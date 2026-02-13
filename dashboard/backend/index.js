@@ -1,7 +1,8 @@
-const express = require('express');
-const cors = require('cors');
-const { Pool } = require('pg');
-require('dotenv').config();
+const express = require("express");
+const cors = require("cors");
+const { Pool } = require("pg");
+const path = require("path");
+require("dotenv").config({ path: path.resolve(__dirname, "../../.env") });
 
 const app = express();
 app.use(cors());
@@ -15,9 +16,9 @@ const pool = new Pool({
   port: process.env.DB_PORT,
 });
 
-app.get('/api/results', async (req, res) => {
+app.get("/api/results", async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM results ORDER BY created_at DESC LIMIT 1000');
+    const { rows } = await pool.query("SELECT * FROM results ORDER BY step ASC LIMIT 1000");
     // Ensure rows is an array
     res.json(Array.isArray(rows) ? rows : []);
   } catch (err) {
@@ -25,7 +26,6 @@ app.get('/api/results', async (req, res) => {
     res.status(500).json([]);
   }
 });
-
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`Backend running on http://localhost:${PORT}`));

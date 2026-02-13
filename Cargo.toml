@@ -10,3 +10,5 @@ sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-native-tls", "m
 dotenvy = "0.15"
 axum = "0.8.8"
 hyper = "1.8.1"
+rand = "0.8"
+serde_json = "1.0"
