@@ -10,19 +10,17 @@ serve-frontend:
     @echo "Starting frontend..."
     cd dashboard && npm start &
 serve:
-    just serve-backend
-    just serve-frontend
+    @just serve-backend
+    @just serve-frontend
 
 stop-backend:
-    @echo "Stopping backend..."
-    -pkill -f "target/debug/server" || echo "Backend not running"
+    -pkill -f "{{justfile_directory()}}/target/debug/server"
     @echo "Backend stopped"
 
 stop-frontend:
-    @echo "Stopping frontend..."
-    -pkill -f "react-scripts" || echo "Frontend not running"
+    -pkill -f "gammaboard/dashboard.*react-scripts"
     @echo "Frontend stopped"
 
 stop:
-    just stop-backend
-    just stop-frontend
+    @just stop-backend
+    @just stop-frontend

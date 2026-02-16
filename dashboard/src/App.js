@@ -1,36 +1,55 @@
+import { Container, Box, Typography } from "@mui/material";
 import ConnectionStatus from "./components/ConnectionStatus";
 import RunSelector from "./components/RunSelector";
 import RunInfo from "./components/RunInfo";
 import WorkQueueStats from "./components/WorkQueueStats";
+import AggregatedBatchesPanel from "./components/AggregatedBatchesPanel";
 import SampleChart from "./components/SampleChart";
 import { useRuns } from "./hooks/useRuns";
-import { useRunData } from "./hooks/useRunData";
+import { RunHistoryProvider, useRunHistory } from "./context/RunHistoryContext";
 
 function App() {
-  // Fetch runs and manage selection
-  const { runs, selectedRun, setSelectedRun, isConnected } = useRuns();
-
-  // Fetch data for selected run
-  const { samples, stats, lastUpdate } = useRunData(selectedRun);
-
-  // Find current run details
-  const currentRun = runs.find((r) => r.run_id === selectedRun);
+  const { runs, selectedRun, setSelectedRun } = useRuns();
 
   return (
-    <div style={{ padding: "20px", fontFamily: "Arial, sans-serif", maxWidth: "1400px", margin: "0 auto" }}>
-      <h1 style={{ marginBottom: "10px" }}>Gammaboard</h1>
-
-      <ConnectionStatus isConnected={isConnected} lastUpdate={lastUpdate} />
-
-      <RunSelector runs={runs} selectedRun={selectedRun} onRunChange={setSelectedRun} />
-
-      <RunInfo run={currentRun} />
-
-      <WorkQueueStats stats={stats} />
-
-      <SampleChart samples={samples} isConnected={isConnected} currentRun={currentRun} />
-    </div>
+    <RunHistoryProvider runId={selectedRun}>
+      <AppContent runs={runs} selectedRun={selectedRun} setSelectedRun={setSelectedRun} />
+    </RunHistoryProvider>
   );
 }
+
+const AppContent = ({ runs, selectedRun, setSelectedRun }) => {
+  const { run, workQueueStats, history, latestAggregated, isConnected, lastUpdate } = useRunHistory();
+  const currentRun = run || runs.find((r) => r.run_id === selectedRun);
+
+  const derivedSamples = history
+    .slice()
+    .reverse()
+    .map((item) => ({
+      sampleCount: item.nr_samples ?? 0,
+      mean: item.mean ?? 0,
+      value: item.mean ?? item.weighted_sum ?? 0,
+    }));
+
+  return (
+    <Container maxWidth="xl" sx={{ py: 3 }}>
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="h3" component="h1" gutterBottom>
+          Gammaboard
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          Real-time Monte Carlo simulation monitoring
+        </Typography>
+      </Box>
+
+      <ConnectionStatus isConnected={isConnected} lastUpdate={lastUpdate} />
+      <RunSelector runs={runs} selectedRun={selectedRun} onRunChange={setSelectedRun} />
+      <RunInfo run={currentRun} />
+      <WorkQueueStats stats={workQueueStats} completionRate={currentRun?.completion_rate} />
+      <AggregatedBatchesPanel latestAggregated={latestAggregated} />
+      <SampleChart samples={derivedSamples} isConnected={isConnected} currentRun={currentRun} />
+    </Container>
+  );
+};
 
 export default App;

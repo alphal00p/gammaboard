@@ -1,40 +1,35 @@
-const API_BASE_URL = "http://localhost:4000/api";
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || "http://localhost:4000/api";
 
-/**
- * Fetches all runs from the backend
- * @returns {Promise<Array>} List of runs
- */
+const parseJsonOrThrow = async (response, message) => {
+  if (!response.ok) throw new Error(`${message}: ${response.statusText}`);
+  return response.json();
+};
+
 export const fetchRuns = async () => {
   const response = await fetch(`${API_BASE_URL}/runs`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch runs: ${response.statusText}`);
-  }
-  return response.json();
+  return parseJsonOrThrow(response, "Failed to fetch runs");
 };
 
-/**
- * Fetches samples for a specific run
- * @param {number} runId - The run ID
- * @param {number} limit - Maximum number of samples to fetch
- * @returns {Promise<Array>} List of samples
- */
-export const fetchSamples = async (runId, limit = 500) => {
-  const response = await fetch(`${API_BASE_URL}/runs/${runId}/samples?limit=${limit}`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch samples: ${response.statusText}`);
-  }
-  return response.json();
-};
-
-/**
- * Fetches statistics for a specific run
- * @param {number} runId - The run ID
- * @returns {Promise<Array>} List of statistics
- */
 export const fetchStats = async (runId) => {
   const response = await fetch(`${API_BASE_URL}/runs/${runId}/stats`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch stats: ${response.statusText}`);
-  }
-  return response.json();
+  return parseJsonOrThrow(response, "Failed to fetch stats");
 };
+
+export const fetchRun = async (runId) => {
+  const response = await fetch(`${API_BASE_URL}/runs/${runId}`);
+  return parseJsonOrThrow(response, "Failed to fetch run");
+};
+
+export const fetchAggregatedHistory = async (runId, limit) => {
+  const response = await fetch(`${API_BASE_URL}/runs/${runId}/aggregated?limit=${limit}`);
+  return parseJsonOrThrow(response, "Failed to fetch aggregated history");
+};
+
+export const fetchLatestAggregated = async (runId) => {
+  const response = await fetch(`${API_BASE_URL}/runs/${runId}/aggregated/latest`);
+  if (response.status === 404) return null;
+  return parseJsonOrThrow(response, "Failed to fetch latest aggregated result");
+};
+
+export const createRunStatsEventSource = (runId, intervalMs) =>
+  new EventSource(`${API_BASE_URL}/runs/${runId}/stream?interval_ms=${intervalMs}`);

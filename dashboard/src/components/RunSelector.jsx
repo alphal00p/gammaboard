@@ -1,31 +1,33 @@
-/**
- * RunSelector component allows users to select which run to view
- */
+import { Box, FormControl, InputLabel, Select, MenuItem, Typography } from "@mui/material";
+
 const RunSelector = ({ runs, selectedRun, onRunChange }) => {
-  if (runs.length === 0) {
-    return null;
-  }
+  if (runs.length === 0) return null;
 
   return (
-    <div style={{ marginBottom: "20px" }}>
-      <label style={{ fontWeight: "bold", marginRight: "10px" }}>Select Run:</label>
-      <select
-        value={selectedRun || ""}
-        onChange={(e) => onRunChange(Number(e.target.value))}
-        style={{
-          padding: "8px",
-          fontSize: "14px",
-          borderRadius: "4px",
-          border: "1px solid #ddd",
-        }}
-      >
-        {runs.map((run) => (
-          <option key={run.run_id} value={run.run_id}>
-            Run #{run.run_id} - {run.run_status} ({run.total_batches || 0} batches)
-          </option>
-        ))}
-      </select>
-    </div>
+    <Box sx={{ mb: 3 }}>
+      <FormControl fullWidth variant="outlined">
+        <InputLabel id="run-selector-label">Select Run</InputLabel>
+        <Select
+          labelId="run-selector-label"
+          value={selectedRun || ""}
+          onChange={(e) => onRunChange(Number(e.target.value))}
+          label="Select Run"
+        >
+          {runs.map((run) => (
+            <MenuItem key={run.run_id} value={run.run_id}>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                <Typography component="span" sx={{ fontWeight: 500 }}>
+                  Run #{run.run_id}
+                </Typography>
+                <Typography component="span" color="text.secondary">
+                  • {run.run_status} • {run.total_batches || 0} batches
+                </Typography>
+              </Box>
+            </MenuItem>
+          ))}
+        </Select>
+      </FormControl>
+    </Box>
   );
 };
 
