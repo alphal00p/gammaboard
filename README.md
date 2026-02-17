@@ -27,3 +27,36 @@ Adaptive numerical integration system with distributed computation using Postgre
 - PostgreSQL 16
 - Node.js & npm (for frontend)
 - Docker (optional, for PostgreSQL)
+
+## Live Mock Test
+
+Use this flow to run a local end-to-end queue test with the mock implementations.
+
+1. Reset and migrate the database:
+   ```bash
+   just restart-db
+   ```
+2. Seed a deterministic test run (`run_id=1`) used by both mock binaries:
+   ```bash
+   just seed-mock-run
+   ```
+3. In terminal A, start the mock sampler-aggregator:
+   ```bash
+   just run-mock-sampler-aggregator
+   ```
+4. In terminal B, start the mock worker:
+   ```bash
+   just run-mock-worker
+   ```
+5. Optional: in terminal C, start the API server and inspect run progress:
+   ```bash
+   just serve-backend
+   curl http://localhost:4000/api/runs/1
+   curl http://localhost:4000/api/runs/1/stats
+   ```
+
+To stop the mock binaries:
+
+```bash
+just stop-mock
+```

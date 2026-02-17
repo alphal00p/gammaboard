@@ -1,6 +1,18 @@
-use gammaboard::{BatchResults, claim_batch, get_pg_pool, submit_batch_results};
+use gammaboard::{EvalError, Evaluator, PgStore, WorkerRunner, WorkerRunnerConfig, get_pg_pool};
+use serde_json::Value as JsonValue;
 use std::{env, time::Duration};
 use tokio::time::sleep;
+
+struct DefaultEvaluator;
+
+impl Evaluator for DefaultEvaluator {
+    fn eval_point(&self, point: &JsonValue) -> Result<f64, EvalError> {
+        let x = point
+            .as_f64()
+            .ok_or_else(|| EvalError::new("expected f64 point"))?;
+        Ok(x.sin() * (-x * x).exp())
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -9,25 +21,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|s| s.parse::<i32>().ok())
         .unwrap_or(1);
     let worker_id = env::var("WORKER_ID").unwrap_or_else(|_| "worker-1".to_string());
+    let loop_sleep_ms = env::var("WORKER_LOOP_SLEEP_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(250);
+    let min_eval_time_per_sample_ms = env::var("WORKER_MIN_EVAL_TIME_PER_SAMPLE_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(100);
 
     println!("🚀 Starting worker {worker_id} for run {run_id}");
     let pool = get_pg_pool(5).await?;
+    let store = PgStore::new(pool);
+    let mut runner = WorkerRunner::new(
+        run_id,
+        worker_id.clone(),
+        DefaultEvaluator,
+        store,
+        WorkerRunnerConfig {
+            min_eval_time_per_sample: Duration::from_millis(min_eval_time_per_sample_ms),
+        },
+    );
 
     loop {
-        let claimed = claim_batch(&pool, run_id, &worker_id).await?;
-        if let Some((batch_id, batch)) = claimed {
-            let mut values = Vec::with_capacity(batch.size());
-            for point in &batch.points {
-                let x = point.point.as_f64().unwrap_or(0.0);
-                values.push(x.sin() * (-x * x).exp());
+        match runner.tick().await {
+            Ok(tick) => {
+                if let Some(batch_id) = tick.claimed_batch_id {
+                    println!("✅ {worker_id} completed batch {batch_id}");
+                }
             }
-
-            let results = BatchResults::new(values);
-            let eval_time_ms = 100.0 * batch.size() as f64;
-            submit_batch_results(&pool, batch_id, &results, eval_time_ms).await?;
-            println!("✅ {worker_id} completed batch {batch_id}");
-        } else {
-            sleep(Duration::from_millis(250)).await;
+            Err(err) => {
+                eprintln!("❌ {worker_id} tick failed: {err}");
+            }
         }
+        sleep(Duration::from_millis(loop_sleep_ms)).await;
     }
 }

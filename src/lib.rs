@@ -3,21 +3,28 @@
 //! This library provides database abstractions for distributed adaptive
 //! numerical integration using PostgreSQL as a work queue.
 
-pub mod aggregator;
 pub mod batch;
+pub mod contracts;
 pub mod models;
-pub mod queries;
+pub mod runners;
+pub mod stores;
 
 use dotenvy::dotenv;
 use sqlx::{PgPool, Pool, Postgres, postgres::PgPoolOptions};
 use std::env;
 
 pub use batch::{Batch, BatchRecord, BatchResults, BatchStatus, WeightedPoint};
-pub use models::{AggregatedResult, RunProgress, WorkQueueStats};
-pub use queries::{
-    claim_batch, get_aggregated_results, get_all_runs, get_latest_aggregated_result,
-    get_run_progress, get_work_queue_stats, health_check, insert_batch, submit_batch_results,
+pub use contracts::{
+    AggregationStore, AssignmentLease, AssignmentLeaseStore, BatchClaim, BuildError,
+    CompletedBatch, ComponentInstance, ComponentRegistryStore, ComponentRole, EngineError,
+    EngineState, EngineStateStore, EvalError, Evaluator, EvaluatorFactory, InstanceStatus,
+    RunReadStore, RunSpec, RunSpecStore, SamplerAggregatorEngine, SamplerAggregatorFactory,
+    StoreError, WorkQueueStore,
 };
+pub use models::{AggregatedResult, RunProgress, WorkQueueStats};
+pub use runners::{RunnerConfig, RunnerError, RunnerTick, SamplerAggregatorRunner};
+pub use runners::{WorkerRunner, WorkerRunnerConfig, WorkerRunnerError, WorkerTick};
+pub use stores::PgStore;
 
 /// Create a PostgreSQL connection pool
 ///

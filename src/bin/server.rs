@@ -11,7 +11,7 @@ use axum::{
     routing::get,
 };
 use futures_core::Stream;
-use gammaboard::{DbPool, get_pg_pool};
+use gammaboard::{PgStore, RunReadStore, get_pg_pool};
 use serde::Deserialize;
 use std::{
     convert::Infallible,
@@ -25,7 +25,7 @@ use tower_http::cors::CorsLayer;
 
 #[derive(Clone)]
 struct AppState {
-    pool: DbPool,
+    store: PgStore,
 }
 
 #[derive(Deserialize)]
@@ -75,7 +75,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = get_pg_pool(10).await?;
     println!("✅ Connected to database");
 
-    let state = AppState { pool };
+    let state = AppState {
+        store: PgStore::new(pool),
+    };
 
     // Build API routes
     let api_routes = Router::new()
@@ -115,7 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Health check endpoint
 async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
-    match sqlx::query("SELECT 1").fetch_one(&state.pool).await {
+    match state.store.health_check().await {
         Ok(_) => (
             StatusCode::OK,
             Json(serde_json::json!({
@@ -137,7 +139,7 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
 
 /// Get all runs with progress
 async fn get_runs(State(state): State<AppState>) -> impl IntoResponse {
-    match gammaboard::get_all_runs(&state.pool).await {
+    match state.store.get_all_runs().await {
         Ok(runs) => (StatusCode::OK, Json(runs)).into_response(),
         Err(e) => {
             eprintln!("Error fetching runs: {}", e);
@@ -152,7 +154,7 @@ async fn get_runs(State(state): State<AppState>) -> impl IntoResponse {
 
 /// Get specific run progress
 async fn get_run(State(state): State<AppState>, Path(id): Path<i32>) -> impl IntoResponse {
-    match gammaboard::get_run_progress(&state.pool, id).await {
+    match state.store.get_run_progress(id).await {
         Ok(Some(run)) => (StatusCode::OK, Json(run)).into_response(),
         Ok(None) => (
             StatusCode::NOT_FOUND,
@@ -172,7 +174,7 @@ async fn get_run(State(state): State<AppState>, Path(id): Path<i32>) -> impl Int
 
 /// Get work queue statistics for a run
 async fn get_run_stats(State(state): State<AppState>, Path(id): Path<i32>) -> impl IntoResponse {
-    match gammaboard::get_work_queue_stats(&state.pool, id).await {
+    match state.store.get_work_queue_stats(id).await {
         Ok(stats) => (StatusCode::OK, Json(stats)).into_response(),
         Err(e) => {
             eprintln!("Error fetching stats for run {}: {}", id, e);
@@ -191,7 +193,7 @@ async fn get_run_aggregated_results(
     Path(id): Path<i32>,
     Query(params): Query<LimitQuery>,
 ) -> impl IntoResponse {
-    match gammaboard::get_aggregated_results(&state.pool, id, params.limit).await {
+    match state.store.get_aggregated_results(id, params.limit).await {
         Ok(results) => (StatusCode::OK, Json(results)).into_response(),
         Err(e) => {
             eprintln!("Error fetching aggregated results for run {}: {}", id, e);
@@ -209,7 +211,7 @@ async fn get_run_aggregated_latest(
     State(state): State<AppState>,
     Path(id): Path<i32>,
 ) -> impl IntoResponse {
-    match gammaboard::get_latest_aggregated_result(&state.pool, id).await {
+    match state.store.get_latest_aggregated_result(id).await {
         Ok(Some(result)) => (StatusCode::OK, Json(result)).into_response(),
         Ok(None) => (
             StatusCode::NOT_FOUND,
@@ -236,7 +238,7 @@ async fn stream_run_stats(
     Path(id): Path<i32>,
     Query(params): Query<StreamQuery>,
 ) -> impl IntoResponse {
-    match gammaboard::get_run_progress(&state.pool, id).await {
+    match state.store.get_run_progress(id).await {
         Ok(Some(_)) => {}
         Ok(None) => {
             return (
@@ -256,7 +258,7 @@ async fn stream_run_stats(
     }
 
     let (tx, rx) = mpsc::channel(16);
-    let pool = state.pool.clone();
+    let store = state.store.clone();
     let interval_ms = sanitize_stream_interval_ms(params.interval_ms);
 
     tokio::spawn(async move {
@@ -264,7 +266,7 @@ async fn stream_run_stats(
         loop {
             ticker.tick().await;
 
-            let progress = match gammaboard::get_run_progress(&pool, id).await {
+            let progress = match store.get_run_progress(id).await {
                 Ok(run) => run,
                 Err(e) => {
                     let err_event = Event::default().event("error").data(
@@ -281,7 +283,7 @@ async fn stream_run_stats(
                 }
             };
 
-            let aggregated = match gammaboard::get_latest_aggregated_result(&pool, id).await {
+            let aggregated = match store.get_latest_aggregated_result(id).await {
                 Ok(result) => result,
                 Err(e) => {
                     let err_event = Event::default().event("error").data(

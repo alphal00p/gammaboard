@@ -5,12 +5,12 @@ use crate::models::{AggregatedResult, RunProgress, WorkQueueStats};
 use serde_json::Value as JsonValue;
 use sqlx::{PgPool, Row};
 
-pub async fn health_check(pool: &PgPool) -> Result<(), sqlx::Error> {
+pub(crate) async fn health_check(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query("SELECT 1").fetch_one(pool).await?;
     Ok(())
 }
 
-pub async fn get_all_runs(pool: &PgPool) -> Result<Vec<RunProgress>, sqlx::Error> {
+pub(crate) async fn get_all_runs(pool: &PgPool) -> Result<Vec<RunProgress>, sqlx::Error> {
     let rows = sqlx::query(
         r#"
         SELECT
@@ -60,7 +60,7 @@ pub async fn get_all_runs(pool: &PgPool) -> Result<Vec<RunProgress>, sqlx::Error
     Ok(runs)
 }
 
-pub async fn get_run_progress(
+pub(crate) async fn get_run_progress(
     pool: &PgPool,
     run_id: i32,
 ) -> Result<Option<RunProgress>, sqlx::Error> {
@@ -109,7 +109,7 @@ pub async fn get_run_progress(
     }))
 }
 
-pub async fn get_work_queue_stats(
+pub(crate) async fn get_work_queue_stats(
     pool: &PgPool,
     run_id: i32,
 ) -> Result<Vec<WorkQueueStats>, sqlx::Error> {
@@ -145,7 +145,7 @@ pub async fn get_work_queue_stats(
     Ok(stats)
 }
 
-pub async fn get_latest_aggregated_result(
+pub(crate) async fn get_latest_aggregated_result(
     pool: &PgPool,
     run_id: i32,
 ) -> Result<Option<AggregatedResult>, sqlx::Error> {
@@ -204,7 +204,7 @@ pub async fn get_latest_aggregated_result(
     }))
 }
 
-pub async fn get_aggregated_results(
+pub(crate) async fn get_aggregated_results(
     pool: &PgPool,
     run_id: i32,
     limit: i64,
@@ -270,7 +270,11 @@ pub async fn get_aggregated_results(
     Ok(results)
 }
 
-pub async fn insert_batch(pool: &PgPool, run_id: i32, batch: &Batch) -> Result<(), sqlx::Error> {
+pub(crate) async fn insert_batch(
+    pool: &PgPool,
+    run_id: i32,
+    batch: &Batch,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
         INSERT INTO batches (run_id, points, batch_size, status)
@@ -286,7 +290,7 @@ pub async fn insert_batch(pool: &PgPool, run_id: i32, batch: &Batch) -> Result<(
     Ok(())
 }
 
-pub async fn claim_batch(
+pub(crate) async fn claim_batch(
     pool: &PgPool,
     run_id: i32,
     worker_id: &str,
@@ -323,7 +327,7 @@ pub async fn claim_batch(
     }
 }
 
-pub async fn submit_batch_results(
+pub(crate) async fn submit_batch_results(
     pool: &PgPool,
     batch_id: i64,
     results: &BatchResults,
@@ -350,18 +354,7 @@ pub async fn submit_batch_results(
 
 // ---- Sampler-aggregator (DB wrappers) ---------------------------------------
 
-pub async fn list_run_ids(pool: &PgPool) -> Result<Vec<i32>, sqlx::Error> {
-    let rows = sqlx::query("SELECT id FROM runs ORDER BY id")
-        .fetch_all(pool)
-        .await?;
-
-    Ok(rows
-        .into_iter()
-        .map(|row| row.get::<i32, _>("id"))
-        .collect())
-}
-
-pub async fn get_latest_aggregation_snapshot(
+pub(crate) async fn get_latest_aggregation_snapshot(
     pool: &PgPool,
     run_id: i32,
 ) -> Result<
@@ -433,50 +426,7 @@ pub async fn get_latest_aggregation_snapshot(
     }))
 }
 
-pub async fn get_completed_batches_points_results_since(
-    pool: &PgPool,
-    run_id: i32,
-    since: Option<chrono::DateTime<chrono::Utc>>,
-) -> Result<Vec<(JsonValue, JsonValue)>, sqlx::Error> {
-    let rows = if let Some(since_ts) = since {
-        sqlx::query(
-            r#"
-            SELECT points, results
-            FROM batches
-            WHERE run_id = $1
-              AND status = 'completed'
-              AND results IS NOT NULL
-              AND completed_at > $2
-            ORDER BY completed_at ASC
-            "#,
-        )
-        .bind(run_id)
-        .bind(since_ts)
-        .fetch_all(pool)
-        .await?
-    } else {
-        sqlx::query(
-            r#"
-            SELECT points, results
-            FROM batches
-            WHERE run_id = $1
-              AND status = 'completed'
-              AND results IS NOT NULL
-            ORDER BY completed_at ASC
-            "#,
-        )
-        .bind(run_id)
-        .fetch_all(pool)
-        .await?
-    };
-
-    Ok(rows
-        .into_iter()
-        .map(|row| (row.get("points"), row.get("results")))
-        .collect())
-}
-
-pub async fn insert_aggregated_results_snapshot(
+pub(crate) async fn insert_aggregated_results_snapshot(
     pool: &PgPool,
     run_id: i32,
     nr_samples: i64,
@@ -542,7 +492,7 @@ pub async fn insert_aggregated_results_snapshot(
     Ok(())
 }
 
-pub async fn update_run_summary_from_snapshot(
+pub(crate) async fn update_run_summary_from_snapshot(
     pool: &PgPool,
     run_id: i32,
     delta_batches_completed: i32,

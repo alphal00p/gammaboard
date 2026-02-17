@@ -1,159 +1,82 @@
+//! Mock evaluator worker binary.
+//!
+//! This binary uses hardcoded constants and the generic `WorkerRunner`.
+
 use gammaboard::{
-    Batch, BatchResults, WeightedPoint, claim_batch, get_pg_pool, insert_batch,
-    submit_batch_results,
+    AssignmentLeaseStore, ComponentInstance, ComponentRegistryStore, ComponentRole, EvalError,
+    Evaluator, InstanceStatus, PgStore, WorkerRunner, WorkerRunnerConfig, get_pg_pool,
 };
-use rand::Rng;
+use serde_json::Value as JsonValue;
 use serde_json::json;
-use sqlx::PgPool;
 use std::time::Duration;
-use tokio::time::sleep;
+
+const RUN_ID: i32 = 1;
+const INSTANCE_ID: &str = "mock-worker-1";
+const LOOP_SLEEP_MS: u64 = 200;
+const MIN_EVAL_TIME_PER_SAMPLE_MS: u64 = 2;
+
+struct MockEvaluator;
+
+impl Evaluator for MockEvaluator {
+    fn eval_point(&self, point: &JsonValue) -> Result<f64, EvalError> {
+        let x = point
+            .as_f64()
+            .ok_or_else(|| EvalError::new("expected f64 point"))?;
+        Ok(x.sin() * (-x * x).exp())
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🚀 Starting mock worker live-view test with batch-based schema...");
+    println!(
+        "🛠️ Starting mock worker: run_id={} instance_id={}",
+        RUN_ID, INSTANCE_ID
+    );
 
-    // Connect to database
     let pool = get_pg_pool(5).await?;
+    let store = PgStore::new(pool);
 
-    // Create a test run
-    let run_id = create_test_run(&pool).await?;
-    println!("✅ Created test run with ID: {}", run_id);
+    store
+        .register_instance(&ComponentInstance {
+            instance_id: INSTANCE_ID.to_string(),
+            node_id: None,
+            role: ComponentRole::Evaluator,
+            implementation: "mock_evaluator".to_string(),
+            version: "v1".to_string(),
+            node_specs: json!({ "mock": true }),
+            status: InstanceStatus::Active,
+            last_seen: None,
+        })
+        .await?;
+    store.assign_evaluator(RUN_ID, INSTANCE_ID).await?;
 
-    // Spawn background task to simulate worker processing batches
-    let pool_clone = pool.clone();
-    tokio::spawn(async move {
-        if let Err(e) = worker_loop(pool_clone, run_id).await {
-            eprintln!("❌ Worker error: {}", e);
-        }
-    });
-
-    let batch_size = 100;
-
-    // Main loop: sampler generates batches continuously
-    loop {
-        // Generate a batch of samples
-        generate_batch(&pool, run_id, batch_size).await?;
-        println!("📝 Generated batch with {} samples", batch_size);
-
-        // Wait a bit before next batch (simulating adaptive sampler thinking)
-        let delay = rand::thread_rng().gen_range(500..2000);
-        sleep(Duration::from_millis(delay)).await;
-
-        // Periodically cleanup old completed batches
-        if rand::thread_rng().gen_bool(0.3) {
-            cleanup_completed_batches(&pool, run_id).await?;
-        }
-    }
-}
-
-async fn create_test_run(pool: &PgPool) -> Result<i32, sqlx::Error> {
-    let result = sqlx::query_scalar::<_, i32>(
-        r#"
-        INSERT INTO runs (integration_params, status)
-        VALUES ($1, 'running')
-        RETURNING id
-        "#,
-    )
-    .bind(json!({
-        "expression": "sin(x)*exp(-x^2)",
-        "bounds": [0.0, 10.0],
-        "target_error": 0.001
-    }))
-    .fetch_one(pool)
-    .await?;
-
-    Ok(result)
-}
-
-async fn generate_batch(pool: &PgPool, run_id: i32, size: usize) -> Result<(), sqlx::Error> {
-    let mut rng = rand::thread_rng();
-
-    // Generate random points with importance weights
-    let mut weighted_points = Vec::new();
-    for _ in 0..size {
-        // Random point in [0, 10]
-        let x: f64 = rng.r#gen();
-        let x = x * 10.0;
-
-        // Random importance weight (adaptive sampler would compute this intelligently)
-        let weight: f64 = rng.r#gen();
-        let weight = 0.5 + weight; // weight in [0.5, 1.5]
-
-        weighted_points.push(WeightedPoint::new(json!(x), weight));
-    }
-
-    let batch = Batch::new(weighted_points);
-    insert_batch(pool, run_id, &batch).await?;
-
-    Ok(())
-}
-
-async fn worker_loop(pool: PgPool, run_id: i32) -> Result<(), sqlx::Error> {
-    println!("🔄 Started worker simulation");
+    let mut runner = WorkerRunner::new(
+        RUN_ID,
+        INSTANCE_ID,
+        MockEvaluator,
+        store.clone(),
+        WorkerRunnerConfig {
+            min_eval_time_per_sample: Duration::from_millis(MIN_EVAL_TIME_PER_SAMPLE_MS),
+        },
+    );
 
     loop {
-        // Try to claim a batch (simulating worker claiming work)
-        let claimed = claim_batch(&pool, run_id, "worker-test").await?;
+        store.heartbeat_instance(INSTANCE_ID).await?;
 
-        if let Some((batch_id, batch)) = claimed {
-            println!(
-                "⚙️  Worker claimed batch {} with {} samples",
-                batch_id,
-                batch.size()
-            );
-
-            // Simulate evaluation time
-            sleep(Duration::from_millis(100)).await;
-
-            // Evaluate the batch (simulate computation)
-            let mut results = Vec::new();
-            for point in &batch.points {
-                // Extract x value and compute sin(x)*exp(-x^2)
-                let x: f64 = if let Some(x_val) = point.point.as_f64() {
-                    x_val
-                } else {
-                    0.0 // fallback
-                };
-                let value = x.sin() * (-x * x).exp();
-                results.push(value);
+        match runner.tick().await {
+            Ok(tick) => {
+                if let Some(batch_id) = tick.claimed_batch_id {
+                    println!(
+                        "✅ completed batch={} samples={} eval_time_ms={:.2}",
+                        batch_id, tick.processed_samples, tick.eval_time_ms
+                    );
+                }
             }
-
-            let batch_results = BatchResults::new(results);
-            let eval_time = 100.0 * batch.size() as f64; // Simulate ~100ms per sample
-
-            // Submit results
-            submit_batch_results(&pool, batch_id, &batch_results, eval_time).await?;
-            println!("✅ Worker completed batch {}", batch_id);
-        } else {
-            // No work available, wait a bit
-            sleep(Duration::from_millis(500)).await;
+            Err(err) => {
+                eprintln!("❌ mock worker tick failed: {}", err);
+            }
         }
+
+        tokio::time::sleep(Duration::from_millis(LOOP_SLEEP_MS)).await;
     }
-}
-
-async fn cleanup_completed_batches(pool: &PgPool, run_id: i32) -> Result<(), sqlx::Error> {
-    // Keep only the most recent 50 completed batches
-    let deleted = sqlx::query(
-        r#"
-        DELETE FROM batches
-        WHERE id IN (
-            SELECT id FROM batches
-            WHERE run_id = $1 AND status = 'completed'
-            ORDER BY completed_at DESC
-            OFFSET 50
-        )
-        "#,
-    )
-    .bind(run_id)
-    .execute(pool)
-    .await?;
-
-    if deleted.rows_affected() > 0 {
-        println!(
-            "🧹 Cleaned up {} old batches to keep table lean",
-            deleted.rows_affected()
-        );
-    }
-
-    Ok(())
 }
