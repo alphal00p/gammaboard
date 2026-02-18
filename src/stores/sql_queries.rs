@@ -305,6 +305,13 @@ pub(crate) async fn claim_batch(
             SELECT id FROM batches
             WHERE run_id = $2
               AND status = 'pending'
+              AND EXISTS (
+                  SELECT 1
+                  FROM run_evaluator_assignments rea
+                  WHERE rea.run_id = $2
+                    AND rea.worker_id = $1
+                    AND rea.active = true
+              )
             ORDER BY created_at
             LIMIT 1
             FOR UPDATE SKIP LOCKED

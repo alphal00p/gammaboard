@@ -59,7 +59,7 @@ impl From<StoreError> for WorkerRunnerError {
 
 pub struct WorkerRunner<E, WQ> {
     run_id: i32,
-    instance_id: String,
+    worker_id: String,
     evaluator: E,
     work_queue: WQ,
     config: WorkerRunnerConfig,
@@ -72,14 +72,14 @@ where
 {
     pub fn new(
         run_id: i32,
-        instance_id: impl Into<String>,
+        worker_id: impl Into<String>,
         evaluator: E,
         work_queue: WQ,
         config: WorkerRunnerConfig,
     ) -> Self {
         Self {
             run_id,
-            instance_id: instance_id.into(),
+            worker_id: worker_id.into(),
             evaluator,
             work_queue,
             config,
@@ -89,7 +89,7 @@ where
     pub async fn tick(&mut self) -> Result<WorkerTick, WorkerRunnerError> {
         let claimed = self
             .work_queue
-            .claim_batch(self.run_id, &self.instance_id)
+            .claim_batch(self.run_id, &self.worker_id)
             .await?;
 
         let Some(claimed) = claimed else {
@@ -166,7 +166,7 @@ mod tests {
         async fn claim_batch(
             &self,
             _run_id: i32,
-            _instance_id: &str,
+            _worker_id: &str,
         ) -> Result<Option<BatchClaim>, StoreError> {
             Ok(self.inner.lock().expect("poison").next_claim.take())
         }

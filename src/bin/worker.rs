@@ -1,59 +1,37 @@
-use gammaboard::{EvalError, Evaluator, PgStore, WorkerRunner, WorkerRunnerConfig, get_pg_pool};
-use serde_json::Value as JsonValue;
-use std::{env, time::Duration};
-use tokio::time::sleep;
+use clap::Parser;
+use gammaboard::{NodeWorkerConfig, PgStore, get_pg_pool, run_node_worker};
+use std::time::Duration;
 
-struct DefaultEvaluator;
-
-impl Evaluator for DefaultEvaluator {
-    fn eval_point(&self, point: &JsonValue) -> Result<f64, EvalError> {
-        let x = point
-            .as_f64()
-            .ok_or_else(|| EvalError::new("expected f64 point"))?;
-        Ok(x.sin() * (-x * x).exp())
-    }
+#[derive(Debug, Parser)]
+#[command(name = "worker")]
+#[command(about = "Node-local role reconciliation worker", long_about = None)]
+struct Cli {
+    #[arg(short = 't', long = "test")]
+    test: bool,
+    #[arg(long)]
+    node_id: String,
+    #[arg(long, default_value_t = 1000)]
+    poll_ms: u64,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let run_id = env::var("WORKER_RUN_ID")
-        .ok()
-        .and_then(|s| s.parse::<i32>().ok())
-        .unwrap_or(1);
-    let worker_id = env::var("WORKER_ID").unwrap_or_else(|_| "worker-1".to_string());
-    let loop_sleep_ms = env::var("WORKER_LOOP_SLEEP_MS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(250);
-    let min_eval_time_per_sample_ms = env::var("WORKER_MIN_EVAL_TIME_PER_SAMPLE_MS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(100);
+    let cli = Cli::parse();
 
-    println!("🚀 Starting worker {worker_id} for run {run_id}");
-    let pool = get_pg_pool(5).await?;
-    let store = PgStore::new(pool);
-    let mut runner = WorkerRunner::new(
-        run_id,
-        worker_id.clone(),
-        DefaultEvaluator,
-        store,
-        WorkerRunnerConfig {
-            min_eval_time_per_sample: Duration::from_millis(min_eval_time_per_sample_ms),
-        },
-    );
-
-    loop {
-        match runner.tick().await {
-            Ok(tick) => {
-                if let Some(batch_id) = tick.claimed_batch_id {
-                    println!("✅ {worker_id} completed batch {batch_id}");
-                }
-            }
-            Err(err) => {
-                eprintln!("❌ {worker_id} tick failed: {err}");
-            }
-        }
-        sleep(Duration::from_millis(loop_sleep_ms)).await;
+    if !cli.test {
+        todo!("non-test engines are not wired yet; use --test / -t for now");
     }
+
+    let pool = get_pg_pool(10).await?;
+    let store = PgStore::new(pool);
+    run_node_worker(
+        store,
+        cli.node_id,
+        NodeWorkerConfig {
+            poll_interval: Duration::from_millis(cli.poll_ms),
+        },
+    )
+    .await?;
+
+    Ok(())
 }

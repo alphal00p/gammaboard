@@ -9,7 +9,8 @@
 
 use super::errors::{BuildError, EngineError, EvalError, StoreError};
 use super::models::{
-    BatchClaim, CompletedBatch, ComponentInstance, EngineState, InstanceStatus, RunSpec,
+    BatchClaim, CompletedBatch, Worker, DesiredAssignment, EngineState, WorkerStatus,
+    RunSpec,
 };
 use crate::models::{AggregatedResult, RunProgress, WorkQueueStats};
 use crate::{Batch, BatchResults};
@@ -57,19 +58,19 @@ pub trait RunSpecStore: Send + Sync {
     async fn load_run_spec(&self, run_id: i32) -> Result<Option<RunSpec>, StoreError>;
 }
 
-/// Registers and monitors running component instances.
-pub trait ComponentRegistryStore: Send + Sync {
-    async fn register_instance(&self, instance: &ComponentInstance) -> Result<(), StoreError>;
-    async fn heartbeat_instance(&self, instance_id: &str) -> Result<(), StoreError>;
-    async fn update_instance_status(
+/// Registers and monitors running workers.
+pub trait WorkerRegistryStore: Send + Sync {
+    async fn register_worker(&self, worker: &Worker) -> Result<(), StoreError>;
+    async fn heartbeat_worker(&self, worker_id: &str) -> Result<(), StoreError>;
+    async fn update_worker_status(
         &self,
-        instance_id: &str,
-        status: InstanceStatus,
+        worker_id: &str,
+        status: WorkerStatus,
     ) -> Result<(), StoreError>;
-    async fn get_instance(
+    async fn get_worker(
         &self,
-        instance_id: &str,
-    ) -> Result<Option<ComponentInstance>, StoreError>;
+        worker_id: &str,
+    ) -> Result<Option<Worker>, StoreError>;
 }
 
 /// Handles run assignment and lease ownership.
@@ -77,23 +78,55 @@ pub trait AssignmentLeaseStore: Send + Sync {
     async fn acquire_sampler_aggregator_lease(
         &self,
         run_id: i32,
-        instance_id: &str,
+        worker_id: &str,
         ttl: Duration,
     ) -> Result<bool, StoreError>;
     async fn renew_sampler_aggregator_lease(
         &self,
         run_id: i32,
-        instance_id: &str,
+        worker_id: &str,
         ttl: Duration,
     ) -> Result<bool, StoreError>;
     async fn release_sampler_aggregator_lease(
         &self,
         run_id: i32,
-        instance_id: &str,
+        worker_id: &str,
     ) -> Result<(), StoreError>;
-    async fn assign_evaluator(&self, run_id: i32, instance_id: &str) -> Result<(), StoreError>;
-    async fn unassign_evaluator(&self, run_id: i32, instance_id: &str) -> Result<(), StoreError>;
+    async fn assign_evaluator(&self, run_id: i32, worker_id: &str) -> Result<(), StoreError>;
+    async fn unassign_evaluator(&self, run_id: i32, worker_id: &str) -> Result<(), StoreError>;
     async fn list_assigned_evaluators(&self, run_id: i32) -> Result<Vec<String>, StoreError>;
+}
+
+/// Desired-state control-plane operations for node assignments and run steering.
+pub trait ControlPlaneStore: Send + Sync {
+    async fn upsert_desired_assignment(
+        &self,
+        node_id: &str,
+        role: super::models::WorkerRole,
+        run_id: i32,
+    ) -> Result<(), StoreError>;
+    async fn clear_desired_assignment(
+        &self,
+        node_id: &str,
+        role: super::models::WorkerRole,
+    ) -> Result<(), StoreError>;
+    async fn get_desired_assignment(
+        &self,
+        node_id: &str,
+        role: super::models::WorkerRole,
+    ) -> Result<Option<DesiredAssignment>, StoreError>;
+    async fn list_desired_assignments(
+        &self,
+        node_id: Option<&str>,
+    ) -> Result<Vec<DesiredAssignment>, StoreError>;
+
+    async fn create_run(
+        &self,
+        status: &str,
+        integration_params: &JsonValue,
+    ) -> Result<i32, StoreError>;
+    async fn set_run_status(&self, run_id: i32, status: &str) -> Result<(), StoreError>;
+    async fn remove_run(&self, run_id: i32) -> Result<(), StoreError>;
 }
 
 /// Accesses the batch work queue.
@@ -103,7 +136,7 @@ pub trait WorkQueueStore: Send + Sync {
     async fn claim_batch(
         &self,
         run_id: i32,
-        instance_id: &str,
+        worker_id: &str,
     ) -> Result<Option<BatchClaim>, StoreError>;
     async fn submit_batch_results(
         &self,

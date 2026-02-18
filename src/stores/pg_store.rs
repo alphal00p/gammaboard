@@ -2,9 +2,10 @@
 
 use super::sql_queries as queries;
 use crate::contracts::{
-    AggregationStore, AssignmentLeaseStore, BatchClaim, CompletedBatch, ComponentInstance,
-    ComponentRegistryStore, ComponentRole, EngineState, EngineStateStore, InstanceStatus,
-    RunReadStore, RunSpec, RunSpecStore, StoreError, WorkQueueStore,
+    AggregationStore, AssignmentLeaseStore, BatchClaim, CompletedBatch, Worker,
+    WorkerRegistryStore, WorkerRole, ControlPlaneStore, DesiredAssignment, EngineState,
+    EngineStateStore, WorkerStatus, RunReadStore, RunSpec, RunSpecStore, StoreError,
+    WorkQueueStore,
 };
 use crate::{Batch, BatchResults};
 use chrono::{DateTime, Utc};
@@ -35,36 +36,40 @@ fn map_sqlx(err: sqlx::Error) -> StoreError {
     store_err(err.to_string())
 }
 
-fn role_to_str(role: ComponentRole) -> &'static str {
+fn role_to_str(role: WorkerRole) -> &'static str {
     match role {
-        ComponentRole::Evaluator => "evaluator",
-        ComponentRole::SamplerAggregator => "sampler_aggregator",
+        WorkerRole::Evaluator => "evaluator",
+        WorkerRole::SamplerAggregator => "sampler_aggregator",
     }
 }
 
-fn parse_role(value: &str) -> Result<ComponentRole, StoreError> {
+fn parse_role(value: &str) -> Result<WorkerRole, StoreError> {
     match value {
-        "evaluator" => Ok(ComponentRole::Evaluator),
-        "sampler_aggregator" => Ok(ComponentRole::SamplerAggregator),
-        other => Err(store_err(format!("unknown component role: {other}"))),
+        "evaluator" => Ok(WorkerRole::Evaluator),
+        "sampler_aggregator" => Ok(WorkerRole::SamplerAggregator),
+        other => Err(store_err(format!("unknown worker role: {other}"))),
     }
 }
 
-fn status_to_str(status: InstanceStatus) -> &'static str {
+fn status_to_str(status: WorkerStatus) -> &'static str {
     match status {
-        InstanceStatus::Active => "active",
-        InstanceStatus::Draining => "draining",
-        InstanceStatus::Inactive => "inactive",
+        WorkerStatus::Active => "active",
+        WorkerStatus::Draining => "draining",
+        WorkerStatus::Inactive => "inactive",
     }
 }
 
-fn parse_status(value: &str) -> Result<InstanceStatus, StoreError> {
+fn parse_status(value: &str) -> Result<WorkerStatus, StoreError> {
     match value {
-        "active" => Ok(InstanceStatus::Active),
-        "draining" => Ok(InstanceStatus::Draining),
-        "inactive" => Ok(InstanceStatus::Inactive),
-        other => Err(store_err(format!("unknown instance status: {other}"))),
+        "active" => Ok(WorkerStatus::Active),
+        "draining" => Ok(WorkerStatus::Draining),
+        "inactive" => Ok(WorkerStatus::Inactive),
+        other => Err(store_err(format!("unknown worker status: {other}"))),
     }
+}
+
+fn control_plane_worker_id(node_id: &str, role: WorkerRole) -> String {
+    format!("{node_id}-{}", role_to_str(role))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -311,50 +316,95 @@ impl RunSpecStore for PgStore {
             .get::<Option<JsonValue>, _>("integration_params")
             .unwrap_or_else(|| json!({}));
 
-        let evaluator_implementation = integration_params
-            .pointer("/evaluator/implementation")
+        let worker_implementation = integration_params
+            .get("worker_implementation")
             .and_then(|v| v.as_str())
-            .unwrap_or("default_evaluator")
+            .or_else(|| {
+                integration_params
+                    .pointer("/worker/implementation")
+                    .and_then(|v| v.as_str())
+            })
+            .unwrap_or("default_worker")
             .to_string();
-        let evaluator_version = integration_params
-            .pointer("/evaluator/version")
+        let worker_version = integration_params
+            .get("worker_version")
             .and_then(|v| v.as_str())
+            .or_else(|| {
+                integration_params
+                    .pointer("/worker/version")
+                    .and_then(|v| v.as_str())
+            })
             .unwrap_or("v1")
             .to_string();
+        let worker_params = integration_params
+            .get("worker_params")
+            .cloned()
+            .or_else(|| integration_params.pointer("/worker/params").cloned())
+            .unwrap_or_else(|| json!({}));
         let sampler_aggregator_implementation = integration_params
-            .pointer("/sampler_aggregator/implementation")
+            .get("sampler_aggregator_implementation")
             .and_then(|v| v.as_str())
+            .or_else(|| {
+                integration_params
+                    .pointer("/sampler_aggregator/implementation")
+                    .and_then(|v| v.as_str())
+            })
             .unwrap_or("default_sampler_aggregator")
             .to_string();
         let sampler_aggregator_version = integration_params
-            .pointer("/sampler_aggregator/version")
+            .get("sampler_aggregator_version")
             .and_then(|v| v.as_str())
+            .or_else(|| {
+                integration_params
+                    .pointer("/sampler_aggregator/version")
+                    .and_then(|v| v.as_str())
+            })
             .unwrap_or("v1")
             .to_string();
-        let integrand = integration_params
-            .get("integrand")
+        let sampler_aggregator_params = integration_params
+            .get("sampler_aggregator_params")
             .cloned()
-            .or_else(|| integration_params.pointer("/problem/integrand").cloned())
-            .unwrap_or(JsonValue::Null);
+            .or_else(|| {
+                integration_params
+                    .pointer("/sampler_aggregator/params")
+                    .cloned()
+            })
+            .unwrap_or_else(|| json!({}));
+        let worker_runner_params = integration_params
+            .get("worker_runner_params")
+            .cloned()
+            .or_else(|| integration_params.pointer("/worker_runner/params").cloned())
+            .unwrap_or_else(|| json!({}));
+        let sampler_aggregator_runner_params = integration_params
+            .get("sampler_aggregator_runner_params")
+            .cloned()
+            .or_else(|| {
+                integration_params
+                    .pointer("/sampler_aggregator_runner/params")
+                    .cloned()
+            })
+            .unwrap_or_else(|| json!({}));
 
         Ok(Some(RunSpec {
             run_id,
-            evaluator_implementation,
-            evaluator_version,
+            worker_implementation,
+            worker_version,
+            worker_params,
             sampler_aggregator_implementation,
             sampler_aggregator_version,
-            integrand,
-            integration_params,
+            sampler_aggregator_params,
+            worker_runner_params,
+            sampler_aggregator_runner_params,
         }))
     }
 }
 
-impl ComponentRegistryStore for PgStore {
-    async fn register_instance(&self, instance: &ComponentInstance) -> Result<(), StoreError> {
+impl WorkerRegistryStore for PgStore {
+    async fn register_worker(&self, worker: &Worker) -> Result<(), StoreError> {
         sqlx::query(
             r#"
-            INSERT INTO component_instances (
-                instance_id,
+            INSERT INTO workers (
+                worker_id,
                 node_id,
                 role,
                 implementation,
@@ -363,7 +413,7 @@ impl ComponentRegistryStore for PgStore {
                 status,
                 last_seen
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, now())
-            ON CONFLICT (instance_id) DO UPDATE
+            ON CONFLICT (worker_id) DO UPDATE
             SET
                 node_id = EXCLUDED.node_id,
                 role = EXCLUDED.role,
@@ -375,13 +425,13 @@ impl ComponentRegistryStore for PgStore {
                 updated_at = now()
             "#,
         )
-        .bind(&instance.instance_id)
-        .bind(&instance.node_id)
-        .bind(role_to_str(instance.role))
-        .bind(&instance.implementation)
-        .bind(&instance.version)
-        .bind(&instance.node_specs)
-        .bind(status_to_str(instance.status))
+        .bind(&worker.worker_id)
+        .bind(&worker.node_id)
+        .bind(role_to_str(worker.role))
+        .bind(&worker.implementation)
+        .bind(&worker.version)
+        .bind(&worker.node_specs)
+        .bind(status_to_str(worker.status))
         .execute(&self.pool)
         .await
         .map_err(map_sqlx)?;
@@ -389,49 +439,49 @@ impl ComponentRegistryStore for PgStore {
         Ok(())
     }
 
-    async fn heartbeat_instance(&self, instance_id: &str) -> Result<(), StoreError> {
+    async fn heartbeat_worker(&self, worker_id: &str) -> Result<(), StoreError> {
         sqlx::query(
             r#"
-            UPDATE component_instances
+            UPDATE workers
             SET last_seen = now(), updated_at = now()
-            WHERE instance_id = $1
+            WHERE worker_id = $1
             "#,
         )
-        .bind(instance_id)
+        .bind(worker_id)
         .execute(&self.pool)
         .await
         .map_err(map_sqlx)?;
         Ok(())
     }
 
-    async fn update_instance_status(
+    async fn update_worker_status(
         &self,
-        instance_id: &str,
-        status: InstanceStatus,
+        worker_id: &str,
+        worker_status: WorkerStatus,
     ) -> Result<(), StoreError> {
         sqlx::query(
             r#"
-            UPDATE component_instances
+            UPDATE workers
             SET status = $2, updated_at = now()
-            WHERE instance_id = $1
+            WHERE worker_id = $1
             "#,
         )
-        .bind(instance_id)
-        .bind(status_to_str(status))
+        .bind(worker_id)
+        .bind(status_to_str(worker_status))
         .execute(&self.pool)
         .await
         .map_err(map_sqlx)?;
         Ok(())
     }
 
-    async fn get_instance(
+    async fn get_worker(
         &self,
-        instance_id: &str,
-    ) -> Result<Option<ComponentInstance>, StoreError> {
+        worker_id: &str,
+    ) -> Result<Option<Worker>, StoreError> {
         let row = sqlx::query(
             r#"
             SELECT
-                instance_id,
+                worker_id,
                 node_id,
                 role,
                 implementation,
@@ -439,11 +489,11 @@ impl ComponentRegistryStore for PgStore {
                 node_specs,
                 status,
                 last_seen
-            FROM component_instances
-            WHERE instance_id = $1
+            FROM workers
+            WHERE worker_id = $1
             "#,
         )
-        .bind(instance_id)
+        .bind(worker_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(map_sqlx)?;
@@ -455,8 +505,8 @@ impl ComponentRegistryStore for PgStore {
         let role: String = row.get("role");
         let status: String = row.get("status");
 
-        Ok(Some(ComponentInstance {
-            instance_id: row.get("instance_id"),
+        Ok(Some(Worker {
+            worker_id: row.get("worker_id"),
             node_id: row.get("node_id"),
             role: parse_role(&role)?,
             implementation: row.get("implementation"),
@@ -472,7 +522,7 @@ impl AssignmentLeaseStore for PgStore {
     async fn acquire_sampler_aggregator_lease(
         &self,
         run_id: i32,
-        instance_id: &str,
+        worker_id: &str,
         ttl: Duration,
     ) -> Result<bool, StoreError> {
         let ttl_secs = ttl.as_secs_f64().max(1.0);
@@ -481,7 +531,7 @@ impl AssignmentLeaseStore for PgStore {
             r#"
             INSERT INTO run_sampler_aggregator_leases (
                 run_id,
-                instance_id,
+                worker_id,
                 lease_expires_at
             ) VALUES (
                 $1,
@@ -490,17 +540,17 @@ impl AssignmentLeaseStore for PgStore {
             )
             ON CONFLICT (run_id) DO UPDATE
             SET
-                instance_id = EXCLUDED.instance_id,
+                worker_id = EXCLUDED.worker_id,
                 lease_expires_at = EXCLUDED.lease_expires_at,
                 updated_at = now()
             WHERE
-                run_sampler_aggregator_leases.instance_id = EXCLUDED.instance_id
+                run_sampler_aggregator_leases.worker_id = EXCLUDED.worker_id
                 OR run_sampler_aggregator_leases.lease_expires_at < now()
             RETURNING run_id
             "#,
         )
         .bind(run_id)
-        .bind(instance_id)
+        .bind(worker_id)
         .bind(ttl_secs)
         .fetch_optional(&self.pool)
         .await
@@ -512,7 +562,7 @@ impl AssignmentLeaseStore for PgStore {
     async fn renew_sampler_aggregator_lease(
         &self,
         run_id: i32,
-        instance_id: &str,
+        worker_id: &str,
         ttl: Duration,
     ) -> Result<bool, StoreError> {
         let ttl_secs = ttl.as_secs_f64().max(1.0);
@@ -523,12 +573,12 @@ impl AssignmentLeaseStore for PgStore {
             SET
                 lease_expires_at = now() + make_interval(secs => $3),
                 updated_at = now()
-            WHERE run_id = $1 AND instance_id = $2
+            WHERE run_id = $1 AND worker_id = $2
             RETURNING run_id
             "#,
         )
         .bind(run_id)
-        .bind(instance_id)
+        .bind(worker_id)
         .bind(ttl_secs)
         .fetch_optional(&self.pool)
         .await
@@ -540,55 +590,55 @@ impl AssignmentLeaseStore for PgStore {
     async fn release_sampler_aggregator_lease(
         &self,
         run_id: i32,
-        instance_id: &str,
+        worker_id: &str,
     ) -> Result<(), StoreError> {
         sqlx::query(
             r#"
             DELETE FROM run_sampler_aggregator_leases
-            WHERE run_id = $1 AND instance_id = $2
+            WHERE run_id = $1 AND worker_id = $2
             "#,
         )
         .bind(run_id)
-        .bind(instance_id)
+        .bind(worker_id)
         .execute(&self.pool)
         .await
         .map_err(map_sqlx)?;
         Ok(())
     }
 
-    async fn assign_evaluator(&self, run_id: i32, instance_id: &str) -> Result<(), StoreError> {
+    async fn assign_evaluator(&self, run_id: i32, worker_id: &str) -> Result<(), StoreError> {
         sqlx::query(
             r#"
             INSERT INTO run_evaluator_assignments (
                 run_id,
-                instance_id,
+                worker_id,
                 active,
                 assigned_at
             ) VALUES (
                 $1, $2, true, now()
             )
-            ON CONFLICT (run_id, instance_id) DO UPDATE
+            ON CONFLICT (run_id, worker_id) DO UPDATE
             SET active = true, assigned_at = now()
             "#,
         )
         .bind(run_id)
-        .bind(instance_id)
+        .bind(worker_id)
         .execute(&self.pool)
         .await
         .map_err(map_sqlx)?;
         Ok(())
     }
 
-    async fn unassign_evaluator(&self, run_id: i32, instance_id: &str) -> Result<(), StoreError> {
+    async fn unassign_evaluator(&self, run_id: i32, worker_id: &str) -> Result<(), StoreError> {
         sqlx::query(
             r#"
             UPDATE run_evaluator_assignments
             SET active = false
-            WHERE run_id = $1 AND instance_id = $2
+            WHERE run_id = $1 AND worker_id = $2
             "#,
         )
         .bind(run_id)
-        .bind(instance_id)
+        .bind(worker_id)
         .execute(&self.pool)
         .await
         .map_err(map_sqlx)?;
@@ -598,7 +648,7 @@ impl AssignmentLeaseStore for PgStore {
     async fn list_assigned_evaluators(&self, run_id: i32) -> Result<Vec<String>, StoreError> {
         let rows = sqlx::query(
             r#"
-            SELECT instance_id
+            SELECT worker_id
             FROM run_evaluator_assignments
             WHERE run_id = $1 AND active = true
             ORDER BY assigned_at ASC
@@ -611,8 +661,202 @@ impl AssignmentLeaseStore for PgStore {
 
         Ok(rows
             .into_iter()
-            .map(|row| row.get::<String, _>("instance_id"))
+            .map(|row| row.get::<String, _>("worker_id"))
             .collect())
+    }
+}
+
+impl ControlPlaneStore for PgStore {
+    async fn upsert_desired_assignment(
+        &self,
+        node_id: &str,
+        role: WorkerRole,
+        run_id: i32,
+    ) -> Result<(), StoreError> {
+        let worker_id = control_plane_worker_id(node_id, role);
+        sqlx::query(
+            r#"
+            INSERT INTO workers (
+                worker_id,
+                node_id,
+                role,
+                implementation,
+                version,
+                node_specs,
+                status,
+                desired_run_id,
+                desired_updated_at,
+                updated_at
+            ) VALUES (
+                $1, $2, $3, 'control_plane', 'v1', '{}'::jsonb, 'inactive', $4, now(), now()
+            )
+            ON CONFLICT (worker_id) DO UPDATE
+            SET
+                node_id = EXCLUDED.node_id,
+                role = EXCLUDED.role,
+                desired_run_id = EXCLUDED.desired_run_id,
+                desired_updated_at = now(),
+                updated_at = now()
+            "#,
+        )
+        .bind(&worker_id)
+        .bind(node_id)
+        .bind(role_to_str(role))
+        .bind(run_id)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
+        Ok(())
+    }
+
+    async fn clear_desired_assignment(
+        &self,
+        node_id: &str,
+        role: WorkerRole,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            r#"
+            UPDATE workers
+            SET
+                desired_run_id = NULL,
+                desired_updated_at = now(),
+                updated_at = now()
+            WHERE node_id = $1 AND role = $2
+            "#,
+        )
+        .bind(node_id)
+        .bind(role_to_str(role))
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
+        Ok(())
+    }
+
+    async fn get_desired_assignment(
+        &self,
+        node_id: &str,
+        role: WorkerRole,
+    ) -> Result<Option<DesiredAssignment>, StoreError> {
+        let row = sqlx::query(
+            r#"
+            SELECT desired_run_id AS run_id
+            FROM workers
+            WHERE node_id = $1 AND role = $2
+              AND desired_run_id IS NOT NULL
+            "#,
+        )
+        .bind(node_id)
+        .bind(role_to_str(role))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
+
+        Ok(row.map(|row| DesiredAssignment {
+            node_id: node_id.to_string(),
+            role,
+            run_id: row.get("run_id"),
+        }))
+    }
+
+    async fn list_desired_assignments(
+        &self,
+        node_id: Option<&str>,
+    ) -> Result<Vec<DesiredAssignment>, StoreError> {
+        let rows = if let Some(node_id) = node_id {
+            sqlx::query(
+                r#"
+                SELECT node_id, role, desired_run_id AS run_id
+                FROM workers
+                WHERE node_id = $1
+                  AND desired_run_id IS NOT NULL
+                ORDER BY role ASC
+                "#,
+            )
+            .bind(node_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_sqlx)?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT node_id, role, desired_run_id AS run_id
+                FROM workers
+                WHERE desired_run_id IS NOT NULL
+                ORDER BY node_id ASC, role ASC
+                "#,
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_sqlx)?
+        };
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let role: String = row.get("role");
+            out.push(DesiredAssignment {
+                node_id: row.get("node_id"),
+                role: parse_role(&role)?,
+                run_id: row.get("run_id"),
+            });
+        }
+        Ok(out)
+    }
+
+    async fn create_run(
+        &self,
+        status: &str,
+        integration_params: &JsonValue,
+    ) -> Result<i32, StoreError> {
+        sqlx::query_scalar(
+            r#"
+            INSERT INTO runs (status, integration_params)
+            VALUES ($1, $2)
+            RETURNING id
+            "#,
+        )
+        .bind(status)
+        .bind(integration_params)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_sqlx)
+    }
+
+    async fn set_run_status(&self, run_id: i32, status: &str) -> Result<(), StoreError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE runs
+            SET status = $2
+            WHERE id = $1
+            "#,
+        )
+        .bind(run_id)
+        .bind(status)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
+
+        if result.rows_affected() == 0 {
+            return Err(store_err(format!("run {run_id} not found")));
+        }
+        Ok(())
+    }
+
+    async fn remove_run(&self, run_id: i32) -> Result<(), StoreError> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM runs
+            WHERE id = $1
+            "#,
+        )
+        .bind(run_id)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
+
+        if result.rows_affected() == 0 {
+            return Err(store_err(format!("run {run_id} not found")));
+        }
+        Ok(())
     }
 }
 
@@ -643,9 +887,9 @@ impl WorkQueueStore for PgStore {
     async fn claim_batch(
         &self,
         run_id: i32,
-        instance_id: &str,
+        worker_id: &str,
     ) -> Result<Option<BatchClaim>, StoreError> {
-        let claimed = queries::claim_batch(&self.pool, run_id, instance_id)
+        let claimed = queries::claim_batch(&self.pool, run_id, worker_id)
             .await
             .map_err(map_sqlx)?;
 
@@ -923,6 +1167,8 @@ mod tests {
     use super::*;
     use crate::WeightedPoint;
     use serde_json::json;
+    use sqlx::postgres::PgPoolOptions;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn completed(values: &[f64], weights: &[f64]) -> CompletedBatch {
         let points = weights
@@ -935,6 +1181,24 @@ mod tests {
             results: BatchResults::new(values.to_vec()),
             completed_at: None,
         }
+    }
+
+    fn unique_id(prefix: &str) -> String {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        format!("{prefix}-{nanos}")
+    }
+
+    async fn test_store() -> Option<PgStore> {
+        let db_url = std::env::var("DATABASE_URL").ok()?;
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&db_url)
+            .await
+            .ok()?;
+        Some(PgStore::new(pool))
     }
 
     #[test]
@@ -991,5 +1255,138 @@ mod tests {
         assert_eq!(combined.max, Some(4.0));
         assert_eq!(combined.min, Some(1.0));
         assert!((combined.mean.unwrap_or_default() - 2.5).abs() < 1e-12);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires postgres with project migrations applied"]
+    async fn claim_batch_requires_active_assignment() {
+        let Some(store) = test_store().await else {
+            return;
+        };
+        let worker_id = unique_id("test-worker");
+
+        let run_id: i32 =
+            sqlx::query_scalar("INSERT INTO runs (status) VALUES ('running') RETURNING id")
+                .fetch_one(store.pool())
+                .await
+                .expect("insert run");
+
+        sqlx::query(
+            r#"
+            INSERT INTO workers (
+                worker_id, node_id, role, implementation, version, node_specs, status
+            ) VALUES (
+                $1, NULL, 'evaluator', 'test_impl', 'v1', '{}'::jsonb, 'active'
+            )
+            "#,
+        )
+        .bind(&worker_id)
+        .execute(store.pool())
+        .await
+        .expect("insert worker");
+
+        store
+            .assign_evaluator(run_id, &worker_id)
+            .await
+            .expect("assign evaluator");
+
+        let batch = Batch::new(vec![WeightedPoint::new(json!(1.0), 1.0)]);
+        store
+            .insert_batch(run_id, &batch)
+            .await
+            .expect("insert batch");
+
+        let claimed = store
+            .claim_batch(run_id, &worker_id)
+            .await
+            .expect("claim batch");
+        assert!(
+            claimed.is_some(),
+            "assigned evaluator should be able to claim"
+        );
+
+        sqlx::query("DELETE FROM runs WHERE id = $1")
+            .bind(run_id)
+            .execute(store.pool())
+            .await
+            .expect("cleanup run");
+        sqlx::query("DELETE FROM workers WHERE worker_id = $1")
+            .bind(&worker_id)
+            .execute(store.pool())
+            .await
+            .expect("cleanup worker");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires postgres with project migrations applied"]
+    async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
+        let Some(store) = test_store().await else {
+            return;
+        };
+        let worker_id = unique_id("test-worker");
+
+        let run_id: i32 =
+            sqlx::query_scalar("INSERT INTO runs (status) VALUES ('running') RETURNING id")
+                .fetch_one(store.pool())
+                .await
+                .expect("insert run");
+
+        sqlx::query(
+            r#"
+            INSERT INTO workers (
+                worker_id, node_id, role, implementation, version, node_specs, status
+            ) VALUES (
+                $1, NULL, 'evaluator', 'test_impl', 'v1', '{}'::jsonb, 'active'
+            )
+            "#,
+        )
+        .bind(&worker_id)
+        .execute(store.pool())
+        .await
+        .expect("insert worker");
+
+        let batch = Batch::new(vec![WeightedPoint::new(json!(2.0), 1.0)]);
+        store
+            .insert_batch(run_id, &batch)
+            .await
+            .expect("insert batch");
+
+        let unassigned_claim = store
+            .claim_batch(run_id, &worker_id)
+            .await
+            .expect("claim batch while unassigned");
+        assert!(
+            unassigned_claim.is_none(),
+            "unassigned evaluator should not be able to claim"
+        );
+
+        store
+            .assign_evaluator(run_id, &worker_id)
+            .await
+            .expect("assign evaluator");
+        store
+            .unassign_evaluator(run_id, &worker_id)
+            .await
+            .expect("unassign evaluator");
+
+        let inactive_claim = store
+            .claim_batch(run_id, &worker_id)
+            .await
+            .expect("claim batch while inactive");
+        assert!(
+            inactive_claim.is_none(),
+            "inactive assignment should not be able to claim"
+        );
+
+        sqlx::query("DELETE FROM runs WHERE id = $1")
+            .bind(run_id)
+            .execute(store.pool())
+            .await
+            .expect("cleanup run");
+        sqlx::query("DELETE FROM workers WHERE worker_id = $1")
+            .bind(&worker_id)
+            .execute(store.pool())
+            .await
+            .expect("cleanup worker");
     }
 }

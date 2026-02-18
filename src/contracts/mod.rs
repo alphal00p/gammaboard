@@ -4,11 +4,11 @@ pub mod traits;
 
 pub use errors::{BuildError, EngineError, EvalError, StoreError};
 pub use models::{
-    AssignmentLease, BatchClaim, CompletedBatch, ComponentInstance, ComponentRole, EngineState,
-    InstanceStatus, RunSpec,
+    AssignmentLease, BatchClaim, CompletedBatch, Worker, WorkerRole,
+    DesiredAssignment, EngineState, WorkerStatus, RunSpec,
 };
 pub use traits::{
-    AggregationStore, AssignmentLeaseStore, ComponentRegistryStore, EngineStateStore, Evaluator,
-    EvaluatorFactory, RunReadStore, RunSpecStore, SamplerAggregatorEngine,
-    SamplerAggregatorFactory, WorkQueueStore,
+    AggregationStore, AssignmentLeaseStore, WorkerRegistryStore, ControlPlaneStore,
+    EngineStateStore, Evaluator, EvaluatorFactory, RunReadStore, RunSpecStore,
+    SamplerAggregatorEngine, SamplerAggregatorFactory, WorkQueueStore,
 };

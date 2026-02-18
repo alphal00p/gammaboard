@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS aggregated_results (
     nr_samples BIGINT NOT NULL DEFAULT 0,
     nr_batches INT NOT NULL DEFAULT 0,
 
-    -- Raw statistics (unweighted)
+    -- Raw statistics (unweighted) probably unnecessary
     sum DOUBLE PRECISION NOT NULL DEFAULT 0.0,
     sum_x2 DOUBLE PRECISION NOT NULL DEFAULT 0.0,  -- sum of x^2 for variance
     sum_abs DOUBLE PRECISION NOT NULL DEFAULT 0.0,  -- sum of |x| for error estimation
@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS aggregated_results (
     std_dev DOUBLE PRECISION,  -- Standard deviation
     error_estimate DOUBLE PRECISION,  -- Statistical error estimate
 
-    -- Spatial distribution
+    -- Other statistics
     histograms JSONB,
     -- e.g., {
     --   "values": {"bins": [...], "counts": [...]},

@@ -215,7 +215,7 @@ mod tests {
         async fn claim_batch(
             &self,
             _run_id: i32,
-            _instance_id: &str,
+            _worker_id: &str,
         ) -> Result<Option<BatchClaim>, StoreError> {
             Ok(None)
         }

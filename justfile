@@ -1,3 +1,7 @@
+node_evaluator := "node-evaluator"
+node_sampler := "node-sampler"
+run_params_file := "configs/live-test.toml"
+
 stop-db:
     docker-compose down -v
 
@@ -9,29 +13,33 @@ restart-db:
     @just stop-db
     @just start-db
 
-seed-mock-run:
-    @echo "Ensuring mock run with id=1 exists..."
-    docker-compose exec -T postgres psql -U postgres -d gammaboard_db -c "INSERT INTO runs (id, status, integration_params) VALUES (1, 'running', '{}'::jsonb) ON CONFLICT (id) DO NOTHING;"
-    docker-compose exec -T postgres psql -U postgres -d gammaboard_db -c "SELECT setval(pg_get_serial_sequence('runs', 'id'), (SELECT GREATEST(COALESCE(MAX(id), 1), 1) FROM runs));"
+control-plane +args:
+    cargo run --bin control_plane -- {{args}}
 
-run-mock-worker:
-    @echo "Starting mock worker..."
-    cargo run --bin mock_worker
+worker node_id poll_ms='500':
+    cargo run --bin worker -- -t --node-id {{node_id}} --poll-ms {{poll_ms}}
 
-run-mock-sampler-aggregator:
-    @echo "Starting mock sampler-aggregator..."
-    cargo run --bin mock_sampler_aggregator
+run-evaluator-worker:
+    @echo "Starting worker on {{node_evaluator}}..."
+    just worker {{node_evaluator}} 500
 
-stop-mock:
-    -pkill -f "{{justfile_directory()}}/target/debug/mock_worker"
-    -pkill -f "{{justfile_directory()}}/target/debug/mock_sampler_aggregator"
-    -pkill -f "target/debug/mock_worker"
-    -pkill -f "target/debug/mock_sampler_aggregator"
-    @echo "Mock binaries stopped"
+run-sampler-worker:
+    @echo "Starting worker on {{node_sampler}}..."
+    just worker {{node_sampler}} 500
+
+stop-workers:
+    -pkill -f "cargo run --bin worker -- .*--node-id {{node_evaluator}}"
+    -pkill -f "cargo run --bin worker -- .*--node-id {{node_sampler}}"
+    -pkill -f "{{justfile_directory()}}/target/debug/worker.*--node-id {{node_evaluator}}"
+    -pkill -f "{{justfile_directory()}}/target/debug/worker.*--node-id {{node_sampler}}"
+    -pkill -f "target/debug/worker.*--node-id {{node_evaluator}}"
+    -pkill -f "target/debug/worker.*--node-id {{node_sampler}}"
+    @echo "Control-plane workers stopped"
 
 serve-backend:
     @echo "Starting Rust API server..."
     cargo run --bin server
+
 serve-frontend:
     @echo "Starting frontend..."
     cd dashboard && npm start
@@ -53,26 +61,58 @@ stop-serving:
 live-test:
     #!/usr/bin/env bash
     set -euo pipefail
-    just start-db
-    just seed-mock-run
-    trap 'just stop-mock || true; just stop-serving || true' EXIT INT TERM
+    just stop-workers || true
+    just stop-serving || true
+    just restart-db
+
     just serve-backend &
     sleep 2
-    just run-mock-sampler-aggregator &
-    just run-mock-worker &
-    echo "Live test running (backend + mock sampler + mock worker). Press Ctrl+C to stop."
+    just run-sampler-worker &
+    just run-evaluator-worker &
+    sleep 2
+
+    CREATE_OUT=$(just control-plane run-add --status pending --integration-params-file {{run_params_file}})
+    echo "${CREATE_OUT}"
+    RUN_ID=$(echo "${CREATE_OUT}" | sed -n 's/.*run_id=\([0-9]\+\).*/\1/p')
+    if [[ -z "${RUN_ID}" ]]; then
+      echo "failed to parse run_id from control_plane run-add output" >&2
+      exit 1
+    fi
+
+    just control-plane assign --node-id {{node_evaluator}} --role evaluator --run-id "${RUN_ID}"
+    just control-plane assign --node-id {{node_sampler}} --role sampler-aggregator --run-id "${RUN_ID}"
+    just control-plane run-start --run-id "${RUN_ID}"
+
+    echo "Live test running (run_id=${RUN_ID}, backend + control-plane workers)."
+    echo "Use 'just stop-workers' and 'just stop-serving' to stop processes."
     wait
 
 live-test-with-frontend:
     #!/usr/bin/env bash
     set -euo pipefail
-    just start-db
-    just seed-mock-run
-    trap 'just stop-mock || true; just stop-serving || true' EXIT INT TERM
+    just stop-workers || true
+    just stop-serving || true
+    just restart-db
+
     just serve-backend &
     sleep 2
-    just run-mock-sampler-aggregator &
-    just run-mock-worker &
+    just run-sampler-worker &
+    just run-evaluator-worker &
+    sleep 2
+
+    CREATE_OUT=$(just control-plane run-add --status pending --integration-params-file {{run_params_file}})
+    echo "${CREATE_OUT}"
+    RUN_ID=$(echo "${CREATE_OUT}" | sed -n 's/.*run_id=\([0-9]\+\).*/\1/p')
+    if [[ -z "${RUN_ID}" ]]; then
+      echo "failed to parse run_id from control_plane run-add output" >&2
+      exit 1
+    fi
+
+    just control-plane assign --node-id {{node_evaluator}} --role evaluator --run-id "${RUN_ID}"
+    just control-plane assign --node-id {{node_sampler}} --role sampler-aggregator --run-id "${RUN_ID}"
+    just control-plane run-start --run-id "${RUN_ID}"
+
     just serve-frontend &
-    echo "Live test running (backend + frontend + mock sampler + mock worker). Press Ctrl+C to stop."
+    echo "Live test running (run_id=${RUN_ID}, backend + frontend + control-plane workers)."
+    echo "Use 'just stop-workers' and 'just stop-serving' to stop processes."
     wait

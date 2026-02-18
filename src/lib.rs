@@ -5,22 +5,25 @@
 
 pub mod batch;
 pub mod contracts;
+pub mod control_plane;
+pub mod engines;
 pub mod models;
 pub mod runners;
 pub mod stores;
 
 use dotenvy::dotenv;
-use sqlx::{PgPool, Pool, Postgres, postgres::PgPoolOptions};
+use sqlx::{Pool, Postgres, postgres::PgPoolOptions};
 use std::env;
 
 pub use batch::{Batch, BatchRecord, BatchResults, BatchStatus, WeightedPoint};
 pub use contracts::{
     AggregationStore, AssignmentLease, AssignmentLeaseStore, BatchClaim, BuildError,
-    CompletedBatch, ComponentInstance, ComponentRegistryStore, ComponentRole, EngineError,
-    EngineState, EngineStateStore, EvalError, Evaluator, EvaluatorFactory, InstanceStatus,
-    RunReadStore, RunSpec, RunSpecStore, SamplerAggregatorEngine, SamplerAggregatorFactory,
-    StoreError, WorkQueueStore,
+    CompletedBatch, Worker, WorkerRegistryStore, WorkerRole, ControlPlaneStore,
+    DesiredAssignment, EngineError, EngineState, EngineStateStore, EvalError, Evaluator,
+    EvaluatorFactory, WorkerStatus, RunReadStore, RunSpec, RunSpecStore, SamplerAggregatorEngine,
+    SamplerAggregatorFactory, StoreError, WorkQueueStore,
 };
+pub use control_plane::{NodeWorkerConfig, run_node_worker};
 pub use models::{AggregatedResult, RunProgress, WorkQueueStats};
 pub use runners::{RunnerConfig, RunnerError, RunnerTick, SamplerAggregatorRunner};
 pub use runners::{WorkerRunner, WorkerRunnerConfig, WorkerRunnerError, WorkerTick};
@@ -52,6 +55,3 @@ pub async fn get_pg_pool(max_connections: u32) -> Result<Pool<Postgres>, sqlx::E
         .connect(&db_url)
         .await
 }
-
-/// Type alias for database pool
-pub type DbPool = PgPool;
