@@ -4,9 +4,8 @@
 //! numerical integration using PostgreSQL as a work queue.
 
 pub mod batch;
-pub mod contracts;
+pub mod core;
 pub mod engines;
-pub mod models;
 pub mod runners;
 pub mod stores;
 
@@ -14,10 +13,14 @@ use dotenvy::dotenv;
 use sqlx::{Pool, Postgres, postgres::PgPoolOptions};
 use std::env;
 
-pub use batch::{Batch, BatchRecord, BatchResults, BatchStatus, WeightedPoint};
-pub use contracts::errors::{BuildError, EngineError, EvalError, StoreError};
-pub use models::{AggregatedResult, RunProgress, RunStatus, WorkQueueStats};
+pub use batch::{
+    Batch, BatchError, BatchRecord, BatchResults, BatchStatus, Point, PointSpec, PointView,
+    WeightedPoint,
+};
+pub use core::{RunStatus, StoreError};
+pub use engines::{BuildError, EngineError, EvalError};
 pub use stores::PgStore;
+pub use stores::{AggregatedResult, RunProgress, WorkQueueStats};
 pub type BinResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 /// Create a PostgreSQL connection pool

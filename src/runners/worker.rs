@@ -1,12 +1,11 @@
 //! Evaluator worker runner orchestration.
 
 use crate::batch::BatchResults;
-use crate::contracts::{
-    AggregatedObservableFactory, BuildError, EngineError, EvalError, Evaluator, StoreError,
-    WorkQueueStore,
-};
+use crate::batch::PointSpec;
+use crate::core::{StoreError, WorkQueueStore};
+use crate::engines::{AggregatedObservable, BuildError, EngineError, EvalError, Evaluator};
 use serde_json::Value as JsonValue;
-use std::{error::Error, fmt, time::Instant};
+use std::{error::Error, fmt, sync::Arc, time::Instant};
 
 #[derive(Debug, Clone)]
 pub struct WorkerTick {
@@ -42,35 +41,40 @@ impl From<StoreError> for WorkerRunnerError {
     }
 }
 
-pub struct WorkerRunner<E, AOF, WQ> {
+pub struct WorkerRunner<E, WQ> {
     run_id: i32,
     worker_id: String,
     evaluator: E,
-    aggregated_observable_factory: AOF,
+    build_observable:
+        Arc<dyn Fn(&JsonValue) -> Result<Box<dyn AggregatedObservable>, BuildError> + Send + Sync>,
     observable_params: JsonValue,
+    point_spec: PointSpec,
     work_queue: WQ,
 }
 
-impl<E, AOF, WQ> WorkerRunner<E, AOF, WQ>
+impl<E, WQ> WorkerRunner<E, WQ>
 where
     E: Evaluator,
-    AOF: AggregatedObservableFactory,
     WQ: WorkQueueStore,
 {
     pub fn new(
         run_id: i32,
         worker_id: impl Into<String>,
         evaluator: E,
-        aggregated_observable_factory: AOF,
+        build_observable: Arc<
+            dyn Fn(&JsonValue) -> Result<Box<dyn AggregatedObservable>, BuildError> + Send + Sync,
+        >,
         observable_params: JsonValue,
+        point_spec: PointSpec,
         work_queue: WQ,
     ) -> Self {
         Self {
             run_id,
             worker_id: worker_id.into(),
             evaluator,
-            aggregated_observable_factory,
+            build_observable,
             observable_params,
+            point_spec,
             work_queue,
         }
     }
@@ -90,14 +94,20 @@ where
             });
         };
 
+        if let Err(err) = claimed.batch.validate_point_spec(&self.point_spec) {
+            let err = EngineError::engine(format!("invalid batch point shape: {err}"));
+            self.work_queue
+                .fail_batch(claimed.batch_id, &err.to_string())
+                .await
+                .map_err(WorkerRunnerError::Store)?;
+            return Err(WorkerRunnerError::Engine(err));
+        }
+
         let started = Instant::now();
 
         match self.evaluator.eval_batch(&claimed.batch) {
             Ok(samples) => {
-                let mut batch_observable = match self
-                    .aggregated_observable_factory
-                    .build(&self.observable_params)
-                {
+                let mut batch_observable = match (self.build_observable)(&self.observable_params) {
                     Ok(observable) => observable,
                     Err(err) => {
                         self.work_queue
@@ -163,16 +173,23 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::batch::{Batch, EvaluatedSample, WeightedPoint};
-    use crate::contracts::{
-        AggregatedObservable, AggregatedObservableFactory, BatchClaim, EvalError,
-    };
+    use crate::batch::{Batch, EvaluatedSample, Point, PointSpec, PointView, WeightedPoint};
+    use crate::core::BatchClaim;
+    use crate::engines::{AggregatedObservable, EvalError};
     use crate::runners::test_support::MockWorkQueue;
     use serde_json::{Value as JsonValue, json};
+    use std::sync::Arc;
 
     struct TestObservable;
 
     impl AggregatedObservable for TestObservable {
+        fn from_params(_params: &JsonValue) -> Result<Self, BuildError>
+        where
+            Self: Sized,
+        {
+            Ok(Self)
+        }
+
         fn implementation(&self) -> &'static str {
             "test_observable"
         }
@@ -204,29 +221,38 @@ mod tests {
         }
     }
 
-    struct TestObservableFactory;
+    struct OkEvaluator;
 
-    impl AggregatedObservableFactory for TestObservableFactory {
+    impl Evaluator for OkEvaluator {
+        fn from_params(_params: &JsonValue) -> Result<Self, BuildError>
+        where
+            Self: Sized,
+        {
+            Ok(Self)
+        }
+
         fn implementation(&self) -> &'static str {
-            "test_observable"
+            "ok_evaluator"
         }
 
         fn version(&self) -> &'static str {
             "v1"
         }
 
-        fn build(&self, _params: &JsonValue) -> Result<Box<dyn AggregatedObservable>, BuildError> {
-            Ok(Box::new(TestObservable))
+        fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError> {
+            if point_spec.continuous_dims != 1 || point_spec.discrete_dims != 0 {
+                return Err(BuildError::build(
+                    "OkEvaluator expects 1 continuous and 0 discrete",
+                ));
+            }
+            Ok(())
         }
-    }
 
-    struct OkEvaluator;
-
-    impl Evaluator for OkEvaluator {
-        fn eval_point(&self, point: &serde_json::Value) -> Result<EvaluatedSample, EvalError> {
-            let value = point
-                .as_f64()
-                .ok_or_else(|| EvalError::eval("expected numeric point"))?;
+        fn eval_point(&self, point: PointView<'_>) -> Result<EvaluatedSample, EvalError> {
+            let value = *point
+                .continuous()
+                .first()
+                .ok_or_else(|| EvalError::eval("missing continuous[0]"))?;
             Ok(EvaluatedSample::weight_only(value))
         }
     }
@@ -234,16 +260,41 @@ mod tests {
     struct FailingEvaluator;
 
     impl Evaluator for FailingEvaluator {
-        fn eval_point(&self, _point: &serde_json::Value) -> Result<EvaluatedSample, EvalError> {
+        fn from_params(_params: &JsonValue) -> Result<Self, BuildError>
+        where
+            Self: Sized,
+        {
+            Ok(Self)
+        }
+
+        fn implementation(&self) -> &'static str {
+            "failing_evaluator"
+        }
+
+        fn version(&self) -> &'static str {
+            "v1"
+        }
+
+        fn validate_point_spec(&self, _point_spec: &PointSpec) -> Result<(), BuildError> {
+            Ok(())
+        }
+
+        fn eval_point(&self, _point: PointView<'_>) -> Result<EvaluatedSample, EvalError> {
             Err(EvalError::eval("mock failure"))
         }
     }
 
     fn sample_batch() -> Batch {
         Batch::new(vec![
-            WeightedPoint::new(json!(1.0), 1.0),
-            WeightedPoint::new(json!(2.0), 1.0),
+            WeightedPoint::new(Point::scalar_continuous(1.0), 1.0),
+            WeightedPoint::new(Point::scalar_continuous(2.0), 1.0),
         ])
+    }
+
+    fn build_test_observable()
+    -> Arc<dyn Fn(&JsonValue) -> Result<Box<dyn AggregatedObservable>, BuildError> + Send + Sync>
+    {
+        Arc::new(|_params: &JsonValue| Ok(Box::new(TestObservable)))
     }
 
     #[tokio::test]
@@ -253,8 +304,12 @@ mod tests {
             1,
             "worker-1",
             OkEvaluator,
-            TestObservableFactory,
+            build_test_observable(),
             json!({}),
+            PointSpec {
+                continuous_dims: 1,
+                discrete_dims: 0,
+            },
             queue,
         );
 
@@ -276,8 +331,12 @@ mod tests {
             1,
             "worker-1",
             OkEvaluator,
-            TestObservableFactory,
+            build_test_observable(),
             json!({}),
+            PointSpec {
+                continuous_dims: 1,
+                discrete_dims: 0,
+            },
             queue.clone(),
         );
 
@@ -303,8 +362,12 @@ mod tests {
             1,
             "worker-1",
             FailingEvaluator,
-            TestObservableFactory,
+            build_test_observable(),
             json!({}),
+            PointSpec {
+                continuous_dims: 1,
+                discrete_dims: 0,
+            },
             queue.clone(),
         );
 

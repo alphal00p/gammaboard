@@ -1,4 +1,4 @@
-use crate::contracts::{Worker, WorkerStatus};
+use crate::core::{Worker, WorkerStatus};
 use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;

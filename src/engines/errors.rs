@@ -1,18 +1,16 @@
 use thiserror::Error;
 
 #[derive(Debug, Clone, Error)]
-pub enum GammaboardError {
+pub enum GammaboardEngineError {
     #[error("evaluation error: {0}")]
     Eval(String),
     #[error("build error: {0}")]
     Build(String),
     #[error("engine error: {0}")]
     Engine(String),
-    #[error("store error: {0}")]
-    Store(String),
 }
 
-impl GammaboardError {
+impl GammaboardEngineError {
     pub fn eval(message: impl Into<String>) -> Self {
         Self::Eval(message.into())
     }
@@ -24,13 +22,8 @@ impl GammaboardError {
     pub fn engine(message: impl Into<String>) -> Self {
         Self::Engine(message.into())
     }
-
-    pub fn store(message: impl Into<String>) -> Self {
-        Self::Store(message.into())
-    }
 }
 
-pub type EvalError = GammaboardError;
-pub type BuildError = GammaboardError;
-pub type EngineError = GammaboardError;
-pub type StoreError = GammaboardError;
+pub type EvalError = GammaboardEngineError;
+pub type BuildError = GammaboardEngineError;
+pub type EngineError = GammaboardEngineError;

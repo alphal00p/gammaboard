@@ -9,10 +9,9 @@
 //! - aggregate completed batch observables into run-level observable snapshot
 //! - persist cursor state
 
-use crate::contracts::{
-    AggregatedObservable, AggregationStore, CompletedBatch, EngineError, EngineState,
-    EngineStateStore, SamplerAggregatorEngine, StoreError, WorkQueueStore,
-};
+use crate::batch::PointSpec;
+use crate::core::{AggregationStore, CompletedBatch, EngineStateStore, StoreError, WorkQueueStore};
+use crate::engines::{AggregatedObservable, EngineError, EngineState, SamplerAggregatorEngine};
 use serde_json::json;
 use std::{error::Error, fmt};
 
@@ -71,6 +70,7 @@ pub struct SamplerAggregatorRunner<E, WQ, ES, AS> {
     state_store: ES,
     aggregation_store: AS,
     config: RunnerConfig,
+    point_spec: PointSpec,
     last_processed_batch_id: Option<i64>,
 }
 
@@ -89,6 +89,7 @@ where
         state_store: ES,
         aggregation_store: AS,
         config: RunnerConfig,
+        point_spec: PointSpec,
     ) -> Result<Self, RunnerError> {
         let persisted_state = state_store.load_engine_state(run_id).await?;
         let last_processed_batch_id = persisted_state
@@ -111,6 +112,7 @@ where
             state_store,
             aggregation_store,
             config,
+            point_spec,
             last_processed_batch_id,
         })
     }
@@ -136,6 +138,11 @@ where
         };
         if produced.len() > produce_limit {
             produced.truncate(produce_limit);
+        }
+        for batch in &produced {
+            batch
+                .validate_point_spec(&self.point_spec)
+                .map_err(|err| RunnerError::Engine(EngineError::engine(err.to_string())))?;
         }
         for batch in &produced {
             self.work_queue.insert_batch(self.run_id, batch).await?;
@@ -203,8 +210,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::batch::{Batch, BatchResults, WeightedPoint};
-    use crate::contracts::{EngineState, StoreError};
+    use crate::batch::{Batch, BatchResults, Point, PointSpec, WeightedPoint};
+    use crate::core::StoreError;
+    use crate::engines::{AggregatedObservable, BuildError, EngineState, SamplerAggregatorEngine};
     use crate::runners::test_support::MockWorkQueue;
     use serde_json::{Value as JsonValue, json};
     use std::sync::{Arc, Mutex};
@@ -284,12 +292,25 @@ mod tests {
     }
 
     impl SamplerAggregatorEngine for TestEngine {
+        fn from_params(_params: &JsonValue) -> Result<Self, BuildError>
+        where
+            Self: Sized,
+        {
+            Err(BuildError::build(
+                "TestEngine::from_params is not used in sampler runner tests",
+            ))
+        }
+
         fn implementation(&self) -> &'static str {
             "test_engine"
         }
 
         fn version(&self) -> &'static str {
             "v1"
+        }
+
+        fn validate_point_spec(&self, _point_spec: &PointSpec) -> Result<(), BuildError> {
+            Ok(())
         }
 
         fn init(&mut self, state: Option<EngineState>) -> Result<(), EngineError> {
@@ -326,6 +347,13 @@ mod tests {
     }
 
     impl AggregatedObservable for TestObservable {
+        fn from_params(_params: &JsonValue) -> Result<Self, BuildError>
+        where
+            Self: Sized,
+        {
+            Ok(Self::default())
+        }
+
         fn implementation(&self) -> &'static str {
             "test_observable"
         }
@@ -381,7 +409,7 @@ mod tests {
     }
 
     fn make_batch() -> Batch {
-        Batch::new(vec![WeightedPoint::new(json!(1.0), 1.0)])
+        Batch::new(vec![WeightedPoint::new(Point::scalar_continuous(1.0), 1.0)])
     }
 
     fn make_completed(
@@ -444,6 +472,10 @@ mod tests {
                 max_batches_per_tick: 1,
                 max_pending_batches: 8,
                 completed_batch_fetch_limit: 128,
+            },
+            PointSpec {
+                continuous_dims: 1,
+                discrete_dims: 0,
             },
         )
         .await
@@ -511,6 +543,10 @@ mod tests {
                 max_pending_batches: 8,
                 completed_batch_fetch_limit: 64,
             },
+            PointSpec {
+                continuous_dims: 1,
+                discrete_dims: 0,
+            },
         )
         .await
         .expect("new runner");
@@ -556,6 +592,10 @@ mod tests {
                 max_pending_batches: 5,
                 completed_batch_fetch_limit: 64,
             },
+            PointSpec {
+                continuous_dims: 1,
+                discrete_dims: 0,
+            },
         )
         .await
         .expect("new runner");
@@ -593,6 +633,10 @@ mod tests {
                 max_batches_per_tick: 3,
                 max_pending_batches: 4,
                 completed_batch_fetch_limit: 64,
+            },
+            PointSpec {
+                continuous_dims: 1,
+                discrete_dims: 0,
             },
         )
         .await

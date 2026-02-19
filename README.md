@@ -1,77 +1,65 @@
 # Gammaboard
 
-Gammaboard is a distributed numerical integration system that uses PostgreSQL as:
-- a work queue (`batches`)
-- a control plane (`workers`, assignment/lease tables)
-- a storage backend for run snapshots and progress (`aggregated_results`, `sampler_states`)
+Gammaboard runs distributed numerical integration jobs using PostgreSQL as the shared runtime state.
 
-## Current Architecture
+At a high level:
+- `control_plane` decides which node should do which role for a run.
+- `run_node` on each node starts/stops local worker loops to match that desired state.
+- `server` exposes run progress and aggregated results for the dashboard.
 
-### Binaries
+## Quick Start
 
-- `server` (`src/bin/server.rs`)
-  - Read API for runs, queue stats, aggregated snapshots, and SSE updates.
-- `control_plane` (`src/bin/control_plane.rs`)
-  - Admin CLI for run lifecycle and desired role assignments.
-- `run_node` (`src/bin/run_node.rs`)
-  - Node-local reconciler that starts/stops role loops based on control-plane desired assignments.
+### Prerequisites
+- Rust (edition 2024)
+- PostgreSQL 16
+- `sqlx` CLI (`cargo install sqlx-cli --no-default-features --features postgres`)
+- Node.js + npm (only if you run the dashboard frontend)
+- Docker (optional, for local Postgres via `docker-compose`)
 
-### Library Modules
+### Fastest local run
+1. Start everything and run a live backend test:
+   - `just live-test`
+2. Optional: include the frontend too:
+   - `just live-test-with-frontend`
 
-- `src/runners/node_runner.rs`
-  - Reconciliation loop per node.
-  - Manages local evaluator and sampler-aggregator tasks.
-  - Handles spin-up/spin-down when assignments change.
-- `src/runners/worker.rs`
-  - Evaluator runner: claims batches, evaluates, writes results/failures.
-- `src/runners/sampler_aggregator.rs`
-  - Sampler-aggregator runner: ingests completed batches, produces new batches, persists state and aggregate snapshots.
-- `src/stores/pg_store.rs`
-  - Postgres implementation of all contracts (run spec, queue, control plane, leases, aggregation).
-- `src/contracts/*`
-  - Runtime and storage traits, shared domain models.
-- `src/engines/test_only.rs`
-  - Test-only evaluator/sampler/observable implementations.
+Useful stop commands:
+- `just stop-workers`
+- `just stop-serving`
+- `just restart-db`
 
-### Runtime Flow
+## Manual Flow
 
-1. Create a run with integration params.
-2. Assign desired roles (`evaluator`, `sampler-aggregator`) to node ids via `control_plane`.
-3. Run `run_node` on each node id.
-4. Each worker reconciles desired state:
-   - starts/stops evaluator and sampler-aggregator loops when assignments change
-   - heartbeats itself in `workers`
-5. Evaluators consume `batches`; sampler-aggregator produces/aggregates and updates run summary.
+1. Create a run from TOML config:
+- `cargo run --bin control_plane -- run-add --status pending --integration-params-file configs/live-test.toml`
 
-## Database Schema
+2. Start nodes:
+- `cargo run --bin run_node -- --node-id node-a --poll-ms 1000`
+- `cargo run --bin run_node -- --node-id node-b --poll-ms 1000`
 
-### Work Queue and Results
+3. Assign roles:
+- `cargo run --bin control_plane -- assign --node-id node-a --role evaluator --run-id <RUN_ID>`
+- `cargo run --bin control_plane -- assign --node-id node-b --role sampler-aggregator --run-id <RUN_ID>`
 
-- `runs`
-- `batches`
-- `aggregated_results`
-- `sampler_states`
-- views: `run_progress`, `work_queue_stats`
-
-### Control Plane
-
-- `workers`
-  - registered worker identities by role and node, includes desired assignment (`desired_run_id`).
-- `run_sampler_aggregator_leases`
-  - single active sampler-aggregator lease per run.
-- `run_evaluator_assignments`
-  - one-to-many evaluator assignments per run.
+4. Start the run:
+- `cargo run --bin control_plane -- run-start --run-id <RUN_ID>`
 
 ## Configuration
 
-Run integration params are provided via TOML file and passed to `control_plane run-add`.
+Run configuration is provided as TOML.
+- Engine and runner params are stored in `runs.integration_params`.
+- Point dimensions are stored in `runs.point_spec`.
+- Batches are stored in `batches.points` as compact flat arrays (`continuous`, `discrete`, `weights`) plus `point_spec`.
 
-Example file: `configs/live-test.toml`
+Example: `configs/live-test.toml`
 
 ```toml
 evaluator_implementation = "test_only_sin"
 sampler_aggregator_implementation = "test_only_training"
 observable_implementation = "test_only"
+
+[point_spec]
+continuous_dims = 1
+discrete_dims = 0
 
 [worker_runner_params]
 min_loop_time_ms = 200
@@ -94,40 +82,12 @@ training_delay_per_sample_ms = 2
 [observable_params]
 ```
 
-## Local Usage
+## Current Status
 
-### Prerequisites
+- Test-only engine implementations are currently wired by default.
+- Runs can be reassigned at runtime by updating desired assignments via `control_plane`.
 
-- Rust (edition 2024)
-- PostgreSQL 16
-- Node.js + npm (for dashboard)
-- Docker (optional, for local Postgres)
+## For Contributors
 
-### Fast Path
-
-- End-to-end backend test:
-  - `just live-test`
-- End-to-end with frontend:
-  - `just live-test-with-frontend`
-
-Useful controls:
-- `just stop-workers`
-- `just stop-serving`
-- `just restart-db`
-
-### Manual CLI Flow
-
-1. Create run:
-   - `cargo run --bin control_plane -- run-add --status pending --integration-params-file configs/live-test.toml`
-2. Start workers:
-   - `cargo run --bin run_node -- --node-id node-a --poll-ms 1000`
-   - `cargo run --bin run_node -- --node-id node-b --poll-ms 1000`
-3. Assign roles:
-   - `cargo run --bin control_plane -- assign --node-id node-a --role evaluator --run-id <RUN_ID>`
-   - `cargo run --bin control_plane -- assign --node-id node-b --role sampler-aggregator --run-id <RUN_ID>`
-4. Start run:
-   - `cargo run --bin control_plane -- run-start --run-id <RUN_ID>`
-
-## Current Limitation
-
-Only test-only engine implementations are currently compiled in (`src/engines/test_only.rs`).
+Engineering structure and maintenance rules live in `AGENTS.md`.
+If you change architecture, CLI/config, or runtime behavior, update both `AGENTS.md` and this README in the same change.

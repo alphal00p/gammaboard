@@ -1,11 +1,12 @@
 //! Test-only runtime implementations used by local control-plane smoke tests.
 
-use crate::batch::{Batch, EvaluatedSample, WeightedPoint};
-use crate::contracts::{
-    AggregatedObservable, AggregatedObservableFactory, BuildError, EngineError, EngineState,
-    EvalError, Evaluator, SamplerAggregatorEngine,
+use crate::batch::{Batch, EvaluatedSample, Point, PointSpec, PointView, WeightedPoint};
+use crate::engines::{
+    AggregatedObservable, BuildError, EngineError, EngineState, EvalError, Evaluator,
+    SamplerAggregatorEngine,
 };
 use rand::Rng;
+use serde::Deserialize;
 use serde_json::{Value as JsonValue, json};
 use std::{
     thread,
@@ -25,11 +26,68 @@ impl TestOnlySinEvaluator {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct TestOnlyEvaluatorParams {
+    min_eval_time_per_sample_ms: u64,
+}
+
+fn parse_test_only_evaluator_params(
+    params: &JsonValue,
+) -> Result<TestOnlyEvaluatorParams, BuildError> {
+    serde_json::from_value(params.clone())
+        .map_err(|err| BuildError::build(format!("invalid evaluator params: {err}")))
+}
+
+pub struct TestOnlySinEvaluatorFactory;
+
+impl TestOnlySinEvaluatorFactory {
+    pub fn build(params: &JsonValue) -> Result<Box<dyn Evaluator>, BuildError> {
+        let parsed = parse_test_only_evaluator_params(params)?;
+        Ok(Box::new(TestOnlySinEvaluator::new(
+            parsed.min_eval_time_per_sample_ms,
+        )))
+    }
+}
+
 impl Evaluator for TestOnlySinEvaluator {
-    fn eval_point(&self, point: &JsonValue) -> Result<EvaluatedSample, EvalError> {
-        let x = point
-            .as_f64()
-            .ok_or_else(|| EvalError::eval("expected f64 point"))?;
+    fn from_params(params: &JsonValue) -> Result<Self, BuildError>
+    where
+        Self: Sized,
+    {
+        let parsed = parse_test_only_evaluator_params(params)?;
+        Ok(Self::new(parsed.min_eval_time_per_sample_ms))
+    }
+
+    fn implementation(&self) -> &'static str {
+        "test_only_sin"
+    }
+
+    fn version(&self) -> &'static str {
+        "v1"
+    }
+
+    fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError> {
+        if point_spec.continuous_dims != 1 {
+            return Err(BuildError::build(format!(
+                "test_only_sin evaluator expects continuous_dims=1, got {}",
+                point_spec.continuous_dims
+            )));
+        }
+        if point_spec.discrete_dims != 0 {
+            return Err(BuildError::build(format!(
+                "test_only_sin evaluator expects discrete_dims=0, got {}",
+                point_spec.discrete_dims
+            )));
+        }
+        Ok(())
+    }
+
+    fn eval_point(&self, point: PointView<'_>) -> Result<EvaluatedSample, EvalError> {
+        let x = *point
+            .continuous()
+            .first()
+            .ok_or_else(|| EvalError::eval("missing continuous[0]"))?;
         let value = x.sin() * (-x * x).exp();
         Ok(EvaluatedSample {
             weight: value,
@@ -43,8 +101,8 @@ impl Evaluator for TestOnlySinEvaluator {
     fn eval_batch(&self, batch: &Batch) -> Result<Vec<EvaluatedSample>, EvalError> {
         let started = Instant::now();
         let mut samples = Vec::with_capacity(batch.size());
-        for p in &batch.points {
-            samples.push(self.eval_point(&p.point)?);
+        for point in batch.iter_points() {
+            samples.push(self.eval_point(point)?);
         }
 
         let min_total =
@@ -61,6 +119,8 @@ impl Evaluator for TestOnlySinEvaluator {
 /// Test-only sampler-aggregator engine with simple random batch generation.
 pub struct TestOnlyTrainingSamplerAggregatorEngine {
     batch_size: usize,
+    continuous_dims: usize,
+    discrete_dims: usize,
     training_target_samples: usize,
     training_delay_per_sample_ms: u64,
     trained_samples: usize,
@@ -72,11 +132,15 @@ pub struct TestOnlyTrainingSamplerAggregatorEngine {
 impl TestOnlyTrainingSamplerAggregatorEngine {
     pub fn new(
         batch_size: usize,
+        continuous_dims: usize,
+        discrete_dims: usize,
         training_target_samples: usize,
         training_delay_per_sample_ms: u64,
     ) -> Self {
         Self {
             batch_size,
+            continuous_dims,
+            discrete_dims,
             training_target_samples,
             training_delay_per_sample_ms,
             trained_samples: 0,
@@ -87,13 +151,87 @@ impl TestOnlyTrainingSamplerAggregatorEngine {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TestOnlySamplerAggregatorParams {
+    batch_size: usize,
+    continuous_dims: usize,
+    discrete_dims: usize,
+    training_target_samples: usize,
+    training_delay_per_sample_ms: u64,
+}
+
+impl Default for TestOnlySamplerAggregatorParams {
+    fn default() -> Self {
+        Self {
+            batch_size: 64,
+            continuous_dims: 1,
+            discrete_dims: 0,
+            training_target_samples: 0,
+            training_delay_per_sample_ms: 0,
+        }
+    }
+}
+
+fn parse_test_only_sampler_params(
+    params: &JsonValue,
+) -> Result<TestOnlySamplerAggregatorParams, BuildError> {
+    serde_json::from_value(params.clone())
+        .map_err(|err| BuildError::build(format!("invalid sampler params: {err}")))
+}
+
+pub struct TestOnlyTrainingSamplerAggregatorFactory;
+
+impl TestOnlyTrainingSamplerAggregatorFactory {
+    pub fn build(params: &JsonValue) -> Result<Box<dyn SamplerAggregatorEngine>, BuildError> {
+        let parsed = parse_test_only_sampler_params(params)?;
+        Ok(Box::new(TestOnlyTrainingSamplerAggregatorEngine::new(
+            parsed.batch_size,
+            parsed.continuous_dims,
+            parsed.discrete_dims,
+            parsed.training_target_samples,
+            parsed.training_delay_per_sample_ms,
+        )))
+    }
+}
+
 impl SamplerAggregatorEngine for TestOnlyTrainingSamplerAggregatorEngine {
+    fn from_params(params: &JsonValue) -> Result<Self, BuildError>
+    where
+        Self: Sized,
+    {
+        let parsed = parse_test_only_sampler_params(params)?;
+        Ok(Self::new(
+            parsed.batch_size,
+            parsed.continuous_dims,
+            parsed.discrete_dims,
+            parsed.training_target_samples,
+            parsed.training_delay_per_sample_ms,
+        ))
+    }
+
     fn implementation(&self) -> &'static str {
         "test_only_training_sampler_aggregator"
     }
 
     fn version(&self) -> &'static str {
         "v1"
+    }
+
+    fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError> {
+        if point_spec.continuous_dims != self.continuous_dims {
+            return Err(BuildError::build(format!(
+                "test_only_training sampler expects continuous_dims={}, got {}",
+                self.continuous_dims, point_spec.continuous_dims
+            )));
+        }
+        if point_spec.discrete_dims != self.discrete_dims {
+            return Err(BuildError::build(format!(
+                "test_only_training sampler expects discrete_dims={}, got {}",
+                self.discrete_dims, point_spec.discrete_dims
+            )));
+        }
+        Ok(())
     }
 
     fn init(&mut self, _state: Option<EngineState>) -> Result<(), EngineError> {
@@ -107,9 +245,14 @@ impl SamplerAggregatorEngine for TestOnlyTrainingSamplerAggregatorEngine {
         for _ in 0..max_batches {
             let mut points = Vec::with_capacity(self.batch_size);
             for _ in 0..self.batch_size {
-                let x = rng.r#gen::<f64>() * 10.0;
+                let continuous = (0..self.continuous_dims)
+                    .map(|_| rng.r#gen::<f64>() * 10.0)
+                    .collect();
+                let discrete = (0..self.discrete_dims)
+                    .map(|_| rng.r#gen::<u32>() as i64)
+                    .collect();
                 let w = 0.5 + rng.r#gen::<f64>();
-                points.push(WeightedPoint::new(json!(x), w));
+                points.push(WeightedPoint::new(Point::new(continuous, discrete), w));
             }
             out.push(Batch::new(points));
         }
@@ -163,7 +306,30 @@ impl TestOnlyObservableAggregator {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct TestOnlyObservableParams {}
+
+pub struct TestOnlyObservableAggregatorFactory;
+
+impl TestOnlyObservableAggregatorFactory {
+    pub fn build(params: &JsonValue) -> Result<Box<dyn AggregatedObservable>, BuildError> {
+        let _: TestOnlyObservableParams = serde_json::from_value(params.clone())
+            .map_err(|err| BuildError::build(format!("invalid observable params: {err}")))?;
+        Ok(Box::new(TestOnlyObservableAggregator::new()))
+    }
+}
+
 impl AggregatedObservable for TestOnlyObservableAggregator {
+    fn from_params(_params: &JsonValue) -> Result<Self, BuildError>
+    where
+        Self: Sized,
+    {
+        let _: TestOnlyObservableParams = serde_json::from_value(_params.clone())
+            .map_err(|err| BuildError::build(format!("invalid observable params: {err}")))?;
+        Ok(Self::new())
+    }
+
     fn implementation(&self) -> &'static str {
         "test_only_observable"
     }
@@ -225,22 +391,5 @@ impl AggregatedObservable for TestOnlyObservableAggregator {
             "sum": self.sum,
             "mean": mean,
         }))
-    }
-}
-
-#[derive(Clone, Copy, Default)]
-pub struct TestOnlyObservableAggregatorFactory;
-
-impl AggregatedObservableFactory for TestOnlyObservableAggregatorFactory {
-    fn implementation(&self) -> &'static str {
-        "test_only_observable"
-    }
-
-    fn version(&self) -> &'static str {
-        "v1"
-    }
-
-    fn build(&self, _params: &JsonValue) -> Result<Box<dyn AggregatedObservable>, BuildError> {
-        Ok(Box::new(TestOnlyObservableAggregator::new()))
     }
 }

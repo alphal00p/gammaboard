@@ -11,7 +11,7 @@ use axum::{
     routing::get,
 };
 use futures_core::Stream;
-use gammaboard::contracts::RunReadStore;
+use gammaboard::stores::RunReadStore;
 use gammaboard::{BinResult, PgStore, init_pg_store};
 use serde::Deserialize;
 use std::{

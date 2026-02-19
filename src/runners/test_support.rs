@@ -1,5 +1,5 @@
 use crate::batch::{Batch, BatchResults};
-use crate::contracts::{BatchClaim, CompletedBatch, StoreError, WorkQueueStore};
+use crate::core::{BatchClaim, CompletedBatch, StoreError, WorkQueueStore};
 use serde_json::Value as JsonValue;
 use std::sync::{Arc, Mutex};
 

@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use gammaboard::contracts::{ControlPlaneStore, DesiredAssignment, WorkerRole};
-use gammaboard::models::RunStatus;
+use gammaboard::batch::PointSpec;
+use gammaboard::core::{ControlPlaneStore, DesiredAssignment, RunStatus, WorkerRole};
 use gammaboard::{BinResult, init_pg_store};
 use serde_json::{Value as JsonValue, json};
 use std::{fs, path::PathBuf};
@@ -93,7 +93,7 @@ enum Command {
     },
 }
 
-fn read_integration_params_toml(path: &PathBuf) -> BinResult<JsonValue> {
+fn read_run_add_toml(path: &PathBuf) -> BinResult<JsonValue> {
     let raw = fs::read_to_string(path)?;
     let toml_value: toml::Value = toml::from_str(&raw)?;
     let json_value = serde_json::to_value(toml_value)?;
@@ -105,6 +105,30 @@ fn read_integration_params_toml(path: &PathBuf) -> BinResult<JsonValue> {
         .into());
     }
     Ok(json_value)
+}
+
+fn parse_run_add_payload(raw: JsonValue) -> BinResult<(JsonValue, PointSpec)> {
+    let mut root = raw.as_object().cloned().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "run-add payload must be a table",
+        )
+    })?;
+
+    let point_spec_value = root.remove("point_spec").ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "missing [point_spec] section in run-add payload",
+        )
+    })?;
+    let point_spec: PointSpec = serde_json::from_value(point_spec_value).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("invalid point_spec: {err}"),
+        )
+    })?;
+
+    Ok((JsonValue::Object(root), point_spec))
 }
 
 fn print_assignment(assignment: &DesiredAssignment) {
@@ -160,9 +184,13 @@ async fn main() -> BinResult {
             status,
             integration_params_file,
         } => {
-            let integration_params = match integration_params_file {
-                Some(path) => read_integration_params_toml(&path)?,
-                None => json!({
+            let (integration_params, point_spec) = match integration_params_file {
+                Some(path) => parse_run_add_payload(read_run_add_toml(&path)?)?,
+                None => parse_run_add_payload(json!({
+                    "point_spec": {
+                        "continuous_dims": 1,
+                        "discrete_dims": 0
+                    },
                     "evaluator_implementation": "test_only_sin",
                     "evaluator_params": {},
                     "sampler_aggregator_implementation": "test_only_training",
@@ -179,10 +207,12 @@ async fn main() -> BinResult {
                         "max_pending_batches": 128,
                         "completed_batch_fetch_limit": 512
                     },
-                }),
+                }))?,
             };
             let run_status: RunStatus = status.into();
-            let run_id = store.create_run(run_status, &integration_params).await?;
+            let run_id = store
+                .create_run(run_status, &integration_params, &point_spec)
+                .await?;
             println!("created run_id={} status={}", run_id, run_status.as_str());
         }
         Command::RunStart { run_id } => {

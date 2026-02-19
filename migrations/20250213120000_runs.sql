@@ -8,12 +8,11 @@ CREATE TABLE IF NOT EXISTS runs (
 
     -- Per-run engine and runner configuration (TOML/JSON payload)
     integration_params JSONB,
+    point_spec JSONB NOT NULL DEFAULT '{"continuous_dims": 1, "discrete_dims": 0}'::jsonb,
 
     -- Summary statistics (updated periodically)
     total_batches_planned INT,
-    batches_completed INT DEFAULT 0,
-    final_result DOUBLE PRECISION,
-    error_estimate DOUBLE PRECISION
+    batches_completed INT DEFAULT 0
 );
 
 -- Index for filtering by status

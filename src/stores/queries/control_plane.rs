@@ -1,5 +1,5 @@
-use crate::contracts::WorkerRole;
-use crate::models::RunStatus;
+use crate::batch::PointSpec;
+use crate::core::{RunStatus, WorkerRole};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 
@@ -127,16 +127,18 @@ pub(crate) async fn create_run(
     pool: &PgPool,
     status: RunStatus,
     integration_params: &JsonValue,
+    point_spec: &PointSpec,
 ) -> Result<i32, sqlx::Error> {
     sqlx::query_scalar(
         r#"
-        INSERT INTO runs (status, integration_params)
-        VALUES ($1, $2)
+        INSERT INTO runs (status, integration_params, point_spec)
+        VALUES ($1, $2, $3)
         RETURNING id
         "#,
     )
     .bind(status.as_str())
     .bind(integration_params)
+    .bind(sqlx::types::Json(point_spec))
     .fetch_one(pool)
     .await
 }

@@ -4,13 +4,16 @@ use super::{
     sampler_aggregator::RunnerConfig, sampler_aggregator::SamplerAggregatorRunner,
     worker::WorkerRunner,
 };
-use crate::contracts::{
+use crate::core::{
     AggregationStore, AssignmentLeaseStore, ControlPlaneStore, EngineStateStore, RunSpecStore,
     StoreError, WorkQueueStore, Worker, WorkerRegistryStore, WorkerRole, WorkerStatus,
 };
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value as JsonValue, json};
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::{
     sync::watch,
     task::JoinHandle,
@@ -261,14 +264,24 @@ async fn run_evaluator_task(
         .evaluator_implementation
         .build(&spec.evaluator_params)
         .map_err(|err| StoreError::store(format!("failed to build evaluator: {err}")))?;
+    evaluator
+        .validate_point_spec(&spec.point_spec)
+        .map_err(|err| {
+            StoreError::store(format!(
+                "incompatible evaluator for point_spec on run {}: {}",
+                run_id, err
+            ))
+        })?;
+    let evaluator_implementation = evaluator.implementation();
+    let evaluator_version = evaluator.version();
 
     register_active_worker(
         &store,
         &worker_id,
         &node_id,
         WorkerRole::Evaluator,
-        spec.evaluator_implementation.as_str(),
-        spec.evaluator_implementation.version(),
+        evaluator_implementation,
+        evaluator_version,
     )
     .await?;
     store.assign_evaluator(run_id, &worker_id).await?;
@@ -277,8 +290,12 @@ async fn run_evaluator_task(
         run_id,
         worker_id.clone(),
         evaluator,
-        spec.observable_implementation,
+        Arc::new({
+            let implementation = spec.observable_implementation;
+            move |params: &JsonValue| implementation.build(params)
+        }),
         spec.observable_params.clone(),
+        spec.point_spec.clone(),
         store.clone(),
     );
 
@@ -338,6 +355,16 @@ async fn run_sampler_aggregator_task(
         .sampler_aggregator_implementation
         .build(&spec.sampler_aggregator_params)
         .map_err(|err| StoreError::store(format!("failed to build sampler-aggregator: {err}")))?;
+    engine
+        .validate_point_spec(&spec.point_spec)
+        .map_err(|err| {
+            StoreError::store(format!(
+                "incompatible sampler-aggregator for point_spec on run {}: {}",
+                run_id, err
+            ))
+        })?;
+    let sampler_aggregator_implementation = engine.implementation();
+    let sampler_aggregator_version = engine.version();
     let aggregated_observable = spec
         .observable_implementation
         .build(&spec.observable_params)
@@ -350,8 +377,8 @@ async fn run_sampler_aggregator_task(
         &worker_id,
         &node_id,
         WorkerRole::SamplerAggregator,
-        spec.sampler_aggregator_implementation.as_str(),
-        spec.sampler_aggregator_implementation.version(),
+        sampler_aggregator_implementation,
+        sampler_aggregator_version,
     )
     .await?;
 
@@ -367,6 +394,7 @@ async fn run_sampler_aggregator_task(
             max_pending_batches: runner_params.max_pending_batches,
             completed_batch_fetch_limit: runner_params.completed_batch_fetch_limit,
         },
+        spec.point_spec.clone(),
     )
     .await
     .map_err(|err| StoreError::store(err.to_string()))?;

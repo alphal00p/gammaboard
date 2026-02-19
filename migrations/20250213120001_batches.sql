@@ -4,10 +4,10 @@ CREATE TABLE IF NOT EXISTS batches (
     id BIGSERIAL PRIMARY KEY,
     run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
 
-    -- Batch data: array of points and their importance weights
+    -- Batch data: compact row-major flat arrays + point_spec
     points JSONB NOT NULL,
-    -- e.g., [{"point": [0.5, 0.3], "weight": 1.2}, {"point": [0.6, 0.4], "weight": 0.8}, ...]
-    -- Or alternatively: {"points": [[0.5, 0.3], [0.6, 0.4]], "weights": [1.2, 0.8]}
+    -- e.g., {"point_spec":{"continuous_dims":2,"discrete_dims":1},
+    --        "continuous":[0.5,0.3,0.6,0.4], "discrete":[1,2], "weights":[1.2,0.8]}
 
     batch_size INT NOT NULL,
     -- Number of samples in this batch
@@ -69,8 +69,6 @@ SELECT
     r.completed_at,
     r.total_batches_planned,
     r.batches_completed,
-    r.final_result,
-    r.error_estimate,
     COALESCE(b.total_batches, 0) as total_batches,
     COALESCE(b.total_samples, 0) as total_samples,
     COALESCE(b.pending_batches, 0) as pending_batches,

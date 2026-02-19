@@ -1,14 +1,14 @@
 //! Postgres-backed implementations of store contracts.
 
 use super::queries;
-use crate::batch::{Batch, BatchResults};
-use crate::contracts::{
+use crate::batch::{Batch, BatchResults, PointSpec};
+use crate::core::{
     AggregationStore, AssignmentLeaseStore, BatchClaim, CompletedBatch, ControlPlaneStore,
-    DesiredAssignment, EngineState, EngineStateStore, IntegrationParams, RunReadStore, RunSpec,
-    RunSpecStore, StoreError, WorkQueueStore, Worker, WorkerRegistryStore, WorkerRole,
-    WorkerStatus,
+    DesiredAssignment, EngineStateStore, RunSpecStore, RunStatus, StoreError, WorkQueueStore,
+    Worker, WorkerRegistryStore, WorkerRole, WorkerStatus,
 };
-use crate::models::RunStatus;
+use crate::engines::{EngineState, IntegrationParams, RunSpec};
+use crate::stores::RunReadStore;
 use serde_json::{Value as JsonValue, json};
 use sqlx::PgPool;
 use std::time::Duration;
@@ -38,6 +38,7 @@ fn map_sqlx(err: sqlx::Error) -> StoreError {
 
 fn run_spec_from_integration_params(
     run_id: i32,
+    point_spec: PointSpec,
     params: IntegrationParams,
 ) -> Result<RunSpec, StoreError> {
     let evaluator_implementation = params.evaluator_implementation.ok_or_else(|| {
@@ -59,6 +60,7 @@ fn run_spec_from_integration_params(
 
     Ok(RunSpec {
         run_id,
+        point_spec,
         evaluator_implementation,
         evaluator_params: params.evaluator_params.unwrap_or_else(|| json!({})),
         sampler_aggregator_implementation,
@@ -74,7 +76,11 @@ fn run_spec_from_integration_params(
     })
 }
 
-fn decode_run_spec(run_id: i32, integration_params: JsonValue) -> Result<RunSpec, StoreError> {
+fn decode_run_spec(
+    run_id: i32,
+    integration_params: JsonValue,
+    point_spec: JsonValue,
+) -> Result<RunSpec, StoreError> {
     if !integration_params.is_object() {
         return Err(store_err(format!(
             "invalid integration_params payload for run_id={run_id}: expected object"
@@ -87,7 +93,13 @@ fn decode_run_spec(run_id: i32, integration_params: JsonValue) -> Result<RunSpec
         ))
     })?;
 
-    run_spec_from_integration_params(run_id, params)
+    let point_spec: PointSpec = serde_json::from_value(point_spec).map_err(|err| {
+        store_err(format!(
+            "invalid point_spec payload for run_id={run_id}: {err}"
+        ))
+    })?;
+
+    run_spec_from_integration_params(run_id, point_spec, params)
 }
 
 #[async_trait::async_trait]
@@ -96,14 +108,14 @@ impl RunReadStore for PgStore {
         queries::health_check(&self.pool).await.map_err(map_sqlx)
     }
 
-    async fn get_all_runs(&self) -> Result<Vec<crate::models::RunProgress>, StoreError> {
+    async fn get_all_runs(&self) -> Result<Vec<crate::stores::RunProgress>, StoreError> {
         queries::get_all_runs(&self.pool).await.map_err(map_sqlx)
     }
 
     async fn get_run_progress(
         &self,
         run_id: i32,
-    ) -> Result<Option<crate::models::RunProgress>, StoreError> {
+    ) -> Result<Option<crate::stores::RunProgress>, StoreError> {
         queries::get_run_progress(&self.pool, run_id)
             .await
             .map_err(map_sqlx)
@@ -112,7 +124,7 @@ impl RunReadStore for PgStore {
     async fn get_work_queue_stats(
         &self,
         run_id: i32,
-    ) -> Result<Vec<crate::models::WorkQueueStats>, StoreError> {
+    ) -> Result<Vec<crate::stores::WorkQueueStats>, StoreError> {
         queries::get_work_queue_stats(&self.pool, run_id)
             .await
             .map_err(map_sqlx)
@@ -121,7 +133,7 @@ impl RunReadStore for PgStore {
     async fn get_latest_aggregated_result(
         &self,
         run_id: i32,
-    ) -> Result<Option<crate::models::AggregatedResult>, StoreError> {
+    ) -> Result<Option<crate::stores::AggregatedResult>, StoreError> {
         queries::get_latest_aggregated_result(&self.pool, run_id)
             .await
             .map_err(map_sqlx)
@@ -131,7 +143,7 @@ impl RunReadStore for PgStore {
         &self,
         run_id: i32,
         limit: i64,
-    ) -> Result<Vec<crate::models::AggregatedResult>, StoreError> {
+    ) -> Result<Vec<crate::stores::AggregatedResult>, StoreError> {
         queries::get_aggregated_results(&self.pool, run_id, limit)
             .await
             .map_err(map_sqlx)
@@ -141,14 +153,15 @@ impl RunReadStore for PgStore {
 #[async_trait::async_trait]
 impl RunSpecStore for PgStore {
     async fn load_run_spec(&self, run_id: i32) -> Result<Option<RunSpec>, StoreError> {
-        let Some(integration_params) = queries::load_integration_params(&self.pool, run_id)
-            .await
-            .map_err(map_sqlx)?
+        let Some((integration_params, point_spec)) =
+            queries::load_run_spec_payload(&self.pool, run_id)
+                .await
+                .map_err(map_sqlx)?
         else {
             return Ok(None);
         };
 
-        let spec = decode_run_spec(run_id, integration_params)?;
+        let spec = decode_run_spec(run_id, integration_params, point_spec)?;
         Ok(Some(spec))
     }
 }
@@ -311,8 +324,9 @@ impl ControlPlaneStore for PgStore {
         &self,
         status: RunStatus,
         integration_params: &JsonValue,
+        point_spec: &PointSpec,
     ) -> Result<i32, StoreError> {
-        queries::create_run(&self.pool, status, integration_params)
+        queries::create_run(&self.pool, status, integration_params, point_spec)
             .await
             .map_err(map_sqlx)
     }
@@ -490,7 +504,7 @@ impl AggregationStore for PgStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contracts::{
+    use crate::engines::{
         EvaluatorImplementation, ObservableImplementation, SamplerAggregatorImplementation,
     };
     use serde_json::json;
@@ -509,10 +523,16 @@ mod tests {
                 "worker_runner_params": { "min_loop_time_ms": 42 },
                 "sampler_aggregator_runner_params": { "interval_ms": 500 }
             }),
+            json!({
+                "continuous_dims": 1,
+                "discrete_dims": 0
+            }),
         )
         .expect("decode");
 
         assert_eq!(spec.run_id, 7);
+        assert_eq!(spec.point_spec.continuous_dims, 1);
+        assert_eq!(spec.point_spec.discrete_dims, 0);
         assert_eq!(
             spec.evaluator_implementation,
             EvaluatorImplementation::TestOnlySin
@@ -544,6 +564,10 @@ mod tests {
                 "sampler_aggregator_implementation": "test_only_training",
                 "observable_implementation": "test_only"
             }),
+            json!({
+                "continuous_dims": 1,
+                "discrete_dims": 0
+            }),
         )
         .expect("decode");
 
@@ -556,8 +580,15 @@ mod tests {
 
     #[test]
     fn decode_run_spec_requires_implementation_fields() {
-        let err = decode_run_spec(9, json!({ "evaluator_implementation": "test_only_sin" }))
-            .expect_err("missing required components should fail");
+        let err = decode_run_spec(
+            9,
+            json!({ "evaluator_implementation": "test_only_sin" }),
+            json!({
+                "continuous_dims": 1,
+                "discrete_dims": 0
+            }),
+        )
+        .expect_err("missing required components should fail");
         assert!(
             err.to_string()
                 .contains("sampler_aggregator_implementation")
@@ -566,8 +597,15 @@ mod tests {
 
     #[test]
     fn decode_run_spec_rejects_non_object_payload() {
-        let err = decode_run_spec(10, json!("invalid-shape"))
-            .expect_err("non-object payload should fail");
+        let err = decode_run_spec(
+            10,
+            json!("invalid-shape"),
+            json!({
+                "continuous_dims": 1,
+                "discrete_dims": 0
+            }),
+        )
+        .expect_err("non-object payload should fail");
         assert!(err.to_string().contains("expected object"));
     }
 }

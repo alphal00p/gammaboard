@@ -1,4 +1,5 @@
-use crate::models::{AggregatedResult, RunProgress, RunStatus, WorkQueueStats};
+use crate::core::RunStatus;
+use crate::stores::{AggregatedResult, RunProgress, WorkQueueStats};
 use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
@@ -21,8 +22,6 @@ struct RunProgressRow {
     completed_at: Option<DateTime<Utc>>,
     total_batches_planned: Option<i32>,
     batches_completed: i32,
-    final_result: Option<f64>,
-    error_estimate: Option<f64>,
     total_batches: i64,
     total_samples: i64,
     pending_batches: i64,
@@ -44,8 +43,6 @@ impl TryFrom<RunProgressRow> for RunProgress {
             completed_at: value.completed_at,
             total_batches_planned: value.total_batches_planned,
             batches_completed: value.batches_completed,
-            final_result: value.final_result,
-            error_estimate: value.error_estimate,
             total_batches: value.total_batches,
             total_samples: value.total_samples,
             pending_batches: value.pending_batches,
@@ -92,8 +89,6 @@ pub(crate) async fn get_all_runs(pool: &PgPool) -> Result<Vec<RunProgress>, sqlx
             completed_at,
             total_batches_planned,
             batches_completed,
-            final_result,
-            error_estimate,
             total_batches,
             total_samples,
             pending_batches,
@@ -125,8 +120,6 @@ pub(crate) async fn get_run_progress(
             completed_at,
             total_batches_planned,
             batches_completed,
-            final_result,
-            error_estimate,
             total_batches,
             total_samples,
             pending_batches,

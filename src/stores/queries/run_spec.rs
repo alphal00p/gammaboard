@@ -1,13 +1,15 @@
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 
-pub(crate) async fn load_integration_params(
+pub(crate) async fn load_run_spec_payload(
     pool: &PgPool,
     run_id: i32,
-) -> Result<Option<JsonValue>, sqlx::Error> {
-    let params = sqlx::query_scalar::<_, JsonValue>(
+) -> Result<Option<(JsonValue, JsonValue)>, sqlx::Error> {
+    let payload = sqlx::query_as::<_, (JsonValue, JsonValue)>(
         r#"
-        SELECT COALESCE(integration_params, '{}'::jsonb)
+        SELECT
+            COALESCE(integration_params, '{}'::jsonb) AS integration_params,
+            point_spec
         FROM runs
         WHERE id = $1
         "#,
@@ -16,5 +18,5 @@ pub(crate) async fn load_integration_params(
     .fetch_optional(pool)
     .await?;
 
-    Ok(params)
+    Ok(payload)
 }

@@ -4,117 +4,41 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::{fmt, str::FromStr};
 
-/// Immutable run configuration loaded from storage before starting a run loop.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RunSpec {
-    pub run_id: i32,
-    pub evaluator_implementation: EvaluatorImplementation,
-    pub evaluator_params: JsonValue,
-    pub sampler_aggregator_implementation: SamplerAggregatorImplementation,
-    pub sampler_aggregator_params: JsonValue,
-    pub observable_implementation: ObservableImplementation,
-    pub observable_params: JsonValue,
-    pub worker_runner_params: JsonValue,
-    pub sampler_aggregator_runner_params: JsonValue,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum EvaluatorImplementation {
-    TestOnlySin,
+pub enum RunStatus {
+    Pending,
+    #[serde(rename = "warm-up")]
+    WarmUp,
+    Running,
+    Completed,
+    Paused,
+    Cancelled,
 }
 
-impl EvaluatorImplementation {
-    pub const fn as_str(self) -> &'static str {
+impl RunStatus {
+    pub fn as_str(self) -> &'static str {
         match self {
-            Self::TestOnlySin => "test_only_sin",
+            RunStatus::Pending => "pending",
+            RunStatus::WarmUp => "warm-up",
+            RunStatus::Running => "running",
+            RunStatus::Completed => "completed",
+            RunStatus::Paused => "paused",
+            RunStatus::Cancelled => "cancelled",
         }
     }
 
-    pub const fn version(self) -> &'static str {
-        match self {
-            Self::TestOnlySin => "v1",
+    pub fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(RunStatus::Pending),
+            "warm-up" | "warm_up" => Some(RunStatus::WarmUp),
+            "running" => Some(RunStatus::Running),
+            "completed" => Some(RunStatus::Completed),
+            "paused" => Some(RunStatus::Paused),
+            "cancelled" => Some(RunStatus::Cancelled),
+            _ => None,
         }
     }
-}
-
-impl fmt::Display for EvaluatorImplementation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SamplerAggregatorImplementation {
-    TestOnlyTraining,
-}
-
-impl SamplerAggregatorImplementation {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::TestOnlyTraining => "test_only_training",
-        }
-    }
-
-    pub const fn version(self) -> &'static str {
-        match self {
-            Self::TestOnlyTraining => "v1",
-        }
-    }
-}
-
-impl fmt::Display for SamplerAggregatorImplementation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ObservableImplementation {
-    TestOnly,
-}
-
-impl ObservableImplementation {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::TestOnly => "test_only",
-        }
-    }
-
-    pub const fn version(self) -> &'static str {
-        match self {
-            Self::TestOnly => "v1",
-        }
-    }
-}
-
-impl fmt::Display for ObservableImplementation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// Canonical integration parameters payload stored on `runs.integration_params`.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct IntegrationParams {
-    pub evaluator_implementation: Option<EvaluatorImplementation>,
-    pub evaluator_params: Option<JsonValue>,
-    pub sampler_aggregator_implementation: Option<SamplerAggregatorImplementation>,
-    pub sampler_aggregator_params: Option<JsonValue>,
-    pub observable_implementation: Option<ObservableImplementation>,
-    pub observable_params: Option<JsonValue>,
-    pub worker_runner_params: Option<JsonValue>,
-    pub sampler_aggregator_runner_params: Option<JsonValue>,
-}
-
-/// In-memory state passed to a sampler-aggregator during initialization.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EngineState {
-    pub last_processed_batch_id: Option<i64>,
-    pub state: JsonValue,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
