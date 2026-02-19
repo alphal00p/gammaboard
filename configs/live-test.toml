@@ -1,5 +1,11 @@
+evaluator_implementation = "test_only_sin"
+sampler_aggregator_implementation = "test_only_training"
+observable_implementation = "test_only"
+
 [worker_runner_params]
-loop_sleep_ms = 200
+min_loop_time_ms = 200
+
+[evaluator_params]
 min_eval_time_per_sample_ms = 2
 
 [sampler_aggregator_runner_params]
@@ -13,3 +19,5 @@ completed_batch_fetch_limit = 512
 batch_size = 64
 training_target_samples = 2000
 training_delay_per_sample_ms = 2
+
+[observable_params]

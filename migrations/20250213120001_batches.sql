@@ -23,9 +23,11 @@ CREATE TABLE IF NOT EXISTS batches (
     completed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT now(),
 
-    -- Results (null until completed)
-    results JSONB,
-    -- Array of evaluated values: [0.123, 0.456, 0.789, ...]
+    -- Training weights (null until completed)
+    training_weights JSONB,
+
+    batch_observable JSONB,
+    -- Batch-level aggregated observable snapshot emitted by evaluator runner
 
     total_eval_time_ms DOUBLE PRECISION,
     -- Total time to evaluate all samples in batch
@@ -62,6 +64,7 @@ CREATE OR REPLACE VIEW run_progress AS
 SELECT
     r.id as run_id,
     r.status as run_status,
+    r.integration_params,
     r.started_at,
     r.completed_at,
     r.total_batches_planned,

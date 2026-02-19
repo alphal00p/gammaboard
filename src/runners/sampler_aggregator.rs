@@ -2,14 +2,16 @@
 //!
 //! This module intentionally focuses on process orchestration:
 //! - load persisted engine state
+//! - load persisted aggregated observable snapshot
 //! - call engine hooks
 //! - enqueue produced batches
-//! - fetch completed batches and pass them back into the engine
+//! - fetch completed batches and pass training weights back into the engine
+//! - aggregate completed batch observables into run-level observable snapshot
 //! - persist cursor state
 
 use crate::contracts::{
-    AggregationStore, CompletedBatch, EngineError, EngineState, EngineStateStore,
-    SamplerAggregatorEngine, StoreError, WorkQueueStore,
+    AggregatedObservable, AggregationStore, CompletedBatch, EngineError, EngineState,
+    EngineStateStore, SamplerAggregatorEngine, StoreError, WorkQueueStore,
 };
 use serde_json::json;
 use std::{error::Error, fmt};
@@ -55,12 +57,6 @@ impl fmt::Display for RunnerError {
 
 impl Error for RunnerError {}
 
-impl From<EngineError> for RunnerError {
-    fn from(value: EngineError) -> Self {
-        RunnerError::Engine(value)
-    }
-}
-
 impl From<StoreError> for RunnerError {
     fn from(value: StoreError) -> Self {
         RunnerError::Store(value)
@@ -70,6 +66,7 @@ impl From<StoreError> for RunnerError {
 pub struct SamplerAggregatorRunner<E, WQ, ES, AS> {
     run_id: i32,
     engine: E,
+    aggregated_observable: Box<dyn AggregatedObservable>,
     work_queue: WQ,
     state_store: ES,
     aggregation_store: AS,
@@ -87,6 +84,7 @@ where
     pub async fn new(
         run_id: i32,
         mut engine: E,
+        mut aggregated_observable: Box<dyn AggregatedObservable>,
         work_queue: WQ,
         state_store: ES,
         aggregation_store: AS,
@@ -96,12 +94,19 @@ where
         let last_processed_batch_id = persisted_state
             .as_ref()
             .and_then(|state| state.last_processed_batch_id);
+        let persisted_snapshot = aggregation_store
+            .load_latest_aggregation_snapshot(run_id)
+            .await?;
 
-        engine.init(persisted_state)?;
+        engine.init(persisted_state).map_err(RunnerError::Engine)?;
+        aggregated_observable
+            .restore(persisted_snapshot)
+            .map_err(RunnerError::Engine)?;
 
         Ok(Self {
             run_id,
             engine,
+            aggregated_observable,
             work_queue,
             state_store,
             aggregation_store,
@@ -125,7 +130,9 @@ where
         let mut produced = if produce_limit == 0 {
             Vec::new()
         } else {
-            self.engine.produce_batches(produce_limit)?
+            self.engine
+                .produce_batches(produce_limit)
+                .map_err(RunnerError::Engine)?
         };
         if produced.len() > produce_limit {
             produced.truncate(produce_limit);
@@ -161,10 +168,24 @@ where
             return Ok(());
         }
 
-        self.engine.ingest_completed(completed)?;
+        for batch in completed {
+            self.engine
+                .ingest_training_weights(&batch.results.training_weights)
+                .map_err(RunnerError::Engine)?;
+            self.aggregated_observable
+                .ingest_batch_observable(&batch.batch_observable)
+                .map_err(RunnerError::Engine)?;
+        }
+
+        let snapshot = self
+            .aggregated_observable
+            .snapshot()
+            .map_err(RunnerError::Engine)?;
+
         self.aggregation_store
-            .aggregate_and_persist(self.run_id, completed)
+            .save_aggregation_snapshot(self.run_id, &snapshot, completed.len() as i32)
             .await?;
+
         self.last_processed_batch_id = completed.last().map(|batch| batch.batch_id);
 
         let state = EngineState {
@@ -182,68 +203,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        Batch, BatchClaim, BatchResults, CompletedBatch, EngineState, StoreError, WeightedPoint,
-    };
+    use crate::batch::{Batch, BatchResults, WeightedPoint};
+    use crate::contracts::{EngineState, StoreError};
+    use crate::runners::test_support::MockWorkQueue;
+    use serde_json::{Value as JsonValue, json};
     use std::sync::{Arc, Mutex};
-
-    #[derive(Clone, Default)]
-    struct QueueState {
-        inserted: Vec<Batch>,
-        pending_batches: i64,
-        completed: Vec<CompletedBatch>,
-        fetch_last_batch_ids: Vec<Option<i64>>,
-    }
-
-    #[derive(Clone, Default)]
-    struct TestQueue {
-        inner: Arc<Mutex<QueueState>>,
-    }
-
-    impl WorkQueueStore for TestQueue {
-        async fn insert_batch(&self, _run_id: i32, batch: &Batch) -> Result<(), StoreError> {
-            let mut guard = self.inner.lock().expect("poison");
-            guard.inserted.push(batch.clone());
-            guard.pending_batches += 1;
-            Ok(())
-        }
-
-        async fn get_pending_batch_count(&self, _run_id: i32) -> Result<i64, StoreError> {
-            Ok(self.inner.lock().expect("poison").pending_batches)
-        }
-
-        async fn claim_batch(
-            &self,
-            _run_id: i32,
-            _worker_id: &str,
-        ) -> Result<Option<BatchClaim>, StoreError> {
-            Ok(None)
-        }
-
-        async fn submit_batch_results(
-            &self,
-            _batch_id: i64,
-            _results: &BatchResults,
-            _eval_time_ms: f64,
-        ) -> Result<(), StoreError> {
-            Ok(())
-        }
-
-        async fn fail_batch(&self, _batch_id: i64, _last_error: &str) -> Result<(), StoreError> {
-            Ok(())
-        }
-
-        async fn fetch_completed_batches_since(
-            &self,
-            _run_id: i32,
-            last_batch_id: Option<i64>,
-            _limit: usize,
-        ) -> Result<Vec<CompletedBatch>, StoreError> {
-            let mut guard = self.inner.lock().expect("poison");
-            guard.fetch_last_batch_ids.push(last_batch_id);
-            Ok(guard.completed.clone())
-        }
-    }
 
     #[derive(Clone, Default)]
     struct StateStoreData {
@@ -252,21 +216,36 @@ mod tests {
     }
 
     #[derive(Clone, Default)]
-    struct TestAggregationStore {
-        calls: Arc<Mutex<Vec<Vec<i64>>>>,
+    struct AggregationStoreData {
+        initial_snapshot: Option<JsonValue>,
+        saved: Vec<(i32, JsonValue, i32)>,
     }
 
+    #[derive(Clone, Default)]
+    struct TestAggregationStore {
+        inner: Arc<Mutex<AggregationStoreData>>,
+    }
+
+    #[async_trait::async_trait]
     impl AggregationStore for TestAggregationStore {
-        async fn aggregate_and_persist(
+        async fn load_latest_aggregation_snapshot(
             &self,
             _run_id: i32,
-            completed: &[CompletedBatch],
+        ) -> Result<Option<JsonValue>, StoreError> {
+            Ok(self.inner.lock().expect("poison").initial_snapshot.clone())
+        }
+
+        async fn save_aggregation_snapshot(
+            &self,
+            run_id: i32,
+            aggregated_observable: &JsonValue,
+            delta_batches_completed: i32,
         ) -> Result<(), StoreError> {
-            let ids = completed
-                .iter()
-                .map(|batch| batch.batch_id)
-                .collect::<Vec<_>>();
-            self.calls.lock().expect("poison").push(ids);
+            self.inner.lock().expect("poison").saved.push((
+                run_id,
+                aggregated_observable.clone(),
+                delta_batches_completed,
+            ));
             Ok(())
         }
     }
@@ -276,6 +255,7 @@ mod tests {
         inner: Arc<Mutex<StateStoreData>>,
     }
 
+    #[async_trait::async_trait]
     impl EngineStateStore for TestStateStore {
         async fn load_engine_state(&self, _run_id: i32) -> Result<Option<EngineState>, StoreError> {
             Ok(self.inner.lock().expect("poison").initial.clone())
@@ -294,7 +274,7 @@ mod tests {
     #[derive(Clone, Default)]
     struct Probe {
         init_last_processed_batch_id: Option<i64>,
-        ingested_batch_ids: Vec<i64>,
+        ingested_training_sizes: Vec<usize>,
         produce_requested: Vec<usize>,
     }
 
@@ -329,35 +309,108 @@ mod tests {
             Ok(self.produced.iter().take(max_batches).cloned().collect())
         }
 
-        fn ingest_completed(&mut self, completed: &[CompletedBatch]) -> Result<(), EngineError> {
-            let mut guard = self.probe.lock().expect("poison");
-            for batch in completed {
-                guard.ingested_batch_ids.push(batch.batch_id);
-            }
+        fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError> {
+            self.probe
+                .lock()
+                .expect("poison")
+                .ingested_training_sizes
+                .push(training_weights.len());
             Ok(())
         }
     }
 
-    fn make_batch() -> Batch {
-        Batch::new(vec![WeightedPoint::new(serde_json::json!(1.0), 1.0)])
+    #[derive(Default)]
+    struct TestObservable {
+        nr_samples: i64,
+        sum: f64,
     }
 
-    fn make_completed(batch_id: i64) -> CompletedBatch {
+    impl AggregatedObservable for TestObservable {
+        fn implementation(&self) -> &'static str {
+            "test_observable"
+        }
+
+        fn version(&self) -> &'static str {
+            "v1"
+        }
+
+        fn restore(&mut self, snapshot: Option<JsonValue>) -> Result<(), EngineError> {
+            if let Some(snapshot) = snapshot {
+                self.nr_samples = snapshot
+                    .get("nr_samples")
+                    .and_then(|v| v.as_i64())
+                    .ok_or_else(|| EngineError::engine("missing nr_samples"))?;
+                self.sum = snapshot
+                    .get("sum")
+                    .and_then(|v| v.as_f64())
+                    .ok_or_else(|| EngineError::engine("missing sum"))?;
+            }
+            Ok(())
+        }
+
+        fn ingest_sample_observable(
+            &mut self,
+            _sample_observable: &JsonValue,
+        ) -> Result<(), EngineError> {
+            Ok(())
+        }
+
+        fn ingest_batch_observable(
+            &mut self,
+            batch_observable: &JsonValue,
+        ) -> Result<(), EngineError> {
+            let nr_samples = batch_observable
+                .get("nr_samples")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| EngineError::engine("missing nr_samples"))?;
+            let sum = batch_observable
+                .get("sum")
+                .and_then(|v| v.as_f64())
+                .ok_or_else(|| EngineError::engine("missing sum"))?;
+            self.nr_samples += nr_samples;
+            self.sum += sum;
+            Ok(())
+        }
+
+        fn snapshot(&self) -> Result<JsonValue, EngineError> {
+            Ok(json!({
+                "nr_samples": self.nr_samples,
+                "sum": self.sum,
+            }))
+        }
+    }
+
+    fn make_batch() -> Batch {
+        Batch::new(vec![WeightedPoint::new(json!(1.0), 1.0)])
+    }
+
+    fn make_completed(
+        batch_id: i64,
+        training_weights: Vec<f64>,
+        observable_sum: f64,
+    ) -> CompletedBatch {
         CompletedBatch {
             batch_id,
             batch: make_batch(),
-            results: BatchResults::new(vec![0.5]),
+            results: BatchResults::new(training_weights.clone()),
+            batch_observable: json!({
+                "nr_samples": training_weights.len() as i64,
+                "sum": observable_sum,
+            }),
             completed_at: None,
         }
     }
 
     #[tokio::test]
-    async fn tick_processes_completed_batches_and_persists_cursor() {
+    async fn tick_processes_completed_batches_and_persists_cursor_and_snapshot() {
         let probe = Arc::new(Mutex::new(Probe::default()));
-        let queue = TestQueue::default();
+        let queue = MockWorkQueue::default();
         {
             let mut q = queue.inner.lock().expect("poison");
-            q.completed = vec![make_completed(11), make_completed(12)];
+            q.completed = vec![
+                make_completed(11, vec![0.1, 0.2], 0.3),
+                make_completed(12, vec![0.4], 0.4),
+            ];
         }
 
         let state_store = TestStateStore::default();
@@ -366,6 +419,14 @@ mod tests {
             last_processed_batch_id: Some(10),
             state: serde_json::json!({}),
         });
+        aggregation_store
+            .inner
+            .lock()
+            .expect("poison")
+            .initial_snapshot = Some(json!({
+            "nr_samples": 3,
+            "sum": 1.0,
+        }));
 
         let engine = TestEngine {
             produced: vec![make_batch()],
@@ -375,6 +436,7 @@ mod tests {
         let mut runner = SamplerAggregatorRunner::new(
             1,
             engine,
+            Box::new(TestObservable::default()),
             queue.clone(),
             state_store.clone(),
             aggregation_store.clone(),
@@ -391,22 +453,44 @@ mod tests {
         let q = queue.inner.lock().expect("poison").clone();
         let s = state_store.inner.lock().expect("poison").clone();
         let p = probe.lock().expect("poison").clone();
-        let agg_calls = aggregation_store.calls.lock().expect("poison").clone();
+        let agg_saved = aggregation_store
+            .inner
+            .lock()
+            .expect("poison")
+            .saved
+            .clone();
 
         assert_eq!(p.init_last_processed_batch_id, Some(10));
         assert_eq!(q.fetch_last_batch_ids, vec![Some(10)]);
         assert_eq!(q.inserted.len(), 1);
-        assert_eq!(p.ingested_batch_ids, vec![11, 12]);
-        assert_eq!(agg_calls, vec![vec![11, 12]]);
+        assert_eq!(p.ingested_training_sizes, vec![2, 1]);
         assert_eq!(tick.last_processed_batch_id, Some(12));
+
+        assert_eq!(agg_saved.len(), 1);
+        assert_eq!(agg_saved[0].0, 1);
+        assert_eq!(agg_saved[0].2, 2);
+        assert_eq!(
+            agg_saved[0]
+                .1
+                .get("nr_samples")
+                .and_then(|value| value.as_i64()),
+            Some(6)
+        );
+        let sum = agg_saved[0]
+            .1
+            .get("sum")
+            .and_then(|value| value.as_f64())
+            .expect("sum f64");
+        assert!((sum - 1.7).abs() < 1e-12);
+
         assert_eq!(s.saved.len(), 1);
         assert_eq!(s.saved[0].last_processed_batch_id, Some(12));
     }
 
     #[tokio::test]
-    async fn tick_without_completed_batches_skips_state_persist() {
+    async fn tick_without_completed_batches_skips_state_and_snapshot_persist() {
         let probe = Arc::new(Mutex::new(Probe::default()));
-        let queue = TestQueue::default();
+        let queue = MockWorkQueue::default();
         let state_store = TestStateStore::default();
         let aggregation_store = TestAggregationStore::default();
 
@@ -418,6 +502,7 @@ mod tests {
         let mut runner = SamplerAggregatorRunner::new(
             1,
             engine,
+            Box::new(TestObservable::default()),
             queue.clone(),
             state_store.clone(),
             aggregation_store.clone(),
@@ -433,18 +518,23 @@ mod tests {
         let tick = runner.tick().await.expect("tick");
         let s = state_store.inner.lock().expect("poison").clone();
         let p = probe.lock().expect("poison").clone();
-        let agg_calls = aggregation_store.calls.lock().expect("poison").clone();
+        let agg_saved = aggregation_store
+            .inner
+            .lock()
+            .expect("poison")
+            .saved
+            .clone();
 
         assert_eq!(tick.processed_completed_batches, 0);
-        assert!(p.ingested_batch_ids.is_empty());
-        assert!(agg_calls.is_empty());
+        assert!(p.ingested_training_sizes.is_empty());
+        assert!(agg_saved.is_empty());
         assert!(s.saved.is_empty());
     }
 
     #[tokio::test]
     async fn tick_skips_batch_production_when_pending_queue_is_full() {
         let probe = Arc::new(Mutex::new(Probe::default()));
-        let queue = TestQueue::default();
+        let queue = MockWorkQueue::default();
         queue.inner.lock().expect("poison").pending_batches = 5;
 
         let state_store = TestStateStore::default();
@@ -457,6 +547,7 @@ mod tests {
         let mut runner = SamplerAggregatorRunner::new(
             1,
             engine,
+            Box::new(TestObservable::default()),
             queue.clone(),
             state_store,
             aggregation_store,
@@ -481,7 +572,7 @@ mod tests {
     #[tokio::test]
     async fn tick_limits_batch_production_to_remaining_pending_capacity() {
         let probe = Arc::new(Mutex::new(Probe::default()));
-        let queue = TestQueue::default();
+        let queue = MockWorkQueue::default();
         queue.inner.lock().expect("poison").pending_batches = 3;
 
         let state_store = TestStateStore::default();
@@ -494,6 +585,7 @@ mod tests {
         let mut runner = SamplerAggregatorRunner::new(
             1,
             engine,
+            Box::new(TestObservable::default()),
             queue.clone(),
             state_store,
             aggregation_store,

@@ -7,14 +7,16 @@ use axum::{
     Router,
     extract::{Path, Query, State},
     http::StatusCode,
-    response::{IntoResponse, Json},
+    response::{IntoResponse, Json, Response},
     routing::get,
 };
 use futures_core::Stream;
-use gammaboard::{PgStore, RunReadStore, get_pg_pool};
+use gammaboard::contracts::RunReadStore;
+use gammaboard::{BinResult, PgStore, init_pg_store};
 use serde::Deserialize;
 use std::{
     convert::Infallible,
+    fmt::Display,
     net::SocketAddr,
     pin::Pin,
     task::{Context, Poll},
@@ -48,6 +50,15 @@ fn sanitize_stream_interval_ms(interval_ms: u64) -> u64 {
     interval_ms.clamp(MIN_INTERVAL_MS, MAX_INTERVAL_MS)
 }
 
+fn json_error(status: StatusCode, message: &str) -> Response {
+    (status, Json(serde_json::json!({ "error": message }))).into_response()
+}
+
+fn internal_error(context: impl Display, err: impl Display, message: &str) -> Response {
+    eprintln!("Error {}: {}", context, err);
+    json_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+}
+
 #[derive(Deserialize)]
 struct StreamQuery {
     #[serde(default = "default_stream_interval_ms")]
@@ -67,17 +78,30 @@ impl Stream for MpscStream {
     }
 }
 
+async fn send_sse_error(
+    tx: &mpsc::Sender<Result<Event, Infallible>>,
+    message: &str,
+    details: impl Display,
+) -> bool {
+    let err_event = Event::default().event("error").data(
+        serde_json::json!({
+            "error": message,
+            "details": details.to_string()
+        })
+        .to_string(),
+    );
+    tx.send(Ok(err_event)).await.is_ok()
+}
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> BinResult {
     println!("🚀 Starting Gammaboard API Server...");
 
     // Initialize database connection pool
-    let pool = get_pg_pool(10).await?;
+    let store = init_pg_store(10).await?;
     println!("✅ Connected to database");
 
-    let state = AppState {
-        store: PgStore::new(pool),
-    };
+    let state = AppState { store };
 
     // Build API routes
     let api_routes = Router::new()
@@ -141,14 +165,7 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
 async fn get_runs(State(state): State<AppState>) -> impl IntoResponse {
     match state.store.get_all_runs().await {
         Ok(runs) => (StatusCode::OK, Json(runs)).into_response(),
-        Err(e) => {
-            eprintln!("Error fetching runs: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Failed to fetch runs" })),
-            )
-                .into_response()
-        }
+        Err(e) => internal_error("fetching runs", e, "Failed to fetch runs"),
     }
 }
 
@@ -156,19 +173,8 @@ async fn get_runs(State(state): State<AppState>) -> impl IntoResponse {
 async fn get_run(State(state): State<AppState>, Path(id): Path<i32>) -> impl IntoResponse {
     match state.store.get_run_progress(id).await {
         Ok(Some(run)) => (StatusCode::OK, Json(run)).into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "Run not found" })),
-        )
-            .into_response(),
-        Err(e) => {
-            eprintln!("Error fetching run {}: {}", id, e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Failed to fetch run" })),
-            )
-                .into_response()
-        }
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "Run not found"),
+        Err(e) => internal_error(format!("fetching run {id}"), e, "Failed to fetch run"),
     }
 }
 
@@ -176,14 +182,11 @@ async fn get_run(State(state): State<AppState>, Path(id): Path<i32>) -> impl Int
 async fn get_run_stats(State(state): State<AppState>, Path(id): Path<i32>) -> impl IntoResponse {
     match state.store.get_work_queue_stats(id).await {
         Ok(stats) => (StatusCode::OK, Json(stats)).into_response(),
-        Err(e) => {
-            eprintln!("Error fetching stats for run {}: {}", id, e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Failed to fetch stats" })),
-            )
-                .into_response()
-        }
+        Err(e) => internal_error(
+            format!("fetching stats for run {id}"),
+            e,
+            "Failed to fetch stats",
+        ),
     }
 }
 
@@ -195,14 +198,11 @@ async fn get_run_aggregated_results(
 ) -> impl IntoResponse {
     match state.store.get_aggregated_results(id, params.limit).await {
         Ok(results) => (StatusCode::OK, Json(results)).into_response(),
-        Err(e) => {
-            eprintln!("Error fetching aggregated results for run {}: {}", id, e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Failed to fetch aggregated results" })),
-            )
-                .into_response()
-        }
+        Err(e) => internal_error(
+            format!("fetching aggregated results for run {id}"),
+            e,
+            "Failed to fetch aggregated results",
+        ),
     }
 }
 
@@ -213,22 +213,12 @@ async fn get_run_aggregated_latest(
 ) -> impl IntoResponse {
     match state.store.get_latest_aggregated_result(id).await {
         Ok(Some(result)) => (StatusCode::OK, Json(result)).into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "No aggregated results" })),
-        )
-            .into_response(),
-        Err(e) => {
-            eprintln!(
-                "Error fetching latest aggregated result for run {}: {}",
-                id, e
-            );
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Failed to fetch aggregated results" })),
-            )
-                .into_response()
-        }
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "No aggregated results"),
+        Err(e) => internal_error(
+            format!("fetching latest aggregated result for run {id}"),
+            e,
+            "Failed to fetch aggregated results",
+        ),
     }
 }
 
@@ -241,19 +231,14 @@ async fn stream_run_stats(
     match state.store.get_run_progress(id).await {
         Ok(Some(_)) => {}
         Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": "Run not found" })),
-            )
-                .into_response();
+            return json_error(StatusCode::NOT_FOUND, "Run not found");
         }
         Err(e) => {
-            eprintln!("Error validating run {} for stream: {}", id, e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Failed to initialize stream" })),
-            )
-                .into_response();
+            return internal_error(
+                format!("validating run {id} for stream"),
+                e,
+                "Failed to initialize stream",
+            );
         }
     }
 
@@ -269,14 +254,7 @@ async fn stream_run_stats(
             let progress = match store.get_run_progress(id).await {
                 Ok(run) => run,
                 Err(e) => {
-                    let err_event = Event::default().event("error").data(
-                        serde_json::json!({
-                            "error": "Failed to fetch run progress",
-                            "details": e.to_string()
-                        })
-                        .to_string(),
-                    );
-                    if tx.send(Ok(err_event)).await.is_err() {
+                    if !send_sse_error(&tx, "Failed to fetch run progress", e).await {
                         break;
                     }
                     continue;
@@ -286,14 +264,7 @@ async fn stream_run_stats(
             let aggregated = match store.get_latest_aggregated_result(id).await {
                 Ok(result) => result,
                 Err(e) => {
-                    let err_event = Event::default().event("error").data(
-                        serde_json::json!({
-                            "error": "Failed to fetch aggregated results",
-                            "details": e.to_string()
-                        })
-                        .to_string(),
-                    );
-                    if tx.send(Ok(err_event)).await.is_err() {
+                    if !send_sse_error(&tx, "Failed to fetch aggregated results", e).await {
                         break;
                     }
                     continue;

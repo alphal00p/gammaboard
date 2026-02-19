@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use gammaboard::{WorkerRole, ControlPlaneStore, DesiredAssignment, PgStore, get_pg_pool};
+use gammaboard::contracts::{ControlPlaneStore, DesiredAssignment, WorkerRole};
+use gammaboard::models::RunStatus;
+use gammaboard::{BinResult, init_pg_store};
 use serde_json::{Value as JsonValue, json};
 use std::{fs, path::PathBuf};
 
@@ -14,6 +16,29 @@ impl From<RoleArg> for WorkerRole {
         match value {
             RoleArg::Evaluator => WorkerRole::Evaluator,
             RoleArg::SamplerAggregator => WorkerRole::SamplerAggregator,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum RunStatusArg {
+    Pending,
+    WarmUp,
+    Running,
+    Completed,
+    Paused,
+    Cancelled,
+}
+
+impl From<RunStatusArg> for RunStatus {
+    fn from(value: RunStatusArg) -> Self {
+        match value {
+            RunStatusArg::Pending => RunStatus::Pending,
+            RunStatusArg::WarmUp => RunStatus::WarmUp,
+            RunStatusArg::Running => RunStatus::Running,
+            RunStatusArg::Completed => RunStatus::Completed,
+            RunStatusArg::Paused => RunStatus::Paused,
+            RunStatusArg::Cancelled => RunStatus::Cancelled,
         }
     }
 }
@@ -47,8 +72,8 @@ enum Command {
         node_id: Option<String>,
     },
     RunAdd {
-        #[arg(long, default_value = "pending")]
-        status: String,
+        #[arg(long, value_enum, default_value_t = RunStatusArg::Pending)]
+        status: RunStatusArg,
         #[arg(long)]
         integration_params_file: Option<PathBuf>,
     },
@@ -59,8 +84,8 @@ enum Command {
     RunStop {
         #[arg(long)]
         run_id: i32,
-        #[arg(long, default_value = "paused")]
-        status: String,
+        #[arg(long, value_enum, default_value_t = RunStatusArg::Paused)]
+        status: RunStatusArg,
     },
     RunRemove {
         #[arg(long)]
@@ -68,7 +93,7 @@ enum Command {
     },
 }
 
-fn read_integration_params_toml(path: &PathBuf) -> Result<JsonValue, Box<dyn std::error::Error>> {
+fn read_integration_params_toml(path: &PathBuf) -> BinResult<JsonValue> {
     let raw = fs::read_to_string(path)?;
     let toml_value: toml::Value = toml::from_str(&raw)?;
     let json_value = serde_json::to_value(toml_value)?;
@@ -83,22 +108,17 @@ fn read_integration_params_toml(path: &PathBuf) -> Result<JsonValue, Box<dyn std
 }
 
 fn print_assignment(assignment: &DesiredAssignment) {
-    let role = match assignment.role {
-        WorkerRole::Evaluator => "evaluator",
-        WorkerRole::SamplerAggregator => "sampler_aggregator",
-    };
     println!(
         "node={} role={} run_id={}",
-        assignment.node_id, role, assignment.run_id
+        assignment.node_id, assignment.role, assignment.run_id
     );
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> BinResult {
     let cli = Cli::parse();
 
-    let pool = get_pg_pool(10).await?;
-    let store = PgStore::new(pool);
+    let store = init_pg_store(10).await?;
 
     match cli.command {
         Command::Assign {
@@ -110,7 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .upsert_desired_assignment(&node_id, role.into(), run_id)
                 .await?;
             println!(
-                "assigned node={} role={:?} run_id={}",
+                "assigned node={} role={} run_id={}",
                 node_id,
                 WorkerRole::from(role),
                 run_id
@@ -121,7 +141,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .clear_desired_assignment(&node_id, WorkerRole::from(role))
                 .await?;
             println!(
-                "unassigned node={} role={:?}",
+                "unassigned node={} role={}",
                 node_id,
                 WorkerRole::from(role)
             );
@@ -142,18 +162,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         } => {
             let integration_params = match integration_params_file {
                 Some(path) => read_integration_params_toml(&path)?,
-                None => json!({}),
+                None => json!({
+                    "evaluator_implementation": "test_only_sin",
+                    "evaluator_params": {},
+                    "sampler_aggregator_implementation": "test_only_training",
+                    "sampler_aggregator_params": {},
+                    "observable_implementation": "test_only",
+                    "observable_params": {},
+                    "worker_runner_params": {
+                        "min_loop_time_ms": 200
+                    },
+                    "sampler_aggregator_runner_params": {
+                        "interval_ms": 500,
+                        "lease_ttl_ms": 5000,
+                        "max_batches_per_tick": 1,
+                        "max_pending_batches": 128,
+                        "completed_batch_fetch_limit": 512
+                    },
+                }),
             };
-            let run_id = store.create_run(&status, &integration_params).await?;
-            println!("created run_id={} status={}", run_id, status);
+            let run_status: RunStatus = status.into();
+            let run_id = store.create_run(run_status, &integration_params).await?;
+            println!("created run_id={} status={}", run_id, run_status.as_str());
         }
         Command::RunStart { run_id } => {
-            store.set_run_status(run_id, "running").await?;
+            store.set_run_status(run_id, RunStatus::Running).await?;
             println!("run {} set to running", run_id);
         }
         Command::RunStop { run_id, status } => {
-            store.set_run_status(run_id, &status).await?;
-            println!("run {} set to {}", run_id, status);
+            let run_status: RunStatus = status.into();
+            store.set_run_status(run_id, run_status).await?;
+            println!("run {} set to {}", run_id, run_status.as_str());
         }
         Command::RunRemove { run_id } => {
             store.remove_run(run_id).await?;

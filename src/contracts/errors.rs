@@ -1,85 +1,36 @@
-use std::{error::Error, fmt};
+use thiserror::Error;
 
-#[derive(Debug, Clone)]
-pub struct EvalError {
-    pub message: String,
+#[derive(Debug, Clone, Error)]
+pub enum GammaboardError {
+    #[error("evaluation error: {0}")]
+    Eval(String),
+    #[error("build error: {0}")]
+    Build(String),
+    #[error("engine error: {0}")]
+    Engine(String),
+    #[error("store error: {0}")]
+    Store(String),
 }
 
-impl EvalError {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
+impl GammaboardError {
+    pub fn eval(message: impl Into<String>) -> Self {
+        Self::Eval(message.into())
+    }
+
+    pub fn build(message: impl Into<String>) -> Self {
+        Self::Build(message.into())
+    }
+
+    pub fn engine(message: impl Into<String>) -> Self {
+        Self::Engine(message.into())
+    }
+
+    pub fn store(message: impl Into<String>) -> Self {
+        Self::Store(message.into())
     }
 }
 
-impl fmt::Display for EvalError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "evaluation error: {}", self.message)
-    }
-}
-
-impl Error for EvalError {}
-
-#[derive(Debug, Clone)]
-pub struct BuildError {
-    pub message: String,
-}
-
-impl BuildError {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for BuildError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "build error: {}", self.message)
-    }
-}
-
-impl Error for BuildError {}
-
-#[derive(Debug, Clone)]
-pub struct EngineError {
-    pub message: String,
-}
-
-impl EngineError {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for EngineError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "engine error: {}", self.message)
-    }
-}
-
-impl Error for EngineError {}
-
-#[derive(Debug, Clone)]
-pub struct StoreError {
-    pub message: String,
-}
-
-impl StoreError {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for StoreError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "store error: {}", self.message)
-    }
-}
-
-impl Error for StoreError {}
+pub type EvalError = GammaboardError;
+pub type BuildError = GammaboardError;
+pub type EngineError = GammaboardError;
+pub type StoreError = GammaboardError;

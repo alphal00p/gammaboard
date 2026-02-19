@@ -21,14 +21,15 @@ function App() {
 const AppContent = ({ runs, selectedRun, setSelectedRun }) => {
   const { run, workQueueStats, history, latestAggregated, isConnected, lastUpdate } = useRunHistory();
   const currentRun = run || runs.find((r) => r.run_id === selectedRun);
+  const observableImplementation = currentRun?.integration_params?.observable_implementation || null;
 
   const derivedSamples = history
     .slice()
     .reverse()
     .map((item) => ({
-      sampleCount: item.nr_samples ?? 0,
-      mean: item.mean ?? 0,
-      value: item.mean ?? item.weighted_sum ?? 0,
+      sampleCount: item.aggregated_observable?.nr_samples ?? 0,
+      mean: item.aggregated_observable?.mean ?? 0,
+      value: item.aggregated_observable?.mean ?? 0,
     }));
 
   return (
@@ -46,8 +47,14 @@ const AppContent = ({ runs, selectedRun, setSelectedRun }) => {
       <RunSelector runs={runs} selectedRun={selectedRun} onRunChange={setSelectedRun} />
       <RunInfo run={currentRun} />
       <WorkQueueStats stats={workQueueStats} completionRate={currentRun?.completion_rate} />
-      <AggregatedBatchesPanel latestAggregated={latestAggregated} />
-      <SampleChart samples={derivedSamples} isConnected={isConnected} currentRun={currentRun} />
+      <AggregatedBatchesPanel latestAggregated={latestAggregated} run={currentRun} />
+      <SampleChart
+        samples={derivedSamples}
+        isConnected={isConnected}
+        currentRun={currentRun}
+        latestAggregated={latestAggregated}
+        observableImplementation={observableImplementation}
+      />
     </Container>
   );
 };

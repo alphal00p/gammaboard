@@ -6,10 +6,7 @@ CREATE TABLE IF NOT EXISTS runs (
     status TEXT NOT NULL DEFAULT 'pending',
     -- Status: 'pending', 'warm-up', 'running', 'completed', 'paused', 'cancelled'
 
-    -- Contains gammaloop parameters and glnis settings
-    -- Split into separate fields for better organization
-    glnis_settings JSONB,
-    gammaloop_params JSONB,
+    -- Per-run engine and runner configuration (TOML/JSON payload)
     integration_params JSONB,
 
     -- Summary statistics (updated periodically)

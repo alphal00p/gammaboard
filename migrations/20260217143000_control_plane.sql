@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS workers (
     node_specs JSONB NOT NULL DEFAULT '{}'::jsonb,
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'draining', 'inactive')),
     desired_run_id INT REFERENCES runs(id) ON DELETE SET NULL,
-    desired_updated_at TIMESTAMPTZ,
+    desired_updated_at TIMESTAMPTZ, --this is set by the control plane
     last_seen TIMESTAMPTZ,
     registered_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS run_sampler_aggregator_leases (
 CREATE INDEX IF NOT EXISTS idx_sa_leases_expires
     ON run_sampler_aggregator_leases(lease_expires_at);
 
--- One-to-many evaluator assignments per run.
+-- One-to-many evaluator assignments per run. represents actual state
 CREATE TABLE IF NOT EXISTS run_evaluator_assignments (
     run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     worker_id TEXT NOT NULL REFERENCES workers(worker_id) ON DELETE CASCADE,

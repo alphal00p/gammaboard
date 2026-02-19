@@ -16,24 +16,24 @@ restart-db:
 control-plane +args:
     cargo run --bin control_plane -- {{args}}
 
-worker node_id poll_ms='500':
-    cargo run --bin worker -- -t --node-id {{node_id}} --poll-ms {{poll_ms}}
+run-node node_id poll_ms='500':
+    cargo run --bin run_node -- --node-id {{node_id}} --poll-ms {{poll_ms}}
 
 run-evaluator-worker:
     @echo "Starting worker on {{node_evaluator}}..."
-    just worker {{node_evaluator}} 500
+    just run-node {{node_evaluator}} 500
 
 run-sampler-worker:
     @echo "Starting worker on {{node_sampler}}..."
-    just worker {{node_sampler}} 500
+    just run-node {{node_sampler}} 500
 
 stop-workers:
-    -pkill -f "cargo run --bin worker -- .*--node-id {{node_evaluator}}"
-    -pkill -f "cargo run --bin worker -- .*--node-id {{node_sampler}}"
-    -pkill -f "{{justfile_directory()}}/target/debug/worker.*--node-id {{node_evaluator}}"
-    -pkill -f "{{justfile_directory()}}/target/debug/worker.*--node-id {{node_sampler}}"
-    -pkill -f "target/debug/worker.*--node-id {{node_evaluator}}"
-    -pkill -f "target/debug/worker.*--node-id {{node_sampler}}"
+    -pkill -f "cargo run --bin run_node -- .*--node-id {{node_evaluator}}"
+    -pkill -f "cargo run --bin run_node -- .*--node-id {{node_sampler}}"
+    -pkill -f "{{justfile_directory()}}/target/debug/run_node.*--node-id {{node_evaluator}}"
+    -pkill -f "{{justfile_directory()}}/target/debug/run_node.*--node-id {{node_sampler}}"
+    -pkill -f "target/debug/run_node.*--node-id {{node_evaluator}}"
+    -pkill -f "target/debug/run_node.*--node-id {{node_sampler}}"
     @echo "Control-plane workers stopped"
 
 serve-backend:

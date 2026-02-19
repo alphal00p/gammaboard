@@ -13,12 +13,12 @@ Gammaboard is a distributed numerical integration system that uses PostgreSQL as
   - Read API for runs, queue stats, aggregated snapshots, and SSE updates.
 - `control_plane` (`src/bin/control_plane.rs`)
   - Admin CLI for run lifecycle and desired role assignments.
-- `worker` (`src/bin/worker.rs`)
+- `run_node` (`src/bin/run_node.rs`)
   - Node-local reconciler that starts/stops role loops based on control-plane desired assignments.
 
 ### Library Modules
 
-- `src/control_plane/mod.rs`
+- `src/runners/node_runner.rs`
   - Reconciliation loop per node.
   - Manages local evaluator and sampler-aggregator tasks.
   - Handles spin-up/spin-down when assignments change.
@@ -31,13 +31,13 @@ Gammaboard is a distributed numerical integration system that uses PostgreSQL as
 - `src/contracts/*`
   - Runtime and storage traits, shared domain models.
 - `src/engines/test_only.rs`
-  - Test-only evaluator/sampler implementations used by `worker --test`.
+  - Test-only evaluator/sampler/observable implementations.
 
 ### Runtime Flow
 
 1. Create a run with integration params.
 2. Assign desired roles (`evaluator`, `sampler-aggregator`) to node ids via `control_plane`.
-3. Run `worker` on each node id.
+3. Run `run_node` on each node id.
 4. Each worker reconciles desired state:
    - starts/stops evaluator and sampler-aggregator loops when assignments change
    - heartbeats itself in `workers`
@@ -69,8 +69,14 @@ Run integration params are provided via TOML file and passed to `control_plane r
 Example file: `configs/live-test.toml`
 
 ```toml
+evaluator_implementation = "test_only_sin"
+sampler_aggregator_implementation = "test_only_training"
+observable_implementation = "test_only"
+
 [worker_runner_params]
-loop_sleep_ms = 200
+min_loop_time_ms = 200
+
+[evaluator_params]
 min_eval_time_per_sample_ms = 2
 
 [sampler_aggregator_runner_params]
@@ -84,6 +90,8 @@ completed_batch_fetch_limit = 512
 batch_size = 64
 training_target_samples = 2000
 training_delay_per_sample_ms = 2
+
+[observable_params]
 ```
 
 ## Local Usage
@@ -112,8 +120,8 @@ Useful controls:
 1. Create run:
    - `cargo run --bin control_plane -- run-add --status pending --integration-params-file configs/live-test.toml`
 2. Start workers:
-   - `cargo run --bin worker -- -t --node-id node-a --poll-ms 1000`
-   - `cargo run --bin worker -- -t --node-id node-b --poll-ms 1000`
+   - `cargo run --bin run_node -- --node-id node-a --poll-ms 1000`
+   - `cargo run --bin run_node -- --node-id node-b --poll-ms 1000`
 3. Assign roles:
    - `cargo run --bin control_plane -- assign --node-id node-a --role evaluator --run-id <RUN_ID>`
    - `cargo run --bin control_plane -- assign --node-id node-b --role sampler-aggregator --run-id <RUN_ID>`
@@ -122,5 +130,4 @@ Useful controls:
 
 ## Current Limitation
 
-`worker` currently requires `-t` / `--test` and uses test-only engines (`src/engines/test_only.rs`).
-Non-test engine wiring is intentionally still `todo!()`.
+Only test-only engine implementations are currently compiled in (`src/engines/test_only.rs`).

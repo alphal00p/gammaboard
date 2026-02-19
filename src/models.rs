@@ -2,11 +2,49 @@
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunStatus {
+    Pending,
+    #[serde(rename = "warm-up")]
+    WarmUp,
+    Running,
+    Completed,
+    Paused,
+    Cancelled,
+}
+
+impl RunStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RunStatus::Pending => "pending",
+            RunStatus::WarmUp => "warm-up",
+            RunStatus::Running => "running",
+            RunStatus::Completed => "completed",
+            RunStatus::Paused => "paused",
+            RunStatus::Cancelled => "cancelled",
+        }
+    }
+
+    pub fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(RunStatus::Pending),
+            "warm-up" | "warm_up" => Some(RunStatus::WarmUp),
+            "running" => Some(RunStatus::Running),
+            "completed" => Some(RunStatus::Completed),
+            "paused" => Some(RunStatus::Paused),
+            "cancelled" => Some(RunStatus::Cancelled),
+            _ => None,
+        }
+    }
+}
+
 /// Run progress information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunProgress {
     pub run_id: i32,
-    pub run_status: String,
+    pub run_status: RunStatus,
+    pub integration_params: Option<serde_json::Value>,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub total_batches_planned: Option<i32>,
@@ -38,21 +76,6 @@ pub struct WorkQueueStats {
 pub struct AggregatedResult {
     pub id: i64,
     pub run_id: i32,
-    pub nr_samples: i64,
-    pub nr_batches: i32,
-    pub sum: f64,
-    pub sum_x2: f64,
-    pub sum_abs: f64,
-    pub max: Option<f64>,
-    pub min: Option<f64>,
-    pub weighted_sum: f64,
-    pub weighted_sum_x2: f64,
-    pub sum_weights: f64,
-    pub effective_sample_size: Option<f64>,
-    pub mean: Option<f64>,
-    pub variance: Option<f64>,
-    pub std_dev: Option<f64>,
-    pub error_estimate: Option<f64>,
-    pub histograms: Option<serde_json::Value>,
+    pub aggregated_observable: serde_json::Value,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }

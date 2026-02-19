@@ -118,29 +118,59 @@ pub struct BatchRecord {
 /// Results from evaluating a batch
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchResults {
-    /// Evaluated values corresponding to each point in the batch
-    pub values: Vec<f64>,
+    /// Per-sample training weights consumed by sampler training logic.
+    pub training_weights: Vec<f64>,
+}
+
+/// Per-sample evaluator output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvaluatedSample {
+    /// Training weight used by sampler training.
+    pub weight: f64,
+    /// Per-sample observable payload to be batch-aggregated by worker runner.
+    #[serde(default)]
+    pub observable: JsonValue,
+}
+
+impl EvaluatedSample {
+    pub fn weight_only(weight: f64) -> Self {
+        Self {
+            weight,
+            observable: JsonValue::Null,
+        }
+    }
 }
 
 impl BatchResults {
-    pub fn new(values: Vec<f64>) -> Self {
-        Self { values }
+    pub fn new(training_weights: Vec<f64>) -> Self {
+        Self { training_weights }
+    }
+
+    pub fn from_evaluated_samples(samples: &[EvaluatedSample]) -> Self {
+        Self {
+            training_weights: samples.iter().map(|sample| sample.weight).collect(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.training_weights.len()
     }
 
     /// Check if results match the batch size
     pub fn matches_batch(&self, batch: &Batch) -> bool {
-        self.values.len() == batch.size()
+        self.len() == batch.size()
     }
 
     /// Convert to JSON for database storage
     pub fn to_json(&self) -> JsonValue {
-        serde_json::to_value(&self.values).expect("Results serialization should never fail")
+        serde_json::to_value(&self.training_weights)
+            .expect("Results serialization should never fail")
     }
 
     /// Create from JSON stored in database
     pub fn from_json(value: &JsonValue) -> Result<Self, serde_json::Error> {
-        let values: Vec<f64> = serde_json::from_value(value.clone())?;
-        Ok(Self::new(values))
+        let training_weights: Vec<f64> = serde_json::from_value(value.clone())?;
+        Ok(Self::new(training_weights))
     }
 }
 

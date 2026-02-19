@@ -2,7 +2,9 @@ import { Box, Card, CardContent, Typography, Paper } from "@mui/material";
 import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer } from "recharts";
 import { TrendingUp as TrendingUpIcon } from "@mui/icons-material";
 
-const SampleChart = ({ samples, isConnected, currentRun }) => {
+const SampleChart = ({ samples, isConnected, currentRun, latestAggregated, observableImplementation }) => {
+  const knownObservableImplementation = !observableImplementation || observableImplementation === "test_only";
+
   const formatMeanTick = (value) => {
     if (!Number.isFinite(value)) return "";
     const abs = Math.abs(value);
@@ -82,6 +84,25 @@ const SampleChart = ({ samples, isConnected, currentRun }) => {
       </Box>
     );
   };
+
+  if (!knownObservableImplementation) {
+    const observableJson = latestAggregated?.aggregated_observable || null;
+    return (
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="h6" gutterBottom>
+          Aggregated Observable
+        </Typography>
+        <Paper sx={{ p: 2 }}>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            No specialized renderer for observable implementation: <strong>{observableImplementation}</strong>
+          </Typography>
+          <Box component="pre" sx={{ m: 0, overflowX: "auto", fontSize: "0.8rem" }}>
+            {JSON.stringify(observableJson, null, 2)}
+          </Box>
+        </Paper>
+      </Box>
+    );
+  }
 
   if (!samples || samples.length === 0) {
     return (

@@ -1,9 +1,10 @@
 import { Box, Card, CardContent, Grid, Typography } from "@mui/material";
 import { Layers as LayersIcon, Analytics as AnalyticsIcon } from "@mui/icons-material";
 
-const AggregatedBatchesPanel = ({ latestAggregated }) => {
-  const aggregatedBatches = latestAggregated?.nr_batches || 0;
-  const aggregatedSamples = latestAggregated?.nr_samples || 0;
+const AggregatedBatchesPanel = ({ latestAggregated, run }) => {
+  const observable = latestAggregated?.aggregated_observable || {};
+  const aggregatedBatches = observable.nr_batches ?? run?.batches_completed ?? 0;
+  const aggregatedSamples = observable.nr_samples ?? 0;
 
   return (
     <Box sx={{ mb: 3 }}>

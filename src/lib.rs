@@ -5,7 +5,6 @@
 
 pub mod batch;
 pub mod contracts;
-pub mod control_plane;
 pub mod engines;
 pub mod models;
 pub mod runners;
@@ -16,18 +15,10 @@ use sqlx::{Pool, Postgres, postgres::PgPoolOptions};
 use std::env;
 
 pub use batch::{Batch, BatchRecord, BatchResults, BatchStatus, WeightedPoint};
-pub use contracts::{
-    AggregationStore, AssignmentLease, AssignmentLeaseStore, BatchClaim, BuildError,
-    CompletedBatch, Worker, WorkerRegistryStore, WorkerRole, ControlPlaneStore,
-    DesiredAssignment, EngineError, EngineState, EngineStateStore, EvalError, Evaluator,
-    EvaluatorFactory, WorkerStatus, RunReadStore, RunSpec, RunSpecStore, SamplerAggregatorEngine,
-    SamplerAggregatorFactory, StoreError, WorkQueueStore,
-};
-pub use control_plane::{NodeWorkerConfig, run_node_worker};
-pub use models::{AggregatedResult, RunProgress, WorkQueueStats};
-pub use runners::{RunnerConfig, RunnerError, RunnerTick, SamplerAggregatorRunner};
-pub use runners::{WorkerRunner, WorkerRunnerConfig, WorkerRunnerError, WorkerTick};
+pub use contracts::errors::{BuildError, EngineError, EvalError, StoreError};
+pub use models::{AggregatedResult, RunProgress, RunStatus, WorkQueueStats};
 pub use stores::PgStore;
+pub type BinResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 /// Create a PostgreSQL connection pool
 ///
@@ -54,4 +45,10 @@ pub async fn get_pg_pool(max_connections: u32) -> Result<Pool<Postgres>, sqlx::E
         .max_connections(max_connections)
         .connect(&db_url)
         .await
+}
+
+/// Initialize a Postgres-backed store with the given max pool size.
+pub async fn init_pg_store(max_connections: u32) -> Result<PgStore, sqlx::Error> {
+    let pool = get_pg_pool(max_connections).await?;
+    Ok(PgStore::new(pool))
 }
