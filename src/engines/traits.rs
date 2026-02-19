@@ -1,6 +1,6 @@
 //! Runtime engine traits for evaluator, sampler-aggregator, and observable aggregation.
 
-use super::{BuildError, EngineError, EngineState, EvalError};
+use super::{BuildError, EngineError, EvalError};
 use crate::batch::{Batch, EvaluatedSample, PointSpec, PointView};
 use serde_json::Value as JsonValue;
 
@@ -68,7 +68,7 @@ pub trait SamplerAggregatorEngine: Send {
     fn implementation(&self) -> &'static str;
     fn version(&self) -> &'static str;
     fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError>;
-    fn init(&mut self, state: Option<EngineState>) -> Result<(), EngineError>;
+    fn init(&mut self) -> Result<(), EngineError>;
     fn produce_batches(&mut self, max_batches: usize) -> Result<Vec<Batch>, EngineError>;
     fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError>;
 }
@@ -98,8 +98,8 @@ where
         (**self).validate_point_spec(point_spec)
     }
 
-    fn init(&mut self, state: Option<EngineState>) -> Result<(), EngineError> {
-        (**self).init(state)
+    fn init(&mut self) -> Result<(), EngineError> {
+        (**self).init()
     }
 
     fn produce_batches(&mut self, max_batches: usize) -> Result<Vec<Batch>, EngineError> {

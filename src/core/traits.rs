@@ -3,7 +3,7 @@
 use super::errors::StoreError;
 use super::models::{BatchClaim, CompletedBatch, DesiredAssignment, Worker, WorkerStatus};
 use crate::batch::{Batch, BatchResults, PointSpec};
-use crate::engines::{EngineState, RunSpec};
+use crate::engines::RunSpec;
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 use std::time::Duration;
@@ -108,19 +108,12 @@ pub trait WorkQueueStore: Send + Sync {
         eval_time_ms: f64,
     ) -> Result<(), StoreError>;
     async fn fail_batch(&self, batch_id: i64, last_error: &str) -> Result<(), StoreError>;
-    async fn fetch_completed_batches_since(
+    async fn fetch_completed_batches(
         &self,
         run_id: i32,
-        last_batch_id: Option<i64>,
         limit: usize,
     ) -> Result<Vec<CompletedBatch>, StoreError>;
-}
-
-/// Persists sampler-aggregator internal state.
-#[async_trait]
-pub trait EngineStateStore: Send + Sync {
-    async fn load_engine_state(&self, run_id: i32) -> Result<Option<EngineState>, StoreError>;
-    async fn save_engine_state(&self, run_id: i32, state: &EngineState) -> Result<(), StoreError>;
+    async fn delete_completed_batches(&self, batch_ids: &[i64]) -> Result<(), StoreError>;
 }
 
 /// Persists aggregated observable snapshots.

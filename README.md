@@ -86,6 +86,7 @@ training_delay_per_sample_ms = 2
 
 - Test-only engine implementations are currently wired by default.
 - Runs can be reassigned at runtime by updating desired assignments via `control_plane`.
+- Sampler-aggregator state is in-memory only; completed batches are consumed and deleted after ingestion.
 
 ## For Contributors
 

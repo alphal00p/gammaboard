@@ -29,6 +29,7 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
 - Engine/runner settings are persisted in `runs.integration_params`; point shape is persisted in `runs.point_spec`.
 - Batch payloads in `batches.points` must stay compact and shape-stable:
   row-major flat `continuous`/`discrete` arrays + `weights` + `point_spec`.
+- Completed batches are consumed by sampler-aggregator and deleted from `batches`; there is no persisted sampler engine state checkpoint.
 - Nodes are generic: one `run_node` process can reconcile both roles for assigned runs.
 - Keep role switching safe: stop old role task, then start new one.
 - Keep worker registration metadata (`implementation`, `version`) tied to concrete built engines.

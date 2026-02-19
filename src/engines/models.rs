@@ -27,6 +27,7 @@ pub enum EvaluatorImplementation {
 #[serde(rename_all = "snake_case")]
 pub enum SamplerAggregatorImplementation {
     TestOnlyTraining,
+    Havana,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,11 +48,4 @@ pub struct IntegrationParams {
     pub observable_params: Option<JsonValue>,
     pub worker_runner_params: Option<JsonValue>,
     pub sampler_aggregator_runner_params: Option<JsonValue>,
-}
-
-/// In-memory state passed to a sampler-aggregator during initialization.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EngineState {
-    pub last_processed_batch_id: Option<i64>,
-    pub state: JsonValue,
 }

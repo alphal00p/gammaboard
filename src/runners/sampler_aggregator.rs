@@ -1,18 +1,16 @@
 //! Sampler-aggregator runner orchestration.
 //!
 //! This module intentionally focuses on process orchestration:
-//! - load persisted engine state
 //! - load persisted aggregated observable snapshot
 //! - call engine hooks
 //! - enqueue produced batches
 //! - fetch completed batches and pass training weights back into the engine
 //! - aggregate completed batch observables into run-level observable snapshot
-//! - persist cursor state
+//! - delete consumed completed batches
 
 use crate::batch::PointSpec;
-use crate::core::{AggregationStore, CompletedBatch, EngineStateStore, StoreError, WorkQueueStore};
-use crate::engines::{AggregatedObservable, EngineError, EngineState, SamplerAggregatorEngine};
-use serde_json::json;
+use crate::core::{AggregationStore, CompletedBatch, StoreError, WorkQueueStore};
+use crate::engines::{AggregatedObservable, EngineError, SamplerAggregatorEngine};
 use std::{error::Error, fmt};
 
 #[derive(Debug, Clone)]
@@ -36,7 +34,6 @@ impl Default for RunnerConfig {
 pub struct RunnerTick {
     pub enqueued_batches: usize,
     pub processed_completed_batches: usize,
-    pub last_processed_batch_id: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -62,23 +59,20 @@ impl From<StoreError> for RunnerError {
     }
 }
 
-pub struct SamplerAggregatorRunner<E, WQ, ES, AS> {
+pub struct SamplerAggregatorRunner<E, WQ, AS> {
     run_id: i32,
     engine: E,
     aggregated_observable: Box<dyn AggregatedObservable>,
     work_queue: WQ,
-    state_store: ES,
     aggregation_store: AS,
     config: RunnerConfig,
     point_spec: PointSpec,
-    last_processed_batch_id: Option<i64>,
 }
 
-impl<E, WQ, ES, AS> SamplerAggregatorRunner<E, WQ, ES, AS>
+impl<E, WQ, AS> SamplerAggregatorRunner<E, WQ, AS>
 where
     E: SamplerAggregatorEngine,
     WQ: WorkQueueStore,
-    ES: EngineStateStore,
     AS: AggregationStore,
 {
     pub async fn new(
@@ -86,20 +80,15 @@ where
         mut engine: E,
         mut aggregated_observable: Box<dyn AggregatedObservable>,
         work_queue: WQ,
-        state_store: ES,
         aggregation_store: AS,
         config: RunnerConfig,
         point_spec: PointSpec,
     ) -> Result<Self, RunnerError> {
-        let persisted_state = state_store.load_engine_state(run_id).await?;
-        let last_processed_batch_id = persisted_state
-            .as_ref()
-            .and_then(|state| state.last_processed_batch_id);
         let persisted_snapshot = aggregation_store
             .load_latest_aggregation_snapshot(run_id)
             .await?;
 
-        engine.init(persisted_state).map_err(RunnerError::Engine)?;
+        engine.init().map_err(RunnerError::Engine)?;
         aggregated_observable
             .restore(persisted_snapshot)
             .map_err(RunnerError::Engine)?;
@@ -109,11 +98,9 @@ where
             engine,
             aggregated_observable,
             work_queue,
-            state_store,
             aggregation_store,
             config,
             point_spec,
-            last_processed_batch_id,
         })
     }
 
@@ -150,29 +137,25 @@ where
 
         let completed = self
             .work_queue
-            .fetch_completed_batches_since(
-                self.run_id,
-                self.last_processed_batch_id,
-                self.config.completed_batch_fetch_limit,
-            )
+            .fetch_completed_batches(self.run_id, self.config.completed_batch_fetch_limit)
             .await?;
-
-        self.process_completed(&completed).await?;
+        let consumed_ids = self.process_completed(&completed).await?;
+        self.work_queue
+            .delete_completed_batches(&consumed_ids)
+            .await?;
 
         Ok(RunnerTick {
             enqueued_batches: produced.len(),
-            processed_completed_batches: completed.len(),
-            last_processed_batch_id: self.last_processed_batch_id,
+            processed_completed_batches: consumed_ids.len(),
         })
     }
 
-    pub fn last_processed_batch_id(&self) -> Option<i64> {
-        self.last_processed_batch_id
-    }
-
-    async fn process_completed(&mut self, completed: &[CompletedBatch]) -> Result<(), RunnerError> {
+    async fn process_completed(
+        &mut self,
+        completed: &[CompletedBatch],
+    ) -> Result<Vec<i64>, RunnerError> {
         if completed.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
 
         for batch in completed {
@@ -193,17 +176,7 @@ where
             .save_aggregation_snapshot(self.run_id, &snapshot, completed.len() as i32)
             .await?;
 
-        self.last_processed_batch_id = completed.last().map(|batch| batch.batch_id);
-
-        let state = EngineState {
-            last_processed_batch_id: self.last_processed_batch_id,
-            state: json!({}),
-        };
-        self.state_store
-            .save_engine_state(self.run_id, &state)
-            .await?;
-
-        Ok(())
+        Ok(completed.iter().map(|batch| batch.batch_id).collect())
     }
 }
 
@@ -212,16 +185,10 @@ mod tests {
     use super::*;
     use crate::batch::{Batch, BatchResults, Point, PointSpec, WeightedPoint};
     use crate::core::StoreError;
-    use crate::engines::{AggregatedObservable, BuildError, EngineState, SamplerAggregatorEngine};
+    use crate::engines::{AggregatedObservable, BuildError, SamplerAggregatorEngine};
     use crate::runners::test_support::MockWorkQueue;
     use serde_json::{Value as JsonValue, json};
     use std::sync::{Arc, Mutex};
-
-    #[derive(Clone, Default)]
-    struct StateStoreData {
-        initial: Option<EngineState>,
-        saved: Vec<EngineState>,
-    }
 
     #[derive(Clone, Default)]
     struct AggregationStoreData {
@@ -259,31 +226,10 @@ mod tests {
     }
 
     #[derive(Clone, Default)]
-    struct TestStateStore {
-        inner: Arc<Mutex<StateStoreData>>,
-    }
-
-    #[async_trait::async_trait]
-    impl EngineStateStore for TestStateStore {
-        async fn load_engine_state(&self, _run_id: i32) -> Result<Option<EngineState>, StoreError> {
-            Ok(self.inner.lock().expect("poison").initial.clone())
-        }
-
-        async fn save_engine_state(
-            &self,
-            _run_id: i32,
-            state: &EngineState,
-        ) -> Result<(), StoreError> {
-            self.inner.lock().expect("poison").saved.push(state.clone());
-            Ok(())
-        }
-    }
-
-    #[derive(Clone, Default)]
     struct Probe {
-        init_last_processed_batch_id: Option<i64>,
         ingested_training_sizes: Vec<usize>,
         produce_requested: Vec<usize>,
+        initialized: bool,
     }
 
     struct TestEngine {
@@ -313,11 +259,8 @@ mod tests {
             Ok(())
         }
 
-        fn init(&mut self, state: Option<EngineState>) -> Result<(), EngineError> {
-            self.probe
-                .lock()
-                .expect("poison")
-                .init_last_processed_batch_id = state.and_then(|s| s.last_processed_batch_id);
+        fn init(&mut self) -> Result<(), EngineError> {
+            self.probe.lock().expect("poison").initialized = true;
             Ok(())
         }
 
@@ -430,7 +373,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tick_processes_completed_batches_and_persists_cursor_and_snapshot() {
+    async fn tick_processes_completed_batches_persists_snapshot_and_deletes_consumed() {
         let probe = Arc::new(Mutex::new(Probe::default()));
         let queue = MockWorkQueue::default();
         {
@@ -441,12 +384,7 @@ mod tests {
             ];
         }
 
-        let state_store = TestStateStore::default();
         let aggregation_store = TestAggregationStore::default();
-        state_store.inner.lock().expect("poison").initial = Some(EngineState {
-            last_processed_batch_id: Some(10),
-            state: serde_json::json!({}),
-        });
         aggregation_store
             .inner
             .lock()
@@ -466,7 +404,6 @@ mod tests {
             engine,
             Box::new(TestObservable::default()),
             queue.clone(),
-            state_store.clone(),
             aggregation_store.clone(),
             RunnerConfig {
                 max_batches_per_tick: 1,
@@ -483,7 +420,6 @@ mod tests {
 
         let tick = runner.tick().await.expect("tick");
         let q = queue.inner.lock().expect("poison").clone();
-        let s = state_store.inner.lock().expect("poison").clone();
         let p = probe.lock().expect("poison").clone();
         let agg_saved = aggregation_store
             .inner
@@ -492,11 +428,11 @@ mod tests {
             .saved
             .clone();
 
-        assert_eq!(p.init_last_processed_batch_id, Some(10));
-        assert_eq!(q.fetch_last_batch_ids, vec![Some(10)]);
+        assert!(p.initialized);
         assert_eq!(q.inserted.len(), 1);
         assert_eq!(p.ingested_training_sizes, vec![2, 1]);
-        assert_eq!(tick.last_processed_batch_id, Some(12));
+        assert_eq!(q.deleted_completed_batch_ids, vec![11, 12]);
+        assert_eq!(tick.processed_completed_batches, 2);
 
         assert_eq!(agg_saved.len(), 1);
         assert_eq!(agg_saved[0].0, 1);
@@ -514,16 +450,12 @@ mod tests {
             .and_then(|value| value.as_f64())
             .expect("sum f64");
         assert!((sum - 1.7).abs() < 1e-12);
-
-        assert_eq!(s.saved.len(), 1);
-        assert_eq!(s.saved[0].last_processed_batch_id, Some(12));
     }
 
     #[tokio::test]
-    async fn tick_without_completed_batches_skips_state_and_snapshot_persist() {
+    async fn tick_without_completed_batches_skips_snapshot_persist_and_delete() {
         let probe = Arc::new(Mutex::new(Probe::default()));
         let queue = MockWorkQueue::default();
-        let state_store = TestStateStore::default();
         let aggregation_store = TestAggregationStore::default();
 
         let engine = TestEngine {
@@ -536,7 +468,6 @@ mod tests {
             engine,
             Box::new(TestObservable::default()),
             queue.clone(),
-            state_store.clone(),
             aggregation_store.clone(),
             RunnerConfig {
                 max_batches_per_tick: 1,
@@ -552,7 +483,6 @@ mod tests {
         .expect("new runner");
 
         let tick = runner.tick().await.expect("tick");
-        let s = state_store.inner.lock().expect("poison").clone();
         let p = probe.lock().expect("poison").clone();
         let agg_saved = aggregation_store
             .inner
@@ -560,11 +490,12 @@ mod tests {
             .expect("poison")
             .saved
             .clone();
+        let q = queue.inner.lock().expect("poison").clone();
 
         assert_eq!(tick.processed_completed_batches, 0);
         assert!(p.ingested_training_sizes.is_empty());
         assert!(agg_saved.is_empty());
-        assert!(s.saved.is_empty());
+        assert!(q.deleted_completed_batch_ids.is_empty());
     }
 
     #[tokio::test]
@@ -573,7 +504,6 @@ mod tests {
         let queue = MockWorkQueue::default();
         queue.inner.lock().expect("poison").pending_batches = 5;
 
-        let state_store = TestStateStore::default();
         let aggregation_store = TestAggregationStore::default();
         let engine = TestEngine {
             produced: vec![make_batch(), make_batch()],
@@ -585,7 +515,6 @@ mod tests {
             engine,
             Box::new(TestObservable::default()),
             queue.clone(),
-            state_store,
             aggregation_store,
             RunnerConfig {
                 max_batches_per_tick: 2,
@@ -615,7 +544,6 @@ mod tests {
         let queue = MockWorkQueue::default();
         queue.inner.lock().expect("poison").pending_batches = 3;
 
-        let state_store = TestStateStore::default();
         let aggregation_store = TestAggregationStore::default();
         let engine = TestEngine {
             produced: vec![make_batch(), make_batch(), make_batch()],
@@ -627,7 +555,6 @@ mod tests {
             engine,
             Box::new(TestObservable::default()),
             queue.clone(),
-            state_store,
             aggregation_store,
             RunnerConfig {
                 max_batches_per_tick: 3,

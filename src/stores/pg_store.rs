@@ -4,10 +4,10 @@ use super::queries;
 use crate::batch::{Batch, BatchResults, PointSpec};
 use crate::core::{
     AggregationStore, AssignmentLeaseStore, BatchClaim, CompletedBatch, ControlPlaneStore,
-    DesiredAssignment, EngineStateStore, RunSpecStore, RunStatus, StoreError, WorkQueueStore,
-    Worker, WorkerRegistryStore, WorkerRole, WorkerStatus,
+    DesiredAssignment, RunSpecStore, RunStatus, StoreError, WorkQueueStore, Worker,
+    WorkerRegistryStore, WorkerRole, WorkerStatus,
 };
-use crate::engines::{EngineState, IntegrationParams, RunSpec};
+use crate::engines::{IntegrationParams, RunSpec};
 use crate::stores::RunReadStore;
 use serde_json::{Value as JsonValue, json};
 use sqlx::PgPool;
@@ -402,13 +402,12 @@ impl WorkQueueStore for PgStore {
             .map_err(map_sqlx)
     }
 
-    async fn fetch_completed_batches_since(
+    async fn fetch_completed_batches(
         &self,
         run_id: i32,
-        last_batch_id: Option<i64>,
         limit: usize,
     ) -> Result<Vec<CompletedBatch>, StoreError> {
-        let rows = queries::fetch_completed_batches_since(&self.pool, run_id, last_batch_id, limit)
+        let rows = queries::fetch_completed_batches(&self.pool, run_id, limit)
             .await
             .map_err(map_sqlx)?;
         let mut out = Vec::with_capacity(rows.len());
@@ -437,33 +436,8 @@ impl WorkQueueStore for PgStore {
 
         Ok(out)
     }
-}
-
-#[async_trait::async_trait]
-impl EngineStateStore for PgStore {
-    async fn load_engine_state(&self, run_id: i32) -> Result<Option<EngineState>, StoreError> {
-        let Some(state_json) = queries::load_engine_state(&self.pool, run_id)
-            .await
-            .map_err(map_sqlx)?
-        else {
-            return Ok(None);
-        };
-        match serde_json::from_value::<EngineState>(state_json.clone()) {
-            Ok(state) => Ok(Some(state)),
-            Err(_) => Ok(Some(EngineState {
-                last_processed_batch_id: None,
-                state: state_json,
-            })),
-        }
-    }
-
-    async fn save_engine_state(&self, run_id: i32, state: &EngineState) -> Result<(), StoreError> {
-        let payload = serde_json::to_value(state).map_err(|err| {
-            store_err(format!(
-                "failed to serialize engine state for run_id={run_id}: {err}"
-            ))
-        })?;
-        queries::save_engine_state(&self.pool, run_id, &payload)
+    async fn delete_completed_batches(&self, batch_ids: &[i64]) -> Result<(), StoreError> {
+        queries::delete_completed_batches(&self.pool, batch_ids)
             .await
             .map_err(map_sqlx)
     }

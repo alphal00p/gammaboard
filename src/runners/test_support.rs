@@ -11,7 +11,7 @@ pub(crate) struct MockWorkQueueState {
     pub inserted: Vec<Batch>,
     pub pending_batches: i64,
     pub completed: Vec<CompletedBatch>,
-    pub fetch_last_batch_ids: Vec<Option<i64>>,
+    pub deleted_completed_batch_ids: Vec<i64>,
 }
 
 #[derive(Clone, Default)]
@@ -64,14 +64,20 @@ impl WorkQueueStore for MockWorkQueue {
         Ok(())
     }
 
-    async fn fetch_completed_batches_since(
+    async fn fetch_completed_batches(
         &self,
         _run_id: i32,
-        last_batch_id: Option<i64>,
         _limit: usize,
     ) -> Result<Vec<CompletedBatch>, StoreError> {
+        Ok(self.inner.lock().expect("poison").completed.clone())
+    }
+
+    async fn delete_completed_batches(&self, batch_ids: &[i64]) -> Result<(), StoreError> {
         let mut guard = self.inner.lock().expect("poison");
-        guard.fetch_last_batch_ids.push(last_batch_id);
-        Ok(guard.completed.clone())
+        guard.deleted_completed_batch_ids.extend(batch_ids);
+        guard
+            .completed
+            .retain(|batch| !batch_ids.contains(&batch.batch_id));
+        Ok(())
     }
 }

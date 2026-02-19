@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use symbolica::numerical_integration::{ContinuousGrid, Grid, MonteCarloRng};
 
@@ -6,7 +7,53 @@ use crate::{
     engines::{BuildError, SamplerAggregatorEngine},
 };
 
-struct HavanaSampler {
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct HavanaSamplerParams {
+    seed: u64,
+    batch_size: usize,
+    continuous_dims: usize,
+    bins: usize,
+    min_samples_for_update: usize,
+}
+
+impl Default for HavanaSamplerParams {
+    fn default() -> Self {
+        Self {
+            seed: 0,
+            batch_size: 64,
+            continuous_dims: 1,
+            bins: 64,
+            min_samples_for_update: 1_024,
+        }
+    }
+}
+
+fn parse_havana_sampler_params(params: &JsonValue) -> Result<HavanaSamplerParams, BuildError> {
+    let parsed: HavanaSamplerParams = serde_json::from_value(params.clone())
+        .map_err(|err| BuildError::build(format!("invalid havana sampler params: {err}")))?;
+
+    if parsed.continuous_dims == 0 {
+        return Err(BuildError::build(
+            "havana sampler requires continuous_dims > 0",
+        ));
+    }
+    if parsed.bins == 0 {
+        return Err(BuildError::build("havana sampler requires bins > 0"));
+    }
+    if parsed.min_samples_for_update == 0 {
+        return Err(BuildError::build(
+            "havana sampler requires min_samples_for_update > 0",
+        ));
+    }
+    if parsed.batch_size == 0 {
+        return Err(BuildError::build("havana sampler requires batch_size > 0"));
+    }
+
+    Ok(parsed)
+}
+
+pub struct HavanaSampler {
     batch_size: usize,
     continuous_dims: usize,
     grid: Grid<f64>,
@@ -29,42 +76,23 @@ impl SamplerAggregatorEngine for HavanaSampler {
     where
         Self: Sized,
     {
-        let seed = params
-            .get("seed")
-            .and_then(JsonValue::as_u64)
-            .unwrap_or_default();
-        let batch_size = params
-            .get("batch_size")
-            .and_then(JsonValue::as_u64)
-            .unwrap_or(64) as usize;
-        let rng = MonteCarloRng::new(seed, 0);
+        let parsed = parse_havana_sampler_params(params)?;
 
-        let n_dims = params
-            .get("dims")
-            .and_then(JsonValue::as_u64)
-            .ok_or_else(|| BuildError::build("could not parse dims from params"))?
-            as usize;
-        let n_bins = params
-            .get("bins")
-            .and_then(JsonValue::as_u64)
-            .ok_or_else(|| BuildError::build("could not parse bins from params"))?
-            as usize;
-        let min_samples_for_update = params
-            .get("min_samples_for_update")
-            .and_then(JsonValue::as_u64)
-            .ok_or_else(|| {
-                BuildError::build("could not parse min_samples_for_update from params")
-            })? as usize;
-
+        let rng = MonteCarloRng::new(parsed.seed, 0);
         let grid = Grid::Continuous(ContinuousGrid::new(
-            n_dims,
-            n_bins,
-            min_samples_for_update,
+            parsed.continuous_dims,
+            parsed.bins,
+            parsed.min_samples_for_update,
             None,
             false,
         ));
 
-        Ok(HavanaSampler::new(n_dims, grid, rng, batch_size))
+        Ok(HavanaSampler::new(
+            parsed.continuous_dims,
+            grid,
+            rng,
+            parsed.batch_size,
+        ))
     }
 
     fn implementation(&self) -> &'static str {
@@ -82,13 +110,16 @@ impl SamplerAggregatorEngine for HavanaSampler {
                 self.continuous_dims, point_spec.continuous_dims
             )));
         }
+        if point_spec.discrete_dims != 0 {
+            return Err(BuildError::build(format!(
+                "havana sampler expects discrete_dims=0, got {}",
+                point_spec.discrete_dims
+            )));
+        }
         Ok(())
     }
 
-    fn init(
-        &mut self,
-        _state: Option<crate::engines::EngineState>,
-    ) -> Result<(), crate::engines::EngineError> {
+    fn init(&mut self) -> Result<(), crate::engines::EngineError> {
         let _ = (&self.batch_size, &self.grid, &self.rng);
         todo!()
     }

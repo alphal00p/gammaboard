@@ -5,8 +5,8 @@ use super::{
     worker::WorkerRunner,
 };
 use crate::core::{
-    AggregationStore, AssignmentLeaseStore, ControlPlaneStore, EngineStateStore, RunSpecStore,
-    StoreError, WorkQueueStore, Worker, WorkerRegistryStore, WorkerRole, WorkerStatus,
+    AggregationStore, AssignmentLeaseStore, ControlPlaneStore, RunSpecStore, StoreError,
+    WorkQueueStore, Worker, WorkerRegistryStore, WorkerRole, WorkerStatus,
 };
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value as JsonValue, json};
@@ -31,7 +31,6 @@ pub trait NodeRunnerStore:
     + WorkerRegistryStore
     + AssignmentLeaseStore
     + WorkQueueStore
-    + EngineStateStore
     + AggregationStore
     + Clone
     + Send
@@ -46,7 +45,6 @@ impl<T> NodeRunnerStore for T where
         + WorkerRegistryStore
         + AssignmentLeaseStore
         + WorkQueueStore
-        + EngineStateStore
         + AggregationStore
         + Clone
         + Send
@@ -69,7 +67,9 @@ fn role_worker_id(node_id: &str, role: WorkerRole) -> String {
 
 struct ManagedRoleTask {
     run_id: i32,
+    // Cooperative shutdown signal for the background role loop.
     stop_tx: watch::Sender<bool>,
+    // Join handle so we can await termination when reconciling/stopping.
     join_handle: JoinHandle<()>,
 }
 
@@ -102,14 +102,17 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         let mut shutdown = std::pin::pin!(tokio::signal::ctrl_c());
 
         loop {
+            // Reconciliation is idempotent; only starts/stops tasks on assignment changes.
             self.reconcile_role(WorkerRole::Evaluator).await?;
             self.reconcile_role(WorkerRole::SamplerAggregator).await?;
 
             tokio::select! {
+                // Wake immediately on Ctrl+C instead of waiting for next poll tick.
                 _ = &mut shutdown => {
                     println!("🛑 stopping node-runner for node {}", self.node_id);
                     break;
                 }
+                // Periodic control-plane poll.
                 _ = sleep(self.config.poll_interval) => {}
             }
         }
@@ -172,7 +175,9 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 }
 
 async fn stop_task(task: ManagedRoleTask) {
+    // Ask task to stop cooperatively.
     let _ = task.stop_tx.send(true);
+    // Bound shutdown latency so reconciliation cannot hang forever.
     match timeout(ROLE_TASK_SHUTDOWN_TIMEOUT, task.join_handle).await {
         Ok(_) => {}
         Err(_) => {
@@ -224,8 +229,10 @@ fn spawn_role_task(
     role: WorkerRole,
     run_id: i32,
 ) -> ManagedRoleTask {
+    // `watch` is used so each loop can cheaply check current stop state and await changes.
     let (stop_tx, stop_rx) = watch::channel(false);
 
+    // Each role gets its own long-lived background task.
     let join_handle = tokio::spawn(async move {
         let result = match role {
             WorkerRole::Evaluator => run_evaluator_task(store, node_id, run_id, stop_rx).await,
@@ -300,6 +307,7 @@ async fn run_evaluator_task(
     );
 
     loop {
+        // Fast path stop check before doing work this tick.
         if *stop_rx.borrow() {
             break;
         }
@@ -311,6 +319,7 @@ async fn run_evaluator_task(
             eprintln!("⚠️ evaluator tick failed for {}: {}", worker_id, err);
         }
 
+        // Keep a minimum tick period while still allowing immediate stop.
         let elapsed = tick_started.elapsed();
         let min_loop_time = Duration::from_millis(worker_runner_params.min_loop_time_ms);
         if elapsed < min_loop_time {
@@ -388,7 +397,6 @@ async fn run_sampler_aggregator_task(
         aggregated_observable,
         store.clone(),
         store.clone(),
-        store.clone(),
         RunnerConfig {
             max_batches_per_tick: runner_params.max_batches_per_tick,
             max_pending_batches: runner_params.max_pending_batches,
@@ -403,12 +411,15 @@ async fn run_sampler_aggregator_task(
     let mut owns_lease = false;
 
     loop {
+        // Fast path stop check before lease/tick work.
         if *stop_rx.borrow() {
             break;
         }
 
         heartbeat_with_log(&store, &worker_id).await;
 
+        // Exactly one sampler-aggregator should actively tick per run.
+        // Acquire on first iteration, then renew while ownership is kept.
         let lease_result = if owns_lease {
             store
                 .renew_sampler_aggregator_lease(run_id, &worker_id, lease_ttl)
@@ -427,6 +438,7 @@ async fn run_sampler_aggregator_task(
             }
         }
 
+        // Only lease owner is allowed to enqueue/process batches for this run.
         if owns_lease && let Err(err) = runner.tick().await {
             eprintln!(
                 "⚠️ sampler-aggregator tick failed for {}: {}",
@@ -434,6 +446,7 @@ async fn run_sampler_aggregator_task(
             );
         }
 
+        // Sleep between attempts, but stop immediately when requested.
         tokio::select! {
             _ = stop_rx.changed() => {}
             _ = sleep(Duration::from_millis(runner_params.interval_ms)) => {}

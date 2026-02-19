@@ -140,27 +140,51 @@ pub(crate) async fn fail_batch(
     Ok(())
 }
 
-pub(crate) async fn fetch_completed_batches_since(
+pub(crate) async fn fetch_completed_batches(
     pool: &PgPool,
     run_id: i32,
-    last_batch_id: Option<i64>,
     limit: usize,
 ) -> Result<Vec<CompletedBatchRaw>, sqlx::Error> {
+    // Return only the contiguous completed prefix by id.
+    // This keeps ingestion strictly ordered across batches and leaves out-of-order
+    // completions buffered in the DB until gaps are resolved.
     let rows = sqlx::query_as::<_, (i64, JsonValue, JsonValue, JsonValue, Option<DateTime<Utc>>)>(
         r#"
-        SELECT id, points, training_weights, batch_observable, completed_at
-        FROM batches
-        WHERE run_id = $1
-          AND status = 'completed'
-          AND training_weights IS NOT NULL
-          AND batch_observable IS NOT NULL
-          AND ($2::bigint IS NULL OR id > $2)
-        ORDER BY id ASC
-        LIMIT $3
+        WITH ordered AS (
+            SELECT
+                id,
+                status,
+                points,
+                training_weights,
+                batch_observable,
+                completed_at,
+                ROW_NUMBER() OVER (ORDER BY id ASC) AS rn
+            FROM batches
+            WHERE run_id = $1
+            ORDER BY id ASC
+            LIMIT $2
+        ),
+        first_blocker AS (
+            SELECT MIN(rn) AS rn
+            FROM ordered
+            WHERE status <> 'completed'
+        )
+        SELECT
+            o.id,
+            o.points,
+            o.training_weights,
+            o.batch_observable,
+            o.completed_at
+        FROM ordered o
+        CROSS JOIN first_blocker b
+        WHERE o.status = 'completed'
+          AND o.training_weights IS NOT NULL
+          AND o.batch_observable IS NOT NULL
+          AND (b.rn IS NULL OR o.rn < b.rn)
+        ORDER BY o.id ASC
         "#,
     )
     .bind(run_id)
-    .bind(last_batch_id)
     .bind(limit as i64)
     .fetch_all(pool)
     .await?;
@@ -179,4 +203,26 @@ pub(crate) async fn fetch_completed_batches_since(
             },
         )
         .collect())
+}
+
+pub(crate) async fn delete_completed_batches(
+    pool: &PgPool,
+    batch_ids: &[i64],
+) -> Result<(), sqlx::Error> {
+    if batch_ids.is_empty() {
+        return Ok(());
+    }
+
+    sqlx::query(
+        r#"
+        DELETE FROM batches
+        WHERE status = 'completed'
+          AND id = ANY($1)
+        "#,
+    )
+    .bind(batch_ids)
+    .execute(pool)
+    .await?;
+
+    Ok(())
 }

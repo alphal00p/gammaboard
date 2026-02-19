@@ -8,6 +8,6 @@ pub use models::{
     WorkerStatus,
 };
 pub use traits::{
-    AggregationStore, AssignmentLeaseStore, ControlPlaneStore, EngineStateStore, RunSpecStore,
-    WorkQueueStore, WorkerRegistryStore,
+    AggregationStore, AssignmentLeaseStore, ControlPlaneStore, RunSpecStore, WorkQueueStore,
+    WorkerRegistryStore,
 };

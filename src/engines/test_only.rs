@@ -2,8 +2,7 @@
 
 use crate::batch::{Batch, EvaluatedSample, Point, PointSpec, PointView, WeightedPoint};
 use crate::engines::{
-    AggregatedObservable, BuildError, EngineError, EngineState, EvalError, Evaluator,
-    SamplerAggregatorEngine,
+    AggregatedObservable, BuildError, EngineError, EvalError, Evaluator, SamplerAggregatorEngine,
 };
 use rand::Rng;
 use serde::Deserialize;
@@ -14,11 +13,11 @@ use std::{
 };
 
 /// Test-only evaluator used for local end-to-end runs.
-pub struct TestOnlySinEvaluator {
+pub struct TestSinEvaluator {
     min_eval_time_per_sample_ms: u64,
 }
 
-impl TestOnlySinEvaluator {
+impl TestSinEvaluator {
     pub fn new(min_eval_time_per_sample_ms: u64) -> Self {
         Self {
             min_eval_time_per_sample_ms,
@@ -28,29 +27,16 @@ impl TestOnlySinEvaluator {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
-pub struct TestOnlyEvaluatorParams {
+pub struct TestEvaluatorParams {
     min_eval_time_per_sample_ms: u64,
 }
 
-fn parse_test_only_evaluator_params(
-    params: &JsonValue,
-) -> Result<TestOnlyEvaluatorParams, BuildError> {
+fn parse_test_only_evaluator_params(params: &JsonValue) -> Result<TestEvaluatorParams, BuildError> {
     serde_json::from_value(params.clone())
         .map_err(|err| BuildError::build(format!("invalid evaluator params: {err}")))
 }
 
-pub struct TestOnlySinEvaluatorFactory;
-
-impl TestOnlySinEvaluatorFactory {
-    pub fn build(params: &JsonValue) -> Result<Box<dyn Evaluator>, BuildError> {
-        let parsed = parse_test_only_evaluator_params(params)?;
-        Ok(Box::new(TestOnlySinEvaluator::new(
-            parsed.min_eval_time_per_sample_ms,
-        )))
-    }
-}
-
-impl Evaluator for TestOnlySinEvaluator {
+impl Evaluator for TestSinEvaluator {
     fn from_params(params: &JsonValue) -> Result<Self, BuildError>
     where
         Self: Sized,
@@ -117,7 +103,7 @@ impl Evaluator for TestOnlySinEvaluator {
 }
 
 /// Test-only sampler-aggregator engine with simple random batch generation.
-pub struct TestOnlyTrainingSamplerAggregatorEngine {
+pub struct TestTrainingSamplerAggregator {
     batch_size: usize,
     continuous_dims: usize,
     discrete_dims: usize,
@@ -129,7 +115,7 @@ pub struct TestOnlyTrainingSamplerAggregatorEngine {
     sum: f64,
 }
 
-impl TestOnlyTrainingSamplerAggregatorEngine {
+impl TestTrainingSamplerAggregator {
     pub fn new(
         batch_size: usize,
         continuous_dims: usize,
@@ -153,7 +139,7 @@ impl TestOnlyTrainingSamplerAggregatorEngine {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct TestOnlySamplerAggregatorParams {
+pub struct TestSamplerAggregatorParams {
     batch_size: usize,
     continuous_dims: usize,
     discrete_dims: usize,
@@ -161,7 +147,7 @@ pub struct TestOnlySamplerAggregatorParams {
     training_delay_per_sample_ms: u64,
 }
 
-impl Default for TestOnlySamplerAggregatorParams {
+impl Default for TestSamplerAggregatorParams {
     fn default() -> Self {
         Self {
             batch_size: 64,
@@ -175,27 +161,12 @@ impl Default for TestOnlySamplerAggregatorParams {
 
 fn parse_test_only_sampler_params(
     params: &JsonValue,
-) -> Result<TestOnlySamplerAggregatorParams, BuildError> {
+) -> Result<TestSamplerAggregatorParams, BuildError> {
     serde_json::from_value(params.clone())
         .map_err(|err| BuildError::build(format!("invalid sampler params: {err}")))
 }
 
-pub struct TestOnlyTrainingSamplerAggregatorFactory;
-
-impl TestOnlyTrainingSamplerAggregatorFactory {
-    pub fn build(params: &JsonValue) -> Result<Box<dyn SamplerAggregatorEngine>, BuildError> {
-        let parsed = parse_test_only_sampler_params(params)?;
-        Ok(Box::new(TestOnlyTrainingSamplerAggregatorEngine::new(
-            parsed.batch_size,
-            parsed.continuous_dims,
-            parsed.discrete_dims,
-            parsed.training_target_samples,
-            parsed.training_delay_per_sample_ms,
-        )))
-    }
-}
-
-impl SamplerAggregatorEngine for TestOnlyTrainingSamplerAggregatorEngine {
+impl SamplerAggregatorEngine for TestTrainingSamplerAggregator {
     fn from_params(params: &JsonValue) -> Result<Self, BuildError>
     where
         Self: Sized,
@@ -234,7 +205,7 @@ impl SamplerAggregatorEngine for TestOnlyTrainingSamplerAggregatorEngine {
         Ok(())
     }
 
-    fn init(&mut self, _state: Option<EngineState>) -> Result<(), EngineError> {
+    fn init(&mut self) -> Result<(), EngineError> {
         Ok(())
     }
 
@@ -292,12 +263,12 @@ impl SamplerAggregatorEngine for TestOnlyTrainingSamplerAggregatorEngine {
     }
 }
 
-pub struct TestOnlyObservableAggregator {
+pub struct TestObservableAggregator {
     nr_samples: i64,
     sum: f64,
 }
 
-impl TestOnlyObservableAggregator {
+impl TestObservableAggregator {
     pub fn new() -> Self {
         Self {
             nr_samples: 0,
@@ -308,24 +279,14 @@ impl TestOnlyObservableAggregator {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
-pub struct TestOnlyObservableParams {}
+pub struct TestObservableParams {}
 
-pub struct TestOnlyObservableAggregatorFactory;
-
-impl TestOnlyObservableAggregatorFactory {
-    pub fn build(params: &JsonValue) -> Result<Box<dyn AggregatedObservable>, BuildError> {
-        let _: TestOnlyObservableParams = serde_json::from_value(params.clone())
-            .map_err(|err| BuildError::build(format!("invalid observable params: {err}")))?;
-        Ok(Box::new(TestOnlyObservableAggregator::new()))
-    }
-}
-
-impl AggregatedObservable for TestOnlyObservableAggregator {
+impl AggregatedObservable for TestObservableAggregator {
     fn from_params(_params: &JsonValue) -> Result<Self, BuildError>
     where
         Self: Sized,
     {
-        let _: TestOnlyObservableParams = serde_json::from_value(_params.clone())
+        let _: TestObservableParams = serde_json::from_value(_params.clone())
             .map_err(|err| BuildError::build(format!("invalid observable params: {err}")))?;
         Ok(Self::new())
     }
