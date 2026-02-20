@@ -39,14 +39,6 @@ pub struct TestEvaluatorParams {
 }
 
 impl Evaluator for TestSinEvaluator {
-    fn implementation(&self) -> &'static str {
-        "test_only_sin"
-    }
-
-    fn version(&self) -> &'static str {
-        "v1"
-    }
-
     fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError> {
         if point_spec.continuous_dims != 1 {
             return Err(BuildError::build(format!(
@@ -181,14 +173,6 @@ impl Default for TestSamplerAggregatorParams {
 }
 
 impl SamplerAggregatorEngine for TestTrainingSamplerAggregator {
-    fn implementation(&self) -> &'static str {
-        "test_only_training_sampler_aggregator"
-    }
-
-    fn version(&self) -> &'static str {
-        "v1"
-    }
-
     fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError> {
         if point_spec.continuous_dims != self.continuous_dims {
             return Err(BuildError::build(format!(

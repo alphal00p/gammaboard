@@ -8,6 +8,9 @@ use crate::core::{
     AggregationStore, AssignmentLeaseStore, ControlPlaneStore, RunSpecStore, StoreError,
     WorkQueueStore, Worker, WorkerRegistryStore, WorkerRole, WorkerStatus,
 };
+use crate::engines::{
+    Evaluator, EvaluatorEngine, ObservableEngine, SamplerAggregatorEngine, SamplerAggregatorImpl,
+};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value as JsonValue, json};
 use std::{
@@ -208,6 +211,10 @@ async fn register_active_worker(
         .await
 }
 
+fn binary_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 async fn heartbeat_with_log(store: &impl NodeRunnerStore, worker_id: &str) {
     if let Err(err) = store.heartbeat_worker(worker_id).await {
         eprintln!("⚠️ heartbeat failed for {}: {}", worker_id, err);
@@ -267,10 +274,19 @@ async fn run_evaluator_task(
 
     let evaluator_params: EvaluatorRunnerParams =
         parse_params(&spec.evaluator_runner_params, "evaluator_runner_params")?;
-    let evaluator = spec
+    if !spec
         .evaluator_implementation
-        .build(&spec.evaluator_params)
-        .map_err(|err| StoreError::store(format!("failed to build evaluator: {err}")))?;
+        .supports_observable(spec.observable_implementation)
+    {
+        return Err(StoreError::store(format!(
+            "incompatible evaluator/observable pair for run {}: evaluator={} observable={}",
+            run_id, spec.evaluator_implementation, spec.observable_implementation
+        )));
+    }
+
+    let evaluator =
+        EvaluatorEngine::build(spec.evaluator_implementation, &spec.evaluator_params)
+            .map_err(|err| StoreError::store(format!("failed to build evaluator: {err}")))?;
     evaluator
         .validate_point_spec(&spec.point_spec)
         .map_err(|err| {
@@ -279,16 +295,14 @@ async fn run_evaluator_task(
                 run_id, err
             ))
         })?;
-    let evaluator_implementation = evaluator.implementation();
-    let evaluator_version = evaluator.version();
 
     register_active_worker(
         &store,
         &worker_id,
         &node_id,
         WorkerRole::Evaluator,
-        evaluator_implementation,
-        evaluator_version,
+        spec.evaluator_implementation.as_str(),
+        binary_version(),
     )
     .await?;
     store.assign_evaluator(run_id, &worker_id).await?;
@@ -296,10 +310,13 @@ async fn run_evaluator_task(
     let mut runner = EvaluatorRunner::new(
         run_id,
         worker_id.clone(),
-        evaluator,
+        Box::new(evaluator),
         Arc::new({
-            let implementation = spec.evaluator_implementation;
-            move |params: &JsonValue| implementation.build_observable(params)
+            let implementation = spec.observable_implementation;
+            move |params: &JsonValue| {
+                ObservableEngine::build(implementation, params)
+                    .map(|engine| Box::new(engine) as Box<dyn crate::engines::Observable>)
+            }
         }),
         spec.observable_params.clone(),
         spec.point_spec.clone(),
@@ -360,10 +377,11 @@ async fn run_sampler_aggregator_task(
         &spec.sampler_aggregator_runner_params,
         "sampler_aggregator_runner_params",
     )?;
-    let engine = spec
-        .sampler_aggregator_implementation
-        .build(&spec.sampler_aggregator_params)
-        .map_err(|err| StoreError::store(format!("failed to build sampler-aggregator: {err}")))?;
+    let engine = SamplerAggregatorImpl::build(
+        spec.sampler_aggregator_implementation,
+        &spec.sampler_aggregator_params,
+    )
+    .map_err(|err| StoreError::store(format!("failed to build sampler-aggregator: {err}")))?;
     engine
         .validate_point_spec(&spec.point_spec)
         .map_err(|err| {
@@ -372,28 +390,26 @@ async fn run_sampler_aggregator_task(
                 run_id, err
             ))
         })?;
-    let sampler_aggregator_implementation = engine.implementation();
-    let sampler_aggregator_version = engine.version();
-    let aggregated_observable = spec
-        .evaluator_implementation
-        .build_observable(&spec.observable_params)
-        .map_err(|err| {
-            StoreError::store(format!("failed to build aggregated observable: {err}"))
-        })?;
+    let aggregated_observable =
+        ObservableEngine::build(spec.observable_implementation, &spec.observable_params)
+            .map(|engine| Box::new(engine) as Box<dyn crate::engines::Observable>)
+            .map_err(|err| {
+                StoreError::store(format!("failed to build aggregated observable: {err}"))
+            })?;
 
     register_active_worker(
         &store,
         &worker_id,
         &node_id,
         WorkerRole::SamplerAggregator,
-        sampler_aggregator_implementation,
-        sampler_aggregator_version,
+        spec.sampler_aggregator_implementation.as_str(),
+        binary_version(),
     )
     .await?;
 
     let mut runner = SamplerAggregatorRunner::new(
         run_id,
-        engine,
+        Box::new(engine),
         aggregated_observable,
         store.clone(),
         store.clone(),

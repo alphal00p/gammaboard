@@ -195,6 +195,7 @@ async fn main() -> BinResult {
                     "evaluator_params": {},
                     "sampler_aggregator_implementation": "test_only_training",
                     "sampler_aggregator_params": {},
+                    "observable_implementation": "scalar",
                     "observable_params": {},
                     "evaluator_runner_params": {
                         "min_loop_time_ms": 200

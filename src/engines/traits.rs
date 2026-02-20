@@ -23,8 +23,6 @@ where
 
 /// Evaluates integrand values for sample points.
 pub trait Evaluator: Send + Sync {
-    fn implementation(&self) -> &'static str;
-    fn version(&self) -> &'static str;
     fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError>;
     fn eval_batch(
         &self,
@@ -35,8 +33,6 @@ pub trait Evaluator: Send + Sync {
 
 /// Owns adaptive sampling training for a single run.
 pub trait SamplerAggregatorEngine: Send {
-    fn implementation(&self) -> &'static str;
-    fn version(&self) -> &'static str;
     fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError>;
     fn init(&mut self) -> Result<(), EngineError>;
     fn produce_batches(&mut self, max_batches: usize) -> Result<Vec<Batch>, EngineError>;

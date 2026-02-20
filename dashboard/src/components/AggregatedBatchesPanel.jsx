@@ -3,8 +3,14 @@ import { Layers as LayersIcon, Analytics as AnalyticsIcon } from "@mui/icons-mat
 
 const AggregatedBatchesPanel = ({ latestAggregated, run }) => {
   const observable = latestAggregated?.aggregated_observable || {};
-  const aggregatedBatches = observable.nr_batches ?? run?.batches_completed ?? 0;
-  const aggregatedSamples = observable.nr_samples ?? 0;
+  const aggregatedBatchesRaw = observable.nr_batches ?? run?.batches_completed ?? 0;
+  const aggregatedBatches = Number.isFinite(Number(aggregatedBatchesRaw)) ? Number(aggregatedBatchesRaw) : 0;
+
+  const batchSizeRaw = run?.integration_params?.sampler_aggregator_params?.batch_size;
+  const batchSize = Number.isFinite(Number(batchSizeRaw)) ? Number(batchSizeRaw) : 0;
+
+  const aggregatedSamples =
+    batchSize > 0 ? aggregatedBatches * batchSize : Number(observable.count ?? observable.nr_samples ?? 0);
 
   return (
     <Box sx={{ mb: 3 }}>

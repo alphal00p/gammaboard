@@ -3,7 +3,7 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContai
 import { TrendingUp as TrendingUpIcon } from "@mui/icons-material";
 
 const SampleChart = ({ samples, isConnected, currentRun, latestAggregated, observableImplementation }) => {
-  const knownObservableImplementation = !observableImplementation || observableImplementation === "test_only";
+  const knownObservableImplementation = observableImplementation === "scalar";
 
   const formatMeanTick = (value) => {
     if (!Number.isFinite(value)) return "";
@@ -94,7 +94,7 @@ const SampleChart = ({ samples, isConnected, currentRun, latestAggregated, obser
         </Typography>
         <Paper sx={{ p: 2 }}>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-            No specialized renderer for observable implementation: <strong>{observableImplementation}</strong>
+            Observable implementation is not supported: <strong>{observableImplementation}</strong>
           </Typography>
           <Box component="pre" sx={{ m: 0, overflowX: "auto", fontSize: "0.8rem" }}>
             {JSON.stringify(observableJson, null, 2)}

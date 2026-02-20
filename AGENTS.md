@@ -31,8 +31,10 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
   row-major flat `continuous`/`discrete` arrays + explicit 2D shape metadata.
 - Evaluators operate batch-wise (`Batch -> BatchResult`), where `BatchResult` contains
   training `values: Vec<f64>` and one aggregated batch-level observable JSON.
-- Evaluator startup validates observable compatibility (`supports_observable`) before entering loop.
-- Observable implementation is selected by `evaluator_implementation`; it is not configured as an independent run field.
+- Runs specify evaluator/sampler/observable implementations independently via
+  `integration_params` (`*_implementation` string fields).
+- Keep compatibility rules in typed implementation enums and validate at
+  startup (for evaluator/observable: `EvaluatorImplementation::supports_observable`).
 - `scalar` observable tracks `count`, `sum`, `sum_abs`, and `sum_sq` over evaluator values.
 - Observable payload handling should use serde-derived structs (`Serialize`/`Deserialize`) plus
   `Observable::{load_state_from_json, merge_state_from_json}`; avoid manual `json!`
@@ -40,7 +42,8 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
 - Completed batches are consumed by sampler-aggregator and deleted from `batches`; there is no persisted sampler engine state checkpoint.
 - Nodes are generic: one `run_node` process can reconcile both roles for assigned runs.
 - Keep role switching safe: stop old role task, then start new one.
-- Keep worker registration metadata (`implementation`, `version`) tied to concrete built engines.
+- Worker registration metadata uses run-spec implementation strings and binary
+  version (`CARGO_PKG_VERSION`).
 
 ## Required Checks Before Finishing
 - `cargo fmt`

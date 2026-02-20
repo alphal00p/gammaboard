@@ -200,14 +200,6 @@ mod tests {
     struct OkEvaluator;
 
     impl Evaluator for OkEvaluator {
-        fn implementation(&self) -> &'static str {
-            "ok_evaluator"
-        }
-
-        fn version(&self) -> &'static str {
-            "v1"
-        }
-
         fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError> {
             if point_spec.continuous_dims != 1 || point_spec.discrete_dims != 0 {
                 return Err(BuildError::build(
@@ -247,14 +239,6 @@ mod tests {
     struct FailingEvaluator;
 
     impl Evaluator for FailingEvaluator {
-        fn implementation(&self) -> &'static str {
-            "failing_evaluator"
-        }
-
-        fn version(&self) -> &'static str {
-            "v1"
-        }
-
         fn validate_point_spec(&self, _point_spec: &PointSpec) -> Result<(), BuildError> {
             Ok(())
         }
@@ -368,12 +352,6 @@ mod tests {
     async fn tick_marks_batch_failed_on_result_len_mismatch() {
         struct BadEvaluator;
         impl Evaluator for BadEvaluator {
-            fn implementation(&self) -> &'static str {
-                "bad"
-            }
-            fn version(&self) -> &'static str {
-                "v1"
-            }
             fn validate_point_spec(&self, _point_spec: &PointSpec) -> Result<(), BuildError> {
                 Ok(())
             }

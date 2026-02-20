@@ -1,5 +1,6 @@
 evaluator_implementation = "test_only_sin"
 sampler_aggregator_implementation = "test_only_training"
+observable_implementation = "scalar"
 
 [point_spec]
 continuous_dims = 1

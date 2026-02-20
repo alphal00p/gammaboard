@@ -46,12 +46,16 @@ fn run_spec_from_integration_params(
             "missing evaluator_implementation in integration_params for run_id={run_id}"
         ))
     })?;
-    let sampler_aggregator_implementation =
-        params.sampler_aggregator_implementation.ok_or_else(|| {
+    let sampler_aggregator_implementation = params.sampler_aggregator_implementation.ok_or_else(|| {
             store_err(format!(
                 "missing sampler_aggregator_implementation in integration_params for run_id={run_id}"
             ))
         })?;
+    let observable_implementation = params.observable_implementation.ok_or_else(|| {
+        store_err(format!(
+            "missing observable_implementation in integration_params for run_id={run_id}"
+        ))
+    })?;
 
     Ok(RunSpec {
         run_id,
@@ -62,6 +66,7 @@ fn run_spec_from_integration_params(
         sampler_aggregator_params: params
             .sampler_aggregator_params
             .unwrap_or_else(|| json!({})),
+        observable_implementation,
         observable_params: params.observable_params.unwrap_or_else(|| json!({})),
         evaluator_runner_params: params.evaluator_runner_params.unwrap_or_else(|| json!({})),
         sampler_aggregator_runner_params: params
@@ -465,7 +470,9 @@ impl AggregationStore for PgStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engines::{EvaluatorImplementation, SamplerAggregatorImplementation};
+    use crate::engines::{
+        EvaluatorImplementation, ObservableImplementation, SamplerAggregatorImplementation,
+    };
     use serde_json::json;
 
     #[test]
@@ -477,6 +484,7 @@ mod tests {
                 "evaluator_params": { "alpha": 1 },
                 "sampler_aggregator_implementation": "test_only_training",
                 "sampler_aggregator_params": { "beta": 2 },
+                "observable_implementation": "scalar",
                 "observable_params": { "gamma": 3 },
                 "evaluator_runner_params": { "min_loop_time_ms": 42 },
                 "sampler_aggregator_runner_params": { "interval_ms": 500 }
@@ -501,6 +509,10 @@ mod tests {
             SamplerAggregatorImplementation::TestOnlyTraining
         );
         assert_eq!(spec.sampler_aggregator_params, json!({ "beta": 2 }));
+        assert_eq!(
+            spec.observable_implementation,
+            ObservableImplementation::Scalar
+        );
         assert_eq!(spec.observable_params, json!({ "gamma": 3 }));
         assert_eq!(
             spec.evaluator_runner_params,
@@ -518,7 +530,8 @@ mod tests {
             8,
             json!({
                 "evaluator_implementation": "test_only_sin",
-                "sampler_aggregator_implementation": "test_only_training"
+                "sampler_aggregator_implementation": "test_only_training",
+                "observable_implementation": "scalar"
             }),
             json!({
                 "continuous_dims": 1,
@@ -549,6 +562,20 @@ mod tests {
             err.to_string()
                 .contains("sampler_aggregator_implementation")
         );
+
+        let err = decode_run_spec(
+            9,
+            json!({
+                "evaluator_implementation": "test_only_sin",
+                "sampler_aggregator_implementation": "test_only_training",
+            }),
+            json!({
+                "continuous_dims": 1,
+                "discrete_dims": 0
+            }),
+        )
+        .expect_err("missing observable implementation should fail");
+        assert!(err.to_string().contains("observable_implementation"));
     }
 
     #[test]

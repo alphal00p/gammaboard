@@ -243,14 +243,6 @@ mod tests {
     }
 
     impl SamplerAggregatorEngine for TestEngine {
-        fn implementation(&self) -> &'static str {
-            "test_engine"
-        }
-
-        fn version(&self) -> &'static str {
-            "v1"
-        }
-
         fn validate_point_spec(&self, _point_spec: &PointSpec) -> Result<(), BuildError> {
             Ok(())
         }

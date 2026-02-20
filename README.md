@@ -56,6 +56,7 @@ Example: `configs/live-test.toml`
 ```toml
 evaluator_implementation = "test_only_sin"
 sampler_aggregator_implementation = "test_only_training"
+observable_implementation = "scalar"
 
 [point_spec]
 continuous_dims = 1
@@ -82,8 +83,10 @@ training_delay_per_sample_ms = 2
 [observable_params]
 ```
 
-`observable_params` are consumed by the observable that is selected by
-`evaluator_implementation` (not configured independently).
+`observable_implementation` and `observable_params` are configured independently
+from evaluator/sampler implementations, so runs can mix-and-match compatible
+engines.
+Compatibility is validated at runner startup before evaluator work begins.
 
 ## Current Status
 
