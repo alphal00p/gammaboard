@@ -28,7 +28,15 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
 - Run configuration is passed as TOML to `control_plane run-add`.
 - Engine/runner settings are persisted in `runs.integration_params`; point shape is persisted in `runs.point_spec`.
 - Batch payloads in `batches.points` must stay compact and shape-stable:
-  row-major flat `continuous`/`discrete` arrays + `weights` + `point_spec`.
+  row-major flat `continuous`/`discrete` arrays + explicit 2D shape metadata.
+- Evaluators operate batch-wise (`Batch -> BatchResult`), where `BatchResult` contains
+  training `values: Vec<f64>` and one aggregated batch-level observable JSON.
+- Evaluator startup validates observable compatibility (`supports_observable`) before entering loop.
+- Observable implementation is selected by `evaluator_implementation`; it is not configured as an independent run field.
+- `scalar` observable tracks `count`, `sum`, `sum_abs`, and `sum_sq` over evaluator values.
+- Observable payload handling should use serde-derived structs (`Serialize`/`Deserialize`) plus
+  `Observable::{load_state_from_json, merge_state_from_json}`; avoid manual `json!`
+  object construction and field-by-field `Value::get` merging in observable implementations.
 - Completed batches are consumed by sampler-aggregator and deleted from `batches`; there is no persisted sampler engine state checkpoint.
 - Nodes are generic: one `run_node` process can reconcile both roles for assigned runs.
 - Keep role switching safe: stop old role task, then start new one.

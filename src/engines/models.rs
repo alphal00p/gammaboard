@@ -11,9 +11,8 @@ pub struct RunSpec {
     pub evaluator_params: JsonValue,
     pub sampler_aggregator_implementation: SamplerAggregatorImplementation,
     pub sampler_aggregator_params: JsonValue,
-    pub observable_implementation: ObservableImplementation,
     pub observable_params: JsonValue,
-    pub worker_runner_params: JsonValue,
+    pub evaluator_runner_params: JsonValue,
     pub sampler_aggregator_runner_params: JsonValue,
 }
 
@@ -30,12 +29,6 @@ pub enum SamplerAggregatorImplementation {
     Havana,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ObservableImplementation {
-    TestOnly,
-}
-
 /// Canonical integration parameters payload stored on `runs.integration_params`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -44,8 +37,7 @@ pub struct IntegrationParams {
     pub evaluator_params: Option<JsonValue>,
     pub sampler_aggregator_implementation: Option<SamplerAggregatorImplementation>,
     pub sampler_aggregator_params: Option<JsonValue>,
-    pub observable_implementation: Option<ObservableImplementation>,
     pub observable_params: Option<JsonValue>,
-    pub worker_runner_params: Option<JsonValue>,
+    pub evaluator_runner_params: Option<JsonValue>,
     pub sampler_aggregator_runner_params: Option<JsonValue>,
 }

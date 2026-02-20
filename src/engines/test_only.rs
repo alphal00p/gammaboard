@@ -1,12 +1,13 @@
 //! Test-only runtime implementations used by local control-plane smoke tests.
 
-use crate::batch::{Batch, EvaluatedSample, Point, PointSpec, PointView, WeightedPoint};
+use crate::batch::{Batch, BatchResult, PointSpec};
 use crate::engines::{
-    AggregatedObservable, BuildError, EngineError, EvalError, Evaluator, SamplerAggregatorEngine,
+    BuildError, EngineError, EvalError, Evaluator, Observable, SamplerAggregatorEngine,
+    encode_observable_state,
 };
 use rand::Rng;
 use serde::Deserialize;
-use serde_json::{Value as JsonValue, json};
+use serde_json::Value as JsonValue;
 use std::{
     thread,
     time::{Duration, Instant},
@@ -23,6 +24,12 @@ impl TestSinEvaluator {
             min_eval_time_per_sample_ms,
         }
     }
+
+    pub fn from_params(params: &JsonValue) -> Result<Self, BuildError> {
+        let parsed: TestEvaluatorParams = serde_json::from_value(params.clone())
+            .map_err(|err| BuildError::build(format!("invalid evaluator params: {err}")))?;
+        Ok(Self::new(parsed.min_eval_time_per_sample_ms))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -31,20 +38,7 @@ pub struct TestEvaluatorParams {
     min_eval_time_per_sample_ms: u64,
 }
 
-fn parse_test_only_evaluator_params(params: &JsonValue) -> Result<TestEvaluatorParams, BuildError> {
-    serde_json::from_value(params.clone())
-        .map_err(|err| BuildError::build(format!("invalid evaluator params: {err}")))
-}
-
 impl Evaluator for TestSinEvaluator {
-    fn from_params(params: &JsonValue) -> Result<Self, BuildError>
-    where
-        Self: Sized,
-    {
-        let parsed = parse_test_only_evaluator_params(params)?;
-        Ok(Self::new(parsed.min_eval_time_per_sample_ms))
-    }
-
     fn implementation(&self) -> &'static str {
         "test_only_sin"
     }
@@ -69,26 +63,20 @@ impl Evaluator for TestSinEvaluator {
         Ok(())
     }
 
-    fn eval_point(&self, point: PointView<'_>) -> Result<EvaluatedSample, EvalError> {
-        let x = *point
-            .continuous()
-            .first()
-            .ok_or_else(|| EvalError::eval("missing continuous[0]"))?;
-        let value = x.sin() * (-x * x).exp();
-        Ok(EvaluatedSample {
-            weight: value,
-            observable: json!({
-                "value": value,
-                "x": x,
-            }),
-        })
-    }
-
-    fn eval_batch(&self, batch: &Batch) -> Result<Vec<EvaluatedSample>, EvalError> {
+    fn eval_batch(
+        &self,
+        batch: &Batch,
+        observable: &mut dyn Observable,
+    ) -> Result<BatchResult, EvalError> {
         let started = Instant::now();
-        let mut samples = Vec::with_capacity(batch.size());
-        for point in batch.iter_points() {
-            samples.push(self.eval_point(point)?);
+        let mut values = Vec::with_capacity(batch.size());
+
+        for row in batch.continuous().rows() {
+            let x = *row
+                .get(0)
+                .ok_or_else(|| EvalError::eval("missing continuous[0]"))?;
+            let value = x.sin() * (-x * x).exp();
+            values.push(value);
         }
 
         let min_total =
@@ -98,7 +86,28 @@ impl Evaluator for TestSinEvaluator {
             thread::sleep(min_total - elapsed);
         }
 
-        Ok(samples)
+        let count = values.len() as i64;
+        let sum = values.iter().sum::<f64>();
+        let sum_abs = values.iter().map(|v| v.abs()).sum::<f64>();
+        let sum_sq = values.iter().map(|v| v * v).sum::<f64>();
+        let delta = encode_observable_state(
+            &serde_json::json!({
+                "count": count,
+                "sum": sum,
+                "sum_abs": sum_abs,
+                "sum_sq": sum_sq,
+            }),
+            "test batch scalar observable",
+        )
+        .map_err(|err| EvalError::eval(err.to_string()))?;
+        observable
+            .merge_state_from_json(&delta)
+            .map_err(|err| EvalError::eval(err.to_string()))?;
+        let batch_observable = observable
+            .snapshot()
+            .map_err(|err| EvalError::eval(err.to_string()))?;
+
+        Ok(BatchResult::new(values, batch_observable))
     }
 }
 
@@ -135,6 +144,18 @@ impl TestTrainingSamplerAggregator {
             sum: 0.0,
         }
     }
+
+    pub fn from_params(params: &JsonValue) -> Result<Self, BuildError> {
+        let parsed: TestSamplerAggregatorParams = serde_json::from_value(params.clone())
+            .map_err(|err| BuildError::build(format!("invalid sampler params: {err}")))?;
+        Ok(Self::new(
+            parsed.batch_size,
+            parsed.continuous_dims,
+            parsed.discrete_dims,
+            parsed.training_target_samples,
+            parsed.training_delay_per_sample_ms,
+        ))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -159,28 +180,7 @@ impl Default for TestSamplerAggregatorParams {
     }
 }
 
-fn parse_test_only_sampler_params(
-    params: &JsonValue,
-) -> Result<TestSamplerAggregatorParams, BuildError> {
-    serde_json::from_value(params.clone())
-        .map_err(|err| BuildError::build(format!("invalid sampler params: {err}")))
-}
-
 impl SamplerAggregatorEngine for TestTrainingSamplerAggregator {
-    fn from_params(params: &JsonValue) -> Result<Self, BuildError>
-    where
-        Self: Sized,
-    {
-        let parsed = parse_test_only_sampler_params(params)?;
-        Ok(Self::new(
-            parsed.batch_size,
-            parsed.continuous_dims,
-            parsed.discrete_dims,
-            parsed.training_target_samples,
-            parsed.training_delay_per_sample_ms,
-        ))
-    }
-
     fn implementation(&self) -> &'static str {
         "test_only_training_sampler_aggregator"
     }
@@ -214,18 +214,22 @@ impl SamplerAggregatorEngine for TestTrainingSamplerAggregator {
         let mut out = Vec::with_capacity(max_batches);
 
         for _ in 0..max_batches {
-            let mut points = Vec::with_capacity(self.batch_size);
+            let mut continuous_data = Vec::with_capacity(self.batch_size * self.continuous_dims);
+            let mut discrete_data = Vec::with_capacity(self.batch_size * self.discrete_dims);
             for _ in 0..self.batch_size {
-                let continuous = (0..self.continuous_dims)
-                    .map(|_| rng.r#gen::<f64>() * 10.0)
-                    .collect();
-                let discrete = (0..self.discrete_dims)
-                    .map(|_| rng.r#gen::<u32>() as i64)
-                    .collect();
-                let w = 0.5 + rng.r#gen::<f64>();
-                points.push(WeightedPoint::new(Point::new(continuous, discrete), w));
+                continuous_data
+                    .extend((0..self.continuous_dims).map(|_| rng.r#gen::<f64>() * 10.0));
+                discrete_data.extend((0..self.discrete_dims).map(|_| rng.r#gen::<u32>() as i64));
             }
-            out.push(Batch::new(points));
+            let batch = Batch::from_flat_data(
+                self.batch_size,
+                self.continuous_dims,
+                self.discrete_dims,
+                continuous_data,
+                discrete_data,
+            )
+            .map_err(|err| EngineError::engine(err.to_string()))?;
+            out.push(batch);
         }
 
         Ok(out)
@@ -260,97 +264,5 @@ impl SamplerAggregatorEngine for TestTrainingSamplerAggregator {
         );
 
         Ok(())
-    }
-}
-
-pub struct TestObservableAggregator {
-    nr_samples: i64,
-    sum: f64,
-}
-
-impl TestObservableAggregator {
-    pub fn new() -> Self {
-        Self {
-            nr_samples: 0,
-            sum: 0.0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(default, deny_unknown_fields)]
-pub struct TestObservableParams {}
-
-impl AggregatedObservable for TestObservableAggregator {
-    fn from_params(_params: &JsonValue) -> Result<Self, BuildError>
-    where
-        Self: Sized,
-    {
-        let _: TestObservableParams = serde_json::from_value(_params.clone())
-            .map_err(|err| BuildError::build(format!("invalid observable params: {err}")))?;
-        Ok(Self::new())
-    }
-
-    fn implementation(&self) -> &'static str {
-        "test_only_observable"
-    }
-
-    fn version(&self) -> &'static str {
-        "v1"
-    }
-
-    fn restore(&mut self, snapshot: Option<JsonValue>) -> Result<(), EngineError> {
-        if let Some(snapshot) = snapshot {
-            self.nr_samples = snapshot
-                .get("nr_samples")
-                .and_then(|v| v.as_i64())
-                .ok_or_else(|| EngineError::engine("missing nr_samples in observable snapshot"))?;
-            self.sum = snapshot
-                .get("sum")
-                .and_then(|v| v.as_f64())
-                .ok_or_else(|| EngineError::engine("missing sum in observable snapshot"))?;
-        }
-        Ok(())
-    }
-
-    fn ingest_sample_observable(
-        &mut self,
-        sample_observable: &JsonValue,
-    ) -> Result<(), EngineError> {
-        let value = sample_observable
-            .get("value")
-            .and_then(|v| v.as_f64())
-            .ok_or_else(|| EngineError::engine("sample observable missing numeric value"))?;
-        self.nr_samples += 1;
-        self.sum += value;
-        Ok(())
-    }
-
-    fn ingest_batch_observable(&mut self, batch_observable: &JsonValue) -> Result<(), EngineError> {
-        let nr_samples = batch_observable
-            .get("nr_samples")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| EngineError::engine("batch observable missing nr_samples"))?;
-        let sum = batch_observable
-            .get("sum")
-            .and_then(|v| v.as_f64())
-            .ok_or_else(|| EngineError::engine("batch observable missing sum"))?;
-        self.nr_samples += nr_samples;
-        self.sum += sum;
-        Ok(())
-    }
-
-    fn snapshot(&self) -> Result<JsonValue, EngineError> {
-        let mean = if self.nr_samples > 0 {
-            Some(self.sum / self.nr_samples as f64)
-        } else {
-            None
-        };
-
-        Ok(json!({
-            "nr_samples": self.nr_samples,
-            "sum": self.sum,
-            "mean": mean,
-        }))
     }
 }

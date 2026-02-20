@@ -48,20 +48,20 @@ Useful stop commands:
 Run configuration is provided as TOML.
 - Engine and runner params are stored in `runs.integration_params`.
 - Point dimensions are stored in `runs.point_spec`.
-- Batches are stored in `batches.points` as compact flat arrays (`continuous`, `discrete`, `weights`) plus `point_spec`.
+- Batches are stored in `batches.points` as compact flat arrays (`continuous`, `discrete`) with explicit 2D shape metadata.
+- Evaluators return one `BatchResult` per batch: `values: Vec<f64>` (sampler training signal) and one aggregated `observable` JSON payload.
 
 Example: `configs/live-test.toml`
 
 ```toml
 evaluator_implementation = "test_only_sin"
 sampler_aggregator_implementation = "test_only_training"
-observable_implementation = "test_only"
 
 [point_spec]
 continuous_dims = 1
 discrete_dims = 0
 
-[worker_runner_params]
+[evaluator_runner_params]
 min_loop_time_ms = 200
 
 [evaluator_params]
@@ -81,6 +81,9 @@ training_delay_per_sample_ms = 2
 
 [observable_params]
 ```
+
+`observable_params` are consumed by the observable that is selected by
+`evaluator_implementation` (not configured independently).
 
 ## Current Status
 

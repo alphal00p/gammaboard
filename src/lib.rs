@@ -13,10 +13,7 @@ use dotenvy::dotenv;
 use sqlx::{Pool, Postgres, postgres::PgPoolOptions};
 use std::env;
 
-pub use batch::{
-    Batch, BatchError, BatchRecord, BatchResults, BatchStatus, Point, PointSpec, PointView,
-    WeightedPoint,
-};
+pub use batch::{Batch, BatchError, BatchRecord, BatchResult, BatchStatus, PointSpec};
 pub use core::{RunStatus, StoreError};
 pub use engines::{BuildError, EngineError, EvalError};
 pub use stores::PgStore;

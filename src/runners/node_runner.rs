@@ -1,8 +1,8 @@
 //! Node-local worker orchestration and role reconciliation.
 
 use super::{
-    sampler_aggregator::RunnerConfig, sampler_aggregator::SamplerAggregatorRunner,
-    worker::WorkerRunner,
+    evaluator::EvaluatorRunner, sampler_aggregator::RunnerConfig,
+    sampler_aggregator::SamplerAggregatorRunner,
 };
 use crate::core::{
     AggregationStore, AssignmentLeaseStore, ControlPlaneStore, RunSpecStore, StoreError,
@@ -265,8 +265,8 @@ async fn run_evaluator_task(
         return Ok(());
     };
 
-    let worker_runner_params: WorkerRunnerParams =
-        parse_params(&spec.worker_runner_params, "worker_runner_params")?;
+    let evaluator_params: EvaluatorRunnerParams =
+        parse_params(&spec.evaluator_runner_params, "evaluator_runner_params")?;
     let evaluator = spec
         .evaluator_implementation
         .build(&spec.evaluator_params)
@@ -293,13 +293,13 @@ async fn run_evaluator_task(
     .await?;
     store.assign_evaluator(run_id, &worker_id).await?;
 
-    let mut runner = WorkerRunner::new(
+    let mut runner = EvaluatorRunner::new(
         run_id,
         worker_id.clone(),
         evaluator,
         Arc::new({
-            let implementation = spec.observable_implementation;
-            move |params: &JsonValue| implementation.build(params)
+            let implementation = spec.evaluator_implementation;
+            move |params: &JsonValue| implementation.build_observable(params)
         }),
         spec.observable_params.clone(),
         spec.point_spec.clone(),
@@ -321,7 +321,7 @@ async fn run_evaluator_task(
 
         // Keep a minimum tick period while still allowing immediate stop.
         let elapsed = tick_started.elapsed();
-        let min_loop_time = Duration::from_millis(worker_runner_params.min_loop_time_ms);
+        let min_loop_time = Duration::from_millis(evaluator_params.min_loop_time_ms);
         if elapsed < min_loop_time {
             tokio::select! {
                 _ = stop_rx.changed() => {}
@@ -375,8 +375,8 @@ async fn run_sampler_aggregator_task(
     let sampler_aggregator_implementation = engine.implementation();
     let sampler_aggregator_version = engine.version();
     let aggregated_observable = spec
-        .observable_implementation
-        .build(&spec.observable_params)
+        .evaluator_implementation
+        .build_observable(&spec.observable_params)
         .map_err(|err| {
             StoreError::store(format!("failed to build aggregated observable: {err}"))
         })?;
@@ -470,7 +470,7 @@ async fn run_sampler_aggregator_task(
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
-struct WorkerRunnerParams {
+struct EvaluatorRunnerParams {
     min_loop_time_ms: u64,
 }
 

@@ -1,4 +1,4 @@
-use crate::batch::{Batch, BatchResults};
+use crate::batch::{Batch, BatchResult};
 use crate::core::{BatchClaim, CompletedBatch, StoreError, WorkQueueStore};
 use serde_json::Value as JsonValue;
 use std::sync::{Arc, Mutex};
@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone, Default)]
 pub(crate) struct MockWorkQueueState {
     pub next_claim: Option<BatchClaim>,
-    pub submitted: Vec<(i64, BatchResults, JsonValue)>,
+    pub submitted: Vec<(i64, BatchResult, JsonValue)>,
     pub failed: Vec<(i64, String)>,
     pub inserted: Vec<Batch>,
     pub pending_batches: i64,
@@ -43,14 +43,13 @@ impl WorkQueueStore for MockWorkQueue {
     async fn submit_batch_results(
         &self,
         batch_id: i64,
-        results: &BatchResults,
-        batch_observable: &JsonValue,
+        result: &BatchResult,
         _eval_time_ms: f64,
     ) -> Result<(), StoreError> {
         self.inner.lock().expect("poison").submitted.push((
             batch_id,
-            results.clone(),
-            batch_observable.clone(),
+            result.clone(),
+            result.observable.clone(),
         ));
         Ok(())
     }

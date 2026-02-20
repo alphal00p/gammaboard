@@ -10,7 +10,7 @@
 
 use crate::batch::PointSpec;
 use crate::core::{AggregationStore, CompletedBatch, StoreError, WorkQueueStore};
-use crate::engines::{AggregatedObservable, EngineError, SamplerAggregatorEngine};
+use crate::engines::{EngineError, Observable, SamplerAggregatorEngine};
 use std::{error::Error, fmt};
 
 #[derive(Debug, Clone)]
@@ -59,26 +59,25 @@ impl From<StoreError> for RunnerError {
     }
 }
 
-pub struct SamplerAggregatorRunner<E, WQ, AS> {
+pub struct SamplerAggregatorRunner<WQ, AS> {
     run_id: i32,
-    engine: E,
-    aggregated_observable: Box<dyn AggregatedObservable>,
+    engine: Box<dyn SamplerAggregatorEngine>,
+    aggregated_observable: Box<dyn Observable>,
     work_queue: WQ,
     aggregation_store: AS,
     config: RunnerConfig,
     point_spec: PointSpec,
 }
 
-impl<E, WQ, AS> SamplerAggregatorRunner<E, WQ, AS>
+impl<WQ, AS> SamplerAggregatorRunner<WQ, AS>
 where
-    E: SamplerAggregatorEngine,
     WQ: WorkQueueStore,
     AS: AggregationStore,
 {
     pub async fn new(
         run_id: i32,
-        mut engine: E,
-        mut aggregated_observable: Box<dyn AggregatedObservable>,
+        mut engine: Box<dyn SamplerAggregatorEngine>,
+        mut aggregated_observable: Box<dyn Observable>,
         work_queue: WQ,
         aggregation_store: AS,
         config: RunnerConfig,
@@ -89,9 +88,11 @@ where
             .await?;
 
         engine.init().map_err(RunnerError::Engine)?;
-        aggregated_observable
-            .restore(persisted_snapshot)
-            .map_err(RunnerError::Engine)?;
+        if let Some(snapshot) = persisted_snapshot {
+            aggregated_observable
+                .load_state_from_json(&snapshot)
+                .map_err(RunnerError::Engine)?;
+        }
 
         Ok(Self {
             run_id,
@@ -160,10 +161,10 @@ where
 
         for batch in completed {
             self.engine
-                .ingest_training_weights(&batch.results.training_weights)
+                .ingest_training_weights(&batch.result.values)
                 .map_err(RunnerError::Engine)?;
             self.aggregated_observable
-                .ingest_batch_observable(&batch.batch_observable)
+                .merge_state_from_json(&batch.result.observable)
                 .map_err(RunnerError::Engine)?;
         }
 
@@ -183,10 +184,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::batch::{Batch, BatchResults, Point, PointSpec, WeightedPoint};
+    use crate::batch::{Batch, BatchResult, PointSpec};
     use crate::core::StoreError;
-    use crate::engines::{AggregatedObservable, BuildError, SamplerAggregatorEngine};
+    use crate::engines::{
+        BuildError, Observable, SamplerAggregatorEngine, decode_observable_state,
+        encode_observable_state,
+    };
     use crate::runners::test_support::MockWorkQueue;
+    use serde::{Deserialize, Serialize};
     use serde_json::{Value as JsonValue, json};
     use std::sync::{Arc, Mutex};
 
@@ -238,15 +243,6 @@ mod tests {
     }
 
     impl SamplerAggregatorEngine for TestEngine {
-        fn from_params(_params: &JsonValue) -> Result<Self, BuildError>
-        where
-            Self: Sized,
-        {
-            Err(BuildError::build(
-                "TestEngine::from_params is not used in sampler runner tests",
-            ))
-        }
-
         fn implementation(&self) -> &'static str {
             "test_engine"
         }
@@ -283,76 +279,74 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
-    struct TestObservable {
+    #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+    struct TestObservableState {
         nr_samples: i64,
         sum: f64,
     }
 
-    impl AggregatedObservable for TestObservable {
-        fn from_params(_params: &JsonValue) -> Result<Self, BuildError>
-        where
-            Self: Sized,
-        {
-            Ok(Self::default())
+    impl TestObservableState {
+        fn merge_from(&mut self, other: &Self) {
+            self.nr_samples += other.nr_samples;
+            self.sum += other.sum;
         }
+    }
 
-        fn implementation(&self) -> &'static str {
-            "test_observable"
-        }
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    struct TestObservableSnapshot {
+        nr_samples: i64,
+        sum: f64,
+    }
 
-        fn version(&self) -> &'static str {
-            "v1"
-        }
-
-        fn restore(&mut self, snapshot: Option<JsonValue>) -> Result<(), EngineError> {
-            if let Some(snapshot) = snapshot {
-                self.nr_samples = snapshot
-                    .get("nr_samples")
-                    .and_then(|v| v.as_i64())
-                    .ok_or_else(|| EngineError::engine("missing nr_samples"))?;
-                self.sum = snapshot
-                    .get("sum")
-                    .and_then(|v| v.as_f64())
-                    .ok_or_else(|| EngineError::engine("missing sum"))?;
+    impl From<&TestObservableState> for TestObservableSnapshot {
+        fn from(state: &TestObservableState) -> Self {
+            Self {
+                nr_samples: state.nr_samples,
+                sum: state.sum,
             }
+        }
+    }
+
+    impl From<TestObservableSnapshot> for TestObservableState {
+        fn from(snapshot: TestObservableSnapshot) -> Self {
+            Self {
+                nr_samples: snapshot.nr_samples,
+                sum: snapshot.sum,
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct TestObservable {
+        state: TestObservableState,
+    }
+
+    impl Observable for TestObservable {
+        fn load_state_from_json(&mut self, state: &JsonValue) -> Result<(), EngineError> {
+            let decoded: TestObservableSnapshot =
+                decode_observable_state(state, "test observable snapshot")?;
+            self.state = decoded.into();
             Ok(())
         }
 
-        fn ingest_sample_observable(
-            &mut self,
-            _sample_observable: &JsonValue,
-        ) -> Result<(), EngineError> {
-            Ok(())
-        }
-
-        fn ingest_batch_observable(
-            &mut self,
-            batch_observable: &JsonValue,
-        ) -> Result<(), EngineError> {
-            let nr_samples = batch_observable
-                .get("nr_samples")
-                .and_then(|v| v.as_i64())
-                .ok_or_else(|| EngineError::engine("missing nr_samples"))?;
-            let sum = batch_observable
-                .get("sum")
-                .and_then(|v| v.as_f64())
-                .ok_or_else(|| EngineError::engine("missing sum"))?;
-            self.nr_samples += nr_samples;
-            self.sum += sum;
+        fn merge_state_from_json(&mut self, state: &JsonValue) -> Result<(), EngineError> {
+            let decoded: TestObservableSnapshot =
+                decode_observable_state(state, "test batch observable")?;
+            let other: TestObservableState = decoded.into();
+            self.state.merge_from(&other);
             Ok(())
         }
 
         fn snapshot(&self) -> Result<JsonValue, EngineError> {
-            Ok(json!({
-                "nr_samples": self.nr_samples,
-                "sum": self.sum,
-            }))
+            encode_observable_state(
+                &TestObservableSnapshot::from(&self.state),
+                "test observable snapshot",
+            )
         }
     }
 
     fn make_batch() -> Batch {
-        Batch::new(vec![WeightedPoint::new(Point::scalar_continuous(1.0), 1.0)])
+        Batch::from_flat_data(1, 1, 0, vec![1.0], vec![]).expect("batch")
     }
 
     fn make_completed(
@@ -363,11 +357,13 @@ mod tests {
         CompletedBatch {
             batch_id,
             batch: make_batch(),
-            results: BatchResults::new(training_weights.clone()),
-            batch_observable: json!({
-                "nr_samples": training_weights.len() as i64,
-                "sum": observable_sum,
-            }),
+            result: BatchResult::new(
+                training_weights.clone(),
+                json!({
+                    "nr_samples": training_weights.len() as i64,
+                    "sum": observable_sum,
+                }),
+            ),
             completed_at: None,
         }
     }
@@ -401,7 +397,7 @@ mod tests {
 
         let mut runner = SamplerAggregatorRunner::new(
             1,
-            engine,
+            Box::new(engine),
             Box::new(TestObservable::default()),
             queue.clone(),
             aggregation_store.clone(),
@@ -465,7 +461,7 @@ mod tests {
 
         let mut runner = SamplerAggregatorRunner::new(
             1,
-            engine,
+            Box::new(engine),
             Box::new(TestObservable::default()),
             queue.clone(),
             aggregation_store.clone(),
@@ -512,7 +508,7 @@ mod tests {
 
         let mut runner = SamplerAggregatorRunner::new(
             1,
-            engine,
+            Box::new(engine),
             Box::new(TestObservable::default()),
             queue.clone(),
             aggregation_store,
@@ -552,7 +548,7 @@ mod tests {
 
         let mut runner = SamplerAggregatorRunner::new(
             1,
-            engine,
+            Box::new(engine),
             Box::new(TestObservable::default()),
             queue.clone(),
             aggregation_store,

@@ -1,4 +1,4 @@
-use crate::batch::{Batch, BatchResults};
+use crate::batch::{Batch, BatchResult};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -152,7 +152,6 @@ pub struct BatchClaim {
 pub struct CompletedBatch {
     pub batch_id: i64,
     pub batch: Batch,
-    pub results: BatchResults,
-    pub batch_observable: JsonValue,
+    pub result: BatchResult,
     pub completed_at: Option<DateTime<Utc>>,
 }

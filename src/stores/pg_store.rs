@@ -1,7 +1,7 @@
 //! Postgres-backed implementations of store contracts.
 
 use super::queries;
-use crate::batch::{Batch, BatchResults, PointSpec};
+use crate::batch::{Batch, BatchResult, PointSpec};
 use crate::core::{
     AggregationStore, AssignmentLeaseStore, BatchClaim, CompletedBatch, ControlPlaneStore,
     DesiredAssignment, RunSpecStore, RunStatus, StoreError, WorkQueueStore, Worker,
@@ -52,11 +52,6 @@ fn run_spec_from_integration_params(
                 "missing sampler_aggregator_implementation in integration_params for run_id={run_id}"
             ))
         })?;
-    let observable_implementation = params.observable_implementation.ok_or_else(|| {
-        store_err(format!(
-            "missing observable_implementation in integration_params for run_id={run_id}"
-        ))
-    })?;
 
     Ok(RunSpec {
         run_id,
@@ -67,9 +62,8 @@ fn run_spec_from_integration_params(
         sampler_aggregator_params: params
             .sampler_aggregator_params
             .unwrap_or_else(|| json!({})),
-        observable_implementation,
         observable_params: params.observable_params.unwrap_or_else(|| json!({})),
-        worker_runner_params: params.worker_runner_params.unwrap_or_else(|| json!({})),
+        evaluator_runner_params: params.evaluator_runner_params.unwrap_or_else(|| json!({})),
         sampler_aggregator_runner_params: params
             .sampler_aggregator_runner_params
             .unwrap_or_else(|| json!({})),
@@ -381,19 +375,12 @@ impl WorkQueueStore for PgStore {
     async fn submit_batch_results(
         &self,
         batch_id: i64,
-        results: &BatchResults,
-        batch_observable: &JsonValue,
+        result: &BatchResult,
         eval_time_ms: f64,
     ) -> Result<(), StoreError> {
-        queries::submit_batch_results(
-            &self.pool,
-            batch_id,
-            results,
-            batch_observable,
-            eval_time_ms,
-        )
-        .await
-        .map_err(map_sqlx)
+        queries::submit_batch_results(&self.pool, batch_id, result, eval_time_ms)
+            .await
+            .map_err(map_sqlx)
     }
 
     async fn fail_batch(&self, batch_id: i64, last_error: &str) -> Result<(), StoreError> {
@@ -418,18 +405,18 @@ impl WorkQueueStore for PgStore {
                     row.batch_id
                 ))
             })?;
-            let results = BatchResults::from_json(&row.training_weights).map_err(|err| {
-                store_err(format!(
-                    "failed to deserialize batch training weights for batch_id={}: {err}",
-                    row.batch_id
-                ))
-            })?;
+            let result = BatchResult::values_from_json(&row.values, &row.batch_observable)
+                .map_err(|err| {
+                    store_err(format!(
+                        "failed to deserialize batch result payload for batch_id={}: {err}",
+                        row.batch_id
+                    ))
+                })?;
 
             out.push(CompletedBatch {
                 batch_id: row.batch_id,
                 batch,
-                results,
-                batch_observable: row.batch_observable,
+                result,
                 completed_at: row.completed_at,
             });
         }
@@ -478,9 +465,7 @@ impl AggregationStore for PgStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engines::{
-        EvaluatorImplementation, ObservableImplementation, SamplerAggregatorImplementation,
-    };
+    use crate::engines::{EvaluatorImplementation, SamplerAggregatorImplementation};
     use serde_json::json;
 
     #[test]
@@ -492,9 +477,8 @@ mod tests {
                 "evaluator_params": { "alpha": 1 },
                 "sampler_aggregator_implementation": "test_only_training",
                 "sampler_aggregator_params": { "beta": 2 },
-                "observable_implementation": "test_only",
                 "observable_params": { "gamma": 3 },
-                "worker_runner_params": { "min_loop_time_ms": 42 },
+                "evaluator_runner_params": { "min_loop_time_ms": 42 },
                 "sampler_aggregator_runner_params": { "interval_ms": 500 }
             }),
             json!({
@@ -517,12 +501,11 @@ mod tests {
             SamplerAggregatorImplementation::TestOnlyTraining
         );
         assert_eq!(spec.sampler_aggregator_params, json!({ "beta": 2 }));
-        assert_eq!(
-            spec.observable_implementation,
-            ObservableImplementation::TestOnly
-        );
         assert_eq!(spec.observable_params, json!({ "gamma": 3 }));
-        assert_eq!(spec.worker_runner_params, json!({ "min_loop_time_ms": 42 }));
+        assert_eq!(
+            spec.evaluator_runner_params,
+            json!({ "min_loop_time_ms": 42 })
+        );
         assert_eq!(
             spec.sampler_aggregator_runner_params,
             json!({ "interval_ms": 500 })
@@ -535,8 +518,7 @@ mod tests {
             8,
             json!({
                 "evaluator_implementation": "test_only_sin",
-                "sampler_aggregator_implementation": "test_only_training",
-                "observable_implementation": "test_only"
+                "sampler_aggregator_implementation": "test_only_training"
             }),
             json!({
                 "continuous_dims": 1,
@@ -548,7 +530,7 @@ mod tests {
         assert_eq!(spec.evaluator_params, json!({}));
         assert_eq!(spec.sampler_aggregator_params, json!({}));
         assert_eq!(spec.observable_params, json!({}));
-        assert_eq!(spec.worker_runner_params, json!({}));
+        assert_eq!(spec.evaluator_runner_params, json!({}));
         assert_eq!(spec.sampler_aggregator_runner_params, json!({}));
     }
 

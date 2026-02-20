@@ -4,10 +4,10 @@ CREATE TABLE IF NOT EXISTS batches (
     id BIGSERIAL PRIMARY KEY,
     run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
 
-    -- Batch data: compact row-major flat arrays + point_spec
+    -- Batch data: compact row-major flat arrays + explicit 2D shape metadata
     points JSONB NOT NULL,
-    -- e.g., {"point_spec":{"continuous_dims":2,"discrete_dims":1},
-    --        "continuous":[0.5,0.3,0.6,0.4], "discrete":[1,2], "weights":[1.2,0.8]}
+    -- e.g., {"continuous_rows":2, "continuous_cols":2, "continuous_data":[0.5,0.3,0.6,0.4],
+    --        "discrete_rows":2, "discrete_cols":1, "discrete_data":[1,2]}
 
     batch_size INT NOT NULL,
     -- Number of samples in this batch
@@ -23,8 +23,8 @@ CREATE TABLE IF NOT EXISTS batches (
     completed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT now(),
 
-    -- Training weights (null until completed)
-    training_weights JSONB,
+    -- Evaluator values used for sampler training (null until completed)
+    "values" JSONB,
 
     batch_observable JSONB,
     -- Batch-level aggregated observable snapshot emitted by evaluator runner

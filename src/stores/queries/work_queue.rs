@@ -1,4 +1,4 @@
-use crate::batch::{Batch, BatchResults};
+use crate::batch::{Batch, BatchResult};
 use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
@@ -6,7 +6,7 @@ use sqlx::PgPool;
 pub(crate) struct CompletedBatchRaw {
     pub batch_id: i64,
     pub points: JsonValue,
-    pub training_weights: JsonValue,
+    pub values: JsonValue,
     pub batch_observable: JsonValue,
     pub completed_at: Option<DateTime<Utc>>,
 }
@@ -93,23 +93,22 @@ pub(crate) async fn claim_batch(
 pub(crate) async fn submit_batch_results(
     pool: &PgPool,
     batch_id: i64,
-    results: &BatchResults,
-    batch_observable: &JsonValue,
+    result: &BatchResult,
     eval_time_ms: f64,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
         UPDATE batches
         SET status = 'completed',
-            training_weights = $1,
+            "values" = $1,
             batch_observable = $2,
             total_eval_time_ms = $3,
             completed_at = now()
         WHERE id = $4
         "#,
     )
-    .bind(results.to_json())
-    .bind(batch_observable)
+    .bind(result.values_to_json())
+    .bind(&result.observable)
     .bind(eval_time_ms)
     .bind(batch_id)
     .execute(pool)
@@ -155,7 +154,7 @@ pub(crate) async fn fetch_completed_batches(
                 id,
                 status,
                 points,
-                training_weights,
+                "values",
                 batch_observable,
                 completed_at,
                 ROW_NUMBER() OVER (ORDER BY id ASC) AS rn
@@ -172,13 +171,13 @@ pub(crate) async fn fetch_completed_batches(
         SELECT
             o.id,
             o.points,
-            o.training_weights,
+            o."values",
             o.batch_observable,
             o.completed_at
         FROM ordered o
         CROSS JOIN first_blocker b
         WHERE o.status = 'completed'
-          AND o.training_weights IS NOT NULL
+          AND o."values" IS NOT NULL
           AND o.batch_observable IS NOT NULL
           AND (b.rn IS NULL OR o.rn < b.rn)
         ORDER BY o.id ASC
@@ -192,14 +191,12 @@ pub(crate) async fn fetch_completed_batches(
     Ok(rows
         .into_iter()
         .map(
-            |(batch_id, points, training_weights, batch_observable, completed_at)| {
-                CompletedBatchRaw {
-                    batch_id,
-                    points,
-                    training_weights,
-                    batch_observable,
-                    completed_at,
-                }
+            |(batch_id, points, values, batch_observable, completed_at)| CompletedBatchRaw {
+                batch_id,
+                points,
+                values,
+                batch_observable,
+                completed_at,
             },
         )
         .collect())

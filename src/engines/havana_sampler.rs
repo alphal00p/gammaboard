@@ -69,13 +69,8 @@ impl HavanaSampler {
             rng,
         }
     }
-}
 
-impl SamplerAggregatorEngine for HavanaSampler {
-    fn from_params(params: &JsonValue) -> Result<Self, BuildError>
-    where
-        Self: Sized,
-    {
+    pub fn from_params(params: &JsonValue) -> Result<Self, BuildError> {
         let parsed = parse_havana_sampler_params(params)?;
 
         let rng = MonteCarloRng::new(parsed.seed, 0);
@@ -94,7 +89,9 @@ impl SamplerAggregatorEngine for HavanaSampler {
             parsed.batch_size,
         ))
     }
+}
 
+impl SamplerAggregatorEngine for HavanaSampler {
     fn implementation(&self) -> &'static str {
         "havana"
     }

@@ -1,5 +1,5 @@
 use gammaboard::core::{AssignmentLeaseStore, WorkQueueStore};
-use gammaboard::{Batch, PgStore, Point, WeightedPoint};
+use gammaboard::{Batch, PgStore};
 use sqlx::postgres::PgPoolOptions;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -54,7 +54,7 @@ async fn claim_batch_requires_active_assignment() {
         .await
         .expect("assign evaluator");
 
-    let batch = Batch::new(vec![WeightedPoint::new(Point::scalar_continuous(1.0), 1.0)]);
+    let batch = Batch::from_flat_data(1, 1, 0, vec![1.0], vec![]).expect("batch");
     store
         .insert_batch(run_id, &batch)
         .await
@@ -109,7 +109,7 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
     .await
     .expect("insert worker");
 
-    let batch = Batch::new(vec![WeightedPoint::new(Point::scalar_continuous(2.0), 1.0)]);
+    let batch = Batch::from_flat_data(1, 1, 0, vec![2.0], vec![]).expect("batch");
     store
         .insert_batch(run_id, &batch)
         .await

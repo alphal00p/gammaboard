@@ -1,12 +1,11 @@
 evaluator_implementation = "test_only_sin"
 sampler_aggregator_implementation = "test_only_training"
-observable_implementation = "test_only"
 
 [point_spec]
 continuous_dims = 1
 discrete_dims = 0
 
-[worker_runner_params]
+[evaluator_runner_params]
 min_loop_time_ms = 200
 
 [evaluator_params]

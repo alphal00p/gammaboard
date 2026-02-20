@@ -2,7 +2,7 @@
 
 use super::errors::StoreError;
 use super::models::{BatchClaim, CompletedBatch, DesiredAssignment, Worker, WorkerStatus};
-use crate::batch::{Batch, BatchResults, PointSpec};
+use crate::batch::{Batch, BatchResult, PointSpec};
 use crate::engines::RunSpec;
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
@@ -103,8 +103,7 @@ pub trait WorkQueueStore: Send + Sync {
     async fn submit_batch_results(
         &self,
         batch_id: i64,
-        results: &BatchResults,
-        batch_observable: &JsonValue,
+        result: &BatchResult,
         eval_time_ms: f64,
     ) -> Result<(), StoreError>;
     async fn fail_batch(&self, batch_id: i64, last_error: &str) -> Result<(), StoreError>;

@@ -21,7 +21,8 @@ function App() {
 const AppContent = ({ runs, selectedRun, setSelectedRun }) => {
   const { run, workQueueStats, history, latestAggregated, isConnected, lastUpdate } = useRunHistory();
   const currentRun = run || runs.find((r) => r.run_id === selectedRun);
-  const observableImplementation = currentRun?.integration_params?.observable_implementation || null;
+  const evaluatorImplementation = currentRun?.integration_params?.evaluator_implementation || null;
+  const observableImplementation = evaluatorImplementation === "test_only_sin" ? "scalar" : null;
 
   const derivedSamples = history
     .slice()
