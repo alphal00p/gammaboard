@@ -7,7 +7,7 @@ use crate::core::{
     DesiredAssignment, RunSpecStore, RunStatus, StoreError, WorkQueueStore, Worker,
     WorkerRegistryStore, WorkerRole, WorkerStatus,
 };
-use crate::engines::{IntegrationParams, RunSpec};
+use crate::engines::{IntegrationParams, ObservableImplementation, RunSpec};
 use crate::stores::RunReadStore;
 use serde_json::{Value as JsonValue, json};
 use sqlx::PgPool;
@@ -101,6 +101,26 @@ fn decode_run_spec(
     run_spec_from_integration_params(run_id, point_spec, params)
 }
 
+fn parse_run_create_payload(
+    integration_params: &JsonValue,
+) -> Result<(JsonValue, ObservableImplementation), StoreError> {
+    let mut root = integration_params.as_object().cloned().ok_or_else(|| {
+        store_err("run create payload must be an object (integration_params json)")
+    })?;
+
+    let observable_implementation = if let Some(value) = root.remove("observable_implementation") {
+        serde_json::from_value::<ObservableImplementation>(value).map_err(|err| {
+            store_err(format!(
+                "invalid observable_implementation in integration_params: {err}"
+            ))
+        })?
+    } else {
+        ObservableImplementation::Scalar
+    };
+
+    Ok((JsonValue::Object(root), observable_implementation))
+}
+
 #[async_trait::async_trait]
 impl RunReadStore for PgStore {
     async fn health_check(&self) -> Result<(), StoreError> {
@@ -144,6 +164,18 @@ impl RunReadStore for PgStore {
         limit: i64,
     ) -> Result<Vec<crate::stores::AggregatedResult>, StoreError> {
         queries::get_aggregated_results(&self.pool, run_id, limit)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn get_worker_logs(
+        &self,
+        run_id: i32,
+        limit: i64,
+        worker_id: Option<&str>,
+        level: Option<&str>,
+    ) -> Result<Vec<crate::stores::WorkerLogEntry>, StoreError> {
+        queries::get_worker_logs(&self.pool, run_id, limit, worker_id, level)
             .await
             .map_err(map_sqlx)
     }
@@ -325,9 +357,18 @@ impl ControlPlaneStore for PgStore {
         integration_params: &JsonValue,
         point_spec: &PointSpec,
     ) -> Result<i32, StoreError> {
-        queries::create_run(&self.pool, status, integration_params, point_spec)
-            .await
-            .map_err(map_sqlx)
+        let (sanitized_params, observable_implementation) =
+            parse_run_create_payload(integration_params)?;
+
+        queries::create_run(
+            &self.pool,
+            status,
+            &sanitized_params,
+            observable_implementation.as_str(),
+            point_spec,
+        )
+        .await
+        .map_err(map_sqlx)
     }
 
     async fn set_run_status(&self, run_id: i32, status: RunStatus) -> Result<(), StoreError> {
@@ -590,5 +631,52 @@ mod tests {
         )
         .expect_err("non-object payload should fail");
         assert!(err.to_string().contains("expected object"));
+    }
+
+    #[test]
+    fn parse_run_create_payload_extracts_observable_implementation() {
+        let (sanitized, observable) = parse_run_create_payload(&json!({
+            "evaluator_implementation": "test_only_sin",
+            "sampler_aggregator_implementation": "test_only_training",
+            "observable_implementation": "scalar",
+            "observable_params": { "a": 1 }
+        }))
+        .expect("parse");
+
+        assert_eq!(observable, ObservableImplementation::Scalar);
+        assert_eq!(
+            sanitized,
+            json!({
+                "evaluator_implementation": "test_only_sin",
+                "sampler_aggregator_implementation": "test_only_training",
+                "observable_params": { "a": 1 }
+            })
+        );
+    }
+
+    #[test]
+    fn parse_run_create_payload_defaults_observable_to_scalar() {
+        let (sanitized, observable) = parse_run_create_payload(&json!({
+            "evaluator_implementation": "test_only_sin"
+        }))
+        .expect("parse");
+
+        assert_eq!(observable, ObservableImplementation::Scalar);
+        assert_eq!(
+            sanitized,
+            json!({ "evaluator_implementation": "test_only_sin" })
+        );
+    }
+
+    #[test]
+    fn parse_run_create_payload_rejects_invalid_observable() {
+        let err = parse_run_create_payload(&json!({
+            "observable_implementation": "does_not_exist"
+        }))
+        .expect_err("invalid observable should fail");
+        assert!(
+            err.to_string()
+                .contains("invalid observable_implementation")
+        );
     }
 }

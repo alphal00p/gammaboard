@@ -3,17 +3,20 @@
 //! This library provides database abstractions for distributed adaptive
 //! numerical integration using PostgreSQL as a work queue.
 
-pub mod batch;
 pub mod core;
+pub mod batch {
+    pub use crate::core::batch::*;
+}
 pub mod engines;
 pub mod runners;
 pub mod stores;
+pub mod telemetry;
 
 use dotenvy::dotenv;
 use sqlx::{Pool, Postgres, postgres::PgPoolOptions};
 use std::env;
 
-pub use batch::{Batch, BatchError, BatchRecord, BatchResult, BatchStatus, PointSpec};
+pub use core::{Batch, BatchError, BatchRecord, BatchResult, BatchStatus, PointSpec};
 pub use core::{RunStatus, StoreError};
 pub use engines::{BuildError, EngineError, EvalError};
 pub use stores::PgStore;

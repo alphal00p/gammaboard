@@ -20,6 +20,14 @@ export const fetchRun = async (runId) => {
   return parseJsonOrThrow(response, "Failed to fetch run");
 };
 
+export const fetchRunLogs = async (runId, limit = 500, workerId = null, level = null) => {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (workerId) params.set("worker_id", workerId);
+  if (level) params.set("level", level);
+  const response = await fetch(`${API_BASE_URL}/runs/${runId}/logs?${params.toString()}`);
+  return parseJsonOrThrow(response, "Failed to fetch run logs");
+};
+
 export const fetchAggregatedHistory = async (runId, limit) => {
   const response = await fetch(`${API_BASE_URL}/runs/${runId}/aggregated?limit=${limit}`);
   return parseJsonOrThrow(response, "Failed to fetch aggregated history");

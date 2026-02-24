@@ -8,7 +8,10 @@ pub(crate) async fn load_run_spec_payload(
     let payload = sqlx::query_as::<_, (JsonValue, JsonValue)>(
         r#"
         SELECT
-            COALESCE(integration_params, '{}'::jsonb) AS integration_params,
+            (
+                COALESCE(integration_params, '{}'::jsonb)
+                || jsonb_build_object('observable_implementation', observable_implementation)
+            ) AS integration_params,
             point_spec
         FROM runs
         WHERE id = $1

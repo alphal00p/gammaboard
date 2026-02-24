@@ -10,7 +10,7 @@
 
 use crate::batch::PointSpec;
 use crate::core::{AggregationStore, CompletedBatch, StoreError, WorkQueueStore};
-use crate::engines::{EngineError, Observable, SamplerAggregatorEngine};
+use crate::engines::{EngineError, Observable, SamplerAggregator};
 use std::{error::Error, fmt};
 
 #[derive(Debug, Clone)]
@@ -61,7 +61,7 @@ impl From<StoreError> for RunnerError {
 
 pub struct SamplerAggregatorRunner<WQ, AS> {
     run_id: i32,
-    engine: Box<dyn SamplerAggregatorEngine>,
+    engine: Box<dyn SamplerAggregator>,
     aggregated_observable: Box<dyn Observable>,
     work_queue: WQ,
     aggregation_store: AS,
@@ -76,7 +76,7 @@ where
 {
     pub async fn new(
         run_id: i32,
-        mut engine: Box<dyn SamplerAggregatorEngine>,
+        mut engine: Box<dyn SamplerAggregator>,
         mut aggregated_observable: Box<dyn Observable>,
         work_queue: WQ,
         aggregation_store: AS,
@@ -187,8 +187,7 @@ mod tests {
     use crate::batch::{Batch, BatchResult, PointSpec};
     use crate::core::StoreError;
     use crate::engines::{
-        BuildError, Observable, SamplerAggregatorEngine, decode_observable_state,
-        encode_observable_state,
+        BuildError, Observable, SamplerAggregator, decode_observable_state, encode_observable_state,
     };
     use crate::runners::test_support::MockWorkQueue;
     use serde::{Deserialize, Serialize};
@@ -242,7 +241,7 @@ mod tests {
         probe: Arc<Mutex<Probe>>,
     }
 
-    impl SamplerAggregatorEngine for TestEngine {
+    impl SamplerAggregator for TestEngine {
         fn validate_point_spec(&self, _point_spec: &PointSpec) -> Result<(), BuildError> {
             Ok(())
         }

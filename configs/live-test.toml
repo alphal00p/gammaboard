@@ -15,7 +15,7 @@ min_eval_time_per_sample_ms = 2
 [sampler_aggregator_runner_params]
 interval_ms = 500
 lease_ttl_ms = 5000
-max_batches_per_tick = 1
+max_batches_per_tick = 128
 max_pending_batches = 128
 completed_batch_fetch_limit = 512
 

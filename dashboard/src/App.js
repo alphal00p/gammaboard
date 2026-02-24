@@ -6,6 +6,7 @@ import RunInfo from "./components/RunInfo";
 import WorkQueueStats from "./components/WorkQueueStats";
 import AggregatedBatchesPanel from "./components/AggregatedBatchesPanel";
 import SampleChart from "./components/SampleChart";
+import WorkerLogsPanel from "./components/WorkerLogsPanel";
 import { useRuns } from "./hooks/useRuns";
 import { RunHistoryProvider, useRunHistory } from "./context/RunHistoryContext";
 
@@ -20,7 +21,7 @@ function App() {
 }
 
 const AppContent = ({ runs, selectedRun, setSelectedRun }) => {
-  const { run, workQueueStats, history, latestAggregated, isConnected, lastUpdate } = useRunHistory();
+  const { run, workerLogs, workQueueStats, history, latestAggregated, isConnected, lastUpdate } = useRunHistory();
   const currentRun = run || runs.find((r) => r.run_id === selectedRun);
   const observableImplementation = currentRun?.integration_params?.observable_implementation ?? "unknown";
   const [showJson, setShowJson] = useState(false);
@@ -41,6 +42,7 @@ const AppContent = ({ runs, selectedRun, setSelectedRun }) => {
       data: latestAggregated?.aggregated_observable ?? null,
     },
     { title: "Aggregated History (/runs/:id/aggregated)", data: history ?? [] },
+    { title: "Worker Logs (/runs/:id/logs)", data: workerLogs ?? [] },
   ];
 
   const derivedSamples = history
@@ -82,6 +84,7 @@ const AppContent = ({ runs, selectedRun, setSelectedRun }) => {
         latestAggregated={latestAggregated}
         observableImplementation={observableImplementation}
       />
+      <WorkerLogsPanel logs={workerLogs} runId={selectedRun} />
       <Box sx={{ mb: 3 }}>
         <Button variant="outlined" onClick={() => setShowJson((value) => !value)} sx={{ mb: 1.5 }}>
           {showJson ? "Hide JSON" : "Show JSON"}

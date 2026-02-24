@@ -3,6 +3,7 @@ import {
   createRunStatsEventSource,
   fetchAggregatedHistory as fetchAggregatedHistoryApi,
   fetchLatestAggregated as fetchLatestAggregatedApi,
+  fetchRunLogs as fetchRunLogsApi,
   fetchRun as fetchRunApi,
   fetchStats as fetchStatsApi,
 } from "../services/api";
@@ -21,6 +22,7 @@ export const RunHistoryProvider = ({
   const [history, setHistory] = useState([]);
   const [latestAggregated, setLatestAggregated] = useState(null);
   const [run, setRun] = useState(null);
+  const [workerLogs, setWorkerLogs] = useState([]);
   const [workQueueStats, setWorkQueueStats] = useState([]);
   const [isConnected, setIsConnected] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
@@ -68,11 +70,18 @@ export const RunHistoryProvider = ({
     setWorkQueueStats(data);
   }, [runId]);
 
+  const fetchWorkerLogs = useCallback(async () => {
+    if (!runId) return;
+    const data = await fetchRunLogsApi(runId, 500);
+    setWorkerLogs(data);
+  }, [runId]);
+
   useEffect(() => {
     if (!runId) {
       setHistory([]);
       setLatestAggregated(null);
       setRun(null);
+      setWorkerLogs([]);
       setWorkQueueStats([]);
       setIsConnected(false);
       setLastUpdate(null);
@@ -84,7 +93,7 @@ export const RunHistoryProvider = ({
 
     const loadInitial = async () => {
       try {
-        await Promise.all([fetchAggregatedHistory(), fetchRun(), fetchWorkQueueStats()]);
+        await Promise.all([fetchAggregatedHistory(), fetchRun(), fetchWorkQueueStats(), fetchWorkerLogs()]);
         if (!cancelled) {
           setError(null);
           setIsConnected(true);
@@ -103,14 +112,14 @@ export const RunHistoryProvider = ({
     return () => {
       cancelled = true;
     };
-  }, [runId, fetchAggregatedHistory, fetchRun, fetchWorkQueueStats]);
+  }, [runId, fetchAggregatedHistory, fetchRun, fetchWorkQueueStats, fetchWorkerLogs]);
 
   useEffect(() => {
     if (!runId) return;
 
     const interval = setInterval(async () => {
       try {
-        const requests = [fetchWorkQueueStats()];
+        const requests = [fetchWorkQueueStats(), fetchWorkerLogs()];
         const sseUnsupported = typeof EventSource === "undefined";
 
         if (!isConnected || sseUnsupported) {
@@ -128,7 +137,7 @@ export const RunHistoryProvider = ({
     }, pollIntervalMs);
 
     return () => clearInterval(interval);
-  }, [runId, pollIntervalMs, isConnected, fetchLatestAggregated, fetchWorkQueueStats, fetchRun]);
+  }, [runId, pollIntervalMs, isConnected, fetchLatestAggregated, fetchWorkQueueStats, fetchRun, fetchWorkerLogs]);
 
   useEffect(() => {
     if (!runId) return;
@@ -177,6 +186,7 @@ export const RunHistoryProvider = ({
     () => ({
       runId,
       run,
+      workerLogs,
       workQueueStats,
       history,
       latestAggregated,
@@ -189,6 +199,7 @@ export const RunHistoryProvider = ({
     [
       runId,
       run,
+      workerLogs,
       workQueueStats,
       history,
       latestAggregated,

@@ -1,15 +1,14 @@
 use serde::Deserialize;
-use serde_json::Value as JsonValue;
 use symbolica::numerical_integration::{ContinuousGrid, Grid, MonteCarloRng};
 
 use crate::{
     batch::PointSpec,
-    engines::{BuildError, SamplerAggregatorEngine},
+    engines::{BuildError, BuildFromJson, SamplerAggregator},
 };
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-struct HavanaSamplerParams {
+pub struct HavanaSamplerParams {
     seed: u64,
     batch_size: usize,
     continuous_dims: usize,
@@ -29,10 +28,7 @@ impl Default for HavanaSamplerParams {
     }
 }
 
-fn parse_havana_sampler_params(params: &JsonValue) -> Result<HavanaSamplerParams, BuildError> {
-    let parsed: HavanaSamplerParams = serde_json::from_value(params.clone())
-        .map_err(|err| BuildError::build(format!("invalid havana sampler params: {err}")))?;
-
+fn validate_havana_sampler_params(parsed: &HavanaSamplerParams) -> Result<(), BuildError> {
     if parsed.continuous_dims == 0 {
         return Err(BuildError::build(
             "havana sampler requires continuous_dims > 0",
@@ -50,7 +46,7 @@ fn parse_havana_sampler_params(params: &JsonValue) -> Result<HavanaSamplerParams
         return Err(BuildError::build("havana sampler requires batch_size > 0"));
     }
 
-    Ok(parsed)
+    Ok(())
 }
 
 pub struct HavanaSampler {
@@ -69,29 +65,34 @@ impl HavanaSampler {
             rng,
         }
     }
+}
 
-    pub fn from_params(params: &JsonValue) -> Result<Self, BuildError> {
-        let parsed = parse_havana_sampler_params(params)?;
+impl BuildFromJson for HavanaSampler {
+    type Params = HavanaSamplerParams;
+    const PARAMS_CONTEXT: &'static str = "havana sampler params";
 
-        let rng = MonteCarloRng::new(parsed.seed, 0);
+    fn from_parsed_params(params: Self::Params) -> Result<Self, BuildError> {
+        validate_havana_sampler_params(&params)?;
+
+        let rng = MonteCarloRng::new(params.seed, 0);
         let grid = Grid::Continuous(ContinuousGrid::new(
-            parsed.continuous_dims,
-            parsed.bins,
-            parsed.min_samples_for_update,
+            params.continuous_dims,
+            params.bins,
+            params.min_samples_for_update,
             None,
             false,
         ));
 
         Ok(HavanaSampler::new(
-            parsed.continuous_dims,
+            params.continuous_dims,
             grid,
             rng,
-            parsed.batch_size,
+            params.batch_size,
         ))
     }
 }
 
-impl SamplerAggregatorEngine for HavanaSampler {
+impl SamplerAggregator for HavanaSampler {
     fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError> {
         if point_spec.continuous_dims != self.continuous_dims {
             return Err(BuildError::build(format!(

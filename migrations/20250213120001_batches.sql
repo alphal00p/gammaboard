@@ -64,7 +64,10 @@ CREATE OR REPLACE VIEW run_progress AS
 SELECT
     r.id as run_id,
     r.status as run_status,
-    r.integration_params,
+    (
+        COALESCE(r.integration_params, '{}'::jsonb)
+        || jsonb_build_object('observable_implementation', r.observable_implementation)
+    ) as integration_params,
     r.started_at,
     r.completed_at,
     r.total_batches_planned,

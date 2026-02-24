@@ -234,6 +234,10 @@ mod tests {
                 .map_err(|err| EvalError::eval(err.to_string()))?;
             Ok(BatchResult::new(values, snapshot))
         }
+
+        fn supports_observable(&self, _observable: &crate::engines::ObservableEngine) -> bool {
+            true
+        }
     }
 
     struct FailingEvaluator;
@@ -249,6 +253,10 @@ mod tests {
             _observable: &mut dyn Observable,
         ) -> Result<BatchResult, EvalError> {
             Err(EvalError::eval("mock failure"))
+        }
+
+        fn supports_observable(&self, _observable: &crate::engines::ObservableEngine) -> bool {
+            false
         }
     }
 
@@ -361,6 +369,9 @@ mod tests {
                 _observable: &mut dyn Observable,
             ) -> Result<BatchResult, EvalError> {
                 Ok(BatchResult::new(vec![1.0], json!({})))
+            }
+            fn supports_observable(&self, _observable: &crate::engines::ObservableEngine) -> bool {
+                true
             }
         }
 

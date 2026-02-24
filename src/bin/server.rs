@@ -40,6 +40,18 @@ fn default_limit() -> i64 {
     1000
 }
 
+#[derive(Deserialize)]
+struct LogQuery {
+    #[serde(default = "default_log_limit")]
+    limit: i64,
+    worker_id: Option<String>,
+    level: Option<String>,
+}
+
+fn default_log_limit() -> i64 {
+    500
+}
+
 fn default_stream_interval_ms() -> u64 {
     1000
 }
@@ -109,6 +121,7 @@ async fn main() -> BinResult {
         .route("/runs", get(get_runs))
         .route("/runs/:id", get(get_run))
         .route("/runs/:id/stats", get(get_run_stats))
+        .route("/runs/:id/logs", get(get_run_logs))
         .route("/runs/:id/aggregated", get(get_run_aggregated_results))
         .route(
             "/runs/:id/aggregated/latest",
@@ -186,6 +199,32 @@ async fn get_run_stats(State(state): State<AppState>, Path(id): Path<i32>) -> im
             format!("fetching stats for run {id}"),
             e,
             "Failed to fetch stats",
+        ),
+    }
+}
+
+/// Get worker logs for a run.
+async fn get_run_logs(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+    Query(params): Query<LogQuery>,
+) -> impl IntoResponse {
+    let limit = params.limit.clamp(1, 10_000);
+    match state
+        .store
+        .get_worker_logs(
+            id,
+            limit,
+            params.worker_id.as_deref(),
+            params.level.as_deref(),
+        )
+        .await
+    {
+        Ok(logs) => (StatusCode::OK, Json(logs)).into_response(),
+        Err(e) => internal_error(
+            format!("fetching logs for run {id}"),
+            e,
+            "Failed to fetch logs",
         ),
     }
 }

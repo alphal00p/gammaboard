@@ -1,5 +1,6 @@
 use crate::engines::{
-    BuildError, EngineError, Observable, decode_observable_state, encode_observable_state,
+    BuildError, BuildFromJson, EngineError, Observable, decode_observable_state,
+    encode_observable_state,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -73,10 +74,13 @@ impl ScalarObservableAggregator {
             state: ScalarState::default(),
         }
     }
+}
 
-    pub fn from_params(params: &JsonValue) -> Result<Self, BuildError> {
-        let _: ScalarObservableParams = serde_json::from_value(params.clone())
-            .map_err(|err| BuildError::build(format!("invalid scalar observable params: {err}")))?;
+impl BuildFromJson for ScalarObservableAggregator {
+    type Params = ScalarObservableParams;
+    const PARAMS_CONTEXT: &'static str = "scalar observable params";
+
+    fn from_parsed_params(_params: Self::Params) -> Result<Self, BuildError> {
         Ok(Self::new())
     }
 }

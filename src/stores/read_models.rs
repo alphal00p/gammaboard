@@ -41,3 +41,18 @@ pub struct AggregatedResult {
     pub aggregated_observable: serde_json::Value,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
+
+/// Worker log event persisted from `run_node` tracing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerLogEntry {
+    pub id: i64,
+    pub ts: chrono::DateTime<chrono::Utc>,
+    pub run_id: Option<i32>,
+    pub node_id: Option<String>,
+    pub worker_id: String,
+    pub role: String,
+    pub level: String,
+    pub event_type: String,
+    pub message: String,
+    pub fields: serde_json::Value,
+}

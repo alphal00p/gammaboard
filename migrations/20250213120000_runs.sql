@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS runs (
 
     -- Per-run engine and runner configuration (TOML/JSON payload)
     integration_params JSONB,
+    observable_implementation TEXT NOT NULL DEFAULT 'scalar'
+        CHECK (observable_implementation IN ('scalar')),
     point_spec JSONB NOT NULL DEFAULT '{"continuous_dims": 1, "discrete_dims": 0}'::jsonb,
 
     -- Summary statistics (updated periodically)

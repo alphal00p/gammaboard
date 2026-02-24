@@ -1,5 +1,5 @@
 use crate::core::RunStatus;
-use crate::stores::{AggregatedResult, RunProgress, WorkQueueStats};
+use crate::stores::{AggregatedResult, RunProgress, WorkQueueStats, WorkerLogEntry};
 use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
@@ -69,6 +69,37 @@ impl From<AggregatedResultRow> for AggregatedResult {
             run_id: value.run_id,
             aggregated_observable: value.aggregated_observable,
             created_at: value.created_at,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct WorkerLogRow {
+    id: i64,
+    ts: DateTime<Utc>,
+    run_id: Option<i32>,
+    node_id: Option<String>,
+    worker_id: String,
+    role: String,
+    level: String,
+    event_type: String,
+    message: String,
+    fields: JsonValue,
+}
+
+impl From<WorkerLogRow> for WorkerLogEntry {
+    fn from(value: WorkerLogRow) -> Self {
+        Self {
+            id: value.id,
+            ts: value.ts,
+            run_id: value.run_id,
+            node_id: value.node_id,
+            worker_id: value.worker_id,
+            role: value.role,
+            level: value.level,
+            event_type: value.event_type,
+            message: value.message,
+            fields: value.fields,
         }
     }
 }
@@ -218,6 +249,44 @@ pub(crate) async fn get_aggregated_results(
         "#,
     )
     .bind(run_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(Into::into).collect())
+}
+
+pub(crate) async fn get_worker_logs(
+    pool: &PgPool,
+    run_id: i32,
+    limit: i64,
+    worker_id: Option<&str>,
+    level: Option<&str>,
+) -> Result<Vec<WorkerLogEntry>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, WorkerLogRow>(
+        r#"
+        SELECT
+            id,
+            ts,
+            run_id,
+            node_id,
+            worker_id,
+            role,
+            level,
+            event_type,
+            message,
+            fields
+        FROM worker_logs
+        WHERE run_id = $1
+          AND ($2::text IS NULL OR worker_id = $2)
+          AND ($3::text IS NULL OR level = $3)
+        ORDER BY ts DESC, id DESC
+        LIMIT $4
+        "#,
+    )
+    .bind(run_id)
+    .bind(worker_id)
+    .bind(level)
     .bind(limit)
     .fetch_all(pool)
     .await?;
