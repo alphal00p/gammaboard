@@ -2,7 +2,7 @@
 //!
 //! Batches are the unit of work exchanged between sampler-aggregator and evaluator.
 
-use ndarray::Array2;
+use ndarray::{Array1, Array2};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::{error::Error, fmt};
@@ -89,6 +89,7 @@ impl From<serde_json::Error> for BatchError {
 pub struct Batch {
     continuous: Array2<f64>,
     discrete: Array2<i64>,
+    weights: Array1<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,11 +100,16 @@ struct BatchJson {
     discrete_rows: usize,
     discrete_cols: usize,
     discrete_data: Vec<i64>,
+    weights_data: Vec<f64>,
 }
 
 impl Batch {
     /// Constructs a batch from dense 2D arrays.
-    pub fn new(continuous: Array2<f64>, discrete: Array2<i64>) -> Result<Self, BatchError> {
+    pub fn new(
+        continuous: Array2<f64>,
+        discrete: Array2<i64>,
+        weight: Option<Array1<f64>>,
+    ) -> Result<Self, BatchError> {
         if continuous.nrows() != discrete.nrows() {
             return Err(BatchError::layout(format!(
                 "row count mismatch: continuous has {}, discrete has {}",
@@ -111,10 +117,27 @@ impl Batch {
                 discrete.nrows()
             )));
         }
+
+        let weights = weight.unwrap_or_else(|| Array1::ones(continuous.nrows()));
+
+        if continuous.nrows() != weights.len() {
+            return Err(BatchError::layout(format!(
+                "row count mismatch: continuous has {}, weights has {}",
+                continuous.nrows(),
+                weights.len()
+            )));
+        }
+
         Ok(Self {
             continuous,
             discrete,
+            weights,
         })
+    }
+
+    pub fn new_continuous(continuous: Array2<f64>) -> Result<Self, BatchError> {
+        let discrete = Array2::zeros((continuous.nrows(), 0));
+        Self::new(continuous, discrete, None)
     }
 
     /// Constructs a batch from flat row-major payloads.
@@ -125,13 +148,33 @@ impl Batch {
         continuous_data: Vec<f64>,
         discrete_data: Vec<i64>,
     ) -> Result<Self, BatchError> {
+        Self::from_flat_data_with_weights(
+            samples,
+            continuous_dims,
+            discrete_dims,
+            continuous_data,
+            discrete_data,
+            None,
+        )
+    }
+
+    /// Constructs a batch from flat row-major payloads and optional per-sample weights.
+    pub fn from_flat_data_with_weights(
+        samples: usize,
+        continuous_dims: usize,
+        discrete_dims: usize,
+        continuous_data: Vec<f64>,
+        discrete_data: Vec<i64>,
+        weights_data: Option<Vec<f64>>,
+    ) -> Result<Self, BatchError> {
         let continuous = Array2::from_shape_vec((samples, continuous_dims), continuous_data)
             .map_err(|err| {
                 BatchError::layout(format!("invalid continuous payload shape: {err}"))
             })?;
         let discrete = Array2::from_shape_vec((samples, discrete_dims), discrete_data)
             .map_err(|err| BatchError::layout(format!("invalid discrete payload shape: {err}")))?;
-        Self::new(continuous, discrete)
+        let weights = weights_data.map(Array1::from_vec);
+        Self::new(continuous, discrete, weights)
     }
 
     pub fn size(&self) -> usize {
@@ -157,6 +200,10 @@ impl Batch {
         &self.discrete
     }
 
+    pub fn weights(&self) -> &Array1<f64> {
+        &self.weights
+    }
+
     pub fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BatchError> {
         point_spec.validate_dims(self.continuous.ncols(), self.discrete.ncols())
     }
@@ -169,6 +216,7 @@ impl Batch {
             discrete_rows: self.discrete.nrows(),
             discrete_cols: self.discrete.ncols(),
             discrete_data: self.discrete.iter().copied().collect(),
+            weights_data: self.weights.iter().copied().collect(),
         };
         serde_json::to_value(payload).expect("Batch serialization should never fail")
     }
@@ -185,7 +233,8 @@ impl Batch {
             payload.discrete_data,
         )
         .map_err(|err| BatchError::layout(format!("invalid discrete payload shape: {err}")))?;
-        Self::new(continuous, discrete)
+        let weights = Array1::from_vec(payload.weights_data);
+        Self::new(continuous, discrete, Some(weights))
     }
 }
 
@@ -245,7 +294,7 @@ mod tests {
 
     #[test]
     fn test_batch_creation() {
-        let batch = Batch::new(array![[0.5], [1.5]], Array2::zeros((2, 0))).expect("batch");
+        let batch = Batch::new(array![[0.5], [1.5]], Array2::zeros((2, 0)), None).expect("batch");
         assert_eq!(batch.size(), 2);
         assert!(!batch.is_empty());
         assert_eq!(
@@ -255,29 +304,31 @@ mod tests {
                 discrete_dims: 0
             }
         );
+        assert_eq!(batch.weights().to_vec(), vec![1.0, 1.0]);
     }
 
     #[test]
     fn test_batch_serialization() {
         let batch =
-            Batch::new(array![[0.5], [1.5]], Array2::zeros((2, 0))).expect("batch creation");
+            Batch::new(array![[0.5], [1.5]], Array2::zeros((2, 0)), None).expect("batch creation");
         let json = batch.to_json();
         let deserialized = Batch::from_json(&json).unwrap();
         assert_eq!(deserialized.size(), batch.size());
         assert_eq!(deserialized.point_spec(), batch.point_spec());
+        assert_eq!(deserialized.weights(), batch.weights());
     }
 
     #[test]
     fn test_batch_results() {
         let batch =
-            Batch::new(array![[0.5], [1.5]], Array2::zeros((2, 0))).expect("batch creation");
+            Batch::new(array![[0.5], [1.5]], Array2::zeros((2, 0)), None).expect("batch creation");
         let result = BatchResult::new(vec![0.123, 0.456], JsonValue::Null);
         assert!(result.matches_batch(&batch));
     }
 
     #[test]
     fn test_batch_point_spec_validation() {
-        let batch = Batch::new(array![[0.1, 0.2], [0.3, 0.4]], array![[1], [2]]).unwrap();
+        let batch = Batch::new(array![[0.1, 0.2], [0.3, 0.4]], array![[1], [2]], None).unwrap();
         let spec = PointSpec {
             continuous_dims: 2,
             discrete_dims: 1,

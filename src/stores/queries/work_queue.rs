@@ -15,19 +15,20 @@ pub(crate) async fn insert_batch(
     pool: &PgPool,
     run_id: i32,
     batch: &Batch,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
+) -> Result<i64, sqlx::Error> {
+    let batch_id = sqlx::query_scalar::<_, i64>(
         r#"
         INSERT INTO batches (run_id, points, batch_size, status)
         VALUES ($1, $2, $3, 'pending')
+        RETURNING id
         "#,
     )
     .bind(run_id)
     .bind(batch.to_json())
     .bind(batch.size() as i32)
-    .execute(pool)
+    .fetch_one(pool)
     .await?;
-    Ok(())
+    Ok(batch_id)
 }
 
 pub(crate) async fn get_pending_batch_count(

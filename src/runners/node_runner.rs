@@ -17,7 +17,7 @@ use crate::engines::{
 };
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value as JsonValue, json};
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 use tokio::{
     sync::watch,
     task::JoinHandle,
@@ -170,13 +170,7 @@ impl<S: NodeRunnerStore> ActiveWorker<S> {
             self.run_id,
             self.worker_id.clone(),
             Box::new(evaluator),
-            Arc::new({
-                let implementation = spec.observable_implementation;
-                move |params: &JsonValue| {
-                    ObservableEngine::build(implementation, params)
-                        .map(|engine| Box::new(engine) as Box<dyn Observable>)
-                }
-            }),
+            spec.observable_implementation,
             spec.observable_params.clone(),
             spec.point_spec.clone(),
             self.store.clone(),

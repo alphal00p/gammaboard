@@ -1,7 +1,7 @@
 use crate::batch::{Batch, BatchResult, PointSpec};
 use crate::engines::{
     BuildError, BuildFromJson, EvalError, Evaluator, Observable, ObservableEngine,
-    encode_observable_state,
+    ObservableImplementation, ScalarObservableAggregator,
 };
 use serde::Deserialize;
 use std::{
@@ -48,16 +48,30 @@ impl Evaluator for TestSinEvaluator {
     fn eval_batch(
         &self,
         batch: &Batch,
-        observable: &mut dyn Observable,
+        observable_implementation: ObservableImplementation,
+        observable_params: &serde_json::Value,
     ) -> Result<BatchResult, EvalError> {
+        if observable_implementation != ObservableImplementation::Scalar {
+            return Err(EvalError::eval(format!(
+                "test_only_sin supports only scalar observable, got {observable_implementation}"
+            )));
+        }
+        let mut observable = ScalarObservableAggregator::from_json(observable_params)
+            .map_err(|err| EvalError::eval(err.to_string()))?;
         let started = Instant::now();
         let mut values = Vec::with_capacity(batch.size());
 
-        for row in batch.continuous().rows() {
+        for (row, weight) in batch
+            .continuous()
+            .rows()
+            .into_iter()
+            .zip(batch.weights().iter())
+        {
             let x = *row
                 .get(0)
                 .ok_or_else(|| EvalError::eval("missing continuous[0]"))?;
             let value = x.sin() * (-x * x).exp();
+            observable.add_sample(value, *weight);
             values.push(value);
         }
 
@@ -68,23 +82,6 @@ impl Evaluator for TestSinEvaluator {
             thread::sleep(min_total - elapsed);
         }
 
-        let count = values.len() as i64;
-        let sum = values.iter().sum::<f64>();
-        let sum_abs = values.iter().map(|v| v.abs()).sum::<f64>();
-        let sum_sq = values.iter().map(|v| v * v).sum::<f64>();
-        let delta = encode_observable_state(
-            &serde_json::json!({
-                "count": count,
-                "sum": sum,
-                "sum_abs": sum_abs,
-                "sum_sq": sum_sq,
-            }),
-            "test batch scalar observable",
-        )
-        .map_err(|err| EvalError::eval(err.to_string()))?;
-        observable
-            .merge_state_from_json(&delta)
-            .map_err(|err| EvalError::eval(err.to_string()))?;
         let batch_observable = observable
             .snapshot()
             .map_err(|err| EvalError::eval(err.to_string()))?;

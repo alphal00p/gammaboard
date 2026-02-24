@@ -1,9 +1,10 @@
 use serde::Deserialize;
-use symbolica::numerical_integration::{ContinuousGrid, Grid, MonteCarloRng};
+use symbolica::numerical_integration::{ContinuousGrid, Grid, MonteCarloRng, Sample};
 
 use crate::{
+    Batch, EngineError,
     batch::PointSpec,
-    engines::{BuildError, BuildFromJson, SamplerAggregator},
+    engines::{BatchContext, BuildError, BuildFromJson, SamplerAggregator},
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -114,19 +115,63 @@ impl SamplerAggregator for HavanaSampler {
         todo!()
     }
 
-    fn produce_batches(
+    fn produce_batch(
         &mut self,
-        _max_batches: usize,
-    ) -> Result<Vec<crate::Batch>, crate::engines::EngineError> {
-        let _ = (&self.batch_size, &self.grid, &self.rng);
-        todo!()
+        _nr_samples: usize,
+    ) -> Result<(crate::Batch, Option<BatchContext>), crate::engines::EngineError> {
+        let mut samples = Vec::with_capacity(_nr_samples);
+        let mut coords: Vec<f64> = Vec::with_capacity(_nr_samples * self.continuous_dims);
+
+        for _ in 0.._nr_samples {
+            let mut sample = Sample::new();
+            self.grid.sample(&mut self.rng, &mut sample);
+
+            match &sample {
+                Sample::Continuous(_weight, x) => {
+                    debug_assert_eq!(x.len(), self.continuous_dims);
+                    coords.extend_from_slice(x);
+                }
+                _ => unreachable!("continuous grid produced non-continuous sample"),
+            }
+
+            samples.push(sample);
+        }
+
+        let batch = Batch::from_flat_data(_nr_samples, self.continuous_dims, 0, coords, vec![])
+            .map_err(|err| EngineError::engine(err.to_string()))?;
+        let context: BatchContext = Box::new(HavanaBatchContext { samples });
+
+        Ok((batch, Some(context)))
     }
 
     fn ingest_training_weights(
         &mut self,
         _training_weights: &[f64],
+        _context: Option<BatchContext>,
     ) -> Result<(), crate::engines::EngineError> {
-        let _ = (&self.batch_size, &self.grid, &self.rng);
-        todo!()
+        let _ = (&self.batch_size, &self.rng);
+        let context = _context
+            .ok_or_else(|| EngineError::engine("missing Havana batch context"))?
+            .downcast::<HavanaBatchContext>()
+            .map_err(|_| EngineError::engine("unexpected context type for Havana sampler"))?;
+
+        if _training_weights.len() != context.samples.len() {
+            return Err(EngineError::engine(format!(
+                "training/context size mismatch in Havana sampler: weights={}, samples={}",
+                _training_weights.len(),
+                context.samples.len()
+            )));
+        }
+
+        for (eval, sample) in _training_weights.iter().zip(context.samples.iter()) {
+            self.grid
+                .add_training_sample(sample, *eval)
+                .map_err(|err| EngineError::engine(err.to_string()))?;
+        }
+        Ok(())
     }
+}
+
+struct HavanaBatchContext {
+    pub samples: Vec<Sample<f64>>,
 }

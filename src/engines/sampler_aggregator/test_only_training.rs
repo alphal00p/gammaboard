@@ -1,4 +1,5 @@
 use crate::batch::{Batch, PointSpec};
+use crate::engines::sampler_aggregator::BatchContext;
 use crate::engines::{BuildError, BuildFromJson, EngineError, SamplerAggregator};
 use rand::Rng;
 use serde::Deserialize;
@@ -97,33 +98,39 @@ impl SamplerAggregator for TestTrainingSamplerAggregator {
         Ok(())
     }
 
-    fn produce_batches(&mut self, max_batches: usize) -> Result<Vec<Batch>, EngineError> {
+    fn produce_batch(
+        &mut self,
+        nr_samples: usize,
+    ) -> Result<(Batch, Option<BatchContext>), EngineError> {
+        let nr_samples = if nr_samples == 0 {
+            self.batch_size
+        } else {
+            nr_samples
+        };
         let mut rng = rand::thread_rng();
-        let mut out = Vec::with_capacity(max_batches);
-
-        for _ in 0..max_batches {
-            let mut continuous_data = Vec::with_capacity(self.batch_size * self.continuous_dims);
-            let mut discrete_data = Vec::with_capacity(self.batch_size * self.discrete_dims);
-            for _ in 0..self.batch_size {
-                continuous_data
-                    .extend((0..self.continuous_dims).map(|_| rng.r#gen::<f64>() * 10.0));
-                discrete_data.extend((0..self.discrete_dims).map(|_| rng.r#gen::<u32>() as i64));
-            }
-            let batch = Batch::from_flat_data(
-                self.batch_size,
-                self.continuous_dims,
-                self.discrete_dims,
-                continuous_data,
-                discrete_data,
-            )
-            .map_err(|err| EngineError::engine(err.to_string()))?;
-            out.push(batch);
+        let mut continuous_data = Vec::with_capacity(nr_samples * self.continuous_dims);
+        let mut discrete_data = Vec::with_capacity(nr_samples * self.discrete_dims);
+        for _ in 0..nr_samples {
+            continuous_data.extend((0..self.continuous_dims).map(|_| rng.r#gen::<f64>() * 10.0));
+            discrete_data.extend((0..self.discrete_dims).map(|_| rng.r#gen::<u32>() as i64));
         }
 
-        Ok(out)
+        let batch = Batch::from_flat_data(
+            nr_samples,
+            self.continuous_dims,
+            self.discrete_dims,
+            continuous_data,
+            discrete_data,
+        )
+        .map_err(|err| EngineError::engine(err.to_string()))?;
+        Ok((batch, None))
     }
 
-    fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError> {
+    fn ingest_training_weights(
+        &mut self,
+        training_weights: &[f64],
+        _context: Option<BatchContext>,
+    ) -> Result<(), EngineError> {
         self.nr_batches += 1;
         self.nr_samples += training_weights.len() as i64;
         self.sum += training_weights.iter().sum::<f64>();

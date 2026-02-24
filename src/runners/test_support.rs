@@ -8,7 +8,9 @@ pub(crate) struct MockWorkQueueState {
     pub next_claim: Option<BatchClaim>,
     pub submitted: Vec<(i64, BatchResult, JsonValue)>,
     pub failed: Vec<(i64, String)>,
+    pub next_insert_batch_id: i64,
     pub inserted: Vec<Batch>,
+    pub inserted_batch_ids: Vec<i64>,
     pub pending_batches: i64,
     pub completed: Vec<CompletedBatch>,
     pub deleted_completed_batch_ids: Vec<i64>,
@@ -21,11 +23,14 @@ pub(crate) struct MockWorkQueue {
 
 #[async_trait::async_trait]
 impl WorkQueueStore for MockWorkQueue {
-    async fn insert_batch(&self, _run_id: i32, batch: &Batch) -> Result<(), StoreError> {
+    async fn insert_batch(&self, _run_id: i32, batch: &Batch) -> Result<i64, StoreError> {
         let mut guard = self.inner.lock().expect("poison");
+        guard.next_insert_batch_id += 1;
+        let batch_id = guard.next_insert_batch_id;
         guard.inserted.push(batch.clone());
+        guard.inserted_batch_ids.push(batch_id);
         guard.pending_batches += 1;
-        Ok(())
+        Ok(batch_id)
     }
 
     async fn get_pending_batch_count(&self, _run_id: i32) -> Result<i64, StoreError> {

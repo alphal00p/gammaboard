@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS batches (
     -- Batch data: compact row-major flat arrays + explicit 2D shape metadata
     points JSONB NOT NULL,
     -- e.g., {"continuous_rows":2, "continuous_cols":2, "continuous_data":[0.5,0.3,0.6,0.4],
-    --        "discrete_rows":2, "discrete_cols":1, "discrete_data":[1,2]}
+    --        "discrete_rows":2, "discrete_cols":1, "discrete_data":[1,2],
+    --        "weights_data":[1.0,1.0]}
 
     batch_size INT NOT NULL,
     -- Number of samples in this batch

@@ -2,9 +2,9 @@
 
 use crate::batch::{BatchResult, PointSpec};
 use crate::core::{StoreError, WorkQueueStore};
-use crate::engines::{BuildError, EngineError, EvalError, Evaluator, Observable};
+use crate::engines::{EngineError, EvalError, Evaluator, ObservableImplementation};
 use serde_json::Value as JsonValue;
-use std::{error::Error, fmt, sync::Arc, time::Instant};
+use std::{error::Error, fmt, time::Instant};
 
 #[derive(Debug, Clone)]
 pub struct EvaluatorRunnerTick {
@@ -15,7 +15,6 @@ pub struct EvaluatorRunnerTick {
 
 #[derive(Debug)]
 pub enum EvaluatorRunnerError {
-    Build(BuildError),
     Engine(EngineError),
     Eval(EvalError),
     Store(StoreError),
@@ -24,7 +23,6 @@ pub enum EvaluatorRunnerError {
 impl fmt::Display for EvaluatorRunnerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EvaluatorRunnerError::Build(err) => write!(f, "{err}"),
             EvaluatorRunnerError::Engine(err) => write!(f, "{err}"),
             EvaluatorRunnerError::Eval(err) => write!(f, "{err}"),
             EvaluatorRunnerError::Store(err) => write!(f, "{err}"),
@@ -44,8 +42,7 @@ pub struct EvaluatorRunner<WQ> {
     run_id: i32,
     worker_id: String,
     evaluator: Box<dyn Evaluator>,
-    build_observable:
-        Arc<dyn Fn(&JsonValue) -> Result<Box<dyn Observable>, BuildError> + Send + Sync>,
+    observable_implementation: ObservableImplementation,
     observable_params: JsonValue,
     point_spec: PointSpec,
     work_queue: WQ,
@@ -59,9 +56,7 @@ where
         run_id: i32,
         worker_id: impl Into<String>,
         evaluator: Box<dyn Evaluator>,
-        build_observable: Arc<
-            dyn Fn(&JsonValue) -> Result<Box<dyn Observable>, BuildError> + Send + Sync,
-        >,
+        observable_implementation: ObservableImplementation,
         observable_params: JsonValue,
         point_spec: PointSpec,
         work_queue: WQ,
@@ -70,7 +65,7 @@ where
             run_id,
             worker_id: worker_id.into(),
             evaluator,
-            build_observable,
+            observable_implementation,
             observable_params,
             point_spec,
             work_queue,
@@ -101,22 +96,12 @@ where
             return Err(EvaluatorRunnerError::Engine(err));
         }
 
-        let mut observable = match (self.build_observable)(&self.observable_params) {
-            Ok(observable) => observable,
-            Err(err) => {
-                self.work_queue
-                    .fail_batch(claimed.batch_id, &err.to_string())
-                    .await
-                    .map_err(EvaluatorRunnerError::Store)?;
-                return Err(EvaluatorRunnerError::Build(err));
-            }
-        };
-
         let started = Instant::now();
-        match self
-            .evaluator
-            .eval_batch(&claimed.batch, observable.as_mut())
-        {
+        match self.evaluator.eval_batch(
+            &claimed.batch,
+            self.observable_implementation,
+            &self.observable_params,
+        ) {
             Ok(result) => {
                 self.submit_result(claimed.batch_id, &claimed.batch, result, started)
                     .await
@@ -171,31 +156,9 @@ mod tests {
     use super::*;
     use crate::batch::{Batch, BatchResult};
     use crate::core::BatchClaim;
-    use crate::engines::{BuildError, EngineError, EvalError, Observable};
+    use crate::engines::{BuildError, EvalError, ObservableImplementation};
     use crate::runners::test_support::MockWorkQueue;
-    use serde_json::{Value as JsonValue, json};
-    use std::sync::Arc;
-
-    #[derive(Default)]
-    struct TestObservable {
-        snapshot: JsonValue,
-    }
-
-    impl Observable for TestObservable {
-        fn load_state_from_json(&mut self, state: &JsonValue) -> Result<(), EngineError> {
-            self.snapshot = state.clone();
-            Ok(())
-        }
-
-        fn merge_state_from_json(&mut self, state: &JsonValue) -> Result<(), EngineError> {
-            self.snapshot = state.clone();
-            Ok(())
-        }
-
-        fn snapshot(&self) -> Result<JsonValue, EngineError> {
-            Ok(self.snapshot.clone())
-        }
-    }
+    use serde_json::json;
 
     struct OkEvaluator;
 
@@ -212,7 +175,8 @@ mod tests {
         fn eval_batch(
             &self,
             batch: &Batch,
-            observable: &mut dyn Observable,
+            _observable_implementation: ObservableImplementation,
+            _observable_params: &JsonValue,
         ) -> Result<BatchResult, EvalError> {
             let values = batch
                 .continuous()
@@ -220,19 +184,17 @@ mod tests {
                 .iter()
                 .copied()
                 .collect::<Vec<f64>>();
-            let snapshot = json!({
+            let batch_observable = json!({
                 "count": values.len() as i64,
-                "sum": values.iter().sum::<f64>(),
+                "sum_weight": values
+                    .iter()
+                    .zip(batch.weights().iter())
+                    .map(|(value, weight)| value * weight)
+                    .sum::<f64>(),
                 "sum_abs": values.iter().map(|v| v.abs()).sum::<f64>(),
                 "sum_sq": values.iter().map(|v| v * v).sum::<f64>(),
             });
-            observable
-                .merge_state_from_json(&snapshot)
-                .map_err(|err| EvalError::eval(err.to_string()))?;
-            let snapshot = observable
-                .snapshot()
-                .map_err(|err| EvalError::eval(err.to_string()))?;
-            Ok(BatchResult::new(values, snapshot))
+            Ok(BatchResult::new(values, batch_observable))
         }
 
         fn supports_observable(&self, _observable: &crate::engines::ObservableEngine) -> bool {
@@ -250,7 +212,8 @@ mod tests {
         fn eval_batch(
             &self,
             _batch: &Batch,
-            _observable: &mut dyn Observable,
+            _observable_implementation: ObservableImplementation,
+            _observable_params: &JsonValue,
         ) -> Result<BatchResult, EvalError> {
             Err(EvalError::eval("mock failure"))
         }
@@ -264,14 +227,6 @@ mod tests {
         Batch::from_flat_data(2, 1, 0, vec![1.0, 2.0], vec![]).expect("sample batch")
     }
 
-    fn build_test_observable(_params: &JsonValue) -> Result<Box<dyn Observable>, BuildError> {
-        let _ = serde_json::from_value::<serde_json::Map<String, JsonValue>>(_params.clone())
-            .map_err(|err| BuildError::build(format!("invalid test observable params: {err}")))?;
-        Ok(Box::new(TestObservable {
-            snapshot: json!({}),
-        }))
-    }
-
     #[tokio::test]
     async fn tick_returns_empty_when_no_batch_claimed() {
         let queue = MockWorkQueue::default();
@@ -279,7 +234,7 @@ mod tests {
             1,
             "worker-1",
             Box::new(OkEvaluator),
-            Arc::new(build_test_observable),
+            ObservableImplementation::Scalar,
             json!({}),
             PointSpec {
                 continuous_dims: 1,
@@ -306,7 +261,7 @@ mod tests {
             1,
             "worker-1",
             Box::new(OkEvaluator),
-            Arc::new(build_test_observable),
+            ObservableImplementation::Scalar,
             json!({}),
             PointSpec {
                 continuous_dims: 1,
@@ -338,7 +293,7 @@ mod tests {
             1,
             "worker-1",
             Box::new(FailingEvaluator),
-            Arc::new(build_test_observable),
+            ObservableImplementation::Scalar,
             json!({}),
             PointSpec {
                 continuous_dims: 1,
@@ -366,7 +321,8 @@ mod tests {
             fn eval_batch(
                 &self,
                 _batch: &Batch,
-                _observable: &mut dyn Observable,
+                _observable_implementation: ObservableImplementation,
+                _observable_params: &JsonValue,
             ) -> Result<BatchResult, EvalError> {
                 Ok(BatchResult::new(vec![1.0], json!({})))
             }
@@ -384,7 +340,7 @@ mod tests {
             1,
             "worker-1",
             Box::new(BadEvaluator),
-            Arc::new(build_test_observable),
+            ObservableImplementation::Scalar,
             json!({}),
             PointSpec {
                 continuous_dims: 1,

@@ -53,8 +53,11 @@ Run configuration is provided as TOML.
 - Engine and runner params are stored in `runs.integration_params`.
 - Observable implementation is stored in `runs.observable_implementation`.
 - Point dimensions are stored in `runs.point_spec`.
-- Batches are stored in `batches.points` as compact flat arrays (`continuous`, `discrete`) with explicit 2D shape metadata.
+- Batches are stored in `batches.points` as compact flat arrays (`continuous`, `discrete`) plus per-sample `weights`, with explicit 2D shape metadata.
 - Evaluators return one `BatchResult` per batch: `values: Vec<f64>` (sampler training signal) and one aggregated `observable` JSON payload.
+- Evaluator implementations receive `observable_implementation` + `observable_params` during `eval_batch` and build batch-local observable state themselves.
+- Sampler-aggregator engines produce one batch per call; the sampler-aggregator runner controls how many batches are produced each tick (`max_batches_per_tick`) and enforces pending-queue limits.
+- Sampler-aggregator engines can attach optional process-local batch context to produced batches; this context is passed back during training ingestion and is not persisted in PostgreSQL.
 
 Example: `configs/live-test.toml`
 

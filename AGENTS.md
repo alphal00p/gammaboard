@@ -36,15 +36,25 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
 - Engine/runner settings are persisted in `runs.integration_params`; point shape is persisted in `runs.point_spec`.
 - Observable implementation is persisted in `runs.observable_implementation`.
 - Batch payloads in `batches.points` must stay compact and shape-stable:
-  row-major flat `continuous`/`discrete` arrays + explicit 2D shape metadata.
+  row-major flat `continuous`/`discrete` arrays, per-sample `weights`, and
+  explicit 2D shape metadata.
 - Evaluators operate batch-wise (`Batch -> BatchResult`), where `BatchResult` contains
   training `values: Vec<f64>` and one aggregated batch-level observable JSON.
+- Evaluator implementations receive observable implementation + params in `eval_batch`
+  and build the batch observable state internally.
+- Sampler-aggregator engines produce one batch per call (`produce_batch`); the runner owns
+  per-tick multi-batch production loops and queue-capacity limiting.
+- Sampler-aggregator engines may return optional local in-memory batch context
+  (`BatchContext`) from `produce_batch`; the runner stores it keyed by `batch_id`
+  and passes it back to `ingest_training_weights`.
+- Batch context is process-local only (not persisted to DB); implementations must
+  tolerate missing context after restart.
 - Runs specify evaluator/sampler/observable implementations independently.
 - Evaluator/sampler implementation names remain in `integration_params`; observable implementation is in `runs.observable_implementation`.
 - Concrete engine implementations should parse JSON params through `engines::BuildFromJson` (typed params + validation) instead of ad-hoc per-engine parsing helpers.
 - Keep compatibility rules in typed implementation enums and validate at
   startup (for evaluator/observable: `EvaluatorImplementation::supports_observable`).
-- `scalar` observable tracks `count`, `sum`, `sum_abs`, and `sum_sq` over evaluator values.
+- `scalar` observable tracks `count`, `sum_weight`, `sum_abs`, and `sum_sq` over evaluator values.
 - Observable payload handling should use serde-derived structs (`Serialize`/`Deserialize`) plus
   `Observable::{load_state_from_json, merge_state_from_json}`; avoid manual `json!`
   object construction and field-by-field `Value::get` merging in observable implementations.

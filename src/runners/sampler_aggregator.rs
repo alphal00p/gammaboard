@@ -10,8 +10,8 @@
 
 use crate::batch::PointSpec;
 use crate::core::{AggregationStore, CompletedBatch, StoreError, WorkQueueStore};
-use crate::engines::{EngineError, Observable, SamplerAggregator};
-use std::{error::Error, fmt};
+use crate::engines::{BatchContext, EngineError, Observable, SamplerAggregator};
+use std::{collections::HashMap, error::Error, fmt};
 
 #[derive(Debug, Clone)]
 pub struct RunnerConfig {
@@ -67,6 +67,7 @@ pub struct SamplerAggregatorRunner<WQ, AS> {
     aggregation_store: AS,
     config: RunnerConfig,
     point_spec: PointSpec,
+    local_batch_contexts: HashMap<i64, BatchContext>,
 }
 
 impl<WQ, AS> SamplerAggregatorRunner<WQ, AS>
@@ -102,6 +103,7 @@ where
             aggregation_store,
             config,
             point_spec,
+            local_batch_contexts: HashMap::new(),
         })
     }
 
@@ -117,23 +119,26 @@ where
             .saturating_sub(pending_batches);
         let produce_limit = self.config.max_batches_per_tick.min(remaining_capacity);
 
-        let mut produced = if produce_limit == 0 {
-            Vec::new()
-        } else {
-            self.engine
-                .produce_batches(produce_limit)
-                .map_err(RunnerError::Engine)?
-        };
-        if produced.len() > produce_limit {
-            produced.truncate(produce_limit);
+        let mut produced = Vec::with_capacity(produce_limit);
+        for _ in 0..produce_limit {
+            produced.push(
+                self.engine
+                    // `0` means "engine default batch size" for current implementations.
+                    .produce_batch(0)
+                    .map_err(RunnerError::Engine)?,
+            );
         }
-        for batch in &produced {
+        for (batch, _) in &produced {
             batch
                 .validate_point_spec(&self.point_spec)
                 .map_err(|err| RunnerError::Engine(EngineError::engine(err.to_string())))?;
         }
-        for batch in &produced {
-            self.work_queue.insert_batch(self.run_id, batch).await?;
+        let enqueued_batches = produced.len();
+        for (batch, context) in produced {
+            let batch_id = self.work_queue.insert_batch(self.run_id, &batch).await?;
+            if let Some(context) = context {
+                self.local_batch_contexts.insert(batch_id, context);
+            }
         }
 
         let completed = self
@@ -146,7 +151,7 @@ where
             .await?;
 
         Ok(RunnerTick {
-            enqueued_batches: produced.len(),
+            enqueued_batches,
             processed_completed_batches: consumed_ids.len(),
         })
     }
@@ -160,8 +165,9 @@ where
         }
 
         for batch in completed {
+            let context = self.local_batch_contexts.remove(&batch.batch_id);
             self.engine
-                .ingest_training_weights(&batch.result.values)
+                .ingest_training_weights(&batch.result.values, context)
                 .map_err(RunnerError::Engine)?;
             self.aggregated_observable
                 .merge_state_from_json(&batch.result.observable)
@@ -187,7 +193,8 @@ mod tests {
     use crate::batch::{Batch, BatchResult, PointSpec};
     use crate::core::StoreError;
     use crate::engines::{
-        BuildError, Observable, SamplerAggregator, decode_observable_state, encode_observable_state,
+        BatchContext, BuildError, Observable, SamplerAggregator, decode_observable_state,
+        encode_observable_state,
     };
     use crate::runners::test_support::MockWorkQueue;
     use serde::{Deserialize, Serialize};
@@ -232,12 +239,17 @@ mod tests {
     #[derive(Clone, Default)]
     struct Probe {
         ingested_training_sizes: Vec<usize>,
-        produce_requested: Vec<usize>,
+        ingested_context_tokens: Vec<Option<usize>>,
+        produce_requested_nr_samples: Vec<usize>,
         initialized: bool,
     }
 
+    struct TestContext {
+        token: usize,
+    }
+
     struct TestEngine {
-        produced: Vec<Batch>,
+        produced: Vec<(Batch, Option<usize>)>,
         probe: Arc<Mutex<Probe>>,
     }
 
@@ -251,21 +263,43 @@ mod tests {
             Ok(())
         }
 
-        fn produce_batches(&mut self, max_batches: usize) -> Result<Vec<Batch>, EngineError> {
+        fn produce_batch(
+            &mut self,
+            nr_samples: usize,
+        ) -> Result<(Batch, Option<BatchContext>), EngineError> {
             self.probe
                 .lock()
                 .expect("poison")
-                .produce_requested
-                .push(max_batches);
-            Ok(self.produced.iter().take(max_batches).cloned().collect())
+                .produce_requested_nr_samples
+                .push(nr_samples);
+            if self.produced.is_empty() {
+                return Err(EngineError::engine("test engine has no more batches"));
+            }
+            let (batch, context_token) = self.produced.remove(0);
+            let context = context_token.map(|token| {
+                let ctx: BatchContext = Box::new(TestContext { token });
+                ctx
+            });
+            Ok((batch, context))
         }
 
-        fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError> {
-            self.probe
-                .lock()
-                .expect("poison")
-                .ingested_training_sizes
-                .push(training_weights.len());
+        fn ingest_training_weights(
+            &mut self,
+            training_weights: &[f64],
+            context: Option<BatchContext>,
+        ) -> Result<(), EngineError> {
+            let token = if let Some(context) = context {
+                let context = context
+                    .downcast::<TestContext>()
+                    .map_err(|_| EngineError::engine("unexpected test context type"))?;
+                Some(context.token)
+            } else {
+                None
+            };
+
+            let mut guard = self.probe.lock().expect("poison");
+            guard.ingested_training_sizes.push(training_weights.len());
+            guard.ingested_context_tokens.push(token);
             Ok(())
         }
     }
@@ -365,6 +399,7 @@ mod tests {
         let queue = MockWorkQueue::default();
         {
             let mut q = queue.inner.lock().expect("poison");
+            q.next_insert_batch_id = 10;
             q.completed = vec![
                 make_completed(11, vec![0.1, 0.2], 0.3),
                 make_completed(12, vec![0.4], 0.4),
@@ -382,7 +417,7 @@ mod tests {
         }));
 
         let engine = TestEngine {
-            produced: vec![make_batch()],
+            produced: vec![(make_batch(), Some(7))],
             probe: probe.clone(),
         };
 
@@ -418,6 +453,7 @@ mod tests {
         assert!(p.initialized);
         assert_eq!(q.inserted.len(), 1);
         assert_eq!(p.ingested_training_sizes, vec![2, 1]);
+        assert_eq!(p.ingested_context_tokens, vec![Some(7), None]);
         assert_eq!(q.deleted_completed_batch_ids, vec![11, 12]);
         assert_eq!(tick.processed_completed_batches, 2);
 
@@ -458,7 +494,7 @@ mod tests {
             aggregation_store.clone(),
             RunnerConfig {
                 max_batches_per_tick: 1,
-                max_pending_batches: 8,
+                max_pending_batches: 0,
                 completed_batch_fetch_limit: 64,
             },
             PointSpec {
@@ -481,6 +517,7 @@ mod tests {
 
         assert_eq!(tick.processed_completed_batches, 0);
         assert!(p.ingested_training_sizes.is_empty());
+        assert!(p.ingested_context_tokens.is_empty());
         assert!(agg_saved.is_empty());
         assert!(q.deleted_completed_batch_ids.is_empty());
     }
@@ -493,7 +530,7 @@ mod tests {
 
         let aggregation_store = TestAggregationStore::default();
         let engine = TestEngine {
-            produced: vec![make_batch(), make_batch()],
+            produced: vec![(make_batch(), None), (make_batch(), None)],
             probe: probe.clone(),
         };
 
@@ -522,7 +559,7 @@ mod tests {
 
         assert_eq!(tick.enqueued_batches, 0);
         assert!(q.inserted.is_empty());
-        assert!(p.produce_requested.is_empty());
+        assert!(p.produce_requested_nr_samples.is_empty());
     }
 
     #[tokio::test]
@@ -533,7 +570,11 @@ mod tests {
 
         let aggregation_store = TestAggregationStore::default();
         let engine = TestEngine {
-            produced: vec![make_batch(), make_batch(), make_batch()],
+            produced: vec![
+                (make_batch(), None),
+                (make_batch(), None),
+                (make_batch(), None),
+            ],
             probe: probe.clone(),
         };
 
@@ -560,7 +601,7 @@ mod tests {
         let q = queue.inner.lock().expect("poison").clone();
         let p = probe.lock().expect("poison").clone();
 
-        assert_eq!(p.produce_requested, vec![1]);
+        assert_eq!(p.produce_requested_nr_samples, vec![0]);
         assert_eq!(tick.enqueued_batches, 1);
         assert_eq!(q.inserted.len(), 1);
     }

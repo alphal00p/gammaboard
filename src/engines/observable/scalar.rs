@@ -12,7 +12,7 @@ pub struct ScalarObservableParams {}
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct ScalarState {
     count: i64,
-    sum: f64,
+    sum_weight: f64,
     sum_abs: f64,
     sum_sq: f64,
 }
@@ -20,7 +20,7 @@ struct ScalarState {
 impl ScalarState {
     fn merge_from(&mut self, other: &Self) {
         self.count += other.count;
-        self.sum += other.sum;
+        self.sum_weight += other.sum_weight;
         self.sum_abs += other.sum_abs;
         self.sum_sq += other.sum_sq;
     }
@@ -29,7 +29,7 @@ impl ScalarState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ScalarSnapshot {
     count: i64,
-    sum: f64,
+    sum_weight: f64,
     sum_abs: f64,
     sum_sq: f64,
     #[serde(default)]
@@ -39,13 +39,13 @@ struct ScalarSnapshot {
 impl From<&ScalarState> for ScalarSnapshot {
     fn from(state: &ScalarState) -> Self {
         let mean = if state.count > 0 {
-            Some(state.sum / state.count as f64)
+            Some(state.sum_weight / state.count as f64)
         } else {
             None
         };
         Self {
             count: state.count,
-            sum: state.sum,
+            sum_weight: state.sum_weight,
             sum_abs: state.sum_abs,
             sum_sq: state.sum_sq,
             mean,
@@ -57,7 +57,7 @@ impl From<ScalarSnapshot> for ScalarState {
     fn from(snapshot: ScalarSnapshot) -> Self {
         Self {
             count: snapshot.count,
-            sum: snapshot.sum,
+            sum_weight: snapshot.sum_weight,
             sum_abs: snapshot.sum_abs,
             sum_sq: snapshot.sum_sq,
         }
@@ -73,6 +73,14 @@ impl ScalarObservableAggregator {
         Self {
             state: ScalarState::default(),
         }
+    }
+
+    pub fn add_sample(&mut self, value: f64, weight: f64) {
+        let weight = weight.abs();
+        self.state.count += 1;
+        self.state.sum_weight += value * weight;
+        self.state.sum_abs += value.abs();
+        self.state.sum_sq += value * value;
     }
 }
 

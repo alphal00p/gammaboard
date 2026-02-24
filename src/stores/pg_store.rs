@@ -394,7 +394,7 @@ impl ControlPlaneStore for PgStore {
 
 #[async_trait::async_trait]
 impl WorkQueueStore for PgStore {
-    async fn insert_batch(&self, run_id: i32, batch: &Batch) -> Result<(), StoreError> {
+    async fn insert_batch(&self, run_id: i32, batch: &Batch) -> Result<i64, StoreError> {
         queries::insert_batch(&self.pool, run_id, batch)
             .await
             .map_err(map_sqlx)

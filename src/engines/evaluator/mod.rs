@@ -1,6 +1,6 @@
 mod test_only_sin;
 
-use super::{BuildError, BuildFromJson, EvalError, Observable, ObservableEngine};
+use super::{BuildError, BuildFromJson, EvalError, ObservableEngine, ObservableImplementation};
 use crate::batch::{Batch, BatchResult, PointSpec};
 use enum_dispatch::enum_dispatch;
 use serde::{Deserialize, Serialize};
@@ -36,7 +36,8 @@ pub trait Evaluator: Send + Sync {
     fn eval_batch(
         &self,
         batch: &Batch,
-        observable: &mut dyn Observable,
+        observable_implementation: ObservableImplementation,
+        observable_params: &JsonValue,
     ) -> Result<BatchResult, EvalError>;
     fn supports_observable(&self, observable: &ObservableEngine) -> bool;
 }
