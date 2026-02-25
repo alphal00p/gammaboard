@@ -1,7 +1,10 @@
 //! Store contracts for DB-backed control-plane, queue, and lifecycle APIs.
 
 use super::errors::StoreError;
-use super::models::{BatchClaim, CompletedBatch, DesiredAssignment, Worker, WorkerStatus};
+use super::models::{
+    BatchClaim, CompletedBatch, DesiredAssignment, EvaluatorPerformanceSnapshot,
+    SamplerAggregatorPerformanceSnapshot, Worker, WorkerStatus,
+};
 use crate::batch::{Batch, BatchResult, PointSpec};
 use crate::engines::RunSpec;
 use async_trait::async_trait;
@@ -79,6 +82,7 @@ pub trait ControlPlaneStore: Send + Sync {
     async fn create_run(
         &self,
         status: super::models::RunStatus,
+        name: &str,
         integration_params: &JsonValue,
         point_spec: &PointSpec,
     ) -> Result<i32, StoreError>;
@@ -105,6 +109,14 @@ pub trait WorkQueueStore: Send + Sync {
         batch_id: i64,
         result: &BatchResult,
         eval_time_ms: f64,
+    ) -> Result<(), StoreError>;
+    async fn record_evaluator_performance_snapshot(
+        &self,
+        snapshot: &EvaluatorPerformanceSnapshot,
+    ) -> Result<(), StoreError>;
+    async fn record_sampler_performance_snapshot(
+        &self,
+        snapshot: &SamplerAggregatorPerformanceSnapshot,
     ) -> Result<(), StoreError>;
     async fn fail_batch(&self, batch_id: i64, last_error: &str) -> Result<(), StoreError>;
     async fn fetch_completed_batches(

@@ -1,0 +1,36 @@
+name = "havana-sinc-complex"
+evaluator_implementation = "test_only_sinc"
+sampler_aggregator_implementation = "havana"
+observable_implementation = "complex"
+
+[point_spec]
+continuous_dims = 2
+discrete_dims = 0
+
+[evaluator_runner_params]
+min_loop_time_ms = 200
+performance_snapshot_interval_ms = 5000
+
+[evaluator_params]
+min_eval_time_per_sample_ms = 2
+
+[sampler_aggregator_runner_params]
+interval_ms = 500
+lease_ttl_ms = 5000
+nr_samples = 64
+performance_snapshot_interval_ms = 5000
+max_batches_per_tick = 64
+max_pending_batches = 128
+completed_batch_fetch_limit = 512
+
+[sampler_aggregator_params]
+seed = 0
+batch_size = 64
+continuous_dims = 2
+bins = 64
+min_samples_for_update = 1024
+batches_for_update = 256
+stop_training_after_n_batches = 4096
+learning_rate = 0.1
+
+[observable_params]

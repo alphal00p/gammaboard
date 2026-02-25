@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunProgress {
     pub run_id: i32,
+    pub run_name: String,
     pub run_status: RunStatus,
     pub integration_params: Option<serde_json::Value>,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -55,4 +56,66 @@ pub struct WorkerLogEntry {
     pub event_type: String,
     pub message: String,
     pub fields: serde_json::Value,
+}
+
+/// Registered worker process snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisteredWorkerEntry {
+    pub worker_id: String,
+    pub node_id: Option<String>,
+    pub role: String,
+    pub implementation: String,
+    pub version: String,
+    pub status: String,
+    pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
+    pub batches_completed: Option<i64>,
+    pub samples_evaluated: Option<i64>,
+    pub avg_time_per_sample_ms: Option<f64>,
+    pub std_time_per_sample_ms: Option<f64>,
+    pub produced_batches: Option<i64>,
+    pub produced_samples: Option<i64>,
+    pub avg_produce_time_per_sample_ms: Option<f64>,
+    pub std_produce_time_per_sample_ms: Option<f64>,
+    pub ingested_batches: Option<i64>,
+    pub ingested_samples: Option<i64>,
+    pub avg_ingest_time_per_sample_ms: Option<f64>,
+    pub std_ingest_time_per_sample_ms: Option<f64>,
+    pub evaluator_diagnostics: Option<serde_json::Value>,
+    pub sampler_diagnostics: Option<serde_json::Value>,
+}
+
+/// Evaluator performance history row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvaluatorPerformanceHistoryEntry {
+    pub id: i64,
+    pub run_id: i32,
+    pub worker_id: String,
+    pub window_start: chrono::DateTime<chrono::Utc>,
+    pub window_end: chrono::DateTime<chrono::Utc>,
+    pub batches_completed: i64,
+    pub samples_evaluated: i64,
+    pub avg_time_per_sample_ms: f64,
+    pub std_time_per_sample_ms: f64,
+    pub diagnostics: serde_json::Value,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Sampler-aggregator performance history row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SamplerPerformanceHistoryEntry {
+    pub id: i64,
+    pub run_id: i32,
+    pub worker_id: String,
+    pub window_start: chrono::DateTime<chrono::Utc>,
+    pub window_end: chrono::DateTime<chrono::Utc>,
+    pub produced_batches: i64,
+    pub produced_samples: i64,
+    pub avg_produce_time_per_sample_ms: f64,
+    pub std_produce_time_per_sample_ms: f64,
+    pub ingested_batches: i64,
+    pub ingested_samples: i64,
+    pub avg_ingest_time_per_sample_ms: f64,
+    pub std_ingest_time_per_sample_ms: f64,
+    pub diagnostics: serde_json::Value,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }

@@ -64,6 +64,7 @@ GROUP BY run_id, status;
 CREATE OR REPLACE VIEW run_progress AS
 SELECT
     r.id as run_id,
+    r.name as run_name,
     r.status as run_status,
     (
         COALESCE(r.integration_params, '{}'::jsonb)

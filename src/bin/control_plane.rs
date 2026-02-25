@@ -100,20 +100,47 @@ fn read_run_add_toml(path: &PathBuf) -> BinResult<JsonValue> {
     if !json_value.is_object() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "integration params TOML must be a table",
+            "run-add TOML must be a table",
         )
         .into());
     }
     Ok(json_value)
 }
 
-fn parse_run_add_payload(raw: JsonValue) -> BinResult<(JsonValue, PointSpec)> {
+fn parse_run_add_payload(raw: JsonValue) -> BinResult<(String, JsonValue, PointSpec)> {
     let mut root = raw.as_object().cloned().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "run-add payload must be a table",
         )
     })?;
+
+    let name = root
+        .remove("name")
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "missing run name (`name`) in run-add payload",
+            )
+        })
+        .and_then(|value| {
+            value
+                .as_str()
+                .map(|value| value.trim().to_string())
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "invalid run name (`name`): expected non-empty string",
+                    )
+                })
+        })?;
+    if name.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid run name (`name`): expected non-empty string",
+        )
+        .into());
+    }
 
     let point_spec_value = root.remove("point_spec").ok_or_else(|| {
         std::io::Error::new(
@@ -128,7 +155,7 @@ fn parse_run_add_payload(raw: JsonValue) -> BinResult<(JsonValue, PointSpec)> {
         )
     })?;
 
-    Ok((JsonValue::Object(root), point_spec))
+    Ok((name, JsonValue::Object(root), point_spec))
 }
 
 fn print_assignment(assignment: &DesiredAssignment) {
@@ -184,9 +211,10 @@ async fn main() -> BinResult {
             status,
             integration_params_file,
         } => {
-            let (integration_params, point_spec) = match integration_params_file {
+            let (name, integration_params, point_spec) = match integration_params_file {
                 Some(path) => parse_run_add_payload(read_run_add_toml(&path)?)?,
                 None => parse_run_add_payload(json!({
+                    "name": "live-test",
                     "point_spec": {
                         "continuous_dims": 1,
                         "discrete_dims": 0
@@ -194,15 +222,23 @@ async fn main() -> BinResult {
                     "evaluator_implementation": "test_only_sin",
                     "evaluator_params": {},
                     "sampler_aggregator_implementation": "test_only_training",
-                    "sampler_aggregator_params": {},
+                    "sampler_aggregator_params": {
+                        "continuous_dims": 1,
+                        "discrete_dims": 0,
+                        "training_target_samples": 0,
+                        "training_delay_per_sample_ms": 0
+                    },
                     "observable_implementation": "scalar",
                     "observable_params": {},
                     "evaluator_runner_params": {
-                        "min_loop_time_ms": 200
+                        "min_loop_time_ms": 200,
+                        "performance_snapshot_interval_ms": 5000
                     },
                     "sampler_aggregator_runner_params": {
                         "interval_ms": 500,
                         "lease_ttl_ms": 5000,
+                        "nr_samples": 64,
+                        "performance_snapshot_interval_ms": 5000,
                         "max_batches_per_tick": 1,
                         "max_pending_batches": 128,
                         "completed_batch_fetch_limit": 512
@@ -211,9 +247,14 @@ async fn main() -> BinResult {
             };
             let run_status: RunStatus = status.into();
             let run_id = store
-                .create_run(run_status, &integration_params, &point_spec)
+                .create_run(run_status, &name, &integration_params, &point_spec)
                 .await?;
-            println!("created run_id={} status={}", run_id, run_status.as_str());
+            println!(
+                "created run_id={} name={} status={}",
+                run_id,
+                name,
+                run_status.as_str()
+            );
         }
         Command::RunStart { run_id } => {
             store.set_run_status(run_id, RunStatus::Running).await?;

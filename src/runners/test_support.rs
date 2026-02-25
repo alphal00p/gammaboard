@@ -1,5 +1,8 @@
 use crate::batch::{Batch, BatchResult};
-use crate::core::{BatchClaim, CompletedBatch, StoreError, WorkQueueStore};
+use crate::core::{
+    BatchClaim, CompletedBatch, EvaluatorPerformanceSnapshot, SamplerAggregatorPerformanceSnapshot,
+    StoreError, WorkQueueStore,
+};
 use serde_json::Value as JsonValue;
 use std::sync::{Arc, Mutex};
 
@@ -7,6 +10,8 @@ use std::sync::{Arc, Mutex};
 pub(crate) struct MockWorkQueueState {
     pub next_claim: Option<BatchClaim>,
     pub submitted: Vec<(i64, BatchResult, JsonValue)>,
+    pub evaluator_perf_snapshots: Vec<EvaluatorPerformanceSnapshot>,
+    pub sampler_perf_snapshots: Vec<SamplerAggregatorPerformanceSnapshot>,
     pub failed: Vec<(i64, String)>,
     pub next_insert_batch_id: i64,
     pub inserted: Vec<Batch>,
@@ -56,6 +61,30 @@ impl WorkQueueStore for MockWorkQueue {
             result.clone(),
             result.observable.clone(),
         ));
+        Ok(())
+    }
+
+    async fn record_evaluator_performance_snapshot(
+        &self,
+        snapshot: &EvaluatorPerformanceSnapshot,
+    ) -> Result<(), StoreError> {
+        self.inner
+            .lock()
+            .expect("poison")
+            .evaluator_perf_snapshots
+            .push(snapshot.clone());
+        Ok(())
+    }
+
+    async fn record_sampler_performance_snapshot(
+        &self,
+        snapshot: &SamplerAggregatorPerformanceSnapshot,
+    ) -> Result<(), StoreError> {
+        self.inner
+            .lock()
+            .expect("poison")
+            .sampler_perf_snapshots
+            .push(snapshot.clone());
         Ok(())
     }
 

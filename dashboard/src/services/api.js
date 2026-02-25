@@ -10,6 +10,14 @@ export const fetchRuns = async () => {
   return parseJsonOrThrow(response, "Failed to fetch runs");
 };
 
+export const fetchWorkers = async (runId = null) => {
+  const params = new URLSearchParams();
+  if (runId != null) params.set("run_id", String(runId));
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const response = await fetch(`${API_BASE_URL}/workers${suffix}`);
+  return parseJsonOrThrow(response, "Failed to fetch workers");
+};
+
 export const fetchStats = async (runId) => {
   const response = await fetch(`${API_BASE_URL}/runs/${runId}/stats`);
   return parseJsonOrThrow(response, "Failed to fetch stats");
@@ -37,6 +45,20 @@ export const fetchLatestAggregated = async (runId) => {
   const response = await fetch(`${API_BASE_URL}/runs/${runId}/aggregated/latest`);
   if (response.status === 404) return null;
   return parseJsonOrThrow(response, "Failed to fetch latest aggregated result");
+};
+
+export const fetchEvaluatorPerformanceHistory = async (runId, limit = 500, workerId = null) => {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (workerId) params.set("worker_id", workerId);
+  const response = await fetch(`${API_BASE_URL}/runs/${runId}/performance/evaluator?${params.toString()}`);
+  return parseJsonOrThrow(response, "Failed to fetch evaluator performance history");
+};
+
+export const fetchSamplerPerformanceHistory = async (runId, limit = 500, workerId = null) => {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (workerId) params.set("worker_id", workerId);
+  const response = await fetch(`${API_BASE_URL}/runs/${runId}/performance/sampler-aggregator?${params.toString()}`);
+  return parseJsonOrThrow(response, "Failed to fetch sampler performance history");
 };
 
 export const createRunStatsEventSource = (runId, intervalMs) =>

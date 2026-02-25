@@ -12,6 +12,15 @@ const RunHistoryContext = createContext(null);
 
 const formatTime = () => new Date().toLocaleTimeString();
 
+const sameLogIdSet = (a, b) => {
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i]?.id !== b[i]?.id) return false;
+  }
+  return true;
+};
+
 export const RunHistoryProvider = ({
   runId,
   children,
@@ -73,7 +82,7 @@ export const RunHistoryProvider = ({
   const fetchWorkerLogs = useCallback(async () => {
     if (!runId) return;
     const data = await fetchRunLogsApi(runId, 500);
-    setWorkerLogs(data);
+    setWorkerLogs((prev) => (sameLogIdSet(prev, data) ? prev : data));
   }, [runId]);
 
   useEffect(() => {

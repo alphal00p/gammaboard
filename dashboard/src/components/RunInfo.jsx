@@ -1,17 +1,26 @@
 import { Box, Card, CardContent, Grid, Typography, Chip } from "@mui/material";
 import { InfoOutlined as InfoOutlinedIcon } from "@mui/icons-material";
+import JsonFallback from "./JsonFallback";
+import { formatDateTime } from "../utils/formatters";
 
 const RunInfo = ({ run }) => {
   if (!run) return null;
 
+  const integrationParams = run.integration_params || {};
+  const evaluatorImplementation = integrationParams.evaluator_implementation || "unknown";
+  const samplerImplementation = integrationParams.sampler_aggregator_implementation || "unknown";
+  const observableImplementation =
+    run.observable_implementation || integrationParams.observable_implementation || "unknown";
+  const pointSpec = run.point_spec || integrationParams.point_spec || null;
+
   return (
     <Box sx={{ mb: 3 }}>
       <Typography variant="h6" gutterBottom>
-        Run Details
+        Run Info / Run Spec
       </Typography>
 
       <Grid container spacing={2}>
-        <Grid item xs={12} md={3}>
+        <Grid item xs={12} sm={6} md={3}>
           <Card sx={{ height: "100%" }}>
             <CardContent>
               <Typography
@@ -31,7 +40,7 @@ const RunInfo = ({ run }) => {
           </Card>
         </Grid>
 
-        <Grid item xs={12} md={3}>
+        <Grid item xs={12} sm={6} md={3}>
           <Card sx={{ height: "100%" }}>
             <CardContent>
               <Typography
@@ -39,31 +48,84 @@ const RunInfo = ({ run }) => {
                 color="text.secondary"
                 sx={{ textTransform: "uppercase", display: "block" }}
               >
-                Run ID
+                Run
               </Typography>
-              <Typography variant="h4" component="div" color="primary.main">
-                #{run.run_id}
+              <Typography variant="body1" component="div" color="primary.main" sx={{ fontWeight: 700 }}>
+                {run.run_name ? `${run.run_name} (#${run.run_id})` : `#${run.run_id}`}
               </Typography>
             </CardContent>
           </Card>
         </Grid>
 
-        <Grid item xs={12} md={6}>
+        <Grid item xs={12} sm={6} md={3}>
+          <Card sx={{ height: "100%" }}>
+            <CardContent>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ textTransform: "uppercase", display: "block", mb: 0.5 }}
+              >
+                Lifecycle
+              </Typography>
+              <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                started: {formatDateTime(run.started_at)}
+              </Typography>
+              <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                completed: {formatDateTime(run.completed_at)}
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12} sm={6} md={3}>
+          <Card sx={{ height: "100%" }}>
+            <CardContent>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ textTransform: "uppercase", display: "block", mb: 0.5 }}
+              >
+                Progress
+              </Typography>
+              <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                completed_batches: {run.batches_completed ?? 0}
+              </Typography>
+              <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                completion_rate: {((run.completion_rate || 0) * 100 || 0).toFixed(1)}%
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12}>
           <Card sx={{ height: "100%" }}>
             <CardContent>
               <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
                 <InfoOutlinedIcon color="disabled" />
                 <Typography variant="subtitle2" color="text.secondary">
-                  Reserved For Additional Run Metadata
+                  Run Spec (Generic)
                 </Typography>
               </Box>
-              <Typography variant="body2" color="text.secondary">
-                This section is intentionally left with space for upcoming run configuration and diagnostics.
+              <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace" }}>
+                evaluator: {evaluatorImplementation}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace" }}>
+                sampler_aggregator: {samplerImplementation}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace" }}>
+                observable: {observableImplementation}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace", mt: 1 }}>
+                point_spec: {pointSpec ? JSON.stringify(pointSpec) : "not exposed by /runs/:id"}
               </Typography>
             </CardContent>
           </Card>
         </Grid>
       </Grid>
+
+      <Box sx={{ mt: 2 }}>
+        <JsonFallback title="integration_params JSON" data={integrationParams} />
+      </Box>
     </Box>
   );
 };

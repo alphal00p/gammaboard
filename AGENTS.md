@@ -9,6 +9,8 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
 - `run_node` is role-agnostic and reconciles DB desired assignments into one active local role task.
 - `server` exposes read APIs and SSE for the dashboard.
 - PostgreSQL is the source of truth for queue, control-plane state, leases, and snapshots.
+  - Worker performance history is persisted in role-split append-only tables:
+    `evaluator_performance_history` and `sampler_aggregator_performance_history`.
 
 ## Module Ownership
 - `src/core/*`
@@ -22,8 +24,12 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
   - Shared engine wiring/types live in `engines::shared`
     (`BuildFromJson`, `IntegrationParams`, `RunSpec`).
   - Engine implementation enums, run spec/integration params parsing, engine errors.
+  - Implementation enums derive string/display behavior via `strum`
+    (`AsRefStr`, `Display`) and should be rendered with `.as_ref()` or `{impl}` formatting.
 - `src/runners/*`
   - Orchestration loops (`NodeRunner`, evaluator runner, sampler-aggregator runner).
+  - `node_runner` also owns typed runner parameter structs used in run spec decoding
+    (`EvaluatorRunnerParams`, `SamplerAggregatorRunnerParams`).
 - `src/stores/*`
   - Postgres implementation and read-side DTOs/traits.
 - `src/telemetry.rs`
@@ -33,17 +39,31 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
 
 ## Operational Conventions
 - Run configuration is passed as TOML to `control_plane run-add`.
+- Run identity is configured via top-level `name` in TOML and persisted in `runs.name`.
 - Engine/runner settings are persisted in `runs.integration_params`; point shape is persisted in `runs.point_spec`.
 - Observable implementation is persisted in `runs.observable_implementation`.
+- Keep `configs/live-test*.toml` as explicit reference configs: include all runner/engine fields,
+  even when values equal defaults.
+- Name live-test scenario configs semantically (describe intent/compatibility), not only by index.
 - Batch payloads in `batches.points` must stay compact and shape-stable:
   row-major flat `continuous`/`discrete` arrays, per-sample `weights`, and
   explicit 2D shape metadata.
 - Evaluators operate batch-wise (`Batch -> BatchResult`), where `BatchResult` contains
   training `values: Vec<f64>` and one aggregated batch-level observable JSON.
-- Evaluator implementations receive observable implementation + params in `eval_batch`
-  and build the batch observable state internally.
+- Evaluator implementations receive an `ObservableFactory` in `eval_batch` and build
+  per-batch observable instances through the factory.
+- Observable construction should be centralized via `engines::observable::ObservableFactory`
+  (shared by evaluator and sampler-aggregator runners), not by passing raw implementation
+  enum + params through call boundaries.
 - Sampler-aggregator engines produce one batch per call (`produce_batch`); the runner owns
   per-tick multi-batch production loops and queue-capacity limiting.
+- Runner-controlled sample count per produced batch comes from
+  `sampler_aggregator_runner_params.nr_samples`; runners pass this value directly to
+  `SamplerAggregator::produce_batch`.
+- Sampler-aggregator engines may optionally throttle per-tick batch production via
+  `SamplerAggregator::get_max_batches` (default `None` means no engine-specific cap).
+  Havana uses this to enforce deterministic update-cycle limits and optional hard
+  stop after N total training batches.
 - Sampler-aggregator engines may return optional local in-memory batch context
   (`BatchContext`) from `produce_batch`; the runner stores it keyed by `batch_id`
   and passes it back to `ingest_training_weights`.
@@ -51,14 +71,33 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
   tolerate missing context after restart.
 - Runs specify evaluator/sampler/observable implementations independently.
 - Evaluator/sampler implementation names remain in `integration_params`; observable implementation is in `runs.observable_implementation`.
+- Runner params in `IntegrationParams`/`RunSpec` are strongly typed
+  (`EvaluatorRunnerParams`, `SamplerAggregatorRunnerParams`) instead of raw JSON blobs.
 - Concrete engine implementations should parse JSON params through `engines::BuildFromJson` (typed params + validation) instead of ad-hoc per-engine parsing helpers.
+- `BuildFromJson` implementations define only `type Params` and `from_parsed_params`; shared JSON decoding/error wrapping lives in `BuildFromJson::from_json`.
 - Keep compatibility rules in typed implementation enums and validate at
   startup (for evaluator/observable: `EvaluatorImplementation::supports_observable`).
-- `scalar` observable tracks `count`, `sum_weight`, `sum_abs`, and `sum_sq` over evaluator values.
+- `scalar` observable state is `ScalarObservable` (serde-derived) and tracks
+  `count`, `sum_weight`, `sum_abs`, and `sum_sq` over evaluator values.
+- `complex` observable state is `ComplexObservable` (serde-derived). Treat current
+  merge behavior as implementation-defined/incomplete unless explicitly finalized.
 - Observable payload handling should use serde-derived structs (`Serialize`/`Deserialize`) plus
-  `Observable::{load_state_from_json, merge_state_from_json}`; avoid manual `json!`
-  object construction and field-by-field `Value::get` merging in observable implementations.
+  `Observable::{load_state_from_json, merge, snapshot}`; avoid manual `json!` object
+  construction and field-by-field `Value::get` merging in observable implementations.
+- Observable aggregation merge is engine-to-engine (`merge(&ObservableEngine)`): load
+  completed batch JSON into a freshly built observable instance, then merge that engine
+  into the run-level aggregate observable.
 - Completed batches are consumed by sampler-aggregator and deleted from `batches`; there is no persisted sampler engine state checkpoint.
+- Evaluator and sampler-aggregator performance stats are accumulated in-memory and
+  flushed as periodic history snapshots (`performance_snapshot_interval_ms`) into:
+  `evaluator_performance_history` and `sampler_aggregator_performance_history`.
+- Engine diagnostics for those snapshots should be emitted via trait defaults/hooks:
+  `Evaluator::get_diagnostics()` and `SamplerAggregator::get_diagnostics()`
+  (default `json!("{}")`).
+- Latest worker stats shown in `/api/workers` are read from role-specific latest views:
+  `evaluator_performance_latest` and `sampler_aggregator_performance_latest`.
+- Both history tables include a `diagnostics` JSONB payload for implementation-specific
+  diagnostics (for example optimizer/loss metadata in future engines).
 - `run_node` role is controlled by DB desired assignments for its `node_id`; CLI does not select role.
 - A `run_node` process executes at most one active role task at a time.
 - `run_node` execution model is supervisor + worker task: outer poll loop reconciles desired assignment and starts/stops one spawned role task for the current run.
@@ -71,6 +110,15 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
 - Log events intended for dashboard visibility should include at least:
   `run_id`, `worker_id`, `role`, `event_type`.
 - Read API includes `GET /api/runs/:id/logs` (optional `limit`, `worker_id`, `level`).
+- Read API includes `GET /api/workers` with optional `run_id` filter; payload
+  includes worker registration fields plus optional run-scoped performance stats.
+- Read API includes history endpoints:
+  `GET /api/runs/:id/performance/evaluator` and
+  `GET /api/runs/:id/performance/sampler-aggregator`
+  (optional `limit`, `worker_id`).
+- Schema migration policy (current): no backward-compat requirements. Prefer
+  direct table definitions for current schema and avoid follow-up `ALTER TABLE`
+  compatibility migrations unless explicitly requested.
 
 ## Required Checks Before Finishing
 - `cargo fmt`

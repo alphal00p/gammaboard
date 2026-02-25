@@ -11,12 +11,13 @@ use crate::core::{
     AggregationStore, AssignmentLeaseStore, ControlPlaneStore, RunSpecStore, StoreError,
     WorkQueueStore, Worker as WorkerRecord, WorkerRegistryStore, WorkerRole, WorkerStatus,
 };
+use crate::engines::observable::ObservableFactory;
 use crate::engines::{
-    Evaluator, EvaluatorEngine, Observable, ObservableEngine, SamplerAggregator,
-    SamplerAggregatorEngine,
+    Evaluator, EvaluatorEngine, ObservableEngine, SamplerAggregator, SamplerAggregatorEngine,
 };
-use serde::{Deserialize, de::DeserializeOwned};
-use serde_json::{Value as JsonValue, json};
+use serde::Deserialize;
+use serde::Serialize;
+use serde_json::json;
 use std::time::Duration;
 use tokio::{
     sync::watch,
@@ -124,9 +125,6 @@ impl<S: NodeRunnerStore> ActiveWorker<S> {
             return Ok(());
         };
 
-        let evaluator_params: EvaluatorRunnerParams =
-            parse_params(&spec.evaluator_runner_params, "evaluator_runner_params")?;
-
         let evaluator =
             EvaluatorEngine::build(spec.evaluator_implementation, &spec.evaluator_params)
                 .map_err(|err| StoreError::store(format!("failed to build evaluator: {err}")))?;
@@ -150,7 +148,7 @@ impl<S: NodeRunnerStore> ActiveWorker<S> {
             )));
         }
 
-        self.register_active_worker(spec.evaluator_implementation.as_str())
+        self.register_active_worker(spec.evaluator_implementation.as_ref())
             .await?;
         self.store
             .assign_evaluator(self.run_id, &self.worker_id)
@@ -166,17 +164,24 @@ impl<S: NodeRunnerStore> ActiveWorker<S> {
             "evaluator worker started"
         );
 
+        let observable_factory = ObservableFactory::new(
+            spec.observable_implementation,
+            spec.observable_params.clone(),
+        );
         let mut runner = EvaluatorRunner::new(
             self.run_id,
             self.worker_id.clone(),
             Box::new(evaluator),
-            spec.observable_implementation,
-            spec.observable_params.clone(),
+            observable_factory,
             spec.point_spec.clone(),
+            Duration::from_millis(
+                spec.evaluator_runner_params
+                    .performance_snapshot_interval_ms,
+            ),
             self.store.clone(),
         );
 
-        let idle_backoff = Duration::from_millis(evaluator_params.min_loop_time_ms);
+        let idle_backoff = Duration::from_millis(spec.evaluator_runner_params.min_loop_time_ms);
 
         loop {
             if *stop_rx.borrow() {
@@ -264,10 +269,6 @@ impl<S: NodeRunnerStore> ActiveWorker<S> {
             return Ok(());
         };
 
-        let runner_params: SamplerAggregatorRunnerParams = parse_params(
-            &spec.sampler_aggregator_runner_params,
-            "sampler_aggregator_runner_params",
-        )?;
         let engine = SamplerAggregatorEngine::build(
             spec.sampler_aggregator_implementation,
             &spec.sampler_aggregator_params,
@@ -282,14 +283,10 @@ impl<S: NodeRunnerStore> ActiveWorker<S> {
                 ))
             })?;
 
-        let aggregated_observable =
-            ObservableEngine::build(spec.observable_implementation, &spec.observable_params)
-                .map(|engine| Box::new(engine) as Box<dyn Observable>)
-                .map_err(|err| {
-                    StoreError::store(format!("failed to build aggregated observable: {err}"))
-                })?;
+        let observable_factory =
+            ObservableFactory::new(spec.observable_implementation, spec.observable_params);
 
-        self.register_active_worker(spec.sampler_aggregator_implementation.as_str())
+        self.register_active_worker(spec.sampler_aggregator_implementation.as_ref())
             .await?;
 
         info!(
@@ -304,22 +301,29 @@ impl<S: NodeRunnerStore> ActiveWorker<S> {
 
         let mut runner = SamplerAggregatorRunner::new(
             self.run_id,
+            self.worker_id.clone(),
             Box::new(engine),
-            aggregated_observable,
+            observable_factory,
             self.store.clone(),
             self.store.clone(),
             RunnerConfig {
-                max_batches_per_tick: runner_params.max_batches_per_tick,
-                max_pending_batches: runner_params.max_pending_batches,
-                completed_batch_fetch_limit: runner_params.completed_batch_fetch_limit,
+                nr_samples: spec.sampler_aggregator_runner_params.nr_samples,
+                performance_snapshot_interval_ms: spec
+                    .sampler_aggregator_runner_params
+                    .performance_snapshot_interval_ms,
+                max_batches_per_tick: spec.sampler_aggregator_runner_params.max_batches_per_tick,
+                max_pending_batches: spec.sampler_aggregator_runner_params.max_pending_batches,
+                completed_batch_fetch_limit: spec
+                    .sampler_aggregator_runner_params
+                    .completed_batch_fetch_limit,
             },
             spec.point_spec.clone(),
         )
         .await
         .map_err(|err| StoreError::store(err.to_string()))?;
 
-        let lease_ttl = Duration::from_millis(runner_params.lease_ttl_ms);
-        let interval = Duration::from_millis(runner_params.interval_ms);
+        let lease_ttl = Duration::from_millis(spec.sampler_aggregator_runner_params.lease_ttl_ms);
+        let interval = Duration::from_millis(spec.sampler_aggregator_runner_params.interval_ms);
         let mut owns_lease = false;
 
         loop {
@@ -722,17 +726,29 @@ fn binary_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
-struct EvaluatorRunnerParams {
+pub struct EvaluatorRunnerParams {
     min_loop_time_ms: u64,
+    performance_snapshot_interval_ms: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+impl Default for EvaluatorRunnerParams {
+    fn default() -> Self {
+        Self {
+            min_loop_time_ms: 0,
+            performance_snapshot_interval_ms: 5_000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
-struct SamplerAggregatorRunnerParams {
+pub struct SamplerAggregatorRunnerParams {
     interval_ms: u64,
     lease_ttl_ms: u64,
+    nr_samples: usize,
+    performance_snapshot_interval_ms: u64,
     max_pending_batches: usize,
     max_batches_per_tick: usize,
     completed_batch_fetch_limit: usize,
@@ -743,14 +759,11 @@ impl Default for SamplerAggregatorRunnerParams {
         Self {
             interval_ms: 500,
             lease_ttl_ms: 5_000,
+            nr_samples: 64,
+            performance_snapshot_interval_ms: 5_000,
             max_pending_batches: 128,
             max_batches_per_tick: 1,
             completed_batch_fetch_limit: 512,
         }
     }
-}
-
-fn parse_params<T: DeserializeOwned>(params: &JsonValue, section: &str) -> Result<T, StoreError> {
-    serde_json::from_value(params.clone())
-        .map_err(|err| StoreError::store(format!("invalid {}: {}", section, err)))
 }

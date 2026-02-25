@@ -155,3 +155,33 @@ pub struct CompletedBatch {
     pub result: BatchResult,
     pub completed_at: Option<DateTime<Utc>>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvaluatorPerformanceSnapshot {
+    pub run_id: i32,
+    pub worker_id: String,
+    pub window_start: DateTime<Utc>,
+    pub window_end: DateTime<Utc>,
+    pub batches_completed: i64,
+    pub samples_evaluated: i64,
+    pub avg_time_per_sample_ms: f64,
+    pub std_time_per_sample_ms: f64,
+    pub diagnostics: JsonValue,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SamplerAggregatorPerformanceSnapshot {
+    pub run_id: i32,
+    pub worker_id: String,
+    pub window_start: DateTime<Utc>,
+    pub window_end: DateTime<Utc>,
+    pub produced_batches: i64,
+    pub produced_samples: i64,
+    pub avg_produce_time_per_sample_ms: f64,
+    pub std_produce_time_per_sample_ms: f64,
+    pub ingested_batches: i64,
+    pub ingested_samples: i64,
+    pub avg_ingest_time_per_sample_ms: f64,
+    pub std_ingest_time_per_sample_ms: f64,
+    pub diagnostics: JsonValue,
+}

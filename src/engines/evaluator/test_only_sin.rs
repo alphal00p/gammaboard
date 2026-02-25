@@ -1,7 +1,8 @@
 use crate::batch::{Batch, BatchResult, PointSpec};
+use crate::engines::observable::ObservableFactory;
 use crate::engines::{
     BuildError, BuildFromJson, EvalError, Evaluator, Observable, ObservableEngine,
-    ObservableImplementation, ScalarObservableAggregator,
+    ObservableImplementation,
 };
 use serde::Deserialize;
 use std::{
@@ -25,7 +26,7 @@ impl TestSinEvaluator {
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct TestEvaluatorParams {
-    min_eval_time_per_sample_ms: u64,
+    pub min_eval_time_per_sample_ms: u64,
 }
 
 impl Evaluator for TestSinEvaluator {
@@ -48,16 +49,26 @@ impl Evaluator for TestSinEvaluator {
     fn eval_batch(
         &self,
         batch: &Batch,
-        observable_implementation: ObservableImplementation,
-        observable_params: &serde_json::Value,
+        observable_factory: &ObservableFactory,
     ) -> Result<BatchResult, EvalError> {
-        if observable_implementation != ObservableImplementation::Scalar {
+        let implementation = observable_factory.implementation;
+
+        if implementation != ObservableImplementation::Scalar {
             return Err(EvalError::eval(format!(
-                "test_only_sin supports only scalar observable, got {observable_implementation}"
+                "test_only_sin supports only scalar observable, got {implementation}"
             )));
         }
-        let mut observable = ScalarObservableAggregator::from_json(observable_params)
-            .map_err(|err| EvalError::eval(err.to_string()))?;
+        let mut observable = match observable_factory
+            .build()
+            .map_err(|err| EvalError::eval(err.to_string()))?
+        {
+            ObservableEngine::Scalar(scalar_observable_aggregator) => {
+                Ok(scalar_observable_aggregator)
+            }
+            _ => Err(EvalError::eval(
+                "test_only_sin supports only scalar observable",
+            )),
+        }?;
         let started = Instant::now();
         let mut values = Vec::with_capacity(batch.size());
 
@@ -96,8 +107,6 @@ impl Evaluator for TestSinEvaluator {
 
 impl BuildFromJson for TestSinEvaluator {
     type Params = TestEvaluatorParams;
-    const PARAMS_CONTEXT: &'static str = "evaluator params";
-
     fn from_parsed_params(params: Self::Params) -> Result<Self, BuildError> {
         Ok(Self::new(params.min_eval_time_per_sample_ms))
     }

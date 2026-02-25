@@ -1,32 +1,24 @@
 mod test_only_sin;
+mod test_only_sinc;
 
-use super::{BuildError, BuildFromJson, EvalError, ObservableEngine, ObservableImplementation};
-use crate::batch::{Batch, BatchResult, PointSpec};
+use super::{BuildError, BuildFromJson, EvalError, ObservableEngine};
+use crate::{
+    batch::{Batch, BatchResult, PointSpec},
+    engines::{evaluator::test_only_sinc::TestSincEvaluator, observable::ObservableFactory},
+};
 use enum_dispatch::enum_dispatch;
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
-use std::fmt;
+use serde_json::{Value as JsonValue, json};
+use strum::{AsRefStr, Display};
 
 use self::test_only_sin::TestSinEvaluator;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, AsRefStr, Display)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum EvaluatorImplementation {
     TestOnlySin,
-}
-
-impl EvaluatorImplementation {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::TestOnlySin => "test_only_sin",
-        }
-    }
-}
-
-impl fmt::Display for EvaluatorImplementation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
+    TestOnlySinc,
 }
 
 /// Evaluates integrand values for sample points.
@@ -36,15 +28,18 @@ pub trait Evaluator: Send + Sync {
     fn eval_batch(
         &self,
         batch: &Batch,
-        observable_implementation: ObservableImplementation,
-        observable_params: &JsonValue,
+        observable_factory: &ObservableFactory,
     ) -> Result<BatchResult, EvalError>;
     fn supports_observable(&self, observable: &ObservableEngine) -> bool;
+    fn get_diagnostics(&self) -> JsonValue {
+        json!("{}")
+    }
 }
 
 #[enum_dispatch(Evaluator)]
 pub enum EvaluatorEngine {
     TestOnlySin(TestSinEvaluator),
+    TestOnlySinc(TestSincEvaluator),
 }
 
 impl EvaluatorEngine {
@@ -55,6 +50,9 @@ impl EvaluatorEngine {
         match implementation {
             EvaluatorImplementation::TestOnlySin => {
                 Ok(Self::TestOnlySin(TestSinEvaluator::from_json(params)?))
+            }
+            EvaluatorImplementation::TestOnlySinc => {
+                Ok(Self::TestOnlySinc(TestSincEvaluator::from_json(params)?))
             }
         }
     }

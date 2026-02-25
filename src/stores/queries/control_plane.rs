@@ -126,18 +126,20 @@ pub(crate) async fn list_desired_assignments(
 pub(crate) async fn create_run(
     pool: &PgPool,
     status: RunStatus,
+    name: &str,
     integration_params: &JsonValue,
     observable_implementation: &str,
     point_spec: &PointSpec,
 ) -> Result<i32, sqlx::Error> {
     sqlx::query_scalar(
         r#"
-        INSERT INTO runs (status, integration_params, observable_implementation, point_spec)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO runs (status, name, integration_params, observable_implementation, point_spec)
+        VALUES ($1, $2, $3, $4, $5)
         RETURNING id
         "#,
     )
     .bind(status.as_str())
+    .bind(name)
     .bind(integration_params)
     .bind(observable_implementation)
     .bind(sqlx::types::Json(point_spec))

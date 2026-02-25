@@ -52,6 +52,17 @@ fn default_log_limit() -> i64 {
     500
 }
 
+#[derive(Deserialize)]
+struct PerformanceHistoryQuery {
+    #[serde(default = "default_perf_history_limit")]
+    limit: i64,
+    worker_id: Option<String>,
+}
+
+fn default_perf_history_limit() -> i64 {
+    500
+}
+
 fn default_stream_interval_ms() -> u64 {
     1000
 }
@@ -75,6 +86,11 @@ fn internal_error(context: impl Display, err: impl Display, message: &str) -> Re
 struct StreamQuery {
     #[serde(default = "default_stream_interval_ms")]
     interval_ms: u64,
+}
+
+#[derive(Deserialize)]
+struct WorkersQuery {
+    run_id: Option<i32>,
 }
 
 struct MpscStream {
@@ -119,6 +135,7 @@ async fn main() -> BinResult {
     let api_routes = Router::new()
         .route("/health", get(health_check))
         .route("/runs", get(get_runs))
+        .route("/workers", get(get_workers))
         .route("/runs/:id", get(get_run))
         .route("/runs/:id/stats", get(get_run_stats))
         .route("/runs/:id/logs", get(get_run_logs))
@@ -126,6 +143,14 @@ async fn main() -> BinResult {
         .route(
             "/runs/:id/aggregated/latest",
             get(get_run_aggregated_latest),
+        )
+        .route(
+            "/runs/:id/performance/evaluator",
+            get(get_run_evaluator_performance_history),
+        )
+        .route(
+            "/runs/:id/performance/sampler-aggregator",
+            get(get_run_sampler_performance_history),
         )
         .route("/runs/:id/stream", get(stream_run_stats))
         .with_state(state);
@@ -179,6 +204,17 @@ async fn get_runs(State(state): State<AppState>) -> impl IntoResponse {
     match state.store.get_all_runs().await {
         Ok(runs) => (StatusCode::OK, Json(runs)).into_response(),
         Err(e) => internal_error("fetching runs", e, "Failed to fetch runs"),
+    }
+}
+
+/// Get all registered workers.
+async fn get_workers(
+    State(state): State<AppState>,
+    Query(params): Query<WorkersQuery>,
+) -> impl IntoResponse {
+    match state.store.get_registered_workers(params.run_id).await {
+        Ok(workers) => (StatusCode::OK, Json(workers)).into_response(),
+        Err(e) => internal_error("fetching workers", e, "Failed to fetch workers"),
     }
 }
 
@@ -257,6 +293,48 @@ async fn get_run_aggregated_latest(
             format!("fetching latest aggregated result for run {id}"),
             e,
             "Failed to fetch aggregated results",
+        ),
+    }
+}
+
+/// Get evaluator performance history for a run.
+async fn get_run_evaluator_performance_history(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+    Query(params): Query<PerformanceHistoryQuery>,
+) -> impl IntoResponse {
+    let limit = params.limit.clamp(1, 10_000);
+    match state
+        .store
+        .get_evaluator_performance_history(id, limit, params.worker_id.as_deref())
+        .await
+    {
+        Ok(rows) => (StatusCode::OK, Json(rows)).into_response(),
+        Err(e) => internal_error(
+            format!("fetching evaluator performance history for run {id}"),
+            e,
+            "Failed to fetch evaluator performance history",
+        ),
+    }
+}
+
+/// Get sampler-aggregator performance history for a run.
+async fn get_run_sampler_performance_history(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+    Query(params): Query<PerformanceHistoryQuery>,
+) -> impl IntoResponse {
+    let limit = params.limit.clamp(1, 10_000);
+    match state
+        .store
+        .get_sampler_performance_history(id, limit, params.worker_id.as_deref())
+        .await
+    {
+        Ok(rows) => (StatusCode::OK, Json(rows)).into_response(),
+        Err(e) => internal_error(
+            format!("fetching sampler performance history for run {id}"),
+            e,
+            "Failed to fetch sampler performance history",
         ),
     }
 }

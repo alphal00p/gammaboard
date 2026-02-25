@@ -7,7 +7,6 @@ use std::{thread, time::Duration};
 
 /// Test-only sampler-aggregator engine with simple random batch generation.
 pub struct TestTrainingSamplerAggregator {
-    batch_size: usize,
     continuous_dims: usize,
     discrete_dims: usize,
     training_target_samples: usize,
@@ -20,14 +19,12 @@ pub struct TestTrainingSamplerAggregator {
 
 impl TestTrainingSamplerAggregator {
     pub fn new(
-        batch_size: usize,
         continuous_dims: usize,
         discrete_dims: usize,
         training_target_samples: usize,
         training_delay_per_sample_ms: u64,
     ) -> Self {
         Self {
-            batch_size,
             continuous_dims,
             discrete_dims,
             training_target_samples,
@@ -43,7 +40,6 @@ impl TestTrainingSamplerAggregator {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TestSamplerAggregatorParams {
-    batch_size: usize,
     continuous_dims: usize,
     discrete_dims: usize,
     training_target_samples: usize,
@@ -53,7 +49,6 @@ pub struct TestSamplerAggregatorParams {
 impl Default for TestSamplerAggregatorParams {
     fn default() -> Self {
         Self {
-            batch_size: 64,
             continuous_dims: 1,
             discrete_dims: 0,
             training_target_samples: 0,
@@ -64,11 +59,8 @@ impl Default for TestSamplerAggregatorParams {
 
 impl BuildFromJson for TestTrainingSamplerAggregator {
     type Params = TestSamplerAggregatorParams;
-    const PARAMS_CONTEXT: &'static str = "sampler params";
-
     fn from_parsed_params(params: Self::Params) -> Result<Self, BuildError> {
         Ok(Self::new(
-            params.batch_size,
             params.continuous_dims,
             params.discrete_dims,
             params.training_target_samples,
@@ -94,19 +86,15 @@ impl SamplerAggregator for TestTrainingSamplerAggregator {
         Ok(())
     }
 
-    fn init(&mut self) -> Result<(), EngineError> {
-        Ok(())
-    }
-
     fn produce_batch(
         &mut self,
         nr_samples: usize,
     ) -> Result<(Batch, Option<BatchContext>), EngineError> {
-        let nr_samples = if nr_samples == 0 {
-            self.batch_size
-        } else {
-            nr_samples
-        };
+        if nr_samples == 0 {
+            return Err(EngineError::engine(
+                "test_only_training sampler requires nr_samples > 0",
+            ));
+        }
         let mut rng = rand::thread_rng();
         let mut continuous_data = Vec::with_capacity(nr_samples * self.continuous_dims);
         let mut discrete_data = Vec::with_capacity(nr_samples * self.discrete_dims);

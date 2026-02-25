@@ -1,20 +1,19 @@
 use super::BuildError;
 use super::{EvaluatorImplementation, ObservableImplementation, SamplerAggregatorImplementation};
 use crate::batch::PointSpec;
+use crate::runners::node_runner::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 pub trait BuildFromJson: Sized {
     type Params: DeserializeOwned;
-    const PARAMS_CONTEXT: &'static str;
 
     fn from_parsed_params(params: Self::Params) -> Result<Self, BuildError>;
 
     fn from_json(params: &JsonValue) -> Result<Self, BuildError> {
-        let parsed: Self::Params = serde_json::from_value(params.clone()).map_err(|err| {
-            BuildError::build(format!("invalid {}: {}", Self::PARAMS_CONTEXT, err))
-        })?;
+        let parsed: Self::Params = serde_json::from_value(params.clone())
+            .map_err(|err| BuildError::build(err.to_string()))?;
         Self::from_parsed_params(parsed)
     }
 }
@@ -29,8 +28,8 @@ pub struct IntegrationParams {
     pub sampler_aggregator_params: Option<JsonValue>,
     pub observable_implementation: Option<ObservableImplementation>,
     pub observable_params: Option<JsonValue>,
-    pub evaluator_runner_params: Option<JsonValue>,
-    pub sampler_aggregator_runner_params: Option<JsonValue>,
+    pub evaluator_runner_params: Option<EvaluatorRunnerParams>,
+    pub sampler_aggregator_runner_params: Option<SamplerAggregatorRunnerParams>,
 }
 
 /// Immutable run configuration loaded from storage before starting a run loop.
@@ -44,6 +43,6 @@ pub struct RunSpec {
     pub sampler_aggregator_params: JsonValue,
     pub observable_implementation: ObservableImplementation,
     pub observable_params: JsonValue,
-    pub evaluator_runner_params: JsonValue,
-    pub sampler_aggregator_runner_params: JsonValue,
+    pub evaluator_runner_params: EvaluatorRunnerParams,
+    pub sampler_aggregator_runner_params: SamplerAggregatorRunnerParams,
 }

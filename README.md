@@ -8,6 +8,8 @@ At a high level:
 - `server` exposes run progress, aggregated results, and worker logs for the dashboard.
 - `run_node` emits structured worker logs via `tracing`; `target="worker_log"` events
   are persisted into `worker_logs`.
+- Worker performance is persisted as history snapshots in role-split tables:
+  `evaluator_performance_history` and `sampler_aggregator_performance_history`.
 
 ## Quick Start
 
@@ -21,6 +23,7 @@ At a high level:
 ### Fastest local run
 1. Start everything and run a live backend test:
    - `just live-test`
+   - this provisions four semantically named runs with mixed evaluator/sampler/observable combinations, including two intentionally incompatible runs for error-surface testing.
 2. Optional: start backend + frontend dashboards:
    - `just serve`
 
@@ -50,18 +53,26 @@ Role selection is fully controlled by desired assignments in the DB.
 ## Configuration
 
 Run configuration is provided as TOML.
+- Run display name is configured via top-level `name` and stored in `runs.name`.
 - Engine and runner params are stored in `runs.integration_params`.
 - Observable implementation is stored in `runs.observable_implementation`.
 - Point dimensions are stored in `runs.point_spec`.
 - Batches are stored in `batches.points` as compact flat arrays (`continuous`, `discrete`) plus per-sample `weights`, with explicit 2D shape metadata.
 - Evaluators return one `BatchResult` per batch: `values: Vec<f64>` (sampler training signal) and one aggregated `observable` JSON payload.
-- Evaluator implementations receive `observable_implementation` + `observable_params` during `eval_batch` and build batch-local observable state themselves.
+- Evaluator implementations receive an `ObservableFactory` during `eval_batch` and build batch-local observable state from it.
 - Sampler-aggregator engines produce one batch per call; the sampler-aggregator runner controls how many batches are produced each tick (`max_batches_per_tick`) and enforces pending-queue limits.
+- Sampler-aggregator runner passes explicit `nr_samples` from `sampler_aggregator_runner_params` into `produce_batch`.
 - Sampler-aggregator engines can attach optional process-local batch context to produced batches; this context is passed back during training ingestion and is not persisted in PostgreSQL.
+- Sampler-aggregator engines may optionally throttle per-tick production via `SamplerAggregator::get_max_batches` (default `None` = no engine-specific cap). Havana uses this for deterministic cycle limits and optional training stop.
+- Runner params in the integration payload are strongly typed (`EvaluatorRunnerParams`, `SamplerAggregatorRunnerParams`) and defaulted server-side when omitted.
+- `configs/live-test*.toml` intentionally sets all known fields (including default-valued ones) as reference templates.
+- Observable snapshots are serde-derived state payloads. For `scalar`, the snapshot fields are:
+  `count`, `sum_weight`, `sum_abs`, `sum_sq`.
 
 Example: `configs/live-test.toml`
 
 ```toml
+name = "live-test"
 evaluator_implementation = "test_only_sin"
 sampler_aggregator_implementation = "test_only_training"
 observable_implementation = "scalar"
@@ -72,6 +83,7 @@ discrete_dims = 0
 
 [evaluator_runner_params]
 min_loop_time_ms = 200
+performance_snapshot_interval_ms = 5000
 
 [evaluator_params]
 min_eval_time_per_sample_ms = 2
@@ -79,17 +91,25 @@ min_eval_time_per_sample_ms = 2
 [sampler_aggregator_runner_params]
 interval_ms = 500
 lease_ttl_ms = 5000
-max_batches_per_tick = 1
+nr_samples = 64
+performance_snapshot_interval_ms = 5000
+max_batches_per_tick = 128
 max_pending_batches = 128
 completed_batch_fetch_limit = 512
 
 [sampler_aggregator_params]
-batch_size = 64
+continuous_dims = 1
+discrete_dims = 0
 training_target_samples = 2000
 training_delay_per_sample_ms = 2
 
 [observable_params]
 ```
+
+Havana-specific sampler params:
+- `batches_for_update`: number of produced/ingested batches before one grid update cycle.
+- `learning_rate`: update step size passed to the grid update.
+- `stop_training_after_n_batches` (optional): hard cap on total produced training batches; once reached, sampler production throttles to zero.
 
 `observable_implementation` and `observable_params` are configured independently
 from evaluator/sampler implementations, so runs can mix-and-match compatible
@@ -97,6 +117,10 @@ engines.
 On write, `observable_implementation` is persisted in `runs.observable_implementation`
 instead of the JSON blob.
 Compatibility is validated at runner startup before evaluator work begins.
+
+### Frontend Observable Notes
+- The dashboard computes scalar mean as `sum_weight / count` from aggregated snapshots.
+- Non-scalar observables are shown using implementation-specific rendering and JSON fallback.
 
 ## Current Status
 
@@ -108,6 +132,17 @@ Compatibility is validated at runner startup before evaluator work begins.
   in `worker_logs` (indexed by `run_id` and `worker_id`).
 - Worker logs are readable via `GET /api/runs/:id/logs` and shown in the dashboard's
   **Worker Logs** panel.
+- Registered workers are readable via `GET /api/workers` (optional `run_id` query
+  filter) and include per-run performance stats:
+  evaluator `avg_time_per_sample_ms`/`std_time_per_sample_ms`,
+  sampler `avg_produce_time_per_sample_ms`/`std_produce_time_per_sample_ms`,
+  sampler `avg_ingest_time_per_sample_ms`/`std_ingest_time_per_sample_ms`,
+  plus evaluator/sampler batch+sample counters and diagnostics JSON emitted by
+  engine `get_diagnostics()` hooks.
+- Performance history is available via:
+  `GET /api/runs/:id/performance/evaluator` and
+  `GET /api/runs/:id/performance/sampler-aggregator`
+  (optional `limit`, `worker_id`).
 
 ## For Contributors
 
@@ -115,5 +150,7 @@ Engineering structure and maintenance rules live in `AGENTS.md`.
 Batch domain types now live in `src/core/batch.rs` and are re-exported at crate root for compatibility.
 Engine contracts/factories are split by role in `src/engines/{evaluator,sampler_aggregator,observable}/`.
 Engine implementations should use `engines::BuildFromJson` for parameter decoding/validation to keep factory behavior consistent.
+Evaluator and sampler engines expose `get_diagnostics()`; default output is `json!("{}")`, and runner snapshots persist this into performance history rows.
+Implementation enums use `strum` derives (`AsRefStr`, `Display`) and should be converted with `.as_ref()` when a string slice is required.
 `IntegrationParams` and `RunSpec` now live in `src/engines/shared.rs`.
 If you change architecture, CLI/config, or runtime behavior, update both `AGENTS.md` and this README in the same change.

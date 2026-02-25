@@ -1,10 +1,12 @@
 //! Evaluator worker runner orchestration.
 
 use crate::batch::{BatchResult, PointSpec};
-use crate::core::{StoreError, WorkQueueStore};
-use crate::engines::{EngineError, EvalError, Evaluator, ObservableImplementation};
-use serde_json::Value as JsonValue;
-use std::{error::Error, fmt, time::Instant};
+use crate::core::{EvaluatorPerformanceSnapshot, StoreError, WorkQueueStore};
+use crate::engines::observable::ObservableFactory;
+use crate::engines::{EngineError, EvalError, Evaluator};
+use crate::runners::sample_time_stats::SampleTimeStats;
+use chrono::Utc;
+use std::{error::Error, fmt, time::Duration, time::Instant};
 
 #[derive(Debug, Clone)]
 pub struct EvaluatorRunnerTick {
@@ -42,9 +44,12 @@ pub struct EvaluatorRunner<WQ> {
     run_id: i32,
     worker_id: String,
     evaluator: Box<dyn Evaluator>,
-    observable_implementation: ObservableImplementation,
-    observable_params: JsonValue,
+    observable_factory: ObservableFactory,
     point_spec: PointSpec,
+    performance_snapshot_interval: Duration,
+    perf_window_started_at: Instant,
+    perf_window_started_ts: chrono::DateTime<Utc>,
+    perf_eval: SampleTimeStats,
     work_queue: WQ,
 }
 
@@ -56,18 +61,23 @@ where
         run_id: i32,
         worker_id: impl Into<String>,
         evaluator: Box<dyn Evaluator>,
-        observable_implementation: ObservableImplementation,
-        observable_params: JsonValue,
+        observable_factory: ObservableFactory,
         point_spec: PointSpec,
+        performance_snapshot_interval: Duration,
         work_queue: WQ,
     ) -> Self {
+        let now_ts = Utc::now();
+        let now_instant = Instant::now();
         Self {
             run_id,
             worker_id: worker_id.into(),
             evaluator,
-            observable_implementation,
-            observable_params,
+            observable_factory,
             point_spec,
+            performance_snapshot_interval,
+            perf_window_started_at: now_instant,
+            perf_window_started_ts: now_ts,
+            perf_eval: SampleTimeStats::default(),
             work_queue,
         }
     }
@@ -80,6 +90,7 @@ where
             .map_err(EvaluatorRunnerError::Store)?;
 
         let Some(claimed) = claimed else {
+            self.flush_performance_snapshot_if_due(false).await?;
             return Ok(EvaluatorRunnerTick {
                 claimed_batch_id: None,
                 processed_samples: 0,
@@ -93,15 +104,15 @@ where
                 .fail_batch(claimed.batch_id, &err.to_string())
                 .await
                 .map_err(EvaluatorRunnerError::Store)?;
+            self.flush_performance_snapshot_if_due(false).await?;
             return Err(EvaluatorRunnerError::Engine(err));
         }
 
         let started = Instant::now();
-        match self.evaluator.eval_batch(
-            &claimed.batch,
-            self.observable_implementation,
-            &self.observable_params,
-        ) {
+        match self
+            .evaluator
+            .eval_batch(&claimed.batch, &self.observable_factory)
+        {
             Ok(result) => {
                 self.submit_result(claimed.batch_id, &claimed.batch, result, started)
                     .await
@@ -111,13 +122,14 @@ where
                     .fail_batch(claimed.batch_id, &err.to_string())
                     .await
                     .map_err(EvaluatorRunnerError::Store)?;
+                self.flush_performance_snapshot_if_due(false).await?;
                 Err(EvaluatorRunnerError::Eval(err))
             }
         }
     }
 
     async fn submit_result(
-        &self,
+        &mut self,
         batch_id: i64,
         batch: &crate::batch::Batch,
         result: BatchResult,
@@ -143,11 +155,58 @@ where
             .await
             .map_err(EvaluatorRunnerError::Store)?;
 
+        self.observe_eval_batch(result.len(), eval_time_ms);
+        self.flush_performance_snapshot_if_due(false).await?;
+
         Ok(EvaluatorRunnerTick {
             claimed_batch_id: Some(batch_id),
             processed_samples: result.len(),
             eval_time_ms,
         })
+    }
+
+    fn observe_eval_batch(&mut self, samples: usize, eval_time_ms: f64) {
+        self.perf_eval.observe(samples, eval_time_ms);
+    }
+
+    async fn flush_performance_snapshot_if_due(
+        &mut self,
+        force: bool,
+    ) -> Result<(), EvaluatorRunnerError> {
+        if !self.perf_eval.has_data() {
+            return Ok(());
+        }
+
+        let due = if self.performance_snapshot_interval.is_zero() {
+            true
+        } else {
+            self.perf_window_started_at.elapsed() >= self.performance_snapshot_interval
+        };
+        if !force && !due {
+            return Ok(());
+        }
+
+        let snapshot = EvaluatorPerformanceSnapshot {
+            run_id: self.run_id,
+            worker_id: self.worker_id.clone(),
+            window_start: self.perf_window_started_ts,
+            window_end: Utc::now(),
+            batches_completed: self.perf_eval.batches(),
+            samples_evaluated: self.perf_eval.samples(),
+            avg_time_per_sample_ms: self.perf_eval.mean(),
+            std_time_per_sample_ms: self.perf_eval.std(),
+            diagnostics: self.evaluator.get_diagnostics(),
+        };
+
+        self.work_queue
+            .record_evaluator_performance_snapshot(&snapshot)
+            .await
+            .map_err(EvaluatorRunnerError::Store)?;
+
+        self.perf_window_started_at = Instant::now();
+        self.perf_window_started_ts = Utc::now();
+        self.perf_eval = SampleTimeStats::default();
+        Ok(())
     }
 }
 
@@ -175,8 +234,7 @@ mod tests {
         fn eval_batch(
             &self,
             batch: &Batch,
-            _observable_implementation: ObservableImplementation,
-            _observable_params: &JsonValue,
+            _observable_factory: &ObservableFactory,
         ) -> Result<BatchResult, EvalError> {
             let values = batch
                 .continuous()
@@ -212,8 +270,7 @@ mod tests {
         fn eval_batch(
             &self,
             _batch: &Batch,
-            _observable_implementation: ObservableImplementation,
-            _observable_params: &JsonValue,
+            _observable_factory: &ObservableFactory,
         ) -> Result<BatchResult, EvalError> {
             Err(EvalError::eval("mock failure"))
         }
@@ -234,12 +291,12 @@ mod tests {
             1,
             "worker-1",
             Box::new(OkEvaluator),
-            ObservableImplementation::Scalar,
-            json!({}),
+            ObservableFactory::new(ObservableImplementation::Scalar, json!({})),
             PointSpec {
                 continuous_dims: 1,
                 discrete_dims: 0,
             },
+            Duration::from_millis(0),
             queue,
         );
 
@@ -261,12 +318,12 @@ mod tests {
             1,
             "worker-1",
             Box::new(OkEvaluator),
-            ObservableImplementation::Scalar,
-            json!({}),
+            ObservableFactory::new(ObservableImplementation::Scalar, json!({})),
             PointSpec {
                 continuous_dims: 1,
                 discrete_dims: 0,
             },
+            Duration::from_millis(0),
             queue.clone(),
         );
 
@@ -278,6 +335,9 @@ mod tests {
         assert_eq!(state.submitted.len(), 1);
         assert_eq!(state.submitted[0].0, 42);
         assert_eq!(state.submitted[0].1.values, vec![1.0, 2.0]);
+        assert_eq!(state.evaluator_perf_snapshots.len(), 1);
+        assert_eq!(state.evaluator_perf_snapshots[0].batches_completed, 1);
+        assert_eq!(state.evaluator_perf_snapshots[0].samples_evaluated, 2);
         assert!(state.failed.is_empty());
     }
 
@@ -293,12 +353,12 @@ mod tests {
             1,
             "worker-1",
             Box::new(FailingEvaluator),
-            ObservableImplementation::Scalar,
-            json!({}),
+            ObservableFactory::new(ObservableImplementation::Scalar, json!({})),
             PointSpec {
                 continuous_dims: 1,
                 discrete_dims: 0,
             },
+            Duration::from_millis(0),
             queue.clone(),
         );
 
@@ -308,6 +368,7 @@ mod tests {
         assert!(matches!(err, EvaluatorRunnerError::Eval(_)));
         assert_eq!(state.failed.len(), 1);
         assert_eq!(state.failed[0].0, 99);
+        assert!(state.evaluator_perf_snapshots.is_empty());
         assert!(state.submitted.is_empty());
     }
 
@@ -321,8 +382,7 @@ mod tests {
             fn eval_batch(
                 &self,
                 _batch: &Batch,
-                _observable_implementation: ObservableImplementation,
-                _observable_params: &JsonValue,
+                _observable_factory: &ObservableFactory,
             ) -> Result<BatchResult, EvalError> {
                 Ok(BatchResult::new(vec![1.0], json!({})))
             }
@@ -340,12 +400,12 @@ mod tests {
             1,
             "worker-1",
             Box::new(BadEvaluator),
-            ObservableImplementation::Scalar,
-            json!({}),
+            ObservableFactory::new(ObservableImplementation::Scalar, json!({})),
             PointSpec {
                 continuous_dims: 1,
                 discrete_dims: 0,
             },
+            Duration::from_millis(0),
             queue.clone(),
         );
 
@@ -354,5 +414,6 @@ mod tests {
         assert!(matches!(err, EvaluatorRunnerError::Engine(_)));
         assert_eq!(state.failed.len(), 1);
         assert_eq!(state.failed[0].0, 7);
+        assert!(state.evaluator_perf_snapshots.is_empty());
     }
 }

@@ -17,7 +17,7 @@ const RunSelector = ({ runs, selectedRun, onRunChange }) => {
             <MenuItem key={run.run_id} value={run.run_id}>
               <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                 <Typography component="span" sx={{ fontWeight: 500 }}>
-                  Run #{run.run_id}
+                  {run.run_name ? `${run.run_name} (#${run.run_id})` : `Run #${run.run_id}`}
                 </Typography>
                 <Typography component="span" color="text.secondary">
                   • {run.run_status} • {run.total_batches || 0} batches

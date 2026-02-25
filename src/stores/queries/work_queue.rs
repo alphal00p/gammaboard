@@ -1,4 +1,5 @@
 use crate::batch::{Batch, BatchResult};
+use crate::core::{EvaluatorPerformanceSnapshot, SamplerAggregatorPerformanceSnapshot};
 use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
@@ -112,6 +113,96 @@ pub(crate) async fn submit_batch_results(
     .bind(&result.observable)
     .bind(eval_time_ms)
     .bind(batch_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn insert_evaluator_performance_snapshot(
+    pool: &PgPool,
+    snapshot: &EvaluatorPerformanceSnapshot,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO evaluator_performance_history (
+            run_id,
+            worker_id,
+            window_start,
+            window_end,
+            batches_completed,
+            samples_evaluated,
+            avg_time_per_sample_ms,
+            std_time_per_sample_ms,
+            diagnostics
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        "#,
+    )
+    .bind(snapshot.run_id)
+    .bind(&snapshot.worker_id)
+    .bind(snapshot.window_start)
+    .bind(snapshot.window_end)
+    .bind(snapshot.batches_completed)
+    .bind(snapshot.samples_evaluated)
+    .bind(snapshot.avg_time_per_sample_ms)
+    .bind(snapshot.std_time_per_sample_ms)
+    .bind(&snapshot.diagnostics)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn insert_sampler_aggregator_performance_snapshot(
+    pool: &PgPool,
+    snapshot: &SamplerAggregatorPerformanceSnapshot,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO sampler_aggregator_performance_history (
+            run_id,
+            worker_id,
+            window_start,
+            window_end,
+            produced_batches,
+            produced_samples,
+            avg_produce_time_per_sample_ms,
+            std_produce_time_per_sample_ms,
+            ingested_batches,
+            ingested_samples,
+            avg_ingest_time_per_sample_ms,
+            std_ingest_time_per_sample_ms,
+            diagnostics
+        )
+        VALUES (
+            $1,
+            $2,
+            $3,
+            $4,
+            $5,
+            $6,
+            $7,
+            $8,
+            $9,
+            $10,
+            $11,
+            $12,
+            $13
+        )
+        "#,
+    )
+    .bind(snapshot.run_id)
+    .bind(&snapshot.worker_id)
+    .bind(snapshot.window_start)
+    .bind(snapshot.window_end)
+    .bind(snapshot.produced_batches)
+    .bind(snapshot.produced_samples)
+    .bind(snapshot.avg_produce_time_per_sample_ms)
+    .bind(snapshot.std_produce_time_per_sample_ms)
+    .bind(snapshot.ingested_batches)
+    .bind(snapshot.ingested_samples)
+    .bind(snapshot.avg_ingest_time_per_sample_ms)
+    .bind(snapshot.std_ingest_time_per_sample_ms)
+    .bind(&snapshot.diagnostics)
     .execute(pool)
     .await?;
     Ok(())

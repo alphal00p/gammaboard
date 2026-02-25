@@ -4,8 +4,9 @@ use super::queries;
 use crate::batch::{Batch, BatchResult, PointSpec};
 use crate::core::{
     AggregationStore, AssignmentLeaseStore, BatchClaim, CompletedBatch, ControlPlaneStore,
-    DesiredAssignment, RunSpecStore, RunStatus, StoreError, WorkQueueStore, Worker,
-    WorkerRegistryStore, WorkerRole, WorkerStatus,
+    DesiredAssignment, EvaluatorPerformanceSnapshot, RunSpecStore, RunStatus,
+    SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore, Worker, WorkerRegistryStore,
+    WorkerRole, WorkerStatus,
 };
 use crate::engines::{IntegrationParams, ObservableImplementation, RunSpec};
 use crate::stores::RunReadStore;
@@ -68,10 +69,10 @@ fn run_spec_from_integration_params(
             .unwrap_or_else(|| json!({})),
         observable_implementation,
         observable_params: params.observable_params.unwrap_or_else(|| json!({})),
-        evaluator_runner_params: params.evaluator_runner_params.unwrap_or_else(|| json!({})),
+        evaluator_runner_params: params.evaluator_runner_params.unwrap_or_default(),
         sampler_aggregator_runner_params: params
             .sampler_aggregator_runner_params
-            .unwrap_or_else(|| json!({})),
+            .unwrap_or_default(),
     })
 }
 
@@ -176,6 +177,37 @@ impl RunReadStore for PgStore {
         level: Option<&str>,
     ) -> Result<Vec<crate::stores::WorkerLogEntry>, StoreError> {
         queries::get_worker_logs(&self.pool, run_id, limit, worker_id, level)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn get_registered_workers(
+        &self,
+        run_id: Option<i32>,
+    ) -> Result<Vec<crate::stores::RegisteredWorkerEntry>, StoreError> {
+        queries::get_registered_workers(&self.pool, run_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn get_evaluator_performance_history(
+        &self,
+        run_id: i32,
+        limit: i64,
+        worker_id: Option<&str>,
+    ) -> Result<Vec<crate::stores::EvaluatorPerformanceHistoryEntry>, StoreError> {
+        queries::get_evaluator_performance_history(&self.pool, run_id, limit, worker_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn get_sampler_performance_history(
+        &self,
+        run_id: i32,
+        limit: i64,
+        worker_id: Option<&str>,
+    ) -> Result<Vec<crate::stores::SamplerPerformanceHistoryEntry>, StoreError> {
+        queries::get_sampler_performance_history(&self.pool, run_id, limit, worker_id)
             .await
             .map_err(map_sqlx)
     }
@@ -354,6 +386,7 @@ impl ControlPlaneStore for PgStore {
     async fn create_run(
         &self,
         status: RunStatus,
+        name: &str,
         integration_params: &JsonValue,
         point_spec: &PointSpec,
     ) -> Result<i32, StoreError> {
@@ -363,8 +396,9 @@ impl ControlPlaneStore for PgStore {
         queries::create_run(
             &self.pool,
             status,
+            name,
             &sanitized_params,
-            observable_implementation.as_str(),
+            observable_implementation.as_ref(),
             point_spec,
         )
         .await
@@ -425,6 +459,24 @@ impl WorkQueueStore for PgStore {
         eval_time_ms: f64,
     ) -> Result<(), StoreError> {
         queries::submit_batch_results(&self.pool, batch_id, result, eval_time_ms)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn record_evaluator_performance_snapshot(
+        &self,
+        snapshot: &EvaluatorPerformanceSnapshot,
+    ) -> Result<(), StoreError> {
+        queries::insert_evaluator_performance_snapshot(&self.pool, snapshot)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn record_sampler_performance_snapshot(
+        &self,
+        snapshot: &SamplerAggregatorPerformanceSnapshot,
+    ) -> Result<(), StoreError> {
+        queries::insert_sampler_aggregator_performance_snapshot(&self.pool, snapshot)
             .await
             .map_err(map_sqlx)
     }
@@ -511,9 +563,13 @@ impl AggregationStore for PgStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engines::{
-        EvaluatorImplementation, ObservableImplementation, SamplerAggregatorImplementation,
+    use crate::{
+        engines::{
+            EvaluatorImplementation, ObservableImplementation, SamplerAggregatorImplementation,
+        },
+        runners::node_runner::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams},
     };
+    use serde::Deserialize;
     use serde_json::json;
 
     #[test]
@@ -557,11 +613,11 @@ mod tests {
         assert_eq!(spec.observable_params, json!({ "gamma": 3 }));
         assert_eq!(
             spec.evaluator_runner_params,
-            json!({ "min_loop_time_ms": 42 })
+            EvaluatorRunnerParams::deserialize(json!({ "min_loop_time_ms": 42 })).unwrap()
         );
         assert_eq!(
             spec.sampler_aggregator_runner_params,
-            json!({ "interval_ms": 500 })
+            SamplerAggregatorRunnerParams::deserialize(json!({ "interval_ms": 500 })).unwrap()
         );
     }
 
@@ -584,8 +640,14 @@ mod tests {
         assert_eq!(spec.evaluator_params, json!({}));
         assert_eq!(spec.sampler_aggregator_params, json!({}));
         assert_eq!(spec.observable_params, json!({}));
-        assert_eq!(spec.evaluator_runner_params, json!({}));
-        assert_eq!(spec.sampler_aggregator_runner_params, json!({}));
+        assert_eq!(
+            spec.evaluator_runner_params,
+            EvaluatorRunnerParams::default()
+        );
+        assert_eq!(
+            spec.sampler_aggregator_runner_params,
+            SamplerAggregatorRunnerParams::default()
+        );
     }
 
     #[test]

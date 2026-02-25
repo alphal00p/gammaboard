@@ -15,31 +15,25 @@ import {
   Typography,
 } from "@mui/material";
 import { DataGrid, useGridApiRef } from "@mui/x-data-grid";
+import { formatDateTime } from "../utils/formatters";
 
 const MAX_LINES = 2000;
 
 const levelTone = (level) => {
   switch ((level || "").toLowerCase()) {
     case "error":
-      return "#ff8a80";
+      return "error.main";
     case "warn":
     case "warning":
-      return "#ffd180";
+      return "warning.main";
     case "info":
-      return "#a5d6ff";
+      return "info.main";
     default:
-      return "#d3d7de";
+      return "text.secondary";
   }
 };
 
 const normalizeLevel = (level) => (level || "").toLowerCase();
-
-const formatTimestamp = (ts) => {
-  if (!ts) return "-";
-  const value = new Date(ts);
-  if (Number.isNaN(value.getTime())) return ts;
-  return value.toLocaleString();
-};
 
 const compareLogsAsc = (a, b) => {
   const aTime = Date.parse(a.ts || "");
@@ -56,11 +50,17 @@ const compareLogsAsc = (a, b) => {
 };
 
 const mergeLogs = (previous, incoming) => {
+  if (!incoming || incoming.length === 0) return previous;
+
   const merged = new Map(previous.map((entry) => [entry.id, entry]));
+  let hasNewIds = false;
   for (const entry of incoming) {
     if (!entry || entry.id == null) continue;
+    if (!merged.has(entry.id)) hasNewIds = true;
     merged.set(entry.id, entry);
   }
+
+  if (!hasNewIds) return previous;
 
   const out = Array.from(merged.values()).sort(compareLogsAsc);
   if (out.length <= MAX_LINES) return out;
@@ -69,7 +69,7 @@ const mergeLogs = (previous, incoming) => {
 
 const WorkerLogsPanel = ({ logs, runId }) => {
   const apiRef = useGridApiRef();
-  const sourceLogs = Array.isArray(logs) ? logs : [];
+  const sourceLogs = useMemo(() => (Array.isArray(logs) ? logs : []), [logs]);
 
   const [bufferedLogs, setBufferedLogs] = useState([]);
   const [displayedLogs, setDisplayedLogs] = useState([]);
@@ -94,6 +94,7 @@ const WorkerLogsPanel = ({ logs, runId }) => {
   }, [runId]);
 
   useEffect(() => {
+    if (sourceLogs.length === 0) return;
     setBufferedLogs((prev) => mergeLogs(prev, sourceLogs));
   }, [sourceLogs]);
 
@@ -152,7 +153,7 @@ const WorkerLogsPanel = ({ logs, runId }) => {
         field: "ts",
         headerName: "Timestamp",
         width: 220,
-        renderCell: (params) => formatTimestamp(params.value),
+        renderCell: (params) => formatDateTime(params.value, "-"),
       },
       {
         field: "level",
@@ -295,8 +296,6 @@ const WorkerLogsPanel = ({ logs, runId }) => {
         sx={{
           height: { xs: 320, md: 460 },
           mb: 1.5,
-          bgcolor: "#101317",
-          color: "#d3d7de",
         }}
       >
         <DataGrid
@@ -312,26 +311,19 @@ const WorkerLogsPanel = ({ logs, runId }) => {
           onRowClick={(params) => setSelectedLogId(params.id)}
           sx={{
             border: 0,
-            bgcolor: "transparent",
-            color: "inherit",
-            "& .MuiDataGrid-columnHeaders": {
-              bgcolor: "#171c22",
-              borderBottom: "1px solid #2a3340",
-            },
             "& .MuiDataGrid-columnHeaderTitle": {
               fontWeight: 700,
               fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace",
             },
             "& .MuiDataGrid-cell": {
-              borderBottom: "1px solid #1f2630",
               fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace",
               fontSize: "0.78rem",
             },
             "& .MuiDataGrid-row.Mui-selected": {
-              bgcolor: "#233040",
+              bgcolor: "action.selected",
             },
             "& .MuiDataGrid-row:hover": {
-              bgcolor: "#1a2533",
+              bgcolor: "action.hover",
             },
           }}
         />

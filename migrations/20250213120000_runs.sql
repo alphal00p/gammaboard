@@ -1,6 +1,7 @@
 -- Runs: integration runs with adaptive sampling
 CREATE TABLE IF NOT EXISTS runs (
     id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
     started_at TIMESTAMPTZ DEFAULT now(),
     completed_at TIMESTAMPTZ,
     status TEXT NOT NULL DEFAULT 'pending',
@@ -8,8 +9,7 @@ CREATE TABLE IF NOT EXISTS runs (
 
     -- Per-run engine and runner configuration (TOML/JSON payload)
     integration_params JSONB,
-    observable_implementation TEXT NOT NULL DEFAULT 'scalar'
-        CHECK (observable_implementation IN ('scalar')),
+    observable_implementation TEXT NOT NULL DEFAULT 'scalar',
     point_spec JSONB NOT NULL DEFAULT '{"continuous_dims": 1, "discrete_dims": 0}'::jsonb,
 
     -- Summary statistics (updated periodically)
