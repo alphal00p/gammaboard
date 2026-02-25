@@ -64,6 +64,9 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
   `SamplerAggregator::get_max_batches` (default `None` means no engine-specific cap).
   Havana uses this to enforce deterministic update-cycle limits and optional hard
   stop after N total training batches.
+- Havana training-rate config is scheduled via absolute `batches_produced`:
+  `initial_training_rate` -> `final_training_rate` (exponential interpolation), typically
+  bounded by optional `stop_training_after_n_batches`.
 - Sampler-aggregator engines may return optional local in-memory batch context
   (`BatchContext`) from `produce_batch`; the runner stores it keyed by `batch_id`
   and passes it back to `ingest_training_weights`.

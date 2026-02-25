@@ -31,6 +31,7 @@ bins = 64
 min_samples_for_update = 1024
 batches_for_update = 256
 stop_training_after_n_batches = 4096
-learning_rate = 0.1
+initial_training_rate = 0.1
+final_training_rate = 0.001
 
 [observable_params]

@@ -108,8 +108,12 @@ training_delay_per_sample_ms = 2
 
 Havana-specific sampler params:
 - `batches_for_update`: number of produced/ingested batches before one grid update cycle.
-- `learning_rate`: update step size passed to the grid update.
+- `initial_training_rate`: training rate at batch 0.
+- `final_training_rate`: training rate at the end of training.
 - `stop_training_after_n_batches` (optional): hard cap on total produced training batches; once reached, sampler production throttles to zero.
+  When this is set, Havana uses exponential interpolation from
+  `initial_training_rate` to `final_training_rate` using absolute
+  `batches_produced`.
 
 `observable_implementation` and `observable_params` are configured independently
 from evaluator/sampler implementations, so runs can mix-and-match compatible

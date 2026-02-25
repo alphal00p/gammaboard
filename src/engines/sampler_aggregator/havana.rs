@@ -18,7 +18,8 @@ pub struct HavanaSamplerParams {
     min_samples_for_update: usize,
     batches_for_update: usize,
     stop_training_after_n_batches: Option<usize>,
-    learning_rate: f64,
+    initial_training_rate: f64,
+    final_training_rate: f64,
 }
 
 impl Default for HavanaSamplerParams {
@@ -31,7 +32,8 @@ impl Default for HavanaSamplerParams {
             min_samples_for_update: 1_024,
             batches_for_update: 10,
             stop_training_after_n_batches: None,
-            learning_rate: 0.1,
+            initial_training_rate: 0.1,
+            final_training_rate: 0.1,
         }
     }
 }
@@ -63,6 +65,16 @@ fn validate_havana_sampler_params(parsed: &HavanaSamplerParams) -> Result<(), Bu
             "havana sampler stop_training_after_n_batches must be > 0 when set",
         ));
     }
+    if !parsed.initial_training_rate.is_finite() || parsed.initial_training_rate < 0.0 {
+        return Err(BuildError::build(
+            "havana sampler requires initial_training_rate >= 0",
+        ));
+    }
+    if !parsed.final_training_rate.is_finite() || parsed.final_training_rate < 0.0 {
+        return Err(BuildError::build(
+            "havana sampler requires final_training_rate >= 0",
+        ));
+    }
 
     Ok(())
 }
@@ -70,12 +82,12 @@ fn validate_havana_sampler_params(parsed: &HavanaSamplerParams) -> Result<(), Bu
 pub struct HavanaSampler {
     batch_size: usize,
     continuous_dims: usize,
-    batches_produced_since_update: usize,
-    batches_ingested_since_update: usize,
-    total_batches_produced: usize,
+    batches_produced: usize,
+    batches_ingested: usize,
     batches_for_update: usize,
     stop_training_after_n_batches: Option<usize>,
-    learning_rate: f64,
+    initial_training_rate: f64,
+    final_training_rate: f64,
     grid: Grid<f64>,
     rng: MonteCarloRng,
 }
@@ -88,20 +100,54 @@ impl HavanaSampler {
         batch_size: usize,
         batches_for_update: usize,
         stop_training_after_n_batches: Option<usize>,
-        learning_rate: f64,
+        initial_training_rate: f64,
+        final_training_rate: f64,
     ) -> Self {
         Self {
             batch_size,
             continuous_dims,
-            batches_produced_since_update: 0,
-            batches_ingested_since_update: 0,
-            total_batches_produced: 0,
+            batches_produced: 0,
+            batches_ingested: 0,
             batches_for_update,
             stop_training_after_n_batches,
-            learning_rate,
+            initial_training_rate,
+            final_training_rate,
             grid,
             rng,
         }
+    }
+
+    fn max_batches_for_cycle(&self) -> usize {
+        let produced_cycle = self.batches_produced / self.batches_for_update;
+        let ingested_cycle = self.batches_ingested / self.batches_for_update;
+
+        if produced_cycle > ingested_cycle {
+            return 0;
+        }
+
+        let produced_mod = self.batches_produced % self.batches_for_update;
+        self.batches_for_update.saturating_sub(produced_mod)
+    }
+
+    fn current_training_rate(&self) -> f64 {
+        let progress = self
+            .stop_training_after_n_batches
+            .map(|limit| {
+                if limit == 0 {
+                    1.0
+                } else {
+                    (self.batches_produced.min(limit) as f64) / (limit as f64)
+                }
+            })
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
+        if self.initial_training_rate <= 0.0 || self.final_training_rate <= 0.0 {
+            return self.initial_training_rate
+                + (self.final_training_rate - self.initial_training_rate) * progress;
+        }
+
+        self.initial_training_rate
+            * (self.final_training_rate / self.initial_training_rate).powf(progress)
     }
 }
 
@@ -126,7 +172,8 @@ impl BuildFromJson for HavanaSampler {
             params.batch_size,
             params.batches_for_update,
             params.stop_training_after_n_batches,
-            params.learning_rate,
+            params.initial_training_rate,
+            params.final_training_rate,
         ))
     }
 }
@@ -149,12 +196,10 @@ impl SamplerAggregator for HavanaSampler {
     }
 
     fn get_max_batches(&self) -> Option<usize> {
-        let remaining_until_update = self
-            .batches_for_update
-            .saturating_sub(self.batches_produced_since_update);
+        let remaining_until_update = self.max_batches_for_cycle();
         let remaining_until_stop = self
             .stop_training_after_n_batches
-            .map(|limit| limit.saturating_sub(self.total_batches_produced))
+            .map(|limit| limit.saturating_sub(self.batches_produced))
             .unwrap_or(usize::MAX);
         Some(remaining_until_update.min(remaining_until_stop))
     }
@@ -166,14 +211,14 @@ impl SamplerAggregator for HavanaSampler {
         let mut samples = Vec::with_capacity(nr_samples);
         let mut coords: Vec<f64> = Vec::with_capacity(nr_samples * self.continuous_dims);
 
-        if self.batches_produced_since_update >= self.batches_for_update {
+        if self.max_batches_for_cycle() == 0 {
             return Err(EngineError::Engine(
                 "tried producing batches before update".to_string(),
             ));
         }
         if self
             .stop_training_after_n_batches
-            .is_some_and(|limit| self.total_batches_produced >= limit)
+            .is_some_and(|limit| self.batches_produced >= limit)
         {
             return Err(EngineError::Engine(
                 "havana sampler training batch limit reached".to_string(),
@@ -198,8 +243,7 @@ impl SamplerAggregator for HavanaSampler {
         let batch = Batch::from_flat_data(nr_samples, self.continuous_dims, 0, coords, vec![])
             .map_err(|err| EngineError::engine(err.to_string()))?;
         let context: BatchContext = Box::new(HavanaBatchContext { samples });
-        self.batches_produced_since_update += 1;
-        self.total_batches_produced += 1;
+        self.batches_produced += 1;
         Ok((batch, Some(context)))
     }
 
@@ -227,19 +271,23 @@ impl SamplerAggregator for HavanaSampler {
                 .add_training_sample(sample, *eval)
                 .map_err(|err| EngineError::engine(err.to_string()))?;
         }
-        self.batches_ingested_since_update += 1;
+        self.batches_ingested += 1;
 
-        if self.batches_ingested_since_update >= self.batches_for_update {
-            self.grid.update(self.learning_rate, self.learning_rate);
-            self.batches_ingested_since_update = 0;
-            self.batches_produced_since_update = 0;
+        if self.batches_ingested % self.batches_for_update == 0 {
+            let training_rate = self.current_training_rate();
+            self.grid.update(training_rate, training_rate);
         }
         Ok(())
     }
 
     fn get_diagnostics(&mut self) -> serde_json::Value {
         let chi_sq = self.grid.get_statistics().chi_sq;
-        return json!({"chi_sq": chi_sq});
+        json!({
+            "chi_sq": chi_sq,
+            "batches_produced": self.batches_produced,
+            "batches_ingested": self.batches_ingested,
+            "training_rate": self.current_training_rate(),
+        })
     }
 }
 
