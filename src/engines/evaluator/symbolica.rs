@@ -1,6 +1,6 @@
 use crate::{
     Batch, BatchResult, BuildError, EngineError, EvalError, PointSpec,
-    engines::{BuildFromJson, Evaluator, Observable, observable::ObservableFactory},
+    engines::{BuildFromJson, Evaluator, observable::ObservableFactory},
 };
 use serde::Deserialize;
 use symbolica::evaluate::{
@@ -114,7 +114,7 @@ impl Evaluator for SymbolicaEngine {
         BatchResult::from_values_weights_and_observable(
             out,
             batch.weights().as_slice().expect("standard order"),
-            &observable,
+            observable.as_ref(),
         )
     }
 

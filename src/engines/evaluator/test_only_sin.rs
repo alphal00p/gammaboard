@@ -1,6 +1,6 @@
 use crate::batch::{Batch, BatchResult, PointSpec};
 use crate::engines::observable::ObservableFactory;
-use crate::engines::{BuildError, BuildFromJson, EvalError, Evaluator, Observable};
+use crate::engines::{BuildError, BuildFromJson, EvalError, Evaluator};
 use serde::Deserialize;
 use std::{
     thread,
@@ -85,7 +85,7 @@ impl Evaluator for TestSinEvaluator {
         BatchResult::from_values_weights_and_observable(
             values,
             batch.weights().as_slice().expect("standard order"),
-            &observable,
+            observable.as_ref(),
         )
     }
 

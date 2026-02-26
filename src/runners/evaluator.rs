@@ -240,7 +240,7 @@ mod tests {
     use crate::batch::{Batch, BatchResult};
     use crate::core::BatchClaim;
     use crate::engines::{
-        BuildError, EvalError, ObservableImplementation, ParametrizationEngine,
+        BuildError, EvalError, ObservableImplementation, ParametrizationFactory,
         ParametrizationImplementation,
     };
     use crate::runners::test_support::MockWorkQueue;
@@ -318,10 +318,9 @@ mod tests {
     }
 
     fn no_parametrization() -> Box<dyn Parametrization> {
-        Box::new(
-            ParametrizationEngine::build(ParametrizationImplementation::None, &json!({}))
-                .expect("no parametrization"),
-        )
+        ParametrizationFactory::new(ParametrizationImplementation::None, json!({}))
+            .build()
+            .expect("no parametrization")
     }
 
     #[tokio::test]

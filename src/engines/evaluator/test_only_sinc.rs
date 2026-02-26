@@ -1,7 +1,7 @@
 use crate::batch::{Batch, BatchResult, PointSpec};
 use crate::engines::evaluator::test_only_sin::TestEvaluatorParams;
 use crate::engines::observable::ObservableFactory;
-use crate::engines::{BuildError, BuildFromJson, EvalError, Evaluator, Observable};
+use crate::engines::{BuildError, BuildFromJson, EvalError, Evaluator};
 use num::complex::Complex64;
 use std::{
     thread,
@@ -85,7 +85,7 @@ impl Evaluator for TestSincEvaluator {
         BatchResult::from_values_weights_and_observable(
             values,
             batch.weights().as_slice().expect("standard order"),
-            &observable,
+            observable.as_ref(),
         )
     }
 

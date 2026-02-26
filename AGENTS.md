@@ -83,12 +83,16 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
   tolerate missing context after restart.
 - Runs specify evaluator/sampler/observable/parametrization implementations independently.
 - Evaluator/sampler/parametrization implementation names remain in `integration_params`; observable implementation is in `runs.observable_implementation`.
+- Runtime engine construction should use role-specific factories
+  (`EvaluatorFactory`, `SamplerAggregatorFactory`, `ParametrizationFactory`,
+  `ObservableFactory`) returning boxed trait objects; do not add runtime
+  `*Engine` dispatch enums.
 - Runner params in `IntegrationParams`/`RunSpec` are strongly typed
   (`EvaluatorRunnerParams`, `SamplerAggregatorRunnerParams`) instead of raw JSON blobs.
 - Concrete engine implementations should parse JSON params through `engines::BuildFromJson` (typed params + validation) instead of ad-hoc per-engine parsing helpers.
 - `BuildFromJson` implementations define only `type Params` and `from_parsed_params`; shared JSON decoding/error wrapping lives in `BuildFromJson::from_json`.
 - Keep compatibility rules in typed implementation enums and validate at
-  startup (for evaluator/observable: `EvaluatorImplementation::supports_observable`).
+  startup (for evaluator/observable: `Evaluator::supports_observable`).
 - `scalar` observable state is `ScalarObservable` (serde-derived) and tracks
   `count`, `sum_weight`, `sum_abs`, and `sum_sq` over evaluator values.
 - `complex` observable state is `ComplexObservable` (serde-derived). Treat current
@@ -96,8 +100,8 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
 - Observable payload handling should use serde-derived structs (`Serialize`/`Deserialize`) plus
   `Observable::{load_state_from_json, merge, snapshot}`; avoid manual `json!` object
   construction and field-by-field `Value::get` merging in observable implementations.
-- Observable aggregation merge is engine-to-engine (`merge(&ObservableEngine)`): load
-  completed batch JSON into a freshly built observable instance, then merge that engine
+- Observable aggregation merge is observable-to-observable (`merge(&dyn Observable)`): load
+  completed batch JSON into a freshly built observable instance, then merge that observable
   into the run-level aggregate observable.
 - Completed batches are consumed by sampler-aggregator and deleted from `batches`; there is no persisted sampler engine state checkpoint.
 - Evaluator and sampler-aggregator performance stats are accumulated in-memory and

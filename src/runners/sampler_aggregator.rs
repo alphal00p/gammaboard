@@ -14,7 +14,7 @@ use crate::core::{
     WorkQueueStore,
 };
 use crate::engines::observable::ObservableFactory;
-use crate::engines::{BatchContext, EngineError, Observable, ObservableEngine, SamplerAggregator};
+use crate::engines::{BatchContext, EngineError, Observable, SamplerAggregator};
 use crate::runners::sample_time_stats::SampleTimeStats;
 use chrono::Utc;
 use std::{collections::HashMap, error::Error, fmt, time::Duration, time::Instant};
@@ -73,7 +73,7 @@ pub struct SamplerAggregatorRunner<WQ, AS> {
     run_id: i32,
     worker_id: String,
     engine: Box<dyn SamplerAggregator>,
-    aggregated_observable: ObservableEngine,
+    aggregated_observable: Box<dyn Observable>,
     observable_factory: ObservableFactory,
     work_queue: WQ,
     aggregation_store: AS,
@@ -227,7 +227,7 @@ where
                 .load_state_from_json(&batch.result.observable)
                 .map_err(RunnerError::Engine)?;
             self.aggregated_observable
-                .merge(&observable)
+                .merge(observable.as_ref())
                 .map_err(RunnerError::Engine)?;
         }
 

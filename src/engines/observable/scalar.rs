@@ -1,8 +1,9 @@
 use crate::engines::{
-    BuildError, BuildFromJson, EngineError, Observable, ObservableEngine, observable::ScalarIngest,
+    BuildError, BuildFromJson, EngineError, Observable, observable::ScalarIngest,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::any::Any;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
@@ -38,6 +39,14 @@ impl BuildFromJson for ScalarObservable {
 }
 
 impl Observable for ScalarObservable {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &'static str {
+        "scalar"
+    }
+
     fn as_scalar_ingest(&mut self) -> Option<&mut dyn ScalarIngest> {
         Some(self)
     }
@@ -55,10 +64,12 @@ impl Observable for ScalarObservable {
         })
     }
 
-    fn merge(&mut self, other: &ObservableEngine) -> Result<(), EngineError> {
-        let other = match other {
-            ObservableEngine::Scalar(other) => other,
-            _ => return Err(EngineError::build("invalid observable type")),
+    fn merge(&mut self, other: &dyn Observable) -> Result<(), EngineError> {
+        let Some(other) = other.as_any().downcast_ref::<ScalarObservable>() else {
+            return Err(EngineError::build(format!(
+                "cannot merge scalar observable with {}",
+                other.name()
+            )));
         };
         self.count += other.count;
         self.sum_weight += other.sum_weight;

@@ -4,9 +4,9 @@ mod scalar;
 use crate::engines::observable::complex::ComplexObservable;
 
 use super::{BuildError, BuildFromJson, EngineError};
-use enum_dispatch::enum_dispatch;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::any::Any;
 use strum::{AsRefStr, Display};
 
 pub use self::scalar::ScalarObservable;
@@ -28,8 +28,11 @@ pub enum ObservableImplementation {
 }
 
 /// Aggregates per-sample observables to batch-level and run-level snapshots.
-#[enum_dispatch]
 pub trait Observable: Send {
+    fn as_any(&self) -> &dyn Any;
+
+    fn name(&self) -> &'static str;
+
     fn as_scalar_ingest(&mut self) -> Option<&mut dyn ScalarIngest> {
         None
     }
@@ -39,37 +42,8 @@ pub trait Observable: Send {
     }
 
     fn load_state_from_json(&mut self, state: &JsonValue) -> Result<(), EngineError>;
-    fn merge(&mut self, other: &ObservableEngine) -> Result<(), EngineError>;
+    fn merge(&mut self, other: &dyn Observable) -> Result<(), EngineError>;
     fn snapshot(&self) -> Result<JsonValue, EngineError>;
-}
-
-#[enum_dispatch(Observable)]
-pub enum ObservableEngine {
-    Scalar(ScalarObservable),
-    Complex(ComplexObservable),
-}
-
-impl ObservableEngine {
-    pub fn build(
-        implementation: ObservableImplementation,
-        params: &JsonValue,
-    ) -> Result<Self, BuildError> {
-        match implementation {
-            ObservableImplementation::Scalar => {
-                Ok(Self::Scalar(ScalarObservable::from_json(params)?))
-            }
-            ObservableImplementation::Complex => {
-                Ok(Self::Complex(ComplexObservable::from_json(params)?))
-            }
-        }
-    }
-
-    pub fn name(&self) -> &str {
-        match self {
-            Self::Scalar(_) => "scalar",
-            Self::Complex(_) => "complex",
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -86,7 +60,14 @@ impl ObservableFactory {
         }
     }
 
-    pub fn build(&self) -> Result<ObservableEngine, BuildError> {
-        ObservableEngine::build(self.implementation, &self.params)
+    pub fn build(&self) -> Result<Box<dyn Observable>, BuildError> {
+        match self.implementation {
+            ObservableImplementation::Scalar => {
+                Ok(Box::new(ScalarObservable::from_json(&self.params)?))
+            }
+            ObservableImplementation::Complex => {
+                Ok(Box::new(ComplexObservable::from_json(&self.params)?))
+            }
+        }
     }
 }

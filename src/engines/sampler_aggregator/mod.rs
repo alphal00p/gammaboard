@@ -3,7 +3,6 @@ mod test_only_training;
 
 use super::{BuildError, BuildFromJson, EngineError};
 use crate::batch::{Batch, PointSpec};
-use enum_dispatch::enum_dispatch;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use std::any::Any;
@@ -23,7 +22,6 @@ pub enum SamplerAggregatorImplementation {
 }
 
 /// Owns adaptive sampling training for a single run.
-#[enum_dispatch]
 pub trait SamplerAggregator: Send {
     fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError>;
     fn get_max_batches(&self) -> Option<usize> {
@@ -43,23 +41,27 @@ pub trait SamplerAggregator: Send {
     }
 }
 
-#[enum_dispatch(SamplerAggregator)]
-pub enum SamplerAggregatorEngine {
-    TestOnlyTraining(TestTrainingSamplerAggregator),
-    Havana(HavanaSampler),
+#[derive(Debug, Clone)]
+pub struct SamplerAggregatorFactory {
+    implementation: SamplerAggregatorImplementation,
+    params: JsonValue,
 }
 
-impl SamplerAggregatorEngine {
-    pub fn build(
-        implementation: SamplerAggregatorImplementation,
-        params: &JsonValue,
-    ) -> Result<Self, BuildError> {
-        match implementation {
-            SamplerAggregatorImplementation::TestOnlyTraining => Ok(Self::TestOnlyTraining(
-                TestTrainingSamplerAggregator::from_json(params)?,
+impl SamplerAggregatorFactory {
+    pub fn new(implementation: SamplerAggregatorImplementation, params: JsonValue) -> Self {
+        Self {
+            implementation,
+            params,
+        }
+    }
+
+    pub fn build(&self) -> Result<Box<dyn SamplerAggregator>, BuildError> {
+        match self.implementation {
+            SamplerAggregatorImplementation::TestOnlyTraining => Ok(Box::new(
+                TestTrainingSamplerAggregator::from_json(&self.params)?,
             )),
             SamplerAggregatorImplementation::Havana => {
-                Ok(Self::Havana(HavanaSampler::from_json(params)?))
+                Ok(Box::new(HavanaSampler::from_json(&self.params)?))
             }
         }
     }

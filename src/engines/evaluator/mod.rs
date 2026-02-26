@@ -7,7 +7,6 @@ use crate::{
     batch::{Batch, BatchResult, PointSpec},
     engines::{evaluator::test_only_sinc::TestSincEvaluator, observable::ObservableFactory},
 };
-use enum_dispatch::enum_dispatch;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use strum::{AsRefStr, Display};
@@ -23,7 +22,6 @@ pub enum EvaluatorImplementation {
 }
 
 /// Evaluates integrand values for sample points.
-#[enum_dispatch]
 pub trait Evaluator: Send + Sync {
     fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError>;
     fn eval_batch(
@@ -37,23 +35,27 @@ pub trait Evaluator: Send + Sync {
     }
 }
 
-#[enum_dispatch(Evaluator)]
-pub enum EvaluatorEngine {
-    TestOnlySin(TestSinEvaluator),
-    TestOnlySinc(TestSincEvaluator),
+#[derive(Debug, Clone)]
+pub struct EvaluatorFactory {
+    implementation: EvaluatorImplementation,
+    params: JsonValue,
 }
 
-impl EvaluatorEngine {
-    pub fn build(
-        implementation: EvaluatorImplementation,
-        params: &JsonValue,
-    ) -> Result<Self, BuildError> {
-        match implementation {
+impl EvaluatorFactory {
+    pub fn new(implementation: EvaluatorImplementation, params: JsonValue) -> Self {
+        Self {
+            implementation,
+            params,
+        }
+    }
+
+    pub fn build(&self) -> Result<Box<dyn Evaluator>, BuildError> {
+        match self.implementation {
             EvaluatorImplementation::TestOnlySin => {
-                Ok(Self::TestOnlySin(TestSinEvaluator::from_json(params)?))
+                Ok(Box::new(TestSinEvaluator::from_json(&self.params)?))
             }
             EvaluatorImplementation::TestOnlySinc => {
-                Ok(Self::TestOnlySinc(TestSincEvaluator::from_json(params)?))
+                Ok(Box::new(TestSincEvaluator::from_json(&self.params)?))
             }
         }
     }

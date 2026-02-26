@@ -12,10 +12,7 @@ use crate::core::{
     WorkQueueStore, Worker as WorkerRecord, WorkerRegistryStore, WorkerRole, WorkerStatus,
 };
 use crate::engines::observable::ObservableFactory;
-use crate::engines::{
-    Evaluator, EvaluatorEngine, Parametrization, ParametrizationEngine, SamplerAggregator,
-    SamplerAggregatorEngine,
-};
+use crate::engines::{EvaluatorFactory, ParametrizationFactory, SamplerAggregatorFactory};
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
@@ -126,9 +123,11 @@ impl<S: NodeRunnerStore> ActiveWorker<S> {
             return Ok(());
         };
 
-        let evaluator =
-            EvaluatorEngine::build(spec.evaluator_implementation, &spec.evaluator_params)
-                .map_err(|err| StoreError::store(format!("failed to build evaluator: {err}")))?;
+        let evaluator_factory =
+            EvaluatorFactory::new(spec.evaluator_implementation, spec.evaluator_params.clone());
+        let evaluator = evaluator_factory
+            .build()
+            .map_err(|err| StoreError::store(format!("failed to build evaluator: {err}")))?;
         evaluator
             .validate_point_spec(&spec.point_spec)
             .map_err(|err| {
@@ -153,10 +152,11 @@ impl<S: NodeRunnerStore> ActiveWorker<S> {
             )));
         }
 
-        let parametrization = ParametrizationEngine::build(
+        let parametrization = ParametrizationFactory::new(
             spec.parametrization_implementation,
-            &spec.parametrization_params,
+            spec.parametrization_params.clone(),
         )
+        .build()
         .map_err(|err| StoreError::store(format!("failed to build parametrization: {err}")))?;
         parametrization
             .validate_point_spec(&spec.point_spec)
@@ -186,8 +186,8 @@ impl<S: NodeRunnerStore> ActiveWorker<S> {
         let mut runner = EvaluatorRunner::new(
             self.run_id,
             self.worker_id.clone(),
-            Box::new(evaluator),
-            Box::new(parametrization),
+            evaluator,
+            parametrization,
             observable_factory,
             spec.point_spec.clone(),
             Duration::from_millis(
@@ -285,10 +285,11 @@ impl<S: NodeRunnerStore> ActiveWorker<S> {
             return Ok(());
         };
 
-        let engine = SamplerAggregatorEngine::build(
+        let engine = SamplerAggregatorFactory::new(
             spec.sampler_aggregator_implementation,
-            &spec.sampler_aggregator_params,
+            spec.sampler_aggregator_params.clone(),
         )
+        .build()
         .map_err(|err| StoreError::store(format!("failed to build sampler-aggregator: {err}")))?;
         engine
             .validate_point_spec(&spec.point_spec)
@@ -318,7 +319,7 @@ impl<S: NodeRunnerStore> ActiveWorker<S> {
         let mut runner = SamplerAggregatorRunner::new(
             self.run_id,
             self.worker_id.clone(),
-            Box::new(engine),
+            engine,
             observable_factory,
             self.store.clone(),
             self.store.clone(),

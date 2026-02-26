@@ -61,6 +61,7 @@ Run configuration is provided as TOML.
 - Point dimensions are stored in `runs.point_spec`.
 - Batches are stored in `batches.points` as compact flat arrays (`continuous`, `discrete`) plus per-sample `weights`, with explicit 2D shape metadata.
 - Evaluators return one `BatchResult` per batch: `values: Vec<f64>` (weighted sampler training signal) and one aggregated `observable` JSON payload.
+- Runtime engines are constructed via factories (`EvaluatorFactory`, `SamplerAggregatorFactory`, `ParametrizationFactory`, `ObservableFactory`) that return boxed trait objects; implementation enums remain config-only.
 - Evaluator implementations receive an `ObservableFactory` during `eval_batch` and build batch-local observable state from it.
 - Observable ingestion in evaluators is capability-based (`as_scalar_ingest` / `as_complex_ingest`) instead of matching concrete observable enum variants.
 - Sampler-aggregator engines produce one batch per call; the sampler-aggregator runner controls how many batches are produced each tick (`max_batches_per_tick`) and enforces pending-queue limits.

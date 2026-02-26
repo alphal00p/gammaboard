@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::any::Any;
 
 use crate::{
     EngineError,
-    engines::{BuildFromJson, ObservableEngine, observable::ComplexIngest},
+    engines::{BuildFromJson, observable::ComplexIngest},
 };
 
 use super::Observable;
@@ -25,6 +26,14 @@ pub struct ComplexObservable {
 }
 
 impl Observable for ComplexObservable {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &'static str {
+        "complex"
+    }
+
     fn as_complex_ingest(&mut self) -> Option<&mut dyn ComplexIngest> {
         Some(self)
     }
@@ -38,23 +47,23 @@ impl Observable for ComplexObservable {
         serde_json::to_value(self).map_err(|err| EngineError::Build(err.to_string()))
     }
 
-    fn merge(&mut self, other: &ObservableEngine) -> Result<(), EngineError> {
-        if let ObservableEngine::Complex(other) = other {
-            self.count += other.count;
-            self.real_sum += other.real_sum;
-            self.imag_sum += other.imag_sum;
-            self.abs_sum += other.abs_sum;
-            self.abs_sq_sum += other.abs_sq_sum;
-            self.real_sq_sum += other.real_sq_sum;
-            self.imag_sq_sum += other.imag_sq_sum;
-            self.weight_sum += other.weight_sum;
-            Ok(())
-        } else {
-            Err(EngineError::Engine(format!(
+    fn merge(&mut self, other: &dyn Observable) -> Result<(), EngineError> {
+        let Some(other) = other.as_any().downcast_ref::<ComplexObservable>() else {
+            return Err(EngineError::Engine(format!(
                 "cannot merge complex observable with {}",
                 other.name()
-            )))
-        }
+            )));
+        };
+
+        self.count += other.count;
+        self.real_sum += other.real_sum;
+        self.imag_sum += other.imag_sum;
+        self.abs_sum += other.abs_sum;
+        self.abs_sq_sum += other.abs_sq_sum;
+        self.real_sq_sum += other.real_sq_sum;
+        self.imag_sq_sum += other.imag_sq_sum;
+        self.weight_sum += other.weight_sum;
+        Ok(())
     }
 }
 

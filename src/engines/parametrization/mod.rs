@@ -1,6 +1,5 @@
 use super::{BuildError, BuildFromJson, EngineError};
 use crate::batch::{Batch, PointSpec};
-use enum_dispatch::enum_dispatch;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use strum::{AsRefStr, Display};
@@ -13,7 +12,6 @@ pub enum ParametrizationImplementation {
     Identity,
 }
 
-#[enum_dispatch]
 pub trait Parametrization: Send + Sync {
     fn validate_point_spec(&self, _point_spec: &PointSpec) -> Result<(), BuildError> {
         Ok(())
@@ -22,23 +20,27 @@ pub trait Parametrization: Send + Sync {
     fn transform_batch(&mut self, batch: &Batch) -> Result<Batch, EngineError>;
 }
 
-#[enum_dispatch(Parametrization)]
-pub enum ParametrizationEngine {
-    None(NoParametrization),
-    Identity(IdentityParametrization),
+#[derive(Debug, Clone)]
+pub struct ParametrizationFactory {
+    implementation: ParametrizationImplementation,
+    params: JsonValue,
 }
 
-impl ParametrizationEngine {
-    pub fn build(
-        implementation: ParametrizationImplementation,
-        params: &JsonValue,
-    ) -> Result<Self, BuildError> {
-        match implementation {
+impl ParametrizationFactory {
+    pub fn new(implementation: ParametrizationImplementation, params: JsonValue) -> Self {
+        Self {
+            implementation,
+            params,
+        }
+    }
+
+    pub fn build(&self) -> Result<Box<dyn Parametrization>, BuildError> {
+        match self.implementation {
             ParametrizationImplementation::None => {
-                Ok(Self::None(NoParametrization::from_json(params)?))
+                Ok(Box::new(NoParametrization::from_json(&self.params)?))
             }
             ParametrizationImplementation::Identity => {
-                Ok(Self::Identity(IdentityParametrization::from_json(params)?))
+                Ok(Box::new(IdentityParametrization::from_json(&self.params)?))
             }
         }
     }
