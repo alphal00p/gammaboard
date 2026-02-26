@@ -1,7 +1,8 @@
+mod symbolica;
 mod test_only_sin;
 mod test_only_sinc;
 
-use super::{BuildError, BuildFromJson, EvalError, ObservableEngine};
+use super::{BuildError, BuildFromJson, EvalError};
 use crate::{
     batch::{Batch, BatchResult, PointSpec},
     engines::{evaluator::test_only_sinc::TestSincEvaluator, observable::ObservableFactory},
@@ -26,11 +27,11 @@ pub enum EvaluatorImplementation {
 pub trait Evaluator: Send + Sync {
     fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError>;
     fn eval_batch(
-        &self,
+        &mut self,
         batch: &Batch,
         observable_factory: &ObservableFactory,
     ) -> Result<BatchResult, EvalError>;
-    fn supports_observable(&self, observable: &ObservableEngine) -> bool;
+    fn supports_observable(&self, observable_factory: &ObservableFactory) -> bool;
     fn get_diagnostics(&self) -> JsonValue {
         json!("{}")
     }

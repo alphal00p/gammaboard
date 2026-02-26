@@ -1,4 +1,6 @@
-use crate::engines::{BuildError, BuildFromJson, EngineError, Observable, ObservableEngine};
+use crate::engines::{
+    BuildError, BuildFromJson, EngineError, Observable, ObservableEngine, observable::ScalarIngest,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
@@ -36,6 +38,10 @@ impl BuildFromJson for ScalarObservable {
 }
 
 impl Observable for ScalarObservable {
+    fn as_scalar_ingest(&mut self) -> Option<&mut dyn ScalarIngest> {
+        Some(self)
+    }
+
     fn load_state_from_json(&mut self, state: &JsonValue) -> Result<(), EngineError> {
         *self = serde_json::from_value(state.clone()).map_err(|err| {
             EngineError::build(format!("invalid scalar observable payload: {err}"))
@@ -59,5 +65,11 @@ impl Observable for ScalarObservable {
         self.sum_abs += other.sum_abs;
         self.sum_sq += other.sum_sq;
         Ok(())
+    }
+}
+
+impl ScalarIngest for ScalarObservable {
+    fn ingest_scalar(&mut self, value: f64, weight: f64) {
+        self.add_sample(value, weight);
     }
 }

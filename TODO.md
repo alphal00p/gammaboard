@@ -1,8 +1,5 @@
- - add live stats to evaluator (including custom things like loss)
-  - this can be done by adding a new history table, which stores eval times + json that stores the extra stuff, frontend then needs specific implementation per impl for json
  - implement symbolica evaluator with propper building from config
  - add basic auth to dashboard which enables steering (spawning virtual workers, creating runs etc.)
- - maybe move to only one role per worker to simplify the async code. if we want multiple workers per machine, we can just spawn multiple workers on it.
  - implement gammaloop evaluator
  - implement madnis sampler_aggregator
 

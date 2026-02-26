@@ -1,9 +1,7 @@
 use crate::batch::{Batch, BatchResult, PointSpec};
 use crate::engines::evaluator::test_only_sin::TestEvaluatorParams;
 use crate::engines::observable::ObservableFactory;
-use crate::engines::{
-    BuildError, BuildFromJson, EvalError, Evaluator, Observable, ObservableEngine,
-};
+use crate::engines::{BuildError, BuildFromJson, EvalError, Evaluator, Observable};
 use num::complex::Complex64;
 use std::{
     thread,
@@ -41,40 +39,40 @@ impl Evaluator for TestSincEvaluator {
     }
 
     fn eval_batch(
-        &self,
+        &mut self,
         batch: &Batch,
         observable_factory: &ObservableFactory,
     ) -> Result<BatchResult, EvalError> {
-        let mut observable = match observable_factory
+        let mut observable = observable_factory
             .build()
-            .map_err(|err| EvalError::eval(err.to_string()))?
-        {
-            ObservableEngine::Complex(scalar_observable_aggregator) => {
-                Ok(scalar_observable_aggregator)
-            }
-            _ => Err(EvalError::eval(
-                "test_only_sinc supports only complex observable",
-            )),
-        }?;
+            .map_err(|err| EvalError::eval(err.to_string()))?;
         let started = Instant::now();
         let mut values = Vec::with_capacity(batch.size());
 
-        for (row, weight) in batch
-            .continuous()
-            .rows()
-            .into_iter()
-            .zip(batch.weights().iter())
         {
-            let x = *row
-                .get(0)
-                .ok_or_else(|| EvalError::eval("missing continuous[0]"))?;
-            let y = *row
-                .get(1)
-                .ok_or_else(|| EvalError::eval("missing continuous[1]"))?;
-            let z = Complex64::new(x, y);
-            let value = z.sin();
-            observable.add_sample(value, *weight);
-            values.push(value.norm());
+            let complex_ingest = observable.as_complex_ingest().ok_or_else(|| {
+                EvalError::eval(format!(
+                    "test_only_sinc supports only complex-capable observables, got {}",
+                    observable_factory.implementation
+                ))
+            })?;
+            for (row, weight) in batch
+                .continuous()
+                .rows()
+                .into_iter()
+                .zip(batch.weights().iter())
+            {
+                let x = *row
+                    .get(0)
+                    .ok_or_else(|| EvalError::eval("missing continuous[0]"))?;
+                let y = *row
+                    .get(1)
+                    .ok_or_else(|| EvalError::eval("missing continuous[1]"))?;
+                let z = Complex64::new(x, y);
+                let value = z.sin();
+                complex_ingest.ingest_complex(value, *weight);
+                values.push(value.norm());
+            }
         }
 
         let min_total =
@@ -84,15 +82,18 @@ impl Evaluator for TestSincEvaluator {
             thread::sleep(min_total - elapsed);
         }
 
-        let batch_observable = observable
-            .snapshot()
-            .map_err(|err| EvalError::eval(err.to_string()))?;
-
-        Ok(BatchResult::new(values, batch_observable))
+        BatchResult::from_values_weights_and_observable(
+            values,
+            batch.weights().as_slice().expect("standard order"),
+            &observable,
+        )
     }
 
-    fn supports_observable(&self, observable: &ObservableEngine) -> bool {
-        matches!(observable, ObservableEngine::Complex(_))
+    fn supports_observable(&self, observable_factory: &ObservableFactory) -> bool {
+        match observable_factory.build() {
+            Ok(mut observable) => observable.as_complex_ingest().is_some(),
+            Err(_) => false,
+        }
     }
 }
 

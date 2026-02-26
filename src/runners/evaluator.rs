@@ -3,7 +3,7 @@
 use crate::batch::{BatchResult, PointSpec};
 use crate::core::{EvaluatorPerformanceSnapshot, StoreError, WorkQueueStore};
 use crate::engines::observable::ObservableFactory;
-use crate::engines::{EngineError, EvalError, Evaluator};
+use crate::engines::{EngineError, EvalError, Evaluator, Parametrization};
 use crate::runners::sample_time_stats::SampleTimeStats;
 use chrono::Utc;
 use std::{error::Error, fmt, time::Duration, time::Instant};
@@ -44,6 +44,7 @@ pub struct EvaluatorRunner<WQ> {
     run_id: i32,
     worker_id: String,
     evaluator: Box<dyn Evaluator>,
+    parametrization: Box<dyn Parametrization>,
     observable_factory: ObservableFactory,
     point_spec: PointSpec,
     performance_snapshot_interval: Duration,
@@ -61,6 +62,7 @@ where
         run_id: i32,
         worker_id: impl Into<String>,
         evaluator: Box<dyn Evaluator>,
+        parametrization: Box<dyn Parametrization>,
         observable_factory: ObservableFactory,
         point_spec: PointSpec,
         performance_snapshot_interval: Duration,
@@ -72,6 +74,7 @@ where
             run_id,
             worker_id: worker_id.into(),
             evaluator,
+            parametrization,
             observable_factory,
             point_spec,
             performance_snapshot_interval,
@@ -108,10 +111,31 @@ where
             return Err(EvaluatorRunnerError::Engine(err));
         }
 
+        let transformed_batch = match self.parametrization.transform_batch(&claimed.batch) {
+            Ok(batch) => batch,
+            Err(err) => {
+                self.work_queue
+                    .fail_batch(claimed.batch_id, &err.to_string())
+                    .await
+                    .map_err(EvaluatorRunnerError::Store)?;
+                self.flush_performance_snapshot_if_due(false).await?;
+                return Err(EvaluatorRunnerError::Engine(err));
+            }
+        };
+        if let Err(err) = transformed_batch.validate_point_spec(&self.point_spec) {
+            let err = EngineError::engine(format!("invalid transformed batch point shape: {err}"));
+            self.work_queue
+                .fail_batch(claimed.batch_id, &err.to_string())
+                .await
+                .map_err(EvaluatorRunnerError::Store)?;
+            self.flush_performance_snapshot_if_due(false).await?;
+            return Err(EvaluatorRunnerError::Engine(err));
+        }
+
         let started = Instant::now();
         match self
             .evaluator
-            .eval_batch(&claimed.batch, &self.observable_factory)
+            .eval_batch(&transformed_batch, &self.observable_factory)
         {
             Ok(result) => {
                 self.submit_result(claimed.batch_id, &claimed.batch, result, started)
@@ -215,7 +239,10 @@ mod tests {
     use super::*;
     use crate::batch::{Batch, BatchResult};
     use crate::core::BatchClaim;
-    use crate::engines::{BuildError, EvalError, ObservableImplementation};
+    use crate::engines::{
+        BuildError, EvalError, ObservableImplementation, ParametrizationEngine,
+        ParametrizationImplementation,
+    };
     use crate::runners::test_support::MockWorkQueue;
     use serde_json::json;
 
@@ -232,7 +259,7 @@ mod tests {
         }
 
         fn eval_batch(
-            &self,
+            &mut self,
             batch: &Batch,
             _observable_factory: &ObservableFactory,
         ) -> Result<BatchResult, EvalError> {
@@ -255,7 +282,10 @@ mod tests {
             Ok(BatchResult::new(values, batch_observable))
         }
 
-        fn supports_observable(&self, _observable: &crate::engines::ObservableEngine) -> bool {
+        fn supports_observable(
+            &self,
+            _observable_factory: &crate::engines::observable::ObservableFactory,
+        ) -> bool {
             true
         }
     }
@@ -268,20 +298,30 @@ mod tests {
         }
 
         fn eval_batch(
-            &self,
+            &mut self,
             _batch: &Batch,
             _observable_factory: &ObservableFactory,
         ) -> Result<BatchResult, EvalError> {
             Err(EvalError::eval("mock failure"))
         }
 
-        fn supports_observable(&self, _observable: &crate::engines::ObservableEngine) -> bool {
+        fn supports_observable(
+            &self,
+            _observable_factory: &crate::engines::observable::ObservableFactory,
+        ) -> bool {
             false
         }
     }
 
     fn sample_batch() -> Batch {
         Batch::from_flat_data(2, 1, 0, vec![1.0, 2.0], vec![]).expect("sample batch")
+    }
+
+    fn no_parametrization() -> Box<dyn Parametrization> {
+        Box::new(
+            ParametrizationEngine::build(ParametrizationImplementation::None, &json!({}))
+                .expect("no parametrization"),
+        )
     }
 
     #[tokio::test]
@@ -291,6 +331,7 @@ mod tests {
             1,
             "worker-1",
             Box::new(OkEvaluator),
+            no_parametrization(),
             ObservableFactory::new(ObservableImplementation::Scalar, json!({})),
             PointSpec {
                 continuous_dims: 1,
@@ -318,6 +359,7 @@ mod tests {
             1,
             "worker-1",
             Box::new(OkEvaluator),
+            no_parametrization(),
             ObservableFactory::new(ObservableImplementation::Scalar, json!({})),
             PointSpec {
                 continuous_dims: 1,
@@ -353,6 +395,7 @@ mod tests {
             1,
             "worker-1",
             Box::new(FailingEvaluator),
+            no_parametrization(),
             ObservableFactory::new(ObservableImplementation::Scalar, json!({})),
             PointSpec {
                 continuous_dims: 1,
@@ -380,13 +423,16 @@ mod tests {
                 Ok(())
             }
             fn eval_batch(
-                &self,
+                &mut self,
                 _batch: &Batch,
                 _observable_factory: &ObservableFactory,
             ) -> Result<BatchResult, EvalError> {
                 Ok(BatchResult::new(vec![1.0], json!({})))
             }
-            fn supports_observable(&self, _observable: &crate::engines::ObservableEngine) -> bool {
+            fn supports_observable(
+                &self,
+                _observable_factory: &crate::engines::observable::ObservableFactory,
+            ) -> bool {
                 true
             }
         }
@@ -400,6 +446,7 @@ mod tests {
             1,
             "worker-1",
             Box::new(BadEvaluator),
+            no_parametrization(),
             ObservableFactory::new(ObservableImplementation::Scalar, json!({})),
             PointSpec {
                 continuous_dims: 1,

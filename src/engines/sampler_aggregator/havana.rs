@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use serde_json::json;
 use symbolica::numerical_integration::{ContinuousGrid, Grid, MonteCarloRng, Sample};
+use tracing::info;
 
 use crate::{
     Batch, EngineError,
@@ -60,9 +61,14 @@ fn validate_havana_sampler_params(parsed: &HavanaSamplerParams) -> Result<(), Bu
             "havana sampler requires batches_for_update > 0",
         ));
     }
+    if parsed.stop_training_after_n_batches.is_none() {
+        return Err(BuildError::build(
+            "havana sampler requires stop_training_after_n_batches",
+        ));
+    }
     if parsed.stop_training_after_n_batches == Some(0) {
         return Err(BuildError::build(
-            "havana sampler stop_training_after_n_batches must be > 0 when set",
+            "havana sampler stop_training_after_n_batches must be > 0",
         ));
     }
     if !parsed.initial_training_rate.is_finite() || parsed.initial_training_rate < 0.0 {
@@ -85,7 +91,7 @@ pub struct HavanaSampler {
     batches_produced: usize,
     batches_ingested: usize,
     batches_for_update: usize,
-    stop_training_after_n_batches: Option<usize>,
+    stop_training_after_n_batches: usize,
     initial_training_rate: f64,
     final_training_rate: f64,
     grid: Grid<f64>,
@@ -99,7 +105,7 @@ impl HavanaSampler {
         rng: MonteCarloRng,
         batch_size: usize,
         batches_for_update: usize,
-        stop_training_after_n_batches: Option<usize>,
+        stop_training_after_n_batches: usize,
         initial_training_rate: f64,
         final_training_rate: f64,
     ) -> Self {
@@ -129,18 +135,15 @@ impl HavanaSampler {
         self.batches_for_update.saturating_sub(produced_mod)
     }
 
+    fn is_training_active(&self) -> bool {
+        self.batches_produced < self.stop_training_after_n_batches
+    }
+
     fn current_training_rate(&self) -> f64 {
-        let progress = self
-            .stop_training_after_n_batches
-            .map(|limit| {
-                if limit == 0 {
-                    1.0
-                } else {
-                    (self.batches_produced.min(limit) as f64) / (limit as f64)
-                }
-            })
-            .unwrap_or(0.0)
-            .clamp(0.0, 1.0);
+        let progress = (self
+            .batches_produced
+            .min(self.stop_training_after_n_batches) as f64)
+            / (self.stop_training_after_n_batches as f64);
         if self.initial_training_rate <= 0.0 || self.final_training_rate <= 0.0 {
             return self.initial_training_rate
                 + (self.final_training_rate - self.initial_training_rate) * progress;
@@ -164,6 +167,10 @@ impl BuildFromJson for HavanaSampler {
             None,
             false,
         ));
+        let stop_training_after_n_batches =
+            params.stop_training_after_n_batches.ok_or_else(|| {
+                BuildError::build("havana sampler requires stop_training_after_n_batches")
+            })?;
 
         Ok(HavanaSampler::new(
             params.continuous_dims,
@@ -171,7 +178,7 @@ impl BuildFromJson for HavanaSampler {
             rng,
             params.batch_size,
             params.batches_for_update,
-            params.stop_training_after_n_batches,
+            stop_training_after_n_batches,
             params.initial_training_rate,
             params.final_training_rate,
         ))
@@ -196,32 +203,28 @@ impl SamplerAggregator for HavanaSampler {
     }
 
     fn get_max_batches(&self) -> Option<usize> {
-        let remaining_until_update = self.max_batches_for_cycle();
-        let remaining_until_stop = self
-            .stop_training_after_n_batches
-            .map(|limit| limit.saturating_sub(self.batches_produced))
-            .unwrap_or(usize::MAX);
-        Some(remaining_until_update.min(remaining_until_stop))
+        if self.is_training_active() {
+            Some(self.max_batches_for_cycle())
+        } else {
+            None
+        }
     }
 
     fn produce_batch(
         &mut self,
         nr_samples: usize,
     ) -> Result<(crate::Batch, Option<BatchContext>), crate::engines::EngineError> {
-        let mut samples = Vec::with_capacity(nr_samples);
+        let should_train = self.is_training_active();
+        let mut samples = if should_train {
+            Some(Vec::with_capacity(nr_samples))
+        } else {
+            None
+        };
         let mut coords: Vec<f64> = Vec::with_capacity(nr_samples * self.continuous_dims);
 
-        if self.max_batches_for_cycle() == 0 {
+        if should_train && self.max_batches_for_cycle() == 0 {
             return Err(EngineError::Engine(
                 "tried producing batches before update".to_string(),
-            ));
-        }
-        if self
-            .stop_training_after_n_batches
-            .is_some_and(|limit| self.batches_produced >= limit)
-        {
-            return Err(EngineError::Engine(
-                "havana sampler training batch limit reached".to_string(),
             ));
         }
 
@@ -237,14 +240,24 @@ impl SamplerAggregator for HavanaSampler {
                 _ => unreachable!("continuous grid produced non-continuous sample"),
             }
 
-            samples.push(sample);
+            if let Some(train_samples) = samples.as_mut() {
+                train_samples.push(sample);
+            }
         }
 
         let batch = Batch::from_flat_data(nr_samples, self.continuous_dims, 0, coords, vec![])
             .map_err(|err| EngineError::engine(err.to_string()))?;
-        let context: BatchContext = Box::new(HavanaBatchContext { samples });
+        let context =
+            samples.map(|samples| Box::new(HavanaBatchContext { samples }) as BatchContext);
         self.batches_produced += 1;
-        Ok((batch, Some(context)))
+        if self.batches_produced == self.stop_training_after_n_batches {
+            info!(
+                batches_produced = self.batches_produced,
+                stop_training_after_n_batches = self.stop_training_after_n_batches,
+                "havana sampler training complete"
+            );
+        }
+        Ok((batch, context))
     }
 
     fn ingest_training_weights(
@@ -253,8 +266,11 @@ impl SamplerAggregator for HavanaSampler {
         context: Option<BatchContext>,
     ) -> Result<(), crate::engines::EngineError> {
         let _ = (&self.batch_size, &self.rng);
+        let Some(context) = context else {
+            // Training is disabled for this batch or context is unavailable.
+            return Ok(());
+        };
         let context = context
-            .ok_or_else(|| EngineError::engine("missing Havana batch context"))?
             .downcast::<HavanaBatchContext>()
             .map_err(|_| EngineError::engine("unexpected context type for Havana sampler"))?;
 

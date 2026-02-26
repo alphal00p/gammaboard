@@ -230,6 +230,8 @@ async fn main() -> BinResult {
                     },
                     "observable_implementation": "scalar",
                     "observable_params": {},
+                    "parametrization_implementation": "none",
+                    "parametrization_params": {},
                     "evaluator_runner_params": {
                         "min_loop_time_ms": 200,
                         "performance_snapshot_interval_ms": 5000

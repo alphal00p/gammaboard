@@ -20,7 +20,8 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
 - `src/engines/*`
   - Runtime engine contracts and implementations.
   - Role-aligned submodules own contracts/factories: `engines::evaluator`,
-    `engines::sampler_aggregator`, `engines::observable`.
+    `engines::sampler_aggregator`, `engines::observable`,
+    `engines::parametrization`.
   - Shared engine wiring/types live in `engines::shared`
     (`BuildFromJson`, `IntegrationParams`, `RunSpec`).
   - Engine implementation enums, run spec/integration params parsing, engine errors.
@@ -42,6 +43,8 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
 - Run identity is configured via top-level `name` in TOML and persisted in `runs.name`.
 - Engine/runner settings are persisted in `runs.integration_params`; point shape is persisted in `runs.point_spec`.
 - Observable implementation is persisted in `runs.observable_implementation`.
+- Parametrization implementation and params are persisted in `runs.integration_params`
+  as `parametrization_implementation` and `parametrization_params`.
 - Keep `configs/live-test*.toml` as explicit reference configs: include all runner/engine fields,
   even when values equal defaults.
 - Name live-test scenario configs semantically (describe intent/compatibility), not only by index.
@@ -49,9 +52,15 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
   row-major flat `continuous`/`discrete` arrays, per-sample `weights`, and
   explicit 2D shape metadata.
 - Evaluators operate batch-wise (`Batch -> BatchResult`), where `BatchResult` contains
-  training `values: Vec<f64>` and one aggregated batch-level observable JSON.
+  weighted training `values: Vec<f64>` and one aggregated batch-level observable JSON.
 - Evaluator implementations receive an `ObservableFactory` in `eval_batch` and build
   per-batch observable instances through the factory.
+- Observable ingestion in evaluators should use capability methods on `Observable`
+  (`as_scalar_ingest`, `as_complex_ingest`) with default `None`, rather than
+  matching concrete observable engine enum variants.
+- Evaluator runner applies optional parametrization (`Batch -> Batch`) before calling
+  `Evaluator::eval_batch`; parametrization is selected per run via
+  `parametrization_implementation` + `parametrization_params`.
 - Observable construction should be centralized via `engines::observable::ObservableFactory`
   (shared by evaluator and sampler-aggregator runners), not by passing raw implementation
   enum + params through call boundaries.
@@ -62,18 +71,18 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
   `SamplerAggregator::produce_batch`.
 - Sampler-aggregator engines may optionally throttle per-tick batch production via
   `SamplerAggregator::get_max_batches` (default `None` means no engine-specific cap).
-  Havana uses this to enforce deterministic update-cycle limits and optional hard
-  stop after N total training batches.
+  Havana uses this to enforce deterministic update-cycle limits while training is active.
 - Havana training-rate config is scheduled via absolute `batches_produced`:
   `initial_training_rate` -> `final_training_rate` (exponential interpolation), typically
-  bounded by optional `stop_training_after_n_batches`.
+  bounded by required `stop_training_after_n_batches` (training stop only;
+  production continues).
 - Sampler-aggregator engines may return optional local in-memory batch context
   (`BatchContext`) from `produce_batch`; the runner stores it keyed by `batch_id`
   and passes it back to `ingest_training_weights`.
 - Batch context is process-local only (not persisted to DB); implementations must
   tolerate missing context after restart.
-- Runs specify evaluator/sampler/observable implementations independently.
-- Evaluator/sampler implementation names remain in `integration_params`; observable implementation is in `runs.observable_implementation`.
+- Runs specify evaluator/sampler/observable/parametrization implementations independently.
+- Evaluator/sampler/parametrization implementation names remain in `integration_params`; observable implementation is in `runs.observable_implementation`.
 - Runner params in `IntegrationParams`/`RunSpec` are strongly typed
   (`EvaluatorRunnerParams`, `SamplerAggregatorRunnerParams`) instead of raw JSON blobs.
 - Concrete engine implementations should parse JSON params through `engines::BuildFromJson` (typed params + validation) instead of ad-hoc per-engine parsing helpers.

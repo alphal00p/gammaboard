@@ -3,7 +3,7 @@ use serde_json::Value as JsonValue;
 
 use crate::{
     EngineError,
-    engines::{BuildFromJson, ObservableEngine},
+    engines::{BuildFromJson, ObservableEngine, observable::ComplexIngest},
 };
 
 use super::Observable;
@@ -25,6 +25,10 @@ pub struct ComplexObservable {
 }
 
 impl Observable for ComplexObservable {
+    fn as_complex_ingest(&mut self) -> Option<&mut dyn ComplexIngest> {
+        Some(self)
+    }
+
     fn load_state_from_json(&mut self, state: &JsonValue) -> Result<(), EngineError> {
         *self = Self::deserialize(state).map_err(|err| EngineError::Build(err.to_string()))?;
         Ok(())
@@ -51,6 +55,12 @@ impl Observable for ComplexObservable {
                 other.name()
             )))
         }
+    }
+}
+
+impl ComplexIngest for ComplexObservable {
+    fn ingest_complex(&mut self, value: num::complex::Complex64, weight: f64) {
+        self.add_sample(value, weight);
     }
 }
 impl BuildFromJson for ComplexObservable {

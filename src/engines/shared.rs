@@ -1,6 +1,9 @@
 use super::BuildError;
-use super::{EvaluatorImplementation, ObservableImplementation, SamplerAggregatorImplementation};
-use crate::batch::PointSpec;
+use super::{
+    EngineError, EvaluatorImplementation, Observable, ObservableImplementation,
+    ParametrizationImplementation, SamplerAggregatorImplementation,
+};
+use crate::batch::{BatchResult, PointSpec};
 use crate::runners::node_runner::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -18,6 +21,31 @@ pub trait BuildFromJson: Sized {
     }
 }
 
+impl BatchResult {
+    pub fn from_values_weights_and_observable<O: Observable + ?Sized>(
+        values: Vec<f64>,
+        weights: &[f64],
+        observable: &O,
+    ) -> Result<Self, EngineError> {
+        if values.len() != weights.len() {
+            return Err(EngineError::engine(format!(
+                "result length mismatch: values has {}, weights has {}",
+                values.len(),
+                weights.len()
+            )));
+        }
+
+        let weighted_values = values
+            .into_iter()
+            .zip(weights.iter().copied())
+            .map(|(value, weight)| value * weight)
+            .collect();
+        let batch_observable = observable.snapshot()?;
+
+        Ok(Self::new(weighted_values, batch_observable))
+    }
+}
+
 /// Canonical integration parameters payload stored on `runs.integration_params`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -28,6 +56,8 @@ pub struct IntegrationParams {
     pub sampler_aggregator_params: Option<JsonValue>,
     pub observable_implementation: Option<ObservableImplementation>,
     pub observable_params: Option<JsonValue>,
+    pub parametrization_implementation: Option<ParametrizationImplementation>,
+    pub parametrization_params: Option<JsonValue>,
     pub evaluator_runner_params: Option<EvaluatorRunnerParams>,
     pub sampler_aggregator_runner_params: Option<SamplerAggregatorRunnerParams>,
 }
@@ -43,6 +73,8 @@ pub struct RunSpec {
     pub sampler_aggregator_params: JsonValue,
     pub observable_implementation: ObservableImplementation,
     pub observable_params: JsonValue,
+    pub parametrization_implementation: ParametrizationImplementation,
+    pub parametrization_params: JsonValue,
     pub evaluator_runner_params: EvaluatorRunnerParams,
     pub sampler_aggregator_runner_params: SamplerAggregatorRunnerParams,
 }

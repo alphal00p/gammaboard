@@ -249,6 +249,9 @@ pub struct BatchRecord {
 }
 
 /// Evaluator output for one batch.
+///
+/// `values` are per-sample weighted training values (already including any
+/// parametrization weighting applied in evaluator-space).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchResult {
     pub values: Vec<f64>,

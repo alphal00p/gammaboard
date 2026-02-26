@@ -2,6 +2,7 @@ name = "havana-sinc-complex"
 evaluator_implementation = "test_only_sinc"
 sampler_aggregator_implementation = "havana"
 observable_implementation = "complex"
+parametrization_implementation = "none"
 
 [point_spec]
 continuous_dims = 2
@@ -35,3 +36,5 @@ initial_training_rate = 0.1
 final_training_rate = 0.001
 
 [observable_params]
+
+[parametrization_params]

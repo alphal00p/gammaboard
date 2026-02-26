@@ -8,7 +8,9 @@ use crate::core::{
     SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore, Worker, WorkerRegistryStore,
     WorkerRole, WorkerStatus,
 };
-use crate::engines::{IntegrationParams, ObservableImplementation, RunSpec};
+use crate::engines::{
+    IntegrationParams, ObservableImplementation, ParametrizationImplementation, RunSpec,
+};
 use crate::stores::RunReadStore;
 use serde_json::{Value as JsonValue, json};
 use sqlx::PgPool;
@@ -69,6 +71,10 @@ fn run_spec_from_integration_params(
             .unwrap_or_else(|| json!({})),
         observable_implementation,
         observable_params: params.observable_params.unwrap_or_else(|| json!({})),
+        parametrization_implementation: params
+            .parametrization_implementation
+            .unwrap_or(ParametrizationImplementation::None),
+        parametrization_params: params.parametrization_params.unwrap_or_else(|| json!({})),
         evaluator_runner_params: params.evaluator_runner_params.unwrap_or_default(),
         sampler_aggregator_runner_params: params
             .sampler_aggregator_runner_params
@@ -565,7 +571,8 @@ mod tests {
     use super::*;
     use crate::{
         engines::{
-            EvaluatorImplementation, ObservableImplementation, SamplerAggregatorImplementation,
+            EvaluatorImplementation, ObservableImplementation, ParametrizationImplementation,
+            SamplerAggregatorImplementation,
         },
         runners::node_runner::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams},
     };
@@ -583,6 +590,8 @@ mod tests {
                 "sampler_aggregator_params": { "beta": 2 },
                 "observable_implementation": "scalar",
                 "observable_params": { "gamma": 3 },
+                "parametrization_implementation": "identity",
+                "parametrization_params": { "delta": 4 },
                 "evaluator_runner_params": { "min_loop_time_ms": 42 },
                 "sampler_aggregator_runner_params": { "interval_ms": 500 }
             }),
@@ -612,6 +621,11 @@ mod tests {
         );
         assert_eq!(spec.observable_params, json!({ "gamma": 3 }));
         assert_eq!(
+            spec.parametrization_implementation,
+            ParametrizationImplementation::Identity
+        );
+        assert_eq!(spec.parametrization_params, json!({ "delta": 4 }));
+        assert_eq!(
             spec.evaluator_runner_params,
             EvaluatorRunnerParams::deserialize(json!({ "min_loop_time_ms": 42 })).unwrap()
         );
@@ -640,6 +654,11 @@ mod tests {
         assert_eq!(spec.evaluator_params, json!({}));
         assert_eq!(spec.sampler_aggregator_params, json!({}));
         assert_eq!(spec.observable_params, json!({}));
+        assert_eq!(
+            spec.parametrization_implementation,
+            ParametrizationImplementation::None
+        );
+        assert_eq!(spec.parametrization_params, json!({}));
         assert_eq!(
             spec.evaluator_runner_params,
             EvaluatorRunnerParams::default()

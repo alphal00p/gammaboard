@@ -2,6 +2,7 @@ name = "invalid-sin-with-complex"
 evaluator_implementation = "test_only_sin"
 sampler_aggregator_implementation = "test_only_training"
 observable_implementation = "complex"
+parametrization_implementation = "none"
 
 [point_spec]
 continuous_dims = 1
@@ -30,3 +31,5 @@ training_target_samples = 2000
 training_delay_per_sample_ms = 2
 
 [observable_params]
+
+[parametrization_params]

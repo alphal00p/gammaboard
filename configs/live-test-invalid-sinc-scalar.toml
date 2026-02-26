@@ -2,6 +2,7 @@ name = "invalid-sinc-with-scalar"
 evaluator_implementation = "test_only_sinc"
 sampler_aggregator_implementation = "test_only_training"
 observable_implementation = "scalar"
+parametrization_implementation = "none"
 
 [point_spec]
 continuous_dims = 2
@@ -30,3 +31,5 @@ training_target_samples = 2000
 training_delay_per_sample_ms = 2
 
 [observable_params]
+
+[parametrization_params]

@@ -13,7 +13,8 @@ use crate::core::{
 };
 use crate::engines::observable::ObservableFactory;
 use crate::engines::{
-    Evaluator, EvaluatorEngine, ObservableEngine, SamplerAggregator, SamplerAggregatorEngine,
+    Evaluator, EvaluatorEngine, Parametrization, ParametrizationEngine, SamplerAggregator,
+    SamplerAggregatorEngine,
 };
 use serde::Deserialize;
 use serde::Serialize;
@@ -137,16 +138,34 @@ impl<S: NodeRunnerStore> ActiveWorker<S> {
                 ))
             })?;
 
-        let observable =
-            ObservableEngine::build(spec.observable_implementation, &spec.observable_params)
-                .map_err(|err| StoreError::store(format!("failed to build observable: {err}")))?;
+        let observable_factory = ObservableFactory::new(
+            spec.observable_implementation,
+            spec.observable_params.clone(),
+        );
+        observable_factory
+            .build()
+            .map_err(|err| StoreError::store(format!("failed to build observable: {err}")))?;
 
-        if !evaluator.supports_observable(&observable) {
+        if !evaluator.supports_observable(&observable_factory) {
             return Err(StoreError::store(format!(
                 "incompatible evaluator/observable pair for run {}: evaluator={} observable={}",
                 self.run_id, spec.evaluator_implementation, spec.observable_implementation
             )));
         }
+
+        let parametrization = ParametrizationEngine::build(
+            spec.parametrization_implementation,
+            &spec.parametrization_params,
+        )
+        .map_err(|err| StoreError::store(format!("failed to build parametrization: {err}")))?;
+        parametrization
+            .validate_point_spec(&spec.point_spec)
+            .map_err(|err| {
+                StoreError::store(format!(
+                    "incompatible parametrization for point_spec on run {}: {}",
+                    self.run_id, err
+                ))
+            })?;
 
         self.register_active_worker(spec.evaluator_implementation.as_ref())
             .await?;
@@ -164,14 +183,11 @@ impl<S: NodeRunnerStore> ActiveWorker<S> {
             "evaluator worker started"
         );
 
-        let observable_factory = ObservableFactory::new(
-            spec.observable_implementation,
-            spec.observable_params.clone(),
-        );
         let mut runner = EvaluatorRunner::new(
             self.run_id,
             self.worker_id.clone(),
             Box::new(evaluator),
+            Box::new(parametrization),
             observable_factory,
             spec.point_spec.clone(),
             Duration::from_millis(

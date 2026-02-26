@@ -56,10 +56,13 @@ Run configuration is provided as TOML.
 - Run display name is configured via top-level `name` and stored in `runs.name`.
 - Engine and runner params are stored in `runs.integration_params`.
 - Observable implementation is stored in `runs.observable_implementation`.
+- Parametrization implementation and params are stored in `runs.integration_params`
+  (`parametrization_implementation`, `parametrization_params`).
 - Point dimensions are stored in `runs.point_spec`.
 - Batches are stored in `batches.points` as compact flat arrays (`continuous`, `discrete`) plus per-sample `weights`, with explicit 2D shape metadata.
-- Evaluators return one `BatchResult` per batch: `values: Vec<f64>` (sampler training signal) and one aggregated `observable` JSON payload.
+- Evaluators return one `BatchResult` per batch: `values: Vec<f64>` (weighted sampler training signal) and one aggregated `observable` JSON payload.
 - Evaluator implementations receive an `ObservableFactory` during `eval_batch` and build batch-local observable state from it.
+- Observable ingestion in evaluators is capability-based (`as_scalar_ingest` / `as_complex_ingest`) instead of matching concrete observable enum variants.
 - Sampler-aggregator engines produce one batch per call; the sampler-aggregator runner controls how many batches are produced each tick (`max_batches_per_tick`) and enforces pending-queue limits.
 - Sampler-aggregator runner passes explicit `nr_samples` from `sampler_aggregator_runner_params` into `produce_batch`.
 - Sampler-aggregator engines can attach optional process-local batch context to produced batches; this context is passed back during training ingestion and is not persisted in PostgreSQL.
@@ -76,6 +79,7 @@ name = "live-test"
 evaluator_implementation = "test_only_sin"
 sampler_aggregator_implementation = "test_only_training"
 observable_implementation = "scalar"
+parametrization_implementation = "none"
 
 [point_spec]
 continuous_dims = 1
@@ -104,13 +108,15 @@ training_target_samples = 2000
 training_delay_per_sample_ms = 2
 
 [observable_params]
+
+[parametrization_params]
 ```
 
 Havana-specific sampler params:
 - `batches_for_update`: number of produced/ingested batches before one grid update cycle.
 - `initial_training_rate`: training rate at batch 0.
 - `final_training_rate`: training rate at the end of training.
-- `stop_training_after_n_batches` (optional): hard cap on total produced training batches; once reached, sampler production throttles to zero.
+- `stop_training_after_n_batches`: required cap on total trained batches; once reached, Havana keeps producing batches but skips training updates.
   When this is set, Havana uses exponential interpolation from
   `initial_training_rate` to `final_training_rate` using absolute
   `batches_produced`.
@@ -118,6 +124,8 @@ Havana-specific sampler params:
 `observable_implementation` and `observable_params` are configured independently
 from evaluator/sampler implementations, so runs can mix-and-match compatible
 engines.
+`parametrization_implementation` and `parametrization_params` are optional and
+default to `"none"` and `{}` when omitted.
 On write, `observable_implementation` is persisted in `runs.observable_implementation`
 instead of the JSON blob.
 Compatibility is validated at runner startup before evaluator work begins.
