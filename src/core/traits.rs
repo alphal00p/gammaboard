@@ -17,6 +17,21 @@ pub trait RunSpecStore: Send + Sync {
     async fn load_run_spec(&self, run_id: i32) -> Result<Option<RunSpec>, StoreError>;
 }
 
+/// Persists run-scoped runtime metadata emitted at worker initialization.
+#[async_trait]
+pub trait RunInitMetadataStore: Send + Sync {
+    async fn try_set_evaluator_init_metadata(
+        &self,
+        run_id: i32,
+        metadata: &JsonValue,
+    ) -> Result<bool, StoreError>;
+    async fn try_set_sampler_init_metadata(
+        &self,
+        run_id: i32,
+        metadata: &JsonValue,
+    ) -> Result<bool, StoreError>;
+}
+
 /// Registers and monitors running workers.
 #[async_trait]
 pub trait WorkerRegistryStore: Send + Sync {
@@ -69,6 +84,8 @@ pub trait ControlPlaneStore: Send + Sync {
         node_id: &str,
         role: super::models::WorkerRole,
     ) -> Result<(), StoreError>;
+    async fn clear_desired_assignments_for_run(&self, run_id: i32) -> Result<u64, StoreError>;
+    async fn clear_all_desired_assignments(&self) -> Result<u64, StoreError>;
     async fn get_desired_assignment(
         &self,
         node_id: &str,
@@ -78,6 +95,9 @@ pub trait ControlPlaneStore: Send + Sync {
         &self,
         node_id: Option<&str>,
     ) -> Result<Vec<DesiredAssignment>, StoreError>;
+    async fn request_node_shutdown(&self, node_id: &str) -> Result<u64, StoreError>;
+    async fn request_all_nodes_shutdown(&self) -> Result<u64, StoreError>;
+    async fn consume_node_shutdown_request(&self, node_id: &str) -> Result<bool, StoreError>;
 
     async fn create_run(
         &self,
@@ -91,6 +111,10 @@ pub trait ControlPlaneStore: Send + Sync {
         run_id: i32,
         status: super::models::RunStatus,
     ) -> Result<(), StoreError>;
+    async fn set_all_runs_status(
+        &self,
+        status: super::models::RunStatus,
+    ) -> Result<u64, StoreError>;
     async fn remove_run(&self, run_id: i32) -> Result<(), StoreError>;
 }
 

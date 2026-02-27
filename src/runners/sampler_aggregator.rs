@@ -17,7 +17,34 @@ use crate::engines::observable::ObservableFactory;
 use crate::engines::{BatchContext, EngineError, Observable, SamplerAggregator};
 use crate::runners::sample_time_stats::SampleTimeStats;
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, error::Error, fmt, time::Duration, time::Instant};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SamplerAggregatorRunnerParams {
+    pub interval_ms: u64,
+    pub lease_ttl_ms: u64,
+    pub nr_samples: usize,
+    pub performance_snapshot_interval_ms: u64,
+    pub max_pending_batches: usize,
+    pub max_batches_per_tick: usize,
+    pub completed_batch_fetch_limit: usize,
+}
+
+impl Default for SamplerAggregatorRunnerParams {
+    fn default() -> Self {
+        Self {
+            interval_ms: 500,
+            lease_ttl_ms: 5_000,
+            nr_samples: 64,
+            performance_snapshot_interval_ms: 5_000,
+            max_pending_batches: 128,
+            max_batches_per_tick: 1,
+            completed_batch_fetch_limit: 512,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct RunnerConfig {

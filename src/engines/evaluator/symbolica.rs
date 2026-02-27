@@ -1,8 +1,11 @@
+use std::{fs, path::Path};
+
 use crate::{
     Batch, BatchResult, BuildError, EngineError, EvalError, PointSpec,
     engines::{BuildFromJson, Evaluator, observable::ObservableFactory},
 };
 use serde::Deserialize;
+use serde_json::{Value as JsonValue, json};
 use symbolica::evaluate::{
     BatchEvaluator, CompileOptions, CompiledRealEvaluator, FunctionMap, OptimizationSettings,
 };
@@ -12,20 +15,36 @@ use symbolica::{
     atom::{Atom, AtomCore},
     evaluate::ExportSettings,
 };
+use tempfile::TempDir;
 
-struct SymbolicaEngine {
+pub struct SymbolicaEngine {
     eval: CompiledRealEvaluator,
     n_args: usize,
+    expr: String,
+    args: Vec<String>,
+    _artifacts_dir: TempDir,
 }
 
 impl SymbolicaEngine {
-    fn new(eval: CompiledRealEvaluator, n_args: usize) -> Self {
-        SymbolicaEngine { eval, n_args }
+    fn new(
+        eval: CompiledRealEvaluator,
+        n_args: usize,
+        expr: String,
+        args: Vec<String>,
+        artifacts_dir: TempDir,
+    ) -> Self {
+        SymbolicaEngine {
+            eval,
+            n_args,
+            expr,
+            args,
+            _artifacts_dir: artifacts_dir,
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
-struct SymbolicaParams {
+pub struct SymbolicaParams {
     expr: String,
     args: Vec<String>,
 }
@@ -34,6 +53,8 @@ impl BuildFromJson for SymbolicaEngine {
     type Params = SymbolicaParams;
 
     fn from_parsed_params(params: Self::Params) -> Result<Self, crate::BuildError> {
+        let expr = params.expr.clone();
+        let arg_names = params.args.clone();
         let settings = ParseSettings::symbolica();
 
         let atom = Atom::parse(wrap_input!(&params.expr), settings.clone())
@@ -54,19 +75,36 @@ impl BuildFromJson for SymbolicaEngine {
             )
             .map_err(|err| BuildError::Build(err.to_string()))?;
 
+        let root_artifacts_dir = Path::new("./.evaluators");
+        fs::create_dir_all(root_artifacts_dir).map_err(|err| BuildError::Build(err.to_string()))?;
+
+        let artifacts_dir = tempfile::Builder::new()
+            .prefix("symbolica-eval-")
+            .rand_bytes(8)
+            .tempdir_in(root_artifacts_dir)
+            .map_err(|err| BuildError::Build(err.to_string()))?;
+        let stem = "eval";
+        let path = artifacts_dir.path().join(stem);
+
         let exported_code = evaluator
-            .export_cpp::<f64>(".evaluators/test.cpp", "test", ExportSettings::default())
+            .export_cpp::<f64>(path.with_extension("cpp"), &stem, ExportSettings::default())
             .map_err(|err| BuildError::Build(err.to_string()))?;
 
         let compiled_code = exported_code
-            .compile(".evaluators/test.so", CompileOptions::default())
+            .compile(path.with_extension("so"), CompileOptions::default())
             .map_err(|err| BuildError::Build(err.to_string()))?;
 
         let evaluator = compiled_code
             .load()
             .map_err(|err| BuildError::Build(err.to_string()))?;
 
-        Ok(SymbolicaEngine::new(evaluator, args.len()))
+        Ok(SymbolicaEngine::new(
+            evaluator,
+            args.len(),
+            expr,
+            arg_names,
+            artifacts_dir,
+        ))
     }
 }
 
@@ -91,13 +129,18 @@ impl Evaluator for SymbolicaEngine {
         batch: &Batch,
         observable_factory: &ObservableFactory,
     ) -> Result<BatchResult, EvalError> {
-        let slice = batch.continuous().as_slice().expect("standard order");
+        let continuous = batch.continuous().as_slice().ok_or_else(|| {
+            EvalError::Engine("Batch continuous array must be standard-layout".to_string())
+        })?;
+        let weights = batch.weights().as_slice().ok_or_else(|| {
+            EvalError::Engine("Batch weights array must be standard-layout".to_string())
+        })?;
 
         let mut observable = observable_factory.build()?;
 
         let mut out = vec![0.0; batch.size()];
         self.eval
-            .evaluate_batch(batch.size(), slice, &mut out)
+            .evaluate_batch(batch.size(), continuous, &mut out)
             .map_err(|err| EngineError::Eval(err.to_string()))?;
 
         {
@@ -107,15 +150,11 @@ impl Evaluator for SymbolicaEngine {
                     observable_factory.implementation
                 ))
             })?;
-            for (i, v) in out.iter().enumerate() {
-                scalar_ingest.ingest_scalar(*v, batch.weights()[i]);
+            for (value, weight) in out.iter().zip(weights.iter()) {
+                scalar_ingest.ingest_scalar(*value, *weight);
             }
         }
-        BatchResult::from_values_weights_and_observable(
-            out,
-            batch.weights().as_slice().expect("standard order"),
-            observable.as_ref(),
-        )
+        BatchResult::from_values_weights_and_observable(out, weights, observable.as_ref())
     }
 
     fn supports_observable(&self, observable_factory: &ObservableFactory) -> bool {
@@ -123,5 +162,12 @@ impl Evaluator for SymbolicaEngine {
             Ok(mut observable) => observable.as_scalar_ingest().is_some(),
             Err(_) => false,
         }
+    }
+
+    fn get_init_metadata(&self) -> JsonValue {
+        json!({
+            "expr": &self.expr,
+            "args": &self.args,
+        })
     }
 }

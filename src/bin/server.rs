@@ -15,19 +15,30 @@ use gammaboard::stores::RunReadStore;
 use gammaboard::{BinResult, PgStore, init_pg_store};
 use serde::Deserialize;
 use std::{
+    collections::HashMap,
     convert::Infallible,
     fmt::Display,
     net::SocketAddr,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
     time::Duration,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, broadcast, mpsc};
 use tower_http::cors::CorsLayer;
 
 #[derive(Clone)]
 struct AppState {
     store: PgStore,
+    run_stream_hub: RunStreamHub,
+}
+
+type RunStreamHub = Arc<Mutex<HashMap<i32, broadcast::Sender<StreamMessage>>>>;
+
+#[derive(Clone)]
+enum StreamMessage {
+    Stats(String),
+    Error(String),
 }
 
 #[derive(Deserialize)]
@@ -106,19 +117,89 @@ impl Stream for MpscStream {
     }
 }
 
-async fn send_sse_error(
-    tx: &mpsc::Sender<Result<Event, Infallible>>,
-    message: &str,
-    details: impl Display,
-) -> bool {
-    let err_event = Event::default().event("error").data(
-        serde_json::json!({
-            "error": message,
-            "details": details.to_string()
+async fn subscribe_run_stream(
+    state: &AppState,
+    run_id: i32,
+    interval_ms: u64,
+) -> broadcast::Receiver<StreamMessage> {
+    let mut streams = state.run_stream_hub.lock().await;
+    if let Some(sender) = streams.get(&run_id) {
+        return sender.subscribe();
+    }
+
+    let (sender, receiver) = broadcast::channel(64);
+    streams.insert(run_id, sender.clone());
+    drop(streams);
+
+    let store = state.store.clone();
+    let hub = state.run_stream_hub.clone();
+    tokio::spawn(run_stream_publisher(
+        store,
+        hub,
+        run_id,
+        interval_ms,
+        sender,
+    ));
+
+    receiver
+}
+
+async fn run_stream_publisher(
+    store: PgStore,
+    hub: RunStreamHub,
+    run_id: i32,
+    interval_ms: u64,
+    sender: broadcast::Sender<StreamMessage>,
+) {
+    let mut ticker = tokio::time::interval(Duration::from_millis(interval_ms));
+    loop {
+        ticker.tick().await;
+
+        if sender.receiver_count() == 0 {
+            break;
+        }
+
+        let progress = match store.get_run_progress(run_id).await {
+            Ok(run) => run,
+            Err(err) => {
+                let payload = serde_json::json!({
+                    "error": "Failed to fetch run progress",
+                    "details": err.to_string()
+                })
+                .to_string();
+                let _ = sender.send(StreamMessage::Error(payload));
+                continue;
+            }
+        };
+
+        let aggregated = match store.get_latest_aggregated_result(run_id).await {
+            Ok(result) => result,
+            Err(err) => {
+                let payload = serde_json::json!({
+                    "error": "Failed to fetch aggregated results",
+                    "details": err.to_string()
+                })
+                .to_string();
+                let _ = sender.send(StreamMessage::Error(payload));
+                continue;
+            }
+        };
+
+        let payload = serde_json::json!({
+            "run": progress,
+            "aggregated": aggregated
         })
-        .to_string(),
-    );
-    tx.send(Ok(err_event)).await.is_ok()
+        .to_string();
+        let _ = sender.send(StreamMessage::Stats(payload));
+    }
+
+    let mut streams = hub.lock().await;
+    if streams
+        .get(&run_id)
+        .is_some_and(|existing| existing.same_channel(&sender))
+    {
+        streams.remove(&run_id);
+    }
 }
 
 #[tokio::main]
@@ -129,7 +210,10 @@ async fn main() -> BinResult {
     let store = init_pg_store(10).await?;
     println!("✅ Connected to database");
 
-    let state = AppState { store };
+    let state = AppState {
+        store,
+        run_stream_hub: Arc::new(Mutex::new(HashMap::new())),
+    };
 
     // Build API routes
     let api_routes = Router::new()
@@ -271,7 +355,8 @@ async fn get_run_aggregated_results(
     Path(id): Path<i32>,
     Query(params): Query<LimitQuery>,
 ) -> impl IntoResponse {
-    match state.store.get_aggregated_results(id, params.limit).await {
+    let limit = params.limit.clamp(1, 10_000);
+    match state.store.get_aggregated_results(id, limit).await {
         Ok(results) => (StatusCode::OK, Json(results)).into_response(),
         Err(e) => internal_error(
             format!("fetching aggregated results for run {id}"),
@@ -359,45 +444,30 @@ async fn stream_run_stats(
         }
     }
 
-    let (tx, rx) = mpsc::channel(16);
-    let store = state.store.clone();
     let interval_ms = sanitize_stream_interval_ms(params.interval_ms);
+    let mut run_rx = subscribe_run_stream(&state, id, interval_ms).await;
 
+    let (tx, rx) = mpsc::channel(16);
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(Duration::from_millis(interval_ms));
         loop {
-            ticker.tick().await;
-
-            let progress = match store.get_run_progress(id).await {
-                Ok(run) => run,
-                Err(e) => {
-                    if !send_sse_error(&tx, "Failed to fetch run progress", e).await {
-                        break;
-                    }
-                    continue;
+            let event = match run_rx.recv().await {
+                Ok(StreamMessage::Stats(payload)) => Event::default().event("stats").data(payload),
+                Ok(StreamMessage::Error(payload)) => Event::default().event("error").data(payload),
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    Event::default().event("error").data(
+                        serde_json::json!({
+                            "error": "Stream lagged",
+                            "details": format!("skipped {skipped} updates")
+                        })
+                        .to_string(),
+                    )
                 }
+                Err(broadcast::error::RecvError::Closed) => break,
             };
-
-            let aggregated = match store.get_latest_aggregated_result(id).await {
-                Ok(result) => result,
-                Err(e) => {
-                    if !send_sse_error(&tx, "Failed to fetch aggregated results", e).await {
-                        break;
-                    }
-                    continue;
-                }
-            };
-
-            let payload = serde_json::json!({
-                "run": progress,
-                "aggregated": aggregated
-            });
-
-            let event = Event::default().event("stats").data(payload.to_string());
 
             if tx.send(Ok(event)).await.is_err() {
                 break;
-            }
+            };
         }
     });
 

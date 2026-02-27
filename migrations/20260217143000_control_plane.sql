@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS workers (
     desired_updated_at TIMESTAMPTZ, --this is set by the control plane
     last_seen TIMESTAMPTZ,
     registered_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    shutdown_requested_at TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_workers_role_impl

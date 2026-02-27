@@ -43,7 +43,8 @@ pub type BinResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 /// ```
 pub async fn get_pg_pool(max_connections: u32) -> Result<Pool<Postgres>, sqlx::Error> {
     dotenv().ok();
-    let db_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let db_url =
+        env::var("DATABASE_URL").map_err(|err| sqlx::Error::Configuration(Box::new(err)))?;
     PgPoolOptions::new()
         .max_connections(max_connections)
         .connect(&db_url)

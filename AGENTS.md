@@ -40,14 +40,25 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
 
 ## Operational Conventions
 - Run configuration is passed as TOML to `control_plane run-add`.
+- `control_plane run-add` requires an explicit TOML file path argument (no embedded default payload).
 - Run identity is configured via top-level `name` in TOML and persisted in `runs.name`.
 - Engine/runner settings are persisted in `runs.integration_params`; point shape is persisted in `runs.point_spec`.
 - Observable implementation is persisted in `runs.observable_implementation`.
+- `control_plane run-pause` / `run-stop` should set run status (`paused`/`cancelled`)
+  and clear desired assignments for targeted runs so `run_node` supervisor reconciliation
+  stops active role tasks without requiring workers to poll run status.
+- `control_plane` run lifecycle commands (`run-start`, `run-pause`, `run-stop`, `run-remove`)
+  should use a shared selector shape: `-a|--all` or one-or-more positional `RUN_ID`s.
+- `control_plane node-stop` should use the same selector shape (`-a|--all` or positional `NODE_ID`s)
+  and request node shutdown via `workers.shutdown_requested_at`.
 - Parametrization implementation and params are persisted in `runs.integration_params`
   as `parametrization_implementation` and `parametrization_params`.
 - Keep `configs/live-test*.toml` as explicit reference configs: include all runner/engine fields,
   even when values equal defaults.
 - Name live-test scenario configs semantically (describe intent/compatibility), not only by index.
+- Keep a Symbolica live-test reference scenario for a 2D polynomial integral
+  (`configs/live-test-symbolica-unit-square-polynomial-scalar.toml`) to exercise
+  evaluator codegen/compile/load in end-to-end runs.
 - Batch payloads in `batches.points` must stay compact and shape-stable:
   row-major flat `continuous`/`discrete` arrays, per-sample `weights`, and
   explicit 2D shape metadata.
@@ -55,20 +66,31 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
   weighted training `values: Vec<f64>` and one aggregated batch-level observable JSON.
 - Evaluator implementations receive an `ObservableFactory` in `eval_batch` and build
   per-batch observable instances through the factory.
+- Evaluator and sampler-aggregator engines can emit run-scoped initialization metadata
+  via trait hooks (`Evaluator::get_init_metadata`, `SamplerAggregator::get_init_metadata`);
+  runners persist these once per run in `runs.evaluator_init_metadata` and
+  `runs.sampler_aggregator_init_metadata` (write only when column is `NULL`).
 - Observable ingestion in evaluators should use capability methods on `Observable`
   (`as_scalar_ingest`, `as_complex_ingest`) with default `None`, rather than
   matching concrete observable engine enum variants.
 - Evaluator runner applies optional parametrization (`Batch -> Batch`) before calling
   `Evaluator::eval_batch`; parametrization is selected per run via
   `parametrization_implementation` + `parametrization_params`.
+- `spherical` parametrization maps unit-hypercube continuous samples to unit-ball
+  coordinates and updates batch weights by the spherical-coordinate Jacobian.
 - Observable construction should be centralized via `engines::observable::ObservableFactory`
   (shared by evaluator and sampler-aggregator runners), not by passing raw implementation
   enum + params through call boundaries.
+- `symbolica` evaluator codegen artifacts should be created in per-engine temporary
+  directories and owned by the evaluator instance so they are cleaned up when the
+  evaluator is dropped (best-effort cleanup on normal process shutdown).
 - Sampler-aggregator engines produce one batch per call (`produce_batch`); the runner owns
   per-tick multi-batch production loops and queue-capacity limiting.
 - Runner-controlled sample count per produced batch comes from
   `sampler_aggregator_runner_params.nr_samples`; runners pass this value directly to
   `SamplerAggregator::produce_batch`.
+- Havana sampler params must not include `batch_size`; Havana also uses
+  `sampler_aggregator_runner_params.nr_samples` as the per-batch sample count.
 - Sampler-aggregator engines may optionally throttle per-tick batch production via
   `SamplerAggregator::get_max_batches` (default `None` means no engine-specific cap).
   Havana uses this to enforce deterministic update-cycle limits while training is active.
@@ -97,6 +119,8 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
   `count`, `sum_weight`, `sum_abs`, and `sum_sq` over evaluator values.
 - `complex` observable state is `ComplexObservable` (serde-derived). Treat current
   merge behavior as implementation-defined/incomplete unless explicitly finalized.
+- `complex` observable must expose both ingestion capabilities:
+  `ComplexIngest` directly and `ScalarIngest` via `real -> complex(real, 0)` casting.
 - Observable payload handling should use serde-derived structs (`Serialize`/`Deserialize`) plus
   `Observable::{load_state_from_json, merge, snapshot}`; avoid manual `json!` object
   construction and field-by-field `Value::get` merging in observable implementations.
@@ -116,8 +140,12 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
   diagnostics (for example optimizer/loss metadata in future engines).
 - `run_node` role is controlled by DB desired assignments for its `node_id`; CLI does not select role.
 - A `run_node` process executes at most one active role task at a time.
+- Operational stop flows should prefer control-plane desired-state changes
+  (`run-stop`/`run-pause`) over process-kill shutdowns so workers reconcile down cleanly.
 - `run_node` execution model is supervisor + worker task: outer poll loop reconciles desired assignment and starts/stops one spawned role task for the current run.
-- Worker runtime state is encapsulated in `src/runners/node_runner.rs` (`NodeRunner`/`ActiveWorker`) and owns its store handle.
+- `run_node` should consume node shutdown requests (`workers.shutdown_requested_at`) as one-shot
+  signals: clear request, stop current role task, then exit process.
+- Worker runtime state is encapsulated in `src/runners/node_runner/` (`NodeRunner`/`ActiveWorker`) and owns its store handle.
 - Keep role switching safe: stop old role task, then start new one.
 - Worker registration metadata uses run-spec implementation strings and binary
   version (`CARGO_PKG_VERSION`).
@@ -132,6 +160,8 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
   `GET /api/runs/:id/performance/evaluator` and
   `GET /api/runs/:id/performance/sampler-aggregator`
   (optional `limit`, `worker_id`).
+- Run stats SSE (`GET /api/runs/:id/stream`) uses one shared per-run backend polling
+  task with fanout/broadcast to subscribers; avoid per-client DB polling loops.
 - Schema migration policy (current): no backward-compat requirements. Prefer
   direct table definitions for current schema and avoid follow-up `ALTER TABLE`
   compatibility migrations unless explicitly requested.

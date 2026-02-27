@@ -22,6 +22,8 @@ struct RunProgressRow {
     run_name: String,
     run_status: String,
     integration_params: Option<JsonValue>,
+    evaluator_init_metadata: Option<JsonValue>,
+    sampler_aggregator_init_metadata: Option<JsonValue>,
     started_at: Option<DateTime<Utc>>,
     completed_at: Option<DateTime<Utc>>,
     total_batches_planned: Option<i32>,
@@ -44,6 +46,8 @@ impl TryFrom<RunProgressRow> for RunProgress {
             run_name: value.run_name,
             run_status: parse_run_status(&value.run_status)?,
             integration_params: value.integration_params,
+            evaluator_init_metadata: value.evaluator_init_metadata,
+            sampler_aggregator_init_metadata: value.sampler_aggregator_init_metadata,
             started_at: value.started_at,
             completed_at: value.completed_at,
             total_batches_planned: value.total_batches_planned,
@@ -249,6 +253,8 @@ pub(crate) async fn get_all_runs(pool: &PgPool) -> Result<Vec<RunProgress>, sqlx
             run_name,
             run_status,
             integration_params,
+            evaluator_init_metadata,
+            sampler_aggregator_init_metadata,
             started_at,
             completed_at,
             total_batches_planned,
@@ -277,23 +283,45 @@ pub(crate) async fn get_run_progress(
     let row = sqlx::query_as::<_, RunProgressRow>(
         r#"
         SELECT
-            run_id,
-            run_name,
-            run_status,
-            integration_params,
-            started_at,
-            completed_at,
-            total_batches_planned,
-            batches_completed,
-            total_batches,
-            total_samples,
-            pending_batches,
-            claimed_batches,
-            completed_batches,
-            failed_batches,
-            completion_rate
-        FROM run_progress
-        WHERE run_id = $1
+            r.id as run_id,
+            r.name as run_name,
+            r.status as run_status,
+            (
+                COALESCE(r.integration_params, '{}'::jsonb)
+                || jsonb_build_object('observable_implementation', r.observable_implementation)
+            ) as integration_params,
+            r.evaluator_init_metadata,
+            r.sampler_aggregator_init_metadata,
+            r.started_at,
+            r.completed_at,
+            r.total_batches_planned,
+            r.batches_completed,
+            COALESCE(b.total_batches, 0) as total_batches,
+            COALESCE(b.total_samples, 0) as total_samples,
+            COALESCE(b.pending_batches, 0) as pending_batches,
+            COALESCE(b.claimed_batches, 0) as claimed_batches,
+            COALESCE(b.completed_batches, 0) as completed_batches,
+            COALESCE(b.failed_batches, 0) as failed_batches,
+            CASE
+                WHEN COALESCE(b.total_batches, 0) > 0
+                THEN CAST(COALESCE(b.completed_batches, 0) AS FLOAT) / b.total_batches
+                ELSE 0.0
+            END as completion_rate
+        FROM runs r
+        LEFT JOIN (
+            SELECT
+                run_id,
+                COUNT(*) as total_batches,
+                SUM(batch_size) as total_samples,
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_batches,
+                SUM(CASE WHEN status = 'claimed' THEN 1 ELSE 0 END) as claimed_batches,
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_batches,
+                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_batches
+            FROM batches
+            WHERE run_id = $1
+            GROUP BY run_id
+        ) b ON r.id = b.run_id
+        WHERE r.id = $1
         "#,
     )
     .bind(run_id)

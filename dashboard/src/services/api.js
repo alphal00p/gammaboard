@@ -5,8 +5,8 @@ const parseJsonOrThrow = async (response, message) => {
   return response.json();
 };
 
-export const fetchRuns = async () => {
-  const response = await fetch(`${API_BASE_URL}/runs`);
+export const fetchRuns = async (signal) => {
+  const response = await fetch(`${API_BASE_URL}/runs`, { signal });
   return parseJsonOrThrow(response, "Failed to fetch runs");
 };
 
@@ -18,31 +18,31 @@ export const fetchWorkers = async (runId = null) => {
   return parseJsonOrThrow(response, "Failed to fetch workers");
 };
 
-export const fetchStats = async (runId) => {
-  const response = await fetch(`${API_BASE_URL}/runs/${runId}/stats`);
+export const fetchStats = async (runId, signal) => {
+  const response = await fetch(`${API_BASE_URL}/runs/${runId}/stats`, { signal });
   return parseJsonOrThrow(response, "Failed to fetch stats");
 };
 
-export const fetchRun = async (runId) => {
-  const response = await fetch(`${API_BASE_URL}/runs/${runId}`);
+export const fetchRun = async (runId, signal) => {
+  const response = await fetch(`${API_BASE_URL}/runs/${runId}`, { signal });
   return parseJsonOrThrow(response, "Failed to fetch run");
 };
 
-export const fetchRunLogs = async (runId, limit = 500, workerId = null, level = null) => {
+export const fetchRunLogs = async (runId, limit = 500, workerId = null, level = null, signal) => {
   const params = new URLSearchParams({ limit: String(limit) });
   if (workerId) params.set("worker_id", workerId);
   if (level) params.set("level", level);
-  const response = await fetch(`${API_BASE_URL}/runs/${runId}/logs?${params.toString()}`);
+  const response = await fetch(`${API_BASE_URL}/runs/${runId}/logs?${params.toString()}`, { signal });
   return parseJsonOrThrow(response, "Failed to fetch run logs");
 };
 
-export const fetchAggregatedHistory = async (runId, limit) => {
-  const response = await fetch(`${API_BASE_URL}/runs/${runId}/aggregated?limit=${limit}`);
+export const fetchAggregatedHistory = async (runId, limit, signal) => {
+  const response = await fetch(`${API_BASE_URL}/runs/${runId}/aggregated?limit=${limit}`, { signal });
   return parseJsonOrThrow(response, "Failed to fetch aggregated history");
 };
 
-export const fetchLatestAggregated = async (runId) => {
-  const response = await fetch(`${API_BASE_URL}/runs/${runId}/aggregated/latest`);
+export const fetchLatestAggregated = async (runId, signal) => {
+  const response = await fetch(`${API_BASE_URL}/runs/${runId}/aggregated/latest`, { signal });
   if (response.status === 404) return null;
   return parseJsonOrThrow(response, "Failed to fetch latest aggregated result");
 };

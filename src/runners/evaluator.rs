@@ -6,7 +6,24 @@ use crate::engines::observable::ObservableFactory;
 use crate::engines::{EngineError, EvalError, Evaluator, Parametrization};
 use crate::runners::sample_time_stats::SampleTimeStats;
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt, time::Duration, time::Instant};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct EvaluatorRunnerParams {
+    pub min_loop_time_ms: u64,
+    pub performance_snapshot_interval_ms: u64,
+}
+
+impl Default for EvaluatorRunnerParams {
+    fn default() -> Self {
+        Self {
+            min_loop_time_ms: 0,
+            performance_snapshot_interval_ms: 5_000,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct EvaluatorRunnerTick {

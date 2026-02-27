@@ -1,7 +1,7 @@
-name = "havana-sinc-complex"
-evaluator_implementation = "test_only_sinc"
+name = "symbolica-unit-square-x2-plus-y4-scalar"
+evaluator_implementation = "symbolica"
 sampler_aggregator_implementation = "havana"
-observable_implementation = "complex"
+observable_implementation = "scalar"
 parametrization_implementation = "none"
 
 [point_spec]
@@ -13,14 +13,15 @@ min_loop_time_ms = 200
 performance_snapshot_interval_ms = 5000
 
 [evaluator_params]
-min_eval_time_per_sample_ms = 2
+expr = "x^2 + y^4"
+args = ["x", "y"]
 
 [sampler_aggregator_runner_params]
 interval_ms = 500
 lease_ttl_ms = 5000
 nr_samples = 64
 performance_snapshot_interval_ms = 5000
-max_batches_per_tick = 64
+max_batches_per_tick = 128
 max_pending_batches = 128
 completed_batch_fetch_limit = 512
 

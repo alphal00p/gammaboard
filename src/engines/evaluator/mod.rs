@@ -1,17 +1,21 @@
 mod symbolica;
 mod test_only_sin;
 mod test_only_sinc;
+mod unit;
 
 use super::{BuildError, BuildFromJson, EvalError};
 use crate::{
     batch::{Batch, BatchResult, PointSpec},
-    engines::{evaluator::test_only_sinc::TestSincEvaluator, observable::ObservableFactory},
+    engines::observable::ObservableFactory,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use strum::{AsRefStr, Display};
 
+use self::symbolica::SymbolicaEngine;
 use self::test_only_sin::TestSinEvaluator;
+use self::test_only_sinc::TestSincEvaluator;
+use self::unit::UnitEvaluator;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, AsRefStr, Display)]
 #[serde(rename_all = "snake_case")]
@@ -19,6 +23,8 @@ use self::test_only_sin::TestSinEvaluator;
 pub enum EvaluatorImplementation {
     TestOnlySin,
     TestOnlySinc,
+    Unit,
+    Symbolica,
 }
 
 /// Evaluates integrand values for sample points.
@@ -30,6 +36,9 @@ pub trait Evaluator: Send + Sync {
         observable_factory: &ObservableFactory,
     ) -> Result<BatchResult, EvalError>;
     fn supports_observable(&self, observable_factory: &ObservableFactory) -> bool;
+    fn get_init_metadata(&self) -> JsonValue {
+        json!({})
+    }
     fn get_diagnostics(&self) -> JsonValue {
         json!("{}")
     }
@@ -56,6 +65,10 @@ impl EvaluatorFactory {
             }
             EvaluatorImplementation::TestOnlySinc => {
                 Ok(Box::new(TestSincEvaluator::from_json(&self.params)?))
+            }
+            EvaluatorImplementation::Unit => Ok(Box::new(UnitEvaluator::from_json(&self.params)?)),
+            EvaluatorImplementation::Symbolica => {
+                Ok(Box::new(SymbolicaEngine::from_json(&self.params)?))
             }
         }
     }

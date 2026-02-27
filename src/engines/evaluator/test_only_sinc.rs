@@ -43,6 +43,10 @@ impl Evaluator for TestSincEvaluator {
         batch: &Batch,
         observable_factory: &ObservableFactory,
     ) -> Result<BatchResult, EvalError> {
+        let weights = batch
+            .weights()
+            .as_slice()
+            .ok_or_else(|| EvalError::eval("Batch weights array must be standard-layout"))?;
         let mut observable = observable_factory
             .build()
             .map_err(|err| EvalError::eval(err.to_string()))?;
@@ -56,12 +60,7 @@ impl Evaluator for TestSincEvaluator {
                     observable_factory.implementation
                 ))
             })?;
-            for (row, weight) in batch
-                .continuous()
-                .rows()
-                .into_iter()
-                .zip(batch.weights().iter())
-            {
+            for (row, weight) in batch.continuous().rows().into_iter().zip(weights.iter()) {
                 let x = *row
                     .get(0)
                     .ok_or_else(|| EvalError::eval("missing continuous[0]"))?;
@@ -82,11 +81,7 @@ impl Evaluator for TestSincEvaluator {
             thread::sleep(min_total - elapsed);
         }
 
-        BatchResult::from_values_weights_and_observable(
-            values,
-            batch.weights().as_slice().expect("standard order"),
-            observable.as_ref(),
-        )
+        BatchResult::from_values_weights_and_observable(values, weights, observable.as_ref())
     }
 
     fn supports_observable(&self, observable_factory: &ObservableFactory) -> bool {

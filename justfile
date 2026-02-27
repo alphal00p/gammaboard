@@ -1,9 +1,4 @@
-worker_prefix := "worker"
 poll_ms := "500"
-run1_params_file := "configs/live-test-baseline-sin-scalar.toml"
-run2_params_file := "configs/live-test-havana-sinc-complex.toml"
-run3_params_file := "configs/live-test-invalid-sinc-scalar.toml"
-run4_params_file := "configs/live-test-invalid-sin-complex.toml"
 
 install:
     cargo install --path . --bin control_plane
@@ -30,17 +25,11 @@ start-workers n='10':
     set -euo pipefail
     cargo build --bin run_node
     for i in $(seq 1 {{ n }}); do
-      NODE_ID="{{ worker_prefix }}-${i}"
+      NODE_ID="w-${i}"
       target/debug/run_node --node-id "${NODE_ID}" --poll-ms {{ poll_ms }} &
       echo "started ${NODE_ID}"
     done
     echo "{{ n }} workers started"
-
-stop-workers:
-    -pkill -f "cargo run --bin run_node -- .*--node-id"
-    -pkill -f "{{ justfile_directory() }}/target/debug/run_node.*--node-id"
-    -pkill -f "target/debug/run_node --node-id"
-    @echo "run_node workers stopped"
 
 serve-backend:
     @echo "Starting Rust API server..."
@@ -61,53 +50,57 @@ live-test:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    just stop-workers || true
     just restart-db
-    just start-workers 12
-    sleep 2
+    cargo run --bin run_node -- --node-id "w-1" --poll-ms {{ poll_ms }} &
+    cargo run --bin run_node -- --node-id "w-2" --poll-ms {{ poll_ms }} &
+    cargo run --bin run_node -- --node-id "w-3" --poll-ms {{ poll_ms }} &
+    cargo run --bin run_node -- --node-id "w-4" --poll-ms {{ poll_ms }} &
+    cargo run --bin run_node -- --node-id "w-5" --poll-ms {{ poll_ms }} &
+    cargo run --bin run_node -- --node-id "w-6" --poll-ms {{ poll_ms }} &
+    cargo run --bin run_node -- --node-id "w-7" --poll-ms {{ poll_ms }} &
+    cargo run --bin run_node -- --node-id "w-8" --poll-ms {{ poll_ms }} &
+    cargo run --bin run_node -- --node-id "w-9" --poll-ms {{ poll_ms }} &
+    cargo run --bin run_node -- --node-id "w-10" --poll-ms {{ poll_ms }} &
+    cargo run --bin run_node -- --node-id "w-11" --poll-ms {{ poll_ms }} &
+    cargo run --bin run_node -- --node-id "w-12" --poll-ms {{ poll_ms }} &
+    cargo run --bin run_node -- --node-id "w-13" --poll-ms {{ poll_ms }} &
+    cargo run --bin run_node -- --node-id "w-14" --poll-ms {{ poll_ms }} &
 
-    create_run() {
-      local cfg="$1"
-      local out
-      local id
-      out=$(control_plane run-add --status pending --integration-params-file "${cfg}")
-      id=$(echo "${out}" | sed -n 's/.*run_id=\([0-9]\+\).*/\1/p')
-      if [[ -z "${id}" ]]; then
-        echo "failed to parse run id from: ${out}" >&2
-        exit 1
-      fi
-      echo "${id}"
-    }
+    sleep 4
 
-    RUN1_ID=$(create_run "{{ run1_params_file }}")
-    RUN2_ID=$(create_run "{{ run2_params_file }}")
-    RUN3_ID=$(create_run "{{ run3_params_file }}")
-    RUN4_ID=$(create_run "{{ run4_params_file }}")
+    control_plane run-add "configs/live-test-baseline-sin-scalar.toml"
+    control_plane run-add "configs/live-test-havana-sinc-complex.toml"
+    control_plane run-add "configs/live-test-invalid-sinc-scalar.toml"
+    control_plane run-add "configs/live-test-invalid-sin-complex.toml"
+    control_plane run-add "configs/live-test-symbolica-unit-square-polynomial-scalar.toml"
 
-    control_plane assign --node-id "{{worker_prefix}}-1" --role evaluator --run-id "${RUN1_ID}"
-    control_plane assign --node-id "{{worker_prefix}}-2" --role sampler-aggregator --run-id "${RUN1_ID}"
+    control_plane assign "w-1" evaluator 1
+    control_plane assign "w-2" sampler-aggregator 1
 
-    for i in $(seq 3 7); do
-      control_plane assign --node-id "{{worker_prefix}}-${i}" --role evaluator --run-id "${RUN2_ID}"
-    done
-    control_plane assign --node-id "{{worker_prefix}}-8" --role sampler-aggregator --run-id "${RUN2_ID}"
+    control_plane assign "w-3" evaluator 2
+    control_plane assign "w-4" evaluator 2
+    control_plane assign "w-5" evaluator 2
+    control_plane assign "w-6" evaluator 2
+    control_plane assign "w-7" evaluator 2
+    control_plane assign "w-8" sampler-aggregator 2
 
-    control_plane assign --node-id "{{worker_prefix}}-9" --role evaluator --run-id "${RUN3_ID}"
-    control_plane assign --node-id "{{worker_prefix}}-10" --role sampler-aggregator --run-id "${RUN3_ID}"
+    control_plane assign "w-9" evaluator 3
+    control_plane assign "w-10" sampler-aggregator 3
 
-    control_plane assign --node-id "{{worker_prefix}}-11" --role evaluator --run-id "${RUN4_ID}"
-    control_plane assign --node-id "{{worker_prefix}}-12" --role sampler-aggregator --run-id "${RUN4_ID}"
+    control_plane assign "w-11" evaluator 4
+    control_plane assign "w-12" sampler-aggregator 4
 
-    control_plane run-start --run-id "${RUN1_ID}"
-    control_plane run-start --run-id "${RUN2_ID}"
-    control_plane run-start --run-id "${RUN3_ID}"
-    control_plane run-start --run-id "${RUN4_ID}"
+    control_plane assign "w-13" evaluator 5
+    control_plane assign "w-14" sampler-aggregator 5
+
+    control_plane run-start 1 2 3 4 5
 
     echo "live-test started"
-    echo "run1=${RUN1_ID} (baseline-sin-scalar): test_only_training + 1x test_only_sin + scalar (workers 1-2)"
-    echo "run2=${RUN2_ID} (havana-sinc-complex): havana (2d) + 5x test_only_sinc + complex (workers 3-8)"
-    echo "run3=${RUN3_ID} (invalid-sinc-with-scalar): test_only_training + 1x test_only_sinc + scalar (expected incompatibility error) (workers 9-10)"
-    echo "run4=${RUN4_ID} (invalid-sin-with-complex): test_only_training + 1x test_only_sin + complex (expected incompatibility error) (workers 11-12)"
+    echo "run1=1 (baseline-unit-sphere-volume): test_only_training + 1x unit + spherical parametrization + scalar (workers 1-2)"
+    echo "run2=2 (havana-sinc-complex): havana (2d) + 5x test_only_sinc + complex (workers 3-8)"
+    echo "run3=3 (invalid-sinc-with-scalar): test_only_training + 1x test_only_sinc + scalar (expected incompatibility error) (workers 9-10)"
+    echo "run4=4 (invalid-sin-with-complex): test_only_training + 1x test_only_sin + complex (expected incompatibility error) (workers 11-12)"
+    echo "run5=5 (symbolica-unit-square-x2-plus-y4-scalar): havana (2d) + 1x symbolica(x^2 + y^4) + scalar (workers 13-14)"
 
 stop-backend:
     -pkill -f "{{ justfile_directory() }}/target/debug/server"
@@ -124,5 +117,6 @@ stop-serving:
     @just stop-frontend
 
 stop:
-    @just stop-workers
+    @just control-plane "run-stop -a"
+    @just control-plane "node-stop -a"
     @just stop-serving

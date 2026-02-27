@@ -10,6 +10,8 @@ pub struct RunProgress {
     pub run_name: String,
     pub run_status: RunStatus,
     pub integration_params: Option<serde_json::Value>,
+    pub evaluator_init_metadata: Option<serde_json::Value>,
+    pub sampler_aggregator_init_metadata: Option<serde_json::Value>,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub total_batches_planned: Option<i32>,

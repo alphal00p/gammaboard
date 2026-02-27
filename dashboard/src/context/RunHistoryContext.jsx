@@ -49,41 +49,56 @@ export const RunHistoryProvider = ({
     [historyLimit],
   );
 
-  const fetchAggregatedHistory = useCallback(async () => {
-    if (!runId) return;
-    const data = await fetchAggregatedHistoryApi(runId, historyLimit);
-    setHistory(data);
-    setLatestAggregated(data[0] || null);
-  }, [runId, historyLimit]);
+  const fetchAggregatedHistory = useCallback(
+    async (signal) => {
+      if (!runId) return;
+      const data = await fetchAggregatedHistoryApi(runId, historyLimit, signal);
+      setHistory(data);
+      setLatestAggregated(data[0] || null);
+    },
+    [runId, historyLimit],
+  );
 
-  const fetchLatestAggregated = useCallback(async () => {
-    if (!runId) return;
-    const data = await fetchLatestAggregatedApi(runId);
-    if (!data) {
-      setLatestAggregated(null);
-      return;
-    }
-    setLatestAggregated(data);
-    mergeLatest(data);
-  }, [runId, mergeLatest]);
+  const fetchLatestAggregated = useCallback(
+    async (signal) => {
+      if (!runId) return;
+      const data = await fetchLatestAggregatedApi(runId, signal);
+      if (!data) {
+        setLatestAggregated(null);
+        return;
+      }
+      setLatestAggregated(data);
+      mergeLatest(data);
+    },
+    [runId, mergeLatest],
+  );
 
-  const fetchRun = useCallback(async () => {
-    if (!runId) return;
-    const data = await fetchRunApi(runId);
-    setRun(data);
-  }, [runId]);
+  const fetchRun = useCallback(
+    async (signal) => {
+      if (!runId) return;
+      const data = await fetchRunApi(runId, signal);
+      setRun(data);
+    },
+    [runId],
+  );
 
-  const fetchWorkQueueStats = useCallback(async () => {
-    if (!runId) return;
-    const data = await fetchStatsApi(runId);
-    setWorkQueueStats(data);
-  }, [runId]);
+  const fetchWorkQueueStats = useCallback(
+    async (signal) => {
+      if (!runId) return;
+      const data = await fetchStatsApi(runId, signal);
+      setWorkQueueStats(data);
+    },
+    [runId],
+  );
 
-  const fetchWorkerLogs = useCallback(async () => {
-    if (!runId) return;
-    const data = await fetchRunLogsApi(runId, 500);
-    setWorkerLogs((prev) => (sameLogIdSet(prev, data) ? prev : data));
-  }, [runId]);
+  const fetchWorkerLogs = useCallback(
+    async (signal) => {
+      if (!runId) return;
+      const data = await fetchRunLogsApi(runId, 500, null, null, signal);
+      setWorkerLogs((prev) => (sameLogIdSet(prev, data) ? prev : data));
+    },
+    [runId],
+  );
 
   useEffect(() => {
     if (!runId) {
@@ -99,16 +114,23 @@ export const RunHistoryProvider = ({
     }
 
     let cancelled = false;
+    const controller = new AbortController();
 
     const loadInitial = async () => {
       try {
-        await Promise.all([fetchAggregatedHistory(), fetchRun(), fetchWorkQueueStats(), fetchWorkerLogs()]);
+        await Promise.all([
+          fetchAggregatedHistory(controller.signal),
+          fetchRun(controller.signal),
+          fetchWorkQueueStats(controller.signal),
+          fetchWorkerLogs(controller.signal),
+        ]);
         if (!cancelled) {
           setError(null);
           setIsConnected(true);
           setLastUpdate(formatTime());
         }
       } catch (err) {
+        if (err?.name === "AbortError" || cancelled) return;
         if (!cancelled) {
           setError(err);
           setIsConnected(false);
@@ -120,33 +142,81 @@ export const RunHistoryProvider = ({
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [runId, fetchAggregatedHistory, fetchRun, fetchWorkQueueStats, fetchWorkerLogs]);
 
   useEffect(() => {
     if (!runId) return;
+    let cancelled = false;
+    let timeoutId;
+    let activeController = null;
 
-    const interval = setInterval(async () => {
+    const poll = async () => {
+      activeController = new AbortController();
       try {
-        const requests = [fetchWorkQueueStats(), fetchWorkerLogs()];
-        const sseUnsupported = typeof EventSource === "undefined";
-
-        if (!isConnected || sseUnsupported) {
-          requests.push(fetchLatestAggregated(), fetchRun());
-        }
-
+        const requests = [fetchWorkQueueStats(activeController.signal), fetchWorkerLogs(activeController.signal)];
         await Promise.all(requests);
+        if (cancelled) return;
         setError(null);
         setIsConnected(true);
         setLastUpdate(formatTime());
       } catch (err) {
+        if (err?.name === "AbortError" || cancelled) return;
         setError(err);
         setIsConnected(false);
+      } finally {
+        activeController = null;
+        if (!cancelled) {
+          timeoutId = setTimeout(poll, pollIntervalMs);
+        }
       }
-    }, pollIntervalMs);
+    };
 
-    return () => clearInterval(interval);
-  }, [runId, pollIntervalMs, isConnected, fetchLatestAggregated, fetchWorkQueueStats, fetchRun, fetchWorkerLogs]);
+    poll();
+
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+      if (activeController) activeController.abort();
+    };
+  }, [runId, pollIntervalMs, fetchWorkQueueStats, fetchWorkerLogs]);
+
+  useEffect(() => {
+    if (!runId) return;
+    if (typeof EventSource !== "undefined") return;
+    let cancelled = false;
+    let timeoutId;
+    let activeController = null;
+
+    const pollStatsFallback = async () => {
+      activeController = new AbortController();
+      try {
+        await Promise.all([fetchLatestAggregated(activeController.signal), fetchRun(activeController.signal)]);
+        if (cancelled) return;
+        setError(null);
+        setIsConnected(true);
+        setLastUpdate(formatTime());
+      } catch (err) {
+        if (err?.name === "AbortError" || cancelled) return;
+        setError(err);
+        setIsConnected(false);
+      } finally {
+        activeController = null;
+        if (!cancelled) {
+          timeoutId = setTimeout(pollStatsFallback, pollIntervalMs);
+        }
+      }
+    };
+
+    pollStatsFallback();
+
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+      if (activeController) activeController.abort();
+    };
+  }, [runId, pollIntervalMs, fetchLatestAggregated, fetchRun]);
 
   useEffect(() => {
     if (!runId) return;

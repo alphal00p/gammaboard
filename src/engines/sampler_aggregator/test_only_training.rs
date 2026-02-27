@@ -99,7 +99,7 @@ impl SamplerAggregator for TestTrainingSamplerAggregator {
         let mut continuous_data = Vec::with_capacity(nr_samples * self.continuous_dims);
         let mut discrete_data = Vec::with_capacity(nr_samples * self.discrete_dims);
         for _ in 0..nr_samples {
-            continuous_data.extend((0..self.continuous_dims).map(|_| rng.r#gen::<f64>() * 10.0));
+            continuous_data.extend((0..self.continuous_dims).map(|_| rng.r#gen::<f64>()));
             discrete_data.extend((0..self.discrete_dims).map(|_| rng.r#gen::<u32>() as i64));
         }
 

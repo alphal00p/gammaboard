@@ -24,6 +24,9 @@ pub enum SamplerAggregatorImplementation {
 /// Owns adaptive sampling training for a single run.
 pub trait SamplerAggregator: Send {
     fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError>;
+    fn get_init_metadata(&mut self) -> JsonValue {
+        json!({})
+    }
     fn get_max_batches(&self) -> Option<usize> {
         None
     }

@@ -13,7 +13,6 @@ use crate::{
 #[serde(default, deny_unknown_fields)]
 pub struct HavanaSamplerParams {
     seed: u64,
-    batch_size: usize,
     continuous_dims: usize,
     bins: usize,
     min_samples_for_update: usize,
@@ -27,7 +26,6 @@ impl Default for HavanaSamplerParams {
     fn default() -> Self {
         Self {
             seed: 0,
-            batch_size: 64,
             continuous_dims: 1,
             bins: 64,
             min_samples_for_update: 1_024,
@@ -52,9 +50,6 @@ fn validate_havana_sampler_params(parsed: &HavanaSamplerParams) -> Result<(), Bu
         return Err(BuildError::build(
             "havana sampler requires min_samples_for_update > 0",
         ));
-    }
-    if parsed.batch_size == 0 {
-        return Err(BuildError::build("havana sampler requires batch_size > 0"));
     }
     if parsed.batches_for_update == 0 {
         return Err(BuildError::build(
@@ -86,7 +81,6 @@ fn validate_havana_sampler_params(parsed: &HavanaSamplerParams) -> Result<(), Bu
 }
 
 pub struct HavanaSampler {
-    batch_size: usize,
     continuous_dims: usize,
     batches_produced: usize,
     batches_ingested: usize,
@@ -103,14 +97,12 @@ impl HavanaSampler {
         continuous_dims: usize,
         grid: Grid<f64>,
         rng: MonteCarloRng,
-        batch_size: usize,
         batches_for_update: usize,
         stop_training_after_n_batches: usize,
         initial_training_rate: f64,
         final_training_rate: f64,
     ) -> Self {
         Self {
-            batch_size,
             continuous_dims,
             batches_produced: 0,
             batches_ingested: 0,
@@ -176,7 +168,6 @@ impl BuildFromJson for HavanaSampler {
             params.continuous_dims,
             grid,
             rng,
-            params.batch_size,
             params.batches_for_update,
             stop_training_after_n_batches,
             params.initial_training_rate,
@@ -265,7 +256,6 @@ impl SamplerAggregator for HavanaSampler {
         training_weights: &[f64],
         context: Option<BatchContext>,
     ) -> Result<(), crate::engines::EngineError> {
-        let _ = (&self.batch_size, &self.rng);
         let Some(context) = context else {
             // Training is disabled for this batch or context is unavailable.
             return Ok(());
@@ -284,7 +274,7 @@ impl SamplerAggregator for HavanaSampler {
 
         for (eval, sample) in training_weights.iter().zip(context.samples.iter()) {
             self.grid
-                .add_training_sample(sample, *eval)
+                .add_training_sample(sample, *eval / sample.get_weight()) // the evaluator return the weighted eval, so it needs to be divided by the sample weight
                 .map_err(|err| EngineError::engine(err.to_string()))?;
         }
         self.batches_ingested += 1;

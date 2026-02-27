@@ -6,6 +6,8 @@ At a high level:
 - `control_plane` decides which node should do which role for a run.
 - `run_node` polls desired assignment in PostgreSQL and starts/stops one local worker role loop (`evaluator` or `sampler_aggregator`) to match desired state.
 - `server` exposes run progress, aggregated results, and worker logs for the dashboard.
+- `server` run stats SSE (`GET /api/runs/:id/stream`) uses one shared per-run polling
+  loop with broadcast fanout to all connected clients.
 - `run_node` emits structured worker logs via `tracing`; `target="worker_log"` events
   are persisted into `worker_logs`.
 - Worker performance is persisted as history snapshots in role-split tables:
@@ -23,19 +25,20 @@ At a high level:
 ### Fastest local run
 1. Start everything and run a live backend test:
    - `just live-test`
-   - this provisions four semantically named runs with mixed evaluator/sampler/observable combinations, including two intentionally incompatible runs for error-surface testing.
+   - this provisions five semantically named runs with mixed evaluator/sampler/observable combinations, including one Symbolica polynomial integration run and two intentionally incompatible runs for error-surface testing.
 2. Optional: start backend + frontend dashboards:
    - `just serve`
 
 Useful stop commands:
 - `just stop-workers`
 - `just stop-serving`
+- `just stop` (stops all runs via `control_plane run-stop -a`, then stops serving)
 - `just restart-db`
 
 ## Manual Flow
 
 1. Create a run from TOML config:
-- `cargo run --bin control_plane -- run-add --status pending --integration-params-file configs/live-test.toml`
+- `cargo run --bin control_plane -- run-add configs/live-test.toml`
 
 2. Start nodes:
 - `cargo run --bin run_node -- --node-id node-a --poll-ms 1000`
@@ -44,11 +47,26 @@ Useful stop commands:
 Role selection is fully controlled by desired assignments in the DB.
 
 3. Assign roles:
-- `cargo run --bin control_plane -- assign --node-id node-a --role evaluator --run-id <RUN_ID>`
-- `cargo run --bin control_plane -- assign --node-id node-b --role sampler-aggregator --run-id <RUN_ID>`
+- `cargo run --bin control_plane -- assign node-a evaluator <RUN_ID>`
+- `cargo run --bin control_plane -- assign node-b sampler-aggregator <RUN_ID>`
 
 4. Start the run:
-- `cargo run --bin control_plane -- run-start --run-id <RUN_ID>`
+- `cargo run --bin control_plane -- run-start <RUN_ID> [<RUN_ID> ...]`
+- `cargo run --bin control_plane -- run-start -a`
+
+Pause/stop runs (also clears desired assignments so workers stop on next reconcile):
+- `cargo run --bin control_plane -- run-pause <RUN_ID> [<RUN_ID> ...]`
+- `cargo run --bin control_plane -- run-pause -a`
+- `cargo run --bin control_plane -- run-stop <RUN_ID> [<RUN_ID> ...]`
+- `cargo run --bin control_plane -- run-stop -a`
+
+Stop run-node processes from the control plane:
+- `cargo run --bin control_plane -- node-stop <NODE_ID> [<NODE_ID> ...]`
+- `cargo run --bin control_plane -- node-stop -a`
+
+Remove runs:
+- `cargo run --bin control_plane -- run-remove <RUN_ID> [<RUN_ID> ...]`
+- `cargo run --bin control_plane -- run-remove -a`
 
 ## Configuration
 
@@ -63,7 +81,13 @@ Run configuration is provided as TOML.
 - Evaluators return one `BatchResult` per batch: `values: Vec<f64>` (weighted sampler training signal) and one aggregated `observable` JSON payload.
 - Runtime engines are constructed via factories (`EvaluatorFactory`, `SamplerAggregatorFactory`, `ParametrizationFactory`, `ObservableFactory`) that return boxed trait objects; implementation enums remain config-only.
 - Evaluator implementations receive an `ObservableFactory` during `eval_batch` and build batch-local observable state from it.
+- Evaluator and sampler-aggregator implementations may expose one-time initialization metadata via trait hooks (`get_init_metadata`); workers persist these payloads into `runs.evaluator_init_metadata` and `runs.sampler_aggregator_init_metadata` with write-once semantics (`NULL -> JSONB`).
+- `symbolica` evaluator parameters use `expr` and `args` (argument symbols).
+- `symbolica` evaluator build artifacts are written to a per-engine temporary directory under `./.evaluators` and cleaned up when the evaluator instance is dropped.
+- `unit` evaluator parameters are `{}` and always return per-sample value `1.0`.
 - Observable ingestion in evaluators is capability-based (`as_scalar_ingest` / `as_complex_ingest`) instead of matching concrete observable enum variants.
+- `complex` observable accepts both complex samples and scalar samples (scalar values are cast to `real + 0i`).
+- `spherical` parametrization maps unit-hypercube continuous samples to the unit ball and scales per-sample weights by the spherical-coordinate Jacobian.
 - Sampler-aggregator engines produce one batch per call; the sampler-aggregator runner controls how many batches are produced each tick (`max_batches_per_tick`) and enforces pending-queue limits.
 - Sampler-aggregator runner passes explicit `nr_samples` from `sampler_aggregator_runner_params` into `produce_batch`.
 - Sampler-aggregator engines can attach optional process-local batch context to produced batches; this context is passed back during training ingestion and is not persisted in PostgreSQL.
@@ -114,6 +138,8 @@ training_delay_per_sample_ms = 2
 ```
 
 Havana-specific sampler params:
+- `batch_size` is not a Havana parameter; produced sample count is controlled by
+  `sampler_aggregator_runner_params.nr_samples`.
 - `batches_for_update`: number of produced/ingested batches before one grid update cycle.
 - `initial_training_rate`: training rate at batch 0.
 - `final_training_rate`: training rate at the end of training.
@@ -141,6 +167,7 @@ Compatibility is validated at runner startup before evaluator work begins.
 - Runs can be reassigned at runtime by updating desired assignments via `control_plane`.
 - Sampler-aggregator state is in-memory only; completed batches are consumed and deleted after ingestion.
 - Each `run_node` process executes at most one active role task at a time, with role selection driven by DB desired assignments.
+- `control_plane node-stop` requests node shutdown via DB; each `run_node` consumes and clears a one-shot shutdown signal before exiting.
 - Role lifecycle, lease, heartbeat, and tick failure events from `run_node` are persisted
   in `worker_logs` (indexed by `run_id` and `worker_id`).
 - Worker logs are readable via `GET /api/runs/:id/logs` and shown in the dashboard's

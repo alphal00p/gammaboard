@@ -10,6 +10,6 @@ pub use models::{
     RunStatus, SamplerAggregatorPerformanceSnapshot, Worker, WorkerRole, WorkerStatus,
 };
 pub use traits::{
-    AggregationStore, AssignmentLeaseStore, ControlPlaneStore, RunSpecStore, WorkQueueStore,
-    WorkerRegistryStore,
+    AggregationStore, AssignmentLeaseStore, ControlPlaneStore, RunInitMetadataStore, RunSpecStore,
+    WorkQueueStore, WorkerRegistryStore,
 };

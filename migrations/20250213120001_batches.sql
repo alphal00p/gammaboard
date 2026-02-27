@@ -70,6 +70,8 @@ SELECT
         COALESCE(r.integration_params, '{}'::jsonb)
         || jsonb_build_object('observable_implementation', r.observable_implementation)
     ) as integration_params,
+    r.evaluator_init_metadata,
+    r.sampler_aggregator_init_metadata,
     r.started_at,
     r.completed_at,
     r.total_batches_planned,

@@ -4,7 +4,7 @@ use super::queries;
 use crate::batch::{Batch, BatchResult, PointSpec};
 use crate::core::{
     AggregationStore, AssignmentLeaseStore, BatchClaim, CompletedBatch, ControlPlaneStore,
-    DesiredAssignment, EvaluatorPerformanceSnapshot, RunSpecStore, RunStatus,
+    DesiredAssignment, EvaluatorPerformanceSnapshot, RunInitMetadataStore, RunSpecStore, RunStatus,
     SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore, Worker, WorkerRegistryStore,
     WorkerRole, WorkerStatus,
 };
@@ -334,6 +334,31 @@ impl AssignmentLeaseStore for PgStore {
 }
 
 #[async_trait::async_trait]
+impl RunInitMetadataStore for PgStore {
+    async fn try_set_evaluator_init_metadata(
+        &self,
+        run_id: i32,
+        metadata: &JsonValue,
+    ) -> Result<bool, StoreError> {
+        let rows = queries::try_set_evaluator_init_metadata(&self.pool, run_id, metadata)
+            .await
+            .map_err(map_sqlx)?;
+        Ok(rows > 0)
+    }
+
+    async fn try_set_sampler_init_metadata(
+        &self,
+        run_id: i32,
+        metadata: &JsonValue,
+    ) -> Result<bool, StoreError> {
+        let rows = queries::try_set_sampler_init_metadata(&self.pool, run_id, metadata)
+            .await
+            .map_err(map_sqlx)?;
+        Ok(rows > 0)
+    }
+}
+
+#[async_trait::async_trait]
 impl ControlPlaneStore for PgStore {
     async fn upsert_desired_assignment(
         &self,
@@ -352,6 +377,18 @@ impl ControlPlaneStore for PgStore {
         role: WorkerRole,
     ) -> Result<(), StoreError> {
         queries::clear_desired_assignment(&self.pool, node_id, role)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn clear_desired_assignments_for_run(&self, run_id: i32) -> Result<u64, StoreError> {
+        queries::clear_desired_assignments_for_run(&self.pool, run_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn clear_all_desired_assignments(&self) -> Result<u64, StoreError> {
+        queries::clear_all_desired_assignments(&self.pool)
             .await
             .map_err(map_sqlx)
     }
@@ -389,6 +426,24 @@ impl ControlPlaneStore for PgStore {
         Ok(out)
     }
 
+    async fn request_node_shutdown(&self, node_id: &str) -> Result<u64, StoreError> {
+        queries::request_node_shutdown(&self.pool, node_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn request_all_nodes_shutdown(&self) -> Result<u64, StoreError> {
+        queries::request_all_nodes_shutdown(&self.pool)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn consume_node_shutdown_request(&self, node_id: &str) -> Result<bool, StoreError> {
+        queries::consume_node_shutdown_request(&self.pool, node_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
     async fn create_run(
         &self,
         status: RunStatus,
@@ -419,6 +474,12 @@ impl ControlPlaneStore for PgStore {
             return Err(store_err(format!("run {run_id} not found")));
         }
         Ok(())
+    }
+
+    async fn set_all_runs_status(&self, status: RunStatus) -> Result<u64, StoreError> {
+        queries::set_all_runs_status(&self.pool, status)
+            .await
+            .map_err(map_sqlx)
     }
 
     async fn remove_run(&self, run_id: i32) -> Result<(), StoreError> {
@@ -574,7 +635,7 @@ mod tests {
             EvaluatorImplementation, ObservableImplementation, ParametrizationImplementation,
             SamplerAggregatorImplementation,
         },
-        runners::node_runner::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams},
+        runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams},
     };
     use serde::Deserialize;
     use serde_json::json;

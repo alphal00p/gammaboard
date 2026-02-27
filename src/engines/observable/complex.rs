@@ -4,7 +4,7 @@ use std::any::Any;
 
 use crate::{
     EngineError,
-    engines::{BuildFromJson, observable::ComplexIngest},
+    engines::{BuildFromJson, observable::ComplexIngest, observable::ScalarIngest},
 };
 
 use super::Observable;
@@ -35,6 +35,10 @@ impl Observable for ComplexObservable {
     }
 
     fn as_complex_ingest(&mut self) -> Option<&mut dyn ComplexIngest> {
+        Some(self)
+    }
+
+    fn as_scalar_ingest(&mut self) -> Option<&mut dyn ScalarIngest> {
         Some(self)
     }
 
@@ -72,6 +76,13 @@ impl ComplexIngest for ComplexObservable {
         self.add_sample(value, weight);
     }
 }
+
+impl ScalarIngest for ComplexObservable {
+    fn ingest_scalar(&mut self, value: f64, weight: f64) {
+        self.add_sample(num::complex::Complex64::new(value, 0.0), weight);
+    }
+}
+
 impl BuildFromJson for ComplexObservable {
     type Params = ComplexObservableParams;
 

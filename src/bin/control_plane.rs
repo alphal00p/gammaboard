@@ -1,8 +1,9 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use gammaboard::batch::PointSpec;
 use gammaboard::core::{ControlPlaneStore, DesiredAssignment, RunStatus, WorkerRole};
+use gammaboard::stores::RunReadStore;
 use gammaboard::{BinResult, init_pg_store};
-use serde_json::{Value as JsonValue, json};
+use serde_json::Value as JsonValue;
 use std::{fs, path::PathBuf};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -54,43 +55,43 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     Assign {
-        #[arg(long)]
         node_id: String,
-        #[arg(long)]
         role: RoleArg,
-        #[arg(long)]
         run_id: i32,
     },
     Unassign {
-        #[arg(long)]
         node_id: String,
-        #[arg(long)]
         role: RoleArg,
     },
     ListAssignments {
-        #[arg(long)]
         node_id: Option<String>,
     },
     RunAdd {
-        #[arg(long, value_enum, default_value_t = RunStatusArg::Pending)]
-        status: RunStatusArg,
-        #[arg(long)]
-        integration_params_file: Option<PathBuf>,
-    },
-    RunStart {
-        #[arg(long)]
-        run_id: i32,
-    },
-    RunStop {
-        #[arg(long)]
-        run_id: i32,
-        #[arg(long, value_enum, default_value_t = RunStatusArg::Paused)]
+        integration_params_file: PathBuf,
+        #[arg(short = 's', long, value_enum, default_value_t = RunStatusArg::Pending)]
         status: RunStatusArg,
     },
-    RunRemove {
-        #[arg(long)]
-        run_id: i32,
-    },
+    RunStart(RunSelection),
+    RunPause(RunSelection),
+    RunStop(RunSelection),
+    RunRemove(RunSelection),
+    NodeStop(NodeSelection),
+}
+
+#[derive(Debug, Args)]
+struct RunSelection {
+    #[arg(short = 'a', long = "all", conflicts_with = "run_ids")]
+    all: bool,
+    #[arg(value_name = "RUN_ID", required_unless_present = "all")]
+    run_ids: Vec<i32>,
+}
+
+#[derive(Debug, Args)]
+struct NodeSelection {
+    #[arg(short = 'a', long = "all", conflicts_with = "node_ids")]
+    all: bool,
+    #[arg(value_name = "NODE_ID", required_unless_present = "all")]
+    node_ids: Vec<String>,
 }
 
 fn read_run_add_toml(path: &PathBuf) -> BinResult<JsonValue> {
@@ -211,42 +212,8 @@ async fn main() -> BinResult {
             status,
             integration_params_file,
         } => {
-            let (name, integration_params, point_spec) = match integration_params_file {
-                Some(path) => parse_run_add_payload(read_run_add_toml(&path)?)?,
-                None => parse_run_add_payload(json!({
-                    "name": "live-test",
-                    "point_spec": {
-                        "continuous_dims": 1,
-                        "discrete_dims": 0
-                    },
-                    "evaluator_implementation": "test_only_sin",
-                    "evaluator_params": {},
-                    "sampler_aggregator_implementation": "test_only_training",
-                    "sampler_aggregator_params": {
-                        "continuous_dims": 1,
-                        "discrete_dims": 0,
-                        "training_target_samples": 0,
-                        "training_delay_per_sample_ms": 0
-                    },
-                    "observable_implementation": "scalar",
-                    "observable_params": {},
-                    "parametrization_implementation": "none",
-                    "parametrization_params": {},
-                    "evaluator_runner_params": {
-                        "min_loop_time_ms": 200,
-                        "performance_snapshot_interval_ms": 5000
-                    },
-                    "sampler_aggregator_runner_params": {
-                        "interval_ms": 500,
-                        "lease_ttl_ms": 5000,
-                        "nr_samples": 64,
-                        "performance_snapshot_interval_ms": 5000,
-                        "max_batches_per_tick": 1,
-                        "max_pending_batches": 128,
-                        "completed_batch_fetch_limit": 512
-                    },
-                }))?,
-            };
+            let (name, integration_params, point_spec) =
+                parse_run_add_payload(read_run_add_toml(&integration_params_file)?)?;
             let run_status: RunStatus = status.into();
             let run_id = store
                 .create_run(run_status, &name, &integration_params, &point_spec)
@@ -258,18 +225,83 @@ async fn main() -> BinResult {
                 run_status.as_str()
             );
         }
-        Command::RunStart { run_id } => {
-            store.set_run_status(run_id, RunStatus::Running).await?;
-            println!("run {} set to running", run_id);
+        Command::RunStart(selection) => {
+            if selection.all {
+                let runs_updated = store.set_all_runs_status(RunStatus::Running).await?;
+                println!("started all runs: runs_updated={runs_updated}");
+            } else {
+                for run_id in selection.run_ids {
+                    store.set_run_status(run_id, RunStatus::Running).await?;
+                    println!("run {run_id} started");
+                }
+            }
         }
-        Command::RunStop { run_id, status } => {
-            let run_status: RunStatus = status.into();
-            store.set_run_status(run_id, run_status).await?;
-            println!("run {} set to {}", run_id, run_status.as_str());
+        Command::RunPause(selection) => {
+            if selection.all {
+                let runs_updated = store.set_all_runs_status(RunStatus::Paused).await?;
+                let assignments_cleared = store.clear_all_desired_assignments().await?;
+                println!(
+                    "paused all runs: runs_updated={} assignments_cleared={}",
+                    runs_updated, assignments_cleared
+                );
+            } else {
+                for run_id in selection.run_ids {
+                    store.set_run_status(run_id, RunStatus::Paused).await?;
+                    let assignments_cleared =
+                        store.clear_desired_assignments_for_run(run_id).await?;
+                    println!(
+                        "run {} paused assignments_cleared={}",
+                        run_id, assignments_cleared
+                    );
+                }
+            }
         }
-        Command::RunRemove { run_id } => {
-            store.remove_run(run_id).await?;
-            println!("removed run {}", run_id);
+        Command::RunStop(selection) => {
+            if selection.all {
+                let runs_updated = store.set_all_runs_status(RunStatus::Cancelled).await?;
+                let assignments_cleared = store.clear_all_desired_assignments().await?;
+                println!(
+                    "stopped all runs: runs_updated={} assignments_cleared={}",
+                    runs_updated, assignments_cleared
+                );
+            } else {
+                for run_id in selection.run_ids {
+                    store.set_run_status(run_id, RunStatus::Cancelled).await?;
+                    let assignments_cleared =
+                        store.clear_desired_assignments_for_run(run_id).await?;
+                    println!(
+                        "run {} stopped assignments_cleared={}",
+                        run_id, assignments_cleared
+                    );
+                }
+            }
+        }
+        Command::RunRemove(selection) => {
+            if selection.all {
+                let runs = store.get_all_runs().await?;
+                let mut removed = 0u64;
+                for run in runs {
+                    store.remove_run(run.run_id).await?;
+                    removed += 1;
+                }
+                println!("removed all runs: removed={removed}");
+            } else {
+                for run_id in selection.run_ids {
+                    store.remove_run(run_id).await?;
+                    println!("removed run {run_id}");
+                }
+            }
+        }
+        Command::NodeStop(selection) => {
+            if selection.all {
+                let rows = store.request_all_nodes_shutdown().await?;
+                println!("requested shutdown for all nodes: rows_updated={rows}");
+            } else {
+                for node_id in selection.node_ids {
+                    let rows = store.request_node_shutdown(&node_id).await?;
+                    println!("requested shutdown for node={node_id}: rows_updated={rows}");
+                }
+            }
         }
     }
 

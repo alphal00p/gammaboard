@@ -4,7 +4,7 @@ use super::{
     ParametrizationImplementation, SamplerAggregatorImplementation,
 };
 use crate::batch::{BatchResult, PointSpec};
-use crate::runners::node_runner::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
+use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
