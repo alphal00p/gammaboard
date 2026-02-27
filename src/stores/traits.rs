@@ -27,6 +27,7 @@ pub trait RunReadStore: Send + Sync {
         limit: i64,
         worker_id: Option<&str>,
         level: Option<&str>,
+        after_id: Option<i64>,
     ) -> Result<Vec<WorkerLogEntry>, StoreError>;
     async fn get_registered_workers(
         &self,

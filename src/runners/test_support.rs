@@ -14,10 +14,11 @@ pub(crate) struct MockWorkQueueState {
     pub sampler_perf_snapshots: Vec<SamplerAggregatorPerformanceSnapshot>,
     pub failed: Vec<(i64, String)>,
     pub next_insert_batch_id: i64,
-    pub inserted: Vec<Batch>,
+    pub inserted: Vec<(Batch, bool)>,
     pub inserted_batch_ids: Vec<i64>,
     pub pending_batches: i64,
     pub completed: Vec<CompletedBatch>,
+    pub training_completed_marked_runs: Vec<i32>,
     pub deleted_completed_batch_ids: Vec<i64>,
 }
 
@@ -28,11 +29,16 @@ pub(crate) struct MockWorkQueue {
 
 #[async_trait::async_trait]
 impl WorkQueueStore for MockWorkQueue {
-    async fn insert_batch(&self, _run_id: i32, batch: &Batch) -> Result<i64, StoreError> {
+    async fn insert_batch(
+        &self,
+        _run_id: i32,
+        batch: &Batch,
+        requires_training: bool,
+    ) -> Result<i64, StoreError> {
         let mut guard = self.inner.lock().expect("poison");
         guard.next_insert_batch_id += 1;
         let batch_id = guard.next_insert_batch_id;
-        guard.inserted.push(batch.clone());
+        guard.inserted.push((batch.clone(), requires_training));
         guard.inserted_batch_ids.push(batch_id);
         guard.pending_batches += 1;
         Ok(batch_id)
@@ -103,6 +109,15 @@ impl WorkQueueStore for MockWorkQueue {
         _limit: usize,
     ) -> Result<Vec<CompletedBatch>, StoreError> {
         Ok(self.inner.lock().expect("poison").completed.clone())
+    }
+
+    async fn try_set_training_completed_at(&self, run_id: i32) -> Result<bool, StoreError> {
+        self.inner
+            .lock()
+            .expect("poison")
+            .training_completed_marked_runs
+            .push(run_id);
+        Ok(true)
     }
 
     async fn delete_completed_batches(&self, batch_ids: &[i64]) -> Result<(), StoreError> {

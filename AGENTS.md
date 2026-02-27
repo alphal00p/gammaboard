@@ -29,6 +29,8 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
     (`AsRefStr`, `Display`) and should be rendered with `.as_ref()` or `{impl}` formatting.
 - `src/runners/*`
   - Orchestration loops (`NodeRunner`, evaluator runner, sampler-aggregator runner).
+  - `node_runner/{evaluator_role_runner,sampler_aggregator_role_runner}.rs` owns role-specific
+    run-node execution flows; `active_worker` is a thin dispatcher/shared context.
   - `node_runner` also owns typed runner parameter structs used in run spec decoding
     (`EvaluatorRunnerParams`, `SamplerAggregatorRunnerParams`).
 - `src/stores/*`
@@ -40,8 +42,13 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
 
 ## Operational Conventions
 - Run configuration is passed as TOML to `control_plane run-add`.
-- `control_plane run-add` requires an explicit TOML file path argument (no embedded default payload).
+- `control_plane run-add` requires an explicit TOML file path argument and merges
+  `configs/default.toml` with the provided file (provided file wins).
+- Runtime run-config defaults should live in `configs/default.toml`, not Rust
+  `Default` impls.
 - Run identity is configured via top-level `name` in TOML and persisted in `runs.name`.
+- Run lifecycle status is persisted in `runs.status` and controlled by control-plane
+  run commands.
 - Engine/runner settings are persisted in `runs.integration_params`; point shape is persisted in `runs.point_spec`.
 - Observable implementation is persisted in `runs.observable_implementation`.
 - `control_plane run-pause` / `run-stop` should set run status (`paused`/`cancelled`)
@@ -63,7 +70,12 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
   row-major flat `continuous`/`discrete` arrays, per-sample `weights`, and
   explicit 2D shape metadata.
 - Evaluators operate batch-wise (`Batch -> BatchResult`), where `BatchResult` contains
-  weighted training `values: Vec<f64>` and one aggregated batch-level observable JSON.
+  one aggregated batch-level observable JSON and optional weighted training
+  `values: Option<Vec<f64>>`.
+- `batches.requires_training` indicates whether training values are required for a batch;
+  when `false`, evaluators may return observable-only results.
+- Sampler training completion is tracked at run scope in `runs.training_completed_at`;
+  sampler runner should set this once (NULL -> timestamp) when training transitions to inactive.
 - Evaluator implementations receive an `ObservableFactory` in `eval_batch` and build
   per-batch observable instances through the factory.
 - Evaluator and sampler-aggregator engines can emit run-scoped initialization metadata
@@ -86,17 +98,19 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
   evaluator is dropped (best-effort cleanup on normal process shutdown).
 - Sampler-aggregator engines produce one batch per call (`produce_batch`); the runner owns
   per-tick multi-batch production loops and queue-capacity limiting.
-- Runner-controlled sample count per produced batch comes from
-  `sampler_aggregator_runner_params.nr_samples`; runners pass this value directly to
-  `SamplerAggregator::produce_batch`.
-- Havana sampler params must not include `batch_size`; Havana also uses
-  `sampler_aggregator_runner_params.nr_samples` as the per-batch sample count.
-- Sampler-aggregator engines may optionally throttle per-tick batch production via
-  `SamplerAggregator::get_max_batches` (default `None` means no engine-specific cap).
-  Havana uses this to enforce deterministic update-cycle limits while training is active.
-- Havana training-rate config is scheduled via absolute `batches_produced`:
+- Runner-controlled sample count per produced batch is adaptive and bounded by
+  `sampler_aggregator_runner_params.max_batch_size`; runners tune toward
+  `target_batch_eval_ms` and call `SamplerAggregator::produce_batch` with the
+  current batch size.
+- Havana sampler params must not include `batch_size`; Havana also uses the
+  runner-controlled adaptive batch size.
+- Sampler-aggregator engines may optionally throttle per-tick production via
+  `SamplerAggregator::get_max_samples` (default `None` means no engine-specific cap
+  in samples per tick); under a cap, runner planning should hit the sample target
+  exactly with near-uniform batch sizes (difference <= 1).
+- Havana training-rate config is scheduled via absolute `samples_ingested`:
   `initial_training_rate` -> `final_training_rate` (exponential interpolation), typically
-  bounded by required `stop_training_after_n_batches` (training stop only;
+  bounded by required `stop_training_after_n_samples` (training stop only;
   production continues).
 - Sampler-aggregator engines may return optional local in-memory batch context
   (`BatchContext`) from `produce_batch`; the runner stores it keyed by `batch_id`
@@ -129,15 +143,24 @@ Use `README.md` for human/operator onboarding, and use this file for repo-intern
   into the run-level aggregate observable.
 - Completed batches are consumed by sampler-aggregator and deleted from `batches`; there is no persisted sampler engine state checkpoint.
 - Evaluator and sampler-aggregator performance stats are accumulated in-memory and
-  flushed as periodic history snapshots (`performance_snapshot_interval_ms`) into:
+  flushed as history snapshots into:
   `evaluator_performance_history` and `sampler_aggregator_performance_history`.
+  Both evaluator and sampler-aggregator flush are periodic via their respective
+  runner params (`*_runner_params.performance_snapshot_interval_ms`).
+- Performance history rows are point-in-time snapshots keyed by `created_at`; do not
+  rely on `window_start`/`window_end` columns.
 - Engine diagnostics for those snapshots should be emitted via trait defaults/hooks:
   `Evaluator::get_diagnostics()` and `SamplerAggregator::get_diagnostics()`
   (default `json!("{}")`).
 - Latest worker stats shown in `/api/workers` are read from role-specific latest views:
   `evaluator_performance_latest` and `sampler_aggregator_performance_latest`.
-- Both history tables include a `diagnostics` JSONB payload for implementation-specific
-  diagnostics (for example optimizer/loss metadata in future engines).
+- `evaluator_performance_history` stores split JSONB payloads:
+  `metrics` (generic evaluator counters/timing) and `engine_diagnostics`
+  (implementation-specific diagnostics).
+- `sampler_aggregator_performance_history` stores split JSONB payloads:
+  `metrics` (generic sampler counters/timing), `runtime_metrics` (generic runner
+  control/tuning metrics), and `engine_diagnostics` (implementation-specific
+  diagnostics). Keep generic/runtime metrics out of `engine_diagnostics`.
 - `run_node` role is controlled by DB desired assignments for its `node_id`; CLI does not select role.
 - A `run_node` process executes at most one active role task at a time.
 - Operational stop flows should prefer control-plane desired-state changes

@@ -1,10 +1,10 @@
 import UnsupportedImplementationPanel from "../common/UnsupportedImplementationPanel";
 import HavanaSamplerPanel from "./custom/HavanaSamplerPanel";
-import TestOnlyTrainingSamplerPanel from "./custom/TestOnlyTrainingSamplerPanel";
+import NaiveMonteCarloSamplerPanel from "./custom/NaiveMonteCarloSamplerPanel";
 
 const SAMPLER_CUSTOM_PANELS = {
   havana: HavanaSamplerPanel,
-  test_only_training: TestOnlyTrainingSamplerPanel,
+  naive_monte_carlo: NaiveMonteCarloSamplerPanel,
 };
 
 const SamplerCustomPanel = ({ implementation, samplerParams }) => {

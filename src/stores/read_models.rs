@@ -1,6 +1,6 @@
 //! Read models for API/dashboard responses.
 
-use crate::core::RunStatus;
+use crate::core::{EvaluatorPerformanceMetrics, RunStatus, SamplerPerformanceMetrics};
 use serde::{Deserialize, Serialize};
 
 /// Run progress information.
@@ -14,6 +14,7 @@ pub struct RunProgress {
     pub sampler_aggregator_init_metadata: Option<serde_json::Value>,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub training_completed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub total_batches_planned: Option<i32>,
     pub batches_completed: i32,
     pub total_batches: i64,
@@ -70,20 +71,11 @@ pub struct RegisteredWorkerEntry {
     pub version: String,
     pub status: String,
     pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
-    pub batches_completed: Option<i64>,
-    pub samples_evaluated: Option<i64>,
-    pub avg_time_per_sample_ms: Option<f64>,
-    pub std_time_per_sample_ms: Option<f64>,
-    pub produced_batches: Option<i64>,
-    pub produced_samples: Option<i64>,
-    pub avg_produce_time_per_sample_ms: Option<f64>,
-    pub std_produce_time_per_sample_ms: Option<f64>,
-    pub ingested_batches: Option<i64>,
-    pub ingested_samples: Option<i64>,
-    pub avg_ingest_time_per_sample_ms: Option<f64>,
-    pub std_ingest_time_per_sample_ms: Option<f64>,
-    pub evaluator_diagnostics: Option<serde_json::Value>,
-    pub sampler_diagnostics: Option<serde_json::Value>,
+    pub evaluator_metrics: Option<EvaluatorPerformanceMetrics>,
+    pub sampler_metrics: Option<SamplerPerformanceMetrics>,
+    pub evaluator_engine_diagnostics: Option<serde_json::Value>,
+    pub sampler_runtime_metrics: Option<serde_json::Value>,
+    pub sampler_engine_diagnostics: Option<serde_json::Value>,
 }
 
 /// Evaluator performance history row.
@@ -92,13 +84,8 @@ pub struct EvaluatorPerformanceHistoryEntry {
     pub id: i64,
     pub run_id: i32,
     pub worker_id: String,
-    pub window_start: chrono::DateTime<chrono::Utc>,
-    pub window_end: chrono::DateTime<chrono::Utc>,
-    pub batches_completed: i64,
-    pub samples_evaluated: i64,
-    pub avg_time_per_sample_ms: f64,
-    pub std_time_per_sample_ms: f64,
-    pub diagnostics: serde_json::Value,
+    pub metrics: EvaluatorPerformanceMetrics,
+    pub engine_diagnostics: serde_json::Value,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -108,16 +95,8 @@ pub struct SamplerPerformanceHistoryEntry {
     pub id: i64,
     pub run_id: i32,
     pub worker_id: String,
-    pub window_start: chrono::DateTime<chrono::Utc>,
-    pub window_end: chrono::DateTime<chrono::Utc>,
-    pub produced_batches: i64,
-    pub produced_samples: i64,
-    pub avg_produce_time_per_sample_ms: f64,
-    pub std_produce_time_per_sample_ms: f64,
-    pub ingested_batches: i64,
-    pub ingested_samples: i64,
-    pub avg_ingest_time_per_sample_ms: f64,
-    pub std_ingest_time_per_sample_ms: f64,
-    pub diagnostics: serde_json::Value,
+    pub metrics: SamplerPerformanceMetrics,
+    pub runtime_metrics: serde_json::Value,
+    pub engine_diagnostics: serde_json::Value,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }

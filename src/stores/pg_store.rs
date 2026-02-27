@@ -8,11 +8,9 @@ use crate::core::{
     SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore, Worker, WorkerRegistryStore,
     WorkerRole, WorkerStatus,
 };
-use crate::engines::{
-    IntegrationParams, ObservableImplementation, ParametrizationImplementation, RunSpec,
-};
+use crate::engines::{IntegrationParams, ObservableImplementation, RunSpec};
 use crate::stores::RunReadStore;
-use serde_json::{Value as JsonValue, json};
+use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 use std::time::Duration;
 
@@ -39,6 +37,12 @@ fn map_sqlx(err: sqlx::Error) -> StoreError {
     store_err(err.to_string())
 }
 
+fn missing_integration_param(run_id: i32, field: &str) -> StoreError {
+    store_err(format!(
+        "missing {field} in integration_params for run_id={run_id}"
+    ))
+}
+
 fn run_spec_from_integration_params(
     run_id: i32,
     point_spec: PointSpec,
@@ -59,26 +63,41 @@ fn run_spec_from_integration_params(
             "missing observable_implementation in integration_params for run_id={run_id}"
         ))
     })?;
+    let evaluator_params = params
+        .evaluator_params
+        .ok_or_else(|| missing_integration_param(run_id, "evaluator_params"))?;
+    let sampler_aggregator_params = params
+        .sampler_aggregator_params
+        .ok_or_else(|| missing_integration_param(run_id, "sampler_aggregator_params"))?;
+    let observable_params = params
+        .observable_params
+        .ok_or_else(|| missing_integration_param(run_id, "observable_params"))?;
+    let parametrization_implementation = params
+        .parametrization_implementation
+        .ok_or_else(|| missing_integration_param(run_id, "parametrization_implementation"))?;
+    let parametrization_params = params
+        .parametrization_params
+        .ok_or_else(|| missing_integration_param(run_id, "parametrization_params"))?;
+    let evaluator_runner_params = params
+        .evaluator_runner_params
+        .ok_or_else(|| missing_integration_param(run_id, "evaluator_runner_params"))?;
+    let sampler_aggregator_runner_params = params
+        .sampler_aggregator_runner_params
+        .ok_or_else(|| missing_integration_param(run_id, "sampler_aggregator_runner_params"))?;
 
     Ok(RunSpec {
         run_id,
         point_spec,
         evaluator_implementation,
-        evaluator_params: params.evaluator_params.unwrap_or_else(|| json!({})),
+        evaluator_params,
         sampler_aggregator_implementation,
-        sampler_aggregator_params: params
-            .sampler_aggregator_params
-            .unwrap_or_else(|| json!({})),
+        sampler_aggregator_params,
         observable_implementation,
-        observable_params: params.observable_params.unwrap_or_else(|| json!({})),
-        parametrization_implementation: params
-            .parametrization_implementation
-            .unwrap_or(ParametrizationImplementation::None),
-        parametrization_params: params.parametrization_params.unwrap_or_else(|| json!({})),
-        evaluator_runner_params: params.evaluator_runner_params.unwrap_or_default(),
-        sampler_aggregator_runner_params: params
-            .sampler_aggregator_runner_params
-            .unwrap_or_default(),
+        observable_params,
+        parametrization_implementation,
+        parametrization_params,
+        evaluator_runner_params,
+        sampler_aggregator_runner_params,
     })
 }
 
@@ -122,7 +141,9 @@ fn parse_run_create_payload(
             ))
         })?
     } else {
-        ObservableImplementation::Scalar
+        return Err(store_err(
+            "missing observable_implementation in integration_params",
+        ));
     };
 
     Ok((JsonValue::Object(root), observable_implementation))
@@ -181,8 +202,9 @@ impl RunReadStore for PgStore {
         limit: i64,
         worker_id: Option<&str>,
         level: Option<&str>,
+        after_id: Option<i64>,
     ) -> Result<Vec<crate::stores::WorkerLogEntry>, StoreError> {
-        queries::get_worker_logs(&self.pool, run_id, limit, worker_id, level)
+        queries::get_worker_logs(&self.pool, run_id, limit, worker_id, level, after_id)
             .await
             .map_err(map_sqlx)
     }
@@ -495,8 +517,13 @@ impl ControlPlaneStore for PgStore {
 
 #[async_trait::async_trait]
 impl WorkQueueStore for PgStore {
-    async fn insert_batch(&self, run_id: i32, batch: &Batch) -> Result<i64, StoreError> {
-        queries::insert_batch(&self.pool, run_id, batch)
+    async fn insert_batch(
+        &self,
+        run_id: i32,
+        batch: &Batch,
+        requires_training: bool,
+    ) -> Result<i64, StoreError> {
+        queries::insert_batch(&self.pool, run_id, batch, requires_training)
             .await
             .map_err(map_sqlx)
     }
@@ -516,7 +543,13 @@ impl WorkQueueStore for PgStore {
             .await
             .map_err(map_sqlx)?;
 
-        Ok(claimed.map(|(batch_id, batch)| BatchClaim { batch_id, batch }))
+        Ok(
+            claimed.map(|(batch_id, batch, requires_training)| BatchClaim {
+                batch_id,
+                batch,
+                requires_training,
+            }),
+        )
     }
 
     async fn submit_batch_results(
@@ -570,7 +603,7 @@ impl WorkQueueStore for PgStore {
                     row.batch_id
                 ))
             })?;
-            let result = BatchResult::values_from_json(&row.values, &row.batch_observable)
+            let result = BatchResult::values_from_json(row.values.as_ref(), &row.batch_observable)
                 .map_err(|err| {
                     store_err(format!(
                         "failed to deserialize batch result payload for batch_id={}: {err}",
@@ -581,12 +614,20 @@ impl WorkQueueStore for PgStore {
             out.push(CompletedBatch {
                 batch_id: row.batch_id,
                 batch,
+                requires_training: row.requires_training,
                 result,
                 completed_at: row.completed_at,
+                total_eval_time_ms: row.total_eval_time_ms,
             });
         }
 
         Ok(out)
+    }
+    async fn try_set_training_completed_at(&self, run_id: i32) -> Result<bool, StoreError> {
+        let rows = queries::try_set_training_completed_at(&self.pool, run_id)
+            .await
+            .map_err(map_sqlx)?;
+        Ok(rows > 0)
     }
     async fn delete_completed_batches(&self, batch_ids: &[i64]) -> Result<(), StoreError> {
         queries::delete_completed_batches(&self.pool, batch_ids)
@@ -645,16 +686,28 @@ mod tests {
         let spec = decode_run_spec(
             7,
             json!({
-                "evaluator_implementation": "test_only_sin",
+                "evaluator_implementation": "sin_evaluator",
                 "evaluator_params": { "alpha": 1 },
-                "sampler_aggregator_implementation": "test_only_training",
+                "sampler_aggregator_implementation": "naive_monte_carlo",
                 "sampler_aggregator_params": { "beta": 2 },
                 "observable_implementation": "scalar",
                 "observable_params": { "gamma": 3 },
                 "parametrization_implementation": "identity",
                 "parametrization_params": { "delta": 4 },
-                "evaluator_runner_params": { "min_loop_time_ms": 42 },
-                "sampler_aggregator_runner_params": { "interval_ms": 500 }
+                "evaluator_runner_params": {
+                    "min_loop_time_ms": 42,
+                    "performance_snapshot_interval_ms": 5000
+                },
+                "sampler_aggregator_runner_params": {
+                    "min_poll_time_ms": 500,
+                    "performance_snapshot_interval_ms": 5000,
+                    "target_batch_eval_ms": 200.0,
+                    "lease_ttl_ms": 5000,
+                    "max_batch_size": 64,
+                    "max_queue_size": 128,
+                    "max_batches_per_tick": 1,
+                    "completed_batch_fetch_limit": 512
+                }
             }),
             json!({
                 "continuous_dims": 1,
@@ -668,12 +721,12 @@ mod tests {
         assert_eq!(spec.point_spec.discrete_dims, 0);
         assert_eq!(
             spec.evaluator_implementation,
-            EvaluatorImplementation::TestOnlySin
+            EvaluatorImplementation::SinEvaluator
         );
         assert_eq!(spec.evaluator_params, json!({ "alpha": 1 }));
         assert_eq!(
             spec.sampler_aggregator_implementation,
-            SamplerAggregatorImplementation::TestOnlyTraining
+            SamplerAggregatorImplementation::NaiveMonteCarlo
         );
         assert_eq!(spec.sampler_aggregator_params, json!({ "beta": 2 }));
         assert_eq!(
@@ -688,21 +741,35 @@ mod tests {
         assert_eq!(spec.parametrization_params, json!({ "delta": 4 }));
         assert_eq!(
             spec.evaluator_runner_params,
-            EvaluatorRunnerParams::deserialize(json!({ "min_loop_time_ms": 42 })).unwrap()
+            EvaluatorRunnerParams::deserialize(json!({
+                "min_loop_time_ms": 42,
+                "performance_snapshot_interval_ms": 5000
+            }))
+            .unwrap()
         );
         assert_eq!(
             spec.sampler_aggregator_runner_params,
-            SamplerAggregatorRunnerParams::deserialize(json!({ "interval_ms": 500 })).unwrap()
+            SamplerAggregatorRunnerParams::deserialize(json!({
+                "min_poll_time_ms": 500,
+                "performance_snapshot_interval_ms": 5000,
+                "target_batch_eval_ms": 200.0,
+                "lease_ttl_ms": 5000,
+                "max_batch_size": 64,
+                "max_queue_size": 128,
+                "max_batches_per_tick": 1,
+                "completed_batch_fetch_limit": 512
+            }))
+            .unwrap()
         );
     }
 
     #[test]
-    fn decode_run_spec_defaults_optional_param_payloads() {
-        let spec = decode_run_spec(
+    fn decode_run_spec_requires_non_implementation_fields() {
+        let err = decode_run_spec(
             8,
             json!({
-                "evaluator_implementation": "test_only_sin",
-                "sampler_aggregator_implementation": "test_only_training",
+                "evaluator_implementation": "sin_evaluator",
+                "sampler_aggregator_implementation": "naive_monte_carlo",
                 "observable_implementation": "scalar"
             }),
             json!({
@@ -710,31 +777,15 @@ mod tests {
                 "discrete_dims": 0
             }),
         )
-        .expect("decode");
-
-        assert_eq!(spec.evaluator_params, json!({}));
-        assert_eq!(spec.sampler_aggregator_params, json!({}));
-        assert_eq!(spec.observable_params, json!({}));
-        assert_eq!(
-            spec.parametrization_implementation,
-            ParametrizationImplementation::None
-        );
-        assert_eq!(spec.parametrization_params, json!({}));
-        assert_eq!(
-            spec.evaluator_runner_params,
-            EvaluatorRunnerParams::default()
-        );
-        assert_eq!(
-            spec.sampler_aggregator_runner_params,
-            SamplerAggregatorRunnerParams::default()
-        );
+        .expect_err("missing params should fail");
+        assert!(err.to_string().contains("evaluator_params"));
     }
 
     #[test]
     fn decode_run_spec_requires_implementation_fields() {
         let err = decode_run_spec(
             9,
-            json!({ "evaluator_implementation": "test_only_sin" }),
+            json!({ "evaluator_implementation": "sin_evaluator" }),
             json!({
                 "continuous_dims": 1,
                 "discrete_dims": 0
@@ -749,8 +800,8 @@ mod tests {
         let err = decode_run_spec(
             9,
             json!({
-                "evaluator_implementation": "test_only_sin",
-                "sampler_aggregator_implementation": "test_only_training",
+                "evaluator_implementation": "sin_evaluator",
+                "sampler_aggregator_implementation": "naive_monte_carlo",
             }),
             json!({
                 "continuous_dims": 1,
@@ -778,8 +829,8 @@ mod tests {
     #[test]
     fn parse_run_create_payload_extracts_observable_implementation() {
         let (sanitized, observable) = parse_run_create_payload(&json!({
-            "evaluator_implementation": "test_only_sin",
-            "sampler_aggregator_implementation": "test_only_training",
+            "evaluator_implementation": "sin_evaluator",
+            "sampler_aggregator_implementation": "naive_monte_carlo",
             "observable_implementation": "scalar",
             "observable_params": { "a": 1 }
         }))
@@ -789,24 +840,22 @@ mod tests {
         assert_eq!(
             sanitized,
             json!({
-                "evaluator_implementation": "test_only_sin",
-                "sampler_aggregator_implementation": "test_only_training",
+                "evaluator_implementation": "sin_evaluator",
+                "sampler_aggregator_implementation": "naive_monte_carlo",
                 "observable_params": { "a": 1 }
             })
         );
     }
 
     #[test]
-    fn parse_run_create_payload_defaults_observable_to_scalar() {
-        let (sanitized, observable) = parse_run_create_payload(&json!({
-            "evaluator_implementation": "test_only_sin"
+    fn parse_run_create_payload_requires_observable_implementation() {
+        let err = parse_run_create_payload(&json!({
+            "evaluator_implementation": "sin_evaluator"
         }))
-        .expect("parse");
-
-        assert_eq!(observable, ObservableImplementation::Scalar);
-        assert_eq!(
-            sanitized,
-            json!({ "evaluator_implementation": "test_only_sin" })
+        .expect_err("missing observable_implementation should fail");
+        assert!(
+            err.to_string()
+                .contains("missing observable_implementation")
         );
     }
 

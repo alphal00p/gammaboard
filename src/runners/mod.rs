@@ -1,5 +1,6 @@
 pub mod evaluator;
 pub mod node_runner;
+pub(crate) mod rolling_metric;
 pub(crate) mod sample_time_stats;
 pub mod sampler_aggregator;
 #[cfg(test)]
@@ -10,5 +11,5 @@ pub use evaluator::{
 };
 pub use node_runner::{NodeRunner, NodeRunnerConfig, NodeRunnerStore};
 pub use sampler_aggregator::{
-    RunnerConfig, RunnerError, RunnerTick, SamplerAggregatorRunner, SamplerAggregatorRunnerParams,
+    RunnerError, RunnerTick, SamplerAggregatorRunner, SamplerAggregatorRunnerParams,
 };

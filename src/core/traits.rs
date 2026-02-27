@@ -121,7 +121,12 @@ pub trait ControlPlaneStore: Send + Sync {
 /// Accesses the batch work queue.
 #[async_trait]
 pub trait WorkQueueStore: Send + Sync {
-    async fn insert_batch(&self, run_id: i32, batch: &Batch) -> Result<i64, StoreError>;
+    async fn insert_batch(
+        &self,
+        run_id: i32,
+        batch: &Batch,
+        requires_training: bool,
+    ) -> Result<i64, StoreError>;
     async fn get_pending_batch_count(&self, run_id: i32) -> Result<i64, StoreError>;
     async fn claim_batch(
         &self,
@@ -148,6 +153,7 @@ pub trait WorkQueueStore: Send + Sync {
         run_id: i32,
         limit: usize,
     ) -> Result<Vec<CompletedBatch>, StoreError>;
+    async fn try_set_training_completed_at(&self, run_id: i32) -> Result<bool, StoreError>;
     async fn delete_completed_batches(&self, batch_ids: &[i64]) -> Result<(), StoreError>;
 }
 

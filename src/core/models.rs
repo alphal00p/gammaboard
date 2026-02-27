@@ -146,35 +146,35 @@ pub struct DesiredAssignment {
 pub struct BatchClaim {
     pub batch_id: i64,
     pub batch: Batch,
+    pub requires_training: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct CompletedBatch {
     pub batch_id: i64,
     pub batch: Batch,
+    pub requires_training: bool,
     pub result: BatchResult,
     pub completed_at: Option<DateTime<Utc>>,
+    pub total_eval_time_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EvaluatorPerformanceSnapshot {
-    pub run_id: i32,
-    pub worker_id: String,
-    pub window_start: DateTime<Utc>,
-    pub window_end: DateTime<Utc>,
+pub struct EvaluatorIdleProfileMetrics {
+    pub idle_ratio: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvaluatorPerformanceMetrics {
     pub batches_completed: i64,
     pub samples_evaluated: i64,
     pub avg_time_per_sample_ms: f64,
     pub std_time_per_sample_ms: f64,
-    pub diagnostics: JsonValue,
+    pub idle_profile: Option<EvaluatorIdleProfileMetrics>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SamplerAggregatorPerformanceSnapshot {
-    pub run_id: i32,
-    pub worker_id: String,
-    pub window_start: DateTime<Utc>,
-    pub window_end: DateTime<Utc>,
+pub struct SamplerPerformanceMetrics {
     pub produced_batches: i64,
     pub produced_samples: i64,
     pub avg_produce_time_per_sample_ms: f64,
@@ -183,5 +183,69 @@ pub struct SamplerAggregatorPerformanceSnapshot {
     pub ingested_samples: i64,
     pub avg_ingest_time_per_sample_ms: f64,
     pub std_ingest_time_per_sample_ms: f64,
-    pub diagnostics: JsonValue,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RollingMetricSnapshot {
+    pub mean: Option<f64>,
+    pub std_dev: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SamplerRollingAverages {
+    pub eval_ms_per_sample: RollingMetricSnapshot,
+    pub eval_ms_per_batch: RollingMetricSnapshot,
+    pub sampler_produce_ms_per_sample: RollingMetricSnapshot,
+    pub sampler_ingest_ms_per_sample: RollingMetricSnapshot,
+    pub queue_remaining_ratio: RollingMetricSnapshot,
+    pub batches_consumed_per_tick: RollingMetricSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SamplerRuntimeMetrics {
+    pub produced_batches_total: i64,
+    pub produced_samples_total: i64,
+    pub ingested_batches_total: i64,
+    pub ingested_samples_total: i64,
+    pub batch_size_current: usize,
+    pub rolling: SamplerRollingAverages,
+}
+
+impl SamplerRuntimeMetrics {
+    pub fn to_performance_metrics(&self) -> SamplerPerformanceMetrics {
+        SamplerPerformanceMetrics {
+            produced_batches: self.produced_batches_total,
+            produced_samples: self.produced_samples_total,
+            avg_produce_time_per_sample_ms: self
+                .rolling
+                .sampler_produce_ms_per_sample
+                .mean
+                .unwrap_or(0.0),
+            std_produce_time_per_sample_ms: self.rolling.sampler_produce_ms_per_sample.std_dev,
+            ingested_batches: self.ingested_batches_total,
+            ingested_samples: self.ingested_samples_total,
+            avg_ingest_time_per_sample_ms: self
+                .rolling
+                .sampler_ingest_ms_per_sample
+                .mean
+                .unwrap_or(0.0),
+            std_ingest_time_per_sample_ms: self.rolling.sampler_ingest_ms_per_sample.std_dev,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvaluatorPerformanceSnapshot {
+    pub run_id: i32,
+    pub worker_id: String,
+    pub metrics: EvaluatorPerformanceMetrics,
+    pub engine_diagnostics: JsonValue,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SamplerAggregatorPerformanceSnapshot {
+    pub run_id: i32,
+    pub worker_id: String,
+    pub runtime_metrics: SamplerRuntimeMetrics,
+    pub engine_diagnostics: JsonValue,
 }

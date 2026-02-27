@@ -57,6 +57,7 @@ struct LogQuery {
     limit: i64,
     worker_id: Option<String>,
     level: Option<String>,
+    after_id: Option<i64>,
 }
 
 fn default_log_limit() -> i64 {
@@ -337,6 +338,7 @@ async fn get_run_logs(
             limit,
             params.worker_id.as_deref(),
             params.level.as_deref(),
+            params.after_id,
         )
         .await
     {

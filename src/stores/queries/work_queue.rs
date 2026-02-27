@@ -7,26 +7,30 @@ use sqlx::PgPool;
 pub(crate) struct CompletedBatchRaw {
     pub batch_id: i64,
     pub points: JsonValue,
-    pub values: JsonValue,
+    pub requires_training: bool,
+    pub values: Option<JsonValue>,
     pub batch_observable: JsonValue,
     pub completed_at: Option<DateTime<Utc>>,
+    pub total_eval_time_ms: Option<f64>,
 }
 
 pub(crate) async fn insert_batch(
     pool: &PgPool,
     run_id: i32,
     batch: &Batch,
+    requires_training: bool,
 ) -> Result<i64, sqlx::Error> {
     let batch_id = sqlx::query_scalar::<_, i64>(
         r#"
-        INSERT INTO batches (run_id, points, batch_size, status)
-        VALUES ($1, $2, $3, 'pending')
+        INSERT INTO batches (run_id, points, batch_size, status, requires_training)
+        VALUES ($1, $2, $3, 'pending', $4)
         RETURNING id
         "#,
     )
     .bind(run_id)
     .bind(batch.to_json())
     .bind(batch.size() as i32)
+    .bind(requires_training)
     .fetch_one(pool)
     .await?;
     Ok(batch_id)
@@ -54,8 +58,8 @@ pub(crate) async fn claim_batch(
     pool: &PgPool,
     run_id: i32,
     worker_id: &str,
-) -> Result<Option<(i64, Batch)>, sqlx::Error> {
-    let row = sqlx::query_as::<_, (i64, JsonValue)>(
+) -> Result<Option<(i64, Batch, bool)>, sqlx::Error> {
+    let row = sqlx::query_as::<_, (i64, JsonValue, bool)>(
         r#"
         UPDATE batches
         SET status = 'claimed',
@@ -76,7 +80,7 @@ pub(crate) async fn claim_batch(
             LIMIT 1
             FOR UPDATE SKIP LOCKED
         )
-        RETURNING id, points
+        RETURNING id, points, requires_training
         "#,
     )
     .bind(worker_id)
@@ -84,9 +88,9 @@ pub(crate) async fn claim_batch(
     .fetch_optional(pool)
     .await?;
 
-    if let Some((batch_id, points_json)) = row {
+    if let Some((batch_id, points_json, requires_training)) = row {
         let batch = Batch::from_json(&points_json).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-        Ok(Some((batch_id, batch)))
+        Ok(Some((batch_id, batch, requires_training)))
     } else {
         Ok(None)
     }
@@ -122,31 +126,22 @@ pub(crate) async fn insert_evaluator_performance_snapshot(
     pool: &PgPool,
     snapshot: &EvaluatorPerformanceSnapshot,
 ) -> Result<(), sqlx::Error> {
+    let metrics = serde_json::to_value(&snapshot.metrics).unwrap_or_default();
     sqlx::query(
         r#"
         INSERT INTO evaluator_performance_history (
             run_id,
             worker_id,
-            window_start,
-            window_end,
-            batches_completed,
-            samples_evaluated,
-            avg_time_per_sample_ms,
-            std_time_per_sample_ms,
-            diagnostics
+            metrics,
+            engine_diagnostics
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4)
         "#,
     )
     .bind(snapshot.run_id)
     .bind(&snapshot.worker_id)
-    .bind(snapshot.window_start)
-    .bind(snapshot.window_end)
-    .bind(snapshot.batches_completed)
-    .bind(snapshot.samples_evaluated)
-    .bind(snapshot.avg_time_per_sample_ms)
-    .bind(snapshot.std_time_per_sample_ms)
-    .bind(&snapshot.diagnostics)
+    .bind(&metrics)
+    .bind(&snapshot.engine_diagnostics)
     .execute(pool)
     .await?;
     Ok(())
@@ -156,53 +151,32 @@ pub(crate) async fn insert_sampler_aggregator_performance_snapshot(
     pool: &PgPool,
     snapshot: &SamplerAggregatorPerformanceSnapshot,
 ) -> Result<(), sqlx::Error> {
+    let metrics =
+        serde_json::to_value(snapshot.runtime_metrics.to_performance_metrics()).unwrap_or_default();
+    let runtime_metrics = serde_json::to_value(&snapshot.runtime_metrics).unwrap_or_default();
     sqlx::query(
         r#"
         INSERT INTO sampler_aggregator_performance_history (
             run_id,
             worker_id,
-            window_start,
-            window_end,
-            produced_batches,
-            produced_samples,
-            avg_produce_time_per_sample_ms,
-            std_produce_time_per_sample_ms,
-            ingested_batches,
-            ingested_samples,
-            avg_ingest_time_per_sample_ms,
-            std_ingest_time_per_sample_ms,
-            diagnostics
+            metrics,
+            runtime_metrics,
+            engine_diagnostics
         )
         VALUES (
             $1,
             $2,
             $3,
             $4,
-            $5,
-            $6,
-            $7,
-            $8,
-            $9,
-            $10,
-            $11,
-            $12,
-            $13
+            $5
         )
         "#,
     )
     .bind(snapshot.run_id)
     .bind(&snapshot.worker_id)
-    .bind(snapshot.window_start)
-    .bind(snapshot.window_end)
-    .bind(snapshot.produced_batches)
-    .bind(snapshot.produced_samples)
-    .bind(snapshot.avg_produce_time_per_sample_ms)
-    .bind(snapshot.std_produce_time_per_sample_ms)
-    .bind(snapshot.ingested_batches)
-    .bind(snapshot.ingested_samples)
-    .bind(snapshot.avg_ingest_time_per_sample_ms)
-    .bind(snapshot.std_ingest_time_per_sample_ms)
-    .bind(&snapshot.diagnostics)
+    .bind(&metrics)
+    .bind(&runtime_metrics)
+    .bind(&snapshot.engine_diagnostics)
     .execute(pool)
     .await?;
     Ok(())
@@ -239,16 +213,29 @@ pub(crate) async fn fetch_completed_batches(
     // Return only the contiguous completed prefix by id.
     // This keeps ingestion strictly ordered across batches and leaves out-of-order
     // completions buffered in the DB until gaps are resolved.
-    let rows = sqlx::query_as::<_, (i64, JsonValue, JsonValue, JsonValue, Option<DateTime<Utc>>)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            i64,
+            JsonValue,
+            bool,
+            Option<JsonValue>,
+            JsonValue,
+            Option<DateTime<Utc>>,
+            Option<f64>,
+        ),
+    >(
         r#"
         WITH ordered AS (
             SELECT
                 id,
                 status,
                 points,
+                requires_training,
                 "values",
                 batch_observable,
                 completed_at,
+                total_eval_time_ms,
                 ROW_NUMBER() OVER (ORDER BY id ASC) AS rn
             FROM batches
             WHERE run_id = $1
@@ -263,14 +250,16 @@ pub(crate) async fn fetch_completed_batches(
         SELECT
             o.id,
             o.points,
+            o.requires_training,
             o."values",
             o.batch_observable,
-            o.completed_at
+            o.completed_at,
+            o.total_eval_time_ms
         FROM ordered o
         CROSS JOIN first_blocker b
         WHERE o.status = 'completed'
-          AND o."values" IS NOT NULL
           AND o.batch_observable IS NOT NULL
+          AND (o.requires_training = false OR o."values" IS NOT NULL)
           AND (b.rn IS NULL OR o.rn < b.rn)
         ORDER BY o.id ASC
         "#,
@@ -283,12 +272,24 @@ pub(crate) async fn fetch_completed_batches(
     Ok(rows
         .into_iter()
         .map(
-            |(batch_id, points, values, batch_observable, completed_at)| CompletedBatchRaw {
+            |(
                 batch_id,
                 points,
+                requires_training,
                 values,
                 batch_observable,
                 completed_at,
+                total_eval_time_ms,
+            )| {
+                CompletedBatchRaw {
+                    batch_id,
+                    points,
+                    requires_training,
+                    values,
+                    batch_observable,
+                    completed_at,
+                    total_eval_time_ms,
+                }
             },
         )
         .collect())

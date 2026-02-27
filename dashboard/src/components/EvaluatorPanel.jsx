@@ -7,6 +7,7 @@ const EvaluatorPanel = ({ run }) => {
   const implementation = integrationParams.evaluator_implementation || "unknown";
   const evaluatorParams = integrationParams.evaluator_params || {};
   const runnerParams = integrationParams.evaluator_runner_params || {};
+  const evaluatorInitMetadata = run?.evaluator_init_metadata || {};
 
   return (
     <EnginePanelLayout
@@ -25,11 +26,18 @@ const EvaluatorPanel = ({ run }) => {
           ]}
         />
       }
-      customPanel={<EvaluatorCustomPanel implementation={implementation} evaluatorParams={evaluatorParams} />}
+      customPanel={
+        <EvaluatorCustomPanel
+          implementation={implementation}
+          evaluatorParams={evaluatorParams}
+          evaluatorInitMetadata={evaluatorInitMetadata}
+        />
+      }
       jsonTitle="evaluator JSON"
       jsonData={{
         evaluator_params: evaluatorParams,
         evaluator_runner_params: runnerParams,
+        evaluator_init_metadata: evaluatorInitMetadata,
       }}
     />
   );

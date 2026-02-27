@@ -1,6 +1,6 @@
 import EvaluatorDetailsCard from "./EvaluatorDetailsCard";
 
-const TestOnlySinPanel = ({ evaluatorParams }) => (
+const SinEvaluatorPanel = ({ evaluatorParams }) => (
   <EvaluatorDetailsCard
     minEvalTimePerSampleMs={evaluatorParams?.min_eval_time_per_sample_ms}
     expectedContinuousDims={1}
@@ -9,4 +9,4 @@ const TestOnlySinPanel = ({ evaluatorParams }) => (
   />
 );
 
-export default TestOnlySinPanel;
+export default SinEvaluatorPanel;

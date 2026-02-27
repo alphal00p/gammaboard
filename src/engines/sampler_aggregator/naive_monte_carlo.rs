@@ -6,7 +6,7 @@ use serde::Deserialize;
 use std::{thread, time::Duration};
 
 /// Test-only sampler-aggregator engine with simple random batch generation.
-pub struct TestTrainingSamplerAggregator {
+pub struct NaiveMonteCarloSamplerAggregator {
     continuous_dims: usize,
     discrete_dims: usize,
     training_target_samples: usize,
@@ -17,7 +17,7 @@ pub struct TestTrainingSamplerAggregator {
     sum: f64,
 }
 
-impl TestTrainingSamplerAggregator {
+impl NaiveMonteCarloSamplerAggregator {
     pub fn new(
         continuous_dims: usize,
         discrete_dims: usize,
@@ -39,14 +39,14 @@ impl TestTrainingSamplerAggregator {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct TestSamplerAggregatorParams {
+pub struct NaiveMonteCarloSamplerParams {
     continuous_dims: usize,
     discrete_dims: usize,
     training_target_samples: usize,
     training_delay_per_sample_ms: u64,
 }
 
-impl Default for TestSamplerAggregatorParams {
+impl Default for NaiveMonteCarloSamplerParams {
     fn default() -> Self {
         Self {
             continuous_dims: 1,
@@ -57,8 +57,8 @@ impl Default for TestSamplerAggregatorParams {
     }
 }
 
-impl BuildFromJson for TestTrainingSamplerAggregator {
-    type Params = TestSamplerAggregatorParams;
+impl BuildFromJson for NaiveMonteCarloSamplerAggregator {
+    type Params = NaiveMonteCarloSamplerParams;
     fn from_parsed_params(params: Self::Params) -> Result<Self, BuildError> {
         Ok(Self::new(
             params.continuous_dims,
@@ -69,21 +69,25 @@ impl BuildFromJson for TestTrainingSamplerAggregator {
     }
 }
 
-impl SamplerAggregator for TestTrainingSamplerAggregator {
+impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
     fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError> {
         if point_spec.continuous_dims != self.continuous_dims {
             return Err(BuildError::build(format!(
-                "test_only_training sampler expects continuous_dims={}, got {}",
+                "naive_monte_carlo sampler expects continuous_dims={}, got {}",
                 self.continuous_dims, point_spec.continuous_dims
             )));
         }
         if point_spec.discrete_dims != self.discrete_dims {
             return Err(BuildError::build(format!(
-                "test_only_training sampler expects discrete_dims={}, got {}",
+                "naive_monte_carlo sampler expects discrete_dims={}, got {}",
                 self.discrete_dims, point_spec.discrete_dims
             )));
         }
         Ok(())
+    }
+
+    fn is_training_active(&self) -> bool {
+        self.training_target_samples == 0 || self.trained_samples < self.training_target_samples
     }
 
     fn produce_batch(
@@ -92,7 +96,7 @@ impl SamplerAggregator for TestTrainingSamplerAggregator {
     ) -> Result<(Batch, Option<BatchContext>), EngineError> {
         if nr_samples == 0 {
             return Err(EngineError::engine(
-                "test_only_training sampler requires nr_samples > 0",
+                "naive_monte_carlo sampler requires nr_samples > 0",
             ));
         }
         let mut rng = rand::thread_rng();

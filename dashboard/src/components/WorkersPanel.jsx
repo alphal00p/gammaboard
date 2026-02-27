@@ -37,17 +37,121 @@ const fmtInt = (value) => {
 };
 
 const toObjectOrNull = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : null);
+const rollingMean = (metric) => {
+  if (Number.isFinite(Number(metric))) return Number(metric);
+  const obj = toObjectOrNull(metric);
+  if (!obj) return null;
+  const mean = Number(obj.mean);
+  return Number.isFinite(mean) ? mean : null;
+};
+const evaluatorMetrics = (worker) => toObjectOrNull(worker?.evaluator_metrics) || {};
+const samplerMetrics = (worker) => toObjectOrNull(worker?.sampler_metrics) || {};
+const evaluatorIdleRatio = (worker) => {
+  const idleProfile = toObjectOrNull(evaluatorMetrics(worker).idle_profile) || {};
+  const ratio = Number(idleProfile.idle_ratio);
+  if (!Number.isFinite(ratio)) return null;
+  return Math.min(1, Math.max(0, ratio));
+};
 
-const HavanaDiagnosticsPanel = ({ diagnostics }) => {
-  const obj = toObjectOrNull(diagnostics);
-  const chiSqFromObject = obj && Number.isFinite(Number(obj.chi_sq)) ? Number(obj.chi_sq) : null;
-  const chiSq = Number.isFinite(Number(diagnostics)) ? Number(diagnostics) : chiSqFromObject;
+const fmtDiagnosticValue = (value) => {
+  if (Number.isFinite(Number(value))) return Number(value).toLocaleString();
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+};
+
+const SamplerRuntimePanel = ({ runtimeMetrics }) => {
+  const root = toObjectOrNull(runtimeMetrics) || {};
+  const rolling = toObjectOrNull(root.rolling);
 
   return (
     <Card variant="outlined">
       <CardContent>
         <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
-          Havana Diagnostics
+          Sampler Runtime Metrics
+        </Typography>
+        <Grid container spacing={2}>
+          <Grid item xs={12} sm={6} md={4}>
+            <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+              batch_size_current
+            </Typography>
+            <Typography variant="h5">{root.batch_size_current ?? "n/a"}</Typography>
+          </Grid>
+          <Grid item xs={12} sm={6} md={4}>
+            <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+              eval_ms_per_sample
+            </Typography>
+            <Typography variant="h5">
+              {rollingMean(rolling?.eval_ms_per_sample) != null
+                ? rollingMean(rolling?.eval_ms_per_sample).toFixed(4)
+                : "n/a"}
+            </Typography>
+          </Grid>
+          <Grid item xs={12} sm={6} md={4}>
+            <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+              eval_ms_per_batch
+            </Typography>
+            <Typography variant="h5">
+              {rollingMean(rolling?.eval_ms_per_batch) != null
+                ? rollingMean(rolling?.eval_ms_per_batch).toFixed(4)
+                : "n/a"}
+            </Typography>
+          </Grid>
+          <Grid item xs={12} sm={6} md={4}>
+            <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+              sampler_produce_ms_per_sample
+            </Typography>
+            <Typography variant="h5">
+              {rollingMean(rolling?.sampler_produce_ms_per_sample) != null
+                ? rollingMean(rolling?.sampler_produce_ms_per_sample).toFixed(4)
+                : "n/a"}
+            </Typography>
+          </Grid>
+          <Grid item xs={12} sm={6} md={4}>
+            <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+              sampler_ingest_ms_per_sample
+            </Typography>
+            <Typography variant="h5">
+              {rollingMean(rolling?.sampler_ingest_ms_per_sample) != null
+                ? rollingMean(rolling?.sampler_ingest_ms_per_sample).toFixed(4)
+                : "n/a"}
+            </Typography>
+          </Grid>
+          <Grid item xs={12} sm={6} md={4}>
+            <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+              queue_remaining_ratio
+            </Typography>
+            <Typography variant="h5">
+              {rollingMean(rolling?.queue_remaining_ratio) != null
+                ? rollingMean(rolling?.queue_remaining_ratio).toFixed(4)
+                : "n/a"}
+            </Typography>
+          </Grid>
+          <Grid item xs={12} sm={6} md={4}>
+            <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+              batches_consumed_per_tick
+            </Typography>
+            <Typography variant="h5">
+              {rollingMean(rolling?.batches_consumed_per_tick) != null
+                ? rollingMean(rolling?.batches_consumed_per_tick).toFixed(4)
+                : "n/a"}
+            </Typography>
+          </Grid>
+        </Grid>
+      </CardContent>
+    </Card>
+  );
+};
+
+const HavanaDiagnosticsPanel = ({ engineDiagnostics }) => {
+  const diagnostics = toObjectOrNull(engineDiagnostics) || {};
+  const chiSq = Number.isFinite(Number(diagnostics?.chi_sq)) ? Number(diagnostics.chi_sq) : null;
+  const otherFields = Object.entries(diagnostics).filter(([key]) => key !== "chi_sq");
+
+  return (
+    <Card variant="outlined">
+      <CardContent>
+        <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
+          Havana Engine Diagnostics
         </Typography>
         <Grid container spacing={2}>
           <Grid item xs={12} sm={6} md={4}>
@@ -56,21 +160,29 @@ const HavanaDiagnosticsPanel = ({ diagnostics }) => {
             </Typography>
             <Typography variant="h5">{chiSq == null ? "n/a" : chiSq.toFixed(6)}</Typography>
           </Grid>
+          {otherFields.map(([key, value]) => (
+            <Grid key={key} item xs={12} sm={6} md={4}>
+              <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+                {key}
+              </Typography>
+              <Typography variant="h6">{fmtDiagnosticValue(value)}</Typography>
+            </Grid>
+          ))}
         </Grid>
       </CardContent>
     </Card>
   );
 };
 
-const TestOnlyTrainingDiagnosticsPanel = ({ diagnostics }) => {
-  const obj = toObjectOrNull(diagnostics);
+const NaiveMonteCarloDiagnosticsPanel = ({ engineDiagnostics }) => {
+  const merged = toObjectOrNull(engineDiagnostics) || {};
 
-  if (!obj || Object.keys(obj).length === 0) {
+  if (Object.keys(merged).length === 0) {
     return (
       <Card variant="outlined">
         <CardContent>
           <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 0.5 }}>
-            test_only_training Diagnostics
+            naive_monte_carlo Diagnostics
           </Typography>
           <Typography variant="body2" color="text.secondary">
             No custom diagnostics reported.
@@ -84,17 +196,15 @@ const TestOnlyTrainingDiagnosticsPanel = ({ diagnostics }) => {
     <Card variant="outlined">
       <CardContent>
         <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
-          test_only_training Diagnostics
+          naive_monte_carlo Diagnostics
         </Typography>
         <Grid container spacing={2}>
-          {Object.entries(obj).map(([key, val]) => (
+          {Object.entries(merged).map(([key, val]) => (
             <Grid key={key} item xs={12} sm={6} md={4}>
               <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
                 {key}
               </Typography>
-              <Typography variant="h6">
-                {Number.isFinite(Number(val)) ? Number(val).toLocaleString() : String(val)}
-              </Typography>
+              <Typography variant="h6">{fmtDiagnosticValue(val)}</Typography>
             </Grid>
           ))}
         </Grid>
@@ -120,11 +230,11 @@ const SamplerDiagnosticsCustomPanel = ({ worker }) => {
   }
 
   if (worker.implementation === "havana") {
-    return <HavanaDiagnosticsPanel diagnostics={worker.sampler_diagnostics} />;
+    return <HavanaDiagnosticsPanel engineDiagnostics={worker.sampler_engine_diagnostics} />;
   }
 
-  if (worker.implementation === "test_only_training") {
-    return <TestOnlyTrainingDiagnosticsPanel diagnostics={worker.sampler_diagnostics} />;
+  if (worker.implementation === "naive_monte_carlo") {
+    return <NaiveMonteCarloDiagnosticsPanel engineDiagnostics={worker.sampler_engine_diagnostics} />;
   }
 
   return <UnsupportedImplementationPanel kind="sampler diagnostics" implementation={worker.implementation} />;
@@ -166,6 +276,11 @@ const WorkersPanel = ({ runId, refreshMs = 3000 }) => {
       evaluatorWorkers.map((worker) => ({
         id: worker.worker_id,
         ...worker,
+        batches_completed: evaluatorMetrics(worker).batches_completed,
+        samples_evaluated: evaluatorMetrics(worker).samples_evaluated,
+        avg_time_per_sample_ms: evaluatorMetrics(worker).avg_time_per_sample_ms,
+        std_time_per_sample_ms: evaluatorMetrics(worker).std_time_per_sample_ms,
+        idle_ratio: evaluatorIdleRatio(worker),
         last_seen_age_s: ageSeconds(worker.last_seen),
       })),
     [evaluatorWorkers],
@@ -216,6 +331,16 @@ const WorkersPanel = ({ runId, refreshMs = 3000 }) => {
         minWidth: 130,
         flex: 0.7,
         renderCell: (params) => fmtMs(params.value),
+      },
+      {
+        field: "idle_ratio",
+        headerName: "Idle Ratio",
+        minWidth: 110,
+        flex: 0.6,
+        renderCell: (params) => {
+          const v = Number(params.value);
+          return Number.isFinite(v) ? `${(v * 100).toFixed(1)}%` : "-";
+        },
       },
       {
         field: "last_seen_age_s",
@@ -298,25 +423,33 @@ const WorkersPanel = ({ runId, refreshMs = 3000 }) => {
                   <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
                     produced batches
                   </Typography>
-                  <Typography variant="body2">{fmtInt(selectedSamplerWorker.produced_batches)}</Typography>
+                  <Typography variant="body2">
+                    {fmtInt(samplerMetrics(selectedSamplerWorker).produced_batches)}
+                  </Typography>
                 </Grid>
                 <Grid item xs={12} sm={6} md={3}>
                   <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
                     produced samples
                   </Typography>
-                  <Typography variant="body2">{fmtInt(selectedSamplerWorker.produced_samples)}</Typography>
+                  <Typography variant="body2">
+                    {fmtInt(samplerMetrics(selectedSamplerWorker).produced_samples)}
+                  </Typography>
                 </Grid>
                 <Grid item xs={12} sm={6} md={3}>
                   <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
                     produce avg ms/sample
                   </Typography>
-                  <Typography variant="body2">{fmtMs(selectedSamplerWorker.avg_produce_time_per_sample_ms)}</Typography>
+                  <Typography variant="body2">
+                    {fmtMs(samplerMetrics(selectedSamplerWorker).avg_produce_time_per_sample_ms)}
+                  </Typography>
                 </Grid>
                 <Grid item xs={12} sm={6} md={3}>
                   <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
                     ingest avg ms/sample
                   </Typography>
-                  <Typography variant="body2">{fmtMs(selectedSamplerWorker.avg_ingest_time_per_sample_ms)}</Typography>
+                  <Typography variant="body2">
+                    {fmtMs(samplerMetrics(selectedSamplerWorker).avg_ingest_time_per_sample_ms)}
+                  </Typography>
                 </Grid>
                 <Grid item xs={12} sm={6} md={3}>
                   <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
@@ -334,6 +467,9 @@ const WorkersPanel = ({ runId, refreshMs = 3000 }) => {
         </Card>
 
         <Box sx={{ mb: 2 }}>
+          <SamplerRuntimePanel runtimeMetrics={selectedSamplerWorker?.sampler_runtime_metrics} />
+        </Box>
+        <Box sx={{ mb: 2 }}>
           <SamplerDiagnosticsCustomPanel worker={selectedSamplerWorker} />
         </Box>
         <JsonFallback
@@ -341,7 +477,8 @@ const WorkersPanel = ({ runId, refreshMs = 3000 }) => {
           data={{
             worker_id: selectedSamplerWorker?.worker_id ?? null,
             implementation: selectedSamplerWorker?.implementation ?? null,
-            diagnostics: selectedSamplerWorker?.sampler_diagnostics ?? null,
+            runtime_metrics: selectedSamplerWorker?.sampler_runtime_metrics ?? null,
+            engine_diagnostics: selectedSamplerWorker?.sampler_engine_diagnostics ?? null,
           }}
         />
       </Box>

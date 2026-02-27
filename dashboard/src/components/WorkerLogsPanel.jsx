@@ -19,6 +19,17 @@ import { formatDateTime } from "../utils/formatters";
 
 const MAX_LINES = 2000;
 
+const buildSearchText = (entry) => {
+  const message = entry?.message || "";
+  let fields = "";
+  try {
+    fields = JSON.stringify(entry?.fields || {});
+  } catch {
+    fields = "";
+  }
+  return `${message} ${fields}`.toLowerCase();
+};
+
 const levelTone = (level) => {
   switch ((level || "").toLowerCase()) {
     case "error":
@@ -56,8 +67,9 @@ const mergeLogs = (previous, incoming) => {
   let hasNewIds = false;
   for (const entry of incoming) {
     if (!entry || entry.id == null) continue;
+    const nextEntry = entry._searchText ? entry : { ...entry, _searchText: buildSearchText(entry) };
     if (!merged.has(entry.id)) hasNewIds = true;
-    merged.set(entry.id, entry);
+    merged.set(entry.id, nextEntry);
   }
 
   if (!hasNewIds) return previous;
@@ -122,7 +134,7 @@ const WorkerLogsPanel = ({ logs, runId }) => {
       if (workerFilter !== "all" && entry.worker_id !== workerFilter) return false;
 
       if (text) {
-        const payload = `${entry.message || ""} ${JSON.stringify(entry.fields || {})}`.toLowerCase();
+        const payload = entry._searchText || "";
         if (!payload.includes(text)) return false;
       }
 

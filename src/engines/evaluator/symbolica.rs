@@ -2,24 +2,27 @@ use std::{fs, path::Path};
 
 use crate::{
     Batch, BatchResult, BuildError, EngineError, EvalError, PointSpec,
-    engines::{BuildFromJson, Evaluator, observable::ObservableFactory},
+    engines::{BuildFromJson, EvalBatchOptions, Evaluator, observable::ObservableFactory},
 };
 use serde::Deserialize;
 use serde_json::{Value as JsonValue, json};
-use symbolica::evaluate::{
-    BatchEvaluator, CompileOptions, CompiledRealEvaluator, FunctionMap, OptimizationSettings,
-};
-use symbolica::parser::ParseSettings;
 use symbolica::wrap_input;
 use symbolica::{
     atom::{Atom, AtomCore},
     evaluate::ExportSettings,
 };
+use symbolica::{
+    evaluate::{
+        BatchEvaluator, CompileOptions, CompiledRealEvaluator, FunctionMap, OptimizationSettings,
+    },
+    printer::PrintOptions,
+};
+use symbolica::{parser::ParseSettings, printer::PrintState};
 use tempfile::TempDir;
 
 pub struct SymbolicaEngine {
     eval: CompiledRealEvaluator,
-    n_args: usize,
+    parsed_expr: Atom,
     expr: String,
     args: Vec<String>,
     _artifacts_dir: TempDir,
@@ -28,14 +31,14 @@ pub struct SymbolicaEngine {
 impl SymbolicaEngine {
     fn new(
         eval: CompiledRealEvaluator,
-        n_args: usize,
+        parsed_expr: Atom,
         expr: String,
         args: Vec<String>,
         artifacts_dir: TempDir,
     ) -> Self {
         SymbolicaEngine {
             eval,
-            n_args,
+            parsed_expr,
             expr,
             args,
             _artifacts_dir: artifacts_dir,
@@ -53,11 +56,8 @@ impl BuildFromJson for SymbolicaEngine {
     type Params = SymbolicaParams;
 
     fn from_parsed_params(params: Self::Params) -> Result<Self, crate::BuildError> {
-        let expr = params.expr.clone();
-        let arg_names = params.args.clone();
         let settings = ParseSettings::symbolica();
-
-        let atom = Atom::parse(wrap_input!(&params.expr), settings.clone())
+        let parsed_expr = Atom::parse(wrap_input!(&params.expr), settings.clone())
             .map_err(|err| BuildError::Build(err.to_string()))?;
 
         let mut args = Vec::with_capacity(params.args.len());
@@ -67,7 +67,7 @@ impl BuildFromJson for SymbolicaEngine {
             args.push(parsed);
         }
 
-        let evaluator = atom
+        let evaluator = parsed_expr
             .evaluator(
                 &FunctionMap::default(),
                 &args,
@@ -100,9 +100,9 @@ impl BuildFromJson for SymbolicaEngine {
 
         Ok(SymbolicaEngine::new(
             evaluator,
-            args.len(),
-            expr,
-            arg_names,
+            parsed_expr,
+            params.expr,
+            params.args.clone(),
             artifacts_dir,
         ))
     }
@@ -114,10 +114,10 @@ impl Evaluator for SymbolicaEngine {
             Err(BuildError::Build(
                 "Discrete dimensions are not supported".to_string(),
             ))
-        } else if point_spec.continuous_dims != self.n_args {
+        } else if point_spec.continuous_dims != self.args.len() {
             Err(BuildError::Build(format!(
                 "Continuous dimensions need to match the number of arguments (n = {})",
-                self.n_args
+                self.args.len()
             )))
         } else {
             Ok(())
@@ -128,6 +128,7 @@ impl Evaluator for SymbolicaEngine {
         &mut self,
         batch: &Batch,
         observable_factory: &ObservableFactory,
+        options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
         let continuous = batch.continuous().as_slice().ok_or_else(|| {
             EvalError::Engine("Batch continuous array must be standard-layout".to_string())
@@ -154,7 +155,11 @@ impl Evaluator for SymbolicaEngine {
                 scalar_ingest.ingest_scalar(*value, *weight);
             }
         }
-        BatchResult::from_values_weights_and_observable(out, weights, observable.as_ref())
+        if options.require_training_values {
+            BatchResult::from_values_weights_and_observable(out, weights, observable.as_ref())
+        } else {
+            BatchResult::from_observable_only(observable.as_ref())
+        }
     }
 
     fn supports_observable(&self, observable_factory: &ObservableFactory) -> bool {
@@ -165,9 +170,15 @@ impl Evaluator for SymbolicaEngine {
     }
 
     fn get_init_metadata(&self) -> JsonValue {
+        let mut str = String::new();
+        _ = self
+            .parsed_expr
+            .format(&mut str, &PrintOptions::latex(), PrintState::new());
+
         json!({
             "expr": &self.expr,
             "args": &self.args,
+            "expr_latex": str,
         })
     }
 }

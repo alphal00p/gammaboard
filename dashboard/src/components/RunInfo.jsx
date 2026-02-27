@@ -12,6 +12,16 @@ const RunInfo = ({ run }) => {
   const observableImplementation =
     run.observable_implementation || integrationParams.observable_implementation || "unknown";
   const pointSpec = run.point_spec || integrationParams.point_spec || null;
+  const trainingCompleted = Boolean(run.training_completed_at);
+  const trainingLabel = trainingCompleted ? "training completed" : "training";
+  let pointSpecText = "not exposed by /runs/:id";
+  if (pointSpec) {
+    try {
+      pointSpecText = JSON.stringify(pointSpec);
+    } catch {
+      pointSpecText = "failed to serialize point_spec";
+    }
+  }
 
   return (
     <Box sx={{ mb: 3 }}>
@@ -35,6 +45,12 @@ const RunInfo = ({ run }) => {
                 color={run.run_status === "running" ? "success" : "default"}
                 size="medium"
                 sx={{ mt: 1, fontWeight: 600 }}
+              />
+              <Chip
+                label={trainingLabel}
+                color={trainingCompleted ? "info" : "warning"}
+                size="small"
+                sx={{ mt: 1, fontWeight: 600, ml: 1 }}
               />
             </CardContent>
           </Card>
@@ -73,6 +89,9 @@ const RunInfo = ({ run }) => {
               <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
                 completed: {formatDateTime(run.completed_at)}
               </Typography>
+              <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                training_completed_at: {formatDateTime(run.training_completed_at)}
+              </Typography>
             </CardContent>
           </Card>
         </Grid>
@@ -88,10 +107,10 @@ const RunInfo = ({ run }) => {
                 Progress
               </Typography>
               <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                completed_batches: {run.batches_completed ?? 0}
+                processed_batches_total: {(run.batches_completed ?? 0).toLocaleString()}
               </Typography>
               <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                completion_rate: {((run.completion_rate || 0) * 100 || 0).toFixed(1)}%
+                queue_batches_current: {(run.total_batches ?? 0).toLocaleString()}
               </Typography>
             </CardContent>
           </Card>
@@ -116,7 +135,7 @@ const RunInfo = ({ run }) => {
                 observable: {observableImplementation}
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace", mt: 1 }}>
-                point_spec: {pointSpec ? JSON.stringify(pointSpec) : "not exposed by /runs/:id"}
+                point_spec: {pointSpecText}
               </Typography>
             </CardContent>
           </Card>

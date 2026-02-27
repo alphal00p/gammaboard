@@ -5,10 +5,9 @@ import {
   CheckCircle as CheckCircleIcon,
   Error as ErrorIcon,
   Timer as TimerIcon,
-  DonutLarge as DonutLargeIcon,
 } from "@mui/icons-material";
 
-const WorkQueueStats = ({ stats, completionRate }) => {
+const WorkQueueStats = ({ stats }) => {
   const defaultStatuses = ["pending", "claimed", "completed", "failed"];
 
   const statsByStatus = new Map((stats || []).map((stat) => [(stat.status || "").toLowerCase(), stat]));
@@ -59,12 +58,6 @@ const WorkQueueStats = ({ stats, completionRate }) => {
     <Box sx={{ mb: 3 }}>
       <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 1 }}>
         <Typography variant="h6">Work Queue (Pending → Claimed → Completed)</Typography>
-        <Chip
-          icon={<DonutLargeIcon />}
-          color="primary"
-          variant="outlined"
-          label={`Completion ${((completionRate || 0) * 100).toFixed(1)}%`}
-        />
       </Box>
 
       <Grid container spacing={2}>

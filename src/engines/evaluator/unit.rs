@@ -1,4 +1,5 @@
 use crate::batch::{Batch, BatchResult, PointSpec};
+use crate::engines::EvalBatchOptions;
 use crate::engines::observable::ObservableFactory;
 use crate::engines::{BuildError, BuildFromJson, EvalError, Evaluator};
 use serde::Deserialize;
@@ -25,6 +26,7 @@ impl Evaluator for UnitEvaluator {
         &mut self,
         batch: &Batch,
         observable_factory: &ObservableFactory,
+        options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
         let weights = batch
             .weights()
@@ -47,7 +49,11 @@ impl Evaluator for UnitEvaluator {
             }
         }
 
-        BatchResult::from_values_weights_and_observable(values, weights, observable.as_ref())
+        if options.require_training_values {
+            BatchResult::from_values_weights_and_observable(values, weights, observable.as_ref())
+        } else {
+            BatchResult::from_observable_only(observable.as_ref())
+        }
     }
 
     fn supports_observable(&self, observable_factory: &ObservableFactory) -> bool {
@@ -89,10 +95,16 @@ mod tests {
         let mut evaluator = UnitEvaluator::new();
 
         let result = evaluator
-            .eval_batch(&batch, &observable_factory)
+            .eval_batch(
+                &batch,
+                &observable_factory,
+                EvalBatchOptions {
+                    require_training_values: true,
+                },
+            )
             .expect("result");
 
-        assert_eq!(result.values, vec![2.0, 3.0]);
+        assert_eq!(result.values, Some(vec![2.0, 3.0]));
         assert_eq!(result.observable["count"], json!(2));
         assert_eq!(result.observable["sum_weight"], json!(5.0));
     }
@@ -114,10 +126,16 @@ mod tests {
 
         assert!(evaluator.supports_observable(&observable_factory));
         let result = evaluator
-            .eval_batch(&batch, &observable_factory)
+            .eval_batch(
+                &batch,
+                &observable_factory,
+                EvalBatchOptions {
+                    require_training_values: true,
+                },
+            )
             .expect("result");
 
-        assert_eq!(result.values, vec![2.0, 3.0]);
+        assert_eq!(result.values, Some(vec![2.0, 3.0]));
         assert_eq!(result.observable["count"], json!(2));
         assert_eq!(result.observable["real_sum"], json!(5.0));
         assert_eq!(result.observable["imag_sum"], json!(0.0));

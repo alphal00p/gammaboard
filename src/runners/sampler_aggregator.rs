@@ -10,67 +10,92 @@
 
 use crate::batch::PointSpec;
 use crate::core::{
-    AggregationStore, CompletedBatch, SamplerAggregatorPerformanceSnapshot, StoreError,
-    WorkQueueStore,
+    AggregationStore, CompletedBatch, RollingMetricSnapshot, SamplerAggregatorPerformanceSnapshot,
+    SamplerRollingAverages, SamplerRuntimeMetrics, StoreError, WorkQueueStore,
 };
 use crate::engines::observable::ObservableFactory;
 use crate::engines::{BatchContext, EngineError, Observable, SamplerAggregator};
-use crate::runners::sample_time_stats::SampleTimeStats;
-use chrono::Utc;
+use crate::runners::rolling_metric::RollingMetric;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, error::Error, fmt, time::Duration, time::Instant};
+use std::{
+    collections::HashMap,
+    error::Error,
+    fmt,
+    time::{Duration, Instant},
+};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerAggregatorRunnerParams {
-    pub interval_ms: u64,
     pub lease_ttl_ms: u64,
-    pub nr_samples: usize,
+    pub min_poll_time_ms: u64,
     pub performance_snapshot_interval_ms: u64,
-    pub max_pending_batches: usize,
+    pub target_batch_eval_ms: f64,
+    pub max_batch_size: usize,
+    pub max_queue_size: usize,
     pub max_batches_per_tick: usize,
     pub completed_batch_fetch_limit: usize,
-}
-
-impl Default for SamplerAggregatorRunnerParams {
-    fn default() -> Self {
-        Self {
-            interval_ms: 500,
-            lease_ttl_ms: 5_000,
-            nr_samples: 64,
-            performance_snapshot_interval_ms: 5_000,
-            max_pending_batches: 128,
-            max_batches_per_tick: 1,
-            completed_batch_fetch_limit: 512,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct RunnerConfig {
-    pub nr_samples: usize,
-    pub performance_snapshot_interval_ms: u64,
-    pub max_batches_per_tick: usize,
-    pub max_pending_batches: usize,
-    pub completed_batch_fetch_limit: usize,
-}
-
-impl Default for RunnerConfig {
-    fn default() -> Self {
-        Self {
-            nr_samples: 64,
-            performance_snapshot_interval_ms: 5_000,
-            max_batches_per_tick: 16,
-            max_pending_batches: 4096,
-            completed_batch_fetch_limit: 1024,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
 pub struct RunnerTick {
     pub enqueued_batches: usize,
     pub processed_completed_batches: usize,
+    pub queue_depleted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+struct RollingAveragesState {
+    eval_ms_per_sample: RollingMetric,
+    eval_ms_per_batch: RollingMetric,
+    sampler_produce_ms_per_sample: RollingMetric,
+    sampler_ingest_ms_per_sample: RollingMetric,
+    queue_remaining_ratio: RollingMetric,
+    batches_consumed_per_tick: RollingMetric,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+struct SamplerRuntimeState {
+    produced_batches_total: i64,
+    produced_samples_total: i64,
+    ingested_batches_total: i64,
+    ingested_samples_total: i64,
+    batch_size_current: usize,
+    rolling: RollingAveragesState,
+}
+
+impl SamplerRuntimeState {
+    fn rolling_metric_snapshot(metric: &RollingMetric) -> RollingMetricSnapshot {
+        RollingMetricSnapshot {
+            mean: metric.value(),
+            std_dev: metric.std_dev(),
+        }
+    }
+
+    fn to_runtime_metrics(&self) -> SamplerRuntimeMetrics {
+        SamplerRuntimeMetrics {
+            produced_batches_total: self.produced_batches_total,
+            produced_samples_total: self.produced_samples_total,
+            ingested_batches_total: self.ingested_batches_total,
+            ingested_samples_total: self.ingested_samples_total,
+            batch_size_current: self.batch_size_current,
+            rolling: SamplerRollingAverages {
+                eval_ms_per_sample: Self::rolling_metric_snapshot(&self.rolling.eval_ms_per_sample),
+                eval_ms_per_batch: Self::rolling_metric_snapshot(&self.rolling.eval_ms_per_batch),
+                sampler_produce_ms_per_sample: Self::rolling_metric_snapshot(
+                    &self.rolling.sampler_produce_ms_per_sample,
+                ),
+                sampler_ingest_ms_per_sample: Self::rolling_metric_snapshot(
+                    &self.rolling.sampler_ingest_ms_per_sample,
+                ),
+                queue_remaining_ratio: Self::rolling_metric_snapshot(
+                    &self.rolling.queue_remaining_ratio,
+                ),
+                batches_consumed_per_tick: Self::rolling_metric_snapshot(
+                    &self.rolling.batches_consumed_per_tick,
+                ),
+            },
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -104,14 +129,14 @@ pub struct SamplerAggregatorRunner<WQ, AS> {
     observable_factory: ObservableFactory,
     work_queue: WQ,
     aggregation_store: AS,
-    config: RunnerConfig,
+    config: SamplerAggregatorRunnerParams,
+    performance_snapshot_interval: Duration,
+    last_snapshot_at: Instant,
     point_spec: PointSpec,
     local_batch_contexts: HashMap<i64, BatchContext>,
-    performance_snapshot_interval: Duration,
-    perf_window_started_at: Instant,
-    perf_window_started_ts: chrono::DateTime<Utc>,
-    perf_produce: SampleTimeStats,
-    perf_ingest: SampleTimeStats,
+    runtime_state: SamplerRuntimeState,
+    last_pending_after_enqueue: Option<usize>,
+    training_completion_marked: bool,
 }
 
 impl<WQ, AS> SamplerAggregatorRunner<WQ, AS>
@@ -119,6 +144,85 @@ where
     WQ: WorkQueueStore,
     AS: AggregationStore,
 {
+    const MIN_BATCH_SIZE: usize = 1;
+    const MAX_BATCH_SIZE_UP_FACTOR: f64 = 1.25;
+    const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.80;
+    const MIN_BATCH_SIZE_CHANGE_RATIO: f64 = 0.03;
+
+    fn tune_batch_size(&mut self) {
+        let Some(eval_ms_per_sample) = self.runtime_state.rolling.eval_ms_per_sample.value() else {
+            return;
+        };
+        if self.config.target_batch_eval_ms <= 0.0 || !self.config.target_batch_eval_ms.is_finite()
+        {
+            return;
+        }
+        if eval_ms_per_sample <= 0.0 {
+            return;
+        }
+        let current_eval_batch_ms =
+            eval_ms_per_sample * self.runtime_state.batch_size_current as f64;
+
+        let raw_ratio = self.config.target_batch_eval_ms / current_eval_batch_ms;
+        let ratio = raw_ratio.clamp(
+            Self::MAX_BATCH_SIZE_DOWN_FACTOR,
+            Self::MAX_BATCH_SIZE_UP_FACTOR,
+        );
+        if (ratio - 1.0).abs() < Self::MIN_BATCH_SIZE_CHANGE_RATIO {
+            return;
+        }
+
+        let next = ((self.runtime_state.batch_size_current as f64) * ratio).round() as usize;
+        self.runtime_state.batch_size_current =
+            next.clamp(Self::MIN_BATCH_SIZE, self.config.max_batch_size);
+    }
+
+    fn compute_produce_limit(&self, pending_before_tick: usize) -> usize {
+        let remaining_capacity = self
+            .config
+            .max_queue_size
+            .saturating_sub(pending_before_tick);
+        if remaining_capacity == 0 {
+            return 0;
+        }
+        remaining_capacity.min(self.config.max_batches_per_tick)
+    }
+
+    fn build_batch_plan(
+        &self,
+        base_produce_limit: usize,
+        engine_max_samples: Option<usize>,
+    ) -> Vec<usize> {
+        match engine_max_samples {
+            None => vec![self.runtime_state.batch_size_current; base_produce_limit],
+            Some(max_samples) => {
+                let base_total_samples =
+                    base_produce_limit.saturating_mul(self.runtime_state.batch_size_current);
+                if base_total_samples <= max_samples {
+                    vec![self.runtime_state.batch_size_current; base_produce_limit]
+                } else if max_samples == 0 || self.runtime_state.batch_size_current == 0 {
+                    Vec::new()
+                } else {
+                    // Build near-uniform batch sizes (difference <= 1) while
+                    // respecting current batch-size cap and exact sample total.
+                    let nr_batches = max_samples.div_ceil(self.runtime_state.batch_size_current);
+                    let base_size = max_samples / nr_batches;
+                    let remainder = max_samples % nr_batches;
+                    let mut plan = Vec::with_capacity(nr_batches);
+                    for i in 0..nr_batches {
+                        let size = if i < remainder {
+                            base_size + 1
+                        } else {
+                            base_size
+                        };
+                        plan.push(size);
+                    }
+                    plan
+                }
+            }
+        }
+    }
+
     pub async fn new(
         run_id: i32,
         worker_id: impl Into<String>,
@@ -126,15 +230,27 @@ where
         observable_factory: ObservableFactory,
         work_queue: WQ,
         aggregation_store: AS,
-        config: RunnerConfig,
+        config: SamplerAggregatorRunnerParams,
         point_spec: PointSpec,
     ) -> Result<Self, RunnerError> {
-        if config.nr_samples == 0 {
+        let initial_batch_size = config.max_batch_size.min(64).max(Self::MIN_BATCH_SIZE);
+        if config.max_batch_size == 0 {
             return Err(RunnerError::Engine(EngineError::engine(
-                "runner config nr_samples must be > 0",
+                "runner config max_batch_size must be > 0",
             )));
         }
-
+        if config.max_queue_size == 0 {
+            return Err(RunnerError::Engine(EngineError::engine(
+                "runner config max_queue_size must be > 0",
+            )));
+        }
+        if !config.target_batch_eval_ms.is_finite() || config.target_batch_eval_ms <= 0.0 {
+            return Err(RunnerError::Engine(EngineError::engine(
+                "runner config target_batch_eval_ms must be > 0",
+            )));
+        }
+        let performance_snapshot_interval =
+            Duration::from_millis(config.performance_snapshot_interval_ms);
         let persisted_snapshot = aggregation_store
             .load_latest_aggregation_snapshot(run_id)
             .await?;
@@ -142,8 +258,6 @@ where
         let mut aggregated_observable = observable_factory
             .build()
             .map_err(|err| RunnerError::Engine(err))?;
-        let performance_snapshot_interval =
-            Duration::from_millis(config.performance_snapshot_interval_ms);
 
         if let Some(snapshot) = persisted_snapshot {
             aggregated_observable
@@ -160,43 +274,64 @@ where
             work_queue,
             aggregation_store,
             config,
+            performance_snapshot_interval,
+            last_snapshot_at: Instant::now(),
             point_spec,
             local_batch_contexts: HashMap::new(),
-            performance_snapshot_interval,
-            perf_window_started_at: Instant::now(),
-            perf_window_started_ts: Utc::now(),
-            perf_produce: SampleTimeStats::default(),
-            perf_ingest: SampleTimeStats::default(),
+            runtime_state: SamplerRuntimeState {
+                batch_size_current: initial_batch_size,
+                ..SamplerRuntimeState::default()
+            },
+            last_pending_after_enqueue: None,
+            training_completion_marked: false,
         })
     }
 
     pub async fn tick(&mut self) -> Result<RunnerTick, RunnerError> {
-        let pending_batches = self
+        let pending_before_tick = self
             .work_queue
             .get_pending_batch_count(self.run_id)
             .await?
             .max(0) as usize;
-        let remaining_capacity = self
-            .config
-            .max_pending_batches
-            .saturating_sub(pending_batches);
-        let engine_max_batches = self.engine.get_max_batches().unwrap_or(usize::MAX);
-        let produce_limit = self
-            .config
-            .max_batches_per_tick
-            .min(remaining_capacity)
-            .min(engine_max_batches);
 
-        let mut produced = Vec::with_capacity(produce_limit);
-        for _ in 0..produce_limit {
+        if let Some(previous_pending_after) = self.last_pending_after_enqueue {
+            if previous_pending_after > 0 {
+                let observed_ratio = (pending_before_tick as f64) / (previous_pending_after as f64);
+                self.runtime_state
+                    .rolling
+                    .queue_remaining_ratio
+                    .observe(observed_ratio);
+                let consumed = previous_pending_after.saturating_sub(pending_before_tick) as f64;
+                self.runtime_state
+                    .rolling
+                    .batches_consumed_per_tick
+                    .observe(consumed);
+            }
+        }
+
+        self.tune_batch_size();
+
+        let base_produce_limit = self.compute_produce_limit(pending_before_tick);
+        let engine_max_samples = self.engine.get_max_samples();
+        let batch_plan = self.build_batch_plan(base_produce_limit, engine_max_samples);
+
+        let mut produced = Vec::with_capacity(batch_plan.len());
+        for nr_samples in batch_plan {
             let started = Instant::now();
             let next = self
                 .engine
-                .produce_batch(self.config.nr_samples)
+                .produce_batch(nr_samples)
                 .map_err(RunnerError::Engine)?;
             let produce_time_ms = started.elapsed().as_secs_f64() * 1000.0;
             let produced_samples = next.0.size();
-            self.perf_produce.observe(produced_samples, produce_time_ms);
+            self.runtime_state.produced_batches_total += 1;
+            self.runtime_state.produced_samples_total += produced_samples as i64;
+            if produced_samples > 0 {
+                self.runtime_state
+                    .rolling
+                    .sampler_produce_ms_per_sample
+                    .observe(produce_time_ms / produced_samples as f64);
+            }
             produced.push(next);
         }
         for (batch, _) in &produced {
@@ -205,12 +340,19 @@ where
                 .map_err(|err| RunnerError::Engine(EngineError::engine(err.to_string())))?;
         }
         let enqueued_batches = produced.len();
+        let requires_training = self.engine.is_training_active();
         for (batch, context) in produced {
-            let batch_id = self.work_queue.insert_batch(self.run_id, &batch).await?;
+            let batch_id = self
+                .work_queue
+                .insert_batch(self.run_id, &batch, requires_training)
+                .await?;
             if let Some(context) = context {
                 self.local_batch_contexts.insert(batch_id, context);
             }
         }
+        let pending_after_enqueue = pending_before_tick.saturating_add(enqueued_batches);
+        self.last_pending_after_enqueue = Some(pending_after_enqueue);
+        let queue_depleted = pending_before_tick == 0;
 
         let completed = self
             .work_queue
@@ -220,11 +362,13 @@ where
         self.work_queue
             .delete_completed_batches(&consumed_ids)
             .await?;
-        self.flush_performance_snapshot_if_due(false).await?;
+        self.try_mark_training_completed().await?;
+        self.flush_performance_snapshot().await?;
 
         Ok(RunnerTick {
             enqueued_batches,
             processed_completed_batches: consumed_ids.len(),
+            queue_depleted,
         })
     }
 
@@ -237,14 +381,43 @@ where
         }
 
         for batch in completed {
-            let context = self.local_batch_contexts.remove(&batch.batch_id);
-            let ingest_started = Instant::now();
-            self.engine
-                .ingest_training_weights(&batch.result.values, context)
-                .map_err(RunnerError::Engine)?;
-            let ingest_time_ms = ingest_started.elapsed().as_secs_f64() * 1000.0;
-            let ingested_samples = batch.result.values.len();
-            self.perf_ingest.observe(ingested_samples, ingest_time_ms);
+            if let Some(total_eval_time_ms) = batch.total_eval_time_ms
+                && batch.batch.size() > 0
+            {
+                self.runtime_state
+                    .rolling
+                    .eval_ms_per_batch
+                    .observe(total_eval_time_ms);
+                self.runtime_state
+                    .rolling
+                    .eval_ms_per_sample
+                    .observe(total_eval_time_ms / batch.batch.size() as f64);
+            }
+            if batch.requires_training {
+                let training_weights = batch.result.values.as_deref().ok_or_else(|| {
+                    RunnerError::Engine(EngineError::engine(format!(
+                        "completed batch {} requires training but has no training values",
+                        batch.batch_id
+                    )))
+                })?;
+                let context = self.local_batch_contexts.remove(&batch.batch_id);
+                let ingest_started = Instant::now();
+                self.engine
+                    .ingest_training_weights(training_weights, context)
+                    .map_err(RunnerError::Engine)?;
+                let ingest_time_ms = ingest_started.elapsed().as_secs_f64() * 1000.0;
+                let ingested_samples = training_weights.len();
+                self.runtime_state.ingested_batches_total += 1;
+                self.runtime_state.ingested_samples_total += ingested_samples as i64;
+                if ingested_samples > 0 {
+                    self.runtime_state
+                        .rolling
+                        .sampler_ingest_ms_per_sample
+                        .observe(ingest_time_ms / ingested_samples as f64);
+                }
+            } else {
+                self.local_batch_contexts.remove(&batch.batch_id);
+            }
 
             let mut observable = self
                 .observable_factory
@@ -270,44 +443,45 @@ where
         Ok(completed.iter().map(|batch| batch.batch_id).collect())
     }
 
-    async fn flush_performance_snapshot_if_due(&mut self, force: bool) -> Result<(), RunnerError> {
-        if !self.perf_produce.has_data() && !self.perf_ingest.has_data() {
+    async fn try_mark_training_completed(&mut self) -> Result<(), RunnerError> {
+        if self.training_completion_marked || self.engine.is_training_active() {
+            return Ok(());
+        }
+        let _ = self
+            .work_queue
+            .try_set_training_completed_at(self.run_id)
+            .await?;
+        self.training_completion_marked = true;
+        Ok(())
+    }
+
+    async fn flush_performance_snapshot(&mut self) -> Result<(), RunnerError> {
+        if self.runtime_state.produced_batches_total <= 0
+            && self.runtime_state.ingested_batches_total <= 0
+        {
             return Ok(());
         }
 
         let due = if self.performance_snapshot_interval.is_zero() {
             true
         } else {
-            self.perf_window_started_at.elapsed() >= self.performance_snapshot_interval
+            self.last_snapshot_at.elapsed() >= self.performance_snapshot_interval
         };
-        if !force && !due {
+        if !due {
             return Ok(());
         }
 
         let snapshot = SamplerAggregatorPerformanceSnapshot {
             run_id: self.run_id,
             worker_id: self.worker_id.clone(),
-            window_start: self.perf_window_started_ts,
-            window_end: Utc::now(),
-            produced_batches: self.perf_produce.batches(),
-            produced_samples: self.perf_produce.samples(),
-            avg_produce_time_per_sample_ms: self.perf_produce.mean(),
-            std_produce_time_per_sample_ms: self.perf_produce.std(),
-            ingested_batches: self.perf_ingest.batches(),
-            ingested_samples: self.perf_ingest.samples(),
-            avg_ingest_time_per_sample_ms: self.perf_ingest.mean(),
-            std_ingest_time_per_sample_ms: self.perf_ingest.std(),
-            diagnostics: self.engine.get_diagnostics(),
+            runtime_metrics: self.runtime_state.to_runtime_metrics(),
+            engine_diagnostics: self.engine.get_diagnostics(),
         };
 
         self.work_queue
             .record_sampler_performance_snapshot(&snapshot)
             .await?;
-
-        self.perf_window_started_at = Instant::now();
-        self.perf_window_started_ts = Utc::now();
-        self.perf_produce = SampleTimeStats::default();
-        self.perf_ingest = SampleTimeStats::default();
+        self.last_snapshot_at = Instant::now();
         Ok(())
     }
 }
@@ -371,11 +545,16 @@ mod tests {
     struct TestEngine {
         produced: Vec<(Batch, Option<usize>)>,
         probe: Arc<Mutex<Probe>>,
+        max_samples: Option<usize>,
     }
 
     impl SamplerAggregator for TestEngine {
         fn validate_point_spec(&self, _point_spec: &PointSpec) -> Result<(), BuildError> {
             Ok(())
+        }
+
+        fn get_max_samples(&self) -> Option<usize> {
+            self.max_samples
         }
 
         fn produce_batch(
@@ -431,8 +610,9 @@ mod tests {
         CompletedBatch {
             batch_id,
             batch: make_batch(),
+            requires_training: true,
             result: BatchResult::new(
-                training_weights.clone(),
+                Some(training_weights.clone()),
                 json!({
                     "count": training_weights.len() as i64,
                     "sum_weight": observable_sum_weight,
@@ -441,6 +621,7 @@ mod tests {
                 }),
             ),
             completed_at: None,
+            total_eval_time_ms: Some(10.0),
         }
     }
 
@@ -472,6 +653,7 @@ mod tests {
         let engine = TestEngine {
             produced: vec![(make_batch(), Some(7))],
             probe: probe.clone(),
+            max_samples: None,
         };
 
         let mut runner = SamplerAggregatorRunner::new(
@@ -481,11 +663,14 @@ mod tests {
             ObservableFactory::new(crate::engines::ObservableImplementation::Scalar, json!({})),
             queue.clone(),
             aggregation_store.clone(),
-            RunnerConfig {
-                nr_samples: 64,
+            SamplerAggregatorRunnerParams {
+                lease_ttl_ms: 5_000,
+                min_poll_time_ms: 500,
                 performance_snapshot_interval_ms: 0,
+                target_batch_eval_ms: 10.0,
+                max_batch_size: 64,
+                max_queue_size: 8,
                 max_batches_per_tick: 1,
-                max_pending_batches: 8,
                 completed_batch_fetch_limit: 128,
             },
             PointSpec {
@@ -509,14 +694,15 @@ mod tests {
         assert_eq!(q.inserted.len(), 1);
         assert_eq!(q.sampler_perf_snapshots.len(), 1);
         let perf = &q.sampler_perf_snapshots[0];
+        let metrics = perf.runtime_metrics.to_performance_metrics();
         assert_eq!(perf.run_id, 1);
         assert_eq!(perf.worker_id, "worker-a");
-        assert_eq!(perf.produced_batches, 1);
-        assert_eq!(perf.produced_samples, 1);
-        assert_eq!(perf.ingested_batches, 2);
-        assert_eq!(perf.ingested_samples, 3);
-        assert!(perf.avg_produce_time_per_sample_ms >= 0.0);
-        assert!(perf.avg_ingest_time_per_sample_ms >= 0.0);
+        assert_eq!(metrics.produced_batches, 1);
+        assert_eq!(metrics.produced_samples, 1);
+        assert_eq!(metrics.ingested_batches, 2);
+        assert_eq!(metrics.ingested_samples, 3);
+        assert!(metrics.avg_produce_time_per_sample_ms >= 0.0);
+        assert!(metrics.avg_ingest_time_per_sample_ms >= 0.0);
         assert_eq!(p.ingested_training_sizes, vec![2, 1]);
         assert_eq!(p.ingested_context_tokens, vec![Some(7), None]);
         assert_eq!(q.deleted_completed_batch_ids, vec![11, 12]);
@@ -541,11 +727,13 @@ mod tests {
     async fn tick_without_completed_batches_skips_snapshot_persist_and_delete() {
         let probe = Arc::new(Mutex::new(Probe::default()));
         let queue = MockWorkQueue::default();
+        queue.inner.lock().expect("poison").pending_batches = 1;
         let aggregation_store = TestAggregationStore::default();
 
         let engine = TestEngine {
             produced: vec![],
             probe: probe.clone(),
+            max_samples: None,
         };
 
         let mut runner = SamplerAggregatorRunner::new(
@@ -555,11 +743,14 @@ mod tests {
             ObservableFactory::new(crate::engines::ObservableImplementation::Scalar, json!({})),
             queue.clone(),
             aggregation_store.clone(),
-            RunnerConfig {
-                nr_samples: 64,
+            SamplerAggregatorRunnerParams {
+                lease_ttl_ms: 5_000,
+                min_poll_time_ms: 500,
                 performance_snapshot_interval_ms: 0,
+                target_batch_eval_ms: 10.0,
+                max_batch_size: 64,
+                max_queue_size: 1,
                 max_batches_per_tick: 1,
-                max_pending_batches: 0,
                 completed_batch_fetch_limit: 64,
             },
             PointSpec {
@@ -598,6 +789,7 @@ mod tests {
         let engine = TestEngine {
             produced: vec![(make_batch(), None), (make_batch(), None)],
             probe: probe.clone(),
+            max_samples: None,
         };
 
         let mut runner = SamplerAggregatorRunner::new(
@@ -607,11 +799,14 @@ mod tests {
             ObservableFactory::new(crate::engines::ObservableImplementation::Scalar, json!({})),
             queue.clone(),
             aggregation_store,
-            RunnerConfig {
-                nr_samples: 64,
+            SamplerAggregatorRunnerParams {
+                lease_ttl_ms: 5_000,
+                min_poll_time_ms: 500,
                 performance_snapshot_interval_ms: 0,
+                target_batch_eval_ms: 10.0,
+                max_batch_size: 64,
+                max_queue_size: 5,
                 max_batches_per_tick: 2,
-                max_pending_batches: 5,
                 completed_batch_fetch_limit: 64,
             },
             PointSpec {
@@ -646,6 +841,7 @@ mod tests {
                 (make_batch(), None),
             ],
             probe: probe.clone(),
+            max_samples: None,
         };
 
         let mut runner = SamplerAggregatorRunner::new(
@@ -655,11 +851,14 @@ mod tests {
             ObservableFactory::new(crate::engines::ObservableImplementation::Scalar, json!({})),
             queue.clone(),
             aggregation_store,
-            RunnerConfig {
-                nr_samples: 64,
+            SamplerAggregatorRunnerParams {
+                lease_ttl_ms: 5_000,
+                min_poll_time_ms: 500,
                 performance_snapshot_interval_ms: 0,
+                target_batch_eval_ms: 10.0,
+                max_batch_size: 64,
+                max_queue_size: 4,
                 max_batches_per_tick: 3,
-                max_pending_batches: 4,
                 completed_batch_fetch_limit: 64,
             },
             PointSpec {
@@ -678,7 +877,57 @@ mod tests {
         assert_eq!(tick.enqueued_batches, 1);
         assert_eq!(q.inserted.len(), 1);
         assert_eq!(q.sampler_perf_snapshots.len(), 1);
-        assert_eq!(q.sampler_perf_snapshots[0].produced_batches, 1);
-        assert_eq!(q.sampler_perf_snapshots[0].ingested_batches, 0);
+        let metrics = q.sampler_perf_snapshots[0]
+            .runtime_metrics
+            .to_performance_metrics();
+        assert_eq!(metrics.produced_batches, 1);
+        assert_eq!(metrics.ingested_batches, 0);
+    }
+
+    #[tokio::test]
+    async fn tick_balances_batch_plan_under_engine_sample_cap() {
+        let probe = Arc::new(Mutex::new(Probe::default()));
+        let queue = MockWorkQueue::default();
+        let aggregation_store = TestAggregationStore::default();
+        let engine = TestEngine {
+            produced: vec![
+                (make_batch(), None),
+                (make_batch(), None),
+                (make_batch(), None),
+                (make_batch(), None),
+            ],
+            probe: probe.clone(),
+            max_samples: Some(16),
+        };
+
+        let mut runner = SamplerAggregatorRunner::new(
+            1,
+            "worker-a",
+            Box::new(engine),
+            ObservableFactory::new(crate::engines::ObservableImplementation::Scalar, json!({})),
+            queue,
+            aggregation_store,
+            SamplerAggregatorRunnerParams {
+                lease_ttl_ms: 5_000,
+                min_poll_time_ms: 500,
+                performance_snapshot_interval_ms: 0,
+                target_batch_eval_ms: 10.0,
+                max_batch_size: 64,
+                max_queue_size: 16,
+                max_batches_per_tick: 4,
+                completed_batch_fetch_limit: 64,
+            },
+            PointSpec {
+                continuous_dims: 1,
+                discrete_dims: 0,
+            },
+        )
+        .await
+        .expect("new runner");
+        runner.runtime_state.batch_size_current = 5;
+
+        runner.tick().await.expect("tick");
+        let p = probe.lock().expect("poison").clone();
+        assert_eq!(p.produce_requested_nr_samples, vec![4, 4, 4, 4]);
     }
 }

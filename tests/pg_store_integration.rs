@@ -56,7 +56,7 @@ async fn claim_batch_requires_active_assignment() {
 
     let batch = Batch::from_flat_data(1, 1, 0, vec![1.0], vec![]).expect("batch");
     store
-        .insert_batch(run_id, &batch)
+        .insert_batch(run_id, &batch, true)
         .await
         .expect("insert batch");
 
@@ -111,7 +111,7 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
 
     let batch = Batch::from_flat_data(1, 1, 0, vec![2.0], vec![]).expect("batch");
     store
-        .insert_batch(run_id, &batch)
+        .insert_batch(run_id, &batch, true)
         .await
         .expect("insert batch");
 

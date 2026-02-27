@@ -42,13 +42,19 @@ impl BatchResult {
             .collect();
         let batch_observable = observable.snapshot()?;
 
-        Ok(Self::new(weighted_values, batch_observable))
+        Ok(Self::new(Some(weighted_values), batch_observable))
+    }
+
+    pub fn from_observable_only<O: Observable + ?Sized>(
+        observable: &O,
+    ) -> Result<Self, EngineError> {
+        let batch_observable = observable.snapshot()?;
+        Ok(Self::new(None, batch_observable))
     }
 }
 
 /// Canonical integration parameters payload stored on `runs.integration_params`.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegrationParams {
     pub evaluator_implementation: Option<EvaluatorImplementation>,
     pub evaluator_params: Option<JsonValue>,

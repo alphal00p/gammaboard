@@ -1,6 +1,6 @@
+mod sin_evaluator;
+mod sinc_evaluator;
 mod symbolica;
-mod test_only_sin;
-mod test_only_sinc;
 mod unit;
 
 use super::{BuildError, BuildFromJson, EvalError};
@@ -12,19 +12,24 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use strum::{AsRefStr, Display};
 
+use self::sin_evaluator::SinEvaluator;
+use self::sinc_evaluator::SincEvaluator;
 use self::symbolica::SymbolicaEngine;
-use self::test_only_sin::TestSinEvaluator;
-use self::test_only_sinc::TestSincEvaluator;
 use self::unit::UnitEvaluator;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, AsRefStr, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum EvaluatorImplementation {
-    TestOnlySin,
-    TestOnlySinc,
+    SinEvaluator,
+    SincEvaluator,
     Unit,
     Symbolica,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct EvalBatchOptions {
+    pub require_training_values: bool,
 }
 
 /// Evaluates integrand values for sample points.
@@ -34,6 +39,7 @@ pub trait Evaluator: Send + Sync {
         &mut self,
         batch: &Batch,
         observable_factory: &ObservableFactory,
+        options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError>;
     fn supports_observable(&self, observable_factory: &ObservableFactory) -> bool;
     fn get_init_metadata(&self) -> JsonValue {
@@ -60,11 +66,11 @@ impl EvaluatorFactory {
 
     pub fn build(&self) -> Result<Box<dyn Evaluator>, BuildError> {
         match self.implementation {
-            EvaluatorImplementation::TestOnlySin => {
-                Ok(Box::new(TestSinEvaluator::from_json(&self.params)?))
+            EvaluatorImplementation::SinEvaluator => {
+                Ok(Box::new(SinEvaluator::from_json(&self.params)?))
             }
-            EvaluatorImplementation::TestOnlySinc => {
-                Ok(Box::new(TestSincEvaluator::from_json(&self.params)?))
+            EvaluatorImplementation::SincEvaluator => {
+                Ok(Box::new(SincEvaluator::from_json(&self.params)?))
             }
             EvaluatorImplementation::Unit => Ok(Box::new(UnitEvaluator::from_json(&self.params)?)),
             EvaluatorImplementation::Symbolica => {

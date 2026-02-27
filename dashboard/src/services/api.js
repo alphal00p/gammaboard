@@ -1,7 +1,31 @@
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || "http://localhost:4000/api";
 
+const extractErrorDetails = async (response) => {
+  const contentType = response.headers.get("content-type") || "";
+
+  try {
+    if (contentType.includes("application/json")) {
+      const payload = await response.json();
+      if (typeof payload?.error === "string" && payload.error.trim()) return payload.error.trim();
+      if (typeof payload?.message === "string" && payload.message.trim()) return payload.message.trim();
+      if (typeof payload === "string" && payload.trim()) return payload.trim();
+      return JSON.stringify(payload);
+    }
+
+    const text = await response.text();
+    if (text.trim()) return text.trim();
+  } catch {
+    // Fall through to status fallback.
+  }
+
+  return response.statusText || `HTTP ${response.status}`;
+};
+
 const parseJsonOrThrow = async (response, message) => {
-  if (!response.ok) throw new Error(`${message}: ${response.statusText}`);
+  if (!response.ok) {
+    const details = await extractErrorDetails(response);
+    throw new Error(`${message}: ${details}`);
+  }
   return response.json();
 };
 

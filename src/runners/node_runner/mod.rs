@@ -4,7 +4,9 @@
 //! The supervisor loop polls desired assignment and starts/stops one worker task.
 
 mod active_worker;
+mod evaluator_role_runner;
 mod reconcile;
+mod sampler_aggregator_role_runner;
 
 use crate::core::{
     AggregationStore, AssignmentLeaseStore, ControlPlaneStore, RunInitMetadataStore, RunSpecStore,
@@ -71,15 +73,18 @@ pub(super) struct RoleTarget {
     pub(super) run_id: i32,
 }
 
+pub(super) struct ActiveRoleTask {
+    pub(super) target: RoleTarget,
+    pub(super) worker_id: String,
+    pub(super) stop_tx: watch::Sender<bool>,
+    pub(super) handle: JoinHandle<()>,
+}
+
 pub struct NodeRunner<S: NodeRunnerStore> {
     store: S,
     node_id: String,
     config: NodeRunnerConfig,
-    role: Option<WorkerRole>,
-    run_id: Option<i32>,
-    worker_id: Option<String>,
-    stop_tx: Option<watch::Sender<bool>>,
-    handle: Option<JoinHandle<()>>,
+    active_task: Option<ActiveRoleTask>,
 }
 
 impl<S: NodeRunnerStore> NodeRunner<S> {
@@ -88,19 +93,12 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             store,
             node_id: node_id.into(),
             config,
-            role: None,
-            run_id: None,
-            worker_id: None,
-            stop_tx: None,
-            handle: None,
+            active_task: None,
         }
     }
 
     fn current_target(&self) -> Option<RoleTarget> {
-        match (self.role, self.run_id) {
-            (Some(role), Some(run_id)) => Some(RoleTarget { role, run_id }),
-            _ => None,
-        }
+        self.active_task.as_ref().map(|task| task.target)
     }
 
     pub async fn run(mut self) -> Result<(), StoreError> {

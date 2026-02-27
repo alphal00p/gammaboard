@@ -1,4 +1,7 @@
-use super::{ActiveWorker, NodeRunner, NodeRunnerStore, ROLE_TASK_SHUTDOWN_TIMEOUT, RoleTarget};
+use super::{
+    ActiveRoleTask, ActiveWorker, NodeRunner, NodeRunnerStore, ROLE_TASK_SHUTDOWN_TIMEOUT,
+    RoleTarget,
+};
 use crate::core::StoreError;
 use tokio::{task::JoinHandle, time::timeout};
 use tracing::{error, info, warn};
@@ -79,10 +82,6 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             "starting role task"
         );
 
-        self.role = Some(target.role);
-        self.run_id = Some(target.run_id);
-        self.worker_id = Some(worker_id.clone());
-
         let runtime = ActiveWorker::new(
             self.store.clone(),
             self.node_id.clone(),
@@ -92,79 +91,75 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         );
 
         let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
-        self.stop_tx = Some(stop_tx);
-
-        self.handle = Some(tokio::spawn(async move {
+        let worker_id_for_task = worker_id.clone();
+        let handle = tokio::spawn(async move {
             let result = runtime.run(stop_rx).await;
             if let Err(err) = result {
                 error!(
                     target: "worker_log",
                     run_id = target.run_id,
-                    worker_id = %worker_id,
+                    worker_id = %worker_id_for_task,
                     role = %target.role,
                     event_type = "role_task_failed",
                     error = %err,
                     "role task failed"
                 );
             }
-        }));
+        });
+
+        self.active_task = Some(ActiveRoleTask {
+            target,
+            worker_id,
+            stop_tx,
+            handle,
+        });
     }
 
     async fn reap_finished_task(&mut self) {
-        let Some(handle) = self.handle.as_ref() else {
+        let Some(task) = self.active_task.as_ref() else {
             return;
         };
-        if !handle.is_finished() {
+        if !task.handle.is_finished() {
             return;
         }
 
-        let run_id = self.run_id;
-        let role = self.role;
-        let worker_id = self.worker_id.clone();
+        let Some(task) = self.active_task.take() else {
+            return;
+        };
+        let run_id = task.target.run_id;
+        let role = task.target.role;
+        let worker_id = task.worker_id;
 
-        if let Some(handle) = self.handle.take()
-            && let Err(err) = handle.await
-        {
+        if let Err(err) = task.handle.await {
             warn!(
                 target: "worker_log",
                 run_id,
                 node_id = %self.node_id,
-                worker_id = %worker_id.unwrap_or_else(|| "unknown".to_string()),
-                role = ?role,
+                worker_id = %worker_id,
+                role = %role,
                 event_type = "role_task_join_failed",
                 error = %err,
                 "role task join failed"
             );
         }
 
-        self.role = None;
-        self.run_id = None;
-        self.worker_id = None;
-        self.stop_tx = None;
-
-        if let (Some(run_id), Some(role)) = (run_id, role) {
-            warn!(
-                target: "worker_log",
-                run_id,
-                node_id = %self.node_id,
-                role = %role,
-                event_type = "role_task_exited",
-                "role task exited; waiting for supervisor reconcile"
-            );
-        }
+        warn!(
+            target: "worker_log",
+            run_id,
+            node_id = %self.node_id,
+            role = %role,
+            event_type = "role_task_exited",
+            "role task exited; waiting for supervisor reconcile"
+        );
     }
 
     pub(super) async fn stop_current(&mut self) {
-        let (Some(run_id), Some(role), Some(worker_id)) =
-            (self.run_id, self.role, self.worker_id.clone())
-        else {
-            self.role = None;
-            self.run_id = None;
-            self.worker_id = None;
-            self.stop_tx = None;
-            self.handle = None;
+        let Some(task) = self.active_task.take() else {
             return;
         };
+        let run_id = task.target.run_id;
+        let role = task.target.role;
+        let worker_id = task.worker_id;
 
         info!(
             target: "worker_log",
@@ -176,44 +171,36 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             "stopping role task"
         );
 
-        if let Some(stop_tx) = self.stop_tx.take() {
-            let _ = stop_tx.send(true);
-        }
+        let _ = task.stop_tx.send(true);
 
-        if let Some(handle) = self.handle.take() {
-            let mut handle: JoinHandle<()> = handle;
-            match timeout(ROLE_TASK_SHUTDOWN_TIMEOUT, &mut handle).await {
-                Ok(join_result) => {
-                    if let Err(err) = join_result {
-                        warn!(
-                            target: "worker_log",
-                            run_id,
-                            node_id = %self.node_id,
-                            worker_id = %worker_id,
-                            role = %role,
-                            event_type = "role_task_join_failed",
-                            error = %err,
-                            "role task join failed"
-                        );
-                    }
-                }
-                Err(_) => {
+        let mut handle: JoinHandle<()> = task.handle;
+        match timeout(ROLE_TASK_SHUTDOWN_TIMEOUT, &mut handle).await {
+            Ok(join_result) => {
+                if let Err(err) = join_result {
                     warn!(
                         target: "worker_log",
                         run_id,
                         node_id = %self.node_id,
                         worker_id = %worker_id,
                         role = %role,
-                        event_type = "role_task_shutdown_timeout",
-                        "timed out waiting for role task shutdown; aborting task"
+                        event_type = "role_task_join_failed",
+                        error = %err,
+                        "role task join failed"
                     );
-                    handle.abort();
                 }
             }
+            Err(_) => {
+                warn!(
+                    target: "worker_log",
+                    run_id,
+                    node_id = %self.node_id,
+                    worker_id = %worker_id,
+                    role = %role,
+                    event_type = "role_task_shutdown_timeout",
+                    "timed out waiting for role task shutdown; aborting task"
+                );
+                handle.abort();
+            }
         }
-
-        self.role = None;
-        self.run_id = None;
-        self.worker_id = None;
     }
 }

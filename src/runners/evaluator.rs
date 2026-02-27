@@ -1,28 +1,20 @@
 //! Evaluator worker runner orchestration.
 
 use crate::batch::{BatchResult, PointSpec};
-use crate::core::{EvaluatorPerformanceSnapshot, StoreError, WorkQueueStore};
+use crate::core::{
+    EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot,
+    StoreError, WorkQueueStore,
+};
 use crate::engines::observable::ObservableFactory;
-use crate::engines::{EngineError, EvalError, Evaluator, Parametrization};
-use crate::runners::sample_time_stats::SampleTimeStats;
-use chrono::Utc;
+use crate::engines::{EngineError, EvalBatchOptions, EvalError, Evaluator, Parametrization};
+use crate::runners::rolling_metric::RollingMetric;
 use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt, time::Duration, time::Instant};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default)]
 pub struct EvaluatorRunnerParams {
     pub min_loop_time_ms: u64,
     pub performance_snapshot_interval_ms: u64,
-}
-
-impl Default for EvaluatorRunnerParams {
-    fn default() -> Self {
-        Self {
-            min_loop_time_ms: 0,
-            performance_snapshot_interval_ms: 5_000,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -65,10 +57,17 @@ pub struct EvaluatorRunner<WQ> {
     observable_factory: ObservableFactory,
     point_spec: PointSpec,
     performance_snapshot_interval: Duration,
-    perf_window_started_at: Instant,
-    perf_window_started_ts: chrono::DateTime<Utc>,
-    perf_eval: SampleTimeStats,
+    last_snapshot_at: Instant,
+    batches_completed_total: i64,
+    samples_evaluated_total: i64,
+    rolling: EvaluatorRollingAverages,
     work_queue: WQ,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+struct EvaluatorRollingAverages {
+    eval_ms_per_sample: RollingMetric,
+    idle_ratio: RollingMetric,
 }
 
 impl<WQ> EvaluatorRunner<WQ>
@@ -85,7 +84,6 @@ where
         performance_snapshot_interval: Duration,
         work_queue: WQ,
     ) -> Self {
-        let now_ts = Utc::now();
         let now_instant = Instant::now();
         Self {
             run_id,
@@ -95,14 +93,16 @@ where
             observable_factory,
             point_spec,
             performance_snapshot_interval,
-            perf_window_started_at: now_instant,
-            perf_window_started_ts: now_ts,
-            perf_eval: SampleTimeStats::default(),
+            last_snapshot_at: now_instant,
+            batches_completed_total: 0,
+            samples_evaluated_total: 0,
+            rolling: EvaluatorRollingAverages::default(),
             work_queue,
         }
     }
 
     pub async fn tick(&mut self) -> Result<EvaluatorRunnerTick, EvaluatorRunnerError> {
+        let loop_started = Instant::now();
         let claimed = self
             .work_queue
             .claim_batch(self.run_id, &self.worker_id)
@@ -110,6 +110,7 @@ where
             .map_err(EvaluatorRunnerError::Store)?;
 
         let Some(claimed) = claimed else {
+            self.observe_idle_ratio(loop_started, 0.0);
             self.flush_performance_snapshot_if_due(false).await?;
             return Ok(EvaluatorRunnerTick {
                 claimed_batch_id: None,
@@ -124,6 +125,7 @@ where
                 .fail_batch(claimed.batch_id, &err.to_string())
                 .await
                 .map_err(EvaluatorRunnerError::Store)?;
+            self.observe_idle_ratio(loop_started, 0.0);
             self.flush_performance_snapshot_if_due(false).await?;
             return Err(EvaluatorRunnerError::Engine(err));
         }
@@ -135,6 +137,7 @@ where
                     .fail_batch(claimed.batch_id, &err.to_string())
                     .await
                     .map_err(EvaluatorRunnerError::Store)?;
+                self.observe_idle_ratio(loop_started, 0.0);
                 self.flush_performance_snapshot_if_due(false).await?;
                 return Err(EvaluatorRunnerError::Engine(err));
             }
@@ -145,24 +148,40 @@ where
                 .fail_batch(claimed.batch_id, &err.to_string())
                 .await
                 .map_err(EvaluatorRunnerError::Store)?;
+            self.observe_idle_ratio(loop_started, 0.0);
             self.flush_performance_snapshot_if_due(false).await?;
             return Err(EvaluatorRunnerError::Engine(err));
         }
 
         let started = Instant::now();
-        match self
-            .evaluator
-            .eval_batch(&transformed_batch, &self.observable_factory)
-        {
+        match self.evaluator.eval_batch(
+            &transformed_batch,
+            &self.observable_factory,
+            EvalBatchOptions {
+                require_training_values: claimed.requires_training,
+            },
+        ) {
             Ok(result) => {
-                self.submit_result(claimed.batch_id, &claimed.batch, result, started)
-                    .await
+                let eval_time_ms = started.elapsed().as_secs_f64() * 1000.0;
+                let tick = self
+                    .submit_result(
+                        claimed.batch_id,
+                        &claimed.batch,
+                        claimed.requires_training,
+                        result,
+                        eval_time_ms,
+                    )
+                    .await?;
+                self.observe_idle_ratio(loop_started, eval_time_ms);
+                Ok(tick)
             }
             Err(err) => {
+                let eval_time_ms = started.elapsed().as_secs_f64() * 1000.0;
                 self.work_queue
                     .fail_batch(claimed.batch_id, &err.to_string())
                     .await
                     .map_err(EvaluatorRunnerError::Store)?;
+                self.observe_idle_ratio(loop_started, eval_time_ms);
                 self.flush_performance_snapshot_if_due(false).await?;
                 Err(EvaluatorRunnerError::Eval(err))
             }
@@ -173,9 +192,21 @@ where
         &mut self,
         batch_id: i64,
         batch: &crate::batch::Batch,
+        requires_training: bool,
         result: BatchResult,
-        started: Instant,
+        eval_time_ms: f64,
     ) -> Result<EvaluatorRunnerTick, EvaluatorRunnerError> {
+        if requires_training && result.values.is_none() {
+            let err = EngineError::engine(format!(
+                "result is missing training values for training batch {}",
+                batch_id
+            ));
+            self.work_queue
+                .fail_batch(batch_id, &err.to_string())
+                .await
+                .map_err(EvaluatorRunnerError::Store)?;
+            return Err(EvaluatorRunnerError::Engine(err));
+        }
         if !result.matches_batch(batch) {
             let err = EngineError::engine(format!(
                 "result length mismatch for batch {}: expected {}, got {}",
@@ -190,38 +221,54 @@ where
             return Err(EvaluatorRunnerError::Engine(err));
         }
 
-        let eval_time_ms = started.elapsed().as_secs_f64() * 1000.0;
         self.work_queue
             .submit_batch_results(batch_id, &result, eval_time_ms)
             .await
             .map_err(EvaluatorRunnerError::Store)?;
 
-        self.observe_eval_batch(result.len(), eval_time_ms);
+        let processed_samples = batch.size();
+        self.observe_eval_batch(processed_samples, eval_time_ms);
         self.flush_performance_snapshot_if_due(false).await?;
 
         Ok(EvaluatorRunnerTick {
             claimed_batch_id: Some(batch_id),
-            processed_samples: result.len(),
+            processed_samples,
             eval_time_ms,
         })
     }
 
     fn observe_eval_batch(&mut self, samples: usize, eval_time_ms: f64) {
-        self.perf_eval.observe(samples, eval_time_ms);
+        self.batches_completed_total += 1;
+        self.samples_evaluated_total += samples as i64;
+        if samples > 0 && eval_time_ms.is_finite() && eval_time_ms >= 0.0 {
+            self.rolling
+                .eval_ms_per_sample
+                .observe(eval_time_ms / samples as f64);
+        }
+    }
+
+    fn observe_idle_ratio(&mut self, loop_started: Instant, compute_time_ms: f64) {
+        let elapsed_ms = loop_started.elapsed().as_secs_f64() * 1000.0;
+        if !elapsed_ms.is_finite() || elapsed_ms <= 0.0 {
+            return;
+        }
+        let compute = compute_time_ms.max(0.0);
+        let idle_ratio = ((elapsed_ms - compute).max(0.0) / elapsed_ms).clamp(0.0, 1.0);
+        self.rolling.idle_ratio.observe(idle_ratio);
     }
 
     async fn flush_performance_snapshot_if_due(
         &mut self,
         force: bool,
     ) -> Result<(), EvaluatorRunnerError> {
-        if !self.perf_eval.has_data() {
+        if self.samples_evaluated_total <= 0 {
             return Ok(());
         }
 
         let due = if self.performance_snapshot_interval.is_zero() {
             true
         } else {
-            self.perf_window_started_at.elapsed() >= self.performance_snapshot_interval
+            self.last_snapshot_at.elapsed() >= self.performance_snapshot_interval
         };
         if !force && !due {
             return Ok(());
@@ -230,13 +277,16 @@ where
         let snapshot = EvaluatorPerformanceSnapshot {
             run_id: self.run_id,
             worker_id: self.worker_id.clone(),
-            window_start: self.perf_window_started_ts,
-            window_end: Utc::now(),
-            batches_completed: self.perf_eval.batches(),
-            samples_evaluated: self.perf_eval.samples(),
-            avg_time_per_sample_ms: self.perf_eval.mean(),
-            std_time_per_sample_ms: self.perf_eval.std(),
-            diagnostics: self.evaluator.get_diagnostics(),
+            metrics: EvaluatorPerformanceMetrics {
+                batches_completed: self.batches_completed_total,
+                samples_evaluated: self.samples_evaluated_total,
+                avg_time_per_sample_ms: self.rolling.eval_ms_per_sample.value().unwrap_or(0.0),
+                std_time_per_sample_ms: self.rolling.eval_ms_per_sample.std_dev(),
+                idle_profile: Some(EvaluatorIdleProfileMetrics {
+                    idle_ratio: self.rolling.idle_ratio.value().unwrap_or(0.0),
+                }),
+            },
+            engine_diagnostics: self.evaluator.get_diagnostics(),
         };
 
         self.work_queue
@@ -244,9 +294,7 @@ where
             .await
             .map_err(EvaluatorRunnerError::Store)?;
 
-        self.perf_window_started_at = Instant::now();
-        self.perf_window_started_ts = Utc::now();
-        self.perf_eval = SampleTimeStats::default();
+        self.last_snapshot_at = Instant::now();
         Ok(())
     }
 }
@@ -257,7 +305,7 @@ mod tests {
     use crate::batch::{Batch, BatchResult};
     use crate::core::BatchClaim;
     use crate::engines::{
-        BuildError, EvalError, ObservableImplementation, ParametrizationFactory,
+        BuildError, EvalBatchOptions, EvalError, ObservableImplementation, ParametrizationFactory,
         ParametrizationImplementation,
     };
     use crate::runners::test_support::MockWorkQueue;
@@ -279,6 +327,7 @@ mod tests {
             &mut self,
             batch: &Batch,
             _observable_factory: &ObservableFactory,
+            _options: EvalBatchOptions,
         ) -> Result<BatchResult, EvalError> {
             let values = batch
                 .continuous()
@@ -296,7 +345,7 @@ mod tests {
                 "sum_abs": values.iter().map(|v| v.abs()).sum::<f64>(),
                 "sum_sq": values.iter().map(|v| v * v).sum::<f64>(),
             });
-            Ok(BatchResult::new(values, batch_observable))
+            Ok(BatchResult::new(Some(values), batch_observable))
         }
 
         fn supports_observable(
@@ -318,6 +367,7 @@ mod tests {
             &mut self,
             _batch: &Batch,
             _observable_factory: &ObservableFactory,
+            _options: EvalBatchOptions,
         ) -> Result<BatchResult, EvalError> {
             Err(EvalError::eval("mock failure"))
         }
@@ -369,6 +419,7 @@ mod tests {
         queue.inner.lock().expect("poison").next_claim = Some(BatchClaim {
             batch_id: 42,
             batch: sample_batch(),
+            requires_training: true,
         });
 
         let mut runner = EvaluatorRunner::new(
@@ -392,10 +443,22 @@ mod tests {
         assert_eq!(tick.processed_samples, 2);
         assert_eq!(state.submitted.len(), 1);
         assert_eq!(state.submitted[0].0, 42);
-        assert_eq!(state.submitted[0].1.values, vec![1.0, 2.0]);
+        assert_eq!(state.submitted[0].1.values, Some(vec![1.0, 2.0]));
         assert_eq!(state.evaluator_perf_snapshots.len(), 1);
-        assert_eq!(state.evaluator_perf_snapshots[0].batches_completed, 1);
-        assert_eq!(state.evaluator_perf_snapshots[0].samples_evaluated, 2);
+        assert_eq!(
+            state.evaluator_perf_snapshots[0].metrics.batches_completed,
+            1
+        );
+        assert_eq!(
+            state.evaluator_perf_snapshots[0].metrics.samples_evaluated,
+            2
+        );
+        assert!(
+            state.evaluator_perf_snapshots[0]
+                .metrics
+                .idle_profile
+                .is_some()
+        );
         assert!(state.failed.is_empty());
     }
 
@@ -405,6 +468,7 @@ mod tests {
         queue.inner.lock().expect("poison").next_claim = Some(BatchClaim {
             batch_id: 99,
             batch: sample_batch(),
+            requires_training: true,
         });
 
         let mut runner = EvaluatorRunner::new(
@@ -442,8 +506,9 @@ mod tests {
                 &mut self,
                 _batch: &Batch,
                 _observable_factory: &ObservableFactory,
+                _options: EvalBatchOptions,
             ) -> Result<BatchResult, EvalError> {
-                Ok(BatchResult::new(vec![1.0], json!({})))
+                Ok(BatchResult::new(Some(vec![1.0]), json!({})))
             }
             fn supports_observable(
                 &self,
@@ -457,6 +522,7 @@ mod tests {
         queue.inner.lock().expect("poison").next_claim = Some(BatchClaim {
             batch_id: 7,
             batch: sample_batch(),
+            requires_training: true,
         });
         let mut runner = EvaluatorRunner::new(
             1,

@@ -7,15 +7,17 @@ import App from "./App";
 import reportWebVitals from "./reportWebVitals";
 
 const theme = createTheme();
+const strictModeEnabled = process.env.REACT_APP_STRICT_MODE !== "false";
+const RootWrapper = strictModeEnabled ? React.StrictMode : React.Fragment;
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(
-  <React.StrictMode>
+  <RootWrapper>
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <App />
     </ThemeProvider>
-  </React.StrictMode>,
+  </RootWrapper>,
 );
 
 reportWebVitals();

@@ -7,7 +7,7 @@ pub mod sampler_aggregator;
 mod shared;
 
 pub use errors::{BuildError, EngineError, EvalError};
-pub use evaluator::{Evaluator, EvaluatorFactory, EvaluatorImplementation};
+pub use evaluator::{EvalBatchOptions, Evaluator, EvaluatorFactory, EvaluatorImplementation};
 pub use observable::{
     ComplexIngest, Observable, ObservableFactory, ObservableImplementation, ScalarIngest,
     ScalarObservable,

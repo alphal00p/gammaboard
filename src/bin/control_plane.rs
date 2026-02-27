@@ -6,6 +6,8 @@ use gammaboard::{BinResult, init_pg_store};
 use serde_json::Value as JsonValue;
 use std::{fs, path::PathBuf};
 
+const DEFAULT_RUN_CONFIG_PATH: &str = "configs/default.toml";
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum RoleArg {
     Evaluator,
@@ -106,6 +108,31 @@ fn read_run_add_toml(path: &PathBuf) -> BinResult<JsonValue> {
         .into());
     }
     Ok(json_value)
+}
+
+fn merge_json(base: &mut JsonValue, overlay: JsonValue) {
+    match (base, overlay) {
+        (JsonValue::Object(base_obj), JsonValue::Object(overlay_obj)) => {
+            for (key, value) in overlay_obj {
+                if let Some(base_value) = base_obj.get_mut(&key) {
+                    merge_json(base_value, value);
+                } else {
+                    base_obj.insert(key, value);
+                }
+            }
+        }
+        (base_value, overlay_value) => {
+            *base_value = overlay_value;
+        }
+    }
+}
+
+fn read_merged_run_add_toml(path: &PathBuf) -> BinResult<JsonValue> {
+    let default_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_RUN_CONFIG_PATH);
+    let mut merged = read_run_add_toml(&default_path)?;
+    let overlay = read_run_add_toml(path)?;
+    merge_json(&mut merged, overlay);
+    Ok(merged)
 }
 
 fn parse_run_add_payload(raw: JsonValue) -> BinResult<(String, JsonValue, PointSpec)> {
@@ -213,7 +240,7 @@ async fn main() -> BinResult {
             integration_params_file,
         } => {
             let (name, integration_params, point_spec) =
-                parse_run_add_payload(read_run_add_toml(&integration_params_file)?)?;
+                parse_run_add_payload(read_merged_run_add_toml(&integration_params_file)?)?;
             let run_status: RunStatus = status.into();
             let run_id = store
                 .create_run(run_status, &name, &integration_params, &point_spec)

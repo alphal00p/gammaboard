@@ -8,7 +8,9 @@ import {
   fetchStats as fetchStatsApi,
 } from "../services/api";
 
-const RunHistoryContext = createContext(null);
+const RunMetaContext = createContext(null);
+const RunAggregatedContext = createContext(null);
+const RunQueueLogsContext = createContext(null);
 
 const formatTime = () => new Date().toLocaleTimeString();
 
@@ -261,40 +263,82 @@ export const RunHistoryProvider = ({
     };
   }, [runId, streamIntervalMs, mergeLatest]);
 
-  const value = useMemo(
+  const metaValue = useMemo(
     () => ({
       runId,
       run,
-      workerLogs,
-      workQueueStats,
-      history,
-      latestAggregated,
       isConnected,
       lastUpdate,
       error,
+    }),
+    [runId, run, isConnected, lastUpdate, error],
+  );
+
+  const aggregatedValue = useMemo(
+    () => ({
+      history,
+      latestAggregated,
       refreshHistory: fetchAggregatedHistory,
       refreshLatest: fetchLatestAggregated,
     }),
-    [
-      runId,
-      run,
-      workerLogs,
-      workQueueStats,
-      history,
-      latestAggregated,
-      isConnected,
-      lastUpdate,
-      error,
-      fetchAggregatedHistory,
-      fetchLatestAggregated,
-    ],
+    [history, latestAggregated, fetchAggregatedHistory, fetchLatestAggregated],
   );
 
-  return <RunHistoryContext.Provider value={value}>{children}</RunHistoryContext.Provider>;
+  const queueLogsValue = useMemo(
+    () => ({
+      workerLogs,
+      workQueueStats,
+      refreshWorkQueueStats: fetchWorkQueueStats,
+      refreshWorkerLogs: fetchWorkerLogs,
+    }),
+    [workerLogs, workQueueStats, fetchWorkQueueStats, fetchWorkerLogs],
+  );
+
+  return (
+    <RunMetaContext.Provider value={metaValue}>
+      <RunAggregatedContext.Provider value={aggregatedValue}>
+        <RunQueueLogsContext.Provider value={queueLogsValue}>{children}</RunQueueLogsContext.Provider>
+      </RunAggregatedContext.Provider>
+    </RunMetaContext.Provider>
+  );
+};
+
+export const useRunMeta = () => {
+  const ctx = useContext(RunMetaContext);
+  if (!ctx) {
+    throw new Error("useRunMeta must be used within RunHistoryProvider");
+  }
+  return ctx;
+};
+
+export const useRunAggregated = () => {
+  const ctx = useContext(RunAggregatedContext);
+  if (!ctx) {
+    throw new Error("useRunAggregated must be used within RunHistoryProvider");
+  }
+  return ctx;
+};
+
+export const useRunQueueLogs = () => {
+  const ctx = useContext(RunQueueLogsContext);
+  if (!ctx) {
+    throw new Error("useRunQueueLogs must be used within RunHistoryProvider");
+  }
+  return ctx;
 };
 
 export const useRunHistory = () => {
-  const ctx = useContext(RunHistoryContext);
+  const meta = useRunMeta();
+  const aggregated = useRunAggregated();
+  const queueLogs = useRunQueueLogs();
+  const ctx = useMemo(
+    () => ({
+      ...meta,
+      ...aggregated,
+      ...queueLogs,
+    }),
+    [meta, aggregated, queueLogs],
+  );
   if (!ctx) {
     throw new Error("useRunHistory must be used within RunHistoryProvider");
   }

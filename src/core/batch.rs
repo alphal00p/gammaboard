@@ -254,38 +254,51 @@ pub struct BatchRecord {
 /// parametrization weighting applied in evaluator-space).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchResult {
-    pub values: Vec<f64>,
+    pub values: Option<Vec<f64>>,
     #[serde(default)]
     pub observable: JsonValue,
 }
 
 impl BatchResult {
-    pub fn new(values: Vec<f64>, observable: JsonValue) -> Self {
+    pub fn new(values: Option<Vec<f64>>, observable: JsonValue) -> Self {
         Self { values, observable }
     }
 
     pub fn len(&self) -> usize {
-        self.values.len()
+        self.values.as_ref().map_or(0, Vec::len)
     }
 
     pub fn is_empty(&self) -> bool {
-        self.values.is_empty()
+        self.values.as_ref().is_none_or(Vec::is_empty)
     }
 
     pub fn matches_batch(&self, batch: &Batch) -> bool {
-        self.len() == batch.size()
+        self.values
+            .as_ref()
+            .is_none_or(|values| values.len() == batch.size())
     }
 
     pub fn values_to_json(&self) -> JsonValue {
-        serde_json::to_value(&self.values).expect("batch values serialization should never fail")
+        match &self.values {
+            Some(values) => {
+                serde_json::to_value(values).expect("batch values serialization should never fail")
+            }
+            None => JsonValue::Null,
+        }
     }
 
     pub fn values_from_json(
-        values: &JsonValue,
+        values: Option<&JsonValue>,
         observable: &JsonValue,
     ) -> Result<Self, BatchError> {
-        let parsed_values: Vec<f64> = serde_json::from_value(values.clone())
-            .map_err(|err| BatchError::layout(format!("invalid batch values payload: {err}")))?;
+        let parsed_values = match values {
+            Some(values) if !values.is_null() => {
+                Some(serde_json::from_value(values.clone()).map_err(|err| {
+                    BatchError::layout(format!("invalid batch values payload: {err}"))
+                })?)
+            }
+            _ => None,
+        };
         Ok(Self::new(parsed_values, observable.clone()))
     }
 }
@@ -325,7 +338,7 @@ mod tests {
     fn test_batch_results() {
         let batch =
             Batch::new(array![[0.5], [1.5]], Array2::zeros((2, 0)), None).expect("batch creation");
-        let result = BatchResult::new(vec![0.123, 0.456], JsonValue::Null);
+        let result = BatchResult::new(Some(vec![0.123, 0.456]), JsonValue::Null);
         assert!(result.matches_batch(&batch));
     }
 

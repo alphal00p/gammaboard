@@ -1,4 +1,5 @@
 use crate::core::RunStatus;
+use crate::core::{EvaluatorPerformanceMetrics, SamplerPerformanceMetrics};
 use crate::stores::{
     AggregatedResult, EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress,
     SamplerPerformanceHistoryEntry, WorkQueueStats, WorkerLogEntry,
@@ -26,6 +27,7 @@ struct RunProgressRow {
     sampler_aggregator_init_metadata: Option<JsonValue>,
     started_at: Option<DateTime<Utc>>,
     completed_at: Option<DateTime<Utc>>,
+    training_completed_at: Option<DateTime<Utc>>,
     total_batches_planned: Option<i32>,
     batches_completed: i32,
     total_batches: i64,
@@ -50,6 +52,7 @@ impl TryFrom<RunProgressRow> for RunProgress {
             sampler_aggregator_init_metadata: value.sampler_aggregator_init_metadata,
             started_at: value.started_at,
             completed_at: value.completed_at,
+            training_completed_at: value.training_completed_at,
             total_batches_planned: value.total_batches_planned,
             batches_completed: value.batches_completed,
             total_batches: value.total_batches,
@@ -122,20 +125,11 @@ struct RegisteredWorkerRow {
     version: String,
     status: String,
     last_seen: Option<DateTime<Utc>>,
-    batches_completed: Option<i64>,
-    samples_evaluated: Option<i64>,
-    avg_time_per_sample_ms: Option<f64>,
-    std_time_per_sample_ms: Option<f64>,
-    produced_batches: Option<i64>,
-    produced_samples: Option<i64>,
-    avg_produce_time_per_sample_ms: Option<f64>,
-    std_produce_time_per_sample_ms: Option<f64>,
-    ingested_batches: Option<i64>,
-    ingested_samples: Option<i64>,
-    avg_ingest_time_per_sample_ms: Option<f64>,
-    std_ingest_time_per_sample_ms: Option<f64>,
-    evaluator_diagnostics: Option<JsonValue>,
-    sampler_diagnostics: Option<JsonValue>,
+    evaluator_metrics: Option<JsonValue>,
+    sampler_metrics: Option<JsonValue>,
+    evaluator_engine_diagnostics: Option<JsonValue>,
+    sampler_runtime_metrics: Option<JsonValue>,
+    sampler_engine_diagnostics: Option<JsonValue>,
 }
 
 impl From<RegisteredWorkerRow> for RegisteredWorkerEntry {
@@ -148,20 +142,15 @@ impl From<RegisteredWorkerRow> for RegisteredWorkerEntry {
             version: value.version,
             status: value.status,
             last_seen: value.last_seen,
-            batches_completed: value.batches_completed,
-            samples_evaluated: value.samples_evaluated,
-            avg_time_per_sample_ms: value.avg_time_per_sample_ms,
-            std_time_per_sample_ms: value.std_time_per_sample_ms,
-            produced_batches: value.produced_batches,
-            produced_samples: value.produced_samples,
-            avg_produce_time_per_sample_ms: value.avg_produce_time_per_sample_ms,
-            std_produce_time_per_sample_ms: value.std_produce_time_per_sample_ms,
-            ingested_batches: value.ingested_batches,
-            ingested_samples: value.ingested_samples,
-            avg_ingest_time_per_sample_ms: value.avg_ingest_time_per_sample_ms,
-            std_ingest_time_per_sample_ms: value.std_ingest_time_per_sample_ms,
-            evaluator_diagnostics: value.evaluator_diagnostics,
-            sampler_diagnostics: value.sampler_diagnostics,
+            evaluator_metrics: value.evaluator_metrics.and_then(|metrics| {
+                serde_json::from_value::<EvaluatorPerformanceMetrics>(metrics).ok()
+            }),
+            sampler_metrics: value.sampler_metrics.and_then(|metrics| {
+                serde_json::from_value::<SamplerPerformanceMetrics>(metrics).ok()
+            }),
+            evaluator_engine_diagnostics: value.evaluator_engine_diagnostics,
+            sampler_runtime_metrics: value.sampler_runtime_metrics,
+            sampler_engine_diagnostics: value.sampler_engine_diagnostics,
         }
     }
 }
@@ -171,13 +160,8 @@ struct EvaluatorPerformanceHistoryRow {
     id: i64,
     run_id: i32,
     worker_id: String,
-    window_start: DateTime<Utc>,
-    window_end: DateTime<Utc>,
-    batches_completed: i64,
-    samples_evaluated: i64,
-    avg_time_per_sample_ms: f64,
-    std_time_per_sample_ms: f64,
-    diagnostics: JsonValue,
+    metrics: JsonValue,
+    engine_diagnostics: JsonValue,
     created_at: DateTime<Utc>,
 }
 
@@ -187,13 +171,15 @@ impl From<EvaluatorPerformanceHistoryRow> for EvaluatorPerformanceHistoryEntry {
             id: value.id,
             run_id: value.run_id,
             worker_id: value.worker_id,
-            window_start: value.window_start,
-            window_end: value.window_end,
-            batches_completed: value.batches_completed,
-            samples_evaluated: value.samples_evaluated,
-            avg_time_per_sample_ms: value.avg_time_per_sample_ms,
-            std_time_per_sample_ms: value.std_time_per_sample_ms,
-            diagnostics: value.diagnostics,
+            metrics: serde_json::from_value::<EvaluatorPerformanceMetrics>(value.metrics)
+                .unwrap_or(EvaluatorPerformanceMetrics {
+                    batches_completed: 0,
+                    samples_evaluated: 0,
+                    avg_time_per_sample_ms: 0.0,
+                    std_time_per_sample_ms: 0.0,
+                    idle_profile: None,
+                }),
+            engine_diagnostics: value.engine_diagnostics,
             created_at: value.created_at,
         }
     }
@@ -204,17 +190,9 @@ struct SamplerPerformanceHistoryRow {
     id: i64,
     run_id: i32,
     worker_id: String,
-    window_start: DateTime<Utc>,
-    window_end: DateTime<Utc>,
-    produced_batches: i64,
-    produced_samples: i64,
-    avg_produce_time_per_sample_ms: f64,
-    std_produce_time_per_sample_ms: f64,
-    ingested_batches: i64,
-    ingested_samples: i64,
-    avg_ingest_time_per_sample_ms: f64,
-    std_ingest_time_per_sample_ms: f64,
-    diagnostics: JsonValue,
+    metrics: JsonValue,
+    runtime_metrics: JsonValue,
+    engine_diagnostics: JsonValue,
     created_at: DateTime<Utc>,
 }
 
@@ -224,17 +202,20 @@ impl From<SamplerPerformanceHistoryRow> for SamplerPerformanceHistoryEntry {
             id: value.id,
             run_id: value.run_id,
             worker_id: value.worker_id,
-            window_start: value.window_start,
-            window_end: value.window_end,
-            produced_batches: value.produced_batches,
-            produced_samples: value.produced_samples,
-            avg_produce_time_per_sample_ms: value.avg_produce_time_per_sample_ms,
-            std_produce_time_per_sample_ms: value.std_produce_time_per_sample_ms,
-            ingested_batches: value.ingested_batches,
-            ingested_samples: value.ingested_samples,
-            avg_ingest_time_per_sample_ms: value.avg_ingest_time_per_sample_ms,
-            std_ingest_time_per_sample_ms: value.std_ingest_time_per_sample_ms,
-            diagnostics: value.diagnostics,
+            metrics: serde_json::from_value::<SamplerPerformanceMetrics>(value.metrics).unwrap_or(
+                SamplerPerformanceMetrics {
+                    produced_batches: 0,
+                    produced_samples: 0,
+                    avg_produce_time_per_sample_ms: 0.0,
+                    std_produce_time_per_sample_ms: 0.0,
+                    ingested_batches: 0,
+                    ingested_samples: 0,
+                    avg_ingest_time_per_sample_ms: 0.0,
+                    std_ingest_time_per_sample_ms: 0.0,
+                },
+            ),
+            runtime_metrics: value.runtime_metrics,
+            engine_diagnostics: value.engine_diagnostics,
             created_at: value.created_at,
         }
     }
@@ -245,33 +226,55 @@ pub(crate) async fn health_check(pool: &PgPool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
+const RUN_PROGRESS_COLUMNS: &str = r#"
+    run_id,
+    run_name,
+    run_status,
+    integration_params,
+    evaluator_init_metadata,
+    sampler_aggregator_init_metadata,
+    started_at,
+    completed_at,
+    training_completed_at,
+    total_batches_planned,
+    batches_completed,
+    total_batches,
+    total_samples,
+    pending_batches,
+    claimed_batches,
+    completed_batches,
+    failed_batches,
+    completion_rate
+"#;
+
+const RUN_BATCH_STATS_SUBQUERY_FOR_ONE_RUN: &str = r#"
+    SELECT
+        run_id,
+        COUNT(*) as total_batches,
+        SUM(batch_size) as total_samples,
+        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_batches,
+        SUM(CASE WHEN status = 'claimed' THEN 1 ELSE 0 END) as claimed_batches,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_batches,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_batches
+    FROM batches
+    WHERE run_id = $1
+    GROUP BY run_id
+"#;
+
 pub(crate) async fn get_all_runs(pool: &PgPool) -> Result<Vec<RunProgress>, sqlx::Error> {
-    let rows = sqlx::query_as::<_, RunProgressRow>(
+    let sql = format!(
         r#"
         SELECT
-            run_id,
-            run_name,
-            run_status,
-            integration_params,
-            evaluator_init_metadata,
-            sampler_aggregator_init_metadata,
-            started_at,
-            completed_at,
-            total_batches_planned,
-            batches_completed,
-            total_batches,
-            total_samples,
-            pending_batches,
-            claimed_batches,
-            completed_batches,
-            failed_batches,
-            completion_rate
+            {columns}
         FROM run_progress
         ORDER BY started_at DESC
         "#,
-    )
-    .fetch_all(pool)
-    .await?;
+        columns = RUN_PROGRESS_COLUMNS
+    );
+
+    let rows = sqlx::query_as::<_, RunProgressRow>(&sql)
+        .fetch_all(pool)
+        .await?;
 
     rows.into_iter().map(TryInto::try_into).collect()
 }
@@ -280,53 +283,53 @@ pub(crate) async fn get_run_progress(
     pool: &PgPool,
     run_id: i32,
 ) -> Result<Option<RunProgress>, sqlx::Error> {
-    let row = sqlx::query_as::<_, RunProgressRow>(
+    let sql = format!(
         r#"
-        SELECT
-            r.id as run_id,
-            r.name as run_name,
-            r.status as run_status,
-            (
-                COALESCE(r.integration_params, '{}'::jsonb)
-                || jsonb_build_object('observable_implementation', r.observable_implementation)
-            ) as integration_params,
-            r.evaluator_init_metadata,
-            r.sampler_aggregator_init_metadata,
-            r.started_at,
-            r.completed_at,
-            r.total_batches_planned,
-            r.batches_completed,
-            COALESCE(b.total_batches, 0) as total_batches,
-            COALESCE(b.total_samples, 0) as total_samples,
-            COALESCE(b.pending_batches, 0) as pending_batches,
-            COALESCE(b.claimed_batches, 0) as claimed_batches,
-            COALESCE(b.completed_batches, 0) as completed_batches,
-            COALESCE(b.failed_batches, 0) as failed_batches,
-            CASE
-                WHEN COALESCE(b.total_batches, 0) > 0
-                THEN CAST(COALESCE(b.completed_batches, 0) AS FLOAT) / b.total_batches
-                ELSE 0.0
-            END as completion_rate
-        FROM runs r
-        LEFT JOIN (
+        WITH run_progress AS (
             SELECT
-                run_id,
-                COUNT(*) as total_batches,
-                SUM(batch_size) as total_samples,
-                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_batches,
-                SUM(CASE WHEN status = 'claimed' THEN 1 ELSE 0 END) as claimed_batches,
-                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_batches,
-                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_batches
-            FROM batches
-            WHERE run_id = $1
-            GROUP BY run_id
-        ) b ON r.id = b.run_id
-        WHERE r.id = $1
+                r.id as run_id,
+                r.name as run_name,
+                r.status as run_status,
+                (
+                    COALESCE(r.integration_params, '{{}}'::jsonb)
+                    || jsonb_build_object('observable_implementation', r.observable_implementation)
+                ) as integration_params,
+                r.evaluator_init_metadata,
+                r.sampler_aggregator_init_metadata,
+                r.started_at,
+                r.completed_at,
+                r.training_completed_at,
+                r.total_batches_planned,
+                r.batches_completed,
+                COALESCE(b.total_batches, 0) as total_batches,
+                COALESCE(b.total_samples, 0) as total_samples,
+                COALESCE(b.pending_batches, 0) as pending_batches,
+                COALESCE(b.claimed_batches, 0) as claimed_batches,
+                COALESCE(b.completed_batches, 0) as completed_batches,
+                COALESCE(b.failed_batches, 0) as failed_batches,
+                CASE
+                    WHEN COALESCE(b.total_batches, 0) > 0
+                    THEN CAST(COALESCE(b.completed_batches, 0) AS FLOAT) / b.total_batches
+                    ELSE 0.0
+                END as completion_rate
+            FROM runs r
+            LEFT JOIN (
+                {batch_stats_subquery}
+            ) b ON r.id = b.run_id
+            WHERE r.id = $1
+        )
+        SELECT
+            {columns}
+        FROM run_progress
         "#,
-    )
-    .bind(run_id)
-    .fetch_optional(pool)
-    .await?;
+        columns = RUN_PROGRESS_COLUMNS,
+        batch_stats_subquery = RUN_BATCH_STATS_SUBQUERY_FOR_ONE_RUN
+    );
+
+    let row = sqlx::query_as::<_, RunProgressRow>(&sql)
+        .bind(run_id)
+        .fetch_optional(pool)
+        .await?;
 
     row.map(TryInto::try_into).transpose()
 }
@@ -424,6 +427,7 @@ pub(crate) async fn get_worker_logs(
     limit: i64,
     worker_id: Option<&str>,
     level: Option<&str>,
+    after_id: Option<i64>,
 ) -> Result<Vec<WorkerLogEntry>, sqlx::Error> {
     let rows = sqlx::query_as::<_, WorkerLogRow>(
         r#"
@@ -438,17 +442,33 @@ pub(crate) async fn get_worker_logs(
             event_type,
             message,
             fields
-        FROM worker_logs
-        WHERE run_id = $1
-          AND ($2::text IS NULL OR worker_id = $2)
-          AND ($3::text IS NULL OR level = $3)
-        ORDER BY ts DESC, id DESC
-        LIMIT $4
+        FROM (
+            SELECT
+                id,
+                ts,
+                run_id,
+                node_id,
+                worker_id,
+                role,
+                level,
+                event_type,
+                message,
+                fields
+            FROM worker_logs
+            WHERE run_id = $1
+              AND ($2::text IS NULL OR worker_id = $2)
+              AND ($3::text IS NULL OR level = $3)
+              AND ($4::bigint IS NULL OR id > $4)
+            ORDER BY id DESC
+            LIMIT $5
+        ) recent
+        ORDER BY id ASC
         "#,
     )
     .bind(run_id)
     .bind(worker_id)
     .bind(level)
+    .bind(after_id)
     .bind(limit)
     .fetch_all(pool)
     .await?;
@@ -470,20 +490,11 @@ pub(crate) async fn get_registered_workers(
             w.version,
             w.status,
             w.last_seen,
-            e.batches_completed,
-            e.samples_evaluated,
-            e.avg_time_per_sample_ms,
-            e.std_time_per_sample_ms,
-            p.produced_batches,
-            p.produced_samples,
-            p.avg_produce_time_per_sample_ms,
-            p.std_produce_time_per_sample_ms,
-            p.ingested_batches,
-            p.ingested_samples,
-            p.avg_ingest_time_per_sample_ms,
-            p.std_ingest_time_per_sample_ms,
-            p.diagnostics AS sampler_diagnostics,
-            e.diagnostics AS evaluator_diagnostics
+            e.metrics AS evaluator_metrics,
+            p.metrics AS sampler_metrics,
+            p.runtime_metrics AS sampler_runtime_metrics,
+            p.engine_diagnostics AS sampler_engine_diagnostics,
+            e.engine_diagnostics AS evaluator_engine_diagnostics
         FROM workers w
         LEFT JOIN sampler_aggregator_performance_latest p
             ON p.run_id = COALESCE($1, w.desired_run_id)
@@ -521,18 +532,13 @@ pub(crate) async fn get_evaluator_performance_history(
             id,
             run_id,
             worker_id,
-            window_start,
-            window_end,
-            batches_completed,
-            samples_evaluated,
-            avg_time_per_sample_ms,
-            std_time_per_sample_ms,
-            diagnostics,
+            metrics,
+            engine_diagnostics,
             created_at
         FROM evaluator_performance_history
         WHERE run_id = $1
           AND ($2::text IS NULL OR worker_id = $2)
-        ORDER BY window_end DESC, id DESC
+        ORDER BY created_at DESC, id DESC
         LIMIT $3
         "#,
     )
@@ -557,22 +563,14 @@ pub(crate) async fn get_sampler_performance_history(
             id,
             run_id,
             worker_id,
-            window_start,
-            window_end,
-            produced_batches,
-            produced_samples,
-            avg_produce_time_per_sample_ms,
-            std_produce_time_per_sample_ms,
-            ingested_batches,
-            ingested_samples,
-            avg_ingest_time_per_sample_ms,
-            std_ingest_time_per_sample_ms,
-            diagnostics,
+            metrics,
+            runtime_metrics,
+            engine_diagnostics,
             created_at
         FROM sampler_aggregator_performance_history
         WHERE run_id = $1
           AND ($2::text IS NULL OR worker_id = $2)
-        ORDER BY window_end DESC, id DESC
+        ORDER BY created_at DESC, id DESC
         LIMIT $3
         "#,
     )

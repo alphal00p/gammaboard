@@ -1,6 +1,6 @@
 import SamplerDetailsCard from "./SamplerDetailsCard";
 
-const TestOnlyTrainingSamplerPanel = ({ samplerParams }) => (
+const NaiveMonteCarloSamplerPanel = ({ samplerParams }) => (
   <SamplerDetailsCard
     fields={[
       { label: "continuous_dims", value: samplerParams?.continuous_dims },
@@ -10,4 +10,4 @@ const TestOnlyTrainingSamplerPanel = ({ samplerParams }) => (
   />
 );
 
-export default TestOnlyTrainingSamplerPanel;
+export default NaiveMonteCarloSamplerPanel;

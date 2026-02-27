@@ -13,6 +13,9 @@ CREATE TABLE IF NOT EXISTS batches (
     batch_size INT NOT NULL,
     -- Number of samples in this batch
 
+    requires_training BOOLEAN NOT NULL DEFAULT true,
+    -- Whether evaluator should emit per-sample training values for this batch
+
     -- Work queue status
     status TEXT NOT NULL DEFAULT 'pending',
     -- Status: 'pending', 'claimed', 'completed', 'failed'
@@ -74,6 +77,7 @@ SELECT
     r.sampler_aggregator_init_metadata,
     r.started_at,
     r.completed_at,
+    r.training_completed_at,
     r.total_batches_planned,
     r.batches_completed,
     COALESCE(b.total_batches, 0) as total_batches,

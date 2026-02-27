@@ -1,4 +1,4 @@
-name = "symbolica-unit-square-x2-plus-y4-scalar"
+name = "symbolica-test"
 evaluator_implementation = "symbolica"
 sampler_aggregator_implementation = "havana"
 observable_implementation = "scalar"
@@ -9,29 +9,30 @@ continuous_dims = 2
 discrete_dims = 0
 
 [evaluator_runner_params]
-min_loop_time_ms = 200
-performance_snapshot_interval_ms = 5000
+min_loop_time_ms = 0
+performance_snapshot_interval_ms = 2000
 
 [evaluator_params]
-expr = "x^2 + y^4"
+expr = "(sin(x*(1+y)) + cos(y*(1+x^2)) + exp((x-y)/(1+x*y)))^2 + (x^3 + 2*x*y^2 + y^4)/(1 + x^2 + y^2)"
 args = ["x", "y"]
 
 [sampler_aggregator_runner_params]
-interval_ms = 500
+min_poll_time_ms = 100
+performance_snapshot_interval_ms = 2000
+target_batch_eval_ms = 400.0
 lease_ttl_ms = 5000
-nr_samples = 64
-performance_snapshot_interval_ms = 5000
-max_batches_per_tick = 128
-max_pending_batches = 128
-completed_batch_fetch_limit = 512
+max_batch_size = 64
+max_batches_per_tick = 16
+max_queue_size = 128
+completed_batch_fetch_limit = 1024
 
 [sampler_aggregator_params]
 seed = 0
 continuous_dims = 2
 bins = 64
 min_samples_for_update = 1024
-batches_for_update = 256
-stop_training_after_n_batches = 4096
+samples_for_update = 16384
+stop_training_after_n_samples = 65536
 initial_training_rate = 0.1
 final_training_rate = 0.001
 

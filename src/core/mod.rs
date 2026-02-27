@@ -6,8 +6,10 @@ pub mod traits;
 pub use batch::{Batch, BatchError, BatchRecord, BatchResult, BatchStatus, PointSpec};
 pub use errors::StoreError;
 pub use models::{
-    AssignmentLease, BatchClaim, CompletedBatch, DesiredAssignment, EvaluatorPerformanceSnapshot,
-    RunStatus, SamplerAggregatorPerformanceSnapshot, Worker, WorkerRole, WorkerStatus,
+    AssignmentLease, BatchClaim, CompletedBatch, DesiredAssignment, EvaluatorIdleProfileMetrics,
+    EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot, RollingMetricSnapshot, RunStatus,
+    SamplerAggregatorPerformanceSnapshot, SamplerPerformanceMetrics, SamplerRollingAverages,
+    SamplerRuntimeMetrics, Worker, WorkerRole, WorkerStatus,
 };
 pub use traits::{
     AggregationStore, AssignmentLeaseStore, ControlPlaneStore, RunInitMetadataStore, RunSpecStore,

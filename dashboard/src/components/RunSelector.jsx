@@ -20,7 +20,8 @@ const RunSelector = ({ runs, selectedRun, onRunChange }) => {
                   {run.run_name ? `${run.run_name} (#${run.run_id})` : `Run #${run.run_id}`}
                 </Typography>
                 <Typography component="span" color="text.secondary">
-                  • {run.run_status} • {run.total_batches || 0} batches
+                  • {run.run_status} • processed {(run.batches_completed || 0).toLocaleString()} • queued now{" "}
+                  {(run.total_batches || 0).toLocaleString()}
                 </Typography>
               </Box>
             </MenuItem>

@@ -1,5 +1,5 @@
 mod havana;
-mod test_only_training;
+mod naive_monte_carlo;
 
 use super::{BuildError, BuildFromJson, EngineError};
 use crate::batch::{Batch, PointSpec};
@@ -9,7 +9,7 @@ use std::any::Any;
 use strum::{AsRefStr, Display};
 
 use self::havana::HavanaSampler;
-use self::test_only_training::TestTrainingSamplerAggregator;
+use self::naive_monte_carlo::NaiveMonteCarloSamplerAggregator;
 
 pub type BatchContext = Box<dyn Any + Send>;
 
@@ -17,7 +17,7 @@ pub type BatchContext = Box<dyn Any + Send>;
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum SamplerAggregatorImplementation {
-    TestOnlyTraining,
+    NaiveMonteCarlo,
     Havana,
 }
 
@@ -27,7 +27,10 @@ pub trait SamplerAggregator: Send {
     fn get_init_metadata(&mut self) -> JsonValue {
         json!({})
     }
-    fn get_max_batches(&self) -> Option<usize> {
+    fn is_training_active(&self) -> bool {
+        true
+    }
+    fn get_max_samples(&self) -> Option<usize> {
         None
     }
     fn produce_batch(
@@ -60,8 +63,8 @@ impl SamplerAggregatorFactory {
 
     pub fn build(&self) -> Result<Box<dyn SamplerAggregator>, BuildError> {
         match self.implementation {
-            SamplerAggregatorImplementation::TestOnlyTraining => Ok(Box::new(
-                TestTrainingSamplerAggregator::from_json(&self.params)?,
+            SamplerAggregatorImplementation::NaiveMonteCarlo => Ok(Box::new(
+                NaiveMonteCarloSamplerAggregator::from_json(&self.params)?,
             )),
             SamplerAggregatorImplementation::Havana => {
                 Ok(Box::new(HavanaSampler::from_json(&self.params)?))
