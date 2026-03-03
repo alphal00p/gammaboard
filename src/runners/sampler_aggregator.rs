@@ -30,6 +30,7 @@ pub struct SamplerAggregatorRunnerParams {
     pub min_poll_time_ms: u64,
     pub performance_snapshot_interval_ms: u64,
     pub target_batch_eval_ms: f64,
+    pub target_queue_remaining: f64,
     pub max_batch_size: usize,
     pub max_queue_size: usize,
     pub max_batches_per_tick: usize,
@@ -185,7 +186,28 @@ where
         if remaining_capacity == 0 {
             return 0;
         }
-        remaining_capacity.min(self.config.max_batches_per_tick)
+        let hard_limit = remaining_capacity.min(self.config.max_batches_per_tick);
+        if hard_limit == 0 {
+            return 0;
+        }
+
+        // Use measured queue drain to keep pending depth near a target remaining ratio.
+        let Some(consumed_per_tick) = self.runtime_state.rolling.batches_consumed_per_tick.value()
+        else {
+            return hard_limit;
+        };
+        if !consumed_per_tick.is_finite() || consumed_per_tick <= 0.0 {
+            return hard_limit;
+        }
+
+        if self.config.target_queue_remaining == 1.0 {
+            return hard_limit;
+        }
+
+        let target_pending_after_enqueue =
+            (consumed_per_tick / (1.0 - self.config.target_queue_remaining)).ceil() as usize;
+        let target_enqueue = target_pending_after_enqueue.saturating_sub(pending_before_tick);
+        hard_limit.min(target_enqueue)
     }
 
     fn build_batch_plan(
@@ -247,6 +269,14 @@ where
         if !config.target_batch_eval_ms.is_finite() || config.target_batch_eval_ms <= 0.0 {
             return Err(RunnerError::Engine(EngineError::engine(
                 "runner config target_batch_eval_ms must be > 0",
+            )));
+        }
+        if !config.target_queue_remaining.is_finite()
+            || config.target_queue_remaining < 0.0
+            || config.target_queue_remaining > 1.0
+        {
+            return Err(RunnerError::Engine(EngineError::engine(
+                "runner config target_queue_remaining must be in [0, 1]",
             )));
         }
         let performance_snapshot_interval =
@@ -318,12 +348,13 @@ where
         let mut produced = Vec::with_capacity(batch_plan.len());
         for nr_samples in batch_plan {
             let started = Instant::now();
-            let next = self
+            let requires_training = self.engine.is_training_active();
+            let (batch, context) = self
                 .engine
                 .produce_batch(nr_samples)
                 .map_err(RunnerError::Engine)?;
             let produce_time_ms = started.elapsed().as_secs_f64() * 1000.0;
-            let produced_samples = next.0.size();
+            let produced_samples = batch.size();
             self.runtime_state.produced_batches_total += 1;
             self.runtime_state.produced_samples_total += produced_samples as i64;
             if produced_samples > 0 {
@@ -332,16 +363,15 @@ where
                     .sampler_produce_ms_per_sample
                     .observe(produce_time_ms / produced_samples as f64);
             }
-            produced.push(next);
+            produced.push((batch, context, requires_training));
         }
-        for (batch, _) in &produced {
+        for (batch, _, _) in &produced {
             batch
                 .validate_point_spec(&self.point_spec)
                 .map_err(|err| RunnerError::Engine(EngineError::engine(err.to_string())))?;
         }
         let enqueued_batches = produced.len();
-        let requires_training = self.engine.is_training_active();
-        for (batch, context) in produced {
+        for (batch, context, requires_training) in produced {
             let batch_id = self
                 .work_queue
                 .insert_batch(self.run_id, &batch, requires_training)
@@ -668,6 +698,7 @@ mod tests {
                 min_poll_time_ms: 500,
                 performance_snapshot_interval_ms: 0,
                 target_batch_eval_ms: 10.0,
+                target_queue_remaining: 0.0,
                 max_batch_size: 64,
                 max_queue_size: 8,
                 max_batches_per_tick: 1,
@@ -748,6 +779,7 @@ mod tests {
                 min_poll_time_ms: 500,
                 performance_snapshot_interval_ms: 0,
                 target_batch_eval_ms: 10.0,
+                target_queue_remaining: 0.0,
                 max_batch_size: 64,
                 max_queue_size: 1,
                 max_batches_per_tick: 1,
@@ -804,6 +836,7 @@ mod tests {
                 min_poll_time_ms: 500,
                 performance_snapshot_interval_ms: 0,
                 target_batch_eval_ms: 10.0,
+                target_queue_remaining: 0.0,
                 max_batch_size: 64,
                 max_queue_size: 5,
                 max_batches_per_tick: 2,
@@ -856,6 +889,7 @@ mod tests {
                 min_poll_time_ms: 500,
                 performance_snapshot_interval_ms: 0,
                 target_batch_eval_ms: 10.0,
+                target_queue_remaining: 0.0,
                 max_batch_size: 64,
                 max_queue_size: 4,
                 max_batches_per_tick: 3,
@@ -912,6 +946,7 @@ mod tests {
                 min_poll_time_ms: 500,
                 performance_snapshot_interval_ms: 0,
                 target_batch_eval_ms: 10.0,
+                target_queue_remaining: 0.0,
                 max_batch_size: 64,
                 max_queue_size: 16,
                 max_batches_per_tick: 4,
@@ -929,5 +964,108 @@ mod tests {
         runner.tick().await.expect("tick");
         let p = probe.lock().expect("poison").clone();
         assert_eq!(p.produce_requested_nr_samples, vec![4, 4, 4, 4]);
+    }
+
+    #[tokio::test]
+    async fn tick_throttles_enqueue_to_target_queue_remaining() {
+        let probe = Arc::new(Mutex::new(Probe::default()));
+        let queue = MockWorkQueue::default();
+        let aggregation_store = TestAggregationStore::default();
+        let engine = TestEngine {
+            produced: vec![(make_batch(), None); 16],
+            probe: probe.clone(),
+            max_samples: None,
+        };
+
+        let mut runner = SamplerAggregatorRunner::new(
+            1,
+            "worker-a",
+            Box::new(engine),
+            ObservableFactory::new(crate::engines::ObservableImplementation::Scalar, json!({})),
+            queue.clone(),
+            aggregation_store,
+            SamplerAggregatorRunnerParams {
+                lease_ttl_ms: 5_000,
+                min_poll_time_ms: 500,
+                performance_snapshot_interval_ms: 0,
+                target_batch_eval_ms: 10.0,
+                target_queue_remaining: 0.0,
+                max_batch_size: 64,
+                max_queue_size: 10,
+                max_batches_per_tick: 8,
+                completed_batch_fetch_limit: 64,
+            },
+            PointSpec {
+                continuous_dims: 1,
+                discrete_dims: 0,
+            },
+        )
+        .await
+        .expect("new runner");
+
+        let first_tick = runner.tick().await.expect("first tick");
+        assert_eq!(first_tick.enqueued_batches, 8);
+
+        {
+            let mut q = queue.inner.lock().expect("poison");
+            // Simulate evaluator draining 6/8 batches before next tick.
+            q.pending_batches = 2;
+        }
+
+        let second_tick = runner.tick().await.expect("second tick");
+        // consumed_per_tick ~= 6, target_queue_remaining=0.0 -> keep ~6 pending,
+        // so enqueue only 4 when pending_before=2.
+        assert_eq!(second_tick.enqueued_batches, 4);
+    }
+
+    #[tokio::test]
+    async fn tick_with_target_queue_remaining_one_fills_to_hard_limit() {
+        let probe = Arc::new(Mutex::new(Probe::default()));
+        let queue = MockWorkQueue::default();
+        let aggregation_store = TestAggregationStore::default();
+        let engine = TestEngine {
+            produced: vec![(make_batch(), None); 16],
+            probe: probe.clone(),
+            max_samples: None,
+        };
+
+        let mut runner = SamplerAggregatorRunner::new(
+            1,
+            "worker-a",
+            Box::new(engine),
+            ObservableFactory::new(crate::engines::ObservableImplementation::Scalar, json!({})),
+            queue.clone(),
+            aggregation_store,
+            SamplerAggregatorRunnerParams {
+                lease_ttl_ms: 5_000,
+                min_poll_time_ms: 500,
+                performance_snapshot_interval_ms: 0,
+                target_batch_eval_ms: 10.0,
+                target_queue_remaining: 1.0,
+                max_batch_size: 64,
+                max_queue_size: 10,
+                max_batches_per_tick: 8,
+                completed_batch_fetch_limit: 64,
+            },
+            PointSpec {
+                continuous_dims: 1,
+                discrete_dims: 0,
+            },
+        )
+        .await
+        .expect("new runner");
+
+        let first_tick = runner.tick().await.expect("first tick");
+        assert_eq!(first_tick.enqueued_batches, 8);
+
+        {
+            let mut q = queue.inner.lock().expect("poison");
+            // Simulate evaluator draining 6/8 batches before next tick.
+            q.pending_batches = 2;
+        }
+
+        let second_tick = runner.tick().await.expect("second tick");
+        // target_queue_remaining=1.0 means no lean-throttle: fill to hard limits.
+        assert_eq!(second_tick.enqueued_batches, 8);
     }
 }

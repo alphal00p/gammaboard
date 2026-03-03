@@ -14,6 +14,18 @@ export const deriveObservableMetric = (observable, implementation) => {
   }
 
   const sumWeight = toFiniteNumber(observable?.sum_weight, 0);
+  const sumSq = toFiniteNumber(observable?.sum_sq, 0);
   const mean = count > 0 ? sumWeight / count : 0;
-  return { sampleCount: count, mean, value: mean };
+  const secondMoment = count > 0 ? sumSq / count : 0;
+  const variance = Math.max(0, secondMoment - mean * mean);
+  const stderr = count > 0 ? Math.sqrt(variance / count) : 0;
+  return {
+    sampleCount: count,
+    mean,
+    value: mean,
+    stderr,
+    lower: mean - stderr,
+    upper: mean + stderr,
+    spread: 2 * stderr,
+  };
 };

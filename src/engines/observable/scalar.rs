@@ -24,10 +24,12 @@ impl ScalarObservable {
 
     pub fn add_sample(&mut self, value: f64, weight: f64) {
         let weight = weight.abs();
+        let weighted_value = value * weight;
         self.count += 1;
-        self.sum_weight += value * weight;
-        self.sum_abs += value.abs();
-        self.sum_sq += value * value;
+        self.sum_weight += weighted_value;
+        self.sum_abs += weighted_value.abs();
+        // Keep second moment consistent with the actual Monte Carlo contribution.
+        self.sum_sq += weighted_value * weighted_value;
     }
 }
 

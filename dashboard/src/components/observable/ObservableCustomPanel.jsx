@@ -7,12 +7,12 @@ const OBSERVABLE_CUSTOM_PANELS = {
   complex: ComplexObservablePanel,
 };
 
-const ObservableCustomPanel = ({ implementation, samples, isConnected, hasRun }) => {
+const ObservableCustomPanel = ({ implementation, samples, isConnected, hasRun, target }) => {
   const Panel = OBSERVABLE_CUSTOM_PANELS[implementation];
   if (!Panel) {
     return <UnsupportedImplementationPanel kind="observable" implementation={implementation} />;
   }
-  return <Panel samples={samples} isConnected={isConnected} hasRun={hasRun} />;
+  return <Panel samples={samples} isConnected={isConnected} hasRun={hasRun} target={target} />;
 };
 
 export default ObservableCustomPanel;

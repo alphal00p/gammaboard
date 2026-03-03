@@ -1,11 +1,12 @@
 name = "symbolica-test"
+target = { kind = "scalar", value = 5.568327996831708 }
 evaluator_implementation = "symbolica"
 sampler_aggregator_implementation = "havana"
 observable_implementation = "scalar"
-parametrization_implementation = "none"
+parametrization_implementation = "spherical"
 
 [point_spec]
-continuous_dims = 2
+continuous_dims = 3
 discrete_dims = 0
 
 [evaluator_runner_params]
@@ -13,13 +14,14 @@ min_loop_time_ms = 0
 performance_snapshot_interval_ms = 2000
 
 [evaluator_params]
-expr = "(sin(x*(1+y)) + cos(y*(1+x^2)) + exp((x-y)/(1+x*y)))^2 + (x^3 + 2*x*y^2 + y^4)/(1 + x^2 + y^2)"
-args = ["x", "y"]
+expr = "exp(-x^2 -y^2-z^2)"
+args = ["x", "y", "z"]
 
 [sampler_aggregator_runner_params]
 min_poll_time_ms = 100
 performance_snapshot_interval_ms = 2000
 target_batch_eval_ms = 400.0
+target_queue_remaining = 0.5
 lease_ttl_ms = 5000
 max_batch_size = 64
 max_batches_per_tick = 16
@@ -28,7 +30,7 @@ completed_batch_fetch_limit = 1024
 
 [sampler_aggregator_params]
 seed = 0
-continuous_dims = 2
+continuous_dims = 3
 bins = 64
 min_samples_for_update = 1024
 samples_for_update = 16384

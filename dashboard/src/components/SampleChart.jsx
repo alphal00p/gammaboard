@@ -1,19 +1,39 @@
 import { Box, Card, CardContent, Typography, Paper } from "@mui/material";
-import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Legend } from "recharts";
+import {
+  LineChart,
+  Area,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  ResponsiveContainer,
+  Legend,
+  ReferenceLine,
+} from "recharts";
 import { TrendingUp as TrendingUpIcon } from "@mui/icons-material";
+import { formatScientific } from "../utils/formatters";
+import { parseScalarTarget } from "../utils/target";
 
-const SampleChart = ({ samples, isConnected, hasRun, mode = "scalar" }) => {
+const SampleChart = ({ samples, isConnected, hasRun, mode = "scalar", target = null }) => {
   const isComplex = mode === "complex";
   const meanLabel = isComplex ? "Value" : "Mean";
   const chartTitle = isComplex ? "Complex Observable Convergence" : "Integration Mean Convergence";
 
   const formatYAxisTick = (value) => {
-    if (!Number.isFinite(value)) return "";
-    const abs = Math.abs(value);
-    if ((abs > 0 && abs < 1e-4) || abs >= 1e4) {
-      return value.toExponential(2);
-    }
-    return value.toFixed(6).replace(/\.?0+$/, "");
+    return formatScientific(value, 2, "");
+  };
+
+  const percentile = (sortedValues, p) => {
+    if (!sortedValues.length) return 0;
+    if (sortedValues.length === 1) return sortedValues[0];
+    const clamped = Math.max(0, Math.min(1, p));
+    const idx = clamped * (sortedValues.length - 1);
+    const lo = Math.floor(idx);
+    const hi = Math.ceil(idx);
+    if (lo === hi) return sortedValues[lo];
+    const t = idx - lo;
+    return sortedValues[lo] * (1 - t) + sortedValues[hi] * t;
   };
 
   const buildChartData = (samples, chartMode) => {
@@ -36,6 +56,10 @@ const SampleChart = ({ samples, isConnected, hasRun, mode = "scalar" }) => {
         return {
           sampleCount: sample.sampleCount,
           mean: sample.mean ?? sample.value ?? 0,
+          stderr: Number.isFinite(sample.stderr) ? sample.stderr : 0,
+          lower: Number.isFinite(sample.lower) ? sample.lower : (sample.mean ?? sample.value ?? 0),
+          upper: Number.isFinite(sample.upper) ? sample.upper : (sample.mean ?? sample.value ?? 0),
+          spread: Number.isFinite(sample.spread) ? sample.spread : 0,
         };
       })
       .sort((a, b) => a.sampleCount - b.sampleCount);
@@ -63,9 +87,20 @@ const SampleChart = ({ samples, isConnected, hasRun, mode = "scalar" }) => {
               {isComplex ? "Real Mean:" : `${meanLabel}:`}
             </Typography>
             <Typography variant="caption" sx={{ fontWeight: 600, fontFamily: "monospace" }}>
-              {(isComplex ? data.real : data.mean).toFixed(6)}
+              {formatScientific(isComplex ? data.real : data.mean, 6)}
             </Typography>
           </Box>
+
+          {!isComplex && Number.isFinite(data.stderr) && (
+            <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2 }}>
+              <Typography variant="caption" color="text.secondary">
+                Std. Error:
+              </Typography>
+              <Typography variant="caption" sx={{ fontWeight: 600, fontFamily: "monospace" }}>
+                {formatScientific(data.stderr, 6)}
+              </Typography>
+            </Box>
+          )}
 
           {isComplex && (
             <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2 }}>
@@ -73,7 +108,7 @@ const SampleChart = ({ samples, isConnected, hasRun, mode = "scalar" }) => {
                 Imag Mean:
               </Typography>
               <Typography variant="caption" sx={{ fontWeight: 600, fontFamily: "monospace" }}>
-                {data.imag.toFixed(6)}
+                {formatScientific(data.imag, 6)}
               </Typography>
             </Box>
           )}
@@ -127,14 +162,34 @@ const SampleChart = ({ samples, isConnected, hasRun, mode = "scalar" }) => {
   const currentMean = lastPoint ? lastPoint.mean : 0;
   const currentReal = lastPoint ? lastPoint.real : 0;
   const currentImag = lastPoint ? lastPoint.imag : 0;
+  const scalarTarget = !isComplex ? parseScalarTarget(target) : null;
+  const targetValue = scalarTarget?.value ?? null;
+  const currentDeltaToTarget = targetValue != null ? currentMean - targetValue : null;
   const xMin = chartData[0]?.sampleCount ?? 0;
   const xMax = chartData[chartData.length - 1]?.sampleCount ?? 0;
   const xDomain = xMin === xMax ? [xMin - 1, xMax + 1] : [xMin, xMax];
 
-  const yValues = isComplex ? chartData.flatMap((d) => [d.real, d.imag]) : chartData.map((d) => d.mean);
-  const yMin = Math.min(...yValues);
-  const yMax = Math.max(...yValues);
-  const yPadding = yMin === yMax ? Math.max(Math.abs(yMin) * 0.01, 1e-6) : Math.max((yMax - yMin) * 0.1, 1e-6);
+  const domainWindowSize = 120;
+  const domainData = chartData.slice(-domainWindowSize);
+  const yValues = isComplex
+    ? domainData.flatMap((d) => [d.real, d.imag])
+    : domainData.flatMap((d) => [d.mean, d.lower, d.upper]);
+  if (targetValue != null) {
+    yValues.push(targetValue);
+  }
+  const sortedY = [...yValues].sort((a, b) => a - b);
+  const qLow = percentile(sortedY, 0.05);
+  const qHigh = percentile(sortedY, 0.95);
+  const latestValues = isComplex
+    ? [currentReal, currentImag]
+    : [currentMean, lastPoint?.lower ?? currentMean, lastPoint?.upper ?? currentMean];
+  const hardMin = Math.min(...latestValues, ...(targetValue != null ? [targetValue] : []));
+  const hardMax = Math.max(...latestValues, ...(targetValue != null ? [targetValue] : []));
+  const yMin = Math.min(qLow, hardMin);
+  const yMax = Math.max(qHigh, hardMax);
+  const yAbsMax = Math.max(Math.abs(yMin), Math.abs(yMax));
+  const yPadding =
+    yMin === yMax ? Math.max(Math.abs(yMin) * 0.005, 1e-14) : Math.max((yMax - yMin) * 0.003, yAbsMax * 5e-8, 1e-14);
   const yDomain = [yMin - yPadding, yMax + yPadding];
 
   return (
@@ -145,9 +200,16 @@ const SampleChart = ({ samples, isConnected, hasRun, mode = "scalar" }) => {
           {chartTitle}
         </Typography>
         <Typography variant="h5" sx={{ fontWeight: 700, fontFamily: "monospace", color: "primary.main" }}>
-          {isComplex ? `Re ${currentReal.toFixed(6)} | Im ${currentImag.toFixed(6)}` : currentMean.toFixed(6)}
+          {isComplex
+            ? `Re ${formatScientific(currentReal, 6)} | Im ${formatScientific(currentImag, 6)}`
+            : formatScientific(currentMean, 6)}
         </Typography>
       </Box>
+      {!isComplex && targetValue != null && (
+        <Typography variant="body2" sx={{ mb: 1, fontFamily: "monospace" }} color="text.secondary">
+          target {formatScientific(targetValue, 6)} | delta {formatScientific(currentDeltaToTarget, 6)}
+        </Typography>
+      )}
 
       <Card>
         <CardContent>
@@ -192,14 +254,43 @@ const SampleChart = ({ samples, isConnected, hasRun, mode = "scalar" }) => {
                   />
                 </>
               ) : (
-                <Line
-                  type="monotone"
-                  dataKey="mean"
-                  stroke="#1976d2"
-                  strokeWidth={2}
-                  dot={false}
-                  isAnimationActive={false}
-                />
+                <>
+                  {targetValue != null && (
+                    <ReferenceLine
+                      y={targetValue}
+                      stroke="#2e7d32"
+                      strokeWidth={1.5}
+                      strokeDasharray="6 4"
+                      ifOverflow="extendDomain"
+                      label={{ value: "target", position: "insideTopRight", fill: "#2e7d32" }}
+                    />
+                  )}
+                  <Area
+                    type="monotone"
+                    dataKey="lower"
+                    stackId="error-band"
+                    stroke="none"
+                    fill="transparent"
+                    isAnimationActive={false}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="spread"
+                    stackId="error-band"
+                    stroke="none"
+                    fill="#1976d2"
+                    fillOpacity={0.18}
+                    isAnimationActive={false}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="mean"
+                    stroke="#1976d2"
+                    strokeWidth={2}
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                </>
               )}
             </LineChart>
           </ResponsiveContainer>

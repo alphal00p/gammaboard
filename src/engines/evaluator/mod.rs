@@ -1,3 +1,4 @@
+mod gammaloop;
 mod sin_evaluator;
 mod sinc_evaluator;
 mod symbolica;
@@ -12,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use strum::{AsRefStr, Display};
 
+use self::gammaloop::GammaLoopEvaluator;
 use self::sin_evaluator::SinEvaluator;
 use self::sinc_evaluator::SincEvaluator;
 use self::symbolica::SymbolicaEngine;
@@ -21,6 +23,7 @@ use self::unit::UnitEvaluator;
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum EvaluatorImplementation {
+    Gammaloop,
     SinEvaluator,
     SincEvaluator,
     Unit,
@@ -33,7 +36,7 @@ pub struct EvalBatchOptions {
 }
 
 /// Evaluates integrand values for sample points.
-pub trait Evaluator: Send + Sync {
+pub trait Evaluator: Send {
     fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError>;
     fn eval_batch(
         &mut self,
@@ -66,6 +69,9 @@ impl EvaluatorFactory {
 
     pub fn build(&self) -> Result<Box<dyn Evaluator>, BuildError> {
         match self.implementation {
+            EvaluatorImplementation::Gammaloop => {
+                Ok(Box::new(GammaLoopEvaluator::from_json(&self.params)?))
+            }
             EvaluatorImplementation::SinEvaluator => {
                 Ok(Box::new(SinEvaluator::from_json(&self.params)?))
             }

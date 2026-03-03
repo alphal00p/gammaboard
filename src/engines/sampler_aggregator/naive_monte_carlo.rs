@@ -145,11 +145,6 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
         } else {
             0.0
         };
-        println!(
-            "📈 test-only engine: batches={}, samples={}, mean={mean:.6}",
-            self.nr_batches, self.nr_samples
-        );
-
         Ok(())
     }
 }

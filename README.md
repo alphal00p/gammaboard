@@ -3,12 +3,12 @@
 Gammaboard runs distributed numerical integration jobs using PostgreSQL as the shared runtime state.
 
 At a high level:
-- `control_plane` decides which node should do which role for a run.
-- `run_node` polls desired assignment in PostgreSQL and starts/stops one local worker role loop (`evaluator` or `sampler_aggregator`) to match desired state.
-- `server` exposes run progress, aggregated results, and worker logs for the dashboard.
-- `server` run stats SSE (`GET /api/runs/:id/stream`) uses one shared per-run polling
+- `gammaboard run` and `gammaboard node` commands manage run lifecycle and desired role assignments.
+- `gammaboard run-node` polls desired assignment in PostgreSQL and starts/stops one local worker role loop (`evaluator` or `sampler_aggregator`) to match desired state.
+- `gammaboard server` exposes run progress, aggregated results, and worker logs for the dashboard.
+- `gammaboard server` run stats SSE (`GET /api/runs/:id/stream`) uses one shared per-run polling
   loop with broadcast fanout to all connected clients.
-- `run_node` emits structured worker logs via `tracing`; `target="worker_log"` events
+- `gammaboard run-node` emits structured worker logs via `tracing`; `target="worker_log"` events
   are persisted into `worker_logs`.
 - Worker performance is persisted as history snapshots in role-split tables:
   `evaluator_performance_history` and `sampler_aggregator_performance_history`.
@@ -24,59 +24,72 @@ At a high level:
 
 ### Fastest local run
 1. Start everything and run a live backend test:
-   - `just live-test`
-   - this provisions two runs: a basic `unit + naive_monte_carlo + scalar` run,
-     and a Symbolica polynomial run (`x^2 + y^4`) with 2 evaluator workers.
-2. Optional: start backend + frontend dashboards:
-   - `just serve`
+   - `just live-test-basic`
+   - this provisions two runs: a `unit + naive_monte_carlo + scalar` run and
+     a Symbolica 3D Gaussian run from `configs/symbolica-live-test.toml`.
+2. Optional: run only the GammaLoop scenario:
+   - `just live-test-gammaloop`
+   - this provisions only `configs/gammaloop-triangle.toml`.
+3. Optional: start backend + frontend dashboards:
+   - terminal 1: `just serve-backend`
+   - terminal 2: `just serve-frontend`
+   - each `serve-*` command stops its own previous process before starting.
 
 Useful stop commands:
 - `just stop-workers`
 - `just stop-serving`
-- `just stop` (stops all runs via `control_plane run-stop -a`, then stops serving)
+- `just stop` (stops all runs via `gammaboard run stop -a`, then stops serving)
 - `just restart-db`
+- `just start-db` uses `docker-compose up -d --wait`, so migrations run only after
+  PostgreSQL healthcheck reports ready.
 
 ## Manual Flow
 
 1. Create a run from TOML config:
-- `cargo run --bin control_plane -- run-add configs/live-test-unit-naive-scalar.toml`
+- `cargo run --bin gammaboard -- run add configs/live-test-unit-naive-scalar.toml`
 
 2. Start nodes:
-- `cargo run --bin run_node -- --node-id node-a --poll-ms 1000`
-- `cargo run --bin run_node -- --node-id node-b --poll-ms 1000`
+- `cargo run --bin gammaboard -- run-node --node-id node-a --poll-ms 1000`
+- `cargo run --bin gammaboard -- run-node --node-id node-b --poll-ms 1000`
 
 Role selection is fully controlled by desired assignments in the DB.
 
 3. Assign roles:
-- `cargo run --bin control_plane -- assign node-a evaluator <RUN_ID>`
-- `cargo run --bin control_plane -- assign node-b sampler-aggregator <RUN_ID>`
+- `cargo run --bin gammaboard -- node assign node-a evaluator <RUN_ID>`
+- `cargo run --bin gammaboard -- node assign node-b sampler-aggregator <RUN_ID>`
 
 4. Start the run:
-- `cargo run --bin control_plane -- run-start <RUN_ID> [<RUN_ID> ...]`
-- `cargo run --bin control_plane -- run-start -a`
+- `cargo run --bin gammaboard -- run start <RUN_ID> [<RUN_ID> ...]`
+- `cargo run --bin gammaboard -- run start -a`
 
 Pause/stop runs (also clears desired assignments so workers stop on next reconcile):
-- `cargo run --bin control_plane -- run-pause <RUN_ID> [<RUN_ID> ...]`
-- `cargo run --bin control_plane -- run-pause -a`
-- `cargo run --bin control_plane -- run-stop <RUN_ID> [<RUN_ID> ...]`
-- `cargo run --bin control_plane -- run-stop -a`
+- `cargo run --bin gammaboard -- run pause <RUN_ID> [<RUN_ID> ...]`
+- `cargo run --bin gammaboard -- run pause -a`
+- `cargo run --bin gammaboard -- run stop <RUN_ID> [<RUN_ID> ...]`
+- `cargo run --bin gammaboard -- run stop -a`
 
-Stop run-node processes from the control plane:
-- `cargo run --bin control_plane -- node-stop <NODE_ID> [<NODE_ID> ...]`
-- `cargo run --bin control_plane -- node-stop -a`
+Stop run-node processes:
+- `cargo run --bin gammaboard -- node stop <NODE_ID> [<NODE_ID> ...]`
+- `cargo run --bin gammaboard -- node stop -a`
 
 Remove runs:
-- `cargo run --bin control_plane -- run-remove <RUN_ID> [<RUN_ID> ...]`
-- `cargo run --bin control_plane -- run-remove -a`
+- `cargo run --bin gammaboard -- run remove <RUN_ID> [<RUN_ID> ...]`
+- `cargo run --bin gammaboard -- run remove -a`
 
 ## Configuration
 
 Run configuration is provided as TOML.
-- `control_plane run-add <file.toml>` first loads `configs/default.toml`, then deep-merges the run file on top (run file values win).
+- Backend serve port is configured via environment variable
+  `GAMMABOOARD_BACKEND_PORT` (for `just serve*` and `gammaboard server` when `--bind` is omitted).
+- Frontend API base URL is configured via `REACT_APP_API_BASE_URL`.
+- Backend DB pool initialization retries transient connection failures with backoff
+  (helps when Postgres is still coming up).
+- `gammaboard run add <file.toml>` first loads `configs/default.toml`, then deep-merges the run file on top (run file values win).
 - Runtime defaults for run/integration payloads are not sourced from Rust struct defaults; keep `configs/default.toml` complete.
 - Run display name is configured via top-level `name` and stored in `runs.name`.
-- Run lifecycle status is persisted in `runs.status` and controlled by control-plane
-  run commands (`run-start`, `run-pause`, `run-stop`).
+- Optional top-level `target` is stored as opaque JSON in `runs.target` (backend pass-through).
+- Run lifecycle status is persisted in `runs.status` and controlled by
+  `gammaboard run` commands (`start`, `pause`, `stop`).
 - Engine and runner params are stored in `runs.integration_params`.
 - Observable implementation is stored in `runs.observable_implementation`.
 - Parametrization implementation and params are stored in `runs.integration_params`
@@ -90,16 +103,39 @@ Run configuration is provided as TOML.
 - Runtime engines are constructed via factories (`EvaluatorFactory`, `SamplerAggregatorFactory`, `ParametrizationFactory`, `ObservableFactory`) that return boxed trait objects; implementation enums remain config-only.
 - Evaluator implementations receive an `ObservableFactory` during `eval_batch` and build batch-local observable state from it.
 - Evaluator and sampler-aggregator implementations may expose one-time initialization metadata via trait hooks (`get_init_metadata`); workers persist these payloads into `runs.evaluator_init_metadata` and `runs.sampler_aggregator_init_metadata` with write-once semantics (`NULL -> JSONB`).
+- `gammaloop` evaluator parameters use:
+  `state_folder`, optional `model_file`, optional `process_id`, optional `integrand_name`,
+  optional `momentum_space`, optional `use_f128`, and optional `training_projection`
+  (`real|imag|abs|abs_sq`); it evaluates points with the same per-point flow as
+  GammaLoop Python `batched_inspect`.
+- Local GammaLoop compatibility patch (in sibling repo `../gammaloop`):
+  - `src/initialisation.rs`: replaced eager access to `INBUILTS.conj` with
+    `spenso_conj_symbol()`.
+  - `src/utils.rs`: replaced `INBUILTS.conj` keys in `FUN_LIB`, `PARAM_FUN_LIB`,
+    and `INT_FUN_LIB` with `spenso_conj_symbol()`, and added helper
+    `spenso_conj_symbol()` using `symbolica::try_symbol!`.
+  - Purpose: avoid panic from `symbol!` redefinition path
+    (`"Symbol spenso::conj redefined with new attributes"`), which otherwise
+    poisons init and causes repeated worker restarts.
 - `symbolica` evaluator parameters use `expr` and `args` (argument symbols).
 - `symbolica` evaluator build artifacts are written to a per-engine temporary directory under `./.evaluators` and cleaned up when the evaluator instance is dropped.
 - `unit` evaluator parameters are `{}` and always return per-sample value `1.0`.
 - Observable ingestion in evaluators is capability-based (`as_scalar_ingest` / `as_complex_ingest`) instead of matching concrete observable enum variants.
 - `complex` observable accepts both complex samples and scalar samples (scalar values are cast to `real + 0i`).
-- `spherical` parametrization maps unit-hypercube continuous samples to the unit ball and scales per-sample weights by the spherical-coordinate Jacobian.
+- `unit_ball` parametrization maps unit-hypercube continuous samples to the unit ball and scales per-sample weights by the corresponding Jacobian.
+- `spherical` parametrization maps `[0,1)^3` to `R^3` with:
+  - hemispherical direction map from the first two coordinates,
+  - radial map `w=2x2-1`, `r=w-1/w`,
+  - Jacobian factor `2*(1+1/w^2) * r^2 * (hemispherical_jacobian)`.
 - Sampler-aggregator engines produce one batch per call; the sampler-aggregator runner controls how many batches are produced each tick (`max_batches_per_tick`) and enforces pending-queue limits.
 - Sampler-aggregator runner adapts produced batch size toward
   `target_batch_eval_ms`, bounded by `max_batch_size`.
 - Sampler-aggregator runner uses `max_queue_size` as the queue throttle.
+- Sampler-aggregator runner queue throughput is tuned by
+  `target_queue_remaining` (`0 <= value <= 1`): from observed evaluator
+  drain-per-tick, the runner targets a pending depth that leaves roughly this
+  fraction in queue by the next tick. `1.0` disables lean-throttling and fills
+  queue up to hard limits (`max_queue_size`, `max_batches_per_tick`).
 - Sampler-aggregator performance snapshots are persisted periodically via
   `sampler_aggregator_runner_params.performance_snapshot_interval_ms`.
 - Sampler-aggregator engines can attach optional process-local batch context to produced batches; this context is passed back during training ingestion and is not persisted in PostgreSQL.
@@ -132,6 +168,7 @@ performance_snapshot_interval_ms = 2000
 min_poll_time_ms = 100
 performance_snapshot_interval_ms = 2000
 target_batch_eval_ms = 400.0
+target_queue_remaining = 0.5
 lease_ttl_ms = 5000
 max_batch_size = 64
 max_batches_per_tick = 8
@@ -149,7 +186,8 @@ discrete_dims = 0
 
 Havana-specific sampler params:
 - `batch_size` is not a Havana parameter; produced sample count is controlled by
-  the adaptive sampler runner (`max_batch_size`, `target_batch_eval_ms`).
+  the adaptive sampler runner
+  (`max_batch_size`, `target_batch_eval_ms`, `target_queue_remaining`).
 - `samples_for_update`: number of ingested training samples between grid updates.
 - `initial_training_rate`: training rate at sample 0.
 - `final_training_rate`: training rate at the end of training.
@@ -174,11 +212,12 @@ Compatibility is validated at runner startup before evaluator work begins.
 ## Current Status
 
 - Test-only engine implementations are currently wired by default.
-- Runs can be reassigned at runtime by updating desired assignments via `control_plane`.
+- Runs can be reassigned at runtime by updating desired assignments via `gammaboard node`.
 - Sampler-aggregator state is in-memory only; completed batches are consumed and deleted after ingestion.
-- Each `run_node` process executes at most one active role task at a time, with role selection driven by DB desired assignments.
-- `control_plane node-stop` requests node shutdown via DB; each `run_node` consumes and clears a one-shot shutdown signal before exiting.
-- Role lifecycle, lease, heartbeat, and tick failure events from `run_node` are persisted
+- Each `gammaboard run-node` process executes at most one active role task at a time, with role selection driven by DB desired assignments.
+- `gammaboard node stop` requests node shutdown via DB; each `gammaboard run-node`
+  consumes and clears a one-shot shutdown signal before exiting.
+- Role lifecycle, lease, heartbeat, and tick failure events from `gammaboard run-node` are persisted
   in `worker_logs` (indexed by `run_id` and `worker_id`).
 - Worker logs are readable via `GET /api/runs/:id/logs` and shown in the dashboard's
   **Worker Logs** panel.

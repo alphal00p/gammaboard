@@ -245,19 +245,21 @@ pub(crate) async fn create_run(
     status: RunStatus,
     name: &str,
     integration_params: &JsonValue,
+    target: Option<&JsonValue>,
     observable_implementation: &str,
     point_spec: &PointSpec,
 ) -> Result<i32, sqlx::Error> {
     sqlx::query_scalar(
         r#"
-        INSERT INTO runs (status, name, integration_params, observable_implementation, point_spec)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO runs (status, name, integration_params, target, observable_implementation, point_spec)
+        VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING id
         "#,
     )
     .bind(status.as_str())
     .bind(name)
     .bind(integration_params)
+    .bind(target)
     .bind(observable_implementation)
     .bind(sqlx::types::Json(point_spec))
     .fetch_one(pool)

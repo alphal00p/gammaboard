@@ -1,80 +1,75 @@
 poll_ms := "500"
 
 install:
-    cargo install --path . --bin control_plane
+    cargo install --path .
+install-dev:
+    cargo install --path . --debug
 
 stop-db:
     docker-compose down -v
 
 start-db:
-    docker-compose up -d
+    docker-compose up -d --wait
     sqlx migrate run
 
 restart-db:
     @just stop-db
     @just start-db
 
-control-plane +args:
-    cargo run --bin control_plane -- {{ args }}
-
-run-node node_id poll_ms='500':
-    cargo run --bin run_node -- --node-id {{ node_id }} --poll-ms {{ poll_ms }}
-
-start-workers n='10':
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cargo build --bin run_node
-    for i in $(seq 1 {{ n }}); do
-      NODE_ID="w-${i}"
-      target/debug/run_node --node-id "${NODE_ID}" --poll-ms {{ poll_ms }} &
-      echo "started ${NODE_ID}"
-    done
-    echo "{{ n }} workers started"
-
 serve-backend:
     @echo "Starting Rust API server..."
-    cargo run --bin server
+    @just stop-backend
+    gammaboard server
 
 serve-frontend:
     @echo "Starting frontend..."
-    cd dashboard && npm start
+    @just stop-frontend
+    bash -lc 'set -a; [ -f .env ] && source .env; set +a; port="${GAMMABOOARD_BACKEND_PORT:?missing GAMMABOOARD_BACKEND_PORT}"; export REACT_APP_API_BASE_URL="http://localhost:$port/api"; cd dashboard && npm start'
 
-serve:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    just serve-backend &
-    just serve-frontend &
-    echo "backend + frontend started in background"
-
-live-test:
+live-test-basic:
     #!/usr/bin/env bash
     set -euo pipefail
 
     just restart-db
-    cargo run --bin run_node -- --node-id "w-1" --poll-ms {{ poll_ms }} &
-    cargo run --bin run_node -- --node-id "w-2" --poll-ms {{ poll_ms }} &
-    cargo run --bin run_node -- --node-id "w-3" --poll-ms {{ poll_ms }} &
-    cargo run --bin run_node -- --node-id "w-4" --poll-ms {{ poll_ms }} &
-    cargo run --bin run_node -- --node-id "w-5" --poll-ms {{ poll_ms }} &
+    gammaboard run-node --node-id "w-1" --poll-ms {{ poll_ms }} &
+    gammaboard run-node --node-id "w-2" --poll-ms {{ poll_ms }} &
+    gammaboard run-node --node-id "w-3" --poll-ms {{ poll_ms }} &
+    gammaboard run-node --node-id "w-4" --poll-ms {{ poll_ms }} &
+    gammaboard run-node --node-id "w-5" --poll-ms {{ poll_ms }} &
 
     sleep 4
 
-    control_plane run-add "configs/live-test-unit-naive-scalar.toml"
-    control_plane run-add "configs/symbolica-live-test.toml"
+    gammaboard run add "configs/live-test-unit-naive-scalar.toml"
+    gammaboard run add "configs/symbolica-live-test.toml"
 
-    control_plane assign "w-1" evaluator 1
-    control_plane assign "w-2" sampler-aggregator 1
+    gammaboard node assign "w-1" evaluator 1
+    gammaboard node assign "w-2" sampler-aggregator 1
 
-    control_plane assign "w-3" evaluator 2
-    control_plane assign "w-4" evaluator 2
-    control_plane assign "w-5" sampler-aggregator 2
+    gammaboard node assign "w-3" evaluator 2
+    gammaboard node assign "w-4" evaluator 2
+    gammaboard node assign "w-5" sampler-aggregator 2
 
-    control_plane run-start 1 2
+    gammaboard run start 1 2
+
+live-test-gammaloop:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    just restart-db
+    gammaboard run-node --node-id "w-1" --poll-ms {{ poll_ms }} &
+    gammaboard run-node --node-id "w-2" --poll-ms {{ poll_ms }} &
+
+    sleep 4
+
+    gammaboard run add "configs/gammaloop-triangle.toml"
+
+    gammaboard node assign "w-1" evaluator 1
+    gammaboard node assign "w-2" sampler-aggregator 1
+
+    gammaboard run start 1
 
 stop-backend:
-    -pkill -f "{{ justfile_directory() }}/target/debug/server"
-    -pkill -f "target/debug/server"
-    -pkill -f "cargo run --bin server"
+    -pkill -f "gammaboard server"
     @echo "Backend stopped"
 
 stop-frontend:
@@ -91,7 +86,7 @@ stop-serving:
     -@just stop-frontend
 
 stop:
-    -@just control-plane "run-stop -a"
-    -@just control-plane "node-stop -a"
+    -gammaboard run stop -a
+    -gammaboard node stop -a
     -@just stop-serving
     -@stty sane

@@ -104,6 +104,7 @@ pub trait ControlPlaneStore: Send + Sync {
         status: super::models::RunStatus,
         name: &str,
         integration_params: &JsonValue,
+        target: Option<&JsonValue>,
         point_spec: &PointSpec,
     ) -> Result<i32, StoreError>;
     async fn set_run_status(

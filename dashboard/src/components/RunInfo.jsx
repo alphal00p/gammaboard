@@ -1,7 +1,8 @@
 import { Box, Card, CardContent, Grid, Typography, Chip } from "@mui/material";
 import { InfoOutlined as InfoOutlinedIcon } from "@mui/icons-material";
 import JsonFallback from "./JsonFallback";
-import { formatDateTime } from "../utils/formatters";
+import { formatDateTime, formatScientific } from "../utils/formatters";
+import { parseScalarTarget } from "../utils/target";
 
 const RunInfo = ({ run }) => {
   if (!run) return null;
@@ -12,6 +13,7 @@ const RunInfo = ({ run }) => {
   const observableImplementation =
     run.observable_implementation || integrationParams.observable_implementation || "unknown";
   const pointSpec = run.point_spec || integrationParams.point_spec || null;
+  const scalarTarget = parseScalarTarget(run.target);
   const trainingCompleted = Boolean(run.training_completed_at);
   const trainingLabel = trainingCompleted ? "training completed" : "training";
   let pointSpecText = "not exposed by /runs/:id";
@@ -137,6 +139,14 @@ const RunInfo = ({ run }) => {
               <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace", mt: 1 }}>
                 point_spec: {pointSpecText}
               </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace", mt: 0.5 }}>
+                target:{" "}
+                {scalarTarget
+                  ? `scalar(${formatScientific(scalarTarget.value, 6)})`
+                  : run.target
+                    ? "custom json"
+                    : "none"}
+              </Typography>
             </CardContent>
           </Card>
         </Grid>
@@ -144,6 +154,9 @@ const RunInfo = ({ run }) => {
 
       <Box sx={{ mt: 2 }}>
         <JsonFallback title="integration_params JSON" data={integrationParams} />
+      </Box>
+      <Box sx={{ mt: 2 }}>
+        <JsonFallback title="target JSON" data={run.target} />
       </Box>
     </Box>
   );

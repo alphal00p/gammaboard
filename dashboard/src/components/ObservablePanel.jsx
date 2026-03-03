@@ -46,6 +46,7 @@ const ObservablePanel = ({ run, latestAggregated, samples, isConnected, observab
           samples={samples}
           isConnected={isConnected}
           hasRun={Boolean(run)}
+          target={run?.target}
         />
       }
       jsonTitle="observable JSON"

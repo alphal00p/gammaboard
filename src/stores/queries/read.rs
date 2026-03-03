@@ -23,6 +23,7 @@ struct RunProgressRow {
     run_name: String,
     run_status: String,
     integration_params: Option<JsonValue>,
+    target: Option<JsonValue>,
     evaluator_init_metadata: Option<JsonValue>,
     sampler_aggregator_init_metadata: Option<JsonValue>,
     started_at: Option<DateTime<Utc>>,
@@ -48,6 +49,7 @@ impl TryFrom<RunProgressRow> for RunProgress {
             run_name: value.run_name,
             run_status: parse_run_status(&value.run_status)?,
             integration_params: value.integration_params,
+            target: value.target,
             evaluator_init_metadata: value.evaluator_init_metadata,
             sampler_aggregator_init_metadata: value.sampler_aggregator_init_metadata,
             started_at: value.started_at,
@@ -231,6 +233,7 @@ const RUN_PROGRESS_COLUMNS: &str = r#"
     run_name,
     run_status,
     integration_params,
+    target,
     evaluator_init_metadata,
     sampler_aggregator_init_metadata,
     started_at,
@@ -294,6 +297,7 @@ pub(crate) async fn get_run_progress(
                     COALESCE(r.integration_params, '{{}}'::jsonb)
                     || jsonb_build_object('observable_implementation', r.observable_implementation)
                 ) as integration_params,
+                r.target,
                 r.evaluator_init_metadata,
                 r.sampler_aggregator_init_metadata,
                 r.started_at,

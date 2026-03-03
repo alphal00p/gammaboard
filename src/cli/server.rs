@@ -1,15 +1,12 @@
-//! Gammaboard API Server
-//!
-//! Serves the REST API for the dashboard and static frontend files.
-
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::{
     Router,
-    extract::{Path, Query, State},
+    extract::{Path as AxumPath, Query, State},
     http::StatusCode,
     response::{IntoResponse, Json, Response},
     routing::get,
 };
+use clap::Args;
 use futures_core::Stream;
 use gammaboard::stores::RunReadStore;
 use gammaboard::{BinResult, PgStore, init_pg_store};
@@ -17,6 +14,7 @@ use serde::Deserialize;
 use std::{
     collections::HashMap,
     convert::Infallible,
+    env,
     fmt::Display,
     net::SocketAddr,
     pin::Pin,
@@ -26,6 +24,51 @@ use std::{
 };
 use tokio::sync::{Mutex, broadcast, mpsc};
 use tower_http::cors::CorsLayer;
+
+#[derive(Debug, Args)]
+pub struct ServerArgs {
+    #[arg(long)]
+    bind: Option<SocketAddr>,
+    #[arg(long, default_value_t = 10)]
+    db_pool_size: u32,
+}
+
+pub async fn run_server(args: ServerArgs) -> BinResult {
+    let store = init_pg_store(args.db_pool_size).await?;
+    let bind = match args.bind {
+        Some(bind) => bind,
+        None => {
+            let value = env::var("GAMMABOOARD_BACKEND_PORT").map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "missing GAMMABOOARD_BACKEND_PORT (set it in environment or pass --bind)",
+                )
+            })?;
+            let port = value.parse::<u16>().map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("invalid GAMMABOOARD_BACKEND_PORT={value:?}: {err}"),
+                )
+            })?;
+            SocketAddr::from(([0, 0, 0, 0], port))
+        }
+    };
+
+    let state = AppState {
+        store,
+        run_stream_hub: Arc::new(Mutex::new(HashMap::new())),
+    };
+
+    let app = build_app(state);
+
+    println!("server listening on http://{}", bind);
+    println!("api available at http://{}/api", bind);
+
+    let listener = tokio::net::TcpListener::bind(bind).await?;
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -118,6 +161,35 @@ impl Stream for MpscStream {
     }
 }
 
+fn build_app(state: AppState) -> Router {
+    let api_routes = Router::new()
+        .route("/health", get(health_check))
+        .route("/runs", get(get_runs))
+        .route("/workers", get(get_workers))
+        .route("/runs/:id", get(get_run))
+        .route("/runs/:id/stats", get(get_run_stats))
+        .route("/runs/:id/logs", get(get_run_logs))
+        .route("/runs/:id/aggregated", get(get_run_aggregated_results))
+        .route(
+            "/runs/:id/aggregated/latest",
+            get(get_run_aggregated_latest),
+        )
+        .route(
+            "/runs/:id/performance/evaluator",
+            get(get_run_evaluator_performance_history),
+        )
+        .route(
+            "/runs/:id/performance/sampler-aggregator",
+            get(get_run_sampler_performance_history),
+        )
+        .route("/runs/:id/stream", get(stream_run_stats))
+        .with_state(state);
+
+    Router::new()
+        .nest("/api", api_routes)
+        .layer(CorsLayer::permissive())
+}
+
 async fn subscribe_run_stream(
     state: &AppState,
     run_id: i32,
@@ -203,66 +275,6 @@ async fn run_stream_publisher(
     }
 }
 
-#[tokio::main]
-async fn main() -> BinResult {
-    println!("🚀 Starting Gammaboard API Server...");
-
-    // Initialize database connection pool
-    let store = init_pg_store(10).await?;
-    println!("✅ Connected to database");
-
-    let state = AppState {
-        store,
-        run_stream_hub: Arc::new(Mutex::new(HashMap::new())),
-    };
-
-    // Build API routes
-    let api_routes = Router::new()
-        .route("/health", get(health_check))
-        .route("/runs", get(get_runs))
-        .route("/workers", get(get_workers))
-        .route("/runs/:id", get(get_run))
-        .route("/runs/:id/stats", get(get_run_stats))
-        .route("/runs/:id/logs", get(get_run_logs))
-        .route("/runs/:id/aggregated", get(get_run_aggregated_results))
-        .route(
-            "/runs/:id/aggregated/latest",
-            get(get_run_aggregated_latest),
-        )
-        .route(
-            "/runs/:id/performance/evaluator",
-            get(get_run_evaluator_performance_history),
-        )
-        .route(
-            "/runs/:id/performance/sampler-aggregator",
-            get(get_run_sampler_performance_history),
-        )
-        .route("/runs/:id/stream", get(stream_run_stats))
-        .with_state(state);
-
-    // Build main app with CORS and static file serving
-    let app = Router::new()
-        .nest("/api", api_routes)
-        // Serve static files from dashboard build directory
-        // Uncomment when you have a production build:
-        // .nest_service("/", ServeDir::new("dashboard/frontend/build"))
-        .layer(CorsLayer::permissive());
-
-    let addr = SocketAddr::from(([0, 0, 0, 0], 4000));
-    println!("🌐 Server listening on http://{}", addr);
-    println!("📊 API available at http://{}/api", addr);
-
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
-
-    Ok(())
-}
-
-// ============================================================================
-// API Handlers
-// ============================================================================
-
-/// Health check endpoint
 async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
     match state.store.health_check().await {
         Ok(_) => (
@@ -284,7 +296,6 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
-/// Get all runs with progress
 async fn get_runs(State(state): State<AppState>) -> impl IntoResponse {
     match state.store.get_all_runs().await {
         Ok(runs) => (StatusCode::OK, Json(runs)).into_response(),
@@ -292,7 +303,6 @@ async fn get_runs(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
-/// Get all registered workers.
 async fn get_workers(
     State(state): State<AppState>,
     Query(params): Query<WorkersQuery>,
@@ -303,8 +313,7 @@ async fn get_workers(
     }
 }
 
-/// Get specific run progress
-async fn get_run(State(state): State<AppState>, Path(id): Path<i32>) -> impl IntoResponse {
+async fn get_run(State(state): State<AppState>, AxumPath(id): AxumPath<i32>) -> impl IntoResponse {
     match state.store.get_run_progress(id).await {
         Ok(Some(run)) => (StatusCode::OK, Json(run)).into_response(),
         Ok(None) => json_error(StatusCode::NOT_FOUND, "Run not found"),
@@ -312,8 +321,10 @@ async fn get_run(State(state): State<AppState>, Path(id): Path<i32>) -> impl Int
     }
 }
 
-/// Get work queue statistics for a run
-async fn get_run_stats(State(state): State<AppState>, Path(id): Path<i32>) -> impl IntoResponse {
+async fn get_run_stats(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i32>,
+) -> impl IntoResponse {
     match state.store.get_work_queue_stats(id).await {
         Ok(stats) => (StatusCode::OK, Json(stats)).into_response(),
         Err(e) => internal_error(
@@ -324,10 +335,9 @@ async fn get_run_stats(State(state): State<AppState>, Path(id): Path<i32>) -> im
     }
 }
 
-/// Get worker logs for a run.
 async fn get_run_logs(
     State(state): State<AppState>,
-    Path(id): Path<i32>,
+    AxumPath(id): AxumPath<i32>,
     Query(params): Query<LogQuery>,
 ) -> impl IntoResponse {
     let limit = params.limit.clamp(1, 10_000);
@@ -351,10 +361,9 @@ async fn get_run_logs(
     }
 }
 
-/// Get aggregated results history for a run
 async fn get_run_aggregated_results(
     State(state): State<AppState>,
-    Path(id): Path<i32>,
+    AxumPath(id): AxumPath<i32>,
     Query(params): Query<LimitQuery>,
 ) -> impl IntoResponse {
     let limit = params.limit.clamp(1, 10_000);
@@ -368,10 +377,9 @@ async fn get_run_aggregated_results(
     }
 }
 
-/// Get latest aggregated results for a run
 async fn get_run_aggregated_latest(
     State(state): State<AppState>,
-    Path(id): Path<i32>,
+    AxumPath(id): AxumPath<i32>,
 ) -> impl IntoResponse {
     match state.store.get_latest_aggregated_result(id).await {
         Ok(Some(result)) => (StatusCode::OK, Json(result)).into_response(),
@@ -384,10 +392,9 @@ async fn get_run_aggregated_latest(
     }
 }
 
-/// Get evaluator performance history for a run.
 async fn get_run_evaluator_performance_history(
     State(state): State<AppState>,
-    Path(id): Path<i32>,
+    AxumPath(id): AxumPath<i32>,
     Query(params): Query<PerformanceHistoryQuery>,
 ) -> impl IntoResponse {
     let limit = params.limit.clamp(1, 10_000);
@@ -405,10 +412,9 @@ async fn get_run_evaluator_performance_history(
     }
 }
 
-/// Get sampler-aggregator performance history for a run.
 async fn get_run_sampler_performance_history(
     State(state): State<AppState>,
-    Path(id): Path<i32>,
+    AxumPath(id): AxumPath<i32>,
     Query(params): Query<PerformanceHistoryQuery>,
 ) -> impl IntoResponse {
     let limit = params.limit.clamp(1, 10_000);
@@ -426,10 +432,9 @@ async fn get_run_sampler_performance_history(
     }
 }
 
-/// Live stats stream (SSE)
 async fn stream_run_stats(
     State(state): State<AppState>,
-    Path(id): Path<i32>,
+    AxumPath(id): AxumPath<i32>,
     Query(params): Query<StreamQuery>,
 ) -> impl IntoResponse {
     match state.store.get_run_progress(id).await {
@@ -469,7 +474,7 @@ async fn stream_run_stats(
 
             if tx.send(Ok(event)).await.is_err() {
                 break;
-            };
+            }
         }
     });
 

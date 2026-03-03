@@ -208,6 +208,7 @@ impl SamplerAggregator for HavanaSampler {
     ) -> Result<(crate::Batch, Option<BatchContext>), crate::engines::EngineError> {
         let should_train = self.is_training_active();
         let mut coords: Vec<f64> = Vec::with_capacity(nr_samples * self.continuous_dims);
+        let mut weights: Vec<f64> = Vec::with_capacity(nr_samples);
 
         let context = if should_train {
             let mut samples = Vec::with_capacity(nr_samples);
@@ -216,9 +217,10 @@ impl SamplerAggregator for HavanaSampler {
                 self.grid.sample(&mut self.rng, &mut sample);
 
                 match &sample {
-                    Sample::Continuous(_weight, x) => {
+                    Sample::Continuous(weight, x) => {
                         debug_assert_eq!(x.len(), self.continuous_dims);
                         coords.extend_from_slice(x);
+                        weights.push(*weight);
                     }
                     _ => unreachable!("continuous grid produced non-continuous sample"),
                 }
@@ -232,9 +234,10 @@ impl SamplerAggregator for HavanaSampler {
                 self.grid.sample(&mut self.rng, &mut sample);
 
                 match &sample {
-                    Sample::Continuous(_weight, x) => {
+                    Sample::Continuous(weight, x) => {
                         debug_assert_eq!(x.len(), self.continuous_dims);
                         coords.extend_from_slice(x);
+                        weights.push(*weight);
                     }
                     _ => unreachable!("continuous grid produced non-continuous sample"),
                 }
@@ -242,8 +245,15 @@ impl SamplerAggregator for HavanaSampler {
             None
         };
 
-        let batch = Batch::from_flat_data(nr_samples, self.continuous_dims, 0, coords, vec![])
-            .map_err(|err| EngineError::engine(err.to_string()))?;
+        let batch = Batch::from_flat_data_with_weights(
+            nr_samples,
+            self.continuous_dims,
+            0,
+            coords,
+            vec![],
+            Some(weights),
+        )
+        .map_err(|err| EngineError::engine(err.to_string()))?;
         self.batches_produced += 1;
         self.samples_produced = self.samples_produced.saturating_add(nr_samples);
         Ok((batch, context))

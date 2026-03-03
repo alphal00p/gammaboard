@@ -471,6 +471,7 @@ impl ControlPlaneStore for PgStore {
         status: RunStatus,
         name: &str,
         integration_params: &JsonValue,
+        target: Option<&JsonValue>,
         point_spec: &PointSpec,
     ) -> Result<i32, StoreError> {
         let (sanitized_params, observable_implementation) =
@@ -481,6 +482,7 @@ impl ControlPlaneStore for PgStore {
             status,
             name,
             &sanitized_params,
+            target,
             observable_implementation.as_ref(),
             point_spec,
         )
@@ -702,6 +704,7 @@ mod tests {
                     "min_poll_time_ms": 500,
                     "performance_snapshot_interval_ms": 5000,
                     "target_batch_eval_ms": 200.0,
+                    "target_queue_remaining": 0.0,
                     "lease_ttl_ms": 5000,
                     "max_batch_size": 64,
                     "max_queue_size": 128,
@@ -753,6 +756,7 @@ mod tests {
                 "min_poll_time_ms": 500,
                 "performance_snapshot_interval_ms": 5000,
                 "target_batch_eval_ms": 200.0,
+                "target_queue_remaining": 0.0,
                 "lease_ttl_ms": 5000,
                 "max_batch_size": 64,
                 "max_queue_size": 128,
