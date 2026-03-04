@@ -1,9 +1,10 @@
-use crate::core::{StoreError, WorkerRole};
+use crate::core::StoreError;
 use crate::engines::observable::ObservableFactory;
 use crate::engines::{EvaluatorFactory, ParametrizationFactory};
 use crate::runners::evaluator::EvaluatorRunner;
 use std::time::Duration;
 use tokio::{sync::watch, time::sleep};
+use tracing::Instrument;
 use tracing::{info, warn};
 
 use super::{NodeRunnerStore, active_worker::ActiveWorker};
@@ -13,39 +14,56 @@ pub(crate) async fn run_evaluator_role<S: NodeRunnerStore>(
     mut stop_rx: watch::Receiver<bool>,
 ) -> Result<(), StoreError> {
     let Some(spec) = worker.store.load_run_spec(worker.run_id).await? else {
-        warn!(
-            target: "worker_log",
-            run_id = worker.run_id,
-            node_id = %worker.node_id,
-            worker_id = %worker.worker_id,
-            role = %WorkerRole::Evaluator,
-            event_type = "run_spec_missing",
-            "run has no RunSpec; evaluator not started"
-        );
+        warn!("run has no RunSpec; evaluator not started");
         return Ok(());
     };
 
     let evaluator_factory =
         EvaluatorFactory::new(spec.evaluator_implementation, spec.evaluator_params.clone());
-    let evaluator = evaluator_factory
-        .build()
-        .map_err(|err| StoreError::store(format!("failed to build evaluator: {err}")))?;
-    evaluator
-        .validate_point_spec(&spec.point_spec)
-        .map_err(|err| {
-            StoreError::store(format!(
-                "incompatible evaluator for point_spec on run {}: {}",
-                worker.run_id, err
-            ))
-        })?;
-
-    let observable_factory = ObservableFactory::new(
-        spec.observable_implementation,
-        spec.observable_params.clone(),
+    let engine_span = tracing::span!(
+        tracing::Level::TRACE,
+        "evaluator_engine_context",
+        engine = true
     );
-    observable_factory
+    let (evaluator, observable_factory, parametrization) = {
+        let _engine_scope = engine_span.enter();
+        let evaluator = evaluator_factory
+            .build()
+            .map_err(|err| StoreError::store(format!("failed to build evaluator: {err}")))?;
+        evaluator
+            .validate_point_spec(&spec.point_spec)
+            .map_err(|err| {
+                StoreError::store(format!(
+                    "incompatible evaluator for point_spec on run {}: {}",
+                    worker.run_id, err
+                ))
+            })?;
+
+        let observable_factory = ObservableFactory::new(
+            spec.observable_implementation,
+            spec.observable_params.clone(),
+        );
+        observable_factory
+            .build()
+            .map_err(|err| StoreError::store(format!("failed to build observable: {err}")))?;
+
+        let parametrization = ParametrizationFactory::new(
+            spec.parametrization_implementation,
+            spec.parametrization_params.clone(),
+        )
         .build()
-        .map_err(|err| StoreError::store(format!("failed to build observable: {err}")))?;
+        .map_err(|err| StoreError::store(format!("failed to build parametrization: {err}")))?;
+        parametrization
+            .validate_point_spec(&spec.point_spec)
+            .map_err(|err| {
+                StoreError::store(format!(
+                    "incompatible parametrization for point_spec on run {}: {}",
+                    worker.run_id, err
+                ))
+            })?;
+
+        (evaluator, observable_factory, parametrization)
+    };
 
     if !evaluator.supports_observable(&observable_factory) {
         return Err(StoreError::store(format!(
@@ -60,31 +78,8 @@ pub(crate) async fn run_evaluator_role<S: NodeRunnerStore>(
         .try_set_evaluator_init_metadata(worker.run_id, &evaluator_init_metadata)
         .await?
     {
-        info!(
-            target: "worker_log",
-            run_id = worker.run_id,
-            node_id = %worker.node_id,
-            worker_id = %worker.worker_id,
-            role = %WorkerRole::Evaluator,
-            event_type = "init_metadata_written",
-            "stored evaluator init metadata"
-        );
+        info!("stored evaluator init metadata");
     }
-
-    let parametrization = ParametrizationFactory::new(
-        spec.parametrization_implementation,
-        spec.parametrization_params.clone(),
-    )
-    .build()
-    .map_err(|err| StoreError::store(format!("failed to build parametrization: {err}")))?;
-    parametrization
-        .validate_point_spec(&spec.point_spec)
-        .map_err(|err| {
-            StoreError::store(format!(
-                "incompatible parametrization for point_spec on run {}: {}",
-                worker.run_id, err
-            ))
-        })?;
 
     worker
         .register_active_worker(spec.evaluator_implementation.as_ref())
@@ -94,15 +89,7 @@ pub(crate) async fn run_evaluator_role<S: NodeRunnerStore>(
         .assign_evaluator(worker.run_id, &worker.worker_id)
         .await?;
 
-    info!(
-        target: "worker_log",
-        run_id = worker.run_id,
-        node_id = %worker.node_id,
-        worker_id = %worker.worker_id,
-        role = %WorkerRole::Evaluator,
-        event_type = "worker_started",
-        "evaluator worker started"
-    );
+    info!("evaluator worker started");
 
     let mut runner = EvaluatorRunner::new(
         worker.run_id,
@@ -127,7 +114,7 @@ pub(crate) async fn run_evaluator_role<S: NodeRunnerStore>(
 
         worker.heartbeat_with_log().await;
 
-        let sleep_after = match runner.tick().await {
+        let sleep_after = match runner.tick().instrument(engine_span.clone()).await {
             Ok(tick) => {
                 if tick.processed_samples > 0 {
                     Duration::ZERO
@@ -136,20 +123,10 @@ pub(crate) async fn run_evaluator_role<S: NodeRunnerStore>(
                 }
             }
             Err(err) => {
-                warn!(
-                    target: "worker_log",
-                    run_id = worker.run_id,
-                    node_id = %worker.node_id,
-                    worker_id = %worker.worker_id,
-                    role = %WorkerRole::Evaluator,
-                    event_type = "tick_failed",
-                    error = %err,
-                    "evaluator tick failed"
-                );
+                warn!("evaluator tick failed: {err}");
                 idle_backoff
             }
         };
-
         if sleep_after > Duration::ZERO {
             tokio::select! {
                 _ = stop_rx.changed() => {}
@@ -163,28 +140,11 @@ pub(crate) async fn run_evaluator_role<S: NodeRunnerStore>(
         .unassign_evaluator(worker.run_id, &worker.worker_id)
         .await
     {
-        warn!(
-            target: "worker_log",
-            run_id = worker.run_id,
-            node_id = %worker.node_id,
-            worker_id = %worker.worker_id,
-            role = %WorkerRole::Evaluator,
-            event_type = "unassign_failed",
-            error = %err,
-            "failed to unassign evaluator"
-        );
+        warn!("failed to unassign evaluator: {err}");
     }
 
     worker.mark_inactive_with_log().await;
-    info!(
-        target: "worker_log",
-        run_id = worker.run_id,
-        node_id = %worker.node_id,
-        worker_id = %worker.worker_id,
-        role = %WorkerRole::Evaluator,
-        event_type = "worker_stopped",
-        "evaluator worker stopped"
-    );
+    info!("evaluator worker stopped");
 
     Ok(())
 }

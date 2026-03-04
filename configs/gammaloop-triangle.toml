@@ -4,7 +4,7 @@ name = "gammaloop-triangle"
 evaluator_implementation = "gammaloop"
 sampler_aggregator_implementation = "havana"
 observable_implementation = "complex"
-parametrization_implementation = "spherical"
+parametrization_implementation = "none" #spherical"
 
 [point_spec]
 continuous_dims = 3
@@ -21,18 +21,18 @@ state_folder = "/home/cedricsigrist/Workspace/repos/gammaloop/my_states/triangle
 # Optional process/integrand selectors. If omitted, GammaLoop's single-process/single-integrand fallback applies.
 # process_id = 0
 # integrand_name = "triangle"
-momentum_space = true
+momentum_space = false
 use_f128 = false
-training_projection = "real"
+training_projection = "abs"
 
 [sampler_aggregator_runner_params]
-min_poll_time_ms = 100
+min_poll_time_ms = 50
 performance_snapshot_interval_ms = 2000
-target_batch_eval_ms = 400.0
+target_batch_eval_ms = 200.0
 target_queue_remaining = 0.8
 lease_ttl_ms = 5000
-max_batch_size = 64
-max_batches_per_tick = 8
+max_batch_size = 1024
+max_batches_per_tick = 64
 max_queue_size = 128
 completed_batch_fetch_limit = 1024
 

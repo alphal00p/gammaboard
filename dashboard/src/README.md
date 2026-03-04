@@ -29,8 +29,9 @@ Backend API → context/RunHistoryContext → App.js → components
 
 ## State Management
 
-- **RunHistoryProvider** - Central source of truth for run details, aggregated history, and live updates (SSE + polling).
-- **useRunHistory** - Hook for components to consume centralized state.
+- **RunHistoryProvider** - Central source of truth for run details, aggregated history, worker logs, and live updates.
+- **useRunState / useRunConnection / useRunHeartbeat** - Split hooks to reduce unnecessary rerenders.
+- **useRunHistory** - Combined convenience hook.
 
 ## Hooks
 
@@ -38,15 +39,16 @@ Backend API → context/RunHistoryContext → App.js → components
 
 ## Configuration
 
-**API URL:** Edit `context/RunHistoryContext.jsx`
-```
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || "http://localhost:4000/api";
-```
+**API URL:** set `REACT_APP_API_BASE_URL`.
 
-**Polling + stream:** Edit `App.js`
-```
-<RunHistoryProvider runId={selectedRun} pollIntervalMs={5000} streamIntervalMs={1000}>
-```
+**Polling + retention:** Edit `DASHBOARD_HISTORY_CONFIG` in `App.js`.
+- `historyLimit`
+- `historyBufferMax`
+- `workerLogsLimit`
+- `workQueueStatsLimit`
+- `pollIntervalMs`
+- `sseConnectedPollThrottleFactor`
+- `streamIntervalMs`
 
 ## Tech Stack
 

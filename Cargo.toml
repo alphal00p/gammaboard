@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-gammaloop = { package = "gammalooprs", path = "../gammaloop" }
+gammalooprs = { path = "../gammaloop" }
 gammaloop_api = { package = "gammaloop-api", path = "../gammaloop/gammaloop-api", default-features = false, features = ["cli", "no_pyo3"] }
 tokio = { version = "1.46", features = ["full"] }
 sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-native-tls", "chrono", "macros"] }

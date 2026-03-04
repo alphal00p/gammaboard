@@ -8,8 +8,12 @@ At a high level:
 - `gammaboard server` exposes run progress, aggregated results, and worker logs for the dashboard.
 - `gammaboard server` run stats SSE (`GET /api/runs/:id/stream`) uses one shared per-run polling
   loop with broadcast fanout to all connected clients.
-- `gammaboard run-node` emits structured worker logs via `tracing`; `target="worker_log"` events
-  are persisted into `worker_logs`.
+- Runtime processes (`run-node`, `server`, and control commands) initialize tracing with a DB sink.
+  Context-tagged events are persisted into `runtime_logs`; worker dashboard logs read
+  `source='worker'`.
+  The tracing layer writes through the store abstraction (`RuntimeLogStore`), with SQL implemented
+  in the PostgreSQL store/query layer.
+  Set `GAMMABOARD_DISABLE_DB_LOGS=1` to disable DB log persistence while keeping console tracing.
 - Worker performance is persisted as history snapshots in role-split tables:
   `evaluator_performance_history` and `sampler_aggregator_performance_history`.
 
@@ -218,9 +222,12 @@ Compatibility is validated at runner startup before evaluator work begins.
 - `gammaboard node stop` requests node shutdown via DB; each `gammaboard run-node`
   consumes and clears a one-shot shutdown signal before exiting.
 - Role lifecycle, lease, heartbeat, and tick failure events from `gammaboard run-node` are persisted
-  in `worker_logs` (indexed by `run_id` and `worker_id`).
+  in `runtime_logs` under `source='worker'` (indexed by source+run/worker).
+- Runtime log sink filtering uses tracing context (`source`, `run_id`, `worker_id`) plus an
+  internal `engine` span flag (`engine=true` on evaluator engine spans, not persisted to DB).
 - Worker logs are readable via `GET /api/runs/:id/logs` and shown in the dashboard's
-  **Worker Logs** panel.
+  **Worker Logs** panel. Each entry includes `id`, `ts`, `level`, `message`, and
+  structured `fields` (no dedicated `event_type` column).
 - Registered workers are readable via `GET /api/workers` (optional `run_id` query
   filter) and include per-run performance stats:
   evaluator `evaluator_metrics` (generic counters/timing),

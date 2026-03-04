@@ -2,7 +2,7 @@
 
 use super::errors::StoreError;
 use super::models::{
-    BatchClaim, CompletedBatch, DesiredAssignment, EvaluatorPerformanceSnapshot,
+    BatchClaim, CompletedBatch, DesiredAssignment, EvaluatorPerformanceSnapshot, RuntimeLogEvent,
     SamplerAggregatorPerformanceSnapshot, Worker, WorkerStatus,
 };
 use crate::batch::{Batch, BatchResult, PointSpec};
@@ -171,4 +171,10 @@ pub trait AggregationStore: Send + Sync {
         aggregated_observable: &JsonValue,
         delta_batches_completed: i32,
     ) -> Result<(), StoreError>;
+}
+
+/// Persists runtime tracing events.
+#[async_trait]
+pub trait RuntimeLogStore: Send + Sync {
+    async fn insert_runtime_log(&self, event: &RuntimeLogEvent) -> Result<(), StoreError>;
 }

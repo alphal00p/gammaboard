@@ -56,15 +56,23 @@ live-test-gammaloop:
     set -euo pipefail
 
     just restart-db
+    gammaboard run-node --node-id "w-0" --poll-ms {{ poll_ms }} &
     gammaboard run-node --node-id "w-1" --poll-ms {{ poll_ms }} &
     gammaboard run-node --node-id "w-2" --poll-ms {{ poll_ms }} &
+    gammaboard run-node --node-id "w-3" --poll-ms {{ poll_ms }} &
+    gammaboard run-node --node-id "w-4" --poll-ms {{ poll_ms }} &
+    gammaboard run-node --node-id "w-5" --poll-ms {{ poll_ms }} &
 
-    sleep 4
+    sleep 1
 
     gammaboard run add "configs/gammaloop-triangle.toml"
 
+    gammaboard node assign "w-0" sampler-aggregator 1
     gammaboard node assign "w-1" evaluator 1
-    gammaboard node assign "w-2" sampler-aggregator 1
+    gammaboard node assign "w-2" evaluator 1
+    gammaboard node assign "w-3" evaluator 1
+    gammaboard node assign "w-4" evaluator 1
+    gammaboard node assign "w-5" evaluator 1
 
     gammaboard run start 1
 

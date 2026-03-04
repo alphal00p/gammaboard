@@ -1,22 +1,26 @@
--- Structured worker log events for per-run and per-worker observability.
-CREATE TABLE IF NOT EXISTS worker_logs (
+-- Unified runtime logs from worker, API, and control-plane contexts.
+CREATE TABLE IF NOT EXISTS runtime_logs (
     id BIGSERIAL PRIMARY KEY,
     ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+    source TEXT NOT NULL,
     run_id INT,
     node_id TEXT,
-    worker_id TEXT NOT NULL,
-    role TEXT NOT NULL,
+    worker_id TEXT,
+    request_id TEXT,
     level TEXT NOT NULL,
-    event_type TEXT NOT NULL,
+    target TEXT NOT NULL,
     message TEXT NOT NULL,
     fields JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 
-CREATE INDEX IF NOT EXISTS idx_worker_logs_run_ts
-    ON worker_logs(run_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_runtime_logs_source_run_id
+    ON runtime_logs(source, run_id, id DESC);
 
-CREATE INDEX IF NOT EXISTS idx_worker_logs_worker_ts
-    ON worker_logs(worker_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_runtime_logs_source_worker_id
+    ON runtime_logs(source, worker_id, id DESC);
 
-CREATE INDEX IF NOT EXISTS idx_worker_logs_node_ts
-    ON worker_logs(node_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_runtime_logs_source_node_id
+    ON runtime_logs(source, node_id, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_runtime_logs_source_level
+    ON runtime_logs(source, level, id DESC);

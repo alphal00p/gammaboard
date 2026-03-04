@@ -5,8 +5,8 @@ use crate::batch::{Batch, BatchResult, PointSpec};
 use crate::core::{
     AggregationStore, AssignmentLeaseStore, BatchClaim, CompletedBatch, ControlPlaneStore,
     DesiredAssignment, EvaluatorPerformanceSnapshot, RunInitMetadataStore, RunSpecStore, RunStatus,
-    SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore, Worker, WorkerRegistryStore,
-    WorkerRole, WorkerStatus,
+    RuntimeLogEvent, RuntimeLogStore, SamplerAggregatorPerformanceSnapshot, StoreError,
+    WorkQueueStore, Worker, WorkerRegistryStore, WorkerRole, WorkerStatus,
 };
 use crate::engines::{IntegrationParams, ObservableImplementation, RunSpec};
 use crate::stores::RunReadStore;
@@ -236,6 +236,15 @@ impl RunReadStore for PgStore {
         worker_id: Option<&str>,
     ) -> Result<Vec<crate::stores::SamplerPerformanceHistoryEntry>, StoreError> {
         queries::get_sampler_performance_history(&self.pool, run_id, limit, worker_id)
+            .await
+            .map_err(map_sqlx)
+    }
+}
+
+#[async_trait::async_trait]
+impl RuntimeLogStore for PgStore {
+    async fn insert_runtime_log(&self, event: &RuntimeLogEvent) -> Result<(), StoreError> {
+        queries::insert_runtime_log(&self.pool, event)
             .await
             .map_err(map_sqlx)
     }

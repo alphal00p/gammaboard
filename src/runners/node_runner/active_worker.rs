@@ -1,6 +1,7 @@
 use crate::core::{StoreError, Worker as WorkerRecord, WorkerRole, WorkerStatus};
 use serde_json::json;
 use tokio::sync::watch;
+use tracing::Instrument;
 use tracing::warn;
 
 use super::evaluator_role_runner::run_evaluator_role;
@@ -33,10 +34,22 @@ impl<S: NodeRunnerStore> ActiveWorker<S> {
     }
 
     pub(super) async fn run(self, stop_rx: watch::Receiver<bool>) -> Result<(), StoreError> {
-        match self.role {
-            WorkerRole::Evaluator => run_evaluator_role(&self, stop_rx).await,
-            WorkerRole::SamplerAggregator => run_sampler_aggregator_role(&self, stop_rx).await,
+        let span = tracing::span!(
+            tracing::Level::TRACE,
+            "worker_role_context",
+            source = "worker",
+            run_id = self.run_id,
+            node_id = %self.node_id,
+            worker_id = %self.worker_id
+        );
+        async move {
+            match self.role {
+                WorkerRole::Evaluator => run_evaluator_role(&self, stop_rx).await,
+                WorkerRole::SamplerAggregator => run_sampler_aggregator_role(&self, stop_rx).await,
+            }
         }
+        .instrument(span)
+        .await
     }
 
     pub(super) async fn register_active_worker(
@@ -59,15 +72,7 @@ impl<S: NodeRunnerStore> ActiveWorker<S> {
 
     pub(super) async fn heartbeat_with_log(&self) {
         if let Err(err) = self.store.heartbeat_worker(&self.worker_id).await {
-            warn!(
-                target: "worker_log",
-                run_id = self.run_id,
-                worker_id = %self.worker_id,
-                role = %self.role,
-                event_type = "heartbeat_failed",
-                error = %err,
-                "worker heartbeat failed"
-            );
+            warn!("worker heartbeat failed: {err}");
         }
     }
 
@@ -77,15 +82,7 @@ impl<S: NodeRunnerStore> ActiveWorker<S> {
             .update_worker_status(&self.worker_id, WorkerStatus::Inactive)
             .await
         {
-            warn!(
-                target: "worker_log",
-                run_id = self.run_id,
-                worker_id = %self.worker_id,
-                role = %self.role,
-                event_type = "worker_inactive_failed",
-                error = %err,
-                "failed to mark worker inactive"
-            );
+            warn!("failed to mark worker inactive: {err}");
         }
     }
 }

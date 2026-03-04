@@ -83,44 +83,38 @@ const WorkerLogsPanel = ({ logs, runId }) => {
   const apiRef = useGridApiRef();
   const sourceLogs = useMemo(() => (Array.isArray(logs) ? logs : []), [logs]);
 
-  const [bufferedLogs, setBufferedLogs] = useState([]);
-  const [displayedLogs, setDisplayedLogs] = useState([]);
+  const [liveLogs, setLiveLogs] = useState([]);
+  const [pausedSnapshot, setPausedSnapshot] = useState(null);
   const [selectedLogId, setSelectedLogId] = useState(null);
   const [tailEnabled, setTailEnabled] = useState(true);
   const [paused, setPaused] = useState(false);
   const [levelFilter, setLevelFilter] = useState([]);
-  const [roleFilter, setRoleFilter] = useState("all");
   const [workerFilter, setWorkerFilter] = useState("all");
   const [search, setSearch] = useState("");
 
   useEffect(() => {
-    setBufferedLogs([]);
-    setDisplayedLogs([]);
+    setLiveLogs([]);
+    setPausedSnapshot(null);
     setSelectedLogId(null);
     setTailEnabled(true);
     setPaused(false);
     setLevelFilter([]);
-    setRoleFilter("all");
     setWorkerFilter("all");
     setSearch("");
   }, [runId]);
 
   useEffect(() => {
     if (sourceLogs.length === 0) return;
-    setBufferedLogs((prev) => mergeLogs(prev, sourceLogs));
+    setLiveLogs((prev) => mergeLogs(prev, sourceLogs));
   }, [sourceLogs]);
 
-  useEffect(() => {
-    if (!paused) setDisplayedLogs(bufferedLogs);
-  }, [bufferedLogs, paused]);
+  const displayedLogs = useMemo(() => {
+    if (!paused) return liveLogs;
+    return pausedSnapshot ?? liveLogs;
+  }, [liveLogs, paused, pausedSnapshot]);
 
   const workerOptions = useMemo(() => {
     const values = new Set(displayedLogs.map((entry) => entry.worker_id).filter(Boolean));
-    return Array.from(values).sort();
-  }, [displayedLogs]);
-
-  const roleOptions = useMemo(() => {
-    const values = new Set(displayedLogs.map((entry) => entry.role).filter(Boolean));
     return Array.from(values).sort();
   }, [displayedLogs]);
 
@@ -130,7 +124,6 @@ const WorkerLogsPanel = ({ logs, runId }) => {
     return displayedLogs.filter((entry) => {
       const level = normalizeLevel(entry.level);
       if (levelFilter.length > 0 && !levelFilter.includes(level)) return false;
-      if (roleFilter !== "all" && entry.role !== roleFilter) return false;
       if (workerFilter !== "all" && entry.worker_id !== workerFilter) return false;
 
       if (text) {
@@ -140,7 +133,7 @@ const WorkerLogsPanel = ({ logs, runId }) => {
 
       return true;
     });
-  }, [displayedLogs, levelFilter, roleFilter, workerFilter, search]);
+  }, [displayedLogs, levelFilter, workerFilter, search]);
 
   useEffect(() => {
     if (!tailEnabled || paused || filteredRows.length === 0) return;
@@ -156,7 +149,8 @@ const WorkerLogsPanel = ({ logs, runId }) => {
     [filteredRows, selectedLogId],
   );
 
-  const backlogCount = Math.max(bufferedLogs.length - displayedLogs.length, 0);
+  const pausedSize = pausedSnapshot?.length ?? 0;
+  const backlogCount = paused ? Math.max(liveLogs.length - pausedSize, 0) : 0;
   const levelOptions = ["error", "warn", "info", "debug", "trace"];
 
   const columns = useMemo(
@@ -177,7 +171,6 @@ const WorkerLogsPanel = ({ logs, runId }) => {
           </Box>
         ),
       },
-      { field: "role", headerName: "Role", width: 180 },
       { field: "worker_id", headerName: "Worker", width: 220 },
       {
         field: "message",
@@ -230,23 +223,6 @@ const WorkerLogsPanel = ({ logs, runId }) => {
           </Select>
         </FormControl>
 
-        <FormControl size="small" sx={{ minWidth: 180 }}>
-          <InputLabel id="log-role-label">Role</InputLabel>
-          <Select
-            labelId="log-role-label"
-            value={roleFilter}
-            label="Role"
-            onChange={(event) => setRoleFilter(event.target.value)}
-          >
-            <MenuItem value="all">All Roles</MenuItem>
-            {roleOptions.map((role) => (
-              <MenuItem key={role} value={role}>
-                {role}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-
         <FormControl size="small" sx={{ minWidth: 200 }}>
           <InputLabel id="log-worker-label">Worker</InputLabel>
           <Select
@@ -280,7 +256,22 @@ const WorkerLogsPanel = ({ logs, runId }) => {
         >
           Tail
         </ToggleButton>
-        <ToggleButton size="small" value="pause" selected={paused} onChange={() => setPaused((value) => !value)}>
+        <ToggleButton
+          size="small"
+          value="pause"
+          selected={paused}
+          onChange={() =>
+            setPaused((value) => {
+              const next = !value;
+              if (next) {
+                setPausedSnapshot(liveLogs);
+              } else {
+                setPausedSnapshot(null);
+              }
+              return next;
+            })
+          }
+        >
           Pause
         </ToggleButton>
 
@@ -288,8 +279,8 @@ const WorkerLogsPanel = ({ logs, runId }) => {
           size="small"
           variant="outlined"
           onClick={() => {
-            setBufferedLogs([]);
-            setDisplayedLogs([]);
+            setLiveLogs([]);
+            setPausedSnapshot(null);
             setSelectedLogId(null);
           }}
         >
@@ -360,10 +351,8 @@ const WorkerLogsPanel = ({ logs, runId }) => {
                 id: selectedLog.id,
                 ts: selectedLog.ts,
                 level: selectedLog.level,
-                role: selectedLog.role,
                 worker_id: selectedLog.worker_id,
                 message: selectedLog.message,
-                event_type: selectedLog.event_type,
                 fields: selectedLog.fields || {},
               },
               null,

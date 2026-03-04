@@ -93,10 +93,8 @@ struct WorkerLogRow {
     ts: DateTime<Utc>,
     run_id: Option<i32>,
     node_id: Option<String>,
-    worker_id: String,
-    role: String,
+    worker_id: Option<String>,
     level: String,
-    event_type: String,
     message: String,
     fields: JsonValue,
 }
@@ -109,9 +107,7 @@ impl From<WorkerLogRow> for WorkerLogEntry {
             run_id: value.run_id,
             node_id: value.node_id,
             worker_id: value.worker_id,
-            role: value.role,
             level: value.level,
-            event_type: value.event_type,
             message: value.message,
             fields: value.fields,
         }
@@ -441,9 +437,7 @@ pub(crate) async fn get_worker_logs(
             run_id,
             node_id,
             worker_id,
-            role,
             level,
-            event_type,
             message,
             fields
         FROM (
@@ -453,13 +447,12 @@ pub(crate) async fn get_worker_logs(
                 run_id,
                 node_id,
                 worker_id,
-                role,
                 level,
-                event_type,
                 message,
                 fields
-            FROM worker_logs
-            WHERE run_id = $1
+            FROM runtime_logs
+            WHERE source = 'worker'
+              AND run_id = $1
               AND ($2::text IS NULL OR worker_id = $2)
               AND ($3::text IS NULL OR level = $3)
               AND ($4::bigint IS NULL OR id > $4)

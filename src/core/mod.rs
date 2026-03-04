@@ -8,10 +8,10 @@ pub use errors::StoreError;
 pub use models::{
     AssignmentLease, BatchClaim, CompletedBatch, DesiredAssignment, EvaluatorIdleProfileMetrics,
     EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot, RollingMetricSnapshot, RunStatus,
-    SamplerAggregatorPerformanceSnapshot, SamplerPerformanceMetrics, SamplerRollingAverages,
-    SamplerRuntimeMetrics, Worker, WorkerRole, WorkerStatus,
+    RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot, SamplerPerformanceMetrics,
+    SamplerRollingAverages, SamplerRuntimeMetrics, Worker, WorkerRole, WorkerStatus,
 };
 pub use traits::{
     AggregationStore, AssignmentLeaseStore, ControlPlaneStore, RunInitMetadataStore, RunSpecStore,
-    WorkQueueStore, WorkerRegistryStore,
+    RuntimeLogStore, WorkQueueStore, WorkerRegistryStore,
 };

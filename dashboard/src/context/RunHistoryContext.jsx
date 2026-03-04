@@ -9,6 +9,8 @@ import {
 } from "../services/api";
 
 const RunMetaContext = createContext(null);
+const RunConnectionContext = createContext(null);
+const RunHeartbeatContext = createContext(null);
 const RunAggregatedContext = createContext(null);
 const RunQueueLogsContext = createContext(null);
 
@@ -27,7 +29,11 @@ export const RunHistoryProvider = ({
   runId,
   children,
   historyLimit = 200,
+  historyBufferMax = 500,
+  workerLogsLimit = 200,
+  workQueueStatsLimit = 200,
   pollIntervalMs = 5000,
+  sseConnectedPollThrottleFactor = 4,
   streamIntervalMs = 1000,
 }) => {
   const [history, setHistory] = useState([]);
@@ -36,29 +42,48 @@ export const RunHistoryProvider = ({
   const [workerLogs, setWorkerLogs] = useState([]);
   const [workQueueStats, setWorkQueueStats] = useState([]);
   const [isConnected, setIsConnected] = useState(false);
+  const [isSseConnected, setIsSseConnected] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [error, setError] = useState(null);
+  const [isDocumentVisible, setIsDocumentVisible] = useState(() => {
+    if (typeof document === "undefined") return true;
+    return document.visibilityState === "visible";
+  });
+
+  const trimHistory = useCallback(
+    (entries) => {
+      if (!Array.isArray(entries) || entries.length === 0) return [];
+      const seen = new Set();
+      const trimmed = [];
+      for (const entry of entries) {
+        const id = entry?.id;
+        if (id == null || seen.has(id)) continue;
+        seen.add(id);
+        trimmed.push(entry);
+        if (trimmed.length >= historyBufferMax) break;
+      }
+      return trimmed;
+    },
+    [historyBufferMax],
+  );
 
   const mergeLatest = useCallback(
     (next) => {
       if (!next) return;
-      setHistory((prev) => {
-        if (prev.some((item) => item.id === next.id)) return prev;
-        const merged = [next, ...prev];
-        return merged.slice(0, historyLimit);
-      });
+      setHistory((prev) => trimHistory([next, ...prev]));
     },
-    [historyLimit],
+    [trimHistory],
   );
 
   const fetchAggregatedHistory = useCallback(
     async (signal) => {
       if (!runId) return;
       const data = await fetchAggregatedHistoryApi(runId, historyLimit, signal);
-      setHistory(data);
-      setLatestAggregated(data[0] || null);
+      const trimmed = trimHistory(data);
+      setHistory(trimmed);
+      setLatestAggregated(trimmed[0] || null);
     },
-    [runId, historyLimit],
+    [runId, historyLimit, trimHistory],
   );
 
   const fetchLatestAggregated = useCallback(
@@ -88,19 +113,31 @@ export const RunHistoryProvider = ({
     async (signal) => {
       if (!runId) return;
       const data = await fetchStatsApi(runId, signal);
-      setWorkQueueStats(data);
+      setWorkQueueStats((Array.isArray(data) ? data : []).slice(0, workQueueStatsLimit));
     },
-    [runId],
+    [runId, workQueueStatsLimit],
   );
 
   const fetchWorkerLogs = useCallback(
     async (signal) => {
       if (!runId) return;
-      const data = await fetchRunLogsApi(runId, 500, null, null, signal);
-      setWorkerLogs((prev) => (sameLogIdSet(prev, data) ? prev : data));
+      const data = await fetchRunLogsApi(runId, workerLogsLimit, null, null, signal);
+      const trimmed = (Array.isArray(data) ? data : []).slice(0, workerLogsLimit);
+      setWorkerLogs((prev) => (sameLogIdSet(prev, trimmed) ? prev : trimmed));
     },
-    [runId],
+    [runId, workerLogsLimit],
   );
+
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+    const handleVisibilityChange = () => {
+      setIsDocumentVisible(document.visibilityState === "visible");
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
 
   useEffect(() => {
     if (!runId) {
@@ -110,6 +147,7 @@ export const RunHistoryProvider = ({
       setWorkerLogs([]);
       setWorkQueueStats([]);
       setIsConnected(false);
+      setIsSseConnected(false);
       setLastUpdate(null);
       setError(null);
       return;
@@ -124,7 +162,7 @@ export const RunHistoryProvider = ({
           fetchAggregatedHistory(controller.signal),
           fetchRun(controller.signal),
           fetchWorkQueueStats(controller.signal),
-          fetchWorkerLogs(controller.signal),
+          ...(isDocumentVisible ? [fetchWorkerLogs(controller.signal)] : []),
         ]);
         if (!cancelled) {
           setError(null);
@@ -146,7 +184,7 @@ export const RunHistoryProvider = ({
       cancelled = true;
       controller.abort();
     };
-  }, [runId, fetchAggregatedHistory, fetchRun, fetchWorkQueueStats, fetchWorkerLogs]);
+  }, [runId, fetchAggregatedHistory, fetchRun, fetchWorkQueueStats, fetchWorkerLogs, isDocumentVisible]);
 
   useEffect(() => {
     if (!runId) return;
@@ -157,7 +195,10 @@ export const RunHistoryProvider = ({
     const poll = async () => {
       activeController = new AbortController();
       try {
-        const requests = [fetchWorkQueueStats(activeController.signal), fetchWorkerLogs(activeController.signal)];
+        const requests = [fetchWorkQueueStats(activeController.signal)];
+        if (isDocumentVisible) {
+          requests.push(fetchWorkerLogs(activeController.signal));
+        }
         await Promise.all(requests);
         if (cancelled) return;
         setError(null);
@@ -170,7 +211,11 @@ export const RunHistoryProvider = ({
       } finally {
         activeController = null;
         if (!cancelled) {
-          timeoutId = setTimeout(poll, pollIntervalMs);
+          const effectiveIntervalMs =
+            typeof EventSource !== "undefined" && isSseConnected
+              ? pollIntervalMs * sseConnectedPollThrottleFactor
+              : pollIntervalMs;
+          timeoutId = setTimeout(poll, effectiveIntervalMs);
         }
       }
     };
@@ -182,11 +227,20 @@ export const RunHistoryProvider = ({
       if (timeoutId) clearTimeout(timeoutId);
       if (activeController) activeController.abort();
     };
-  }, [runId, pollIntervalMs, fetchWorkQueueStats, fetchWorkerLogs]);
+  }, [
+    runId,
+    pollIntervalMs,
+    fetchWorkQueueStats,
+    fetchWorkerLogs,
+    isDocumentVisible,
+    isSseConnected,
+    sseConnectedPollThrottleFactor,
+  ]);
 
   useEffect(() => {
     if (!runId) return;
     if (typeof EventSource !== "undefined") return;
+    setIsSseConnected(false);
     let cancelled = false;
     let timeoutId;
     let activeController = null;
@@ -226,7 +280,10 @@ export const RunHistoryProvider = ({
 
     const source = createRunStatsEventSource(runId, streamIntervalMs);
 
-    source.onopen = () => setIsConnected(true);
+    source.onopen = () => {
+      setIsConnected(true);
+      setIsSseConnected(true);
+    };
 
     source.addEventListener("stats", (event) => {
       try {
@@ -239,6 +296,7 @@ export const RunHistoryProvider = ({
         setError(null);
         setLastUpdate(formatTime());
         setIsConnected(true);
+        setIsSseConnected(true);
       } catch (err) {
         setError(err);
       }
@@ -252,10 +310,12 @@ export const RunHistoryProvider = ({
         setError(new Error("Server stream error"));
       }
       setIsConnected(false);
+      setIsSseConnected(false);
     });
 
     source.onerror = () => {
       setIsConnected(false);
+      setIsSseConnected(false);
     };
 
     return () => {
@@ -267,11 +327,23 @@ export const RunHistoryProvider = ({
     () => ({
       runId,
       run,
+    }),
+    [runId, run],
+  );
+
+  const connectionValue = useMemo(
+    () => ({
       isConnected,
-      lastUpdate,
       error,
     }),
-    [runId, run, isConnected, lastUpdate, error],
+    [isConnected, error],
+  );
+
+  const heartbeatValue = useMemo(
+    () => ({
+      lastUpdate,
+    }),
+    [lastUpdate],
   );
 
   const aggregatedValue = useMemo(
@@ -296,17 +368,37 @@ export const RunHistoryProvider = ({
 
   return (
     <RunMetaContext.Provider value={metaValue}>
-      <RunAggregatedContext.Provider value={aggregatedValue}>
-        <RunQueueLogsContext.Provider value={queueLogsValue}>{children}</RunQueueLogsContext.Provider>
-      </RunAggregatedContext.Provider>
+      <RunConnectionContext.Provider value={connectionValue}>
+        <RunHeartbeatContext.Provider value={heartbeatValue}>
+          <RunAggregatedContext.Provider value={aggregatedValue}>
+            <RunQueueLogsContext.Provider value={queueLogsValue}>{children}</RunQueueLogsContext.Provider>
+          </RunAggregatedContext.Provider>
+        </RunHeartbeatContext.Provider>
+      </RunConnectionContext.Provider>
     </RunMetaContext.Provider>
   );
 };
 
-export const useRunMeta = () => {
+export const useRunState = () => {
   const ctx = useContext(RunMetaContext);
   if (!ctx) {
-    throw new Error("useRunMeta must be used within RunHistoryProvider");
+    throw new Error("useRunState must be used within RunHistoryProvider");
+  }
+  return ctx;
+};
+
+export const useRunConnection = () => {
+  const ctx = useContext(RunConnectionContext);
+  if (!ctx) {
+    throw new Error("useRunConnection must be used within RunHistoryProvider");
+  }
+  return ctx;
+};
+
+export const useRunHeartbeat = () => {
+  const ctx = useContext(RunHeartbeatContext);
+  if (!ctx) {
+    throw new Error("useRunHeartbeat must be used within RunHistoryProvider");
   }
   return ctx;
 };
@@ -328,16 +420,20 @@ export const useRunQueueLogs = () => {
 };
 
 export const useRunHistory = () => {
-  const meta = useRunMeta();
+  const meta = useRunState();
+  const connection = useRunConnection();
+  const heartbeat = useRunHeartbeat();
   const aggregated = useRunAggregated();
   const queueLogs = useRunQueueLogs();
   const ctx = useMemo(
     () => ({
       ...meta,
+      ...connection,
+      ...heartbeat,
       ...aggregated,
       ...queueLogs,
     }),
-    [meta, aggregated, queueLogs],
+    [meta, connection, heartbeat, aggregated, queueLogs],
   );
   if (!ctx) {
     throw new Error("useRunHistory must be used within RunHistoryProvider");

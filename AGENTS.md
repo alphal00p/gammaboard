@@ -17,7 +17,7 @@ Use `README.md` for operator onboarding. Keep this file focused on internal arch
   - Shared types: `engines::shared::{BuildFromJson, IntegrationParams, RunSpec}`.
 - `src/runners/*`: orchestration loops (`NodeRunner`, evaluator runner, sampler-aggregator runner).
 - `src/stores/*`: PostgreSQL implementation and read DTOs/traits.
-- `src/telemetry.rs`: tracing setup and DB sink for worker logs.
+- `src/telemetry.rs`: tracing setup and runtime-log sink wiring through `core::RuntimeLogStore`.
 - `src/main.rs` + `src/cli/*`: operational CLI entrypoint and subcommand modules (`run`, `node`, `run-node`, `server`).
 
 ## Operational Conventions
@@ -69,8 +69,13 @@ Use `README.md` for operator onboarding. Keep this file focused on internal arch
   - `sampler_aggregator_performance_history`.
 - Snapshot rows are point-in-time (`created_at`); do not rely on window columns.
 - Latest worker stats in `/api/workers` come from role-specific latest views.
-- `target="worker_log"` events are persisted to `worker_logs`.
-- Dashboard-targeted worker log events should include: `run_id`, `worker_id`, `role`, `event_type`.
+- Runtime logs persist to `runtime_logs` based on tracing context (`source`, `run_id`, `worker_id`) and DB sink policy.
+- Set `GAMMABOARD_DISABLE_DB_LOGS=1` to disable runtime-log DB persistence for CLI processes while keeping console tracing enabled.
+- `engine` is tracing context only (used for sink-level filtering) and is not persisted as a `runtime_logs` column.
+- SQL for runtime-log persistence lives in the Pg store query layer (`stores::queries::runtime_logs`);
+  tracing should not issue raw SQL directly.
+- Worker dashboard logs are read as `source='worker'` from `runtime_logs`; include
+  `run_id` and `worker_id` when available.
 - Read APIs include:
   - `GET /api/runs/:id/logs`,
   - `GET /api/workers`,

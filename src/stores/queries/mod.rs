@@ -3,6 +3,7 @@ mod assignment_lease;
 mod control_plane;
 mod read;
 mod run_spec;
+mod runtime_logs;
 mod work_queue;
 mod worker_registry;
 
@@ -11,5 +12,6 @@ pub(crate) use assignment_lease::*;
 pub(crate) use control_plane::*;
 pub(crate) use read::*;
 pub(crate) use run_spec::*;
+pub(crate) use runtime_logs::*;
 pub(crate) use work_queue::*;
 pub(crate) use worker_registry::*;

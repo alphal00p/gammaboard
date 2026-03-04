@@ -2,7 +2,9 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::{
     Router,
     extract::{Path as AxumPath, Query, State},
+    http::Request,
     http::StatusCode,
+    middleware::{self, Next},
     response::{IntoResponse, Json, Response},
     routing::get,
 };
@@ -24,6 +26,9 @@ use std::{
 };
 use tokio::sync::{Mutex, broadcast, mpsc};
 use tower_http::cors::CorsLayer;
+use tracing::Instrument;
+
+use super::shared::init_cli_tracing;
 
 #[derive(Debug, Args)]
 pub struct ServerArgs {
@@ -35,6 +40,7 @@ pub struct ServerArgs {
 
 pub async fn run_server(args: ServerArgs) -> BinResult {
     let store = init_pg_store(args.db_pool_size).await?;
+    init_cli_tracing(&store)?;
     let bind = match args.bind {
         Some(bind) => bind,
         None => {
@@ -183,11 +189,25 @@ fn build_app(state: AppState) -> Router {
             get(get_run_sampler_performance_history),
         )
         .route("/runs/:id/stream", get(stream_run_stats))
+        .layer(middleware::from_fn(request_context_middleware))
         .with_state(state);
 
     Router::new()
         .nest("/api", api_routes)
         .layer(CorsLayer::permissive())
+}
+
+async fn request_context_middleware(request: Request<axum::body::Body>, next: Next) -> Response {
+    let method = request.method().to_string();
+    let path = request.uri().path().to_string();
+    let span = tracing::span!(
+        tracing::Level::TRACE,
+        "api_request",
+        source = "server",
+        method = %method,
+        path = %path
+    );
+    next.run(request).instrument(span).await
 }
 
 async fn subscribe_run_stream(
@@ -206,13 +226,13 @@ async fn subscribe_run_stream(
 
     let store = state.store.clone();
     let hub = state.run_stream_hub.clone();
-    tokio::spawn(run_stream_publisher(
-        store,
-        hub,
-        run_id,
-        interval_ms,
-        sender,
-    ));
+    let span = tracing::span!(
+        tracing::Level::TRACE,
+        "api_run_stream_publisher",
+        source = "server",
+        run_id = run_id
+    );
+    tokio::spawn(run_stream_publisher(store, hub, run_id, interval_ms, sender).instrument(span));
 
     receiver
 }

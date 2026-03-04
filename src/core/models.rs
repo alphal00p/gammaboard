@@ -160,6 +160,17 @@ pub struct CompletedBatch {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeLogEvent {
+    pub source: String,
+    pub run_id: Option<i32>,
+    pub worker_id: Option<String>,
+    pub level: String,
+    pub target: String,
+    pub message: String,
+    pub fields: JsonValue,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvaluatorIdleProfileMetrics {
     pub idle_ratio: f64,
 }

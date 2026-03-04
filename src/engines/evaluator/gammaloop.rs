@@ -1,8 +1,11 @@
 use std::path::PathBuf;
 
-use gammaloop::gammaloop_integrand::GLIntegrand;
-use gammaloop::{inspect::inspect, utils::F};
 use gammaloop_api::state::{ProcessRef, State};
+use gammalooprs::gammaloop_integrand::GLIntegrand;
+use gammalooprs::initialisation::initialise;
+use gammalooprs::model::Model;
+use gammalooprs::settings::RuntimeSettings;
+use gammalooprs::{inspect::inspect, utils::F};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -13,6 +16,8 @@ use crate::{
 
 pub struct GammaLoopEvaluator {
     integrand: GLIntegrand,
+    model: Model,
+    settings: RuntimeSettings,
     state_folder: PathBuf,
     process_id: usize,
     integrand_name: String,
@@ -72,7 +77,7 @@ impl BuildFromJson for GammaLoopEvaluator {
     type Params = GammaLoopParams;
 
     fn from_parsed_params(params: Self::Params) -> Result<Self, BuildError> {
-        _ = gammaloop::initialisation::initialise();
+        _ = initialise();
         let state =
             State::load(params.state_folder.clone(), params.model_file, None).map_err(|err| {
                 BuildError::build(format!(
@@ -93,8 +98,13 @@ impl BuildFromJson for GammaLoopEvaluator {
 
         _ = integrand.warm_up(&state.model);
 
+        let settings = integrand.get_settings().clone();
+        let model = state.model.clone();
+
         Ok(Self {
-            integrand: integrand,
+            integrand,
+            model,
+            settings,
             state_folder: params.state_folder,
             process_id,
             integrand_name,
@@ -110,14 +120,6 @@ impl GammaLoopEvaluator {
         &mut self,
         batch: &Batch,
     ) -> Result<(Vec<num::complex::Complex64>, Option<Vec<f64>>), EvalError> {
-        let settings = self.integrand.get_settings().clone();
-        let state = State::load(self.state_folder.clone(), None, None).map_err(|err| {
-            EvalError::eval(format!(
-                "failed to load state from {}: {err}",
-                self.state_folder.display()
-            ))
-        })?;
-
         let mut vec_res = vec![];
         let mut jac_res = vec![];
 
@@ -138,9 +140,9 @@ impl GammaLoopEvaluator {
                 .collect::<Result<Vec<_>, _>>()?;
 
             let (inspect_res_jac, inspect_res_eval) = inspect(
-                &settings,
+                &self.settings,
                 &mut self.integrand,
-                &state.model,
+                &self.model,
                 pt,
                 &discrete_dim,
                 false,
@@ -175,7 +177,7 @@ impl GammaLoopEvaluator {
 }
 
 impl Evaluator for GammaLoopEvaluator {
-    fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError> {
+    fn validate_point_spec(&self, _point_spec: &PointSpec) -> Result<(), BuildError> {
         Ok(()) //todo
     }
 
@@ -268,7 +270,7 @@ impl Evaluator for GammaLoopEvaluator {
         })
     }
 
-    fn supports_observable(&self, observable_factory: &ObservableFactory) -> bool {
+    fn supports_observable(&self, _observable_factory: &ObservableFactory) -> bool {
         true //todo
     }
 }

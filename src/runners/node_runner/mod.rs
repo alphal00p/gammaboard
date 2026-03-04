@@ -14,7 +14,7 @@ use crate::core::{
 };
 use std::time::Duration;
 use tokio::{sync::watch, task::JoinHandle, time::sleep};
-use tracing::info;
+use tracing::{Instrument, info};
 
 use self::active_worker::ActiveWorker;
 
@@ -75,7 +75,7 @@ pub(super) struct RoleTarget {
 
 pub(super) struct ActiveRoleTask {
     pub(super) target: RoleTarget,
-    pub(super) worker_id: String,
+    pub(super) context_span: tracing::Span,
     pub(super) stop_tx: watch::Sender<bool>,
     pub(super) handle: JoinHandle<()>,
 }
@@ -102,32 +102,42 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
     }
 
     pub async fn run(mut self) -> Result<(), StoreError> {
-        let mut shutdown = std::pin::pin!(tokio::signal::ctrl_c());
+        let span = tracing::span!(
+            tracing::Level::TRACE,
+            "node_runner_context",
+            source = "worker",
+            node_id = %self.node_id
+        );
+        async move {
+            let mut shutdown = std::pin::pin!(tokio::signal::ctrl_c());
 
-        loop {
-            if self
-                .store
-                .consume_node_shutdown_request(&self.node_id)
-                .await?
-            {
-                info!(node_id = %self.node_id, "node shutdown requested by control-plane");
-                break;
-            }
-
-            let desired_target = self.resolve_desired_target().await?;
-            self.reconcile(desired_target).await?;
-
-            tokio::select! {
-                _ = &mut shutdown => {
-                    info!(node_id = %self.node_id, "stopping node-runner");
+            loop {
+                if self
+                    .store
+                    .consume_node_shutdown_request(&self.node_id)
+                    .await?
+                {
+                    info!("node shutdown requested by control-plane");
                     break;
                 }
-                _ = sleep(self.config.poll_interval) => {}
-            }
-        }
 
-        self.stop_current().await;
-        Ok(())
+                let desired_target = self.resolve_desired_target().await?;
+                self.reconcile(desired_target).await?;
+
+                tokio::select! {
+                    _ = &mut shutdown => {
+                        info!("stopping node-runner");
+                        break;
+                    }
+                    _ = sleep(self.config.poll_interval) => {}
+                }
+            }
+
+            self.stop_current().await;
+            Ok(())
+        }
+        .instrument(span)
+        .await
     }
 }
 

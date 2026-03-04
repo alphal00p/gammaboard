@@ -4,7 +4,7 @@ use super::{
 };
 use crate::core::StoreError;
 use tokio::{task::JoinHandle, time::timeout};
-use tracing::{error, info, warn};
+use tracing::{Instrument, error, info, warn};
 
 impl<S: NodeRunnerStore> NodeRunner<S> {
     pub(super) async fn resolve_desired_target(&self) -> Result<Option<RoleTarget>, StoreError> {
@@ -31,7 +31,6 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                 .find(|assignment| assignment.role == current.role)
         {
             warn!(
-                node_id = %self.node_id,
                 current_role = %current.role,
                 conflict_count = assignments.len(),
                 "multiple desired role assignments for one node; keeping current role assignment"
@@ -43,7 +42,6 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         }
 
         warn!(
-            node_id = %self.node_id,
             conflict_count = assignments.len(),
             "multiple desired role assignments for one node; no active role selected"
         );
@@ -71,16 +69,16 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
     fn start(&mut self, target: RoleTarget) {
         let worker_id = super::role_worker_id(&self.node_id, target.role);
-
-        info!(
-            target: "worker_log",
+        let role_context_span = tracing::span!(
+            tracing::Level::TRACE,
+            "role_task_context",
             run_id = target.run_id,
-            node_id = %self.node_id,
-            worker_id = %worker_id,
-            role = %target.role,
-            event_type = "role_start",
-            "starting role task"
+            worker_id = %worker_id
         );
+        let role_scope_span = role_context_span.clone();
+        let _role_scope = role_scope_span.enter();
+
+        info!("starting role task");
 
         let runtime = ActiveWorker::new(
             self.store.clone(),
@@ -91,25 +89,20 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         );
 
         let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
-        let worker_id_for_task = worker_id.clone();
-        let handle = tokio::spawn(async move {
-            let result = runtime.run(stop_rx).await;
-            if let Err(err) = result {
-                error!(
-                    target: "worker_log",
-                    run_id = target.run_id,
-                    worker_id = %worker_id_for_task,
-                    role = %target.role,
-                    event_type = "role_task_failed",
-                    error = %err,
-                    "role task failed"
-                );
+        let role_span_for_task = role_context_span.clone();
+        let handle = tokio::spawn(
+            async move {
+                let result = runtime.run(stop_rx).await;
+                if let Err(err) = result {
+                    error!("role task failed: {err}");
+                }
             }
-        });
+            .instrument(role_span_for_task),
+        );
 
         self.active_task = Some(ActiveRoleTask {
             target,
-            worker_id,
+            context_span: role_context_span,
             stop_tx,
             handle,
         });
@@ -126,50 +119,22 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         let Some(task) = self.active_task.take() else {
             return;
         };
-        let run_id = task.target.run_id;
-        let role = task.target.role;
-        let worker_id = task.worker_id;
+        let _role_scope = task.context_span.enter();
 
         if let Err(err) = task.handle.await {
-            warn!(
-                target: "worker_log",
-                run_id,
-                node_id = %self.node_id,
-                worker_id = %worker_id,
-                role = %role,
-                event_type = "role_task_join_failed",
-                error = %err,
-                "role task join failed"
-            );
+            warn!("role task join failed: {err}");
         }
 
-        warn!(
-            target: "worker_log",
-            run_id,
-            node_id = %self.node_id,
-            role = %role,
-            event_type = "role_task_exited",
-            "role task exited; waiting for supervisor reconcile"
-        );
+        warn!("role task exited; waiting for supervisor reconcile");
     }
 
     pub(super) async fn stop_current(&mut self) {
         let Some(task) = self.active_task.take() else {
             return;
         };
-        let run_id = task.target.run_id;
-        let role = task.target.role;
-        let worker_id = task.worker_id;
+        let _role_scope = task.context_span.enter();
 
-        info!(
-            target: "worker_log",
-            run_id,
-            node_id = %self.node_id,
-            worker_id = %worker_id,
-            role = %role,
-            event_type = "role_stop",
-            "stopping role task"
-        );
+        info!("stopping role task");
 
         let _ = task.stop_tx.send(true);
 
@@ -177,28 +142,11 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         match timeout(ROLE_TASK_SHUTDOWN_TIMEOUT, &mut handle).await {
             Ok(join_result) => {
                 if let Err(err) = join_result {
-                    warn!(
-                        target: "worker_log",
-                        run_id,
-                        node_id = %self.node_id,
-                        worker_id = %worker_id,
-                        role = %role,
-                        event_type = "role_task_join_failed",
-                        error = %err,
-                        "role task join failed"
-                    );
+                    warn!("role task join failed: {err}");
                 }
             }
             Err(_) => {
-                warn!(
-                    target: "worker_log",
-                    run_id,
-                    node_id = %self.node_id,
-                    worker_id = %worker_id,
-                    role = %role,
-                    event_type = "role_task_shutdown_timeout",
-                    "timed out waiting for role task shutdown; aborting task"
-                );
+                warn!("timed out waiting for role task shutdown; aborting task");
                 handle.abort();
             }
         }

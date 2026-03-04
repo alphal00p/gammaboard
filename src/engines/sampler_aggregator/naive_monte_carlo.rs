@@ -139,12 +139,6 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
             }
         }
         self.trained_samples = self.trained_samples.saturating_add(training_weights.len());
-
-        let mean = if self.nr_samples > 0 {
-            self.sum / self.nr_samples as f64
-        } else {
-            0.0
-        };
         Ok(())
     }
 }

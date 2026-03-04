@@ -5,8 +5,9 @@ use gammaboard::stores::RunReadStore;
 use gammaboard::{BinResult, init_pg_store};
 use serde_json::Value as JsonValue;
 use std::{env, fs, path::PathBuf};
+use tracing::Instrument;
 
-use super::shared::{RunSelection, RunStatusArg};
+use super::shared::{RunSelection, RunStatusArg, init_cli_tracing};
 
 const DEFAULT_RUN_CONFIG_PATH: &str = "configs/default.toml";
 
@@ -31,101 +32,122 @@ pub enum RunCommand {
 
 pub async fn run_run_commands(command: RunCommand) -> BinResult {
     let store = init_pg_store(10).await?;
+    init_cli_tracing(&store)?;
+    let command_name = run_command_name(&command);
+    let span = tracing::span!(
+        tracing::Level::TRACE,
+        "control_run_command",
+        source = "control",
+        command = command_name
+    );
 
-    match command {
-        RunCommand::Add {
-            status,
-            integration_params_file,
-        } => {
-            let (name, integration_params, target, point_spec) =
-                parse_run_add_payload(read_merged_run_add_toml(&integration_params_file)?)?;
-            let run_status: RunStatus = status.into();
-            let run_id = store
-                .create_run(
-                    run_status,
-                    &name,
-                    &integration_params,
-                    target.as_ref(),
-                    &point_spec,
-                )
-                .await?;
-            println!(
-                "created run_id={} name={} status={}",
-                run_id,
-                name,
-                run_status.as_str()
-            );
-        }
-        RunCommand::Start(selection) => {
-            if selection.all {
-                let runs_updated = store.set_all_runs_status(RunStatus::Running).await?;
-                println!("started all runs: runs_updated={runs_updated}");
-            } else {
-                for run_id in selection.run_ids {
-                    store.set_run_status(run_id, RunStatus::Running).await?;
-                    println!("run {run_id} started");
-                }
-            }
-        }
-        RunCommand::Pause(selection) => {
-            if selection.all {
-                let runs_updated = store.set_all_runs_status(RunStatus::Paused).await?;
-                let assignments_cleared = store.clear_all_desired_assignments().await?;
+    async move {
+        match command {
+            RunCommand::Add {
+                status,
+                integration_params_file,
+            } => {
+                let (name, integration_params, target, point_spec) =
+                    parse_run_add_payload(read_merged_run_add_toml(&integration_params_file)?)?;
+                let run_status: RunStatus = status.into();
+                let run_id = store
+                    .create_run(
+                        run_status,
+                        &name,
+                        &integration_params,
+                        target.as_ref(),
+                        &point_spec,
+                    )
+                    .await?;
                 println!(
-                    "paused all runs: runs_updated={} assignments_cleared={}",
-                    runs_updated, assignments_cleared
+                    "created run_id={} name={} status={}",
+                    run_id,
+                    name,
+                    run_status.as_str()
                 );
-            } else {
-                for run_id in selection.run_ids {
-                    store.set_run_status(run_id, RunStatus::Paused).await?;
-                    let assignments_cleared =
-                        store.clear_desired_assignments_for_run(run_id).await?;
+            }
+            RunCommand::Start(selection) => {
+                if selection.all {
+                    let runs_updated = store.set_all_runs_status(RunStatus::Running).await?;
+                    println!("started all runs: runs_updated={runs_updated}");
+                } else {
+                    for run_id in selection.run_ids {
+                        store.set_run_status(run_id, RunStatus::Running).await?;
+                        println!("run {run_id} started");
+                    }
+                }
+            }
+            RunCommand::Pause(selection) => {
+                if selection.all {
+                    let runs_updated = store.set_all_runs_status(RunStatus::Paused).await?;
+                    let assignments_cleared = store.clear_all_desired_assignments().await?;
                     println!(
-                        "run {} paused assignments_cleared={}",
-                        run_id, assignments_cleared
+                        "paused all runs: runs_updated={} assignments_cleared={}",
+                        runs_updated, assignments_cleared
                     );
+                } else {
+                    for run_id in selection.run_ids {
+                        store.set_run_status(run_id, RunStatus::Paused).await?;
+                        let assignments_cleared =
+                            store.clear_desired_assignments_for_run(run_id).await?;
+                        println!(
+                            "run {} paused assignments_cleared={}",
+                            run_id, assignments_cleared
+                        );
+                    }
                 }
             }
-        }
-        RunCommand::Stop(selection) => {
-            if selection.all {
-                let runs_updated = store.set_all_runs_status(RunStatus::Cancelled).await?;
-                let assignments_cleared = store.clear_all_desired_assignments().await?;
-                println!(
-                    "stopped all runs: runs_updated={} assignments_cleared={}",
-                    runs_updated, assignments_cleared
-                );
-            } else {
-                for run_id in selection.run_ids {
-                    store.set_run_status(run_id, RunStatus::Cancelled).await?;
-                    let assignments_cleared =
-                        store.clear_desired_assignments_for_run(run_id).await?;
+            RunCommand::Stop(selection) => {
+                if selection.all {
+                    let runs_updated = store.set_all_runs_status(RunStatus::Cancelled).await?;
+                    let assignments_cleared = store.clear_all_desired_assignments().await?;
                     println!(
-                        "run {} stopped assignments_cleared={}",
-                        run_id, assignments_cleared
+                        "stopped all runs: runs_updated={} assignments_cleared={}",
+                        runs_updated, assignments_cleared
                     );
+                } else {
+                    for run_id in selection.run_ids {
+                        store.set_run_status(run_id, RunStatus::Cancelled).await?;
+                        let assignments_cleared =
+                            store.clear_desired_assignments_for_run(run_id).await?;
+                        println!(
+                            "run {} stopped assignments_cleared={}",
+                            run_id, assignments_cleared
+                        );
+                    }
+                }
+            }
+            RunCommand::Remove(selection) => {
+                if selection.all {
+                    let runs = store.get_all_runs().await?;
+                    let mut removed = 0u64;
+                    for run in runs {
+                        store.remove_run(run.run_id).await?;
+                        removed += 1;
+                    }
+                    println!("removed all runs: removed={removed}");
+                } else {
+                    for run_id in selection.run_ids {
+                        store.remove_run(run_id).await?;
+                        println!("removed run {run_id}");
+                    }
                 }
             }
         }
-        RunCommand::Remove(selection) => {
-            if selection.all {
-                let runs = store.get_all_runs().await?;
-                let mut removed = 0u64;
-                for run in runs {
-                    store.remove_run(run.run_id).await?;
-                    removed += 1;
-                }
-                println!("removed all runs: removed={removed}");
-            } else {
-                for run_id in selection.run_ids {
-                    store.remove_run(run_id).await?;
-                    println!("removed run {run_id}");
-                }
-            }
-        }
+        Ok(())
     }
+    .instrument(span)
+    .await
+}
 
-    Ok(())
+fn run_command_name(command: &RunCommand) -> &'static str {
+    match command {
+        RunCommand::Add { .. } => "run_add",
+        RunCommand::Start(_) => "run_start",
+        RunCommand::Pause(_) => "run_pause",
+        RunCommand::Stop(_) => "run_stop",
+        RunCommand::Remove(_) => "run_remove",
+    }
 }
 
 fn read_run_add_toml(path: &PathBuf) -> BinResult<JsonValue> {

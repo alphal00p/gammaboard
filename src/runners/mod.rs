@@ -1,7 +1,6 @@
 pub mod evaluator;
 pub mod node_runner;
 pub(crate) mod rolling_metric;
-pub(crate) mod sample_time_stats;
 pub mod sampler_aggregator;
 #[cfg(test)]
 pub(crate) mod test_support;
