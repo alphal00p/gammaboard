@@ -5,7 +5,8 @@ pub mod traits;
 
 pub use pg_store::PgStore;
 pub use read_models::{
-    AggregatedResult, EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress,
+    AggregatedRangeMeta, AggregatedRangeResponse, AggregatedResult,
+    EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress,
     SamplerPerformanceHistoryEntry, WorkQueueStats, WorkerLogEntry,
 };
 pub use traits::RunReadStore;

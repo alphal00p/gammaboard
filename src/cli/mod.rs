@@ -4,8 +4,8 @@ pub mod run_node;
 pub mod server;
 pub mod shared;
 
+use anyhow::Result;
 use clap::{Parser, Subcommand};
-use gammaboard::BinResult;
 use node::{NodeArgs, run_node_commands};
 use run::{RunArgs, run_run_commands};
 use run_node::{RunNodeArgs, run_node};
@@ -31,7 +31,7 @@ enum Command {
     Server(ServerArgs),
 }
 
-pub async fn dispatch(cli: Cli) -> BinResult {
+pub async fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Run(args) => run_run_commands(args.command).await,
         Command::Node(args) => run_node_commands(args.command).await,

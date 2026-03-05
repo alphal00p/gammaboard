@@ -1,11 +1,11 @@
 mod cli;
 
+use anyhow::Result;
 use clap::Parser;
 use cli::Cli;
-use gammaboard::BinResult;
 
 #[tokio::main]
-async fn main() -> BinResult {
+async fn main() -> Result<()> {
     let cli = Cli::parse();
     cli::dispatch(cli).await
 }

@@ -41,16 +41,35 @@ pub struct WorkQueueStats {
 /// Aggregated observable snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AggregatedResult {
-    pub id: i64,
+    pub id: String,
     pub run_id: i32,
     pub aggregated_observable: serde_json::Value,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// Sampled aggregated-history range response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggregatedRangeResponse {
+    pub snapshots: Vec<AggregatedResult>,
+    pub latest: Option<AggregatedResult>,
+    pub meta: AggregatedRangeMeta,
+}
+
+/// Metadata for sampled range responses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggregatedRangeMeta {
+    pub resolved_start: Option<i64>,
+    pub resolved_stop: Option<i64>,
+    pub step: i64,
+    pub anchor: i64,
+    pub latest_id: Option<String>,
+    pub max_points: usize,
+}
+
 /// Worker log event persisted from runtime tracing (`source='worker'`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerLogEntry {
-    pub id: i64,
+    pub id: String,
     pub ts: chrono::DateTime<chrono::Utc>,
     pub run_id: Option<i32>,
     pub node_id: Option<String>,

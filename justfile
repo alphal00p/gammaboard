@@ -2,10 +2,14 @@ poll_ms := "500"
 
 install:
     cargo install --path .
+
 install-dev:
     cargo install --path . --debug
 
 stop-db:
+    docker-compose down
+
+reset-db:
     docker-compose down -v
 
 start-db:
@@ -13,18 +17,20 @@ start-db:
     sqlx migrate run
 
 restart-db:
-    @just stop-db
+    @just reset-db
     @just start-db
 
 serve-backend:
-    @echo "Starting Rust API server..."
-    @just stop-backend
     gammaboard server
 
 serve-frontend:
-    @echo "Starting frontend..."
-    @just stop-frontend
-    bash -lc 'set -a; [ -f .env ] && source .env; set +a; port="${GAMMABOOARD_BACKEND_PORT:?missing GAMMABOOARD_BACKEND_PORT}"; export REACT_APP_API_BASE_URL="http://localhost:$port/api"; cd dashboard && npm start'
+    cd dashboard && npm start
+
+build-frontend:
+    cd dashboard && npm run build
+
+serve-frontend-release:
+    cd dashboard && npx serve build
 
 live-test-basic:
     #!/usr/bin/env bash
@@ -76,25 +82,7 @@ live-test-gammaloop:
 
     gammaboard run start 1
 
-stop-backend:
-    -pkill -f "gammaboard server"
-    @echo "Backend stopped"
-
-stop-frontend:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    # Prefer graceful stop to avoid noisy "terminated by signal 15" output.
-    pkill -INT -f "gammaboard/dashboard.*react-scripts" || true
-    sleep 0.5
-    pkill -TERM -f "gammaboard/dashboard.*react-scripts" || true
-    echo "Frontend stopped"
-
-stop-serving:
-    -@just stop-backend
-    -@just stop-frontend
-
 stop:
     -gammaboard run stop -a
     -gammaboard node stop -a
-    -@just stop-serving
     -@stty sane

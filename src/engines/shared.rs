@@ -16,7 +16,7 @@ pub trait BuildFromJson: Sized {
 
     fn from_json(params: &JsonValue) -> Result<Self, BuildError> {
         let parsed: Self::Params = serde_json::from_value(params.clone())
-            .map_err(|err| BuildError::build(err.to_string()))?;
+            .map_err(|err| BuildError::invalid_input(err.to_string()))?;
         Self::from_parsed_params(parsed)
     }
 }

@@ -1,10 +1,8 @@
-import React, { createContext, useCallback, useContext, useMemo, useEffect, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
-  createRunStatsEventSource,
-  fetchAggregatedHistory as fetchAggregatedHistoryApi,
-  fetchLatestAggregated as fetchLatestAggregatedApi,
-  fetchRunLogs as fetchRunLogsApi,
+  fetchAggregatedRange as fetchAggregatedRangeApi,
   fetchRun as fetchRunApi,
+  fetchRunLogs as fetchRunLogsApi,
   fetchStats as fetchStatsApi,
 } from "../services/api";
 
@@ -16,25 +14,80 @@ const RunQueueLogsContext = createContext(null);
 
 const formatTime = () => new Date().toLocaleTimeString();
 
-const sameLogIdSet = (a, b) => {
-  if (!Array.isArray(a) || !Array.isArray(b)) return false;
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i += 1) {
-    if (a[i]?.id !== b[i]?.id) return false;
+const mergeLogsAsc = (previous, incoming, maxSize) => {
+  if (!Array.isArray(incoming) || incoming.length === 0) return previous;
+  const out = Array.isArray(previous) ? [...previous] : [];
+  const seen = new Set(out.map((entry) => entry?.id));
+  let hasNew = false;
+  for (const entry of incoming) {
+    if (!entry || entry.id == null) continue;
+    if (seen.has(entry.id)) continue;
+    seen.add(entry.id);
+    out.push(entry);
+    hasNew = true;
   }
-  return true;
+  if (!hasNew) return previous;
+  return out.length > maxSize ? out.slice(out.length - maxSize) : out;
+};
+
+const normalizeRange = (start, stop) => (start <= stop ? [start, stop] : [stop, start]);
+
+const computeStepForBuffer = (start, stop, bufferSize) => {
+  const span = Math.max(1, stop - start + 1);
+  const n = Math.max(1, Number(bufferSize) || 1);
+  return Math.max(1, Math.ceil(span / n));
+};
+
+const dedupeNewestFirst = (entries, maxSize) => {
+  if (!Array.isArray(entries) || entries.length === 0) return [];
+  const seen = new Set();
+  const out = [];
+  for (const entry of entries) {
+    const id = entry?.id;
+    if (id == null || seen.has(id)) continue;
+    seen.add(id);
+    out.push(entry);
+    if (out.length >= maxSize) break;
+  }
+  return out;
+};
+
+const toAscWithOptionalLatest = (payload) => {
+  const snapshots = Array.isArray(payload?.snapshots) ? payload.snapshots : [];
+  const latest = payload?.latest ?? null;
+  if (!latest) return snapshots;
+  const last = snapshots[snapshots.length - 1];
+  if (last?.id === latest.id) return snapshots;
+  return [...snapshots, latest];
+};
+
+const maxIdOf = (entries) => {
+  let maxId = null;
+  const bigIntCtor = typeof window !== "undefined" ? window.BigInt : undefined;
+  if (typeof bigIntCtor !== "function") return null;
+  for (const entry of entries || []) {
+    if (entry?.id == null) continue;
+    let id = null;
+    try {
+      id = bigIntCtor(entry.id);
+    } catch {
+      id = null;
+    }
+    if (id == null) continue;
+    if (maxId == null || id > maxId) maxId = id;
+  }
+  return maxId == null ? null : maxId.toString();
 };
 
 export const RunHistoryProvider = ({
   runId,
   children,
-  historyLimit = 200,
-  historyBufferMax = 500,
+  historyStart = -1000,
+  historyStop = -1,
+  historyBufferMax = 100,
   workerLogsLimit = 200,
   workQueueStatsLimit = 200,
   pollIntervalMs = 5000,
-  sseConnectedPollThrottleFactor = 4,
-  streamIntervalMs = 1000,
 }) => {
   const [history, setHistory] = useState([]);
   const [latestAggregated, setLatestAggregated] = useState(null);
@@ -42,7 +95,6 @@ export const RunHistoryProvider = ({
   const [workerLogs, setWorkerLogs] = useState([]);
   const [workQueueStats, setWorkQueueStats] = useState([]);
   const [isConnected, setIsConnected] = useState(false);
-  const [isSseConnected, setIsSseConnected] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [error, setError] = useState(null);
   const [isDocumentVisible, setIsDocumentVisible] = useState(() => {
@@ -50,55 +102,20 @@ export const RunHistoryProvider = ({
     return document.visibilityState === "visible";
   });
 
-  const trimHistory = useCallback(
-    (entries) => {
-      if (!Array.isArray(entries) || entries.length === 0) return [];
-      const seen = new Set();
-      const trimmed = [];
-      for (const entry of entries) {
-        const id = entry?.id;
-        if (id == null || seen.has(id)) continue;
-        seen.add(id);
-        trimmed.push(entry);
-        if (trimmed.length >= historyBufferMax) break;
-      }
-      return trimmed;
-    },
-    [historyBufferMax],
-  );
+  const lastRangeRef = useRef(null);
+  const latestSeenIdRef = useRef(null);
+  const lastLogIdRef = useRef(null);
 
-  const mergeLatest = useCallback(
-    (next) => {
-      if (!next) return;
-      setHistory((prev) => trimHistory([next, ...prev]));
-    },
-    [trimHistory],
-  );
-
-  const fetchAggregatedHistory = useCallback(
-    async (signal) => {
-      if (!runId) return;
-      const data = await fetchAggregatedHistoryApi(runId, historyLimit, signal);
-      const trimmed = trimHistory(data);
-      setHistory(trimmed);
-      setLatestAggregated(trimmed[0] || null);
-    },
-    [runId, historyLimit, trimHistory],
-  );
-
-  const fetchLatestAggregated = useCallback(
-    async (signal) => {
-      if (!runId) return;
-      const data = await fetchLatestAggregatedApi(runId, signal);
-      if (!data) {
-        setLatestAggregated(null);
-        return;
-      }
-      setLatestAggregated(data);
-      mergeLatest(data);
-    },
-    [runId, mergeLatest],
-  );
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+    const handleVisibilityChange = () => {
+      setIsDocumentVisible(document.visibilityState === "visible");
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
 
   const fetchRun = useCallback(
     async (signal) => {
@@ -121,23 +138,60 @@ export const RunHistoryProvider = ({
   const fetchWorkerLogs = useCallback(
     async (signal) => {
       if (!runId) return;
-      const data = await fetchRunLogsApi(runId, workerLogsLimit, null, null, signal);
-      const trimmed = (Array.isArray(data) ? data : []).slice(0, workerLogsLimit);
-      setWorkerLogs((prev) => (sameLogIdSet(prev, trimmed) ? prev : trimmed));
+      const afterId = lastLogIdRef.current;
+      const data = await fetchRunLogsApi(runId, workerLogsLimit, null, null, signal, afterId);
+      const incoming = Array.isArray(data) ? data : [];
+      if (afterId == null) {
+        const trimmed = incoming.slice(-workerLogsLimit);
+        setWorkerLogs(trimmed);
+        const last = trimmed[trimmed.length - 1];
+        if (last?.id != null) lastLogIdRef.current = last.id;
+        return;
+      }
+
+      if (incoming.length === 0) return;
+      setWorkerLogs((prev) => {
+        const next = mergeLogsAsc(prev, incoming, workerLogsLimit);
+        const last = next[next.length - 1];
+        if (last?.id != null) lastLogIdRef.current = last.id;
+        return next;
+      });
     },
     [runId, workerLogsLimit],
   );
 
-  useEffect(() => {
-    if (typeof document === "undefined") return undefined;
-    const handleVisibilityChange = () => {
-      setIsDocumentVisible(document.visibilityState === "visible");
-    };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, []);
+  const fetchAggregatedRange = useCallback(
+    async (signal) => {
+      if (!runId) return;
+
+      const [rangeStart, rangeStop] = normalizeRange(historyStart, historyStop);
+      const step = computeStepForBuffer(rangeStart, rangeStop, historyBufferMax);
+      const currentRange = { start: rangeStart, stop: rangeStop, step };
+      const rangeChanged =
+        !lastRangeRef.current ||
+        lastRangeRef.current.start !== currentRange.start ||
+        lastRangeRef.current.stop !== currentRange.stop ||
+        lastRangeRef.current.step !== currentRange.step;
+
+      const latestId = rangeChanged ? null : latestSeenIdRef.current;
+      const payload = await fetchAggregatedRangeApi(runId, rangeStart, rangeStop, step, latestId, signal);
+      const ascEntries = toAscWithOptionalLatest(payload);
+      const newestFirstIncoming = ascEntries.slice().reverse();
+
+      if (rangeChanged || latestId == null) {
+        const replaced = dedupeNewestFirst(newestFirstIncoming, historyBufferMax);
+        setHistory(replaced);
+      } else if (newestFirstIncoming.length > 0) {
+        setHistory((prev) => dedupeNewestFirst([...newestFirstIncoming, ...prev], historyBufferMax));
+      }
+
+      const effectiveLatest = payload?.latest ?? ascEntries[ascEntries.length - 1] ?? null;
+      if (effectiveLatest) setLatestAggregated(effectiveLatest);
+      latestSeenIdRef.current = maxIdOf(ascEntries) ?? payload?.meta?.latest_id ?? latestSeenIdRef.current;
+      lastRangeRef.current = currentRange;
+    },
+    [runId, historyStart, historyStop, historyBufferMax],
+  );
 
   useEffect(() => {
     if (!runId) {
@@ -147,47 +201,14 @@ export const RunHistoryProvider = ({
       setWorkerLogs([]);
       setWorkQueueStats([]);
       setIsConnected(false);
-      setIsSseConnected(false);
       setLastUpdate(null);
       setError(null);
+      latestSeenIdRef.current = null;
+      lastRangeRef.current = null;
+      lastLogIdRef.current = null;
       return;
     }
 
-    let cancelled = false;
-    const controller = new AbortController();
-
-    const loadInitial = async () => {
-      try {
-        await Promise.all([
-          fetchAggregatedHistory(controller.signal),
-          fetchRun(controller.signal),
-          fetchWorkQueueStats(controller.signal),
-          ...(isDocumentVisible ? [fetchWorkerLogs(controller.signal)] : []),
-        ]);
-        if (!cancelled) {
-          setError(null);
-          setIsConnected(true);
-          setLastUpdate(formatTime());
-        }
-      } catch (err) {
-        if (err?.name === "AbortError" || cancelled) return;
-        if (!cancelled) {
-          setError(err);
-          setIsConnected(false);
-        }
-      }
-    };
-
-    loadInitial();
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [runId, fetchAggregatedHistory, fetchRun, fetchWorkQueueStats, fetchWorkerLogs, isDocumentVisible]);
-
-  useEffect(() => {
-    if (!runId) return;
     let cancelled = false;
     let timeoutId;
     let activeController = null;
@@ -195,11 +216,15 @@ export const RunHistoryProvider = ({
     const poll = async () => {
       activeController = new AbortController();
       try {
-        const requests = [fetchWorkQueueStats(activeController.signal)];
-        if (isDocumentVisible) {
-          requests.push(fetchWorkerLogs(activeController.signal));
+        const jobs = [
+          fetchAggregatedRange(activeController.signal),
+          fetchRun(activeController.signal),
+          fetchWorkQueueStats(activeController.signal),
+        ];
+        if (isDocumentVisible || lastLogIdRef.current == null) {
+          jobs.push(fetchWorkerLogs(activeController.signal));
         }
-        await Promise.all(requests);
+        await Promise.all(jobs);
         if (cancelled) return;
         setError(null);
         setIsConnected(true);
@@ -211,11 +236,7 @@ export const RunHistoryProvider = ({
       } finally {
         activeController = null;
         if (!cancelled) {
-          const effectiveIntervalMs =
-            typeof EventSource !== "undefined" && isSseConnected
-              ? pollIntervalMs * sseConnectedPollThrottleFactor
-              : pollIntervalMs;
-          timeoutId = setTimeout(poll, effectiveIntervalMs);
+          timeoutId = setTimeout(poll, pollIntervalMs);
         }
       }
     };
@@ -227,101 +248,7 @@ export const RunHistoryProvider = ({
       if (timeoutId) clearTimeout(timeoutId);
       if (activeController) activeController.abort();
     };
-  }, [
-    runId,
-    pollIntervalMs,
-    fetchWorkQueueStats,
-    fetchWorkerLogs,
-    isDocumentVisible,
-    isSseConnected,
-    sseConnectedPollThrottleFactor,
-  ]);
-
-  useEffect(() => {
-    if (!runId) return;
-    if (typeof EventSource !== "undefined") return;
-    setIsSseConnected(false);
-    let cancelled = false;
-    let timeoutId;
-    let activeController = null;
-
-    const pollStatsFallback = async () => {
-      activeController = new AbortController();
-      try {
-        await Promise.all([fetchLatestAggregated(activeController.signal), fetchRun(activeController.signal)]);
-        if (cancelled) return;
-        setError(null);
-        setIsConnected(true);
-        setLastUpdate(formatTime());
-      } catch (err) {
-        if (err?.name === "AbortError" || cancelled) return;
-        setError(err);
-        setIsConnected(false);
-      } finally {
-        activeController = null;
-        if (!cancelled) {
-          timeoutId = setTimeout(pollStatsFallback, pollIntervalMs);
-        }
-      }
-    };
-
-    pollStatsFallback();
-
-    return () => {
-      cancelled = true;
-      if (timeoutId) clearTimeout(timeoutId);
-      if (activeController) activeController.abort();
-    };
-  }, [runId, pollIntervalMs, fetchLatestAggregated, fetchRun]);
-
-  useEffect(() => {
-    if (!runId) return;
-    if (typeof EventSource === "undefined") return;
-
-    const source = createRunStatsEventSource(runId, streamIntervalMs);
-
-    source.onopen = () => {
-      setIsConnected(true);
-      setIsSseConnected(true);
-    };
-
-    source.addEventListener("stats", (event) => {
-      try {
-        const payload = JSON.parse(event.data);
-        if (payload.run) setRun(payload.run);
-        if (payload.aggregated) {
-          setLatestAggregated(payload.aggregated);
-          mergeLatest(payload.aggregated);
-        }
-        setError(null);
-        setLastUpdate(formatTime());
-        setIsConnected(true);
-        setIsSseConnected(true);
-      } catch (err) {
-        setError(err);
-      }
-    });
-
-    source.addEventListener("error", (event) => {
-      try {
-        const payload = JSON.parse(event.data);
-        setError(new Error(payload.error || "Server stream error"));
-      } catch {
-        setError(new Error("Server stream error"));
-      }
-      setIsConnected(false);
-      setIsSseConnected(false);
-    });
-
-    source.onerror = () => {
-      setIsConnected(false);
-      setIsSseConnected(false);
-    };
-
-    return () => {
-      source.close();
-    };
-  }, [runId, streamIntervalMs, mergeLatest]);
+  }, [runId, pollIntervalMs, fetchAggregatedRange, fetchRun, fetchWorkQueueStats, fetchWorkerLogs, isDocumentVisible]);
 
   const metaValue = useMemo(
     () => ({
@@ -350,10 +277,10 @@ export const RunHistoryProvider = ({
     () => ({
       history,
       latestAggregated,
-      refreshHistory: fetchAggregatedHistory,
-      refreshLatest: fetchLatestAggregated,
+      refreshHistory: fetchAggregatedRange,
+      refreshLatest: fetchAggregatedRange,
     }),
-    [history, latestAggregated, fetchAggregatedHistory, fetchLatestAggregated],
+    [history, latestAggregated, fetchAggregatedRange],
   );
 
   const queueLogsValue = useMemo(

@@ -33,14 +33,33 @@ fn store_err(message: impl Into<String>) -> StoreError {
     StoreError::store(message)
 }
 
+fn store_invalid_input(message: impl Into<String>) -> StoreError {
+    StoreError::invalid_input(message)
+}
+
 fn map_sqlx(err: sqlx::Error) -> StoreError {
-    store_err(err.to_string())
+    StoreError::from(err)
 }
 
 fn missing_integration_param(run_id: i32, field: &str) -> StoreError {
     store_err(format!(
         "missing {field} in integration_params for run_id={run_id}"
     ))
+}
+
+const AGGREGATED_RANGE_ANCHOR: i64 = 1;
+const AGGREGATED_RANGE_MAX_POINTS: usize = 100;
+
+fn resolve_aggregated_range_index(raw: i64, latest_id: i64) -> Result<i64, StoreError> {
+    if raw == 0 {
+        return Err(store_invalid_input(
+            "invalid aggregated range index 0; use >=1 or negative indices",
+        ));
+    }
+    if raw > 0 {
+        return Ok(raw);
+    }
+    Ok(latest_id + raw + 1)
 }
 
 fn run_spec_from_integration_params(
@@ -152,38 +171,33 @@ fn parse_run_create_payload(
 #[async_trait::async_trait]
 impl RunReadStore for PgStore {
     async fn health_check(&self) -> Result<(), StoreError> {
-        queries::health_check(&self.pool).await.map_err(map_sqlx)
+        queries::health_check(&self.pool).await?;
+        Ok(())
     }
 
     async fn get_all_runs(&self) -> Result<Vec<crate::stores::RunProgress>, StoreError> {
-        queries::get_all_runs(&self.pool).await.map_err(map_sqlx)
+        Ok(queries::get_all_runs(&self.pool).await?)
     }
 
     async fn get_run_progress(
         &self,
         run_id: i32,
     ) -> Result<Option<crate::stores::RunProgress>, StoreError> {
-        queries::get_run_progress(&self.pool, run_id)
-            .await
-            .map_err(map_sqlx)
+        Ok(queries::get_run_progress(&self.pool, run_id).await?)
     }
 
     async fn get_work_queue_stats(
         &self,
         run_id: i32,
     ) -> Result<Vec<crate::stores::WorkQueueStats>, StoreError> {
-        queries::get_work_queue_stats(&self.pool, run_id)
-            .await
-            .map_err(map_sqlx)
+        Ok(queries::get_work_queue_stats(&self.pool, run_id).await?)
     }
 
     async fn get_latest_aggregated_result(
         &self,
         run_id: i32,
     ) -> Result<Option<crate::stores::AggregatedResult>, StoreError> {
-        queries::get_latest_aggregated_result(&self.pool, run_id)
-            .await
-            .map_err(map_sqlx)
+        Ok(queries::get_latest_aggregated_result(&self.pool, run_id).await?)
     }
 
     async fn get_aggregated_results(
@@ -191,9 +205,93 @@ impl RunReadStore for PgStore {
         run_id: i32,
         limit: i64,
     ) -> Result<Vec<crate::stores::AggregatedResult>, StoreError> {
-        queries::get_aggregated_results(&self.pool, run_id, limit)
-            .await
-            .map_err(map_sqlx)
+        Ok(queries::get_aggregated_results(&self.pool, run_id, limit).await?)
+    }
+
+    async fn get_aggregated_range(
+        &self,
+        run_id: i32,
+        start: i64,
+        stop: i64,
+        step: i64,
+        latest_id: Option<i64>,
+    ) -> Result<crate::stores::AggregatedRangeResponse, StoreError> {
+        if step < 1 {
+            return Err(store_invalid_input("aggregated range step must be >= 1"));
+        }
+
+        let Some((min_id, max_id)) = queries::get_aggregated_id_bounds(&self.pool, run_id).await?
+        else {
+            return Ok(crate::stores::AggregatedRangeResponse {
+                snapshots: Vec::new(),
+                latest: None,
+                meta: crate::stores::AggregatedRangeMeta {
+                    resolved_start: None,
+                    resolved_stop: None,
+                    step,
+                    anchor: AGGREGATED_RANGE_ANCHOR,
+                    latest_id: None,
+                    max_points: AGGREGATED_RANGE_MAX_POINTS,
+                },
+            });
+        };
+
+        let mut resolved_start = resolve_aggregated_range_index(start, max_id)?;
+        let mut resolved_stop = resolve_aggregated_range_index(stop, max_id)?;
+        if resolved_start > resolved_stop {
+            return Err(store_invalid_input(format!(
+                "aggregated range start > stop after resolution: start={} stop={}",
+                resolved_start, resolved_stop
+            )));
+        }
+
+        resolved_start = resolved_start.max(min_id).min(max_id);
+        resolved_stop = resolved_stop.max(min_id).min(max_id);
+        if resolved_start > resolved_stop {
+            resolved_start = resolved_stop;
+        }
+
+        let estimated_points = ((resolved_stop - resolved_start) / step + 1).max(0) as usize;
+        if estimated_points > AGGREGATED_RANGE_MAX_POINTS {
+            return Err(store_invalid_input(format!(
+                "aggregated range request exceeds max points: estimated={} max={} (increase step or shrink range)",
+                estimated_points, AGGREGATED_RANGE_MAX_POINTS
+            )));
+        }
+
+        let snapshots = queries::get_aggregated_range(
+            &self.pool,
+            run_id,
+            resolved_start,
+            resolved_stop,
+            step,
+            AGGREGATED_RANGE_ANCHOR,
+            latest_id,
+            AGGREGATED_RANGE_MAX_POINTS as i64,
+        )
+        .await?;
+
+        let latest = queries::get_latest_aggregated_result(&self.pool, run_id).await?;
+
+        Ok(crate::stores::AggregatedRangeResponse {
+            snapshots,
+            latest: latest.filter(|row| {
+                latest_id.is_none_or(|seen| {
+                    row.id
+                        .parse::<i64>()
+                        .ok()
+                        .is_some_and(|latest_row_id| latest_row_id > seen)
+                })
+            }),
+            meta: crate::stores::AggregatedRangeMeta {
+                resolved_start: Some(resolved_start),
+                resolved_stop: Some(resolved_stop),
+                step,
+                anchor: AGGREGATED_RANGE_ANCHOR,
+                latest_id: Some(max_id.to_string()),
+                max_points: AGGREGATED_RANGE_MAX_POINTS,
+            },
+        })
     }
 
     async fn get_worker_logs(
@@ -204,18 +302,14 @@ impl RunReadStore for PgStore {
         level: Option<&str>,
         after_id: Option<i64>,
     ) -> Result<Vec<crate::stores::WorkerLogEntry>, StoreError> {
-        queries::get_worker_logs(&self.pool, run_id, limit, worker_id, level, after_id)
-            .await
-            .map_err(map_sqlx)
+        Ok(queries::get_worker_logs(&self.pool, run_id, limit, worker_id, level, after_id).await?)
     }
 
     async fn get_registered_workers(
         &self,
         run_id: Option<i32>,
     ) -> Result<Vec<crate::stores::RegisteredWorkerEntry>, StoreError> {
-        queries::get_registered_workers(&self.pool, run_id)
-            .await
-            .map_err(map_sqlx)
+        Ok(queries::get_registered_workers(&self.pool, run_id).await?)
     }
 
     async fn get_evaluator_performance_history(
@@ -224,9 +318,10 @@ impl RunReadStore for PgStore {
         limit: i64,
         worker_id: Option<&str>,
     ) -> Result<Vec<crate::stores::EvaluatorPerformanceHistoryEntry>, StoreError> {
-        queries::get_evaluator_performance_history(&self.pool, run_id, limit, worker_id)
-            .await
-            .map_err(map_sqlx)
+        Ok(
+            queries::get_evaluator_performance_history(&self.pool, run_id, limit, worker_id)
+                .await?,
+        )
     }
 
     async fn get_sampler_performance_history(
@@ -235,18 +330,15 @@ impl RunReadStore for PgStore {
         limit: i64,
         worker_id: Option<&str>,
     ) -> Result<Vec<crate::stores::SamplerPerformanceHistoryEntry>, StoreError> {
-        queries::get_sampler_performance_history(&self.pool, run_id, limit, worker_id)
-            .await
-            .map_err(map_sqlx)
+        Ok(queries::get_sampler_performance_history(&self.pool, run_id, limit, worker_id).await?)
     }
 }
 
 #[async_trait::async_trait]
 impl RuntimeLogStore for PgStore {
     async fn insert_runtime_log(&self, event: &RuntimeLogEvent) -> Result<(), StoreError> {
-        queries::insert_runtime_log(&self.pool, event)
-            .await
-            .map_err(map_sqlx)
+        queries::insert_runtime_log(&self.pool, event).await?;
+        Ok(())
     }
 }
 
@@ -254,9 +346,7 @@ impl RuntimeLogStore for PgStore {
 impl RunSpecStore for PgStore {
     async fn load_run_spec(&self, run_id: i32) -> Result<Option<RunSpec>, StoreError> {
         let Some((integration_params, point_spec)) =
-            queries::load_run_spec_payload(&self.pool, run_id)
-                .await
-                .map_err(map_sqlx)?
+            queries::load_run_spec_payload(&self.pool, run_id).await?
         else {
             return Ok(None);
         };

@@ -9,7 +9,8 @@ use crate::engines::observable::ObservableFactory;
 use crate::engines::{EngineError, EvalBatchOptions, EvalError, Evaluator, Parametrization};
 use crate::runners::rolling_metric::RollingMetric;
 use serde::{Deserialize, Serialize};
-use std::{error::Error, fmt, time::Duration, time::Instant};
+use std::{time::Duration, time::Instant};
+use thiserror::Error;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvaluatorRunnerParams {
@@ -24,29 +25,14 @@ pub struct EvaluatorRunnerTick {
     pub eval_time_ms: f64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum EvaluatorRunnerError {
-    Engine(EngineError),
+    #[error(transparent)]
+    Engine(#[from] EngineError),
+    #[error(transparent)]
     Eval(EvalError),
-    Store(StoreError),
-}
-
-impl fmt::Display for EvaluatorRunnerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            EvaluatorRunnerError::Engine(err) => write!(f, "{err}"),
-            EvaluatorRunnerError::Eval(err) => write!(f, "{err}"),
-            EvaluatorRunnerError::Store(err) => write!(f, "{err}"),
-        }
-    }
-}
-
-impl Error for EvaluatorRunnerError {}
-
-impl From<StoreError> for EvaluatorRunnerError {
-    fn from(value: StoreError) -> Self {
-        EvaluatorRunnerError::Store(value)
-    }
+    #[error(transparent)]
+    Store(#[from] StoreError),
 }
 
 pub struct EvaluatorRunner<WQ> {

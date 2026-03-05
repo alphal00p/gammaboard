@@ -428,7 +428,9 @@ where
 ///
 /// If `runtime_log_store` is provided, context-tagged runtime events are
 /// persisted through that store.
-pub fn init_tracing<S>(runtime_log_store: Option<S>) -> Result<(), Box<dyn std::error::Error>>
+pub fn init_tracing<S>(
+    runtime_log_store: Option<S>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
     S: RuntimeLogStore + Send + Sync + 'static,
 {

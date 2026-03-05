@@ -6,8 +6,8 @@ At a high level:
 - `gammaboard run` and `gammaboard node` commands manage run lifecycle and desired role assignments.
 - `gammaboard run-node` polls desired assignment in PostgreSQL and starts/stops one local worker role loop (`evaluator` or `sampler_aggregator`) to match desired state.
 - `gammaboard server` exposes run progress, aggregated results, and worker logs for the dashboard.
-- `gammaboard server` run stats SSE (`GET /api/runs/:id/stream`) uses one shared per-run polling
-  loop with broadcast fanout to all connected clients.
+- Aggregated-history polling uses sampled range reads (`GET /api/runs/:id/aggregated/range`)
+  with explicit `latest` in the response.
 - Runtime processes (`run-node`, `server`, and control commands) initialize tracing with a DB sink.
   Context-tagged events are persisted into `runtime_logs`; worker dashboard logs read
   `source='worker'`.
@@ -228,6 +228,13 @@ Compatibility is validated at runner startup before evaluator work begins.
 - Worker logs are readable via `GET /api/runs/:id/logs` and shown in the dashboard's
   **Worker Logs** panel. Each entry includes `id`, `ts`, `level`, `message`, and
   structured `fields` (no dedicated `event_type` column).
+- Aggregated-history chart data is read via:
+  - `GET /api/runs/:id/aggregated/range?start=<i64>&stop=<i64>&step=<i64>&latest_id=<optional>`
+  - negative `start`/`stop` are relative to newest id (`-1` = newest)
+  - server enforces a max returned point budget; increase `step` for wider ranges
+  - response always includes an explicit `latest` snapshot field
+- API responses serialize `BIGINT` identifiers (`id`, `latest_id`) as strings for
+  JavaScript precision safety.
 - Registered workers are readable via `GET /api/workers` (optional `run_id` query
   filter) and include per-run performance stats:
   evaluator `evaluator_metrics` (generic counters/timing),

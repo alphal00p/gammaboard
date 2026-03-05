@@ -20,13 +20,12 @@ import { deriveObservableMetric } from "./viewmodels/observable";
 import { Profiler, useMemo, useState } from "react";
 
 const DASHBOARD_HISTORY_CONFIG = {
-  historyLimit: 200,
-  historyBufferMax: 500,
+  historyStart: -5000,
+  historyStop: -1,
+  historyBufferMax: 100,
   workerLogsLimit: 200,
   workQueueStatsLimit: 200,
   pollIntervalMs: 5000,
-  sseConnectedPollThrottleFactor: 4,
-  streamIntervalMs: 1000,
 };
 
 const onRender = (id, phase, actualDuration, baseDuration, startTime, commitTime) => {
@@ -61,7 +60,12 @@ function App() {
   const [historyRangeEnd, setHistoryRangeEnd] = useState(-1);
 
   return (
-    <RunHistoryProvider runId={selectedRun} {...DASHBOARD_HISTORY_CONFIG}>
+    <RunHistoryProvider
+      runId={selectedRun}
+      historyStart={historyRangeStart}
+      historyStop={historyRangeEnd}
+      {...DASHBOARD_HISTORY_CONFIG}
+    >
       <AppContent
         runs={runs}
         selectedRun={selectedRun}
@@ -120,23 +124,6 @@ const ConnectionAndSelector = ({
   );
 };
 
-const resolveHistoryIndex = (index, len) => {
-  if (index < 0) return len + index;
-  return index;
-};
-
-const sliceHistoryByRange = (samples, startInclusive, endInclusive) => {
-  if (!Array.isArray(samples) || samples.length === 0) return [];
-  const len = samples.length;
-  const rawStart = resolveHistoryIndex(startInclusive, len);
-  const rawEnd = resolveHistoryIndex(endInclusive, len);
-  const clampedStart = Math.max(0, Math.min(len - 1, rawStart));
-  const clampedEnd = Math.max(0, Math.min(len - 1, rawEnd));
-  const start = Math.min(clampedStart, clampedEnd);
-  const end = Math.max(clampedStart, clampedEnd);
-  return samples.slice(start, end + 1);
-};
-
 const RunPanels = ({ runs, selectedRun }) => {
   const currentRun = useCurrentRun(runs, selectedRun);
 
@@ -166,10 +153,7 @@ const ObservableSection = ({ runs, selectedRun, historyRangeStart, historyRangeE
         .map((item) => deriveObservableMetric(item.aggregated_observable || {}, observableImplementation)),
     [history, observableImplementation],
   );
-  const derivedSamples = useMemo(
-    () => sliceHistoryByRange(fullSamples, historyRangeStart, historyRangeEnd),
-    [fullSamples, historyRangeStart, historyRangeEnd],
-  );
+  const derivedSamples = fullSamples;
 
   return (
     <ObservablePanel

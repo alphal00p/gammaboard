@@ -1,7 +1,8 @@
+use anyhow::{Result, anyhow};
 use clap::{Args, ValueEnum};
+use gammaboard::PgStore;
 use gammaboard::core::{RunStatus, WorkerRole};
 use gammaboard::telemetry::init_tracing;
-use gammaboard::{BinResult, PgStore};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum RoleArg {
@@ -69,12 +70,12 @@ fn env_true(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub fn init_cli_tracing(store: &PgStore) -> BinResult {
+pub fn init_cli_tracing(store: &PgStore) -> Result<()> {
     let runtime_log_store = if env_true("GAMMABOARD_DISABLE_DB_LOGS") {
         None
     } else {
         Some(store.clone())
     };
-    init_tracing(runtime_log_store)?;
+    init_tracing(runtime_log_store).map_err(|err| anyhow!(err.to_string()))?;
     Ok(())
 }

@@ -79,7 +79,7 @@ struct AggregatedResultRow {
 impl From<AggregatedResultRow> for AggregatedResult {
     fn from(value: AggregatedResultRow) -> Self {
         Self {
-            id: value.id,
+            id: value.id.to_string(),
             run_id: value.run_id,
             aggregated_observable: value.aggregated_observable,
             created_at: value.created_at,
@@ -102,7 +102,7 @@ struct WorkerLogRow {
 impl From<WorkerLogRow> for WorkerLogEntry {
     fn from(value: WorkerLogRow) -> Self {
         Self {
-            id: value.id,
+            id: value.id.to_string(),
             ts: value.ts,
             run_id: value.run_id,
             node_id: value.node_id,
@@ -414,6 +414,62 @@ pub(crate) async fn get_aggregated_results(
         "#,
     )
     .bind(run_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(Into::into).collect())
+}
+
+pub(crate) async fn get_aggregated_id_bounds(
+    pool: &PgPool,
+    run_id: i32,
+) -> Result<Option<(i64, i64)>, sqlx::Error> {
+    sqlx::query_as::<_, (i64, i64)>(
+        r#"
+        SELECT MIN(id) AS min_id, MAX(id) AS max_id
+        FROM aggregated_results
+        WHERE run_id = $1
+        HAVING COUNT(*) > 0
+        "#,
+    )
+    .bind(run_id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub(crate) async fn get_aggregated_range(
+    pool: &PgPool,
+    run_id: i32,
+    start_id: i64,
+    stop_id: i64,
+    step: i64,
+    anchor: i64,
+    latest_id: Option<i64>,
+    limit: i64,
+) -> Result<Vec<AggregatedResult>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, AggregatedResultRow>(
+        r#"
+        SELECT
+            id,
+            run_id,
+            aggregated_observable,
+            created_at
+        FROM aggregated_results
+        WHERE run_id = $1
+          AND id BETWEEN $2 AND $3
+          AND (($4::bigint IS NULL) OR id > $4)
+          AND MOD(id - $5, $6) = 0
+        ORDER BY id ASC
+        LIMIT $7
+        "#,
+    )
+    .bind(run_id)
+    .bind(start_id)
+    .bind(stop_id)
+    .bind(latest_id)
+    .bind(anchor)
+    .bind(step)
     .bind(limit)
     .fetch_all(pool)
     .await?;

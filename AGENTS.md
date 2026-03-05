@@ -7,7 +7,7 @@ Use `README.md` for operator onboarding. Keep this file focused on internal arch
 ## System Snapshot
 - `gammaboard run` and `gammaboard node` manage runs and desired assignments.
 - `gammaboard run-node` is role-agnostic and reconciles DB desired assignment into one active local role task.
-- `gammaboard server` exposes read APIs and SSE for the dashboard.
+- `gammaboard server` exposes read APIs for the dashboard (no run-history SSE stream).
 - PostgreSQL is the source of truth for run state, queue state, leases, worker state, logs, and snapshots.
 
 ## Module Ownership
@@ -80,9 +80,10 @@ Use `README.md` for operator onboarding. Keep this file focused on internal arch
   - `GET /api/runs/:id/logs`,
   - `GET /api/workers`,
   - `GET /api/runs` / `GET /api/runs/:id` (includes opaque `target` payload when present),
+  - `GET /api/runs/:id/aggregated/range` (sampled history range + explicit `latest`),
   - `GET /api/runs/:id/performance/evaluator`,
-  - `GET /api/runs/:id/performance/sampler-aggregator`,
-  - `GET /api/runs/:id/stream` (shared per-run polling backend task, fanout broadcast).
+  - `GET /api/runs/:id/performance/sampler-aggregator`.
+- Read API payloads should serialize `BIGINT` IDs as strings for frontend safety.
 
 ## Schema and Migration Policy
 - No backward-compat requirement by default.

@@ -1,8 +1,9 @@
+use anyhow::{Context, Result, anyhow};
 use clap::{Args, Subcommand};
 use gammaboard::batch::PointSpec;
 use gammaboard::core::{ControlPlaneStore, RunStatus};
+use gammaboard::init_pg_store;
 use gammaboard::stores::RunReadStore;
-use gammaboard::{BinResult, init_pg_store};
 use serde_json::Value as JsonValue;
 use std::{env, fs, path::PathBuf};
 use tracing::Instrument;
@@ -30,8 +31,10 @@ pub enum RunCommand {
     Remove(RunSelection),
 }
 
-pub async fn run_run_commands(command: RunCommand) -> BinResult {
-    let store = init_pg_store(10).await?;
+pub async fn run_run_commands(command: RunCommand) -> Result<()> {
+    let store = init_pg_store(10)
+        .await
+        .context("failed to initialize postgres store")?;
     init_cli_tracing(&store)?;
     let command_name = run_command_name(&command);
     let span = tracing::span!(
@@ -150,16 +153,15 @@ fn run_command_name(command: &RunCommand) -> &'static str {
     }
 }
 
-fn read_run_add_toml(path: &PathBuf) -> BinResult<JsonValue> {
-    let raw = fs::read_to_string(path)?;
-    let toml_value: toml::Value = toml::from_str(&raw)?;
-    let json_value = serde_json::to_value(toml_value)?;
+fn read_run_add_toml(path: &PathBuf) -> Result<JsonValue> {
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("failed reading run-add TOML from {}", path.display()))?;
+    let toml_value: toml::Value =
+        toml::from_str(&raw).with_context(|| format!("failed parsing TOML {}", path.display()))?;
+    let json_value = serde_json::to_value(toml_value)
+        .with_context(|| format!("failed converting TOML to JSON {}", path.display()))?;
     if !json_value.is_object() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "run-add TOML must be a table",
-        )
-        .into());
+        return Err(anyhow!("run-add TOML must be a table"));
     }
     Ok(json_value)
 }
@@ -181,7 +183,7 @@ fn merge_json(base: &mut JsonValue, overlay: JsonValue) {
     }
 }
 
-fn read_merged_run_add_toml(path: &PathBuf) -> BinResult<JsonValue> {
+fn read_merged_run_add_toml(path: &PathBuf) -> Result<JsonValue> {
     let default_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_RUN_CONFIG_PATH);
     let mut merged = read_run_add_toml(&default_path)?;
     let overlay = read_run_add_toml(path)?;
@@ -191,53 +193,30 @@ fn read_merged_run_add_toml(path: &PathBuf) -> BinResult<JsonValue> {
 
 fn parse_run_add_payload(
     raw: JsonValue,
-) -> BinResult<(String, JsonValue, Option<JsonValue>, PointSpec)> {
-    let mut root = raw.as_object().cloned().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "run-add payload must be a table",
-        )
-    })?;
+) -> Result<(String, JsonValue, Option<JsonValue>, PointSpec)> {
+    let mut root = raw
+        .as_object()
+        .cloned()
+        .ok_or_else(|| anyhow!("run-add payload must be a table"))?;
 
-    let name = root
+    let name_value = root
         .remove("name")
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "missing run name (`name`) in run-add payload",
-            )
-        })
-        .and_then(|value| {
-            value
-                .as_str()
-                .map(|value| value.trim().to_string())
-                .ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "invalid run name (`name`): expected non-empty string",
-                    )
-                })
-        })?;
+        .ok_or_else(|| anyhow!("missing run name (`name`) in run-add payload"))?;
+    let name = name_value
+        .as_str()
+        .map(|value| value.trim().to_string())
+        .ok_or_else(|| anyhow!("invalid run name (`name`): expected non-empty string"))?;
     if name.is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "invalid run name (`name`): expected non-empty string",
-        )
-        .into());
+        return Err(anyhow!(
+            "invalid run name (`name`): expected non-empty string"
+        ));
     }
 
-    let point_spec_value = root.remove("point_spec").ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "missing [point_spec] section in run-add payload",
-        )
-    })?;
-    let point_spec: PointSpec = serde_json::from_value(point_spec_value).map_err(|err| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("invalid point_spec: {err}"),
-        )
-    })?;
+    let point_spec_value = root
+        .remove("point_spec")
+        .ok_or_else(|| anyhow!("missing [point_spec] section in run-add payload"))?;
+    let point_spec: PointSpec = serde_json::from_value(point_spec_value)
+        .map_err(|err| anyhow!("invalid point_spec: {err}"))?;
 
     let target = root.remove("target");
 

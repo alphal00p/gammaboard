@@ -58,12 +58,12 @@ impl BuildFromJson for SymbolicaEngine {
     fn from_parsed_params(params: Self::Params) -> Result<Self, crate::BuildError> {
         let settings = ParseSettings::symbolica();
         let parsed_expr = Atom::parse(wrap_input!(&params.expr), settings.clone())
-            .map_err(|err| BuildError::Build(err.to_string()))?;
+            .map_err(|err| BuildError::build(err.to_string()))?;
 
         let mut args = Vec::with_capacity(params.args.len());
         for arg in &params.args {
             let parsed = Atom::parse(wrap_input!(arg), settings.clone())
-                .map_err(|err| BuildError::Build(err.to_string()))?;
+                .map_err(|err| BuildError::build(err.to_string()))?;
             args.push(parsed);
         }
 
@@ -73,30 +73,30 @@ impl BuildFromJson for SymbolicaEngine {
                 &args,
                 OptimizationSettings::default(),
             )
-            .map_err(|err| BuildError::Build(err.to_string()))?;
+            .map_err(|err| BuildError::build(err.to_string()))?;
 
         let root_artifacts_dir = Path::new("./.evaluators");
-        fs::create_dir_all(root_artifacts_dir).map_err(|err| BuildError::Build(err.to_string()))?;
+        fs::create_dir_all(root_artifacts_dir)?;
 
         let artifacts_dir = tempfile::Builder::new()
             .prefix("symbolica-eval-")
             .rand_bytes(8)
             .tempdir_in(root_artifacts_dir)
-            .map_err(|err| BuildError::Build(err.to_string()))?;
+            .map_err(|err| BuildError::io(err.to_string()))?;
         let stem = "eval";
         let path = artifacts_dir.path().join(stem);
 
         let exported_code = evaluator
             .export_cpp::<f64>(path.with_extension("cpp"), &stem, ExportSettings::default())
-            .map_err(|err| BuildError::Build(err.to_string()))?;
+            .map_err(|err| BuildError::build(err.to_string()))?;
 
         let compiled_code = exported_code
             .compile(path.with_extension("so"), CompileOptions::default())
-            .map_err(|err| BuildError::Build(err.to_string()))?;
+            .map_err(|err| BuildError::build(err.to_string()))?;
 
         let evaluator = compiled_code
             .load()
-            .map_err(|err| BuildError::Build(err.to_string()))?;
+            .map_err(|err| BuildError::build(err.to_string()))?;
 
         Ok(SymbolicaEngine::new(
             evaluator,
@@ -115,7 +115,7 @@ impl Evaluator for SymbolicaEngine {
                 "Discrete dimensions are not supported".to_string(),
             ))
         } else if point_spec.continuous_dims != self.args.len() {
-            Err(BuildError::Build(format!(
+            Err(BuildError::incompatible(format!(
                 "Continuous dimensions need to match the number of arguments (n = {})",
                 self.args.len()
             )))

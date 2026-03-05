@@ -1,6 +1,7 @@
+use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use gammaboard::core::{ControlPlaneStore, DesiredAssignment, WorkerRole};
-use gammaboard::{BinResult, init_pg_store};
+use gammaboard::init_pg_store;
 use tracing::Instrument;
 
 use super::shared::{NodeSelection, RoleArg, init_cli_tracing};
@@ -28,8 +29,10 @@ pub enum NodeCommand {
     Stop(NodeSelection),
 }
 
-pub async fn run_node_commands(command: NodeCommand) -> BinResult {
-    let store = init_pg_store(10).await?;
+pub async fn run_node_commands(command: NodeCommand) -> Result<()> {
+    let store = init_pg_store(10)
+        .await
+        .context("failed to initialize postgres store")?;
     init_cli_tracing(&store)?;
     let command_name = node_command_name(&command);
     let span = tracing::span!(

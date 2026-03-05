@@ -46,35 +46,22 @@ const levelTone = (level) => {
 
 const normalizeLevel = (level) => (level || "").toLowerCase();
 
-const compareLogsAsc = (a, b) => {
-  const aTime = Date.parse(a.ts || "");
-  const bTime = Date.parse(b.ts || "");
-  const aValid = Number.isFinite(aTime);
-  const bValid = Number.isFinite(bTime);
-
-  if (aValid && bValid && aTime !== bTime) return aTime - bTime;
-  if (aValid !== bValid) return aValid ? -1 : 1;
-  const aId = Number(a.id);
-  const bId = Number(b.id);
-  if (Number.isFinite(aId) && Number.isFinite(bId) && aId !== bId) return aId - bId;
-  return String(a.id).localeCompare(String(b.id));
-};
-
 const mergeLogs = (previous, incoming) => {
   if (!incoming || incoming.length === 0) return previous;
 
-  const merged = new Map(previous.map((entry) => [entry.id, entry]));
+  const out = [...previous];
+  const seen = new Set(out.map((entry) => entry.id));
   let hasNewIds = false;
   for (const entry of incoming) {
     if (!entry || entry.id == null) continue;
     const nextEntry = entry._searchText ? entry : { ...entry, _searchText: buildSearchText(entry) };
-    if (!merged.has(entry.id)) hasNewIds = true;
-    merged.set(entry.id, nextEntry);
+    if (seen.has(entry.id)) continue;
+    seen.add(entry.id);
+    out.push(nextEntry);
+    hasNewIds = true;
   }
 
   if (!hasNewIds) return previous;
-
-  const out = Array.from(merged.values()).sort(compareLogsAsc);
   if (out.length <= MAX_LINES) return out;
   return out.slice(out.length - MAX_LINES);
 };

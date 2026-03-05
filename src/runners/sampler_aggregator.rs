@@ -19,10 +19,9 @@ use crate::runners::rolling_metric::RollingMetric;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    error::Error,
-    fmt,
     time::{Duration, Instant},
 };
+use thiserror::Error;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerAggregatorRunnerParams {
@@ -99,27 +98,12 @@ impl SamplerRuntimeState {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum RunnerError {
-    Engine(EngineError),
-    Store(StoreError),
-}
-
-impl fmt::Display for RunnerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            RunnerError::Engine(err) => write!(f, "{err}"),
-            RunnerError::Store(err) => write!(f, "{err}"),
-        }
-    }
-}
-
-impl Error for RunnerError {}
-
-impl From<StoreError> for RunnerError {
-    fn from(value: StoreError) -> Self {
-        RunnerError::Store(value)
-    }
+    #[error(transparent)]
+    Engine(#[from] EngineError),
+    #[error(transparent)]
+    Store(#[from] StoreError),
 }
 
 pub struct SamplerAggregatorRunner<WQ, AS> {
