@@ -1,131 +1,80 @@
 # AGENTS
 
 ## Purpose
-This file is for coding agents and contributors making structural or behavioral changes.
-Use `README.md` for operator onboarding. Keep this file focused on internal architecture and implementation rules.
+This file is for contributors making structural or behavioral changes.
+Use `README.md` for operator onboarding. Keep this file focused on architecture, invariants, and implementation rules.
 
 ## System Snapshot
-- `gammaboard run` and `gammaboard node` manage runs and desired assignments.
-- `gammaboard run-node` is role-agnostic and reconciles DB desired assignment into one active local role task.
-- CLI command output is emitted through tracing (not `println!`) with default console level
-  `INFO` for `gammaboard*` targets and `WARN` for external targets.
-  Pass global `-q/--quiet` to suppress all `INFO` output and keep warnings/errors only.
-- `gammaboard server` exposes read APIs for the dashboard (no run-history SSE stream).
-- Dashboard frontend has mode tabs:
-  `Runs` for run-scoped panels and `Workers` for worker overview/details/logs.
-  `Runs` contains compact warn/error logs; full filterable logs remain in `Workers`.
-- PostgreSQL is the source of truth for run state, queue state, leases, worker state, logs, and snapshots.
+- `gammaboard run` manages run lifecycle.
+- `gammaboard node` manages desired assignments.
+- `gammaboard run-node` reconciles DB desired assignment into at most one active local role loop.
+- `gammaboard server` exposes the dashboard read API.
+- PostgreSQL is the source of truth for runs, batches, assignments, workers, logs, and snapshots.
 
 ## Module Ownership
-- `src/core/*`: shared domain models and store-facing contracts (`Batch`, `BatchResult`, `PointSpec`, `RunStatus`, store traits, `StoreError`).
-- `src/engines/*`: engine traits, implementations, and shared run-spec wiring.
-  - Role modules: `engines::evaluator`, `engines::sampler_aggregator`, `engines::observable`, `engines::parametrization`.
-  - Shared types: `engines::shared::{BuildFromJson, IntegrationParams, RunSpec}`.
-- `src/runners/*`: orchestration loops (`NodeRunner`, evaluator runner, sampler-aggregator runner).
-- `src/stores/*`: PostgreSQL implementation and read DTOs/traits.
-- `src/tracing.rs`: tracing setup and runtime-log sink wiring through `core::RuntimeLogStore`.
-- `src/main.rs` + `src/cli/*`: operational CLI entrypoint and subcommand modules (`run`, `node`, `run-node`, `server`).
+- `src/core/*`: domain types and store-facing contracts.
+- `src/engines/*`: engine traits, configs, implementations, and shared run-spec wiring.
+- `src/runners/*`: evaluator, sampler-aggregator, and node orchestration loops.
+- `src/stores/*`: PostgreSQL implementation, queries, and read DTOs.
+- `src/tracing.rs`: tracing initialization and DB log sink wiring.
+- `src/cli/*` and `src/main.rs`: CLI entrypoints and command wiring.
 
 ## Operational Conventions
 - Run config is TOML via `gammaboard run add <file.toml>`.
-- `run-add` deep-merges `configs/default.toml` with the provided file (provided file wins).
-- `run-add` applies typed preprocessing before DB insert via a single top-level orchestrator
-  that derives `point_spec` from the evaluator via preflight build.
-- `run-add` performs deep preflight compatibility checks before DB insert by constructing
-  engines from typed config enums and validating point-spec compatibility via a one-point dry-run.
-  Preflight includes a one-point sampler -> parametrization -> evaluator dry-run.
-- `run-add` also resolves evaluator/sampler init metadata via `get_init_metadata` and persists
-  it on run creation (`runs.evaluator_init_metadata`, `runs.sampler_aggregator_init_metadata`).
-- Point dimensions are canonical in evaluator-derived `runs.point_spec`; do not duplicate them in
-  integration config outside evaluator.
-- Keep split local live-test recipes in `justfile`:
-  - `live-test-basic` for unit-line + Symbolica 3D Gaussian scenarios.
-  - `live-test-gammaloop` for GammaLoop-only scenario.
-- Runtime defaults live in `configs/default.toml`, not Rust `Default` impls.
-- Run identity uses top-level `name` and persists to `runs.name`.
-- Optional top-level `target` is persisted verbatim in `runs.target`; backend does not interpret it.
-- Run lifecycle status persists in `runs.status` and is controlled by `gammaboard run` commands.
-- `run start`/`run pause`/`run stop`/`run remove` and `node stop` use shared selectors: `-a|--all` or positional IDs.
-- `run pause`/`run stop` must also clear desired assignments so run-nodes reconcile down cleanly.
-- `run-node` executes at most one active role task at a time.
-- Role switching must be stop-old-then-start-new.
-- Role start failures are capped per desired target (`max_consecutive_start_failures`, default 3).
-  After the cap is reached, run-node aborts further restarts for that target until desired assignment changes.
-- Node shutdown requests are consumed from `workers.shutdown_requested_at` as one-shot signals.
-- Server/default local serve port contract:
-  - Use env var `GAMMABOARD_BACKEND_PORT` for backend port.
-  - `just serve-backend` and `just serve-frontend` source `.env` and use the same backend port.
-  - There is no combined `just serve` orchestrator; run backend/frontend in separate terminals.
-  - Each `serve-*` command should stop its own previously running process before starting.
-  - Frontend API URL is provided through `REACT_APP_API_BASE_URL`.
+- `run add` deep-merges `configs/default.toml` with the provided file.
+- Preflight derives `point_spec` from the evaluator and performs a one-point sampler -> parametrization -> evaluator dry-run before persistence.
+- `run add` also persists evaluator and sampler init metadata.
+- Point dimensions are canonical in `runs.point_spec`; do not duplicate them outside evaluator config unless the evaluator intrinsically needs them.
+- `run start`, `run pause`, `run stop`, `run remove`, and `node stop` support positional IDs or `-a/--all`.
+- `run pause` and `run stop` must clear desired assignments so `run-node` reconciles down cleanly.
+- `run-node` must stop the old role before starting a new one.
+- Role start failures are capped per desired target; after the cap is hit, retries stay disabled until desired assignment changes.
+- Node shutdown is a one-shot signal read from `workers.shutdown_requested_at`.
+- Local serve contract:
+  - backend port env var is `GAMMABOARD_BACKEND_PORT`
+  - frontend API base URL is `REACT_APP_API_BASE_URL`
+  - backend and frontend are started separately
 - Local DB startup contract:
-  - `just start-db` must wait for Compose health (`docker-compose up -d --wait`)
-    before running `sqlx migrate run`.
-  - Postgres service in `docker-compose.yml` must keep a valid healthcheck so
-    startup is deterministic.
-  - `gammaboard` DB pool initialization includes retry/backoff for transient
-    connect errors; keep retries in Rust startup path, not shell wrappers.
+  - `just start-db` must wait for Compose health before migrations
+  - DB retry/backoff belongs in Rust startup, not shell wrappers
 
 ## Engine and Data Rules
-- Keep runtime construction config-based (`EvaluatorConfig`, `SamplerAggregatorConfig`, `ParametrizationConfig`) via `build()` returning boxed trait objects.
-- Avoid runtime `*Engine` dispatch enums.
-- Parse engine params through `BuildFromJson` typed params + validation.
-- `IntegrationParams`/`RunSpec` runner params are strongly typed (`EvaluatorRunnerParams`, `SamplerAggregatorRunnerParams`).
-- Evaluators are batch-oriented (`Batch -> BatchResult`) and must support `batches.requires_training` semantics.
-- Observable state is evaluator-owned and serialized through the semantic `ObservableState` enum.
-- Evaluator configs may choose observable semantics (`scalar` vs `complex`) when the evaluator supports both.
-- Observable aggregation is `ObservableState`-to-`ObservableState` merge in the sampler-aggregator runner.
-- Batch payloads in `batches.points` must remain compact and shape-stable:
-  - row-major flat `continuous`/`discrete`,
-  - per-sample `weights`,
-  - explicit 2D shape metadata.
-- Completed batches are consumed by sampler-aggregator and deleted from `batches`.
+- Keep runtime construction config-based through `EvaluatorConfig`, `SamplerAggregatorConfig`, and `ParametrizationConfig`.
+- Avoid adding runtime engine dispatch enums for evaluator/sampler/parametrization selection.
+- Parse engine params with `BuildFromJson`.
+- `IntegrationParams` and `RunSpec` carry strongly typed runner params.
+- Evaluators are batch-oriented and must respect `batches.requires_training`.
+- Observable state is evaluator-owned and serialized as semantic `ObservableState`.
+- If an evaluator supports multiple observable semantics, that choice belongs in evaluator config via `observable_kind`.
+- Sampler-aggregator aggregation is `ObservableState` merge, not capability-style ingest.
+- Batch payloads in `batches.points` must stay compact and shape-stable:
+  - row-major flat `continuous` and `discrete`
+  - per-sample `weights`
+  - explicit 2D shape metadata
+- Completed batches are consumed by sampler-aggregator and deleted.
 
-## Performance, Logs, and Read APIs
-- Worker performance history is persisted in:
-  - `evaluator_performance_history`,
-  - `sampler_aggregator_performance_history`.
-- Snapshot rows are point-in-time (`created_at`); do not rely on window columns.
-- Latest worker stats in `/api/workers` come from role-specific latest views.
-- Runtime logs persist to `runtime_logs` based on tracing context (`source`, `run_id`, `worker_id`) and DB sink policy.
-- Runtime logs persist `node_id` as well when it is present in tracing context.
-- Set `GAMMABOARD_DISABLE_DB_LOGS=1` to disable runtime-log DB persistence for CLI processes while keeping console tracing enabled.
-- DB sink levels are split by context:
-  `GAMMABOARD_DB_LOG_LEVEL` for `gammaboard*` targets and
-  `GAMMABOARD_DB_EXTERNAL_LOG_LEVEL` for external targets
-  (`off|error|warn|info|debug|trace`).
-- SQL for runtime-log persistence lives in the Pg store query layer (`stores::queries::runtime_logs`);
-  tracing should not issue raw SQL directly.
-- Worker dashboard logs are read as `source='worker'` from `runtime_logs`; include
-  `run_id` and `worker_id` when available.
-- Read APIs include:
-  - `GET /api/runs/:id/logs`,
-  - `GET /api/workers/:id/performance/evaluator`,
-  - `GET /api/workers/:id/performance/sampler-aggregator`,
-  - `GET /api/workers`,
-  - `GET /api/runs` / `GET /api/runs/:id` (includes opaque `target` payload when present),
-  - `GET /api/runs/:id/aggregated/range` (sampled history range + explicit `latest`; query uses `start`, `stop`, required `max_points`, optional `last_id`; backend auto-derives step and may set `reset_required`),
-  - `GET /api/runs/:id/performance/evaluator`,
-  - `GET /api/runs/:id/performance/sampler-aggregator`.
-- Read API payloads should serialize `BIGINT` IDs as strings for frontend safety.
+## Logging and Read APIs
+- Runtime logs are persisted from tracing context through `RuntimeLogStore`.
+- SQL for runtime log persistence lives in the store/query layer, not in tracing setup.
+- Runtime log context should include `source`, `run_id`, `worker_id`, and `node_id` when available.
+- Set `GAMMABOARD_DISABLE_DB_LOGS=1` to disable DB log persistence.
+- DB log thresholds are configured with:
+  - `GAMMABOARD_DB_LOG_LEVEL`
+  - `GAMMABOARD_DB_EXTERNAL_LOG_LEVEL`
+- Worker performance history is stored in:
+  - `evaluator_performance_history`
+  - `sampler_aggregator_performance_history`
+- Snapshot rows are point-in-time; do not reintroduce window semantics.
+- Read APIs should serialize `BIGINT` IDs as strings.
 
-## Schema and Migration Policy
+## Schema Policy
 - No backward-compat requirement by default.
-- Prefer direct current-schema migrations over compatibility `ALTER TABLE` chains unless explicitly requested.
+- Prefer direct current-schema migrations unless compatibility work is explicitly requested.
 
-## Required Checks Before Finishing
+## Required Checks
 - `cargo fmt`
 - `cargo check -q`
 - `cargo test -q`
 
-## Documentation Sync Rule
-If a change affects structure or operations, update docs in the same change:
-- Always update `AGENTS.md` for internal conventions.
-- Always update `README.md` for user-facing workflows/commands.
-
-Changes that require doc updates include:
-- module moves/renames,
-- binary/CLI changes,
-- config schema changes,
-- migration/schema behavior changes,
-- run orchestration/node assignment behavior changes.
+## Documentation Rule
+If you change structure, operations, CLI behavior, config schema, or runtime behavior, update `README.md` and `AGENTS.md` in the same change.

@@ -27,6 +27,11 @@ const EvaluatorPanel = ({ run }) => {
               value: runnerParams.performance_snapshot_interval_ms ?? "n/a",
               md: 6,
             },
+            {
+              label: "observable_kind",
+              value: evaluatorParams.observable_kind ?? "evaluator-defined",
+              md: 6,
+            },
           ]}
         />
       }

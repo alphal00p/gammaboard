@@ -1,12 +1,7 @@
 import { Card, CardContent, Grid, Typography } from "@mui/material";
 import LatexFormula from "../../LatexFormula";
 
-const EvaluatorDetailsCard = ({
-  minEvalTimePerSampleMs,
-  expectedContinuousDims,
-  supportedObservable,
-  integralLatex,
-}) => (
+const EvaluatorDetailsCard = ({ minEvalTimePerSampleMs, expectedContinuousDims, observableKind, integralLatex }) => (
   <Card>
     <CardContent>
       <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
@@ -27,9 +22,9 @@ const EvaluatorDetailsCard = ({
         </Grid>
         <Grid item xs={12} md={4}>
           <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
-            supported observable
+            observable kind
           </Typography>
-          <Typography variant="h5">{supportedObservable}</Typography>
+          <Typography variant="h5">{observableKind ?? "n/a"}</Typography>
         </Grid>
         <Grid item xs={12}>
           <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
