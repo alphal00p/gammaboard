@@ -114,7 +114,7 @@ pub(crate) async fn submit_batch_results(
         "#,
     )
     .bind(result.values_to_json())
-    .bind(&result.observable)
+    .bind(serde_json::to_value(&result.observable).unwrap_or_default())
     .bind(eval_time_ms)
     .bind(batch_id)
     .execute(pool)

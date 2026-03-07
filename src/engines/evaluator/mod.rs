@@ -1,13 +1,13 @@
-mod gammaloop;
+pub(crate) mod gammaloop;
 mod sin_evaluator;
 mod sinc_evaluator;
 mod symbolica;
-mod unit;
+pub(crate) mod unit;
 
 use super::{BuildError, BuildFromJson, EvalError};
 use crate::{
     core::{Batch, BatchResult, PointSpec},
-    engines::ObservableConfig,
+    engines::ObservableState,
 };
 use serde_json::{Value as JsonValue, json};
 
@@ -25,10 +25,10 @@ pub struct EvalBatchOptions {
 /// Evaluates integrand values for sample points.
 pub trait Evaluator: Send {
     fn get_point_spec(&self) -> PointSpec;
+    fn empty_observable(&self) -> ObservableState;
     fn eval_batch(
         &mut self,
         batch: &Batch,
-        observable_config: &ObservableConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError>;
     fn get_init_metadata(&self) -> JsonValue {
@@ -67,6 +67,26 @@ impl crate::engines::EvaluatorConfig {
             Self::Symbolica { params } => Ok(Box::new(SymbolicaEngine::from_json(
                 &JsonValue::Object(params.clone()),
             )?)),
+        }
+    }
+
+    pub fn empty_observable_state(&self) -> Result<ObservableState, BuildError> {
+        match self {
+            Self::Gammaloop { params } => {
+                let params: gammaloop::GammaLoopParams =
+                    serde_json::from_value(JsonValue::Object(params.clone()))
+                        .map_err(|err| BuildError::invalid_input(err.to_string()))?;
+                Ok(params.observable_kind.empty_state())
+            }
+            Self::SinEvaluator { .. } => Ok(ObservableState::empty_scalar()),
+            Self::SincEvaluator { .. } => Ok(ObservableState::empty_complex()),
+            Self::Unit { params } => {
+                let params: unit::UnitEvaluatorParams =
+                    serde_json::from_value(JsonValue::Object(params.clone()))
+                        .map_err(|err| BuildError::invalid_input(err.to_string()))?;
+                Ok(params.observable_kind.empty_state())
+            }
+            Self::Symbolica { .. } => Ok(ObservableState::empty_scalar()),
         }
     }
 }

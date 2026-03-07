@@ -13,7 +13,7 @@ use crate::core::{
     AggregationStore, CompletedBatch, RollingMetricSnapshot, SamplerAggregatorPerformanceSnapshot,
     SamplerRollingAverages, SamplerRuntimeMetrics, StoreError, WorkQueueStore,
 };
-use crate::engines::{BatchContext, EngineError, Observable, ObservableConfig, SamplerAggregator};
+use crate::engines::{BatchContext, EngineError, ObservableState, SamplerAggregator};
 use crate::runners::rolling_metric::RollingMetric;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -109,8 +109,7 @@ pub struct SamplerAggregatorRunner<WQ, AS> {
     run_id: i32,
     worker_id: String,
     engine: Box<dyn SamplerAggregator>,
-    aggregated_observable: Box<dyn Observable>,
-    observable_config: ObservableConfig,
+    aggregated_observable: ObservableState,
     work_queue: WQ,
     aggregation_store: AS,
     config: SamplerAggregatorRunnerParams,
@@ -232,7 +231,7 @@ where
         run_id: i32,
         worker_id: impl Into<String>,
         engine: Box<dyn SamplerAggregator>,
-        observable_config: ObservableConfig,
+        mut aggregated_observable: ObservableState,
         work_queue: WQ,
         aggregation_store: AS,
         config: SamplerAggregatorRunnerParams,
@@ -268,14 +267,9 @@ where
             .load_latest_aggregation_snapshot(run_id)
             .await?;
 
-        let mut aggregated_observable = observable_config
-            .build()
-            .map_err(|err| RunnerError::Engine(err))?;
-
         if let Some(snapshot) = persisted_snapshot {
-            aggregated_observable
-                .load_state_from_json(&snapshot)
-                .map_err(RunnerError::Engine)?;
+            aggregated_observable =
+                ObservableState::from_json(&snapshot).map_err(RunnerError::Engine)?;
         }
 
         Ok(Self {
@@ -283,7 +277,6 @@ where
             worker_id: worker_id.into(),
             engine,
             aggregated_observable,
-            observable_config,
             work_queue,
             aggregation_store,
             config,
@@ -432,21 +425,14 @@ where
                 self.local_batch_contexts.remove(&batch.batch_id);
             }
 
-            let mut observable = self
-                .observable_config
-                .build()
-                .map_err(RunnerError::Engine)?;
-            observable
-                .load_state_from_json(&batch.result.observable)
-                .map_err(RunnerError::Engine)?;
             self.aggregated_observable
-                .merge(observable.as_ref())
+                .merge(batch.result.observable.clone())
                 .map_err(RunnerError::Engine)?;
         }
 
         let snapshot = self
             .aggregated_observable
-            .snapshot()
+            .to_json()
             .map_err(RunnerError::Engine)?;
 
         self.aggregation_store
@@ -504,7 +490,7 @@ mod tests {
     use super::*;
     use crate::core::StoreError;
     use crate::core::{Batch, BatchResult, PointSpec};
-    use crate::engines::{BatchContext, BuildError, ObservableConfig, SamplerAggregator};
+    use crate::engines::{BatchContext, BuildError, ObservableState, SamplerAggregator};
     use crate::runners::test_support::MockWorkQueue;
     use serde_json::{Value as JsonValue, json};
     use std::sync::{Arc, Mutex};
@@ -615,10 +601,8 @@ mod tests {
         Batch::from_flat_data(1, 1, 0, vec![1.0], vec![]).expect("batch")
     }
 
-    fn scalar_observable_config() -> ObservableConfig {
-        ObservableConfig::Scalar {
-            params: serde_json::Map::new(),
-        }
+    fn scalar_observable() -> ObservableState {
+        ObservableState::empty_scalar()
     }
 
     fn make_completed(
@@ -632,11 +616,11 @@ mod tests {
             requires_training: true,
             result: BatchResult::new(
                 Some(training_weights.clone()),
-                json!({
-                    "count": training_weights.len() as i64,
-                    "sum_weighted_value": observable_sum_weighted_value,
-                    "sum_abs": 0.0,
-                    "sum_sq": 0.0,
+                ObservableState::Scalar(crate::engines::ScalarObservableState {
+                    count: training_weights.len() as i64,
+                    sum_weighted_value: observable_sum_weighted_value,
+                    sum_abs: 0.0,
+                    sum_sq: 0.0,
                 }),
             ),
             completed_at: None,
@@ -663,6 +647,7 @@ mod tests {
             .lock()
             .expect("poison")
             .initial_snapshot = Some(json!({
+            "kind": "scalar",
             "count": 3,
             "sum_weighted_value": 1.0,
             "sum_abs": 0.0,
@@ -679,7 +664,7 @@ mod tests {
             1,
             "worker-a",
             Box::new(engine),
-            scalar_observable_config(),
+            scalar_observable(),
             queue.clone(),
             aggregation_store.clone(),
             SamplerAggregatorRunnerParams {
@@ -760,7 +745,7 @@ mod tests {
             1,
             "worker-a",
             Box::new(engine),
-            scalar_observable_config(),
+            scalar_observable(),
             queue.clone(),
             aggregation_store.clone(),
             SamplerAggregatorRunnerParams {
@@ -817,7 +802,7 @@ mod tests {
             1,
             "worker-a",
             Box::new(engine),
-            scalar_observable_config(),
+            scalar_observable(),
             queue.clone(),
             aggregation_store,
             SamplerAggregatorRunnerParams {
@@ -870,7 +855,7 @@ mod tests {
             1,
             "worker-a",
             Box::new(engine),
-            scalar_observable_config(),
+            scalar_observable(),
             queue.clone(),
             aggregation_store,
             SamplerAggregatorRunnerParams {
@@ -927,7 +912,7 @@ mod tests {
             1,
             "worker-a",
             Box::new(engine),
-            scalar_observable_config(),
+            scalar_observable(),
             queue,
             aggregation_store,
             SamplerAggregatorRunnerParams {
@@ -970,7 +955,7 @@ mod tests {
             1,
             "worker-a",
             Box::new(engine),
-            scalar_observable_config(),
+            scalar_observable(),
             queue.clone(),
             aggregation_store,
             SamplerAggregatorRunnerParams {
@@ -1022,7 +1007,7 @@ mod tests {
             1,
             "worker-a",
             Box::new(engine),
-            scalar_observable_config(),
+            scalar_observable(),
             queue.clone(),
             aggregation_store,
             SamplerAggregatorRunnerParams {

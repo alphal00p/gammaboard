@@ -17,16 +17,12 @@ pub(crate) async fn run_evaluator_role<S: NodeRunnerStore>(
     };
 
     let engine_span = tracing::span!(tracing::Level::TRACE, "evaluator_engine_context");
-    let (evaluator, observable_config, parametrization) = {
+    let (evaluator, parametrization) = {
         let _engine_scope = engine_span.enter();
         let evaluator = spec
             .evaluator
             .build()
             .map_err(|err| StoreError::store(format!("failed to build evaluator: {err}")))?;
-
-        spec.observable
-            .build()
-            .map_err(|err| StoreError::store(format!("failed to build observable: {err}")))?;
 
         let parametrization = spec
             .parametrization
@@ -41,7 +37,7 @@ pub(crate) async fn run_evaluator_role<S: NodeRunnerStore>(
                 ))
             })?;
 
-        (evaluator, spec.observable.clone(), parametrization)
+        (evaluator, parametrization)
     };
 
     worker
@@ -59,7 +55,6 @@ pub(crate) async fn run_evaluator_role<S: NodeRunnerStore>(
         worker.worker_id.clone(),
         evaluator,
         parametrization,
-        observable_config,
         spec.point_spec.clone(),
         Duration::from_millis(
             spec.evaluator_runner_params

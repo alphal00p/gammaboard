@@ -1,7 +1,9 @@
 use crate::core::{Batch, BatchResult, PointSpec};
 use crate::engines::EvalBatchOptions;
 use crate::engines::evaluator::sin_evaluator::SinEvaluatorParams;
-use crate::engines::{BuildError, BuildFromJson, EvalError, Evaluator, ObservableConfig};
+use crate::engines::{
+    BuildError, BuildFromJson, ComplexObservableState, EvalError, Evaluator, ObservableState,
+};
 use num::complex::Complex64;
 use std::{
     thread,
@@ -29,19 +31,20 @@ impl Evaluator for SincEvaluator {
         }
     }
 
+    fn empty_observable(&self) -> ObservableState {
+        ObservableState::empty_complex()
+    }
+
     fn eval_batch(
         &mut self,
         batch: &Batch,
-        observable_config: &ObservableConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
         let weights = batch
             .weights()
             .as_slice()
             .ok_or_else(|| EvalError::eval("Batch weights array must be standard-layout"))?;
-        let mut observable = observable_config
-            .build()
-            .map_err(|err| EvalError::eval(err.to_string()))?;
+        let mut observable = ComplexObservableState::default();
         let started = Instant::now();
         let mut values = if options.require_training_values {
             Some(Vec::with_capacity(batch.size()))
@@ -49,26 +52,18 @@ impl Evaluator for SincEvaluator {
             None
         };
 
-        {
-            let complex_ingest = observable.as_complex_ingest().ok_or_else(|| {
-                EvalError::eval(format!(
-                    "sinc_evaluator supports only complex-capable observables, got {}",
-                    observable_config.kind_str()
-                ))
-            })?;
-            for (row, weight) in batch.continuous().rows().into_iter().zip(weights.iter()) {
-                let x = *row
-                    .get(0)
-                    .ok_or_else(|| EvalError::eval("missing continuous[0]"))?;
-                let y = *row
-                    .get(1)
-                    .ok_or_else(|| EvalError::eval("missing continuous[1]"))?;
-                let z = Complex64::new(x, y);
-                let value = z.sin();
-                complex_ingest.ingest_complex(value, *weight);
-                if let Some(values) = values.as_mut() {
-                    values.push(value.norm());
-                }
+        for (row, weight) in batch.continuous().rows().into_iter().zip(weights.iter()) {
+            let x = *row
+                .get(0)
+                .ok_or_else(|| EvalError::eval("missing continuous[0]"))?;
+            let y = *row
+                .get(1)
+                .ok_or_else(|| EvalError::eval("missing continuous[1]"))?;
+            let z = Complex64::new(x, y);
+            let value = z.sin();
+            observable.add_sample(value, *weight);
+            if let Some(values) = values.as_mut() {
+                values.push(value.norm());
             }
         }
 
@@ -79,11 +74,17 @@ impl Evaluator for SincEvaluator {
             thread::sleep(min_total - elapsed);
         }
 
-        if let Some(values) = values {
-            BatchResult::from_values_weights_and_observable(values, weights, observable.as_ref())
-        } else {
-            BatchResult::from_observable_only(observable.as_ref())
-        }
+        let weighted_values = values.map(|values| {
+            values
+                .into_iter()
+                .zip(weights.iter().copied())
+                .map(|(value, weight)| value * weight)
+                .collect()
+        });
+        Ok(BatchResult::new(
+            weighted_values,
+            ObservableState::Complex(observable),
+        ))
     }
 }
 

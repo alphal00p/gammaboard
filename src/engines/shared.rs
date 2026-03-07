@@ -1,6 +1,5 @@
 use super::BuildError;
-use super::{EngineError, Observable};
-use crate::core::{BatchResult, PointSpec};
+use crate::core::PointSpec;
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -18,44 +17,11 @@ pub trait BuildFromJson: Sized {
     }
 }
 
-impl BatchResult {
-    pub fn from_values_weights_and_observable<O: Observable + ?Sized>(
-        values: Vec<f64>,
-        weights: &[f64],
-        observable: &O,
-    ) -> Result<Self, EngineError> {
-        if values.len() != weights.len() {
-            return Err(EngineError::engine(format!(
-                "result length mismatch: values has {}, weights has {}",
-                values.len(),
-                weights.len()
-            )));
-        }
-
-        let weighted_values = values
-            .into_iter()
-            .zip(weights.iter().copied())
-            .map(|(value, weight)| value * weight)
-            .collect();
-        let batch_observable = observable.snapshot()?;
-
-        Ok(Self::new(Some(weighted_values), batch_observable))
-    }
-
-    pub fn from_observable_only<O: Observable + ?Sized>(
-        observable: &O,
-    ) -> Result<Self, EngineError> {
-        let batch_observable = observable.snapshot()?;
-        Ok(Self::new(None, batch_observable))
-    }
-}
-
 /// Canonical integration parameters payload stored on `runs.integration_params`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegrationParams {
     pub evaluator: EvaluatorConfig,
     pub sampler_aggregator: SamplerAggregatorConfig,
-    pub observable: ObservableConfig,
     pub parametrization: ParametrizationConfig,
     pub evaluator_runner_params: EvaluatorRunnerParams,
     pub sampler_aggregator_runner_params: SamplerAggregatorRunnerParams,
@@ -68,7 +34,6 @@ pub struct RunSpec {
     pub point_spec: PointSpec,
     pub evaluator: EvaluatorConfig,
     pub sampler_aggregator: SamplerAggregatorConfig,
-    pub observable: ObservableConfig,
     pub parametrization: ParametrizationConfig,
     pub evaluator_runner_params: EvaluatorRunnerParams,
     pub sampler_aggregator_runner_params: SamplerAggregatorRunnerParams,
@@ -115,21 +80,6 @@ pub enum SamplerAggregatorConfig {
 }
 
 impl SamplerAggregatorConfig {}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ObservableConfig {
-    Scalar {
-        #[serde(flatten)]
-        params: serde_json::Map<String, JsonValue>,
-    },
-    Complex {
-        #[serde(flatten)]
-        params: serde_json::Map<String, JsonValue>,
-    },
-}
-
-impl ObservableConfig {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

@@ -3,13 +3,13 @@ use crate::core::{
     BatchClaim, CompletedBatch, EvaluatorPerformanceSnapshot, SamplerAggregatorPerformanceSnapshot,
     StoreError, WorkQueueStore,
 };
-use serde_json::Value as JsonValue;
+use crate::engines::ObservableState;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Default)]
 pub(crate) struct MockWorkQueueState {
     pub next_claim: Option<BatchClaim>,
-    pub submitted: Vec<(i64, BatchResult, JsonValue)>,
+    pub submitted: Vec<(i64, BatchResult, ObservableState)>,
     pub evaluator_perf_snapshots: Vec<EvaluatorPerformanceSnapshot>,
     pub sampler_perf_snapshots: Vec<SamplerAggregatorPerformanceSnapshot>,
     pub failed: Vec<(i64, String)>,

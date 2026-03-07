@@ -2,7 +2,7 @@ use std::{fs, path::Path};
 
 use crate::{
     Batch, BatchResult, BuildError, EngineError, EvalError, PointSpec,
-    engines::{BuildFromJson, EvalBatchOptions, Evaluator, ObservableConfig},
+    engines::{BuildFromJson, EvalBatchOptions, Evaluator, ObservableState, ScalarObservableState},
 };
 use serde::Deserialize;
 use serde_json::{Value as JsonValue, json};
@@ -116,10 +116,13 @@ impl Evaluator for SymbolicaEngine {
         }
     }
 
+    fn empty_observable(&self) -> ObservableState {
+        ObservableState::empty_scalar()
+    }
+
     fn eval_batch(
         &mut self,
         batch: &Batch,
-        observable_config: &ObservableConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
         let continuous = batch.continuous().as_slice().ok_or_else(|| {
@@ -129,28 +132,28 @@ impl Evaluator for SymbolicaEngine {
             EvalError::Engine("Batch weights array must be standard-layout".to_string())
         })?;
 
-        let mut observable = observable_config.build()?;
+        let mut observable = ScalarObservableState::default();
 
         let mut out = vec![0.0; batch.size()];
         self.eval
             .evaluate_batch(batch.size(), continuous, &mut out)
             .map_err(|err| EngineError::Eval(err.to_string()))?;
 
-        {
-            let scalar_ingest = observable.as_scalar_ingest().ok_or_else(|| {
-                EvalError::Engine(format!(
-                    "symbolica evaluator supports only scalar-capable observables, got {}",
-                    observable_config.kind_str()
-                ))
-            })?;
-            for (value, weight) in out.iter().zip(weights.iter()) {
-                scalar_ingest.ingest_scalar(*value, *weight);
-            }
+        for (value, weight) in out.iter().zip(weights.iter()) {
+            observable.add_sample(*value, *weight);
         }
         if options.require_training_values {
-            BatchResult::from_values_weights_and_observable(out, weights, observable.as_ref())
+            let weighted_values = out
+                .into_iter()
+                .zip(weights.iter().copied())
+                .map(|(value, weight)| value * weight)
+                .collect();
+            Ok(BatchResult::new(
+                Some(weighted_values),
+                ObservableState::Scalar(observable),
+            ))
         } else {
-            BatchResult::from_observable_only(observable.as_ref())
+            Ok(BatchResult::new(None, ObservableState::Scalar(observable)))
         }
     }
 

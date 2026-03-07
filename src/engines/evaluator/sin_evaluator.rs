@@ -1,6 +1,8 @@
 use crate::core::{Batch, BatchResult, PointSpec};
 use crate::engines::EvalBatchOptions;
-use crate::engines::{BuildError, BuildFromJson, EvalError, Evaluator, ObservableConfig};
+use crate::engines::{
+    BuildError, BuildFromJson, EvalError, Evaluator, ObservableState, ScalarObservableState,
+};
 use serde::Deserialize;
 use std::{
     thread,
@@ -34,41 +36,34 @@ impl Evaluator for SinEvaluator {
         }
     }
 
+    fn empty_observable(&self) -> ObservableState {
+        ObservableState::empty_scalar()
+    }
+
     fn eval_batch(
         &mut self,
         batch: &Batch,
-        observable_config: &ObservableConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
         let weights = batch
             .weights()
             .as_slice()
             .ok_or_else(|| EvalError::eval("Batch weights array must be standard-layout"))?;
-        let mut observable = observable_config
-            .build()
-            .map_err(|err| EvalError::eval(err.to_string()))?;
+        let mut observable = ScalarObservableState::default();
         let mut values = if options.require_training_values {
             Some(Vec::with_capacity(batch.size()))
         } else {
             None
         };
         let started = Instant::now();
-        {
-            let scalar_ingest = observable.as_scalar_ingest().ok_or_else(|| {
-                EvalError::eval(format!(
-                    "sin_evaluator supports only scalar-capable observables, got {}",
-                    observable_config.kind_str()
-                ))
-            })?;
-            for (row, weight) in batch.continuous().rows().into_iter().zip(weights.iter()) {
-                let x = *row
-                    .get(0)
-                    .ok_or_else(|| EvalError::eval("missing continuous[0]"))?;
-                let value = x.sin() * (-x * x).exp();
-                scalar_ingest.ingest_scalar(value, *weight);
-                if let Some(values) = values.as_mut() {
-                    values.push(value);
-                }
+        for (row, weight) in batch.continuous().rows().into_iter().zip(weights.iter()) {
+            let x = *row
+                .get(0)
+                .ok_or_else(|| EvalError::eval("missing continuous[0]"))?;
+            let value = x.sin() * (-x * x).exp();
+            observable.add_sample(value, *weight);
+            if let Some(values) = values.as_mut() {
+                values.push(value);
             }
         }
 
@@ -79,11 +74,17 @@ impl Evaluator for SinEvaluator {
             thread::sleep(min_total - elapsed);
         }
 
-        if let Some(values) = values {
-            BatchResult::from_values_weights_and_observable(values, weights, observable.as_ref())
-        } else {
-            BatchResult::from_observable_only(observable.as_ref())
-        }
+        let weighted_values = values.map(|values| {
+            values
+                .into_iter()
+                .zip(weights.iter().copied())
+                .map(|(value, weight)| value * weight)
+                .collect()
+        });
+        Ok(BatchResult::new(
+            weighted_values,
+            ObservableState::Scalar(observable),
+        ))
     }
 }
 

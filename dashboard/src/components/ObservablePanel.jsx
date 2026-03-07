@@ -3,7 +3,7 @@ import EnginePanelLayout from "./common/EnginePanelLayout";
 import ImplementationSummaryCard from "./common/ImplementationSummaryCard";
 import ObservableCustomPanel from "./observable/ObservableCustomPanel";
 import { formatDateTime, formatScientific, toFiniteNumber } from "../utils/formatters";
-import { splitKindConfig, toConfigObject } from "../utils/config";
+import { deriveObservableImplementation, toConfigObject } from "../utils/config";
 
 const computeScalarRsd = (observable) => {
   const count = toFiniteNumber(observable?.count, 0);
@@ -45,8 +45,12 @@ const computeRsd = (observable, implementation) => {
 
 const ObservablePanel = ({ run, latestAggregated, samples, isConnected, observableImplementation }) => {
   const integrationParams = toConfigObject(run?.integration_params);
-  const { implementation } = splitKindConfig(integrationParams.observable, observableImplementation || "unknown");
   const observablePayload = latestAggregated?.aggregated_observable || null;
+  const implementation = deriveObservableImplementation(
+    integrationParams.evaluator,
+    observablePayload,
+    observableImplementation || "unknown",
+  );
 
   const aggregatedBatches = toFiniteNumber(run?.batches_completed ?? 0, 0);
   const aggregatedSamples = toFiniteNumber(observablePayload?.count, 0);
@@ -86,7 +90,7 @@ const ObservablePanel = ({ run, latestAggregated, samples, isConnected, observab
       }
       jsonTitle="observable JSON"
       jsonData={{
-        observable: integrationParams?.observable ?? null,
+        evaluator: integrationParams?.evaluator ?? null,
         aggregated_observable: observablePayload,
       }}
     />

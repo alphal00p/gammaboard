@@ -1,57 +1,78 @@
 mod complex;
 mod scalar;
 
-use crate::engines::observable::complex::ComplexObservable;
-
-use super::{BuildError, BuildFromJson, EngineError};
+use crate::engines::EngineError;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::any::Any;
 
-pub use self::scalar::ScalarObservable;
+pub use self::complex::ComplexObservableState;
+pub use self::scalar::ScalarObservableState;
 
-pub trait ScalarIngest: Send {
-    fn ingest_scalar(&mut self, value: f64, weight: f64);
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ObservableState {
+    Scalar(ScalarObservableState),
+    Complex(ComplexObservableState),
 }
 
-pub trait ComplexIngest: Send {
-    fn ingest_complex(&mut self, value: num::complex::Complex64, weight: f64);
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticObservableKind {
+    #[default]
+    Scalar,
+    Complex,
 }
 
-/// Aggregates per-sample observables to batch-level and run-level snapshots.
-pub trait Observable: Send {
-    fn as_any(&self) -> &dyn Any;
+impl SemanticObservableKind {
+    pub fn empty_state(self) -> ObservableState {
+        match self {
+            Self::Scalar => ObservableState::empty_scalar(),
+            Self::Complex => ObservableState::empty_complex(),
+        }
+    }
+}
 
-    fn name(&self) -> &'static str;
-
-    fn as_scalar_ingest(&mut self) -> Option<&mut dyn ScalarIngest> {
-        None
+impl ObservableState {
+    pub fn empty_scalar() -> Self {
+        Self::Scalar(ScalarObservableState::default())
     }
 
-    fn as_complex_ingest(&mut self) -> Option<&mut dyn ComplexIngest> {
-        None
+    pub fn empty_complex() -> Self {
+        Self::Complex(ComplexObservableState::default())
     }
 
-    fn load_state_from_json(&mut self, state: &JsonValue) -> Result<(), EngineError>;
-    fn merge(&mut self, other: &dyn Observable) -> Result<(), EngineError>;
-    fn snapshot(&self) -> Result<JsonValue, EngineError>;
-}
-
-impl crate::engines::ObservableConfig {
     pub fn kind_str(&self) -> &'static str {
         match self {
-            Self::Scalar { .. } => "scalar",
-            Self::Complex { .. } => "complex",
+            Self::Scalar(_) => "scalar",
+            Self::Complex(_) => "complex",
         }
     }
 
-    pub fn build(&self) -> Result<Box<dyn Observable>, BuildError> {
-        match self {
-            Self::Scalar { params } => Ok(Box::new(ScalarObservable::from_json(
-                &JsonValue::Object(params.clone()),
-            )?)),
-            Self::Complex { params } => Ok(Box::new(ComplexObservable::from_json(
-                &JsonValue::Object(params.clone()),
-            )?)),
+    pub fn merge(&mut self, other: Self) -> Result<(), EngineError> {
+        match (self, other) {
+            (Self::Scalar(left), Self::Scalar(right)) => {
+                left.merge(right);
+                Ok(())
+            }
+            (Self::Complex(left), Self::Complex(right)) => {
+                left.merge(right);
+                Ok(())
+            }
+            (left, right) => Err(EngineError::engine(format!(
+                "cannot merge {} observable with {} observable",
+                left.kind_str(),
+                right.kind_str(),
+            ))),
         }
+    }
+
+    pub fn to_json(&self) -> Result<JsonValue, EngineError> {
+        serde_json::to_value(self)
+            .map_err(|err| EngineError::build(format!("failed to serialize observable: {err}")))
+    }
+
+    pub fn from_json(value: &JsonValue) -> Result<Self, EngineError> {
+        serde_json::from_value(value.clone())
+            .map_err(|err| EngineError::build(format!("invalid observable payload: {err}")))
     }
 }

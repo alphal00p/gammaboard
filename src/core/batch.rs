@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::{error::Error, fmt};
 
+use crate::engines::ObservableState;
+
 /// Status of a batch in the work queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -255,12 +257,11 @@ pub struct BatchRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchResult {
     pub values: Option<Vec<f64>>,
-    #[serde(default)]
-    pub observable: JsonValue,
+    pub observable: ObservableState,
 }
 
 impl BatchResult {
-    pub fn new(values: Option<Vec<f64>>, observable: JsonValue) -> Self {
+    pub fn new(values: Option<Vec<f64>>, observable: ObservableState) -> Self {
         Self { values, observable }
     }
 
@@ -299,7 +300,10 @@ impl BatchResult {
             }
             _ => None,
         };
-        Ok(Self::new(parsed_values, observable.clone()))
+        let parsed_observable = ObservableState::from_json(observable).map_err(|err| {
+            BatchError::layout(format!("invalid batch observable payload: {err}"))
+        })?;
+        Ok(Self::new(parsed_values, parsed_observable))
     }
 }
 
@@ -338,7 +342,10 @@ mod tests {
     fn test_batch_results() {
         let batch =
             Batch::new(array![[0.5], [1.5]], Array2::zeros((2, 0)), None).expect("batch creation");
-        let result = BatchResult::new(Some(vec![0.123, 0.456]), JsonValue::Null);
+        let result = BatchResult::new(
+            Some(vec![0.123, 0.456]),
+            crate::engines::ObservableState::empty_scalar(),
+        );
         assert!(result.matches_batch(&batch));
     }
 

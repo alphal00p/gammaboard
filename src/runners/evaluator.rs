@@ -4,9 +4,7 @@ use crate::core::{
     Batch, BatchResult, EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics,
     EvaluatorPerformanceSnapshot, PointSpec, StoreError, WorkQueueStore,
 };
-use crate::engines::{
-    EngineError, EvalBatchOptions, EvalError, Evaluator, ObservableConfig, Parametrization,
-};
+use crate::engines::{EngineError, EvalBatchOptions, EvalError, Evaluator, Parametrization};
 use crate::runners::rolling_metric::RollingMetric;
 use serde::{Deserialize, Serialize};
 use std::{time::Duration, time::Instant};
@@ -40,7 +38,6 @@ pub struct EvaluatorRunner<WQ> {
     worker_id: String,
     evaluator: Box<dyn Evaluator>,
     parametrization: Box<dyn Parametrization>,
-    observable_config: ObservableConfig,
     point_spec: PointSpec,
     performance_snapshot_interval: Duration,
     last_snapshot_at: Instant,
@@ -65,7 +62,6 @@ where
         worker_id: impl Into<String>,
         evaluator: Box<dyn Evaluator>,
         parametrization: Box<dyn Parametrization>,
-        observable_config: ObservableConfig,
         point_spec: PointSpec,
         performance_snapshot_interval: Duration,
         work_queue: WQ,
@@ -76,7 +72,6 @@ where
             worker_id: worker_id.into(),
             evaluator,
             parametrization,
-            observable_config,
             point_spec,
             performance_snapshot_interval,
             last_snapshot_at: now_instant,
@@ -142,7 +137,6 @@ where
         let started = Instant::now();
         match self.evaluator.eval_batch(
             &transformed_batch,
-            &self.observable_config,
             EvalBatchOptions {
                 require_training_values: claimed.requires_training,
             },
@@ -290,9 +284,10 @@ mod tests {
     use super::*;
     use crate::core::BatchClaim;
     use crate::core::{Batch, BatchResult};
-    use crate::engines::{EvalBatchOptions, EvalError, ObservableConfig, ParametrizationConfig};
+    use crate::engines::{
+        EvalBatchOptions, EvalError, ObservableState, ParametrizationConfig, ScalarObservableState,
+    };
     use crate::runners::test_support::MockWorkQueue;
-    use serde_json::json;
 
     struct OkEvaluator;
 
@@ -304,10 +299,13 @@ mod tests {
             }
         }
 
+        fn empty_observable(&self) -> ObservableState {
+            ObservableState::empty_scalar()
+        }
+
         fn eval_batch(
             &mut self,
             batch: &Batch,
-            _observable_factory: &ObservableConfig,
             _options: EvalBatchOptions,
         ) -> Result<BatchResult, EvalError> {
             let values = batch
@@ -316,17 +314,14 @@ mod tests {
                 .iter()
                 .copied()
                 .collect::<Vec<f64>>();
-            let batch_observable = json!({
-                "count": values.len() as i64,
-                "sum_weighted_value": values
-                    .iter()
-                    .zip(batch.weights().iter())
-                    .map(|(value, weight)| value * weight)
-                    .sum::<f64>(),
-                "sum_abs": values.iter().map(|v| v.abs()).sum::<f64>(),
-                "sum_sq": values.iter().map(|v| v * v).sum::<f64>(),
-            });
-            Ok(BatchResult::new(Some(values), batch_observable))
+            let mut batch_observable = ScalarObservableState::default();
+            for (value, weight) in values.iter().zip(batch.weights().iter()) {
+                batch_observable.add_sample(*value, *weight);
+            }
+            Ok(BatchResult::new(
+                Some(values),
+                ObservableState::Scalar(batch_observable),
+            ))
         }
     }
 
@@ -340,10 +335,13 @@ mod tests {
             }
         }
 
+        fn empty_observable(&self) -> ObservableState {
+            ObservableState::empty_scalar()
+        }
+
         fn eval_batch(
             &mut self,
             _batch: &Batch,
-            _observable_factory: &ObservableConfig,
             _options: EvalBatchOptions,
         ) -> Result<BatchResult, EvalError> {
             Err(EvalError::eval("mock failure"))
@@ -362,12 +360,6 @@ mod tests {
         .expect("no parametrization")
     }
 
-    fn scalar_observable() -> ObservableConfig {
-        ObservableConfig::Scalar {
-            params: serde_json::Map::new(),
-        }
-    }
-
     #[tokio::test]
     async fn tick_returns_empty_when_no_batch_claimed() {
         let queue = MockWorkQueue::default();
@@ -376,7 +368,6 @@ mod tests {
             "worker-1",
             Box::new(OkEvaluator),
             no_parametrization(),
-            scalar_observable(),
             PointSpec {
                 continuous_dims: 1,
                 discrete_dims: 0,
@@ -405,7 +396,6 @@ mod tests {
             "worker-1",
             Box::new(OkEvaluator),
             no_parametrization(),
-            scalar_observable(),
             PointSpec {
                 continuous_dims: 1,
                 discrete_dims: 0,
@@ -454,7 +444,6 @@ mod tests {
             "worker-1",
             Box::new(FailingEvaluator),
             no_parametrization(),
-            scalar_observable(),
             PointSpec {
                 continuous_dims: 1,
                 discrete_dims: 0,
@@ -483,13 +472,18 @@ mod tests {
                     discrete_dims: 0,
                 }
             }
+            fn empty_observable(&self) -> ObservableState {
+                ObservableState::empty_scalar()
+            }
             fn eval_batch(
                 &mut self,
                 _batch: &Batch,
-                _observable_factory: &ObservableConfig,
                 _options: EvalBatchOptions,
             ) -> Result<BatchResult, EvalError> {
-                Ok(BatchResult::new(Some(vec![1.0]), json!({})))
+                Ok(BatchResult::new(
+                    Some(vec![1.0]),
+                    ObservableState::empty_scalar(),
+                ))
             }
         }
 
@@ -504,7 +498,6 @@ mod tests {
             "worker-1",
             Box::new(BadEvaluator),
             no_parametrization(),
-            scalar_observable(),
             PointSpec {
                 continuous_dims: 1,
                 discrete_dims: 0,

@@ -16,9 +16,6 @@ stop_training_after_n_samples = 65536
 initial_training_rate = 0.1
 final_training_rate = 0.001
 
-[observable]
-kind = "scalar"
-
 [parametrization]
 kind = "spherical"
 

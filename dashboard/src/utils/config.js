@@ -25,3 +25,19 @@ export const splitKindConfig = (config, fallbackImplementation = "unknown", fall
     params: toConfigObject(fallbackParams),
   };
 };
+
+export const deriveObservableImplementation = (evaluatorConfig, observablePayload, fallback = "unknown") => {
+  const payload = toConfigObject(observablePayload);
+  if (typeof payload.kind === "string") {
+    return payload.kind;
+  }
+
+  const { implementation, params } = splitKindConfig(evaluatorConfig, fallback);
+  if (typeof params.observable_kind === "string") {
+    return params.observable_kind;
+  }
+
+  if (implementation === "sinc_evaluator") return "complex";
+  if (implementation === "sin_evaluator" || implementation === "symbolica") return "scalar";
+  return fallback;
+};

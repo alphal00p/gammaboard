@@ -3,7 +3,7 @@ import { InfoOutlined as InfoOutlinedIcon } from "@mui/icons-material";
 import JsonFallback from "./JsonFallback";
 import { formatDateTime, formatScientific } from "../utils/formatters";
 import { parseScalarTarget } from "../utils/target";
-import { splitKindConfig, toConfigObject } from "../utils/config";
+import { deriveObservableImplementation, splitKindConfig, toConfigObject } from "../utils/config";
 import { formatRunLabel } from "../utils/runs";
 
 const RunInfo = ({ run }) => {
@@ -12,7 +12,7 @@ const RunInfo = ({ run }) => {
   const integrationParams = toConfigObject(run.integration_params);
   const { implementation: evaluatorImplementation } = splitKindConfig(integrationParams.evaluator, "unknown");
   const { implementation: samplerImplementation } = splitKindConfig(integrationParams.sampler_aggregator, "unknown");
-  const { implementation: observableImplementation } = splitKindConfig(integrationParams.observable, "unknown");
+  const observableImplementation = deriveObservableImplementation(integrationParams.evaluator, null, "unknown");
   const pointSpec = run.point_spec || null;
   const scalarTarget = parseScalarTarget(run.target);
   const trainingCompleted = Boolean(run.training_completed_at);

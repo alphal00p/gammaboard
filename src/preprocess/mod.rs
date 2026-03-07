@@ -78,7 +78,6 @@ fn preflight_compatibility(
     let result = evaluator
         .eval_batch(
             &transformed_batch,
-            &config.integration_params.observable,
             EvalBatchOptions {
                 require_training_values,
             },

@@ -110,15 +110,15 @@ Run configuration is provided as TOML.
 - Run lifecycle status is persisted in `runs.status` and controlled by
   `gammaboard run` commands (`start`, `pause`, `stop`).
 - Engine and runner params are stored in `runs.integration_params` using component sections
-  (`evaluator`, `sampler_aggregator`, `observable`, `parametrization`) with `kind` tags.
+  (`evaluator`, `sampler_aggregator`, `parametrization`) with `kind` tags.
 - Point dimensions are stored in `runs.point_spec`.
 - Batches are stored in `batches.points` as compact flat arrays (`continuous`, `discrete`) plus per-sample `weights`, with explicit 2D shape metadata.
 - Evaluators return one `BatchResult` per batch with aggregated `observable` JSON and optional `values: Option<Vec<f64>>` training signal.
 - Each enqueued batch carries `batches.requires_training`; evaluator results may omit training values for batches where this flag is `false`.
 - Sampler training completion is persisted once per run in `runs.training_completed_at`
   when the sampler reports training inactive.
-- Runtime engines are constructed via typed config enums (`EvaluatorConfig`, `SamplerAggregatorConfig`, `ParametrizationConfig`, `ObservableConfig`) using `build()` methods that return boxed trait objects.
-- Evaluator implementations receive an `ObservableConfig` during `eval_batch` and build batch-local observable state from it.
+- Runtime engines are constructed via typed config enums (`EvaluatorConfig`, `SamplerAggregatorConfig`, `ParametrizationConfig`) using `build()` methods that return boxed trait objects.
+- Evaluators own observable semantics directly and return tagged `ObservableState` payloads from `eval_batch`.
 - Evaluator and sampler-aggregator implementations may expose initialization metadata via `get_init_metadata`; `run add` preprocessing resolves and persists these payloads into `runs.evaluator_init_metadata` and `runs.sampler_aggregator_init_metadata` at run creation.
 - `gammaloop` evaluator parameters use:
   `state_folder`, optional `model_file`, optional `process_id`, optional `integrand_name`,
@@ -136,9 +136,10 @@ Run configuration is provided as TOML.
     poisons init and causes repeated worker restarts.
 - `symbolica` evaluator parameters use `expr` and `args` (argument symbols).
 - `symbolica` evaluator build artifacts are written to a per-engine temporary directory under `./.evaluators` and cleaned up when the evaluator instance is dropped.
-- `unit` evaluator parameters are `{}` and always return per-sample value `1.0`.
-- Observable ingestion in evaluators is capability-based (`as_scalar_ingest` / `as_complex_ingest`) instead of matching concrete observable enum variants.
-- `complex` observable accepts both complex samples and scalar samples (scalar values are cast to `real + 0i`).
+- `unit` evaluator parameters are `continuous_dims`, `discrete_dims`, and optional
+  `observable_kind = "scalar" | "complex"`; it always returns per-sample value `1.0`.
+- `gammaloop` may also set `observable_kind = "scalar" | "complex"`. Scalar mode uses
+  `training_projection` to project complex amplitudes before aggregation.
 - `unit_ball` parametrization maps unit-hypercube continuous samples to the unit ball and scales per-sample weights by the corresponding Jacobian.
 - `spherical` parametrization maps `[0,1)^3` to `R^3` with:
   - radial map `r = u_r / (1 - u_r)`,
@@ -159,8 +160,8 @@ Run configuration is provided as TOML.
 - Sampler-aggregator engines may optionally throttle per-tick production via `SamplerAggregator::get_max_samples` (default `None` = no engine-specific sample cap); under a cap, the runner builds a near-uniform per-tick batch plan that hits the sample target exactly.
 - Runner params in the integration payload are strongly typed (`EvaluatorRunnerParams`, `SamplerAggregatorRunnerParams`).
 - `configs/live-test*.toml` intentionally sets all known fields (including default-valued ones) as reference templates.
-- Observable snapshots are serde-derived state payloads. For `scalar`, the snapshot fields are:
-  `count`, `sum_weighted_value`, `sum_abs`, `sum_sq`.
+- Observable snapshots are tagged serde-derived state payloads. For `scalar`, the snapshot fields are:
+  `kind`, `count`, `sum_weighted_value`, `sum_abs`, `sum_sq`.
 
 Example: `configs/live-test-unit-naive-scalar.toml`
 
@@ -174,9 +175,6 @@ discrete_dims = 0
 
 [sampler_aggregator]
 kind = "naive_monte_carlo"
-
-[observable]
-kind = "scalar"
 
 [parametrization]
 kind = "none"

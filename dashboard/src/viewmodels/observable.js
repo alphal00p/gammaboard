@@ -15,9 +15,10 @@ const deriveScalarStats = (sum, sumSq, count) => {
 };
 
 export const deriveObservableMetric = (observable, implementation) => {
+  const resolvedImplementation = typeof observable?.kind === "string" ? observable.kind : implementation;
   const count = toFiniteNumber(observable?.count, 0);
 
-  if (implementation === "complex") {
+  if (resolvedImplementation === "complex") {
     const realSum = toFiniteNumber(observable?.real_sum, 0);
     const imagSum = toFiniteNumber(observable?.imag_sum, 0);
     const absSum = toFiniteNumber(observable?.abs_sum, 0);

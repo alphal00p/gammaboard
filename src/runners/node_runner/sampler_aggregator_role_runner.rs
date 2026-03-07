@@ -35,7 +35,9 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
             })?;
         engine
     };
-    let observable_config = spec.observable.clone();
+    let aggregated_observable = spec.evaluator.empty_observable_state().map_err(|err| {
+        StoreError::store(format!("failed to initialize observable state: {err}"))
+    })?;
 
     worker
         .register_active_worker(spec.sampler_aggregator.kind_str())
@@ -47,7 +49,7 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
         worker.run_id,
         worker.worker_id.clone(),
         engine,
-        observable_config,
+        aggregated_observable,
         worker.store.clone(),
         worker.store.clone(),
         spec.sampler_aggregator_runner_params.clone(),

@@ -9,9 +9,6 @@ discrete_dims = 0
 [sampler_aggregator]
 kind = "naive_monte_carlo"
 
-[observable]
-kind = "scalar"
-
 [parametrization]
 kind = "none"
 

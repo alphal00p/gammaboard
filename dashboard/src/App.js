@@ -13,7 +13,7 @@ import RunScopedWorkspace from "./components/common/RunScopedWorkspace";
 import { RunHistoryProvider, useRunHistory } from "./context/RunHistoryContext";
 import { useSamplerRuntimeSummary } from "./hooks/useSamplerRuntimeSummary";
 import { useRuns } from "./hooks/useRuns";
-import { splitKindConfig } from "./utils/config";
+import { deriveObservableImplementation } from "./utils/config";
 import { deriveObservableMetric } from "./viewmodels/observable";
 
 const DASHBOARD_HISTORY_CONFIG = {
@@ -42,12 +42,11 @@ const RunModeContent = ({ runs, selectedRun, setSelectedRun, historyRange, setHi
   const { isConnected, lastUpdate, history, latestAggregated, workQueueStats } = useRunHistory();
   const currentRun = useCurrentRun(runs, selectedRun);
   const samplerRuntimeSummary = useSamplerRuntimeSummary(selectedRun, 3000);
-  const { implementation: observableKindFromConfig } = splitKindConfig(
-    currentRun?.integration_params?.observable,
-    "unknown",
+  const observableImplementation = deriveObservableImplementation(
+    currentRun?.integration_params?.evaluator,
+    latestAggregated?.aggregated_observable,
+    "scalar",
   );
-
-  const observableImplementation = observableKindFromConfig !== "unknown" ? observableKindFromConfig : "scalar";
 
   const fullSamples = useMemo(
     () =>

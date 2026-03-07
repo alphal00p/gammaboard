@@ -80,7 +80,6 @@ fn run_spec_from_integration_params(
         point_spec,
         evaluator: params.evaluator,
         sampler_aggregator: params.sampler_aggregator,
-        observable: params.observable,
         parametrization: params.parametrization,
         evaluator_runner_params: params.evaluator_runner_params,
         sampler_aggregator_runner_params: params.sampler_aggregator_runner_params,
@@ -753,7 +752,6 @@ mod tests {
             json!({
                 "evaluator": { "kind": "sin_evaluator", "alpha": 1 },
                 "sampler_aggregator": { "kind": "naive_monte_carlo", "beta": 2 },
-                "observable": { "kind": "scalar", "gamma": 3 },
                 "parametrization": { "kind": "identity", "delta": 4 },
                 "evaluator_runner_params": {
                     "min_loop_time_ms": 42,
@@ -793,12 +791,6 @@ mod tests {
             crate::engines::SamplerAggregatorConfig::NaiveMonteCarlo { params }
                 if params.get("beta") == Some(&json!(2))
         ));
-        assert_eq!(spec.observable.kind_str(), "scalar");
-        assert!(matches!(
-            &spec.observable,
-            crate::engines::ObservableConfig::Scalar { params }
-                if params.get("gamma") == Some(&json!(3))
-        ));
         assert_eq!(spec.parametrization.kind_str(), "identity");
         assert!(matches!(
             &spec.parametrization,
@@ -837,7 +829,7 @@ mod tests {
             json!({
                 "evaluator": { "kind": "sin_evaluator" },
                 "sampler_aggregator": { "kind": "naive_monte_carlo" },
-                "observable": { "kind": "scalar" }
+                "parametrization": { "kind": "identity" }
             }),
             json!({
                 "continuous_dims": 1,
@@ -845,7 +837,7 @@ mod tests {
             }),
         )
         .expect_err("missing params should fail");
-        assert!(err.to_string().contains("parametrization"));
+        assert!(err.to_string().contains("evaluator_runner_params"));
     }
 
     #[test]
@@ -872,8 +864,8 @@ mod tests {
                 "discrete_dims": 0
             }),
         )
-        .expect_err("missing observable implementation should fail");
-        assert!(err.to_string().contains("observable"));
+        .expect_err("missing parametrization implementation should fail");
+        assert!(err.to_string().contains("parametrization"));
     }
 
     #[test]
@@ -895,7 +887,7 @@ mod tests {
         let sanitized = parse_run_create_payload(&json!({
             "evaluator": { "kind": "sin_evaluator" },
             "sampler_aggregator": { "kind": "naive_monte_carlo" },
-            "observable": { "kind": "scalar", "a": 1 }
+            "parametrization": { "kind": "identity", "a": 1 }
         }))
         .expect("parse");
 
@@ -904,7 +896,7 @@ mod tests {
             json!({
                 "evaluator": { "kind": "sin_evaluator" },
                 "sampler_aggregator": { "kind": "naive_monte_carlo" },
-                "observable": { "kind": "scalar", "a": 1 }
+                "parametrization": { "kind": "identity", "a": 1 }
             })
         );
     }

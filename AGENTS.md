@@ -32,7 +32,7 @@ Use `README.md` for operator onboarding. Keep this file focused on internal arch
 - `run-add` applies typed preprocessing before DB insert via a single top-level orchestrator
   that derives `point_spec` from the evaluator via preflight build.
 - `run-add` performs deep preflight compatibility checks before DB insert by constructing
-  engines from typed config enums and validating point-spec + observable compatibility.
+  engines from typed config enums and validating point-spec compatibility via a one-point dry-run.
   Preflight includes a one-point sampler -> parametrization -> evaluator dry-run.
 - `run-add` also resolves evaluator/sampler init metadata via `get_init_metadata` and persists
   it on run creation (`runs.evaluator_init_metadata`, `runs.sampler_aggregator_init_metadata`).
@@ -67,13 +67,14 @@ Use `README.md` for operator onboarding. Keep this file focused on internal arch
     connect errors; keep retries in Rust startup path, not shell wrappers.
 
 ## Engine and Data Rules
-- Keep runtime construction config-based (`EvaluatorConfig`, `SamplerAggregatorConfig`, `ParametrizationConfig`, `ObservableConfig`) via `build()` returning boxed trait objects.
+- Keep runtime construction config-based (`EvaluatorConfig`, `SamplerAggregatorConfig`, `ParametrizationConfig`) via `build()` returning boxed trait objects.
 - Avoid runtime `*Engine` dispatch enums.
 - Parse engine params through `BuildFromJson` typed params + validation.
 - `IntegrationParams`/`RunSpec` runner params are strongly typed (`EvaluatorRunnerParams`, `SamplerAggregatorRunnerParams`).
 - Evaluators are batch-oriented (`Batch -> BatchResult`) and must support `batches.requires_training` semantics.
-- Observable construction/ingestion is capability-based (`as_scalar_ingest`, `as_complex_ingest`).
-- Observable aggregation is observable-to-observable merge.
+- Observable state is evaluator-owned and serialized through the semantic `ObservableState` enum.
+- Evaluator configs may choose observable semantics (`scalar` vs `complex`) when the evaluator supports both.
+- Observable aggregation is `ObservableState`-to-`ObservableState` merge in the sampler-aggregator runner.
 - Batch payloads in `batches.points` must remain compact and shape-stable:
   - row-major flat `continuous`/`discrete`,
   - per-sample `weights`,

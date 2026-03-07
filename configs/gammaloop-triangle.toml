@@ -13,6 +13,7 @@ state_folder = "/home/cedricsigrist/Workspace/repos/gammaloop/my_states/triangle
 momentum_space = false
 use_f128 = false
 training_projection = "abs"
+observable_kind = "complex"
 continuous_dims = 3
 discrete_dims = 0
 
@@ -25,9 +26,6 @@ samples_for_update = 16384
 stop_training_after_n_samples = 65536
 initial_training_rate = 0.1
 final_training_rate = 0.001
-
-[observable]
-kind = "complex"
 
 [parametrization]
 kind = "none" # "spherical"
