@@ -6,7 +6,6 @@ CREATE TABLE IF NOT EXISTS runtime_logs (
     run_id INT,
     node_id TEXT,
     worker_id TEXT,
-    request_id TEXT,
     level TEXT NOT NULL,
     target TEXT NOT NULL,
     message TEXT NOT NULL,

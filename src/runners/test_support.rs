@@ -1,4 +1,4 @@
-use crate::batch::{Batch, BatchResult};
+use crate::core::{Batch, BatchResult};
 use crate::core::{
     BatchClaim, CompletedBatch, EvaluatorPerformanceSnapshot, SamplerAggregatorPerformanceSnapshot,
     StoreError, WorkQueueStore,

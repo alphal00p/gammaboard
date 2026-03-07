@@ -6,29 +6,16 @@ mod unit;
 
 use super::{BuildError, BuildFromJson, EvalError};
 use crate::{
-    batch::{Batch, BatchResult, PointSpec},
-    engines::observable::ObservableFactory,
+    core::{Batch, BatchResult, PointSpec},
+    engines::ObservableConfig,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
-use strum::{AsRefStr, Display};
 
 use self::gammaloop::GammaLoopEvaluator;
 use self::sin_evaluator::SinEvaluator;
 use self::sinc_evaluator::SincEvaluator;
 use self::symbolica::SymbolicaEngine;
 use self::unit::UnitEvaluator;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, AsRefStr, Display)]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-pub enum EvaluatorImplementation {
-    Gammaloop,
-    SinEvaluator,
-    SincEvaluator,
-    Unit,
-    Symbolica,
-}
 
 #[derive(Debug, Clone, Copy)]
 pub struct EvalBatchOptions {
@@ -37,14 +24,13 @@ pub struct EvalBatchOptions {
 
 /// Evaluates integrand values for sample points.
 pub trait Evaluator: Send {
-    fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError>;
+    fn get_point_spec(&self) -> PointSpec;
     fn eval_batch(
         &mut self,
         batch: &Batch,
-        observable_factory: &ObservableFactory,
+        observable_config: &ObservableConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError>;
-    fn supports_observable(&self, observable_factory: &ObservableFactory) -> bool;
     fn get_init_metadata(&self) -> JsonValue {
         json!({})
     }
@@ -53,35 +39,34 @@ pub trait Evaluator: Send {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct EvaluatorFactory {
-    implementation: EvaluatorImplementation,
-    params: JsonValue,
-}
-
-impl EvaluatorFactory {
-    pub fn new(implementation: EvaluatorImplementation, params: JsonValue) -> Self {
-        Self {
-            implementation,
-            params,
+impl crate::engines::EvaluatorConfig {
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            Self::Gammaloop { .. } => "gammaloop",
+            Self::SinEvaluator { .. } => "sin_evaluator",
+            Self::SincEvaluator { .. } => "sinc_evaluator",
+            Self::Unit { .. } => "unit",
+            Self::Symbolica { .. } => "symbolica",
         }
     }
 
     pub fn build(&self) -> Result<Box<dyn Evaluator>, BuildError> {
-        match self.implementation {
-            EvaluatorImplementation::Gammaloop => {
-                Ok(Box::new(GammaLoopEvaluator::from_json(&self.params)?))
-            }
-            EvaluatorImplementation::SinEvaluator => {
-                Ok(Box::new(SinEvaluator::from_json(&self.params)?))
-            }
-            EvaluatorImplementation::SincEvaluator => {
-                Ok(Box::new(SincEvaluator::from_json(&self.params)?))
-            }
-            EvaluatorImplementation::Unit => Ok(Box::new(UnitEvaluator::from_json(&self.params)?)),
-            EvaluatorImplementation::Symbolica => {
-                Ok(Box::new(SymbolicaEngine::from_json(&self.params)?))
-            }
+        match self {
+            Self::Gammaloop { params } => Ok(Box::new(GammaLoopEvaluator::from_json(
+                &JsonValue::Object(params.clone()),
+            )?)),
+            Self::SinEvaluator { params } => Ok(Box::new(SinEvaluator::from_json(
+                &JsonValue::Object(params.clone()),
+            )?)),
+            Self::SincEvaluator { params } => Ok(Box::new(SincEvaluator::from_json(
+                &JsonValue::Object(params.clone()),
+            )?)),
+            Self::Unit { params } => Ok(Box::new(UnitEvaluator::from_json(&JsonValue::Object(
+                params.clone(),
+            ))?)),
+            Self::Symbolica { params } => Ok(Box::new(SymbolicaEngine::from_json(
+                &JsonValue::Object(params.clone()),
+            )?)),
         }
     }
 }

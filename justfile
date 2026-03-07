@@ -1,10 +1,11 @@
+set dotenv-load := true
+
 poll_ms := "500"
+bin := "./target/debug/gammaboard"
+bin_release := "./target/release/gammaboard"
 
-install:
-    cargo install --path .
-
-install-dev:
-    cargo install --path . --debug
+check:
+    cargo check --no-default-features --features 'cli,no_pyo3'
 
 stop-db:
     docker-compose down
@@ -21,7 +22,7 @@ restart-db:
     @just start-db
 
 serve-backend:
-    gammaboard server
+    {{bin}} server
 
 serve-frontend:
     cd dashboard && npm start
@@ -37,52 +38,47 @@ live-test-basic:
     set -euo pipefail
 
     just restart-db
-    gammaboard run-node --node-id "w-1" --poll-ms {{ poll_ms }} &
-    gammaboard run-node --node-id "w-2" --poll-ms {{ poll_ms }} &
-    gammaboard run-node --node-id "w-3" --poll-ms {{ poll_ms }} &
-    gammaboard run-node --node-id "w-4" --poll-ms {{ poll_ms }} &
-    gammaboard run-node --node-id "w-5" --poll-ms {{ poll_ms }} &
+    {{bin}} run-node --node-id "w-1" --poll-ms {{ poll_ms }} &
+    {{bin}} run-node --node-id "w-2" --poll-ms {{ poll_ms }} &
+    {{bin}} run-node --node-id "w-3" --poll-ms {{ poll_ms }} &
+    {{bin}} run-node --node-id "w-4" --poll-ms {{ poll_ms }} &
+    {{bin}} run-node --node-id "w-5" --poll-ms {{ poll_ms }} &
 
     sleep 4
 
-    gammaboard run add "configs/live-test-unit-naive-scalar.toml"
-    gammaboard run add "configs/symbolica-live-test.toml"
+    {{bin}} run add "configs/live-test-unit-naive-scalar.toml"
+    {{bin}} run add "configs/symbolica-live-test.toml"
 
-    gammaboard node assign "w-1" evaluator 1
-    gammaboard node assign "w-2" sampler-aggregator 1
+    {{bin}} node assign "w-1" evaluator 1
+    {{bin}} node assign "w-2" sampler-aggregator 1
 
-    gammaboard node assign "w-3" evaluator 2
-    gammaboard node assign "w-4" evaluator 2
-    gammaboard node assign "w-5" sampler-aggregator 2
+    {{bin}} node assign "w-3" evaluator 2
+    {{bin}} node assign "w-4" evaluator 2
+    {{bin}} node assign "w-5" sampler-aggregator 2
 
-    gammaboard run start 1 2
+    {{bin}} run start 1 2
 
 live-test-gammaloop:
     #!/usr/bin/env bash
     set -euo pipefail
 
     just restart-db
-    gammaboard run-node --node-id "w-0" --poll-ms {{ poll_ms }} &
-    gammaboard run-node --node-id "w-1" --poll-ms {{ poll_ms }} &
-    gammaboard run-node --node-id "w-2" --poll-ms {{ poll_ms }} &
-    gammaboard run-node --node-id "w-3" --poll-ms {{ poll_ms }} &
-    gammaboard run-node --node-id "w-4" --poll-ms {{ poll_ms }} &
-    gammaboard run-node --node-id "w-5" --poll-ms {{ poll_ms }} &
+    {{bin}} run-node --node-id "w-0" --poll-ms {{ poll_ms }} &
+    {{bin}} run-node --node-id "w-1" --poll-ms {{ poll_ms }} &
+    {{bin}} run-node --node-id "w-2" --poll-ms {{ poll_ms }} &
 
     sleep 1
 
-    gammaboard run add "configs/gammaloop-triangle.toml"
+    {{bin}} run add "configs/gammaloop-triangle.toml"
 
-    gammaboard node assign "w-0" sampler-aggregator 1
-    gammaboard node assign "w-1" evaluator 1
-    gammaboard node assign "w-2" evaluator 1
-    gammaboard node assign "w-3" evaluator 1
-    gammaboard node assign "w-4" evaluator 1
-    gammaboard node assign "w-5" evaluator 1
+    {{bin}} node assign "w-0" sampler-aggregator 1
+    {{bin}} node assign "w-1" evaluator 1
+    {{bin}} node assign "w-2" evaluator 1
 
-    gammaboard run start 1
+    {{bin}} run start 1
+
 
 stop:
-    -gammaboard run stop -a
-    -gammaboard node stop -a
+    -{{bin}} run stop -a
+    -{{bin}} node stop -a
     -@stty sane

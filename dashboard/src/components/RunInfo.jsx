@@ -3,16 +3,17 @@ import { InfoOutlined as InfoOutlinedIcon } from "@mui/icons-material";
 import JsonFallback from "./JsonFallback";
 import { formatDateTime, formatScientific } from "../utils/formatters";
 import { parseScalarTarget } from "../utils/target";
+import { splitKindConfig, toConfigObject } from "../utils/config";
+import { formatRunLabel } from "../utils/runs";
 
 const RunInfo = ({ run }) => {
   if (!run) return null;
 
-  const integrationParams = run.integration_params || {};
-  const evaluatorImplementation = integrationParams.evaluator_implementation || "unknown";
-  const samplerImplementation = integrationParams.sampler_aggregator_implementation || "unknown";
-  const observableImplementation =
-    run.observable_implementation || integrationParams.observable_implementation || "unknown";
-  const pointSpec = run.point_spec || integrationParams.point_spec || null;
+  const integrationParams = toConfigObject(run.integration_params);
+  const { implementation: evaluatorImplementation } = splitKindConfig(integrationParams.evaluator, "unknown");
+  const { implementation: samplerImplementation } = splitKindConfig(integrationParams.sampler_aggregator, "unknown");
+  const { implementation: observableImplementation } = splitKindConfig(integrationParams.observable, "unknown");
+  const pointSpec = run.point_spec || null;
   const scalarTarget = parseScalarTarget(run.target);
   const trainingCompleted = Boolean(run.training_completed_at);
   const trainingLabel = trainingCompleted ? "training completed" : "training";
@@ -69,7 +70,7 @@ const RunInfo = ({ run }) => {
                 Run
               </Typography>
               <Typography variant="body1" component="div" color="primary.main" sx={{ fontWeight: 700 }}>
-                {run.run_name ? `${run.run_name} (#${run.run_id})` : `#${run.run_id}`}
+                {formatRunLabel(run)}
               </Typography>
             </CardContent>
           </Card>
@@ -109,10 +110,10 @@ const RunInfo = ({ run }) => {
                 Progress
               </Typography>
               <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                processed_batches_total: {(run.batches_completed ?? 0).toLocaleString()}
+                completed_batches: {(run.batches_completed ?? 0).toLocaleString()}
               </Typography>
               <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                queue_batches_current: {(run.total_batches ?? 0).toLocaleString()}
+                queued_batches: {(run.total_batches ?? 0).toLocaleString()}
               </Typography>
             </CardContent>
           </Card>

@@ -1,9 +1,6 @@
 use super::BuildError;
-use super::{
-    EngineError, EvaluatorImplementation, Observable, ObservableImplementation,
-    ParametrizationImplementation, SamplerAggregatorImplementation,
-};
-use crate::batch::{BatchResult, PointSpec};
+use super::{EngineError, Observable};
+use crate::core::{BatchResult, PointSpec};
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -56,16 +53,12 @@ impl BatchResult {
 /// Canonical integration parameters payload stored on `runs.integration_params`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegrationParams {
-    pub evaluator_implementation: Option<EvaluatorImplementation>,
-    pub evaluator_params: Option<JsonValue>,
-    pub sampler_aggregator_implementation: Option<SamplerAggregatorImplementation>,
-    pub sampler_aggregator_params: Option<JsonValue>,
-    pub observable_implementation: Option<ObservableImplementation>,
-    pub observable_params: Option<JsonValue>,
-    pub parametrization_implementation: Option<ParametrizationImplementation>,
-    pub parametrization_params: Option<JsonValue>,
-    pub evaluator_runner_params: Option<EvaluatorRunnerParams>,
-    pub sampler_aggregator_runner_params: Option<SamplerAggregatorRunnerParams>,
+    pub evaluator: EvaluatorConfig,
+    pub sampler_aggregator: SamplerAggregatorConfig,
+    pub observable: ObservableConfig,
+    pub parametrization: ParametrizationConfig,
+    pub evaluator_runner_params: EvaluatorRunnerParams,
+    pub sampler_aggregator_runner_params: SamplerAggregatorRunnerParams,
 }
 
 /// Immutable run configuration loaded from storage before starting a run loop.
@@ -73,14 +66,90 @@ pub struct IntegrationParams {
 pub struct RunSpec {
     pub run_id: i32,
     pub point_spec: PointSpec,
-    pub evaluator_implementation: EvaluatorImplementation,
-    pub evaluator_params: JsonValue,
-    pub sampler_aggregator_implementation: SamplerAggregatorImplementation,
-    pub sampler_aggregator_params: JsonValue,
-    pub observable_implementation: ObservableImplementation,
-    pub observable_params: JsonValue,
-    pub parametrization_implementation: ParametrizationImplementation,
-    pub parametrization_params: JsonValue,
+    pub evaluator: EvaluatorConfig,
+    pub sampler_aggregator: SamplerAggregatorConfig,
+    pub observable: ObservableConfig,
+    pub parametrization: ParametrizationConfig,
     pub evaluator_runner_params: EvaluatorRunnerParams,
     pub sampler_aggregator_runner_params: SamplerAggregatorRunnerParams,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EvaluatorConfig {
+    Gammaloop {
+        #[serde(flatten)]
+        params: serde_json::Map<String, JsonValue>,
+    },
+    SinEvaluator {
+        #[serde(flatten)]
+        params: serde_json::Map<String, JsonValue>,
+    },
+    SincEvaluator {
+        #[serde(flatten)]
+        params: serde_json::Map<String, JsonValue>,
+    },
+    Unit {
+        #[serde(flatten)]
+        params: serde_json::Map<String, JsonValue>,
+    },
+    Symbolica {
+        #[serde(flatten)]
+        params: serde_json::Map<String, JsonValue>,
+    },
+}
+
+impl EvaluatorConfig {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SamplerAggregatorConfig {
+    NaiveMonteCarlo {
+        #[serde(flatten)]
+        params: serde_json::Map<String, JsonValue>,
+    },
+    Havana {
+        #[serde(flatten)]
+        params: serde_json::Map<String, JsonValue>,
+    },
+}
+
+impl SamplerAggregatorConfig {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ObservableConfig {
+    Scalar {
+        #[serde(flatten)]
+        params: serde_json::Map<String, JsonValue>,
+    },
+    Complex {
+        #[serde(flatten)]
+        params: serde_json::Map<String, JsonValue>,
+    },
+}
+
+impl ObservableConfig {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ParametrizationConfig {
+    None {
+        #[serde(flatten)]
+        params: serde_json::Map<String, JsonValue>,
+    },
+    Identity {
+        #[serde(flatten)]
+        params: serde_json::Map<String, JsonValue>,
+    },
+    UnitBall {
+        #[serde(flatten)]
+        params: serde_json::Map<String, JsonValue>,
+    },
+    Spherical {
+        #[serde(flatten)]
+        params: serde_json::Map<String, JsonValue>,
+    },
+}
+
+impl ParametrizationConfig {}

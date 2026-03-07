@@ -1,38 +1,51 @@
-use crate::batch::{Batch, BatchResult, PointSpec};
+use crate::core::{Batch, BatchResult, PointSpec};
 use crate::engines::EvalBatchOptions;
-use crate::engines::observable::ObservableFactory;
-use crate::engines::{BuildError, BuildFromJson, EvalError, Evaluator};
+use crate::engines::{BuildError, BuildFromJson, EvalError, Evaluator, ObservableConfig};
 use serde::Deserialize;
 
 /// Evaluator that returns 1.0 for every sample.
-pub struct UnitEvaluator;
+pub struct UnitEvaluator {
+    point_spec: PointSpec,
+}
 
 impl UnitEvaluator {
-    pub fn new() -> Self {
-        Self
+    pub fn new(point_spec: PointSpec) -> Self {
+        Self { point_spec }
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct UnitEvaluatorParams {}
+pub struct UnitEvaluatorParams {
+    pub continuous_dims: usize,
+    pub discrete_dims: usize,
+}
+
+impl Default for UnitEvaluatorParams {
+    fn default() -> Self {
+        Self {
+            continuous_dims: 1,
+            discrete_dims: 0,
+        }
+    }
+}
 
 impl Evaluator for UnitEvaluator {
-    fn validate_point_spec(&self, _point_spec: &PointSpec) -> Result<(), BuildError> {
-        Ok(())
+    fn get_point_spec(&self) -> PointSpec {
+        self.point_spec.clone()
     }
 
     fn eval_batch(
         &mut self,
         batch: &Batch,
-        observable_factory: &ObservableFactory,
+        observable_config: &ObservableConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
         let weights = batch
             .weights()
             .as_slice()
             .ok_or_else(|| EvalError::eval("Batch weights array must be standard-layout"))?;
-        let mut observable = observable_factory
+        let mut observable = observable_config
             .build()
             .map_err(|err| EvalError::eval(err.to_string()))?;
         let values = vec![1.0; batch.size()];
@@ -41,7 +54,7 @@ impl Evaluator for UnitEvaluator {
             let scalar_ingest = observable.as_scalar_ingest().ok_or_else(|| {
                 EvalError::eval(format!(
                     "unit evaluator supports only scalar-capable observables, got {}",
-                    observable_factory.implementation
+                    observable_config.kind_str()
                 ))
             })?;
             for weight in weights.iter() {
@@ -55,29 +68,23 @@ impl Evaluator for UnitEvaluator {
             BatchResult::from_observable_only(observable.as_ref())
         }
     }
-
-    fn supports_observable(&self, observable_factory: &ObservableFactory) -> bool {
-        match observable_factory.build() {
-            Ok(mut observable) => observable.as_scalar_ingest().is_some(),
-            Err(_) => false,
-        }
-    }
 }
 
 impl BuildFromJson for UnitEvaluator {
     type Params = UnitEvaluatorParams;
 
-    fn from_parsed_params(_params: Self::Params) -> Result<Self, BuildError> {
-        Ok(Self::new())
+    fn from_parsed_params(params: Self::Params) -> Result<Self, BuildError> {
+        Ok(Self::new(PointSpec {
+            continuous_dims: params.continuous_dims,
+            discrete_dims: params.discrete_dims,
+        }))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::batch::Batch;
-    use crate::engines::observable::ObservableImplementation;
-    use serde_json::json;
+    use crate::core::Batch;
 
     #[test]
     fn eval_batch_returns_weighted_ones_for_scalar_observable() {
@@ -90,14 +97,18 @@ mod tests {
             Some(vec![2.0, 3.0]),
         )
         .expect("batch");
-        let observable_factory =
-            ObservableFactory::new(ObservableImplementation::Scalar, json!({}));
-        let mut evaluator = UnitEvaluator::new();
+        let observable_config = ObservableConfig::Scalar {
+            params: serde_json::Map::new(),
+        };
+        let mut evaluator = UnitEvaluator::new(PointSpec {
+            continuous_dims: 1,
+            discrete_dims: 0,
+        });
 
         let result = evaluator
             .eval_batch(
                 &batch,
-                &observable_factory,
+                &observable_config,
                 EvalBatchOptions {
                     require_training_values: true,
                 },
@@ -105,8 +116,11 @@ mod tests {
             .expect("result");
 
         assert_eq!(result.values, Some(vec![2.0, 3.0]));
-        assert_eq!(result.observable["count"], json!(2));
-        assert_eq!(result.observable["sum_weight"], json!(5.0));
+        assert_eq!(result.observable["count"], serde_json::json!(2));
+        assert_eq!(
+            result.observable["sum_weighted_value"],
+            serde_json::json!(5.0)
+        );
     }
 
     #[test]
@@ -120,15 +134,18 @@ mod tests {
             Some(vec![2.0, 3.0]),
         )
         .expect("batch");
-        let observable_factory =
-            ObservableFactory::new(ObservableImplementation::Complex, json!({}));
-        let mut evaluator = UnitEvaluator::new();
+        let observable_config = ObservableConfig::Complex {
+            params: serde_json::Map::new(),
+        };
+        let mut evaluator = UnitEvaluator::new(PointSpec {
+            continuous_dims: 1,
+            discrete_dims: 0,
+        });
 
-        assert!(evaluator.supports_observable(&observable_factory));
         let result = evaluator
             .eval_batch(
                 &batch,
-                &observable_factory,
+                &observable_config,
                 EvalBatchOptions {
                     require_training_values: true,
                 },
@@ -136,8 +153,8 @@ mod tests {
             .expect("result");
 
         assert_eq!(result.values, Some(vec![2.0, 3.0]));
-        assert_eq!(result.observable["count"], json!(2));
-        assert_eq!(result.observable["real_sum"], json!(5.0));
-        assert_eq!(result.observable["imag_sum"], json!(0.0));
+        assert_eq!(result.observable["count"], serde_json::json!(2));
+        assert_eq!(result.observable["real_sum"], serde_json::json!(5.0));
+        assert_eq!(result.observable["imag_sum"], serde_json::json!(0.0));
     }
 }

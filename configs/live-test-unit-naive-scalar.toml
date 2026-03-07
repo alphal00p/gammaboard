@@ -1,18 +1,22 @@
 name = "live-test"
-evaluator_implementation = "unit"
-sampler_aggregator_implementation = "naive_monte_carlo"
-observable_implementation = "scalar"
-parametrization_implementation = "none"
 
-[point_spec]
+[evaluator]
+kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
+
+[sampler_aggregator]
+kind = "naive_monte_carlo"
+
+[observable]
+kind = "scalar"
+
+[parametrization]
+kind = "none"
 
 [evaluator_runner_params]
 min_loop_time_ms = 5
 performance_snapshot_interval_ms = 2000
-
-[evaluator_params]
 
 [sampler_aggregator_runner_params]
 min_poll_time_ms = 100
@@ -24,11 +28,3 @@ max_batch_size = 64
 max_batches_per_tick = 8
 max_queue_size = 128
 completed_batch_fetch_limit = 1024
-
-[sampler_aggregator_params]
-continuous_dims = 1
-discrete_dims = 0
-
-[observable_params]
-
-[parametrization_params]

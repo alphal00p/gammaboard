@@ -1,25 +1,15 @@
 mod havana;
 mod naive_monte_carlo;
 
-use super::{BuildError, BuildFromJson, EngineError};
-use crate::batch::{Batch, PointSpec};
-use serde::{Deserialize, Serialize};
+use super::{BuildError, EngineError};
+use crate::core::{Batch, PointSpec};
 use serde_json::{Value as JsonValue, json};
 use std::any::Any;
-use strum::{AsRefStr, Display};
 
-use self::havana::HavanaSampler;
-use self::naive_monte_carlo::NaiveMonteCarloSamplerAggregator;
+use self::havana::{HavanaSampler, HavanaSamplerParams};
+use self::naive_monte_carlo::{NaiveMonteCarloSamplerAggregator, NaiveMonteCarloSamplerParams};
 
 pub type BatchContext = Box<dyn Any + Send>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, AsRefStr, Display)]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-pub enum SamplerAggregatorImplementation {
-    NaiveMonteCarlo,
-    Havana,
-}
 
 /// Owns adaptive sampling training for a single run.
 pub trait SamplerAggregator: Send {
@@ -47,27 +37,35 @@ pub trait SamplerAggregator: Send {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct SamplerAggregatorFactory {
-    implementation: SamplerAggregatorImplementation,
-    params: JsonValue,
-}
-
-impl SamplerAggregatorFactory {
-    pub fn new(implementation: SamplerAggregatorImplementation, params: JsonValue) -> Self {
-        Self {
-            implementation,
-            params,
+impl crate::engines::SamplerAggregatorConfig {
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            Self::NaiveMonteCarlo { .. } => "naive_monte_carlo",
+            Self::Havana { .. } => "havana",
         }
     }
 
-    pub fn build(&self) -> Result<Box<dyn SamplerAggregator>, BuildError> {
-        match self.implementation {
-            SamplerAggregatorImplementation::NaiveMonteCarlo => Ok(Box::new(
-                NaiveMonteCarloSamplerAggregator::from_json(&self.params)?,
-            )),
-            SamplerAggregatorImplementation::Havana => {
-                Ok(Box::new(HavanaSampler::from_json(&self.params)?))
+    pub fn build(&self, point_spec: PointSpec) -> Result<Box<dyn SamplerAggregator>, BuildError> {
+        match self {
+            Self::NaiveMonteCarlo { params } => {
+                let params: NaiveMonteCarloSamplerParams =
+                    serde_json::from_value(JsonValue::Object(params.clone()))
+                        .map_err(|err| BuildError::invalid_input(err.to_string()))?;
+                Ok(Box::new(
+                    NaiveMonteCarloSamplerAggregator::from_params_and_point_spec(
+                        params,
+                        &point_spec,
+                    )?,
+                ))
+            }
+            Self::Havana { params } => {
+                let params: HavanaSamplerParams =
+                    serde_json::from_value(JsonValue::Object(params.clone()))
+                        .map_err(|err| BuildError::invalid_input(err.to_string()))?;
+                Ok(Box::new(HavanaSampler::from_params_and_point_spec(
+                    params,
+                    &point_spec,
+                )?))
             }
         }
     }

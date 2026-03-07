@@ -1,6 +1,6 @@
-use crate::batch::{Batch, PointSpec};
+use crate::core::{Batch, PointSpec};
 use crate::engines::sampler_aggregator::BatchContext;
-use crate::engines::{BuildError, BuildFromJson, EngineError, SamplerAggregator};
+use crate::engines::{BuildError, EngineError, SamplerAggregator};
 use rand::Rng;
 use serde::Deserialize;
 use std::{thread, time::Duration};
@@ -40,8 +40,6 @@ impl NaiveMonteCarloSamplerAggregator {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct NaiveMonteCarloSamplerParams {
-    continuous_dims: usize,
-    discrete_dims: usize,
     training_target_samples: usize,
     training_delay_per_sample_ms: u64,
 }
@@ -49,20 +47,20 @@ pub struct NaiveMonteCarloSamplerParams {
 impl Default for NaiveMonteCarloSamplerParams {
     fn default() -> Self {
         Self {
-            continuous_dims: 1,
-            discrete_dims: 0,
             training_target_samples: 0,
             training_delay_per_sample_ms: 0,
         }
     }
 }
 
-impl BuildFromJson for NaiveMonteCarloSamplerAggregator {
-    type Params = NaiveMonteCarloSamplerParams;
-    fn from_parsed_params(params: Self::Params) -> Result<Self, BuildError> {
+impl NaiveMonteCarloSamplerAggregator {
+    pub(crate) fn from_params_and_point_spec(
+        params: NaiveMonteCarloSamplerParams,
+        point_spec: &PointSpec,
+    ) -> Result<Self, BuildError> {
         Ok(Self::new(
-            params.continuous_dims,
-            params.discrete_dims,
+            point_spec.continuous_dims,
+            point_spec.discrete_dims,
             params.training_target_samples,
             params.training_delay_per_sample_ms,
         ))

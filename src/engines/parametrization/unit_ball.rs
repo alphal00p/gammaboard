@@ -1,5 +1,5 @@
 use super::Parametrization;
-use crate::batch::{Batch, PointSpec};
+use crate::core::{Batch, PointSpec};
 use crate::engines::{BuildError, BuildFromJson, EngineError};
 use ndarray::{Array1, Array2};
 use serde::Deserialize;

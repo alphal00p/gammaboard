@@ -53,17 +53,17 @@ pub struct AggregatedRangeResponse {
     pub snapshots: Vec<AggregatedResult>,
     pub latest: Option<AggregatedResult>,
     pub meta: AggregatedRangeMeta,
+    pub reset_required: bool,
 }
 
 /// Metadata for sampled range responses.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AggregatedRangeMeta {
-    pub resolved_start: Option<i64>,
-    pub resolved_stop: Option<i64>,
+    pub abs_start: Option<i64>,
+    pub abs_stop: Option<i64>,
     pub step: i64,
-    pub anchor: i64,
     pub latest_id: Option<String>,
-    pub max_points: usize,
+    pub max_points: i64,
 }
 
 /// Worker log event persisted from runtime tracing (`source='worker'`).
@@ -84,6 +84,7 @@ pub struct WorkerLogEntry {
 pub struct RegisteredWorkerEntry {
     pub worker_id: String,
     pub node_id: Option<String>,
+    pub desired_run_id: Option<i32>,
     pub role: String,
     pub implementation: String,
     pub version: String,
@@ -117,4 +118,18 @@ pub struct SamplerPerformanceHistoryEntry {
     pub runtime_metrics: serde_json::Value,
     pub engine_diagnostics: serde_json::Value,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Evaluator performance history for a worker resolved from current assignment.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerEvaluatorPerformanceHistoryResponse {
+    pub run_id: Option<i32>,
+    pub entries: Vec<EvaluatorPerformanceHistoryEntry>,
+}
+
+/// Sampler-aggregator performance history for a worker resolved from current assignment.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerSamplerPerformanceHistoryResponse {
+    pub run_id: Option<i32>,
+    pub entries: Vec<SamplerPerformanceHistoryEntry>,
 }

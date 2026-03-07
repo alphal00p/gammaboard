@@ -1,149 +1,53 @@
-import { Container, Box, Typography, Stack, TextField } from "@mui/material";
+import { Alert, Box, Container, Tab, Tabs, Typography } from "@mui/material";
+import { useEffect, useMemo, useState } from "react";
 import ConnectionStatus from "./components/ConnectionStatus";
-import RunSelector from "./components/RunSelector";
-import RunInfo from "./components/RunInfo";
-import ObservablePanel from "./components/ObservablePanel";
 import EvaluatorPanel from "./components/EvaluatorPanel";
+import HistoryRangeControls from "./components/HistoryRangeControls";
+import ObservablePanel from "./components/ObservablePanel";
+import RunInfo from "./components/RunInfo";
+import RunSelector from "./components/RunSelector";
 import SamplerAggregatorPanel from "./components/SamplerAggregatorPanel";
-import WorkerLogsPanel from "./components/WorkerLogsPanel";
-import WorkersPanel from "./components/WorkersPanel";
+import LogsWorkspace from "./components/LogsWorkspace";
+import WorkersWorkspace from "./components/WorkersWorkspace";
+import RunScopedWorkspace from "./components/common/RunScopedWorkspace";
+import { RunHistoryProvider, useRunHistory } from "./context/RunHistoryContext";
+import { useSamplerRuntimeSummary } from "./hooks/useSamplerRuntimeSummary";
 import { useRuns } from "./hooks/useRuns";
-import {
-  RunHistoryProvider,
-  useRunAggregated,
-  useRunConnection,
-  useRunHeartbeat,
-  useRunQueueLogs,
-  useRunState,
-} from "./context/RunHistoryContext";
+import { splitKindConfig } from "./utils/config";
 import { deriveObservableMetric } from "./viewmodels/observable";
-import { Profiler, useMemo, useState } from "react";
 
 const DASHBOARD_HISTORY_CONFIG = {
-  historyStart: -5000,
-  historyStop: -1,
   historyBufferMax: 100,
-  workerLogsLimit: 200,
   workQueueStatsLimit: 200,
   pollIntervalMs: 5000,
 };
 
-const onRender = (id, phase, actualDuration, baseDuration, startTime, commitTime) => {
-  if (process.env.NODE_ENV !== "development") return;
-  console.debug("[react-profiler]", {
-    id,
-    phase,
-    actualDuration,
-    baseDuration,
-    startTime,
-    commitTime,
-  });
-};
-
-const parseIntOr = (value, fallback) => {
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
-};
-
-const ProfiledSection = ({ id, children }) => {
-  if (process.env.NODE_ENV !== "development") return children;
-  return (
-    <Profiler id={id} onRender={onRender}>
-      {children}
-    </Profiler>
-  );
-};
-
-function App() {
-  const { runs, selectedRun, setSelectedRun } = useRuns();
-  const [historyRangeStart, setHistoryRangeStart] = useState(-50);
-  const [historyRangeEnd, setHistoryRangeEnd] = useState(-1);
-
-  return (
-    <RunHistoryProvider
-      runId={selectedRun}
-      historyStart={historyRangeStart}
-      historyStop={historyRangeEnd}
-      {...DASHBOARD_HISTORY_CONFIG}
-    >
-      <AppContent
-        runs={runs}
-        selectedRun={selectedRun}
-        setSelectedRun={setSelectedRun}
-        historyRangeStart={historyRangeStart}
-        historyRangeEnd={historyRangeEnd}
-        setHistoryRangeStart={setHistoryRangeStart}
-        setHistoryRangeEnd={setHistoryRangeEnd}
-      />
-    </RunHistoryProvider>
-  );
-}
+const DashboardHeader = () => (
+  <Box sx={{ mb: 3 }}>
+    <Typography variant="h3" component="h1" gutterBottom>
+      Gammaboard
+    </Typography>
+    <Typography variant="body2" color="text.secondary">
+      Real-time Monte Carlo simulation monitoring
+    </Typography>
+  </Box>
+);
 
 const useCurrentRun = (runs, selectedRun) => {
-  const { run } = useRunState();
-  return run || runs.find((r) => r.run_id === selectedRun);
+  const { run } = useRunHistory();
+  return run || runs.find((entry) => entry.run_id === selectedRun);
 };
 
-const ConnectionAndSelector = ({
-  runs,
-  selectedRun,
-  setSelectedRun,
-  historyRangeStart,
-  historyRangeEnd,
-  setHistoryRangeStart,
-  setHistoryRangeEnd,
-}) => {
-  const { isConnected } = useRunConnection();
-  const { lastUpdate } = useRunHeartbeat();
-
-  return (
-    <>
-      <ConnectionStatus isConnected={isConnected} lastUpdate={lastUpdate} />
-      <RunSelector runs={runs} selectedRun={selectedRun} onRunChange={setSelectedRun} />
-      <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ mb: 2 }}>
-        <TextField
-          size="small"
-          type="number"
-          label="History Start"
-          value={historyRangeStart}
-          onChange={(event) => setHistoryRangeStart((prev) => parseIntOr(event.target.value, prev))}
-          inputProps={{ step: 1 }}
-          helperText="Inclusive index (negative = relative to newest)"
-        />
-        <TextField
-          size="small"
-          type="number"
-          label="History End"
-          value={historyRangeEnd}
-          onChange={(event) => setHistoryRangeEnd((prev) => parseIntOr(event.target.value, prev))}
-          inputProps={{ step: 1 }}
-          helperText="Inclusive index (default -1 = newest)"
-        />
-      </Stack>
-    </>
-  );
-};
-
-const RunPanels = ({ runs, selectedRun }) => {
+const RunModeContent = ({ runs, selectedRun, setSelectedRun, historyRange, setHistoryRange }) => {
+  const { isConnected, lastUpdate, history, latestAggregated, workQueueStats } = useRunHistory();
   const currentRun = useCurrentRun(runs, selectedRun);
-
-  return (
-    <>
-      <RunInfo run={currentRun} />
-      <EvaluatorPanel run={currentRun} />
-    </>
+  const samplerRuntimeSummary = useSamplerRuntimeSummary(selectedRun, 3000);
+  const { implementation: observableKindFromConfig } = splitKindConfig(
+    currentRun?.integration_params?.observable,
+    "unknown",
   );
-};
 
-const ObservableSection = ({ runs, selectedRun, historyRangeStart, historyRangeEnd }) => {
-  const currentRun = runs.find((r) => r.run_id === selectedRun) || null;
-  const { history, latestAggregated } = useRunAggregated();
-  const { isConnected } = useRunConnection();
-  const observableImplementation =
-    currentRun?.observable_implementation ||
-    currentRun?.integration_params?.observable_implementation ||
-    latestAggregated?.observable_implementation ||
-    "scalar";
+  const observableImplementation = observableKindFromConfig !== "unknown" ? observableKindFromConfig : "scalar";
 
   const fullSamples = useMemo(
     () =>
@@ -153,84 +57,116 @@ const ObservableSection = ({ runs, selectedRun, historyRangeStart, historyRangeE
         .map((item) => deriveObservableMetric(item.aggregated_observable || {}, observableImplementation)),
     [history, observableImplementation],
   );
-  const derivedSamples = fullSamples;
+
+  if (!currentRun) {
+    return (
+      <Alert severity="warning" sx={{ mb: 3 }}>
+        Selected run not found in current run list.
+      </Alert>
+    );
+  }
 
   return (
-    <ObservablePanel
-      run={currentRun}
-      samples={derivedSamples}
-      totalSnapshots={fullSamples.length}
-      isConnected={isConnected}
-      latestAggregated={latestAggregated}
-      observableImplementation={observableImplementation}
-    />
+    <>
+      <ConnectionStatus isConnected={isConnected} lastUpdate={lastUpdate} />
+      <RunSelector runs={runs} selectedRun={selectedRun} onRunChange={setSelectedRun} />
+      <HistoryRangeControls historyRange={historyRange} setHistoryRange={setHistoryRange} />
+      <RunInfo run={currentRun} />
+      <EvaluatorPanel run={currentRun} />
+      <ObservablePanel
+        run={currentRun}
+        samples={fullSamples}
+        isConnected={isConnected}
+        latestAggregated={latestAggregated}
+        observableImplementation={observableImplementation}
+      />
+      <SamplerAggregatorPanel run={currentRun} stats={workQueueStats} runtimeSummary={samplerRuntimeSummary} />
+    </>
   );
 };
 
-const SamplerSection = ({ runs, selectedRun }) => {
-  const currentRun = useCurrentRun(runs, selectedRun);
-  const { workQueueStats } = useRunQueueLogs();
-
-  return <SamplerAggregatorPanel run={currentRun} stats={workQueueStats} />;
+const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, historyRange, setHistoryRange }) => {
+  return (
+    <RunScopedWorkspace
+      runs={runs}
+      selectedRun={selectedRun}
+      setSelectedRun={setSelectedRun}
+      isConnected={isConnected}
+      noRunsMessage="Create a run to start monitoring history, observables, and engine configuration."
+      noSelectionMessage="Pick a run to view run-level metrics and configuration."
+    >
+      <RunHistoryProvider
+        runId={selectedRun}
+        historyStart={historyRange.start}
+        historyStop={historyRange.end}
+        {...DASHBOARD_HISTORY_CONFIG}
+      >
+        <RunModeContent
+          runs={runs}
+          selectedRun={selectedRun}
+          setSelectedRun={setSelectedRun}
+          historyRange={historyRange}
+          setHistoryRange={setHistoryRange}
+        />
+      </RunHistoryProvider>
+    </RunScopedWorkspace>
+  );
 };
 
-const WorkerLogsSection = ({ selectedRun }) => {
-  const { workerLogs } = useRunQueueLogs();
+function App() {
+  const { runs, isConnected } = useRuns();
+  const [mode, setMode] = useState("runs");
+  const [historyRange, setHistoryRange] = useState({ start: -50, end: -1 });
+  const [selectedRun, setSelectedRun] = useState(null);
+  const [selectedLogRun, setSelectedLogRun] = useState(null);
 
-  return <WorkerLogsPanel logs={workerLogs} runId={selectedRun} />;
-};
+  useEffect(() => {
+    if (!Array.isArray(runs) || runs.length === 0) {
+      setSelectedRun(null);
+      setSelectedLogRun(null);
+      return;
+    }
 
-const AppContent = ({
-  runs,
-  selectedRun,
-  setSelectedRun,
-  historyRangeStart,
-  historyRangeEnd,
-  setHistoryRangeStart,
-  setHistoryRangeEnd,
-}) => (
-  <Container maxWidth="xl" sx={{ py: 3 }}>
-    <Box sx={{ mb: 3 }}>
-      <Typography variant="h3" component="h1" gutterBottom>
-        Gammaboard
-      </Typography>
-      <Typography variant="body2" color="text.secondary">
-        Real-time Monte Carlo simulation monitoring
-      </Typography>
-    </Box>
+    if (!selectedRun || !runs.some((run) => run.run_id === selectedRun)) {
+      setSelectedRun(runs[0].run_id);
+    }
 
-    <ProfiledSection id="ConnectionAndSelector">
-      <ConnectionAndSelector
-        runs={runs}
-        selectedRun={selectedRun}
-        setSelectedRun={setSelectedRun}
-        historyRangeStart={historyRangeStart}
-        historyRangeEnd={historyRangeEnd}
-        setHistoryRangeStart={setHistoryRangeStart}
-        setHistoryRangeEnd={setHistoryRangeEnd}
-      />
-    </ProfiledSection>
-    <ProfiledSection id="RunPanels">
-      <RunPanels runs={runs} selectedRun={selectedRun} />
-    </ProfiledSection>
-    <ProfiledSection id="ObservableSection">
-      <ObservableSection
-        runs={runs}
-        selectedRun={selectedRun}
-        historyRangeStart={historyRangeStart}
-        historyRangeEnd={historyRangeEnd}
-      />
-    </ProfiledSection>
-    <ProfiledSection id="SamplerSection">
-      <SamplerSection runs={runs} selectedRun={selectedRun} />
-    </ProfiledSection>
-    <ProfiledSection id="WorkerLogsSection">
-      <WorkerLogsSection selectedRun={selectedRun} />
-    </ProfiledSection>
-    <ProfiledSection id="WorkersPanel">
-      <WorkersPanel runId={selectedRun} />
-    </ProfiledSection>
-  </Container>
-);
+    if (!selectedLogRun || !runs.some((run) => run.run_id === selectedLogRun)) {
+      setSelectedLogRun(runs[0].run_id);
+    }
+  }, [runs, selectedRun, selectedLogRun]);
+
+  return (
+    <Container maxWidth="xl" sx={{ py: 3 }}>
+      <DashboardHeader />
+
+      <Tabs value={mode} onChange={(_, next) => setMode(next)} sx={{ mb: 3 }}>
+        <Tab value="runs" label="Runs" />
+        <Tab value="workers" label="Workers" />
+        <Tab value="logs" label="Logs" />
+      </Tabs>
+
+      {mode === "runs" ? (
+        <RunsWorkspace
+          runs={runs}
+          selectedRun={selectedRun}
+          setSelectedRun={setSelectedRun}
+          isConnected={isConnected}
+          historyRange={historyRange}
+          setHistoryRange={setHistoryRange}
+        />
+      ) : mode === "workers" ? (
+        <WorkersWorkspace />
+      ) : (
+        <LogsWorkspace
+          runs={runs}
+          selectedRun={selectedLogRun}
+          setSelectedRun={setSelectedLogRun}
+          isConnected={isConnected}
+        />
+      )}
+    </Container>
+  );
+}
 
 export default App;

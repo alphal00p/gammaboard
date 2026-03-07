@@ -1,4 +1,5 @@
 import { Box, FormControl, InputLabel, Select, MenuItem, Typography } from "@mui/material";
+import { formatRunLabel, formatRunSecondaryLabel } from "../utils/runs";
 
 const RunSelector = ({ runs, selectedRun, onRunChange }) => {
   if (runs.length === 0) return null;
@@ -17,11 +18,10 @@ const RunSelector = ({ runs, selectedRun, onRunChange }) => {
             <MenuItem key={run.run_id} value={run.run_id}>
               <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                 <Typography component="span" sx={{ fontWeight: 500 }}>
-                  {run.run_name ? `${run.run_name} (#${run.run_id})` : `Run #${run.run_id}`}
+                  {formatRunLabel(run)}
                 </Typography>
                 <Typography component="span" color="text.secondary">
-                  • {run.run_status} • processed {(run.batches_completed || 0).toLocaleString()} • queued now{" "}
-                  {(run.total_batches || 0).toLocaleString()}
+                  {formatRunSecondaryLabel(run)}
                 </Typography>
               </Box>
             </MenuItem>

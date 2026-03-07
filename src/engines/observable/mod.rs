@@ -4,10 +4,8 @@ mod scalar;
 use crate::engines::observable::complex::ComplexObservable;
 
 use super::{BuildError, BuildFromJson, EngineError};
-use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::any::Any;
-use strum::{AsRefStr, Display};
 
 pub use self::scalar::ScalarObservable;
 
@@ -17,14 +15,6 @@ pub trait ScalarIngest: Send {
 
 pub trait ComplexIngest: Send {
     fn ingest_complex(&mut self, value: num::complex::Complex64, weight: f64);
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, AsRefStr, Display)]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-pub enum ObservableImplementation {
-    Scalar,
-    Complex,
 }
 
 /// Aggregates per-sample observables to batch-level and run-level snapshots.
@@ -46,28 +36,22 @@ pub trait Observable: Send {
     fn snapshot(&self) -> Result<JsonValue, EngineError>;
 }
 
-#[derive(Debug, Clone)]
-pub struct ObservableFactory {
-    pub(crate) implementation: ObservableImplementation,
-    params: JsonValue,
-}
-
-impl ObservableFactory {
-    pub fn new(implementation: ObservableImplementation, params: JsonValue) -> Self {
-        Self {
-            implementation,
-            params,
+impl crate::engines::ObservableConfig {
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            Self::Scalar { .. } => "scalar",
+            Self::Complex { .. } => "complex",
         }
     }
 
     pub fn build(&self) -> Result<Box<dyn Observable>, BuildError> {
-        match self.implementation {
-            ObservableImplementation::Scalar => {
-                Ok(Box::new(ScalarObservable::from_json(&self.params)?))
-            }
-            ObservableImplementation::Complex => {
-                Ok(Box::new(ComplexObservable::from_json(&self.params)?))
-            }
+        match self {
+            Self::Scalar { params } => Ok(Box::new(ScalarObservable::from_json(
+                &JsonValue::Object(params.clone()),
+            )?)),
+            Self::Complex { params } => Ok(Box::new(ComplexObservable::from_json(
+                &JsonValue::Object(params.clone()),
+            )?)),
         }
     }
 }

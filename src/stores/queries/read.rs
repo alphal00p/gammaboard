@@ -118,6 +118,7 @@ impl From<WorkerLogRow> for WorkerLogEntry {
 struct RegisteredWorkerRow {
     worker_id: String,
     node_id: Option<String>,
+    desired_run_id: Option<i32>,
     role: String,
     implementation: String,
     version: String,
@@ -135,6 +136,7 @@ impl From<RegisteredWorkerRow> for RegisteredWorkerEntry {
         Self {
             worker_id: value.worker_id,
             node_id: value.node_id,
+            desired_run_id: value.desired_run_id,
             role: value.role,
             implementation: value.implementation,
             version: value.version,
@@ -289,10 +291,7 @@ pub(crate) async fn get_run_progress(
                 r.id as run_id,
                 r.name as run_name,
                 r.status as run_status,
-                (
-                    COALESCE(r.integration_params, '{{}}'::jsonb)
-                    || jsonb_build_object('observable_implementation', r.observable_implementation)
-                ) as integration_params,
+                COALESCE(r.integration_params, '{{}}'::jsonb) as integration_params,
                 r.target,
                 r.evaluator_init_metadata,
                 r.sampler_aggregator_init_metadata,
@@ -538,6 +537,7 @@ pub(crate) async fn get_registered_workers(
         SELECT
             w.worker_id,
             w.node_id,
+            w.desired_run_id,
             w.role,
             w.implementation,
             w.version,
@@ -571,6 +571,24 @@ pub(crate) async fn get_registered_workers(
     .await?;
 
     Ok(rows.into_iter().map(Into::into).collect())
+}
+
+pub(crate) async fn get_worker_assigned_run_id(
+    pool: &PgPool,
+    worker_id: &str,
+) -> Result<Option<i32>, sqlx::Error> {
+    let row: Option<(Option<i32>,)> = sqlx::query_as(
+        r#"
+        SELECT desired_run_id
+        FROM workers
+        WHERE worker_id = $1
+        "#,
+    )
+    .bind(worker_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.and_then(|value| value.0))
 }
 
 pub(crate) async fn get_evaluator_performance_history(

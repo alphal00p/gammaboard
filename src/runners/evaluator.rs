@@ -1,12 +1,12 @@
 //! Evaluator worker runner orchestration.
 
-use crate::batch::{BatchResult, PointSpec};
 use crate::core::{
-    EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot,
-    StoreError, WorkQueueStore,
+    Batch, BatchResult, EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics,
+    EvaluatorPerformanceSnapshot, PointSpec, StoreError, WorkQueueStore,
 };
-use crate::engines::observable::ObservableFactory;
-use crate::engines::{EngineError, EvalBatchOptions, EvalError, Evaluator, Parametrization};
+use crate::engines::{
+    EngineError, EvalBatchOptions, EvalError, Evaluator, ObservableConfig, Parametrization,
+};
 use crate::runners::rolling_metric::RollingMetric;
 use serde::{Deserialize, Serialize};
 use std::{time::Duration, time::Instant};
@@ -40,7 +40,7 @@ pub struct EvaluatorRunner<WQ> {
     worker_id: String,
     evaluator: Box<dyn Evaluator>,
     parametrization: Box<dyn Parametrization>,
-    observable_factory: ObservableFactory,
+    observable_config: ObservableConfig,
     point_spec: PointSpec,
     performance_snapshot_interval: Duration,
     last_snapshot_at: Instant,
@@ -65,7 +65,7 @@ where
         worker_id: impl Into<String>,
         evaluator: Box<dyn Evaluator>,
         parametrization: Box<dyn Parametrization>,
-        observable_factory: ObservableFactory,
+        observable_config: ObservableConfig,
         point_spec: PointSpec,
         performance_snapshot_interval: Duration,
         work_queue: WQ,
@@ -76,7 +76,7 @@ where
             worker_id: worker_id.into(),
             evaluator,
             parametrization,
-            observable_factory,
+            observable_config,
             point_spec,
             performance_snapshot_interval,
             last_snapshot_at: now_instant,
@@ -142,7 +142,7 @@ where
         let started = Instant::now();
         match self.evaluator.eval_batch(
             &transformed_batch,
-            &self.observable_factory,
+            &self.observable_config,
             EvalBatchOptions {
                 require_training_values: claimed.requires_training,
             },
@@ -177,7 +177,7 @@ where
     async fn submit_result(
         &mut self,
         batch_id: i64,
-        batch: &crate::batch::Batch,
+        batch: &Batch,
         requires_training: bool,
         result: BatchResult,
         eval_time_ms: f64,
@@ -288,31 +288,26 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::batch::{Batch, BatchResult};
     use crate::core::BatchClaim;
-    use crate::engines::{
-        BuildError, EvalBatchOptions, EvalError, ObservableImplementation, ParametrizationFactory,
-        ParametrizationImplementation,
-    };
+    use crate::core::{Batch, BatchResult};
+    use crate::engines::{EvalBatchOptions, EvalError, ObservableConfig, ParametrizationConfig};
     use crate::runners::test_support::MockWorkQueue;
     use serde_json::json;
 
     struct OkEvaluator;
 
     impl Evaluator for OkEvaluator {
-        fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError> {
-            if point_spec.continuous_dims != 1 || point_spec.discrete_dims != 0 {
-                return Err(BuildError::build(
-                    "OkEvaluator expects 1 continuous and 0 discrete",
-                ));
+        fn get_point_spec(&self) -> PointSpec {
+            PointSpec {
+                continuous_dims: 1,
+                discrete_dims: 0,
             }
-            Ok(())
         }
 
         fn eval_batch(
             &mut self,
             batch: &Batch,
-            _observable_factory: &ObservableFactory,
+            _observable_factory: &ObservableConfig,
             _options: EvalBatchOptions,
         ) -> Result<BatchResult, EvalError> {
             let values = batch
@@ -323,7 +318,7 @@ mod tests {
                 .collect::<Vec<f64>>();
             let batch_observable = json!({
                 "count": values.len() as i64,
-                "sum_weight": values
+                "sum_weighted_value": values
                     .iter()
                     .zip(batch.weights().iter())
                     .map(|(value, weight)| value * weight)
@@ -333,36 +328,25 @@ mod tests {
             });
             Ok(BatchResult::new(Some(values), batch_observable))
         }
-
-        fn supports_observable(
-            &self,
-            _observable_factory: &crate::engines::observable::ObservableFactory,
-        ) -> bool {
-            true
-        }
     }
 
     struct FailingEvaluator;
 
     impl Evaluator for FailingEvaluator {
-        fn validate_point_spec(&self, _point_spec: &PointSpec) -> Result<(), BuildError> {
-            Ok(())
+        fn get_point_spec(&self) -> PointSpec {
+            PointSpec {
+                continuous_dims: 1,
+                discrete_dims: 0,
+            }
         }
 
         fn eval_batch(
             &mut self,
             _batch: &Batch,
-            _observable_factory: &ObservableFactory,
+            _observable_factory: &ObservableConfig,
             _options: EvalBatchOptions,
         ) -> Result<BatchResult, EvalError> {
             Err(EvalError::eval("mock failure"))
-        }
-
-        fn supports_observable(
-            &self,
-            _observable_factory: &crate::engines::observable::ObservableFactory,
-        ) -> bool {
-            false
         }
     }
 
@@ -371,9 +355,17 @@ mod tests {
     }
 
     fn no_parametrization() -> Box<dyn Parametrization> {
-        ParametrizationFactory::new(ParametrizationImplementation::None, json!({}))
-            .build()
-            .expect("no parametrization")
+        ParametrizationConfig::None {
+            params: serde_json::Map::new(),
+        }
+        .build()
+        .expect("no parametrization")
+    }
+
+    fn scalar_observable() -> ObservableConfig {
+        ObservableConfig::Scalar {
+            params: serde_json::Map::new(),
+        }
     }
 
     #[tokio::test]
@@ -384,7 +376,7 @@ mod tests {
             "worker-1",
             Box::new(OkEvaluator),
             no_parametrization(),
-            ObservableFactory::new(ObservableImplementation::Scalar, json!({})),
+            scalar_observable(),
             PointSpec {
                 continuous_dims: 1,
                 discrete_dims: 0,
@@ -413,7 +405,7 @@ mod tests {
             "worker-1",
             Box::new(OkEvaluator),
             no_parametrization(),
-            ObservableFactory::new(ObservableImplementation::Scalar, json!({})),
+            scalar_observable(),
             PointSpec {
                 continuous_dims: 1,
                 discrete_dims: 0,
@@ -462,7 +454,7 @@ mod tests {
             "worker-1",
             Box::new(FailingEvaluator),
             no_parametrization(),
-            ObservableFactory::new(ObservableImplementation::Scalar, json!({})),
+            scalar_observable(),
             PointSpec {
                 continuous_dims: 1,
                 discrete_dims: 0,
@@ -485,22 +477,19 @@ mod tests {
     async fn tick_marks_batch_failed_on_result_len_mismatch() {
         struct BadEvaluator;
         impl Evaluator for BadEvaluator {
-            fn validate_point_spec(&self, _point_spec: &PointSpec) -> Result<(), BuildError> {
-                Ok(())
+            fn get_point_spec(&self) -> PointSpec {
+                PointSpec {
+                    continuous_dims: 1,
+                    discrete_dims: 0,
+                }
             }
             fn eval_batch(
                 &mut self,
                 _batch: &Batch,
-                _observable_factory: &ObservableFactory,
+                _observable_factory: &ObservableConfig,
                 _options: EvalBatchOptions,
             ) -> Result<BatchResult, EvalError> {
                 Ok(BatchResult::new(Some(vec![1.0]), json!({})))
-            }
-            fn supports_observable(
-                &self,
-                _observable_factory: &crate::engines::observable::ObservableFactory,
-            ) -> bool {
-                true
             }
         }
 
@@ -515,7 +504,7 @@ mod tests {
             "worker-1",
             Box::new(BadEvaluator),
             no_parametrization(),
-            ObservableFactory::new(ObservableImplementation::Scalar, json!({})),
+            scalar_observable(),
             PointSpec {
                 continuous_dims: 1,
                 discrete_dims: 0,

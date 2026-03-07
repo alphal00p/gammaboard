@@ -5,7 +5,7 @@ pub mod server;
 pub mod shared;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use node::{NodeArgs, run_node_commands};
 use run::{RunArgs, run_run_commands};
 use run_node::{RunNodeArgs, run_node};
@@ -15,6 +15,8 @@ use server::{ServerArgs, run_server};
 #[command(name = "gammaboard")]
 #[command(about = "Gammaboard operations CLI", long_about = None)]
 pub struct Cli {
+    #[arg(short = 'q', long, global = true, action = ArgAction::SetTrue)]
+    quiet: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -32,10 +34,11 @@ enum Command {
 }
 
 pub async fn dispatch(cli: Cli) -> Result<()> {
+    let quiet = cli.quiet;
     match cli.command {
-        Command::Run(args) => run_run_commands(args.command).await,
-        Command::Node(args) => run_node_commands(args.command).await,
-        Command::RunNode(args) => run_node(args).await,
-        Command::Server(args) => run_server(args).await,
+        Command::Run(args) => run_run_commands(args.command, quiet).await,
+        Command::Node(args) => run_node_commands(args.command, quiet).await,
+        Command::RunNode(args) => run_node(args, quiet).await,
+        Command::Server(args) => run_server(args, quiet).await,
     }
 }

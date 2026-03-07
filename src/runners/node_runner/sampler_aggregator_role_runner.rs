@@ -1,6 +1,4 @@
 use crate::core::StoreError;
-use crate::engines::SamplerAggregatorFactory;
-use crate::engines::observable::ObservableFactory;
 use crate::runners::sampler_aggregator::SamplerAggregatorRunner;
 use std::time::Duration;
 use tokio::{sync::watch, time::sleep};
@@ -19,14 +17,14 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
     };
 
     let engine_span = tracing::span!(tracing::Level::TRACE, "sampler_engine_context");
-    let mut engine = {
+    let engine = {
         let _engine_scope = engine_span.enter();
-        let engine = SamplerAggregatorFactory::new(
-            spec.sampler_aggregator_implementation,
-            spec.sampler_aggregator_params.clone(),
-        )
-        .build()
-        .map_err(|err| StoreError::store(format!("failed to build sampler-aggregator: {err}")))?;
+        let engine = spec
+            .sampler_aggregator
+            .build(spec.point_spec.clone())
+            .map_err(|err| {
+                StoreError::store(format!("failed to build sampler-aggregator: {err}"))
+            })?;
         engine
             .validate_point_spec(&spec.point_spec)
             .map_err(|err| {
@@ -37,20 +35,10 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
             })?;
         engine
     };
-    let sampler_init_metadata = engine.get_init_metadata();
-    if worker
-        .store
-        .try_set_sampler_init_metadata(worker.run_id, &sampler_init_metadata)
-        .await?
-    {
-        info!("stored sampler-aggregator init metadata");
-    }
-
-    let observable_factory =
-        ObservableFactory::new(spec.observable_implementation, spec.observable_params);
+    let observable_config = spec.observable.clone();
 
     worker
-        .register_active_worker(spec.sampler_aggregator_implementation.as_ref())
+        .register_active_worker(spec.sampler_aggregator.kind_str())
         .await?;
 
     info!("sampler-aggregator worker started");
@@ -59,7 +47,7 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
         worker.run_id,
         worker.worker_id.clone(),
         engine,
-        observable_factory,
+        observable_config,
         worker.store.clone(),
         worker.store.clone(),
         spec.sampler_aggregator_runner_params.clone(),

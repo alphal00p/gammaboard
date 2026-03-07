@@ -21,15 +21,16 @@ describe("App Component", () => {
     expect(statusElement).toBeInTheDocument();
   });
 
-  test("renders integration mean heading", () => {
+  test("renders mode tabs", () => {
     render(<App />);
-    const chartHeading = screen.getByText(/Integration Mean/i);
-    expect(chartHeading).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Runs/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Workers/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Logs/i })).toBeInTheDocument();
   });
 
-  test("shows empty state message when no run is selected", () => {
+  test("shows no-runs empty state when run list is empty", () => {
     render(<App />);
-    const emptyMessage = screen.getByText(/Select a run to view data/i);
+    const emptyMessage = screen.getByText(/No runs available/i);
     expect(emptyMessage).toBeInTheDocument();
   });
 });

@@ -7,22 +7,37 @@ Use `README.md` for operator onboarding. Keep this file focused on internal arch
 ## System Snapshot
 - `gammaboard run` and `gammaboard node` manage runs and desired assignments.
 - `gammaboard run-node` is role-agnostic and reconciles DB desired assignment into one active local role task.
+- CLI command output is emitted through tracing (not `println!`) with default console level
+  `INFO` for `gammaboard*` targets and `WARN` for external targets.
+  Pass global `-q/--quiet` to suppress all `INFO` output and keep warnings/errors only.
 - `gammaboard server` exposes read APIs for the dashboard (no run-history SSE stream).
+- Dashboard frontend has mode tabs:
+  `Runs` for run-scoped panels and `Workers` for worker overview/details/logs.
+  `Runs` contains compact warn/error logs; full filterable logs remain in `Workers`.
 - PostgreSQL is the source of truth for run state, queue state, leases, worker state, logs, and snapshots.
 
 ## Module Ownership
 - `src/core/*`: shared domain models and store-facing contracts (`Batch`, `BatchResult`, `PointSpec`, `RunStatus`, store traits, `StoreError`).
-- `src/engines/*`: engine traits, factories, implementations, and shared run-spec wiring.
+- `src/engines/*`: engine traits, implementations, and shared run-spec wiring.
   - Role modules: `engines::evaluator`, `engines::sampler_aggregator`, `engines::observable`, `engines::parametrization`.
   - Shared types: `engines::shared::{BuildFromJson, IntegrationParams, RunSpec}`.
 - `src/runners/*`: orchestration loops (`NodeRunner`, evaluator runner, sampler-aggregator runner).
 - `src/stores/*`: PostgreSQL implementation and read DTOs/traits.
-- `src/telemetry.rs`: tracing setup and runtime-log sink wiring through `core::RuntimeLogStore`.
+- `src/tracing.rs`: tracing setup and runtime-log sink wiring through `core::RuntimeLogStore`.
 - `src/main.rs` + `src/cli/*`: operational CLI entrypoint and subcommand modules (`run`, `node`, `run-node`, `server`).
 
 ## Operational Conventions
 - Run config is TOML via `gammaboard run add <file.toml>`.
 - `run-add` deep-merges `configs/default.toml` with the provided file (provided file wins).
+- `run-add` applies typed preprocessing before DB insert via a single top-level orchestrator
+  that derives `point_spec` from the evaluator via preflight build.
+- `run-add` performs deep preflight compatibility checks before DB insert by constructing
+  engines from typed config enums and validating point-spec + observable compatibility.
+  Preflight includes a one-point sampler -> parametrization -> evaluator dry-run.
+- `run-add` also resolves evaluator/sampler init metadata via `get_init_metadata` and persists
+  it on run creation (`runs.evaluator_init_metadata`, `runs.sampler_aggregator_init_metadata`).
+- Point dimensions are canonical in evaluator-derived `runs.point_spec`; do not duplicate them in
+  integration config outside evaluator.
 - Keep split local live-test recipes in `justfile`:
   - `live-test-basic` for unit-line + Symbolica 3D Gaussian scenarios.
   - `live-test-gammaloop` for GammaLoop-only scenario.
@@ -32,11 +47,13 @@ Use `README.md` for operator onboarding. Keep this file focused on internal arch
 - Run lifecycle status persists in `runs.status` and is controlled by `gammaboard run` commands.
 - `run start`/`run pause`/`run stop`/`run remove` and `node stop` use shared selectors: `-a|--all` or positional IDs.
 - `run pause`/`run stop` must also clear desired assignments so run-nodes reconcile down cleanly.
-- `run_node` executes at most one active role task at a time.
+- `run-node` executes at most one active role task at a time.
 - Role switching must be stop-old-then-start-new.
+- Role start failures are capped per desired target (`max_consecutive_start_failures`, default 3).
+  After the cap is reached, run-node aborts further restarts for that target until desired assignment changes.
 - Node shutdown requests are consumed from `workers.shutdown_requested_at` as one-shot signals.
 - Server/default local serve port contract:
-  - Use env var `GAMMABOOARD_BACKEND_PORT` for backend port.
+  - Use env var `GAMMABOARD_BACKEND_PORT` for backend port.
   - `just serve-backend` and `just serve-frontend` source `.env` and use the same backend port.
   - There is no combined `just serve` orchestrator; run backend/frontend in separate terminals.
   - Each `serve-*` command should stop its own previously running process before starting.
@@ -50,7 +67,7 @@ Use `README.md` for operator onboarding. Keep this file focused on internal arch
     connect errors; keep retries in Rust startup path, not shell wrappers.
 
 ## Engine and Data Rules
-- Keep runtime construction factory-based (`EvaluatorFactory`, `SamplerAggregatorFactory`, `ParametrizationFactory`, `ObservableFactory`) returning boxed trait objects.
+- Keep runtime construction config-based (`EvaluatorConfig`, `SamplerAggregatorConfig`, `ParametrizationConfig`, `ObservableConfig`) via `build()` returning boxed trait objects.
 - Avoid runtime `*Engine` dispatch enums.
 - Parse engine params through `BuildFromJson` typed params + validation.
 - `IntegrationParams`/`RunSpec` runner params are strongly typed (`EvaluatorRunnerParams`, `SamplerAggregatorRunnerParams`).
@@ -70,17 +87,23 @@ Use `README.md` for operator onboarding. Keep this file focused on internal arch
 - Snapshot rows are point-in-time (`created_at`); do not rely on window columns.
 - Latest worker stats in `/api/workers` come from role-specific latest views.
 - Runtime logs persist to `runtime_logs` based on tracing context (`source`, `run_id`, `worker_id`) and DB sink policy.
+- Runtime logs persist `node_id` as well when it is present in tracing context.
 - Set `GAMMABOARD_DISABLE_DB_LOGS=1` to disable runtime-log DB persistence for CLI processes while keeping console tracing enabled.
-- `engine` is tracing context only (used for sink-level filtering) and is not persisted as a `runtime_logs` column.
+- DB sink levels are split by context:
+  `GAMMABOARD_DB_LOG_LEVEL` for `gammaboard*` targets and
+  `GAMMABOARD_DB_EXTERNAL_LOG_LEVEL` for external targets
+  (`off|error|warn|info|debug|trace`).
 - SQL for runtime-log persistence lives in the Pg store query layer (`stores::queries::runtime_logs`);
   tracing should not issue raw SQL directly.
 - Worker dashboard logs are read as `source='worker'` from `runtime_logs`; include
   `run_id` and `worker_id` when available.
 - Read APIs include:
   - `GET /api/runs/:id/logs`,
+  - `GET /api/workers/:id/performance/evaluator`,
+  - `GET /api/workers/:id/performance/sampler-aggregator`,
   - `GET /api/workers`,
   - `GET /api/runs` / `GET /api/runs/:id` (includes opaque `target` payload when present),
-  - `GET /api/runs/:id/aggregated/range` (sampled history range + explicit `latest`),
+  - `GET /api/runs/:id/aggregated/range` (sampled history range + explicit `latest`; query uses `start`, `stop`, required `max_points`, optional `last_id`; backend auto-derives step and may set `reset_required`),
   - `GET /api/runs/:id/performance/evaluator`,
   - `GET /api/runs/:id/performance/sampler-aggregator`.
 - Read API payloads should serialize `BIGINT` IDs as strings for frontend safety.

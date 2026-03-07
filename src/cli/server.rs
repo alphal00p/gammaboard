@@ -27,20 +27,20 @@ pub struct ServerArgs {
     db_pool_size: u32,
 }
 
-pub async fn run_server(args: ServerArgs) -> anyhow::Result<()> {
+pub async fn run_server(args: ServerArgs, quiet: bool) -> anyhow::Result<()> {
     let store = init_pg_store(args.db_pool_size)
         .await
         .context("failed to initialize postgres store")?;
-    init_cli_tracing(&store)?;
+    init_cli_tracing(&store, quiet)?;
     let bind = match args.bind {
         Some(bind) => bind,
         None => {
-            let value = env::var("GAMMABOOARD_BACKEND_PORT").context(
-                "missing GAMMABOOARD_BACKEND_PORT (set it in environment or pass --bind)",
+            let value = env::var("GAMMABOARD_BACKEND_PORT").context(
+                "missing GAMMABOARD_BACKEND_PORT (set it in environment or pass --bind)",
             )?;
             let port = value
                 .parse::<u16>()
-                .with_context(|| format!("invalid GAMMABOOARD_BACKEND_PORT={value:?}"))?;
+                .with_context(|| format!("invalid GAMMABOARD_BACKEND_PORT={value:?}"))?;
             SocketAddr::from(([0, 0, 0, 0], port))
         }
     };
@@ -49,8 +49,8 @@ pub async fn run_server(args: ServerArgs) -> anyhow::Result<()> {
 
     let app = build_app(state);
 
-    println!("server listening on http://{}", bind);
-    println!("api available at http://{}/api", bind);
+    tracing::info!("server listening on http://{}", bind);
+    tracing::info!("api available at http://{}/api", bind);
 
     let listener = tokio::net::TcpListener::bind(bind)
         .await
@@ -143,8 +143,8 @@ struct WorkersQuery {
 struct AggregatedRangeQuery {
     start: i64,
     stop: i64,
-    step: i64,
-    latest_id: Option<i64>,
+    max_points: i64,
+    last_id: Option<i64>,
 }
 
 fn build_app(state: AppState) -> Router {
@@ -168,6 +168,14 @@ fn build_app(state: AppState) -> Router {
         .route(
             "/runs/:id/performance/sampler-aggregator",
             get(get_run_sampler_performance_history),
+        )
+        .route(
+            "/workers/:id/performance/evaluator",
+            get(get_worker_evaluator_performance_history),
+        )
+        .route(
+            "/workers/:id/performance/sampler-aggregator",
+            get(get_worker_sampler_performance_history),
         )
         .layer(middleware::from_fn(request_context_middleware))
         .with_state(state);
@@ -292,13 +300,19 @@ async fn get_run_aggregated_range(
     AxumPath(id): AxumPath<i32>,
     Query(params): Query<AggregatedRangeQuery>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    if params.step < 1 {
-        return Err(ApiError::BadRequest("step must be >= 1".to_string()));
+    if params.max_points < 1 {
+        return Err(ApiError::BadRequest("max_points must be >= 1".to_string()));
     }
 
     let result = state
         .store
-        .get_aggregated_range(id, params.start, params.stop, params.step, params.latest_id)
+        .get_aggregated_range(
+            id,
+            params.start,
+            params.stop,
+            params.max_points,
+            params.last_id,
+        )
         .await?;
     Ok(Json(
         serde_json::to_value(result).map_err(|e| ApiError::Internal(e.to_string()))?,
@@ -346,5 +360,35 @@ async fn get_run_sampler_performance_history(
         .await?;
     Ok(Json(
         serde_json::to_value(rows).map_err(|e| ApiError::Internal(e.to_string()))?,
+    ))
+}
+
+async fn get_worker_evaluator_performance_history(
+    State(state): State<AppState>,
+    AxumPath(worker_id): AxumPath<String>,
+    Query(params): Query<PerformanceHistoryQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let limit = params.limit.clamp(1, 10_000);
+    let payload = state
+        .store
+        .get_worker_evaluator_performance_history(&worker_id, limit)
+        .await?;
+    Ok(Json(
+        serde_json::to_value(payload).map_err(|e| ApiError::Internal(e.to_string()))?,
+    ))
+}
+
+async fn get_worker_sampler_performance_history(
+    State(state): State<AppState>,
+    AxumPath(worker_id): AxumPath<String>,
+    Query(params): Query<PerformanceHistoryQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let limit = params.limit.clamp(1, 10_000);
+    let payload = state
+        .store
+        .get_worker_sampler_performance_history(&worker_id, limit)
+        .await?;
+    Ok(Json(
+        serde_json::to_value(payload).map_err(|e| ApiError::Internal(e.to_string()))?,
     ))
 }

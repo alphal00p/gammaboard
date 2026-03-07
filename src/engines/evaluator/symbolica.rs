@@ -2,7 +2,7 @@ use std::{fs, path::Path};
 
 use crate::{
     Batch, BatchResult, BuildError, EngineError, EvalError, PointSpec,
-    engines::{BuildFromJson, EvalBatchOptions, Evaluator, observable::ObservableFactory},
+    engines::{BuildFromJson, EvalBatchOptions, Evaluator, ObservableConfig},
 };
 use serde::Deserialize;
 use serde_json::{Value as JsonValue, json};
@@ -109,25 +109,17 @@ impl BuildFromJson for SymbolicaEngine {
 }
 
 impl Evaluator for SymbolicaEngine {
-    fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError> {
-        if point_spec.discrete_dims != 0 {
-            Err(BuildError::Build(
-                "Discrete dimensions are not supported".to_string(),
-            ))
-        } else if point_spec.continuous_dims != self.args.len() {
-            Err(BuildError::incompatible(format!(
-                "Continuous dimensions need to match the number of arguments (n = {})",
-                self.args.len()
-            )))
-        } else {
-            Ok(())
+    fn get_point_spec(&self) -> PointSpec {
+        PointSpec {
+            continuous_dims: self.args.len(),
+            discrete_dims: 0,
         }
     }
 
     fn eval_batch(
         &mut self,
         batch: &Batch,
-        observable_factory: &ObservableFactory,
+        observable_config: &ObservableConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
         let continuous = batch.continuous().as_slice().ok_or_else(|| {
@@ -137,7 +129,7 @@ impl Evaluator for SymbolicaEngine {
             EvalError::Engine("Batch weights array must be standard-layout".to_string())
         })?;
 
-        let mut observable = observable_factory.build()?;
+        let mut observable = observable_config.build()?;
 
         let mut out = vec![0.0; batch.size()];
         self.eval
@@ -148,7 +140,7 @@ impl Evaluator for SymbolicaEngine {
             let scalar_ingest = observable.as_scalar_ingest().ok_or_else(|| {
                 EvalError::Engine(format!(
                     "symbolica evaluator supports only scalar-capable observables, got {}",
-                    observable_factory.implementation
+                    observable_config.kind_str()
                 ))
             })?;
             for (value, weight) in out.iter().zip(weights.iter()) {
@@ -159,13 +151,6 @@ impl Evaluator for SymbolicaEngine {
             BatchResult::from_values_weights_and_observable(out, weights, observable.as_ref())
         } else {
             BatchResult::from_observable_only(observable.as_ref())
-        }
-    }
-
-    fn supports_observable(&self, observable_factory: &ObservableFactory) -> bool {
-        match observable_factory.build() {
-            Ok(mut observable) => observable.as_scalar_ingest().is_some(),
-            Err(_) => false,
         }
     }
 

@@ -3,15 +3,16 @@ import EnginePanelLayout from "./common/EnginePanelLayout";
 import ImplementationSummaryCard from "./common/ImplementationSummaryCard";
 import ObservableCustomPanel from "./observable/ObservableCustomPanel";
 import { formatDateTime, formatScientific, toFiniteNumber } from "../utils/formatters";
+import { splitKindConfig, toConfigObject } from "../utils/config";
 
 const computeScalarRsd = (observable) => {
   const count = toFiniteNumber(observable?.count, 0);
   if (count <= 0) return null;
 
-  const sumWeight = toFiniteNumber(observable?.sum_weight, 0);
+  const sumWeightedValue = toFiniteNumber(observable?.sum_weighted_value, 0);
   const sumSq = toFiniteNumber(observable?.sum_sq, 0);
   const sumAbs = toFiniteNumber(observable?.sum_abs, 0);
-  const mean = sumWeight / count;
+  const mean = sumWeightedValue / count;
   const meanAbs = sumAbs / count;
   if (!Number.isFinite(meanAbs) || meanAbs <= 0) return null;
 
@@ -42,32 +43,22 @@ const computeRsd = (observable, implementation) => {
   return computeScalarRsd(observable);
 };
 
-const ObservablePanel = ({ run, latestAggregated, samples, totalSnapshots, isConnected, observableImplementation }) => {
-  const integrationParams = run?.integration_params || {};
-  const observableParams = integrationParams.observable_params || {};
+const ObservablePanel = ({ run, latestAggregated, samples, isConnected, observableImplementation }) => {
+  const integrationParams = toConfigObject(run?.integration_params);
+  const { implementation } = splitKindConfig(integrationParams.observable, observableImplementation || "unknown");
   const observablePayload = latestAggregated?.aggregated_observable || null;
 
-  const aggregatedBatches = toFiniteNumber(
-    observablePayload?.nr_batches ?? run?.batches_completed ?? run?.completed_batches ?? 0,
-    0,
-  );
-  const aggregatedSamples = toFiniteNumber(observablePayload?.count ?? observablePayload?.nr_samples, 0);
-  const rsd = computeRsd(observablePayload, observableImplementation);
-  const historySnapshots = Array.isArray(samples) ? samples.length : 0;
-  const fullHistorySnapshots = Number.isFinite(totalSnapshots) ? totalSnapshots : historySnapshots;
-
+  const aggregatedBatches = toFiniteNumber(run?.batches_completed ?? 0, 0);
+  const aggregatedSamples = toFiniteNumber(observablePayload?.count, 0);
+  const rsd = computeRsd(observablePayload, implementation);
   return (
     <EnginePanelLayout
       title="Observable"
       genericPanel={
         <ImplementationSummaryCard
-          implementation={observableImplementation}
+          implementation={implementation}
           chipColor="primary"
           fields={[
-            {
-              label: "history snapshots",
-              value: `${historySnapshots.toLocaleString()} / ${fullHistorySnapshots.toLocaleString()}`,
-            },
             { label: "aggregated batches", value: aggregatedBatches.toLocaleString() },
             { label: "aggregated samples", value: aggregatedSamples.toLocaleString() },
             { label: "RSD (std/mean(abs))", value: rsd == null ? "n/a" : formatScientific(rsd, 4) },
@@ -86,7 +77,7 @@ const ObservablePanel = ({ run, latestAggregated, samples, totalSnapshots, isCon
       }
       customPanel={
         <ObservableCustomPanel
-          implementation={observableImplementation}
+          implementation={implementation}
           samples={samples}
           isConnected={isConnected}
           hasRun={Boolean(run)}
@@ -95,7 +86,7 @@ const ObservablePanel = ({ run, latestAggregated, samples, totalSnapshots, isCon
       }
       jsonTitle="observable JSON"
       jsonData={{
-        observable_params: observableParams,
+        observable: integrationParams?.observable ?? null,
         aggregated_observable: observablePayload,
       }}
     />

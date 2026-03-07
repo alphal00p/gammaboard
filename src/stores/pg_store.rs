@@ -1,14 +1,14 @@
 //! Postgres-backed implementations of store contracts.
 
 use super::queries;
-use crate::batch::{Batch, BatchResult, PointSpec};
 use crate::core::{
     AggregationStore, AssignmentLeaseStore, BatchClaim, CompletedBatch, ControlPlaneStore,
-    DesiredAssignment, EvaluatorPerformanceSnapshot, RunInitMetadataStore, RunSpecStore, RunStatus,
-    RuntimeLogEvent, RuntimeLogStore, SamplerAggregatorPerformanceSnapshot, StoreError,
-    WorkQueueStore, Worker, WorkerRegistryStore, WorkerRole, WorkerStatus,
+    DesiredAssignment, EvaluatorPerformanceSnapshot, RunSpecStore, RunStatus, RuntimeLogEvent,
+    RuntimeLogStore, SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore, Worker,
+    WorkerRegistryStore, WorkerRole, WorkerStatus,
 };
-use crate::engines::{IntegrationParams, ObservableImplementation, RunSpec};
+use crate::core::{Batch, BatchResult, PointSpec};
+use crate::engines::{IntegrationParams, RunSpec};
 use crate::stores::RunReadStore;
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
@@ -41,20 +41,12 @@ fn map_sqlx(err: sqlx::Error) -> StoreError {
     StoreError::from(err)
 }
 
-fn missing_integration_param(run_id: i32, field: &str) -> StoreError {
-    store_err(format!(
-        "missing {field} in integration_params for run_id={run_id}"
-    ))
-}
-
-const AGGREGATED_RANGE_ANCHOR: i64 = 1;
-const AGGREGATED_RANGE_MAX_POINTS: usize = 100;
+const AGGREGATED_RANGE_MAX_POINTS_LIMIT: i64 = 10_000;
 
 fn resolve_aggregated_range_index(raw: i64, latest_id: i64) -> Result<i64, StoreError> {
     if raw == 0 {
-        return Err(store_invalid_input(
-            "invalid aggregated range index 0; use >=1 or negative indices",
-        ));
+        // Accept 0 as a convenient alias for the first snapshot id.
+        return Ok(1);
     }
     if raw > 0 {
         return Ok(raw);
@@ -62,61 +54,36 @@ fn resolve_aggregated_range_index(raw: i64, latest_id: i64) -> Result<i64, Store
     Ok(latest_id + raw + 1)
 }
 
+fn ceil_div_i64(numerator: i64, denominator: i64) -> i64 {
+    debug_assert!(denominator > 0);
+    (numerator + denominator - 1) / denominator
+}
+
+fn next_power_of_two_i64(n: i64) -> i64 {
+    if n <= 1 {
+        return 1;
+    }
+    let mut p = 1_i64;
+    while p < n {
+        p = p.saturating_mul(2);
+    }
+    p
+}
+
 fn run_spec_from_integration_params(
     run_id: i32,
     point_spec: PointSpec,
     params: IntegrationParams,
 ) -> Result<RunSpec, StoreError> {
-    let evaluator_implementation = params.evaluator_implementation.ok_or_else(|| {
-        store_err(format!(
-            "missing evaluator_implementation in integration_params for run_id={run_id}"
-        ))
-    })?;
-    let sampler_aggregator_implementation = params.sampler_aggregator_implementation.ok_or_else(|| {
-            store_err(format!(
-                "missing sampler_aggregator_implementation in integration_params for run_id={run_id}"
-            ))
-        })?;
-    let observable_implementation = params.observable_implementation.ok_or_else(|| {
-        store_err(format!(
-            "missing observable_implementation in integration_params for run_id={run_id}"
-        ))
-    })?;
-    let evaluator_params = params
-        .evaluator_params
-        .ok_or_else(|| missing_integration_param(run_id, "evaluator_params"))?;
-    let sampler_aggregator_params = params
-        .sampler_aggregator_params
-        .ok_or_else(|| missing_integration_param(run_id, "sampler_aggregator_params"))?;
-    let observable_params = params
-        .observable_params
-        .ok_or_else(|| missing_integration_param(run_id, "observable_params"))?;
-    let parametrization_implementation = params
-        .parametrization_implementation
-        .ok_or_else(|| missing_integration_param(run_id, "parametrization_implementation"))?;
-    let parametrization_params = params
-        .parametrization_params
-        .ok_or_else(|| missing_integration_param(run_id, "parametrization_params"))?;
-    let evaluator_runner_params = params
-        .evaluator_runner_params
-        .ok_or_else(|| missing_integration_param(run_id, "evaluator_runner_params"))?;
-    let sampler_aggregator_runner_params = params
-        .sampler_aggregator_runner_params
-        .ok_or_else(|| missing_integration_param(run_id, "sampler_aggregator_runner_params"))?;
-
     Ok(RunSpec {
         run_id,
         point_spec,
-        evaluator_implementation,
-        evaluator_params,
-        sampler_aggregator_implementation,
-        sampler_aggregator_params,
-        observable_implementation,
-        observable_params,
-        parametrization_implementation,
-        parametrization_params,
-        evaluator_runner_params,
-        sampler_aggregator_runner_params,
+        evaluator: params.evaluator,
+        sampler_aggregator: params.sampler_aggregator,
+        observable: params.observable,
+        parametrization: params.parametrization,
+        evaluator_runner_params: params.evaluator_runner_params,
+        sampler_aggregator_runner_params: params.sampler_aggregator_runner_params,
     })
 }
 
@@ -146,26 +113,12 @@ fn decode_run_spec(
     run_spec_from_integration_params(run_id, point_spec, params)
 }
 
-fn parse_run_create_payload(
-    integration_params: &JsonValue,
-) -> Result<(JsonValue, ObservableImplementation), StoreError> {
-    let mut root = integration_params.as_object().cloned().ok_or_else(|| {
+fn parse_run_create_payload(integration_params: &JsonValue) -> Result<JsonValue, StoreError> {
+    let root = integration_params.as_object().cloned().ok_or_else(|| {
         store_err("run create payload must be an object (integration_params json)")
     })?;
 
-    let observable_implementation = if let Some(value) = root.remove("observable_implementation") {
-        serde_json::from_value::<ObservableImplementation>(value).map_err(|err| {
-            store_err(format!(
-                "invalid observable_implementation in integration_params: {err}"
-            ))
-        })?
-    } else {
-        return Err(store_err(
-            "missing observable_implementation in integration_params",
-        ));
-    };
-
-    Ok((JsonValue::Object(root), observable_implementation))
+    Ok(JsonValue::Object(root))
 }
 
 #[async_trait::async_trait]
@@ -213,11 +166,19 @@ impl RunReadStore for PgStore {
         run_id: i32,
         start: i64,
         stop: i64,
-        step: i64,
-        latest_id: Option<i64>,
+        max_points: i64,
+        last_id: Option<i64>,
     ) -> Result<crate::stores::AggregatedRangeResponse, StoreError> {
-        if step < 1 {
-            return Err(store_invalid_input("aggregated range step must be >= 1"));
+        if max_points < 1 {
+            return Err(store_invalid_input(
+                "aggregated range max_points must be >= 1",
+            ));
+        }
+        if max_points > AGGREGATED_RANGE_MAX_POINTS_LIMIT {
+            return Err(store_invalid_input(format!(
+                "aggregated range max_points must be <= {}",
+                AGGREGATED_RANGE_MAX_POINTS_LIMIT
+            )));
         }
 
         let Some((min_id, max_id)) = queries::get_aggregated_id_bounds(&self.pool, run_id).await?
@@ -226,13 +187,13 @@ impl RunReadStore for PgStore {
                 snapshots: Vec::new(),
                 latest: None,
                 meta: crate::stores::AggregatedRangeMeta {
-                    resolved_start: None,
-                    resolved_stop: None,
-                    step,
-                    anchor: AGGREGATED_RANGE_ANCHOR,
+                    abs_start: None,
+                    abs_stop: None,
+                    step: 1,
                     latest_id: None,
-                    max_points: AGGREGATED_RANGE_MAX_POINTS,
+                    max_points,
                 },
+                reset_required: false,
             });
         };
 
@@ -251,13 +212,15 @@ impl RunReadStore for PgStore {
             resolved_start = resolved_stop;
         }
 
-        let estimated_points = ((resolved_stop - resolved_start) / step + 1).max(0) as usize;
-        if estimated_points > AGGREGATED_RANGE_MAX_POINTS {
-            return Err(store_invalid_input(format!(
-                "aggregated range request exceeds max points: estimated={} max={} (increase step or shrink range)",
-                estimated_points, AGGREGATED_RANGE_MAX_POINTS
-            )));
-        }
+        let span = (resolved_stop - resolved_start + 1).max(1);
+        let min_step = ceil_div_i64(span, max_points);
+        let step = next_power_of_two_i64(min_step);
+
+        let grid_anchor = resolved_start;
+        let reset_required = last_id.is_some_and(|seen| {
+            seen < resolved_start || seen > resolved_stop || (seen - grid_anchor) % step != 0
+        });
+        let effective_last_id = if reset_required { None } else { last_id };
 
         let snapshots = queries::get_aggregated_range(
             &self.pool,
@@ -265,9 +228,9 @@ impl RunReadStore for PgStore {
             resolved_start,
             resolved_stop,
             step,
-            AGGREGATED_RANGE_ANCHOR,
-            latest_id,
-            AGGREGATED_RANGE_MAX_POINTS as i64,
+            grid_anchor,
+            effective_last_id,
+            max_points,
         )
         .await?;
 
@@ -276,7 +239,7 @@ impl RunReadStore for PgStore {
         Ok(crate::stores::AggregatedRangeResponse {
             snapshots,
             latest: latest.filter(|row| {
-                latest_id.is_none_or(|seen| {
+                effective_last_id.is_none_or(|seen| {
                     row.id
                         .parse::<i64>()
                         .ok()
@@ -284,13 +247,13 @@ impl RunReadStore for PgStore {
                 })
             }),
             meta: crate::stores::AggregatedRangeMeta {
-                resolved_start: Some(resolved_start),
-                resolved_stop: Some(resolved_stop),
+                abs_start: Some(resolved_start),
+                abs_stop: Some(resolved_stop),
                 step,
-                anchor: AGGREGATED_RANGE_ANCHOR,
                 latest_id: Some(max_id.to_string()),
-                max_points: AGGREGATED_RANGE_MAX_POINTS,
+                max_points,
             },
+            reset_required,
         })
     }
 
@@ -331,6 +294,36 @@ impl RunReadStore for PgStore {
         worker_id: Option<&str>,
     ) -> Result<Vec<crate::stores::SamplerPerformanceHistoryEntry>, StoreError> {
         Ok(queries::get_sampler_performance_history(&self.pool, run_id, limit, worker_id).await?)
+    }
+
+    async fn get_worker_evaluator_performance_history(
+        &self,
+        worker_id: &str,
+        limit: i64,
+    ) -> Result<crate::stores::WorkerEvaluatorPerformanceHistoryResponse, StoreError> {
+        let run_id = queries::get_worker_assigned_run_id(&self.pool, worker_id).await?;
+        let entries = if let Some(run_id) = run_id {
+            queries::get_evaluator_performance_history(&self.pool, run_id, limit, Some(worker_id))
+                .await?
+        } else {
+            Vec::new()
+        };
+        Ok(crate::stores::WorkerEvaluatorPerformanceHistoryResponse { run_id, entries })
+    }
+
+    async fn get_worker_sampler_performance_history(
+        &self,
+        worker_id: &str,
+        limit: i64,
+    ) -> Result<crate::stores::WorkerSamplerPerformanceHistoryResponse, StoreError> {
+        let run_id = queries::get_worker_assigned_run_id(&self.pool, worker_id).await?;
+        let entries = if let Some(run_id) = run_id {
+            queries::get_sampler_performance_history(&self.pool, run_id, limit, Some(worker_id))
+                .await?
+        } else {
+            Vec::new()
+        };
+        Ok(crate::stores::WorkerSamplerPerformanceHistoryResponse { run_id, entries })
     }
 }
 
@@ -455,31 +448,6 @@ impl AssignmentLeaseStore for PgStore {
 }
 
 #[async_trait::async_trait]
-impl RunInitMetadataStore for PgStore {
-    async fn try_set_evaluator_init_metadata(
-        &self,
-        run_id: i32,
-        metadata: &JsonValue,
-    ) -> Result<bool, StoreError> {
-        let rows = queries::try_set_evaluator_init_metadata(&self.pool, run_id, metadata)
-            .await
-            .map_err(map_sqlx)?;
-        Ok(rows > 0)
-    }
-
-    async fn try_set_sampler_init_metadata(
-        &self,
-        run_id: i32,
-        metadata: &JsonValue,
-    ) -> Result<bool, StoreError> {
-        let rows = queries::try_set_sampler_init_metadata(&self.pool, run_id, metadata)
-            .await
-            .map_err(map_sqlx)?;
-        Ok(rows > 0)
-    }
-}
-
-#[async_trait::async_trait]
 impl ControlPlaneStore for PgStore {
     async fn upsert_desired_assignment(
         &self,
@@ -572,9 +540,10 @@ impl ControlPlaneStore for PgStore {
         integration_params: &JsonValue,
         target: Option<&JsonValue>,
         point_spec: &PointSpec,
+        evaluator_init_metadata: Option<&JsonValue>,
+        sampler_aggregator_init_metadata: Option<&JsonValue>,
     ) -> Result<i32, StoreError> {
-        let (sanitized_params, observable_implementation) =
-            parse_run_create_payload(integration_params)?;
+        let sanitized_params = parse_run_create_payload(integration_params)?;
 
         queries::create_run(
             &self.pool,
@@ -582,8 +551,9 @@ impl ControlPlaneStore for PgStore {
             name,
             &sanitized_params,
             target,
-            observable_implementation.as_ref(),
             point_spec,
+            evaluator_init_metadata,
+            sampler_aggregator_init_metadata,
         )
         .await
         .map_err(map_sqlx)
@@ -772,13 +742,7 @@ impl AggregationStore for PgStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        engines::{
-            EvaluatorImplementation, ObservableImplementation, ParametrizationImplementation,
-            SamplerAggregatorImplementation,
-        },
-        runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams},
-    };
+    use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
     use serde::Deserialize;
     use serde_json::json;
 
@@ -787,14 +751,10 @@ mod tests {
         let spec = decode_run_spec(
             7,
             json!({
-                "evaluator_implementation": "sin_evaluator",
-                "evaluator_params": { "alpha": 1 },
-                "sampler_aggregator_implementation": "naive_monte_carlo",
-                "sampler_aggregator_params": { "beta": 2 },
-                "observable_implementation": "scalar",
-                "observable_params": { "gamma": 3 },
-                "parametrization_implementation": "identity",
-                "parametrization_params": { "delta": 4 },
+                "evaluator": { "kind": "sin_evaluator", "alpha": 1 },
+                "sampler_aggregator": { "kind": "naive_monte_carlo", "beta": 2 },
+                "observable": { "kind": "scalar", "gamma": 3 },
+                "parametrization": { "kind": "identity", "delta": 4 },
                 "evaluator_runner_params": {
                     "min_loop_time_ms": 42,
                     "performance_snapshot_interval_ms": 5000
@@ -821,26 +781,30 @@ mod tests {
         assert_eq!(spec.run_id, 7);
         assert_eq!(spec.point_spec.continuous_dims, 1);
         assert_eq!(spec.point_spec.discrete_dims, 0);
-        assert_eq!(
-            spec.evaluator_implementation,
-            EvaluatorImplementation::SinEvaluator
-        );
-        assert_eq!(spec.evaluator_params, json!({ "alpha": 1 }));
-        assert_eq!(
-            spec.sampler_aggregator_implementation,
-            SamplerAggregatorImplementation::NaiveMonteCarlo
-        );
-        assert_eq!(spec.sampler_aggregator_params, json!({ "beta": 2 }));
-        assert_eq!(
-            spec.observable_implementation,
-            ObservableImplementation::Scalar
-        );
-        assert_eq!(spec.observable_params, json!({ "gamma": 3 }));
-        assert_eq!(
-            spec.parametrization_implementation,
-            ParametrizationImplementation::Identity
-        );
-        assert_eq!(spec.parametrization_params, json!({ "delta": 4 }));
+        assert_eq!(spec.evaluator.kind_str(), "sin_evaluator");
+        assert!(matches!(
+            &spec.evaluator,
+            crate::engines::EvaluatorConfig::SinEvaluator { params }
+                if params.get("alpha") == Some(&json!(1))
+        ));
+        assert_eq!(spec.sampler_aggregator.kind_str(), "naive_monte_carlo");
+        assert!(matches!(
+            &spec.sampler_aggregator,
+            crate::engines::SamplerAggregatorConfig::NaiveMonteCarlo { params }
+                if params.get("beta") == Some(&json!(2))
+        ));
+        assert_eq!(spec.observable.kind_str(), "scalar");
+        assert!(matches!(
+            &spec.observable,
+            crate::engines::ObservableConfig::Scalar { params }
+                if params.get("gamma") == Some(&json!(3))
+        ));
+        assert_eq!(spec.parametrization.kind_str(), "identity");
+        assert!(matches!(
+            &spec.parametrization,
+            crate::engines::ParametrizationConfig::Identity { params }
+                if params.get("delta") == Some(&json!(4))
+        ));
         assert_eq!(
             spec.evaluator_runner_params,
             EvaluatorRunnerParams::deserialize(json!({
@@ -871,9 +835,9 @@ mod tests {
         let err = decode_run_spec(
             8,
             json!({
-                "evaluator_implementation": "sin_evaluator",
-                "sampler_aggregator_implementation": "naive_monte_carlo",
-                "observable_implementation": "scalar"
+                "evaluator": { "kind": "sin_evaluator" },
+                "sampler_aggregator": { "kind": "naive_monte_carlo" },
+                "observable": { "kind": "scalar" }
             }),
             json!({
                 "continuous_dims": 1,
@@ -881,30 +845,27 @@ mod tests {
             }),
         )
         .expect_err("missing params should fail");
-        assert!(err.to_string().contains("evaluator_params"));
+        assert!(err.to_string().contains("parametrization"));
     }
 
     #[test]
     fn decode_run_spec_requires_implementation_fields() {
         let err = decode_run_spec(
             9,
-            json!({ "evaluator_implementation": "sin_evaluator" }),
+            json!({ "evaluator": { "kind": "sin_evaluator" } }),
             json!({
                 "continuous_dims": 1,
                 "discrete_dims": 0
             }),
         )
         .expect_err("missing required components should fail");
-        assert!(
-            err.to_string()
-                .contains("sampler_aggregator_implementation")
-        );
+        assert!(err.to_string().contains("sampler_aggregator"));
 
         let err = decode_run_spec(
             9,
             json!({
-                "evaluator_implementation": "sin_evaluator",
-                "sampler_aggregator_implementation": "naive_monte_carlo",
+                "evaluator": { "kind": "sin_evaluator" },
+                "sampler_aggregator": { "kind": "naive_monte_carlo" }
             }),
             json!({
                 "continuous_dims": 1,
@@ -912,7 +873,7 @@ mod tests {
             }),
         )
         .expect_err("missing observable implementation should fail");
-        assert!(err.to_string().contains("observable_implementation"));
+        assert!(err.to_string().contains("observable"));
     }
 
     #[test]
@@ -930,47 +891,21 @@ mod tests {
     }
 
     #[test]
-    fn parse_run_create_payload_extracts_observable_implementation() {
-        let (sanitized, observable) = parse_run_create_payload(&json!({
-            "evaluator_implementation": "sin_evaluator",
-            "sampler_aggregator_implementation": "naive_monte_carlo",
-            "observable_implementation": "scalar",
-            "observable_params": { "a": 1 }
+    fn parse_run_create_payload_accepts_kind_model() {
+        let sanitized = parse_run_create_payload(&json!({
+            "evaluator": { "kind": "sin_evaluator" },
+            "sampler_aggregator": { "kind": "naive_monte_carlo" },
+            "observable": { "kind": "scalar", "a": 1 }
         }))
         .expect("parse");
 
-        assert_eq!(observable, ObservableImplementation::Scalar);
         assert_eq!(
             sanitized,
             json!({
-                "evaluator_implementation": "sin_evaluator",
-                "sampler_aggregator_implementation": "naive_monte_carlo",
-                "observable_params": { "a": 1 }
+                "evaluator": { "kind": "sin_evaluator" },
+                "sampler_aggregator": { "kind": "naive_monte_carlo" },
+                "observable": { "kind": "scalar", "a": 1 }
             })
-        );
-    }
-
-    #[test]
-    fn parse_run_create_payload_requires_observable_implementation() {
-        let err = parse_run_create_payload(&json!({
-            "evaluator_implementation": "sin_evaluator"
-        }))
-        .expect_err("missing observable_implementation should fail");
-        assert!(
-            err.to_string()
-                .contains("missing observable_implementation")
-        );
-    }
-
-    #[test]
-    fn parse_run_create_payload_rejects_invalid_observable() {
-        let err = parse_run_create_payload(&json!({
-            "observable_implementation": "does_not_exist"
-        }))
-        .expect_err("invalid observable should fail");
-        assert!(
-            err.to_string()
-                .contains("invalid observable_implementation")
         );
     }
 }

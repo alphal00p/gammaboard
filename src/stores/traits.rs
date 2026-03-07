@@ -1,7 +1,8 @@
 use super::read_models::{
     AggregatedRangeResponse, AggregatedResult, EvaluatorPerformanceHistoryEntry,
     RegisteredWorkerEntry, RunProgress, SamplerPerformanceHistoryEntry, WorkQueueStats,
-    WorkerLogEntry,
+    WorkerEvaluatorPerformanceHistoryResponse, WorkerLogEntry,
+    WorkerSamplerPerformanceHistoryResponse,
 };
 use crate::core::StoreError;
 use async_trait::async_trait;
@@ -27,8 +28,8 @@ pub trait RunReadStore: Send + Sync {
         run_id: i32,
         start: i64,
         stop: i64,
-        step: i64,
-        latest_id: Option<i64>,
+        max_points: i64,
+        last_id: Option<i64>,
     ) -> Result<AggregatedRangeResponse, StoreError>;
     async fn get_worker_logs(
         &self,
@@ -54,4 +55,14 @@ pub trait RunReadStore: Send + Sync {
         limit: i64,
         worker_id: Option<&str>,
     ) -> Result<Vec<SamplerPerformanceHistoryEntry>, StoreError>;
+    async fn get_worker_evaluator_performance_history(
+        &self,
+        worker_id: &str,
+        limit: i64,
+    ) -> Result<WorkerEvaluatorPerformanceHistoryResponse, StoreError>;
+    async fn get_worker_sampler_performance_history(
+        &self,
+        worker_id: &str,
+        limit: i64,
+    ) -> Result<WorkerSamplerPerformanceHistoryResponse, StoreError>;
 }

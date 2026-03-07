@@ -12,6 +12,6 @@ pub use models::{
     SamplerRollingAverages, SamplerRuntimeMetrics, Worker, WorkerRole, WorkerStatus,
 };
 pub use traits::{
-    AggregationStore, AssignmentLeaseStore, ControlPlaneStore, RunInitMetadataStore, RunSpecStore,
-    RuntimeLogStore, WorkQueueStore, WorkerRegistryStore,
+    AggregationStore, AssignmentLeaseStore, ControlPlaneStore, RunSpecStore, RuntimeLogStore,
+    WorkQueueStore, WorkerRegistryStore,
 };

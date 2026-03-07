@@ -1,6 +1,6 @@
 //! Node-local worker orchestration and role reconciliation.
 //!
-//! A `run_node` process is role-agnostic. Desired role/run comes from DB.
+//! A `run-node` process is role-agnostic. Desired role/run comes from DB.
 //! The supervisor loop polls desired assignment and starts/stops one worker task.
 
 mod active_worker;
@@ -9,8 +9,8 @@ mod reconcile;
 mod sampler_aggregator_role_runner;
 
 use crate::core::{
-    AggregationStore, AssignmentLeaseStore, ControlPlaneStore, RunInitMetadataStore, RunSpecStore,
-    StoreError, WorkQueueStore, WorkerRegistryStore, WorkerRole,
+    AggregationStore, AssignmentLeaseStore, ControlPlaneStore, RunSpecStore, StoreError,
+    WorkQueueStore, WorkerRegistryStore, WorkerRole,
 };
 use std::time::Duration;
 use tokio::{sync::watch, task::JoinHandle, time::sleep};
@@ -21,11 +21,11 @@ use self::active_worker::ActiveWorker;
 #[derive(Debug, Clone)]
 pub struct NodeRunnerConfig {
     pub poll_interval: Duration,
+    pub max_consecutive_start_failures: u32,
 }
 
 pub trait NodeRunnerStore:
     RunSpecStore
-    + RunInitMetadataStore
     + ControlPlaneStore
     + WorkerRegistryStore
     + AssignmentLeaseStore
@@ -40,7 +40,6 @@ pub trait NodeRunnerStore:
 
 impl<T> NodeRunnerStore for T where
     T: RunSpecStore
-        + RunInitMetadataStore
         + ControlPlaneStore
         + WorkerRegistryStore
         + AssignmentLeaseStore
@@ -57,6 +56,7 @@ impl Default for NodeRunnerConfig {
     fn default() -> Self {
         Self {
             poll_interval: Duration::from_millis(1_000),
+            max_consecutive_start_failures: 3,
         }
     }
 }
@@ -77,7 +77,7 @@ pub(super) struct ActiveRoleTask {
     pub(super) target: RoleTarget,
     pub(super) context_span: tracing::Span,
     pub(super) stop_tx: watch::Sender<bool>,
-    pub(super) handle: JoinHandle<()>,
+    pub(super) handle: JoinHandle<Result<(), StoreError>>,
 }
 
 pub struct NodeRunner<S: NodeRunnerStore> {
@@ -85,6 +85,9 @@ pub struct NodeRunner<S: NodeRunnerStore> {
     node_id: String,
     config: NodeRunnerConfig,
     active_task: Option<ActiveRoleTask>,
+    blocked_target: Option<RoleTarget>,
+    failure_target: Option<RoleTarget>,
+    consecutive_start_failures: u32,
 }
 
 impl<S: NodeRunnerStore> NodeRunner<S> {
@@ -94,6 +97,9 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             node_id: node_id.into(),
             config,
             active_task: None,
+            blocked_target: None,
+            failure_target: None,
+            consecutive_start_failures: 0,
         }
     }
 

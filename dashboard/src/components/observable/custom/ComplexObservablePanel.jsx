@@ -22,10 +22,10 @@ const toInverseNormalizedAbsErrorSamples = (samples) =>
       if (!Number.isFinite(sampleCount) || sampleCount <= 0) return null;
       if (!Number.isFinite(meanAbs) || meanAbs <= 0) return null;
       if (!Number.isFinite(stderrAbs) || stderrAbs <= 0) return null;
-      const value = meanAbs / stderrAbs;
+      const value = (meanAbs * meanAbs) / (stderrAbs * stderrAbs);
       if (!Number.isFinite(value)) return null;
       return {
-        sampleCount: Math.sqrt(sampleCount),
+        sampleCount,
         mean: value,
       };
     })
@@ -48,36 +48,44 @@ const ComplexObservablePanel = ({ samples, isConnected, hasRun }) => {
         samples={realSamples}
         isConnected={isConnected}
         hasRun={hasRun}
-        title="Complex Observable Real Part Convergence"
+        title="Real part vs nr_samples"
         lineColor="#1976d2"
         bandColor="#1976d2"
+        xAxisLabel="nr_samples"
+        yAxisLabel="real(mean)"
+        sampleLabel="nr_samples"
+        valueLabel="real(mean)"
+        showErrorBand
       />
       <SampleChart
         samples={imagSamples}
         isConnected={isConnected}
         hasRun={hasRun}
-        title="Complex Observable Imaginary Part Convergence"
+        title="Imaginary part vs nr_samples"
         lineColor="#ef6c00"
         bandColor="#ef6c00"
+        xAxisLabel="nr_samples"
+        yAxisLabel="imag(mean)"
+        sampleLabel="nr_samples"
+        valueLabel="imag(mean)"
+        showErrorBand
       />
-      {inverseNormalizedAbsErrorSamples.length > 0 && (
-        <SampleChart
-          samples={inverseNormalizedAbsErrorSamples}
-          isConnected={isConnected}
-          hasRun={hasRun}
-          title="mean(|z|) / stderr(|z|) vs sqrt(Sample Count)"
-          lineColor="#2e7d32"
-          bandColor="#2e7d32"
-          xAxisLabel="sqrt(Sample Count)"
-          yAxisLabel="mean(|z|) / stderr(|z|)"
-          sampleLabel="sqrt(N)"
-          valueLabel="mean(|z|)/stderr(|z|)"
-          showStdErr={false}
-          showErrorBand={false}
-          showTargetLine={false}
-          showTargetSummary={false}
-        />
-      )}
+      <SampleChart
+        samples={inverseNormalizedAbsErrorSamples}
+        isConnected={isConnected}
+        hasRun={hasRun}
+        title="mean(|z|)^2 / err^2 vs nr_samples"
+        lineColor="#2e7d32"
+        bandColor="#2e7d32"
+        xAxisLabel="nr_samples"
+        yAxisLabel="mean(|z|)^2 / err^2"
+        sampleLabel="nr_samples"
+        valueLabel="mean(|z|)^2 / err^2"
+        showStdErr={false}
+        showErrorBand={false}
+        showTargetLine={false}
+        showTargetSummary={false}
+      />
     </Box>
   );
 };

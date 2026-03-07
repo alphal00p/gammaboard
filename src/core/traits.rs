@@ -5,7 +5,7 @@ use super::models::{
     BatchClaim, CompletedBatch, DesiredAssignment, EvaluatorPerformanceSnapshot, RuntimeLogEvent,
     SamplerAggregatorPerformanceSnapshot, Worker, WorkerStatus,
 };
-use crate::batch::{Batch, BatchResult, PointSpec};
+use crate::core::{Batch, BatchResult, PointSpec};
 use crate::engines::RunSpec;
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
@@ -15,21 +15,6 @@ use std::time::Duration;
 #[async_trait]
 pub trait RunSpecStore: Send + Sync {
     async fn load_run_spec(&self, run_id: i32) -> Result<Option<RunSpec>, StoreError>;
-}
-
-/// Persists run-scoped runtime metadata emitted at worker initialization.
-#[async_trait]
-pub trait RunInitMetadataStore: Send + Sync {
-    async fn try_set_evaluator_init_metadata(
-        &self,
-        run_id: i32,
-        metadata: &JsonValue,
-    ) -> Result<bool, StoreError>;
-    async fn try_set_sampler_init_metadata(
-        &self,
-        run_id: i32,
-        metadata: &JsonValue,
-    ) -> Result<bool, StoreError>;
 }
 
 /// Registers and monitors running workers.
@@ -106,6 +91,8 @@ pub trait ControlPlaneStore: Send + Sync {
         integration_params: &JsonValue,
         target: Option<&JsonValue>,
         point_spec: &PointSpec,
+        evaluator_init_metadata: Option<&JsonValue>,
+        sampler_aggregator_init_metadata: Option<&JsonValue>,
     ) -> Result<i32, StoreError>;
     async fn set_run_status(
         &self,

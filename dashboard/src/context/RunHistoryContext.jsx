@@ -2,41 +2,13 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import {
   fetchAggregatedRange as fetchAggregatedRangeApi,
   fetchRun as fetchRunApi,
-  fetchRunLogs as fetchRunLogsApi,
   fetchStats as fetchStatsApi,
 } from "../services/api";
 
-const RunMetaContext = createContext(null);
-const RunConnectionContext = createContext(null);
-const RunHeartbeatContext = createContext(null);
-const RunAggregatedContext = createContext(null);
-const RunQueueLogsContext = createContext(null);
+const RunHistoryContext = createContext(null);
 
 const formatTime = () => new Date().toLocaleTimeString();
-
-const mergeLogsAsc = (previous, incoming, maxSize) => {
-  if (!Array.isArray(incoming) || incoming.length === 0) return previous;
-  const out = Array.isArray(previous) ? [...previous] : [];
-  const seen = new Set(out.map((entry) => entry?.id));
-  let hasNew = false;
-  for (const entry of incoming) {
-    if (!entry || entry.id == null) continue;
-    if (seen.has(entry.id)) continue;
-    seen.add(entry.id);
-    out.push(entry);
-    hasNew = true;
-  }
-  if (!hasNew) return previous;
-  return out.length > maxSize ? out.slice(out.length - maxSize) : out;
-};
-
-const normalizeRange = (start, stop) => (start <= stop ? [start, stop] : [stop, start]);
-
-const computeStepForBuffer = (start, stop, bufferSize) => {
-  const span = Math.max(1, stop - start + 1);
-  const n = Math.max(1, Number(bufferSize) || 1);
-  return Math.max(1, Math.ceil(span / n));
-};
+const isConnectivityError = (err) => !(err && err.isHttp === true);
 
 const dedupeNewestFirst = (entries, maxSize) => {
   if (!Array.isArray(entries) || entries.length === 0) return [];
@@ -85,37 +57,19 @@ export const RunHistoryProvider = ({
   historyStart = -1000,
   historyStop = -1,
   historyBufferMax = 100,
-  workerLogsLimit = 200,
   workQueueStatsLimit = 200,
   pollIntervalMs = 5000,
 }) => {
   const [history, setHistory] = useState([]);
   const [latestAggregated, setLatestAggregated] = useState(null);
   const [run, setRun] = useState(null);
-  const [workerLogs, setWorkerLogs] = useState([]);
   const [workQueueStats, setWorkQueueStats] = useState([]);
   const [isConnected, setIsConnected] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [error, setError] = useState(null);
-  const [isDocumentVisible, setIsDocumentVisible] = useState(() => {
-    if (typeof document === "undefined") return true;
-    return document.visibilityState === "visible";
-  });
 
   const lastRangeRef = useRef(null);
   const latestSeenIdRef = useRef(null);
-  const lastLogIdRef = useRef(null);
-
-  useEffect(() => {
-    if (typeof document === "undefined") return undefined;
-    const handleVisibilityChange = () => {
-      setIsDocumentVisible(document.visibilityState === "visible");
-    };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, []);
 
   const fetchRun = useCallback(
     async (signal) => {
@@ -135,50 +89,31 @@ export const RunHistoryProvider = ({
     [runId, workQueueStatsLimit],
   );
 
-  const fetchWorkerLogs = useCallback(
-    async (signal) => {
-      if (!runId) return;
-      const afterId = lastLogIdRef.current;
-      const data = await fetchRunLogsApi(runId, workerLogsLimit, null, null, signal, afterId);
-      const incoming = Array.isArray(data) ? data : [];
-      if (afterId == null) {
-        const trimmed = incoming.slice(-workerLogsLimit);
-        setWorkerLogs(trimmed);
-        const last = trimmed[trimmed.length - 1];
-        if (last?.id != null) lastLogIdRef.current = last.id;
-        return;
-      }
-
-      if (incoming.length === 0) return;
-      setWorkerLogs((prev) => {
-        const next = mergeLogsAsc(prev, incoming, workerLogsLimit);
-        const last = next[next.length - 1];
-        if (last?.id != null) lastLogIdRef.current = last.id;
-        return next;
-      });
-    },
-    [runId, workerLogsLimit],
-  );
-
   const fetchAggregatedRange = useCallback(
     async (signal) => {
       if (!runId) return;
 
-      const [rangeStart, rangeStop] = normalizeRange(historyStart, historyStop);
-      const step = computeStepForBuffer(rangeStart, rangeStop, historyBufferMax);
-      const currentRange = { start: rangeStart, stop: rangeStop, step };
+      const currentRange = { start: historyStart, stop: historyStop };
+      const previousRange = lastRangeRef.current;
       const rangeChanged =
-        !lastRangeRef.current ||
-        lastRangeRef.current.start !== currentRange.start ||
-        lastRangeRef.current.stop !== currentRange.stop ||
-        lastRangeRef.current.step !== currentRange.step;
+        !previousRange || previousRange.start !== currentRange.start || previousRange.stop !== currentRange.stop;
 
       const latestId = rangeChanged ? null : latestSeenIdRef.current;
-      const payload = await fetchAggregatedRangeApi(runId, rangeStart, rangeStop, step, latestId, signal);
+      const payload = await fetchAggregatedRangeApi(
+        runId,
+        currentRange.start,
+        currentRange.stop,
+        historyBufferMax,
+        latestId,
+        signal,
+      );
       const ascEntries = toAscWithOptionalLatest(payload);
+      // Backend guarantees ascending id order for sampled range snapshots.
       const newestFirstIncoming = ascEntries.slice().reverse();
+      const returnedStep = Number(payload?.meta?.step) || 1;
+      const shouldReset = rangeChanged || latestId == null || payload?.reset_required === true;
 
-      if (rangeChanged || latestId == null) {
+      if (shouldReset) {
         const replaced = dedupeNewestFirst(newestFirstIncoming, historyBufferMax);
         setHistory(replaced);
       } else if (newestFirstIncoming.length > 0) {
@@ -188,26 +123,24 @@ export const RunHistoryProvider = ({
       const effectiveLatest = payload?.latest ?? ascEntries[ascEntries.length - 1] ?? null;
       if (effectiveLatest) setLatestAggregated(effectiveLatest);
       latestSeenIdRef.current = maxIdOf(ascEntries) ?? payload?.meta?.latest_id ?? latestSeenIdRef.current;
-      lastRangeRef.current = currentRange;
+      lastRangeRef.current = { ...currentRange, step: returnedStep };
     },
     [runId, historyStart, historyStop, historyBufferMax],
   );
 
   useEffect(() => {
-    if (!runId) {
-      setHistory([]);
-      setLatestAggregated(null);
-      setRun(null);
-      setWorkerLogs([]);
-      setWorkQueueStats([]);
-      setIsConnected(false);
-      setLastUpdate(null);
-      setError(null);
-      latestSeenIdRef.current = null;
-      lastRangeRef.current = null;
-      lastLogIdRef.current = null;
-      return;
-    }
+    // Always clear run-scoped state first so switching runs never shows stale data.
+    setHistory([]);
+    setLatestAggregated(null);
+    setRun(null);
+    setWorkQueueStats([]);
+    setIsConnected(false);
+    setLastUpdate(null);
+    setError(null);
+    latestSeenIdRef.current = null;
+    lastRangeRef.current = null;
+
+    if (!runId) return;
 
     let cancelled = false;
     let timeoutId;
@@ -221,18 +154,26 @@ export const RunHistoryProvider = ({
           fetchRun(activeController.signal),
           fetchWorkQueueStats(activeController.signal),
         ];
-        if (isDocumentVisible || lastLogIdRef.current == null) {
-          jobs.push(fetchWorkerLogs(activeController.signal));
-        }
-        await Promise.all(jobs);
+        const results = await Promise.allSettled(jobs);
         if (cancelled) return;
-        setError(null);
-        setIsConnected(true);
+
+        const failures = results
+          .filter((result) => result.status === "rejected")
+          .map((result) => result.reason)
+          .filter((err) => err?.name !== "AbortError");
+
+        if (failures.length > 0) {
+          setError(failures[0]);
+          setIsConnected(!failures.some(isConnectivityError));
+        } else {
+          setError(null);
+          setIsConnected(true);
+        }
         setLastUpdate(formatTime());
       } catch (err) {
         if (err?.name === "AbortError" || cancelled) return;
         setError(err);
-        setIsConnected(false);
+        setIsConnected(!isConnectivityError(err));
       } finally {
         activeController = null;
         if (!cancelled) {
@@ -248,120 +189,40 @@ export const RunHistoryProvider = ({
       if (timeoutId) clearTimeout(timeoutId);
       if (activeController) activeController.abort();
     };
-  }, [runId, pollIntervalMs, fetchAggregatedRange, fetchRun, fetchWorkQueueStats, fetchWorkerLogs, isDocumentVisible]);
+  }, [runId, pollIntervalMs, fetchAggregatedRange, fetchRun, fetchWorkQueueStats]);
 
-  const metaValue = useMemo(
+  const value = useMemo(
     () => ({
       runId,
       run,
-    }),
-    [runId, run],
-  );
-
-  const connectionValue = useMemo(
-    () => ({
       isConnected,
       error,
-    }),
-    [isConnected, error],
-  );
-
-  const heartbeatValue = useMemo(
-    () => ({
       lastUpdate,
-    }),
-    [lastUpdate],
-  );
-
-  const aggregatedValue = useMemo(
-    () => ({
       history,
       latestAggregated,
-      refreshHistory: fetchAggregatedRange,
-      refreshLatest: fetchAggregatedRange,
-    }),
-    [history, latestAggregated, fetchAggregatedRange],
-  );
-
-  const queueLogsValue = useMemo(
-    () => ({
-      workerLogs,
+      refresh: fetchAggregatedRange,
       workQueueStats,
       refreshWorkQueueStats: fetchWorkQueueStats,
-      refreshWorkerLogs: fetchWorkerLogs,
     }),
-    [workerLogs, workQueueStats, fetchWorkQueueStats, fetchWorkerLogs],
+    [
+      runId,
+      run,
+      isConnected,
+      error,
+      lastUpdate,
+      history,
+      latestAggregated,
+      fetchAggregatedRange,
+      workQueueStats,
+      fetchWorkQueueStats,
+    ],
   );
 
-  return (
-    <RunMetaContext.Provider value={metaValue}>
-      <RunConnectionContext.Provider value={connectionValue}>
-        <RunHeartbeatContext.Provider value={heartbeatValue}>
-          <RunAggregatedContext.Provider value={aggregatedValue}>
-            <RunQueueLogsContext.Provider value={queueLogsValue}>{children}</RunQueueLogsContext.Provider>
-          </RunAggregatedContext.Provider>
-        </RunHeartbeatContext.Provider>
-      </RunConnectionContext.Provider>
-    </RunMetaContext.Provider>
-  );
-};
-
-export const useRunState = () => {
-  const ctx = useContext(RunMetaContext);
-  if (!ctx) {
-    throw new Error("useRunState must be used within RunHistoryProvider");
-  }
-  return ctx;
-};
-
-export const useRunConnection = () => {
-  const ctx = useContext(RunConnectionContext);
-  if (!ctx) {
-    throw new Error("useRunConnection must be used within RunHistoryProvider");
-  }
-  return ctx;
-};
-
-export const useRunHeartbeat = () => {
-  const ctx = useContext(RunHeartbeatContext);
-  if (!ctx) {
-    throw new Error("useRunHeartbeat must be used within RunHistoryProvider");
-  }
-  return ctx;
-};
-
-export const useRunAggregated = () => {
-  const ctx = useContext(RunAggregatedContext);
-  if (!ctx) {
-    throw new Error("useRunAggregated must be used within RunHistoryProvider");
-  }
-  return ctx;
-};
-
-export const useRunQueueLogs = () => {
-  const ctx = useContext(RunQueueLogsContext);
-  if (!ctx) {
-    throw new Error("useRunQueueLogs must be used within RunHistoryProvider");
-  }
-  return ctx;
+  return <RunHistoryContext.Provider value={value}>{children}</RunHistoryContext.Provider>;
 };
 
 export const useRunHistory = () => {
-  const meta = useRunState();
-  const connection = useRunConnection();
-  const heartbeat = useRunHeartbeat();
-  const aggregated = useRunAggregated();
-  const queueLogs = useRunQueueLogs();
-  const ctx = useMemo(
-    () => ({
-      ...meta,
-      ...connection,
-      ...heartbeat,
-      ...aggregated,
-      ...queueLogs,
-    }),
-    [meta, connection, heartbeat, aggregated, queueLogs],
-  );
+  const ctx = useContext(RunHistoryContext);
   if (!ctx) {
     throw new Error("useRunHistory must be used within RunHistoryProvider");
   }

@@ -4,16 +4,14 @@ use symbolica::numerical_integration::{ContinuousGrid, Grid, MonteCarloRng, Samp
 use tracing::info;
 
 use crate::{
-    Batch, EngineError,
-    batch::PointSpec,
-    engines::{BatchContext, BuildError, BuildFromJson, SamplerAggregator},
+    Batch, EngineError, PointSpec,
+    engines::{BatchContext, BuildError, SamplerAggregator},
 };
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HavanaSamplerParams {
     seed: u64,
-    continuous_dims: usize,
     bins: usize,
     min_samples_for_update: usize,
     samples_for_update: usize,
@@ -26,7 +24,6 @@ impl Default for HavanaSamplerParams {
     fn default() -> Self {
         Self {
             seed: 0,
-            continuous_dims: 1,
             bins: 64,
             min_samples_for_update: 1_024,
             samples_for_update: 10_240,
@@ -37,10 +34,18 @@ impl Default for HavanaSamplerParams {
     }
 }
 
-fn validate_havana_sampler_params(parsed: &HavanaSamplerParams) -> Result<(), BuildError> {
-    if parsed.continuous_dims == 0 {
+fn validate_havana_sampler_params(
+    parsed: &HavanaSamplerParams,
+    point_spec: &PointSpec,
+) -> Result<(), BuildError> {
+    if point_spec.continuous_dims == 0 {
         return Err(BuildError::build(
             "havana sampler requires continuous_dims > 0",
+        ));
+    }
+    if point_spec.discrete_dims != 0 {
+        return Err(BuildError::build(
+            "havana sampler requires point_spec.discrete_dims == 0",
         ));
     }
     if parsed.bins == 0 {
@@ -143,14 +148,16 @@ impl HavanaSampler {
     }
 }
 
-impl BuildFromJson for HavanaSampler {
-    type Params = HavanaSamplerParams;
-    fn from_parsed_params(params: Self::Params) -> Result<Self, BuildError> {
-        validate_havana_sampler_params(&params)?;
+impl HavanaSampler {
+    pub(crate) fn from_params_and_point_spec(
+        params: HavanaSamplerParams,
+        point_spec: &PointSpec,
+    ) -> Result<Self, BuildError> {
+        validate_havana_sampler_params(&params, point_spec)?;
 
         let rng = MonteCarloRng::new(params.seed, 0);
         let grid = Grid::Continuous(ContinuousGrid::new(
-            params.continuous_dims,
+            point_spec.continuous_dims,
             params.bins,
             params.min_samples_for_update,
             None,
@@ -162,7 +169,7 @@ impl BuildFromJson for HavanaSampler {
             })?;
 
         Ok(HavanaSampler::new(
-            params.continuous_dims,
+            point_spec.continuous_dims,
             grid,
             rng,
             params.samples_for_update,

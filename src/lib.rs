@@ -4,13 +4,11 @@
 //! numerical integration using PostgreSQL as a work queue.
 
 pub mod core;
-pub mod batch {
-    pub use crate::core::batch::*;
-}
 pub mod engines;
+pub mod preprocess;
 pub mod runners;
 pub mod stores;
-pub mod telemetry;
+pub mod tracing;
 
 use dotenvy::dotenv;
 use sqlx::{Pool, Postgres, postgres::PgPoolOptions};

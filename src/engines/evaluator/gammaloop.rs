@@ -11,7 +11,7 @@ use serde_json::json;
 
 use crate::{
     Batch, BatchResult, BuildError, EvalError, PointSpec,
-    engines::{BuildFromJson, EvalBatchOptions, Evaluator, observable::ObservableFactory},
+    engines::{BuildFromJson, EvalBatchOptions, Evaluator, ObservableConfig},
 };
 
 pub struct GammaLoopEvaluator {
@@ -24,6 +24,7 @@ pub struct GammaLoopEvaluator {
     momentum_space: bool,
     use_f128: bool,
     training_projection: TrainingProjection,
+    point_spec: PointSpec,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, Default)]
@@ -57,6 +58,8 @@ pub struct GammaLoopParams {
     pub momentum_space: bool,
     pub use_f128: bool,
     pub training_projection: TrainingProjection,
+    pub continuous_dims: usize,
+    pub discrete_dims: usize,
 }
 
 impl Default for GammaLoopParams {
@@ -69,6 +72,8 @@ impl Default for GammaLoopParams {
             momentum_space: true,
             use_f128: false,
             training_projection: TrainingProjection::default(),
+            continuous_dims: 3,
+            discrete_dims: 0,
         }
     }
 }
@@ -111,6 +116,10 @@ impl BuildFromJson for GammaLoopEvaluator {
             momentum_space: params.momentum_space,
             use_f128: params.use_f128,
             training_projection: params.training_projection,
+            point_spec: PointSpec {
+                continuous_dims: params.continuous_dims,
+                discrete_dims: params.discrete_dims,
+            },
         })
     }
 }
@@ -148,7 +157,8 @@ impl GammaLoopEvaluator {
                 false,
                 self.momentum_space,
                 self.use_f128,
-            );
+            )
+            .map_err(|err| EvalError::eval(err.to_string()))?;
             let res_to_return: num::complex::Complex64 = if let Some(jac) = inspect_res_jac {
                 jac_res.push(jac);
                 if jac == 0.0 {
@@ -177,21 +187,21 @@ impl GammaLoopEvaluator {
 }
 
 impl Evaluator for GammaLoopEvaluator {
-    fn validate_point_spec(&self, _point_spec: &PointSpec) -> Result<(), BuildError> {
-        Ok(()) //todo
+    fn get_point_spec(&self) -> PointSpec {
+        self.point_spec.clone()
     }
 
     fn eval_batch(
         &mut self,
         batch: &Batch,
-        observable_factory: &ObservableFactory,
+        observable_config: &ObservableConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
         let weights = batch
             .weights()
             .as_slice()
             .ok_or_else(|| EvalError::eval("Batch weights array must be standard-layout"))?;
-        let mut observable = observable_factory
+        let mut observable = observable_config
             .build()
             .map_err(|err| EvalError::eval(err.to_string()))?;
         let mut values = if options.require_training_values {
@@ -239,7 +249,7 @@ impl Evaluator for GammaLoopEvaluator {
             } else {
                 return Err(EvalError::eval(format!(
                     "gammaloop evaluator requires scalar or complex-capable observables, got {}",
-                    observable_factory.implementation
+                    observable_config.kind_str()
                 )));
             }
 
@@ -268,9 +278,5 @@ impl Evaluator for GammaLoopEvaluator {
             "use_f128": self.use_f128,
             "training_projection": self.training_projection,
         })
-    }
-
-    fn supports_observable(&self, _observable_factory: &ObservableFactory) -> bool {
-        true //todo
     }
 }

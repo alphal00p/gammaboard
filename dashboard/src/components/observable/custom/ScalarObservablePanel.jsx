@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import SampleChart from "../../SampleChart";
 
-const toInverseNormalizedErrorSamples = (samples) =>
+const toAbsSignalToNoiseSquaredSamples = (samples) =>
   (Array.isArray(samples) ? samples : [])
     .map((sample) => {
       const sampleCount = Number(sample.sampleCount);
@@ -11,38 +11,34 @@ const toInverseNormalizedErrorSamples = (samples) =>
       if (!Number.isFinite(meanAbs) || meanAbs <= 0) return null;
       if (!Number.isFinite(stderr) || stderr <= 0) return null;
 
-      // Relative normalized error: stderr / mean(abs)
-      const normalizedError = stderr / meanAbs;
-      if (!Number.isFinite(normalizedError) || normalizedError === 0) return null;
-
-      const inverseAbsNormalizedError = Math.abs(1 / normalizedError);
-      if (!Number.isFinite(inverseAbsNormalizedError)) return null;
+      const value = (meanAbs * meanAbs) / (stderr * stderr);
+      if (!Number.isFinite(value)) return null;
 
       return {
-        sampleCount: Math.sqrt(sampleCount),
-        mean: inverseAbsNormalizedError,
+        sampleCount,
+        mean: value,
       };
     })
     .filter(Boolean);
 
 const ScalarObservablePanel = ({ samples, isConnected, hasRun, target }) => {
-  const inverseNormalizedErrorSamples = useMemo(() => toInverseNormalizedErrorSamples(samples), [samples]);
+  const absSignalToNoiseSquaredSamples = useMemo(() => toAbsSignalToNoiseSquaredSamples(samples), [samples]);
 
   return (
     <>
       <SampleChart samples={samples} isConnected={isConnected} hasRun={hasRun} target={target} />
-      {inverseNormalizedErrorSamples.length > 0 && (
+      {absSignalToNoiseSquaredSamples.length > 0 && (
         <SampleChart
-          samples={inverseNormalizedErrorSamples}
+          samples={absSignalToNoiseSquaredSamples}
           isConnected={isConnected}
           hasRun={hasRun}
-          title="mean(abs) / stderr vs sqrt(Sample Count)"
+          title="mean(abs)^2 / err^2 vs nr_samples"
           lineColor="#2e7d32"
           bandColor="#2e7d32"
-          xAxisLabel="sqrt(Sample Count)"
-          yAxisLabel="mean(abs) / stderr"
-          sampleLabel="sqrt(N)"
-          valueLabel="mean(abs)/stderr"
+          xAxisLabel="nr_samples"
+          yAxisLabel="mean(abs)^2 / err^2"
+          sampleLabel="nr_samples"
+          valueLabel="mean(abs)^2 / err^2"
           showStdErr={false}
           showErrorBand={false}
           showTargetLine={false}

@@ -69,10 +69,7 @@ SELECT
     r.id as run_id,
     r.name as run_name,
     r.status as run_status,
-    (
-        COALESCE(r.integration_params, '{}'::jsonb)
-        || jsonb_build_object('observable_implementation', r.observable_implementation)
-    ) as integration_params,
+    COALESCE(r.integration_params, '{}'::jsonb) as integration_params,
     r.target,
     r.evaluator_init_metadata,
     r.sampler_aggregator_init_metadata,

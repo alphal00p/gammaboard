@@ -1,4 +1,4 @@
-use crate::batch::PointSpec;
+use crate::core::PointSpec;
 use crate::core::{RunStatus, WorkerRole};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
@@ -246,13 +246,22 @@ pub(crate) async fn create_run(
     name: &str,
     integration_params: &JsonValue,
     target: Option<&JsonValue>,
-    observable_implementation: &str,
     point_spec: &PointSpec,
+    evaluator_init_metadata: Option<&JsonValue>,
+    sampler_aggregator_init_metadata: Option<&JsonValue>,
 ) -> Result<i32, sqlx::Error> {
     sqlx::query_scalar(
         r#"
-        INSERT INTO runs (status, name, integration_params, target, observable_implementation, point_spec)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO runs (
+            status,
+            name,
+            integration_params,
+            target,
+            point_spec,
+            evaluator_init_metadata,
+            sampler_aggregator_init_metadata
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING id
         "#,
     )
@@ -260,8 +269,9 @@ pub(crate) async fn create_run(
     .bind(name)
     .bind(integration_params)
     .bind(target)
-    .bind(observable_implementation)
     .bind(sqlx::types::Json(point_spec))
+    .bind(evaluator_init_metadata)
+    .bind(sampler_aggregator_init_metadata)
     .fetch_one(pool)
     .await
 }
@@ -296,46 +306,6 @@ pub(crate) async fn set_all_runs_status(
         "#,
     )
     .bind(status.as_str())
-    .execute(pool)
-    .await?;
-    Ok(result.rows_affected())
-}
-
-pub(crate) async fn try_set_evaluator_init_metadata(
-    pool: &PgPool,
-    run_id: i32,
-    metadata: &JsonValue,
-) -> Result<u64, sqlx::Error> {
-    let result = sqlx::query(
-        r#"
-        UPDATE runs
-        SET evaluator_init_metadata = $2
-        WHERE id = $1
-          AND evaluator_init_metadata IS NULL
-        "#,
-    )
-    .bind(run_id)
-    .bind(metadata)
-    .execute(pool)
-    .await?;
-    Ok(result.rows_affected())
-}
-
-pub(crate) async fn try_set_sampler_init_metadata(
-    pool: &PgPool,
-    run_id: i32,
-    metadata: &JsonValue,
-) -> Result<u64, sqlx::Error> {
-    let result = sqlx::query(
-        r#"
-        UPDATE runs
-        SET sampler_aggregator_init_metadata = $2
-        WHERE id = $1
-          AND sampler_aggregator_init_metadata IS NULL
-        "#,
-    )
-    .bind(run_id)
-    .bind(metadata)
     .execute(pool)
     .await?;
     Ok(result.rows_affected())

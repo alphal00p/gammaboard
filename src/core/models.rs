@@ -1,4 +1,4 @@
-use crate::batch::{Batch, BatchResult};
+use crate::core::{Batch, BatchResult};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -163,6 +163,7 @@ pub struct CompletedBatch {
 pub struct RuntimeLogEvent {
     pub source: String,
     pub run_id: Option<i32>,
+    pub node_id: Option<String>,
     pub worker_id: Option<String>,
     pub level: String,
     pub target: String,

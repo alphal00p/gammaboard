@@ -30,9 +30,10 @@ const buildChartData = (samples) => {
     .sort((a, b) => a.sampleCount - b.sampleCount);
 };
 
-const ScalarTooltip = ({ active, payload, sampleLabel, valueLabel, showStdErr }) => {
+const ScalarTooltip = ({ active, payload, sampleLabel, valueLabel, showStdErr, sampleFormatter }) => {
   if (!active || !payload || payload.length === 0) return null;
   const data = payload[0].payload;
+  const formatSample = sampleFormatter || ((value) => value);
   return (
     <Paper elevation={3} sx={{ p: 1.5, border: 1, borderColor: "divider" }}>
       <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
@@ -41,7 +42,7 @@ const ScalarTooltip = ({ active, payload, sampleLabel, valueLabel, showStdErr })
             {sampleLabel}:
           </Typography>
           <Typography variant="caption" sx={{ fontWeight: 600, fontFamily: "monospace" }}>
-            {data.sampleCount}
+            {formatSample(data.sampleCount)}
           </Typography>
         </Box>
         <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2 }}>
@@ -84,6 +85,8 @@ const SampleChart = ({
   showErrorBand = true,
   showTargetLine = true,
   showTargetSummary = true,
+  xTickFormatter = null,
+  sampleFormatter = null,
 }) => {
   const chartData = useMemo(() => buildChartData(samples), [samples]);
   const lastPoint = chartData.length > 0 ? chartData[chartData.length - 1] : null;
@@ -169,6 +172,7 @@ const SampleChart = ({
                 domain={xDomain}
                 label={{ value: xAxisLabel, position: "insideBottom", offset: -10 }}
                 stroke="#666"
+                tickFormatter={xTickFormatter || undefined}
               />
               <YAxis
                 domain={yDomain}
@@ -179,7 +183,14 @@ const SampleChart = ({
                 stroke="#666"
               />
               <Tooltip
-                content={<ScalarTooltip sampleLabel={sampleLabel} valueLabel={valueLabel} showStdErr={showStdErr} />}
+                content={
+                  <ScalarTooltip
+                    sampleLabel={sampleLabel}
+                    valueLabel={valueLabel}
+                    showStdErr={showStdErr}
+                    sampleFormatter={sampleFormatter}
+                  />
+                }
               />
               {showTargetLine && targetValue != null && (
                 <ReferenceLine

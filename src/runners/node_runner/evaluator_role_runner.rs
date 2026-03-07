@@ -1,6 +1,4 @@
 use crate::core::StoreError;
-use crate::engines::observable::ObservableFactory;
-use crate::engines::{EvaluatorFactory, ParametrizationFactory};
 use crate::runners::evaluator::EvaluatorRunner;
 use std::time::Duration;
 use tokio::{sync::watch, time::sleep};
@@ -18,41 +16,22 @@ pub(crate) async fn run_evaluator_role<S: NodeRunnerStore>(
         return Ok(());
     };
 
-    let evaluator_factory =
-        EvaluatorFactory::new(spec.evaluator_implementation, spec.evaluator_params.clone());
-    let engine_span = tracing::span!(
-        tracing::Level::TRACE,
-        "evaluator_engine_context",
-        engine = true
-    );
-    let (evaluator, observable_factory, parametrization) = {
+    let engine_span = tracing::span!(tracing::Level::TRACE, "evaluator_engine_context");
+    let (evaluator, observable_config, parametrization) = {
         let _engine_scope = engine_span.enter();
-        let evaluator = evaluator_factory
+        let evaluator = spec
+            .evaluator
             .build()
             .map_err(|err| StoreError::store(format!("failed to build evaluator: {err}")))?;
-        evaluator
-            .validate_point_spec(&spec.point_spec)
-            .map_err(|err| {
-                StoreError::store(format!(
-                    "incompatible evaluator for point_spec on run {}: {}",
-                    worker.run_id, err
-                ))
-            })?;
 
-        let observable_factory = ObservableFactory::new(
-            spec.observable_implementation,
-            spec.observable_params.clone(),
-        );
-        observable_factory
+        spec.observable
             .build()
             .map_err(|err| StoreError::store(format!("failed to build observable: {err}")))?;
 
-        let parametrization = ParametrizationFactory::new(
-            spec.parametrization_implementation,
-            spec.parametrization_params.clone(),
-        )
-        .build()
-        .map_err(|err| StoreError::store(format!("failed to build parametrization: {err}")))?;
+        let parametrization = spec
+            .parametrization
+            .build()
+            .map_err(|err| StoreError::store(format!("failed to build parametrization: {err}")))?;
         parametrization
             .validate_point_spec(&spec.point_spec)
             .map_err(|err| {
@@ -62,27 +41,11 @@ pub(crate) async fn run_evaluator_role<S: NodeRunnerStore>(
                 ))
             })?;
 
-        (evaluator, observable_factory, parametrization)
+        (evaluator, spec.observable.clone(), parametrization)
     };
 
-    if !evaluator.supports_observable(&observable_factory) {
-        return Err(StoreError::store(format!(
-            "incompatible evaluator/observable pair for run {}: evaluator={} observable={}",
-            worker.run_id, spec.evaluator_implementation, spec.observable_implementation
-        )));
-    }
-
-    let evaluator_init_metadata = evaluator.get_init_metadata();
-    if worker
-        .store
-        .try_set_evaluator_init_metadata(worker.run_id, &evaluator_init_metadata)
-        .await?
-    {
-        info!("stored evaluator init metadata");
-    }
-
     worker
-        .register_active_worker(spec.evaluator_implementation.as_ref())
+        .register_active_worker(spec.evaluator.kind_str())
         .await?;
     worker
         .store
@@ -96,7 +59,7 @@ pub(crate) async fn run_evaluator_role<S: NodeRunnerStore>(
         worker.worker_id.clone(),
         evaluator,
         parametrization,
-        observable_factory,
+        observable_config,
         spec.point_spec.clone(),
         Duration::from_millis(
             spec.evaluator_runner_params

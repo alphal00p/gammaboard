@@ -29,11 +29,11 @@ pub enum NodeCommand {
     Stop(NodeSelection),
 }
 
-pub async fn run_node_commands(command: NodeCommand) -> Result<()> {
+pub async fn run_node_commands(command: NodeCommand, quiet: bool) -> Result<()> {
     let store = init_pg_store(10)
         .await
         .context("failed to initialize postgres store")?;
-    init_cli_tracing(&store)?;
+    init_cli_tracing(&store, quiet)?;
     let command_name = node_command_name(&command);
     let span = tracing::span!(
         tracing::Level::TRACE,
@@ -52,7 +52,7 @@ pub async fn run_node_commands(command: NodeCommand) -> Result<()> {
                 store
                     .upsert_desired_assignment(&node_id, role.into(), run_id)
                     .await?;
-                println!(
+                tracing::info!(
                     "assigned node={} role={} run_id={}",
                     node_id,
                     WorkerRole::from(role),
@@ -63,7 +63,7 @@ pub async fn run_node_commands(command: NodeCommand) -> Result<()> {
                 store
                     .clear_desired_assignment(&node_id, WorkerRole::from(role))
                     .await?;
-                println!(
+                tracing::info!(
                     "unassigned node={} role={}",
                     node_id,
                     WorkerRole::from(role)
@@ -72,7 +72,7 @@ pub async fn run_node_commands(command: NodeCommand) -> Result<()> {
             NodeCommand::ListAssignments { node_id } => {
                 let assignments = store.list_desired_assignments(node_id.as_deref()).await?;
                 if assignments.is_empty() {
-                    println!("no desired assignments");
+                    tracing::info!("no desired assignments");
                 } else {
                     for assignment in &assignments {
                         print_assignment(assignment);
@@ -82,11 +82,13 @@ pub async fn run_node_commands(command: NodeCommand) -> Result<()> {
             NodeCommand::Stop(selection) => {
                 if selection.all {
                     let rows = store.request_all_nodes_shutdown().await?;
-                    println!("requested shutdown for all nodes: rows_updated={rows}");
+                    tracing::info!("requested shutdown for all nodes: rows_updated={rows}");
                 } else {
                     for node_id in selection.node_ids {
                         let rows = store.request_node_shutdown(&node_id).await?;
-                        println!("requested shutdown for node={node_id}: rows_updated={rows}");
+                        tracing::info!(
+                            "requested shutdown for node={node_id}: rows_updated={rows}"
+                        );
                     }
                 }
             }
@@ -107,8 +109,10 @@ fn node_command_name(command: &NodeCommand) -> &'static str {
 }
 
 fn print_assignment(assignment: &DesiredAssignment) {
-    println!(
+    tracing::info!(
         "node={} role={} run_id={}",
-        assignment.node_id, assignment.role, assignment.run_id
+        assignment.node_id,
+        assignment.role,
+        assignment.run_id
     );
 }

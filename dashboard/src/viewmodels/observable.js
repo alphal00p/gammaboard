@@ -49,10 +49,10 @@ export const deriveObservableMetric = (observable, implementation) => {
     };
   }
 
-  const sumWeight = toFiniteNumber(observable?.sum_weight, 0);
+  const sumWeightedValue = toFiniteNumber(observable?.sum_weighted_value, 0);
   const sumSq = toFiniteNumber(observable?.sum_sq, 0);
   const sumAbs = toFiniteNumber(observable?.sum_abs, 0);
-  const scalar = deriveScalarStats(sumWeight, sumSq, count);
+  const scalar = deriveScalarStats(sumWeightedValue, sumSq, count);
   const meanAbs = count > 0 ? sumAbs / count : 0;
   return {
     sampleCount: count,

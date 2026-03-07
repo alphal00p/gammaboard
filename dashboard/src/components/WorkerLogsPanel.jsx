@@ -14,21 +14,9 @@ import {
   ToggleButton,
   Typography,
 } from "@mui/material";
-import { DataGrid, useGridApiRef } from "@mui/x-data-grid";
 import { formatDateTime } from "../utils/formatters";
-
-const MAX_LINES = 2000;
-
-const buildSearchText = (entry) => {
-  const message = entry?.message || "";
-  let fields = "";
-  try {
-    fields = JSON.stringify(entry?.fields || {});
-  } catch {
-    fields = "";
-  }
-  return `${message} ${fields}`.toLowerCase();
-};
+import { buildLogSearchText } from "../utils/logs";
+import { formatRunLabel } from "../utils/runs";
 
 const levelTone = (level) => {
   switch ((level || "").toLowerCase()) {
@@ -44,66 +32,112 @@ const levelTone = (level) => {
   }
 };
 
-const normalizeLevel = (level) => (level || "").toLowerCase();
+const normalizeLevel = (level) => {
+  const normalized = (level || "").toLowerCase();
+  return normalized === "warning" ? "warn" : normalized;
+};
+const EMPTY_LEVEL_FILTER = [];
 
-const mergeLogs = (previous, incoming) => {
-  if (!incoming || incoming.length === 0) return previous;
-
-  const out = [...previous];
-  const seen = new Set(out.map((entry) => entry.id));
-  let hasNewIds = false;
-  for (const entry of incoming) {
-    if (!entry || entry.id == null) continue;
-    const nextEntry = entry._searchText ? entry : { ...entry, _searchText: buildSearchText(entry) };
-    if (seen.has(entry.id)) continue;
-    seen.add(entry.id);
-    out.push(nextEntry);
-    hasNewIds = true;
-  }
-
-  if (!hasNewIds) return previous;
-  if (out.length <= MAX_LINES) return out;
-  return out.slice(out.length - MAX_LINES);
+const toDecimalId = (value) => {
+  if (value == null) return null;
+  const normalized = String(value).trim();
+  if (!/^\d+$/.test(normalized)) return null;
+  return normalized.replace(/^0+(?=\d)/, "");
 };
 
-const WorkerLogsPanel = ({ logs, runId }) => {
-  const apiRef = useGridApiRef();
-  const sourceLogs = useMemo(() => (Array.isArray(logs) ? logs : []), [logs]);
+const isLogIdAfter = (entryId, thresholdId) => {
+  const entry = toDecimalId(entryId);
+  const threshold = toDecimalId(thresholdId);
+  if (entry == null || threshold == null) return false;
+  if (entry.length !== threshold.length) return entry.length > threshold.length;
+  return entry > threshold;
+};
 
-  const [liveLogs, setLiveLogs] = useState([]);
+const WorkerLogsPanel = ({
+  logs,
+  runId,
+  runs = [],
+  title = "Worker Logs",
+  variant = "full",
+  defaultLevelFilter = EMPTY_LEVEL_FILTER,
+  onOpenFullLogs = null,
+}) => {
+  const compact = variant === "compact";
+  const sourceLogs = useMemo(
+    () =>
+      (Array.isArray(logs) ? logs : []).map((entry) =>
+        entry?._searchText ? entry : { ...entry, _searchText: buildLogSearchText(entry) },
+      ),
+    [logs],
+  );
+
   const [pausedSnapshot, setPausedSnapshot] = useState(null);
   const [selectedLogId, setSelectedLogId] = useState(null);
   const [tailEnabled, setTailEnabled] = useState(true);
   const [paused, setPaused] = useState(false);
-  const [levelFilter, setLevelFilter] = useState([]);
+  const [levelFilter, setLevelFilter] = useState(defaultLevelFilter);
+  const [runFilter, setRunFilter] = useState(runId ?? "all");
   const [workerFilter, setWorkerFilter] = useState("all");
   const [search, setSearch] = useState("");
+  const [clearAfterId, setClearAfterId] = useState(null);
 
   useEffect(() => {
-    setLiveLogs([]);
     setPausedSnapshot(null);
     setSelectedLogId(null);
     setTailEnabled(true);
     setPaused(false);
-    setLevelFilter([]);
+    setLevelFilter(defaultLevelFilter);
     setWorkerFilter("all");
     setSearch("");
-  }, [runId]);
+    setClearAfterId(null);
+  }, [defaultLevelFilter, runId]);
 
-  useEffect(() => {
-    if (sourceLogs.length === 0) return;
-    setLiveLogs((prev) => mergeLogs(prev, sourceLogs));
-  }, [sourceLogs]);
+  const visibleLiveLogs = useMemo(() => {
+    if (clearAfterId == null) return sourceLogs;
+    return sourceLogs.filter((entry) => entry?.id != null && isLogIdAfter(entry.id, clearAfterId));
+  }, [sourceLogs, clearAfterId]);
 
   const displayedLogs = useMemo(() => {
-    if (!paused) return liveLogs;
-    return pausedSnapshot ?? liveLogs;
-  }, [liveLogs, paused, pausedSnapshot]);
+    if (!paused) return visibleLiveLogs;
+    return pausedSnapshot ?? visibleLiveLogs;
+  }, [visibleLiveLogs, paused, pausedSnapshot]);
 
   const workerOptions = useMemo(() => {
     const values = new Set(displayedLogs.map((entry) => entry.worker_id).filter(Boolean));
     return Array.from(values).sort();
   }, [displayedLogs]);
+
+  const runOptions = useMemo(() => {
+    const list = Array.isArray(runs) ? runs : [];
+    return list
+      .map((run) => run.run_id)
+      .filter((id) => Number.isFinite(Number(id)))
+      .sort((a, b) => a - b);
+  }, [runs]);
+
+  const runLabel = (id) => {
+    const numericId = Number(id);
+    const match = runs.find((run) => run.run_id === numericId);
+    if (!match) return `Run #${numericId}`;
+    return formatRunLabel(match);
+  };
+
+  useEffect(() => {
+    if (runId == null) return;
+    setRunFilter((current) => {
+      if (current === "all") return runId;
+      if (!runOptions.includes(Number(current))) return runId;
+      return current;
+    });
+  }, [runId, runOptions]);
+
+  useEffect(() => {
+    setRunFilter((current) => {
+      if (current === "all") return current;
+      if (!runOptions.includes(Number(current))) return "all";
+      return current;
+    });
+  }, [runOptions]);
 
   const filteredRows = useMemo(() => {
     const text = search.trim().toLowerCase();
@@ -111,6 +145,7 @@ const WorkerLogsPanel = ({ logs, runId }) => {
     return displayedLogs.filter((entry) => {
       const level = normalizeLevel(entry.level);
       if (levelFilter.length > 0 && !levelFilter.includes(level)) return false;
+      if (runFilter !== "all" && Number(entry.run_id) !== Number(runFilter)) return false;
       if (workerFilter !== "all" && entry.worker_id !== workerFilter) return false;
 
       if (text) {
@@ -120,16 +155,7 @@ const WorkerLogsPanel = ({ logs, runId }) => {
 
       return true;
     });
-  }, [displayedLogs, levelFilter, workerFilter, search]);
-
-  useEffect(() => {
-    if (!tailEnabled || paused || filteredRows.length === 0) return;
-    const rowIndex = filteredRows.length - 1;
-    const timeout = setTimeout(() => {
-      apiRef.current?.scrollToIndexes({ rowIndex });
-    }, 0);
-    return () => clearTimeout(timeout);
-  }, [apiRef, filteredRows.length, paused, tailEnabled]);
+  }, [displayedLogs, levelFilter, runFilter, workerFilter, search]);
 
   const selectedLog = useMemo(
     () => filteredRows.find((entry) => entry.id === selectedLogId) || null,
@@ -137,56 +163,13 @@ const WorkerLogsPanel = ({ logs, runId }) => {
   );
 
   const pausedSize = pausedSnapshot?.length ?? 0;
-  const backlogCount = paused ? Math.max(liveLogs.length - pausedSize, 0) : 0;
+  const backlogCount = paused ? Math.max(visibleLiveLogs.length - pausedSize, 0) : 0;
   const levelOptions = ["error", "warn", "info", "debug", "trace"];
-
-  const columns = useMemo(
-    () => [
-      {
-        field: "ts",
-        headerName: "Timestamp",
-        width: 220,
-        renderCell: (params) => formatDateTime(params.value, "-"),
-      },
-      {
-        field: "level",
-        headerName: "Level",
-        width: 90,
-        renderCell: (params) => (
-          <Box component="span" sx={{ color: levelTone(params.value), fontWeight: 700 }}>
-            {(params.value || "unknown").toUpperCase()}
-          </Box>
-        ),
-      },
-      { field: "worker_id", headerName: "Worker", width: 220 },
-      {
-        field: "message",
-        headerName: "Message",
-        flex: 1,
-        minWidth: 300,
-        renderCell: (params) => (
-          <Box
-            component="span"
-            sx={{
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              display: "block",
-              width: "100%",
-            }}
-          >
-            {params.value || ""}
-          </Box>
-        ),
-      },
-    ],
-    [],
-  );
 
   return (
     <Box sx={{ mb: 3 }}>
       <Typography variant="h6" gutterBottom>
-        Worker Logs
+        {title}
       </Typography>
 
       <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mb: 1.5 }}>
@@ -210,22 +193,43 @@ const WorkerLogsPanel = ({ logs, runId }) => {
           </Select>
         </FormControl>
 
-        <FormControl size="small" sx={{ minWidth: 200 }}>
-          <InputLabel id="log-worker-label">Worker</InputLabel>
-          <Select
-            labelId="log-worker-label"
-            value={workerFilter}
-            label="Worker"
-            onChange={(event) => setWorkerFilter(event.target.value)}
-          >
-            <MenuItem value="all">All Workers</MenuItem>
-            {workerOptions.map((workerId) => (
-              <MenuItem key={workerId} value={workerId}>
-                {workerId}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+        {!compact && (
+          <FormControl size="small" sx={{ minWidth: 220 }}>
+            <InputLabel id="log-run-label">Run</InputLabel>
+            <Select
+              labelId="log-run-label"
+              value={runFilter}
+              label="Run"
+              onChange={(event) => setRunFilter(event.target.value)}
+            >
+              <MenuItem value="all">All Runs</MenuItem>
+              {runOptions.map((run) => (
+                <MenuItem key={run} value={run}>
+                  {runLabel(run)}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        )}
+
+        {!compact && (
+          <FormControl size="small" sx={{ minWidth: 200 }}>
+            <InputLabel id="log-worker-label">Worker</InputLabel>
+            <Select
+              labelId="log-worker-label"
+              value={workerFilter}
+              label="Worker"
+              onChange={(event) => setWorkerFilter(event.target.value)}
+            >
+              <MenuItem value="all">All Workers</MenuItem>
+              {workerOptions.map((workerId) => (
+                <MenuItem key={workerId} value={workerId}>
+                  {workerId}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        )}
 
         <TextField
           size="small"
@@ -251,7 +255,7 @@ const WorkerLogsPanel = ({ logs, runId }) => {
             setPaused((value) => {
               const next = !value;
               if (next) {
-                setPausedSnapshot(liveLogs);
+                setPausedSnapshot(visibleLiveLogs);
               } else {
                 setPausedSnapshot(null);
               }
@@ -266,13 +270,19 @@ const WorkerLogsPanel = ({ logs, runId }) => {
           size="small"
           variant="outlined"
           onClick={() => {
-            setLiveLogs([]);
             setPausedSnapshot(null);
             setSelectedLogId(null);
+            const last = sourceLogs[sourceLogs.length - 1];
+            setClearAfterId(last?.id ?? clearAfterId);
           }}
         >
           Clear
         </Button>
+        {compact && typeof onOpenFullLogs === "function" && (
+          <Button size="small" variant="text" onClick={onOpenFullLogs}>
+            Open Full Logs
+          </Button>
+        )}
       </Stack>
 
       {paused && backlogCount > 0 ? (
@@ -284,74 +294,156 @@ const WorkerLogsPanel = ({ logs, runId }) => {
       <Paper
         variant="outlined"
         sx={{
-          height: { xs: 320, md: 460 },
+          height: compact ? { xs: 260, md: 320 } : { xs: 320, md: 460 },
           mb: 1.5,
+          overflow: "auto",
         }}
       >
-        <DataGrid
-          apiRef={apiRef}
-          rows={filteredRows}
-          columns={columns}
-          getRowId={(row) => row.id}
-          density="compact"
-          rowHeight={30}
-          disableColumnMenu
-          disableRowSelectionOnClick={false}
-          hideFooter
-          onRowClick={(params) => setSelectedLogId(params.id)}
-          sx={{
-            border: 0,
-            "& .MuiDataGrid-columnHeaderTitle": {
-              fontWeight: 700,
-              fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace",
-            },
-            "& .MuiDataGrid-cell": {
-              fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace",
-              fontSize: "0.78rem",
-            },
-            "& .MuiDataGrid-row.Mui-selected": {
-              bgcolor: "action.selected",
-            },
-            "& .MuiDataGrid-row:hover": {
-              bgcolor: "action.hover",
-            },
-          }}
-        />
-      </Paper>
-
-      <Paper variant="outlined" sx={{ p: 1.5 }}>
-        <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-          Selected Log Details
-        </Typography>
-        {selectedLog ? (
-          <Box
-            component="pre"
-            sx={{
-              m: 0,
-              fontSize: "0.76rem",
-              overflowX: "auto",
-              fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace",
-            }}
-          >
-            {JSON.stringify(
-              {
-                id: selectedLog.id,
-                ts: selectedLog.ts,
-                level: selectedLog.level,
-                worker_id: selectedLog.worker_id,
-                message: selectedLog.message,
-                fields: selectedLog.fields || {},
-              },
-              null,
-              2,
+        <Box component="table" sx={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+          <Box component="thead">
+            <Box component="tr">
+              <Box
+                component="th"
+                sx={{ textAlign: "left", p: 1, borderBottom: "1px solid", borderColor: "divider", width: 220 }}
+              >
+                Timestamp
+              </Box>
+              <Box
+                component="th"
+                sx={{ textAlign: "left", p: 1, borderBottom: "1px solid", borderColor: "divider", width: 90 }}
+              >
+                Level
+              </Box>
+              {!compact && (
+                <Box
+                  component="th"
+                  sx={{ textAlign: "left", p: 1, borderBottom: "1px solid", borderColor: "divider", width: 220 }}
+                >
+                  Worker
+                </Box>
+              )}
+              {!compact && (
+                <Box
+                  component="th"
+                  sx={{ textAlign: "left", p: 1, borderBottom: "1px solid", borderColor: "divider", width: 260 }}
+                >
+                  Run
+                </Box>
+              )}
+              <Box component="th" sx={{ textAlign: "left", p: 1, borderBottom: "1px solid", borderColor: "divider" }}>
+                Message
+              </Box>
+            </Box>
+          </Box>
+          <Box component="tbody">
+            {filteredRows.map((row, index) => (
+              <Box
+                component="tr"
+                key={row.id != null ? String(row.id) : `row-${index}`}
+                onClick={compact ? undefined : () => setSelectedLogId(row.id)}
+                sx={{
+                  cursor: compact ? "default" : "pointer",
+                  bgcolor: !compact && selectedLogId === row.id ? "action.selected" : "transparent",
+                  "&:hover": { bgcolor: compact ? "transparent" : "action.hover" },
+                }}
+              >
+                <Box
+                  component="td"
+                  sx={{ p: 1, borderBottom: "1px solid", borderColor: "divider", whiteSpace: "nowrap" }}
+                >
+                  {formatDateTime(row.ts, "-")}
+                </Box>
+                <Box
+                  component="td"
+                  sx={{
+                    p: 1,
+                    borderBottom: "1px solid",
+                    borderColor: "divider",
+                    color: levelTone(row.level),
+                    fontWeight: 700,
+                  }}
+                >
+                  {(row.level || "unknown").toUpperCase()}
+                </Box>
+                {!compact && (
+                  <Box
+                    component="td"
+                    sx={{ p: 1, borderBottom: "1px solid", borderColor: "divider", whiteSpace: "nowrap" }}
+                  >
+                    {row.worker_id || "-"}
+                  </Box>
+                )}
+                {!compact && (
+                  <Box
+                    component="td"
+                    sx={{ p: 1, borderBottom: "1px solid", borderColor: "divider", whiteSpace: "nowrap" }}
+                  >
+                    {row.run_id != null ? runLabel(row.run_id) : "-"}
+                  </Box>
+                )}
+                <Box
+                  component="td"
+                  sx={{
+                    p: 1,
+                    borderBottom: "1px solid",
+                    borderColor: "divider",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {row.message || ""}
+                </Box>
+              </Box>
+            ))}
+            {filteredRows.length === 0 && (
+              <Box component="tr">
+                <Box component="td" colSpan={compact ? 3 : 5} sx={{ p: 2, color: "text.secondary" }}>
+                  No logs match the current filters.
+                </Box>
+              </Box>
             )}
           </Box>
-        ) : (
-          <Typography variant="body2" color="text.secondary">
-            Click a log line to inspect raw fields.
-          </Typography>
-        )}
+        </Box>
       </Paper>
+
+      {!compact && (
+        <Paper variant="outlined" sx={{ p: 1.5 }}>
+          <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+            Selected Log Details
+          </Typography>
+          {selectedLog ? (
+            <Box
+              component="pre"
+              sx={{
+                m: 0,
+                fontSize: "0.76rem",
+                overflowX: "auto",
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace",
+              }}
+            >
+              {JSON.stringify(
+                {
+                  id: selectedLog.id,
+                  ts: selectedLog.ts,
+                  run_id: selectedLog.run_id,
+                  node_id: selectedLog.node_id,
+                  level: selectedLog.level,
+                  worker_id: selectedLog.worker_id,
+                  message: selectedLog.message,
+                  fields: selectedLog.fields || {},
+                },
+                null,
+                2,
+              )}
+            </Box>
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              Click a log line to inspect raw fields.
+            </Typography>
+          )}
+        </Paper>
+      )}
     </Box>
   );
 };

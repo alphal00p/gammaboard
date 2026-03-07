@@ -1,13 +1,17 @@
 import EnginePanelLayout from "./common/EnginePanelLayout";
 import ImplementationSummaryCard from "./common/ImplementationSummaryCard";
 import EvaluatorCustomPanel from "./evaluator/EvaluatorCustomPanel";
+import { splitKindConfig, toConfigObject } from "../utils/config";
 
 const EvaluatorPanel = ({ run }) => {
-  const integrationParams = run?.integration_params || {};
-  const implementation = integrationParams.evaluator_implementation || "unknown";
-  const evaluatorParams = integrationParams.evaluator_params || {};
-  const runnerParams = integrationParams.evaluator_runner_params || {};
-  const evaluatorInitMetadata = run?.evaluator_init_metadata || {};
+  const integrationParams = toConfigObject(run?.integration_params);
+  const { implementation, params: evaluatorParams } = splitKindConfig(
+    integrationParams.evaluator,
+    "unknown",
+    integrationParams.evaluator_params,
+  );
+  const runnerParams = toConfigObject(integrationParams.evaluator_runner_params);
+  const evaluatorInitMetadata = toConfigObject(run?.evaluator_init_metadata);
 
   return (
     <EnginePanelLayout
@@ -35,9 +39,9 @@ const EvaluatorPanel = ({ run }) => {
       }
       jsonTitle="evaluator JSON"
       jsonData={{
-        evaluator_params: evaluatorParams,
-        evaluator_runner_params: runnerParams,
-        evaluator_init_metadata: evaluatorInitMetadata,
+        evaluator: integrationParams?.evaluator ?? null,
+        evaluator_runner_params: integrationParams?.evaluator_runner_params ?? null,
+        evaluator_init_metadata: run?.evaluator_init_metadata ?? null,
       }}
     />
   );

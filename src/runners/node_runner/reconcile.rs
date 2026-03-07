@@ -52,6 +52,14 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         &mut self,
         desired_target: Option<RoleTarget>,
     ) -> Result<(), StoreError> {
+        if desired_target != self.failure_target {
+            self.failure_target = desired_target;
+            self.consecutive_start_failures = 0;
+            if self.blocked_target != desired_target {
+                self.blocked_target = None;
+            }
+        }
+
         self.reap_finished_task().await;
 
         if self.current_target() == desired_target {
@@ -61,6 +69,9 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         self.stop_current().await;
 
         if let Some(target) = desired_target {
+            if self.blocked_target == Some(target) {
+                return Ok(());
+            }
             self.start(target);
         }
 
@@ -90,15 +101,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
         let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
         let role_span_for_task = role_context_span.clone();
-        let handle = tokio::spawn(
-            async move {
-                let result = runtime.run(stop_rx).await;
-                if let Err(err) = result {
-                    error!("role task failed: {err}");
-                }
-            }
-            .instrument(role_span_for_task),
-        );
+        let handle =
+            tokio::spawn(async move { runtime.run(stop_rx).await }.instrument(role_span_for_task));
 
         self.active_task = Some(ActiveRoleTask {
             target,
@@ -121,8 +125,35 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         };
         let _role_scope = task.context_span.enter();
 
-        if let Err(err) = task.handle.await {
-            warn!("role task join failed: {err}");
+        match task.handle.await {
+            Ok(Ok(())) => {
+                self.failure_target = None;
+                self.consecutive_start_failures = 0;
+                self.blocked_target = None;
+            }
+            Ok(Err(err)) => {
+                error!("role task failed: {err}");
+                if self.failure_target == Some(task.target) {
+                    self.consecutive_start_failures =
+                        self.consecutive_start_failures.saturating_add(1);
+                } else {
+                    self.failure_target = Some(task.target);
+                    self.consecutive_start_failures = 1;
+                }
+                if self.consecutive_start_failures >= self.config.max_consecutive_start_failures {
+                    self.blocked_target = Some(task.target);
+                    warn!(
+                        role = %task.target.role,
+                        run_id = task.target.run_id,
+                        consecutive_failures = self.consecutive_start_failures,
+                        max_consecutive_start_failures = self.config.max_consecutive_start_failures,
+                        "aborting role task restarts after repeated startup failures; waiting for desired assignment change"
+                    );
+                }
+            }
+            Err(err) => {
+                warn!("role task join failed: {err}");
+            }
         }
 
         warn!("role task exited; waiting for supervisor reconcile");
@@ -138,7 +169,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
         let _ = task.stop_tx.send(true);
 
-        let mut handle: JoinHandle<()> = task.handle;
+        let mut handle: JoinHandle<Result<(), StoreError>> = task.handle;
         match timeout(ROLE_TASK_SHUTDOWN_TIMEOUT, &mut handle).await {
             Ok(join_result) => {
                 if let Err(err) = join_result {

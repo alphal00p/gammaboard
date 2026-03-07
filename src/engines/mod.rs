@@ -7,13 +7,11 @@ pub mod sampler_aggregator;
 mod shared;
 
 pub use errors::{BuildError, EngineError, EvalError};
-pub use evaluator::{EvalBatchOptions, Evaluator, EvaluatorFactory, EvaluatorImplementation};
-pub use observable::{
-    ComplexIngest, Observable, ObservableFactory, ObservableImplementation, ScalarIngest,
-    ScalarObservable,
+pub use evaluator::{EvalBatchOptions, Evaluator};
+pub use observable::{ComplexIngest, Observable, ScalarIngest, ScalarObservable};
+pub use parametrization::Parametrization;
+pub use sampler_aggregator::{BatchContext, SamplerAggregator};
+pub use shared::{
+    BuildFromJson, EvaluatorConfig, IntegrationParams, ObservableConfig, ParametrizationConfig,
+    RunSpec, SamplerAggregatorConfig,
 };
-pub use parametrization::{Parametrization, ParametrizationFactory, ParametrizationImplementation};
-pub use sampler_aggregator::{
-    BatchContext, SamplerAggregator, SamplerAggregatorFactory, SamplerAggregatorImplementation,
-};
-pub use shared::{BuildFromJson, IntegrationParams, RunSpec};

@@ -1,5 +1,5 @@
 use super::Parametrization;
-use crate::batch::Batch;
+use crate::core::Batch;
 use crate::engines::{BuildError, BuildFromJson, EngineError};
 use serde::Deserialize;
 
