@@ -6,43 +6,6 @@ use std::{fmt, str::FromStr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum RunStatus {
-    Pending,
-    #[serde(rename = "warm-up")]
-    WarmUp,
-    Running,
-    Completed,
-    Paused,
-    Cancelled,
-}
-
-impl RunStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            RunStatus::Pending => "pending",
-            RunStatus::WarmUp => "warm-up",
-            RunStatus::Running => "running",
-            RunStatus::Completed => "completed",
-            RunStatus::Paused => "paused",
-            RunStatus::Cancelled => "cancelled",
-        }
-    }
-
-    pub fn from_db(value: &str) -> Option<Self> {
-        match value {
-            "pending" => Some(RunStatus::Pending),
-            "warm-up" | "warm_up" => Some(RunStatus::WarmUp),
-            "running" => Some(RunStatus::Running),
-            "completed" => Some(RunStatus::Completed),
-            "paused" => Some(RunStatus::Paused),
-            "cancelled" => Some(RunStatus::Cancelled),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum WorkerRole {
     Evaluator,
     SamplerAggregator,
@@ -251,7 +214,6 @@ pub struct EvaluatorPerformanceSnapshot {
     pub run_id: i32,
     pub worker_id: String,
     pub metrics: EvaluatorPerformanceMetrics,
-    pub engine_diagnostics: JsonValue,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

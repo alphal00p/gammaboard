@@ -7,7 +7,7 @@ Gammaboard runs distributed numerical integration jobs with PostgreSQL as the sh
 - `gammaboard node` manages desired worker assignments.
 - `gammaboard run-node` reconciles one local process into one active role loop at a time: `evaluator` or `sampler_aggregator`.
 - `gammaboard server` serves the dashboard read API.
-- The dashboard exposes `Runs`, `Workers`, and `Logs` tabs.
+- The dashboard exposes `Runs`, `Workers`, `Performance`, and `Logs` tabs.
 
 ## Quick Start
 
@@ -120,6 +120,8 @@ Examples:
 - The latest full runtime observable is stored on the run record as `current_observable`.
 - Aggregated observable history snapshots persist the observable's reduced persistent payload rather than the tagged runtime `ObservableState`.
 - Run and worker performance snapshots are persisted periodically.
+- Evaluator performance history stores generic evaluator metrics only; evaluator-specific static details belong in evaluator init metadata.
+- Sampler performance history stores generic sampler metrics plus sampler runtime metrics, while sampler-specific diagnostics remain separate.
 - Runtime logs are persisted in `runtime_logs` when DB logging is enabled.
 
 ## Logging
@@ -151,6 +153,8 @@ Notes:
 - Run payloads from `GET /api/runs` and `GET /api/runs/:id` include `point_spec` from `runs.point_spec` and the latest full observable as `current_observable`.
 - Finished-run dashboard views should use persisted run/history data; live worker payloads are only for active telemetry.
 - The `Workers` tab shows live worker assignment/heartbeat/role state; historical evaluator/sampler performance is viewed separately by run and worker.
+- The `Performance` tab is run-scoped and worker-scoped, using persisted snapshots. For sampler-aggregators, produce and ingest timing are shown separately, with latest-snapshot summary cards below the charts.
+- In the `Runs` tab, the sampler panel should prioritize target-vs-actual runtime values and current performance metrics; low-level runner bounds remain available in the JSON view instead of the summary card.
 
 Dashboard behavior:
 - Worker data is polled once at the app level and shared across the `Runs`, `Workers`, and `Logs` tabs.

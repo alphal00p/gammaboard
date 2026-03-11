@@ -5,8 +5,6 @@ CREATE TABLE IF NOT EXISTS runs (
     started_at TIMESTAMPTZ DEFAULT now(),
     completed_at TIMESTAMPTZ,
     training_completed_at TIMESTAMPTZ,
-    status TEXT NOT NULL DEFAULT 'pending',
-    -- Status: 'pending', 'warm-up', 'running', 'completed', 'paused', 'cancelled'
 
     -- Per-run engine and runner configuration (TOML/JSON payload)
     integration_params JSONB,

@@ -11,8 +11,8 @@ pub mod server;
 pub mod stores;
 pub mod tracing;
 
+pub use core::StoreError;
 pub use core::{Batch, BatchError, BatchRecord, BatchResult, BatchStatus, PointSpec};
-pub use core::{RunStatus, StoreError};
 pub use engines::{BuildError, EngineError, EvalError};
 pub use stores::PgStore;
 pub use stores::{AggregatedResult, RunProgress, WorkQueueStats};

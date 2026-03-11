@@ -1,14 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Box, FormControl, InputLabel, MenuItem, Paper, Select, Stack, Typography } from "@mui/material";
+import {
+  Alert,
+  Box,
+  Paper,
+  Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Typography,
+} from "@mui/material";
 import ConnectionStatus from "./ConnectionStatus";
+import WorkerDetailsPanel from "./WorkerDetailsPanel";
 import EmptyStateCard from "./common/EmptyStateCard";
-import WorkerStatusPanel from "./WorkerStatusPanel";
-
-const workerLabel = (worker) => {
-  const role = worker?.role || "unknown";
-  const node = worker?.node_id || "n/a";
-  return `${worker?.worker_id || "unknown"} (${role}, node=${node})`;
-};
+import { formatDateTime } from "../utils/formatters";
 
 const WorkersWorkspace = ({ workers, isConnected, lastUpdate, error }) => {
   const [selectedWorkerId, setSelectedWorkerId] = useState(null);
@@ -61,22 +68,6 @@ const WorkersWorkspace = ({ workers, isConnected, lastUpdate, error }) => {
           />
         ) : (
           <Stack spacing={2}>
-            <FormControl size="small" sx={{ maxWidth: 420 }}>
-              <InputLabel id="worker-select-label">Worker</InputLabel>
-              <Select
-                labelId="worker-select-label"
-                value={selectedWorkerId || ""}
-                label="Worker"
-                onChange={(event) => setSelectedWorkerId(event.target.value)}
-              >
-                {workers.map((worker) => (
-                  <MenuItem key={worker.worker_id} value={worker.worker_id}>
-                    {workerLabel(worker)}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-
             <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
               <Typography variant="body2" color="text.secondary">
                 total workers: <strong>{workers.length}</strong>
@@ -90,12 +81,57 @@ const WorkersWorkspace = ({ workers, isConnected, lastUpdate, error }) => {
                 </Typography>
               ))}
             </Box>
+
+            <TableContainer component={Paper} variant="outlined">
+              <Table size="small" aria-label="workers table">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Worker ID</TableCell>
+                    <TableCell>Role</TableCell>
+                    <TableCell>Status</TableCell>
+                    <TableCell>Node</TableCell>
+                    <TableCell>Run</TableCell>
+                    <TableCell>Implementation</TableCell>
+                    <TableCell>Version</TableCell>
+                    <TableCell>Last Seen</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {workers.map((worker) => {
+                    const selected = worker.worker_id === selectedWorkerId;
+                    return (
+                      <TableRow
+                        key={worker.worker_id}
+                        hover
+                        selected={selected}
+                        onClick={() => setSelectedWorkerId(worker.worker_id)}
+                        sx={{
+                          cursor: "pointer",
+                          "& .MuiTableCell-root": {
+                            fontFamily: selected ? "monospace" : "inherit",
+                          },
+                        }}
+                      >
+                        <TableCell>{worker.worker_id || "unknown"}</TableCell>
+                        <TableCell>{worker.role || "unknown"}</TableCell>
+                        <TableCell>{worker.status || "unknown"}</TableCell>
+                        <TableCell>{worker.node_id || "n/a"}</TableCell>
+                        <TableCell>{worker.desired_run_id ?? "n/a"}</TableCell>
+                        <TableCell>{worker.implementation || "unknown"}</TableCell>
+                        <TableCell>{worker.version || "n/a"}</TableCell>
+                        <TableCell>{formatDateTime(worker.last_seen, "-")}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </TableContainer>
           </Stack>
         )}
       </Paper>
 
       {selectedWorker ? (
-        <WorkerStatusPanel worker={selectedWorker} />
+        <WorkerDetailsPanel worker={selectedWorker} isConnected={isConnected} />
       ) : (
         <Alert severity="info">Select a worker to view assignment and heartbeat details.</Alert>
       )}

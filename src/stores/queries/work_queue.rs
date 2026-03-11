@@ -96,6 +96,29 @@ pub(crate) async fn claim_batch(
     }
 }
 
+pub(crate) async fn release_claimed_batches_for_worker(
+    pool: &PgPool,
+    run_id: i32,
+    worker_id: &str,
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        r#"
+        UPDATE batches
+        SET status = 'pending',
+            claimed_by = NULL,
+            claimed_at = NULL
+        WHERE run_id = $1
+          AND status = 'claimed'
+          AND claimed_by = $2
+        "#,
+    )
+    .bind(run_id)
+    .bind(worker_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 pub(crate) async fn submit_batch_results(
     pool: &PgPool,
     batch_id: i64,
@@ -132,16 +155,14 @@ pub(crate) async fn insert_evaluator_performance_snapshot(
         INSERT INTO evaluator_performance_history (
             run_id,
             worker_id,
-            metrics,
-            engine_diagnostics
+            metrics
         )
-        VALUES ($1, $2, $3, $4)
+        VALUES ($1, $2, $3)
         "#,
     )
     .bind(snapshot.run_id)
     .bind(&snapshot.worker_id)
     .bind(&metrics)
-    .bind(&snapshot.engine_diagnostics)
     .execute(pool)
     .await?;
     Ok(())

@@ -3,9 +3,9 @@
 use super::queries;
 use crate::core::{
     AggregationStore, AssignmentLeaseStore, BatchClaim, CompletedBatch, ControlPlaneStore,
-    DesiredAssignment, EvaluatorPerformanceSnapshot, RunReadStore, RunSpecStore, RunStatus,
-    RuntimeLogEvent, RuntimeLogStore, SamplerAggregatorPerformanceSnapshot, StoreError,
-    WorkQueueStore, Worker, WorkerRegistryStore, WorkerRole, WorkerStatus,
+    DesiredAssignment, EvaluatorPerformanceSnapshot, RunReadStore, RunSpecStore, RuntimeLogEvent,
+    RuntimeLogStore, SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore, Worker,
+    WorkerRegistryStore, WorkerRole, WorkerStatus,
 };
 use crate::core::{Batch, BatchResult, PointSpec};
 use crate::engines::{IntegrationParams, RunSpec};
@@ -529,7 +529,6 @@ impl ControlPlaneStore for PgStore {
 
     async fn create_run(
         &self,
-        status: RunStatus,
         name: &str,
         integration_params: &JsonValue,
         target: Option<&JsonValue>,
@@ -541,7 +540,6 @@ impl ControlPlaneStore for PgStore {
 
         queries::create_run(
             &self.pool,
-            status,
             name,
             &sanitized_params,
             target,
@@ -551,22 +549,6 @@ impl ControlPlaneStore for PgStore {
         )
         .await
         .map_err(map_sqlx)
-    }
-
-    async fn set_run_status(&self, run_id: i32, status: RunStatus) -> Result<(), StoreError> {
-        let rows = queries::set_run_status(&self.pool, run_id, status)
-            .await
-            .map_err(map_sqlx)?;
-        if rows == 0 {
-            return Err(store_err(format!("run {run_id} not found")));
-        }
-        Ok(())
-    }
-
-    async fn set_all_runs_status(&self, status: RunStatus) -> Result<u64, StoreError> {
-        queries::set_all_runs_status(&self.pool, status)
-            .await
-            .map_err(map_sqlx)
     }
 
     async fn remove_run(&self, run_id: i32) -> Result<(), StoreError> {
@@ -615,6 +597,16 @@ impl WorkQueueStore for PgStore {
                 requires_training,
             }),
         )
+    }
+
+    async fn release_claimed_batches_for_worker(
+        &self,
+        run_id: i32,
+        worker_id: &str,
+    ) -> Result<u64, StoreError> {
+        queries::release_claimed_batches_for_worker(&self.pool, run_id, worker_id)
+            .await
+            .map_err(map_sqlx)
     }
 
     async fn submit_batch_results(
@@ -709,6 +701,12 @@ impl AggregationStore for PgStore {
             .map_err(map_sqlx)
     }
 
+    async fn load_sampler_checkpoint(&self, run_id: i32) -> Result<Option<JsonValue>, StoreError> {
+        queries::get_run_sampler_checkpoint(&self.pool, run_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
     async fn load_latest_aggregation_snapshot(
         &self,
         run_id: i32,
@@ -742,6 +740,16 @@ impl AggregationStore for PgStore {
         .map_err(map_sqlx)?;
 
         Ok(())
+    }
+
+    async fn save_sampler_checkpoint(
+        &self,
+        run_id: i32,
+        checkpoint: &JsonValue,
+    ) -> Result<(), StoreError> {
+        queries::update_run_sampler_checkpoint(&self.pool, run_id, checkpoint)
+            .await
+            .map_err(map_sqlx)
     }
 }
 

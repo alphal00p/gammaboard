@@ -1,5 +1,6 @@
 import { Alert, Box, Container, Tab, Tabs, Typography } from "@mui/material";
 import { useEffect, useMemo, useState } from "react";
+import gammaboardLogo from "./assets/gammalooplogo.svg";
 import ConnectionStatus from "./components/ConnectionStatus";
 import EvaluatorPanel from "./components/EvaluatorPanel";
 import HistoryRangeControls from "./components/HistoryRangeControls";
@@ -26,9 +27,12 @@ const DASHBOARD_HISTORY_CONFIG = {
 
 const DashboardHeader = () => (
   <Box sx={{ mb: 3 }}>
-    <Typography variant="h3" component="h1" gutterBottom>
-      Gammaboard
-    </Typography>
+    <Box
+      component="img"
+      src={gammaboardLogo}
+      alt="Gammaboard"
+      sx={{ display: "block", width: "min(100%, 320px)", height: "auto", mb: 1 }}
+    />
     <Typography variant="body2" color="text.secondary">
       Real-time Monte Carlo simulation monitoring
     </Typography>
@@ -55,13 +59,30 @@ const deriveSamplerRuntimeSummary = (workers, runId, latestSamplerEntry) => {
     list.find((worker) => worker.desired_run_id === runId && worker.role === "sampler_aggregator") ||
     null;
   const runtimeMetrics = samplerWorker?.sampler_runtime_metrics ?? latestSamplerEntry?.runtime_metrics ?? null;
+  const samplerMetrics = latestSamplerEntry?.metrics ?? samplerWorker?.sampler_metrics ?? null;
   const rolling = runtimeMetrics?.rolling || {};
   const remainingRatio = rollingMean(rolling.queue_remaining_ratio);
-  const avgQueueDepletion = remainingRatio == null ? null : Math.max(0, Math.min(1, 1 - remainingRatio));
+  const targetQueueRemaining = Number(runtimeMetrics?.target_queue_remaining_ratio);
   return {
-    avg_queue_depletion: avgQueueDepletion,
-    avg_time_per_sample_ms: rollingMean(rolling.eval_ms_per_sample),
-    avg_time_per_batch_ms: rollingMean(rolling.eval_ms_per_batch),
+    current_batch_size: runtimeMetrics?.batch_size_current ?? null,
+    target_queue_remaining_ratio: Number.isFinite(targetQueueRemaining) ? targetQueueRemaining : null,
+    actual_queue_remaining_ratio: remainingRatio,
+    queue_remaining_delta:
+      Number.isFinite(remainingRatio) && Number.isFinite(targetQueueRemaining)
+        ? remainingRatio - targetQueueRemaining
+        : null,
+    actual_eval_ms_per_sample: rollingMean(rolling.eval_ms_per_sample),
+    actual_eval_ms_per_batch: rollingMean(rolling.eval_ms_per_batch),
+    produce_ms_per_sample: Number.isFinite(Number(samplerMetrics?.avg_produce_time_per_sample_ms))
+      ? Number(samplerMetrics.avg_produce_time_per_sample_ms)
+      : rollingMean(rolling.sampler_produce_ms_per_sample),
+    ingest_ms_per_sample: Number.isFinite(Number(samplerMetrics?.avg_ingest_time_per_sample_ms))
+      ? Number(samplerMetrics.avg_ingest_time_per_sample_ms)
+      : rollingMean(rolling.sampler_ingest_ms_per_sample),
+    produced_batches: samplerMetrics?.produced_batches ?? runtimeMetrics?.produced_batches_total ?? null,
+    produced_samples: samplerMetrics?.produced_samples ?? runtimeMetrics?.produced_samples_total ?? null,
+    ingested_batches: samplerMetrics?.ingested_batches ?? runtimeMetrics?.ingested_batches_total ?? null,
+    ingested_samples: samplerMetrics?.ingested_samples ?? runtimeMetrics?.ingested_samples_total ?? null,
   };
 };
 

@@ -1,13 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Box, FormControl, InputLabel, MenuItem, Paper, Select, Stack, Typography } from "@mui/material";
+import {
+  Alert,
+  Box,
+  Card,
+  CardContent,
+  FormControl,
+  Grid,
+  InputLabel,
+  MenuItem,
+  Paper,
+  Select,
+  Stack,
+  Typography,
+} from "@mui/material";
 import ConnectionStatus from "./ConnectionStatus";
 import EmptyStateCard from "./common/EmptyStateCard";
 import RunSelector from "./RunSelector";
 import SampleChart from "./SampleChart";
 import JsonFallback from "./JsonFallback";
 import { useRunPerformanceSummary } from "../hooks/useRunPerformanceSummary";
+import { formatDateTime } from "../utils/formatters";
 
-const buildPerformanceSamples = (entries, role) => {
+const buildPerformanceSamples = (entries, { meanKey, stderrKey }) => {
   if (!Array.isArray(entries) || entries.length === 0) return [];
   return entries
     .map((entry) => {
@@ -16,14 +30,8 @@ const buildPerformanceSamples = (entries, role) => {
       const sampleCount = Number.isFinite(createdAtMs) ? createdAtMs : Number(entry.id);
       if (!Number.isFinite(sampleCount)) return null;
       const metrics = entry.metrics || {};
-      const mean =
-        role === "sampler_aggregator"
-          ? Number(metrics.avg_produce_time_per_sample_ms)
-          : Number(metrics.avg_time_per_sample_ms);
-      const stderr =
-        role === "sampler_aggregator"
-          ? Number(metrics.std_produce_time_per_sample_ms)
-          : Number(metrics.std_time_per_sample_ms);
+      const mean = Number(metrics[meanKey]);
+      const stderr = Number(metrics[stderrKey]);
       if (!Number.isFinite(mean)) return null;
       const safeStd = Number.isFinite(stderr) ? Math.abs(stderr) : 0;
       return {
@@ -42,8 +50,51 @@ const buildPerformanceSamples = (entries, role) => {
 const latestEntryForWorker = (entries, workerId) =>
   (Array.isArray(entries) ? entries : []).find((entry) => entry.worker_id === workerId) || null;
 
-const PerformanceSection = ({ title, entries, role, isConnected }) => {
-  const samples = useMemo(() => buildPerformanceSamples(entries, role), [entries, role]);
+const metricValue = (entry, key) => {
+  const value = Number(entry?.metrics?.[key]);
+  return Number.isFinite(value) ? value : null;
+};
+
+const fmtMetric = (value, digits = 4) => {
+  if (!Number.isFinite(Number(value))) return "n/a";
+  return `${Number(value).toFixed(digits)} ms`;
+};
+
+const fmtCount = (value) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num.toLocaleString() : "n/a";
+};
+
+const LatestSnapshotPanel = ({ title, snapshotAt, fields }) => (
+  <Card variant="outlined" sx={{ height: "100%" }}>
+    <CardContent>
+      <Typography variant="subtitle1" sx={{ mb: 0.5 }}>
+        {title}
+      </Typography>
+      <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 2 }}>
+        latest snapshot: {formatDateTime(snapshotAt, "n/a")}
+      </Typography>
+      <Grid container spacing={2}>
+        {fields.map((field) => (
+          <Grid key={field.label} item xs={12} sm={6} md={field.md ?? 3}>
+            <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+              {field.label}
+            </Typography>
+            <Typography variant="h6" sx={{ fontFamily: "monospace" }}>
+              {field.value}
+            </Typography>
+          </Grid>
+        ))}
+      </Grid>
+    </CardContent>
+  </Card>
+);
+
+const PerformanceSection = ({ title, entries, meanKey, stderrKey, isConnected, color }) => {
+  const samples = useMemo(
+    () => buildPerformanceSamples(entries, { meanKey, stderrKey }),
+    [entries, meanKey, stderrKey],
+  );
   if (samples.length === 0) return null;
 
   const formatTimestamp = (value) => {
@@ -59,8 +110,8 @@ const PerformanceSection = ({ title, entries, role, isConnected }) => {
       hasRun
       target={null}
       title={title}
-      lineColor={role === "sampler_aggregator" ? "#6a1b9a" : "#1565c0"}
-      bandColor={role === "sampler_aggregator" ? "#6a1b9a" : "#1565c0"}
+      lineColor={color}
+      bandColor={color}
       targetLabel=""
       xAxisLabel="Snapshot time"
       yAxisLabel="ms/sample"
@@ -125,6 +176,8 @@ const PerformanceWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected }
     evaluator: latestEntryForWorker(selectedEvaluatorEntries, selectedWorkerId),
     sampler_aggregator: latestEntryForWorker(selectedSamplerEntries, selectedWorkerId),
   };
+  const latestEvaluator = latestPayload.evaluator;
+  const latestSampler = latestPayload.sampler_aggregator;
 
   if (!Array.isArray(runs) || runs.length === 0) {
     return (
@@ -186,15 +239,114 @@ const PerformanceWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected }
           <PerformanceSection
             title="Evaluator ms/sample history"
             entries={selectedEvaluatorEntries}
-            role="evaluator"
+            meanKey="avg_time_per_sample_ms"
+            stderrKey="std_time_per_sample_ms"
             isConnected={isConnected}
+            color="#1565c0"
           />
           <PerformanceSection
-            title="Sampler ms/sample history"
+            title="Sampler produce ms/sample history"
             entries={selectedSamplerEntries}
-            role="sampler_aggregator"
+            meanKey="avg_produce_time_per_sample_ms"
+            stderrKey="std_produce_time_per_sample_ms"
             isConnected={isConnected}
+            color="#6a1b9a"
           />
+          <PerformanceSection
+            title="Sampler ingest ms/sample history"
+            entries={selectedSamplerEntries}
+            meanKey="avg_ingest_time_per_sample_ms"
+            stderrKey="std_ingest_time_per_sample_ms"
+            isConnected={isConnected}
+            color="#2e7d32"
+          />
+
+          {(latestEvaluator || latestSampler) && (
+            <Box sx={{ mt: 1, mb: 3 }}>
+              <Typography variant="h6" gutterBottom>
+                Latest Snapshot Summary
+              </Typography>
+              <Grid container spacing={2}>
+                {latestEvaluator ? (
+                  <Grid item xs={12}>
+                    <LatestSnapshotPanel
+                      title="Evaluator Snapshot"
+                      snapshotAt={latestEvaluator.created_at}
+                      fields={[
+                        { label: "worker", value: latestEvaluator.worker_id ?? "n/a", md: 3 },
+                        {
+                          label: "batches completed",
+                          value: fmtCount(latestEvaluator.metrics?.batches_completed),
+                          md: 3,
+                        },
+                        {
+                          label: "samples evaluated",
+                          value: fmtCount(latestEvaluator.metrics?.samples_evaluated),
+                          md: 3,
+                        },
+                        {
+                          label: "avg ms/sample",
+                          value: fmtMetric(metricValue(latestEvaluator, "avg_time_per_sample_ms")),
+                          md: 3,
+                        },
+                        {
+                          label: "std ms/sample",
+                          value: fmtMetric(metricValue(latestEvaluator, "std_time_per_sample_ms")),
+                          md: 3,
+                        },
+                        {
+                          label: "idle ratio",
+                          value: Number.isFinite(Number(latestEvaluator.metrics?.idle_profile?.idle_ratio))
+                            ? `${(Number(latestEvaluator.metrics.idle_profile.idle_ratio) * 100).toFixed(1)}%`
+                            : "n/a",
+                          md: 3,
+                        },
+                        { label: "run id", value: String(latestEvaluator.run_id ?? "n/a"), md: 3 },
+                        { label: "snapshot id", value: String(latestEvaluator.id ?? "n/a"), md: 3 },
+                      ]}
+                    />
+                  </Grid>
+                ) : null}
+                {latestSampler ? (
+                  <Grid item xs={12}>
+                    <LatestSnapshotPanel
+                      title="Sampler Snapshot"
+                      snapshotAt={latestSampler.created_at}
+                      fields={[
+                        { label: "worker", value: latestSampler.worker_id ?? "n/a", md: 3 },
+                        { label: "produced batches", value: fmtCount(latestSampler.metrics?.produced_batches), md: 3 },
+                        { label: "produced samples", value: fmtCount(latestSampler.metrics?.produced_samples), md: 3 },
+                        { label: "ingested batches", value: fmtCount(latestSampler.metrics?.ingested_batches), md: 3 },
+                        { label: "ingested samples", value: fmtCount(latestSampler.metrics?.ingested_samples), md: 3 },
+                        {
+                          label: "produce ms/sample",
+                          value: fmtMetric(metricValue(latestSampler, "avg_produce_time_per_sample_ms")),
+                          md: 3,
+                        },
+                        {
+                          label: "produce std",
+                          value: fmtMetric(metricValue(latestSampler, "std_produce_time_per_sample_ms")),
+                          md: 3,
+                        },
+                        {
+                          label: "ingest ms/sample",
+                          value: fmtMetric(metricValue(latestSampler, "avg_ingest_time_per_sample_ms")),
+                          md: 3,
+                        },
+                        {
+                          label: "ingest std",
+                          value: fmtMetric(metricValue(latestSampler, "std_ingest_time_per_sample_ms")),
+                          md: 3,
+                        },
+                        { label: "run id", value: String(latestSampler.run_id ?? "n/a"), md: 3 },
+                        { label: "snapshot id", value: String(latestSampler.id ?? "n/a"), md: 3 },
+                      ]}
+                    />
+                  </Grid>
+                ) : null}
+              </Grid>
+            </Box>
+          )}
 
           <Box sx={{ mt: 2 }}>
             <JsonFallback title="latest performance snapshot JSON" data={latestPayload} />

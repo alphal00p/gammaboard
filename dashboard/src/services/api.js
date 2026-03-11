@@ -49,7 +49,6 @@ const normalizeWorkerEntry = (entry) => {
     last_seen: entry.last_seen ?? null,
     evaluator_metrics: entry.evaluator_metrics ?? null,
     sampler_metrics: entry.sampler_metrics ?? null,
-    evaluator_engine_diagnostics: entry.evaluator_engine_diagnostics ?? null,
     sampler_runtime_metrics: entry.sampler_runtime_metrics ?? null,
     sampler_engine_diagnostics: entry.sampler_engine_diagnostics ?? null,
   };

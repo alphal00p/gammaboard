@@ -212,6 +212,18 @@ impl SamplerAggregator for HavanaSampler {
         }
     }
 
+    fn export_checkpoint(&mut self) -> Result<serde_json::Value, crate::engines::EngineError> {
+        Ok(json!({
+            "kind": "havana",
+            "resume_supported": false,
+            "batches_produced": self.batches_produced,
+            "samples_produced": self.samples_produced,
+            "batches_ingested": self.batches_ingested,
+            "samples_ingested": self.samples_ingested,
+            "pending_training_batches": self.pending_training_samples.len(),
+        }))
+    }
+
     fn produce_batch(
         &mut self,
         nr_samples: usize,

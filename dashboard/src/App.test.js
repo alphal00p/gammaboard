@@ -30,10 +30,10 @@ jest.mock("./services/api", () => ({
  * and contains expected core elements.
  */
 describe("App Component", () => {
-  test("renders Gammaboard title", () => {
+  test("renders Gammaboard logo", () => {
     render(<App />);
-    const titleElement = screen.getByText(/Gammaboard/i);
-    expect(titleElement).toBeInTheDocument();
+    const logoElement = screen.getByAltText(/Gammaboard/i);
+    expect(logoElement).toBeInTheDocument();
   });
 
   test("renders connection status component", () => {

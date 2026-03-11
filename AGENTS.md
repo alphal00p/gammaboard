@@ -72,11 +72,15 @@ Use `README.md` for operator onboarding. Keep this file focused on architecture,
 - Worker performance history is stored in:
   - `evaluator_performance_history`
   - `sampler_aggregator_performance_history`
+- Evaluator performance history should stay generic-metrics-only; evaluator-specific diagnostics do not belong there and static evaluator details belong in init metadata.
+- Sampler performance history may include generic sampler metrics and sampler runtime metrics, but sampler-specific diagnostics should remain separate from generic metrics.
 - Snapshot rows are point-in-time; do not reintroduce window semantics.
 - Read APIs should serialize `BIGINT` IDs as strings.
 - Run read payloads should expose `runs.point_spec` as `point_spec`.
 - Frontend run views should prefer persisted run/history state for finished runs; live worker state is only for currently active telemetry.
 - The `Workers` tab is for live worker registry state (assignment, heartbeat, role); historical performance belongs in a separate run+worker performance view.
+- The `Performance` tab should stay run-scoped and worker-scoped over persisted snapshot history; sampler produce and ingest timing should remain distinct views rather than a merged single timing metric.
+- In the `Runs` tab, sampler summary panels should emphasize targets, current runtime values, and current performance metrics. Low-signal tuning bounds belong in the JSON/config view rather than the primary summary card.
 - Run log reads should stay server-filtered and cursor-paged (`limit`, `worker_id`, `level`, `q`, `before_id`) with response `{ items, next_before_id, has_more_older }`.
 - The dashboard log viewer is view-only; prefer backend-driven pagination/filtering over rich client grid state.
 

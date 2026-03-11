@@ -2,6 +2,7 @@ use crate::core::{Batch, PointSpec};
 use crate::engines::{BuildError, EngineError, SamplerAggregator};
 use rand::Rng;
 use serde::Deserialize;
+use serde_json::{Value as JsonValue, json};
 use std::{thread, time::Duration};
 
 /// Test-only sampler-aggregator engine with simple random batch generation.
@@ -87,6 +88,70 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
         self.training_target_samples == 0 || self.trained_samples < self.training_target_samples
     }
 
+    fn get_max_samples(&self) -> Option<usize> {
+        if self.training_target_samples == 0 {
+            None
+        } else {
+            Some(
+                self.training_target_samples
+                    .saturating_sub(self.trained_samples),
+            )
+        }
+    }
+
+    fn export_checkpoint(&mut self) -> Result<JsonValue, EngineError> {
+        Ok(json!({
+            "kind": "naive_monte_carlo",
+            "continuous_dims": self.continuous_dims,
+            "discrete_dims": self.discrete_dims,
+            "training_target_samples": self.training_target_samples,
+            "training_delay_per_sample_ms": self.training_delay_per_sample_ms,
+            "trained_samples": self.trained_samples,
+            "nr_batches": self.nr_batches,
+            "nr_samples": self.nr_samples,
+            "sum": self.sum,
+        }))
+    }
+
+    fn import_checkpoint(&mut self, checkpoint: &JsonValue) -> Result<(), EngineError> {
+        let kind = checkpoint
+            .get("kind")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("");
+        if kind != "naive_monte_carlo" {
+            return Err(EngineError::engine(format!(
+                "invalid naive_monte_carlo checkpoint kind: {kind}"
+            )));
+        }
+        let trained_samples = checkpoint
+            .get("trained_samples")
+            .and_then(JsonValue::as_u64)
+            .ok_or_else(|| {
+                EngineError::engine("naive_monte_carlo checkpoint missing trained_samples")
+            })?;
+        let nr_batches = checkpoint
+            .get("nr_batches")
+            .and_then(JsonValue::as_i64)
+            .ok_or_else(|| {
+                EngineError::engine("naive_monte_carlo checkpoint missing nr_batches")
+            })?;
+        let nr_samples = checkpoint
+            .get("nr_samples")
+            .and_then(JsonValue::as_i64)
+            .ok_or_else(|| {
+                EngineError::engine("naive_monte_carlo checkpoint missing nr_samples")
+            })?;
+        let sum = checkpoint
+            .get("sum")
+            .and_then(JsonValue::as_f64)
+            .ok_or_else(|| EngineError::engine("naive_monte_carlo checkpoint missing sum"))?;
+        self.trained_samples = trained_samples as usize;
+        self.nr_batches = nr_batches;
+        self.nr_samples = nr_samples;
+        self.sum = sum;
+        Ok(())
+    }
+
     fn produce_batch(&mut self, nr_samples: usize) -> Result<Batch, EngineError> {
         if nr_samples == 0 {
             return Err(EngineError::engine(
@@ -113,22 +178,26 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
     }
 
     fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError> {
-        self.nr_batches += 1;
-        self.nr_samples += training_weights.len() as i64;
-        self.sum += training_weights.iter().sum::<f64>();
+        let accepted = if self.training_target_samples == 0 {
+            training_weights.len()
+        } else {
+            self.training_target_samples
+                .saturating_sub(self.trained_samples)
+                .min(training_weights.len())
+        };
 
-        if !training_weights.is_empty() && self.training_delay_per_sample_ms > 0 {
-            let remaining_training = self
-                .training_target_samples
-                .saturating_sub(self.trained_samples);
-            let delayed_samples = remaining_training.min(training_weights.len());
-            if delayed_samples > 0 {
+        self.nr_batches += 1;
+        self.nr_samples += accepted as i64;
+        self.sum += training_weights.iter().take(accepted).sum::<f64>();
+
+        if accepted > 0 && self.training_delay_per_sample_ms > 0 {
+            if self.training_target_samples > 0 {
                 thread::sleep(Duration::from_millis(
-                    delayed_samples as u64 * self.training_delay_per_sample_ms,
+                    accepted as u64 * self.training_delay_per_sample_ms,
                 ));
             }
         }
-        self.trained_samples = self.trained_samples.saturating_add(training_weights.len());
+        self.trained_samples = self.trained_samples.saturating_add(accepted);
         Ok(())
     }
 }

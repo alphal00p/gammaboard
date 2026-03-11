@@ -34,9 +34,6 @@ pub trait Evaluator: Send {
     fn get_init_metadata(&self) -> JsonValue {
         json!({})
     }
-    fn get_diagnostics(&self) -> JsonValue {
-        json!("{}")
-    }
 }
 
 impl crate::engines::EvaluatorConfig {

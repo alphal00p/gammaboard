@@ -68,7 +68,7 @@ live-test-gammaloop:
     just restart-db
     {{bin}} run-node --node-id "w-0" --poll-ms {{ poll_ms }} &
     {{bin}} run-node --node-id "w-1" --poll-ms {{ poll_ms }} &
-    #{{bin}} run-node --node-id "w-2" --poll-ms {{ poll_ms }} &
+    {{bin}} run-node --node-id "w-2" --poll-ms {{ poll_ms }} &
 
     sleep 1
 
@@ -76,7 +76,7 @@ live-test-gammaloop:
 
     {{bin}} node assign "w-0" sampler-aggregator 1
     {{bin}} node assign "w-1" evaluator 1
-    #{{bin}} node assign "w-2" evaluator 1
+    {{bin}} node assign "w-2" evaluator 1
 
     {{bin}} run start 1
 

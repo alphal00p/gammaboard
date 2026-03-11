@@ -92,7 +92,6 @@ pub trait ControlPlaneStore: Send + Sync {
 
     async fn create_run(
         &self,
-        status: super::models::RunStatus,
         name: &str,
         integration_params: &JsonValue,
         target: Option<&JsonValue>,
@@ -100,15 +99,6 @@ pub trait ControlPlaneStore: Send + Sync {
         evaluator_init_metadata: Option<&JsonValue>,
         sampler_aggregator_init_metadata: Option<&JsonValue>,
     ) -> Result<i32, StoreError>;
-    async fn set_run_status(
-        &self,
-        run_id: i32,
-        status: super::models::RunStatus,
-    ) -> Result<(), StoreError>;
-    async fn set_all_runs_status(
-        &self,
-        status: super::models::RunStatus,
-    ) -> Result<u64, StoreError>;
     async fn remove_run(&self, run_id: i32) -> Result<(), StoreError>;
 }
 
@@ -127,6 +117,11 @@ pub trait WorkQueueStore: Send + Sync {
         run_id: i32,
         worker_id: &str,
     ) -> Result<Option<BatchClaim>, StoreError>;
+    async fn release_claimed_batches_for_worker(
+        &self,
+        run_id: i32,
+        worker_id: &str,
+    ) -> Result<u64, StoreError>;
     async fn submit_batch_results(
         &self,
         batch_id: i64,
@@ -155,6 +150,7 @@ pub trait WorkQueueStore: Send + Sync {
 #[async_trait]
 pub trait AggregationStore: Send + Sync {
     async fn load_current_observable(&self, run_id: i32) -> Result<Option<JsonValue>, StoreError>;
+    async fn load_sampler_checkpoint(&self, run_id: i32) -> Result<Option<JsonValue>, StoreError>;
     async fn load_latest_aggregation_snapshot(
         &self,
         run_id: i32,
@@ -165,6 +161,11 @@ pub trait AggregationStore: Send + Sync {
         current_observable: &JsonValue,
         aggregated_observable: &JsonValue,
         delta_batches_completed: i32,
+    ) -> Result<(), StoreError>;
+    async fn save_sampler_checkpoint(
+        &self,
+        run_id: i32,
+        checkpoint: &JsonValue,
     ) -> Result<(), StoreError>;
 }
 

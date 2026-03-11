@@ -1,5 +1,5 @@
 use crate::core::PointSpec;
-use crate::core::{RunStatus, WorkerRole};
+use crate::core::WorkerRole;
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 
@@ -242,7 +242,6 @@ pub(crate) async fn consume_node_shutdown_request(
 
 pub(crate) async fn create_run(
     pool: &PgPool,
-    status: RunStatus,
     name: &str,
     integration_params: &JsonValue,
     target: Option<&JsonValue>,
@@ -253,7 +252,6 @@ pub(crate) async fn create_run(
     sqlx::query_scalar(
         r#"
         INSERT INTO runs (
-            status,
             name,
             integration_params,
             target,
@@ -261,11 +259,10 @@ pub(crate) async fn create_run(
             evaluator_init_metadata,
             sampler_aggregator_init_metadata
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING id
         "#,
     )
-    .bind(status.as_str())
     .bind(name)
     .bind(integration_params)
     .bind(target)
@@ -274,41 +271,6 @@ pub(crate) async fn create_run(
     .bind(sampler_aggregator_init_metadata)
     .fetch_one(pool)
     .await
-}
-
-pub(crate) async fn set_run_status(
-    pool: &PgPool,
-    run_id: i32,
-    status: RunStatus,
-) -> Result<u64, sqlx::Error> {
-    let result = sqlx::query(
-        r#"
-        UPDATE runs
-        SET status = $2
-        WHERE id = $1
-        "#,
-    )
-    .bind(run_id)
-    .bind(status.as_str())
-    .execute(pool)
-    .await?;
-    Ok(result.rows_affected())
-}
-
-pub(crate) async fn set_all_runs_status(
-    pool: &PgPool,
-    status: RunStatus,
-) -> Result<u64, sqlx::Error> {
-    let result = sqlx::query(
-        r#"
-        UPDATE runs
-        SET status = $1
-        "#,
-    )
-    .bind(status.as_str())
-    .execute(pool)
-    .await?;
-    Ok(result.rows_affected())
 }
 
 pub(crate) async fn try_set_training_completed_at(

@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use clap::{Args, ValueEnum};
 use gammaboard::PgStore;
-use gammaboard::core::{RunStatus, WorkerRole};
+use gammaboard::core::WorkerRole;
 use gammaboard::tracing::init_tracing;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -15,29 +15,6 @@ impl From<RoleArg> for WorkerRole {
         match value {
             RoleArg::Evaluator => WorkerRole::Evaluator,
             RoleArg::SamplerAggregator => WorkerRole::SamplerAggregator,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum RunStatusArg {
-    Pending,
-    WarmUp,
-    Running,
-    Completed,
-    Paused,
-    Cancelled,
-}
-
-impl From<RunStatusArg> for RunStatus {
-    fn from(value: RunStatusArg) -> Self {
-        match value {
-            RunStatusArg::Pending => RunStatus::Pending,
-            RunStatusArg::WarmUp => RunStatus::WarmUp,
-            RunStatusArg::Running => RunStatus::Running,
-            RunStatusArg::Completed => RunStatus::Completed,
-            RunStatusArg::Paused => RunStatus::Paused,
-            RunStatusArg::Cancelled => RunStatus::Cancelled,
         }
     }
 }

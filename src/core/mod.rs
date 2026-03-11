@@ -7,7 +7,7 @@ pub use batch::{Batch, BatchError, BatchRecord, BatchResult, BatchStatus, PointS
 pub use errors::StoreError;
 pub use models::{
     AssignmentLease, BatchClaim, CompletedBatch, DesiredAssignment, EvaluatorIdleProfileMetrics,
-    EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot, RollingMetricSnapshot, RunStatus,
+    EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot, RollingMetricSnapshot,
     RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot, SamplerPerformanceMetrics,
     SamplerRollingAverages, SamplerRuntimeMetrics, Worker, WorkerRole, WorkerStatus,
 };

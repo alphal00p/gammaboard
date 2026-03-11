@@ -6,7 +6,6 @@ CREATE TABLE IF NOT EXISTS evaluator_performance_history (
     run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     worker_id TEXT NOT NULL REFERENCES workers(worker_id) ON DELETE CASCADE,
     metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
-    engine_diagnostics JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -22,7 +21,6 @@ SELECT DISTINCT ON (run_id, worker_id)
     run_id,
     worker_id,
     metrics,
-    engine_diagnostics,
     created_at
 FROM evaluator_performance_history
 ORDER BY run_id, worker_id, created_at DESC, id DESC;

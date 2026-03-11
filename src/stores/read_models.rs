@@ -1,6 +1,6 @@
 //! Read models for API/dashboard responses.
 
-use crate::core::{EvaluatorPerformanceMetrics, PointSpec, RunStatus, SamplerPerformanceMetrics};
+use crate::core::{EvaluatorPerformanceMetrics, PointSpec, SamplerPerformanceMetrics};
 use serde::{Deserialize, Serialize};
 
 /// Run progress information.
@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 pub struct RunProgress {
     pub run_id: i32,
     pub run_name: String,
-    pub run_status: RunStatus,
     pub integration_params: Option<serde_json::Value>,
     pub point_spec: Option<PointSpec>,
     pub current_observable: Option<serde_json::Value>,
@@ -102,7 +101,6 @@ pub struct RegisteredWorkerEntry {
     pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
     pub evaluator_metrics: Option<EvaluatorPerformanceMetrics>,
     pub sampler_metrics: Option<SamplerPerformanceMetrics>,
-    pub evaluator_engine_diagnostics: Option<serde_json::Value>,
     pub sampler_runtime_metrics: Option<serde_json::Value>,
     pub sampler_engine_diagnostics: Option<serde_json::Value>,
 }
@@ -114,7 +112,6 @@ pub struct EvaluatorPerformanceHistoryEntry {
     pub run_id: i32,
     pub worker_id: String,
     pub metrics: EvaluatorPerformanceMetrics,
-    pub engine_diagnostics: serde_json::Value,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 

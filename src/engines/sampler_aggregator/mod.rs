@@ -14,6 +14,12 @@ pub trait SamplerAggregator: Send {
     fn get_init_metadata(&mut self) -> JsonValue {
         json!({})
     }
+    fn export_checkpoint(&mut self) -> Result<JsonValue, EngineError> {
+        Ok(json!({}))
+    }
+    fn import_checkpoint(&mut self, _checkpoint: &JsonValue) -> Result<(), EngineError> {
+        Ok(())
+    }
     fn is_training_active(&self) -> bool {
         true
     }

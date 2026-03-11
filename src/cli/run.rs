@@ -1,13 +1,13 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Args, Subcommand};
+use gammaboard::core::ControlPlaneStore;
 use gammaboard::core::RunReadStore;
-use gammaboard::core::{ControlPlaneStore, RunStatus};
 use gammaboard::init_pg_store;
 use gammaboard::preprocess::{RunAddConfig, preprocess_run_add};
 use std::path::PathBuf;
 use tracing::Instrument;
 
-use super::shared::{RunSelection, RunStatusArg, init_cli_tracing};
+use super::shared::{RunSelection, init_cli_tracing};
 
 const DEFAULT_RUN_CONFIG_PATH: &str = "configs/default.toml";
 
@@ -19,14 +19,8 @@ pub struct RunArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum RunCommand {
-    Add {
-        integration_params_file: PathBuf,
-        #[arg(short = 's', long, value_enum, default_value_t = RunStatusArg::Pending)]
-        status: RunStatusArg,
-    },
-    Start(RunSelection),
+    Add { integration_params_file: PathBuf },
     Pause(RunSelection),
-    Stop(RunSelection),
     Remove(RunSelection),
 }
 
@@ -46,7 +40,6 @@ pub async fn run_run_commands(command: RunCommand, quiet: bool) -> Result<()> {
     async move {
         match command {
             RunCommand::Add {
-                status,
                 integration_params_file,
             } => {
                 let config = load_run_add_config(&integration_params_file)?;
@@ -66,12 +59,10 @@ pub async fn run_run_commands(command: RunCommand, quiet: bool) -> Result<()> {
                     .point_spec
                     .as_ref()
                     .ok_or_else(|| anyhow!("preprocessing did not resolve point_spec"))?;
-                let run_status: RunStatus = status.into();
                 let integration_params = serde_json::to_value(&processed.integration_params)
                     .map_err(|err| anyhow!("failed to serialize integration_params: {err}"))?;
                 let run_id = store
                     .create_run(
-                        run_status,
                         &processed.name,
                         &integration_params,
                         processed.target.as_ref(),
@@ -80,62 +71,21 @@ pub async fn run_run_commands(command: RunCommand, quiet: bool) -> Result<()> {
                         processed.sampler_aggregator_init_metadata.as_ref(),
                     )
                     .await?;
-                tracing::info!(
-                    "created run_id={} name={} status={}",
-                    run_id,
-                    processed.name,
-                    run_status.as_str()
-                );
-            }
-            RunCommand::Start(selection) => {
-                if selection.all {
-                    let runs_updated = store.set_all_runs_status(RunStatus::Running).await?;
-                    tracing::info!("started all runs: runs_updated={runs_updated}");
-                } else {
-                    for run_id in selection.run_ids {
-                        store.set_run_status(run_id, RunStatus::Running).await?;
-                        tracing::info!("run {run_id} started");
-                    }
-                }
+                tracing::info!("created run_id={} name={}", run_id, processed.name);
             }
             RunCommand::Pause(selection) => {
                 if selection.all {
-                    let runs_updated = store.set_all_runs_status(RunStatus::Paused).await?;
                     let assignments_cleared = store.clear_all_desired_assignments().await?;
                     tracing::info!(
-                        "paused all runs: runs_updated={} assignments_cleared={}",
-                        runs_updated,
+                        "paused all runs: assignments_cleared={}",
                         assignments_cleared
                     );
                 } else {
                     for run_id in selection.run_ids {
-                        store.set_run_status(run_id, RunStatus::Paused).await?;
                         let assignments_cleared =
                             store.clear_desired_assignments_for_run(run_id).await?;
                         tracing::info!(
                             "run {} paused assignments_cleared={}",
-                            run_id,
-                            assignments_cleared
-                        );
-                    }
-                }
-            }
-            RunCommand::Stop(selection) => {
-                if selection.all {
-                    let runs_updated = store.set_all_runs_status(RunStatus::Cancelled).await?;
-                    let assignments_cleared = store.clear_all_desired_assignments().await?;
-                    tracing::info!(
-                        "stopped all runs: runs_updated={} assignments_cleared={}",
-                        runs_updated,
-                        assignments_cleared
-                    );
-                } else {
-                    for run_id in selection.run_ids {
-                        store.set_run_status(run_id, RunStatus::Cancelled).await?;
-                        let assignments_cleared =
-                            store.clear_desired_assignments_for_run(run_id).await?;
-                        tracing::info!(
-                            "run {} stopped assignments_cleared={}",
                             run_id,
                             assignments_cleared
                         );
@@ -168,9 +118,7 @@ pub async fn run_run_commands(command: RunCommand, quiet: bool) -> Result<()> {
 fn run_command_name(command: &RunCommand) -> &'static str {
     match command {
         RunCommand::Add { .. } => "run_add",
-        RunCommand::Start(_) => "run_start",
         RunCommand::Pause(_) => "run_pause",
-        RunCommand::Stop(_) => "run_stop",
         RunCommand::Remove(_) => "run_remove",
     }
 }

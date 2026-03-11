@@ -1,5 +1,5 @@
+use crate::core::PointSpec;
 use crate::core::{EvaluatorPerformanceMetrics, SamplerPerformanceMetrics};
-use crate::core::{PointSpec, RunStatus};
 use crate::stores::{
     AggregatedResult, EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress,
     SamplerPerformanceHistoryEntry, WorkQueueStats, WorkerLogEntry, WorkerLogPage,
@@ -8,20 +8,10 @@ use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 
-fn parse_run_status(value: &str) -> Result<RunStatus, sqlx::Error> {
-    RunStatus::from_db(value).ok_or_else(|| {
-        sqlx::Error::Decode(Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("unknown run status: {value}"),
-        )))
-    })
-}
-
 #[derive(sqlx::FromRow)]
 struct RunProgressRow {
     run_id: i32,
     run_name: String,
-    run_status: String,
     integration_params: Option<JsonValue>,
     point_spec: Option<JsonValue>,
     current_observable: Option<JsonValue>,
@@ -49,7 +39,6 @@ impl TryFrom<RunProgressRow> for RunProgress {
         Ok(RunProgress {
             run_id: value.run_id,
             run_name: value.run_name,
-            run_status: parse_run_status(&value.run_status)?,
             integration_params: value.integration_params,
             point_spec: value
                 .point_spec
@@ -139,7 +128,6 @@ struct RegisteredWorkerRow {
     last_seen: Option<DateTime<Utc>>,
     evaluator_metrics: Option<JsonValue>,
     sampler_metrics: Option<JsonValue>,
-    evaluator_engine_diagnostics: Option<JsonValue>,
     sampler_runtime_metrics: Option<JsonValue>,
     sampler_engine_diagnostics: Option<JsonValue>,
 }
@@ -161,7 +149,6 @@ impl From<RegisteredWorkerRow> for RegisteredWorkerEntry {
             sampler_metrics: value.sampler_metrics.and_then(|metrics| {
                 serde_json::from_value::<SamplerPerformanceMetrics>(metrics).ok()
             }),
-            evaluator_engine_diagnostics: value.evaluator_engine_diagnostics,
             sampler_runtime_metrics: value.sampler_runtime_metrics,
             sampler_engine_diagnostics: value.sampler_engine_diagnostics,
         }
@@ -174,7 +161,6 @@ struct EvaluatorPerformanceHistoryRow {
     run_id: i32,
     worker_id: String,
     metrics: JsonValue,
-    engine_diagnostics: JsonValue,
     created_at: DateTime<Utc>,
 }
 
@@ -192,7 +178,6 @@ impl From<EvaluatorPerformanceHistoryRow> for EvaluatorPerformanceHistoryEntry {
                     std_time_per_sample_ms: 0.0,
                     idle_profile: None,
                 }),
-            engine_diagnostics: value.engine_diagnostics,
             created_at: value.created_at,
         }
     }
@@ -242,7 +227,6 @@ pub(crate) async fn health_check(pool: &PgPool) -> Result<(), sqlx::Error> {
 const RUN_PROGRESS_COLUMNS: &str = r#"
     run_id,
     run_name,
-    run_status,
     integration_params,
     point_spec,
     current_observable,
@@ -305,7 +289,6 @@ pub(crate) async fn get_run_progress(
             SELECT
                 r.id as run_id,
                 r.name as run_name,
-                r.status as run_status,
                 COALESCE(r.integration_params, '{{}}'::jsonb) as integration_params,
                 r.point_spec as point_spec,
                 r.current_observable as current_observable,
@@ -583,8 +566,7 @@ pub(crate) async fn get_registered_workers(
             e.metrics AS evaluator_metrics,
             p.metrics AS sampler_metrics,
             p.runtime_metrics AS sampler_runtime_metrics,
-            p.engine_diagnostics AS sampler_engine_diagnostics,
-            e.engine_diagnostics AS evaluator_engine_diagnostics
+            p.engine_diagnostics AS sampler_engine_diagnostics
         FROM workers w
         LEFT JOIN sampler_aggregator_performance_latest p
             ON p.run_id = COALESCE($1, w.desired_run_id)
@@ -623,7 +605,6 @@ pub(crate) async fn get_evaluator_performance_history(
             run_id,
             worker_id,
             metrics,
-            engine_diagnostics,
             created_at
         FROM evaluator_performance_history
         WHERE run_id = $1
@@ -685,7 +666,6 @@ pub(crate) async fn get_worker_evaluator_performance_history(
             run_id,
             worker_id,
             metrics,
-            engine_diagnostics,
             created_at
         FROM evaluator_performance_history
         WHERE worker_id = $1

@@ -1,11 +1,7 @@
-import { useMemo } from "react";
 import { Alert, Box, Card, CardContent, Chip, Grid, Typography } from "@mui/material";
 import { formatDateTime } from "../utils/formatters";
 import JsonFallback from "./JsonFallback";
-import SampleChart from "./SampleChart";
-import EmptyStateCard from "./common/EmptyStateCard";
 import UnsupportedImplementationPanel from "./common/UnsupportedImplementationPanel";
-import { useWorkerPerformanceHistory } from "../hooks/useWorkerPerformanceHistory";
 
 const toObjectOrNull = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : null);
 
@@ -49,38 +45,31 @@ const fmtDiagnosticValue = (value) => {
   return String(value);
 };
 
-const buildPerformanceSamples = (entries, role) => {
-  if (!Array.isArray(entries) || entries.length === 0) return [];
-  const mapped = entries
-    .map((entry) => {
-      const createdAt = entry.created_at || entry.createdAt || null;
-      const createdAtMs = createdAt ? Date.parse(createdAt) : NaN;
-      const sampleCount = Number.isFinite(createdAtMs) ? createdAtMs : Number(entry.id);
-      if (!Number.isFinite(sampleCount)) return null;
-      const metrics = entry.metrics || {};
-      const mean =
-        role === "sampler_aggregator"
-          ? Number(metrics.avg_produce_time_per_sample_ms)
-          : Number(metrics.avg_time_per_sample_ms);
-      const stderr =
-        role === "sampler_aggregator"
-          ? Number(metrics.std_produce_time_per_sample_ms)
-          : Number(metrics.std_time_per_sample_ms);
-      if (!Number.isFinite(mean)) return null;
-      const safeStd = Number.isFinite(stderr) ? Math.abs(stderr) : 0;
-      return {
-        sampleCount,
-        mean,
-        stderr: safeStd,
-        lower: mean - safeStd,
-        upper: mean + safeStd,
-        spread: safeStd * 2,
-      };
-    })
-    .filter(Boolean);
+const workerHasAssignedRun = (worker) => worker?.desired_run_id != null;
+const workerIsInactive = (worker) => String(worker?.status || "").toLowerCase() === "inactive";
 
-  return mapped.reverse();
+const unavailableMetricsMessage = (worker, roleLabel) => {
+  if (!workerHasAssignedRun(worker)) {
+    return `No run is currently assigned to this ${roleLabel} worker. Metrics will appear after assignment.`;
+  }
+  if (workerIsInactive(worker)) {
+    return `This ${roleLabel} worker is inactive. Metrics will appear when the worker becomes active again.`;
+  }
+  return null;
 };
+
+const MetricsUnavailableCard = ({ title, message }) => (
+  <Card variant="outlined" sx={{ mb: 2 }}>
+    <CardContent>
+      <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 0.5 }}>
+        {title}
+      </Typography>
+      <Typography variant="body2" color="text.secondary">
+        {message}
+      </Typography>
+    </CardContent>
+  </Card>
+);
 
 const WorkerOverviewPanel = ({ worker }) => (
   <Card variant="outlined" sx={{ mb: 2 }}>
@@ -152,6 +141,11 @@ const WorkerOverviewPanel = ({ worker }) => (
 );
 
 const EvaluatorMetricsPanel = ({ worker }) => {
+  const unavailableMessage = unavailableMetricsMessage(worker, "evaluator");
+  if (unavailableMessage) {
+    return <MetricsUnavailableCard title="Evaluator Metrics" message={unavailableMessage} />;
+  }
+
   const metrics = evaluatorMetrics(worker);
   const idle = evaluatorIdleRatio(worker);
 
@@ -201,6 +195,11 @@ const EvaluatorMetricsPanel = ({ worker }) => {
 };
 
 const SamplerMetricsPanel = ({ worker }) => {
+  const unavailableMessage = unavailableMetricsMessage(worker, "sampler");
+  if (unavailableMessage) {
+    return <MetricsUnavailableCard title="Sampler Aggregator Metrics" message={unavailableMessage} />;
+  }
+
   const metrics = samplerMetrics(worker);
 
   return (
@@ -264,9 +263,23 @@ const SamplerMetricsPanel = ({ worker }) => {
   );
 };
 
-const SamplerRuntimePanel = ({ runtimeMetrics }) => {
-  const root = toObjectOrNull(runtimeMetrics) || {};
+const SamplerRuntimePanel = ({ worker }) => {
+  const unavailableMessage = unavailableMetricsMessage(worker, "sampler");
+  if (unavailableMessage) {
+    return <MetricsUnavailableCard title="Sampler Runtime Metrics" message={unavailableMessage} />;
+  }
+
+  const root = toObjectOrNull(worker?.sampler_runtime_metrics) || {};
   const rolling = toObjectOrNull(root.rolling);
+
+  if (Object.keys(root).length === 0) {
+    return (
+      <MetricsUnavailableCard
+        title="Sampler Runtime Metrics"
+        message="No live sampler runtime metrics are currently available for this worker."
+      />
+    );
+  }
 
   return (
     <Card variant="outlined" sx={{ mb: 2 }}>
@@ -445,97 +458,21 @@ const SamplerDiagnosticsCustomPanel = ({ worker }) => {
   return <UnsupportedImplementationPanel kind="sampler diagnostics" implementation={worker.implementation} />;
 };
 
-const WorkerPerformancePanel = ({ worker, isConnected }) => {
-  const role = worker?.role || null;
-  const workerId = worker?.worker_id || null;
-  const { run_id: assignedRunId, entries } = useWorkerPerformanceHistory({
-    workerId,
-    role,
-    limit: 200,
-    pollMs: 5000,
-  });
-  const samples = useMemo(() => buildPerformanceSamples(entries, role), [entries, role]);
-
-  if (!workerId || !role || (role !== "evaluator" && role !== "sampler_aggregator")) {
-    return (
-      <Alert severity="info" sx={{ mb: 2 }}>
-        Select a worker to view performance history.
-      </Alert>
-    );
-  }
-
-  if (samples.length === 0) {
-    return (
-      <Box sx={{ mb: 2 }}>
-        <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
-          Performance History
-        </Typography>
-        <EmptyStateCard
-          title="No performance history yet"
-          message="Wait for snapshots to be recorded for this worker."
-        />
-      </Box>
-    );
-  }
-
-  const title = role === "sampler_aggregator" ? "Sampler ms/sample history" : "Evaluator ms/sample history";
-  const formatTimestamp = (value) => {
-    const dt = new Date(Number(value));
-    if (Number.isNaN(dt.getTime())) return String(value);
-    return dt.toLocaleString();
-  };
-
-  return (
-    <Box sx={{ mb: 2 }}>
-      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 1 }}>
-        <Typography variant="subtitle2" color="text.secondary">
-          Performance History
-        </Typography>
-        <Typography variant="caption" color="text.secondary">
-          assigned run: {assignedRunId ?? "n/a"}
-        </Typography>
-      </Box>
-      <SampleChart
-        samples={samples}
-        isConnected={isConnected}
-        hasRun
-        target={null}
-        title={title}
-        lineColor="#6a1b9a"
-        bandColor="#6a1b9a"
-        targetLabel=""
-        xAxisLabel="Snapshot time"
-        yAxisLabel="ms/sample"
-        sampleLabel="Snapshot time"
-        valueLabel="ms/sample"
-        showStdErr
-        showErrorBand
-        showTargetLine={false}
-        showTargetSummary={false}
-        xTickFormatter={formatTimestamp}
-        sampleFormatter={formatTimestamp}
-      />
-    </Box>
-  );
-};
-
-const WorkerDetailsPanel = ({ worker, isConnected }) => {
+const WorkerDetailsPanel = ({ worker }) => {
   if (!worker) return null;
 
   return (
     <>
       <WorkerOverviewPanel worker={worker} />
-      <WorkerPerformancePanel worker={worker} isConnected={isConnected} />
 
       {worker.role === "evaluator" ? (
         <>
           <EvaluatorMetricsPanel worker={worker} />
-          <JsonFallback title="evaluator diagnostics JSON" data={worker.evaluator_engine_diagnostics} />
         </>
       ) : worker.role === "sampler_aggregator" ? (
         <>
           <SamplerMetricsPanel worker={worker} />
-          <SamplerRuntimePanel runtimeMetrics={worker.sampler_runtime_metrics} />
+          <SamplerRuntimePanel worker={worker} />
           <SamplerDiagnosticsCustomPanel worker={worker} />
           <JsonFallback
             title="sampler diagnostics JSON"
