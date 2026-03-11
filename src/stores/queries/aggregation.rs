@@ -18,13 +18,13 @@ pub(crate) async fn get_run_current_observable(
     .map(|row| row.flatten())
 }
 
-pub(crate) async fn get_run_sampler_checkpoint(
+pub(crate) async fn get_run_sampler_runner_snapshot(
     pool: &PgPool,
     run_id: i32,
 ) -> Result<Option<JsonValue>, sqlx::Error> {
     sqlx::query_scalar(
         r#"
-        SELECT sampler_checkpoint
+        SELECT sampler_runner_snapshot
         FROM runs
         WHERE id = $1
         "#,
@@ -93,19 +93,19 @@ pub(crate) async fn update_run_aggregation(
     Ok(())
 }
 
-pub(crate) async fn update_run_sampler_checkpoint(
+pub(crate) async fn update_run_sampler_runner_snapshot(
     pool: &PgPool,
     run_id: i32,
-    checkpoint: &JsonValue,
+    snapshot: &JsonValue,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
         UPDATE runs
-        SET sampler_checkpoint = $1
+        SET sampler_runner_snapshot = $1
         WHERE id = $2
         "#,
     )
-    .bind(checkpoint)
+    .bind(snapshot)
     .bind(run_id)
     .execute(pool)
     .await?;

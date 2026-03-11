@@ -3,7 +3,7 @@ import JsonFallback from "./JsonFallback";
 import { formatDateTime, formatScientific } from "../utils/formatters";
 import { parseScalarTarget } from "../utils/target";
 import { deriveObservableImplementation, splitKindConfig, toConfigObject } from "../utils/config";
-import { formatRunLabel } from "../utils/runs";
+import { deriveRunLifecycle, formatRunLabel } from "../utils/runs";
 
 const RunInfo = ({ run }) => {
   if (!run) return null;
@@ -23,6 +23,7 @@ const RunInfo = ({ run }) => {
   const scalarTarget = parseScalarTarget(run.target);
   const trainingCompleted = Boolean(run.training_completed_at);
   const trainingLabel = trainingCompleted ? "training completed" : "training";
+  const lifecycle = deriveRunLifecycle(run);
 
   return (
     <Box sx={{ mb: 3 }}>
@@ -42,8 +43,8 @@ const RunInfo = ({ run }) => {
                 Status
               </Typography>
               <Chip
-                label={run.run_status || "unknown"}
-                color={run.run_status === "running" ? "success" : "default"}
+                label={lifecycle}
+                color={lifecycle === "running" ? "success" : lifecycle === "pausing" ? "warning" : "default"}
                 size="medium"
                 sx={{ mt: 1, fontWeight: 600 }}
               />

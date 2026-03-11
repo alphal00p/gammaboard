@@ -5,7 +5,7 @@ This file is for contributors making structural or behavioral changes.
 Use `README.md` for operator onboarding. Keep this file focused on architecture, invariants, and implementation rules.
 
 ## System Snapshot
-- `gammaboard run` manages run lifecycle.
+- `gammaboard run` manages run creation, pause, and removal.
 - `gammaboard node` manages desired assignments.
 - `gammaboard run-node` reconciles DB desired assignment into at most one active local role loop.
 - `gammaboard server` exposes the dashboard read API.
@@ -27,9 +27,13 @@ Use `README.md` for operator onboarding. Keep this file focused on architecture,
 - Preflight derives `point_spec` from the evaluator and performs a one-point sampler -> parametrization -> evaluator dry-run before persistence.
 - `run add` also persists evaluator and sampler init metadata.
 - Point dimensions are canonical in `runs.point_spec`; do not duplicate them outside evaluator config unless the evaluator intrinsically needs them.
-- `run start`, `run pause`, `run stop`, `run remove`, and `node stop` support positional IDs or `-a/--all`.
-- `run pause` and `run stop` must clear desired assignments so `run-node` reconciles down cleanly.
-- Auto-stop conditions in `sampler_aggregator_runner_params.stop_on` are evaluated against aggregated observable samples; once reached, stop new production, wait for pending queue depletion, then apply stop semantics (`cancelled` + desired assignments cleared).
+- `run pause`, `run remove`, and `node stop` support positional IDs or `-a/--all`.
+- Run pause is implemented by clearing desired assignments so `run-node` reconciles down cleanly.
+- Run lifecycle is derived from control-plane state; do not reintroduce a persisted `runs.status` column unless explicitly requested.
+- Auto-stop conditions in `sampler_aggregator_runner_params.stop_on` are evaluated against aggregated observable samples; once reached, stop new production and clear desired assignments for the run.
+- Sampler pause/resume snapshots are persisted on `runs.sampler_runner_snapshot`; keep the persisted shape explicit and versioned.
+- The current snapshot restore path is implementation-specific; adding a new sampler requires adding snapshot export/restore support for it.
+- Do not expose `runs.sampler_runner_snapshot` through the read API or dashboard payloads; it is internal resumability state and may be large.
 - `run-node` must stop the old role before starting a new one.
 - Role start failures are capped per desired target; after the cap is hit, retries stay disabled until desired assignment changes.
 - Node shutdown is a one-shot signal read from `workers.shutdown_requested_at`.

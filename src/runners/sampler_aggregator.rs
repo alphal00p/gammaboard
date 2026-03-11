@@ -13,10 +13,11 @@ use crate::core::{
     AggregationStore, CompletedBatch, RollingMetricSnapshot, SamplerAggregatorPerformanceSnapshot,
     SamplerRollingAverages, SamplerRuntimeMetrics, StoreError, WorkQueueStore,
 };
-use crate::engines::{EngineError, ObservableState, SamplerAggregator};
+use crate::engines::{EngineError, ObservableState, SamplerAggregator, SamplerAggregatorSnapshot};
 use crate::runners::rolling_metric::RollingMetric;
 use crate::stores::RunControlStore;
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 use tracing::info;
@@ -49,7 +50,7 @@ pub struct RunnerTick {
     pub queue_depleted: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct RollingAveragesState {
     eval_ms_per_sample: RollingMetric,
     eval_ms_per_batch: RollingMetric,
@@ -59,7 +60,7 @@ struct RollingAveragesState {
     batches_consumed_per_tick: RollingMetric,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct SamplerRuntimeState {
     produced_batches_total: i64,
     produced_samples_total: i64,
@@ -67,6 +68,17 @@ struct SamplerRuntimeState {
     ingested_samples_total: i64,
     batch_size_current: usize,
     rolling: RollingAveragesState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SamplerAggregatorRunnerSnapshot {
+    pub version: u32,
+    pub engine: SamplerAggregatorSnapshot,
+    pub aggregated_observable: JsonValue,
+    runtime_state: SamplerRuntimeState,
+    last_pending_after_enqueue: Option<usize>,
+    training_completion_marked: bool,
+    auto_stop_triggered: bool,
 }
 
 impl SamplerRuntimeState {
@@ -128,7 +140,6 @@ pub struct SamplerAggregatorRunner<WQ, AS, RC> {
     last_pending_after_enqueue: Option<usize>,
     training_completion_marked: bool,
     auto_stop_triggered: bool,
-    auto_stop_waiting_for_depletion: bool,
 }
 
 impl<WQ, AS, RC> SamplerAggregatorRunner<WQ, AS, RC>
@@ -141,6 +152,7 @@ where
     const MAX_BATCH_SIZE_UP_FACTOR: f64 = 1.25;
     const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.80;
     const MIN_BATCH_SIZE_CHANGE_RATIO: f64 = 0.03;
+    pub const SNAPSHOT_VERSION: u32 = 1;
 
     fn tune_batch_size(&mut self) {
         let Some(eval_ms_per_sample) = self.runtime_state.rolling.eval_ms_per_sample.value() else {
@@ -306,8 +318,51 @@ where
             last_pending_after_enqueue: None,
             training_completion_marked: false,
             auto_stop_triggered: false,
-            auto_stop_waiting_for_depletion: false,
         })
+    }
+
+    pub fn restore_snapshot(
+        &mut self,
+        snapshot: SamplerAggregatorRunnerSnapshot,
+    ) -> Result<(), RunnerError> {
+        if snapshot.version != Self::SNAPSHOT_VERSION {
+            return Err(RunnerError::Engine(EngineError::engine(format!(
+                "unsupported sampler runner snapshot version: {}",
+                snapshot.version
+            ))));
+        }
+        self.aggregated_observable = ObservableState::from_json(&snapshot.aggregated_observable)
+            .map_err(RunnerError::Engine)?;
+        self.runtime_state = snapshot.runtime_state;
+        self.last_pending_after_enqueue = snapshot.last_pending_after_enqueue;
+        self.training_completion_marked = snapshot.training_completion_marked;
+        self.auto_stop_triggered = snapshot.auto_stop_triggered;
+        Ok(())
+    }
+
+    pub fn snapshot_state(&mut self) -> Result<SamplerAggregatorRunnerSnapshot, RunnerError> {
+        Ok(SamplerAggregatorRunnerSnapshot {
+            version: Self::SNAPSHOT_VERSION,
+            engine: self.engine.snapshot().map_err(RunnerError::Engine)?,
+            aggregated_observable: self
+                .aggregated_observable
+                .to_json()
+                .map_err(RunnerError::Engine)?,
+            runtime_state: self.runtime_state.clone(),
+            last_pending_after_enqueue: self.last_pending_after_enqueue,
+            training_completion_marked: self.training_completion_marked,
+            auto_stop_triggered: self.auto_stop_triggered,
+        })
+    }
+
+    pub async fn persist_snapshot(&mut self) -> Result<(), RunnerError> {
+        let snapshot = self.snapshot_state()?;
+        let payload = serde_json::to_value(&snapshot)
+            .map_err(|err| RunnerError::Engine(EngineError::from(err)))?;
+        self.aggregation_store
+            .save_sampler_runner_snapshot(self.run_id, &payload)
+            .await?;
+        Ok(())
     }
 
     pub async fn tick(&mut self) -> Result<RunnerTick, RunnerError> {
@@ -528,38 +583,15 @@ where
         if self.auto_stop_triggered || !self.stop_condition_met() {
             return Ok(());
         }
-
-        let pending = self
-            .work_queue
-            .get_pending_batch_count(self.run_id)
-            .await?
-            .max(0);
-        if pending > 0 {
-            if !self.auto_stop_waiting_for_depletion {
-                info!(
-                    run_id = self.run_id,
-                    aggregated_samples = self.aggregated_sample_count(),
-                    pending_batches = pending,
-                    ?self.config.stop_on,
-                    "auto-stop condition reached; halting production and waiting for queue depletion"
-                );
-                self.auto_stop_waiting_for_depletion = true;
-            }
-            return Ok(());
-        }
-
-        //let assignments_cleared = self
-        //    .run_control
-        //    .stop_run_and_clear_assignments(self.run_id)
-        //    .await?;
+        let assignments_cleared = self.run_control.clear_run_assignments(self.run_id).await?;
         self.auto_stop_triggered = true;
-        //info!(
-        //    run_id = self.run_id,
-        //    aggregated_samples = self.aggregated_sample_count(),
-        //    ?self.config.stop_on,
-        //    assignments_cleared,
-        //    "auto-stop condition reached"
-        //);
+        info!(
+            run_id = self.run_id,
+            aggregated_samples = self.aggregated_sample_count(),
+            ?self.config.stop_on,
+            assignments_cleared,
+            "auto-stop condition reached; assignments cleared"
+        );
         Ok(())
     }
 }

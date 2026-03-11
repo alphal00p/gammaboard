@@ -701,8 +701,11 @@ impl AggregationStore for PgStore {
             .map_err(map_sqlx)
     }
 
-    async fn load_sampler_checkpoint(&self, run_id: i32) -> Result<Option<JsonValue>, StoreError> {
-        queries::get_run_sampler_checkpoint(&self.pool, run_id)
+    async fn load_sampler_runner_snapshot(
+        &self,
+        run_id: i32,
+    ) -> Result<Option<JsonValue>, StoreError> {
+        queries::get_run_sampler_runner_snapshot(&self.pool, run_id)
             .await
             .map_err(map_sqlx)
     }
@@ -742,12 +745,12 @@ impl AggregationStore for PgStore {
         Ok(())
     }
 
-    async fn save_sampler_checkpoint(
+    async fn save_sampler_runner_snapshot(
         &self,
         run_id: i32,
-        checkpoint: &JsonValue,
+        snapshot: &JsonValue,
     ) -> Result<(), StoreError> {
-        queries::update_run_sampler_checkpoint(&self.pool, run_id, checkpoint)
+        queries::update_run_sampler_runner_snapshot(&self.pool, run_id, snapshot)
             .await
             .map_err(map_sqlx)
     }

@@ -68,7 +68,6 @@ CREATE OR REPLACE VIEW run_progress AS
 SELECT
     r.id as run_id,
     r.name as run_name,
-    r.status as run_status,
     COALESCE(r.integration_params, '{}'::jsonb) as integration_params,
     r.point_spec,
     r.current_observable,

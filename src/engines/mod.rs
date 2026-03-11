@@ -13,7 +13,7 @@ pub use observable::{
     SemanticObservableKind,
 };
 pub use parametrization::Parametrization;
-pub use sampler_aggregator::SamplerAggregator;
+pub use sampler_aggregator::{SamplerAggregator, SamplerAggregatorSnapshot};
 pub use shared::{
     BuildFromJson, EvaluatorConfig, IntegrationParams, ParametrizationConfig, RunSpec,
     SamplerAggregatorConfig,

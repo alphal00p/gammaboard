@@ -3,7 +3,7 @@
 Gammaboard runs distributed numerical integration jobs with PostgreSQL as the shared control plane, queue, and telemetry store.
 
 ## What It Does
-- `gammaboard run` manages run lifecycle.
+- `gammaboard run` manages run creation, pause, and removal.
 - `gammaboard node` manages desired worker assignments.
 - `gammaboard run-node` reconciles one local process into one active role loop at a time: `evaluator` or `sampler_aggregator`.
 - `gammaboard server` serves the dashboard read API.
@@ -46,12 +46,9 @@ Useful stop commands:
 3. Assign roles:
    - `cargo run --bin gammaboard -- node assign node-a evaluator <RUN_ID>`
    - `cargo run --bin gammaboard -- node assign node-b sampler-aggregator <RUN_ID>`
-4. Start the run:
-   - `cargo run --bin gammaboard -- run start <RUN_ID>`
 
 Useful lifecycle commands:
 - `cargo run --bin gammaboard -- run pause <RUN_ID>`
-- `cargo run --bin gammaboard -- run stop <RUN_ID>`
 - `cargo run --bin gammaboard -- run remove <RUN_ID>`
 - `cargo run --bin gammaboard -- node stop <NODE_ID>`
 
@@ -100,10 +97,10 @@ Notes:
 - `point_spec` is derived from the evaluator during preflight and stored on the run.
 - Observable semantics are evaluator-owned. There is no separate `[observable]` section anymore.
 - Evaluators that support multiple observable semantics use `observable_kind` inside `[evaluator]`.
-- Optional `sampler_aggregator_runner_params.stop_on` supports automatic run stop on conditions.
+- Optional `sampler_aggregator_runner_params.stop_on` supports automatic run pause on conditions.
   Current condition support: `kind = "samples_at_least"` with positive integer `samples`.
   `samples_at_least` is evaluated against aggregated observable sample count.
-  After threshold is reached, sampler-aggregator stops producing new batches, waits for pending queue depletion, then sets run status to `cancelled` and clears desired assignments.
+  After threshold is reached, sampler-aggregator stops producing new batches and clears desired assignments for the run.
 
 Examples:
 - `unit`: optional `observable_kind = "scalar" | "complex"`
@@ -118,6 +115,11 @@ Examples:
 - Sampler-aggregators consume completed batches, merge observable state, ingest training values when needed, and delete consumed completed batches.
 - Sampler-aggregators own any per-batch training correlation state internally; the runner does not persist or return batch context.
 - The latest full runtime observable is stored on the run record as `current_observable`.
+- On pause/unassignment, the sampler-aggregator finishes its current tick and persists a runner snapshot to `runs.sampler_runner_snapshot` before exiting.
+- Resume currently restores sampler snapshots for `naive_monte_carlo` and `havana`, including Havana RNG state.
+- `runs.sampler_runner_snapshot` is internal control-plane state and is not exposed by the dashboard read API.
+- Run lifecycle is derived from control-plane state rather than persisted on `runs`:
+  desired assignments present -> `running`; no desired assignments but active workers or claimed batches remain -> `pausing`; otherwise -> `paused`.
 - Aggregated observable history snapshots persist the observable's reduced persistent payload rather than the tagged runtime `ObservableState`.
 - Run and worker performance snapshots are persisted periodically.
 - Evaluator performance history stores generic evaluator metrics only; evaluator-specific static details belong in evaluator init metadata.

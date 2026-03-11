@@ -3,5 +3,21 @@ export const formatRunLabel = (run) => {
   return run.run_name ? `${run.run_name} (#${run.run_id})` : `Run #${run.run_id}`;
 };
 
+export const deriveRunLifecycle = (run) => {
+  if (!run || typeof run !== "object") return "unknown";
+  if (typeof run.lifecycle_state === "string" && run.lifecycle_state.trim()) return run.lifecycle_state;
+  const desiredAssignments = Number(run.desired_assignment_count);
+  const activeWorkers = Number(run.active_worker_count);
+  const claimedBatches = Number(run.claimed_batches);
+  if (Number.isFinite(desiredAssignments) && desiredAssignments > 0) return "running";
+  if (
+    (Number.isFinite(activeWorkers) && activeWorkers > 0) ||
+    (Number.isFinite(claimedBatches) && claimedBatches > 0)
+  ) {
+    return "pausing";
+  }
+  return "paused";
+};
+
 export const formatRunSecondaryLabel = (run) =>
-  `${run.run_status} | completed ${(run.batches_completed || 0).toLocaleString()} | queued ${(run.total_batches || 0).toLocaleString()}`;
+  `${deriveRunLifecycle(run)} | completed ${(run.batches_completed || 0).toLocaleString()} | queued ${(run.total_batches || 0).toLocaleString()}`;

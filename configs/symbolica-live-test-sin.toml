@@ -1,10 +1,10 @@
-name = "symbolica-poly-test"
-target = { kind = "scalar", value = 1.0 }
+name = "symbolica-sin-test"
+target = { kind = "scalar", value = 0.45969769413186023 }
 
 [evaluator]
 kind = "symbolica"
-expr = "x^2 + y^2 + z^2"
-args = ["x", "y", "z"]
+expr = "sin(x)"
+args = ["x"]
 
 [sampler_aggregator]
 kind = "naive_monte_carlo"

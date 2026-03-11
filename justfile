@@ -46,20 +46,52 @@ live-test-basic:
     {{bin}} run-node --node-id "w-3" --poll-ms {{ poll_ms }} &
     {{bin}} run-node --node-id "w-4" --poll-ms {{ poll_ms }} &
     {{bin}} run-node --node-id "w-5" --poll-ms {{ poll_ms }} &
+    {{bin}} run-node --node-id "w-6" --poll-ms {{ poll_ms }} &
+    {{bin}} run-node --node-id "w-7" --poll-ms {{ poll_ms }} &
+    {{bin}} run-node --node-id "w-8" --poll-ms {{ poll_ms }} &
 
     sleep 4
 
     {{bin}} run add "configs/live-test-unit-naive-scalar.toml"
     {{bin}} run add "configs/symbolica-live-test.toml"
+    {{bin}} run add "configs/symbolica-live-test-sin.toml"
 
     {{bin}} node assign "w-1" evaluator 1
     {{bin}} node assign "w-2" sampler-aggregator 1
 
-    {{bin}} node assign "w-3" evaluator 2
+    {{bin}} node assign "w-3" sampler-aggregator 2
     {{bin}} node assign "w-4" evaluator 2
-    {{bin}} node assign "w-5" sampler-aggregator 2
+    {{bin}} node assign "w-5" evaluator 2
+    {{bin}} node assign "w-6" evaluator 2
+    {{bin}} node assign "w-7" evaluator 2
+    {{bin}} node assign "w-8" evaluator 2
 
-    {{bin}} run start 1 2
+    echo "initial assignments settled"
+    sleep 10
+
+    echo "move two workers from run 2 to run 3"
+    {{bin}} node assign "w-3" sampler-aggregator 3
+    {{bin}} node assign "w-8" evaluator 3
+
+    sleep 10
+
+    echo "pause run 3 and return workers to run 2"
+    {{bin}} run pause 3
+    sleep 6
+    {{bin}} node assign "w-3" sampler-aggregator 2
+    {{bin}} node assign "w-8" evaluator 2
+
+    sleep 10
+
+    echo "pause run 2 and resume run 3 with all symbolica workers"
+    {{bin}} run pause 2
+    sleep 6
+    {{bin}} node assign "w-3" sampler-aggregator 3
+    {{bin}} node assign "w-4" evaluator 3
+    {{bin}} node assign "w-5" evaluator 3
+    {{bin}} node assign "w-6" evaluator 3
+    {{bin}} node assign "w-7" evaluator 3
+    {{bin}} node assign "w-8" evaluator 3
 
 live-test-gammaloop:
     #!/usr/bin/env bash
@@ -78,10 +110,7 @@ live-test-gammaloop:
     {{bin}} node assign "w-1" evaluator 1
     {{bin}} node assign "w-2" evaluator 1
 
-    {{bin}} run start 1
-
-
 stop:
-    -{{bin}} run stop -a
+    -{{bin}} run pause -a
     -{{bin}} node stop -a
     -@stty sane

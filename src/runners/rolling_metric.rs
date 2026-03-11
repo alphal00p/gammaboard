@@ -1,7 +1,7 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Lightweight EWMA helper for non-negative timing/capacity metrics.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct RollingMetric {
     mean: Option<f64>,
     variance: f64,

@@ -10,6 +10,8 @@ tokio = { version = "1.46", features = ["full"] }
 sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-native-tls", "chrono", "macros"] }
 dotenvy = "0.15"
 rand = "0.8"
+rand09 = { package = "rand", version = "0.9" }
+rand_xoshiro = { version = "0.7", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
@@ -21,7 +23,7 @@ clap = { version = "4.5", features = ["derive"] }
 toml = "0.8"
 async-trait = "0.1"
 thiserror = "2.0"
-symbolica = "1.4"
+symbolica = { version = "1.4", features = ["serde"] }
 ndarray = "0.16"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

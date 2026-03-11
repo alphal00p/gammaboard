@@ -150,7 +150,10 @@ pub trait WorkQueueStore: Send + Sync {
 #[async_trait]
 pub trait AggregationStore: Send + Sync {
     async fn load_current_observable(&self, run_id: i32) -> Result<Option<JsonValue>, StoreError>;
-    async fn load_sampler_checkpoint(&self, run_id: i32) -> Result<Option<JsonValue>, StoreError>;
+    async fn load_sampler_runner_snapshot(
+        &self,
+        run_id: i32,
+    ) -> Result<Option<JsonValue>, StoreError>;
     async fn load_latest_aggregation_snapshot(
         &self,
         run_id: i32,
@@ -162,10 +165,10 @@ pub trait AggregationStore: Send + Sync {
         aggregated_observable: &JsonValue,
         delta_batches_completed: i32,
     ) -> Result<(), StoreError>;
-    async fn save_sampler_checkpoint(
+    async fn save_sampler_runner_snapshot(
         &self,
         run_id: i32,
-        checkpoint: &JsonValue,
+        snapshot: &JsonValue,
     ) -> Result<(), StoreError>;
 }
 

@@ -1,5 +1,7 @@
 use crate::core::StoreError;
-use crate::runners::sampler_aggregator::SamplerAggregatorRunner;
+use crate::runners::sampler_aggregator::{
+    SamplerAggregatorRunner, SamplerAggregatorRunnerSnapshot,
+};
 use std::time::Duration;
 use tokio::{sync::watch, time::sleep};
 use tracing::Instrument;
@@ -15,16 +17,37 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
         warn!("run has no RunSpec; sampler-aggregator not started");
         return Ok(());
     };
+    let saved_snapshot = worker
+        .store
+        .load_sampler_runner_snapshot(worker.run_id)
+        .await?
+        .map(|payload| {
+            serde_json::from_value::<SamplerAggregatorRunnerSnapshot>(payload).map_err(|err| {
+                StoreError::store(format!("failed to decode sampler snapshot: {err}"))
+            })
+        })
+        .transpose()?;
 
     let engine_span = tracing::span!(tracing::Level::TRACE, "sampler_engine_context");
     let engine = {
         let _engine_scope = engine_span.enter();
-        let engine = spec
-            .sampler_aggregator
-            .build(spec.point_spec.clone())
-            .map_err(|err| {
-                StoreError::store(format!("failed to build sampler-aggregator: {err}"))
-            })?;
+        let engine = if let Some(snapshot) = saved_snapshot.as_ref() {
+            snapshot
+                .engine
+                .clone()
+                .into_runtime(&spec.point_spec)
+                .map_err(|err| {
+                    StoreError::store(format!(
+                        "failed to restore sampler-aggregator from snapshot: {err}"
+                    ))
+                })?
+        } else {
+            spec.sampler_aggregator
+                .build(spec.point_spec.clone())
+                .map_err(|err| {
+                    StoreError::store(format!("failed to build sampler-aggregator: {err}"))
+                })?
+        };
         engine
             .validate_point_spec(&spec.point_spec)
             .map_err(|err| {
@@ -59,6 +82,12 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
     .await
     .map_err(|err| StoreError::store(err.to_string()))?;
 
+    if let Some(snapshot) = saved_snapshot {
+        runner.restore_snapshot(snapshot).map_err(|err| {
+            StoreError::store(format!("failed to restore sampler runner snapshot: {err}"))
+        })?;
+    }
+
     let lease_ttl = Duration::from_millis(spec.sampler_aggregator_runner_params.lease_ttl_ms);
     let interval = Duration::from_millis(spec.sampler_aggregator_runner_params.min_poll_time_ms);
     let mut owns_lease = false;
@@ -92,11 +121,7 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
 
         if owns_lease {
             match runner.tick().instrument(engine_span.clone()).await {
-                Ok(tick) => {
-                    if tick.queue_depleted {
-                        info!("sampler queue depleted (pending == 0 before tick)");
-                    }
-                }
+                Ok(_) => {}
                 Err(err) => warn!("sampler-aggregator tick failed: {err}"),
             }
         }
@@ -105,6 +130,10 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
             _ = stop_rx.changed() => {}
             _ = sleep(interval) => {}
         }
+    }
+
+    if let Err(err) = runner.persist_snapshot().await {
+        warn!("failed to persist sampler-aggregator snapshot on shutdown: {err}");
     }
 
     if owns_lease

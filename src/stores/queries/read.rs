@@ -12,6 +12,9 @@ use sqlx::PgPool;
 struct RunProgressRow {
     run_id: i32,
     run_name: String,
+    lifecycle_state: String,
+    desired_assignment_count: i64,
+    active_worker_count: i64,
     integration_params: Option<JsonValue>,
     point_spec: Option<JsonValue>,
     current_observable: Option<JsonValue>,
@@ -39,6 +42,9 @@ impl TryFrom<RunProgressRow> for RunProgress {
         Ok(RunProgress {
             run_id: value.run_id,
             run_name: value.run_name,
+            lifecycle_state: value.lifecycle_state,
+            desired_assignment_count: value.desired_assignment_count,
+            active_worker_count: value.active_worker_count,
             integration_params: value.integration_params,
             point_spec: value
                 .point_spec
@@ -227,6 +233,9 @@ pub(crate) async fn health_check(pool: &PgPool) -> Result<(), sqlx::Error> {
 const RUN_PROGRESS_COLUMNS: &str = r#"
     run_id,
     run_name,
+    lifecycle_state,
+    desired_assignment_count,
+    active_worker_count,
     integration_params,
     point_spec,
     current_observable,
@@ -247,6 +256,31 @@ const RUN_PROGRESS_COLUMNS: &str = r#"
     completion_rate
 "#;
 
+const RUN_ASSIGNMENT_STATS_SUBQUERY: &str = r#"
+    SELECT
+        r.id AS run_id,
+        COALESCE(da.desired_assignment_count, 0) AS desired_assignment_count,
+        COALESCE(ea.active_evaluator_count, 0) + COALESCE(sa.active_sampler_count, 0) AS active_worker_count
+    FROM runs r
+    LEFT JOIN (
+        SELECT desired_run_id AS run_id, COUNT(*) AS desired_assignment_count
+        FROM workers
+        WHERE desired_run_id IS NOT NULL
+        GROUP BY desired_run_id
+    ) da ON r.id = da.run_id
+    LEFT JOIN (
+        SELECT run_id, COUNT(*) AS active_evaluator_count
+        FROM run_evaluator_assignments
+        WHERE active = true
+        GROUP BY run_id
+    ) ea ON r.id = ea.run_id
+    LEFT JOIN (
+        SELECT run_id, COUNT(*) AS active_sampler_count
+        FROM run_sampler_aggregator_leases
+        GROUP BY run_id
+    ) sa ON r.id = sa.run_id
+"#;
+
 const RUN_BATCH_STATS_SUBQUERY_FOR_ONE_RUN: &str = r#"
     SELECT
         run_id,
@@ -264,12 +298,58 @@ const RUN_BATCH_STATS_SUBQUERY_FOR_ONE_RUN: &str = r#"
 pub(crate) async fn get_all_runs(pool: &PgPool) -> Result<Vec<RunProgress>, sqlx::Error> {
     let sql = format!(
         r#"
+        WITH assignment_stats AS (
+            {assignment_stats_subquery}
+        )
         SELECT
-            {columns}
-        FROM run_progress
+            r.id as run_id,
+            r.name as run_name,
+            CASE
+                WHEN COALESCE(a.desired_assignment_count, 0) > 0 THEN 'running'
+                WHEN COALESCE(b.claimed_batches, 0) > 0 OR COALESCE(a.active_worker_count, 0) > 0 THEN 'pausing'
+                ELSE 'paused'
+            END as lifecycle_state,
+            COALESCE(a.desired_assignment_count, 0) as desired_assignment_count,
+            COALESCE(a.active_worker_count, 0) as active_worker_count,
+            COALESCE(r.integration_params, '{{}}'::jsonb) as integration_params,
+            r.point_spec as point_spec,
+            r.current_observable as current_observable,
+            r.target,
+            r.evaluator_init_metadata,
+            r.sampler_aggregator_init_metadata,
+            r.started_at,
+            r.completed_at,
+            r.training_completed_at,
+            r.total_batches_planned,
+            r.batches_completed,
+            COALESCE(b.total_batches, 0) as total_batches,
+            COALESCE(b.total_samples, 0) as total_samples,
+            COALESCE(b.pending_batches, 0) as pending_batches,
+            COALESCE(b.claimed_batches, 0) as claimed_batches,
+            COALESCE(b.completed_batches, 0) as completed_batches,
+            COALESCE(b.failed_batches, 0) as failed_batches,
+            CASE
+                WHEN COALESCE(b.total_batches, 0) > 0
+                THEN CAST(COALESCE(b.completed_batches, 0) AS FLOAT) / b.total_batches
+                ELSE 0.0
+            END as completion_rate
+        FROM runs r
+        LEFT JOIN (
+            SELECT
+                run_id,
+                COUNT(*) as total_batches,
+                SUM(batch_size) as total_samples,
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_batches,
+                SUM(CASE WHEN status = 'claimed' THEN 1 ELSE 0 END) as claimed_batches,
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_batches,
+                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_batches
+            FROM batches
+            GROUP BY run_id
+        ) b ON r.id = b.run_id
+        LEFT JOIN assignment_stats a ON r.id = a.run_id
         ORDER BY started_at DESC
         "#,
-        columns = RUN_PROGRESS_COLUMNS
+        assignment_stats_subquery = RUN_ASSIGNMENT_STATS_SUBQUERY
     );
 
     let rows = sqlx::query_as::<_, RunProgressRow>(&sql)
@@ -285,10 +365,20 @@ pub(crate) async fn get_run_progress(
 ) -> Result<Option<RunProgress>, sqlx::Error> {
     let sql = format!(
         r#"
-        WITH run_progress AS (
+        WITH assignment_stats AS (
+            {assignment_stats_subquery}
+        ),
+        run_progress AS (
             SELECT
                 r.id as run_id,
                 r.name as run_name,
+                CASE
+                    WHEN COALESCE(a.desired_assignment_count, 0) > 0 THEN 'running'
+                    WHEN COALESCE(b.claimed_batches, 0) > 0 OR COALESCE(a.active_worker_count, 0) > 0 THEN 'pausing'
+                    ELSE 'paused'
+                END as lifecycle_state,
+                COALESCE(a.desired_assignment_count, 0) as desired_assignment_count,
+                COALESCE(a.active_worker_count, 0) as active_worker_count,
                 COALESCE(r.integration_params, '{{}}'::jsonb) as integration_params,
                 r.point_spec as point_spec,
                 r.current_observable as current_observable,
@@ -315,6 +405,7 @@ pub(crate) async fn get_run_progress(
             LEFT JOIN (
                 {batch_stats_subquery}
             ) b ON r.id = b.run_id
+            LEFT JOIN assignment_stats a ON r.id = a.run_id
             WHERE r.id = $1
         )
         SELECT
@@ -322,7 +413,8 @@ pub(crate) async fn get_run_progress(
         FROM run_progress
         "#,
         columns = RUN_PROGRESS_COLUMNS,
-        batch_stats_subquery = RUN_BATCH_STATS_SUBQUERY_FOR_ONE_RUN
+        batch_stats_subquery = RUN_BATCH_STATS_SUBQUERY_FOR_ONE_RUN,
+        assignment_stats_subquery = RUN_ASSIGNMENT_STATS_SUBQUERY
     );
 
     let row = sqlx::query_as::<_, RunProgressRow>(&sql)

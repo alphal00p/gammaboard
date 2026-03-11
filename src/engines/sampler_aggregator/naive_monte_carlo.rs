@@ -1,11 +1,11 @@
 use crate::core::{Batch, PointSpec};
-use crate::engines::{BuildError, EngineError, SamplerAggregator};
+use crate::engines::{BuildError, EngineError, SamplerAggregator, SamplerAggregatorSnapshot};
 use rand::Rng;
-use serde::Deserialize;
-use serde_json::{Value as JsonValue, json};
+use serde::{Deserialize, Serialize};
 use std::{thread, time::Duration};
 
 /// Test-only sampler-aggregator engine with simple random batch generation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NaiveMonteCarloSamplerAggregator {
     continuous_dims: usize,
     discrete_dims: usize,
@@ -65,6 +65,15 @@ impl NaiveMonteCarloSamplerAggregator {
             params.training_delay_per_sample_ms,
         ))
     }
+
+    pub(crate) fn from_snapshot(
+        snapshot: Self,
+        point_spec: &PointSpec,
+    ) -> Result<Self, BuildError> {
+        let runtime = snapshot;
+        runtime.validate_point_spec(point_spec)?;
+        Ok(runtime)
+    }
 }
 
 impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
@@ -99,57 +108,10 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
         }
     }
 
-    fn export_checkpoint(&mut self) -> Result<JsonValue, EngineError> {
-        Ok(json!({
-            "kind": "naive_monte_carlo",
-            "continuous_dims": self.continuous_dims,
-            "discrete_dims": self.discrete_dims,
-            "training_target_samples": self.training_target_samples,
-            "training_delay_per_sample_ms": self.training_delay_per_sample_ms,
-            "trained_samples": self.trained_samples,
-            "nr_batches": self.nr_batches,
-            "nr_samples": self.nr_samples,
-            "sum": self.sum,
-        }))
-    }
-
-    fn import_checkpoint(&mut self, checkpoint: &JsonValue) -> Result<(), EngineError> {
-        let kind = checkpoint
-            .get("kind")
-            .and_then(JsonValue::as_str)
-            .unwrap_or("");
-        if kind != "naive_monte_carlo" {
-            return Err(EngineError::engine(format!(
-                "invalid naive_monte_carlo checkpoint kind: {kind}"
-            )));
-        }
-        let trained_samples = checkpoint
-            .get("trained_samples")
-            .and_then(JsonValue::as_u64)
-            .ok_or_else(|| {
-                EngineError::engine("naive_monte_carlo checkpoint missing trained_samples")
-            })?;
-        let nr_batches = checkpoint
-            .get("nr_batches")
-            .and_then(JsonValue::as_i64)
-            .ok_or_else(|| {
-                EngineError::engine("naive_monte_carlo checkpoint missing nr_batches")
-            })?;
-        let nr_samples = checkpoint
-            .get("nr_samples")
-            .and_then(JsonValue::as_i64)
-            .ok_or_else(|| {
-                EngineError::engine("naive_monte_carlo checkpoint missing nr_samples")
-            })?;
-        let sum = checkpoint
-            .get("sum")
-            .and_then(JsonValue::as_f64)
-            .ok_or_else(|| EngineError::engine("naive_monte_carlo checkpoint missing sum"))?;
-        self.trained_samples = trained_samples as usize;
-        self.nr_batches = nr_batches;
-        self.nr_samples = nr_samples;
-        self.sum = sum;
-        Ok(())
+    fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
+        Ok(SamplerAggregatorSnapshot::NaiveMonteCarlo {
+            state: self.clone(),
+        })
     }
 
     fn produce_batch(&mut self, nr_samples: usize) -> Result<Batch, EngineError> {
@@ -199,5 +161,39 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
         }
         self.trained_samples = self.trained_samples.saturating_add(accepted);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_roundtrip_restores_naive_runtime_state() {
+        let point_spec = PointSpec {
+            continuous_dims: 2,
+            discrete_dims: 1,
+        };
+        let mut sampler = NaiveMonteCarloSamplerAggregator::new(2, 1, 100, 7);
+        sampler.trained_samples = 13;
+        sampler.nr_batches = 5;
+        sampler.nr_samples = 29;
+        sampler.sum = 4.5;
+
+        let snapshot = sampler.snapshot().expect("snapshot");
+        let mut restored = snapshot.into_runtime(&point_spec).expect("restore");
+        let restored_snapshot = restored.snapshot().expect("snapshot after restore");
+
+        let SamplerAggregatorSnapshot::NaiveMonteCarlo { state } = restored_snapshot else {
+            panic!("expected naive snapshot");
+        };
+        assert_eq!(state.continuous_dims, 2);
+        assert_eq!(state.discrete_dims, 1);
+        assert_eq!(state.training_target_samples, 100);
+        assert_eq!(state.training_delay_per_sample_ms, 7);
+        assert_eq!(state.trained_samples, 13);
+        assert_eq!(state.nr_batches, 5);
+        assert_eq!(state.nr_samples, 29);
+        assert_eq!(state.sum, 4.5);
     }
 }

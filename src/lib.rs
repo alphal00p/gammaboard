@@ -10,6 +10,7 @@ pub mod runners;
 pub mod server;
 pub mod stores;
 pub mod tracing;
+pub mod utils;
 
 pub use core::StoreError;
 pub use core::{Batch, BatchError, BatchRecord, BatchResult, BatchStatus, PointSpec};

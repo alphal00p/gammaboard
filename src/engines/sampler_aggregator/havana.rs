@@ -1,12 +1,13 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::VecDeque;
-use symbolica::numerical_integration::{ContinuousGrid, Grid, MonteCarloRng, Sample};
+use symbolica::numerical_integration::{ContinuousGrid, Grid, Sample};
 use tracing::info;
 
 use crate::{
     Batch, EngineError, PointSpec,
-    engines::{BuildError, SamplerAggregator},
+    engines::{BuildError, SamplerAggregator, SamplerAggregatorSnapshot},
+    utils::rng::SerializableMonteCarloRng,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -19,6 +20,21 @@ pub struct HavanaSamplerParams {
     stop_training_after_n_samples: Option<usize>,
     initial_training_rate: f64,
     final_training_rate: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HavanaSamplerSnapshot {
+    batches_produced: usize,
+    samples_produced: usize,
+    batches_ingested: usize,
+    samples_ingested: usize,
+    samples_for_update: usize,
+    stop_training_after_n_samples: usize,
+    initial_training_rate: f64,
+    final_training_rate: f64,
+    grid: Grid<f64>,
+    rng: SerializableMonteCarloRng,
+    pending_training_samples: VecDeque<Vec<Sample<f64>>>,
 }
 
 impl Default for HavanaSamplerParams {
@@ -97,7 +113,7 @@ pub struct HavanaSampler {
     initial_training_rate: f64,
     final_training_rate: f64,
     grid: Grid<f64>,
-    rng: MonteCarloRng,
+    rng: SerializableMonteCarloRng,
     pending_training_samples: VecDeque<Vec<Sample<f64>>>,
 }
 
@@ -105,7 +121,7 @@ impl HavanaSampler {
     fn new(
         continuous_dims: usize,
         grid: Grid<f64>,
-        rng: MonteCarloRng,
+        rng: SerializableMonteCarloRng,
         samples_for_update: usize,
         stop_training_after_n_samples: usize,
         initial_training_rate: f64,
@@ -149,6 +165,65 @@ impl HavanaSampler {
         self.initial_training_rate
             * (self.final_training_rate / self.initial_training_rate).powf(progress)
     }
+
+    fn grid_continuous_dims(grid: &Grid<f64>) -> Result<usize, BuildError> {
+        match grid {
+            Grid::Continuous(grid) => Ok(grid.continuous_dimensions.len()),
+            Grid::Discrete(_) | Grid::Uniform(_, _) => Err(BuildError::build(
+                "havana snapshot requires a continuous grid",
+            )),
+        }
+    }
+
+    fn to_snapshot(&self) -> HavanaSamplerSnapshot {
+        HavanaSamplerSnapshot {
+            batches_produced: self.batches_produced,
+            samples_produced: self.samples_produced,
+            batches_ingested: self.batches_ingested,
+            samples_ingested: self.samples_ingested,
+            samples_for_update: self.samples_for_update,
+            stop_training_after_n_samples: self.stop_training_after_n_samples,
+            initial_training_rate: self.initial_training_rate,
+            final_training_rate: self.final_training_rate,
+            grid: self.grid.clone(),
+            rng: self.rng.clone(),
+            pending_training_samples: self.pending_training_samples.clone(),
+        }
+    }
+
+    pub(crate) fn from_snapshot(
+        snapshot: HavanaSamplerSnapshot,
+        point_spec: &PointSpec,
+    ) -> Result<Self, BuildError> {
+        let continuous_dims = Self::grid_continuous_dims(&snapshot.grid)?;
+        if point_spec.continuous_dims != continuous_dims {
+            return Err(BuildError::build(format!(
+                "havana snapshot expects continuous_dims={}, got {}",
+                continuous_dims, point_spec.continuous_dims
+            )));
+        }
+        if point_spec.discrete_dims != 0 {
+            return Err(BuildError::build(format!(
+                "havana snapshot expects discrete_dims=0, got {}",
+                point_spec.discrete_dims
+            )));
+        }
+
+        Ok(Self {
+            continuous_dims,
+            batches_produced: snapshot.batches_produced,
+            samples_produced: snapshot.samples_produced,
+            batches_ingested: snapshot.batches_ingested,
+            samples_ingested: snapshot.samples_ingested,
+            samples_for_update: snapshot.samples_for_update,
+            stop_training_after_n_samples: snapshot.stop_training_after_n_samples,
+            initial_training_rate: snapshot.initial_training_rate,
+            final_training_rate: snapshot.final_training_rate,
+            grid: snapshot.grid,
+            rng: snapshot.rng,
+            pending_training_samples: snapshot.pending_training_samples,
+        })
+    }
 }
 
 impl HavanaSampler {
@@ -158,7 +233,7 @@ impl HavanaSampler {
     ) -> Result<Self, BuildError> {
         validate_havana_sampler_params(&params, point_spec)?;
 
-        let rng = MonteCarloRng::new(params.seed, 0);
+        let rng = SerializableMonteCarloRng::new(params.seed, 0);
         let grid = Grid::Continuous(ContinuousGrid::new(
             point_spec.continuous_dims,
             params.bins,
@@ -212,16 +287,11 @@ impl SamplerAggregator for HavanaSampler {
         }
     }
 
-    fn export_checkpoint(&mut self) -> Result<serde_json::Value, crate::engines::EngineError> {
-        Ok(json!({
-            "kind": "havana",
-            "resume_supported": false,
-            "batches_produced": self.batches_produced,
-            "samples_produced": self.samples_produced,
-            "batches_ingested": self.batches_ingested,
-            "samples_ingested": self.samples_ingested,
-            "pending_training_batches": self.pending_training_samples.len(),
-        }))
+    fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, crate::engines::EngineError> {
+        let raw = serde_json::to_value(self.to_snapshot()).map_err(|err| {
+            EngineError::engine(format!("failed to serialize havana snapshot: {err}"))
+        })?;
+        Ok(SamplerAggregatorSnapshot::Havana { raw })
     }
 
     fn produce_batch(
@@ -342,5 +412,56 @@ impl SamplerAggregator for HavanaSampler {
             "pending_training_batches": self.pending_training_samples.len(),
             "training_rate": self.current_training_rate(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand09::RngCore;
+
+    #[test]
+    fn snapshot_roundtrip_restores_havana_runtime_state() {
+        let point_spec = PointSpec {
+            continuous_dims: 2,
+            discrete_dims: 0,
+        };
+        let params = HavanaSamplerParams {
+            seed: 7,
+            bins: 8,
+            min_samples_for_update: 4,
+            samples_for_update: 16,
+            stop_training_after_n_samples: Some(32),
+            initial_training_rate: 0.1,
+            final_training_rate: 0.01,
+        };
+        let mut sampler = HavanaSampler::from_params_and_point_spec(params, &point_spec)
+            .expect("build havana sampler");
+        let _ = sampler.produce_batch(5).expect("produce");
+        sampler
+            .ingest_training_weights(&[1.0, 2.0, 3.0, 4.0, 5.0])
+            .expect("ingest");
+        let _ = sampler.produce_batch(3).expect("produce pending batch");
+
+        let snapshot = sampler.snapshot().expect("snapshot");
+        let restored = snapshot.into_runtime(&point_spec).expect("restore");
+        let mut restored = restored;
+        let restored_snapshot = restored.snapshot().expect("snapshot after restore");
+
+        let SamplerAggregatorSnapshot::Havana { raw } = restored_snapshot else {
+            panic!("expected havana snapshot");
+        };
+        let mut state: HavanaSamplerSnapshot =
+            serde_json::from_value(raw).expect("decode restored havana snapshot");
+        let Grid::Continuous(grid) = &state.grid else {
+            panic!("expected continuous grid");
+        };
+        assert_eq!(grid.continuous_dimensions.len(), 2);
+        assert_eq!(state.batches_produced, 2);
+        assert_eq!(state.samples_produced, 8);
+        assert_eq!(state.batches_ingested, 1);
+        assert_eq!(state.samples_ingested, 5);
+        assert_eq!(state.pending_training_samples.len(), 1);
+        assert_eq!(state.rng.next_u64(), sampler.rng.next_u64());
     }
 }

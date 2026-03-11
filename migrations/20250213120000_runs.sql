@@ -13,14 +13,12 @@ CREATE TABLE IF NOT EXISTS runs (
     sampler_aggregator_init_metadata JSONB,
     point_spec JSONB NOT NULL,
     current_observable JSONB,
+    sampler_runner_snapshot JSONB,
 
     -- Summary statistics (updated periodically)
     total_batches_planned INT,
     batches_completed INT DEFAULT 0
 );
-
--- Index for filtering by status
-CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
 
 -- Index for time-based queries
 CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at DESC);
