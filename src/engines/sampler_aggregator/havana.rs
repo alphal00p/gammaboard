@@ -1,11 +1,12 @@
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::VecDeque;
 use symbolica::numerical_integration::{ContinuousGrid, Grid, MonteCarloRng, Sample};
 use tracing::info;
 
 use crate::{
     Batch, EngineError, PointSpec,
-    engines::{BatchContext, BuildError, SamplerAggregator},
+    engines::{BuildError, SamplerAggregator},
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -97,6 +98,7 @@ pub struct HavanaSampler {
     final_training_rate: f64,
     grid: Grid<f64>,
     rng: MonteCarloRng,
+    pending_training_samples: VecDeque<Vec<Sample<f64>>>,
 }
 
 impl HavanaSampler {
@@ -121,6 +123,7 @@ impl HavanaSampler {
             final_training_rate,
             grid,
             rng,
+            pending_training_samples: VecDeque::new(),
         }
     }
 
@@ -212,12 +215,12 @@ impl SamplerAggregator for HavanaSampler {
     fn produce_batch(
         &mut self,
         nr_samples: usize,
-    ) -> Result<(crate::Batch, Option<BatchContext>), crate::engines::EngineError> {
+    ) -> Result<crate::Batch, crate::engines::EngineError> {
         let should_train = self.is_training_active();
         let mut coords: Vec<f64> = Vec::with_capacity(nr_samples * self.continuous_dims);
         let mut weights: Vec<f64> = Vec::with_capacity(nr_samples);
 
-        let context = if should_train {
+        if should_train {
             let mut samples = Vec::with_capacity(nr_samples);
             for _ in 0..nr_samples {
                 let mut sample = Sample::new();
@@ -234,7 +237,7 @@ impl SamplerAggregator for HavanaSampler {
 
                 samples.push(sample);
             }
-            Some(Box::new(HavanaBatchContext { samples }) as BatchContext)
+            self.pending_training_samples.push_back(samples);
         } else {
             for _ in 0..nr_samples {
                 let mut sample = Sample::new();
@@ -249,8 +252,7 @@ impl SamplerAggregator for HavanaSampler {
                     _ => unreachable!("continuous grid produced non-continuous sample"),
                 }
             }
-            None
-        };
+        }
 
         let batch = Batch::from_flat_data_with_weights(
             nr_samples,
@@ -263,38 +265,30 @@ impl SamplerAggregator for HavanaSampler {
         .map_err(|err| EngineError::engine(err.to_string()))?;
         self.batches_produced += 1;
         self.samples_produced = self.samples_produced.saturating_add(nr_samples);
-        Ok((batch, context))
+        Ok(batch)
     }
 
     fn ingest_training_weights(
         &mut self,
         training_weights: &[f64],
-        context: Option<BatchContext>,
     ) -> Result<(), crate::engines::EngineError> {
-        let Some(context) = context else {
+        let Some(samples) = self.pending_training_samples.pop_front() else {
             // Training is disabled for this batch or context is unavailable.
             return Ok(());
         };
-        let context = context
-            .downcast::<HavanaBatchContext>()
-            .map_err(|_| EngineError::engine("unexpected context type for Havana sampler"))?;
 
-        if training_weights.len() != context.samples.len() {
+        if training_weights.len() != samples.len() {
             return Err(EngineError::engine(format!(
-                "training/context size mismatch in Havana sampler: weights={}, samples={}",
+                "training/sample size mismatch in Havana sampler: weights={}, samples={}",
                 training_weights.len(),
-                context.samples.len()
+                samples.len()
             )));
         }
 
         let before_samples_ingested = self.samples_ingested;
         let remaining_training = self.remaining_training_samples();
         let train_len = remaining_training.min(training_weights.len());
-        for (eval, sample) in training_weights
-            .iter()
-            .zip(context.samples.iter())
-            .take(train_len)
-        {
+        for (eval, sample) in training_weights.iter().zip(samples.iter()).take(train_len) {
             self.grid
                 .add_training_sample(sample, *eval / sample.get_weight()) // the evaluator return the weighted eval, so it needs to be divided by the sample weight
                 .map_err(|err| EngineError::engine(err.to_string()))?;
@@ -333,11 +327,8 @@ impl SamplerAggregator for HavanaSampler {
             "samples_produced": self.samples_produced,
             "batches_ingested": self.batches_ingested,
             "samples_ingested": self.samples_ingested,
+            "pending_training_batches": self.pending_training_samples.len(),
             "training_rate": self.current_training_rate(),
         })
     }
-}
-
-struct HavanaBatchContext {
-    pub samples: Vec<Sample<f64>>,
 }

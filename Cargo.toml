@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-gammalooprs = { path = "../gammaloop", version = "0.3.3" }
-gammaloop_api = { package = "gammaloop-api", path = "../gammaloop/gammaloop-api", default-features = false, features = ["cli", "no_pyo3"] }
+gammalooprs = { path = "../gammaloop/crates/gammalooprs", version = "0.3.3" }
+gammaloop_api = { package = "gammaloop-api", path = "../gammaloop/crates/gammaloop-api", default-features = false, features = ["cli", "no_pyo3"] }
 tokio = { version = "1.46", features = ["full"] }
 sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-native-tls", "chrono", "macros"] }
 dotenvy = "0.15"
@@ -21,7 +21,7 @@ clap = { version = "4.5", features = ["derive"] }
 toml = "0.8"
 async-trait = "0.1"
 thiserror = "2.0"
-symbolica = "1.3"
+symbolica = "1.4"
 ndarray = "0.16"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -29,6 +29,10 @@ strum = { version = "0.27", features = ["derive"] }
 num = "0.4.3"
 tempfile = "3"
 anyhow = "1"
+
+[profile.dev-optim]
+inherits = "dev"
+opt-level = 2
 
 [lib]
 name = "gammaboard"

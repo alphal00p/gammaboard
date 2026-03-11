@@ -8,11 +8,13 @@ import RunInfo from "./components/RunInfo";
 import RunSelector from "./components/RunSelector";
 import SamplerAggregatorPanel from "./components/SamplerAggregatorPanel";
 import LogsWorkspace from "./components/LogsWorkspace";
+import PerformanceWorkspace from "./components/PerformanceWorkspace";
 import WorkersWorkspace from "./components/WorkersWorkspace";
 import RunScopedWorkspace from "./components/common/RunScopedWorkspace";
 import { RunHistoryProvider, useRunHistory } from "./context/RunHistoryContext";
-import { useSamplerRuntimeSummary } from "./hooks/useSamplerRuntimeSummary";
 import { useRuns } from "./hooks/useRuns";
+import { useRunPerformanceSummary } from "./hooks/useRunPerformanceSummary";
+import { useWorkersData } from "./hooks/useWorkersData";
 import { deriveObservableImplementation } from "./utils/config";
 import { deriveObservableMetric } from "./viewmodels/observable";
 
@@ -33,29 +35,60 @@ const DashboardHeader = () => (
   </Box>
 );
 
-const useCurrentRun = (runs, selectedRun) => {
-  const { run } = useRunHistory();
-  return run || runs.find((entry) => entry.run_id === selectedRun);
+const rollingMean = (metric) => {
+  if (Number.isFinite(Number(metric))) return Number(metric);
+  if (!metric || typeof metric !== "object" || Array.isArray(metric)) return null;
+  const mean = Number(metric.mean);
+  return Number.isFinite(mean) ? mean : null;
 };
 
-const RunModeContent = ({ runs, selectedRun, setSelectedRun, historyRange, setHistoryRange }) => {
+const deriveSamplerRuntimeSummary = (workers, runId, latestSamplerEntry) => {
+  if (!runId) return null;
+  const list = Array.isArray(workers) ? workers : [];
+  const samplerWorker =
+    list.find(
+      (worker) =>
+        worker.desired_run_id === runId &&
+        worker.role === "sampler_aggregator" &&
+        String(worker.status || "").toLowerCase() === "active",
+    ) ||
+    list.find((worker) => worker.desired_run_id === runId && worker.role === "sampler_aggregator") ||
+    null;
+  const runtimeMetrics = samplerWorker?.sampler_runtime_metrics ?? latestSamplerEntry?.runtime_metrics ?? null;
+  const rolling = runtimeMetrics?.rolling || {};
+  const remainingRatio = rollingMean(rolling.queue_remaining_ratio);
+  const avgQueueDepletion = remainingRatio == null ? null : Math.max(0, Math.min(1, 1 - remainingRatio));
+  return {
+    avg_queue_depletion: avgQueueDepletion,
+    avg_time_per_sample_ms: rollingMean(rolling.eval_ms_per_sample),
+    avg_time_per_batch_ms: rollingMean(rolling.eval_ms_per_batch),
+  };
+};
+
+const RunModeContent = ({ runs, workers, selectedRun, setSelectedRun, historyRange, setHistoryRange }) => {
   const { isConnected, lastUpdate, history, latestAggregated, workQueueStats } = useRunHistory();
-  const currentRun = useCurrentRun(runs, selectedRun);
-  const samplerRuntimeSummary = useSamplerRuntimeSummary(selectedRun, 3000);
+  const currentRun = runs.find((entry) => entry.run_id === selectedRun);
+  const { latestSampler } = useRunPerformanceSummary({ runId: selectedRun, pollMs: 5000 });
+  const samplerRuntimeSummary = useMemo(
+    () => deriveSamplerRuntimeSummary(workers, selectedRun, latestSampler),
+    [workers, selectedRun, latestSampler],
+  );
+  const latestObservablePayload = latestAggregated?.aggregated_observable ?? currentRun?.current_observable ?? null;
   const observableImplementation = deriveObservableImplementation(
     currentRun?.integration_params?.evaluator,
-    latestAggregated?.aggregated_observable,
+    latestObservablePayload,
     "scalar",
   );
 
-  const fullSamples = useMemo(
-    () =>
-      history
-        .slice()
-        .reverse()
-        .map((item) => deriveObservableMetric(item.aggregated_observable || {}, observableImplementation)),
-    [history, observableImplementation],
-  );
+  const fullSamples = useMemo(() => {
+    const derived = history
+      .slice()
+      .reverse()
+      .map((item) => deriveObservableMetric(item.aggregated_observable || {}, observableImplementation));
+    if (derived.length > 0) return derived;
+    if (!currentRun?.current_observable) return derived;
+    return [deriveObservableMetric(currentRun.current_observable, observableImplementation)];
+  }, [history, observableImplementation, currentRun]);
 
   if (!currentRun) {
     return (
@@ -84,7 +117,7 @@ const RunModeContent = ({ runs, selectedRun, setSelectedRun, historyRange, setHi
   );
 };
 
-const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, historyRange, setHistoryRange }) => {
+const RunsWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isConnected, historyRange, setHistoryRange }) => {
   return (
     <RunScopedWorkspace
       runs={runs}
@@ -102,6 +135,7 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, history
       >
         <RunModeContent
           runs={runs}
+          workers={workers}
           selectedRun={selectedRun}
           setSelectedRun={setSelectedRun}
           historyRange={historyRange}
@@ -114,6 +148,7 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, history
 
 function App() {
   const { runs, isConnected } = useRuns();
+  const workersData = useWorkersData({ runId: null, pollMs: 3000 });
   const [mode, setMode] = useState("runs");
   const [historyRange, setHistoryRange] = useState({ start: -50, end: -1 });
   const [selectedRun, setSelectedRun] = useState(null);
@@ -142,12 +177,14 @@ function App() {
       <Tabs value={mode} onChange={(_, next) => setMode(next)} sx={{ mb: 3 }}>
         <Tab value="runs" label="Runs" />
         <Tab value="workers" label="Workers" />
+        <Tab value="performance" label="Performance" />
         <Tab value="logs" label="Logs" />
       </Tabs>
 
       {mode === "runs" ? (
         <RunsWorkspace
           runs={runs}
+          workers={workersData.workers}
           selectedRun={selectedRun}
           setSelectedRun={setSelectedRun}
           isConnected={isConnected}
@@ -155,10 +192,23 @@ function App() {
           setHistoryRange={setHistoryRange}
         />
       ) : mode === "workers" ? (
-        <WorkersWorkspace />
+        <WorkersWorkspace
+          workers={workersData.workers}
+          isConnected={workersData.isConnected}
+          lastUpdate={workersData.lastUpdate}
+          error={workersData.error}
+        />
+      ) : mode === "performance" ? (
+        <PerformanceWorkspace
+          runs={runs}
+          selectedRun={selectedRun}
+          setSelectedRun={setSelectedRun}
+          isConnected={isConnected}
+        />
       ) : (
         <LogsWorkspace
           runs={runs}
+          workers={workersData.workers}
           selectedRun={selectedLogRun}
           setSelectedRun={setSelectedLogRun}
           isConnected={isConnected}

@@ -1,10 +1,11 @@
 import EnginePanelLayout from "./common/EnginePanelLayout";
 import ImplementationSummaryCard from "./common/ImplementationSummaryCard";
 import EvaluatorCustomPanel from "./evaluator/EvaluatorCustomPanel";
-import { splitKindConfig, toConfigObject } from "../utils/config";
+import { deriveObservableImplementation, splitKindConfig, toConfigObject } from "../utils/config";
 
 const EvaluatorPanel = ({ run }) => {
   const integrationParams = toConfigObject(run?.integration_params);
+  const pointSpec = toConfigObject(run?.point_spec);
   const { implementation, params: evaluatorParams } = splitKindConfig(
     integrationParams.evaluator,
     "unknown",
@@ -12,6 +13,7 @@ const EvaluatorPanel = ({ run }) => {
   );
   const runnerParams = toConfigObject(integrationParams.evaluator_runner_params);
   const evaluatorInitMetadata = toConfigObject(run?.evaluator_init_metadata);
+  const observableKind = deriveObservableImplementation(integrationParams.evaluator, null, "unknown");
 
   return (
     <EnginePanelLayout
@@ -29,7 +31,7 @@ const EvaluatorPanel = ({ run }) => {
             },
             {
               label: "observable_kind",
-              value: evaluatorParams.observable_kind ?? "evaluator-defined",
+              value: observableKind,
               md: 6,
             },
           ]}
@@ -40,6 +42,7 @@ const EvaluatorPanel = ({ run }) => {
           implementation={implementation}
           evaluatorParams={evaluatorParams}
           evaluatorInitMetadata={evaluatorInitMetadata}
+          pointSpec={pointSpec}
         />
       }
       jsonTitle="evaluator JSON"

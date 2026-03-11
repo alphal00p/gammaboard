@@ -1,6 +1,6 @@
 //! Read models for API/dashboard responses.
 
-use crate::core::{EvaluatorPerformanceMetrics, RunStatus, SamplerPerformanceMetrics};
+use crate::core::{EvaluatorPerformanceMetrics, PointSpec, RunStatus, SamplerPerformanceMetrics};
 use serde::{Deserialize, Serialize};
 
 /// Run progress information.
@@ -10,6 +10,8 @@ pub struct RunProgress {
     pub run_name: String,
     pub run_status: RunStatus,
     pub integration_params: Option<serde_json::Value>,
+    pub point_spec: Option<PointSpec>,
+    pub current_observable: Option<serde_json::Value>,
     pub target: Option<serde_json::Value>,
     pub evaluator_init_metadata: Option<serde_json::Value>,
     pub sampler_aggregator_init_metadata: Option<serde_json::Value>,
@@ -79,6 +81,14 @@ pub struct WorkerLogEntry {
     pub fields: serde_json::Value,
 }
 
+/// Cursor-paged worker log response for dashboard browsing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerLogPage {
+    pub items: Vec<WorkerLogEntry>,
+    pub next_before_id: Option<String>,
+    pub has_more_older: bool,
+}
+
 /// Registered worker process snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisteredWorkerEntry {
@@ -120,14 +130,14 @@ pub struct SamplerPerformanceHistoryEntry {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Evaluator performance history for a worker resolved from current assignment.
+/// Evaluator performance history for a worker resolved directly by worker_id.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerEvaluatorPerformanceHistoryResponse {
     pub run_id: Option<i32>,
     pub entries: Vec<EvaluatorPerformanceHistoryEntry>,
 }
 
-/// Sampler-aggregator performance history for a worker resolved from current assignment.
+/// Sampler-aggregator performance history for a worker resolved directly by worker_id.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerSamplerPerformanceHistoryResponse {
     pub run_id: Option<i32>,

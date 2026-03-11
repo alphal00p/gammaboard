@@ -1,9 +1,9 @@
 import EvaluatorDetailsCard from "./EvaluatorDetailsCard";
 
-const SinEvaluatorPanel = ({ evaluatorParams }) => (
+const SinEvaluatorPanel = ({ evaluatorParams, pointSpec }) => (
   <EvaluatorDetailsCard
     minEvalTimePerSampleMs={evaluatorParams?.min_eval_time_per_sample_ms}
-    expectedContinuousDims={1}
+    pointSpec={pointSpec}
     observableKind="scalar"
     integralLatex={String.raw`\int_0^1 dx \,\sin(x)`}
   />

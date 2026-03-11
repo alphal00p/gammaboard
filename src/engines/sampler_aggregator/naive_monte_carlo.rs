@@ -1,5 +1,4 @@
 use crate::core::{Batch, PointSpec};
-use crate::engines::sampler_aggregator::BatchContext;
 use crate::engines::{BuildError, EngineError, SamplerAggregator};
 use rand::Rng;
 use serde::Deserialize;
@@ -88,10 +87,7 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
         self.training_target_samples == 0 || self.trained_samples < self.training_target_samples
     }
 
-    fn produce_batch(
-        &mut self,
-        nr_samples: usize,
-    ) -> Result<(Batch, Option<BatchContext>), EngineError> {
+    fn produce_batch(&mut self, nr_samples: usize) -> Result<Batch, EngineError> {
         if nr_samples == 0 {
             return Err(EngineError::engine(
                 "naive_monte_carlo sampler requires nr_samples > 0",
@@ -113,14 +109,10 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
             discrete_data,
         )
         .map_err(|err| EngineError::engine(err.to_string()))?;
-        Ok((batch, None))
+        Ok(batch)
     }
 
-    fn ingest_training_weights(
-        &mut self,
-        training_weights: &[f64],
-        _context: Option<BatchContext>,
-    ) -> Result<(), EngineError> {
+    fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError> {
         self.nr_batches += 1;
         self.nr_samples += training_weights.len() as i64;
         self.sum += training_weights.iter().sum::<f64>();

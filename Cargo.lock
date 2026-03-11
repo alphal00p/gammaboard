@@ -159,9 +159,6 @@ name = "anyhow"
 version = "1.0.101"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f0e0fee31ef5ed1ba1316088939cea399010ed7731dba877ed44aeb407a75ea"
-dependencies = [
- "backtrace",
-]
 
 [[package]]
 name = "append-only-vec"
@@ -670,30 +667,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "comemo"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c963350b2b08aa4b725d7802593245380ab53dacfedcaa971385fc33306c0d4"
-dependencies = [
- "comemo-macros",
- "parking_lot",
- "rustc-hash",
- "siphasher",
- "slab",
-]
-
-[[package]]
-name = "comemo-macros"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3c400139ba1389ef9e20ad2d87cda68b437a66483aa0da616bdf2cea7413853"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.115",
 ]
 
 [[package]]
@@ -1579,6 +1552,7 @@ dependencies = [
  "git-version",
  "idenso",
  "include_dir",
+ "indexmap",
  "indicatif 0.18.4",
  "itertools 0.14.0",
  "json5",
@@ -1623,7 +1597,6 @@ dependencies = [
  "clarabel",
  "color-eyre",
  "colored 3.1.1",
- "comemo",
  "ctrlc",
  "delegate",
  "derive_more",
@@ -1866,8 +1839,9 @@ dependencies = [
 
 [[package]]
 name = "graphica"
-version = "1.2.0"
-source = "git+https://github.com/benruijl/symbolica?branch=dev#d3efdb9791a404a20e7610ed9d5ca82a894e2e9f"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f32bec01b43c1a68289108ac4c3b71ed76296f871f3dbf3922d3f498cf6e7215"
 dependencies = [
  "ahash",
  "dyn-clone",
@@ -2191,18 +2165,17 @@ checksum = "25a2bc672d1148e28034f176e01fffebb08b35768468cc954630da77a1449005"
 [[package]]
 name = "idenso"
 version = "0.3.0"
-source = "git+https://github.com/alphal00p/spenso?rev=c052f22dc98a18535e114eede758674befc2758f#c052f22dc98a18535e114eede758674befc2758f"
 dependencies = [
- "anyhow",
  "bincode",
  "bincode-trait-derive",
+ "eyre",
  "itertools 0.14.0",
  "linnet",
  "nu-ansi-term",
  "spenso",
  "spenso-macros",
  "symbolica",
- "thiserror 2.0.18",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -2537,7 +2510,6 @@ dependencies = [
 [[package]]
 name = "linnet"
 version = "0.17.0"
-source = "git+https://github.com/alphal00p/linnet?rev=406272c24bcb5bde5551d7d29620459e0671c82e#406272c24bcb5bde5551d7d29620459e0671c82e"
 dependencies = [
  "ahash",
  "bincode",
@@ -2964,8 +2936,9 @@ checksum = "830b246a0e5f20af87141b25c173cd1b609bd7779a4617d6ec582abaf90870f3"
 
 [[package]]
 name = "numerica"
-version = "1.2.1"
-source = "git+https://github.com/benruijl/symbolica?branch=dev#d3efdb9791a404a20e7610ed9d5ca82a894e2e9f"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdd9474fbe32d20ae4e655789a335034fe1d1d743c6420c5a2b2719b84a60f89"
 dependencies = [
  "ahash",
  "bincode",
@@ -4093,7 +4066,7 @@ version = "3.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32824fab5e16e6c4d86dc1ba84489390419a39f97699852b66480bb87d297ed8"
 dependencies = [
- "dirs 5.0.1",
+ "dirs 6.0.0",
 ]
 
 [[package]]
@@ -4231,10 +4204,8 @@ dependencies = [
 [[package]]
 name = "spenso"
 version = "0.6.0"
-source = "git+https://github.com/alphal00p/spenso?rev=c052f22dc98a18535e114eede758674befc2758f#c052f22dc98a18535e114eede758674befc2758f"
 dependencies = [
  "ahash",
- "anyhow",
  "append-only-vec",
  "bincode",
  "bincode-trait-derive",
@@ -4247,6 +4218,7 @@ dependencies = [
  "dyn-clone",
  "enum-try-as-inner",
  "env_logger",
+ "eyre",
  "features",
  "gat-lending-iterator",
  "indexmap",
@@ -4271,7 +4243,6 @@ dependencies = [
 [[package]]
 name = "spenso-hep-lib"
 version = "0.1.7"
-source = "git+https://github.com/alphal00p/spenso?rev=c052f22dc98a18535e114eede758674befc2758f#c052f22dc98a18535e114eede758674befc2758f"
 dependencies = [
  "ahash",
  "idenso",
@@ -4284,7 +4255,6 @@ dependencies = [
 [[package]]
 name = "spenso-macros"
 version = "0.3.2"
-source = "git+https://github.com/alphal00p/spenso?rev=c052f22dc98a18535e114eede758674befc2758f#c052f22dc98a18535e114eede758674befc2758f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4652,8 +4622,9 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "symbolica"
-version = "1.3.1"
-source = "git+https://github.com/benruijl/symbolica?branch=dev#d3efdb9791a404a20e7610ed9d5ca82a894e2e9f"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c4e740f36592919409c27ce6c668c3faa0e81816d69074d3daf70a49c0faa45"
 dependencies = [
  "ahash",
  "append-only-vec",
@@ -5385,12 +5356,11 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 [[package]]
 name = "vakint"
 version = "0.1.2"
-source = "git+https://github.com/alphal00p/vakint?rev=bf91ee57aa62604c7ae3fb919203bf6f09544470#bf91ee57aa62604c7ae3fb919203bf6f09544470"
 dependencies = [
  "ahash",
- "anyhow",
  "arrayvec",
  "colored 2.2.0",
+ "eyre",
  "log",
  "phf",
  "regex",
@@ -6260,3 +6230,48 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
+
+[[patch.unused]]
+name = "graphica"
+version = "1.2.0"
+source = "git+https://github.com/benruijl/symbolica?branch=dev#d3efdb9791a404a20e7610ed9d5ca82a894e2e9f"
+
+[[patch.unused]]
+name = "idenso"
+version = "0.3.0"
+source = "git+https://github.com/alphal00p/spenso?rev=c052f22dc98a18535e114eede758674befc2758f#c052f22dc98a18535e114eede758674befc2758f"
+
+[[patch.unused]]
+name = "linnet"
+version = "0.17.0"
+source = "git+https://github.com/alphal00p/linnet?rev=406272c24bcb5bde5551d7d29620459e0671c82e#406272c24bcb5bde5551d7d29620459e0671c82e"
+
+[[patch.unused]]
+name = "numerica"
+version = "1.2.1"
+source = "git+https://github.com/benruijl/symbolica?branch=dev#d3efdb9791a404a20e7610ed9d5ca82a894e2e9f"
+
+[[patch.unused]]
+name = "spenso"
+version = "0.6.0"
+source = "git+https://github.com/alphal00p/spenso?rev=c052f22dc98a18535e114eede758674befc2758f#c052f22dc98a18535e114eede758674befc2758f"
+
+[[patch.unused]]
+name = "spenso-hep-lib"
+version = "0.1.7"
+source = "git+https://github.com/alphal00p/spenso?rev=c052f22dc98a18535e114eede758674befc2758f#c052f22dc98a18535e114eede758674befc2758f"
+
+[[patch.unused]]
+name = "spenso-macros"
+version = "0.3.2"
+source = "git+https://github.com/alphal00p/spenso?rev=c052f22dc98a18535e114eede758674befc2758f#c052f22dc98a18535e114eede758674befc2758f"
+
+[[patch.unused]]
+name = "symbolica"
+version = "1.3.1"
+source = "git+https://github.com/benruijl/symbolica?branch=dev#d3efdb9791a404a20e7610ed9d5ca82a894e2e9f"
+
+[[patch.unused]]
+name = "vakint"
+version = "0.1.2"
+source = "git+https://github.com/alphal00p/vakint?rev=bf91ee57aa62604c7ae3fb919203bf6f09544470#bf91ee57aa62604c7ae3fb919203bf6f09544470"

@@ -1,3 +1,4 @@
+use super::Observable;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -17,11 +18,19 @@ impl ScalarObservableState {
         self.sum_abs += weighted_value.abs();
         self.sum_sq += weighted_value * weighted_value;
     }
+}
 
-    pub fn merge(&mut self, other: Self) {
+impl Observable for ScalarObservableState {
+    type Persistent = Self;
+
+    fn merge(&mut self, other: Self) {
         self.count += other.count;
         self.sum_weighted_value += other.sum_weighted_value;
         self.sum_abs += other.sum_abs;
         self.sum_sq += other.sum_sq;
+    }
+
+    fn get_persistent(&self) -> Self::Persistent {
+        self.clone()
     }
 }

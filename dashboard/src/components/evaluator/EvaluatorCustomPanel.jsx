@@ -9,12 +9,14 @@ const EVALUATOR_CUSTOM_PANELS = {
   sinc_evaluator: SincEvaluatorPanel,
 };
 
-const EvaluatorCustomPanel = ({ implementation, evaluatorParams, evaluatorInitMetadata }) => {
+const EvaluatorCustomPanel = ({ implementation, evaluatorParams, evaluatorInitMetadata, pointSpec }) => {
   const Panel = EVALUATOR_CUSTOM_PANELS[implementation];
   if (!Panel) {
     return <UnsupportedImplementationPanel kind="evaluator" implementation={implementation} />;
   }
-  return <Panel evaluatorParams={evaluatorParams} evaluatorInitMetadata={evaluatorInitMetadata} />;
+  return (
+    <Panel evaluatorParams={evaluatorParams} evaluatorInitMetadata={evaluatorInitMetadata} pointSpec={pointSpec} />
+  );
 };
 
 export default EvaluatorCustomPanel;

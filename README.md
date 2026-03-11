@@ -21,6 +21,7 @@ Gammaboard runs distributed numerical integration jobs with PostgreSQL as the sh
 ### Fast local setup
 1. Start the database:
    - `just start-db`
+   - If `5432` is already in use on your machine, set `DB_PORT` in `.env` (for example `DB_PORT=5433`) and rerun.
 2. Start the backend:
    - `just serve-backend`
 3. Start the frontend:
@@ -87,6 +88,10 @@ max_batch_size = 64
 max_batches_per_tick = 8
 max_queue_size = 128
 completed_batch_fetch_limit = 1024
+
+[sampler_aggregator_runner_params.stop_on]
+kind = "samples_at_least"
+samples = 1000000
 ```
 
 Notes:
@@ -95,6 +100,10 @@ Notes:
 - `point_spec` is derived from the evaluator during preflight and stored on the run.
 - Observable semantics are evaluator-owned. There is no separate `[observable]` section anymore.
 - Evaluators that support multiple observable semantics use `observable_kind` inside `[evaluator]`.
+- Optional `sampler_aggregator_runner_params.stop_on` supports automatic run stop on conditions.
+  Current condition support: `kind = "samples_at_least"` with positive integer `samples`.
+  `samples_at_least` is evaluated against aggregated observable sample count.
+  After threshold is reached, sampler-aggregator stops producing new batches, waits for pending queue depletion, then sets run status to `cancelled` and clears desired assignments.
 
 Examples:
 - `unit`: optional `observable_kind = "scalar" | "complex"`
@@ -107,6 +116,9 @@ Examples:
 - Evaluators claim batches, apply parametrization, evaluate them, and write back `BatchResult`.
 - `BatchResult` contains optional training values and a tagged observable payload.
 - Sampler-aggregators consume completed batches, merge observable state, ingest training values when needed, and delete consumed completed batches.
+- Sampler-aggregators own any per-batch training correlation state internally; the runner does not persist or return batch context.
+- The latest full runtime observable is stored on the run record as `current_observable`.
+- Aggregated observable history snapshots persist the observable's reduced persistent payload rather than the tagged runtime `ObservableState`.
 - Run and worker performance snapshots are persisted periodically.
 - Runtime logs are persisted in `runtime_logs` when DB logging is enabled.
 
@@ -133,10 +145,20 @@ Main read APIs:
 
 Notes:
 - Aggregated history uses sampled range reads with explicit `latest` in the response.
+- Run logs are cursor-paged and server-filtered. `GET /api/runs/:id/logs` accepts `limit`, `worker_id`, `level`, `q`, and `before_id`, and returns `{ items, next_before_id, has_more_older }`.
 - `BIGINT` identifiers are serialized as strings for frontend safety.
 - Observable payloads are tagged JSON, for example `kind = scalar` or `kind = complex`.
+- Run payloads from `GET /api/runs` and `GET /api/runs/:id` include `point_spec` from `runs.point_spec` and the latest full observable as `current_observable`.
+- Finished-run dashboard views should use persisted run/history data; live worker payloads are only for active telemetry.
+- The `Workers` tab shows live worker assignment/heartbeat/role state; historical evaluator/sampler performance is viewed separately by run and worker.
+
+Dashboard behavior:
+- Worker data is polled once at the app level and shared across the `Runs`, `Workers`, and `Logs` tabs.
+- The `Logs` tab is intentionally view-only with server-side filters and `Load older` pagination instead of client-side pause/buffer/grid state.
 
 ## Development
+- Store bootstrap/composition helpers used by runners live under `src/stores/*`.
+- HTTP server runtime and handlers live under `src/server/*`; `src/cli/*` wires arguments and startup.
 - Rust formatting/checks/tests:
   - `cargo fmt`
   - `cargo check -q`

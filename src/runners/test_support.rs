@@ -4,6 +4,7 @@ use crate::core::{
     StoreError, WorkQueueStore,
 };
 use crate::engines::ObservableState;
+use crate::stores::RunControlStore;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Default)]
@@ -123,9 +124,23 @@ impl WorkQueueStore for MockWorkQueue {
     async fn delete_completed_batches(&self, batch_ids: &[i64]) -> Result<(), StoreError> {
         let mut guard = self.inner.lock().expect("poison");
         guard.deleted_completed_batch_ids.extend(batch_ids);
+        guard.pending_batches = guard.pending_batches.saturating_sub(batch_ids.len() as i64);
         guard
             .completed
             .retain(|batch| !batch_ids.contains(&batch.batch_id));
         Ok(())
+    }
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct TestRunControlStore {
+    pub stopped_runs: Arc<Mutex<Vec<i32>>>,
+}
+
+#[async_trait::async_trait]
+impl RunControlStore for TestRunControlStore {
+    async fn stop_run_and_clear_assignments(&self, run_id: i32) -> Result<u64, StoreError> {
+        self.stopped_runs.lock().expect("poison").push(run_id);
+        Ok(1)
     }
 }

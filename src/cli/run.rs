@@ -1,9 +1,9 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Args, Subcommand};
+use gammaboard::core::RunReadStore;
 use gammaboard::core::{ControlPlaneStore, RunStatus};
 use gammaboard::init_pg_store;
 use gammaboard::preprocess::{RunAddConfig, preprocess_run_add};
-use gammaboard::stores::RunReadStore;
 use std::path::PathBuf;
 use tracing::Instrument;
 

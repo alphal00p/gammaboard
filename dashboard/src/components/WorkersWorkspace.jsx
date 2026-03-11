@@ -2,8 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Alert, Box, FormControl, InputLabel, MenuItem, Paper, Select, Stack, Typography } from "@mui/material";
 import ConnectionStatus from "./ConnectionStatus";
 import EmptyStateCard from "./common/EmptyStateCard";
-import WorkerDetailsPanel from "./WorkerDetailsPanel";
-import { useWorkersData } from "../hooks/useWorkersData";
+import WorkerStatusPanel from "./WorkerStatusPanel";
 
 const workerLabel = (worker) => {
   const role = worker?.role || "unknown";
@@ -11,8 +10,7 @@ const workerLabel = (worker) => {
   return `${worker?.worker_id || "unknown"} (${role}, node=${node})`;
 };
 
-const WorkersWorkspace = () => {
-  const { workers, isConnected, lastUpdate, error } = useWorkersData({ runId: null, pollMs: 3000 });
+const WorkersWorkspace = ({ workers, isConnected, lastUpdate, error }) => {
   const [selectedWorkerId, setSelectedWorkerId] = useState(null);
 
   useEffect(() => {
@@ -59,7 +57,7 @@ const WorkersWorkspace = () => {
         {workers.length === 0 ? (
           <EmptyStateCard
             title="No workers registered"
-            message="Start one or more workers to inspect role details and history."
+            message="Start one or more workers to inspect assignments, heartbeat, and current role."
           />
         ) : (
           <Stack spacing={2}>
@@ -97,9 +95,9 @@ const WorkersWorkspace = () => {
       </Paper>
 
       {selectedWorker ? (
-        <WorkerDetailsPanel worker={selectedWorker} isConnected={isConnected} />
+        <WorkerStatusPanel worker={selectedWorker} />
       ) : (
-        <Alert severity="info">Select a worker to view role details.</Alert>
+        <Alert severity="info">Select a worker to view assignment and heartbeat details.</Alert>
       )}
     </>
   );

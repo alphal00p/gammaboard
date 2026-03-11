@@ -1,8 +1,8 @@
-use crate::core::RunStatus;
 use crate::core::{EvaluatorPerformanceMetrics, SamplerPerformanceMetrics};
+use crate::core::{PointSpec, RunStatus};
 use crate::stores::{
     AggregatedResult, EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress,
-    SamplerPerformanceHistoryEntry, WorkQueueStats, WorkerLogEntry,
+    SamplerPerformanceHistoryEntry, WorkQueueStats, WorkerLogEntry, WorkerLogPage,
 };
 use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
@@ -23,6 +23,8 @@ struct RunProgressRow {
     run_name: String,
     run_status: String,
     integration_params: Option<JsonValue>,
+    point_spec: Option<JsonValue>,
+    current_observable: Option<JsonValue>,
     target: Option<JsonValue>,
     evaluator_init_metadata: Option<JsonValue>,
     sampler_aggregator_init_metadata: Option<JsonValue>,
@@ -49,6 +51,17 @@ impl TryFrom<RunProgressRow> for RunProgress {
             run_name: value.run_name,
             run_status: parse_run_status(&value.run_status)?,
             integration_params: value.integration_params,
+            point_spec: value
+                .point_spec
+                .map(serde_json::from_value::<PointSpec>)
+                .transpose()
+                .map_err(|err| {
+                    sqlx::Error::Decode(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("invalid point_spec payload: {err}"),
+                    )))
+                })?,
+            current_observable: value.current_observable,
             target: value.target,
             evaluator_init_metadata: value.evaluator_init_metadata,
             sampler_aggregator_init_metadata: value.sampler_aggregator_init_metadata,
@@ -231,6 +244,8 @@ const RUN_PROGRESS_COLUMNS: &str = r#"
     run_name,
     run_status,
     integration_params,
+    point_spec,
+    current_observable,
     target,
     evaluator_init_metadata,
     sampler_aggregator_init_metadata,
@@ -292,6 +307,8 @@ pub(crate) async fn get_run_progress(
                 r.name as run_name,
                 r.status as run_status,
                 COALESCE(r.integration_params, '{{}}'::jsonb) as integration_params,
+                r.point_spec as point_spec,
+                r.current_observable as current_observable,
                 r.target,
                 r.evaluator_init_metadata,
                 r.sampler_aggregator_init_metadata,
@@ -482,8 +499,10 @@ pub(crate) async fn get_worker_logs(
     limit: i64,
     worker_id: Option<&str>,
     level: Option<&str>,
-    after_id: Option<i64>,
-) -> Result<Vec<WorkerLogEntry>, sqlx::Error> {
+    query: Option<&str>,
+    before_id: Option<i64>,
+) -> Result<WorkerLogPage, sqlx::Error> {
+    let query_pattern = query.map(|value| format!("%{value}%"));
     let rows = sqlx::query_as::<_, WorkerLogRow>(
         r#"
         SELECT
@@ -510,22 +529,40 @@ pub(crate) async fn get_worker_logs(
               AND run_id = $1
               AND ($2::text IS NULL OR worker_id = $2)
               AND ($3::text IS NULL OR level = $3)
-              AND ($4::bigint IS NULL OR id > $4)
+              AND ($4::text IS NULL OR message ILIKE $4 OR fields::text ILIKE $4)
+              AND ($5::bigint IS NULL OR id < $5)
             ORDER BY id DESC
-            LIMIT $5
+            LIMIT $6
         ) recent
-        ORDER BY id ASC
+        ORDER BY id DESC
         "#,
     )
     .bind(run_id)
     .bind(worker_id)
     .bind(level)
-    .bind(after_id)
-    .bind(limit)
+    .bind(query_pattern)
+    .bind(before_id)
+    .bind(limit + 1)
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.into_iter().map(Into::into).collect())
+    let has_more_older = rows.len() as i64 > limit;
+    let items: Vec<WorkerLogEntry> = rows
+        .into_iter()
+        .take(limit as usize)
+        .map(Into::into)
+        .collect();
+    let next_before_id = if has_more_older {
+        items.last().map(|entry| entry.id.clone())
+    } else {
+        None
+    };
+
+    Ok(WorkerLogPage {
+        items,
+        next_before_id,
+        has_more_older,
+    })
 }
 
 pub(crate) async fn get_registered_workers(
@@ -571,24 +608,6 @@ pub(crate) async fn get_registered_workers(
     .await?;
 
     Ok(rows.into_iter().map(Into::into).collect())
-}
-
-pub(crate) async fn get_worker_assigned_run_id(
-    pool: &PgPool,
-    worker_id: &str,
-) -> Result<Option<i32>, sqlx::Error> {
-    let row: Option<(Option<i32>,)> = sqlx::query_as(
-        r#"
-        SELECT desired_run_id
-        FROM workers
-        WHERE worker_id = $1
-        "#,
-    )
-    .bind(worker_id)
-    .fetch_optional(pool)
-    .await?;
-
-    Ok(row.and_then(|value| value.0))
 }
 
 pub(crate) async fn get_evaluator_performance_history(
@@ -646,6 +665,63 @@ pub(crate) async fn get_sampler_performance_history(
         "#,
     )
     .bind(run_id)
+    .bind(worker_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(Into::into).collect())
+}
+
+pub(crate) async fn get_worker_evaluator_performance_history(
+    pool: &PgPool,
+    worker_id: &str,
+    limit: i64,
+) -> Result<Vec<EvaluatorPerformanceHistoryEntry>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, EvaluatorPerformanceHistoryRow>(
+        r#"
+        SELECT
+            id,
+            run_id,
+            worker_id,
+            metrics,
+            engine_diagnostics,
+            created_at
+        FROM evaluator_performance_history
+        WHERE worker_id = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2
+        "#,
+    )
+    .bind(worker_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(Into::into).collect())
+}
+
+pub(crate) async fn get_worker_sampler_performance_history(
+    pool: &PgPool,
+    worker_id: &str,
+    limit: i64,
+) -> Result<Vec<SamplerPerformanceHistoryEntry>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, SamplerPerformanceHistoryRow>(
+        r#"
+        SELECT
+            id,
+            run_id,
+            worker_id,
+            metrics,
+            runtime_metrics,
+            engine_diagnostics,
+            created_at
+        FROM sampler_aggregator_performance_history
+        WHERE worker_id = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2
+        "#,
+    )
     .bind(worker_id)
     .bind(limit)
     .fetch_all(pool)

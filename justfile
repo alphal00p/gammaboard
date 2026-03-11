@@ -1,8 +1,14 @@
 set dotenv-load := true
 
 poll_ms := "500"
-bin := "./target/debug/gammaboard"
-bin_release := "./target/release/gammaboard"
+#bin_debug := "./target/debug/gammaboard"
+#bin_release := "./target/release/gammaboard"
+#bin_profile := env_var_or_default("GAMMABOARD_BIN_PROFILE", "debug")
+
+bin := "./target/dev-optim/gammaboard"
+
+build:
+    cargo build --profile dev-optim
 
 check:
     cargo check --no-default-features --features 'cli,no_pyo3'
@@ -24,13 +30,10 @@ restart-db:
 serve-backend:
     {{bin}} server
 
-serve-frontend:
-    cd dashboard && npm start
-
 build-frontend:
     cd dashboard && npm run build
 
-serve-frontend-release:
+serve-frontend:
     cd dashboard && npx serve build
 
 live-test-basic:
@@ -65,7 +68,7 @@ live-test-gammaloop:
     just restart-db
     {{bin}} run-node --node-id "w-0" --poll-ms {{ poll_ms }} &
     {{bin}} run-node --node-id "w-1" --poll-ms {{ poll_ms }} &
-    {{bin}} run-node --node-id "w-2" --poll-ms {{ poll_ms }} &
+    #{{bin}} run-node --node-id "w-2" --poll-ms {{ poll_ms }} &
 
     sleep 1
 
@@ -73,7 +76,7 @@ live-test-gammaloop:
 
     {{bin}} node assign "w-0" sampler-aggregator 1
     {{bin}} node assign "w-1" evaluator 1
-    {{bin}} node assign "w-2" evaluator 1
+    #{{bin}} node assign "w-2" evaluator 1
 
     {{bin}} run start 1
 

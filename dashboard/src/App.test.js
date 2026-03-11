@@ -1,6 +1,28 @@
 import { render, screen } from "@testing-library/react";
 import App from "./App";
 
+jest.mock("./services/api", () => ({
+  fetchRuns: jest.fn(async () => []),
+  fetchWorkers: jest.fn(async () => []),
+  fetchStats: jest.fn(async () => []),
+  fetchAggregatedRange: jest.fn(async () => ({
+    snapshots: [],
+    latest: null,
+    meta: { step: 1, latest_id: null, max_points: 100, abs_start: null, abs_stop: null },
+    reset_required: false,
+  })),
+  fetchRunLogPage: jest.fn(async () => ({
+    items: [],
+    next_before_id: null,
+    has_more_older: false,
+  })),
+  fetchRun: jest.fn(async () => null),
+  fetchEvaluatorPerformanceHistory: jest.fn(async () => []),
+  fetchSamplerPerformanceHistory: jest.fn(async () => []),
+  fetchWorkerEvaluatorPerformanceHistory: jest.fn(async () => ({ run_id: null, entries: [] })),
+  fetchWorkerSamplerPerformanceHistory: jest.fn(async () => ({ run_id: null, entries: [] })),
+}));
+
 /**
  * Basic smoke test for the App component
  *
@@ -25,6 +47,7 @@ describe("App Component", () => {
     render(<App />);
     expect(screen.getByRole("tab", { name: /Runs/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Workers/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Performance/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Logs/i })).toBeInTheDocument();
   });
 

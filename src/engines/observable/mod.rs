@@ -2,11 +2,26 @@ mod complex;
 mod scalar;
 
 use crate::engines::EngineError;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value as JsonValue;
 
 pub use self::complex::ComplexObservableState;
 pub use self::scalar::ScalarObservableState;
+
+pub trait Observable: Clone + Serialize + DeserializeOwned {
+    type Persistent: Clone + Serialize + DeserializeOwned;
+
+    fn merge(&mut self, other: Self);
+    fn get_persistent(&self) -> Self::Persistent;
+
+    fn to_persistent_json(&self) -> Result<JsonValue, EngineError> {
+        serde_json::to_value(self.get_persistent()).map_err(|err| {
+            EngineError::build(format!(
+                "failed to serialize persistent observable payload: {err}"
+            ))
+        })
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -51,11 +66,11 @@ impl ObservableState {
     pub fn merge(&mut self, other: Self) -> Result<(), EngineError> {
         match (self, other) {
             (Self::Scalar(left), Self::Scalar(right)) => {
-                left.merge(right);
+                Observable::merge(left, right);
                 Ok(())
             }
             (Self::Complex(left), Self::Complex(right)) => {
-                left.merge(right);
+                Observable::merge(left, right);
                 Ok(())
             }
             (left, right) => Err(EngineError::engine(format!(
@@ -74,5 +89,31 @@ impl ObservableState {
     pub fn from_json(value: &JsonValue) -> Result<Self, EngineError> {
         serde_json::from_value(value.clone())
             .map_err(|err| EngineError::build(format!("invalid observable payload: {err}")))
+    }
+
+    pub fn to_persistent_json(&self) -> Result<JsonValue, EngineError> {
+        match self {
+            Self::Scalar(observable) => observable.to_persistent_json(),
+            Self::Complex(observable) => observable.to_persistent_json(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ObservableState, ScalarObservableState};
+
+    #[test]
+    fn persistent_json_roundtrips_without_enum_tag() {
+        let snapshot = ObservableState::Scalar(ScalarObservableState {
+            count: 2,
+            sum_weighted_value: 3.0,
+            sum_abs: 4.0,
+            sum_sq: 5.0,
+        })
+        .to_persistent_json()
+        .expect("persistent snapshot");
+
+        assert_eq!(snapshot.get("kind"), None);
     }
 }

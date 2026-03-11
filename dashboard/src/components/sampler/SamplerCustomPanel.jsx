@@ -7,12 +7,12 @@ const SAMPLER_CUSTOM_PANELS = {
   naive_monte_carlo: NaiveMonteCarloSamplerPanel,
 };
 
-const SamplerCustomPanel = ({ implementation, samplerParams }) => {
+const SamplerCustomPanel = ({ implementation, samplerParams, pointSpec }) => {
   const Panel = SAMPLER_CUSTOM_PANELS[implementation];
   if (!Panel) {
     return <UnsupportedImplementationPanel kind="sampler_aggregator" implementation={implementation} />;
   }
-  return <Panel samplerParams={samplerParams} />;
+  return <Panel samplerParams={samplerParams} pointSpec={pointSpec} />;
 };
 
 export default SamplerCustomPanel;

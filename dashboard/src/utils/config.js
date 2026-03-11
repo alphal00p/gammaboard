@@ -37,6 +37,8 @@ export const deriveObservableImplementation = (evaluatorConfig, observablePayloa
     return params.observable_kind;
   }
 
+  if (implementation === "unit") return "scalar";
+  if (implementation === "gammaloop") return "complex";
   if (implementation === "sinc_evaluator") return "complex";
   if (implementation === "sin_evaluator" || implementation === "symbolica") return "scalar";
   return fallback;

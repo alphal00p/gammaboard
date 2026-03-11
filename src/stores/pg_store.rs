@@ -3,13 +3,12 @@
 use super::queries;
 use crate::core::{
     AggregationStore, AssignmentLeaseStore, BatchClaim, CompletedBatch, ControlPlaneStore,
-    DesiredAssignment, EvaluatorPerformanceSnapshot, RunSpecStore, RunStatus, RuntimeLogEvent,
-    RuntimeLogStore, SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore, Worker,
-    WorkerRegistryStore, WorkerRole, WorkerStatus,
+    DesiredAssignment, EvaluatorPerformanceSnapshot, RunReadStore, RunSpecStore, RunStatus,
+    RuntimeLogEvent, RuntimeLogStore, SamplerAggregatorPerformanceSnapshot, StoreError,
+    WorkQueueStore, Worker, WorkerRegistryStore, WorkerRole, WorkerStatus,
 };
 use crate::core::{Batch, BatchResult, PointSpec};
 use crate::engines::{IntegrationParams, RunSpec};
-use crate::stores::RunReadStore;
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 use std::time::Duration;
@@ -262,9 +261,13 @@ impl RunReadStore for PgStore {
         limit: i64,
         worker_id: Option<&str>,
         level: Option<&str>,
-        after_id: Option<i64>,
-    ) -> Result<Vec<crate::stores::WorkerLogEntry>, StoreError> {
-        Ok(queries::get_worker_logs(&self.pool, run_id, limit, worker_id, level, after_id).await?)
+        query: Option<&str>,
+        before_id: Option<i64>,
+    ) -> Result<crate::stores::WorkerLogPage, StoreError> {
+        Ok(queries::get_worker_logs(
+            &self.pool, run_id, limit, worker_id, level, query, before_id,
+        )
+        .await?)
     }
 
     async fn get_registered_workers(
@@ -300,13 +303,9 @@ impl RunReadStore for PgStore {
         worker_id: &str,
         limit: i64,
     ) -> Result<crate::stores::WorkerEvaluatorPerformanceHistoryResponse, StoreError> {
-        let run_id = queries::get_worker_assigned_run_id(&self.pool, worker_id).await?;
-        let entries = if let Some(run_id) = run_id {
-            queries::get_evaluator_performance_history(&self.pool, run_id, limit, Some(worker_id))
-                .await?
-        } else {
-            Vec::new()
-        };
+        let entries =
+            queries::get_worker_evaluator_performance_history(&self.pool, worker_id, limit).await?;
+        let run_id = entries.first().map(|entry| entry.run_id);
         Ok(crate::stores::WorkerEvaluatorPerformanceHistoryResponse { run_id, entries })
     }
 
@@ -315,13 +314,9 @@ impl RunReadStore for PgStore {
         worker_id: &str,
         limit: i64,
     ) -> Result<crate::stores::WorkerSamplerPerformanceHistoryResponse, StoreError> {
-        let run_id = queries::get_worker_assigned_run_id(&self.pool, worker_id).await?;
-        let entries = if let Some(run_id) = run_id {
-            queries::get_sampler_performance_history(&self.pool, run_id, limit, Some(worker_id))
-                .await?
-        } else {
-            Vec::new()
-        };
+        let entries =
+            queries::get_worker_sampler_performance_history(&self.pool, worker_id, limit).await?;
+        let run_id = entries.first().map(|entry| entry.run_id);
         Ok(crate::stores::WorkerSamplerPerformanceHistoryResponse { run_id, entries })
     }
 }
@@ -708,6 +703,12 @@ impl WorkQueueStore for PgStore {
 
 #[async_trait::async_trait]
 impl AggregationStore for PgStore {
+    async fn load_current_observable(&self, run_id: i32) -> Result<Option<JsonValue>, StoreError> {
+        queries::get_run_current_observable(&self.pool, run_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
     async fn load_latest_aggregation_snapshot(
         &self,
         run_id: i32,
@@ -717,9 +718,10 @@ impl AggregationStore for PgStore {
             .map_err(map_sqlx)
     }
 
-    async fn save_aggregation_snapshot(
+    async fn save_aggregation(
         &self,
         run_id: i32,
+        current_observable: &JsonValue,
         aggregated_observable: &JsonValue,
         delta_batches_completed: i32,
     ) -> Result<(), StoreError> {
@@ -730,9 +732,14 @@ impl AggregationStore for PgStore {
         queries::insert_aggregated_results_snapshot(&self.pool, run_id, aggregated_observable)
             .await
             .map_err(map_sqlx)?;
-        queries::update_run_summary_from_snapshot(&self.pool, run_id, delta_batches_completed)
-            .await
-            .map_err(map_sqlx)?;
+        queries::update_run_aggregation(
+            &self.pool,
+            run_id,
+            current_observable,
+            delta_batches_completed,
+        )
+        .await
+        .map_err(map_sqlx)?;
 
         Ok(())
     }

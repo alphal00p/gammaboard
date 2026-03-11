@@ -77,20 +77,31 @@ const normalizeRunLogEntry = (entry) => {
   };
 };
 
-const normalizeRunLogsPayload = (payload) => {
-  const rows = Array.isArray(payload)
-    ? payload
-    : Array.isArray(payload?.logs)
-      ? payload.logs
-      : Array.isArray(payload?.items)
-        ? payload.items
-        : [];
-  return rows.map(normalizeRunLogEntry).filter(Boolean);
+const normalizeRunLogPage = (payload) => {
+  const rows = Array.isArray(payload?.items) ? payload.items : [];
+  return {
+    items: rows.map(normalizeRunLogEntry).filter(Boolean),
+    next_before_id: payload?.next_before_id != null ? String(payload.next_before_id) : null,
+    has_more_older: payload?.has_more_older === true,
+  };
+};
+
+const normalizeRunEntry = (entry) => {
+  if (!entry || typeof entry !== "object") return null;
+  const runId = Number(entry.run_id);
+  return {
+    ...entry,
+    run_id: Number.isFinite(runId) ? runId : entry.run_id,
+    integration_params: entry.integration_params ?? {},
+    point_spec: entry.point_spec ?? null,
+    target: entry.target ?? null,
+  };
 };
 
 export const fetchRuns = async (signal) => {
   const response = await fetch(`${API_BASE_URL}/runs`, { signal });
-  return parseJsonOrThrow(response, "Failed to fetch runs");
+  const data = await parseJsonOrThrow(response, "Failed to fetch runs");
+  return (Array.isArray(data) ? data : []).map(normalizeRunEntry).filter(Boolean);
 };
 
 export const fetchWorkers = async (runId = null, signal) => {
@@ -109,17 +120,23 @@ export const fetchStats = async (runId, signal) => {
 
 export const fetchRun = async (runId, signal) => {
   const response = await fetch(`${API_BASE_URL}/runs/${runId}`, { signal });
-  return parseJsonOrThrow(response, "Failed to fetch run");
+  const data = await parseJsonOrThrow(response, "Failed to fetch run");
+  return normalizeRunEntry(data) ?? data;
 };
 
-export const fetchRunLogs = async (runId, limit = 500, workerId = null, level = null, signal, afterId = null) => {
+export const fetchRunLogPage = async (
+  runId,
+  { limit = 100, workerId = null, level = null, search = "", beforeId = null } = {},
+  signal,
+) => {
   const params = new URLSearchParams({ limit: String(limit) });
   if (workerId) params.set("worker_id", workerId);
   if (level) params.set("level", level);
-  if (afterId != null) params.set("after_id", String(afterId));
+  if (search && search.trim()) params.set("q", search.trim());
+  if (beforeId != null) params.set("before_id", String(beforeId));
   const response = await fetch(`${API_BASE_URL}/runs/${runId}/logs?${params.toString()}`, { signal });
   const data = await parseJsonOrThrow(response, "Failed to fetch run logs");
-  return normalizeRunLogsPayload(data);
+  return normalizeRunLogPage(data);
 };
 
 export const fetchAggregatedRange = async (runId, start, stop, maxPoints, lastId = null, signal) => {

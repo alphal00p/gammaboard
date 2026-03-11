@@ -45,7 +45,7 @@ const computeRsd = (observable, implementation) => {
 
 const ObservablePanel = ({ run, latestAggregated, samples, isConnected, observableImplementation }) => {
   const integrationParams = toConfigObject(run?.integration_params);
-  const observablePayload = latestAggregated?.aggregated_observable || null;
+  const observablePayload = latestAggregated?.aggregated_observable || run?.current_observable || null;
   const implementation = deriveObservableImplementation(
     integrationParams.evaluator,
     observablePayload,
@@ -91,6 +91,7 @@ const ObservablePanel = ({ run, latestAggregated, samples, isConnected, observab
       jsonTitle="observable JSON"
       jsonData={{
         evaluator: integrationParams?.evaluator ?? null,
+        current_observable: run?.current_observable ?? null,
         aggregated_observable: observablePayload,
       }}
     />

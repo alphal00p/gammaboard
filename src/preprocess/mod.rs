@@ -48,7 +48,7 @@ fn preflight_compatibility(
 
     // One-point dry-run through sampler -> parametrization -> evaluator.
     let require_training_values = sampler_aggregator.is_training_active();
-    let (sample_batch, sample_context) = sampler_aggregator.produce_batch(1).map_err(|err| {
+    let sample_batch = sampler_aggregator.produce_batch(1).map_err(|err| {
         BuildError::incompatible(format!(
             "preflight failed to produce sample batch with sampler {}: {err}",
             config.integration_params.sampler_aggregator.kind_str()
@@ -93,7 +93,7 @@ fn preflight_compatibility(
             )
         })?;
         sampler_aggregator
-            .ingest_training_weights(training_weights, sample_context)
+            .ingest_training_weights(training_weights)
             .map_err(|err| {
                 BuildError::incompatible(format!(
                     "preflight sampler ingest of evaluator training values failed: {err}"

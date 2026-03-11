@@ -4,12 +4,9 @@ mod naive_monte_carlo;
 use super::{BuildError, EngineError};
 use crate::core::{Batch, PointSpec};
 use serde_json::{Value as JsonValue, json};
-use std::any::Any;
 
 use self::havana::{HavanaSampler, HavanaSamplerParams};
 use self::naive_monte_carlo::{NaiveMonteCarloSamplerAggregator, NaiveMonteCarloSamplerParams};
-
-pub type BatchContext = Box<dyn Any + Send>;
 
 /// Owns adaptive sampling training for a single run.
 pub trait SamplerAggregator: Send {
@@ -23,15 +20,8 @@ pub trait SamplerAggregator: Send {
     fn get_max_samples(&self) -> Option<usize> {
         None
     }
-    fn produce_batch(
-        &mut self,
-        nr_samples: usize,
-    ) -> Result<(Batch, Option<BatchContext>), EngineError>;
-    fn ingest_training_weights(
-        &mut self,
-        training_weights: &[f64],
-        context: Option<BatchContext>,
-    ) -> Result<(), EngineError>;
+    fn produce_batch(&mut self, nr_samples: usize) -> Result<Batch, EngineError>;
+    fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError>;
     fn get_diagnostics(&mut self) -> JsonValue {
         json!("{}")
     }

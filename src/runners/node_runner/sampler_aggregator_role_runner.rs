@@ -52,6 +52,7 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
         aggregated_observable,
         worker.store.clone(),
         worker.store.clone(),
+        worker.store.clone(),
         spec.sampler_aggregator_runner_params.clone(),
         spec.point_spec.clone(),
     )

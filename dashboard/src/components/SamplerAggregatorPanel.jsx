@@ -9,6 +9,7 @@ const fmtRatio = (value) => (Number.isFinite(Number(value)) ? Number(value).toFi
 
 const SamplerAggregatorPanel = ({ run, stats, runtimeSummary = null }) => {
   const integrationParams = toConfigObject(run?.integration_params);
+  const pointSpec = toConfigObject(run?.point_spec);
   const { implementation, params: samplerParams } = splitKindConfig(
     integrationParams.sampler_aggregator,
     "unknown",
@@ -62,7 +63,9 @@ const SamplerAggregatorPanel = ({ run, stats, runtimeSummary = null }) => {
           footer={<WorkQueueStats stats={stats} />}
         />
       }
-      customPanel={<SamplerCustomPanel implementation={implementation} samplerParams={samplerParams} />}
+      customPanel={
+        <SamplerCustomPanel implementation={implementation} samplerParams={samplerParams} pointSpec={pointSpec} />
+      }
       jsonTitle="sampler_aggregator JSON"
       jsonData={{
         sampler_aggregator: integrationParams?.sampler_aggregator ?? null,

@@ -1,9 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import {
-  fetchAggregatedRange as fetchAggregatedRangeApi,
-  fetchRun as fetchRunApi,
-  fetchStats as fetchStatsApi,
-} from "../services/api";
+import { fetchAggregatedRange as fetchAggregatedRangeApi, fetchStats as fetchStatsApi } from "../services/api";
 
 const RunHistoryContext = createContext(null);
 
@@ -62,7 +58,6 @@ export const RunHistoryProvider = ({
 }) => {
   const [history, setHistory] = useState([]);
   const [latestAggregated, setLatestAggregated] = useState(null);
-  const [run, setRun] = useState(null);
   const [workQueueStats, setWorkQueueStats] = useState([]);
   const [isConnected, setIsConnected] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
@@ -70,15 +65,6 @@ export const RunHistoryProvider = ({
 
   const lastRangeRef = useRef(null);
   const latestSeenIdRef = useRef(null);
-
-  const fetchRun = useCallback(
-    async (signal) => {
-      if (!runId) return;
-      const data = await fetchRunApi(runId, signal);
-      setRun(data);
-    },
-    [runId],
-  );
 
   const fetchWorkQueueStats = useCallback(
     async (signal) => {
@@ -132,7 +118,6 @@ export const RunHistoryProvider = ({
     // Always clear run-scoped state first so switching runs never shows stale data.
     setHistory([]);
     setLatestAggregated(null);
-    setRun(null);
     setWorkQueueStats([]);
     setIsConnected(false);
     setLastUpdate(null);
@@ -149,11 +134,7 @@ export const RunHistoryProvider = ({
     const poll = async () => {
       activeController = new AbortController();
       try {
-        const jobs = [
-          fetchAggregatedRange(activeController.signal),
-          fetchRun(activeController.signal),
-          fetchWorkQueueStats(activeController.signal),
-        ];
+        const jobs = [fetchAggregatedRange(activeController.signal), fetchWorkQueueStats(activeController.signal)];
         const results = await Promise.allSettled(jobs);
         if (cancelled) return;
 
@@ -189,12 +170,11 @@ export const RunHistoryProvider = ({
       if (timeoutId) clearTimeout(timeoutId);
       if (activeController) activeController.abort();
     };
-  }, [runId, pollIntervalMs, fetchAggregatedRange, fetchRun, fetchWorkQueueStats]);
+  }, [runId, pollIntervalMs, fetchAggregatedRange, fetchWorkQueueStats]);
 
   const value = useMemo(
     () => ({
       runId,
-      run,
       isConnected,
       error,
       lastUpdate,
@@ -206,7 +186,6 @@ export const RunHistoryProvider = ({
     }),
     [
       runId,
-      run,
       isConnected,
       error,
       lastUpdate,

@@ -5,12 +5,11 @@ import WorkerLogsPanel from "./WorkerLogsPanel";
 import RunScopedWorkspace from "./common/RunScopedWorkspace";
 import { useWorkerLogs } from "../hooks/useWorkerLogs";
 
-const LogsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected }) => {
-  const logs = useWorkerLogs({
+const LogsWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isConnected }) => {
+  const logReader = useWorkerLogs({
     runId: selectedRun,
-    workerId: null,
-    limit: 500,
-    pollMs: 5000,
+    workers,
+    limit: 100,
   });
 
   return (
@@ -25,15 +24,8 @@ const LogsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected }) => {
       <Box>
         <ConnectionStatus isConnected={isConnected} lastUpdate={null} />
         <RunSelector runs={runs} selectedRun={selectedRun} onRunChange={setSelectedRun} />
-        <WorkerLogsPanel
-          logs={logs}
-          runId={selectedRun}
-          runs={runs}
-          title="Run Logs"
-          variant="full"
-          defaultLevelFilter={["error", "warn", "info"]}
-        />
-        {logs.length === 0 && (
+        <WorkerLogsPanel {...logReader} title="Run Logs" />
+        {logReader.items.length === 0 && !logReader.isLoading && (
           <Alert severity="info" sx={{ mt: 2 }}>
             No logs received for this run yet.
           </Alert>

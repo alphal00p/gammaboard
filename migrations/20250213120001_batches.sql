@@ -70,6 +70,8 @@ SELECT
     r.name as run_name,
     r.status as run_status,
     COALESCE(r.integration_params, '{}'::jsonb) as integration_params,
+    r.point_spec,
+    r.current_observable,
     r.target,
     r.evaluator_init_metadata,
     r.sampler_aggregator_init_metadata,

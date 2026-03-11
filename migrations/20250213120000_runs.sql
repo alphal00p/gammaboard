@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS runs (
     target JSONB,
     evaluator_init_metadata JSONB,
     sampler_aggregator_init_metadata JSONB,
-    point_spec JSONB NOT NULL DEFAULT '{"continuous_dims": 1, "discrete_dims": 0}'::jsonb,
+    point_spec JSONB NOT NULL,
+    current_observable JSONB,
 
     -- Summary statistics (updated periodically)
     total_batches_planned INT,

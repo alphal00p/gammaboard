@@ -15,9 +15,11 @@ Use `README.md` for operator onboarding. Keep this file focused on architecture,
 - `src/core/*`: domain types and store-facing contracts.
 - `src/engines/*`: engine traits, configs, implementations, and shared run-spec wiring.
 - `src/runners/*`: evaluator, sampler-aggregator, and node orchestration loops.
-- `src/stores/*`: PostgreSQL implementation, queries, and read DTOs.
+- `src/stores/*`: PostgreSQL implementation, queries, read DTOs, and bootstrap/run-control store composition.
+  - Includes run-control composition traits used by runners (for example `RunControlStore`).
+- `src/server/*`: dashboard read API runtime and route handlers.
 - `src/tracing.rs`: tracing initialization and DB log sink wiring.
-- `src/cli/*` and `src/main.rs`: CLI entrypoints and command wiring.
+- `src/cli/*` and `src/main.rs`: CLI argument/wiring and process bootstrap.
 
 ## Operational Conventions
 - Run config is TOML via `gammaboard run add <file.toml>`.
@@ -27,6 +29,7 @@ Use `README.md` for operator onboarding. Keep this file focused on architecture,
 - Point dimensions are canonical in `runs.point_spec`; do not duplicate them outside evaluator config unless the evaluator intrinsically needs them.
 - `run start`, `run pause`, `run stop`, `run remove`, and `node stop` support positional IDs or `-a/--all`.
 - `run pause` and `run stop` must clear desired assignments so `run-node` reconciles down cleanly.
+- Auto-stop conditions in `sampler_aggregator_runner_params.stop_on` are evaluated against aggregated observable samples; once reached, stop new production, wait for pending queue depletion, then apply stop semantics (`cancelled` + desired assignments cleared).
 - `run-node` must stop the old role before starting a new one.
 - Role start failures are capped per desired target; after the cap is hit, retries stay disabled until desired assignment changes.
 - Node shutdown is a one-shot signal read from `workers.shutdown_requested_at`.
@@ -34,8 +37,10 @@ Use `README.md` for operator onboarding. Keep this file focused on architecture,
   - backend port env var is `GAMMABOARD_BACKEND_PORT`
   - frontend API base URL is `REACT_APP_API_BASE_URL`
   - backend and frontend are started separately
+  - frontend worker polling is shared app-wide; avoid adding duplicate per-panel polls for the same resource
 - Local DB startup contract:
   - `just start-db` must wait for Compose health before migrations
+  - Compose host port binding must use `DB_PORT` so local Postgres conflicts can be resolved in `.env`
   - DB retry/backoff belongs in Rust startup, not shell wrappers
 
 ## Engine and Data Rules
@@ -47,6 +52,9 @@ Use `README.md` for operator onboarding. Keep this file focused on architecture,
 - Observable state is evaluator-owned and serialized as semantic `ObservableState`.
 - If an evaluator supports multiple observable semantics, that choice belongs in evaluator config via `observable_kind`.
 - Sampler-aggregator aggregation is `ObservableState` merge, not capability-style ingest.
+- Sampler-aggregators own any per-batch training correlation state internally; do not pass runner-managed batch context back into them.
+- The latest full aggregated observable should live on `runs.current_observable`.
+- Snapshot persistence should use each observable's reduced persistent payload, not the tagged runtime enum form.
 - Batch payloads in `batches.points` must stay compact and shape-stable:
   - row-major flat `continuous` and `discrete`
   - per-sample `weights`
@@ -66,6 +74,11 @@ Use `README.md` for operator onboarding. Keep this file focused on architecture,
   - `sampler_aggregator_performance_history`
 - Snapshot rows are point-in-time; do not reintroduce window semantics.
 - Read APIs should serialize `BIGINT` IDs as strings.
+- Run read payloads should expose `runs.point_spec` as `point_spec`.
+- Frontend run views should prefer persisted run/history state for finished runs; live worker state is only for currently active telemetry.
+- The `Workers` tab is for live worker registry state (assignment, heartbeat, role); historical performance belongs in a separate run+worker performance view.
+- Run log reads should stay server-filtered and cursor-paged (`limit`, `worker_id`, `level`, `q`, `before_id`) with response `{ items, next_before_id, has_more_older }`.
+- The dashboard log viewer is view-only; prefer backend-driven pagination/filtering over rich client grid state.
 
 ## Schema Policy
 - No backward-compat requirement by default.

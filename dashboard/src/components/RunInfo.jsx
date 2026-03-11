@@ -1,5 +1,4 @@
 import { Box, Card, CardContent, Grid, Typography, Chip } from "@mui/material";
-import { InfoOutlined as InfoOutlinedIcon } from "@mui/icons-material";
 import JsonFallback from "./JsonFallback";
 import { formatDateTime, formatScientific } from "../utils/formatters";
 import { parseScalarTarget } from "../utils/target";
@@ -12,19 +11,18 @@ const RunInfo = ({ run }) => {
   const integrationParams = toConfigObject(run.integration_params);
   const { implementation: evaluatorImplementation } = splitKindConfig(integrationParams.evaluator, "unknown");
   const { implementation: samplerImplementation } = splitKindConfig(integrationParams.sampler_aggregator, "unknown");
+  const { implementation: parametrizationImplementation } = splitKindConfig(
+    integrationParams.parametrization,
+    "unknown",
+  );
+  const samplerRunnerParams = toConfigObject(integrationParams.sampler_aggregator_runner_params);
   const observableImplementation = deriveObservableImplementation(integrationParams.evaluator, null, "unknown");
-  const pointSpec = run.point_spec || null;
+  const pointSpec = toConfigObject(run.point_spec);
+  const hasPointSpec = Number.isInteger(pointSpec?.continuous_dims) && Number.isInteger(pointSpec?.discrete_dims);
+  const stopOn = toConfigObject(samplerRunnerParams.stop_on);
   const scalarTarget = parseScalarTarget(run.target);
   const trainingCompleted = Boolean(run.training_completed_at);
   const trainingLabel = trainingCompleted ? "training completed" : "training";
-  let pointSpecText = "not exposed by /runs/:id";
-  if (pointSpec) {
-    try {
-      pointSpecText = JSON.stringify(pointSpec);
-    } catch {
-      pointSpecText = "failed to serialize point_spec";
-    }
-  }
 
   return (
     <Box sx={{ mb: 3 }}>
@@ -122,32 +120,75 @@ const RunInfo = ({ run }) => {
         <Grid item xs={12}>
           <Card sx={{ height: "100%" }}>
             <CardContent>
-              <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
-                <InfoOutlinedIcon color="disabled" />
-                <Typography variant="subtitle2" color="text.secondary">
-                  Run Spec (Generic)
-                </Typography>
-              </Box>
-              <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace" }}>
-                evaluator: {evaluatorImplementation}
+              <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
+                Run Spec Summary
               </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace" }}>
-                sampler_aggregator: {samplerImplementation}
-              </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace" }}>
-                observable: {observableImplementation}
-              </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace", mt: 1 }}>
-                point_spec: {pointSpecText}
-              </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace", mt: 0.5 }}>
-                target:{" "}
-                {scalarTarget
-                  ? `scalar(${formatScientific(scalarTarget.value, 6)})`
-                  : run.target
-                    ? "custom json"
-                    : "none"}
-              </Typography>
+              <Grid container spacing={1.5}>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+                    evaluator
+                  </Typography>
+                  <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                    {evaluatorImplementation}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+                    sampler_aggregator
+                  </Typography>
+                  <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                    {samplerImplementation}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+                    parametrization
+                  </Typography>
+                  <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                    {parametrizationImplementation}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+                    observable
+                  </Typography>
+                  <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                    {observableImplementation}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+                    point_spec
+                  </Typography>
+                  <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                    {hasPointSpec
+                      ? `continuous=${pointSpec.continuous_dims}, discrete=${pointSpec.discrete_dims}`
+                      : "n/a"}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+                    auto-stop
+                  </Typography>
+                  <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                    {stopOn.kind === "samples_at_least" && Number.isFinite(Number(stopOn.samples))
+                      ? `samples_at_least(${Number(stopOn.samples).toLocaleString()})`
+                      : "disabled"}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12}>
+                  <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+                    target
+                  </Typography>
+                  <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                    {scalarTarget
+                      ? `scalar(${formatScientific(scalarTarget.value, 6)})`
+                      : run.target
+                        ? "custom json"
+                        : "none"}
+                  </Typography>
+                </Grid>
+              </Grid>
             </CardContent>
           </Card>
         </Grid>

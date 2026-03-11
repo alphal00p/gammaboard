@@ -16,9 +16,9 @@ Opens at http://localhost:3000
 ```
 src/
 ├── components/       # UI components (ConnectionStatus, RunSelector, etc.)
-├── hooks/           # useRuns, useRunData
-├── services/        # API client (fetchRuns, fetchSamples, fetchStats)
-├── utils/           # parseSamples helper
+├── hooks/           # shared polling hooks and read-only log browser state
+├── services/        # API client (runs, workers, history, logs)
+├── utils/           # formatting and viewmodel helpers
 └── App.js           # Main app
 ```
 
@@ -32,8 +32,14 @@ const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
 **Refresh Intervals:** `src/App.js`
 ```javascript
 useRuns(2000)           // Poll runs every 2 seconds
-useRunData(runId, 1000) // Poll data every 1 second
+useWorkersData(3000)    // Poll workers once app-wide every 3 seconds
 ```
+
+**Logs Tab:** `GET /api/runs/:id/logs`
+- Server-side filters: `worker_id`, `level`, `q`
+- Cursor pagination: `before_id`
+- Response shape: `{ items, next_before_id, has_more_older }`
+- UI model: read-only table with `Refresh` and `Load older`
 
 ## Tech Stack
 

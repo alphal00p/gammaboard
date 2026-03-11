@@ -1,7 +1,7 @@
 import { Card, CardContent, Grid, Typography } from "@mui/material";
 import LatexFormula from "../../LatexFormula";
 
-const EvaluatorDetailsCard = ({ minEvalTimePerSampleMs, expectedContinuousDims, observableKind, integralLatex }) => (
+const EvaluatorDetailsCard = ({ minEvalTimePerSampleMs, pointSpec, observableKind, integralLatex }) => (
   <Card>
     <CardContent>
       <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
@@ -16,9 +16,13 @@ const EvaluatorDetailsCard = ({ minEvalTimePerSampleMs, expectedContinuousDims, 
         </Grid>
         <Grid item xs={12} md={4}>
           <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
-            expected continuous_dims
+            point_spec
           </Typography>
-          <Typography variant="h5">{expectedContinuousDims}</Typography>
+          <Typography variant="h5">
+            {Number.isInteger(pointSpec?.continuous_dims) && Number.isInteger(pointSpec?.discrete_dims)
+              ? `${pointSpec.continuous_dims} / ${pointSpec.discrete_dims}`
+              : "n/a"}
+          </Typography>
         </Grid>
         <Grid item xs={12} md={4}>
           <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>

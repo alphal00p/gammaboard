@@ -1,6 +1,23 @@
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 
+pub(crate) async fn get_run_current_observable(
+    pool: &PgPool,
+    run_id: i32,
+) -> Result<Option<JsonValue>, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+        SELECT current_observable
+        FROM runs
+        WHERE id = $1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_optional(pool)
+    .await
+    .map(|row| row.flatten())
+}
+
 pub(crate) async fn get_latest_aggregation_snapshot(
     pool: &PgPool,
     run_id: i32,
@@ -37,18 +54,21 @@ pub(crate) async fn insert_aggregated_results_snapshot(
     Ok(())
 }
 
-pub(crate) async fn update_run_summary_from_snapshot(
+pub(crate) async fn update_run_aggregation(
     pool: &PgPool,
     run_id: i32,
+    current_observable: &JsonValue,
     delta_batches_completed: i32,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
         UPDATE runs
-        SET batches_completed = COALESCE(batches_completed, 0) + $1
-        WHERE id = $2
+        SET current_observable = $1,
+            batches_completed = COALESCE(batches_completed, 0) + $2
+        WHERE id = $3
         "#,
     )
+    .bind(current_observable)
     .bind(delta_batches_completed)
     .bind(run_id)
     .execute(pool)

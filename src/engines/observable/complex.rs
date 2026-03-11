@@ -1,3 +1,4 @@
+use super::Observable;
 use num::complex::Complex64;
 use serde::{Deserialize, Serialize};
 
@@ -28,8 +29,12 @@ impl ComplexObservableState {
         self.imag_sq_sum += weighted_imag * weighted_imag;
         self.weight_sum += weight;
     }
+}
 
-    pub fn merge(&mut self, other: Self) {
+impl Observable for ComplexObservableState {
+    type Persistent = Self;
+
+    fn merge(&mut self, other: Self) {
         self.count += other.count;
         self.real_sum += other.real_sum;
         self.imag_sum += other.imag_sum;
@@ -38,6 +43,10 @@ impl ComplexObservableState {
         self.real_sq_sum += other.real_sq_sum;
         self.imag_sq_sum += other.imag_sq_sum;
         self.weight_sum += other.weight_sum;
+    }
+
+    fn get_persistent(&self) -> Self::Persistent {
+        self.clone()
     }
 }
 
