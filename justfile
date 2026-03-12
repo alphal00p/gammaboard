@@ -1,5 +1,4 @@
 set dotenv-load := true
-
 poll_ms := "500"
 bin := "./target/dev-optim/gammaboard"
 
@@ -18,19 +17,29 @@ check:
 test-e2e:
     cargo test -q --test full_stack_cli -- --ignored --nocapture
 
-stop-db:
-    docker-compose down
 
-reset-db:
-    docker-compose down -v
 
-start-db:
-    docker-compose up -d --wait
+db-init:
+    initdb -D .postgres --username="{{ env_var('DB_USER') }}" --auth=trust
+    mkdir -p .postgres-socket
+
+db-start:
+    mkdir -p .postgres-socket
+    pg_ctl -D .postgres -l .postgres/logfile -o "-k {{ invocation_directory() }}/.postgres-socket -p {{ env_var('DB_PORT') }}" start
+
+db-create:
+    createdb -h "{{ invocation_directory() }}/.postgres-socket" -p "{{ env_var('DB_PORT') }}" -U "{{ env_var('DB_USER') }}" "{{ env_var('DB_NAME') }}" || true
     sqlx migrate run
 
-restart-db:
-    @just reset-db
-    @just start-db
+db-stop:
+    pg_ctl -D .postgres stop || true
+
+db-reset:
+    pg_ctl -D .postgres stop || true
+    rm -rf .postgres .postgres-socket
+    just db-init
+    just db-start
+    just db-create
 
 serve-backend:
     {{bin}} server

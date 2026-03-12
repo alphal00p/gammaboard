@@ -1,6 +1,8 @@
 notes
 .evaluators
-
+.direnv/
+.postgres/
+.postgres-socket/
 /target
 .env
 # Logs
