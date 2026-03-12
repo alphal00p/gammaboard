@@ -38,56 +38,6 @@ impl FromStr for WorkerRole {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkerStatus {
-    Active,
-    Draining,
-    Inactive,
-}
-
-impl WorkerStatus {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Active => "active",
-            Self::Draining => "draining",
-            Self::Inactive => "inactive",
-        }
-    }
-}
-
-impl fmt::Display for WorkerStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FromStr for WorkerStatus {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "active" => Ok(Self::Active),
-            "draining" => Ok(Self::Draining),
-            "inactive" => Ok(Self::Inactive),
-            other => Err(format!("unknown worker status: {other}")),
-        }
-    }
-}
-
-/// Registered running process (role-specific identity).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Worker {
-    pub worker_id: String,
-    pub node_id: Option<String>,
-    pub role: WorkerRole,
-    pub implementation: String,
-    pub version: String,
-    pub node_specs: JsonValue,
-    pub status: WorkerStatus,
-    pub last_seen: Option<DateTime<Utc>>,
-}
-
 /// Desired node-level role assignment managed by the control plane.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesiredAssignment {
@@ -221,4 +171,11 @@ pub struct SamplerAggregatorPerformanceSnapshot {
     pub node_id: String,
     pub runtime_metrics: SamplerRuntimeMetrics,
     pub engine_diagnostics: JsonValue,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunSampleProgress {
+    pub target_nr_samples: Option<i64>,
+    pub nr_produced_samples: i64,
+    pub nr_completed_samples: i64,
 }

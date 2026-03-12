@@ -63,9 +63,9 @@ const WorkerLogsPanel = ({
           <InputLabel id="worker-log-filter-worker">Node</InputLabel>
           <Select
             labelId="worker-log-filter-worker"
-            value={filters.workerId}
+            value={filters.nodeId}
             label="Node"
-            onChange={(event) => setFilters((current) => ({ ...current, workerId: event.target.value }))}
+            onChange={(event) => setFilters((current) => ({ ...current, nodeId: event.target.value }))}
           >
             <MenuItem value="">All nodes</MenuItem>
             {workerOptions.map((workerId) => (
@@ -141,7 +141,7 @@ const WorkerLogsPanel = ({
                       {String(entry.level || "unknown").toUpperCase()}
                     </Box>
                   </TableCell>
-                  <TableCell>{entry.worker_id || "-"}</TableCell>
+                  <TableCell>{entry.node_id || entry.worker_id || "-"}</TableCell>
                   <TableCell sx={{ fontFamily: "monospace" }}>{entry.message || ""}</TableCell>
                 </TableRow>
               ))}

@@ -35,6 +35,25 @@ pub(crate) async fn get_run_sampler_runner_snapshot(
     .map(|row| row.flatten())
 }
 
+pub(crate) async fn get_run_sample_progress(
+    pool: &PgPool,
+    run_id: i32,
+) -> Result<Option<(Option<i64>, i64, i64)>, sqlx::Error> {
+    sqlx::query_as::<_, (Option<i64>, i64, i64)>(
+        r#"
+        SELECT
+            target_nr_samples,
+            nr_produced_samples,
+            nr_completed_samples
+        FROM runs
+        WHERE id = $1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_optional(pool)
+    .await
+}
+
 pub(crate) async fn get_latest_aggregation_snapshot(
     pool: &PgPool,
     run_id: i32,
@@ -106,6 +125,29 @@ pub(crate) async fn update_run_sampler_runner_snapshot(
         "#,
     )
     .bind(snapshot)
+    .bind(run_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn update_run_sample_progress(
+    pool: &PgPool,
+    run_id: i32,
+    nr_produced_samples: i64,
+    nr_completed_samples: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        UPDATE runs
+        SET
+            nr_produced_samples = $1,
+            nr_completed_samples = $2
+        WHERE id = $3
+        "#,
+    )
+    .bind(nr_produced_samples)
+    .bind(nr_completed_samples)
     .bind(run_id)
     .execute(pool)
     .await?;

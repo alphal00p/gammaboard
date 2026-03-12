@@ -62,11 +62,13 @@ Useful stop commands:
 Useful lifecycle commands:
 - `cargo run --bin gammaboard -- run pause <RUN_ID>`
 - `cargo run --bin gammaboard -- run remove <RUN_ID>`
+- `cargo run --bin gammaboard -- auto-assign <RUN_ID> [MAX_EVALUATORS]`
 - `cargo run --bin gammaboard -- node list`
 - `cargo run --bin gammaboard -- node unassign <NODE_ID>`
 - `cargo run --bin gammaboard -- node stop <NODE_ID>`
 
 `gammaboard node list` prints one row per node with `ID / Run / Role / Last Seen`. `run-node` registers the node immediately, so freshly started idle nodes appear with `Run = N/A` and `Role = None`.
+`gammaboard auto-assign <RUN_ID> [MAX_EVALUATORS]` assigns currently free nodes to the run. If the run does not yet have a sampler assignment, it assigns one sampler first and then up to `MAX_EVALUATORS` evaluators. For example, `gammaboard auto-assign 0 0` assigns only a sampler when needed, and `gammaboard auto-assign 0 2` assigns a sampler when needed and up to two evaluators.
 
 ## Configuration
 Run configuration is TOML and is deep-merged over `configs/default.toml` when you call `gammaboard run add <file.toml>`.
@@ -74,6 +76,7 @@ Run configuration is TOML and is deep-merged over `configs/default.toml` when yo
 Current top-level structure:
 ```toml
 name = "example"
+pause_on_samples = 1000000 # optional
 target = { kind = "scalar", value = 1.23 } # optional
 
 [evaluator]
@@ -100,23 +103,15 @@ max_batch_size = 64
 max_batches_per_tick = 8
 max_queue_size = 128
 completed_batch_fetch_limit = 1024
-
-[sampler_aggregator_runner_params.stop_on]
-kind = "samples_at_least"
-samples = 1000000
 ```
 
 Notes:
 - `name` is stored in `runs.name`.
+- `pause_on_samples` is stored in `runs.target_nr_samples`. When set, the sampler produces exactly that many samples and the run is paused automatically once exactly that many samples have been fully completed and aggregated.
 - `target` is stored verbatim in `runs.target`.
 - `point_spec` is derived from the evaluator during preflight and stored on the run.
 - Observable semantics are evaluator-owned. There is no separate `[observable]` section anymore.
 - Evaluators that support multiple observable semantics use `observable_kind` inside `[evaluator]`.
-- Optional `sampler_aggregator_runner_params.stop_on` supports automatic run pause on conditions.
-  Current condition support: `kind = "samples_at_least"` with positive integer `samples`.
-  `samples_at_least` is evaluated against aggregated observable sample count.
-  After threshold is reached, sampler-aggregator stops producing new batches and clears desired assignments for the run.
-
 Examples:
 - `unit`: optional `observable_kind = "scalar" | "complex"`
 - `gammaloop`: optional `observable_kind = "scalar" | "complex"`, plus `training_projection`
@@ -130,6 +125,8 @@ Examples:
 - Sampler-aggregators consume completed batches, merge observable state, ingest training values when needed, and delete consumed completed batches.
 - Sampler-aggregators own any per-batch training correlation state internally; the runner does not persist or return batch context.
 - The latest full runtime observable is stored on the run record as `current_observable`.
+- Run-level sample accounting lives directly on `runs` as `target_nr_samples`, `nr_produced_samples`, and `nr_completed_samples`.
+- While the sampler is active, it keeps produced/completed counts in memory and flushes them back to `runs` after each tick. On resume, those counters are restored from `runs`.
 - On pause/unassignment, the sampler-aggregator finishes its current tick and persists a runner snapshot to `runs.sampler_runner_snapshot` before exiting.
 - Resume currently restores sampler snapshots for `naive_monte_carlo` and `havana`, including Havana RNG state.
 - `runs.sampler_runner_snapshot` is internal control-plane state and is not exposed by the dashboard read API.

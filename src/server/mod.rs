@@ -67,7 +67,7 @@ fn default_limit() -> i64 {
 struct LogQuery {
     #[serde(default = "default_log_limit")]
     limit: i64,
-    worker_id: Option<String>,
+    node_id: Option<String>,
     level: Option<String>,
     q: Option<String>,
     before_id: Option<i64>,
@@ -81,7 +81,7 @@ fn default_log_limit() -> i64 {
 struct PerformanceHistoryQuery {
     #[serde(default = "default_perf_history_limit")]
     limit: i64,
-    worker_id: Option<String>,
+    node_id: Option<String>,
 }
 
 fn default_perf_history_limit() -> i64 {
@@ -138,7 +138,7 @@ fn build_app(state: AppState) -> Router {
     let api_routes = Router::new()
         .route("/health", get(health_check))
         .route("/runs", get(get_runs))
-        .route("/workers", get(get_workers))
+        .route("/nodes", get(get_nodes))
         .route("/runs/:id", get(get_run))
         .route("/runs/:id/stats", get(get_run_stats))
         .route("/runs/:id/logs", get(get_run_logs))
@@ -157,12 +157,12 @@ fn build_app(state: AppState) -> Router {
             get(get_run_sampler_performance_history),
         )
         .route(
-            "/workers/:id/performance/evaluator",
-            get(get_worker_evaluator_performance_history),
+            "/nodes/:id/performance/evaluator",
+            get(get_node_evaluator_performance_history),
         )
         .route(
-            "/workers/:id/performance/sampler-aggregator",
-            get(get_worker_sampler_performance_history),
+            "/nodes/:id/performance/sampler-aggregator",
+            get(get_node_sampler_performance_history),
         )
         .layer(middleware::from_fn(request_context_middleware))
         .with_state(state);
@@ -215,7 +215,7 @@ async fn get_runs(
     ))
 }
 
-async fn get_workers(
+async fn get_nodes(
     State(state): State<AppState>,
     Query(params): Query<WorkersQuery>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
@@ -260,7 +260,7 @@ async fn get_run_logs(
         .get_worker_logs(
             id,
             limit,
-            params.worker_id.as_deref(),
+            params.node_id.as_deref(),
             params.level.as_deref(),
             params
                 .q
@@ -333,7 +333,7 @@ async fn get_run_evaluator_performance_history(
     let limit = params.limit.clamp(1, 10_000);
     let rows = state
         .store
-        .get_evaluator_performance_history(id, limit, params.worker_id.as_deref())
+        .get_evaluator_performance_history(id, limit, params.node_id.as_deref())
         .await?;
     Ok(Json(
         serde_json::to_value(rows).map_err(|e| ApiError::Internal(e.to_string()))?,
@@ -348,37 +348,37 @@ async fn get_run_sampler_performance_history(
     let limit = params.limit.clamp(1, 10_000);
     let rows = state
         .store
-        .get_sampler_performance_history(id, limit, params.worker_id.as_deref())
+        .get_sampler_performance_history(id, limit, params.node_id.as_deref())
         .await?;
     Ok(Json(
         serde_json::to_value(rows).map_err(|e| ApiError::Internal(e.to_string()))?,
     ))
 }
 
-async fn get_worker_evaluator_performance_history(
+async fn get_node_evaluator_performance_history(
     State(state): State<AppState>,
-    AxumPath(worker_id): AxumPath<String>,
+    AxumPath(node_id): AxumPath<String>,
     Query(params): Query<PerformanceHistoryQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let limit = params.limit.clamp(1, 10_000);
     let payload = state
         .store
-        .get_worker_evaluator_performance_history(&worker_id, limit)
+        .get_worker_evaluator_performance_history(&node_id, limit)
         .await?;
     Ok(Json(
         serde_json::to_value(payload).map_err(|e| ApiError::Internal(e.to_string()))?,
     ))
 }
 
-async fn get_worker_sampler_performance_history(
+async fn get_node_sampler_performance_history(
     State(state): State<AppState>,
-    AxumPath(worker_id): AxumPath<String>,
+    AxumPath(node_id): AxumPath<String>,
     Query(params): Query<PerformanceHistoryQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let limit = params.limit.clamp(1, 10_000);
     let payload = state
         .store
-        .get_worker_sampler_performance_history(&worker_id, limit)
+        .get_worker_sampler_performance_history(&node_id, limit)
         .await?;
     Ok(Json(
         serde_json::to_value(payload).map_err(|e| ApiError::Internal(e.to_string()))?,

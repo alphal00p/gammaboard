@@ -7,6 +7,7 @@ Use `README.md` for operator onboarding. Keep this file focused on architecture,
 ## System Snapshot
 - `gammaboard run` manages run creation, pause, and removal.
 - `gammaboard node` manages desired assignments.
+- `gammaboard auto-assign <RUN_ID> [MAX_EVALUATORS]` assigns currently free nodes to a run, assigning a sampler first if the run does not already have one.
 - `gammaboard run-node` reconciles DB desired assignment into at most one active local role loop.
 - `gammaboard server` exposes the dashboard read API.
 - PostgreSQL is the source of truth for runs, batches, node state, logs, and snapshots.
@@ -24,6 +25,7 @@ Use `README.md` for operator onboarding. Keep this file focused on architecture,
 ## Operational Conventions
 - Run config is TOML via `gammaboard run add <file.toml>`.
 - `run add` deep-merges `configs/default.toml` with the provided file.
+- Top-level `pause_on_samples` persists to `runs.target_nr_samples`; when set, the sampler must produce exactly that many samples and pause the run once `runs.nr_completed_samples` reaches the target exactly.
 - Preflight derives `point_spec` from the evaluator and performs a one-point sampler -> parametrization -> evaluator dry-run before persistence.
 - `run add` also persists evaluator and sampler init metadata.
 - Point dimensions are canonical in `runs.point_spec`; do not duplicate them outside evaluator config unless the evaluator intrinsically needs them.
@@ -37,7 +39,7 @@ Use `README.md` for operator onboarding. Keep this file focused on architecture,
 - `gammaboard completion <shell>` should emit shell completion scripts to stdout; local build workflow also provides `~/.cargo/bin/gammaboard` as a symlink to the built binary so the latest local build can replace a Cargo-installed command in place.
 - Run pause is implemented by clearing desired assignments so `run-node` reconciles down cleanly.
 - Run lifecycle is derived from control-plane state; do not reintroduce a persisted `runs.status` column unless explicitly requested.
-- Auto-stop conditions in `sampler_aggregator_runner_params.stop_on` are evaluated against aggregated observable samples; once reached, stop new production and clear desired assignments for the run.
+- Sampler run-level sample accounting lives on `runs` as `target_nr_samples`, `nr_produced_samples`, and `nr_completed_samples`. The sampler runner keeps the live counters in memory, flushes them after each tick, and restores them from `runs` on resume.
 - Sampler pause/resume snapshots are persisted on `runs.sampler_runner_snapshot`; keep the persisted shape explicit and versioned.
 - The current snapshot restore path is implementation-specific; adding a new sampler requires adding snapshot export/restore support for it.
 - Do not expose `runs.sampler_runner_snapshot` through the read API or dashboard payloads; it is internal resumability state and may be large.

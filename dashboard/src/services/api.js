@@ -59,20 +59,20 @@ const normalizeWorkerEntry = (entry) => {
 
 const normalizeRunLogEntry = (entry) => {
   if (!entry || typeof entry !== "object") return null;
-  const rawId = entry.id ?? entry.log_id ?? null;
+  const rawId = entry.id ?? null;
   if (rawId == null) return null;
 
-  const rawRunId = entry.run_id ?? entry.runId ?? null;
+  const rawRunId = entry.run_id ?? null;
   const runId = rawRunId == null ? null : Number(rawRunId);
-  const timestamp = entry.ts ?? entry.timestamp ?? entry.created_at ?? null;
+  const timestamp = entry.ts ?? null;
   const level = typeof entry.level === "string" ? entry.level.toLowerCase() : "info";
 
   return {
     id: String(rawId),
     ts: timestamp,
     run_id: runId != null && Number.isFinite(runId) ? runId : null,
-    node_id: entry.node_id ?? entry.nodeId ?? null,
-    worker_id: entry.worker_id ?? entry.workerId ?? null,
+    node_id: entry.node_id ?? null,
+    worker_id: entry.worker_id ?? null,
     level,
     message: entry.message ?? "",
     fields: entry.fields ?? {},
@@ -94,6 +94,9 @@ const normalizeRunEntry = (entry) => {
   return {
     ...entry,
     run_id: Number.isFinite(runId) ? runId : entry.run_id,
+    target_nr_samples: Number.isFinite(Number(entry.target_nr_samples)) ? Number(entry.target_nr_samples) : null,
+    nr_produced_samples: Number.isFinite(Number(entry.nr_produced_samples)) ? Number(entry.nr_produced_samples) : 0,
+    nr_completed_samples: Number.isFinite(Number(entry.nr_completed_samples)) ? Number(entry.nr_completed_samples) : 0,
     integration_params: entry.integration_params ?? {},
     point_spec: entry.point_spec ?? null,
     target: entry.target ?? null,
@@ -106,12 +109,12 @@ export const fetchRuns = async (signal) => {
   return (Array.isArray(data) ? data : []).map(normalizeRunEntry).filter(Boolean);
 };
 
-export const fetchWorkers = async (runId = null, signal) => {
+export const fetchNodes = async (runId = null, signal) => {
   const params = new URLSearchParams();
   if (runId != null) params.set("run_id", String(runId));
   const suffix = params.toString() ? `?${params.toString()}` : "";
-  const response = await fetch(`${API_BASE_URL}/workers${suffix}`, { signal });
-  const data = await parseJsonOrThrow(response, "Failed to fetch workers");
+  const response = await fetch(`${API_BASE_URL}/nodes${suffix}`, { signal });
+  const data = await parseJsonOrThrow(response, "Failed to fetch nodes");
   return (Array.isArray(data) ? data : []).map(normalizeWorkerEntry).filter(Boolean);
 };
 
@@ -128,11 +131,11 @@ export const fetchRun = async (runId, signal) => {
 
 export const fetchRunLogPage = async (
   runId,
-  { limit = 100, workerId = null, level = null, search = "", beforeId = null } = {},
+  { limit = 100, nodeId = null, level = null, search = "", beforeId = null } = {},
   signal,
 ) => {
   const params = new URLSearchParams({ limit: String(limit) });
-  if (workerId) params.set("worker_id", workerId);
+  if (nodeId) params.set("node_id", nodeId);
   if (level) params.set("level", level);
   if (search && search.trim()) params.set("q", search.trim());
   if (beforeId != null) params.set("before_id", String(beforeId));
@@ -152,35 +155,34 @@ export const fetchAggregatedRange = async (runId, start, stop, maxPoints, lastId
   return parseJsonOrThrow(response, "Failed to fetch aggregated range");
 };
 
-export const fetchEvaluatorPerformanceHistory = async (runId, limit = 500, workerId = null, signal) => {
+export const fetchEvaluatorPerformanceHistory = async (runId, limit = 500, nodeId = null, signal) => {
   const params = new URLSearchParams({ limit: String(limit) });
-  if (workerId) params.set("worker_id", workerId);
+  if (nodeId) params.set("node_id", nodeId);
   const response = await fetch(`${API_BASE_URL}/runs/${runId}/performance/evaluator?${params.toString()}`, { signal });
   return parseJsonOrThrow(response, "Failed to fetch evaluator performance history");
 };
 
-export const fetchSamplerPerformanceHistory = async (runId, limit = 500, workerId = null, signal) => {
+export const fetchSamplerPerformanceHistory = async (runId, limit = 500, nodeId = null, signal) => {
   const params = new URLSearchParams({ limit: String(limit) });
-  if (workerId) params.set("worker_id", workerId);
+  if (nodeId) params.set("node_id", nodeId);
   const response = await fetch(`${API_BASE_URL}/runs/${runId}/performance/sampler-aggregator?${params.toString()}`, {
     signal,
   });
   return parseJsonOrThrow(response, "Failed to fetch sampler performance history");
 };
 
-export const fetchWorkerEvaluatorPerformanceHistory = async (workerId, limit = 500, signal) => {
+export const fetchNodeEvaluatorPerformanceHistory = async (nodeId, limit = 500, signal) => {
   const params = new URLSearchParams({ limit: String(limit) });
-  const response = await fetch(`${API_BASE_URL}/workers/${workerId}/performance/evaluator?${params.toString()}`, {
+  const response = await fetch(`${API_BASE_URL}/nodes/${nodeId}/performance/evaluator?${params.toString()}`, {
     signal,
   });
-  return parseJsonOrThrow(response, "Failed to fetch worker evaluator performance history");
+  return parseJsonOrThrow(response, "Failed to fetch node evaluator performance history");
 };
 
-export const fetchWorkerSamplerPerformanceHistory = async (workerId, limit = 500, signal) => {
+export const fetchNodeSamplerPerformanceHistory = async (nodeId, limit = 500, signal) => {
   const params = new URLSearchParams({ limit: String(limit) });
-  const response = await fetch(
-    `${API_BASE_URL}/workers/${workerId}/performance/sampler-aggregator?${params.toString()}`,
-    { signal },
-  );
-  return parseJsonOrThrow(response, "Failed to fetch worker sampler performance history");
+  const response = await fetch(`${API_BASE_URL}/nodes/${nodeId}/performance/sampler-aggregator?${params.toString()}`, {
+    signal,
+  });
+  return parseJsonOrThrow(response, "Failed to fetch node sampler performance history");
 };

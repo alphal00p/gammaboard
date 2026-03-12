@@ -18,24 +18,25 @@ import EmptyStateCard from "./common/EmptyStateCard";
 import { formatDateTime } from "../utils/formatters";
 
 const WorkersWorkspace = ({ workers, isConnected, lastUpdate, error }) => {
-  const [selectedWorkerId, setSelectedWorkerId] = useState(null);
+  const [selectedNodeId, setSelectedNodeId] = useState(null);
+  const nodeIdFor = (worker) => worker.node_id || worker.worker_id;
 
   const displayRole = (worker) => worker.current_role || "None";
   const displayRun = (worker) => (worker.current_role ? (worker.current_run_id ?? "N/A") : "N/A");
 
   useEffect(() => {
     if (workers.length === 0) {
-      setSelectedWorkerId(null);
+      setSelectedNodeId(null);
       return;
     }
 
-    const stillExists = workers.some((worker) => worker.worker_id === selectedWorkerId);
-    if (!stillExists) setSelectedWorkerId(workers[0].worker_id);
-  }, [workers, selectedWorkerId]);
+    const stillExists = workers.some((worker) => nodeIdFor(worker) === selectedNodeId);
+    if (!stillExists) setSelectedNodeId(nodeIdFor(workers[0]));
+  }, [workers, selectedNodeId]);
 
   const selectedWorker = useMemo(
-    () => workers.find((worker) => worker.worker_id === selectedWorkerId) || null,
-    [workers, selectedWorkerId],
+    () => workers.find((worker) => nodeIdFor(worker) === selectedNodeId) || null,
+    [workers, selectedNodeId],
   );
   const workerRoleCounts = useMemo(() => {
     return workers.reduce((acc, worker) => {
@@ -86,7 +87,7 @@ const WorkersWorkspace = ({ workers, isConnected, lastUpdate, error }) => {
             </Box>
 
             <TableContainer component={Paper} variant="outlined">
-              <Table size="small" aria-label="workers table">
+              <Table size="small" aria-label="nodes table">
                 <TableHead>
                   <TableRow>
                     <TableCell>Node ID</TableCell>
@@ -97,13 +98,14 @@ const WorkersWorkspace = ({ workers, isConnected, lastUpdate, error }) => {
                 </TableHead>
                 <TableBody>
                   {workers.map((worker) => {
-                    const selected = worker.worker_id === selectedWorkerId;
+                    const nodeId = nodeIdFor(worker);
+                    const selected = nodeId === selectedNodeId;
                     return (
                       <TableRow
-                        key={worker.worker_id}
+                        key={nodeId}
                         hover
                         selected={selected}
-                        onClick={() => setSelectedWorkerId(worker.worker_id)}
+                        onClick={() => setSelectedNodeId(nodeId)}
                         sx={{
                           cursor: "pointer",
                           "& .MuiTableCell-root": {
@@ -111,7 +113,7 @@ const WorkersWorkspace = ({ workers, isConnected, lastUpdate, error }) => {
                           },
                         }}
                       >
-                        <TableCell>{worker.worker_id || "unknown"}</TableCell>
+                        <TableCell>{nodeId || "unknown"}</TableCell>
                         <TableCell>{displayRun(worker)}</TableCell>
                         <TableCell>{displayRole(worker)}</TableCell>
                         <TableCell>{formatDateTime(worker.last_seen, "-")}</TableCell>

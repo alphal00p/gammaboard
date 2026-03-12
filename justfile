@@ -68,12 +68,7 @@ live-test-basic:
     {{bin}} node assign "w-1" evaluator 1
     {{bin}} node assign "w-2" sampler-aggregator 1
 
-    {{bin}} node assign "w-3" sampler-aggregator 2
-    {{bin}} node assign "w-4" evaluator 2
-    {{bin}} node assign "w-5" evaluator 2
-    {{bin}} node assign "w-6" evaluator 2
-    {{bin}} node assign "w-7" evaluator 2
-    {{bin}} node assign "w-8" evaluator 2
+    {{bin}} auto-assign 2 5
 
     echo "initial assignments settled"
     sleep 10
@@ -87,20 +82,14 @@ live-test-basic:
     echo "pause run 3 and return workers to run 2"
     {{bin}} run pause 3
     sleep 6
-    {{bin}} node assign "w-3" sampler-aggregator 2
-    {{bin}} node assign "w-8" evaluator 2
+    {{bin}} auto-assign 2 1
 
     sleep 10
 
     echo "pause run 2 and resume run 3 with all symbolica workers"
     {{bin}} run pause 2
     sleep 6
-    {{bin}} node assign "w-3" sampler-aggregator 3
-    {{bin}} node assign "w-4" evaluator 3
-    {{bin}} node assign "w-5" evaluator 3
-    {{bin}} node assign "w-6" evaluator 3
-    {{bin}} node assign "w-7" evaluator 3
-    {{bin}} node assign "w-8" evaluator 3
+    {{bin}} auto-assign 3 5
 
 live-test-gammaloop:
     #!/usr/bin/env bash
@@ -114,9 +103,7 @@ live-test-gammaloop:
 
     {{bin}} run add "configs/gammaloop-triangle.toml"
 
-    {{bin}} node assign "w-0" sampler-aggregator 1
-    {{bin}} node assign "w-1" evaluator 1
-    {{bin}} node assign "w-2" evaluator 1
+    {{bin}} auto-assign 1 2
 
 stop:
     -{{bin}} run pause -a

@@ -15,15 +15,21 @@ const RunInfo = ({ run }) => {
     integrationParams.parametrization,
     "unknown",
   );
-  const samplerRunnerParams = toConfigObject(integrationParams.sampler_aggregator_runner_params);
   const observableImplementation = deriveObservableImplementation(integrationParams.evaluator, null, "unknown");
   const pointSpec = toConfigObject(run.point_spec);
   const hasPointSpec = Number.isInteger(pointSpec?.continuous_dims) && Number.isInteger(pointSpec?.discrete_dims);
-  const stopOn = toConfigObject(samplerRunnerParams.stop_on);
   const scalarTarget = parseScalarTarget(run.target);
   const trainingCompleted = Boolean(run.training_completed_at);
   const trainingLabel = trainingCompleted ? "training completed" : "training";
   const lifecycle = deriveRunLifecycle(run);
+  const targetSamples = Number(run.target_nr_samples);
+  const producedSamples = Number(run.nr_produced_samples);
+  const completedSamples = Number(run.nr_completed_samples);
+  const hasTargetSamples = Number.isFinite(targetSamples);
+  const hasProducedSamples = Number.isFinite(producedSamples);
+  const hasCompletedSamples = Number.isFinite(completedSamples);
+  const completedBatches = Number(run.completed_batches ?? run.batches_completed);
+  const totalBatches = Number(run.total_batches);
 
   return (
     <Box sx={{ mb: 3 }}>
@@ -109,10 +115,19 @@ const RunInfo = ({ run }) => {
                 Progress
               </Typography>
               <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                completed_batches: {(run.batches_completed ?? 0).toLocaleString()}
+                target_samples: {hasTargetSamples ? targetSamples.toLocaleString() : "unbounded"}
               </Typography>
               <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                queued_batches: {(run.total_batches ?? 0).toLocaleString()}
+                produced_samples: {hasProducedSamples ? producedSamples.toLocaleString() : "0"}
+              </Typography>
+              <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                completed_samples: {hasCompletedSamples ? completedSamples.toLocaleString() : "0"}
+              </Typography>
+              <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                completed_batches: {Number.isFinite(completedBatches) ? completedBatches.toLocaleString() : "0"}
+              </Typography>
+              <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                total_batches: {Number.isFinite(totalBatches) ? totalBatches.toLocaleString() : "0"}
               </Typography>
             </CardContent>
           </Card>
@@ -169,12 +184,10 @@ const RunInfo = ({ run }) => {
                 </Grid>
                 <Grid item xs={12} md={6}>
                   <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
-                    auto-stop
+                    pause_on_samples
                   </Typography>
                   <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                    {stopOn.kind === "samples_at_least" && Number.isFinite(Number(stopOn.samples))
-                      ? `samples_at_least(${Number(stopOn.samples).toLocaleString()})`
-                      : "disabled"}
+                    {hasTargetSamples ? targetSamples.toLocaleString() : "disabled"}
                   </Typography>
                 </Grid>
                 <Grid item xs={12}>

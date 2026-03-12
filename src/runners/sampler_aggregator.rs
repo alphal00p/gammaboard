@@ -10,8 +10,9 @@
 
 use crate::core::PointSpec;
 use crate::core::{
-    AggregationStore, CompletedBatch, RollingMetricSnapshot, SamplerAggregatorPerformanceSnapshot,
-    SamplerRollingAverages, SamplerRuntimeMetrics, StoreError, WorkQueueStore,
+    AggregationStore, CompletedBatch, RollingMetricSnapshot, RunSampleProgress,
+    SamplerAggregatorPerformanceSnapshot, SamplerRollingAverages, SamplerRuntimeMetrics,
+    StoreError, WorkQueueStore,
 };
 use crate::engines::{EngineError, ObservableState, SamplerAggregator, SamplerAggregatorSnapshot};
 use crate::runners::rolling_metric::RollingMetric;
@@ -32,14 +33,6 @@ pub struct SamplerAggregatorRunnerParams {
     pub max_queue_size: usize,
     pub max_batches_per_tick: usize,
     pub completed_batch_fetch_limit: usize,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stop_on: Option<RunStopCondition>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum RunStopCondition {
-    SamplesAtLeast { samples: i64 },
 }
 
 #[derive(Debug, Clone)]
@@ -132,6 +125,9 @@ pub struct SamplerAggregatorRunner<WQ, AS, RC> {
     aggregation_store: AS,
     run_control: RC,
     config: SamplerAggregatorRunnerParams,
+    target_nr_samples: Option<i64>,
+    nr_produced_samples: i64,
+    nr_completed_samples: i64,
     performance_snapshot_interval: Duration,
     last_snapshot_at: Instant,
     point_spec: PointSpec,
@@ -216,9 +212,9 @@ where
     fn build_batch_plan(
         &self,
         base_produce_limit: usize,
-        engine_max_samples: Option<usize>,
+        max_samples: Option<usize>,
     ) -> Vec<usize> {
-        match engine_max_samples {
+        match max_samples {
             None => vec![self.runtime_state.batch_size_current; base_produce_limit],
             Some(max_samples) => {
                 let base_total_samples =
@@ -257,6 +253,7 @@ where
         aggregation_store: AS,
         run_control: RC,
         config: SamplerAggregatorRunnerParams,
+        target_nr_samples: Option<i64>,
         point_spec: PointSpec,
     ) -> Result<Self, RunnerError> {
         let initial_batch_size = config.max_batch_size.min(64).max(Self::MIN_BATCH_SIZE);
@@ -283,11 +280,11 @@ where
                 "runner config target_queue_remaining must be in [0, 1]",
             )));
         }
-        if let Some(RunStopCondition::SamplesAtLeast { samples }) = config.stop_on
-            && samples <= 0
+        if let Some(target_nr_samples) = target_nr_samples
+            && target_nr_samples <= 0
         {
             return Err(RunnerError::Engine(EngineError::engine(
-                "runner config stop_on.samples_at_least.samples must be > 0",
+                "run target_nr_samples must be > 0 when set",
             )));
         }
         let performance_snapshot_interval =
@@ -297,6 +294,14 @@ where
             aggregated_observable =
                 ObservableState::from_json(&snapshot).map_err(RunnerError::Engine)?;
         }
+        let persisted_progress = aggregation_store
+            .load_run_sample_progress(run_id)
+            .await?
+            .unwrap_or(RunSampleProgress {
+                target_nr_samples,
+                nr_produced_samples: 0,
+                nr_completed_samples: 0,
+            });
 
         Ok(Self {
             run_id,
@@ -307,10 +312,14 @@ where
             aggregation_store,
             run_control,
             config,
+            target_nr_samples: persisted_progress.target_nr_samples.or(target_nr_samples),
+            nr_produced_samples: persisted_progress.nr_produced_samples,
+            nr_completed_samples: persisted_progress.nr_completed_samples,
             performance_snapshot_interval,
             last_snapshot_at: Instant::now(),
             point_spec,
             runtime_state: SamplerRuntimeState {
+                produced_samples_total: persisted_progress.nr_produced_samples,
                 batch_size_current: initial_batch_size,
                 ..SamplerRuntimeState::default()
             },
@@ -333,6 +342,10 @@ where
         self.aggregated_observable = ObservableState::from_json(&snapshot.aggregated_observable)
             .map_err(RunnerError::Engine)?;
         self.runtime_state = snapshot.runtime_state;
+        self.runtime_state.produced_samples_total = self
+            .runtime_state
+            .produced_samples_total
+            .max(self.nr_produced_samples);
         self.last_pending_after_enqueue = snapshot.last_pending_after_enqueue;
         self.training_completion_marked = snapshot.training_completion_marked;
         self.auto_stop_triggered = snapshot.auto_stop_triggered;
@@ -388,13 +401,15 @@ where
 
         self.tune_batch_size();
 
-        let base_produce_limit = if self.stop_condition_met() {
+        let base_produce_limit = if self.pause_target_reached() {
             0
         } else {
             self.compute_produce_limit(pending_before_tick)
         };
-        let engine_max_samples = self.engine.get_max_samples();
-        let batch_plan = self.build_batch_plan(base_produce_limit, engine_max_samples);
+        let batch_plan = self.build_batch_plan(
+            base_produce_limit,
+            self.max_samples_to_produce_this_tick(self.engine.get_max_samples())?,
+        );
 
         let mut produced = Vec::with_capacity(batch_plan.len());
         for nr_samples in batch_plan {
@@ -408,6 +423,7 @@ where
             let produced_samples = batch.size();
             self.runtime_state.produced_batches_total += 1;
             self.runtime_state.produced_samples_total += produced_samples as i64;
+            self.nr_produced_samples += produced_samples as i64;
             if produced_samples > 0 {
                 self.runtime_state
                     .rolling
@@ -440,6 +456,7 @@ where
             .delete_completed_batches(&consumed_ids)
             .await?;
         self.try_mark_training_completed().await?;
+        self.flush_run_sample_progress().await?;
         self.flush_performance_snapshot().await?;
         self.maybe_stop_run_from_condition().await?;
 
@@ -458,9 +475,12 @@ where
             return Ok(Vec::new());
         }
 
+        let mut completed_samples_delta = 0_i64;
         for batch in completed {
+            let batch_samples = batch.batch.size();
+            completed_samples_delta += batch_samples as i64;
             if let Some(total_eval_time_ms) = batch.total_eval_time_ms
-                && batch.batch.size() > 0
+                && batch_samples > 0
             {
                 self.runtime_state
                     .rolling
@@ -469,7 +489,7 @@ where
                 self.runtime_state
                     .rolling
                     .eval_ms_per_sample
-                    .observe(total_eval_time_ms / batch.batch.size() as f64);
+                    .observe(total_eval_time_ms / batch_samples as f64);
             }
             if batch.requires_training {
                 let training_weights = batch.result.values.as_deref().ok_or_else(|| {
@@ -478,12 +498,20 @@ where
                         batch.batch_id
                     )))
                 })?;
+                if training_weights.len() != batch_samples {
+                    return Err(RunnerError::Engine(EngineError::engine(format!(
+                        "completed batch {} training value count mismatch: expected {}, got {}",
+                        batch.batch_id,
+                        batch_samples,
+                        training_weights.len()
+                    ))));
+                }
                 let ingest_started = Instant::now();
                 self.engine
                     .ingest_training_weights(training_weights)
                     .map_err(RunnerError::Engine)?;
                 let ingest_time_ms = ingest_started.elapsed().as_secs_f64() * 1000.0;
-                let ingested_samples = training_weights.len();
+                let ingested_samples = batch_samples;
                 self.runtime_state.ingested_batches_total += 1;
                 self.runtime_state.ingested_samples_total += ingested_samples as i64;
                 if ingested_samples > 0 {
@@ -498,6 +526,7 @@ where
                 .merge(batch.result.observable.clone())
                 .map_err(RunnerError::Engine)?;
         }
+        self.nr_completed_samples += completed_samples_delta;
 
         let current_observable = self
             .aggregated_observable
@@ -562,13 +591,46 @@ where
         Ok(())
     }
 
-    fn stop_condition_met(&self) -> bool {
-        match self.config.stop_on {
-            Some(RunStopCondition::SamplesAtLeast { samples }) => {
-                self.aggregated_sample_count() >= samples
+    async fn flush_run_sample_progress(&mut self) -> Result<(), RunnerError> {
+        self.aggregation_store
+            .save_run_sample_progress(
+                self.run_id,
+                self.nr_produced_samples,
+                self.nr_completed_samples,
+            )
+            .await?;
+        Ok(())
+    }
+
+    fn pause_target_reached(&self) -> bool {
+        self.target_nr_samples == Some(self.nr_completed_samples)
+    }
+
+    fn max_samples_to_produce_this_tick(
+        &self,
+        engine_max_samples: Option<usize>,
+    ) -> Result<Option<usize>, RunnerError> {
+        let run_remaining = self
+            .target_nr_samples
+            .map(|target| target.saturating_sub(self.nr_produced_samples));
+        if let Some(remaining) = run_remaining {
+            if remaining < 0 {
+                return Err(RunnerError::Engine(EngineError::engine(format!(
+                    "run {} produced sample count exceeded target: produced={} target={}",
+                    self.run_id,
+                    self.nr_produced_samples,
+                    remaining + self.nr_produced_samples
+                ))));
             }
-            None => false,
         }
+
+        let run_remaining = run_remaining.and_then(|remaining| usize::try_from(remaining).ok());
+        Ok(match (engine_max_samples, run_remaining) {
+            (Some(engine_max), Some(run_remaining)) => Some(engine_max.min(run_remaining)),
+            (Some(engine_max), None) => Some(engine_max),
+            (None, Some(run_remaining)) => Some(run_remaining),
+            (None, None) => None,
+        })
     }
 
     fn aggregated_sample_count(&self) -> i64 {
@@ -579,17 +641,19 @@ where
     }
 
     async fn maybe_stop_run_from_condition(&mut self) -> Result<(), RunnerError> {
-        if self.auto_stop_triggered || !self.stop_condition_met() {
+        if self.auto_stop_triggered || !self.pause_target_reached() {
             return Ok(());
         }
         let assignments_cleared = self.run_control.clear_run_assignments(self.run_id).await?;
         self.auto_stop_triggered = true;
         info!(
             run_id = self.run_id,
+            target_nr_samples = self.target_nr_samples,
+            nr_produced_samples = self.nr_produced_samples,
+            nr_completed_samples = self.nr_completed_samples,
             aggregated_samples = self.aggregated_sample_count(),
-            ?self.config.stop_on,
             assignments_cleared,
-            "auto-stop condition reached; assignments cleared"
+            "pause-on-samples target reached; assignments cleared"
         );
         Ok(())
     }

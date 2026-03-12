@@ -20,4 +20,6 @@ export const deriveRunLifecycle = (run) => {
 };
 
 export const formatRunSecondaryLabel = (run) =>
-  `${deriveRunLifecycle(run)} | completed ${(run.batches_completed || 0).toLocaleString()} | queued ${(run.total_batches || 0).toLocaleString()}`;
+  `${deriveRunLifecycle(run)} | completed samples ${Number(run?.nr_completed_samples || 0).toLocaleString()}${
+    Number.isFinite(Number(run?.target_nr_samples)) ? ` / ${Number(run.target_nr_samples).toLocaleString()}` : ""
+  }`;

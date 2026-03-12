@@ -17,10 +17,12 @@ pub struct RunProgress {
     pub target: Option<serde_json::Value>,
     pub evaluator_init_metadata: Option<serde_json::Value>,
     pub sampler_aggregator_init_metadata: Option<serde_json::Value>,
+    pub target_nr_samples: Option<i64>,
+    pub nr_produced_samples: i64,
+    pub nr_completed_samples: i64,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub training_completed_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub total_batches_planned: Option<i32>,
     pub batches_completed: i32,
     pub total_batches: i64,
     pub total_samples: i64,
@@ -91,7 +93,7 @@ pub struct WorkerLogPage {
     pub has_more_older: bool,
 }
 
-/// Registered worker process snapshot.
+/// Registered node snapshot exposed through the legacy `/workers` read endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisteredWorkerEntry {
     pub worker_id: String,

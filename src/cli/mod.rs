@@ -1,3 +1,4 @@
+pub mod auto_assign;
 pub mod completion;
 pub mod node;
 pub mod run;
@@ -6,6 +7,7 @@ pub mod server;
 pub mod shared;
 
 use anyhow::Result;
+use auto_assign::{AutoAssignArgs, run_auto_assign_command};
 use clap::{ArgAction, Parser, Subcommand};
 use completion::{CompletionArgs, run_completion};
 use node::{NodeArgs, run_node_commands};
@@ -25,6 +27,8 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Assign free nodes to a run automatically
+    AutoAssign(AutoAssignArgs),
     /// Run lifecycle commands
     Run(RunArgs),
     /// Node assignment and node lifecycle commands
@@ -40,6 +44,7 @@ enum Command {
 pub async fn dispatch(cli: Cli) -> Result<()> {
     let quiet = cli.quiet;
     match cli.command {
+        Command::AutoAssign(args) => run_auto_assign_command(args, quiet).await,
         Command::Run(args) => run_run_commands(args.command, quiet).await,
         Command::Node(args) => run_node_commands(args.command, quiet).await,
         Command::RunNode(args) => run_node(args, quiet).await,

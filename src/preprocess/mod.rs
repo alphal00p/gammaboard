@@ -6,6 +6,7 @@ use serde_json::Value as JsonValue;
 #[derive(Debug, Clone, Deserialize)]
 pub struct RunAddConfig {
     pub name: String,
+    pub pause_on_samples: Option<i64>,
     #[serde(flatten)]
     pub integration_params: IntegrationParams,
     pub target: Option<JsonValue>,

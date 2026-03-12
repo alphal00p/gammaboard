@@ -8,8 +8,9 @@ pub use errors::StoreError;
 pub use models::{
     BatchClaim, CompletedBatch, DesiredAssignment, EvaluatorIdleProfileMetrics,
     EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot, RegisteredNode,
-    RollingMetricSnapshot, RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
-    SamplerPerformanceMetrics, SamplerRollingAverages, SamplerRuntimeMetrics, WorkerRole,
+    RollingMetricSnapshot, RunSampleProgress, RuntimeLogEvent,
+    SamplerAggregatorPerformanceSnapshot, SamplerPerformanceMetrics, SamplerRollingAverages,
+    SamplerRuntimeMetrics, WorkerRole,
 };
 pub use traits::{
     AggregationStore, ControlPlaneStore, RunReadStore, RunSpecStore, RuntimeLogStore,

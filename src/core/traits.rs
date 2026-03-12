@@ -3,7 +3,7 @@
 use super::errors::StoreError;
 use super::models::{
     BatchClaim, CompletedBatch, DesiredAssignment, EvaluatorPerformanceSnapshot, RegisteredNode,
-    RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
+    RunSampleProgress, RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
 };
 use crate::core::{Batch, BatchResult, PointSpec};
 use crate::engines::RunSpec;
@@ -59,6 +59,7 @@ pub trait ControlPlaneStore: Send + Sync {
     async fn create_run(
         &self,
         name: &str,
+        target_nr_samples: Option<i64>,
         integration_params: &JsonValue,
         target: Option<&JsonValue>,
         point_spec: &PointSpec,
@@ -124,6 +125,10 @@ pub trait AggregationStore: Send + Sync {
         &self,
         run_id: i32,
     ) -> Result<Option<JsonValue>, StoreError>;
+    async fn load_run_sample_progress(
+        &self,
+        run_id: i32,
+    ) -> Result<Option<RunSampleProgress>, StoreError>;
     async fn save_aggregation(
         &self,
         run_id: i32,
@@ -135,6 +140,12 @@ pub trait AggregationStore: Send + Sync {
         &self,
         run_id: i32,
         snapshot: &JsonValue,
+    ) -> Result<(), StoreError>;
+    async fn save_run_sample_progress(
+        &self,
+        run_id: i32,
+        nr_produced_samples: i64,
+        nr_completed_samples: i64,
     ) -> Result<(), StoreError>;
 }
 

@@ -94,7 +94,7 @@ const WorkerStatusPanel = ({ worker }) => {
       </Card>
 
       <JsonFallback
-        title="worker status JSON"
+        title="node status JSON"
         data={{
           worker_id: worker.worker_id ?? null,
           node_id: worker.node_id ?? null,

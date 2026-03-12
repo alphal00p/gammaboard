@@ -31,6 +31,7 @@ pub struct IntegrationParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunSpec {
     pub run_id: i32,
+    pub target_nr_samples: Option<i64>,
     pub point_spec: PointSpec,
     pub evaluator: EvaluatorConfig,
     pub sampler_aggregator: SamplerAggregatorConfig,

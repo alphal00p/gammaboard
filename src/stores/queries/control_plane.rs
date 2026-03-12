@@ -353,6 +353,7 @@ pub(crate) async fn consume_node_shutdown_request(
 pub(crate) async fn create_run(
     pool: &PgPool,
     name: &str,
+    target_nr_samples: Option<i64>,
     integration_params: &JsonValue,
     target: Option<&JsonValue>,
     point_spec: &PointSpec,
@@ -363,17 +364,19 @@ pub(crate) async fn create_run(
         r#"
         INSERT INTO runs (
             name,
+            target_nr_samples,
             integration_params,
             target,
             point_spec,
             evaluator_init_metadata,
             sampler_aggregator_init_metadata
         )
-        VALUES ($1, $2, $3, $4, $5, $6)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING id
         "#,
     )
     .bind(name)
+    .bind(target_nr_samples)
     .bind(integration_params)
     .bind(target)
     .bind(sqlx::types::Json(point_spec))

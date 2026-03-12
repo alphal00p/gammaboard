@@ -1,6 +1,7 @@
 # todo: create run-cargd to make the state
 
 name = "gammaloop-triangle"
+pause_on_samples = 1_000_000
 
 [evaluator]
 kind = "gammaloop"
@@ -41,6 +42,3 @@ max_batch_size = 10_000
 max_batches_per_tick = 128
 max_queue_size = 128
 completed_batch_fetch_limit = 128
-[sampler_aggregator_runner_params.stop_on]
-kind = "samples_at_least"
-samples = 1_000_000

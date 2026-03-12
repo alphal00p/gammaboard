@@ -63,15 +63,9 @@ const deriveSamplerRuntimeSummary = (workers, runId, latestSamplerEntry) => {
   const samplerMetrics = latestSamplerEntry?.metrics ?? samplerWorker?.sampler_metrics ?? null;
   const rolling = runtimeMetrics?.rolling || {};
   const remainingRatio = rollingMean(rolling.queue_remaining_ratio);
-  const targetQueueRemaining = Number(runtimeMetrics?.target_queue_remaining_ratio);
   return {
     current_batch_size: runtimeMetrics?.batch_size_current ?? null,
-    target_queue_remaining_ratio: Number.isFinite(targetQueueRemaining) ? targetQueueRemaining : null,
     actual_queue_remaining_ratio: remainingRatio,
-    queue_remaining_delta:
-      Number.isFinite(remainingRatio) && Number.isFinite(targetQueueRemaining)
-        ? remainingRatio - targetQueueRemaining
-        : null,
     actual_eval_ms_per_sample: rollingMean(rolling.eval_ms_per_sample),
     actual_eval_ms_per_batch: rollingMean(rolling.eval_ms_per_batch),
     produce_ms_per_sample: Number.isFinite(Number(samplerMetrics?.avg_produce_time_per_sample_ms))

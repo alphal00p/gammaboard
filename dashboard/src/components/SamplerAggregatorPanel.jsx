@@ -38,7 +38,6 @@ const SamplerAggregatorPanel = ({ run, stats, runtimeSummary = null }) => {
           : null,
       target_queue_remaining: Number.isFinite(Number(targetQueueRemaining)) ? Number(targetQueueRemaining) : null,
       actual_queue_remaining: runtimeSummary?.actual_queue_remaining_ratio ?? null,
-      queue_remaining_delta: runtimeSummary?.queue_remaining_delta ?? null,
       current_batch_size: runtimeSummary?.current_batch_size ?? null,
       eval_ms_per_sample: runtimeSummary?.actual_eval_ms_per_sample ?? null,
       produce_ms_per_sample: runtimeSummary?.produce_ms_per_sample ?? null,

@@ -76,6 +76,7 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
         worker.store.clone(),
         worker.store.clone(),
         spec.sampler_aggregator_runner_params.clone(),
+        spec.target_nr_samples,
         spec.point_spec.clone(),
     )
     .await

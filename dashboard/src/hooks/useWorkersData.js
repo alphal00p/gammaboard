@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { fetchWorkers } from "../services/api";
+import { fetchNodes } from "../services/api";
 import { usePolling } from "./usePolling";
 
 const formatTime = () => new Date().toLocaleTimeString();
@@ -13,7 +13,7 @@ export const useWorkersData = ({ runId = null, pollMs = 3000 } = {}) => {
   const poll = useCallback(
     async (signal) => {
       try {
-        const data = await fetchWorkers(runId, signal);
+        const data = await fetchNodes(runId, signal);
         setWorkers(Array.isArray(data) ? data : []);
         setError(null);
         setIsConnected(true);

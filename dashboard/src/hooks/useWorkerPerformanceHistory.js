@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { fetchWorkerEvaluatorPerformanceHistory, fetchWorkerSamplerPerformanceHistory } from "../services/api";
+import { fetchNodeEvaluatorPerformanceHistory, fetchNodeSamplerPerformanceHistory } from "../services/api";
 import { usePolling } from "./usePolling";
 
 const emptyResponse = Object.freeze({ run_id: null, entries: [] });
@@ -13,8 +13,8 @@ export const useWorkerPerformanceHistory = ({ workerId, role, limit = 200, pollM
       try {
         const payload =
           role === "evaluator"
-            ? await fetchWorkerEvaluatorPerformanceHistory(workerId, limit, signal)
-            : await fetchWorkerSamplerPerformanceHistory(workerId, limit, signal);
+            ? await fetchNodeEvaluatorPerformanceHistory(workerId, limit, signal)
+            : await fetchNodeSamplerPerformanceHistory(workerId, limit, signal);
         setData(payload || emptyResponse);
       } catch (err) {
         if (err?.name === "AbortError") return;

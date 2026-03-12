@@ -64,6 +64,7 @@ pub async fn run_run_commands(command: RunCommand, quiet: bool) -> Result<()> {
                 let run_id = store
                     .create_run(
                         &processed.name,
+                        processed.pause_on_samples,
                         &integration_params,
                         processed.target.as_ref(),
                         point_spec,
@@ -144,6 +145,13 @@ fn load_run_add_config(path: &PathBuf) -> Result<RunAddConfig> {
     if name.is_empty() {
         return Err(anyhow!(
             "invalid run name (`name`): expected non-empty string"
+        ));
+    }
+    if let Some(pause_on_samples) = parsed.pause_on_samples
+        && pause_on_samples <= 0
+    {
+        return Err(anyhow!(
+            "invalid pause_on_samples: expected positive integer when set"
         ));
     }
 

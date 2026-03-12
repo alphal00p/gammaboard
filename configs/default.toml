@@ -1,5 +1,6 @@
 # Shared defaults merged into every `control_plane run-add <config.toml>` payload.
 # `name` is intentionally omitted and must be provided per run.
+pause_on_samples = 10_000_000
 
 [evaluator]
 kind = "unit"
@@ -25,6 +26,3 @@ max_batch_size = 1024
 max_queue_size = 1024
 max_batches_per_tick = 8
 completed_batch_fetch_limit = 1024
-[sampler_aggregator_runner_params.stop_on]
-kind = "samples_at_least"
-samples = 10_000_000

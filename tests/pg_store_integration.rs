@@ -29,11 +29,23 @@ async fn claim_batch_requires_active_assignment() {
     };
     let node_id = unique_id("node");
 
-    let run_id: i32 =
-        sqlx::query_scalar("INSERT INTO runs (status) VALUES ('running') RETURNING id")
-            .fetch_one(store.pool())
-            .await
-            .expect("insert run");
+    let run_id: i32 = sqlx::query_scalar(
+        r#"
+        INSERT INTO runs (
+            name,
+            integration_params,
+            point_spec
+        ) VALUES (
+            'claim-batch-active',
+            '{}'::jsonb,
+            '{"continuous_dims":1,"discrete_dims":0}'::jsonb
+        )
+        RETURNING id
+        "#,
+    )
+    .fetch_one(store.pool())
+    .await
+    .expect("insert run");
 
     store.register_node(&node_id).await.expect("register node");
     store
@@ -71,11 +83,23 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
     };
     let node_id = unique_id("node");
 
-    let run_id: i32 =
-        sqlx::query_scalar("INSERT INTO runs (status) VALUES ('running') RETURNING id")
-            .fetch_one(store.pool())
-            .await
-            .expect("insert run");
+    let run_id: i32 = sqlx::query_scalar(
+        r#"
+        INSERT INTO runs (
+            name,
+            integration_params,
+            point_spec
+        ) VALUES (
+            'claim-batch-inactive',
+            '{}'::jsonb,
+            '{"continuous_dims":1,"discrete_dims":0}'::jsonb
+        )
+        RETURNING id
+        "#,
+    )
+    .fetch_one(store.pool())
+    .await
+    .expect("insert run");
 
     store.register_node(&node_id).await.expect("register node");
 
