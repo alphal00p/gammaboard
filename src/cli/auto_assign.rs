@@ -30,7 +30,6 @@ pub async fn run_auto_assign_command(args: AutoAssignArgs, quiet: bool) -> Resul
             .get_run_progress(args.run_id)
             .await?
             .ok_or_else(|| anyhow!("run {} not found", args.run_id))?;
-
         let free_nodes = store
             .list_nodes(None)
             .await?

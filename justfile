@@ -8,6 +8,10 @@ build:
 symlink-build:
     ln -sf "$(pwd)/target/dev-optim/gammaboard" "${HOME}/.cargo/bin/gammaboard"
 
+install-completions:
+    mkdir -p "${HOME}/.local/share/bash-completion/completions"
+    {{bin}} completion bash > "${HOME}/.local/share/bash-completion/completions/gammaboard"
+
 install:
     cargo install --path . --profile dev-optim --force
 

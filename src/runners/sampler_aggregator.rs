@@ -603,6 +603,14 @@ where
         Ok(())
     }
 
+    pub async fn stop_if_pause_target_already_reached(&mut self) -> Result<bool, RunnerError> {
+        if !self.pause_target_reached() {
+            return Ok(false);
+        }
+        self.maybe_stop_run_from_condition().await?;
+        Ok(true)
+    }
+
     fn pause_target_reached(&self) -> bool {
         self.target_nr_samples == Some(self.nr_completed_samples)
     }

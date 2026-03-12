@@ -32,11 +32,11 @@ Both `serve-*` commands load `.env`. The backend port is controlled by `GAMMABOA
 
 ### CLI completions and shortcut
 - `just build` also creates `~/.cargo/bin/gammaboard` as a symlink to the built binary so you can run `gammaboard ...` directly with the same command name your shell already resolves from Cargo's bin directory.
-- Generate shell completions with:
-  - `./target/dev-optim/gammaboard completion bash`
-  - `./target/dev-optim/gammaboard completion zsh`
-  - `./target/dev-optim/gammaboard completion fish`
-- The generated script can be sourced directly, or installed through your shell's normal completion directory.
+- Install bash completions locally with:
+  - `just install-completions`
+- That writes the generated bash completion script to:
+  - `~/.local/share/bash-completion/completions/gammaboard`
+- `gammaboard completion <shell>` still emits completion scripts to stdout for manual installs or non-bash shells.
 
 ### Live test flows
 - `just live-test-basic`
@@ -69,6 +69,7 @@ Useful lifecycle commands:
 
 `gammaboard node list` prints one row per node with `ID / Run / Role / Last Seen`. `run-node` registers the node immediately, so freshly started idle nodes appear with `Run = N/A` and `Role = None`.
 `gammaboard auto-assign <RUN_ID> [MAX_EVALUATORS]` assigns currently free nodes to the run. If the run does not yet have a sampler assignment, it assigns one sampler first and then up to `MAX_EVALUATORS` evaluators. For example, `gammaboard auto-assign 0 0` assigns only a sampler when needed, and `gammaboard auto-assign 0 2` assigns a sampler when needed and up to two evaluators.
+If a run has already reached `pause_on_samples`, assignments are still allowed, but the sampler-aggregator clears the run assignments and exits before its first tick.
 
 ## Configuration
 Run configuration is TOML and is deep-merged over `configs/default.toml` when you call `gammaboard run add <file.toml>`.

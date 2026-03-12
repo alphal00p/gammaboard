@@ -33,10 +33,12 @@ Use `README.md` for operator onboarding. Keep this file focused on architecture,
 - `gammaboard node list` is the node inventory view; it should print one row per node with `ID / Run / Role / Last Seen`. Inactive nodes should show `Run = N/A` and `Role = None`.
 - Desired assignment is node-level: each node may have at most one desired role/run assignment at a time, and `node assign` should replace any existing desired assignment on that node.
 - `node unassign` should clear the node's desired assignment without requiring a role.
+- Runs that have already reached `pause_on_samples` may still receive assignments, but the sampler-aggregator must clear the run assignments and exit before its first tick so no new work is produced.
 - Desired assignments may include many evaluators per run, but must allow at most one sampler-aggregator per run. Enforce that invariant in the database and surface a clear CLI/store error on violation.
 - Current assignments may include many evaluators per run, but must allow at most one current sampler-aggregator per run. Enforce that invariant in the database. Recovery from stale current sampler state is manual for now.
 - Local worker bootstrapping for manual/live-test flows should go through `just start <N>` so worker IDs stay sequential as `w-1` through `w-N`.
 - `gammaboard completion <shell>` should emit shell completion scripts to stdout; local build workflow also provides `~/.cargo/bin/gammaboard` as a symlink to the built binary so the latest local build can replace a Cargo-installed command in place.
+- The `just install-completions` helper currently installs bash completions only, writing to `~/.local/share/bash-completion/completions/gammaboard`.
 - Run pause is implemented by clearing desired assignments so `run-node` reconciles down cleanly.
 - Run lifecycle is derived from control-plane state; do not reintroduce a persisted `runs.status` column unless explicitly requested.
 - Sampler run-level sample accounting lives on `runs` as `target_nr_samples`, `nr_produced_samples`, and `nr_completed_samples`. The sampler runner keeps the live counters in memory, flushes them after each tick, and restores them from `runs` on resume.

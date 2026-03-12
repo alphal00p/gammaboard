@@ -28,8 +28,6 @@ const RunInfo = ({ run }) => {
   const hasTargetSamples = Number.isFinite(targetSamples);
   const hasProducedSamples = Number.isFinite(producedSamples);
   const hasCompletedSamples = Number.isFinite(completedSamples);
-  const completedBatches = Number(run.completed_batches ?? run.batches_completed);
-  const totalBatches = Number(run.total_batches);
 
   return (
     <Box sx={{ mb: 3 }}>
@@ -122,12 +120,6 @@ const RunInfo = ({ run }) => {
               </Typography>
               <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
                 completed_samples: {hasCompletedSamples ? completedSamples.toLocaleString() : "0"}
-              </Typography>
-              <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                completed_batches: {Number.isFinite(completedBatches) ? completedBatches.toLocaleString() : "0"}
-              </Typography>
-              <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                total_batches: {Number.isFinite(totalBatches) ? totalBatches.toLocaleString() : "0"}
               </Typography>
             </CardContent>
           </Card>

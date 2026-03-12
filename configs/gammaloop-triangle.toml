@@ -6,7 +6,7 @@ pause_on_samples = 1_000_000
 [evaluator]
 kind = "gammaloop"
 # Path to a pre-generated GammaLoop state folder containing model/process/integrand artifacts.
-state_folder = "/home/cedricsigrist/Workspace/repos/gammaloop/my_states/triangle"
+state_folder = "/home/cedricsigrist/Workspace/repos/gammaloop/my_triangle/state"
 # process_id = 0
 # integrand_name = "triangle"
 momentum_space = false

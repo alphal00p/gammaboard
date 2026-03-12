@@ -88,6 +88,20 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
         })?;
     }
 
+    if runner
+        .stop_if_pause_target_already_reached()
+        .await
+        .map_err(|err| StoreError::store(err.to_string()))?
+    {
+        if let Err(err) = runner.persist_snapshot().await {
+            warn!("failed to persist sampler-aggregator snapshot on early shutdown: {err}");
+        }
+        info!(
+            "sampler-aggregator run already satisfied pause target; cleared assignments before first tick"
+        );
+        return Ok(());
+    }
+
     let interval = Duration::from_millis(spec.sampler_aggregator_runner_params.min_poll_time_ms);
 
     loop {
