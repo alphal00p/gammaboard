@@ -143,13 +143,20 @@ impl HavanaSampler {
         }
     }
 
+    fn pending_training_sample_count(&self) -> usize {
+        self.pending_training_samples.iter().map(Vec::len).sum()
+    }
+
+    fn remaining_training_samples_to_produce(&self) -> usize {
+        self.stop_training_after_n_samples.saturating_sub(
+            self.samples_ingested
+                .saturating_add(self.pending_training_sample_count()),
+        )
+    }
+
     fn remaining_training_samples(&self) -> usize {
         self.stop_training_after_n_samples
             .saturating_sub(self.samples_ingested)
-    }
-
-    fn is_training_active(&self) -> bool {
-        self.samples_ingested < self.stop_training_after_n_samples
     }
 
     fn current_training_rate(&self) -> f64 {
@@ -275,15 +282,12 @@ impl SamplerAggregator for HavanaSampler {
         Ok(())
     }
 
-    fn is_training_active(&self) -> bool {
-        HavanaSampler::is_training_active(self)
-    }
-
-    fn get_max_samples(&self) -> Option<usize> {
-        if self.is_training_active() {
-            Some(self.remaining_training_samples())
-        } else {
+    fn training_samples_remaining(&self) -> Option<usize> {
+        let remaining = self.remaining_training_samples_to_produce();
+        if remaining == 0 {
             None
+        } else {
+            Some(remaining)
         }
     }
 
@@ -298,11 +302,10 @@ impl SamplerAggregator for HavanaSampler {
         &mut self,
         nr_samples: usize,
     ) -> Result<crate::Batch, crate::engines::EngineError> {
-        let should_train = self.is_training_active();
         let mut coords: Vec<f64> = Vec::with_capacity(nr_samples * self.continuous_dims);
         let mut weights: Vec<f64> = Vec::with_capacity(nr_samples);
 
-        if should_train {
+        if self.training_samples_remaining().is_some() {
             let mut samples = Vec::with_capacity(nr_samples);
             for _ in 0..nr_samples {
                 let mut sample = Sample::new();
@@ -463,5 +466,44 @@ mod tests {
         assert_eq!(state.samples_ingested, 5);
         assert_eq!(state.pending_training_samples.len(), 1);
         assert_eq!(state.rng.next_u64(), sampler.rng.next_u64());
+    }
+
+    #[test]
+    fn havana_limits_training_production_by_pending_samples() {
+        let point_spec = PointSpec {
+            continuous_dims: 2,
+            discrete_dims: 0,
+        };
+        let params = HavanaSamplerParams {
+            seed: 7,
+            bins: 8,
+            min_samples_for_update: 4,
+            samples_for_update: 16,
+            stop_training_after_n_samples: Some(8),
+            initial_training_rate: 0.1,
+            final_training_rate: 0.01,
+        };
+        let mut sampler = HavanaSampler::from_params_and_point_spec(params, &point_spec)
+            .expect("build havana sampler");
+
+        assert_eq!(sampler.training_samples_remaining(), Some(8));
+        let _ = sampler
+            .produce_batch(5)
+            .expect("produce first training batch");
+        assert_eq!(sampler.training_samples_remaining(), Some(3));
+        let _ = sampler
+            .produce_batch(3)
+            .expect("produce second training batch");
+        assert_eq!(sampler.training_samples_remaining(), None);
+
+        sampler
+            .ingest_training_weights(&[1.0, 2.0, 3.0, 4.0, 5.0])
+            .expect("ingest first batch");
+        assert_eq!(sampler.training_samples_remaining(), None);
+
+        sampler
+            .ingest_training_weights(&[1.0, 2.0, 3.0])
+            .expect("ingest second batch");
+        assert_eq!(sampler.training_samples_remaining(), None);
     }
 }

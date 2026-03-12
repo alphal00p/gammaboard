@@ -3,7 +3,7 @@ import App from "./App";
 
 jest.mock("./services/api", () => ({
   fetchRuns: jest.fn(async () => []),
-  fetchWorkers: jest.fn(async () => []),
+  fetchNodes: jest.fn(async () => []),
   fetchStats: jest.fn(async () => []),
   fetchAggregatedRange: jest.fn(async () => ({
     snapshots: [],
@@ -19,8 +19,8 @@ jest.mock("./services/api", () => ({
   fetchRun: jest.fn(async () => null),
   fetchEvaluatorPerformanceHistory: jest.fn(async () => []),
   fetchSamplerPerformanceHistory: jest.fn(async () => []),
-  fetchWorkerEvaluatorPerformanceHistory: jest.fn(async () => ({ run_id: null, entries: [] })),
-  fetchWorkerSamplerPerformanceHistory: jest.fn(async () => ({ run_id: null, entries: [] })),
+  fetchNodeEvaluatorPerformanceHistory: jest.fn(async () => ({ run_id: null, entries: [] })),
+  fetchNodeSamplerPerformanceHistory: jest.fn(async () => ({ run_id: null, entries: [] })),
 }));
 
 /**
@@ -46,7 +46,7 @@ describe("App Component", () => {
   test("renders mode tabs", () => {
     render(<App />);
     expect(screen.getByRole("tab", { name: /Runs/i })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /Workers/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Nodes/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Performance/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Logs/i })).toBeInTheDocument();
   });

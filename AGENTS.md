@@ -68,6 +68,7 @@ Use `README.md` for operator onboarding. Keep this file focused on architecture,
 - If an evaluator supports multiple observable semantics, that choice belongs in evaluator config via `observable_kind`.
 - Sampler-aggregator aggregation is `ObservableState` merge, not capability-style ingest.
 - Sampler-aggregators own any per-batch training correlation state internally; do not pass runner-managed batch context back into them.
+- If a sampler has a finite training budget, only the exact training-suite samples may be produced with `requires_training`; the runner must not enqueue extra training batches beyond that boundary.
 - The latest full aggregated observable should live on `runs.current_observable`.
 - Snapshot persistence should use each observable's reduced persistent payload, not the tagged runtime enum form.
 - Batch payloads in `batches.points` must stay compact and shape-stable:
@@ -79,7 +80,7 @@ Use `README.md` for operator onboarding. Keep this file focused on architecture,
 ## Logging and Read APIs
 - Runtime logs are persisted from tracing context through `RuntimeLogStore`.
 - SQL for runtime log persistence lives in the store/query layer, not in tracing setup.
-- Runtime log context should include `source`, `run_id`, `worker_id`, and `node_id` when available.
+- Runtime log context should include `source`, `run_id`, and `node_id` when available. Include `worker_id` only when a persisted history/log schema still requires that identifier name.
 - Set `GAMMABOARD_DISABLE_DB_LOGS=1` to disable DB log persistence.
 - DB log thresholds are configured with:
   - `GAMMABOARD_DB_LOG_LEVEL`
@@ -93,10 +94,10 @@ Use `README.md` for operator onboarding. Keep this file focused on architecture,
 - Read APIs should serialize `BIGINT` IDs as strings.
 - Run read payloads should expose `runs.point_spec` as `point_spec`.
 - Frontend run views should prefer persisted run/history state for finished runs; live worker state is only for currently active telemetry.
-- The `Workers` tab is for live worker registry state (assignment, heartbeat, role); historical performance belongs in a separate run+worker performance view.
+- The `Nodes` tab is for live node registry state (assignment, heartbeat, role); historical performance belongs in a separate run+node performance view.
 - The `Performance` tab should stay run-scoped and worker-scoped over persisted snapshot history; sampler produce and ingest timing should remain distinct views rather than a merged single timing metric.
 - In the `Runs` tab, sampler summary panels should emphasize targets, current runtime values, and current performance metrics. Low-signal tuning bounds belong in the JSON/config view rather than the primary summary card.
-- Run log reads should stay server-filtered and cursor-paged (`limit`, `worker_id`, `level`, `q`, `before_id`) with response `{ items, next_before_id, has_more_older }`.
+- Run log reads should stay server-filtered and cursor-paged (`limit`, `node_id`, `level`, `q`, `before_id`) with response `{ items, next_before_id, has_more_older }`.
 - The dashboard log viewer is view-only; prefer backend-driven pagination/filtering over rich client grid state.
 
 ## Schema Policy

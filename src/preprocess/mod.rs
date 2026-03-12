@@ -48,7 +48,7 @@ fn preflight_compatibility(
     parametrization.validate_point_spec(point_spec)?;
 
     // One-point dry-run through sampler -> parametrization -> evaluator.
-    let require_training_values = sampler_aggregator.is_training_active();
+    let require_training_values = sampler_aggregator.training_samples_remaining().is_some();
     let sample_batch = sampler_aggregator.produce_batch(1).map_err(|err| {
         BuildError::incompatible(format!(
             "preflight failed to produce sample batch with sampler {}: {err}",

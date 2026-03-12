@@ -50,10 +50,7 @@ pub trait SamplerAggregator: Send {
     fn get_init_metadata(&mut self) -> JsonValue {
         json!({})
     }
-    fn is_training_active(&self) -> bool {
-        true
-    }
-    fn get_max_samples(&self) -> Option<usize> {
+    fn training_samples_remaining(&self) -> Option<usize> {
         None
     }
     fn produce_batch(&mut self, nr_samples: usize) -> Result<Batch, EngineError>;

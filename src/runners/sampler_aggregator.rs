@@ -406,15 +406,16 @@ where
         } else {
             self.compute_produce_limit(pending_before_tick)
         };
+        let training_samples_remaining = self.engine.training_samples_remaining();
         let batch_plan = self.build_batch_plan(
             base_produce_limit,
-            self.max_samples_to_produce_this_tick(self.engine.get_max_samples())?,
+            self.max_samples_to_produce_this_tick(training_samples_remaining)?,
         );
 
         let mut produced = Vec::with_capacity(batch_plan.len());
         for nr_samples in batch_plan {
             let started = Instant::now();
-            let requires_training = self.engine.is_training_active();
+            let requires_training = training_samples_remaining.is_some();
             let batch = self
                 .engine
                 .produce_batch(nr_samples)
@@ -550,7 +551,7 @@ where
     }
 
     async fn try_mark_training_completed(&mut self) -> Result<(), RunnerError> {
-        if self.training_completion_marked || self.engine.is_training_active() {
+        if self.training_completion_marked || self.engine.training_samples_remaining().is_some() {
             return Ok(());
         }
         let _ = self

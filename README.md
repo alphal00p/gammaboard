@@ -8,7 +8,7 @@ Gammaboard runs distributed numerical integration jobs with PostgreSQL as the sh
 - `gammaboard run-node` reconciles one local process into one active role loop at a time: `evaluator` or `sampler_aggregator`.
 - Sampler failover is manual in the current model. If a node still holds the current sampler assignment for a run, another sampler node will not start for that run until the current assignment is cleared or replaced.
 - `gammaboard server` serves the dashboard read API.
-- The dashboard exposes `Runs`, `Workers`, `Performance`, and `Logs` tabs.
+- The dashboard exposes `Runs`, `Nodes`, `Performance`, and `Logs` tabs.
 
 ## Quick Start
 
@@ -123,6 +123,7 @@ Examples:
 - Evaluators claim batches, apply parametrization, evaluate them, and write back `BatchResult`.
 - `BatchResult` contains optional training values and a tagged observable payload.
 - Sampler-aggregators consume completed batches, merge observable state, ingest training values when needed, and delete consumed completed batches.
+- For adaptive samplers with a training cap, the runner must only mark the exact training-suite samples with `requires_training`; once that budget is exhausted, later batches are produced as non-training batches.
 - Sampler-aggregators own any per-batch training correlation state internally; the runner does not persist or return batch context.
 - The latest full runtime observable is stored on the run record as `current_observable`.
 - Run-level sample accounting lives directly on `runs` as `target_nr_samples`, `nr_produced_samples`, and `nr_completed_samples`.
@@ -156,23 +157,23 @@ Main read APIs:
 - `GET /api/runs/:id/aggregated/range`
 - `GET /api/runs/:id/performance/evaluator`
 - `GET /api/runs/:id/performance/sampler-aggregator`
-- `GET /api/workers`
-- `GET /api/workers/:id/performance/evaluator`
-- `GET /api/workers/:id/performance/sampler-aggregator`
+- `GET /api/nodes`
+- `GET /api/nodes/:id/performance/evaluator`
+- `GET /api/nodes/:id/performance/sampler-aggregator`
 
 Notes:
 - Aggregated history uses sampled range reads with explicit `latest` in the response.
-- Run logs are cursor-paged and server-filtered. `GET /api/runs/:id/logs` accepts `limit`, `worker_id`, `level`, `q`, and `before_id`, and returns `{ items, next_before_id, has_more_older }`.
+- Run logs are cursor-paged and server-filtered. `GET /api/runs/:id/logs` accepts `limit`, `node_id`, `level`, `q`, and `before_id`, and returns `{ items, next_before_id, has_more_older }`.
 - `BIGINT` identifiers are serialized as strings for frontend safety.
 - Observable payloads are tagged JSON, for example `kind = scalar` or `kind = complex`.
 - Run payloads from `GET /api/runs` and `GET /api/runs/:id` include `point_spec` from `runs.point_spec` and the latest full observable as `current_observable`.
-- Finished-run dashboard views should use persisted run/history data; live worker payloads are only for active telemetry.
-- The `Workers` tab shows live worker assignment/heartbeat/role state; historical evaluator/sampler performance is viewed separately by run and worker.
-- The `Performance` tab is run-scoped and worker-scoped, using persisted snapshots. For sampler-aggregators, produce and ingest timing are shown separately, with latest-snapshot summary cards below the charts.
+- Finished-run dashboard views should use persisted run/history data; live node payloads are only for active telemetry.
+- The `Nodes` tab shows live node assignment/heartbeat/role state; historical evaluator/sampler performance is viewed separately by run and node.
+- The `Performance` tab is run-scoped and node-scoped, using persisted snapshots. For sampler-aggregators, produce and ingest timing are shown separately, with latest-snapshot summary cards below the charts.
 - In the `Runs` tab, the sampler panel should prioritize target-vs-actual runtime values and current performance metrics; low-level runner bounds remain available in the JSON view instead of the summary card.
 
 Dashboard behavior:
-- Worker data is polled once at the app level and shared across the `Runs`, `Workers`, and `Logs` tabs.
+- Node data is polled once at the app level and shared across the `Runs`, `Nodes`, and `Logs` tabs.
 - The `Logs` tab is intentionally view-only with server-side filters and `Load older` pagination instead of client-side pause/buffer/grid state.
 
 ## Development

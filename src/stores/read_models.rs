@@ -85,7 +85,7 @@ pub struct WorkerLogEntry {
     pub fields: serde_json::Value,
 }
 
-/// Cursor-paged worker log response for dashboard browsing.
+/// Cursor-paged runtime log response for dashboard browsing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerLogPage {
     pub items: Vec<WorkerLogEntry>,
@@ -93,7 +93,7 @@ pub struct WorkerLogPage {
     pub has_more_older: bool,
 }
 
-/// Registered node snapshot exposed through the legacy `/workers` read endpoint.
+/// Registered node snapshot exposed through the `/nodes` read endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisteredWorkerEntry {
     pub worker_id: String,

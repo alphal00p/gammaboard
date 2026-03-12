@@ -12,6 +12,7 @@ pub struct NaiveMonteCarloSamplerAggregator {
     training_target_samples: usize,
     training_delay_per_sample_ms: u64,
     trained_samples: usize,
+    pending_training_samples: usize,
     nr_batches: i64,
     nr_samples: i64,
     sum: f64,
@@ -30,6 +31,7 @@ impl NaiveMonteCarloSamplerAggregator {
             training_target_samples,
             training_delay_per_sample_ms,
             trained_samples: 0,
+            pending_training_samples: 0,
             nr_batches: 0,
             nr_samples: 0,
             sum: 0.0,
@@ -93,17 +95,15 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
         Ok(())
     }
 
-    fn is_training_active(&self) -> bool {
-        self.training_target_samples == 0 || self.trained_samples < self.training_target_samples
-    }
-
-    fn get_max_samples(&self) -> Option<usize> {
+    fn training_samples_remaining(&self) -> Option<usize> {
         if self.training_target_samples == 0 {
             None
         } else {
             Some(
-                self.training_target_samples
-                    .saturating_sub(self.trained_samples),
+                self.training_target_samples.saturating_sub(
+                    self.trained_samples
+                        .saturating_add(self.pending_training_samples),
+                ),
             )
         }
     }
@@ -136,6 +136,16 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
             discrete_data,
         )
         .map_err(|err| EngineError::engine(err.to_string()))?;
+        if self.training_target_samples > 0 {
+            let reserved = self
+                .training_target_samples
+                .saturating_sub(
+                    self.trained_samples
+                        .saturating_add(self.pending_training_samples),
+                )
+                .min(nr_samples);
+            self.pending_training_samples = self.pending_training_samples.saturating_add(reserved);
+        }
         Ok(batch)
     }
 
@@ -160,6 +170,9 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
             }
         }
         self.trained_samples = self.trained_samples.saturating_add(accepted);
+        self.pending_training_samples = self
+            .pending_training_samples
+            .saturating_sub(training_weights.len());
         Ok(())
     }
 }
