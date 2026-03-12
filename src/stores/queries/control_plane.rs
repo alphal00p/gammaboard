@@ -211,8 +211,8 @@ pub(crate) async fn list_nodes(
             n.node_id,
             n.desired_role,
             n.desired_run_id,
-            n.current_role,
-            n.current_run_id,
+            n.active_role AS current_role,
+            n.active_run_id AS current_run_id,
             n.last_seen
         FROM nodes n
         WHERE ($1::text IS NULL OR n.node_id = $1)
@@ -250,8 +250,8 @@ pub(crate) async fn set_current_assignment(
         r#"
         UPDATE nodes
         SET
-            current_run_id = $2,
-            current_role = $3,
+            active_run_id = $2,
+            active_role = $3,
             updated_at = now()
         WHERE node_id = $1
         "#,
@@ -272,8 +272,8 @@ pub(crate) async fn clear_current_assignment(
         r#"
         UPDATE nodes
         SET
-            current_run_id = NULL,
-            current_role = NULL,
+            active_run_id = NULL,
+            active_role = NULL,
             updated_at = now()
         WHERE node_id = $1
         "#,

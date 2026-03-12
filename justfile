@@ -15,6 +15,9 @@ install:
 check:
     cargo check --no-default-features --features 'cli,no_pyo3'
 
+test-e2e:
+    cargo test -q --test full_stack_cli -- --ignored --nocapture
+
 stop-db:
     docker-compose down
 

@@ -272,3 +272,60 @@ async fn assigning_new_role_replaces_existing_desired_assignment_for_node() {
         .await
         .expect("cleanup runs");
 }
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn sampler_aggregator_current_assignment_is_unique_per_run() {
+    let Some(store) = test_store().await else {
+        return;
+    };
+    let node_a = unique_id("node-a");
+    let node_b = unique_id("node-b");
+
+    let run_id: i32 = sqlx::query_scalar(
+        r#"
+        INSERT INTO runs (
+            name,
+            integration_params,
+            point_spec
+        ) VALUES (
+            'test-run-current-sampler',
+            '{}'::jsonb,
+            '{"continuous_dims":0,"discrete_dims":0}'::jsonb
+        )
+        RETURNING id
+        "#,
+    )
+    .fetch_one(store.pool())
+    .await
+    .expect("insert run");
+
+    store.register_node(&node_a).await.expect("register node a");
+    store.register_node(&node_b).await.expect("register node b");
+
+    store
+        .set_current_assignment(&node_a, WorkerRole::SamplerAggregator, run_id)
+        .await
+        .expect("set current sampler on node a");
+
+    let err = store
+        .set_current_assignment(&node_b, WorkerRole::SamplerAggregator, run_id)
+        .await
+        .expect_err("second current sampler should fail");
+
+    match err {
+        StoreError::InvalidInput(message) => {
+            assert!(
+                message.contains("current sampler_aggregator"),
+                "unexpected error message: {message}"
+            );
+        }
+        other => panic!("expected invalid input, got {other}"),
+    }
+
+    sqlx::query("DELETE FROM runs WHERE id = $1")
+        .bind(run_id)
+        .execute(store.pool())
+        .await
+        .expect("cleanup run");
+}

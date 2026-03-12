@@ -32,6 +32,7 @@ Use `README.md` for operator onboarding. Keep this file focused on architecture,
 - Desired assignment is node-level: each node may have at most one desired role/run assignment at a time, and `node assign` should replace any existing desired assignment on that node.
 - `node unassign` should clear the node's desired assignment without requiring a role.
 - Desired assignments may include many evaluators per run, but must allow at most one sampler-aggregator per run. Enforce that invariant in the database and surface a clear CLI/store error on violation.
+- Current assignments may include many evaluators per run, but must allow at most one current sampler-aggregator per run. Enforce that invariant in the database. Recovery from stale current sampler state is manual for now.
 - Local worker bootstrapping for manual/live-test flows should go through `just start <N>` so worker IDs stay sequential as `w-1` through `w-N`.
 - `gammaboard completion <shell>` should emit shell completion scripts to stdout; local build workflow also provides `~/.cargo/bin/gammaboard` as a symlink to the built binary so the latest local build can replace a Cargo-installed command in place.
 - Run pause is implemented by clearing desired assignments so `run-node` reconciles down cleanly.
@@ -43,7 +44,7 @@ Use `README.md` for operator onboarding. Keep this file focused on architecture,
 - `run-node` must stop the old role before starting a new one.
 - Role start failures are capped per desired target; after the cap is hit, retries stay disabled until desired assignment changes.
 - Nodes register and heartbeat through the `nodes` table even when idle so node inventory is visible before any role assignment.
-- Desired and current node assignments live directly on `nodes`, with `(desired_run_id, desired_role)` and `(current_run_id, current_role)` required to be both null or both set.
+- Desired and current node assignments live directly on `nodes`, with `(desired_run_id, desired_role)` and `(active_run_id, active_role)` required to be both null or both set.
 - Node shutdown is a one-shot signal read from `nodes.shutdown_requested_at`.
 - Local serve contract:
   - backend port env var is `GAMMABOARD_BACKEND_PORT`
@@ -104,6 +105,7 @@ Use `README.md` for operator onboarding. Keep this file focused on architecture,
 - `cargo fmt`
 - `cargo check -q`
 - `cargo test -q`
+- `just test-e2e` for the ignored full-stack CLI flow when validating end-to-end behavior against a real local Postgres instance
 
 ## Documentation Rule
 If you change structure, operations, CLI behavior, config schema, or runtime behavior, update `README.md` and `AGENTS.md` in the same change.

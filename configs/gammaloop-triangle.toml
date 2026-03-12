@@ -37,7 +37,6 @@ min_poll_time_ms = 50
 performance_snapshot_interval_ms = 2000
 target_batch_eval_ms = 200.0
 target_queue_remaining = 0.8
-lease_ttl_ms = 5000
 max_batch_size = 10_000
 max_batches_per_tick = 128
 max_queue_size = 128

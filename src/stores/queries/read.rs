@@ -275,10 +275,10 @@ const RUN_ASSIGNMENT_STATS_SUBQUERY: &str = r#"
         GROUP BY desired_run_id
     ) da ON r.id = da.run_id
     LEFT JOIN (
-        SELECT current_run_id AS run_id, COUNT(*) AS active_worker_count
+        SELECT active_run_id AS run_id, COUNT(*) AS active_worker_count
         FROM nodes
-        WHERE current_run_id IS NOT NULL
-        GROUP BY current_run_id
+        WHERE active_run_id IS NOT NULL
+        GROUP BY active_run_id
     ) aw ON r.id = aw.run_id
 "#;
 
@@ -652,13 +652,13 @@ pub(crate) async fn get_registered_workers(
             n.node_id,
             n.desired_run_id,
             n.desired_role,
-            n.current_run_id,
-            n.current_role,
-            COALESCE(n.current_role, n.desired_role, 'none') AS role,
+            n.active_run_id AS current_run_id,
+            n.active_role AS current_role,
+            COALESCE(n.active_role, n.desired_role, 'none') AS role,
             'run_node' AS implementation,
             'node' AS version,
             CASE
-                WHEN n.current_role IS NOT NULL THEN 'active'
+                WHEN n.active_role IS NOT NULL THEN 'active'
                 ELSE 'inactive'
             END AS status,
             n.last_seen,
@@ -668,18 +668,15 @@ pub(crate) async fn get_registered_workers(
             p.engine_diagnostics AS sampler_engine_diagnostics
         FROM nodes n
         LEFT JOIN sampler_aggregator_performance_latest p
-            ON p.run_id = COALESCE($1, n.current_run_id, n.desired_run_id)
+            ON p.run_id = COALESCE($1, n.active_run_id, n.desired_run_id)
            AND p.worker_id = n.node_id
         LEFT JOIN evaluator_performance_latest e
-            ON e.run_id = COALESCE($1, n.current_run_id, n.desired_run_id)
+            ON e.run_id = COALESCE($1, n.active_run_id, n.desired_run_id)
            AND e.worker_id = n.node_id
-        WHERE ($1::int IS NULL OR n.desired_run_id = $1 OR n.current_run_id = $1)
+        WHERE ($1::int IS NULL OR n.desired_run_id = $1 OR n.active_run_id = $1)
         ORDER BY
             CASE
-                WHEN n.current_role IS NOT NULL THEN 'active'
-                ELSE 'inactive'
-            END
-                WHEN 'active' THEN 0
+                WHEN n.active_role IS NOT NULL THEN 0
                 ELSE 1
             END,
             n.last_seen DESC NULLS LAST,

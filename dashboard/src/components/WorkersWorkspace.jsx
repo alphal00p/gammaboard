@@ -20,6 +20,9 @@ import { formatDateTime } from "../utils/formatters";
 const WorkersWorkspace = ({ workers, isConnected, lastUpdate, error }) => {
   const [selectedWorkerId, setSelectedWorkerId] = useState(null);
 
+  const displayRole = (worker) => worker.current_role || "None";
+  const displayRun = (worker) => (worker.current_role ? (worker.current_run_id ?? "N/A") : "N/A");
+
   useEffect(() => {
     if (workers.length === 0) {
       setSelectedWorkerId(null);
@@ -87,11 +90,8 @@ const WorkersWorkspace = ({ workers, isConnected, lastUpdate, error }) => {
                 <TableHead>
                   <TableRow>
                     <TableCell>Node ID</TableCell>
-                    <TableCell>Current Role</TableCell>
-                    <TableCell>Current Run</TableCell>
-                    <TableCell>Desired Role</TableCell>
-                    <TableCell>Desired Run</TableCell>
-                    <TableCell>Status</TableCell>
+                    <TableCell>Run</TableCell>
+                    <TableCell>Role</TableCell>
                     <TableCell>Last Seen</TableCell>
                   </TableRow>
                 </TableHead>
@@ -112,11 +112,8 @@ const WorkersWorkspace = ({ workers, isConnected, lastUpdate, error }) => {
                         }}
                       >
                         <TableCell>{worker.worker_id || "unknown"}</TableCell>
-                        <TableCell>{worker.current_role || "None"}</TableCell>
-                        <TableCell>{worker.current_run_id ?? "N/A"}</TableCell>
-                        <TableCell>{worker.desired_role || "None"}</TableCell>
-                        <TableCell>{worker.desired_run_id ?? "N/A"}</TableCell>
-                        <TableCell>{worker.status || "unknown"}</TableCell>
+                        <TableCell>{displayRun(worker)}</TableCell>
+                        <TableCell>{displayRole(worker)}</TableCell>
                         <TableCell>{formatDateTime(worker.last_seen, "-")}</TableCell>
                       </TableRow>
                     );

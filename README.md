@@ -6,6 +6,7 @@ Gammaboard runs distributed numerical integration jobs with PostgreSQL as the sh
 - `gammaboard run` manages run creation, pause, and removal.
 - `gammaboard node` manages desired worker assignments.
 - `gammaboard run-node` reconciles one local process into one active role loop at a time: `evaluator` or `sampler_aggregator`.
+- Sampler failover is manual in the current model. If a node still holds the current sampler assignment for a run, another sampler node will not start for that run until the current assignment is cleared or replaced.
 - `gammaboard server` serves the dashboard read API.
 - The dashboard exposes `Runs`, `Workers`, `Performance`, and `Logs` tabs.
 
@@ -184,6 +185,7 @@ Dashboard behavior:
   - `cargo fmt`
   - `cargo check -q`
   - `cargo test -q`
+  - `just test-e2e` for the ignored full-stack CLI integration test against a real local Postgres
 - Frontend:
   - `npm --prefix dashboard test -- --watch=false`
   - `npm --prefix dashboard run build`

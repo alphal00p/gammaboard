@@ -33,6 +33,11 @@ tempfile = "3"
 anyhow = "1"
 comfy-table = "7"
 
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+url = "2"
+
 [profile.dev-optim]
 inherits = "dev"
 opt-level = 2

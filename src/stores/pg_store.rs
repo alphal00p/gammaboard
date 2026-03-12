@@ -10,7 +10,6 @@ use crate::core::{Batch, BatchResult, PointSpec};
 use crate::engines::{IntegrationParams, RunSpec};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
-use std::time::Duration;
 
 #[derive(Clone)]
 pub struct PgStore {
@@ -768,7 +767,6 @@ mod tests {
                     "performance_snapshot_interval_ms": 5000,
                     "target_batch_eval_ms": 200.0,
                     "target_queue_remaining": 0.0,
-                    "lease_ttl_ms": 5000,
                     "max_batch_size": 64,
                     "max_queue_size": 128,
                     "max_batches_per_tick": 1,
@@ -818,7 +816,6 @@ mod tests {
                 "performance_snapshot_interval_ms": 5000,
                 "target_batch_eval_ms": 200.0,
                 "target_queue_remaining": 0.0,
-                "lease_ttl_ms": 5000,
                 "max_batch_size": 64,
                 "max_queue_size": 128,
                 "max_batches_per_tick": 1,

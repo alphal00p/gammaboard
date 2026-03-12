@@ -73,8 +73,8 @@ pub(crate) async fn claim_batch(
                   SELECT 1
                   FROM nodes n
                   WHERE n.node_id = $1
-                    AND n.current_run_id = $2
-                    AND n.current_role = 'evaluator'
+                    AND n.active_run_id = $2
+                    AND n.active_role = 'evaluator'
               )
             ORDER BY created_at
             LIMIT 1
