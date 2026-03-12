@@ -127,6 +127,7 @@
           virtualenv
           postgresql
           sqlx-cli
+          nodejs
           (pkgs.rustPlatform.buildRustPackage rec {
             pname = "clinnet";
             version = "0.1.8";

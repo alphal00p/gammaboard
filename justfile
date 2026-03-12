@@ -65,7 +65,7 @@ live-test-basic:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    just restart-db
+    just db-reset
     just start 8
 
     sleep 4
@@ -103,8 +103,8 @@ live-test-basic:
 live-test-gammaloop:
     #!/usr/bin/env bash
     set -euo pipefail
-
-    just restart-db
+    
+    just db-reset
     {{bin}} run-node --node-id "w-0" --poll-ms {{ poll_ms }} &
     just start 2
 
