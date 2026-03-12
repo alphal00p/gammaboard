@@ -17,7 +17,7 @@ export const useWorkerLogs = ({ runId, workers = [], limit = 100 } = {}) => {
 
   const workerOptions = useMemo(() => {
     const runWorkers = (Array.isArray(workers) ? workers : []).filter(
-      (worker) => runId == null || worker.desired_run_id === runId,
+      (worker) => runId == null || worker.current_run_id === runId || worker.desired_run_id === runId,
     );
     return runWorkers
       .map((worker) => worker.worker_id)

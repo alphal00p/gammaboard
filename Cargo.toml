@@ -9,8 +9,7 @@ gammaloop_api = { package = "gammaloop-api", path = "../gammaloop/crates/gammalo
 tokio = { version = "1.46", features = ["full"] }
 sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-native-tls", "chrono", "macros"] }
 dotenvy = "0.15"
-rand = "0.8"
-rand09 = { package = "rand", version = "0.9" }
+rand = { package = "rand", version = "0.9" }
 rand_xoshiro = { version = "0.7", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -20,6 +19,7 @@ futures-core = "0.3"
 tower = "0.5"
 tower-http = { version = "0.5", features = ["fs", "cors"] }
 clap = { version = "4.5", features = ["derive"] }
+clap_complete = "4.5"
 toml = "0.8"
 async-trait = "0.1"
 thiserror = "2.0"
@@ -31,6 +31,7 @@ strum = { version = "0.27", features = ["derive"] }
 num = "0.4.3"
 tempfile = "3"
 anyhow = "1"
+comfy-table = "7"
 
 [profile.dev-optim]
 inherits = "dev"
@@ -42,33 +43,12 @@ crate-type = ["rlib"]
 
 
 [patch.crates-io]
-graphica = { git = "https://github.com/benruijl/symbolica", branch = "dev" }
-idenso = { git = "https://github.com/alphal00p/spenso", rev = "c052f22dc98a18535e114eede758674befc2758f" }
-linnet = { git = "https://github.com/alphal00p/linnet", rev = "406272c24bcb5bde5551d7d29620459e0671c82e" }
-# graphica = { path = "../../symbolica/lib/graphica" }
-# vakint={git="https://github.com/alphal00p/vakint",rev="10ffd4e8559696b1dc79b21ef3e700caac663aa8"}
-# symbolica = { git = "https://github.com/alphal00p/symbolica", rev = "a23ebaa71b1bc715a129ac765764ece7273625dc" }
-# symbolica = { path = "../symbolica" }
-# linnet = "0.10.0"
-numerica = { git = "https://github.com/benruijl/symbolica", branch = "dev" }
-spenso = { git = "https://github.com/alphal00p/spenso", rev = "c052f22dc98a18535e114eede758674befc2758f" }
-spenso-hep-lib = { git = "https://github.com/alphal00p/spenso", rev = "c052f22dc98a18535e114eede758674befc2758f" }
-spenso-macros = { git = "https://github.com/alphal00p/spenso", rev = "c052f22dc98a18535e114eede758674befc2758f" }
-# numerica = { path = "../../symbolica/lib/numerica" }
-# symbolica = { git = "https://github.com/benruijl/symbolica", branch = "dev" }
-# symbolica = { version = "1.2.1", default-features = false, features = [
-#    "serde",
-#    "bincode",
-# ] }
-# spenso-macros = { path = "../spenso/spenso-macros" }
-symbolica = { git = "https://github.com/benruijl/symbolica", branch = "dev" }
-vakint = { git = "https://github.com/alphal00p/vakint", rev = "bf91ee57aa62604c7ae3fb919203bf6f09544470" }
-
-# spenso = { git = "https://github.com/alphal00p/spenso", rev = "5e1c358e11b131ecd0d83da4453ad4cc28983165" }
-# spenso={path="../../spenso/spenso"}
-# idenso = { git = "https://github.com/alphal00p/spenso", rev = "5e1c358e11b131ecd0d83da4453ad4cc28983165" }
-# idenso={path="../../spenso/idenso"}
-# spenso-hep-lib = {git = "https://github.com/alphal00p/spenso",rev="5e1c358e11b131ecd0d83da4453ad4cc28983165"}
-# {path="../spenso/spenso-hep-lib"}
-# symbolica-community={path="../symbolica-community"}
-# linnet = { git = "https://github.com/alphal00p/linnet", rev = "d72588ecbea39c6df3fdde9ffa4e4f3575f93542" }
+#graphica = { git = "https://github.com/benruijl/symbolica", branch = "dev" }
+#idenso = { git = "https://github.com/alphal00p/spenso", rev = "c052f22dc98a18535e114eede758674befc2758f" }
+#linnet = { git = "https://github.com/alphal00p/linnet", rev = "406272c24bcb5bde5551d7d29620459e0671c82e" }
+#numerica = { git = "https://github.com/benruijl/symbolica", branch = "dev" }
+#spenso = { git = "https://github.com/alphal00p/spenso", rev = "c052f22dc98a18535e114eede758674befc2758f" }
+#spenso-hep-lib = { git = "https://github.com/alphal00p/spenso", rev = "c052f22dc98a18535e114eede758674befc2758f" }
+#spenso-macros = { git = "https://github.com/alphal00p/spenso", rev = "c052f22dc98a18535e114eede758674befc2758f" }
+#symbolica = { git = "https://github.com/benruijl/symbolica", branch = "dev" }
+#vakint = { git = "https://github.com/alphal00p/vakint", rev = "bf91ee57aa62604c7ae3fb919203bf6f09544470" }

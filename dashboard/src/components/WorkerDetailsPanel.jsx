@@ -47,13 +47,20 @@ const fmtDiagnosticValue = (value) => {
 
 const workerHasAssignedRun = (worker) => worker?.desired_run_id != null;
 const workerIsInactive = (worker) => String(worker?.status || "").toLowerCase() === "inactive";
+const currentRole = (worker) => worker?.current_role ?? null;
+const currentRunId = (worker) => worker?.current_run_id ?? null;
+const desiredRole = (worker) => worker?.desired_role ?? null;
+const desiredRunId = (worker) => worker?.desired_run_id ?? null;
 
 const unavailableMetricsMessage = (worker, roleLabel) => {
-  if (!workerHasAssignedRun(worker)) {
-    return `No run is currently assigned to this ${roleLabel} worker. Metrics will appear after assignment.`;
+  if (currentRole(worker) == null || currentRunId(worker) == null) {
+    if (!workerHasAssignedRun(worker)) {
+      return `No run is currently assigned to this ${roleLabel} node. Metrics will appear after assignment.`;
+    }
+    return `This ${roleLabel} node is assigned but not currently active. Metrics will appear after the role starts.`;
   }
   if (workerIsInactive(worker)) {
-    return `This ${roleLabel} worker is inactive. Metrics will appear when the worker becomes active again.`;
+    return `This ${roleLabel} node is inactive. Metrics will appear when the node becomes active again.`;
   }
   return null;
 };
@@ -75,22 +82,22 @@ const WorkerOverviewPanel = ({ worker }) => (
   <Card variant="outlined" sx={{ mb: 2 }}>
     <CardContent>
       <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
-        Worker Overview
+        Node Overview
       </Typography>
       <Grid container spacing={2}>
         <Grid item xs={12} sm={6} md={3}>
           <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
-            worker_id
+            node_id
           </Typography>
           <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-            {worker.worker_id}
+            {worker.node_id || worker.worker_id}
           </Typography>
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
-            role
+            current_role
           </Typography>
-          <Typography variant="body2">{worker.role || "unknown"}</Typography>
+          <Typography variant="body2">{currentRole(worker) || "None"}</Typography>
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
@@ -107,15 +114,21 @@ const WorkerOverviewPanel = ({ worker }) => (
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
-            node
+            current_run_id
           </Typography>
-          <Typography variant="body2">{worker.node_id || "n/a"}</Typography>
+          <Typography variant="body2">{currentRunId(worker) ?? "N/A"}</Typography>
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
-            run_id
+            desired_role
           </Typography>
-          <Typography variant="body2">{worker.desired_run_id ?? "n/a"}</Typography>
+          <Typography variant="body2">{desiredRole(worker) || "None"}</Typography>
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+            desired_run_id
+          </Typography>
+          <Typography variant="body2">{desiredRunId(worker) ?? "N/A"}</Typography>
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
@@ -440,7 +453,7 @@ const SamplerDiagnosticsCustomPanel = ({ worker }) => {
             Sampler Diagnostics
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            No sampler_aggregator worker is currently registered.
+            No sampler_aggregator node is currently active.
           </Typography>
         </CardContent>
       </Card>
@@ -465,11 +478,11 @@ const WorkerDetailsPanel = ({ worker }) => {
     <>
       <WorkerOverviewPanel worker={worker} />
 
-      {worker.role === "evaluator" ? (
+      {currentRole(worker) === "evaluator" ? (
         <>
           <EvaluatorMetricsPanel worker={worker} />
         </>
-      ) : worker.role === "sampler_aggregator" ? (
+      ) : currentRole(worker) === "sampler_aggregator" ? (
         <>
           <SamplerMetricsPanel worker={worker} />
           <SamplerRuntimePanel worker={worker} />
@@ -477,7 +490,7 @@ const WorkerDetailsPanel = ({ worker }) => {
           <JsonFallback
             title="sampler diagnostics JSON"
             data={{
-              worker_id: worker.worker_id ?? null,
+              node_id: worker.node_id ?? worker.worker_id ?? null,
               implementation: worker.implementation ?? null,
               runtime_metrics: worker.sampler_runtime_metrics ?? null,
               engine_diagnostics: worker.sampler_engine_diagnostics ?? null,
@@ -486,12 +499,12 @@ const WorkerDetailsPanel = ({ worker }) => {
         </>
       ) : (
         <Alert severity="info" sx={{ mb: 2 }}>
-          No role-specific panels available for this worker.
+          No role-specific panels are available for this node while it is idle.
         </Alert>
       )}
 
       <Box sx={{ mt: 2 }}>
-        <JsonFallback title="worker JSON" data={worker} />
+        <JsonFallback title="node JSON" data={worker} />
       </Box>
     </>
   );

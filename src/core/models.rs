@@ -88,21 +88,20 @@ pub struct Worker {
     pub last_seen: Option<DateTime<Utc>>,
 }
 
-/// Assignment lease for a run/worker pairing.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AssignmentLease {
-    pub run_id: i32,
-    pub role: WorkerRole,
-    pub worker_id: String,
-    pub lease_expires_at: DateTime<Utc>,
-}
-
 /// Desired node-level role assignment managed by the control plane.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesiredAssignment {
     pub node_id: String,
     pub role: WorkerRole,
     pub run_id: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisteredNode {
+    pub node_id: String,
+    pub desired_assignment: Option<DesiredAssignment>,
+    pub current_assignment: Option<DesiredAssignment>,
+    pub last_seen: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone)]
@@ -212,14 +211,14 @@ impl SamplerRuntimeMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvaluatorPerformanceSnapshot {
     pub run_id: i32,
-    pub worker_id: String,
+    pub node_id: String,
     pub metrics: EvaluatorPerformanceMetrics,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SamplerAggregatorPerformanceSnapshot {
     pub run_id: i32,
-    pub worker_id: String,
+    pub node_id: String,
     pub runtime_metrics: SamplerRuntimeMetrics,
     pub engine_diagnostics: JsonValue,
 }

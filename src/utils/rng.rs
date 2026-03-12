@@ -1,5 +1,5 @@
+use rand::{RngCore, SeedableRng};
 use rand_xoshiro::Xoshiro256StarStar;
-use rand09::{RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

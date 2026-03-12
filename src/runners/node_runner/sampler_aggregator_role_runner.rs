@@ -62,15 +62,14 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
         StoreError::store(format!("failed to initialize observable state: {err}"))
     })?;
 
-    worker
-        .register_active_worker(spec.sampler_aggregator.kind_str())
-        .await?;
+    let _ = spec.sampler_aggregator.kind_str();
+    worker.mark_active_with_log().await?;
 
     info!("sampler-aggregator worker started");
 
     let mut runner = SamplerAggregatorRunner::new(
         worker.run_id,
-        worker.worker_id.clone(),
+        worker.node_id.clone(),
         engine,
         aggregated_observable,
         worker.store.clone(),
@@ -88,9 +87,7 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
         })?;
     }
 
-    let lease_ttl = Duration::from_millis(spec.sampler_aggregator_runner_params.lease_ttl_ms);
     let interval = Duration::from_millis(spec.sampler_aggregator_runner_params.min_poll_time_ms);
-    let mut owns_lease = false;
 
     loop {
         if *stop_rx.borrow() {
@@ -99,31 +96,9 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
 
         worker.heartbeat_with_log().await;
 
-        let lease_result = if owns_lease {
-            worker
-                .store
-                .renew_sampler_aggregator_lease(worker.run_id, &worker.worker_id, lease_ttl)
-                .await
-        } else {
-            worker
-                .store
-                .acquire_sampler_aggregator_lease(worker.run_id, &worker.worker_id, lease_ttl)
-                .await
-        };
-
-        match lease_result {
-            Ok(has_lease) => owns_lease = has_lease,
-            Err(err) => {
-                warn!("lease operation failed: {err}");
-                owns_lease = false;
-            }
-        }
-
-        if owns_lease {
-            match runner.tick().instrument(engine_span.clone()).await {
-                Ok(_) => {}
-                Err(err) => warn!("sampler-aggregator tick failed: {err}"),
-            }
+        match runner.tick().instrument(engine_span.clone()).await {
+            Ok(_) => {}
+            Err(err) => warn!("sampler-aggregator tick failed: {err}"),
         }
 
         tokio::select! {
@@ -134,15 +109,6 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
 
     if let Err(err) = runner.persist_snapshot().await {
         warn!("failed to persist sampler-aggregator snapshot on shutdown: {err}");
-    }
-
-    if owns_lease
-        && let Err(err) = worker
-            .store
-            .release_sampler_aggregator_lease(worker.run_id, &worker.worker_id)
-            .await
-    {
-        warn!("failed to release sampler-aggregator lease: {err}");
     }
 
     worker.mark_inactive_with_log().await;

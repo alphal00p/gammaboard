@@ -40,19 +40,14 @@ pub(crate) async fn run_evaluator_role<S: NodeRunnerStore>(
         (evaluator, parametrization)
     };
 
-    worker
-        .register_active_worker(spec.evaluator.kind_str())
-        .await?;
-    worker
-        .store
-        .assign_evaluator(worker.run_id, &worker.worker_id)
-        .await?;
+    let _ = spec.evaluator.kind_str();
+    worker.mark_active_with_log().await?;
 
     info!("evaluator worker started");
 
     let mut runner = EvaluatorRunner::new(
         worker.run_id,
-        worker.worker_id.clone(),
+        worker.node_id.clone(),
         evaluator,
         parametrization,
         spec.point_spec.clone(),
@@ -91,14 +86,6 @@ pub(crate) async fn run_evaluator_role<S: NodeRunnerStore>(
                 _ = sleep(sleep_after) => {}
             }
         }
-    }
-
-    if let Err(err) = worker
-        .store
-        .unassign_evaluator(worker.run_id, &worker.worker_id)
-        .await
-    {
-        warn!("failed to unassign evaluator: {err}");
     }
 
     worker.mark_inactive_with_log().await;

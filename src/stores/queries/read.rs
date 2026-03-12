@@ -127,6 +127,9 @@ struct RegisteredWorkerRow {
     worker_id: String,
     node_id: Option<String>,
     desired_run_id: Option<i32>,
+    desired_role: Option<String>,
+    current_run_id: Option<i32>,
+    current_role: Option<String>,
     role: String,
     implementation: String,
     version: String,
@@ -144,6 +147,9 @@ impl From<RegisteredWorkerRow> for RegisteredWorkerEntry {
             worker_id: value.worker_id,
             node_id: value.node_id,
             desired_run_id: value.desired_run_id,
+            desired_role: value.desired_role,
+            current_run_id: value.current_run_id,
+            current_role: value.current_role,
             role: value.role,
             implementation: value.implementation,
             version: value.version,
@@ -260,25 +266,20 @@ const RUN_ASSIGNMENT_STATS_SUBQUERY: &str = r#"
     SELECT
         r.id AS run_id,
         COALESCE(da.desired_assignment_count, 0) AS desired_assignment_count,
-        COALESCE(ea.active_evaluator_count, 0) + COALESCE(sa.active_sampler_count, 0) AS active_worker_count
+        COALESCE(aw.active_worker_count, 0) AS active_worker_count
     FROM runs r
     LEFT JOIN (
         SELECT desired_run_id AS run_id, COUNT(*) AS desired_assignment_count
-        FROM workers
+        FROM nodes
         WHERE desired_run_id IS NOT NULL
         GROUP BY desired_run_id
     ) da ON r.id = da.run_id
     LEFT JOIN (
-        SELECT run_id, COUNT(*) AS active_evaluator_count
-        FROM run_evaluator_assignments
-        WHERE active = true
-        GROUP BY run_id
-    ) ea ON r.id = ea.run_id
-    LEFT JOIN (
-        SELECT run_id, COUNT(*) AS active_sampler_count
-        FROM run_sampler_aggregator_leases
-        GROUP BY run_id
-    ) sa ON r.id = sa.run_id
+        SELECT current_run_id AS run_id, COUNT(*) AS active_worker_count
+        FROM nodes
+        WHERE current_run_id IS NOT NULL
+        GROUP BY current_run_id
+    ) aw ON r.id = aw.run_id
 "#;
 
 const RUN_BATCH_STATS_SUBQUERY_FOR_ONE_RUN: &str = r#"
@@ -647,34 +648,42 @@ pub(crate) async fn get_registered_workers(
     let rows = sqlx::query_as::<_, RegisteredWorkerRow>(
         r#"
         SELECT
-            w.worker_id,
-            w.node_id,
-            w.desired_run_id,
-            w.role,
-            w.implementation,
-            w.version,
-            w.status,
-            w.last_seen,
+            n.node_id AS worker_id,
+            n.node_id,
+            n.desired_run_id,
+            n.desired_role,
+            n.current_run_id,
+            n.current_role,
+            COALESCE(n.current_role, n.desired_role, 'none') AS role,
+            'run_node' AS implementation,
+            'node' AS version,
+            CASE
+                WHEN n.current_role IS NOT NULL THEN 'active'
+                ELSE 'inactive'
+            END AS status,
+            n.last_seen,
             e.metrics AS evaluator_metrics,
             p.metrics AS sampler_metrics,
             p.runtime_metrics AS sampler_runtime_metrics,
             p.engine_diagnostics AS sampler_engine_diagnostics
-        FROM workers w
+        FROM nodes n
         LEFT JOIN sampler_aggregator_performance_latest p
-            ON p.run_id = COALESCE($1, w.desired_run_id)
-           AND p.worker_id = w.worker_id
+            ON p.run_id = COALESCE($1, n.current_run_id, n.desired_run_id)
+           AND p.worker_id = n.node_id
         LEFT JOIN evaluator_performance_latest e
-            ON e.run_id = COALESCE($1, w.desired_run_id)
-           AND e.worker_id = w.worker_id
-        WHERE ($1::int IS NULL OR w.desired_run_id = $1)
+            ON e.run_id = COALESCE($1, n.current_run_id, n.desired_run_id)
+           AND e.worker_id = n.node_id
+        WHERE ($1::int IS NULL OR n.desired_run_id = $1 OR n.current_run_id = $1)
         ORDER BY
-            CASE w.status
+            CASE
+                WHEN n.current_role IS NOT NULL THEN 'active'
+                ELSE 'inactive'
+            END
                 WHEN 'active' THEN 0
-                WHEN 'draining' THEN 1
-                ELSE 2
+                ELSE 1
             END,
-            w.last_seen DESC NULLS LAST,
-            w.worker_id ASC
+            n.last_seen DESC NULLS LAST,
+            n.node_id ASC
         "#,
     )
     .bind(run_id)

@@ -58,19 +58,19 @@ const WorkersWorkspace = ({ workers, isConnected, lastUpdate, error }) => {
 
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
         <Typography variant="h6" gutterBottom>
-          Workers
+          Nodes
         </Typography>
 
         {workers.length === 0 ? (
           <EmptyStateCard
-            title="No workers registered"
-            message="Start one or more workers to inspect assignments, heartbeat, and current role."
+            title="No nodes registered"
+            message="Start one or more run-node processes to inspect desired assignment, current role, and heartbeat."
           />
         ) : (
           <Stack spacing={2}>
             <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
               <Typography variant="body2" color="text.secondary">
-                total workers: <strong>{workers.length}</strong>
+                total nodes: <strong>{workers.length}</strong>
               </Typography>
               <Typography variant="body2" color="text.secondary">
                 active: <strong>{activeCount}</strong>
@@ -86,13 +86,12 @@ const WorkersWorkspace = ({ workers, isConnected, lastUpdate, error }) => {
               <Table size="small" aria-label="workers table">
                 <TableHead>
                   <TableRow>
-                    <TableCell>Worker ID</TableCell>
-                    <TableCell>Role</TableCell>
+                    <TableCell>Node ID</TableCell>
+                    <TableCell>Current Role</TableCell>
+                    <TableCell>Current Run</TableCell>
+                    <TableCell>Desired Role</TableCell>
+                    <TableCell>Desired Run</TableCell>
                     <TableCell>Status</TableCell>
-                    <TableCell>Node</TableCell>
-                    <TableCell>Run</TableCell>
-                    <TableCell>Implementation</TableCell>
-                    <TableCell>Version</TableCell>
                     <TableCell>Last Seen</TableCell>
                   </TableRow>
                 </TableHead>
@@ -113,12 +112,11 @@ const WorkersWorkspace = ({ workers, isConnected, lastUpdate, error }) => {
                         }}
                       >
                         <TableCell>{worker.worker_id || "unknown"}</TableCell>
-                        <TableCell>{worker.role || "unknown"}</TableCell>
+                        <TableCell>{worker.current_role || "None"}</TableCell>
+                        <TableCell>{worker.current_run_id ?? "N/A"}</TableCell>
+                        <TableCell>{worker.desired_role || "None"}</TableCell>
+                        <TableCell>{worker.desired_run_id ?? "N/A"}</TableCell>
                         <TableCell>{worker.status || "unknown"}</TableCell>
-                        <TableCell>{worker.node_id || "n/a"}</TableCell>
-                        <TableCell>{worker.desired_run_id ?? "n/a"}</TableCell>
-                        <TableCell>{worker.implementation || "unknown"}</TableCell>
-                        <TableCell>{worker.version || "n/a"}</TableCell>
                         <TableCell>{formatDateTime(worker.last_seen, "-")}</TableCell>
                       </TableRow>
                     );
@@ -133,7 +131,7 @@ const WorkersWorkspace = ({ workers, isConnected, lastUpdate, error }) => {
       {selectedWorker ? (
         <WorkerDetailsPanel worker={selectedWorker} isConnected={isConnected} />
       ) : (
-        <Alert severity="info">Select a worker to view assignment and heartbeat details.</Alert>
+        <Alert severity="info">Select a node to view assignment and heartbeat details.</Alert>
       )}
     </>
   );

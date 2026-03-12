@@ -1,4 +1,4 @@
-use gammaboard::core::{AssignmentLeaseStore, WorkQueueStore};
+use gammaboard::core::{ControlPlaneStore, StoreError, WorkQueueStore, WorkerRole};
 use gammaboard::{Batch, PgStore};
 use sqlx::postgres::PgPoolOptions;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -27,7 +27,7 @@ async fn claim_batch_requires_active_assignment() {
     let Some(store) = test_store().await else {
         return;
     };
-    let worker_id = unique_id("test-worker");
+    let node_id = unique_id("node");
 
     let run_id: i32 =
         sqlx::query_scalar("INSERT INTO runs (status) VALUES ('running') RETURNING id")
@@ -35,24 +35,11 @@ async fn claim_batch_requires_active_assignment() {
             .await
             .expect("insert run");
 
-    sqlx::query(
-        r#"
-        INSERT INTO workers (
-            worker_id, node_id, role, implementation, version, node_specs, status
-        ) VALUES (
-            $1, NULL, 'evaluator', 'test_impl', 'v1', '{}'::jsonb, 'active'
-        )
-        "#,
-    )
-    .bind(&worker_id)
-    .execute(store.pool())
-    .await
-    .expect("insert worker");
-
+    store.register_node(&node_id).await.expect("register node");
     store
-        .assign_evaluator(run_id, &worker_id)
+        .set_current_assignment(&node_id, WorkerRole::Evaluator, run_id)
         .await
-        .expect("assign evaluator");
+        .expect("set current evaluator assignment");
 
     let batch = Batch::from_flat_data(1, 1, 0, vec![1.0], vec![]).expect("batch");
     store
@@ -61,7 +48,7 @@ async fn claim_batch_requires_active_assignment() {
         .expect("insert batch");
 
     let claimed = store
-        .claim_batch(run_id, &worker_id)
+        .claim_batch(run_id, &node_id)
         .await
         .expect("claim batch");
     assert!(
@@ -74,11 +61,6 @@ async fn claim_batch_requires_active_assignment() {
         .execute(store.pool())
         .await
         .expect("cleanup run");
-    sqlx::query("DELETE FROM workers WHERE worker_id = $1")
-        .bind(&worker_id)
-        .execute(store.pool())
-        .await
-        .expect("cleanup worker");
 }
 
 #[tokio::test]
@@ -87,7 +69,7 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
     let Some(store) = test_store().await else {
         return;
     };
-    let worker_id = unique_id("test-worker");
+    let node_id = unique_id("node");
 
     let run_id: i32 =
         sqlx::query_scalar("INSERT INTO runs (status) VALUES ('running') RETURNING id")
@@ -95,19 +77,7 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
             .await
             .expect("insert run");
 
-    sqlx::query(
-        r#"
-        INSERT INTO workers (
-            worker_id, node_id, role, implementation, version, node_specs, status
-        ) VALUES (
-            $1, NULL, 'evaluator', 'test_impl', 'v1', '{}'::jsonb, 'active'
-        )
-        "#,
-    )
-    .bind(&worker_id)
-    .execute(store.pool())
-    .await
-    .expect("insert worker");
+    store.register_node(&node_id).await.expect("register node");
 
     let batch = Batch::from_flat_data(1, 1, 0, vec![2.0], vec![]).expect("batch");
     store
@@ -116,7 +86,7 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
         .expect("insert batch");
 
     let unassigned_claim = store
-        .claim_batch(run_id, &worker_id)
+        .claim_batch(run_id, &node_id)
         .await
         .expect("claim batch while unassigned");
     assert!(
@@ -125,16 +95,16 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
     );
 
     store
-        .assign_evaluator(run_id, &worker_id)
+        .set_current_assignment(&node_id, WorkerRole::Evaluator, run_id)
         .await
-        .expect("assign evaluator");
+        .expect("set current evaluator assignment");
     store
-        .unassign_evaluator(run_id, &worker_id)
+        .clear_current_assignment(&node_id)
         .await
-        .expect("unassign evaluator");
+        .expect("clear current assignment");
 
     let inactive_claim = store
-        .claim_batch(run_id, &worker_id)
+        .claim_batch(run_id, &node_id)
         .await
         .expect("claim batch while inactive");
     assert!(
@@ -147,9 +117,158 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
         .execute(store.pool())
         .await
         .expect("cleanup run");
-    sqlx::query("DELETE FROM workers WHERE worker_id = $1")
-        .bind(&worker_id)
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn sampler_aggregator_desired_assignment_is_unique_per_run() {
+    let Some(store) = test_store().await else {
+        return;
+    };
+    let node_a = unique_id("node-a");
+    let node_b = unique_id("node-b");
+
+    let run_id: i32 = sqlx::query_scalar(
+        r#"
+        INSERT INTO runs (
+            name,
+            integration_params,
+            point_spec
+        ) VALUES (
+            'test-run',
+            '{}'::jsonb,
+            '{"continuous_dims":0,"discrete_dims":0}'::jsonb
+        )
+        RETURNING id
+        "#,
+    )
+    .fetch_one(store.pool())
+    .await
+    .expect("insert run");
+
+    store
+        .upsert_desired_assignment(&node_a, WorkerRole::SamplerAggregator, run_id)
+        .await
+        .expect("assign first sampler");
+
+    let err = store
+        .upsert_desired_assignment(&node_b, WorkerRole::SamplerAggregator, run_id)
+        .await
+        .expect_err("second sampler assignment should fail");
+
+    match err {
+        StoreError::InvalidInput(message) => {
+            assert!(
+                message.contains("sampler_aggregator assignment"),
+                "unexpected error message: {message}"
+            );
+        }
+        other => panic!("expected invalid input, got {other}"),
+    }
+
+    sqlx::query("DELETE FROM runs WHERE id = $1")
+        .bind(run_id)
         .execute(store.pool())
         .await
-        .expect("cleanup worker");
+        .expect("cleanup run");
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn assigning_new_role_replaces_existing_desired_assignment_for_node() {
+    let Some(store) = test_store().await else {
+        return;
+    };
+    let node_id = unique_id("node");
+
+    let run_a: i32 = sqlx::query_scalar(
+        r#"
+        INSERT INTO runs (
+            name,
+            integration_params,
+            point_spec
+        ) VALUES (
+            'test-run-a',
+            '{}'::jsonb,
+            '{"continuous_dims":0,"discrete_dims":0}'::jsonb
+        )
+        RETURNING id
+        "#,
+    )
+    .fetch_one(store.pool())
+    .await
+    .expect("insert run a");
+
+    let run_b: i32 = sqlx::query_scalar(
+        r#"
+        INSERT INTO runs (
+            name,
+            integration_params,
+            point_spec
+        ) VALUES (
+            'test-run-b',
+            '{}'::jsonb,
+            '{"continuous_dims":0,"discrete_dims":0}'::jsonb
+        )
+        RETURNING id
+        "#,
+    )
+    .fetch_one(store.pool())
+    .await
+    .expect("insert run b");
+
+    store
+        .upsert_desired_assignment(&node_id, WorkerRole::Evaluator, run_a)
+        .await
+        .expect("assign evaluator");
+    store
+        .upsert_desired_assignment(&node_id, WorkerRole::SamplerAggregator, run_b)
+        .await
+        .expect("replace desired assignment");
+
+    let assignment = store
+        .get_desired_assignment(&node_id)
+        .await
+        .expect("load desired assignment")
+        .expect("assignment should exist");
+    assert_eq!(assignment.role, WorkerRole::SamplerAggregator);
+    assert_eq!(assignment.run_id, run_b);
+
+    let desired_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM nodes
+        WHERE node_id = $1
+          AND desired_run_id IS NOT NULL
+          AND desired_role IS NOT NULL
+        "#,
+    )
+    .bind(&node_id)
+    .fetch_one(store.pool())
+    .await
+    .expect("count desired assignments");
+    assert_eq!(
+        desired_count, 1,
+        "node should have exactly one desired assignment"
+    );
+
+    store
+        .clear_desired_assignment(&node_id)
+        .await
+        .expect("clear desired assignment");
+    assert!(
+        store
+            .get_desired_assignment(&node_id)
+            .await
+            .expect("load cleared assignment")
+            .is_none(),
+        "node desired assignment should be cleared"
+    );
+
+    sqlx::query("DELETE FROM runs WHERE id = $1 OR id = $2")
+        .bind(run_a)
+        .bind(run_b)
+        .execute(store.pool())
+        .await
+        .expect("cleanup runs");
 }

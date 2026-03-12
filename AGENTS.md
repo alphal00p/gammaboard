@@ -9,7 +9,7 @@ Use `README.md` for operator onboarding. Keep this file focused on architecture,
 - `gammaboard node` manages desired assignments.
 - `gammaboard run-node` reconciles DB desired assignment into at most one active local role loop.
 - `gammaboard server` exposes the dashboard read API.
-- PostgreSQL is the source of truth for runs, batches, assignments, workers, logs, and snapshots.
+- PostgreSQL is the source of truth for runs, batches, node state, logs, and snapshots.
 
 ## Module Ownership
 - `src/core/*`: domain types and store-facing contracts.
@@ -28,6 +28,12 @@ Use `README.md` for operator onboarding. Keep this file focused on architecture,
 - `run add` also persists evaluator and sampler init metadata.
 - Point dimensions are canonical in `runs.point_spec`; do not duplicate them outside evaluator config unless the evaluator intrinsically needs them.
 - `run pause`, `run remove`, and `node stop` support positional IDs or `-a/--all`.
+- `gammaboard node list` is the node inventory view; it should print one row per node with `ID / Run / Role / Last Seen`. Inactive nodes should show `Run = N/A` and `Role = None`.
+- Desired assignment is node-level: each node may have at most one desired role/run assignment at a time, and `node assign` should replace any existing desired assignment on that node.
+- `node unassign` should clear the node's desired assignment without requiring a role.
+- Desired assignments may include many evaluators per run, but must allow at most one sampler-aggregator per run. Enforce that invariant in the database and surface a clear CLI/store error on violation.
+- Local worker bootstrapping for manual/live-test flows should go through `just start <N>` so worker IDs stay sequential as `w-1` through `w-N`.
+- `gammaboard completion <shell>` should emit shell completion scripts to stdout; local build workflow also provides `~/.cargo/bin/gammaboard` as a symlink to the built binary so the latest local build can replace a Cargo-installed command in place.
 - Run pause is implemented by clearing desired assignments so `run-node` reconciles down cleanly.
 - Run lifecycle is derived from control-plane state; do not reintroduce a persisted `runs.status` column unless explicitly requested.
 - Auto-stop conditions in `sampler_aggregator_runner_params.stop_on` are evaluated against aggregated observable samples; once reached, stop new production and clear desired assignments for the run.
@@ -36,7 +42,9 @@ Use `README.md` for operator onboarding. Keep this file focused on architecture,
 - Do not expose `runs.sampler_runner_snapshot` through the read API or dashboard payloads; it is internal resumability state and may be large.
 - `run-node` must stop the old role before starting a new one.
 - Role start failures are capped per desired target; after the cap is hit, retries stay disabled until desired assignment changes.
-- Node shutdown is a one-shot signal read from `workers.shutdown_requested_at`.
+- Nodes register and heartbeat through the `nodes` table even when idle so node inventory is visible before any role assignment.
+- Desired and current node assignments live directly on `nodes`, with `(desired_run_id, desired_role)` and `(current_run_id, current_role)` required to be both null or both set.
+- Node shutdown is a one-shot signal read from `nodes.shutdown_requested_at`.
 - Local serve contract:
   - backend port env var is `GAMMABOARD_BACKEND_PORT`
   - frontend API base URL is `REACT_APP_API_BASE_URL`

@@ -1,14 +1,16 @@
 set dotenv-load := true
 
 poll_ms := "500"
-#bin_debug := "./target/debug/gammaboard"
-#bin_release := "./target/release/gammaboard"
-#bin_profile := env_var_or_default("GAMMABOARD_BIN_PROFILE", "debug")
-
 bin := "./target/dev-optim/gammaboard"
 
 build:
     cargo build --profile dev-optim
+
+symlink-build:
+    ln -sf "$(pwd)/target/dev-optim/gammaboard" "${HOME}/.cargo/bin/gammaboard"
+
+install:
+    cargo install --path . --profile dev-optim --force
 
 check:
     cargo check --no-default-features --features 'cli,no_pyo3'
@@ -36,19 +38,23 @@ build-frontend:
 serve-frontend:
     cd dashboard && npx serve build
 
+start-workers n:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    for i in $(seq 1 {{n}}); do
+        {{bin}} run-node --node-id "w-${i}" --poll-ms {{ poll_ms }} &
+    done
+
+start n:
+    @just start-workers {{n}}
+
 live-test-basic:
     #!/usr/bin/env bash
     set -euo pipefail
 
     just restart-db
-    {{bin}} run-node --node-id "w-1" --poll-ms {{ poll_ms }} &
-    {{bin}} run-node --node-id "w-2" --poll-ms {{ poll_ms }} &
-    {{bin}} run-node --node-id "w-3" --poll-ms {{ poll_ms }} &
-    {{bin}} run-node --node-id "w-4" --poll-ms {{ poll_ms }} &
-    {{bin}} run-node --node-id "w-5" --poll-ms {{ poll_ms }} &
-    {{bin}} run-node --node-id "w-6" --poll-ms {{ poll_ms }} &
-    {{bin}} run-node --node-id "w-7" --poll-ms {{ poll_ms }} &
-    {{bin}} run-node --node-id "w-8" --poll-ms {{ poll_ms }} &
+    just start 8
 
     sleep 4
 
@@ -99,8 +105,7 @@ live-test-gammaloop:
 
     just restart-db
     {{bin}} run-node --node-id "w-0" --poll-ms {{ poll_ms }} &
-    {{bin}} run-node --node-id "w-1" --poll-ms {{ poll_ms }} &
-    {{bin}} run-node --node-id "w-2" --poll-ms {{ poll_ms }} &
+    just start 2
 
     sleep 1
 

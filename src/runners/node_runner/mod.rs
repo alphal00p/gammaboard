@@ -9,8 +9,7 @@ mod reconcile;
 mod sampler_aggregator_role_runner;
 
 use crate::core::{
-    AggregationStore, AssignmentLeaseStore, ControlPlaneStore, RunSpecStore, StoreError,
-    WorkQueueStore, WorkerRegistryStore, WorkerRole,
+    AggregationStore, ControlPlaneStore, RunSpecStore, StoreError, WorkQueueStore, WorkerRole,
 };
 use std::time::Duration;
 use tokio::{sync::watch, task::JoinHandle, time::sleep};
@@ -25,24 +24,13 @@ pub struct NodeRunnerConfig {
 }
 
 pub trait NodeRunnerStore:
-    RunSpecStore
-    + ControlPlaneStore
-    + WorkerRegistryStore
-    + AssignmentLeaseStore
-    + WorkQueueStore
-    + AggregationStore
-    + Clone
-    + Send
-    + Sync
-    + 'static
+    RunSpecStore + ControlPlaneStore + WorkQueueStore + AggregationStore + Clone + Send + Sync + 'static
 {
 }
 
 impl<T> NodeRunnerStore for T where
     T: RunSpecStore
         + ControlPlaneStore
-        + WorkerRegistryStore
-        + AssignmentLeaseStore
         + WorkQueueStore
         + AggregationStore
         + Clone
@@ -59,10 +47,6 @@ impl Default for NodeRunnerConfig {
             max_consecutive_start_failures: 3,
         }
     }
-}
-
-pub(super) fn role_worker_id(node_id: &str, role: WorkerRole) -> String {
-    format!("{node_id}-{role}")
 }
 
 pub(super) const ROLE_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
@@ -116,8 +100,10 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         );
         async move {
             let mut shutdown = std::pin::pin!(tokio::signal::ctrl_c());
+            self.store.register_node(&self.node_id).await?;
 
             loop {
+                self.store.heartbeat_node(&self.node_id).await?;
                 if self
                     .store
                     .consume_node_shutdown_request(&self.node_id)

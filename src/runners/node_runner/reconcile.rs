@@ -8,44 +8,11 @@ use tracing::{Instrument, error, info, warn};
 
 impl<S: NodeRunnerStore> NodeRunner<S> {
     pub(super) async fn resolve_desired_target(&self) -> Result<Option<RoleTarget>, StoreError> {
-        let assignments = self
-            .store
-            .list_desired_assignments(Some(&self.node_id))
-            .await?;
-
-        if assignments.is_empty() {
-            return Ok(None);
-        }
-
-        if assignments.len() == 1 {
-            let assignment = &assignments[0];
-            return Ok(Some(RoleTarget {
-                role: assignment.role,
-                run_id: assignment.run_id,
-            }));
-        }
-
-        if let Some(current) = self.current_target()
-            && let Some(matching) = assignments
-                .iter()
-                .find(|assignment| assignment.role == current.role)
-        {
-            warn!(
-                current_role = %current.role,
-                conflict_count = assignments.len(),
-                "multiple desired role assignments for one node; keeping current role assignment"
-            );
-            return Ok(Some(RoleTarget {
-                role: matching.role,
-                run_id: matching.run_id,
-            }));
-        }
-
-        warn!(
-            conflict_count = assignments.len(),
-            "multiple desired role assignments for one node; no active role selected"
-        );
-        Ok(None)
+        let assignment = self.store.get_desired_assignment(&self.node_id).await?;
+        Ok(assignment.map(|assignment| RoleTarget {
+            role: assignment.role,
+            run_id: assignment.run_id,
+        }))
     }
 
     pub(super) async fn reconcile(
@@ -79,12 +46,12 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
     }
 
     fn start(&mut self, target: RoleTarget) {
-        let worker_id = super::role_worker_id(&self.node_id, target.role);
         let role_context_span = tracing::span!(
             tracing::Level::TRACE,
             "role_task_context",
             run_id = target.run_id,
-            worker_id = %worker_id
+            node_id = %self.node_id,
+            role = %target.role
         );
         let role_scope_span = role_context_span.clone();
         let _role_scope = role_scope_span.enter();
@@ -94,7 +61,6 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         let runtime = ActiveWorker::new(
             self.store.clone(),
             self.node_id.clone(),
-            worker_id.clone(),
             target.role,
             target.run_id,
         );

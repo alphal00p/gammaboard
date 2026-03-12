@@ -57,7 +57,7 @@ pub(crate) async fn get_pending_batch_count(
 pub(crate) async fn claim_batch(
     pool: &PgPool,
     run_id: i32,
-    worker_id: &str,
+    node_id: &str,
 ) -> Result<Option<(i64, Batch, bool)>, sqlx::Error> {
     let row = sqlx::query_as::<_, (i64, JsonValue, bool)>(
         r#"
@@ -71,10 +71,10 @@ pub(crate) async fn claim_batch(
               AND status = 'pending'
               AND EXISTS (
                   SELECT 1
-                  FROM run_evaluator_assignments rea
-                  WHERE rea.run_id = $2
-                    AND rea.worker_id = $1
-                    AND rea.active = true
+                  FROM nodes n
+                  WHERE n.node_id = $1
+                    AND n.current_run_id = $2
+                    AND n.current_role = 'evaluator'
               )
             ORDER BY created_at
             LIMIT 1
@@ -83,7 +83,7 @@ pub(crate) async fn claim_batch(
         RETURNING id, points, requires_training
         "#,
     )
-    .bind(worker_id)
+    .bind(node_id)
     .bind(run_id)
     .fetch_optional(pool)
     .await?;
@@ -99,7 +99,7 @@ pub(crate) async fn claim_batch(
 pub(crate) async fn release_claimed_batches_for_worker(
     pool: &PgPool,
     run_id: i32,
-    worker_id: &str,
+    node_id: &str,
 ) -> Result<u64, sqlx::Error> {
     let result = sqlx::query(
         r#"
@@ -113,7 +113,7 @@ pub(crate) async fn release_claimed_batches_for_worker(
         "#,
     )
     .bind(run_id)
-    .bind(worker_id)
+    .bind(node_id)
     .execute(pool)
     .await?;
     Ok(result.rows_affected())
@@ -161,7 +161,7 @@ pub(crate) async fn insert_evaluator_performance_snapshot(
         "#,
     )
     .bind(snapshot.run_id)
-    .bind(&snapshot.worker_id)
+    .bind(&snapshot.node_id)
     .bind(&metrics)
     .execute(pool)
     .await?;
@@ -194,7 +194,7 @@ pub(crate) async fn insert_sampler_aggregator_performance_snapshot(
         "#,
     )
     .bind(snapshot.run_id)
-    .bind(&snapshot.worker_id)
+    .bind(&snapshot.node_id)
     .bind(&metrics)
     .bind(&runtime_metrics)
     .bind(&snapshot.engine_diagnostics)

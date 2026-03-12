@@ -418,7 +418,7 @@ impl SamplerAggregator for HavanaSampler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand09::RngCore;
+    use rand::RngCore;
 
     #[test]
     fn snapshot_roundtrip_restores_havana_runtime_state() {

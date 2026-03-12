@@ -2,10 +2,9 @@
 
 use super::queries;
 use crate::core::{
-    AggregationStore, AssignmentLeaseStore, BatchClaim, CompletedBatch, ControlPlaneStore,
-    DesiredAssignment, EvaluatorPerformanceSnapshot, RunReadStore, RunSpecStore, RuntimeLogEvent,
-    RuntimeLogStore, SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore, Worker,
-    WorkerRegistryStore, WorkerRole, WorkerStatus,
+    AggregationStore, BatchClaim, CompletedBatch, ControlPlaneStore, DesiredAssignment,
+    EvaluatorPerformanceSnapshot, RegisteredNode, RunReadStore, RunSpecStore, RuntimeLogEvent,
+    RuntimeLogStore, SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore, WorkerRole,
 };
 use crate::core::{Batch, BatchResult, PointSpec};
 use crate::engines::{IntegrationParams, RunSpec};
@@ -37,6 +36,31 @@ fn store_invalid_input(message: impl Into<String>) -> StoreError {
 }
 
 fn map_sqlx(err: sqlx::Error) -> StoreError {
+    if let sqlx::Error::Database(db_err) = &err {
+        if db_err.code().as_deref() == Some("23505") {
+            if db_err.constraint() == Some("idx_nodes_desired_sampler_run") {
+                return store_invalid_input(
+                    "run already has a sampler_aggregator assignment; clear the existing sampler assignment before assigning another node",
+                );
+            }
+            if db_err.constraint() == Some("idx_nodes_current_sampler_run") {
+                return store_invalid_input(
+                    "run already has a current sampler_aggregator node; clear the existing current sampler before starting another node",
+                );
+            }
+        }
+        if db_err.code().as_deref() == Some("23514") {
+            if matches!(
+                db_err.constraint(),
+                Some("nodes_desired_assignment_pair_check")
+                    | Some("nodes_current_assignment_pair_check")
+            ) {
+                return store_invalid_input(
+                    "node desired/current role and run fields must be both set or both null",
+                );
+            }
+        }
+    }
     StoreError::from(err)
 }
 
@@ -344,104 +368,6 @@ impl RunSpecStore for PgStore {
 }
 
 #[async_trait::async_trait]
-impl WorkerRegistryStore for PgStore {
-    async fn register_worker(&self, worker: &Worker) -> Result<(), StoreError> {
-        queries::register_worker(&self.pool, worker)
-            .await
-            .map_err(map_sqlx)
-    }
-
-    async fn heartbeat_worker(&self, worker_id: &str) -> Result<(), StoreError> {
-        queries::heartbeat_worker(&self.pool, worker_id)
-            .await
-            .map_err(map_sqlx)
-    }
-
-    async fn update_worker_status(
-        &self,
-        worker_id: &str,
-        worker_status: WorkerStatus,
-    ) -> Result<(), StoreError> {
-        queries::update_worker_status(&self.pool, worker_id, worker_status)
-            .await
-            .map_err(map_sqlx)
-    }
-
-    async fn get_worker(&self, worker_id: &str) -> Result<Option<Worker>, StoreError> {
-        let Some(row) = queries::get_worker(&self.pool, worker_id)
-            .await
-            .map_err(map_sqlx)?
-        else {
-            return Ok(None);
-        };
-
-        Ok(Some(Worker {
-            worker_id: row.worker_id,
-            node_id: row.node_id,
-            role: row.role.parse().map_err(store_err)?,
-            implementation: row.implementation,
-            version: row.version,
-            node_specs: row.node_specs,
-            status: row.status.parse().map_err(store_err)?,
-            last_seen: row.last_seen,
-        }))
-    }
-}
-
-#[async_trait::async_trait]
-impl AssignmentLeaseStore for PgStore {
-    async fn acquire_sampler_aggregator_lease(
-        &self,
-        run_id: i32,
-        worker_id: &str,
-        ttl: Duration,
-    ) -> Result<bool, StoreError> {
-        queries::acquire_sampler_aggregator_lease(&self.pool, run_id, worker_id, ttl)
-            .await
-            .map_err(map_sqlx)
-    }
-
-    async fn renew_sampler_aggregator_lease(
-        &self,
-        run_id: i32,
-        worker_id: &str,
-        ttl: Duration,
-    ) -> Result<bool, StoreError> {
-        queries::renew_sampler_aggregator_lease(&self.pool, run_id, worker_id, ttl)
-            .await
-            .map_err(map_sqlx)
-    }
-
-    async fn release_sampler_aggregator_lease(
-        &self,
-        run_id: i32,
-        worker_id: &str,
-    ) -> Result<(), StoreError> {
-        queries::release_sampler_aggregator_lease(&self.pool, run_id, worker_id)
-            .await
-            .map_err(map_sqlx)
-    }
-
-    async fn assign_evaluator(&self, run_id: i32, worker_id: &str) -> Result<(), StoreError> {
-        queries::assign_evaluator(&self.pool, run_id, worker_id)
-            .await
-            .map_err(map_sqlx)
-    }
-
-    async fn unassign_evaluator(&self, run_id: i32, worker_id: &str) -> Result<(), StoreError> {
-        queries::unassign_evaluator(&self.pool, run_id, worker_id)
-            .await
-            .map_err(map_sqlx)
-    }
-
-    async fn list_assigned_evaluators(&self, run_id: i32) -> Result<Vec<String>, StoreError> {
-        queries::list_assigned_evaluators(&self.pool, run_id)
-            .await
-            .map_err(map_sqlx)
-    }
-}
-
-#[async_trait::async_trait]
 impl ControlPlaneStore for PgStore {
     async fn upsert_desired_assignment(
         &self,
@@ -454,12 +380,37 @@ impl ControlPlaneStore for PgStore {
             .map_err(map_sqlx)
     }
 
-    async fn clear_desired_assignment(
+    async fn register_node(&self, node_id: &str) -> Result<(), StoreError> {
+        queries::register_node(&self.pool, node_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn heartbeat_node(&self, node_id: &str) -> Result<(), StoreError> {
+        queries::heartbeat_node(&self.pool, node_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn set_current_assignment(
         &self,
         node_id: &str,
         role: WorkerRole,
+        run_id: i32,
     ) -> Result<(), StoreError> {
-        queries::clear_desired_assignment(&self.pool, node_id, role)
+        queries::set_current_assignment(&self.pool, node_id, role, run_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn clear_current_assignment(&self, node_id: &str) -> Result<(), StoreError> {
+        queries::clear_current_assignment(&self.pool, node_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn clear_desired_assignment(&self, node_id: &str) -> Result<(), StoreError> {
+        queries::clear_desired_assignment(&self.pool, node_id)
             .await
             .map_err(map_sqlx)
     }
@@ -479,16 +430,19 @@ impl ControlPlaneStore for PgStore {
     async fn get_desired_assignment(
         &self,
         node_id: &str,
-        role: WorkerRole,
     ) -> Result<Option<DesiredAssignment>, StoreError> {
-        let run_id = queries::get_desired_assignment_run_id(&self.pool, node_id, role)
+        let assignment = queries::get_desired_assignment(&self.pool, node_id)
             .await
             .map_err(map_sqlx)?;
-        Ok(run_id.map(|run_id| DesiredAssignment {
-            node_id: node_id.to_string(),
-            role,
-            run_id,
-        }))
+        assignment
+            .map(|row| {
+                Ok(DesiredAssignment {
+                    node_id: row.node_id,
+                    role: row.role.parse().map_err(store_err)?,
+                    run_id: row.run_id,
+                })
+            })
+            .transpose()
     }
 
     async fn list_desired_assignments(
@@ -504,6 +458,40 @@ impl ControlPlaneStore for PgStore {
                 node_id: row.node_id,
                 role: row.role.parse().map_err(store_err)?,
                 run_id: row.run_id,
+            });
+        }
+        Ok(out)
+    }
+
+    async fn list_nodes(&self, node_id: Option<&str>) -> Result<Vec<RegisteredNode>, StoreError> {
+        let rows = queries::list_nodes(&self.pool, node_id)
+            .await
+            .map_err(map_sqlx)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let desired_assignment = match (row.desired_role, row.desired_run_id) {
+                (Some(role), Some(run_id)) => Some(DesiredAssignment {
+                    node_id: row.node_id.clone(),
+                    role: role.parse().map_err(store_err)?,
+                    run_id,
+                }),
+                (None, None) => None,
+                _ => return Err(store_err("invalid node assignment row")),
+            };
+            let current_assignment = match (row.current_role, row.current_run_id) {
+                (Some(role), Some(run_id)) => Some(DesiredAssignment {
+                    node_id: row.node_id.clone(),
+                    role: role.parse().map_err(store_err)?,
+                    run_id,
+                }),
+                (None, None) => None,
+                _ => return Err(store_err("invalid current node assignment row")),
+            };
+            out.push(RegisteredNode {
+                node_id: row.node_id,
+                desired_assignment,
+                current_assignment,
+                last_seen: row.last_seen,
             });
         }
         Ok(out)
@@ -584,9 +572,9 @@ impl WorkQueueStore for PgStore {
     async fn claim_batch(
         &self,
         run_id: i32,
-        worker_id: &str,
+        node_id: &str,
     ) -> Result<Option<BatchClaim>, StoreError> {
-        let claimed = queries::claim_batch(&self.pool, run_id, worker_id)
+        let claimed = queries::claim_batch(&self.pool, run_id, node_id)
             .await
             .map_err(map_sqlx)?;
 
@@ -602,9 +590,9 @@ impl WorkQueueStore for PgStore {
     async fn release_claimed_batches_for_worker(
         &self,
         run_id: i32,
-        worker_id: &str,
+        node_id: &str,
     ) -> Result<u64, StoreError> {
-        queries::release_claimed_batches_for_worker(&self.pool, run_id, worker_id)
+        queries::release_claimed_batches_for_worker(&self.pool, run_id, node_id)
             .await
             .map_err(map_sqlx)
     }

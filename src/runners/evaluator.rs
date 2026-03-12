@@ -35,7 +35,7 @@ pub enum EvaluatorRunnerError {
 
 pub struct EvaluatorRunner<WQ> {
     run_id: i32,
-    worker_id: String,
+    node_id: String,
     evaluator: Box<dyn Evaluator>,
     parametrization: Box<dyn Parametrization>,
     point_spec: PointSpec,
@@ -59,7 +59,7 @@ where
 {
     pub fn new(
         run_id: i32,
-        worker_id: impl Into<String>,
+        node_id: impl Into<String>,
         evaluator: Box<dyn Evaluator>,
         parametrization: Box<dyn Parametrization>,
         point_spec: PointSpec,
@@ -69,7 +69,7 @@ where
         let now_instant = Instant::now();
         Self {
             run_id,
-            worker_id: worker_id.into(),
+            node_id: node_id.into(),
             evaluator,
             parametrization,
             point_spec,
@@ -86,7 +86,7 @@ where
         let loop_started = Instant::now();
         let claimed = self
             .work_queue
-            .claim_batch(self.run_id, &self.worker_id)
+            .claim_batch(self.run_id, &self.node_id)
             .await
             .map_err(EvaluatorRunnerError::Store)?;
 
@@ -256,7 +256,7 @@ where
 
         let snapshot = EvaluatorPerformanceSnapshot {
             run_id: self.run_id,
-            worker_id: self.worker_id.clone(),
+            node_id: self.node_id.clone(),
             metrics: EvaluatorPerformanceMetrics {
                 batches_completed: self.batches_completed_total,
                 samples_evaluated: self.samples_evaluated_total,

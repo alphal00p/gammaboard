@@ -23,22 +23,22 @@ const WorkerStatusPanel = ({ worker }) => {
       <Card variant="outlined" sx={{ mb: 2 }}>
         <CardContent>
           <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
-            Worker Status
+            Node Status
           </Typography>
           <Grid container spacing={2}>
             <Grid item xs={12} sm={6} md={3}>
               <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
-                worker_id
+                node_id
               </Typography>
               <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                {worker.worker_id}
+                {worker.node_id || worker.worker_id}
               </Typography>
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
               <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
-                role
+                current_role
               </Typography>
-              <Typography variant="body2">{worker.role || "unknown"}</Typography>
+              <Typography variant="body2">{worker.current_role || "None"}</Typography>
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
               <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
@@ -55,15 +55,21 @@ const WorkerStatusPanel = ({ worker }) => {
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
               <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
-                node
+                current_run_id
               </Typography>
-              <Typography variant="body2">{worker.node_id || "n/a"}</Typography>
+              <Typography variant="body2">{worker.current_run_id ?? "N/A"}</Typography>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+                desired_role
+              </Typography>
+              <Typography variant="body2">{worker.desired_role || "None"}</Typography>
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
               <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
                 desired_run_id
               </Typography>
-              <Typography variant="body2">{worker.desired_run_id ?? "n/a"}</Typography>
+              <Typography variant="body2">{worker.desired_run_id ?? "N/A"}</Typography>
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
               <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
@@ -92,7 +98,10 @@ const WorkerStatusPanel = ({ worker }) => {
         data={{
           worker_id: worker.worker_id ?? null,
           node_id: worker.node_id ?? null,
+          desired_role: worker.desired_role ?? null,
           desired_run_id: worker.desired_run_id ?? null,
+          current_role: worker.current_role ?? null,
+          current_run_id: worker.current_run_id ?? null,
           role: worker.role ?? null,
           implementation: worker.implementation ?? null,
           version: worker.version ?? null,

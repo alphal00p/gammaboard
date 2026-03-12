@@ -2,8 +2,8 @@
 
 use super::errors::StoreError;
 use super::models::{
-    BatchClaim, CompletedBatch, DesiredAssignment, EvaluatorPerformanceSnapshot, RuntimeLogEvent,
-    SamplerAggregatorPerformanceSnapshot, Worker, WorkerStatus,
+    BatchClaim, CompletedBatch, DesiredAssignment, EvaluatorPerformanceSnapshot, RegisteredNode,
+    RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
 };
 use crate::core::{Batch, BatchResult, PointSpec};
 use crate::engines::RunSpec;
@@ -15,50 +15,11 @@ use crate::stores::read_models::{
 };
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
-use std::time::Duration;
 
 /// Loads immutable run configuration.
 #[async_trait]
 pub trait RunSpecStore: Send + Sync {
     async fn load_run_spec(&self, run_id: i32) -> Result<Option<RunSpec>, StoreError>;
-}
-
-/// Registers and monitors running workers.
-#[async_trait]
-pub trait WorkerRegistryStore: Send + Sync {
-    async fn register_worker(&self, worker: &Worker) -> Result<(), StoreError>;
-    async fn heartbeat_worker(&self, worker_id: &str) -> Result<(), StoreError>;
-    async fn update_worker_status(
-        &self,
-        worker_id: &str,
-        status: WorkerStatus,
-    ) -> Result<(), StoreError>;
-    async fn get_worker(&self, worker_id: &str) -> Result<Option<Worker>, StoreError>;
-}
-
-/// Handles run assignment and lease ownership.
-#[async_trait]
-pub trait AssignmentLeaseStore: Send + Sync {
-    async fn acquire_sampler_aggregator_lease(
-        &self,
-        run_id: i32,
-        worker_id: &str,
-        ttl: Duration,
-    ) -> Result<bool, StoreError>;
-    async fn renew_sampler_aggregator_lease(
-        &self,
-        run_id: i32,
-        worker_id: &str,
-        ttl: Duration,
-    ) -> Result<bool, StoreError>;
-    async fn release_sampler_aggregator_lease(
-        &self,
-        run_id: i32,
-        worker_id: &str,
-    ) -> Result<(), StoreError>;
-    async fn assign_evaluator(&self, run_id: i32, worker_id: &str) -> Result<(), StoreError>;
-    async fn unassign_evaluator(&self, run_id: i32, worker_id: &str) -> Result<(), StoreError>;
-    async fn list_assigned_evaluators(&self, run_id: i32) -> Result<Vec<String>, StoreError>;
 }
 
 /// Desired-state control-plane operations for node assignments and run steering.
@@ -70,22 +31,27 @@ pub trait ControlPlaneStore: Send + Sync {
         role: super::models::WorkerRole,
         run_id: i32,
     ) -> Result<(), StoreError>;
-    async fn clear_desired_assignment(
+    async fn register_node(&self, node_id: &str) -> Result<(), StoreError>;
+    async fn heartbeat_node(&self, node_id: &str) -> Result<(), StoreError>;
+    async fn set_current_assignment(
         &self,
         node_id: &str,
         role: super::models::WorkerRole,
+        run_id: i32,
     ) -> Result<(), StoreError>;
+    async fn clear_current_assignment(&self, node_id: &str) -> Result<(), StoreError>;
+    async fn clear_desired_assignment(&self, node_id: &str) -> Result<(), StoreError>;
     async fn clear_desired_assignments_for_run(&self, run_id: i32) -> Result<u64, StoreError>;
     async fn clear_all_desired_assignments(&self) -> Result<u64, StoreError>;
     async fn get_desired_assignment(
         &self,
         node_id: &str,
-        role: super::models::WorkerRole,
     ) -> Result<Option<DesiredAssignment>, StoreError>;
     async fn list_desired_assignments(
         &self,
         node_id: Option<&str>,
     ) -> Result<Vec<DesiredAssignment>, StoreError>;
+    async fn list_nodes(&self, node_id: Option<&str>) -> Result<Vec<RegisteredNode>, StoreError>;
     async fn request_node_shutdown(&self, node_id: &str) -> Result<u64, StoreError>;
     async fn request_all_nodes_shutdown(&self) -> Result<u64, StoreError>;
     async fn consume_node_shutdown_request(&self, node_id: &str) -> Result<bool, StoreError>;
@@ -115,12 +81,12 @@ pub trait WorkQueueStore: Send + Sync {
     async fn claim_batch(
         &self,
         run_id: i32,
-        worker_id: &str,
+        node_id: &str,
     ) -> Result<Option<BatchClaim>, StoreError>;
     async fn release_claimed_batches_for_worker(
         &self,
         run_id: i32,
-        worker_id: &str,
+        node_id: &str,
     ) -> Result<u64, StoreError>;
     async fn submit_batch_results(
         &self,

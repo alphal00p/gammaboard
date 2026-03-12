@@ -35,7 +35,7 @@ Backend API → context/RunHistoryContext → App.js → components
 ## Hooks
 
 - **useRuns(refreshInterval)** - Fetches runs list (default: 2s refresh)
-- **useWorkerLogs** - Fetches run logs for the Logs tab
+- **useWorkerLogs** - Fetches run logs for the Logs tab, filtered by node ID
 
 ## Configuration
 

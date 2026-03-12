@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
-use gammaboard::core::{ControlPlaneStore, DesiredAssignment, WorkerRole};
+use comfy_table::{Cell, CellAlignment, ContentArrangement, Table};
+use gammaboard::core::{ControlPlaneStore, RegisteredNode, WorkerRole};
 use gammaboard::init_pg_store;
 use tracing::Instrument;
 
@@ -21,9 +22,8 @@ pub enum NodeCommand {
     },
     Unassign {
         node_id: String,
-        role: RoleArg,
     },
-    ListAssignments {
+    List {
         node_id: Option<String>,
     },
     Stop(NodeSelection),
@@ -59,25 +59,13 @@ pub async fn run_node_commands(command: NodeCommand, quiet: bool) -> Result<()> 
                     run_id
                 );
             }
-            NodeCommand::Unassign { node_id, role } => {
-                store
-                    .clear_desired_assignment(&node_id, WorkerRole::from(role))
-                    .await?;
-                tracing::info!(
-                    "unassigned node={} role={}",
-                    node_id,
-                    WorkerRole::from(role)
-                );
+            NodeCommand::Unassign { node_id } => {
+                store.clear_desired_assignment(&node_id).await?;
+                tracing::info!("unassigned node={}", node_id);
             }
-            NodeCommand::ListAssignments { node_id } => {
-                let assignments = store.list_desired_assignments(node_id.as_deref()).await?;
-                if assignments.is_empty() {
-                    tracing::info!("no desired assignments");
-                } else {
-                    for assignment in &assignments {
-                        print_assignment(assignment);
-                    }
-                }
+            NodeCommand::List { node_id } => {
+                let nodes = store.list_nodes(node_id.as_deref()).await?;
+                print_node_table(build_node_rows(nodes));
             }
             NodeCommand::Stop(selection) => {
                 if selection.all {
@@ -103,16 +91,71 @@ fn node_command_name(command: &NodeCommand) -> &'static str {
     match command {
         NodeCommand::Assign { .. } => "node_assign",
         NodeCommand::Unassign { .. } => "node_unassign",
-        NodeCommand::ListAssignments { .. } => "node_list_assignments",
+        NodeCommand::List { .. } => "node_list",
         NodeCommand::Stop(_) => "node_stop",
     }
 }
 
-fn print_assignment(assignment: &DesiredAssignment) {
-    tracing::info!(
-        "node={} role={} run_id={}",
-        assignment.node_id,
-        assignment.role,
-        assignment.run_id
-    );
+#[derive(Debug)]
+struct NodeRow {
+    node_id: String,
+    run: String,
+    role: String,
+    last_seen: String,
+}
+
+fn build_node_rows(nodes: Vec<RegisteredNode>) -> Vec<NodeRow> {
+    nodes
+        .into_iter()
+        .map(|node| NodeRow {
+            node_id: node.node_id,
+            run: node
+                .desired_assignment
+                .as_ref()
+                .map(|assignment| assignment.run_id.to_string())
+                .unwrap_or_else(|| "N/A".to_string()),
+            role: node
+                .desired_assignment
+                .as_ref()
+                .map(|assignment| format_role(Some(assignment.role)))
+                .unwrap_or_else(|| "None".to_string()),
+            last_seen: format_last_seen(node.last_seen),
+        })
+        .collect()
+}
+
+fn print_node_table(rows: Vec<NodeRow>) {
+    if rows.is_empty() {
+        println!("no nodes found");
+        return;
+    }
+
+    let mut table = Table::new();
+    table.set_content_arrangement(ContentArrangement::Dynamic);
+    table.set_header(vec![
+        Cell::new("ID").set_alignment(CellAlignment::Center),
+        Cell::new("Run").set_alignment(CellAlignment::Center),
+        Cell::new("Role").set_alignment(CellAlignment::Center),
+        Cell::new("Last Seen").set_alignment(CellAlignment::Center),
+    ]);
+
+    for row in rows {
+        table.add_row(vec![row.node_id, row.run, row.role, row.last_seen]);
+    }
+
+    println!("{table}");
+}
+
+fn format_role(role: Option<WorkerRole>) -> String {
+    match role {
+        Some(WorkerRole::Evaluator) => "Evaluator".to_string(),
+        Some(WorkerRole::SamplerAggregator) => "Sampler Aggregator".to_string(),
+        None => "None".to_string(),
+    }
+}
+
+fn format_last_seen(last_seen: Option<chrono::DateTime<chrono::Utc>>) -> String {
+    last_seen
+        .map(|ts| ts.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .unwrap_or_else(|| "-".to_string())
 }

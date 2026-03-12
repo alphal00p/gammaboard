@@ -24,7 +24,6 @@ use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerAggregatorRunnerParams {
-    pub lease_ttl_ms: u64,
     pub min_poll_time_ms: u64,
     pub performance_snapshot_interval_ms: u64,
     pub target_batch_eval_ms: f64,
@@ -126,7 +125,7 @@ pub enum RunnerError {
 
 pub struct SamplerAggregatorRunner<WQ, AS, RC> {
     run_id: i32,
-    worker_id: String,
+    node_id: String,
     engine: Box<dyn SamplerAggregator>,
     aggregated_observable: ObservableState,
     work_queue: WQ,
@@ -251,7 +250,7 @@ where
 
     pub async fn new(
         run_id: i32,
-        worker_id: impl Into<String>,
+        node_id: impl Into<String>,
         engine: Box<dyn SamplerAggregator>,
         mut aggregated_observable: ObservableState,
         work_queue: WQ,
@@ -301,7 +300,7 @@ where
 
         Ok(Self {
             run_id,
-            worker_id: worker_id.into(),
+            node_id: node_id.into(),
             engine,
             aggregated_observable,
             work_queue,
@@ -551,7 +550,7 @@ where
 
         let snapshot = SamplerAggregatorPerformanceSnapshot {
             run_id: self.run_id,
-            worker_id: self.worker_id.clone(),
+            node_id: self.node_id.clone(),
             runtime_metrics: self.runtime_state.to_runtime_metrics(),
             engine_diagnostics: self.engine.get_diagnostics(),
         };

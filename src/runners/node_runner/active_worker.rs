@@ -1,33 +1,24 @@
-use crate::core::{StoreError, Worker as WorkerRecord, WorkerRole, WorkerStatus};
-use serde_json::json;
+use crate::core::{StoreError, WorkerRole};
 use tokio::sync::watch;
 use tracing::Instrument;
 use tracing::warn;
 
+use super::NodeRunnerStore;
 use super::evaluator_role_runner::run_evaluator_role;
 use super::sampler_aggregator_role_runner::run_sampler_aggregator_role;
-use super::{NodeRunnerStore, binary_version};
 
 pub(super) struct ActiveWorker<S: NodeRunnerStore> {
     pub(super) store: S,
     pub(super) node_id: String,
-    pub(super) worker_id: String,
     pub(super) role: WorkerRole,
     pub(super) run_id: i32,
 }
 
 impl<S: NodeRunnerStore> ActiveWorker<S> {
-    pub(super) fn new(
-        store: S,
-        node_id: impl Into<String>,
-        worker_id: impl Into<String>,
-        role: WorkerRole,
-        run_id: i32,
-    ) -> Self {
+    pub(super) fn new(store: S, node_id: impl Into<String>, role: WorkerRole, run_id: i32) -> Self {
         Self {
             store,
             node_id: node_id.into(),
-            worker_id: worker_id.into(),
             role,
             run_id,
         }
@@ -40,7 +31,8 @@ impl<S: NodeRunnerStore> ActiveWorker<S> {
             source = "worker",
             run_id = self.run_id,
             node_id = %self.node_id,
-            worker_id = %self.worker_id
+            worker_id = %self.node_id,
+            role = %self.role
         );
         async move {
             match self.role {
@@ -52,37 +44,21 @@ impl<S: NodeRunnerStore> ActiveWorker<S> {
         .await
     }
 
-    pub(super) async fn register_active_worker(
-        &self,
-        implementation: &str,
-    ) -> Result<(), StoreError> {
+    pub(super) async fn mark_active_with_log(&self) -> Result<(), StoreError> {
         self.store
-            .register_worker(&WorkerRecord {
-                worker_id: self.worker_id.clone(),
-                node_id: Some(self.node_id.clone()),
-                role: self.role,
-                implementation: implementation.to_string(),
-                version: binary_version().to_string(),
-                node_specs: json!({ "node_id": self.node_id }),
-                status: WorkerStatus::Active,
-                last_seen: None,
-            })
+            .set_current_assignment(&self.node_id, self.role, self.run_id)
             .await
     }
 
     pub(super) async fn heartbeat_with_log(&self) {
-        if let Err(err) = self.store.heartbeat_worker(&self.worker_id).await {
-            warn!("worker heartbeat failed: {err}");
+        if let Err(err) = self.store.heartbeat_node(&self.node_id).await {
+            warn!("node heartbeat failed: {err}");
         }
     }
 
     pub(super) async fn mark_inactive_with_log(&self) {
-        if let Err(err) = self
-            .store
-            .update_worker_status(&self.worker_id, WorkerStatus::Inactive)
-            .await
-        {
-            warn!("failed to mark worker inactive: {err}");
+        if let Err(err) = self.store.clear_current_assignment(&self.node_id).await {
+            warn!("failed to clear current node assignment: {err}");
         }
     }
 }

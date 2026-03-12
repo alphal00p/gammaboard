@@ -3,14 +3,19 @@ use crate::core::WorkerRole;
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 
-fn control_plane_worker_id(node_id: &str, role: WorkerRole) -> String {
-    format!("{node_id}-{role}")
-}
-
 pub(crate) struct DesiredAssignmentRaw {
     pub node_id: String,
     pub role: String,
     pub run_id: i32,
+}
+
+pub(crate) struct NodeRaw {
+    pub node_id: String,
+    pub desired_role: Option<String>,
+    pub desired_run_id: Option<i32>,
+    pub current_role: Option<String>,
+    pub current_run_id: Option<i32>,
+    pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub(crate) async fn upsert_desired_assignment(
@@ -19,36 +24,62 @@ pub(crate) async fn upsert_desired_assignment(
     role: WorkerRole,
     run_id: i32,
 ) -> Result<(), sqlx::Error> {
-    let worker_id = control_plane_worker_id(node_id, role);
     sqlx::query(
         r#"
-        INSERT INTO workers (
-            worker_id,
+        INSERT INTO nodes (
             node_id,
-            role,
-            implementation,
-            version,
-            node_specs,
-            status,
             desired_run_id,
-            desired_updated_at,
+            desired_role,
             updated_at
         ) VALUES (
-            $1, $2, $3, 'control_plane', 'v1', '{}'::jsonb, 'inactive', $4, now(), now()
+            $1, $2, $3, now()
         )
-        ON CONFLICT (worker_id) DO UPDATE
+        ON CONFLICT (node_id) DO UPDATE
         SET
-            node_id = EXCLUDED.node_id,
-            role = EXCLUDED.role,
             desired_run_id = EXCLUDED.desired_run_id,
-            desired_updated_at = now(),
+            desired_role = EXCLUDED.desired_role,
             updated_at = now()
         "#,
     )
-    .bind(&worker_id)
     .bind(node_id)
-    .bind(role.as_str())
     .bind(run_id)
+    .bind(role.as_str())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn register_node(pool: &PgPool, node_id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO nodes (
+            node_id,
+            last_seen,
+            updated_at
+        ) VALUES (
+            $1, now(), now()
+        )
+        ON CONFLICT (node_id) DO UPDATE
+        SET
+            last_seen = now(),
+            updated_at = now()
+        "#,
+    )
+    .bind(node_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn heartbeat_node(pool: &PgPool, node_id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        UPDATE nodes
+        SET last_seen = now(), updated_at = now()
+        WHERE node_id = $1
+        "#,
+    )
+    .bind(node_id)
     .execute(pool)
     .await?;
     Ok(())
@@ -57,20 +88,18 @@ pub(crate) async fn upsert_desired_assignment(
 pub(crate) async fn clear_desired_assignment(
     pool: &PgPool,
     node_id: &str,
-    role: WorkerRole,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
-        UPDATE workers
+        UPDATE nodes
         SET
             desired_run_id = NULL,
-            desired_updated_at = now(),
+            desired_role = NULL,
             updated_at = now()
-        WHERE node_id = $1 AND role = $2
+        WHERE node_id = $1
         "#,
     )
     .bind(node_id)
-    .bind(role.as_str())
     .execute(pool)
     .await?;
     Ok(())
@@ -82,10 +111,10 @@ pub(crate) async fn clear_desired_assignments_for_run(
 ) -> Result<u64, sqlx::Error> {
     let result = sqlx::query(
         r#"
-        UPDATE workers
+        UPDATE nodes
         SET
             desired_run_id = NULL,
-            desired_updated_at = now(),
+            desired_role = NULL,
             updated_at = now()
         WHERE desired_run_id = $1
         "#,
@@ -99,12 +128,11 @@ pub(crate) async fn clear_desired_assignments_for_run(
 pub(crate) async fn clear_all_desired_assignments(pool: &PgPool) -> Result<u64, sqlx::Error> {
     let result = sqlx::query(
         r#"
-        UPDATE workers
+        UPDATE nodes
         SET
             desired_run_id = NULL,
-            desired_updated_at = now(),
+            desired_role = NULL,
             updated_at = now()
-        WHERE desired_run_id IS NOT NULL
         "#,
     )
     .execute(pool)
@@ -112,24 +140,28 @@ pub(crate) async fn clear_all_desired_assignments(pool: &PgPool) -> Result<u64, 
     Ok(result.rows_affected())
 }
 
-pub(crate) async fn get_desired_assignment_run_id(
+pub(crate) async fn get_desired_assignment(
     pool: &PgPool,
     node_id: &str,
-    role: WorkerRole,
-) -> Result<Option<i32>, sqlx::Error> {
-    let run_id = sqlx::query_scalar(
+) -> Result<Option<DesiredAssignmentRaw>, sqlx::Error> {
+    let row = sqlx::query_as::<_, (String, String, i32)>(
         r#"
-        SELECT desired_run_id AS run_id
-        FROM workers
-        WHERE node_id = $1 AND role = $2
+        SELECT node_id, desired_role AS role, desired_run_id AS run_id
+        FROM nodes
+        WHERE node_id = $1
           AND desired_run_id IS NOT NULL
+        LIMIT 1
         "#,
     )
     .bind(node_id)
-    .bind(role.as_str())
     .fetch_optional(pool)
     .await?;
-    Ok(run_id)
+
+    Ok(row.map(|(node_id, role, run_id)| DesiredAssignmentRaw {
+        node_id,
+        role,
+        run_id,
+    }))
 }
 
 pub(crate) async fn list_desired_assignments(
@@ -138,11 +170,11 @@ pub(crate) async fn list_desired_assignments(
 ) -> Result<Vec<DesiredAssignmentRaw>, sqlx::Error> {
     let rows = sqlx::query_as::<_, (String, String, i32)>(
         r#"
-        SELECT node_id, role, desired_run_id AS run_id
-        FROM workers
+        SELECT node_id, desired_role AS role, desired_run_id AS run_id
+        FROM nodes
         WHERE desired_run_id IS NOT NULL
           AND ($1::text IS NULL OR node_id = $1)
-        ORDER BY node_id ASC, role ASC
+        ORDER BY node_id ASC
         "#,
     )
     .bind(node_id)
@@ -159,40 +191,119 @@ pub(crate) async fn list_desired_assignments(
         .collect())
 }
 
+pub(crate) async fn list_nodes(
+    pool: &PgPool,
+    node_id: Option<&str>,
+) -> Result<Vec<NodeRaw>, sqlx::Error> {
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            Option<String>,
+            Option<i32>,
+            Option<String>,
+            Option<i32>,
+            Option<chrono::DateTime<chrono::Utc>>,
+        ),
+    >(
+        r#"
+        SELECT
+            n.node_id,
+            n.desired_role,
+            n.desired_run_id,
+            n.current_role,
+            n.current_run_id,
+            n.last_seen
+        FROM nodes n
+        WHERE ($1::text IS NULL OR n.node_id = $1)
+        ORDER BY n.node_id ASC
+        "#,
+    )
+    .bind(node_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(node_id, desired_role, desired_run_id, current_role, current_run_id, last_seen)| {
+                NodeRaw {
+                    node_id,
+                    desired_role,
+                    desired_run_id,
+                    current_role,
+                    current_run_id,
+                    last_seen,
+                }
+            },
+        )
+        .collect())
+}
+
+pub(crate) async fn set_current_assignment(
+    pool: &PgPool,
+    node_id: &str,
+    role: WorkerRole,
+    run_id: i32,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        UPDATE nodes
+        SET
+            current_run_id = $2,
+            current_role = $3,
+            updated_at = now()
+        WHERE node_id = $1
+        "#,
+    )
+    .bind(node_id)
+    .bind(run_id)
+    .bind(role.as_str())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn clear_current_assignment(
+    pool: &PgPool,
+    node_id: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        UPDATE nodes
+        SET
+            current_run_id = NULL,
+            current_role = NULL,
+            updated_at = now()
+        WHERE node_id = $1
+        "#,
+    )
+    .bind(node_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub(crate) async fn request_node_shutdown(
     pool: &PgPool,
     node_id: &str,
 ) -> Result<u64, sqlx::Error> {
-    let evaluator_worker_id = control_plane_worker_id(node_id, WorkerRole::Evaluator);
-    let sampler_worker_id = control_plane_worker_id(node_id, WorkerRole::SamplerAggregator);
-
     let result = sqlx::query(
         r#"
-        INSERT INTO workers (
-            worker_id,
+        INSERT INTO nodes (
             node_id,
-            role,
-            implementation,
-            version,
-            node_specs,
-            status,
             shutdown_requested_at,
             updated_at
         )
         VALUES
-            ($1, $2, 'evaluator', 'control_plane', 'v1', '{}'::jsonb, 'inactive', now(), now()),
-            ($3, $2, 'sampler_aggregator', 'control_plane', 'v1', '{}'::jsonb, 'inactive', now(), now())
-        ON CONFLICT (worker_id) DO UPDATE
+            ($1, now(), now())
+        ON CONFLICT (node_id) DO UPDATE
         SET
-            node_id = EXCLUDED.node_id,
-            role = EXCLUDED.role,
             shutdown_requested_at = now(),
             updated_at = now()
         "#,
     )
-    .bind(evaluator_worker_id)
     .bind(node_id)
-    .bind(sampler_worker_id)
     .execute(pool)
     .await?;
 
@@ -202,11 +313,10 @@ pub(crate) async fn request_node_shutdown(
 pub(crate) async fn request_all_nodes_shutdown(pool: &PgPool) -> Result<u64, sqlx::Error> {
     let result = sqlx::query(
         r#"
-        UPDATE workers
+        UPDATE nodes
         SET
             shutdown_requested_at = now(),
             updated_at = now()
-        WHERE node_id IS NOT NULL
         "#,
     )
     .execute(pool)
@@ -222,7 +332,7 @@ pub(crate) async fn consume_node_shutdown_request(
     let requested = sqlx::query_scalar(
         r#"
         WITH cleared AS (
-            UPDATE workers
+            UPDATE nodes
             SET
                 shutdown_requested_at = NULL,
                 updated_at = now()

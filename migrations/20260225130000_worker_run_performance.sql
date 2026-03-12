@@ -4,7 +4,7 @@
 CREATE TABLE IF NOT EXISTS evaluator_performance_history (
     id BIGSERIAL PRIMARY KEY,
     run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-    worker_id TEXT NOT NULL REFERENCES workers(worker_id) ON DELETE CASCADE,
+    worker_id TEXT NOT NULL REFERENCES nodes(node_id) ON DELETE CASCADE,
     metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -28,7 +28,7 @@ ORDER BY run_id, worker_id, created_at DESC, id DESC;
 CREATE TABLE IF NOT EXISTS sampler_aggregator_performance_history (
     id BIGSERIAL PRIMARY KEY,
     run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-    worker_id TEXT NOT NULL REFERENCES workers(worker_id) ON DELETE CASCADE,
+    worker_id TEXT NOT NULL REFERENCES nodes(node_id) ON DELETE CASCADE,
     metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
     runtime_metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
     engine_diagnostics JSONB NOT NULL DEFAULT '{}'::jsonb,

@@ -52,11 +52,12 @@ const deriveSamplerRuntimeSummary = (workers, runId, latestSamplerEntry) => {
   const samplerWorker =
     list.find(
       (worker) =>
-        worker.desired_run_id === runId &&
-        worker.role === "sampler_aggregator" &&
+        worker.current_run_id === runId &&
+        worker.current_role === "sampler_aggregator" &&
         String(worker.status || "").toLowerCase() === "active",
     ) ||
-    list.find((worker) => worker.desired_run_id === runId && worker.role === "sampler_aggregator") ||
+    list.find((worker) => worker.current_run_id === runId && worker.current_role === "sampler_aggregator") ||
+    list.find((worker) => worker.desired_run_id === runId && worker.desired_role === "sampler_aggregator") ||
     null;
   const runtimeMetrics = samplerWorker?.sampler_runtime_metrics ?? latestSamplerEntry?.runtime_metrics ?? null;
   const samplerMetrics = latestSamplerEntry?.metrics ?? samplerWorker?.sampler_metrics ?? null;

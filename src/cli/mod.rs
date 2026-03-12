@@ -1,3 +1,4 @@
+pub mod completion;
 pub mod node;
 pub mod run;
 pub mod run_node;
@@ -6,6 +7,7 @@ pub mod shared;
 
 use anyhow::Result;
 use clap::{ArgAction, Parser, Subcommand};
+use completion::{CompletionArgs, run_completion};
 use node::{NodeArgs, run_node_commands};
 use run::{RunArgs, run_run_commands};
 use run_node::{RunNodeArgs, run_node};
@@ -31,6 +33,8 @@ enum Command {
     RunNode(RunNodeArgs),
     /// API server
     Server(ServerArgs),
+    /// Generate shell completion scripts
+    Completion(CompletionArgs),
 }
 
 pub async fn dispatch(cli: Cli) -> Result<()> {
@@ -40,5 +44,6 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Command::Node(args) => run_node_commands(args.command, quiet).await,
         Command::RunNode(args) => run_node(args, quiet).await,
         Command::Server(args) => run_server(args, quiet).await,
+        Command::Completion(args) => run_completion(args),
     }
 }

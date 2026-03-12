@@ -29,6 +29,14 @@ Gammaboard runs distributed numerical integration jobs with PostgreSQL as the sh
 
 Both `serve-*` commands load `.env`. The backend port is controlled by `GAMMABOARD_BACKEND_PORT`, and the frontend uses `REACT_APP_API_BASE_URL`.
 
+### CLI completions and shortcut
+- `just build` also creates `~/.cargo/bin/gammaboard` as a symlink to the built binary so you can run `gammaboard ...` directly with the same command name your shell already resolves from Cargo's bin directory.
+- Generate shell completions with:
+  - `./target/dev-optim/gammaboard completion bash`
+  - `./target/dev-optim/gammaboard completion zsh`
+  - `./target/dev-optim/gammaboard completion fish`
+- The generated script can be sourced directly, or installed through your shell's normal completion directory.
+
 ### Live test flows
 - `just live-test-basic`
 - `just live-test-gammaloop`
@@ -36,21 +44,28 @@ Both `serve-*` commands load `.env`. The backend port is controlled by `GAMMABOA
 Useful stop commands:
 - `just stop`
 - `just restart-db`
+- `just start 8`
 
 ## Manual Flow
 1. Add a run:
    - `cargo run --bin gammaboard -- run add configs/live-test-unit-naive-scalar.toml`
 2. Start one or more run-nodes:
-   - `cargo run --bin gammaboard -- run-node --node-id node-a --poll-ms 1000`
-   - `cargo run --bin gammaboard -- run-node --node-id node-b --poll-ms 1000`
+   - `just start 2`
+   - Worker IDs are `w-1`, `w-2`, ... in sequence.
 3. Assign roles:
-   - `cargo run --bin gammaboard -- node assign node-a evaluator <RUN_ID>`
-   - `cargo run --bin gammaboard -- node assign node-b sampler-aggregator <RUN_ID>`
+   - `cargo run --bin gammaboard -- node assign w-1 evaluator <RUN_ID>`
+   - `cargo run --bin gammaboard -- node assign w-2 sampler-aggregator <RUN_ID>`
+   - Each run may have many evaluator assignments, but at most one sampler-aggregator assignment.
+   - Each node may have at most one desired assignment. Assigning a new role on the same node replaces the previous desired assignment.
 
 Useful lifecycle commands:
 - `cargo run --bin gammaboard -- run pause <RUN_ID>`
 - `cargo run --bin gammaboard -- run remove <RUN_ID>`
+- `cargo run --bin gammaboard -- node list`
+- `cargo run --bin gammaboard -- node unassign <NODE_ID>`
 - `cargo run --bin gammaboard -- node stop <NODE_ID>`
+
+`gammaboard node list` prints one row per node with `ID / Run / Role / Last Seen`. `run-node` registers the node immediately, so freshly started idle nodes appear with `Run = N/A` and `Role = None`.
 
 ## Configuration
 Run configuration is TOML and is deep-merged over `configs/default.toml` when you call `gammaboard run add <file.toml>`.
@@ -80,7 +95,6 @@ min_poll_time_ms = 100
 performance_snapshot_interval_ms = 2000
 target_batch_eval_ms = 400.0
 target_queue_remaining = 0.5
-lease_ttl_ms = 5000
 max_batch_size = 64
 max_batches_per_tick = 8
 max_queue_size = 128
@@ -120,6 +134,7 @@ Examples:
 - `runs.sampler_runner_snapshot` is internal control-plane state and is not exposed by the dashboard read API.
 - Run lifecycle is derived from control-plane state rather than persisted on `runs`:
   desired assignments present -> `running`; no desired assignments but active workers or claimed batches remain -> `pausing`; otherwise -> `paused`.
+- Desired and current node state live directly on `nodes`; both desired fields and both current fields must be either null together or set together.
 - Aggregated observable history snapshots persist the observable's reduced persistent payload rather than the tagged runtime `ObservableState`.
 - Run and worker performance snapshots are persisted periodically.
 - Evaluator performance history stores generic evaluator metrics only; evaluator-specific static details belong in evaluator init metadata.
@@ -172,5 +187,7 @@ Dashboard behavior:
 - Frontend:
   - `npm --prefix dashboard test -- --watch=false`
   - `npm --prefix dashboard run build`
+- Local worker utility:
+  - `just start <N>` starts `N` local `run-node` processes with sequential IDs `w-1` through `w-N`.
 
 If you change architecture, config shape, CLI behavior, or operational workflow, update this file and `AGENTS.md` in the same change.

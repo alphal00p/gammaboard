@@ -183,7 +183,10 @@ const PerformanceWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected }
     return (
       <>
         <ConnectionStatus isConnected={isConnected} lastUpdate={null} />
-        <EmptyStateCard title="No runs available" message="Create a run to inspect persisted performance history." />
+        <EmptyStateCard
+          title="No runs available"
+          message="Create a run to inspect persisted node performance history."
+        />
       </>
     );
   }
@@ -194,7 +197,7 @@ const PerformanceWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected }
       <RunSelector runs={runs} selectedRun={selectedRun} onRunChange={setSelectedRun} />
 
       {!selectedRun ? (
-        <EmptyStateCard title="Select a run" message="Pick a run to inspect persisted worker performance history." />
+        <EmptyStateCard title="Select a run" message="Pick a run to inspect persisted node performance history." />
       ) : (
         <>
           <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
@@ -209,11 +212,11 @@ const PerformanceWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected }
             ) : (
               <Stack spacing={2}>
                 <FormControl size="small" sx={{ maxWidth: 420 }}>
-                  <InputLabel id="performance-worker-select-label">Worker</InputLabel>
+                  <InputLabel id="performance-worker-select-label">Node</InputLabel>
                   <Select
                     labelId="performance-worker-select-label"
                     value={selectedWorkerId}
-                    label="Worker"
+                    label="Node"
                     onChange={(event) => setSelectedWorkerId(event.target.value)}
                   >
                     {workers.map((worker) => (
@@ -225,7 +228,7 @@ const PerformanceWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected }
                 </FormControl>
                 {selectedWorker ? (
                   <Typography variant="body2" color="text.secondary">
-                    Selected worker: <strong>{selectedWorker.workerId}</strong>
+                    Selected node: <strong>{selectedWorker.workerId}</strong>
                   </Typography>
                 ) : null}
               </Stack>
@@ -233,7 +236,7 @@ const PerformanceWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected }
           </Paper>
 
           {selectedWorkerId && selectedEvaluatorEntries.length === 0 && selectedSamplerEntries.length === 0 ? (
-            <Alert severity="info">No persisted performance entries found for the selected worker on this run.</Alert>
+            <Alert severity="info">No persisted performance entries found for the selected node on this run.</Alert>
           ) : null}
 
           <PerformanceSection
@@ -273,7 +276,7 @@ const PerformanceWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected }
                       title="Evaluator Snapshot"
                       snapshotAt={latestEvaluator.created_at}
                       fields={[
-                        { label: "worker", value: latestEvaluator.worker_id ?? "n/a", md: 3 },
+                        { label: "node", value: latestEvaluator.worker_id ?? "n/a", md: 3 },
                         {
                           label: "batches completed",
                           value: fmtCount(latestEvaluator.metrics?.batches_completed),
@@ -313,7 +316,7 @@ const PerformanceWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected }
                       title="Sampler Snapshot"
                       snapshotAt={latestSampler.created_at}
                       fields={[
-                        { label: "worker", value: latestSampler.worker_id ?? "n/a", md: 3 },
+                        { label: "node", value: latestSampler.worker_id ?? "n/a", md: 3 },
                         { label: "produced batches", value: fmtCount(latestSampler.metrics?.produced_batches), md: 3 },
                         { label: "produced samples", value: fmtCount(latestSampler.metrics?.produced_samples), md: 3 },
                         { label: "ingested batches", value: fmtCount(latestSampler.metrics?.ingested_batches), md: 3 },

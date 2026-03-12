@@ -44,7 +44,7 @@ const WorkerLogsPanel = ({
   error,
   refresh,
   loadOlder,
-  title = "Worker Logs",
+  title = "Node Logs",
 }) => {
   const [selectedLogId, setSelectedLogId] = useState(null);
   const selectedLog = useMemo(
@@ -60,14 +60,14 @@ const WorkerLogsPanel = ({
 
       <Stack direction="row" spacing={1.5} useFlexGap flexWrap="wrap" sx={{ mb: 1.5 }}>
         <FormControl size="small" sx={{ minWidth: 220 }}>
-          <InputLabel id="worker-log-filter-worker">Worker</InputLabel>
+          <InputLabel id="worker-log-filter-worker">Node</InputLabel>
           <Select
             labelId="worker-log-filter-worker"
             value={filters.workerId}
-            label="Worker"
+            label="Node"
             onChange={(event) => setFilters((current) => ({ ...current, workerId: event.target.value }))}
           >
-            <MenuItem value="">All workers</MenuItem>
+            <MenuItem value="">All nodes</MenuItem>
             {workerOptions.map((workerId) => (
               <MenuItem key={workerId} value={workerId}>
                 {workerId}
@@ -122,7 +122,7 @@ const WorkerLogsPanel = ({
               <TableRow>
                 <TableCell sx={{ width: 220 }}>Timestamp</TableCell>
                 <TableCell sx={{ width: 110 }}>Level</TableCell>
-                <TableCell sx={{ width: 220 }}>Worker</TableCell>
+                <TableCell sx={{ width: 220 }}>Node</TableCell>
                 <TableCell>Message</TableCell>
               </TableRow>
             </TableHead>
