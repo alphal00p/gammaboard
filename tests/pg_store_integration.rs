@@ -1,5 +1,5 @@
 use gammaboard::core::{ControlPlaneStore, StoreError, WorkQueueStore, WorkerRole};
-use gammaboard::{Batch, PgStore};
+use gammaboard::{Batch, LatentBatchSpec, PgStore};
 use sqlx::postgres::PgPoolOptions;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -54,8 +54,9 @@ async fn claim_batch_requires_active_assignment() {
         .expect("set current evaluator assignment");
 
     let batch = Batch::from_flat_data(1, 1, 0, vec![1.0], vec![]).expect("batch");
+    let latent_batch = LatentBatchSpec::from_batch(&batch).with_version(1);
     store
-        .insert_batch(run_id, &batch, true)
+        .insert_batch(run_id, &latent_batch, true)
         .await
         .expect("insert batch");
 
@@ -104,8 +105,9 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
     store.register_node(&node_id).await.expect("register node");
 
     let batch = Batch::from_flat_data(1, 1, 0, vec![2.0], vec![]).expect("batch");
+    let latent_batch = LatentBatchSpec::from_batch(&batch).with_version(1);
     store
-        .insert_batch(run_id, &batch, true)
+        .insert_batch(run_id, &latent_batch, true)
         .await
         .expect("insert batch");
 

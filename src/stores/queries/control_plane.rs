@@ -1,6 +1,4 @@
-use crate::core::PointSpec;
 use crate::core::WorkerRole;
-use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 
 pub(crate) struct DesiredAssignmentRaw {
@@ -348,42 +346,6 @@ pub(crate) async fn consume_node_shutdown_request(
     .await?;
 
     Ok(requested)
-}
-
-pub(crate) async fn create_run(
-    pool: &PgPool,
-    name: &str,
-    target_nr_samples: Option<i64>,
-    integration_params: &JsonValue,
-    target: Option<&JsonValue>,
-    point_spec: &PointSpec,
-    evaluator_init_metadata: Option<&JsonValue>,
-    sampler_aggregator_init_metadata: Option<&JsonValue>,
-) -> Result<i32, sqlx::Error> {
-    sqlx::query_scalar(
-        r#"
-        INSERT INTO runs (
-            name,
-            target_nr_samples,
-            integration_params,
-            target,
-            point_spec,
-            evaluator_init_metadata,
-            sampler_aggregator_init_metadata
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING id
-        "#,
-    )
-    .bind(name)
-    .bind(target_nr_samples)
-    .bind(integration_params)
-    .bind(target)
-    .bind(sqlx::types::Json(point_spec))
-    .bind(evaluator_init_metadata)
-    .bind(sampler_aggregator_init_metadata)
-    .fetch_one(pool)
-    .await
 }
 
 pub(crate) async fn try_set_training_completed_at(

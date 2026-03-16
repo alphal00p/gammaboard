@@ -12,9 +12,9 @@ use serde_json::json;
 use crate::{
     Batch, BatchResult, BuildError, EvalError, PointSpec,
     engines::{
-        BuildFromJson, ComplexObservableState, EvalBatchOptions, Evaluator, ObservableState,
-        ScalarObservableState, SemanticObservableKind,
+        ComplexObservableState, ObservableState, ScalarObservableState, SemanticObservableKind,
     },
+    engines::{EvalBatchOptions, Evaluator},
 };
 
 pub struct GammaLoopEvaluator {
@@ -29,7 +29,7 @@ pub struct GammaLoopEvaluator {
     point_spec: PointSpec, //why?
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TrainingProjection {
     #[default]
@@ -50,7 +50,7 @@ impl TrainingProjection {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct GammaLoopParams {
     pub state_folder: PathBuf,
@@ -80,10 +80,8 @@ impl Default for GammaLoopParams {
     }
 }
 
-impl BuildFromJson for GammaLoopEvaluator {
-    type Params = GammaLoopParams;
-
-    fn from_parsed_params(params: Self::Params) -> Result<Self, BuildError> {
+impl GammaLoopEvaluator {
+    pub fn from_params(params: GammaLoopParams) -> Result<Self, BuildError> {
         _ = initialise();
         let state = State::load(params.state_folder.clone(), None, None).map_err(|err| {
             BuildError::build(format!(
@@ -122,9 +120,7 @@ impl BuildFromJson for GammaLoopEvaluator {
             },
         })
     }
-}
 
-impl GammaLoopEvaluator {
     fn evaluate(&mut self, batch: &Batch) -> Result<Vec<num::complex::Complex64>, EvalError> {
         let mut vec_res = vec![];
 

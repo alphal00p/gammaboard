@@ -2,9 +2,10 @@ use std::{fs, path::Path};
 
 use crate::{
     Batch, BatchResult, BuildError, EngineError, EvalError, PointSpec,
-    engines::{BuildFromJson, EvalBatchOptions, Evaluator, ObservableState, ScalarObservableState},
+    engines::{EvalBatchOptions, Evaluator},
+    engines::{ObservableState, ScalarObservableState},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use symbolica::wrap_input;
 use symbolica::{
@@ -46,16 +47,14 @@ impl SymbolicaEngine {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SymbolicaParams {
-    expr: String,
-    args: Vec<String>,
+    pub expr: String,
+    pub args: Vec<String>,
 }
 
-impl BuildFromJson for SymbolicaEngine {
-    type Params = SymbolicaParams;
-
-    fn from_parsed_params(params: Self::Params) -> Result<Self, crate::BuildError> {
+impl SymbolicaEngine {
+    pub fn from_params(params: SymbolicaParams) -> Result<Self, crate::BuildError> {
         let settings = ParseSettings::symbolica();
         let parsed_expr = Atom::parse(wrap_input!(&params.expr), settings.clone())
             .map_err(|err| BuildError::build(err.to_string()))?;

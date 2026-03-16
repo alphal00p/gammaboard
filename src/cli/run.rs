@@ -1,9 +1,11 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Args, Subcommand};
-use gammaboard::core::ControlPlaneStore;
-use gammaboard::core::RunReadStore;
+use gammaboard::core::{
+    ControlPlaneStore, RunReadStore, RunTaskSpec, RunTaskStore, default_run_task_queue,
+};
 use gammaboard::init_pg_store;
 use gammaboard::preprocess::{RunAddConfig, preprocess_run_add};
+use serde::Deserialize;
 use std::path::PathBuf;
 use tracing::Instrument;
 
@@ -22,6 +24,20 @@ pub enum RunCommand {
     Add { integration_params_file: PathBuf },
     Pause(RunSelection),
     Remove(RunSelection),
+    Task(TaskArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct TaskArgs {
+    #[command(subcommand)]
+    command: TaskCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TaskCommand {
+    Add { run_id: i32, task_file: PathBuf },
+    List { run_id: i32 },
+    Remove { run_id: i32, task_id: i64 },
 }
 
 pub async fn run_run_commands(command: RunCommand, quiet: bool) -> Result<()> {
@@ -61,6 +77,10 @@ pub async fn run_run_commands(command: RunCommand, quiet: bool) -> Result<()> {
                     .ok_or_else(|| anyhow!("preprocessing did not resolve point_spec"))?;
                 let integration_params = serde_json::to_value(&processed.integration_params)
                     .map_err(|err| anyhow!("failed to serialize integration_params: {err}"))?;
+                let initial_tasks = match processed.task_queue.clone() {
+                    Some(tasks) => tasks,
+                    None => default_run_task_queue(processed.pause_on_samples),
+                };
                 let run_id = store
                     .create_run(
                         &processed.name,
@@ -70,6 +90,7 @@ pub async fn run_run_commands(command: RunCommand, quiet: bool) -> Result<()> {
                         point_spec,
                         processed.evaluator_init_metadata.as_ref(),
                         processed.sampler_aggregator_init_metadata.as_ref(),
+                        &initial_tasks,
                     )
                     .await?;
                 tracing::info!("created run_id={} name={}", run_id, processed.name);
@@ -109,6 +130,38 @@ pub async fn run_run_commands(command: RunCommand, quiet: bool) -> Result<()> {
                     }
                 }
             }
+            RunCommand::Task(args) => match args.command {
+                TaskCommand::Add { run_id, task_file } => {
+                    let tasks = load_task_queue_file(&task_file)?;
+                    let inserted = store.append_run_tasks(run_id, &tasks).await?;
+                    tracing::info!(run_id, tasks_added = inserted.len(), "appended run tasks");
+                }
+                TaskCommand::List { run_id } => {
+                    let tasks = store.list_run_tasks(run_id).await?;
+                    for task in tasks {
+                        tracing::info!(
+                            run_id = task.run_id,
+                            task_id = task.id,
+                            sequence_nr = task.sequence_nr,
+                            state = task.state.as_str(),
+                            kind = task.task.kind_str(),
+                            nr_produced_samples = task.nr_produced_samples,
+                            nr_completed_samples = task.nr_completed_samples,
+                            failure_reason = task.failure_reason.as_deref().unwrap_or(""),
+                            "run task"
+                        );
+                    }
+                }
+                TaskCommand::Remove { run_id, task_id } => {
+                    let removed = store.remove_pending_run_task(run_id, task_id).await?;
+                    if !removed {
+                        return Err(anyhow!(
+                            "run task {task_id} was not removed; only pending tasks can be removed"
+                        ));
+                    }
+                    tracing::info!(run_id, task_id, "removed pending run task");
+                }
+            },
         }
         Ok(())
     }
@@ -121,7 +174,13 @@ fn run_command_name(command: &RunCommand) -> &'static str {
         RunCommand::Add { .. } => "run_add",
         RunCommand::Pause(_) => "run_pause",
         RunCommand::Remove(_) => "run_remove",
+        RunCommand::Task(_) => "run_task",
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct TaskQueueFile {
+    task_queue: Vec<RunTaskSpec>,
 }
 
 fn load_run_add_config(path: &PathBuf) -> Result<RunAddConfig> {
@@ -154,8 +213,33 @@ fn load_run_add_config(path: &PathBuf) -> Result<RunAddConfig> {
             "invalid pause_on_samples: expected positive integer when set"
         ));
     }
+    if let Some(task_queue) = parsed.task_queue.as_ref() {
+        if task_queue.is_empty() {
+            return Err(anyhow!(
+                "invalid task_queue: expected at least one task when set"
+            ));
+        }
+        for task in task_queue {
+            task.validate()
+                .map_err(|err| anyhow!("invalid task_queue entry: {err}"))?;
+        }
+    }
 
     Ok(RunAddConfig { name, ..parsed })
+}
+
+fn load_task_queue_file(path: &PathBuf) -> Result<Vec<RunTaskSpec>> {
+    let parsed: TaskQueueFile = read_run_add_toml(path)?
+        .try_into()
+        .map_err(|err| anyhow!("invalid run-task payload: {err}"))?;
+    if parsed.task_queue.is_empty() {
+        return Err(anyhow!("invalid task_queue: expected at least one task"));
+    }
+    for task in &parsed.task_queue {
+        task.validate()
+            .map_err(|err| anyhow!("invalid task_queue entry: {err}"))?;
+    }
+    Ok(parsed.task_queue)
 }
 
 fn read_run_add_toml(path: &PathBuf) -> Result<toml::Value> {

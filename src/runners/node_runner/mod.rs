@@ -9,7 +9,8 @@ mod reconcile;
 mod sampler_aggregator_role_runner;
 
 use crate::core::{
-    AggregationStore, ControlPlaneStore, RunSpecStore, StoreError, WorkQueueStore, WorkerRole,
+    AggregationStore, ControlPlaneStore, ParametrizationVersionStore, RunSpecStore, RunTaskStore,
+    StoreError, WorkQueueStore, WorkerRole,
 };
 use std::time::Duration;
 use tokio::{sync::watch, task::JoinHandle, time::sleep};
@@ -24,7 +25,16 @@ pub struct NodeRunnerConfig {
 }
 
 pub trait NodeRunnerStore:
-    RunSpecStore + ControlPlaneStore + WorkQueueStore + AggregationStore + Clone + Send + Sync + 'static
+    RunSpecStore
+    + ControlPlaneStore
+    + WorkQueueStore
+    + AggregationStore
+    + ParametrizationVersionStore
+    + RunTaskStore
+    + Clone
+    + Send
+    + Sync
+    + 'static
 {
 }
 
@@ -33,6 +43,8 @@ impl<T> NodeRunnerStore for T where
         + ControlPlaneStore
         + WorkQueueStore
         + AggregationStore
+        + ParametrizationVersionStore
+        + RunTaskStore
         + Clone
         + Send
         + Sync
@@ -131,8 +143,4 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         .instrument(span)
         .await
     }
-}
-
-pub(super) fn binary_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
 }

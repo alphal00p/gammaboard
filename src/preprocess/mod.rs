@@ -1,5 +1,5 @@
-use crate::core::PointSpec;
-use crate::engines::{BuildError, EvalBatchOptions, Evaluator, IntegrationParams};
+use crate::core::RunTaskSpec;
+use crate::engines::{BuildError, EvalBatchOptions, Evaluator, IntegrationParams, PointSpec};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
@@ -7,6 +7,7 @@ use serde_json::Value as JsonValue;
 pub struct RunAddConfig {
     pub name: String,
     pub pause_on_samples: Option<i64>,
+    pub task_queue: Option<Vec<RunTaskSpec>>,
     #[serde(flatten)]
     pub integration_params: IntegrationParams,
     pub target: Option<JsonValue>,
@@ -49,24 +50,22 @@ fn preflight_compatibility(
 
     // One-point dry-run through sampler -> parametrization -> evaluator.
     let require_training_values = sampler_aggregator.training_samples_remaining().is_some();
-    let sample_batch = sampler_aggregator.produce_batch(1).map_err(|err| {
-        BuildError::incompatible(format!(
-            "preflight failed to produce sample batch with sampler {}: {err}",
-            config.integration_params.sampler_aggregator.kind_str()
-        ))
-    })?;
-    sample_batch
-        .validate_point_spec(point_spec)
+    let latent_batch = sampler_aggregator
+        .produce_latent_batch(1)
         .map_err(|err| {
             BuildError::incompatible(format!(
-                "preflight sample batch has invalid point_spec: {err}"
+                "preflight failed to produce latent batch with sampler {}: {err}",
+                config.integration_params.sampler_aggregator.kind_str()
             ))
-        })?;
+        })?
+        .with_version(1);
 
     let transformed_batch = parametrization
-        .transform_batch(&sample_batch)
+        .materialize_batch(&latent_batch)
         .map_err(|err| {
-            BuildError::incompatible(format!("preflight parametrization transform failed: {err}"))
+            BuildError::incompatible(format!(
+                "preflight parametrization materialization failed: {err}"
+            ))
         })?;
     transformed_batch
         .validate_point_spec(point_spec)

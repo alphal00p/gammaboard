@@ -11,7 +11,7 @@ discrete_dims = 0
 kind = "naive_monte_carlo"
 
 [parametrization]
-kind = "none"
+kind = "identity"
 
 [evaluator_runner_params]
 min_loop_time_ms = 20

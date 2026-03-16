@@ -1,5 +1,7 @@
-use crate::core::{Batch, PointSpec};
-use crate::engines::{BuildError, EngineError, SamplerAggregator, SamplerAggregatorSnapshot};
+use crate::engines::{
+    Batch, BuildError, EngineError, LatentBatchSpec, PointSpec, SamplePlan, SamplerAggregator,
+    SamplerAggregatorSnapshot,
+};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{thread, time::Duration};
@@ -39,11 +41,11 @@ impl NaiveMonteCarloSamplerAggregator {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct NaiveMonteCarloSamplerParams {
-    training_target_samples: usize,
-    training_delay_per_sample_ms: u64,
+    pub training_target_samples: usize,
+    pub training_delay_per_sample_ms: u64,
 }
 
 impl Default for NaiveMonteCarloSamplerParams {
@@ -108,24 +110,30 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
         }
     }
 
-    fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
-        Ok(SamplerAggregatorSnapshot::NaiveMonteCarlo {
-            state: self.clone(),
+    fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
+        Ok(SamplePlan::Produce {
+            nr_samples: usize::MAX,
         })
     }
 
-    fn produce_batch(&mut self, nr_samples: usize) -> Result<Batch, EngineError> {
+    fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
+        Ok(SamplerAggregatorSnapshot::NaiveMonteCarlo {
+            raw: serde_json::to_value(self.clone()).map_err(EngineError::from)?,
+        })
+    }
+
+    fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
         if nr_samples == 0 {
             return Err(EngineError::engine(
                 "naive_monte_carlo sampler requires nr_samples > 0",
             ));
         }
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut continuous_data = Vec::with_capacity(nr_samples * self.continuous_dims);
         let mut discrete_data = Vec::with_capacity(nr_samples * self.discrete_dims);
         for _ in 0..nr_samples {
-            continuous_data.extend((0..self.continuous_dims).map(|_| rng.r#gen::<f64>()));
-            discrete_data.extend((0..self.discrete_dims).map(|_| rng.r#gen::<u32>() as i64));
+            continuous_data.extend((0..self.continuous_dims).map(|_| rng.random::<f64>()));
+            discrete_data.extend((0..self.discrete_dims).map(|_| rng.random::<u32>() as i64));
         }
 
         let batch = Batch::from_flat_data(
@@ -146,7 +154,7 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
                 .min(nr_samples);
             self.pending_training_samples = self.pending_training_samples.saturating_add(reserved);
         }
-        Ok(batch)
+        Ok(LatentBatchSpec::from_batch(&batch))
     }
 
     fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError> {
@@ -197,9 +205,11 @@ mod tests {
         let mut restored = snapshot.into_runtime(&point_spec).expect("restore");
         let restored_snapshot = restored.snapshot().expect("snapshot after restore");
 
-        let SamplerAggregatorSnapshot::NaiveMonteCarlo { state } = restored_snapshot else {
+        let SamplerAggregatorSnapshot::NaiveMonteCarlo { raw } = restored_snapshot else {
             panic!("expected naive snapshot");
         };
+        let state: NaiveMonteCarloSamplerAggregator =
+            serde_json::from_value(raw).expect("decode snapshot");
         assert_eq!(state.continuous_dims, 2);
         assert_eq!(state.discrete_dims, 1);
         assert_eq!(state.training_target_samples, 100);

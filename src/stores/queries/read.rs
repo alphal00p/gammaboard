@@ -1,5 +1,5 @@
-use crate::core::PointSpec;
 use crate::core::{EvaluatorPerformanceMetrics, SamplerPerformanceMetrics};
+use crate::engines::PointSpec;
 use crate::stores::{
     AggregatedResult, EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress,
     SamplerPerformanceHistoryEntry, WorkQueueStats, WorkerLogEntry, WorkerLogPage,

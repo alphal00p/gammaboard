@@ -5,8 +5,8 @@ use super::models::{
     BatchClaim, CompletedBatch, DesiredAssignment, EvaluatorPerformanceSnapshot, RegisteredNode,
     RunSampleProgress, RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
 };
-use crate::core::{Batch, BatchResult, PointSpec};
-use crate::engines::RunSpec;
+use crate::core::{RunTask, RunTaskSpec};
+use crate::engines::{BatchResult, LatentBatch, ParametrizationConfig, PointSpec, RunSpec};
 use crate::stores::read_models::{
     AggregatedRangeResponse, AggregatedResult, EvaluatorPerformanceHistoryEntry,
     RegisteredWorkerEntry, RunProgress, SamplerPerformanceHistoryEntry, WorkQueueStats,
@@ -65,6 +65,7 @@ pub trait ControlPlaneStore: Send + Sync {
         point_spec: &PointSpec,
         evaluator_init_metadata: Option<&JsonValue>,
         sampler_aggregator_init_metadata: Option<&JsonValue>,
+        initial_tasks: &[RunTaskSpec],
     ) -> Result<i32, StoreError>;
     async fn remove_run(&self, run_id: i32) -> Result<(), StoreError>;
 }
@@ -75,10 +76,11 @@ pub trait WorkQueueStore: Send + Sync {
     async fn insert_batch(
         &self,
         run_id: i32,
-        batch: &Batch,
+        batch: &LatentBatch,
         requires_training: bool,
     ) -> Result<i64, StoreError>;
     async fn get_pending_batch_count(&self, run_id: i32) -> Result<i64, StoreError>;
+    async fn get_open_batch_count(&self, run_id: i32) -> Result<i64, StoreError>;
     async fn claim_batch(
         &self,
         run_id: i32,
@@ -111,6 +113,25 @@ pub trait WorkQueueStore: Send + Sync {
     ) -> Result<Vec<CompletedBatch>, StoreError>;
     async fn try_set_training_completed_at(&self, run_id: i32) -> Result<bool, StoreError>;
     async fn delete_completed_batches(&self, batch_ids: &[i64]) -> Result<(), StoreError>;
+}
+
+#[async_trait]
+pub trait ParametrizationVersionStore: Send + Sync {
+    async fn load_parametrization_version(
+        &self,
+        run_id: i32,
+        version: i64,
+    ) -> Result<Option<ParametrizationConfig>, StoreError>;
+    async fn load_latest_parametrization_version(
+        &self,
+        run_id: i32,
+    ) -> Result<Option<i64>, StoreError>;
+    async fn save_parametrization_version(
+        &self,
+        run_id: i32,
+        version: i64,
+        config: &ParametrizationConfig,
+    ) -> Result<(), StoreError>;
 }
 
 /// Persists aggregated observable snapshots.
@@ -147,6 +168,27 @@ pub trait AggregationStore: Send + Sync {
         nr_produced_samples: i64,
         nr_completed_samples: i64,
     ) -> Result<(), StoreError>;
+}
+
+#[async_trait]
+pub trait RunTaskStore: Send + Sync {
+    async fn append_run_tasks(
+        &self,
+        run_id: i32,
+        tasks: &[RunTaskSpec],
+    ) -> Result<Vec<RunTask>, StoreError>;
+    async fn list_run_tasks(&self, run_id: i32) -> Result<Vec<RunTask>, StoreError>;
+    async fn remove_pending_run_task(&self, run_id: i32, task_id: i64) -> Result<bool, StoreError>;
+    async fn load_active_run_task(&self, run_id: i32) -> Result<Option<RunTask>, StoreError>;
+    async fn activate_next_run_task(&self, run_id: i32) -> Result<Option<RunTask>, StoreError>;
+    async fn update_run_task_progress(
+        &self,
+        task_id: i64,
+        nr_produced_samples: i64,
+        nr_completed_samples: i64,
+    ) -> Result<(), StoreError>;
+    async fn complete_run_task(&self, task_id: i64) -> Result<(), StoreError>;
+    async fn fail_run_task(&self, task_id: i64, reason: &str) -> Result<(), StoreError>;
 }
 
 /// Persists runtime tracing events.

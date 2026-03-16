@@ -17,7 +17,7 @@ pub(crate) async fn run_evaluator_role<S: NodeRunnerStore>(
     };
 
     let engine_span = tracing::span!(tracing::Level::TRACE, "evaluator_engine_context");
-    let (evaluator, parametrization) = {
+    let evaluator = {
         let _engine_scope = engine_span.enter();
         let evaluator = spec
             .evaluator
@@ -37,7 +37,7 @@ pub(crate) async fn run_evaluator_role<S: NodeRunnerStore>(
                 ))
             })?;
 
-        (evaluator, parametrization)
+        evaluator
     };
 
     let _ = spec.evaluator.kind_str();
@@ -49,12 +49,12 @@ pub(crate) async fn run_evaluator_role<S: NodeRunnerStore>(
         worker.run_id,
         worker.node_id.clone(),
         evaluator,
-        parametrization,
         spec.point_spec.clone(),
         Duration::from_millis(
             spec.evaluator_runner_params
                 .performance_snapshot_interval_ms,
         ),
+        worker.store.clone(),
         worker.store.clone(),
     );
 

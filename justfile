@@ -104,20 +104,6 @@ live-test-basic:
     sleep 6
     {{bin}} auto-assign 3 5
 
-live-test-gammaloop:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    
-    just db-reset
-    {{bin}} run-node --node-id "w-0" --poll-ms {{ poll_ms }} &
-    just start 2
-
-    sleep 1
-
-    {{bin}} run add "configs/gammaloop-triangle.toml"
-
-    {{bin}} auto-assign 1 2
-
 stop:
     -{{bin}} run pause -a
     -{{bin}} node stop -a

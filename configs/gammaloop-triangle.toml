@@ -27,7 +27,7 @@ initial_training_rate = 0.1
 final_training_rate = 0.001
 
 [parametrization]
-kind = "none" # "spherical"
+kind = "identity" # "spherical"
 
 [evaluator_runner_params]
 min_loop_time_ms = 5

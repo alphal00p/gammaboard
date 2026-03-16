@@ -153,3 +153,63 @@ pub(crate) async fn update_run_sample_progress(
     .await?;
     Ok(())
 }
+
+pub(crate) async fn get_parametrization_state(
+    pool: &PgPool,
+    run_id: i32,
+    version: i64,
+) -> Result<Option<JsonValue>, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+        SELECT state
+        FROM parametrization_states
+        WHERE run_id = $1 AND version = $2
+        "#,
+    )
+    .bind(run_id)
+    .bind(version)
+    .fetch_optional(pool)
+    .await
+    .map(|row| row.flatten())
+}
+
+pub(crate) async fn get_latest_parametrization_state_version(
+    pool: &PgPool,
+    run_id: i32,
+) -> Result<Option<i64>, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+        SELECT version
+        FROM parametrization_states
+        WHERE run_id = $1
+        ORDER BY version DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_optional(pool)
+    .await
+    .map(|row| row.flatten())
+}
+
+pub(crate) async fn upsert_parametrization_state(
+    pool: &PgPool,
+    run_id: i32,
+    version: i64,
+    state: &JsonValue,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO parametrization_states (run_id, version, state)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (run_id, version)
+        DO UPDATE SET state = EXCLUDED.state
+        "#,
+    )
+    .bind(run_id)
+    .bind(version)
+    .bind(state)
+    .execute(pool)
+    .await?;
+    Ok(())
+}

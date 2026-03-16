@@ -1,80 +1,68 @@
 # Gammaboard
 
-Gammaboard runs distributed numerical integration jobs with PostgreSQL as the shared control plane, queue, and telemetry store.
+Gammaboard runs distributed numerical integration jobs with PostgreSQL as the shared control plane.
+Samplers queue versioned latent batches that evaluators materialize locally through the parametrization layer.
 
 ## What It Does
-- `gammaboard run` manages run creation, pause, and removal.
-- `gammaboard node` manages desired worker assignments.
-- `gammaboard run-node` reconciles one local process into one active role loop at a time: `evaluator` or `sampler_aggregator`.
-- Sampler failover is manual in the current model. If a node still holds the current sampler assignment for a run, another sampler node will not start for that run until the current assignment is cleared or replaced.
-- `gammaboard server` serves the dashboard read API.
-- The dashboard exposes `Runs`, `Nodes`, `Performance`, and `Logs` tabs.
+- `gammaboard run` creates, pauses, and removes runs.
+- `gammaboard node` assigns or unassigns nodes to runs.
+- `gammaboard run-node` starts one local worker process that reconciles into either an `evaluator` or `sampler_aggregator` role.
+- `gammaboard server` starts the backend used by the dashboard.
+- The dashboard shows runs, nodes, performance, and logs.
 
-## Quick Start
+## Install
 
 ### Prerequisites
 - Rust
 - PostgreSQL 16
 - `sqlx` CLI: `cargo install sqlx-cli --no-default-features --features postgres`
 - Node.js + npm for the dashboard
-- Docker optional, for local Postgres via `docker-compose`
+- Docker optional for local Postgres via `docker-compose`
 
-### Fast local setup
-1. Start the database:
-   - `just start-db`
-   - If `5432` is already in use on your machine, set `DB_PORT` in `.env` (for example `DB_PORT=5433`) and rerun.
+### Build
+```bash
+just build
+```
+
+This also refreshes `~/.cargo/bin/gammaboard` as a symlink to the local build.
+
+### Local setup
+1. Start Postgres:
+   ```bash
+   just start-db
+   ```
 2. Start the backend:
-   - `just serve-backend`
+   ```bash
+   just serve-backend
+   ```
 3. Start the frontend:
-   - `just serve-frontend`
+   ```bash
+   just serve-frontend
+   ```
 
-Both `serve-*` commands load `.env`. The backend port is controlled by `GAMMABOARD_BACKEND_PORT`, and the frontend uses `REACT_APP_API_BASE_URL`.
+If `5432` is already in use, set `DB_PORT` in `.env` first. `serve-*` commands load `.env`. The backend port is controlled by `GAMMABOARD_BACKEND_PORT`, and the frontend uses `REACT_APP_API_BASE_URL`.
 
-### CLI completions and shortcut
-- `just build` also creates `~/.cargo/bin/gammaboard` as a symlink to the built binary so you can run `gammaboard ...` directly with the same command name your shell already resolves from Cargo's bin directory.
-- Install bash completions locally with:
-  - `just install-completions`
-- That writes the generated bash completion script to:
-  - `~/.local/share/bash-completion/completions/gammaboard`
-- `gammaboard completion <shell>` still emits completion scripts to stdout for manual installs or non-bash shells.
+### Shell completion
+Install local bash completions with:
+```bash
+just install-completions
+```
 
-### Live test flows
-- `just live-test-basic`
-- `just live-test-gammaloop`
+Or print completion scripts directly with:
+```bash
+gammaboard completion <shell>
+```
 
-Useful stop commands:
-- `just stop`
-- `just restart-db`
-- `just start 8`
+## Use
 
-## Manual Flow
-1. Add a run:
-   - `cargo run --bin gammaboard -- run add configs/live-test-unit-naive-scalar.toml`
-2. Start one or more run-nodes:
-   - `just start 2`
-   - Worker IDs are `w-1`, `w-2`, ... in sequence.
-3. Assign roles:
-   - `cargo run --bin gammaboard -- node assign w-1 evaluator <RUN_ID>`
-   - `cargo run --bin gammaboard -- node assign w-2 sampler-aggregator <RUN_ID>`
-   - Each run may have many evaluator assignments, but at most one sampler-aggregator assignment.
-   - Each node may have at most one desired assignment. Assigning a new role on the same node replaces the previous desired assignment.
+### Add a run
+Run configs are TOML and are deep-merged over `configs/default.toml`.
 
-Useful lifecycle commands:
-- `cargo run --bin gammaboard -- run pause <RUN_ID>`
-- `cargo run --bin gammaboard -- run remove <RUN_ID>`
-- `cargo run --bin gammaboard -- auto-assign <RUN_ID> [MAX_EVALUATORS]`
-- `cargo run --bin gammaboard -- node list`
-- `cargo run --bin gammaboard -- node unassign <NODE_ID>`
-- `cargo run --bin gammaboard -- node stop <NODE_ID>`
+```bash
+gammaboard run add configs/live-test-unit-naive-scalar.toml
+```
 
-`gammaboard node list` prints one row per node with `ID / Run / Role / Last Seen`. `run-node` registers the node immediately, so freshly started idle nodes appear with `Run = N/A` and `Role = None`.
-`gammaboard auto-assign <RUN_ID> [MAX_EVALUATORS]` assigns currently free nodes to the run. If the run does not yet have a sampler assignment, it assigns one sampler first and then up to `MAX_EVALUATORS` evaluators. For example, `gammaboard auto-assign 0 0` assigns only a sampler when needed, and `gammaboard auto-assign 0 2` assigns a sampler when needed and up to two evaluators.
-If a run has already reached `pause_on_samples`, assignments are still allowed, but the sampler-aggregator clears the run assignments and exits before its first tick.
-
-## Configuration
-Run configuration is TOML and is deep-merged over `configs/default.toml` when you call `gammaboard run add <file.toml>`.
-
-Current top-level structure:
+Minimal config shape:
 ```toml
 name = "example"
 pause_on_samples = 1000000 # optional
@@ -89,106 +77,62 @@ discrete_dims = 0
 kind = "naive_monte_carlo"
 
 [parametrization]
-kind = "none"
-
-[evaluator_runner_params]
-min_loop_time_ms = 5
-performance_snapshot_interval_ms = 2000
-
-[sampler_aggregator_runner_params]
-min_poll_time_ms = 100
-performance_snapshot_interval_ms = 2000
-target_batch_eval_ms = 400.0
-target_queue_remaining = 0.5
-max_batch_size = 64
-max_batches_per_tick = 8
-max_queue_size = 128
-completed_batch_fetch_limit = 1024
+kind = "identity"
 ```
 
-Notes:
-- `name` is stored in `runs.name`.
-- `pause_on_samples` is stored in `runs.target_nr_samples`. When set, the sampler produces exactly that many samples and the run is paused automatically once exactly that many samples have been fully completed and aggregated.
-- `target` is stored verbatim in `runs.target`.
-- `point_spec` is derived from the evaluator during preflight and stored on the run.
-- Observable semantics are evaluator-owned. There is no separate `[observable]` section anymore.
-- Evaluators that support multiple observable semantics use `observable_kind` inside `[evaluator]`.
-Examples:
-- `unit`: optional `observable_kind = "scalar" | "complex"`
-- `gammaloop`: optional `observable_kind = "scalar" | "complex"`, plus `training_projection`
-- `symbolica`: scalar observable semantics only
-- `sinc_evaluator`: complex observable semantics only
+Optional top-level task queue:
+```toml
+[[task_queue]]
+kind = "sample"
+nr_samples = 100000
 
-## Runtime Model
-- Batches are queued in PostgreSQL.
-- Evaluators claim batches, apply parametrization, evaluate them, and write back `BatchResult`.
-- `BatchResult` contains optional training values and a tagged observable payload.
-- Sampler-aggregators consume completed batches, merge observable state, ingest training values when needed, and delete consumed completed batches.
-- For adaptive samplers with a training cap, the runner must only mark the exact training-suite samples with `requires_training`; once that budget is exhausted, later batches are produced as non-training batches.
-- Sampler-aggregators own any per-batch training correlation state internally; the runner does not persist or return batch context.
-- The latest full runtime observable is stored on the run record as `current_observable`.
-- Run-level sample accounting lives directly on `runs` as `target_nr_samples`, `nr_produced_samples`, and `nr_completed_samples`.
-- While the sampler is active, it keeps produced/completed counts in memory and flushes them back to `runs` after each tick. On resume, those counters are restored from `runs`.
-- On pause/unassignment, the sampler-aggregator finishes its current tick and persists a runner snapshot to `runs.sampler_runner_snapshot` before exiting.
-- Resume currently restores sampler snapshots for `naive_monte_carlo` and `havana`, including Havana RNG state.
-- `runs.sampler_runner_snapshot` is internal control-plane state and is not exposed by the dashboard read API.
-- Run lifecycle is derived from control-plane state rather than persisted on `runs`:
-  desired assignments present -> `running`; no desired assignments but active workers or claimed batches remain -> `pausing`; otherwise -> `paused`.
-- Desired and current node state live directly on `nodes`; both desired fields and both current fields must be either null together or set together.
-- Aggregated observable history snapshots persist the observable's reduced persistent payload rather than the tagged runtime `ObservableState`.
-- Run and worker performance snapshots are persisted periodically.
-- Evaluator performance history stores generic evaluator metrics only; evaluator-specific static details belong in evaluator init metadata.
-- Sampler performance history stores generic sampler metrics plus sampler runtime metrics, while sampler-specific diagnostics remain separate.
-- Runtime logs are persisted in `runtime_logs` when DB logging is enabled.
+[[task_queue]]
+kind = "reconfigure_parametrization"
+[task_queue.config]
+kind = "spherical"
 
-## Logging
-- Console logging uses tracing.
-- Default console behavior is `INFO` for `gammaboard*` targets and `WARN` for external targets.
-- `-q` suppresses all `INFO` output.
-- Set `GAMMABOARD_DISABLE_DB_LOGS=1` to disable DB log persistence while keeping console logging.
-- DB sink levels are configured with:
-  - `GAMMABOARD_DB_LOG_LEVEL`
-  - `GAMMABOARD_DB_EXTERNAL_LOG_LEVEL`
+[[task_queue]]
+kind = "pause"
+```
 
-## Dashboard/API
-Main read APIs:
-- `GET /api/runs`
-- `GET /api/runs/:id`
-- `GET /api/runs/:id/logs`
-- `GET /api/runs/:id/aggregated/range`
-- `GET /api/runs/:id/performance/evaluator`
-- `GET /api/runs/:id/performance/sampler-aggregator`
-- `GET /api/nodes`
-- `GET /api/nodes/:id/performance/evaluator`
-- `GET /api/nodes/:id/performance/sampler-aggregator`
+If `task_queue` is omitted, `run add` creates a default queue from `pause_on_samples`.
 
-Notes:
-- Aggregated history uses sampled range reads with explicit `latest` in the response.
-- Run logs are cursor-paged and server-filtered. `GET /api/runs/:id/logs` accepts `limit`, `node_id`, `level`, `q`, and `before_id`, and returns `{ items, next_before_id, has_more_older }`.
-- `BIGINT` identifiers are serialized as strings for frontend safety.
-- Observable payloads are tagged JSON, for example `kind = scalar` or `kind = complex`.
-- Run payloads from `GET /api/runs` and `GET /api/runs/:id` include `point_spec` from `runs.point_spec` and the latest full observable as `current_observable`.
-- Finished-run dashboard views should use persisted run/history data; live node payloads are only for active telemetry.
-- The `Nodes` tab shows live node assignment/heartbeat/role state; historical evaluator/sampler performance is viewed separately by run and node.
-- The `Performance` tab is run-scoped and node-scoped, using persisted snapshots. For sampler-aggregators, produce and ingest timing are shown separately, with latest-snapshot summary cards below the charts.
-- In the `Runs` tab, the sampler panel should prioritize target-vs-actual runtime values and current performance metrics; low-level runner bounds remain available in the JSON view instead of the summary card.
+### Start local workers
+```bash
+just start 2
+```
 
-Dashboard behavior:
-- Node data is polled once at the app level and shared across the `Runs`, `Nodes`, and `Logs` tabs.
-- The `Logs` tab is intentionally view-only with server-side filters and `Load older` pagination instead of client-side pause/buffer/grid state.
+That starts `w-1`, `w-2`, and so on.
 
-## Development
-- Store bootstrap/composition helpers used by runners live under `src/stores/*`.
-- HTTP server runtime and handlers live under `src/server/*`; `src/cli/*` wires arguments and startup.
-- Rust formatting/checks/tests:
-  - `cargo fmt`
-  - `cargo check -q`
-  - `cargo test -q`
-  - `just test-e2e` for the ignored full-stack CLI integration test against a real local Postgres
-- Frontend:
-  - `npm --prefix dashboard test -- --watch=false`
-  - `npm --prefix dashboard run build`
-- Local worker utility:
-  - `just start <N>` starts `N` local `run-node` processes with sequential IDs `w-1` through `w-N`.
+### Assign roles
+```bash
+gammaboard node assign w-1 evaluator <RUN_ID>
+gammaboard node assign w-2 sampler-aggregator <RUN_ID>
+```
 
-If you change architecture, config shape, CLI behavior, or operational workflow, update this file and `AGENTS.md` in the same change.
+Or auto-assign currently free nodes:
+```bash
+gammaboard auto-assign <RUN_ID> [MAX_EVALUATORS]
+```
+
+### Common commands
+```bash
+gammaboard node assign <NODE_ID> <ROLE> <RUN_ID>
+gammaboard node list
+gammaboard node unassign <NODE_ID>
+gammaboard node stop <NODE_ID>
+gammaboard auto-assign <RUN_ID> [MAX_EVALUATORS]
+gammaboard run pause <RUN_ID>
+gammaboard run task list <RUN_ID>
+gammaboard run task add <RUN_ID> <TASK_FILE.toml>
+gammaboard run task remove <RUN_ID> <TASK_ID>
+gammaboard run remove <RUN_ID>
+```
+
+### Useful local commands
+```bash
+just stop
+just restart-db
+just live-test-basic
+just live-test-gammaloop
+```

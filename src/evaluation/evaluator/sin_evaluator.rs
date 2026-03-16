@@ -1,9 +1,7 @@
-use crate::core::{Batch, BatchResult, PointSpec};
-use crate::engines::EvalBatchOptions;
-use crate::engines::{
-    BuildError, BuildFromJson, EvalError, Evaluator, ObservableState, ScalarObservableState,
-};
-use serde::Deserialize;
+use crate::engines::EvalError;
+use crate::engines::{Batch, BatchResult, EvalBatchOptions, Evaluator, PointSpec};
+use crate::engines::{ObservableState, ScalarObservableState};
+use serde::{Deserialize, Serialize};
 use std::{
     thread,
     time::{Duration, Instant},
@@ -20,9 +18,13 @@ impl SinEvaluator {
             min_eval_time_per_sample_ms,
         }
     }
+
+    pub fn from_params(params: SinEvaluatorParams) -> Self {
+        Self::new(params.min_eval_time_per_sample_ms)
+    }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct SinEvaluatorParams {
     pub min_eval_time_per_sample_ms: u64,
@@ -85,12 +87,5 @@ impl Evaluator for SinEvaluator {
             weighted_values,
             ObservableState::Scalar(observable),
         ))
-    }
-}
-
-impl BuildFromJson for SinEvaluator {
-    type Params = SinEvaluatorParams;
-    fn from_parsed_params(params: Self::Params) -> Result<Self, BuildError> {
-        Ok(Self::new(params.min_eval_time_per_sample_ms))
     }
 }

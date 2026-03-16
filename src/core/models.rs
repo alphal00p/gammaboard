@@ -1,4 +1,4 @@
-use crate::core::{Batch, BatchResult};
+use crate::engines::{Batch, BatchResult, LatentBatch};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -57,18 +57,49 @@ pub struct RegisteredNode {
 #[derive(Debug, Clone)]
 pub struct BatchClaim {
     pub batch_id: i64,
-    pub batch: Batch,
+    pub latent_batch: LatentBatch,
     pub requires_training: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct CompletedBatch {
     pub batch_id: i64,
-    pub batch: Batch,
+    pub latent_batch: LatentBatch,
     pub requires_training: bool,
     pub result: BatchResult,
     pub completed_at: Option<DateTime<Utc>>,
     pub total_eval_time_ms: Option<f64>,
+}
+
+/// Status of a batch in the work queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BatchStatus {
+    Pending,
+    Claimed,
+    Completed,
+    Failed,
+}
+
+impl BatchStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BatchStatus::Pending => "pending",
+            BatchStatus::Claimed => "claimed",
+            BatchStatus::Completed => "completed",
+            BatchStatus::Failed => "failed",
+        }
+    }
+}
+
+/// A concrete batch with metadata from the database.
+#[derive(Debug, Clone)]
+pub struct BatchRecord {
+    pub id: i64,
+    pub run_id: i32,
+    pub batch: Batch,
+    pub status: BatchStatus,
+    pub claimed_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

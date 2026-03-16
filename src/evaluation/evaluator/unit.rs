@@ -1,10 +1,9 @@
-use crate::core::{Batch, BatchResult, PointSpec};
-use crate::engines::EvalBatchOptions;
+use crate::engines::EvalError;
+use crate::engines::{Batch, BatchResult, EvalBatchOptions, Evaluator, PointSpec};
 use crate::engines::{
-    BuildError, BuildFromJson, EvalError, Evaluator, ObservableState, ScalarObservableState,
-    SemanticObservableKind,
+    ComplexObservableState, ObservableState, ScalarObservableState, SemanticObservableKind,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Evaluator that returns 1.0 for every sample.
 pub struct UnitEvaluator {
@@ -19,9 +18,19 @@ impl UnitEvaluator {
             observable_kind,
         }
     }
+
+    pub fn from_params(params: UnitEvaluatorParams) -> Self {
+        Self::new(
+            PointSpec {
+                continuous_dims: params.continuous_dims,
+                discrete_dims: params.discrete_dims,
+            },
+            params.observable_kind,
+        )
+    }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct UnitEvaluatorParams {
     pub continuous_dims: usize,
@@ -67,7 +76,7 @@ impl Evaluator for UnitEvaluator {
                 ObservableState::Scalar(observable)
             }
             SemanticObservableKind::Complex => {
-                let mut observable = crate::engines::ComplexObservableState::default();
+                let mut observable = ComplexObservableState::default();
                 for weight in weights.iter().copied() {
                     observable.add_sample(num::complex::Complex64::new(1.0, 0.0), weight);
                 }
@@ -86,24 +95,10 @@ impl Evaluator for UnitEvaluator {
     }
 }
 
-impl BuildFromJson for UnitEvaluator {
-    type Params = UnitEvaluatorParams;
-
-    fn from_parsed_params(params: Self::Params) -> Result<Self, BuildError> {
-        Ok(Self::new(
-            PointSpec {
-                continuous_dims: params.continuous_dims,
-                discrete_dims: params.discrete_dims,
-            },
-            params.observable_kind,
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Batch;
+    use crate::engines::Batch;
 
     #[test]
     fn eval_batch_returns_weighted_ones_for_scalar_observable() {

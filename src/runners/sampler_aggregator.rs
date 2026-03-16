@@ -8,13 +8,15 @@
 //! - aggregate completed batch observables into run-level observable snapshot
 //! - delete consumed completed batches
 
-use crate::core::PointSpec;
 use crate::core::{
-    AggregationStore, CompletedBatch, RollingMetricSnapshot, RunSampleProgress,
-    SamplerAggregatorPerformanceSnapshot, SamplerRollingAverages, SamplerRuntimeMetrics,
-    StoreError, WorkQueueStore,
+    AggregationStore, CompletedBatch, ParametrizationVersionStore, RollingMetricSnapshot,
+    RunSampleProgress, RunTask, RunTaskSpec, RunTaskStore, SamplerAggregatorPerformanceSnapshot,
+    SamplerRollingAverages, SamplerRuntimeMetrics, StoreError, WorkQueueStore,
 };
-use crate::engines::{EngineError, ObservableState, SamplerAggregator, SamplerAggregatorSnapshot};
+use crate::engines::{
+    EngineError, ObservableState, ParametrizationConfig, PointSpec, SamplePlan, SamplerAggregator,
+    SamplerAggregatorSnapshot,
+};
 use crate::runners::rolling_metric::RollingMetric;
 use crate::stores::RunControlStore;
 use serde::{Deserialize, Serialize};
@@ -67,6 +69,7 @@ pub struct SamplerAggregatorRunnerSnapshot {
     pub version: u32,
     pub engine: SamplerAggregatorSnapshot,
     pub aggregated_observable: JsonValue,
+    current_parametrization_state_version: i64,
     runtime_state: SamplerRuntimeState,
     last_pending_after_enqueue: Option<usize>,
     training_completion_marked: bool,
@@ -116,7 +119,7 @@ pub enum RunnerError {
     Store(#[from] StoreError),
 }
 
-pub struct SamplerAggregatorRunner<WQ, AS, RC> {
+pub struct SamplerAggregatorRunner<WQ, AS, RC, PS, TS> {
     run_id: i32,
     node_id: String,
     engine: Box<dyn SamplerAggregator>,
@@ -124,24 +127,29 @@ pub struct SamplerAggregatorRunner<WQ, AS, RC> {
     work_queue: WQ,
     aggregation_store: AS,
     run_control: RC,
+    parametrization_state_store: PS,
+    task_store: TS,
     config: SamplerAggregatorRunnerParams,
-    target_nr_samples: Option<i64>,
+    point_spec: PointSpec,
     nr_produced_samples: i64,
     nr_completed_samples: i64,
     performance_snapshot_interval: Duration,
     last_snapshot_at: Instant,
-    point_spec: PointSpec,
+    current_parametrization_state_version: i64,
     runtime_state: SamplerRuntimeState,
     last_pending_after_enqueue: Option<usize>,
     training_completion_marked: bool,
     auto_stop_triggered: bool,
+    current_task: Option<RunTask>,
 }
 
-impl<WQ, AS, RC> SamplerAggregatorRunner<WQ, AS, RC>
+impl<WQ, AS, RC, PS, TS> SamplerAggregatorRunner<WQ, AS, RC, PS, TS>
 where
     WQ: WorkQueueStore,
     AS: AggregationStore,
     RC: RunControlStore,
+    PS: ParametrizationVersionStore,
+    TS: RunTaskStore,
 {
     const MIN_BATCH_SIZE: usize = 1;
     const MAX_BATCH_SIZE_UP_FACTOR: f64 = 1.25;
@@ -252,9 +260,11 @@ where
         work_queue: WQ,
         aggregation_store: AS,
         run_control: RC,
+        parametrization_state_store: PS,
+        task_store: TS,
         config: SamplerAggregatorRunnerParams,
-        target_nr_samples: Option<i64>,
         point_spec: PointSpec,
+        initial_parametrization_state: ParametrizationConfig,
     ) -> Result<Self, RunnerError> {
         let initial_batch_size = config.max_batch_size.min(64).max(Self::MIN_BATCH_SIZE);
         if config.max_batch_size == 0 {
@@ -280,13 +290,6 @@ where
                 "runner config target_queue_remaining must be in [0, 1]",
             )));
         }
-        if let Some(target_nr_samples) = target_nr_samples
-            && target_nr_samples <= 0
-        {
-            return Err(RunnerError::Engine(EngineError::engine(
-                "run target_nr_samples must be > 0 when set",
-            )));
-        }
         let performance_snapshot_interval =
             Duration::from_millis(config.performance_snapshot_interval_ms);
         let current_observable = aggregation_store.load_current_observable(run_id).await?;
@@ -298,10 +301,23 @@ where
             .load_run_sample_progress(run_id)
             .await?
             .unwrap_or(RunSampleProgress {
-                target_nr_samples,
+                target_nr_samples: None,
                 nr_produced_samples: 0,
                 nr_completed_samples: 0,
             });
+        let latest_version = parametrization_state_store
+            .load_latest_parametrization_version(run_id)
+            .await?;
+        let current_parametrization_state_version = match latest_version {
+            Some(version) => version,
+            None => {
+                let version = 1;
+                parametrization_state_store
+                    .save_parametrization_version(run_id, version, &initial_parametrization_state)
+                    .await?;
+                version
+            }
+        };
 
         Ok(Self {
             run_id,
@@ -311,13 +327,15 @@ where
             work_queue,
             aggregation_store,
             run_control,
+            parametrization_state_store,
+            task_store,
             config,
-            target_nr_samples: persisted_progress.target_nr_samples.or(target_nr_samples),
+            point_spec,
             nr_produced_samples: persisted_progress.nr_produced_samples,
             nr_completed_samples: persisted_progress.nr_completed_samples,
             performance_snapshot_interval,
             last_snapshot_at: Instant::now(),
-            point_spec,
+            current_parametrization_state_version,
             runtime_state: SamplerRuntimeState {
                 produced_samples_total: persisted_progress.nr_produced_samples,
                 batch_size_current: initial_batch_size,
@@ -326,6 +344,7 @@ where
             last_pending_after_enqueue: None,
             training_completion_marked: false,
             auto_stop_triggered: false,
+            current_task: None,
         })
     }
 
@@ -341,6 +360,7 @@ where
         }
         self.aggregated_observable = ObservableState::from_json(&snapshot.aggregated_observable)
             .map_err(RunnerError::Engine)?;
+        self.current_parametrization_state_version = snapshot.current_parametrization_state_version;
         self.runtime_state = snapshot.runtime_state;
         self.runtime_state.produced_samples_total = self
             .runtime_state
@@ -360,6 +380,7 @@ where
                 .aggregated_observable
                 .to_json()
                 .map_err(RunnerError::Engine)?,
+            current_parametrization_state_version: self.current_parametrization_state_version,
             runtime_state: self.runtime_state.clone(),
             last_pending_after_enqueue: self.last_pending_after_enqueue,
             training_completion_marked: self.training_completion_marked,
@@ -400,52 +421,6 @@ where
         }
 
         self.tune_batch_size();
-
-        let base_produce_limit = if self.pause_target_reached() {
-            0
-        } else {
-            self.compute_produce_limit(pending_before_tick)
-        };
-        let training_samples_remaining = self.engine.training_samples_remaining();
-        let batch_plan = self.build_batch_plan(
-            base_produce_limit,
-            self.max_samples_to_produce_this_tick(training_samples_remaining)?,
-        );
-
-        let mut produced = Vec::with_capacity(batch_plan.len());
-        for nr_samples in batch_plan {
-            let started = Instant::now();
-            let requires_training = training_samples_remaining.is_some();
-            let batch = self
-                .engine
-                .produce_batch(nr_samples)
-                .map_err(RunnerError::Engine)?;
-            let produce_time_ms = started.elapsed().as_secs_f64() * 1000.0;
-            let produced_samples = batch.size();
-            self.runtime_state.produced_batches_total += 1;
-            self.runtime_state.produced_samples_total += produced_samples as i64;
-            self.nr_produced_samples += produced_samples as i64;
-            if produced_samples > 0 {
-                self.runtime_state
-                    .rolling
-                    .sampler_produce_ms_per_sample
-                    .observe(produce_time_ms / produced_samples as f64);
-            }
-            produced.push((batch, requires_training));
-        }
-        for (batch, _) in &produced {
-            batch
-                .validate_point_spec(&self.point_spec)
-                .map_err(|err| RunnerError::Engine(EngineError::engine(err.to_string())))?;
-        }
-        let enqueued_batches = produced.len();
-        for (batch, requires_training) in produced {
-            self.work_queue
-                .insert_batch(self.run_id, &batch, requires_training)
-                .await?;
-        }
-        let pending_after_enqueue = pending_before_tick.saturating_add(enqueued_batches);
-        self.last_pending_after_enqueue = Some(pending_after_enqueue);
         let queue_depleted = pending_before_tick == 0;
 
         let completed = self
@@ -457,9 +432,17 @@ where
             .delete_completed_batches(&consumed_ids)
             .await?;
         self.try_mark_training_completed().await?;
+        self.sync_active_task_progress().await?;
+        let open_batch_count = self
+            .work_queue
+            .get_open_batch_count(self.run_id)
+            .await?
+            .max(0) as usize;
+        let enqueued_batches = self
+            .run_task_tick(pending_before_tick, open_batch_count)
+            .await?;
         self.flush_run_sample_progress().await?;
         self.flush_performance_snapshot().await?;
-        self.maybe_stop_run_from_condition().await?;
 
         Ok(RunnerTick {
             enqueued_batches,
@@ -478,7 +461,7 @@ where
 
         let mut completed_samples_delta = 0_i64;
         for batch in completed {
-            let batch_samples = batch.batch.size();
+            let batch_samples = batch.latent_batch.nr_samples;
             completed_samples_delta += batch_samples as i64;
             if let Some(total_eval_time_ms) = batch.total_eval_time_ms
                 && batch_samples > 0
@@ -528,6 +511,11 @@ where
                 .map_err(RunnerError::Engine)?;
         }
         self.nr_completed_samples += completed_samples_delta;
+        if let Some(task) = self.current_task.as_mut()
+            && matches!(task.task, RunTaskSpec::Sample { .. })
+        {
+            task.nr_completed_samples += completed_samples_delta;
+        }
 
         let current_observable = self
             .aggregated_observable
@@ -560,6 +548,34 @@ where
             .await?;
         self.training_completion_marked = true;
         Ok(())
+    }
+
+    async fn resolve_sample_plan(&mut self) -> Result<SamplePlan, RunnerError> {
+        for _ in 0..8 {
+            match self.engine.sample_plan().map_err(RunnerError::Engine)? {
+                SamplePlan::Advance { state } => {
+                    let state: ParametrizationConfig =
+                        serde_json::from_value(state).map_err(|err| {
+                            RunnerError::Engine(EngineError::build(format!(
+                                "failed to decode parametrization config from sampler plan: {err}"
+                            )))
+                        })?;
+                    self.current_parametrization_state_version += 1;
+                    self.parametrization_state_store
+                        .save_parametrization_version(
+                            self.run_id,
+                            self.current_parametrization_state_version,
+                            &state,
+                        )
+                        .await?;
+                }
+                plan => return Ok(plan),
+            }
+        }
+
+        Err(RunnerError::Engine(EngineError::engine(
+            "sampler emitted too many consecutive parametrization advances",
+        )))
     }
 
     async fn flush_performance_snapshot(&mut self) -> Result<(), RunnerError> {
@@ -603,43 +619,45 @@ where
         Ok(())
     }
 
-    pub async fn stop_if_pause_target_already_reached(&mut self) -> Result<bool, RunnerError> {
-        if !self.pause_target_reached() {
-            return Ok(false);
-        }
-        self.maybe_stop_run_from_condition().await?;
-        Ok(true)
-    }
-
-    fn pause_target_reached(&self) -> bool {
-        self.target_nr_samples == Some(self.nr_completed_samples)
-    }
-
     fn max_samples_to_produce_this_tick(
         &self,
         engine_max_samples: Option<usize>,
+        task_max_samples: Option<usize>,
     ) -> Result<Option<usize>, RunnerError> {
-        let run_remaining = self
-            .target_nr_samples
-            .map(|target| target.saturating_sub(self.nr_produced_samples));
-        if let Some(remaining) = run_remaining {
-            if remaining < 0 {
-                return Err(RunnerError::Engine(EngineError::engine(format!(
-                    "run {} produced sample count exceeded target: produced={} target={}",
-                    self.run_id,
-                    self.nr_produced_samples,
-                    remaining + self.nr_produced_samples
-                ))));
-            }
+        if let Some(task_remaining) = task_max_samples
+            && task_remaining == 0
+        {
+            return Ok(Some(0));
         }
-
-        let run_remaining = run_remaining.and_then(|remaining| usize::try_from(remaining).ok());
-        Ok(match (engine_max_samples, run_remaining) {
-            (Some(engine_max), Some(run_remaining)) => Some(engine_max.min(run_remaining)),
+        Ok(match (engine_max_samples, task_max_samples) {
+            (Some(engine_max), Some(task_remaining)) => Some(engine_max.min(task_remaining)),
             (Some(engine_max), None) => Some(engine_max),
-            (None, Some(run_remaining)) => Some(run_remaining),
+            (None, Some(task_remaining)) => Some(task_remaining),
             (None, None) => None,
         })
+    }
+
+    fn active_sample_remaining_budget(&self) -> Result<Option<usize>, RunnerError> {
+        let Some(task) = self.current_task.as_ref() else {
+            return Ok(None);
+        };
+        let RunTaskSpec::Sample { nr_samples } = &task.task else {
+            return Ok(None);
+        };
+        let Some(target) = nr_samples else {
+            return Ok(None);
+        };
+        let remaining = target.saturating_sub(task.nr_produced_samples);
+        if remaining < 0 {
+            return Err(RunnerError::Engine(EngineError::engine(format!(
+                "run {} task {} produced sample count exceeded target: produced={} target={}",
+                self.run_id,
+                task.id,
+                task.nr_produced_samples,
+                remaining + task.nr_produced_samples
+            ))));
+        }
+        Ok(usize::try_from(remaining).ok())
     }
 
     fn aggregated_sample_count(&self) -> i64 {
@@ -649,21 +667,229 @@ where
         }
     }
 
-    async fn maybe_stop_run_from_condition(&mut self) -> Result<(), RunnerError> {
-        if self.auto_stop_triggered || !self.pause_target_reached() {
+    async fn clear_run_assignments_once(
+        &mut self,
+        reason: &'static str,
+    ) -> Result<(), RunnerError> {
+        if self.auto_stop_triggered {
             return Ok(());
         }
         let assignments_cleared = self.run_control.clear_run_assignments(self.run_id).await?;
         self.auto_stop_triggered = true;
         info!(
             run_id = self.run_id,
-            target_nr_samples = self.target_nr_samples,
             nr_produced_samples = self.nr_produced_samples,
             nr_completed_samples = self.nr_completed_samples,
             aggregated_samples = self.aggregated_sample_count(),
             assignments_cleared,
-            "pause-on-samples target reached; assignments cleared"
+            reason,
+            "run assignments cleared"
         );
         Ok(())
+    }
+
+    async fn sync_active_task_progress(&mut self) -> Result<(), RunnerError> {
+        let Some(task) = self.current_task.as_ref() else {
+            return Ok(());
+        };
+        if !matches!(task.task, RunTaskSpec::Sample { .. }) {
+            return Ok(());
+        }
+        self.task_store
+            .update_run_task_progress(task.id, task.nr_produced_samples, task.nr_completed_samples)
+            .await?;
+        Ok(())
+    }
+
+    async fn ensure_active_task(&mut self) -> Result<Option<RunTask>, RunnerError> {
+        if let Some(task) = self.task_store.load_active_run_task(self.run_id).await? {
+            self.current_task = Some(task.clone());
+            return Ok(Some(task));
+        }
+        let next = self.task_store.activate_next_run_task(self.run_id).await?;
+        self.current_task = next.clone();
+        Ok(next)
+    }
+
+    async fn complete_current_task(&mut self) -> Result<(), RunnerError> {
+        let Some(task) = self.current_task.take() else {
+            return Ok(());
+        };
+        if matches!(task.task, RunTaskSpec::Sample { .. }) {
+            self.task_store
+                .update_run_task_progress(
+                    task.id,
+                    task.nr_produced_samples,
+                    task.nr_completed_samples,
+                )
+                .await?;
+        }
+        self.task_store.complete_run_task(task.id).await?;
+        Ok(())
+    }
+
+    async fn fail_current_task(&mut self, reason: String) -> Result<(), RunnerError> {
+        if let Some(task) = self.current_task.take() {
+            self.task_store.fail_run_task(task.id, &reason).await?;
+        }
+        self.clear_run_assignments_once("run task failed; assignments cleared")
+            .await?;
+        info!(run_id = self.run_id, error = %reason, "run task failed");
+        Ok(())
+    }
+
+    async fn run_task_tick(
+        &mut self,
+        pending_before_tick: usize,
+        open_batch_count: usize,
+    ) -> Result<usize, RunnerError> {
+        for _ in 0..8 {
+            let Some(task) = self.ensure_active_task().await? else {
+                self.clear_run_assignments_once("run task queue exhausted; assignments cleared")
+                    .await?;
+                return Ok(0);
+            };
+            match task.task.clone() {
+                RunTaskSpec::Sample { nr_samples } => {
+                    if let Some(target) = nr_samples
+                        && task.nr_completed_samples >= target
+                    {
+                        if open_batch_count == 0 {
+                            self.complete_current_task().await?;
+                            continue;
+                        }
+                        return Ok(0);
+                    }
+                    return self
+                        .produce_for_active_sample_task(pending_before_tick)
+                        .await;
+                }
+                RunTaskSpec::ReconfigureParametrization { config } => {
+                    if open_batch_count > 0 {
+                        return Ok(0);
+                    }
+                    self.current_parametrization_state_version += 1;
+                    self.parametrization_state_store
+                        .save_parametrization_version(
+                            self.run_id,
+                            self.current_parametrization_state_version,
+                            &config,
+                        )
+                        .await?;
+                    self.complete_current_task().await?;
+                    continue;
+                }
+                RunTaskSpec::ReconfigureSampler { config } => {
+                    if open_batch_count > 0 {
+                        return Ok(0);
+                    }
+                    match self.engine.transition(&config, &self.point_spec) {
+                        Ok(engine) => {
+                            self.engine = engine;
+                            self.training_completion_marked =
+                                self.engine.training_samples_remaining().is_none();
+                            self.complete_current_task().await?;
+                            continue;
+                        }
+                        Err(err) => {
+                            self.fail_current_task(format!(
+                                "failed to transition sampler for task {}: {err}",
+                                task.id
+                            ))
+                            .await?;
+                            return Ok(0);
+                        }
+                    }
+                }
+                RunTaskSpec::Pause => {
+                    if open_batch_count > 0 {
+                        return Ok(0);
+                    }
+                    self.complete_current_task().await?;
+                    self.clear_run_assignments_once("pause task reached; run assignments cleared")
+                        .await?;
+                    return Ok(0);
+                }
+            }
+        }
+
+        Err(RunnerError::Engine(EngineError::engine(
+            "run task executor advanced too many times in a single tick",
+        )))
+    }
+
+    async fn produce_for_active_sample_task(
+        &mut self,
+        pending_before_tick: usize,
+    ) -> Result<usize, RunnerError> {
+        let sample_plan = self.resolve_sample_plan().await?;
+        let training_samples_remaining = self.engine.training_samples_remaining();
+        let batch_plan = match sample_plan {
+            SamplePlan::Pause => Vec::new(),
+            SamplePlan::Produce { nr_samples } => {
+                let base_produce_limit = self.compute_produce_limit(pending_before_tick);
+                let requested = if nr_samples == usize::MAX {
+                    None
+                } else {
+                    Some(nr_samples)
+                };
+                self.build_batch_plan(
+                    base_produce_limit,
+                    self.max_samples_to_produce_this_tick(
+                        match requested {
+                            Some(requested) => Some(
+                                training_samples_remaining
+                                    .map_or(requested, |remaining| remaining.min(requested)),
+                            ),
+                            None => training_samples_remaining,
+                        },
+                        self.active_sample_remaining_budget()?,
+                    )?,
+                )
+            }
+            SamplePlan::Advance { .. } => {
+                return Err(RunnerError::Engine(EngineError::engine(
+                    "unresolved SamplePlan::Advance reached batch production",
+                )));
+            }
+        };
+
+        let mut produced = Vec::with_capacity(batch_plan.len());
+        for nr_samples in batch_plan {
+            let started = Instant::now();
+            let requires_training = training_samples_remaining.is_some();
+            let batch = self
+                .engine
+                .produce_latent_batch(nr_samples)
+                .map_err(RunnerError::Engine)?;
+            let produce_time_ms = started.elapsed().as_secs_f64() * 1000.0;
+            let produced_samples = batch.nr_samples;
+            self.runtime_state.produced_batches_total += 1;
+            self.runtime_state.produced_samples_total += produced_samples as i64;
+            self.nr_produced_samples += produced_samples as i64;
+            if let Some(task) = self.current_task.as_mut() {
+                task.nr_produced_samples += produced_samples as i64;
+            }
+            if produced_samples > 0 {
+                self.runtime_state
+                    .rolling
+                    .sampler_produce_ms_per_sample
+                    .observe(produce_time_ms / produced_samples as f64);
+            }
+            produced.push((
+                batch.with_version(self.current_parametrization_state_version),
+                requires_training,
+            ));
+        }
+        let enqueued_batches = produced.len();
+        for (batch, requires_training) in produced {
+            self.work_queue
+                .insert_batch(self.run_id, &batch, requires_training)
+                .await?;
+        }
+        let pending_after_enqueue = pending_before_tick.saturating_add(enqueued_batches);
+        self.last_pending_after_enqueue = Some(pending_after_enqueue);
+        self.sync_active_task_progress().await?;
+        Ok(enqueued_batches)
     }
 }

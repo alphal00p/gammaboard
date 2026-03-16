@@ -5,21 +5,21 @@ use symbolica::numerical_integration::{ContinuousGrid, Grid, Sample};
 use tracing::info;
 
 use crate::{
-    Batch, EngineError, PointSpec,
+    Batch, EngineError, LatentBatchSpec, PointSpec, SamplePlan,
     engines::{BuildError, SamplerAggregator, SamplerAggregatorSnapshot},
     utils::rng::SerializableMonteCarloRng,
 };
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct HavanaSamplerParams {
-    seed: u64,
-    bins: usize,
-    min_samples_for_update: usize,
-    samples_for_update: usize,
-    stop_training_after_n_samples: Option<usize>,
-    initial_training_rate: f64,
-    final_training_rate: f64,
+    pub seed: u64,
+    pub bins: usize,
+    pub min_samples_for_update: usize,
+    pub samples_for_update: usize,
+    pub stop_training_after_n_samples: Option<usize>,
+    pub initial_training_rate: f64,
+    pub final_training_rate: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -291,6 +291,12 @@ impl SamplerAggregator for HavanaSampler {
         }
     }
 
+    fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
+        Ok(SamplePlan::Produce {
+            nr_samples: usize::MAX,
+        })
+    }
+
     fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, crate::engines::EngineError> {
         let raw = serde_json::to_value(self.to_snapshot()).map_err(|err| {
             EngineError::engine(format!("failed to serialize havana snapshot: {err}"))
@@ -298,14 +304,14 @@ impl SamplerAggregator for HavanaSampler {
         Ok(SamplerAggregatorSnapshot::Havana { raw })
     }
 
-    fn produce_batch(
+    fn produce_latent_batch(
         &mut self,
         nr_samples: usize,
-    ) -> Result<crate::Batch, crate::engines::EngineError> {
+    ) -> Result<LatentBatchSpec, crate::engines::EngineError> {
         let mut coords: Vec<f64> = Vec::with_capacity(nr_samples * self.continuous_dims);
         let mut weights: Vec<f64> = Vec::with_capacity(nr_samples);
 
-        if self.training_samples_remaining().is_some() {
+        if self.remaining_training_samples_to_produce() > 0 {
             let mut samples = Vec::with_capacity(nr_samples);
             for _ in 0..nr_samples {
                 let mut sample = Sample::new();
@@ -350,7 +356,7 @@ impl SamplerAggregator for HavanaSampler {
         .map_err(|err| EngineError::engine(err.to_string()))?;
         self.batches_produced += 1;
         self.samples_produced = self.samples_produced.saturating_add(nr_samples);
-        Ok(batch)
+        Ok(LatentBatchSpec::from_batch(&batch))
     }
 
     fn ingest_training_weights(
@@ -440,11 +446,13 @@ mod tests {
         };
         let mut sampler = HavanaSampler::from_params_and_point_spec(params, &point_spec)
             .expect("build havana sampler");
-        let _ = sampler.produce_batch(5).expect("produce");
+        let _ = sampler.produce_latent_batch(5).expect("produce");
         sampler
             .ingest_training_weights(&[1.0, 2.0, 3.0, 4.0, 5.0])
             .expect("ingest");
-        let _ = sampler.produce_batch(3).expect("produce pending batch");
+        let _ = sampler
+            .produce_latent_batch(3)
+            .expect("produce pending batch");
 
         let snapshot = sampler.snapshot().expect("snapshot");
         let restored = snapshot.into_runtime(&point_spec).expect("restore");
@@ -488,11 +496,11 @@ mod tests {
 
         assert_eq!(sampler.training_samples_remaining(), Some(8));
         let _ = sampler
-            .produce_batch(5)
+            .produce_latent_batch(5)
             .expect("produce first training batch");
         assert_eq!(sampler.training_samples_remaining(), Some(3));
         let _ = sampler
-            .produce_batch(3)
+            .produce_latent_batch(3)
             .expect("produce second training batch");
         assert_eq!(sampler.training_samples_remaining(), None);
 

@@ -3,12 +3,13 @@
 use super::queries;
 use crate::core::{
     AggregationStore, BatchClaim, CompletedBatch, ControlPlaneStore, DesiredAssignment,
-    EvaluatorPerformanceSnapshot, RegisteredNode, RunReadStore, RunSampleProgress, RunSpecStore,
-    RuntimeLogEvent, RuntimeLogStore, SamplerAggregatorPerformanceSnapshot, StoreError,
-    WorkQueueStore, WorkerRole,
+    EvaluatorPerformanceSnapshot, ParametrizationVersionStore, RegisteredNode, RunReadStore,
+    RunSampleProgress, RunSpecStore, RunTask, RunTaskSpec, RunTaskStore, RuntimeLogEvent,
+    RuntimeLogStore, SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore, WorkerRole,
 };
-use crate::core::{Batch, BatchResult, PointSpec};
-use crate::engines::{IntegrationParams, RunSpec};
+use crate::engines::{
+    BatchResult, IntegrationParams, LatentBatch, ParametrizationConfig, PointSpec, RunSpec,
+};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 
@@ -527,21 +528,56 @@ impl ControlPlaneStore for PgStore {
         point_spec: &PointSpec,
         evaluator_init_metadata: Option<&JsonValue>,
         sampler_aggregator_init_metadata: Option<&JsonValue>,
+        initial_tasks: &[RunTaskSpec],
     ) -> Result<i32, StoreError> {
         let sanitized_params = parse_run_create_payload(integration_params)?;
-
-        queries::create_run(
-            &self.pool,
-            name,
-            target_nr_samples,
-            &sanitized_params,
-            target,
-            point_spec,
-            evaluator_init_metadata,
-            sampler_aggregator_init_metadata,
+        let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
+        let run_id = sqlx::query_scalar(
+            r#"
+            INSERT INTO runs (
+                name,
+                target_nr_samples,
+                integration_params,
+                target,
+                point_spec,
+                evaluator_init_metadata,
+                sampler_aggregator_init_metadata
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING id
+            "#,
         )
+        .bind(name)
+        .bind(target_nr_samples)
+        .bind(&sanitized_params)
+        .bind(target)
+        .bind(sqlx::types::Json(point_spec))
+        .bind(evaluator_init_metadata)
+        .bind(sampler_aggregator_init_metadata)
+        .fetch_one(&mut *tx)
         .await
-        .map_err(map_sqlx)
+        .map_err(map_sqlx)?;
+        for (offset, task) in initial_tasks.iter().enumerate() {
+            sqlx::query(
+                r#"
+                INSERT INTO run_tasks (
+                    run_id,
+                    sequence_nr,
+                    task,
+                    state
+                )
+                VALUES ($1, $2, $3, 'pending')
+                "#,
+            )
+            .bind(run_id)
+            .bind(offset as i32 + 1)
+            .bind(serde_json::to_value(task).unwrap_or_default())
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx)?;
+        }
+        tx.commit().await.map_err(map_sqlx)?;
+        Ok(run_id)
     }
 
     async fn remove_run(&self, run_id: i32) -> Result<(), StoreError> {
@@ -560,7 +596,7 @@ impl WorkQueueStore for PgStore {
     async fn insert_batch(
         &self,
         run_id: i32,
-        batch: &Batch,
+        batch: &LatentBatch,
         requires_training: bool,
     ) -> Result<i64, StoreError> {
         queries::insert_batch(&self.pool, run_id, batch, requires_training)
@@ -570,6 +606,12 @@ impl WorkQueueStore for PgStore {
 
     async fn get_pending_batch_count(&self, run_id: i32) -> Result<i64, StoreError> {
         queries::get_pending_batch_count(&self.pool, run_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn get_open_batch_count(&self, run_id: i32) -> Result<i64, StoreError> {
+        queries::get_open_batch_count(&self.pool, run_id)
             .await
             .map_err(map_sqlx)
     }
@@ -584,9 +626,9 @@ impl WorkQueueStore for PgStore {
             .map_err(map_sqlx)?;
 
         Ok(
-            claimed.map(|(batch_id, batch, requires_training)| BatchClaim {
+            claimed.map(|(batch_id, latent_batch, requires_training)| BatchClaim {
                 batch_id,
-                batch,
+                latent_batch,
                 requires_training,
             }),
         )
@@ -647,9 +689,9 @@ impl WorkQueueStore for PgStore {
             .map_err(map_sqlx)?;
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
-            let batch = Batch::from_json(&row.points).map_err(|err| {
+            let latent_batch = LatentBatch::from_json(&row.latent_batch).map_err(|err| {
                 store_err(format!(
-                    "failed to deserialize batch points for batch_id={}: {err}",
+                    "failed to deserialize latent batch payload for batch_id={}: {err}",
                     row.batch_id
                 ))
             })?;
@@ -663,7 +705,7 @@ impl WorkQueueStore for PgStore {
 
             out.push(CompletedBatch {
                 batch_id: row.batch_id,
-                batch,
+                latent_batch,
                 requires_training: row.requires_training,
                 result,
                 completed_at: row.completed_at,
@@ -681,6 +723,47 @@ impl WorkQueueStore for PgStore {
     }
     async fn delete_completed_batches(&self, batch_ids: &[i64]) -> Result<(), StoreError> {
         queries::delete_completed_batches(&self.pool, batch_ids)
+            .await
+            .map_err(map_sqlx)
+    }
+}
+
+#[async_trait::async_trait]
+impl ParametrizationVersionStore for PgStore {
+    async fn load_parametrization_version(
+        &self,
+        run_id: i32,
+        version: i64,
+    ) -> Result<Option<ParametrizationConfig>, StoreError> {
+        let row = queries::get_parametrization_state(&self.pool, run_id, version)
+            .await
+            .map_err(map_sqlx)?;
+        row.map(|payload| {
+            serde_json::from_value(payload)
+                .map_err(|err| store_err(format!("failed to decode parametrization state: {err}")))
+        })
+        .transpose()
+    }
+
+    async fn load_latest_parametrization_version(
+        &self,
+        run_id: i32,
+    ) -> Result<Option<i64>, StoreError> {
+        queries::get_latest_parametrization_state_version(&self.pool, run_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn save_parametrization_version(
+        &self,
+        run_id: i32,
+        version: i64,
+        config: &ParametrizationConfig,
+    ) -> Result<(), StoreError> {
+        let payload = serde_json::to_value(config).map_err(|err| {
+            store_err(format!("failed to serialize parametrization state: {err}"))
+        })?;
+        queries::upsert_parametrization_state(&self.pool, run_id, version, &payload)
             .await
             .map_err(map_sqlx)
     }
@@ -781,6 +864,71 @@ impl AggregationStore for PgStore {
     }
 }
 
+#[async_trait::async_trait]
+impl RunTaskStore for PgStore {
+    async fn append_run_tasks(
+        &self,
+        run_id: i32,
+        tasks: &[RunTaskSpec],
+    ) -> Result<Vec<RunTask>, StoreError> {
+        queries::append_run_tasks(&self.pool, run_id, tasks)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn list_run_tasks(&self, run_id: i32) -> Result<Vec<RunTask>, StoreError> {
+        queries::list_run_tasks(&self.pool, run_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn remove_pending_run_task(&self, run_id: i32, task_id: i64) -> Result<bool, StoreError> {
+        queries::remove_pending_run_task(&self.pool, run_id, task_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn load_active_run_task(&self, run_id: i32) -> Result<Option<RunTask>, StoreError> {
+        queries::load_active_run_task(&self.pool, run_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn activate_next_run_task(&self, run_id: i32) -> Result<Option<RunTask>, StoreError> {
+        queries::activate_next_run_task(&self.pool, run_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn update_run_task_progress(
+        &self,
+        task_id: i64,
+        nr_produced_samples: i64,
+        nr_completed_samples: i64,
+    ) -> Result<(), StoreError> {
+        queries::update_run_task_progress(
+            &self.pool,
+            task_id,
+            nr_produced_samples,
+            nr_completed_samples,
+        )
+        .await
+        .map_err(map_sqlx)
+    }
+
+    async fn complete_run_task(&self, task_id: i64) -> Result<(), StoreError> {
+        queries::complete_run_task(&self.pool, task_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn fail_run_task(&self, task_id: i64, reason: &str) -> Result<(), StoreError> {
+        queries::fail_run_task(&self.pool, task_id, reason)
+            .await
+            .map_err(map_sqlx)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -794,9 +942,15 @@ mod tests {
             7,
             Some(1_000),
             json!({
-                "evaluator": { "kind": "sin_evaluator", "alpha": 1 },
-                "sampler_aggregator": { "kind": "naive_monte_carlo", "beta": 2 },
-                "parametrization": { "kind": "identity", "delta": 4 },
+                "evaluator": {
+                    "kind": "sin_evaluator",
+                    "min_eval_time_per_sample_ms": 1
+                },
+                "sampler_aggregator": {
+                    "kind": "naive_monte_carlo",
+                    "training_target_samples": 2
+                },
+                "parametrization": { "kind": "identity" },
                 "evaluator_runner_params": {
                     "min_loop_time_ms": 42,
                     "performance_snapshot_interval_ms": 5000
@@ -827,19 +981,18 @@ mod tests {
         assert!(matches!(
             &spec.evaluator,
             crate::engines::EvaluatorConfig::SinEvaluator { params }
-                if params.get("alpha") == Some(&json!(1))
+                if params.min_eval_time_per_sample_ms == 1
         ));
         assert_eq!(spec.sampler_aggregator.kind_str(), "naive_monte_carlo");
         assert!(matches!(
             &spec.sampler_aggregator,
             crate::engines::SamplerAggregatorConfig::NaiveMonteCarlo { params }
-                if params.get("beta") == Some(&json!(2))
+                if params.training_target_samples == 2
         ));
         assert_eq!(spec.parametrization.kind_str(), "identity");
         assert!(matches!(
             &spec.parametrization,
-            crate::engines::ParametrizationConfig::Identity { params }
-                if params.get("delta") == Some(&json!(4))
+            crate::engines::ParametrizationConfig::Identity { .. }
         ));
         assert_eq!(
             spec.evaluator_runner_params,

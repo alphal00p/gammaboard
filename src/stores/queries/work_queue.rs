@@ -1,12 +1,12 @@
-use crate::core::{Batch, BatchResult};
 use crate::core::{EvaluatorPerformanceSnapshot, SamplerAggregatorPerformanceSnapshot};
+use crate::engines::{BatchResult, LatentBatch};
 use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 
 pub(crate) struct CompletedBatchRaw {
     pub batch_id: i64,
-    pub points: JsonValue,
+    pub latent_batch: JsonValue,
     pub requires_training: bool,
     pub values: Option<JsonValue>,
     pub batch_observable: JsonValue,
@@ -17,19 +17,27 @@ pub(crate) struct CompletedBatchRaw {
 pub(crate) async fn insert_batch(
     pool: &PgPool,
     run_id: i32,
-    batch: &Batch,
+    batch: &LatentBatch,
     requires_training: bool,
 ) -> Result<i64, sqlx::Error> {
     let batch_id = sqlx::query_scalar::<_, i64>(
         r#"
-        INSERT INTO batches (run_id, points, batch_size, status, requires_training)
-        VALUES ($1, $2, $3, 'pending', $4)
+        INSERT INTO batches (
+            run_id,
+            latent_batch,
+            parametrization_state_version,
+            batch_size,
+            status,
+            requires_training
+        )
+        VALUES ($1, $2, $3, $4, 'pending', $5)
         RETURNING id
         "#,
     )
     .bind(run_id)
-    .bind(batch.to_json())
-    .bind(batch.size() as i32)
+    .bind(batch.into_json())
+    .bind(batch.parametrization_state_version)
+    .bind(batch.nr_samples as i32)
     .bind(requires_training)
     .fetch_one(pool)
     .await?;
@@ -54,11 +62,26 @@ pub(crate) async fn get_pending_batch_count(
     Ok(count)
 }
 
+pub(crate) async fn get_open_batch_count(pool: &PgPool, run_id: i32) -> Result<i64, sqlx::Error> {
+    let count = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM batches
+        WHERE run_id = $1
+          AND status IN ('pending', 'claimed', 'completed')
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(count)
+}
+
 pub(crate) async fn claim_batch(
     pool: &PgPool,
     run_id: i32,
     node_id: &str,
-) -> Result<Option<(i64, Batch, bool)>, sqlx::Error> {
+) -> Result<Option<(i64, LatentBatch, bool)>, sqlx::Error> {
     let row = sqlx::query_as::<_, (i64, JsonValue, bool)>(
         r#"
         UPDATE batches
@@ -80,7 +103,7 @@ pub(crate) async fn claim_batch(
             LIMIT 1
             FOR UPDATE SKIP LOCKED
         )
-        RETURNING id, points, requires_training
+        RETURNING id, latent_batch, requires_training
         "#,
     )
     .bind(node_id)
@@ -88,8 +111,9 @@ pub(crate) async fn claim_batch(
     .fetch_optional(pool)
     .await?;
 
-    if let Some((batch_id, points_json, requires_training)) = row {
-        let batch = Batch::from_json(&points_json).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    if let Some((batch_id, latent_json, requires_training)) = row {
+        let batch =
+            LatentBatch::from_json(&latent_json).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
         Ok(Some((batch_id, batch, requires_training)))
     } else {
         Ok(None)
@@ -251,7 +275,7 @@ pub(crate) async fn fetch_completed_batches(
             SELECT
                 id,
                 status,
-                points,
+                latent_batch,
                 requires_training,
                 "values",
                 batch_observable,
@@ -270,7 +294,7 @@ pub(crate) async fn fetch_completed_batches(
         )
         SELECT
             o.id,
-            o.points,
+            o.latent_batch,
             o.requires_training,
             o."values",
             o.batch_observable,
@@ -295,7 +319,7 @@ pub(crate) async fn fetch_completed_batches(
         .map(
             |(
                 batch_id,
-                points,
+                latent_batch,
                 requires_training,
                 values,
                 batch_observable,
@@ -304,7 +328,7 @@ pub(crate) async fn fetch_completed_batches(
             )| {
                 CompletedBatchRaw {
                     batch_id,
-                    points,
+                    latent_batch,
                     requires_training,
                     values,
                     batch_observable,

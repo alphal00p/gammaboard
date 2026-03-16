@@ -1,6 +1,4 @@
-//! Batch abstraction for work queue operations.
-//!
-//! Batches are the unit of work exchanged between sampler-aggregator and evaluator.
+//! Batch abstraction for concrete evaluator-side materialized work.
 
 use ndarray::{Array1, Array2};
 use serde::{Deserialize, Serialize};
@@ -8,27 +6,6 @@ use serde_json::Value as JsonValue;
 use std::{error::Error, fmt};
 
 use crate::engines::ObservableState;
-
-/// Status of a batch in the work queue.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum BatchStatus {
-    Pending,
-    Claimed,
-    Completed,
-    Failed,
-}
-
-impl BatchStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            BatchStatus::Pending => "pending",
-            BatchStatus::Claimed => "claimed",
-            BatchStatus::Completed => "completed",
-            BatchStatus::Failed => "failed",
-        }
-    }
-}
 
 /// Point layout contract for a run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,7 +83,6 @@ struct BatchJson {
 }
 
 impl Batch {
-    /// Constructs a batch from dense 2D arrays.
     pub fn new(
         continuous: Array2<f64>,
         discrete: Array2<i64>,
@@ -142,7 +118,6 @@ impl Batch {
         Self::new(continuous, discrete, None)
     }
 
-    /// Constructs a batch from flat row-major payloads.
     pub fn from_flat_data(
         samples: usize,
         continuous_dims: usize,
@@ -160,7 +135,6 @@ impl Batch {
         )
     }
 
-    /// Constructs a batch from flat row-major payloads and optional per-sample weights.
     pub fn from_flat_data_with_weights(
         samples: usize,
         continuous_dims: usize,
@@ -240,20 +214,7 @@ impl Batch {
     }
 }
 
-/// A batch with metadata from the database.
-#[derive(Debug, Clone)]
-pub struct BatchRecord {
-    pub id: i64,
-    pub run_id: i32,
-    pub batch: Batch,
-    pub status: BatchStatus,
-    pub claimed_by: Option<String>,
-}
-
 /// Evaluator output for one batch.
-///
-/// `values` are per-sample weighted training values (already including any
-/// parametrization weighting applied in evaluator-space).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchResult {
     pub values: Option<Vec<f64>>,
@@ -342,10 +303,7 @@ mod tests {
     fn test_batch_results() {
         let batch =
             Batch::new(array![[0.5], [1.5]], Array2::zeros((2, 0)), None).expect("batch creation");
-        let result = BatchResult::new(
-            Some(vec![0.123, 0.456]),
-            crate::engines::ObservableState::empty_scalar(),
-        );
+        let result = BatchResult::new(Some(vec![0.123, 0.456]), ObservableState::empty_scalar());
         assert!(result.matches_batch(&batch));
     }
 
@@ -357,13 +315,5 @@ mod tests {
             discrete_dims: 1,
         };
         assert!(batch.validate_point_spec(&spec).is_ok());
-    }
-
-    #[test]
-    fn test_batch_status() {
-        assert_eq!(BatchStatus::Pending.as_str(), "pending");
-        assert_eq!(BatchStatus::Claimed.as_str(), "claimed");
-        assert_eq!(BatchStatus::Completed.as_str(), "completed");
-        assert_eq!(BatchStatus::Failed.as_str(), "failed");
     }
 }

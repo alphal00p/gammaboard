@@ -1,21 +1,18 @@
 use super::Parametrization;
-use crate::core::{Batch, PointSpec};
-use crate::engines::{BuildError, BuildFromJson, EngineError};
+use crate::engines::{Batch, BuildError, EngineError, LatentBatch, PointSpec};
 use ndarray::{Array1, Array2};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
 
 pub struct SphericalParametrization;
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct SphericalParametrizationParams {}
 
-impl BuildFromJson for SphericalParametrization {
-    type Params = SphericalParametrizationParams;
-
-    fn from_parsed_params(_params: Self::Params) -> Result<Self, BuildError> {
-        Ok(Self)
+impl SphericalParametrization {
+    pub fn from_params(_params: SphericalParametrizationParams) -> Self {
+        Self
     }
 }
 
@@ -29,7 +26,11 @@ impl Parametrization for SphericalParametrization {
         Ok(())
     }
 
-    fn transform_batch(&mut self, batch: &Batch) -> Result<Batch, EngineError> {
+    fn materialize_batch(&mut self, latent_batch: &LatentBatch) -> Result<Batch, EngineError> {
+        let batch = latent_batch
+            .payload
+            .as_batch()
+            .map_err(|err| EngineError::engine(err.to_string()))?;
         let rows = batch.size();
         let dims = batch.continuous().ncols();
         if dims != 3 {

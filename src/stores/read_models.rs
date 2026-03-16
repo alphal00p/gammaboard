@@ -1,6 +1,7 @@
 //! Read models for API/dashboard responses.
 
-use crate::core::{EvaluatorPerformanceMetrics, PointSpec, SamplerPerformanceMetrics};
+use crate::core::{EvaluatorPerformanceMetrics, SamplerPerformanceMetrics};
+use crate::engines::PointSpec;
 use serde::{Deserialize, Serialize};
 
 /// Run progress information.

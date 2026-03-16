@@ -4,11 +4,9 @@ CREATE TABLE IF NOT EXISTS batches (
     id BIGSERIAL PRIMARY KEY,
     run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
 
-    -- Batch data: compact row-major flat arrays + explicit 2D shape metadata
-    points JSONB NOT NULL,
-    -- e.g., {"continuous_rows":2, "continuous_cols":2, "continuous_data":[0.5,0.3,0.6,0.4],
-    --        "discrete_rows":2, "discrete_cols":1, "discrete_data":[1,2],
-    --        "weights_data":[1.0,1.0]}
+    -- Versioned latent queue payload that evaluators materialize locally.
+    latent_batch JSONB NOT NULL,
+    parametrization_state_version BIGINT NOT NULL,
 
     batch_size INT NOT NULL,
     -- Number of samples in this batch
@@ -40,6 +38,17 @@ CREATE TABLE IF NOT EXISTS batches (
     retry_count INT DEFAULT 0,
     last_error TEXT
 );
+
+CREATE TABLE IF NOT EXISTS parametrization_states (
+    run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    version BIGINT NOT NULL,
+    state JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (run_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_parametrization_states_run_created
+    ON parametrization_states(run_id, created_at DESC);
 
 -- Indexes for work queue pattern (critical for performance)
 CREATE INDEX IF NOT EXISTS idx_batches_status_runid ON batches(run_id, status)

@@ -1,9 +1,8 @@
-use crate::core::{Batch, BatchResult, PointSpec};
-use crate::engines::EvalBatchOptions;
-use crate::engines::evaluator::sin_evaluator::SinEvaluatorParams;
 use crate::engines::{
-    BuildError, BuildFromJson, ComplexObservableState, EvalError, Evaluator, ObservableState,
+    Batch, BatchResult, ComplexObservableState, EvalBatchOptions, EvalError, Evaluator,
+    ObservableState, PointSpec,
 };
+use crate::evaluation::SinEvaluatorParams;
 use num::complex::Complex64;
 use std::{
     thread,
@@ -21,7 +20,13 @@ impl SincEvaluator {
             min_eval_time_per_sample_ms,
         }
     }
+
+    pub fn from_params(params: SincEvaluatorParams) -> Self {
+        Self::new(params.min_eval_time_per_sample_ms)
+    }
 }
+
+pub type SincEvaluatorParams = SinEvaluatorParams;
 
 impl Evaluator for SincEvaluator {
     fn get_point_spec(&self) -> PointSpec {
@@ -85,12 +90,5 @@ impl Evaluator for SincEvaluator {
             weighted_values,
             ObservableState::Complex(observable),
         ))
-    }
-}
-
-impl BuildFromJson for SincEvaluator {
-    type Params = SinEvaluatorParams;
-    fn from_parsed_params(params: Self::Params) -> Result<Self, BuildError> {
-        Ok(Self::new(params.min_eval_time_per_sample_ms))
     }
 }

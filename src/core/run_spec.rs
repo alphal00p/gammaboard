@@ -1,21 +1,13 @@
-use super::BuildError;
-use crate::core::PointSpec;
+use crate::evaluation::PointSpec;
+use crate::evaluation::{
+    GammaLoopParams, SinEvaluatorParams, SincEvaluatorParams, SymbolicaParams, UnitEvaluatorParams,
+};
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
-use serde::de::DeserializeOwned;
+use crate::sampling::{
+    HavanaSamplerParams, IdentityParametrizationParams, NaiveMonteCarloSamplerParams,
+    SphericalParametrizationParams, UnitBallParametrizationParams,
+};
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
-
-pub trait BuildFromJson: Sized {
-    type Params: DeserializeOwned;
-
-    fn from_parsed_params(params: Self::Params) -> Result<Self, BuildError>;
-
-    fn from_json(params: &JsonValue) -> Result<Self, BuildError> {
-        let parsed: Self::Params = serde_json::from_value(params.clone())
-            .map_err(|err| BuildError::invalid_input(err.to_string()))?;
-        Self::from_parsed_params(parsed)
-    }
-}
 
 /// Canonical integration parameters payload stored on `runs.integration_params`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,23 +37,23 @@ pub struct RunSpec {
 pub enum EvaluatorConfig {
     Gammaloop {
         #[serde(flatten)]
-        params: serde_json::Map<String, JsonValue>,
+        params: GammaLoopParams,
     },
     SinEvaluator {
         #[serde(flatten)]
-        params: serde_json::Map<String, JsonValue>,
+        params: SinEvaluatorParams,
     },
     SincEvaluator {
         #[serde(flatten)]
-        params: serde_json::Map<String, JsonValue>,
+        params: SincEvaluatorParams,
     },
     Unit {
         #[serde(flatten)]
-        params: serde_json::Map<String, JsonValue>,
+        params: UnitEvaluatorParams,
     },
     Symbolica {
         #[serde(flatten)]
-        params: serde_json::Map<String, JsonValue>,
+        params: SymbolicaParams,
     },
 }
 
@@ -72,11 +64,11 @@ impl EvaluatorConfig {}
 pub enum SamplerAggregatorConfig {
     NaiveMonteCarlo {
         #[serde(flatten)]
-        params: serde_json::Map<String, JsonValue>,
+        params: NaiveMonteCarloSamplerParams,
     },
     Havana {
         #[serde(flatten)]
-        params: serde_json::Map<String, JsonValue>,
+        params: HavanaSamplerParams,
     },
 }
 
@@ -85,21 +77,17 @@ impl SamplerAggregatorConfig {}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ParametrizationConfig {
-    None {
-        #[serde(flatten)]
-        params: serde_json::Map<String, JsonValue>,
-    },
     Identity {
         #[serde(flatten)]
-        params: serde_json::Map<String, JsonValue>,
+        params: IdentityParametrizationParams,
     },
     UnitBall {
         #[serde(flatten)]
-        params: serde_json::Map<String, JsonValue>,
+        params: UnitBallParametrizationParams,
     },
     Spherical {
         #[serde(flatten)]
-        params: serde_json::Map<String, JsonValue>,
+        params: SphericalParametrizationParams,
     },
 }
 
