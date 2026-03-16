@@ -1,8 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Args, Subcommand};
-use gammaboard::core::{
-    ControlPlaneStore, RunReadStore, RunTaskSpec, RunTaskStore, default_run_task_queue,
-};
+use gammaboard::core::{ControlPlaneStore, RunReadStore, RunTaskSpec, RunTaskStore};
 use gammaboard::init_pg_store;
 use gammaboard::preprocess::{RunAddConfig, preprocess_run_add};
 use serde::Deserialize;
@@ -75,16 +73,19 @@ pub async fn run_run_commands(command: RunCommand, quiet: bool) -> Result<()> {
                     .point_spec
                     .as_ref()
                     .ok_or_else(|| anyhow!("preprocessing did not resolve point_spec"))?;
-                let integration_params = serde_json::to_value(&processed.integration_params)
-                    .map_err(|err| anyhow!("failed to serialize integration_params: {err}"))?;
-                let initial_tasks = match processed.task_queue.clone() {
-                    Some(tasks) => tasks,
-                    None => default_run_task_queue(processed.pause_on_samples),
-                };
+                let integration_params = serde_json::to_value(
+                    processed
+                        .resolved_integration_params
+                        .as_ref()
+                        .ok_or_else(|| {
+                            anyhow!("preprocessing did not resolve integration_params")
+                        })?,
+                )
+                .map_err(|err| anyhow!("failed to serialize integration_params: {err}"))?;
+                let initial_tasks = processed.task_queue.clone().unwrap_or_default();
                 let run_id = store
                     .create_run(
                         &processed.name,
-                        processed.pause_on_samples,
                         &integration_params,
                         processed.target.as_ref(),
                         point_spec,
@@ -204,13 +205,6 @@ fn load_run_add_config(path: &PathBuf) -> Result<RunAddConfig> {
     if name.is_empty() {
         return Err(anyhow!(
             "invalid run name (`name`): expected non-empty string"
-        ));
-    }
-    if let Some(pause_on_samples) = parsed.pause_on_samples
-        && pause_on_samples <= 0
-    {
-        return Err(anyhow!(
-            "invalid pause_on_samples: expected positive integer when set"
         ));
     }
     if let Some(task_queue) = parsed.task_queue.as_ref() {

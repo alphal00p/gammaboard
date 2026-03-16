@@ -38,11 +38,10 @@ pub(crate) async fn get_run_sampler_runner_snapshot(
 pub(crate) async fn get_run_sample_progress(
     pool: &PgPool,
     run_id: i32,
-) -> Result<Option<(Option<i64>, i64, i64)>, sqlx::Error> {
-    sqlx::query_as::<_, (Option<i64>, i64, i64)>(
+) -> Result<Option<(i64, i64)>, sqlx::Error> {
+    sqlx::query_as::<_, (i64, i64)>(
         r#"
         SELECT
-            target_nr_samples,
             nr_produced_samples,
             nr_completed_samples
         FROM runs

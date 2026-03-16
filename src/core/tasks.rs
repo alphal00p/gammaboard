@@ -26,9 +26,11 @@ impl RunTaskState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RunTaskSpec {
-    Sample { nr_samples: Option<i64> },
-    ReconfigureSampler { config: SamplerAggregatorConfig },
-    ReconfigureParametrization { config: ParametrizationConfig },
+    Sample {
+        nr_samples: Option<i64>,
+        sampler_aggregator: SamplerAggregatorConfig,
+        parametrization: ParametrizationConfig,
+    },
     Pause,
 }
 
@@ -37,6 +39,7 @@ impl RunTaskSpec {
         match self {
             Self::Sample {
                 nr_samples: Some(nr_samples),
+                ..
             } if *nr_samples <= 0 => {
                 Err("sample task nr_samples must be a positive integer when set".to_string())
             }
@@ -47,8 +50,6 @@ impl RunTaskSpec {
     pub fn kind_str(&self) -> &'static str {
         match self {
             Self::Sample { .. } => "sample",
-            Self::ReconfigureSampler { .. } => "reconfigure_sampler",
-            Self::ReconfigureParametrization { .. } => "reconfigure_parametrization",
             Self::Pause => "pause",
         }
     }
@@ -68,14 +69,4 @@ pub struct RunTask {
     pub completed_at: Option<DateTime<Utc>>,
     pub failed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
-}
-
-pub fn default_run_task_queue(pause_on_samples: Option<i64>) -> Vec<RunTaskSpec> {
-    let mut tasks = vec![RunTaskSpec::Sample {
-        nr_samples: pause_on_samples,
-    }];
-    if pause_on_samples.is_some() {
-        tasks.push(RunTaskSpec::Pause);
-    }
-    tasks
 }

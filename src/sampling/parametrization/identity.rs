@@ -1,5 +1,7 @@
 use super::Parametrization;
-use crate::engines::{Batch, EngineError, LatentBatch};
+use crate::core::EngineError;
+use crate::evaluation::Batch;
+use crate::sampling::LatentBatch;
 use serde::{Deserialize, Serialize};
 
 pub struct IdentityParametrization;

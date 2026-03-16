@@ -1,8 +1,8 @@
-use crate::engines::{
-    Batch, BatchResult, ComplexObservableState, EvalBatchOptions, EvalError, Evaluator,
-    ObservableState, PointSpec,
+use crate::core::EvalError;
+use crate::evaluation::{
+    Batch, BatchResult, ComplexObservableState, EvalBatchOptions, Evaluator, ObservableState,
+    PointSpec, SinEvaluatorParams,
 };
-use crate::evaluation::SinEvaluatorParams;
 use num::complex::Complex64;
 use std::{
     thread,

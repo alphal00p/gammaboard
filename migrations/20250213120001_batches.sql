@@ -83,7 +83,6 @@ SELECT
     r.target,
     r.evaluator_init_metadata,
     r.sampler_aggregator_init_metadata,
-    r.target_nr_samples,
     r.nr_produced_samples,
     r.nr_completed_samples,
     r.started_at,

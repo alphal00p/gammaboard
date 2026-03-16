@@ -1,18 +1,34 @@
-use crate::core::RunTaskSpec;
-use crate::engines::{BuildError, EvalBatchOptions, Evaluator, IntegrationParams, PointSpec};
+use crate::core::{
+    BuildError, EvaluatorConfig, IntegrationParams, ParametrizationConfig, RunTaskSpec,
+    SamplerAggregatorConfig,
+};
+use crate::evaluation::{EvalBatchOptions, Evaluator, PointSpec};
+use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
+use crate::sampling::NaiveMonteCarloSamplerParams;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct RunAddIntegrationParams {
+    pub evaluator: EvaluatorConfig,
+    #[serde(default)]
+    pub sampler_aggregator: Option<SamplerAggregatorConfig>,
+    pub parametrization: ParametrizationConfig,
+    pub evaluator_runner_params: EvaluatorRunnerParams,
+    pub sampler_aggregator_runner_params: SamplerAggregatorRunnerParams,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct RunAddConfig {
     pub name: String,
-    pub pause_on_samples: Option<i64>,
     pub task_queue: Option<Vec<RunTaskSpec>>,
     #[serde(flatten)]
-    pub integration_params: IntegrationParams,
+    pub integration_params: RunAddIntegrationParams,
     pub target: Option<JsonValue>,
     #[serde(skip)]
     pub point_spec: Option<PointSpec>,
+    #[serde(skip)]
+    pub resolved_integration_params: Option<IntegrationParams>,
     #[serde(skip)]
     pub evaluator_init_metadata: Option<JsonValue>,
     #[serde(skip)]
@@ -20,28 +36,61 @@ pub struct RunAddConfig {
 }
 
 pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, BuildError> {
+    let resolved_sampler_aggregator = resolve_initial_sampler_aggregator(&config);
+    let resolved_integration_params = IntegrationParams {
+        evaluator: config.integration_params.evaluator.clone(),
+        sampler_aggregator: resolved_sampler_aggregator.clone(),
+        parametrization: config.integration_params.parametrization.clone(),
+        evaluator_runner_params: config.integration_params.evaluator_runner_params.clone(),
+        sampler_aggregator_runner_params: config
+            .integration_params
+            .sampler_aggregator_runner_params
+            .clone(),
+    };
+
     let mut evaluator = config.integration_params.evaluator.build()?;
     let point_spec = evaluator.get_point_spec();
     let evaluator_init_metadata = evaluator.get_init_metadata();
     config.point_spec = Some(point_spec.clone());
 
-    let sampler_aggregator_init_metadata =
-        preflight_compatibility(&config, &mut *evaluator, &point_spec)?;
+    let sampler_aggregator_init_metadata = preflight_compatibility(
+        &config,
+        &resolved_sampler_aggregator,
+        &mut *evaluator,
+        &point_spec,
+    )?;
+    config.resolved_integration_params = Some(resolved_integration_params);
     config.evaluator_init_metadata = Some(evaluator_init_metadata);
     config.sampler_aggregator_init_metadata = Some(sampler_aggregator_init_metadata);
 
     Ok(config)
 }
 
+fn resolve_initial_sampler_aggregator(config: &RunAddConfig) -> SamplerAggregatorConfig {
+    config
+        .task_queue
+        .as_ref()
+        .and_then(|tasks| {
+            tasks.iter().find_map(|task| match task {
+                RunTaskSpec::Sample {
+                    sampler_aggregator, ..
+                } => Some(sampler_aggregator.clone()),
+                RunTaskSpec::Pause => None,
+            })
+        })
+        .or_else(|| config.integration_params.sampler_aggregator.clone())
+        .unwrap_or_else(|| SamplerAggregatorConfig::NaiveMonteCarlo {
+            params: NaiveMonteCarloSamplerParams::default(),
+        })
+}
+
 fn preflight_compatibility(
     config: &RunAddConfig,
+    resolved_sampler_aggregator: &SamplerAggregatorConfig,
     evaluator: &mut dyn Evaluator,
     point_spec: &PointSpec,
 ) -> Result<JsonValue, BuildError> {
-    let mut sampler_aggregator = config
-        .integration_params
-        .sampler_aggregator
-        .build(point_spec.clone())?;
+    let mut sampler_aggregator = resolved_sampler_aggregator.build(point_spec.clone())?;
     sampler_aggregator.validate_point_spec(point_spec)?;
     let sampler_aggregator_init_metadata = sampler_aggregator.get_init_metadata();
 
@@ -55,7 +104,7 @@ fn preflight_compatibility(
         .map_err(|err| {
             BuildError::incompatible(format!(
                 "preflight failed to produce latent batch with sampler {}: {err}",
-                config.integration_params.sampler_aggregator.kind_str()
+                resolved_sampler_aggregator.kind_str()
             ))
         })?
         .with_version(1);

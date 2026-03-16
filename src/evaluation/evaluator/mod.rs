@@ -4,8 +4,8 @@ mod sinc_evaluator;
 mod symbolica;
 pub(crate) mod unit;
 
-use crate::engines::evaluation::Evaluator;
-use crate::engines::{BuildError, ObservableState};
+use crate::core::{BuildError, EvaluatorConfig};
+use crate::evaluation::{Evaluator, ObservableState};
 
 use self::gammaloop::GammaLoopEvaluator;
 use self::sin_evaluator::SinEvaluator;
@@ -18,7 +18,7 @@ pub use sinc_evaluator::SincEvaluatorParams;
 pub use symbolica::SymbolicaParams;
 pub use unit::UnitEvaluatorParams;
 
-impl crate::engines::EvaluatorConfig {
+impl EvaluatorConfig {
     pub fn kind_str(&self) -> &'static str {
         match self {
             Self::Gammaloop { .. } => "gammaloop",

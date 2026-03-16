@@ -1,9 +1,8 @@
-use crate::engines::{BuildError, EngineError, EvalError};
+use crate::core::{BuildError, EngineError, EvalError};
 use serde_json::{Value as JsonValue, json};
 
-use super::{Batch, BatchResult, PointSpec};
-use crate::engines::LatentBatch;
-use crate::engines::ObservableState;
+use super::{Batch, BatchResult, ObservableState, PointSpec};
+use crate::sampling::LatentBatch;
 
 #[derive(Debug, Clone, Copy)]
 pub struct EvalBatchOptions {

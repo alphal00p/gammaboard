@@ -3,7 +3,7 @@ import HavanaSamplerPanel from "./custom/HavanaSamplerPanel";
 import NaiveMonteCarloSamplerPanel from "./custom/NaiveMonteCarloSamplerPanel";
 
 const SAMPLER_CUSTOM_PANELS = {
-  havana: HavanaSamplerPanel,
+  havana_training: HavanaSamplerPanel,
   naive_monte_carlo: NaiveMonteCarloSamplerPanel,
 };
 

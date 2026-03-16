@@ -5,8 +5,10 @@ use super::models::{
     BatchClaim, CompletedBatch, DesiredAssignment, EvaluatorPerformanceSnapshot, RegisteredNode,
     RunSampleProgress, RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
 };
+use crate::core::{ParametrizationConfig, RunSpec};
 use crate::core::{RunTask, RunTaskSpec};
-use crate::engines::{BatchResult, LatentBatch, ParametrizationConfig, PointSpec, RunSpec};
+use crate::evaluation::{BatchResult, PointSpec};
+use crate::sampling::LatentBatch;
 use crate::stores::read_models::{
     AggregatedRangeResponse, AggregatedResult, EvaluatorPerformanceHistoryEntry,
     RegisteredWorkerEntry, RunProgress, SamplerPerformanceHistoryEntry, WorkQueueStats,
@@ -59,7 +61,6 @@ pub trait ControlPlaneStore: Send + Sync {
     async fn create_run(
         &self,
         name: &str,
-        target_nr_samples: Option<i64>,
         integration_params: &JsonValue,
         target: Option<&JsonValue>,
         point_spec: &PointSpec,

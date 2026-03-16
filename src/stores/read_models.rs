@@ -1,7 +1,7 @@
 //! Read models for API/dashboard responses.
 
 use crate::core::{EvaluatorPerformanceMetrics, SamplerPerformanceMetrics};
-use crate::engines::PointSpec;
+use crate::evaluation::PointSpec;
 use serde::{Deserialize, Serialize};
 
 /// Run progress information.
@@ -18,7 +18,6 @@ pub struct RunProgress {
     pub target: Option<serde_json::Value>,
     pub evaluator_init_metadata: Option<serde_json::Value>,
     pub sampler_aggregator_init_metadata: Option<serde_json::Value>,
-    pub target_nr_samples: Option<i64>,
     pub nr_produced_samples: i64,
     pub nr_completed_samples: i64,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,

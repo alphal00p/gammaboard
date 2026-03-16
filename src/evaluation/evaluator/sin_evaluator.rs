@@ -1,6 +1,8 @@
-use crate::engines::EvalError;
-use crate::engines::{Batch, BatchResult, EvalBatchOptions, Evaluator, PointSpec};
-use crate::engines::{ObservableState, ScalarObservableState};
+use crate::core::EvalError;
+use crate::evaluation::{
+    Batch, BatchResult, EvalBatchOptions, Evaluator, ObservableState, PointSpec,
+    ScalarObservableState,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     thread,

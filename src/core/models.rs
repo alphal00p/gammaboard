@@ -1,4 +1,5 @@
-use crate::engines::{Batch, BatchResult, LatentBatch};
+use crate::evaluation::{Batch, BatchResult};
+use crate::sampling::LatentBatch;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -162,6 +163,7 @@ pub struct SamplerRuntimeMetrics {
     pub produced_samples_total: i64,
     pub ingested_batches_total: i64,
     pub ingested_samples_total: i64,
+    pub completed_samples_per_second: f64,
     pub batch_size_current: usize,
     pub rolling: SamplerRollingAverages,
 }
@@ -206,7 +208,6 @@ pub struct SamplerAggregatorPerformanceSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunSampleProgress {
-    pub target_nr_samples: Option<i64>,
     pub nr_produced_samples: i64,
     pub nr_completed_samples: i64,
 }

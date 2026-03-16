@@ -1,7 +1,6 @@
-use crate::engines::{
-    Batch, BuildError, EngineError, LatentBatchSpec, PointSpec, SamplePlan, SamplerAggregator,
-    SamplerAggregatorSnapshot,
-};
+use crate::core::{BuildError, EngineError};
+use crate::evaluation::{Batch, PointSpec};
+use crate::sampling::{LatentBatchSpec, SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{thread, time::Duration};

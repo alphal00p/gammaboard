@@ -1,7 +1,33 @@
 # todo: create run-cargd to make the state
 
 name = "gammaloop-triangle"
-pause_on_samples = 1_000_000
+[[task_queue]]
+kind = "sample"
+nr_samples = 1_000_000
+[task_queue.sampler_aggregator]
+kind = "havana_training"
+seed = 0
+bins = 64
+min_samples_for_update = 1024
+samples_for_update = 16384
+stop_training_after_n_samples = 1_000_000
+initial_training_rate = 0.1
+final_training_rate = 0.001
+[task_queue.parametrization]
+kind = "identity"
+
+[[task_queue]]
+kind = "sample"
+nr_samples = 2_000_000
+[task_queue.sampler_aggregator]
+kind = "havana_inference"
+[task_queue.parametrization]
+kind = "havana_inference"
+[task_queue.parametrization.inner]
+kind = "identity"
+
+[[task_queue]]
+kind = "pause"
 
 [evaluator]
 kind = "gammaloop"
@@ -15,16 +41,6 @@ training_projection = "abs"
 observable_kind = "complex"
 continuous_dims = 3
 discrete_dims = 0
-
-[sampler_aggregator]
-kind = "havana"
-seed = 0
-bins = 64
-min_samples_for_update = 1024
-samples_for_update = 16384
-stop_training_after_n_samples = 65536
-initial_training_rate = 0.1
-final_training_rate = 0.001
 
 [parametrization]
 kind = "identity" # "spherical"

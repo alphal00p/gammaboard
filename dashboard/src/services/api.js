@@ -94,12 +94,23 @@ const normalizeRunEntry = (entry) => {
   return {
     ...entry,
     run_id: Number.isFinite(runId) ? runId : entry.run_id,
-    target_nr_samples: Number.isFinite(Number(entry.target_nr_samples)) ? Number(entry.target_nr_samples) : null,
     nr_produced_samples: Number.isFinite(Number(entry.nr_produced_samples)) ? Number(entry.nr_produced_samples) : 0,
     nr_completed_samples: Number.isFinite(Number(entry.nr_completed_samples)) ? Number(entry.nr_completed_samples) : 0,
     integration_params: entry.integration_params ?? {},
     point_spec: entry.point_spec ?? null,
     target: entry.target ?? null,
+  };
+};
+
+const normalizeRunTaskEntry = (entry) => {
+  if (!entry || typeof entry !== "object") return null;
+  return {
+    ...entry,
+    id: Number.isFinite(Number(entry.id)) ? Number(entry.id) : entry.id,
+    run_id: Number.isFinite(Number(entry.run_id)) ? Number(entry.run_id) : entry.run_id,
+    sequence_nr: Number.isFinite(Number(entry.sequence_nr)) ? Number(entry.sequence_nr) : entry.sequence_nr,
+    nr_produced_samples: Number.isFinite(Number(entry.nr_produced_samples)) ? Number(entry.nr_produced_samples) : 0,
+    nr_completed_samples: Number.isFinite(Number(entry.nr_completed_samples)) ? Number(entry.nr_completed_samples) : 0,
   };
 };
 
@@ -127,6 +138,12 @@ export const fetchRun = async (runId, signal) => {
   const response = await fetch(`${API_BASE_URL}/runs/${runId}`, { signal });
   const data = await parseJsonOrThrow(response, "Failed to fetch run");
   return normalizeRunEntry(data) ?? data;
+};
+
+export const fetchRunTasks = async (runId, signal) => {
+  const response = await fetch(`${API_BASE_URL}/runs/${runId}/tasks`, { signal });
+  const data = await parseJsonOrThrow(response, "Failed to fetch run tasks");
+  return (Array.isArray(data) ? data : []).map(normalizeRunTaskEntry).filter(Boolean);
 };
 
 export const fetchRunLogPage = async (

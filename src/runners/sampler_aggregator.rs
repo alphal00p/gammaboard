@@ -13,11 +13,10 @@ use crate::core::{
     RunSampleProgress, RunTask, RunTaskSpec, RunTaskStore, SamplerAggregatorPerformanceSnapshot,
     SamplerRollingAverages, SamplerRuntimeMetrics, StoreError, WorkQueueStore,
 };
-use crate::engines::{
-    EngineError, ObservableState, ParametrizationConfig, PointSpec, SamplePlan, SamplerAggregator,
-    SamplerAggregatorSnapshot,
-};
+use crate::core::{EngineError, ParametrizationConfig, SamplerAggregatorConfig};
+use crate::evaluation::{ObservableState, PointSpec};
 use crate::runners::rolling_metric::RollingMetric;
+use crate::sampling::{SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot};
 use crate::stores::RunControlStore;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -84,12 +83,13 @@ impl SamplerRuntimeState {
         }
     }
 
-    fn to_runtime_metrics(&self) -> SamplerRuntimeMetrics {
+    fn to_runtime_metrics(&self, completed_samples_per_second: f64) -> SamplerRuntimeMetrics {
         SamplerRuntimeMetrics {
             produced_batches_total: self.produced_batches_total,
             produced_samples_total: self.produced_samples_total,
             ingested_batches_total: self.ingested_batches_total,
             ingested_samples_total: self.ingested_samples_total,
+            completed_samples_per_second,
             batch_size_current: self.batch_size_current,
             rolling: SamplerRollingAverages {
                 eval_ms_per_sample: Self::rolling_metric_snapshot(&self.rolling.eval_ms_per_sample),
@@ -137,10 +137,13 @@ pub struct SamplerAggregatorRunner<WQ, AS, RC, PS, TS> {
     last_snapshot_at: Instant,
     current_parametrization_state_version: i64,
     runtime_state: SamplerRuntimeState,
+    last_performance_completed_samples: i64,
     last_pending_after_enqueue: Option<usize>,
     training_completion_marked: bool,
     auto_stop_triggered: bool,
     current_task: Option<RunTask>,
+    current_sampler_config: SamplerAggregatorConfig,
+    current_parametrization_config: ParametrizationConfig,
 }
 
 impl<WQ, AS, RC, PS, TS> SamplerAggregatorRunner<WQ, AS, RC, PS, TS>
@@ -264,6 +267,7 @@ where
         task_store: TS,
         config: SamplerAggregatorRunnerParams,
         point_spec: PointSpec,
+        initial_sampler_config: SamplerAggregatorConfig,
         initial_parametrization_state: ParametrizationConfig,
     ) -> Result<Self, RunnerError> {
         let initial_batch_size = config.max_batch_size.min(64).max(Self::MIN_BATCH_SIZE);
@@ -301,7 +305,6 @@ where
             .load_run_sample_progress(run_id)
             .await?
             .unwrap_or(RunSampleProgress {
-                target_nr_samples: None,
                 nr_produced_samples: 0,
                 nr_completed_samples: 0,
             });
@@ -341,10 +344,13 @@ where
                 batch_size_current: initial_batch_size,
                 ..SamplerRuntimeState::default()
             },
+            last_performance_completed_samples: persisted_progress.nr_completed_samples,
             last_pending_after_enqueue: None,
             training_completion_marked: false,
             auto_stop_triggered: false,
             current_task: None,
+            current_sampler_config: initial_sampler_config,
+            current_parametrization_config: initial_parametrization_state,
         })
     }
 
@@ -366,6 +372,7 @@ where
             .runtime_state
             .produced_samples_total
             .max(self.nr_produced_samples);
+        self.last_performance_completed_samples = self.nr_completed_samples;
         self.last_pending_after_enqueue = snapshot.last_pending_after_enqueue;
         self.training_completion_marked = snapshot.training_completion_marked;
         self.auto_stop_triggered = snapshot.auto_stop_triggered;
@@ -550,32 +557,110 @@ where
         Ok(())
     }
 
-    async fn resolve_sample_plan(&mut self) -> Result<SamplePlan, RunnerError> {
-        for _ in 0..8 {
-            match self.engine.sample_plan().map_err(RunnerError::Engine)? {
-                SamplePlan::Advance { state } => {
-                    let state: ParametrizationConfig =
-                        serde_json::from_value(state).map_err(|err| {
+    fn resolve_task_parametrization(
+        &self,
+        parametrization: &ParametrizationConfig,
+        handoff_snapshot: Option<&SamplerAggregatorSnapshot>,
+    ) -> Result<ParametrizationConfig, RunnerError> {
+        match parametrization {
+            ParametrizationConfig::HavanaInference { params } => {
+                let grid = match handoff_snapshot {
+                    Some(SamplerAggregatorSnapshot::HavanaTraining { raw }) => {
+                        #[derive(Deserialize)]
+                        struct GridOnlySnapshot {
+                            grid: serde_json::Value,
+                        }
+                        let grid_only: GridOnlySnapshot =
+                            serde_json::from_value(raw.clone()).map_err(|err| {
+                                RunnerError::Engine(EngineError::build(format!(
+                                    "failed to decode havana snapshot grid for parametrization handoff: {err}"
+                                )))
+                            })?;
+                        serde_json::from_value(grid_only.grid).map_err(|err| {
                             RunnerError::Engine(EngineError::build(format!(
-                                "failed to decode parametrization config from sampler plan: {err}"
+                                "failed to decode havana grid for parametrization handoff: {err}"
                             )))
-                        })?;
-                    self.current_parametrization_state_version += 1;
-                    self.parametrization_state_store
-                        .save_parametrization_version(
-                            self.run_id,
-                            self.current_parametrization_state_version,
-                            &state,
-                        )
-                        .await?;
-                }
-                plan => return Ok(plan),
+                        })?
+                    }
+                    _ => match &self.current_parametrization_config {
+                        ParametrizationConfig::FrozenHavanaInference { params } => {
+                            params.grid.clone()
+                        }
+                        _ => {
+                            return Err(RunnerError::Engine(EngineError::build(
+                                "havana_inference parametrization requires a persisted havana training snapshot or an existing frozen_havana_inference parametrization",
+                            )));
+                        }
+                    },
+                };
+                Ok(ParametrizationConfig::FrozenHavanaInference {
+                    params: crate::sampling::FrozenHavanaInferenceParametrizationParams {
+                        grid,
+                        inner: params.inner.clone(),
+                    },
+                })
             }
+            _ => Ok(parametrization.clone()),
+        }
+    }
+
+    fn same_serialized<T: Serialize>(left: &T, right: &T) -> Result<bool, RunnerError> {
+        let left = serde_json::to_value(left).map_err(|err| {
+            RunnerError::Engine(EngineError::engine(format!(
+                "failed to serialize runtime config for comparison: {err}"
+            )))
+        })?;
+        let right = serde_json::to_value(right).map_err(|err| {
+            RunnerError::Engine(EngineError::engine(format!(
+                "failed to serialize runtime config for comparison: {err}"
+            )))
+        })?;
+        Ok(left == right)
+    }
+
+    async fn ensure_sample_task_runtime(
+        &mut self,
+        sampler_aggregator: &SamplerAggregatorConfig,
+        parametrization: &ParametrizationConfig,
+        handoff_snapshot: Option<SamplerAggregatorSnapshot>,
+        open_batch_count: usize,
+    ) -> Result<(), RunnerError> {
+        if open_batch_count > 0 {
+            return Ok(());
         }
 
-        Err(RunnerError::Engine(EngineError::engine(
-            "sampler emitted too many consecutive parametrization advances",
-        )))
+        let resolved_parametrization =
+            self.resolve_task_parametrization(parametrization, handoff_snapshot.as_ref())?;
+
+        if !Self::same_serialized(
+            &self.current_parametrization_config,
+            &resolved_parametrization,
+        )? {
+            self.current_parametrization_state_version += 1;
+            self.parametrization_state_store
+                .save_parametrization_version(
+                    self.run_id,
+                    self.current_parametrization_state_version,
+                    &resolved_parametrization,
+                )
+                .await?;
+            self.current_parametrization_config = resolved_parametrization;
+        }
+
+        if !Self::same_serialized(&self.current_sampler_config, sampler_aggregator)? {
+            self.engine = match handoff_snapshot {
+                Some(snapshot) => sampler_aggregator
+                    .build_from_params_and_snapshot(self.point_spec.clone(), snapshot)
+                    .map_err(RunnerError::Engine)?,
+                None => sampler_aggregator
+                    .build(self.point_spec.clone())
+                    .map_err(RunnerError::Engine)?,
+            };
+            self.current_sampler_config = sampler_aggregator.clone();
+        }
+
+        self.training_completion_marked = self.engine.training_samples_remaining().is_none();
+        Ok(())
     }
 
     async fn flush_performance_snapshot(&mut self) -> Result<(), RunnerError> {
@@ -594,16 +679,29 @@ where
             return Ok(());
         }
 
+        let elapsed_secs = self.last_snapshot_at.elapsed().as_secs_f64();
+        let completed_delta = self
+            .nr_completed_samples
+            .saturating_sub(self.last_performance_completed_samples);
+        let completed_samples_per_second = if elapsed_secs > 0.0 {
+            (completed_delta as f64 / elapsed_secs).max(0.0)
+        } else {
+            0.0
+        };
+
         let snapshot = SamplerAggregatorPerformanceSnapshot {
             run_id: self.run_id,
             node_id: self.node_id.clone(),
-            runtime_metrics: self.runtime_state.to_runtime_metrics(),
+            runtime_metrics: self
+                .runtime_state
+                .to_runtime_metrics(completed_samples_per_second),
             engine_diagnostics: self.engine.get_diagnostics(),
         };
 
         self.work_queue
             .record_sampler_performance_snapshot(&snapshot)
             .await?;
+        self.last_performance_completed_samples = self.nr_completed_samples;
         self.last_snapshot_at = Instant::now();
         Ok(())
     }
@@ -641,7 +739,7 @@ where
         let Some(task) = self.current_task.as_ref() else {
             return Ok(None);
         };
-        let RunTaskSpec::Sample { nr_samples } = &task.task else {
+        let RunTaskSpec::Sample { nr_samples, .. } = &task.task else {
             return Ok(None);
         };
         let Some(target) = nr_samples else {
@@ -743,6 +841,7 @@ where
         pending_before_tick: usize,
         open_batch_count: usize,
     ) -> Result<usize, RunnerError> {
+        let mut handoff_snapshot: Option<SamplerAggregatorSnapshot> = None;
         for _ in 0..8 {
             let Some(task) = self.ensure_active_task().await? else {
                 self.clear_run_assignments_once("run task queue exhausted; assignments cleared")
@@ -750,11 +849,34 @@ where
                 return Ok(0);
             };
             match task.task.clone() {
-                RunTaskSpec::Sample { nr_samples } => {
+                RunTaskSpec::Sample {
+                    nr_samples,
+                    sampler_aggregator,
+                    parametrization,
+                } => {
+                    if let Err(err) = self
+                        .ensure_sample_task_runtime(
+                            &sampler_aggregator,
+                            &parametrization,
+                            handoff_snapshot.take(),
+                            open_batch_count,
+                        )
+                        .await
+                    {
+                        self.fail_current_task(format!(
+                            "failed to activate sample task {}: {err}",
+                            task.id
+                        ))
+                        .await?;
+                        return Ok(0);
+                    }
                     if let Some(target) = nr_samples
                         && task.nr_completed_samples >= target
                     {
                         if open_batch_count == 0 {
+                            handoff_snapshot =
+                                Some(self.engine.snapshot().map_err(RunnerError::Engine)?);
+                            self.persist_snapshot().await?;
                             self.complete_current_task().await?;
                             continue;
                         }
@@ -764,47 +886,11 @@ where
                         .produce_for_active_sample_task(pending_before_tick)
                         .await;
                 }
-                RunTaskSpec::ReconfigureParametrization { config } => {
-                    if open_batch_count > 0 {
-                        return Ok(0);
-                    }
-                    self.current_parametrization_state_version += 1;
-                    self.parametrization_state_store
-                        .save_parametrization_version(
-                            self.run_id,
-                            self.current_parametrization_state_version,
-                            &config,
-                        )
-                        .await?;
-                    self.complete_current_task().await?;
-                    continue;
-                }
-                RunTaskSpec::ReconfigureSampler { config } => {
-                    if open_batch_count > 0 {
-                        return Ok(0);
-                    }
-                    match self.engine.transition(&config, &self.point_spec) {
-                        Ok(engine) => {
-                            self.engine = engine;
-                            self.training_completion_marked =
-                                self.engine.training_samples_remaining().is_none();
-                            self.complete_current_task().await?;
-                            continue;
-                        }
-                        Err(err) => {
-                            self.fail_current_task(format!(
-                                "failed to transition sampler for task {}: {err}",
-                                task.id
-                            ))
-                            .await?;
-                            return Ok(0);
-                        }
-                    }
-                }
                 RunTaskSpec::Pause => {
                     if open_batch_count > 0 {
                         return Ok(0);
                     }
+                    self.persist_snapshot().await?;
                     self.complete_current_task().await?;
                     self.clear_run_assignments_once("pause task reached; run assignments cleared")
                         .await?;
@@ -822,7 +908,7 @@ where
         &mut self,
         pending_before_tick: usize,
     ) -> Result<usize, RunnerError> {
-        let sample_plan = self.resolve_sample_plan().await?;
+        let sample_plan = self.engine.sample_plan().map_err(RunnerError::Engine)?;
         let training_samples_remaining = self.engine.training_samples_remaining();
         let batch_plan = match sample_plan {
             SamplePlan::Pause => Vec::new(),
@@ -846,11 +932,6 @@ where
                         self.active_sample_remaining_budget()?,
                     )?,
                 )
-            }
-            SamplePlan::Advance { .. } => {
-                return Err(RunnerError::Engine(EngineError::engine(
-                    "unresolved SamplePlan::Advance reached batch production",
-                )));
             }
         };
 

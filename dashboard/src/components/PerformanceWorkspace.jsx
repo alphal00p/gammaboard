@@ -47,6 +47,27 @@ const buildPerformanceSamples = (entries, { meanKey, stderrKey }) => {
     .reverse();
 };
 
+const buildOverallSamplerThroughputSamples = (entries) =>
+  (Array.isArray(entries) ? entries : [])
+    .map((entry) => {
+      const createdAt = entry?.created_at ? Date.parse(entry.created_at) : NaN;
+      const completedSamplesPerSecond = Number(entry?.runtime_metrics?.completed_samples_per_second);
+      const snapshotId = Number(entry?.id);
+      if (!Number.isFinite(createdAt) || !Number.isFinite(completedSamplesPerSecond)) return null;
+      return {
+        sampleCount: createdAt,
+        mean: completedSamplesPerSecond,
+        value: completedSamplesPerSecond,
+        stderr: 0,
+        lower: completedSamplesPerSecond,
+        upper: completedSamplesPerSecond,
+        spread: 0,
+        snapshotId: Number.isFinite(snapshotId) ? snapshotId : null,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.sampleCount - b.sampleCount || (a.snapshotId ?? 0) - (b.snapshotId ?? 0));
+
 const latestEntryForWorker = (entries, workerId) =>
   (Array.isArray(entries) ? entries : []).find((entry) => entry.worker_id === workerId) || null;
 
@@ -127,6 +148,40 @@ const PerformanceSection = ({ title, entries, meanKey, stderrKey, isConnected, c
   );
 };
 
+const ThroughputSection = ({ title, entries, isConnected, color }) => {
+  const samples = useMemo(() => buildOverallSamplerThroughputSamples(entries), [entries]);
+  if (samples.length === 0) return null;
+
+  const formatTimestamp = (value) => {
+    const dt = new Date(Number(value));
+    if (Number.isNaN(dt.getTime())) return String(value);
+    return dt.toLocaleString();
+  };
+
+  return (
+    <SampleChart
+      samples={samples}
+      isConnected={isConnected}
+      hasRun
+      target={null}
+      title={title}
+      lineColor={color}
+      bandColor={color}
+      targetLabel=""
+      xAxisLabel="Snapshot time"
+      yAxisLabel="completed samples/s"
+      sampleLabel="Snapshot time"
+      valueLabel="completed samples/s"
+      showStdErr={false}
+      showErrorBand={false}
+      showTargetLine={false}
+      showTargetSummary={false}
+      xTickFormatter={formatTimestamp}
+      sampleFormatter={formatTimestamp}
+    />
+  );
+};
+
 const workerLabel = (workerId, roles) => {
   const roleList = Array.from(roles).sort().join(", ");
   return roleList ? `${workerId} (${roleList})` : workerId;
@@ -157,17 +212,17 @@ const PerformanceWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected }
       setSelectedWorkerId("");
       return;
     }
-    if (!workers.some((worker) => worker.workerId === selectedWorkerId)) {
-      setSelectedWorkerId(workers[0].workerId);
+    if (selectedWorkerId && !workers.some((worker) => worker.workerId === selectedWorkerId)) {
+      setSelectedWorkerId("");
     }
   }, [workers, selectedWorkerId]);
 
   const selectedEvaluatorEntries = useMemo(
-    () => evaluatorEntries.filter((entry) => entry.worker_id === selectedWorkerId),
+    () => (selectedWorkerId ? evaluatorEntries.filter((entry) => entry.worker_id === selectedWorkerId) : []),
     [evaluatorEntries, selectedWorkerId],
   );
   const selectedSamplerEntries = useMemo(
-    () => samplerEntries.filter((entry) => entry.worker_id === selectedWorkerId),
+    () => (selectedWorkerId ? samplerEntries.filter((entry) => entry.worker_id === selectedWorkerId) : []),
     [samplerEntries, selectedWorkerId],
   );
 
@@ -202,13 +257,37 @@ const PerformanceWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected }
         <>
           <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
             <Typography variant="h6" gutterBottom>
-              Performance
+              Overall Performance
             </Typography>
-            {workers.length === 0 ? (
+            {samplerEntries.length === 0 && evaluatorEntries.length === 0 ? (
               <EmptyStateCard
                 title="No performance history yet"
                 message="Wait for evaluator or sampler performance snapshots to be recorded for this run."
               />
+            ) : (
+              <Stack spacing={1.5}>
+                <Typography variant="body2" color="text.secondary">
+                  Run-level charts aggregate persisted performance history across all nodes.
+                </Typography>
+              </Stack>
+            )}
+          </Paper>
+
+          <ThroughputSection
+            title="Overall completed samples per second"
+            entries={samplerEntries}
+            isConnected={isConnected}
+            color="#ef6c00"
+          />
+
+          <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+            <Typography variant="h6" gutterBottom>
+              Implementation Details
+            </Typography>
+            {workers.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                No node-specific performance snapshots have been recorded yet.
+              </Typography>
             ) : (
               <Stack spacing={2}>
                 <FormControl size="small" sx={{ maxWidth: 420 }}>
@@ -217,8 +296,12 @@ const PerformanceWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected }
                     labelId="performance-worker-select-label"
                     value={selectedWorkerId}
                     label="Node"
+                    displayEmpty
                     onChange={(event) => setSelectedWorkerId(event.target.value)}
                   >
+                    <MenuItem value="">
+                      <em>No node selected</em>
+                    </MenuItem>
                     {workers.map((worker) => (
                       <MenuItem key={worker.workerId} value={worker.workerId}>
                         {workerLabel(worker.workerId, worker.roles)}
@@ -230,7 +313,11 @@ const PerformanceWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected }
                   <Typography variant="body2" color="text.secondary">
                     Selected node: <strong>{selectedWorker.workerId}</strong>
                   </Typography>
-                ) : null}
+                ) : (
+                  <Typography variant="body2" color="text.secondary">
+                    Select a node to inspect evaluator and sampler-specific runtime details.
+                  </Typography>
+                )}
               </Stack>
             )}
           </Paper>
@@ -239,32 +326,28 @@ const PerformanceWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected }
             <Alert severity="info">No persisted performance entries found for the selected node on this run.</Alert>
           ) : null}
 
-          <PerformanceSection
-            title="Evaluator ms/sample history"
-            entries={selectedEvaluatorEntries}
-            meanKey="avg_time_per_sample_ms"
-            stderrKey="std_time_per_sample_ms"
-            isConnected={isConnected}
-            color="#1565c0"
-          />
-          <PerformanceSection
-            title="Sampler produce ms/sample history"
-            entries={selectedSamplerEntries}
-            meanKey="avg_produce_time_per_sample_ms"
-            stderrKey="std_produce_time_per_sample_ms"
-            isConnected={isConnected}
-            color="#6a1b9a"
-          />
-          <PerformanceSection
-            title="Sampler ingest ms/sample history"
-            entries={selectedSamplerEntries}
-            meanKey="avg_ingest_time_per_sample_ms"
-            stderrKey="std_ingest_time_per_sample_ms"
-            isConnected={isConnected}
-            color="#2e7d32"
-          />
+          {selectedWorkerId ? (
+            <>
+              <PerformanceSection
+                title="Evaluator ms/sample history"
+                entries={selectedEvaluatorEntries}
+                meanKey="avg_time_per_sample_ms"
+                stderrKey="std_time_per_sample_ms"
+                isConnected={isConnected}
+                color="#1565c0"
+              />
+              <PerformanceSection
+                title="Sampler produce ms/sample history"
+                entries={selectedSamplerEntries}
+                meanKey="avg_produce_time_per_sample_ms"
+                stderrKey="std_produce_time_per_sample_ms"
+                isConnected={isConnected}
+                color="#6a1b9a"
+              />
+            </>
+          ) : null}
 
-          {(latestEvaluator || latestSampler) && (
+          {selectedWorkerId && (latestEvaluator || latestSampler) && (
             <Box sx={{ mt: 1, mb: 3 }}>
               <Typography variant="h6" gutterBottom>
                 Latest Snapshot Summary
@@ -351,9 +434,11 @@ const PerformanceWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected }
             </Box>
           )}
 
-          <Box sx={{ mt: 2 }}>
-            <JsonFallback title="latest performance snapshot JSON" data={latestPayload} />
-          </Box>
+          {selectedWorkerId ? (
+            <Box sx={{ mt: 2 }}>
+              <JsonFallback title="latest performance snapshot JSON" data={latestPayload} />
+            </Box>
+          ) : null}
         </>
       )}
     </>

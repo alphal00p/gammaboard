@@ -1,5 +1,5 @@
-use crate::engines::PointSpec;
-use crate::engines::{BuildError, EngineError, SamplerAggregatorConfig};
+use crate::core::{BuildError, EngineError};
+use crate::evaluation::PointSpec;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 
@@ -9,7 +9,8 @@ use super::{LatentBatchSpec, SamplePlan};
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SamplerAggregatorSnapshot {
     NaiveMonteCarlo { raw: JsonValue },
-    Havana { raw: JsonValue },
+    HavanaTraining { raw: JsonValue },
+    HavanaInference { raw: JsonValue },
 }
 
 pub trait SamplerAggregator: Send {
@@ -28,13 +29,6 @@ pub trait SamplerAggregator: Send {
     fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError>;
     fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError>;
     fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError>;
-    fn transition(
-        &mut self,
-        config: &SamplerAggregatorConfig,
-        point_spec: &PointSpec,
-    ) -> Result<Box<dyn SamplerAggregator>, BuildError> {
-        config.build(point_spec.clone())
-    }
     fn get_diagnostics(&mut self) -> JsonValue {
         json!("{}")
     }

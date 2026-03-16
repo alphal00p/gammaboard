@@ -8,7 +8,6 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - `src/core/*`: cross-stage shared contracts and types, including run-spec/config enums, shared errors, control-plane/store-facing contracts, DB row models, and worker assignment models.
 - `src/evaluation/*`: evaluator-side batch/result semantics, evaluator traits, evaluator implementations, and observables.
 - `src/sampling/*`: sampler-side latent batch semantics, sampling plans, sampler traits, sampler implementations, and parametrization implementations.
-- `src/engines/mod.rs`: compatibility re-exports for the runtime domain modules.
 - `src/runners/*`: evaluator, sampler-aggregator, and node orchestration loops only.
 - `src/stores/*`: PostgreSQL implementation, queries, read DTOs, and store composition.
 - `src/server/*`: dashboard read API runtime and handlers.
@@ -21,8 +20,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - Preflight derives `point_spec` from the evaluator and performs a one-point sampler -> parametrization -> evaluator dry-run before persistence.
 - `run add` persists evaluator and sampler init metadata.
 - Runs are driven by persisted `run_tasks`; this is the top-level execution queue and is distinct from the evaluator batch work queue.
-- If a run-add config omits `task_queue`, synthesize the default queue from `pause_on_samples`: one sample task, plus a pause task when `pause_on_samples` is set.
-- `pause_on_samples` still persists to `runs.target_nr_samples` for operator visibility, but task-local sample budgeting now comes from the active `run_tasks` row.
+- If a run-add config omits `task_queue`, the run is created idle; no batches should be produced until tasks are appended explicitly.
 - Point dimensions are canonical in `runs.point_spec`; do not duplicate them outside evaluator config unless the evaluator intrinsically needs them.
 - Run lifecycle is derived from control-plane state; do not add a persisted `runs.status` column unless explicitly requested.
 - Run pause is implemented by clearing desired assignments so `run-node` reconciles down cleanly.
@@ -54,6 +52,12 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - Keep latent-batch queue types separate from concrete evaluator batch/result types in code layout: latent queue payloads belong with sampler-side semantics, while `Batch`/`BatchResult` are the concrete A/B interface.
 - `core` owns the cross-stage shared config/run-spec types and error types; concrete evaluator/sampler transport types should still live in `evaluation` or `sampling`.
 - Parametrization versions are persisted separately in `parametrization_states (run_id, version)` as full `ParametrizationConfig` payloads; evaluators rebuild the parametrization when that version changes, and the version row must be written before any latent batch references it.
+- Task-owned phase transitions replace sampler-emitted semantic advances: sample tasks carry both `sampler_aggregator` and `parametrization` config, and the runner activates the next phase only after the current queue is drained and the current sampler snapshot is persisted.
+- For task-driven runs, do not duplicate sampler config at the top level of the run-add TOML. Resolve the initial sampler from the first sample task during preprocessing and persist the concrete resolved `integration_params`.
+- `Parametrization` currently means full latent-batch-to-concrete-batch materialization. It may later be split into a narrower `Parametrization` plus a `LatentBatchMaterializer`.
+- `SamplerAggregatorConfig::HavanaTraining` is the adaptive training sampler phase, and `SamplerAggregatorConfig::HavanaInference` is the compact seed-dispatch phase.
+- `ParametrizationConfig::HavanaInference` is task-level and must be resolved from a persisted Havana training snapshot into a concrete `FrozenHavanaInference` version before any latent batch references it.
+- `LatentBatchPayload::HavanaInference` is the compact evaluator-side Havana inference payload and carries only the per-batch seed; the frozen grid lives in the persisted parametrization version.
 - If an evaluator supports multiple observable semantics, that choice belongs in evaluator config via `observable_kind`.
 - Sampler-aggregator aggregation is `ObservableState` merge, not capability-style ingest.
 - Sampler-aggregators own any per-batch training correlation state internally; do not pass runner-managed batch context back into them.
@@ -62,8 +66,6 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - Snapshot persistence uses each observable's reduced persistent payload, not the tagged runtime enum form.
 - `LatentBatchPayload::Batch` is the compatibility payload for now and stores the previous compact row-major batch JSON.
 - Completed batches are consumed by the sampler-aggregator and deleted.
-- `ReconfigureSampler` tasks are interpreted by the sampler runner and executed through explicit sampler transition/build APIs; keep task data declarative.
-- `ReconfigureParametrization` tasks must persist a new parametrization version before any subsequent latent batch references it.
 
 ## Snapshot, Logging, And Read Rules
 - Sampler pause/resume snapshots are persisted on `runs.sampler_runner_snapshot`; keep the persisted shape explicit and versioned.

@@ -1,12 +1,12 @@
 //! Evaluator worker runner orchestration.
 
+use crate::core::{EngineError, EvalError, ParametrizationConfig};
 use crate::core::{
     EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot,
     ParametrizationVersionStore, StoreError, WorkQueueStore,
 };
-use crate::engines::{
-    Batch, BatchResult, EngineError, EvalBatchOptions, EvalError, Evaluator, Parametrization,
-    PointSpec,
+use crate::evaluation::{
+    Batch, BatchResult, EvalBatchOptions, Evaluator, Parametrization, PointSpec,
 };
 use crate::runners::rolling_metric::RollingMetric;
 use serde::{Deserialize, Serialize};
@@ -188,7 +188,7 @@ where
         if self.current_parametrization_version == Some(version) {
             return Ok(());
         }
-        let Some(config) = self
+        let Some(config): Option<ParametrizationConfig> = self
             .parametrization_states
             .load_parametrization_version(self.run_id, version)
             .await?

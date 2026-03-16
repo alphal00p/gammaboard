@@ -15,7 +15,7 @@ pub use models::{
 pub use run_spec::{
     EvaluatorConfig, IntegrationParams, ParametrizationConfig, RunSpec, SamplerAggregatorConfig,
 };
-pub use tasks::{RunTask, RunTaskSpec, RunTaskState, default_run_task_queue};
+pub use tasks::{RunTask, RunTaskSpec, RunTaskState};
 pub use traits::{
     AggregationStore, ControlPlaneStore, ParametrizationVersionStore, RunReadStore, RunSpecStore,
     RunTaskStore, RuntimeLogStore, WorkQueueStore,

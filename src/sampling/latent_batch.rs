@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
-use crate::engines::{Batch, BatchError};
+use crate::evaluation::{Batch, BatchError};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LatentBatch {
@@ -22,13 +22,13 @@ pub struct LatentBatchSpec {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LatentBatchPayload {
     Batch { batch: JsonValue },
+    HavanaInference { seed: u64 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SamplePlan {
     Produce { nr_samples: usize },
-    Advance { state: JsonValue },
     Pause,
 }
 
@@ -42,12 +42,18 @@ impl LatentBatchPayload {
     pub fn into_batch(self) -> Result<Batch, BatchError> {
         match self {
             Self::Batch { batch } => Batch::from_json(&batch),
+            Self::HavanaInference { .. } => Err(BatchError::layout(
+                "havana_inference latent payload must be materialized by a parametrization",
+            )),
         }
     }
 
     pub fn as_batch(&self) -> Result<Batch, BatchError> {
         match self {
             Self::Batch { batch } => Batch::from_json(batch),
+            Self::HavanaInference { .. } => Err(BatchError::layout(
+                "havana_inference latent payload must be materialized by a parametrization",
+            )),
         }
     }
 }

@@ -11,10 +11,10 @@ use serde_json::json;
 
 use crate::{
     Batch, BatchResult, BuildError, EvalError, PointSpec,
-    engines::{
-        ComplexObservableState, ObservableState, ScalarObservableState, SemanticObservableKind,
+    evaluation::{
+        ComplexObservableState, EvalBatchOptions, Evaluator, ObservableState,
+        ScalarObservableState, SemanticObservableKind,
     },
-    engines::{EvalBatchOptions, Evaluator},
 };
 
 pub struct GammaLoopEvaluator {

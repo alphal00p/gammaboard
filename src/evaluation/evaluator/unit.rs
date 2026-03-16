@@ -1,7 +1,7 @@
-use crate::engines::EvalError;
-use crate::engines::{Batch, BatchResult, EvalBatchOptions, Evaluator, PointSpec};
-use crate::engines::{
-    ComplexObservableState, ObservableState, ScalarObservableState, SemanticObservableKind,
+use crate::core::EvalError;
+use crate::evaluation::{
+    Batch, BatchResult, ComplexObservableState, EvalBatchOptions, Evaluator, ObservableState,
+    PointSpec, ScalarObservableState, SemanticObservableKind,
 };
 use serde::{Deserialize, Serialize};
 
@@ -98,7 +98,7 @@ impl Evaluator for UnitEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engines::Batch;
+    use crate::evaluation::Batch;
 
     #[test]
     fn eval_batch_returns_weighted_ones_for_scalar_observable() {

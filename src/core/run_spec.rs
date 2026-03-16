@@ -4,8 +4,9 @@ use crate::evaluation::{
 };
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use crate::sampling::{
-    HavanaSamplerParams, IdentityParametrizationParams, NaiveMonteCarloSamplerParams,
-    SphericalParametrizationParams, UnitBallParametrizationParams,
+    FrozenHavanaInferenceParametrizationParams, HavanaInferenceParametrizationParams,
+    HavanaInferenceSamplerParams, HavanaSamplerParams, IdentityParametrizationParams,
+    NaiveMonteCarloSamplerParams, SphericalParametrizationParams, UnitBallParametrizationParams,
 };
 use serde::{Deserialize, Serialize};
 
@@ -23,7 +24,6 @@ pub struct IntegrationParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunSpec {
     pub run_id: i32,
-    pub target_nr_samples: Option<i64>,
     pub point_spec: PointSpec,
     pub evaluator: EvaluatorConfig,
     pub sampler_aggregator: SamplerAggregatorConfig,
@@ -66,9 +66,13 @@ pub enum SamplerAggregatorConfig {
         #[serde(flatten)]
         params: NaiveMonteCarloSamplerParams,
     },
-    Havana {
+    HavanaTraining {
         #[serde(flatten)]
         params: HavanaSamplerParams,
+    },
+    HavanaInference {
+        #[serde(flatten)]
+        params: HavanaInferenceSamplerParams,
     },
 }
 
@@ -88,6 +92,14 @@ pub enum ParametrizationConfig {
     Spherical {
         #[serde(flatten)]
         params: SphericalParametrizationParams,
+    },
+    HavanaInference {
+        #[serde(flatten)]
+        params: HavanaInferenceParametrizationParams,
+    },
+    FrozenHavanaInference {
+        #[serde(flatten)]
+        params: FrozenHavanaInferenceParametrizationParams,
     },
 }
 

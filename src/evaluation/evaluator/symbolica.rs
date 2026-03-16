@@ -2,8 +2,8 @@ use std::{fs, path::Path};
 
 use crate::{
     Batch, BatchResult, BuildError, EngineError, EvalError, PointSpec,
-    engines::{EvalBatchOptions, Evaluator},
-    engines::{ObservableState, ScalarObservableState},
+    evaluation::{EvalBatchOptions, Evaluator},
+    evaluation::{ObservableState, ScalarObservableState},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};

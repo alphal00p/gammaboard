@@ -1,14 +1,9 @@
 # Shared defaults merged into every `control_plane run-add <config.toml>` payload.
 # `name` is intentionally omitted and must be provided per run.
-pause_on_samples = 10_000_000
-
 [evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-
-[sampler_aggregator]
-kind = "naive_monte_carlo"
 
 [parametrization]
 kind = "identity"

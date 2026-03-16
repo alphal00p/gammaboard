@@ -460,7 +460,7 @@ const SamplerDiagnosticsCustomPanel = ({ worker }) => {
     );
   }
 
-  if (worker.implementation === "havana") {
+  if (worker.implementation === "havana_training") {
     return <HavanaDiagnosticsPanel engineDiagnostics={worker.sampler_engine_diagnostics} />;
   }
 

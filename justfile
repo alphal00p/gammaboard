@@ -108,3 +108,9 @@ stop:
     -{{bin}} run pause -a
     -{{bin}} node stop -a
     -@stty sane
+
+stop-kill:
+    just stop
+    -pkill -f "{{bin}} run-node"
+    -pkill -f "{{bin}} server"
+    -@stty sane

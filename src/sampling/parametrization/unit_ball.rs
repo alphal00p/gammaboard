@@ -1,5 +1,7 @@
 use super::Parametrization;
-use crate::engines::{Batch, BuildError, EngineError, LatentBatch, PointSpec};
+use crate::core::{BuildError, EngineError};
+use crate::evaluation::{Batch, PointSpec};
+use crate::sampling::LatentBatch;
 use ndarray::{Array1, Array2};
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;

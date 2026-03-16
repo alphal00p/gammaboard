@@ -14,6 +14,7 @@ import WorkersWorkspace from "./components/WorkersWorkspace";
 import RunScopedWorkspace from "./components/common/RunScopedWorkspace";
 import { RunHistoryProvider, useRunHistory } from "./context/RunHistoryContext";
 import { useRuns } from "./hooks/useRuns";
+import { useRunTasks } from "./hooks/useRunTasks";
 import { useRunPerformanceSummary } from "./hooks/useRunPerformanceSummary";
 import { useWorkersData } from "./hooks/useWorkersData";
 import { deriveObservableImplementation } from "./utils/config";
@@ -84,6 +85,7 @@ const deriveSamplerRuntimeSummary = (workers, runId, latestSamplerEntry) => {
 const RunModeContent = ({ runs, workers, selectedRun, setSelectedRun, historyRange, setHistoryRange }) => {
   const { isConnected, lastUpdate, history, latestAggregated, workQueueStats } = useRunHistory();
   const currentRun = runs.find((entry) => entry.run_id === selectedRun);
+  const { tasks } = useRunTasks(selectedRun, 2000);
   const { latestSampler } = useRunPerformanceSummary({ runId: selectedRun, pollMs: 5000 });
   const samplerRuntimeSummary = useMemo(
     () => deriveSamplerRuntimeSummary(workers, selectedRun, latestSampler),
@@ -119,7 +121,7 @@ const RunModeContent = ({ runs, workers, selectedRun, setSelectedRun, historyRan
       <ConnectionStatus isConnected={isConnected} lastUpdate={lastUpdate} />
       <RunSelector runs={runs} selectedRun={selectedRun} onRunChange={setSelectedRun} />
       <HistoryRangeControls historyRange={historyRange} setHistoryRange={setHistoryRange} />
-      <RunInfo run={currentRun} />
+      <RunInfo run={currentRun} tasks={tasks} />
       <EvaluatorPanel run={currentRun} />
       <ObservablePanel
         run={currentRun}

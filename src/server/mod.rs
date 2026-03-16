@@ -1,4 +1,4 @@
-use crate::core::{RunReadStore, StoreError};
+use crate::core::{RunReadStore, RunTaskStore, StoreError};
 use crate::stores::PgStore;
 use anyhow::Context;
 use axum::{
@@ -140,6 +140,7 @@ fn build_app(state: AppState) -> Router {
         .route("/runs", get(get_runs))
         .route("/nodes", get(get_nodes))
         .route("/runs/:id", get(get_run))
+        .route("/runs/:id/tasks", get(get_run_tasks))
         .route("/runs/:id/stats", get(get_run_stats))
         .route("/runs/:id/logs", get(get_run_logs))
         .route("/runs/:id/aggregated", get(get_run_aggregated_results))
@@ -236,6 +237,16 @@ async fn get_run(
         .ok_or_else(|| ApiError::NotFound("Run not found".to_string()))?;
     Ok(Json(
         serde_json::to_value(run).map_err(|e| ApiError::Internal(e.to_string()))?,
+    ))
+}
+
+async fn get_run_tasks(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i32>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    let tasks = state.store.list_run_tasks(id).await?;
+    Ok(Json(
+        serde_json::to_value(tasks).map_err(|e| ApiError::Internal(e.to_string()))?,
     ))
 }
 

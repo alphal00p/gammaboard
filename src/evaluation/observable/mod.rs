@@ -1,7 +1,7 @@
 mod complex;
 mod scalar;
 
-use crate::engines::EngineError;
+use crate::core::EngineError;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value as JsonValue;
 

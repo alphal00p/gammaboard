@@ -1,5 +1,5 @@
 use crate::core::{EvaluatorPerformanceMetrics, SamplerPerformanceMetrics};
-use crate::engines::PointSpec;
+use crate::evaluation::PointSpec;
 use crate::stores::{
     AggregatedResult, EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress,
     SamplerPerformanceHistoryEntry, WorkQueueStats, WorkerLogEntry, WorkerLogPage,
@@ -21,7 +21,6 @@ struct RunProgressRow {
     target: Option<JsonValue>,
     evaluator_init_metadata: Option<JsonValue>,
     sampler_aggregator_init_metadata: Option<JsonValue>,
-    target_nr_samples: Option<i64>,
     nr_produced_samples: i64,
     nr_completed_samples: i64,
     started_at: Option<DateTime<Utc>>,
@@ -62,7 +61,6 @@ impl TryFrom<RunProgressRow> for RunProgress {
             target: value.target,
             evaluator_init_metadata: value.evaluator_init_metadata,
             sampler_aggregator_init_metadata: value.sampler_aggregator_init_metadata,
-            target_nr_samples: value.target_nr_samples,
             nr_produced_samples: value.nr_produced_samples,
             nr_completed_samples: value.nr_completed_samples,
             started_at: value.started_at,
@@ -252,7 +250,6 @@ const RUN_PROGRESS_COLUMNS: &str = r#"
     target,
     evaluator_init_metadata,
     sampler_aggregator_init_metadata,
-    target_nr_samples,
     nr_produced_samples,
     nr_completed_samples,
     started_at,
@@ -324,7 +321,6 @@ pub(crate) async fn get_all_runs(pool: &PgPool) -> Result<Vec<RunProgress>, sqlx
             r.target,
             r.evaluator_init_metadata,
             r.sampler_aggregator_init_metadata,
-            r.target_nr_samples,
             r.nr_produced_samples,
             r.nr_completed_samples,
             r.started_at,
@@ -394,7 +390,6 @@ pub(crate) async fn get_run_progress(
                 r.target,
                 r.evaluator_init_metadata,
                 r.sampler_aggregator_init_metadata,
-                r.target_nr_samples,
                 r.nr_produced_samples,
                 r.nr_completed_samples,
                 r.started_at,

@@ -65,16 +65,12 @@ gammaboard run add configs/live-test-unit-naive-scalar.toml
 Minimal config shape:
 ```toml
 name = "example"
-pause_on_samples = 1000000 # optional
 target = { kind = "scalar", value = 1.23 } # optional
 
 [evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-
-[sampler_aggregator]
-kind = "naive_monte_carlo"
 
 [parametrization]
 kind = "identity"
@@ -85,17 +81,34 @@ Optional top-level task queue:
 [[task_queue]]
 kind = "sample"
 nr_samples = 100000
+[task_queue.sampler_aggregator]
+kind = "naive_monte_carlo"
+[task_queue.parametrization]
+kind = "identity"
 
 [[task_queue]]
-kind = "reconfigure_parametrization"
-[task_queue.config]
+kind = "sample"
+nr_samples = 200000
+[task_queue.sampler_aggregator]
+kind = "havana_training"
+[task_queue.parametrization]
+kind = "identity"
+
+[[task_queue]]
+kind = "sample"
+nr_samples = 800000
+[task_queue.sampler_aggregator]
+kind = "havana_inference"
+[task_queue.parametrization]
+kind = "havana_inference"
+[task_queue.parametrization.inner]
 kind = "spherical"
 
 [[task_queue]]
 kind = "pause"
 ```
 
-If `task_queue` is omitted, `run add` creates a default queue from `pause_on_samples`.
+Each sample task fully owns the sampler/materialization config for that phase. There is no separate top-level sampler definition for task-driven runs. If `task_queue` is omitted, the run is created idle and no work will be produced until tasks are appended.
 
 ### Start local workers
 ```bash

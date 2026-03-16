@@ -4,7 +4,6 @@
 //! numerical integration using PostgreSQL as a work queue.
 
 pub mod core;
-pub mod engines;
 pub mod evaluation;
 pub mod preprocess;
 pub mod runners;
@@ -16,7 +15,7 @@ pub mod utils;
 
 pub use core::{BatchRecord, BatchStatus};
 pub use core::{BuildError, EngineError, EvalError, StoreError};
-pub use core::{RunTask, RunTaskSpec, RunTaskState, default_run_task_queue};
+pub use core::{RunTask, RunTaskSpec, RunTaskState};
 pub use evaluation::{
     Batch, BatchError, BatchResult, ComplexObservableState, EvalBatchOptions, Evaluator,
     Observable, ObservableState, Parametrization, PointSpec, ScalarObservableState,

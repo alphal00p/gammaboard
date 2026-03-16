@@ -7,9 +7,9 @@ use crate::core::{
     RunSampleProgress, RunSpecStore, RunTask, RunTaskSpec, RunTaskStore, RuntimeLogEvent,
     RuntimeLogStore, SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore, WorkerRole,
 };
-use crate::engines::{
-    BatchResult, IntegrationParams, LatentBatch, ParametrizationConfig, PointSpec, RunSpec,
-};
+use crate::core::{IntegrationParams, ParametrizationConfig, RunSpec};
+use crate::evaluation::{BatchResult, PointSpec};
+use crate::sampling::LatentBatch;
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 
@@ -96,13 +96,11 @@ fn next_power_of_two_i64(n: i64) -> i64 {
 
 fn run_spec_from_integration_params(
     run_id: i32,
-    target_nr_samples: Option<i64>,
     point_spec: PointSpec,
     params: IntegrationParams,
 ) -> Result<RunSpec, StoreError> {
     Ok(RunSpec {
         run_id,
-        target_nr_samples,
         point_spec,
         evaluator: params.evaluator,
         sampler_aggregator: params.sampler_aggregator,
@@ -114,7 +112,6 @@ fn run_spec_from_integration_params(
 
 fn decode_run_spec(
     run_id: i32,
-    target_nr_samples: Option<i64>,
     integration_params: JsonValue,
     point_spec: JsonValue,
 ) -> Result<RunSpec, StoreError> {
@@ -136,7 +133,7 @@ fn decode_run_spec(
         ))
     })?;
 
-    run_spec_from_integration_params(run_id, target_nr_samples, point_spec, params)
+    run_spec_from_integration_params(run_id, point_spec, params)
 }
 
 fn parse_run_create_payload(integration_params: &JsonValue) -> Result<JsonValue, StoreError> {
@@ -360,13 +357,13 @@ impl RuntimeLogStore for PgStore {
 #[async_trait::async_trait]
 impl RunSpecStore for PgStore {
     async fn load_run_spec(&self, run_id: i32) -> Result<Option<RunSpec>, StoreError> {
-        let Some((integration_params, point_spec, target_nr_samples)) =
+        let Some((integration_params, point_spec)) =
             queries::load_run_spec_payload(&self.pool, run_id).await?
         else {
             return Ok(None);
         };
 
-        let spec = decode_run_spec(run_id, target_nr_samples, integration_params, point_spec)?;
+        let spec = decode_run_spec(run_id, integration_params, point_spec)?;
         Ok(Some(spec))
     }
 }
@@ -522,7 +519,6 @@ impl ControlPlaneStore for PgStore {
     async fn create_run(
         &self,
         name: &str,
-        target_nr_samples: Option<i64>,
         integration_params: &JsonValue,
         target: Option<&JsonValue>,
         point_spec: &PointSpec,
@@ -536,19 +532,17 @@ impl ControlPlaneStore for PgStore {
             r#"
             INSERT INTO runs (
                 name,
-                target_nr_samples,
                 integration_params,
                 target,
                 point_spec,
                 evaluator_init_metadata,
                 sampler_aggregator_init_metadata
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING id
             "#,
         )
         .bind(name)
-        .bind(target_nr_samples)
         .bind(&sanitized_params)
         .bind(target)
         .bind(sqlx::types::Json(point_spec))
@@ -803,8 +797,7 @@ impl AggregationStore for PgStore {
             .await
             .map_err(map_sqlx)?;
         Ok(row.map(
-            |(target_nr_samples, nr_produced_samples, nr_completed_samples)| RunSampleProgress {
-                target_nr_samples,
+            |(nr_produced_samples, nr_completed_samples)| RunSampleProgress {
                 nr_produced_samples,
                 nr_completed_samples,
             },
@@ -940,7 +933,6 @@ mod tests {
     fn decode_run_spec_supports_current_schema() {
         let spec = decode_run_spec(
             7,
-            Some(1_000),
             json!({
                 "evaluator": {
                     "kind": "sin_evaluator",
@@ -974,25 +966,24 @@ mod tests {
         .expect("decode");
 
         assert_eq!(spec.run_id, 7);
-        assert_eq!(spec.target_nr_samples, Some(1_000));
         assert_eq!(spec.point_spec.continuous_dims, 1);
         assert_eq!(spec.point_spec.discrete_dims, 0);
         assert_eq!(spec.evaluator.kind_str(), "sin_evaluator");
         assert!(matches!(
             &spec.evaluator,
-            crate::engines::EvaluatorConfig::SinEvaluator { params }
+            crate::core::EvaluatorConfig::SinEvaluator { params }
                 if params.min_eval_time_per_sample_ms == 1
         ));
         assert_eq!(spec.sampler_aggregator.kind_str(), "naive_monte_carlo");
         assert!(matches!(
             &spec.sampler_aggregator,
-            crate::engines::SamplerAggregatorConfig::NaiveMonteCarlo { params }
+            crate::core::SamplerAggregatorConfig::NaiveMonteCarlo { params }
                 if params.training_target_samples == 2
         ));
         assert_eq!(spec.parametrization.kind_str(), "identity");
         assert!(matches!(
             &spec.parametrization,
-            crate::engines::ParametrizationConfig::Identity { .. }
+            crate::core::ParametrizationConfig::Identity { .. }
         ));
         assert_eq!(
             spec.evaluator_runner_params,
@@ -1022,7 +1013,6 @@ mod tests {
     fn decode_run_spec_requires_non_implementation_fields() {
         let err = decode_run_spec(
             8,
-            None,
             json!({
                 "evaluator": { "kind": "sin_evaluator" },
                 "sampler_aggregator": { "kind": "naive_monte_carlo" },
@@ -1041,7 +1031,6 @@ mod tests {
     fn decode_run_spec_requires_implementation_fields() {
         let err = decode_run_spec(
             9,
-            None,
             json!({ "evaluator": { "kind": "sin_evaluator" } }),
             json!({
                 "continuous_dims": 1,
@@ -1053,7 +1042,6 @@ mod tests {
 
         let err = decode_run_spec(
             9,
-            None,
             json!({
                 "evaluator": { "kind": "sin_evaluator" },
                 "sampler_aggregator": { "kind": "naive_monte_carlo" }
@@ -1071,7 +1059,6 @@ mod tests {
     fn decode_run_spec_rejects_non_object_payload() {
         let err = decode_run_spec(
             10,
-            None,
             json!("invalid-shape"),
             json!({
                 "continuous_dims": 1,

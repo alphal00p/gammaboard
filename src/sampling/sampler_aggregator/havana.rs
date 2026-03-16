@@ -1,3 +1,4 @@
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::VecDeque;
@@ -6,7 +7,8 @@ use tracing::info;
 
 use crate::{
     Batch, EngineError, LatentBatchSpec, PointSpec, SamplePlan,
-    engines::{BuildError, SamplerAggregator, SamplerAggregatorSnapshot},
+    core::BuildError,
+    sampling::{LatentBatchPayload, SamplerAggregator, SamplerAggregatorSnapshot},
     utils::rng::SerializableMonteCarloRng,
 };
 
@@ -20,6 +22,12 @@ pub struct HavanaSamplerParams {
     pub stop_training_after_n_samples: Option<usize>,
     pub initial_training_rate: f64,
     pub final_training_rate: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct HavanaInferenceSamplerParams {
+    pub seed: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +45,14 @@ pub struct HavanaSamplerSnapshot {
     pending_training_samples: VecDeque<Vec<Sample<f64>>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HavanaInferenceSamplerSnapshot {
+    continuous_dims: usize,
+    batches_produced: usize,
+    samples_produced: usize,
+    rng: SerializableMonteCarloRng,
+}
+
 impl Default for HavanaSamplerParams {
     fn default() -> Self {
         Self {
@@ -48,6 +64,12 @@ impl Default for HavanaSamplerParams {
             initial_training_rate: 0.1,
             final_training_rate: 0.1,
         }
+    }
+}
+
+impl Default for HavanaInferenceSamplerParams {
+    fn default() -> Self {
+        Self { seed: None }
     }
 }
 
@@ -115,6 +137,13 @@ pub struct HavanaSampler {
     grid: Grid<f64>,
     rng: SerializableMonteCarloRng,
     pending_training_samples: VecDeque<Vec<Sample<f64>>>,
+}
+
+pub struct HavanaInferenceSampler {
+    continuous_dims: usize,
+    batches_produced: usize,
+    samples_produced: usize,
+    rng: SerializableMonteCarloRng,
 }
 
 impl HavanaSampler {
@@ -263,6 +292,87 @@ impl HavanaSampler {
             params.final_training_rate,
         ))
     }
+
+    pub(crate) fn into_inference(
+        self,
+        params: HavanaInferenceSamplerParams,
+    ) -> HavanaInferenceSampler {
+        HavanaInferenceSampler {
+            continuous_dims: self.continuous_dims,
+            batches_produced: 0,
+            samples_produced: 0,
+            rng: params
+                .seed
+                .map(|seed| SerializableMonteCarloRng::new(seed, 0))
+                .unwrap_or(self.rng),
+        }
+    }
+}
+
+impl HavanaInferenceSampler {
+    pub(crate) fn from_params_and_snapshot(
+        params: HavanaInferenceSamplerParams,
+        snapshot: SamplerAggregatorSnapshot,
+        point_spec: &PointSpec,
+    ) -> Result<Self, BuildError> {
+        match snapshot {
+            SamplerAggregatorSnapshot::HavanaTraining { raw } => {
+                let snapshot: HavanaSamplerSnapshot =
+                    serde_json::from_value(raw).map_err(|err| {
+                        BuildError::build(format!(
+                            "failed to decode havana sampler snapshot for inference handoff: {err}"
+                        ))
+                    })?;
+                let training = HavanaSampler::from_snapshot(snapshot, point_spec)?;
+                Ok(training.into_inference(params))
+            }
+            SamplerAggregatorSnapshot::HavanaInference { raw } => {
+                let snapshot: HavanaInferenceSamplerSnapshot = serde_json::from_value(raw)
+                    .map_err(|err| {
+                        BuildError::build(format!(
+                            "failed to decode havana inference sampler snapshot: {err}"
+                        ))
+                    })?;
+                Self::from_snapshot(snapshot, point_spec)
+            }
+            SamplerAggregatorSnapshot::NaiveMonteCarlo { .. } => Err(BuildError::build(
+                "havana_inference sampler requires a havana snapshot for handoff",
+            )),
+        }
+    }
+
+    pub(crate) fn from_snapshot(
+        snapshot: HavanaInferenceSamplerSnapshot,
+        point_spec: &PointSpec,
+    ) -> Result<Self, BuildError> {
+        if point_spec.continuous_dims != snapshot.continuous_dims {
+            return Err(BuildError::build(format!(
+                "havana inference snapshot expects continuous_dims={}, got {}",
+                snapshot.continuous_dims, point_spec.continuous_dims
+            )));
+        }
+        if point_spec.discrete_dims != 0 {
+            return Err(BuildError::build(format!(
+                "havana inference snapshot expects discrete_dims=0, got {}",
+                point_spec.discrete_dims
+            )));
+        }
+        Ok(Self {
+            continuous_dims: snapshot.continuous_dims,
+            batches_produced: snapshot.batches_produced,
+            samples_produced: snapshot.samples_produced,
+            rng: snapshot.rng,
+        })
+    }
+
+    fn to_snapshot(&self) -> HavanaInferenceSamplerSnapshot {
+        HavanaInferenceSamplerSnapshot {
+            continuous_dims: self.continuous_dims,
+            batches_produced: self.batches_produced,
+            samples_produced: self.samples_produced,
+            rng: self.rng.clone(),
+        }
+    }
 }
 
 impl SamplerAggregator for HavanaSampler {
@@ -297,17 +407,14 @@ impl SamplerAggregator for HavanaSampler {
         })
     }
 
-    fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, crate::engines::EngineError> {
+    fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
         let raw = serde_json::to_value(self.to_snapshot()).map_err(|err| {
             EngineError::engine(format!("failed to serialize havana snapshot: {err}"))
         })?;
-        Ok(SamplerAggregatorSnapshot::Havana { raw })
+        Ok(SamplerAggregatorSnapshot::HavanaTraining { raw })
     }
 
-    fn produce_latent_batch(
-        &mut self,
-        nr_samples: usize,
-    ) -> Result<LatentBatchSpec, crate::engines::EngineError> {
+    fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
         let mut coords: Vec<f64> = Vec::with_capacity(nr_samples * self.continuous_dims);
         let mut weights: Vec<f64> = Vec::with_capacity(nr_samples);
 
@@ -359,10 +466,7 @@ impl SamplerAggregator for HavanaSampler {
         Ok(LatentBatchSpec::from_batch(&batch))
     }
 
-    fn ingest_training_weights(
-        &mut self,
-        training_weights: &[f64],
-    ) -> Result<(), crate::engines::EngineError> {
+    fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError> {
         let Some(samples) = self.pending_training_samples.pop_front() else {
             // Training is disabled for this batch or context is unavailable.
             return Ok(());
@@ -424,6 +528,59 @@ impl SamplerAggregator for HavanaSampler {
     }
 }
 
+impl SamplerAggregator for HavanaInferenceSampler {
+    fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError> {
+        if point_spec.continuous_dims != self.continuous_dims {
+            return Err(BuildError::build(format!(
+                "havana inference sampler expects continuous_dims={}, got {}",
+                self.continuous_dims, point_spec.continuous_dims
+            )));
+        }
+        if point_spec.discrete_dims != 0 {
+            return Err(BuildError::build(format!(
+                "havana inference sampler expects discrete_dims=0, got {}",
+                point_spec.discrete_dims
+            )));
+        }
+        Ok(())
+    }
+
+    fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
+        let seed = self.rng.next_u64();
+        self.batches_produced += 1;
+        self.samples_produced = self.samples_produced.saturating_add(nr_samples);
+        Ok(LatentBatchSpec {
+            nr_samples,
+            payload: LatentBatchPayload::HavanaInference { seed },
+        })
+    }
+
+    fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError> {
+        if !training_weights.is_empty() {
+            return Err(EngineError::engine(
+                "havana inference sampler does not accept training weights",
+            ));
+        }
+        Ok(())
+    }
+
+    fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
+        let raw = serde_json::to_value(self.to_snapshot()).map_err(|err| {
+            EngineError::engine(format!(
+                "failed to serialize havana inference snapshot: {err}"
+            ))
+        })?;
+        Ok(SamplerAggregatorSnapshot::HavanaInference { raw })
+    }
+
+    fn get_diagnostics(&mut self) -> serde_json::Value {
+        json!({
+            "batches_produced": self.batches_produced,
+            "samples_produced": self.samples_produced,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,7 +616,7 @@ mod tests {
         let mut restored = restored;
         let restored_snapshot = restored.snapshot().expect("snapshot after restore");
 
-        let SamplerAggregatorSnapshot::Havana { raw } = restored_snapshot else {
+        let SamplerAggregatorSnapshot::HavanaTraining { raw } = restored_snapshot else {
             panic!("expected havana snapshot");
         };
         let mut state: HavanaSamplerSnapshot =
@@ -513,5 +670,47 @@ mod tests {
             .ingest_training_weights(&[1.0, 2.0, 3.0])
             .expect("ingest second batch");
         assert_eq!(sampler.training_samples_remaining(), None);
+    }
+
+    #[test]
+    fn havana_inference_handoff_emits_compact_seed_payloads() {
+        let point_spec = PointSpec {
+            continuous_dims: 2,
+            discrete_dims: 0,
+        };
+        let params = HavanaSamplerParams {
+            seed: 7,
+            bins: 8,
+            min_samples_for_update: 4,
+            samples_for_update: 16,
+            stop_training_after_n_samples: Some(8),
+            initial_training_rate: 0.1,
+            final_training_rate: 0.01,
+        };
+        let mut sampler = HavanaSampler::from_params_and_point_spec(params, &point_spec)
+            .expect("build havana sampler");
+        let _ = sampler
+            .produce_latent_batch(4)
+            .expect("produce training batch");
+        sampler
+            .ingest_training_weights(&[1.0, 2.0, 3.0, 4.0])
+            .expect("ingest training batch");
+
+        let snapshot = sampler.snapshot().expect("snapshot");
+        let mut inference = HavanaInferenceSampler::from_params_and_snapshot(
+            HavanaInferenceSamplerParams::default(),
+            snapshot,
+            &point_spec,
+        )
+        .expect("build inference sampler");
+        let batch = inference
+            .produce_latent_batch(5)
+            .expect("produce inference");
+        assert_eq!(batch.nr_samples, 5);
+        match batch.payload {
+            LatentBatchPayload::HavanaInference { .. } => {}
+            other => panic!("expected havana_inference payload, got {other:?}"),
+        }
+        assert_eq!(inference.training_samples_remaining(), None);
     }
 }

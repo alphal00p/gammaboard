@@ -5,7 +5,6 @@ CREATE TABLE IF NOT EXISTS runs (
     started_at TIMESTAMPTZ DEFAULT now(),
     completed_at TIMESTAMPTZ,
     training_completed_at TIMESTAMPTZ,
-    target_nr_samples BIGINT,
     nr_produced_samples BIGINT NOT NULL DEFAULT 0,
     nr_completed_samples BIGINT NOT NULL DEFAULT 0,
 
@@ -20,14 +19,10 @@ CREATE TABLE IF NOT EXISTS runs (
 
     -- Summary statistics (updated periodically)
     batches_completed INT DEFAULT 0,
-    CONSTRAINT runs_target_nr_samples_positive_check CHECK (
-        target_nr_samples IS NULL OR target_nr_samples > 0
-    ),
     CONSTRAINT runs_sample_progress_check CHECK (
         nr_produced_samples >= 0
         AND nr_completed_samples >= 0
         AND nr_completed_samples <= nr_produced_samples
-        AND (target_nr_samples IS NULL OR nr_produced_samples <= target_nr_samples)
     )
 );
 
