@@ -42,6 +42,12 @@ This also refreshes `~/.cargo/bin/gammaboard` as a symlink to the local build.
 
 If `5432` is already in use, set `DB_PORT` in `.env` first. `serve-*` commands load `.env`. The backend port is controlled by `GAMMABOARD_BACKEND_PORT`, and the frontend uses `REACT_APP_API_BASE_URL`.
 
+To snapshot the current local database into the gitignored `dump/` directory:
+```bash
+just dump-db-sql
+just dump-db-custom
+```
+
 ### Shell completion
 Install local bash completions with:
 ```bash

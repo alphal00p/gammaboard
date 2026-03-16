@@ -45,6 +45,14 @@ db-reset:
     just db-start
     just db-create
 
+dump-db-sql:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p dump
+    out="dump/db-$(date +%Y%m%d-%H%M%S).sql"
+    pg_dump -h "{{ invocation_directory() }}/.postgres-socket" -p "{{ env_var('DB_PORT') }}" -U "{{ env_var('DB_USER') }}" "{{ env_var('DB_NAME') }}" > "$out"
+    echo "$out"
+
 serve-backend:
     {{bin}} server
 

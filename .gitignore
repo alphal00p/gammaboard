@@ -3,6 +3,7 @@ notes
 .direnv/
 .postgres/
 .postgres-socket/
+/dump/
 /target
 .env
 # Logs
