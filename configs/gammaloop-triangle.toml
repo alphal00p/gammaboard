@@ -6,7 +6,15 @@ kind = "plot_line"
 [task_queue.geometry]
 offset = [0.0, 0.0, 0.0]
 direction = [0.0, 0.0, 1.0]
-linspace = { start = -2.0, stop = 2.0, count = 128 }
+linspace = { start = -10.0, stop = 10.0, count = 128 }
+discrete = []
+
+[[task_queue]]
+kind = "plot_line"
+[task_queue.geometry]
+offset = [0.0, 0.0, 0.0]
+direction = [1.0, 0.0, 0.0]
+linspace = { start = -10, stop = 10.0, count = 128 }
 discrete = []
 
 [[task_queue]]
