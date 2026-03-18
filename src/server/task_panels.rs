@@ -75,26 +75,20 @@ impl RunTaskSpec {
                 .chain(build_estimate_panels_from_observable(&observable, run_spec))
                 .collect()
             }
-            Self::Image { geometry, .. } => {
-                let progress = decode_full_progress(&snapshot.persisted_output)?;
-                full_progress_panels(
-                    "image_progress",
-                    progress.processed,
-                    geometry.nr_points(),
-                    "pixels",
-                    image_completion_panel(geometry.nr_points(), progress.processed),
-                )
-            }
-            Self::PlotLine { geometry, .. } => {
-                let progress = decode_full_progress(&snapshot.persisted_output)?;
-                full_progress_panels(
-                    "line_progress",
-                    progress.processed,
-                    geometry.nr_points(),
-                    "points",
-                    line_completion_panel(geometry.nr_points(), progress.processed),
-                )
-            }
+            Self::Image { geometry, .. } => persisted_full_progress_panels(
+                &snapshot.persisted_output,
+                "image_progress",
+                geometry.nr_points(),
+                "pixels",
+                image_completion_panel,
+            )?,
+            Self::PlotLine { geometry, .. } => persisted_full_progress_panels(
+                &snapshot.persisted_output,
+                "line_progress",
+                geometry.nr_points(),
+                "points",
+                line_completion_panel,
+            )?,
         };
 
         let _ = task;
@@ -120,26 +114,20 @@ impl RunTaskSpec {
                 )?;
                 self.build_current_panels(task, Some(&observable), run_spec)
             }
-            Self::Image { geometry, .. } => {
-                let progress = decode_full_progress(persisted)?;
-                Ok(full_progress_panels(
-                    "image_progress",
-                    progress.processed,
-                    geometry.nr_points(),
-                    "pixels",
-                    image_completion_panel(geometry.nr_points(), progress.processed),
-                ))
-            }
-            Self::PlotLine { geometry, .. } => {
-                let progress = decode_full_progress(persisted)?;
-                Ok(full_progress_panels(
-                    "line_progress",
-                    progress.processed,
-                    geometry.nr_points(),
-                    "points",
-                    line_completion_panel(geometry.nr_points(), progress.processed),
-                ))
-            }
+            Self::Image { geometry, .. } => persisted_full_progress_panels(
+                persisted,
+                "image_progress",
+                geometry.nr_points(),
+                "pixels",
+                image_completion_panel,
+            ),
+            Self::PlotLine { geometry, .. } => persisted_full_progress_panels(
+                persisted,
+                "line_progress",
+                geometry.nr_points(),
+                "points",
+                line_completion_panel,
+            ),
         }
     }
 
@@ -227,6 +215,23 @@ fn full_progress_panels(
         ),
         completion_panel,
     ]
+}
+
+fn persisted_full_progress_panels(
+    persisted: &JsonValue,
+    progress_panel_id: &str,
+    total: usize,
+    unit: &'static str,
+    completion_panel: impl Fn(usize, usize) -> PanelState,
+) -> Result<Vec<PanelState>, EngineError> {
+    let progress = decode_full_progress(persisted)?;
+    Ok(full_progress_panels(
+        progress_panel_id,
+        progress.processed,
+        total,
+        unit,
+        completion_panel(total, progress.processed),
+    ))
 }
 
 fn describe_line_panels(run_spec: &RunSpec) -> Vec<PanelDescriptor> {

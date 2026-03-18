@@ -2,6 +2,7 @@ use crate::core::{EvaluatorPerformanceSnapshot, SamplerAggregatorPerformanceSnap
 use crate::evaluation::BatchResult;
 use crate::sampling::LatentBatch;
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 
@@ -13,6 +14,11 @@ pub(crate) struct CompletedBatchRaw {
     pub batch_observable: JsonValue,
     pub completed_at: Option<DateTime<Utc>>,
     pub total_eval_time_ms: Option<f64>,
+}
+
+fn encode_json<T: Serialize>(label: &str, value: &T) -> Result<JsonValue, sqlx::Error> {
+    serde_json::to_value(value)
+        .map_err(|err| sqlx::Error::Protocol(format!("failed to serialize {label}: {err}")))
 }
 
 pub(crate) async fn insert_batch(
@@ -150,6 +156,7 @@ pub(crate) async fn submit_batch_results(
     result: &BatchResult,
     eval_time_ms: f64,
 ) -> Result<(), sqlx::Error> {
+    let observable = encode_json("batch observable", &result.observable)?;
     sqlx::query(
         r#"
         UPDATE batches
@@ -162,7 +169,7 @@ pub(crate) async fn submit_batch_results(
         "#,
     )
     .bind(result.values_to_json())
-    .bind(serde_json::to_value(&result.observable).unwrap_or_default())
+    .bind(observable)
     .bind(eval_time_ms)
     .bind(batch_id)
     .execute(pool)
@@ -174,7 +181,7 @@ pub(crate) async fn insert_evaluator_performance_snapshot(
     pool: &PgPool,
     snapshot: &EvaluatorPerformanceSnapshot,
 ) -> Result<(), sqlx::Error> {
-    let metrics = serde_json::to_value(&snapshot.metrics).unwrap_or_default();
+    let metrics = encode_json("evaluator performance metrics", &snapshot.metrics)?;
     sqlx::query(
         r#"
         INSERT INTO evaluator_performance_history (
@@ -197,9 +204,11 @@ pub(crate) async fn insert_sampler_aggregator_performance_snapshot(
     pool: &PgPool,
     snapshot: &SamplerAggregatorPerformanceSnapshot,
 ) -> Result<(), sqlx::Error> {
-    let metrics =
-        serde_json::to_value(snapshot.runtime_metrics.to_performance_metrics()).unwrap_or_default();
-    let runtime_metrics = serde_json::to_value(&snapshot.runtime_metrics).unwrap_or_default();
+    let metrics = encode_json(
+        "sampler performance metrics",
+        &snapshot.runtime_metrics.to_performance_metrics(),
+    )?;
+    let runtime_metrics = encode_json("sampler runtime metrics", &snapshot.runtime_metrics)?;
     sqlx::query(
         r#"
         INSERT INTO sampler_aggregator_performance_history (
