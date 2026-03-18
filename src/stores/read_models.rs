@@ -14,7 +14,7 @@ pub struct RunProgress {
     pub active_worker_count: i64,
     pub integration_params: Option<serde_json::Value>,
     pub point_spec: Option<PointSpec>,
-    pub current_observable: Option<serde_json::Value>,
+    pub active_task_id: Option<String>,
     pub target: Option<serde_json::Value>,
     pub evaluator_init_metadata: Option<serde_json::Value>,
     pub sampler_aggregator_init_metadata: Option<serde_json::Value>,
@@ -44,32 +44,24 @@ pub struct WorkQueueStats {
     pub avg_sample_time_ms: Option<f64>,
 }
 
-/// Aggregated observable snapshot.
+/// Task-local persisted observable snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AggregatedResult {
+pub struct TaskOutputSnapshot {
     pub id: String,
     pub run_id: i32,
-    pub aggregated_observable: serde_json::Value,
+    pub task_id: String,
+    pub persisted_output: serde_json::Value,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-/// Sampled aggregated-history range response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AggregatedRangeResponse {
-    pub snapshots: Vec<AggregatedResult>,
-    pub latest: Option<AggregatedResult>,
-    pub meta: AggregatedRangeMeta,
-    pub reset_required: bool,
-}
-
-/// Metadata for sampled range responses.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AggregatedRangeMeta {
-    pub abs_start: Option<i64>,
-    pub abs_stop: Option<i64>,
-    pub step: i64,
-    pub latest_id: Option<String>,
-    pub max_points: i64,
+pub struct TaskStageSnapshot {
+    pub id: String,
+    pub run_id: i32,
+    pub task_id: String,
+    pub observable_state: serde_json::Value,
+    pub persisted_output: serde_json::Value,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Worker log event persisted from runtime tracing (`source='worker'`).
@@ -133,18 +125,4 @@ pub struct SamplerPerformanceHistoryEntry {
     pub runtime_metrics: serde_json::Value,
     pub engine_diagnostics: serde_json::Value,
     pub created_at: chrono::DateTime<chrono::Utc>,
-}
-
-/// Evaluator performance history for a worker resolved directly by worker_id.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkerEvaluatorPerformanceHistoryResponse {
-    pub run_id: Option<i32>,
-    pub entries: Vec<EvaluatorPerformanceHistoryEntry>,
-}
-
-/// Sampler-aggregator performance history for a worker resolved directly by worker_id.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkerSamplerPerformanceHistoryResponse {
-    pub run_id: Option<i32>,
-    pub entries: Vec<SamplerPerformanceHistoryEntry>,
 }

@@ -4,9 +4,9 @@ use crate::evaluation::{
 };
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use crate::sampling::{
-    FrozenHavanaInferenceParametrizationParams, HavanaInferenceParametrizationParams,
-    HavanaInferenceSamplerParams, HavanaSamplerParams, IdentityParametrizationParams,
-    NaiveMonteCarloSamplerParams, SphericalParametrizationParams, UnitBallParametrizationParams,
+    HavanaInferenceParametrizationParams, HavanaInferenceSamplerParams, HavanaSamplerParams,
+    IdentityParametrizationParams, NaiveMonteCarloSamplerParams, RasterLineSamplerParams,
+    RasterPlaneSamplerParams, SphericalParametrizationParams, UnitBallParametrizationParams,
 };
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegrationParams {
     pub evaluator: EvaluatorConfig,
+    pub observable: ObservableConfig,
     pub sampler_aggregator: SamplerAggregatorConfig,
     pub parametrization: ParametrizationConfig,
     pub evaluator_runner_params: EvaluatorRunnerParams,
@@ -26,10 +27,20 @@ pub struct RunSpec {
     pub run_id: i32,
     pub point_spec: PointSpec,
     pub evaluator: EvaluatorConfig,
+    pub observable: ObservableConfig,
     pub sampler_aggregator: SamplerAggregatorConfig,
     pub parametrization: ParametrizationConfig,
     pub evaluator_runner_params: EvaluatorRunnerParams,
     pub sampler_aggregator_runner_params: SamplerAggregatorRunnerParams,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ObservableConfig {
+    Scalar,
+    Complex,
+    FullScalar,
+    FullComplex,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +77,14 @@ pub enum SamplerAggregatorConfig {
         #[serde(flatten)]
         params: NaiveMonteCarloSamplerParams,
     },
+    RasterPlane {
+        #[serde(flatten)]
+        params: RasterPlaneSamplerParams,
+    },
+    RasterLine {
+        #[serde(flatten)]
+        params: RasterLineSamplerParams,
+    },
     HavanaTraining {
         #[serde(flatten)]
         params: HavanaSamplerParams,
@@ -96,10 +115,6 @@ pub enum ParametrizationConfig {
     HavanaInference {
         #[serde(flatten)]
         params: HavanaInferenceParametrizationParams,
-    },
-    FrozenHavanaInference {
-        #[serde(flatten)]
-        params: FrozenHavanaInferenceParametrizationParams,
     },
 }
 

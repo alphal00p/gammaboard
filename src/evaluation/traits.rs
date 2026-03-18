@@ -1,8 +1,8 @@
-use crate::core::{BuildError, EngineError, EvalError};
+use crate::core::{BuildError, EngineError, EvalError, ObservableConfig};
 use serde_json::{Value as JsonValue, json};
 
-use super::{Batch, BatchResult, ObservableState, PointSpec};
-use crate::sampling::LatentBatch;
+use super::{Batch, BatchResult, PointSpec};
+use crate::sampling::{LatentBatch, ParametrizationSnapshot};
 
 #[derive(Debug, Clone, Copy)]
 pub struct EvalBatchOptions {
@@ -11,10 +11,10 @@ pub struct EvalBatchOptions {
 
 pub trait Evaluator: Send {
     fn get_point_spec(&self) -> PointSpec;
-    fn empty_observable(&self) -> ObservableState;
     fn eval_batch(
         &mut self,
         batch: &Batch,
+        observable: &ObservableConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError>;
     fn get_init_metadata(&self) -> JsonValue {
@@ -28,4 +28,6 @@ pub trait Parametrization: Send + Sync {
     }
 
     fn materialize_batch(&mut self, latent_batch: &LatentBatch) -> Result<Batch, EngineError>;
+
+    fn snapshot(&self) -> Result<ParametrizationSnapshot, EngineError>;
 }

@@ -1,22 +1,28 @@
 //! Sampler-aggregator runner orchestration.
 //!
 //! This module intentionally focuses on process orchestration:
-//! - load persisted aggregated observable snapshot
+//! - load persisted active-stage observable state
 //! - call engine hooks
 //! - enqueue produced batches
 //! - fetch completed batches and pass training weights back into the engine
-//! - aggregate completed batch observables into run-level observable snapshot
+//! - merge completed batch observables into the active-stage observable state
+//! - persist compact task-local observable snapshots
 //! - delete consumed completed batches
 
 use crate::core::{
-    AggregationStore, CompletedBatch, ParametrizationVersionStore, RollingMetricSnapshot,
-    RunSampleProgress, RunTask, RunTaskSpec, RunTaskStore, SamplerAggregatorPerformanceSnapshot,
-    SamplerRollingAverages, SamplerRuntimeMetrics, StoreError, WorkQueueStore,
+    AggregationStore, CompletedBatch, ParametrizationState, ParametrizationVersionStore,
+    RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot, RunTask, RunTaskSpec, RunTaskStore,
+    SamplerAggregatorPerformanceSnapshot, SamplerRollingAverages, SamplerRuntimeMetrics,
+    StoreError, WorkQueueStore,
 };
-use crate::core::{EngineError, ParametrizationConfig, SamplerAggregatorConfig};
+use crate::core::{
+    EngineError, EvaluatorConfig, ObservableConfig, ParametrizationConfig, SamplerAggregatorConfig,
+};
 use crate::evaluation::{ObservableState, PointSpec};
 use crate::runners::rolling_metric::RollingMetric;
-use crate::sampling::{SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot};
+use crate::sampling::{
+    ParametrizationBuildContext, SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot,
+};
 use crate::stores::RunControlStore;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -67,7 +73,8 @@ struct SamplerRuntimeState {
 pub struct SamplerAggregatorRunnerSnapshot {
     pub version: u32,
     pub engine: SamplerAggregatorSnapshot,
-    pub aggregated_observable: JsonValue,
+    pub observable_state: JsonValue,
+    active_runtime_task_id: Option<i64>,
     current_parametrization_state_version: i64,
     runtime_state: SamplerRuntimeState,
     last_pending_after_enqueue: Option<usize>,
@@ -123,7 +130,7 @@ pub struct SamplerAggregatorRunner<WQ, AS, RC, PS, TS> {
     run_id: i32,
     node_id: String,
     engine: Box<dyn SamplerAggregator>,
-    aggregated_observable: ObservableState,
+    observable_state: ObservableState,
     work_queue: WQ,
     aggregation_store: AS,
     run_control: RC,
@@ -142,8 +149,11 @@ pub struct SamplerAggregatorRunner<WQ, AS, RC, PS, TS> {
     training_completion_marked: bool,
     auto_stop_triggered: bool,
     current_task: Option<RunTask>,
+    active_runtime_task_id: Option<i64>,
+    evaluator_config: EvaluatorConfig,
+    base_observable_config: ObservableConfig,
     current_sampler_config: SamplerAggregatorConfig,
-    current_parametrization_config: ParametrizationConfig,
+    current_parametrization_state: ParametrizationState,
 }
 
 impl<WQ, AS, RC, PS, TS> SamplerAggregatorRunner<WQ, AS, RC, PS, TS>
@@ -259,7 +269,7 @@ where
         run_id: i32,
         node_id: impl Into<String>,
         engine: Box<dyn SamplerAggregator>,
-        mut aggregated_observable: ObservableState,
+        mut observable_state: ObservableState,
         work_queue: WQ,
         aggregation_store: AS,
         run_control: RC,
@@ -267,8 +277,10 @@ where
         task_store: TS,
         config: SamplerAggregatorRunnerParams,
         point_spec: PointSpec,
+        evaluator_config: EvaluatorConfig,
+        base_observable_config: ObservableConfig,
         initial_sampler_config: SamplerAggregatorConfig,
-        initial_parametrization_state: ParametrizationConfig,
+        initial_parametrization_config: ParametrizationConfig,
     ) -> Result<Self, RunnerError> {
         let initial_batch_size = config.max_batch_size.min(64).max(Self::MIN_BATCH_SIZE);
         if config.max_batch_size == 0 {
@@ -298,7 +310,7 @@ where
             Duration::from_millis(config.performance_snapshot_interval_ms);
         let current_observable = aggregation_store.load_current_observable(run_id).await?;
         if let Some(snapshot) = current_observable {
-            aggregated_observable =
+            observable_state =
                 ObservableState::from_json(&snapshot).map_err(RunnerError::Engine)?;
         }
         let persisted_progress = aggregation_store
@@ -311,22 +323,44 @@ where
         let latest_version = parametrization_state_store
             .load_latest_parametrization_version(run_id)
             .await?;
-        let current_parametrization_state_version = match latest_version {
-            Some(version) => version,
-            None => {
-                let version = 1;
-                parametrization_state_store
-                    .save_parametrization_version(run_id, version, &initial_parametrization_state)
-                    .await?;
-                version
-            }
-        };
+        let initial_parametrization_state = Self::build_parametrization_state(
+            &initial_parametrization_config,
+            &point_spec,
+            None,
+            None,
+        )?;
+        let (current_parametrization_state_version, current_parametrization_state) =
+            match latest_version {
+                Some(version) => {
+                    let state = parametrization_state_store
+                        .load_parametrization_version(run_id, version)
+                        .await?
+                        .ok_or_else(|| {
+                            RunnerError::Store(StoreError::store(format!(
+                                "missing parametrization state for run {} version {}",
+                                run_id, version
+                            )))
+                        })?;
+                    (version, state)
+                }
+                None => {
+                    let version = 1;
+                    parametrization_state_store
+                        .save_parametrization_version(
+                            run_id,
+                            version,
+                            &initial_parametrization_state,
+                        )
+                        .await?;
+                    (version, initial_parametrization_state)
+                }
+            };
 
         Ok(Self {
             run_id,
             node_id: node_id.into(),
             engine,
-            aggregated_observable,
+            observable_state,
             work_queue,
             aggregation_store,
             run_control,
@@ -349,8 +383,11 @@ where
             training_completion_marked: false,
             auto_stop_triggered: false,
             current_task: None,
+            active_runtime_task_id: None,
+            evaluator_config,
+            base_observable_config,
             current_sampler_config: initial_sampler_config,
-            current_parametrization_config: initial_parametrization_state,
+            current_parametrization_state,
         })
     }
 
@@ -364,8 +401,9 @@ where
                 snapshot.version
             ))));
         }
-        self.aggregated_observable = ObservableState::from_json(&snapshot.aggregated_observable)
-            .map_err(RunnerError::Engine)?;
+        self.observable_state =
+            ObservableState::from_json(&snapshot.observable_state).map_err(RunnerError::Engine)?;
+        self.active_runtime_task_id = snapshot.active_runtime_task_id;
         self.current_parametrization_state_version = snapshot.current_parametrization_state_version;
         self.runtime_state = snapshot.runtime_state;
         self.runtime_state.produced_samples_total = self
@@ -383,10 +421,11 @@ where
         Ok(SamplerAggregatorRunnerSnapshot {
             version: Self::SNAPSHOT_VERSION,
             engine: self.engine.snapshot().map_err(RunnerError::Engine)?,
-            aggregated_observable: self
-                .aggregated_observable
+            observable_state: self
+                .observable_state
                 .to_json()
                 .map_err(RunnerError::Engine)?,
+            active_runtime_task_id: self.active_runtime_task_id,
             current_parametrization_state_version: self.current_parametrization_state_version,
             runtime_state: self.runtime_state.clone(),
             last_pending_after_enqueue: self.last_pending_after_enqueue,
@@ -513,29 +552,39 @@ where
                 }
             }
 
-            self.aggregated_observable
+            self.observable_state
                 .merge(batch.result.observable.clone())
                 .map_err(RunnerError::Engine)?;
         }
         self.nr_completed_samples += completed_samples_delta;
         if let Some(task) = self.current_task.as_mut()
-            && matches!(task.task, RunTaskSpec::Sample { .. })
+            && task.task.nr_expected_samples().is_some()
         {
             task.nr_completed_samples += completed_samples_delta;
         }
 
         let current_observable = self
-            .aggregated_observable
+            .observable_state
             .to_json()
             .map_err(RunnerError::Engine)?;
         let snapshot = self
-            .aggregated_observable
+            .observable_state
             .to_persistent_json()
             .map_err(RunnerError::Engine)?;
+        let task_id = self
+            .current_task
+            .as_ref()
+            .ok_or_else(|| {
+                RunnerError::Engine(EngineError::engine(
+                    "cannot persist observable snapshot without an active task",
+                ))
+            })?
+            .id;
 
         self.aggregation_store
             .save_aggregation(
                 self.run_id,
+                task_id,
                 &current_observable,
                 &snapshot,
                 completed.len() as i32,
@@ -557,51 +606,30 @@ where
         Ok(())
     }
 
-    fn resolve_task_parametrization(
-        &self,
+    fn build_parametrization_state(
         parametrization: &ParametrizationConfig,
+        point_spec: &PointSpec,
         handoff_snapshot: Option<&SamplerAggregatorSnapshot>,
-    ) -> Result<ParametrizationConfig, RunnerError> {
-        match parametrization {
-            ParametrizationConfig::HavanaInference { params } => {
-                let grid = match handoff_snapshot {
-                    Some(SamplerAggregatorSnapshot::HavanaTraining { raw }) => {
-                        #[derive(Deserialize)]
-                        struct GridOnlySnapshot {
-                            grid: serde_json::Value,
-                        }
-                        let grid_only: GridOnlySnapshot =
-                            serde_json::from_value(raw.clone()).map_err(|err| {
-                                RunnerError::Engine(EngineError::build(format!(
-                                    "failed to decode havana snapshot grid for parametrization handoff: {err}"
-                                )))
-                            })?;
-                        serde_json::from_value(grid_only.grid).map_err(|err| {
-                            RunnerError::Engine(EngineError::build(format!(
-                                "failed to decode havana grid for parametrization handoff: {err}"
-                            )))
-                        })?
-                    }
-                    _ => match &self.current_parametrization_config {
-                        ParametrizationConfig::FrozenHavanaInference { params } => {
-                            params.grid.clone()
-                        }
-                        _ => {
-                            return Err(RunnerError::Engine(EngineError::build(
-                                "havana_inference parametrization requires a persisted havana training snapshot or an existing frozen_havana_inference parametrization",
-                            )));
-                        }
-                    },
-                };
-                Ok(ParametrizationConfig::FrozenHavanaInference {
-                    params: crate::sampling::FrozenHavanaInferenceParametrizationParams {
-                        grid,
-                        inner: params.inner.clone(),
-                    },
-                })
-            }
-            _ => Ok(parametrization.clone()),
-        }
+        previous_state: Option<&ParametrizationState>,
+    ) -> Result<ParametrizationState, RunnerError> {
+        parametrization
+            .build(ParametrizationBuildContext {
+                sampler_aggregator_snapshot: handoff_snapshot,
+                parametrization_snapshot: previous_state.map(|state| &state.snapshot),
+            })
+            .map_err(RunnerError::Engine)
+            .and_then(|runtime| {
+                runtime
+                    .validate_point_spec(point_spec)
+                    .map_err(RunnerError::Engine)?;
+                runtime
+                    .snapshot()
+                    .map(|snapshot| ParametrizationState {
+                        config: parametrization.clone(),
+                        snapshot,
+                    })
+                    .map_err(RunnerError::Engine)
+            })
     }
 
     fn same_serialized<T: Serialize>(left: &T, right: &T) -> Result<bool, RunnerError> {
@@ -618,8 +646,9 @@ where
         Ok(left == right)
     }
 
-    async fn ensure_sample_task_runtime(
+    async fn ensure_task_runtime(
         &mut self,
+        task: &RunTask,
         sampler_aggregator: &SamplerAggregatorConfig,
         parametrization: &ParametrizationConfig,
         handoff_snapshot: Option<SamplerAggregatorSnapshot>,
@@ -629,37 +658,58 @@ where
             return Ok(());
         }
 
-        let resolved_parametrization =
-            self.resolve_task_parametrization(parametrization, handoff_snapshot.as_ref())?;
+        if self.active_runtime_task_id != Some(task.id) {
+            let observable_config = task.task.observable_config(&self.base_observable_config);
+            self.observable_state = self
+                .evaluator_config
+                .empty_observable_state(&observable_config)
+                .map_err(RunnerError::Engine)?;
+        }
+
+        let next_parametrization_state = Self::build_parametrization_state(
+            parametrization,
+            &self.point_spec,
+            handoff_snapshot.as_ref(),
+            Some(&self.current_parametrization_state),
+        )?;
 
         if !Self::same_serialized(
-            &self.current_parametrization_config,
-            &resolved_parametrization,
+            &self.current_parametrization_state,
+            &next_parametrization_state,
         )? {
             self.current_parametrization_state_version += 1;
             self.parametrization_state_store
                 .save_parametrization_version(
                     self.run_id,
                     self.current_parametrization_state_version,
-                    &resolved_parametrization,
+                    &next_parametrization_state,
                 )
                 .await?;
-            self.current_parametrization_config = resolved_parametrization;
+            self.current_parametrization_state = next_parametrization_state;
         }
 
         if !Self::same_serialized(&self.current_sampler_config, sampler_aggregator)? {
+            let sample_budget = task
+                .task
+                .nr_expected_samples()
+                .and_then(|n| usize::try_from(n).ok());
             self.engine = match handoff_snapshot {
                 Some(snapshot) => sampler_aggregator
-                    .build_from_params_and_snapshot(self.point_spec.clone(), snapshot)
+                    .build_from_params_and_snapshot(
+                        self.point_spec.clone(),
+                        sample_budget,
+                        snapshot,
+                    )
                     .map_err(RunnerError::Engine)?,
                 None => sampler_aggregator
-                    .build(self.point_spec.clone())
+                    .build(self.point_spec.clone(), sample_budget)
                     .map_err(RunnerError::Engine)?,
             };
             self.current_sampler_config = sampler_aggregator.clone();
         }
 
         self.training_completion_marked = self.engine.training_samples_remaining().is_none();
+        self.active_runtime_task_id = Some(task.id);
         Ok(())
     }
 
@@ -717,6 +767,42 @@ where
         Ok(())
     }
 
+    async fn save_stage_snapshot(
+        &mut self,
+        task: Option<&RunTask>,
+        queue_empty: bool,
+    ) -> Result<(), RunnerError> {
+        let runner_snapshot = self.snapshot_state()?;
+        let sampler_runner_snapshot = serde_json::to_value(&runner_snapshot)
+            .map_err(|err| RunnerError::Engine(EngineError::from(err)))?;
+        let observable_state = self
+            .observable_state
+            .to_json()
+            .map_err(RunnerError::Engine)?;
+        let persisted_observable = self
+            .observable_state
+            .to_persistent_json()
+            .map_err(RunnerError::Engine)?;
+        let sampler_aggregator = serde_json::to_value(&self.current_sampler_config)
+            .map_err(|err| RunnerError::Engine(EngineError::from(err)))?;
+        let parametrization = serde_json::to_value(&self.current_parametrization_state)
+            .map_err(|err| RunnerError::Engine(EngineError::from(err)))?;
+        self.aggregation_store
+            .save_run_stage_snapshot(&RunStageSnapshot {
+                run_id: self.run_id,
+                task_id: task.map(|task| task.id),
+                sequence_nr: task.map(|task| task.sequence_nr),
+                queue_empty,
+                sampler_runner_snapshot,
+                observable_state,
+                persisted_observable,
+                sampler_aggregator,
+                parametrization,
+            })
+            .await?;
+        Ok(())
+    }
+
     fn max_samples_to_produce_this_tick(
         &self,
         engine_max_samples: Option<usize>,
@@ -739,10 +825,7 @@ where
         let Some(task) = self.current_task.as_ref() else {
             return Ok(None);
         };
-        let RunTaskSpec::Sample { nr_samples, .. } = &task.task else {
-            return Ok(None);
-        };
-        let Some(target) = nr_samples else {
+        let Some(target) = task.task.nr_expected_samples() else {
             return Ok(None);
         };
         let remaining = target.saturating_sub(task.nr_produced_samples);
@@ -758,10 +841,12 @@ where
         Ok(usize::try_from(remaining).ok())
     }
 
-    fn aggregated_sample_count(&self) -> i64 {
-        match &self.aggregated_observable {
+    fn observable_sample_count(&self) -> i64 {
+        match &self.observable_state {
             ObservableState::Scalar(state) => state.count,
             ObservableState::Complex(state) => state.count,
+            ObservableState::FullScalar(state) => state.values.len() as i64,
+            ObservableState::FullComplex(state) => state.values.len() as i64,
         }
     }
 
@@ -778,7 +863,7 @@ where
             run_id = self.run_id,
             nr_produced_samples = self.nr_produced_samples,
             nr_completed_samples = self.nr_completed_samples,
-            aggregated_samples = self.aggregated_sample_count(),
+            observable_samples = self.observable_sample_count(),
             assignments_cleared,
             reason,
             "run assignments cleared"
@@ -790,7 +875,7 @@ where
         let Some(task) = self.current_task.as_ref() else {
             return Ok(());
         };
-        if !matches!(task.task, RunTaskSpec::Sample { .. }) {
+        if task.task.nr_expected_samples().is_none() {
             return Ok(());
         }
         self.task_store
@@ -813,7 +898,8 @@ where
         let Some(task) = self.current_task.take() else {
             return Ok(());
         };
-        if matches!(task.task, RunTaskSpec::Sample { .. }) {
+        self.active_runtime_task_id = None;
+        if task.task.nr_expected_samples().is_some() {
             self.task_store
                 .update_run_task_progress(
                     task.id,
@@ -828,6 +914,9 @@ where
 
     async fn fail_current_task(&mut self, reason: String) -> Result<(), RunnerError> {
         if let Some(task) = self.current_task.take() {
+            self.active_runtime_task_id = None;
+            let queue_empty = self.work_queue.get_open_batch_count(self.run_id).await? <= 0;
+            self.save_stage_snapshot(Some(&task), queue_empty).await?;
             self.task_store.fail_run_task(task.id, &reason).await?;
         }
         self.clear_run_assignments_once("run task failed; assignments cleared")
@@ -849,13 +938,20 @@ where
                 return Ok(0);
             };
             match task.task.clone() {
-                RunTaskSpec::Sample {
-                    nr_samples,
-                    sampler_aggregator,
-                    parametrization,
-                } => {
+                RunTaskSpec::Sample { .. }
+                | RunTaskSpec::Image { .. }
+                | RunTaskSpec::PlotLine { .. } => {
+                    let sampler_aggregator = task.task.sampler_config().ok_or_else(|| {
+                        RunnerError::Engine(EngineError::engine("task missing sampler config"))
+                    })?;
+                    let parametrization = task.task.parametrization_config().ok_or_else(|| {
+                        RunnerError::Engine(EngineError::engine(
+                            "task missing parametrization config",
+                        ))
+                    })?;
                     if let Err(err) = self
-                        .ensure_sample_task_runtime(
+                        .ensure_task_runtime(
+                            &task,
                             &sampler_aggregator,
                             &parametrization,
                             handoff_snapshot.take(),
@@ -870,27 +966,27 @@ where
                         .await?;
                         return Ok(0);
                     }
-                    if let Some(target) = nr_samples
+                    if let Some(target) = task.task.nr_expected_samples()
                         && task.nr_completed_samples >= target
                     {
                         if open_batch_count == 0 {
                             handoff_snapshot =
                                 Some(self.engine.snapshot().map_err(RunnerError::Engine)?);
                             self.persist_snapshot().await?;
+                            self.save_stage_snapshot(Some(&task), true).await?;
                             self.complete_current_task().await?;
                             continue;
                         }
                         return Ok(0);
                     }
-                    return self
-                        .produce_for_active_sample_task(pending_before_tick)
-                        .await;
+                    return self.produce_for_active_task(pending_before_tick).await;
                 }
                 RunTaskSpec::Pause => {
                     if open_batch_count > 0 {
                         return Ok(0);
                     }
                     self.persist_snapshot().await?;
+                    self.save_stage_snapshot(Some(&task), true).await?;
                     self.complete_current_task().await?;
                     self.clear_run_assignments_once("pause task reached; run assignments cleared")
                         .await?;
@@ -904,10 +1000,15 @@ where
         )))
     }
 
-    async fn produce_for_active_sample_task(
+    async fn produce_for_active_task(
         &mut self,
         pending_before_tick: usize,
     ) -> Result<usize, RunnerError> {
+        let observable_config = self
+            .current_task
+            .as_ref()
+            .map(|task| task.task.observable_config(&self.base_observable_config))
+            .unwrap_or_else(|| self.base_observable_config.clone());
         let sample_plan = self.engine.sample_plan().map_err(RunnerError::Engine)?;
         let training_samples_remaining = self.engine.training_samples_remaining();
         let batch_plan = match sample_plan {
@@ -958,7 +1059,9 @@ where
                     .observe(produce_time_ms / produced_samples as f64);
             }
             produced.push((
-                batch.with_version(self.current_parametrization_state_version),
+                batch
+                    .with_observable_config(observable_config.clone())
+                    .with_version(self.current_parametrization_state_version),
                 requires_training,
             ));
         }

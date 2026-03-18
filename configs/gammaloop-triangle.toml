@@ -10,7 +10,6 @@ seed = 0
 bins = 64
 min_samples_for_update = 1024
 samples_for_update = 16384
-stop_training_after_n_samples = 500_000
 initial_training_rate = 0.1
 final_training_rate = 0.001
 [task_queue.parametrization]

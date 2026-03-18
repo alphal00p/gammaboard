@@ -17,7 +17,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 ## Core Invariants
 - PostgreSQL is the source of truth for runs, batches, node state, logs, and snapshots.
 - Run config is TOML via `gammaboard run add <file.toml>` and is deep-merged over `configs/default.toml`.
-- Preflight derives `point_spec` from the evaluator and performs a one-point sampler -> parametrization -> evaluator dry-run before persistence.
+- Preprocessing first resolves inherited `RunTaskInputSpec` entries into concrete `RunTaskSpec` stages. Preflight then derives `point_spec` from the evaluator, reduces the resolved task queue via each task's `into_preflight` hook, and executes that reduced queue synchronously in-memory before persistence.
 - `run add` persists evaluator and sampler init metadata.
 - Runs are driven by persisted `run_tasks`; this is the top-level execution queue and is distinct from the evaluator batch work queue.
 - If a run-add config omits `task_queue`, the run is created idle; no batches should be produced until tasks are appended explicitly.
@@ -46,29 +46,37 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - Engine config enums should carry typed parameter structs directly; avoid untyped `serde_json::Value` maps at the config boundary.
 - `IntegrationParams` and `RunSpec` carry strongly typed runner params.
 - Evaluators are batch-oriented and must respect `batches.requires_training`.
-- Observable semantics are evaluator-owned and serialized as semantic `ObservableState`.
+- Observable semantics are first-class run/task config via `ObservableConfig`, while serialized runtime/current state remains semantic `ObservableState`.
 - Queue payloads are latent and versioned: `batches.latent_batch` plus `batches.parametrization_state_version`.
 - Top-level run task sequencing lives in `src/core/tasks.rs`; sampler/evaluator engines should not parse arbitrary task JSON directly.
+- Task-local structural validation and preflight reduction hooks belong on the task types in `src/core/tasks.rs`; `src/preprocess/*` should orchestrate them rather than duplicate task semantics.
 - Keep latent-batch queue types separate from concrete evaluator batch/result types in code layout: latent queue payloads belong with sampler-side semantics, while `Batch`/`BatchResult` are the concrete A/B interface.
 - `core` owns the cross-stage shared config/run-spec types and error types; concrete evaluator/sampler transport types should still live in `evaluation` or `sampling`.
-- Parametrization versions are persisted separately in `parametrization_states (run_id, version)` as full `ParametrizationConfig` payloads; evaluators rebuild the parametrization when that version changes, and the version row must be written before any latent batch references it.
-- Task-owned phase transitions replace sampler-emitted semantic advances: sample tasks carry both `sampler_aggregator` and `parametrization` config, and the runner activates the next phase only after the current queue is drained and the current sampler snapshot is persisted.
+- Parametrization versions are persisted separately in `parametrization_states (run_id, version)` as a canonical `{ config, snapshot }` state payload; evaluators rebuild the parametrization from that persisted state when the version changes, and the version row must be written before any latent batch references it.
+- Task-owned phase transitions replace sampler-emitted semantic advances: `sample` tasks carry both `sampler_aggregator` and `parametrization` config, while `image` and `plot_line` tasks own deterministic scan geometry and resolve internally to raster sampler + identity parametrization stages. The runner activates the next phase only after the current queue is drained and the current sampler snapshot is persisted.
+- Sample-task config files may omit `sampler_aggregator` and/or `parametrization`; preprocessing must resolve those fields by inheriting the previous effective sample-stage settings before tasks are persisted.
 - For task-driven runs, do not duplicate sampler config at the top level of the run-add TOML. Resolve the initial sampler from the first sample task during preprocessing and persist the concrete resolved `integration_params`.
 - `Parametrization` currently means full latent-batch-to-concrete-batch materialization. It may later be split into a narrower `Parametrization` plus a `LatentBatchMaterializer`.
 - `SamplerAggregatorConfig::HavanaTraining` is the adaptive training sampler phase, and `SamplerAggregatorConfig::HavanaInference` is the compact seed-dispatch phase.
-- `ParametrizationConfig::HavanaInference` is task-level and must be resolved from a persisted Havana training snapshot into a concrete `FrozenHavanaInference` version before any latent batch references it.
+- Havana training budget comes from the active sample task's `nr_samples`, not from sampler config.
+- `ParametrizationConfig::HavanaInference` remains declarative; building it may require a persisted Havana training sampler snapshot and/or a persisted previous parametrization snapshot, and the resulting parametrization state must be snapshottable for replay on evaluator workers.
 - `LatentBatchPayload::HavanaInference` is the compact evaluator-side Havana inference payload and carries only the per-batch seed; the frozen grid lives in the persisted parametrization version.
-- If an evaluator supports multiple observable semantics, that choice belongs in evaluator config via `observable_kind`.
+- If an evaluator supports multiple semantic value families, that choice still belongs in evaluator config via `observable_kind`, but the aggregate-vs-full observable shape is selected explicitly through `ObservableConfig`.
+- Evaluator implementations should reuse `IngestScalar` / `IngestComplex` helpers internally after locally matching the resolved observable config; do not reintroduce hidden capture-mode switches in batch/eval options.
+- Image and line tasks use full observables that store weighted per-sample values in deterministic task order; use those full observables as the canonical current-state artifact instead of tunneling sample values through training-mode side channels.
 - Sampler-aggregator aggregation is `ObservableState` merge, not capability-style ingest.
 - Sampler-aggregators own any per-batch training correlation state internally; do not pass runner-managed batch context back into them.
 - If a sampler has a finite training budget, only the exact training-suite samples may be produced with `requires_training`; the runner must not enqueue extra training batches beyond that boundary.
-- The latest full aggregated observable lives on `runs.current_observable`.
-- Snapshot persistence uses each observable's reduced persistent payload, not the tagged runtime enum form.
+- The latest full observable state for the active stage is cached on `runs.current_observable`; treat it as runner state, not as a run-global read-model contract.
+- Persisted observable history snapshots store each observable's reduced persistent payload, not the full in-memory observable state.
+- For full observables used by deterministic scan tasks, the reduced persistent payload is just progress (`processed` count). Completed-task rendering should come from `run_stage_snapshots.observable_state`, not from persisted history rows.
+- Observable API/read projections should be produced from typed run configuration context such as `RunSpec`, not by passing store read rows or ad-hoc JSON context into observable implementations.
 - `LatentBatchPayload::Batch` is the compatibility payload for now and stores the previous compact row-major batch JSON.
 - Completed batches are consumed by the sampler-aggregator and deleted.
 
 ## Snapshot, Logging, And Read Rules
 - Sampler pause/resume snapshots are persisted on `runs.sampler_runner_snapshot`; keep the persisted shape explicit and versioned.
+- Stage-boundary snapshots are also persisted on `run_stage_snapshots`; each row must record `queue_empty` so deterministic resume eligibility is explicit.
 - Adding a new sampler requires snapshot export/restore support for it.
 - Do not expose `runs.sampler_runner_snapshot` through the read API or dashboard payloads.
 - Runtime logs are persisted from tracing context through `RuntimeLogStore`.
@@ -82,6 +90,10 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - Snapshot rows are point-in-time; do not reintroduce window semantics.
 - Read APIs should serialize `BIGINT` IDs as strings.
 - Run read payloads should expose `runs.point_spec` as `point_spec`.
+- Backend observable/output APIs are task-scoped: persisted observable history only has meaning within a single task/stage, and task types own the digest/projection exposed to the frontend.
+- Backend visualization payloads should use the generic panel model in `src/server/panels.rs`; task output and performance/history views should share the same panel vocabulary instead of exposing raw backend-specific JSON shapes to the frontend.
+- Older task output should be reconstructed from the latest `run_stage_snapshots` row for that task when the active-stage runner state has already moved on.
+- History deltas are time-based, not structural patches: clients send the last seen snapshot id and the backend returns later panel snapshots for that task in order.
 
 ## Schema Policy
 - No backward-compat requirement by default.

@@ -1,4 +1,4 @@
-use super::Observable;
+use super::{IngestScalar, Observable};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -20,8 +20,15 @@ impl ScalarObservableState {
     }
 }
 
+impl IngestScalar for ScalarObservableState {
+    fn ingest_scalar(&mut self, value: f64, weight: f64) {
+        self.add_sample(value, weight);
+    }
+}
+
 impl Observable for ScalarObservableState {
     type Persistent = Self;
+    type Digest = Self;
 
     fn merge(&mut self, other: Self) {
         self.count += other.count;

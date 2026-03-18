@@ -1,7 +1,7 @@
-use crate::core::EvalError;
+use crate::core::{EvalError, ObservableConfig};
 use crate::evaluation::{
-    Batch, BatchResult, ComplexObservableState, EvalBatchOptions, Evaluator, ObservableState,
-    PointSpec, ScalarObservableState, SemanticObservableKind,
+    Batch, BatchResult, EvalBatchOptions, Evaluator, IngestComplex, IngestScalar, ObservableState,
+    PointSpec, SemanticObservableKind,
 };
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +28,38 @@ impl UnitEvaluator {
             params.observable_kind,
         )
     }
+
+    fn eval_scalar_into<O: IngestScalar>(
+        &self,
+        batch: &Batch,
+        observable: &mut O,
+        capture_training_values: bool,
+    ) -> Result<Option<Vec<f64>>, EvalError> {
+        let weights = batch
+            .weights()
+            .as_slice()
+            .ok_or_else(|| EvalError::eval("Batch weights array must be standard-layout"))?;
+        for weight in weights.iter().copied() {
+            observable.ingest_scalar(1.0, weight);
+        }
+        Ok(capture_training_values.then(|| weights.iter().copied().collect()))
+    }
+
+    fn eval_complex_into<O: IngestComplex>(
+        &self,
+        batch: &Batch,
+        observable: &mut O,
+        capture_training_values: bool,
+    ) -> Result<Option<Vec<f64>>, EvalError> {
+        let weights = batch
+            .weights()
+            .as_slice()
+            .ok_or_else(|| EvalError::eval("Batch weights array must be standard-layout"))?;
+        for weight in weights.iter().copied() {
+            observable.ingest_complex(num::complex::Complex64::new(1.0, 0.0), weight);
+        }
+        Ok(capture_training_values.then(|| weights.iter().copied().collect()))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -53,45 +85,44 @@ impl Evaluator for UnitEvaluator {
         self.point_spec.clone()
     }
 
-    fn empty_observable(&self) -> ObservableState {
-        self.observable_kind.empty_state()
-    }
-
     fn eval_batch(
         &mut self,
         batch: &Batch,
+        observable: &ObservableConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
-        let weights = batch
-            .weights()
-            .as_slice()
-            .ok_or_else(|| EvalError::eval("Batch weights array must be standard-layout"))?;
-        let values = vec![1.0; batch.size()];
-        let observable = match self.observable_kind {
-            SemanticObservableKind::Scalar => {
-                let mut observable = ScalarObservableState::default();
-                for weight in weights.iter().copied() {
-                    observable.add_sample(1.0, weight);
+        let mut observable_state = ObservableState::from_config(observable);
+        let weighted_values = match self.observable_kind {
+            SemanticObservableKind::Scalar => match &mut observable_state {
+                ObservableState::Scalar(observable) => {
+                    self.eval_scalar_into(batch, observable, options.require_training_values)?
                 }
-                ObservableState::Scalar(observable)
-            }
-            SemanticObservableKind::Complex => {
-                let mut observable = ComplexObservableState::default();
-                for weight in weights.iter().copied() {
-                    observable.add_sample(num::complex::Complex64::new(1.0, 0.0), weight);
+                ObservableState::FullScalar(observable) => {
+                    self.eval_scalar_into(batch, observable, options.require_training_values)?
                 }
-                ObservableState::Complex(observable)
-            }
+                other => {
+                    return Err(EvalError::eval(format!(
+                        "unit evaluator scalar mode does not support observable kind {}",
+                        other.kind_str()
+                    )));
+                }
+            },
+            SemanticObservableKind::Complex => match &mut observable_state {
+                ObservableState::Complex(observable) => {
+                    self.eval_complex_into(batch, observable, options.require_training_values)?
+                }
+                ObservableState::FullComplex(observable) => {
+                    self.eval_complex_into(batch, observable, options.require_training_values)?
+                }
+                other => {
+                    return Err(EvalError::eval(format!(
+                        "unit evaluator complex mode does not support observable kind {}",
+                        other.kind_str()
+                    )));
+                }
+            },
         };
-
-        let weighted_values = options.require_training_values.then(|| {
-            values
-                .into_iter()
-                .zip(weights.iter().copied())
-                .map(|(value, weight)| value * weight)
-                .collect()
-        });
-        Ok(BatchResult::new(weighted_values, observable))
+        Ok(BatchResult::new(weighted_values, observable_state))
     }
 }
 
@@ -122,6 +153,7 @@ mod tests {
         let result = evaluator
             .eval_batch(
                 &batch,
+                &ObservableConfig::Scalar,
                 EvalBatchOptions {
                     require_training_values: true,
                 },
@@ -158,6 +190,7 @@ mod tests {
         let result = evaluator
             .eval_batch(
                 &batch,
+                &ObservableConfig::Complex,
                 EvalBatchOptions {
                     require_training_values: true,
                 },

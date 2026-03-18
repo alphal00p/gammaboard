@@ -1,23 +1,54 @@
 mod complex;
+mod full;
 mod scalar;
 
-use crate::core::EngineError;
+use crate::core::{EngineError, ObservableConfig, RunSpec};
+use num::complex::Complex64;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value as JsonValue;
 
 pub use self::complex::ComplexObservableState;
+pub use self::full::{
+    ComplexValue, FullComplexObservableState, FullObservableProgress, FullScalarObservableState,
+};
 pub use self::scalar::ScalarObservableState;
+
+pub trait IngestScalar {
+    fn ingest_scalar(&mut self, value: f64, weight: f64);
+}
+
+pub trait IngestComplex {
+    fn ingest_complex(&mut self, value: Complex64, weight: f64);
+}
 
 pub trait Observable: Clone + Serialize + DeserializeOwned {
     type Persistent: Clone + Serialize + DeserializeOwned;
+    type Digest: Clone + Serialize + DeserializeOwned;
 
     fn merge(&mut self, other: Self);
     fn get_persistent(&self) -> Self::Persistent;
+    fn get_digest(&self, _run_spec: &RunSpec) -> Result<Self::Digest, EngineError>
+    where
+        Self: Into<Self::Digest>,
+    {
+        Ok(self.clone().into())
+    }
 
     fn to_persistent_json(&self) -> Result<JsonValue, EngineError> {
         serde_json::to_value(self.get_persistent()).map_err(|err| {
             EngineError::build(format!(
                 "failed to serialize persistent observable payload: {err}"
+            ))
+        })
+    }
+
+    fn to_digest_json(&self, run_spec: &RunSpec) -> Result<JsonValue, EngineError>
+    where
+        Self: Into<Self::Digest>,
+    {
+        serde_json::to_value(self.get_digest(run_spec)?).map_err(|err| {
+            EngineError::build(format!(
+                "failed to serialize observable digest payload: {err}"
             ))
         })
     }
@@ -28,6 +59,8 @@ pub trait Observable: Clone + Serialize + DeserializeOwned {
 pub enum ObservableState {
     Scalar(ScalarObservableState),
     Complex(ComplexObservableState),
+    FullScalar(FullScalarObservableState),
+    FullComplex(FullComplexObservableState),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -39,15 +72,31 @@ pub enum SemanticObservableKind {
 }
 
 impl SemanticObservableKind {
-    pub fn empty_state(self) -> ObservableState {
+    pub fn aggregate_observable_config(self) -> ObservableConfig {
         match self {
-            Self::Scalar => ObservableState::empty_scalar(),
-            Self::Complex => ObservableState::empty_complex(),
+            Self::Scalar => ObservableConfig::Scalar,
+            Self::Complex => ObservableConfig::Complex,
+        }
+    }
+
+    pub fn full_observable_config(self) -> ObservableConfig {
+        match self {
+            Self::Scalar => ObservableConfig::FullScalar,
+            Self::Complex => ObservableConfig::FullComplex,
         }
     }
 }
 
 impl ObservableState {
+    pub fn from_config(config: &ObservableConfig) -> Self {
+        match config {
+            ObservableConfig::Scalar => Self::empty_scalar(),
+            ObservableConfig::Complex => Self::empty_complex(),
+            ObservableConfig::FullScalar => Self::empty_full_scalar(),
+            ObservableConfig::FullComplex => Self::empty_full_complex(),
+        }
+    }
+
     pub fn empty_scalar() -> Self {
         Self::Scalar(ScalarObservableState::default())
     }
@@ -56,10 +105,20 @@ impl ObservableState {
         Self::Complex(ComplexObservableState::default())
     }
 
+    pub fn empty_full_scalar() -> Self {
+        Self::FullScalar(FullScalarObservableState::default())
+    }
+
+    pub fn empty_full_complex() -> Self {
+        Self::FullComplex(FullComplexObservableState::default())
+    }
+
     pub fn kind_str(&self) -> &'static str {
         match self {
             Self::Scalar(_) => "scalar",
             Self::Complex(_) => "complex",
+            Self::FullScalar(_) => "full_scalar",
+            Self::FullComplex(_) => "full_complex",
         }
     }
 
@@ -70,6 +129,14 @@ impl ObservableState {
                 Ok(())
             }
             (Self::Complex(left), Self::Complex(right)) => {
+                Observable::merge(left, right);
+                Ok(())
+            }
+            (Self::FullScalar(left), Self::FullScalar(right)) => {
+                Observable::merge(left, right);
+                Ok(())
+            }
+            (Self::FullComplex(left), Self::FullComplex(right)) => {
                 Observable::merge(left, right);
                 Ok(())
             }
@@ -95,6 +162,17 @@ impl ObservableState {
         match self {
             Self::Scalar(observable) => observable.to_persistent_json(),
             Self::Complex(observable) => observable.to_persistent_json(),
+            Self::FullScalar(observable) => observable.to_persistent_json(),
+            Self::FullComplex(observable) => observable.to_persistent_json(),
+        }
+    }
+
+    pub fn to_digest_json(&self, run_spec: &RunSpec) -> Result<JsonValue, EngineError> {
+        match self {
+            Self::Scalar(observable) => observable.to_digest_json(run_spec),
+            Self::Complex(observable) => observable.to_digest_json(run_spec),
+            Self::FullScalar(observable) => observable.to_digest_json(run_spec),
+            Self::FullComplex(observable) => observable.to_digest_json(run_spec),
         }
     }
 }

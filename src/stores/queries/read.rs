@@ -1,8 +1,9 @@
 use crate::core::{EvaluatorPerformanceMetrics, SamplerPerformanceMetrics};
 use crate::evaluation::PointSpec;
 use crate::stores::{
-    AggregatedResult, EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress,
-    SamplerPerformanceHistoryEntry, WorkQueueStats, WorkerLogEntry, WorkerLogPage,
+    EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress,
+    SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot, WorkQueueStats,
+    WorkerLogEntry, WorkerLogPage,
 };
 use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
@@ -17,7 +18,7 @@ struct RunProgressRow {
     active_worker_count: i64,
     integration_params: Option<JsonValue>,
     point_spec: Option<JsonValue>,
-    current_observable: Option<JsonValue>,
+    active_task_id: Option<i64>,
     target: Option<JsonValue>,
     evaluator_init_metadata: Option<JsonValue>,
     sampler_aggregator_init_metadata: Option<JsonValue>,
@@ -57,7 +58,7 @@ impl TryFrom<RunProgressRow> for RunProgress {
                         format!("invalid point_spec payload: {err}"),
                     )))
                 })?,
-            current_observable: value.current_observable,
+            active_task_id: value.active_task_id.map(|id| id.to_string()),
             target: value.target,
             evaluator_init_metadata: value.evaluator_init_metadata,
             sampler_aggregator_init_metadata: value.sampler_aggregator_init_metadata,
@@ -79,19 +80,44 @@ impl TryFrom<RunProgressRow> for RunProgress {
 }
 
 #[derive(sqlx::FromRow)]
-struct AggregatedResultRow {
+struct TaskOutputSnapshotRow {
     id: i64,
     run_id: i32,
-    aggregated_observable: JsonValue,
+    task_id: i64,
+    persisted_output: JsonValue,
     created_at: Option<DateTime<Utc>>,
 }
 
-impl From<AggregatedResultRow> for AggregatedResult {
-    fn from(value: AggregatedResultRow) -> Self {
+impl From<TaskOutputSnapshotRow> for TaskOutputSnapshot {
+    fn from(value: TaskOutputSnapshotRow) -> Self {
         Self {
             id: value.id.to_string(),
             run_id: value.run_id,
-            aggregated_observable: value.aggregated_observable,
+            task_id: value.task_id.to_string(),
+            persisted_output: value.persisted_output,
+            created_at: value.created_at,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct TaskStageSnapshotRow {
+    id: i64,
+    run_id: i32,
+    task_id: i64,
+    observable_state: JsonValue,
+    persisted_output: JsonValue,
+    created_at: Option<DateTime<Utc>>,
+}
+
+impl From<TaskStageSnapshotRow> for TaskStageSnapshot {
+    fn from(value: TaskStageSnapshotRow) -> Self {
+        Self {
+            id: value.id.to_string(),
+            run_id: value.run_id,
+            task_id: value.task_id.to_string(),
+            observable_state: value.observable_state,
+            persisted_output: value.persisted_output,
             created_at: value.created_at,
         }
     }
@@ -246,7 +272,7 @@ const RUN_PROGRESS_COLUMNS: &str = r#"
     active_worker_count,
     integration_params,
     point_spec,
-    current_observable,
+    active_task_id,
     target,
     evaluator_init_metadata,
     sampler_aggregator_init_metadata,
@@ -317,7 +343,7 @@ pub(crate) async fn get_all_runs(pool: &PgPool) -> Result<Vec<RunProgress>, sqlx
             COALESCE(a.active_worker_count, 0) as active_worker_count,
             COALESCE(r.integration_params, '{{}}'::jsonb) as integration_params,
             r.point_spec as point_spec,
-            r.current_observable as current_observable,
+            active_task.id as active_task_id,
             r.target,
             r.evaluator_init_metadata,
             r.sampler_aggregator_init_metadata,
@@ -352,6 +378,9 @@ pub(crate) async fn get_all_runs(pool: &PgPool) -> Result<Vec<RunProgress>, sqlx
             GROUP BY run_id
         ) b ON r.id = b.run_id
         LEFT JOIN assignment_stats a ON r.id = a.run_id
+        LEFT JOIN run_tasks active_task
+            ON active_task.run_id = r.id
+           AND active_task.state = 'active'
         ORDER BY started_at DESC
         "#,
         assignment_stats_subquery = RUN_ASSIGNMENT_STATS_SUBQUERY
@@ -386,7 +415,7 @@ pub(crate) async fn get_run_progress(
                 COALESCE(a.active_worker_count, 0) as active_worker_count,
                 COALESCE(r.integration_params, '{{}}'::jsonb) as integration_params,
                 r.point_spec as point_spec,
-                r.current_observable as current_observable,
+                active_task.id as active_task_id,
                 r.target,
                 r.evaluator_init_metadata,
                 r.sampler_aggregator_init_metadata,
@@ -412,6 +441,9 @@ pub(crate) async fn get_run_progress(
                 {batch_stats_subquery}
             ) b ON r.id = b.run_id
             LEFT JOIN assignment_stats a ON r.id = a.run_id
+            LEFT JOIN run_tasks active_task
+                ON active_task.run_id = r.id
+               AND active_task.state = 'active'
             WHERE r.id = $1
         )
         SELECT
@@ -468,110 +500,65 @@ pub(crate) async fn get_work_queue_stats(
     Ok(stats)
 }
 
-pub(crate) async fn get_latest_aggregated_result(
+pub(crate) async fn get_task_output_snapshots(
     pool: &PgPool,
     run_id: i32,
-) -> Result<Option<AggregatedResult>, sqlx::Error> {
-    let row = sqlx::query_as::<_, AggregatedResultRow>(
+    task_id: i64,
+    after_snapshot_id: Option<i64>,
+    limit: i64,
+) -> Result<Vec<TaskOutputSnapshot>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, TaskOutputSnapshotRow>(
         r#"
         SELECT
             id,
             run_id,
-            aggregated_observable,
+            task_id,
+            persisted_observable AS persisted_output,
             created_at
-        FROM aggregated_results
+        FROM persisted_observable_snapshots
         WHERE run_id = $1
-        ORDER BY created_at DESC
+          AND task_id = $2
+          AND ($3::bigint IS NULL OR id > $3)
+        ORDER BY id DESC
+        LIMIT $4
+        "#,
+    )
+    .bind(run_id)
+    .bind(task_id)
+    .bind(after_snapshot_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(Into::into).collect())
+}
+
+pub(crate) async fn get_latest_task_stage_snapshot(
+    pool: &PgPool,
+    run_id: i32,
+    task_id: i64,
+) -> Result<Option<TaskStageSnapshot>, sqlx::Error> {
+    let row = sqlx::query_as::<_, TaskStageSnapshotRow>(
+        r#"
+        SELECT
+            id,
+            run_id,
+            task_id,
+            observable_state,
+            persisted_observable AS persisted_output,
+            created_at
+        FROM run_stage_snapshots
+        WHERE run_id = $1
+          AND task_id = $2
+        ORDER BY id DESC
         LIMIT 1
         "#,
     )
     .bind(run_id)
+    .bind(task_id)
     .fetch_optional(pool)
     .await?;
-
     Ok(row.map(Into::into))
-}
-
-pub(crate) async fn get_aggregated_results(
-    pool: &PgPool,
-    run_id: i32,
-    limit: i64,
-) -> Result<Vec<AggregatedResult>, sqlx::Error> {
-    let rows = sqlx::query_as::<_, AggregatedResultRow>(
-        r#"
-        SELECT
-            id,
-            run_id,
-            aggregated_observable,
-            created_at
-        FROM aggregated_results
-        WHERE run_id = $1
-        ORDER BY created_at DESC
-        LIMIT $2
-        "#,
-    )
-    .bind(run_id)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
-
-    Ok(rows.into_iter().map(Into::into).collect())
-}
-
-pub(crate) async fn get_aggregated_id_bounds(
-    pool: &PgPool,
-    run_id: i32,
-) -> Result<Option<(i64, i64)>, sqlx::Error> {
-    sqlx::query_as::<_, (i64, i64)>(
-        r#"
-        SELECT MIN(id) AS min_id, MAX(id) AS max_id
-        FROM aggregated_results
-        WHERE run_id = $1
-        HAVING COUNT(*) > 0
-        "#,
-    )
-    .bind(run_id)
-    .fetch_optional(pool)
-    .await
-}
-
-pub(crate) async fn get_aggregated_range(
-    pool: &PgPool,
-    run_id: i32,
-    start_id: i64,
-    stop_id: i64,
-    step: i64,
-    anchor: i64,
-    latest_id: Option<i64>,
-    limit: i64,
-) -> Result<Vec<AggregatedResult>, sqlx::Error> {
-    let rows = sqlx::query_as::<_, AggregatedResultRow>(
-        r#"
-        SELECT
-            id,
-            run_id,
-            aggregated_observable,
-            created_at
-        FROM aggregated_results
-        WHERE run_id = $1
-          AND id BETWEEN $2 AND $3
-          AND (($4::bigint IS NULL) OR id > $4)
-          AND MOD(id - $5, $6) = 0
-        ORDER BY id ASC
-        LIMIT $7
-        "#,
-    )
-    .bind(run_id)
-    .bind(start_id)
-    .bind(stop_id)
-    .bind(latest_id)
-    .bind(anchor)
-    .bind(step)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
-
-    Ok(rows.into_iter().map(Into::into).collect())
 }
 
 pub(crate) async fn get_worker_logs(

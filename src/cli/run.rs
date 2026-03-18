@@ -1,6 +1,9 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Args, Subcommand};
-use gammaboard::core::{ControlPlaneStore, RunReadStore, RunTaskSpec, RunTaskStore};
+use gammaboard::core::{
+    ControlPlaneStore, RunReadStore, RunSpecStore, RunTaskInputSpec, RunTaskSpec, RunTaskStore,
+    resolve_task_queue,
+};
 use gammaboard::init_pg_store;
 use gammaboard::preprocess::{RunAddConfig, preprocess_run_add};
 use serde::Deserialize;
@@ -82,7 +85,7 @@ pub async fn run_run_commands(command: RunCommand, quiet: bool) -> Result<()> {
                         })?,
                 )
                 .map_err(|err| anyhow!("failed to serialize integration_params: {err}"))?;
-                let initial_tasks = processed.task_queue.clone().unwrap_or_default();
+                let initial_tasks = processed.resolved_task_queue.clone().unwrap_or_default();
                 let run_id = store
                     .create_run(
                         &processed.name,
@@ -133,7 +136,8 @@ pub async fn run_run_commands(command: RunCommand, quiet: bool) -> Result<()> {
             }
             RunCommand::Task(args) => match args.command {
                 TaskCommand::Add { run_id, task_file } => {
-                    let tasks = load_task_queue_file(&task_file)?;
+                    let tasks =
+                        resolve_task_queue_file_for_run(&store, &store, run_id, &task_file).await?;
                     let inserted = store.append_run_tasks(run_id, &tasks).await?;
                     tracing::info!(run_id, tasks_added = inserted.len(), "appended run tasks");
                 }
@@ -181,7 +185,7 @@ fn run_command_name(command: &RunCommand) -> &'static str {
 
 #[derive(Debug, Deserialize)]
 struct TaskQueueFile {
-    task_queue: Vec<RunTaskSpec>,
+    task_queue: Vec<RunTaskInputSpec>,
 }
 
 fn load_run_add_config(path: &PathBuf) -> Result<RunAddConfig> {
@@ -222,7 +226,12 @@ fn load_run_add_config(path: &PathBuf) -> Result<RunAddConfig> {
     Ok(RunAddConfig { name, ..parsed })
 }
 
-fn load_task_queue_file(path: &PathBuf) -> Result<Vec<RunTaskSpec>> {
+async fn resolve_task_queue_file_for_run(
+    store: &impl RunTaskStore,
+    run_spec_store: &impl RunSpecStore,
+    run_id: i32,
+    path: &PathBuf,
+) -> Result<Vec<RunTaskSpec>> {
     let parsed: TaskQueueFile = read_run_add_toml(path)?
         .try_into()
         .map_err(|err| anyhow!("invalid run-task payload: {err}"))?;
@@ -233,7 +242,30 @@ fn load_task_queue_file(path: &PathBuf) -> Result<Vec<RunTaskSpec>> {
         task.validate()
             .map_err(|err| anyhow!("invalid task_queue entry: {err}"))?;
     }
-    Ok(parsed.task_queue)
+    let run_spec = run_spec_store
+        .load_run_spec(run_id)
+        .await?
+        .ok_or_else(|| anyhow!("run {run_id} not found"))?;
+    let existing_tasks = store.list_run_tasks(run_id).await?;
+    let mut base_sampler_aggregator = run_spec.sampler_aggregator;
+    let mut base_parametrization = run_spec.parametrization;
+    for task in existing_tasks {
+        if let RunTaskSpec::Sample {
+            sampler_aggregator,
+            parametrization,
+            ..
+        } = task.task
+        {
+            base_sampler_aggregator = sampler_aggregator;
+            base_parametrization = parametrization;
+        }
+    }
+    resolve_task_queue(
+        &base_sampler_aggregator,
+        &base_parametrization,
+        &parsed.task_queue,
+    )
+    .map_err(|err| anyhow!("invalid task_queue entry: {err}"))
 }
 
 fn read_run_add_toml(path: &PathBuf) -> Result<toml::Value> {

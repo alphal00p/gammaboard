@@ -1,30 +1,19 @@
 import { Alert, Box, Container, Tab, Tabs, Typography } from "@mui/material";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import gammaboardLogo from "./assets/gammalooplogo.svg";
-import ConnectionStatus from "./components/ConnectionStatus";
 import EvaluatorPanel from "./components/EvaluatorPanel";
-import HistoryRangeControls from "./components/HistoryRangeControls";
-import ObservablePanel from "./components/ObservablePanel";
-import RunInfo from "./components/RunInfo";
-import RunSelector from "./components/RunSelector";
-import SamplerAggregatorPanel from "./components/SamplerAggregatorPanel";
 import LogsWorkspace from "./components/LogsWorkspace";
 import PerformanceWorkspace from "./components/PerformanceWorkspace";
+import RunInfo from "./components/RunInfo";
+import SamplerAggregatorPanel from "./components/SamplerAggregatorPanel";
+import TaskOutputPanel from "./components/TaskOutputPanel";
+import TaskQueuePanel from "./components/TaskQueuePanel";
 import WorkersWorkspace from "./components/WorkersWorkspace";
 import RunScopedWorkspace from "./components/common/RunScopedWorkspace";
-import { RunHistoryProvider, useRunHistory } from "./context/RunHistoryContext";
 import { useRuns } from "./hooks/useRuns";
 import { useRunTasks } from "./hooks/useRunTasks";
-import { useRunPerformanceSummary } from "./hooks/useRunPerformanceSummary";
 import { useWorkersData } from "./hooks/useWorkersData";
-import { deriveObservableImplementation } from "./utils/config";
-import { deriveObservableMetric } from "./viewmodels/observable";
-
-const DASHBOARD_HISTORY_CONFIG = {
-  historyBufferMax: 100,
-  workQueueStatsLimit: 200,
-  pollIntervalMs: 5000,
-};
+import { getCurrentTask } from "./utils/tasks";
 
 const DashboardHeader = () => (
   <Box sx={{ mb: 3 }}>
@@ -40,73 +29,21 @@ const DashboardHeader = () => (
   </Box>
 );
 
-const rollingMean = (metric) => {
-  if (Number.isFinite(Number(metric))) return Number(metric);
-  if (!metric || typeof metric !== "object" || Array.isArray(metric)) return null;
-  const mean = Number(metric.mean);
-  return Number.isFinite(mean) ? mean : null;
-};
-
-const deriveSamplerRuntimeSummary = (workers, runId, latestSamplerEntry) => {
-  if (!runId) return null;
-  const list = Array.isArray(workers) ? workers : [];
-  const samplerWorker =
-    list.find(
-      (worker) =>
-        worker.current_run_id === runId &&
-        worker.current_role === "sampler_aggregator" &&
-        String(worker.status || "").toLowerCase() === "active",
-    ) ||
-    list.find((worker) => worker.current_run_id === runId && worker.current_role === "sampler_aggregator") ||
-    list.find((worker) => worker.desired_run_id === runId && worker.desired_role === "sampler_aggregator") ||
-    null;
-  const runtimeMetrics = samplerWorker?.sampler_runtime_metrics ?? latestSamplerEntry?.runtime_metrics ?? null;
-  const samplerMetrics = latestSamplerEntry?.metrics ?? samplerWorker?.sampler_metrics ?? null;
-  const rolling = runtimeMetrics?.rolling || {};
-  const remainingRatio = rollingMean(rolling.queue_remaining_ratio);
-  return {
-    current_batch_size: runtimeMetrics?.batch_size_current ?? null,
-    actual_queue_remaining_ratio: remainingRatio,
-    actual_eval_ms_per_sample: rollingMean(rolling.eval_ms_per_sample),
-    actual_eval_ms_per_batch: rollingMean(rolling.eval_ms_per_batch),
-    produce_ms_per_sample: Number.isFinite(Number(samplerMetrics?.avg_produce_time_per_sample_ms))
-      ? Number(samplerMetrics.avg_produce_time_per_sample_ms)
-      : rollingMean(rolling.sampler_produce_ms_per_sample),
-    ingest_ms_per_sample: Number.isFinite(Number(samplerMetrics?.avg_ingest_time_per_sample_ms))
-      ? Number(samplerMetrics.avg_ingest_time_per_sample_ms)
-      : rollingMean(rolling.sampler_ingest_ms_per_sample),
-    produced_batches: samplerMetrics?.produced_batches ?? runtimeMetrics?.produced_batches_total ?? null,
-    produced_samples: samplerMetrics?.produced_samples ?? runtimeMetrics?.produced_samples_total ?? null,
-    ingested_batches: samplerMetrics?.ingested_batches ?? runtimeMetrics?.ingested_batches_total ?? null,
-    ingested_samples: samplerMetrics?.ingested_samples ?? runtimeMetrics?.ingested_samples_total ?? null,
-  };
-};
-
-const RunModeContent = ({ runs, workers, selectedRun, setSelectedRun, historyRange, setHistoryRange }) => {
-  const { isConnected, lastUpdate, history, latestAggregated, workQueueStats } = useRunHistory();
+const RunModeContent = ({ runs, selectedRun }) => {
   const currentRun = runs.find((entry) => entry.run_id === selectedRun);
   const { tasks } = useRunTasks(selectedRun, 2000);
-  const { latestSampler } = useRunPerformanceSummary({ runId: selectedRun, pollMs: 5000 });
-  const samplerRuntimeSummary = useMemo(
-    () => deriveSamplerRuntimeSummary(workers, selectedRun, latestSampler),
-    [workers, selectedRun, latestSampler],
-  );
-  const latestObservablePayload = latestAggregated?.aggregated_observable ?? currentRun?.current_observable ?? null;
-  const observableImplementation = deriveObservableImplementation(
-    currentRun?.integration_params?.evaluator,
-    latestObservablePayload,
-    "scalar",
-  );
+  const [selectedTaskId, setSelectedTaskId] = useState(null);
 
-  const fullSamples = useMemo(() => {
-    const derived = history
-      .slice()
-      .reverse()
-      .map((item) => deriveObservableMetric(item.aggregated_observable || {}, observableImplementation));
-    if (derived.length > 0) return derived;
-    if (!currentRun?.current_observable) return derived;
-    return [deriveObservableMetric(currentRun.current_observable, observableImplementation)];
-  }, [history, observableImplementation, currentRun]);
+  useEffect(() => {
+    if (!Array.isArray(tasks) || tasks.length === 0) {
+      setSelectedTaskId(null);
+      return;
+    }
+    if (selectedTaskId != null && tasks.some((task) => task.id === selectedTaskId)) {
+      return;
+    }
+    setSelectedTaskId(getCurrentTask(tasks)?.id ?? tasks[0].id ?? null);
+  }, [selectedTaskId, tasks]);
 
   if (!currentRun) {
     return (
@@ -116,59 +53,36 @@ const RunModeContent = ({ runs, workers, selectedRun, setSelectedRun, historyRan
     );
   }
 
+  const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? getCurrentTask(tasks) ?? null;
+
   return (
     <>
-      <ConnectionStatus isConnected={isConnected} lastUpdate={lastUpdate} />
-      <RunSelector runs={runs} selectedRun={selectedRun} onRunChange={setSelectedRun} />
-      <HistoryRangeControls historyRange={historyRange} setHistoryRange={setHistoryRange} />
       <RunInfo run={currentRun} tasks={tasks} />
+      <TaskQueuePanel tasks={tasks} selectedTaskId={selectedTask?.id ?? null} onSelectTask={setSelectedTaskId} />
       <EvaluatorPanel run={currentRun} />
-      <ObservablePanel
-        run={currentRun}
-        samples={fullSamples}
-        isConnected={isConnected}
-        latestAggregated={latestAggregated}
-        observableImplementation={observableImplementation}
-      />
-      <SamplerAggregatorPanel run={currentRun} stats={workQueueStats} runtimeSummary={samplerRuntimeSummary} />
+      <TaskOutputPanel runId={selectedRun} task={selectedTask} />
+      <SamplerAggregatorPanel run={currentRun} tasks={tasks} />
     </>
   );
 };
 
-const RunsWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isConnected, historyRange, setHistoryRange }) => {
-  return (
-    <RunScopedWorkspace
-      runs={runs}
-      selectedRun={selectedRun}
-      setSelectedRun={setSelectedRun}
-      isConnected={isConnected}
-      noRunsMessage="Create a run to start monitoring history, observables, and engine configuration."
-      noSelectionMessage="Pick a run to view run-level metrics and configuration."
-    >
-      <RunHistoryProvider
-        runId={selectedRun}
-        historyStart={historyRange.start}
-        historyStop={historyRange.end}
-        {...DASHBOARD_HISTORY_CONFIG}
-      >
-        <RunModeContent
-          runs={runs}
-          workers={workers}
-          selectedRun={selectedRun}
-          setSelectedRun={setSelectedRun}
-          historyRange={historyRange}
-          setHistoryRange={setHistoryRange}
-        />
-      </RunHistoryProvider>
-    </RunScopedWorkspace>
-  );
-};
+const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected }) => (
+  <RunScopedWorkspace
+    runs={runs}
+    selectedRun={selectedRun}
+    setSelectedRun={setSelectedRun}
+    isConnected={isConnected}
+    noRunsMessage="Create a run to start monitoring task output and engine configuration."
+    noSelectionMessage="Pick a run to view run-level task output and configuration."
+  >
+    <RunModeContent runs={runs} selectedRun={selectedRun} />
+  </RunScopedWorkspace>
+);
 
 function App() {
   const { runs, isConnected } = useRuns();
   const workersData = useWorkersData({ runId: null, pollMs: 3000 });
   const [mode, setMode] = useState("runs");
-  const [historyRange, setHistoryRange] = useState({ start: -50, end: -1 });
   const [selectedRun, setSelectedRun] = useState(null);
   const [selectedLogRun, setSelectedLogRun] = useState(null);
 
@@ -202,12 +116,9 @@ function App() {
       {mode === "runs" ? (
         <RunsWorkspace
           runs={runs}
-          workers={workersData.workers}
           selectedRun={selectedRun}
           setSelectedRun={setSelectedRun}
           isConnected={isConnected}
-          historyRange={historyRange}
-          setHistoryRange={setHistoryRange}
         />
       ) : mode === "workers" ? (
         <WorkersWorkspace

@@ -4,6 +4,7 @@ import NaiveMonteCarloSamplerPanel from "./custom/NaiveMonteCarloSamplerPanel";
 
 const SAMPLER_CUSTOM_PANELS = {
   havana_training: HavanaSamplerPanel,
+  havana_inference: HavanaSamplerPanel,
   naive_monte_carlo: NaiveMonteCarloSamplerPanel,
 };
 

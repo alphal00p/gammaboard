@@ -8,7 +8,8 @@ pub use evaluator::{
     GammaLoopParams, SinEvaluatorParams, SincEvaluatorParams, SymbolicaParams, UnitEvaluatorParams,
 };
 pub use observable::{
-    ComplexObservableState, Observable, ObservableState, ScalarObservableState,
-    SemanticObservableKind,
+    ComplexObservableState, ComplexValue, FullComplexObservableState, FullObservableProgress,
+    FullScalarObservableState, IngestComplex, IngestScalar, Observable, ObservableState,
+    ScalarObservableState, SemanticObservableKind,
 };
 pub use traits::{EvalBatchOptions, Evaluator, Parametrization};

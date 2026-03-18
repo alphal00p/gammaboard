@@ -1,6 +1,8 @@
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 
+use crate::core::RunStageSnapshot;
+
 pub(crate) async fn get_run_current_observable(
     pool: &PgPool,
     run_id: i32,
@@ -53,43 +55,27 @@ pub(crate) async fn get_run_sample_progress(
     .await
 }
 
-pub(crate) async fn get_latest_aggregation_snapshot(
+pub(crate) async fn insert_persisted_observable_snapshot(
     pool: &PgPool,
     run_id: i32,
-) -> Result<Option<JsonValue>, sqlx::Error> {
-    sqlx::query_scalar(
-        r#"
-        SELECT aggregated_observable
-        FROM aggregated_results
-        WHERE run_id = $1
-        ORDER BY created_at DESC
-        LIMIT 1
-        "#,
-    )
-    .bind(run_id)
-    .fetch_optional(pool)
-    .await
-}
-
-pub(crate) async fn insert_aggregated_results_snapshot(
-    pool: &PgPool,
-    run_id: i32,
-    aggregated_observable: &JsonValue,
+    task_id: i64,
+    persisted_observable: &JsonValue,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
-        INSERT INTO aggregated_results (run_id, aggregated_observable)
-        VALUES ($1, $2)
+        INSERT INTO persisted_observable_snapshots (run_id, task_id, persisted_observable)
+        VALUES ($1, $2, $3)
         "#,
     )
     .bind(run_id)
-    .bind(aggregated_observable)
+    .bind(task_id)
+    .bind(persisted_observable)
     .execute(pool)
     .await?;
     Ok(())
 }
 
-pub(crate) async fn update_run_aggregation(
+pub(crate) async fn update_run_current_observable(
     pool: &PgPool,
     run_id: i32,
     current_observable: &JsonValue,
@@ -148,6 +134,40 @@ pub(crate) async fn update_run_sample_progress(
     .bind(nr_produced_samples)
     .bind(nr_completed_samples)
     .bind(run_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn insert_run_stage_snapshot(
+    pool: &PgPool,
+    snapshot: &RunStageSnapshot,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO run_stage_snapshots (
+            run_id,
+            task_id,
+            sequence_nr,
+            queue_empty,
+            sampler_runner_snapshot,
+            observable_state,
+            persisted_observable,
+            sampler_aggregator,
+            parametrization
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        "#,
+    )
+    .bind(snapshot.run_id)
+    .bind(snapshot.task_id)
+    .bind(snapshot.sequence_nr)
+    .bind(snapshot.queue_empty)
+    .bind(&snapshot.sampler_runner_snapshot)
+    .bind(&snapshot.observable_state)
+    .bind(&snapshot.persisted_observable)
+    .bind(&snapshot.sampler_aggregator)
+    .bind(&snapshot.parametrization)
     .execute(pool)
     .await?;
     Ok(())

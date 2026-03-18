@@ -1,5 +1,6 @@
+use crate::core::ParametrizationConfig;
 use crate::evaluation::{Batch, BatchResult};
-use crate::sampling::LatentBatch;
+use crate::sampling::{LatentBatch, ParametrizationSnapshot};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -210,4 +211,23 @@ pub struct SamplerAggregatorPerformanceSnapshot {
 pub struct RunSampleProgress {
     pub nr_produced_samples: i64,
     pub nr_completed_samples: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunStageSnapshot {
+    pub run_id: i32,
+    pub task_id: Option<i64>,
+    pub sequence_nr: Option<i32>,
+    pub queue_empty: bool,
+    pub sampler_runner_snapshot: JsonValue,
+    pub observable_state: JsonValue,
+    pub persisted_observable: JsonValue,
+    pub sampler_aggregator: JsonValue,
+    pub parametrization: JsonValue,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParametrizationState {
+    pub config: ParametrizationConfig,
+    pub snapshot: ParametrizationSnapshot,
 }

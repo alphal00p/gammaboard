@@ -1,4 +1,4 @@
-use super::Observable;
+use super::{IngestComplex, Observable};
 use num::complex::Complex64;
 use serde::{Deserialize, Serialize};
 
@@ -31,8 +31,15 @@ impl ComplexObservableState {
     }
 }
 
+impl IngestComplex for ComplexObservableState {
+    fn ingest_complex(&mut self, value: Complex64, weight: f64) {
+        self.add_sample(value, weight);
+    }
+}
+
 impl Observable for ComplexObservableState {
     type Persistent = Self;
+    type Digest = Self;
 
     fn merge(&mut self, other: Self) {
         self.count += other.count;

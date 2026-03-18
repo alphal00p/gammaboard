@@ -2,8 +2,9 @@ use std::{fs, path::Path};
 
 use crate::{
     Batch, BatchResult, BuildError, EngineError, EvalError, PointSpec,
+    core::ObservableConfig,
     evaluation::{EvalBatchOptions, Evaluator},
-    evaluation::{ObservableState, ScalarObservableState},
+    evaluation::{IngestScalar, ObservableState},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
@@ -115,13 +116,10 @@ impl Evaluator for SymbolicaEngine {
         }
     }
 
-    fn empty_observable(&self) -> ObservableState {
-        ObservableState::empty_scalar()
-    }
-
     fn eval_batch(
         &mut self,
         batch: &Batch,
+        observable: &ObservableConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
         let continuous = batch.continuous().as_slice().ok_or_else(|| {
@@ -131,15 +129,30 @@ impl Evaluator for SymbolicaEngine {
             EvalError::Engine("Batch weights array must be standard-layout".to_string())
         })?;
 
-        let mut observable = ScalarObservableState::default();
+        let mut observable_state = ObservableState::from_config(observable);
 
         let mut out = vec![0.0; batch.size()];
         self.eval
             .evaluate_batch(batch.size(), continuous, &mut out)
             .map_err(|err| EngineError::Eval(err.to_string()))?;
 
-        for (value, weight) in out.iter().zip(weights.iter()) {
-            observable.add_sample(*value, *weight);
+        match &mut observable_state {
+            ObservableState::Scalar(observable) => {
+                for (value, weight) in out.iter().zip(weights.iter()) {
+                    observable.ingest_scalar(*value, *weight);
+                }
+            }
+            ObservableState::FullScalar(observable) => {
+                for (value, weight) in out.iter().zip(weights.iter()) {
+                    observable.ingest_scalar(*value, *weight);
+                }
+            }
+            other => {
+                return Err(EvalError::eval(format!(
+                    "symbolica evaluator does not support observable kind {}",
+                    other.kind_str()
+                )));
+            }
         }
         if options.require_training_values {
             let weighted_values = out
@@ -147,12 +160,9 @@ impl Evaluator for SymbolicaEngine {
                 .zip(weights.iter().copied())
                 .map(|(value, weight)| value * weight)
                 .collect();
-            Ok(BatchResult::new(
-                Some(weighted_values),
-                ObservableState::Scalar(observable),
-            ))
+            Ok(BatchResult::new(Some(weighted_values), observable_state))
         } else {
-            Ok(BatchResult::new(None, ObservableState::Scalar(observable)))
+            Ok(BatchResult::new(None, observable_state))
         }
     }
 

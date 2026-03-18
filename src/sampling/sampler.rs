@@ -9,6 +9,8 @@ use super::{LatentBatchSpec, SamplePlan};
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SamplerAggregatorSnapshot {
     NaiveMonteCarlo { raw: JsonValue },
+    RasterPlane { raw: JsonValue },
+    RasterLine { raw: JsonValue },
     HavanaTraining { raw: JsonValue },
     HavanaInference { raw: JsonValue },
 }

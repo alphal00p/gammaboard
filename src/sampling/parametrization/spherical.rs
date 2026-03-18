@@ -1,7 +1,7 @@
 use super::Parametrization;
 use crate::core::{BuildError, EngineError};
 use crate::evaluation::{Batch, PointSpec};
-use crate::sampling::LatentBatch;
+use crate::sampling::{LatentBatch, ParametrizationSnapshot};
 use ndarray::{Array1, Array2};
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
@@ -84,5 +84,9 @@ impl Parametrization for SphericalParametrization {
             Some(transformed_weights),
         )
         .map_err(|err| EngineError::engine(err.to_string()))
+    }
+
+    fn snapshot(&self) -> Result<ParametrizationSnapshot, EngineError> {
+        Ok(ParametrizationSnapshot::Spherical {})
     }
 }

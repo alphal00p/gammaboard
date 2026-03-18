@@ -2,17 +2,6 @@
 
 ## Platform Features
 - [ ] add basic auth to dashboard which enables steering (spawning virtual workers, creating runs etc.)
-- [ ] replace evaluator-side static parametrization with sampler-steered, versioned latent-batch materialization state:
-  - keep `ObservableState` separate from steering/materialization state
-  - sampler-aggregator should emit `LatentBatch` plus `parametrization_state_version`, not explicit points
-  - persist full versioned `ParametrizationConfig` payloads in `parametrization_states (run_id, version)` so evaluators can rebuild the parametrization and materialize concrete batches locally
-  - allow compact queue payloads down to RNG seed + sample count + version for inference-style workflows
-  - preserve deterministic replay/materialization from `(latent_batch, parametrization_state_version)`
-  - preserve training correlation semantics for adaptive samplers when generation moves to evaluator nodes
-  - sampler API should become a state machine, e.g. `SamplePlan::{Produce, Advance, Pause}`
-  - `Advance` should publish a new parametrization/materialization version; `Pause` should mean the run can stop producing and later resume
-  - runner should persist a new parametrization version before enqueueing latent b<atches that reference it
-  - support explicit training -> training-version rollover -> final frozen inference transitions owned by the sampler
 - [ ] implement madnis sampler_aggregator as parametrization.
 
 ## Sweep Findings (2026-03-04)

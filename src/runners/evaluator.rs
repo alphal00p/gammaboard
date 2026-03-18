@@ -1,6 +1,6 @@
 //! Evaluator worker runner orchestration.
 
-use crate::core::{EngineError, EvalError, ParametrizationConfig};
+use crate::core::{EngineError, EvalError, ParametrizationState};
 use crate::core::{
     EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot,
     ParametrizationVersionStore, StoreError, WorkQueueStore,
@@ -9,6 +9,7 @@ use crate::evaluation::{
     Batch, BatchResult, EvalBatchOptions, Evaluator, Parametrization, PointSpec,
 };
 use crate::runners::rolling_metric::RollingMetric;
+use crate::sampling::ParametrizationBuildContext;
 use serde::{Deserialize, Serialize};
 use std::{time::Duration, time::Instant};
 use thiserror::Error;
@@ -153,6 +154,7 @@ where
         let started = Instant::now();
         match self.evaluator.eval_batch(
             &transformed_batch,
+            &claimed.latent_batch.observable,
             EvalBatchOptions {
                 require_training_values: claimed.requires_training,
             },
@@ -188,18 +190,22 @@ where
         if self.current_parametrization_version == Some(version) {
             return Ok(());
         }
-        let Some(config): Option<ParametrizationConfig> = self
+        let Some(state): Option<ParametrizationState> = self
             .parametrization_states
             .load_parametrization_version(self.run_id, version)
             .await?
         else {
             return Err(StoreError::store(format!(
-                "missing parametrization config for run {} version {}",
+                "missing parametrization state for run {} version {}",
                 self.run_id, version
             )));
         };
-        let parametrization = config
-            .build()
+        let parametrization = state
+            .config
+            .build(ParametrizationBuildContext {
+                sampler_aggregator_snapshot: None,
+                parametrization_snapshot: Some(&state.snapshot),
+            })
             .map_err(|err| StoreError::store(format!("failed to build parametrization: {err}")))?;
         parametrization
             .validate_point_spec(&self.point_spec)

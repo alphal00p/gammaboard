@@ -19,7 +19,6 @@ pub struct HavanaSamplerParams {
     pub bins: usize,
     pub min_samples_for_update: usize,
     pub samples_for_update: usize,
-    pub stop_training_after_n_samples: Option<usize>,
     pub initial_training_rate: f64,
     pub final_training_rate: f64,
 }
@@ -60,7 +59,6 @@ impl Default for HavanaSamplerParams {
             bins: 64,
             min_samples_for_update: 1_024,
             samples_for_update: 10_240,
-            stop_training_after_n_samples: None,
             initial_training_rate: 0.1,
             final_training_rate: 0.1,
         }
@@ -98,16 +96,6 @@ fn validate_havana_sampler_params(
     if parsed.samples_for_update == 0 {
         return Err(BuildError::build(
             "havana sampler requires samples_for_update > 0",
-        ));
-    }
-    if parsed.stop_training_after_n_samples.is_none() {
-        return Err(BuildError::build(
-            "havana sampler requires stop_training_after_n_samples",
-        ));
-    }
-    if parsed.stop_training_after_n_samples == Some(0) {
-        return Err(BuildError::build(
-            "havana sampler stop_training_after_n_samples must be > 0",
         ));
     }
     if !parsed.initial_training_rate.is_finite() || parsed.initial_training_rate < 0.0 {
@@ -266,8 +254,14 @@ impl HavanaSampler {
     pub(crate) fn from_params_and_point_spec(
         params: HavanaSamplerParams,
         point_spec: &PointSpec,
+        stop_training_after_n_samples: usize,
     ) -> Result<Self, BuildError> {
         validate_havana_sampler_params(&params, point_spec)?;
+        if stop_training_after_n_samples == 0 {
+            return Err(BuildError::build(
+                "havana sampler requires sample task nr_samples > 0",
+            ));
+        }
 
         let rng = SerializableMonteCarloRng::new(params.seed, 0);
         let grid = Grid::Continuous(ContinuousGrid::new(
@@ -277,10 +271,6 @@ impl HavanaSampler {
             None,
             false,
         ));
-        let stop_training_after_n_samples =
-            params.stop_training_after_n_samples.ok_or_else(|| {
-                BuildError::build("havana sampler requires stop_training_after_n_samples")
-            })?;
 
         Ok(HavanaSampler::new(
             point_spec.continuous_dims,
@@ -335,7 +325,9 @@ impl HavanaInferenceSampler {
                     })?;
                 Self::from_snapshot(snapshot, point_spec)
             }
-            SamplerAggregatorSnapshot::NaiveMonteCarlo { .. } => Err(BuildError::build(
+            SamplerAggregatorSnapshot::NaiveMonteCarlo { .. }
+            | SamplerAggregatorSnapshot::RasterPlane { .. }
+            | SamplerAggregatorSnapshot::RasterLine { .. } => Err(BuildError::build(
                 "havana_inference sampler requires a havana snapshot for handoff",
             )),
         }
@@ -551,6 +543,7 @@ impl SamplerAggregator for HavanaInferenceSampler {
         self.samples_produced = self.samples_produced.saturating_add(nr_samples);
         Ok(LatentBatchSpec {
             nr_samples,
+            observable: crate::core::ObservableConfig::Scalar,
             payload: LatentBatchPayload::HavanaInference { seed },
         })
     }
@@ -597,11 +590,10 @@ mod tests {
             bins: 8,
             min_samples_for_update: 4,
             samples_for_update: 16,
-            stop_training_after_n_samples: Some(32),
             initial_training_rate: 0.1,
             final_training_rate: 0.01,
         };
-        let mut sampler = HavanaSampler::from_params_and_point_spec(params, &point_spec)
+        let mut sampler = HavanaSampler::from_params_and_point_spec(params, &point_spec, 32)
             .expect("build havana sampler");
         let _ = sampler.produce_latent_batch(5).expect("produce");
         sampler
@@ -644,11 +636,10 @@ mod tests {
             bins: 8,
             min_samples_for_update: 4,
             samples_for_update: 16,
-            stop_training_after_n_samples: Some(8),
             initial_training_rate: 0.1,
             final_training_rate: 0.01,
         };
-        let mut sampler = HavanaSampler::from_params_and_point_spec(params, &point_spec)
+        let mut sampler = HavanaSampler::from_params_and_point_spec(params, &point_spec, 8)
             .expect("build havana sampler");
 
         assert_eq!(sampler.training_samples_remaining(), Some(8));
@@ -683,11 +674,10 @@ mod tests {
             bins: 8,
             min_samples_for_update: 4,
             samples_for_update: 16,
-            stop_training_after_n_samples: Some(8),
             initial_training_rate: 0.1,
             final_training_rate: 0.01,
         };
-        let mut sampler = HavanaSampler::from_params_and_point_spec(params, &point_spec)
+        let mut sampler = HavanaSampler::from_params_and_point_spec(params, &point_spec, 8)
             .expect("build havana sampler");
         let _ = sampler
             .produce_latent_batch(4)

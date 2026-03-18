@@ -146,6 +146,25 @@ export const fetchRunTasks = async (runId, signal) => {
   return (Array.isArray(data) ? data : []).map(normalizeRunTaskEntry).filter(Boolean);
 };
 
+export const fetchRunTaskOutput = async (runId, taskId, signal) => {
+  const response = await fetch(`${API_BASE_URL}/runs/${runId}/tasks/${taskId}/output`, { signal });
+  return parseJsonOrThrow(response, "Failed to fetch task output");
+};
+
+export const fetchRunTaskOutputHistory = async (
+  runId,
+  taskId,
+  { limit = 500, afterSnapshotId = null } = {},
+  signal,
+) => {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (afterSnapshotId != null) params.set("after_snapshot_id", String(afterSnapshotId));
+  const response = await fetch(`${API_BASE_URL}/runs/${runId}/tasks/${taskId}/output/history?${params.toString()}`, {
+    signal,
+  });
+  return parseJsonOrThrow(response, "Failed to fetch task output history");
+};
+
 export const fetchRunLogPage = async (
   runId,
   { limit = 100, nodeId = null, level = null, search = "", beforeId = null } = {},
@@ -159,17 +178,6 @@ export const fetchRunLogPage = async (
   const response = await fetch(`${API_BASE_URL}/runs/${runId}/logs?${params.toString()}`, { signal });
   const data = await parseJsonOrThrow(response, "Failed to fetch run logs");
   return normalizeRunLogPage(data);
-};
-
-export const fetchAggregatedRange = async (runId, start, stop, maxPoints, lastId = null, signal) => {
-  const params = new URLSearchParams({
-    start: String(start),
-    stop: String(stop),
-    max_points: String(maxPoints),
-  });
-  if (lastId != null) params.set("last_id", String(lastId));
-  const response = await fetch(`${API_BASE_URL}/runs/${runId}/aggregated/range?${params.toString()}`, { signal });
-  return parseJsonOrThrow(response, "Failed to fetch aggregated range");
 };
 
 export const fetchEvaluatorPerformanceHistory = async (runId, limit = 500, nodeId = null, signal) => {

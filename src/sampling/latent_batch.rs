@@ -3,18 +3,21 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
+use crate::core::ObservableConfig;
 use crate::evaluation::{Batch, BatchError};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LatentBatch {
     pub nr_samples: usize,
     pub parametrization_state_version: i64,
+    pub observable: ObservableConfig,
     pub payload: LatentBatchPayload,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LatentBatchSpec {
     pub nr_samples: usize,
+    pub observable: ObservableConfig,
     pub payload: LatentBatchPayload,
 }
 
@@ -62,6 +65,7 @@ impl LatentBatchSpec {
     pub fn from_batch(batch: &Batch) -> Self {
         Self {
             nr_samples: batch.size(),
+            observable: ObservableConfig::Scalar,
             payload: LatentBatchPayload::from_batch(batch),
         }
     }
@@ -70,8 +74,14 @@ impl LatentBatchSpec {
         LatentBatch {
             nr_samples: self.nr_samples,
             parametrization_state_version,
+            observable: self.observable,
             payload: self.payload,
         }
+    }
+
+    pub fn with_observable_config(mut self, observable: ObservableConfig) -> Self {
+        self.observable = observable;
+        self
     }
 }
 

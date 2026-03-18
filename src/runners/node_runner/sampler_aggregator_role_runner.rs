@@ -29,6 +29,26 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
         .transpose()?;
 
     let engine_span = tracing::span!(tracing::Level::TRACE, "sampler_engine_context");
+    let initial_task = match worker.store.load_active_run_task(worker.run_id).await? {
+        Some(task) => Some(task),
+        None => worker
+            .store
+            .list_run_tasks(worker.run_id)
+            .await?
+            .into_iter()
+            .find(|task| {
+                !matches!(task.task, crate::core::RunTaskSpec::Pause)
+                    && matches!(
+                        task.state,
+                        crate::core::RunTaskState::Pending | crate::core::RunTaskState::Active
+                    )
+            }),
+    };
+    let initial_sample_budget = initial_task.and_then(|task| {
+        task.task
+            .nr_expected_samples()
+            .and_then(|n| usize::try_from(n).ok())
+    });
     let engine = {
         let _engine_scope = engine_span.enter();
         let engine = if let Some(snapshot) = saved_snapshot.as_ref() {
@@ -43,7 +63,7 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
                 })?
         } else {
             spec.sampler_aggregator
-                .build(spec.point_spec.clone())
+                .build(spec.point_spec.clone(), initial_sample_budget)
                 .map_err(|err| {
                     StoreError::store(format!("failed to build sampler-aggregator: {err}"))
                 })?
@@ -58,9 +78,12 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
             })?;
         engine
     };
-    let aggregated_observable = spec.evaluator.empty_observable_state().map_err(|err| {
-        StoreError::store(format!("failed to initialize observable state: {err}"))
-    })?;
+    let observable_state = spec
+        .evaluator
+        .empty_observable_state(&spec.observable)
+        .map_err(|err| {
+            StoreError::store(format!("failed to initialize observable state: {err}"))
+        })?;
 
     let _ = spec.sampler_aggregator.kind_str();
     worker.mark_active_with_log().await?;
@@ -71,7 +94,7 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
         worker.run_id,
         worker.node_id.clone(),
         engine,
-        aggregated_observable,
+        observable_state,
         worker.store.clone(),
         worker.store.clone(),
         worker.store.clone(),
@@ -79,6 +102,8 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
         worker.store.clone(),
         spec.sampler_aggregator_runner_params.clone(),
         spec.point_spec.clone(),
+        spec.evaluator.clone(),
+        spec.observable.clone(),
         spec.sampler_aggregator.clone(),
         spec.parametrization.clone(),
     )

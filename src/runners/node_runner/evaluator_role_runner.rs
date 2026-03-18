@@ -1,5 +1,6 @@
 use crate::core::StoreError;
 use crate::runners::evaluator::EvaluatorRunner;
+use crate::sampling::ParametrizationBuildContext;
 use std::time::Duration;
 use tokio::{sync::watch, time::sleep};
 use tracing::Instrument;
@@ -26,7 +27,7 @@ pub(crate) async fn run_evaluator_role<S: NodeRunnerStore>(
 
         let parametrization = spec
             .parametrization
-            .build()
+            .build(ParametrizationBuildContext::default())
             .map_err(|err| StoreError::store(format!("failed to build parametrization: {err}")))?;
         parametrization
             .validate_point_spec(&spec.point_spec)

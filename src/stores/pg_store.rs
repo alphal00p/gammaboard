@@ -3,11 +3,12 @@
 use super::queries;
 use crate::core::{
     AggregationStore, BatchClaim, CompletedBatch, ControlPlaneStore, DesiredAssignment,
-    EvaluatorPerformanceSnapshot, ParametrizationVersionStore, RegisteredNode, RunReadStore,
-    RunSampleProgress, RunSpecStore, RunTask, RunTaskSpec, RunTaskStore, RuntimeLogEvent,
-    RuntimeLogStore, SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore, WorkerRole,
+    EvaluatorPerformanceSnapshot, ParametrizationState, ParametrizationVersionStore,
+    RegisteredNode, RunReadStore, RunSampleProgress, RunSpecStore, RunStageSnapshot, RunTask,
+    RunTaskSpec, RunTaskStore, RuntimeLogEvent, RuntimeLogStore,
+    SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore, WorkerRole,
 };
-use crate::core::{IntegrationParams, ParametrizationConfig, RunSpec};
+use crate::core::{IntegrationParams, RunSpec};
 use crate::evaluation::{BatchResult, PointSpec};
 use crate::sampling::LatentBatch;
 use serde_json::Value as JsonValue;
@@ -32,20 +33,16 @@ fn store_err(message: impl Into<String>) -> StoreError {
     StoreError::store(message)
 }
 
-fn store_invalid_input(message: impl Into<String>) -> StoreError {
-    StoreError::invalid_input(message)
-}
-
 fn map_sqlx(err: sqlx::Error) -> StoreError {
     if let sqlx::Error::Database(db_err) = &err {
         if db_err.code().as_deref() == Some("23505") {
             if db_err.constraint() == Some("idx_nodes_desired_sampler_run") {
-                return store_invalid_input(
+                return StoreError::invalid_input(
                     "run already has a sampler_aggregator assignment; clear the existing sampler assignment before assigning another node",
                 );
             }
             if db_err.constraint() == Some("idx_nodes_current_sampler_run") {
-                return store_invalid_input(
+                return StoreError::invalid_input(
                     "run already has a current sampler_aggregator node; clear the existing current sampler before starting another node",
                 );
             }
@@ -56,42 +53,13 @@ fn map_sqlx(err: sqlx::Error) -> StoreError {
                 Some("nodes_desired_assignment_pair_check")
                     | Some("nodes_current_assignment_pair_check")
             ) {
-                return store_invalid_input(
+                return StoreError::invalid_input(
                     "node desired/current role and run fields must be both set or both null",
                 );
             }
         }
     }
     StoreError::from(err)
-}
-
-const AGGREGATED_RANGE_MAX_POINTS_LIMIT: i64 = 10_000;
-
-fn resolve_aggregated_range_index(raw: i64, latest_id: i64) -> Result<i64, StoreError> {
-    if raw == 0 {
-        // Accept 0 as a convenient alias for the first snapshot id.
-        return Ok(1);
-    }
-    if raw > 0 {
-        return Ok(raw);
-    }
-    Ok(latest_id + raw + 1)
-}
-
-fn ceil_div_i64(numerator: i64, denominator: i64) -> i64 {
-    debug_assert!(denominator > 0);
-    (numerator + denominator - 1) / denominator
-}
-
-fn next_power_of_two_i64(n: i64) -> i64 {
-    if n <= 1 {
-        return 1;
-    }
-    let mut p = 1_i64;
-    while p < n {
-        p = p.saturating_mul(2);
-    }
-    p
 }
 
 fn run_spec_from_integration_params(
@@ -103,6 +71,7 @@ fn run_spec_from_integration_params(
         run_id,
         point_spec,
         evaluator: params.evaluator,
+        observable: params.observable,
         sampler_aggregator: params.sampler_aggregator,
         parametrization: params.parametrization,
         evaluator_runner_params: params.evaluator_runner_params,
@@ -169,115 +138,29 @@ impl RunReadStore for PgStore {
         Ok(queries::get_work_queue_stats(&self.pool, run_id).await?)
     }
 
-    async fn get_latest_aggregated_result(
+    async fn get_task_output_snapshots(
         &self,
         run_id: i32,
-    ) -> Result<Option<crate::stores::AggregatedResult>, StoreError> {
-        Ok(queries::get_latest_aggregated_result(&self.pool, run_id).await?)
-    }
-
-    async fn get_aggregated_results(
-        &self,
-        run_id: i32,
+        task_id: i64,
+        after_snapshot_id: Option<i64>,
         limit: i64,
-    ) -> Result<Vec<crate::stores::AggregatedResult>, StoreError> {
-        Ok(queries::get_aggregated_results(&self.pool, run_id, limit).await?)
-    }
-
-    async fn get_aggregated_range(
-        &self,
-        run_id: i32,
-        start: i64,
-        stop: i64,
-        max_points: i64,
-        last_id: Option<i64>,
-    ) -> Result<crate::stores::AggregatedRangeResponse, StoreError> {
-        if max_points < 1 {
-            return Err(store_invalid_input(
-                "aggregated range max_points must be >= 1",
-            ));
-        }
-        if max_points > AGGREGATED_RANGE_MAX_POINTS_LIMIT {
-            return Err(store_invalid_input(format!(
-                "aggregated range max_points must be <= {}",
-                AGGREGATED_RANGE_MAX_POINTS_LIMIT
-            )));
-        }
-
-        let Some((min_id, max_id)) = queries::get_aggregated_id_bounds(&self.pool, run_id).await?
-        else {
-            return Ok(crate::stores::AggregatedRangeResponse {
-                snapshots: Vec::new(),
-                latest: None,
-                meta: crate::stores::AggregatedRangeMeta {
-                    abs_start: None,
-                    abs_stop: None,
-                    step: 1,
-                    latest_id: None,
-                    max_points,
-                },
-                reset_required: false,
-            });
-        };
-
-        let mut resolved_start = resolve_aggregated_range_index(start, max_id)?;
-        let mut resolved_stop = resolve_aggregated_range_index(stop, max_id)?;
-        if resolved_start > resolved_stop {
-            return Err(store_invalid_input(format!(
-                "aggregated range start > stop after resolution: start={} stop={}",
-                resolved_start, resolved_stop
-            )));
-        }
-
-        resolved_start = resolved_start.max(min_id).min(max_id);
-        resolved_stop = resolved_stop.max(min_id).min(max_id);
-        if resolved_start > resolved_stop {
-            resolved_start = resolved_stop;
-        }
-
-        let span = (resolved_stop - resolved_start + 1).max(1);
-        let min_step = ceil_div_i64(span, max_points);
-        let step = next_power_of_two_i64(min_step);
-
-        let grid_anchor = resolved_start;
-        let reset_required = last_id.is_some_and(|seen| {
-            seen < resolved_start || seen > resolved_stop || (seen - grid_anchor) % step != 0
-        });
-        let effective_last_id = if reset_required { None } else { last_id };
-
-        let snapshots = queries::get_aggregated_range(
+    ) -> Result<Vec<crate::stores::TaskOutputSnapshot>, StoreError> {
+        Ok(queries::get_task_output_snapshots(
             &self.pool,
             run_id,
-            resolved_start,
-            resolved_stop,
-            step,
-            grid_anchor,
-            effective_last_id,
-            max_points,
+            task_id,
+            after_snapshot_id,
+            limit,
         )
-        .await?;
+        .await?)
+    }
 
-        let latest = queries::get_latest_aggregated_result(&self.pool, run_id).await?;
-
-        Ok(crate::stores::AggregatedRangeResponse {
-            snapshots,
-            latest: latest.filter(|row| {
-                effective_last_id.is_none_or(|seen| {
-                    row.id
-                        .parse::<i64>()
-                        .ok()
-                        .is_some_and(|latest_row_id| latest_row_id > seen)
-                })
-            }),
-            meta: crate::stores::AggregatedRangeMeta {
-                abs_start: Some(resolved_start),
-                abs_stop: Some(resolved_stop),
-                step,
-                latest_id: Some(max_id.to_string()),
-                max_points,
-            },
-            reset_required,
-        })
+    async fn get_latest_task_stage_snapshot(
+        &self,
+        run_id: i32,
+        task_id: i64,
+    ) -> Result<Option<crate::stores::TaskStageSnapshot>, StoreError> {
+        Ok(queries::get_latest_task_stage_snapshot(&self.pool, run_id, task_id).await?)
     }
 
     async fn get_worker_logs(
@@ -327,22 +210,16 @@ impl RunReadStore for PgStore {
         &self,
         worker_id: &str,
         limit: i64,
-    ) -> Result<crate::stores::WorkerEvaluatorPerformanceHistoryResponse, StoreError> {
-        let entries =
-            queries::get_worker_evaluator_performance_history(&self.pool, worker_id, limit).await?;
-        let run_id = entries.first().map(|entry| entry.run_id);
-        Ok(crate::stores::WorkerEvaluatorPerformanceHistoryResponse { run_id, entries })
+    ) -> Result<Vec<crate::stores::EvaluatorPerformanceHistoryEntry>, StoreError> {
+        Ok(queries::get_worker_evaluator_performance_history(&self.pool, worker_id, limit).await?)
     }
 
     async fn get_worker_sampler_performance_history(
         &self,
         worker_id: &str,
         limit: i64,
-    ) -> Result<crate::stores::WorkerSamplerPerformanceHistoryResponse, StoreError> {
-        let entries =
-            queries::get_worker_sampler_performance_history(&self.pool, worker_id, limit).await?;
-        let run_id = entries.first().map(|entry| entry.run_id);
-        Ok(crate::stores::WorkerSamplerPerformanceHistoryResponse { run_id, entries })
+    ) -> Result<Vec<crate::stores::SamplerPerformanceHistoryEntry>, StoreError> {
+        Ok(queries::get_worker_sampler_performance_history(&self.pool, worker_id, limit).await?)
     }
 }
 
@@ -728,7 +605,7 @@ impl ParametrizationVersionStore for PgStore {
         &self,
         run_id: i32,
         version: i64,
-    ) -> Result<Option<ParametrizationConfig>, StoreError> {
+    ) -> Result<Option<ParametrizationState>, StoreError> {
         let row = queries::get_parametrization_state(&self.pool, run_id, version)
             .await
             .map_err(map_sqlx)?;
@@ -752,9 +629,9 @@ impl ParametrizationVersionStore for PgStore {
         &self,
         run_id: i32,
         version: i64,
-        config: &ParametrizationConfig,
+        state: &ParametrizationState,
     ) -> Result<(), StoreError> {
-        let payload = serde_json::to_value(config).map_err(|err| {
+        let payload = serde_json::to_value(state).map_err(|err| {
             store_err(format!("failed to serialize parametrization state: {err}"))
         })?;
         queries::upsert_parametrization_state(&self.pool, run_id, version, &payload)
@@ -780,15 +657,6 @@ impl AggregationStore for PgStore {
             .map_err(map_sqlx)
     }
 
-    async fn load_latest_aggregation_snapshot(
-        &self,
-        run_id: i32,
-    ) -> Result<Option<JsonValue>, StoreError> {
-        queries::get_latest_aggregation_snapshot(&self.pool, run_id)
-            .await
-            .map_err(map_sqlx)
-    }
-
     async fn load_run_sample_progress(
         &self,
         run_id: i32,
@@ -807,18 +675,24 @@ impl AggregationStore for PgStore {
     async fn save_aggregation(
         &self,
         run_id: i32,
+        task_id: i64,
         current_observable: &JsonValue,
-        aggregated_observable: &JsonValue,
+        persisted_observable: &JsonValue,
         delta_batches_completed: i32,
     ) -> Result<(), StoreError> {
         if delta_batches_completed <= 0 {
             return Ok(());
         }
 
-        queries::insert_aggregated_results_snapshot(&self.pool, run_id, aggregated_observable)
-            .await
-            .map_err(map_sqlx)?;
-        queries::update_run_aggregation(
+        queries::insert_persisted_observable_snapshot(
+            &self.pool,
+            run_id,
+            task_id,
+            persisted_observable,
+        )
+        .await
+        .map_err(map_sqlx)?;
+        queries::update_run_current_observable(
             &self.pool,
             run_id,
             current_observable,
@@ -854,6 +728,12 @@ impl AggregationStore for PgStore {
         )
         .await
         .map_err(map_sqlx)
+    }
+
+    async fn save_run_stage_snapshot(&self, snapshot: &RunStageSnapshot) -> Result<(), StoreError> {
+        queries::insert_run_stage_snapshot(&self.pool, snapshot)
+            .await
+            .map_err(map_sqlx)
     }
 }
 
@@ -938,6 +818,7 @@ mod tests {
                     "kind": "sin_evaluator",
                     "min_eval_time_per_sample_ms": 1
                 },
+                "observable": "scalar",
                 "sampler_aggregator": {
                     "kind": "naive_monte_carlo",
                     "training_target_samples": 2
@@ -973,6 +854,10 @@ mod tests {
             &spec.evaluator,
             crate::core::EvaluatorConfig::SinEvaluator { params }
                 if params.min_eval_time_per_sample_ms == 1
+        ));
+        assert!(matches!(
+            spec.observable,
+            crate::core::ObservableConfig::Scalar
         ));
         assert_eq!(spec.sampler_aggregator.kind_str(), "naive_monte_carlo");
         assert!(matches!(
@@ -1015,6 +900,7 @@ mod tests {
             8,
             json!({
                 "evaluator": { "kind": "sin_evaluator" },
+                "observable": "scalar",
                 "sampler_aggregator": { "kind": "naive_monte_carlo" },
                 "parametrization": { "kind": "identity" }
             }),
@@ -1031,7 +917,10 @@ mod tests {
     fn decode_run_spec_requires_implementation_fields() {
         let err = decode_run_spec(
             9,
-            json!({ "evaluator": { "kind": "sin_evaluator" } }),
+            json!({
+                "evaluator": { "kind": "sin_evaluator" },
+                "observable": "scalar"
+            }),
             json!({
                 "continuous_dims": 1,
                 "discrete_dims": 0
@@ -1044,6 +933,7 @@ mod tests {
             9,
             json!({
                 "evaluator": { "kind": "sin_evaluator" },
+                "observable": "scalar",
                 "sampler_aggregator": { "kind": "naive_monte_carlo" }
             }),
             json!({

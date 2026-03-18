@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS batches (
     "values" JSONB,
 
     batch_observable JSONB,
-    -- Batch-level aggregated observable snapshot emitted by evaluator runner
+    -- Batch-level observable payload emitted by the evaluator runner
 
     total_eval_time_ms DOUBLE PRECISION,
     -- Total time to evaluate all samples in batch
@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS batches (
 CREATE TABLE IF NOT EXISTS parametrization_states (
     run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     version BIGINT NOT NULL,
+    -- Canonical persisted parametrization state payload: { config, snapshot }.
     state JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (run_id, version)
@@ -71,45 +72,3 @@ SELECT
     AVG(total_eval_time_ms / NULLIF(batch_size, 0)) as avg_sample_time_ms
 FROM batches
 GROUP BY run_id, status;
-
--- View for run progress
-CREATE OR REPLACE VIEW run_progress AS
-SELECT
-    r.id as run_id,
-    r.name as run_name,
-    COALESCE(r.integration_params, '{}'::jsonb) as integration_params,
-    r.point_spec,
-    r.current_observable,
-    r.target,
-    r.evaluator_init_metadata,
-    r.sampler_aggregator_init_metadata,
-    r.nr_produced_samples,
-    r.nr_completed_samples,
-    r.started_at,
-    r.completed_at,
-    r.training_completed_at,
-    r.batches_completed,
-    COALESCE(b.total_batches, 0) as total_batches,
-    COALESCE(b.total_samples, 0) as total_samples,
-    COALESCE(b.pending_batches, 0) as pending_batches,
-    COALESCE(b.claimed_batches, 0) as claimed_batches,
-    COALESCE(b.completed_batches, 0) as completed_batches,
-    COALESCE(b.failed_batches, 0) as failed_batches,
-    CASE
-        WHEN COALESCE(b.total_batches, 0) > 0
-        THEN CAST(COALESCE(b.completed_batches, 0) AS FLOAT) / b.total_batches
-        ELSE 0.0
-    END as completion_rate
-FROM runs r
-LEFT JOIN (
-    SELECT
-        run_id,
-        COUNT(*) as total_batches,
-        SUM(batch_size) as total_samples,
-        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_batches,
-        SUM(CASE WHEN status = 'claimed' THEN 1 ELSE 0 END) as claimed_batches,
-        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_batches,
-        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_batches
-    FROM batches
-    GROUP BY run_id
-) b ON r.id = b.run_id;

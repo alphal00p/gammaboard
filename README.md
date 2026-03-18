@@ -97,8 +97,7 @@ kind = "sample"
 nr_samples = 200000
 [task_queue.sampler_aggregator]
 kind = "havana_training"
-[task_queue.parametrization]
-kind = "identity"
+# training budget comes from `nr_samples`
 
 [[task_queue]]
 kind = "sample"
@@ -114,7 +113,30 @@ kind = "spherical"
 kind = "pause"
 ```
 
-Each sample task fully owns the sampler/materialization config for that phase. There is no separate top-level sampler definition for task-driven runs. If `task_queue` is omitted, the run is created idle and no work will be produced until tasks are appended.
+Sample tasks support inheritance. Omitted `sampler_aggregator` and `parametrization` fields inherit from the previous effective sample stage, or from the run's initial integration settings for the first sample task. If `task_queue` is omitted, the run is created idle and no work will be produced until tasks are appended.
+
+Deterministic scan tasks are also supported:
+```toml
+[[task_queue]]
+kind = "image"
+display = "complex_hue_intensity" # optional; "auto" is the default
+[task_queue.geometry]
+offset = [0.0, 0.0]
+u_vector = [1.0, 0.0]
+v_vector = [0.0, 1.0]
+u_linspace = { start = -2.0, stop = 2.0, count = 128 }
+v_linspace = { start = -2.0, stop = 2.0, count = 128 }
+
+[[task_queue]]
+kind = "plot_line"
+display = "complex_components" # optional; "auto" is the default
+[task_queue.geometry]
+offset = [0.0, 0.0]
+direction = [1.0, 0.0]
+linspace = { start = -2.0, stop = 2.0, count = 512 }
+```
+
+`image` and `plot_line` tasks rasterize deterministic points directly in evaluator space, persist only compact progress history, and render their current result from the full task-local observable state.
 
 ### Start local workers
 ```bash

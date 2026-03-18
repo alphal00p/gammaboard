@@ -20,17 +20,13 @@ const RunScopedWorkspace = ({
     );
   }
 
-  if (!selectedRun) {
-    return (
-      <>
-        <ConnectionStatus isConnected={isConnected} lastUpdate={null} />
-        <RunSelector runs={runs} selectedRun={selectedRun} onRunChange={setSelectedRun} />
-        <EmptyStateCard title="Select a run" message={noSelectionMessage} />
-      </>
-    );
-  }
-
-  return children;
+  return (
+    <>
+      <ConnectionStatus isConnected={isConnected} lastUpdate={null} />
+      <RunSelector runs={runs} selectedRun={selectedRun} onRunChange={setSelectedRun} />
+      {!selectedRun ? <EmptyStateCard title="Select a run" message={noSelectionMessage} /> : children}
+    </>
+  );
 };
 
 export default RunScopedWorkspace;

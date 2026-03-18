@@ -4,7 +4,7 @@ mod sinc_evaluator;
 mod symbolica;
 pub(crate) mod unit;
 
-use crate::core::{BuildError, EvaluatorConfig};
+use crate::core::{BuildError, EvaluatorConfig, ObservableConfig};
 use crate::evaluation::{Evaluator, ObservableState};
 
 use self::gammaloop::GammaLoopEvaluator;
@@ -47,13 +47,20 @@ impl EvaluatorConfig {
         }
     }
 
-    pub fn empty_observable_state(&self) -> Result<ObservableState, BuildError> {
+    pub fn default_observable_config(&self) -> ObservableConfig {
         match self {
-            Self::Gammaloop { params } => Ok(params.observable_kind.empty_state()),
-            Self::SinEvaluator { .. } => Ok(ObservableState::empty_scalar()),
-            Self::SincEvaluator { .. } => Ok(ObservableState::empty_complex()),
-            Self::Unit { params } => Ok(params.observable_kind.empty_state()),
-            Self::Symbolica { .. } => Ok(ObservableState::empty_scalar()),
+            Self::Gammaloop { params } => params.observable_kind.aggregate_observable_config(),
+            Self::SinEvaluator { .. } => ObservableConfig::Scalar,
+            Self::SincEvaluator { .. } => ObservableConfig::Complex,
+            Self::Unit { params } => params.observable_kind.aggregate_observable_config(),
+            Self::Symbolica { .. } => ObservableConfig::Scalar,
         }
+    }
+
+    pub fn empty_observable_state(
+        &self,
+        config: &ObservableConfig,
+    ) -> Result<ObservableState, BuildError> {
+        Ok(ObservableState::from_config(config))
     }
 }

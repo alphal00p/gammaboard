@@ -2,18 +2,18 @@
 
 use super::errors::StoreError;
 use super::models::{
-    BatchClaim, CompletedBatch, DesiredAssignment, EvaluatorPerformanceSnapshot, RegisteredNode,
-    RunSampleProgress, RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
+    BatchClaim, CompletedBatch, DesiredAssignment, EvaluatorPerformanceSnapshot,
+    ParametrizationState, RegisteredNode, RunSampleProgress, RunStageSnapshot, RuntimeLogEvent,
+    SamplerAggregatorPerformanceSnapshot,
 };
-use crate::core::{ParametrizationConfig, RunSpec};
+use crate::core::RunSpec;
 use crate::core::{RunTask, RunTaskSpec};
 use crate::evaluation::{BatchResult, PointSpec};
 use crate::sampling::LatentBatch;
 use crate::stores::read_models::{
-    AggregatedRangeResponse, AggregatedResult, EvaluatorPerformanceHistoryEntry,
-    RegisteredWorkerEntry, RunProgress, SamplerPerformanceHistoryEntry, WorkQueueStats,
-    WorkerEvaluatorPerformanceHistoryResponse, WorkerLogPage,
-    WorkerSamplerPerformanceHistoryResponse,
+    EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress,
+    SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot, WorkQueueStats,
+    WorkerLogPage,
 };
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
@@ -122,7 +122,7 @@ pub trait ParametrizationVersionStore: Send + Sync {
         &self,
         run_id: i32,
         version: i64,
-    ) -> Result<Option<ParametrizationConfig>, StoreError>;
+    ) -> Result<Option<ParametrizationState>, StoreError>;
     async fn load_latest_parametrization_version(
         &self,
         run_id: i32,
@@ -131,19 +131,15 @@ pub trait ParametrizationVersionStore: Send + Sync {
         &self,
         run_id: i32,
         version: i64,
-        config: &ParametrizationConfig,
+        state: &ParametrizationState,
     ) -> Result<(), StoreError>;
 }
 
-/// Persists aggregated observable snapshots.
+/// Persists active-stage observable state and task-local persisted snapshots.
 #[async_trait]
 pub trait AggregationStore: Send + Sync {
     async fn load_current_observable(&self, run_id: i32) -> Result<Option<JsonValue>, StoreError>;
     async fn load_sampler_runner_snapshot(
-        &self,
-        run_id: i32,
-    ) -> Result<Option<JsonValue>, StoreError>;
-    async fn load_latest_aggregation_snapshot(
         &self,
         run_id: i32,
     ) -> Result<Option<JsonValue>, StoreError>;
@@ -154,8 +150,9 @@ pub trait AggregationStore: Send + Sync {
     async fn save_aggregation(
         &self,
         run_id: i32,
+        task_id: i64,
         current_observable: &JsonValue,
-        aggregated_observable: &JsonValue,
+        persisted_observable: &JsonValue,
         delta_batches_completed: i32,
     ) -> Result<(), StoreError>;
     async fn save_sampler_runner_snapshot(
@@ -169,6 +166,7 @@ pub trait AggregationStore: Send + Sync {
         nr_produced_samples: i64,
         nr_completed_samples: i64,
     ) -> Result<(), StoreError>;
+    async fn save_run_stage_snapshot(&self, snapshot: &RunStageSnapshot) -> Result<(), StoreError>;
 }
 
 #[async_trait]
@@ -205,23 +203,18 @@ pub trait RunReadStore: Send + Sync {
     async fn get_all_runs(&self) -> Result<Vec<RunProgress>, StoreError>;
     async fn get_run_progress(&self, run_id: i32) -> Result<Option<RunProgress>, StoreError>;
     async fn get_work_queue_stats(&self, run_id: i32) -> Result<Vec<WorkQueueStats>, StoreError>;
-    async fn get_latest_aggregated_result(
+    async fn get_task_output_snapshots(
         &self,
         run_id: i32,
-    ) -> Result<Option<AggregatedResult>, StoreError>;
-    async fn get_aggregated_results(
-        &self,
-        run_id: i32,
+        task_id: i64,
+        after_snapshot_id: Option<i64>,
         limit: i64,
-    ) -> Result<Vec<AggregatedResult>, StoreError>;
-    async fn get_aggregated_range(
+    ) -> Result<Vec<TaskOutputSnapshot>, StoreError>;
+    async fn get_latest_task_stage_snapshot(
         &self,
         run_id: i32,
-        start: i64,
-        stop: i64,
-        max_points: i64,
-        last_id: Option<i64>,
-    ) -> Result<AggregatedRangeResponse, StoreError>;
+        task_id: i64,
+    ) -> Result<Option<TaskStageSnapshot>, StoreError>;
     async fn get_worker_logs(
         &self,
         run_id: i32,
@@ -251,10 +244,10 @@ pub trait RunReadStore: Send + Sync {
         &self,
         worker_id: &str,
         limit: i64,
-    ) -> Result<WorkerEvaluatorPerformanceHistoryResponse, StoreError>;
+    ) -> Result<Vec<EvaluatorPerformanceHistoryEntry>, StoreError>;
     async fn get_worker_sampler_performance_history(
         &self,
         worker_id: &str,
         limit: i64,
-    ) -> Result<WorkerSamplerPerformanceHistoryResponse, StoreError>;
+    ) -> Result<Vec<SamplerPerformanceHistoryEntry>, StoreError>;
 }

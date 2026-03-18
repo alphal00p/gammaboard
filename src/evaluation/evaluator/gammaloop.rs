@@ -11,9 +11,10 @@ use serde_json::json;
 
 use crate::{
     Batch, BatchResult, BuildError, EvalError, PointSpec,
+    core::ObservableConfig,
     evaluation::{
-        ComplexObservableState, EvalBatchOptions, Evaluator, ObservableState,
-        ScalarObservableState, SemanticObservableKind,
+        EvalBatchOptions, Evaluator, IngestComplex, IngestScalar, ObservableState,
+        SemanticObservableKind,
     },
 };
 
@@ -160,6 +161,41 @@ impl GammaLoopEvaluator {
 
         Ok(vec_res)
     }
+
+    fn eval_scalar_into<O: IngestScalar>(
+        &self,
+        values: &[num::complex::Complex64],
+        weights: &[f64],
+        capture_training_values: bool,
+        observable: &mut O,
+    ) -> Option<Vec<f64>> {
+        let mut training_values = capture_training_values.then(|| Vec::with_capacity(values.len()));
+        for (sample_idx, value) in values.iter().enumerate() {
+            let projected = self.training_projection.project(*value);
+            observable.ingest_scalar(projected, weights[sample_idx]);
+            if let Some(values) = training_values.as_mut() {
+                values.push(projected * weights[sample_idx]);
+            }
+        }
+        training_values
+    }
+
+    fn eval_complex_into<O: IngestComplex>(
+        &self,
+        values: &[num::complex::Complex64],
+        weights: &[f64],
+        capture_training_values: bool,
+        observable: &mut O,
+    ) -> Option<Vec<f64>> {
+        let mut training_values = capture_training_values.then(|| Vec::with_capacity(values.len()));
+        for (sample_idx, value) in values.iter().enumerate() {
+            observable.ingest_complex(*value, weights[sample_idx]);
+            if let Some(values) = training_values.as_mut() {
+                values.push(self.training_projection.project(*value) * weights[sample_idx]);
+            }
+        }
+        training_values
+    }
 }
 
 impl Evaluator for GammaLoopEvaluator {
@@ -167,61 +203,61 @@ impl Evaluator for GammaLoopEvaluator {
         self.point_spec.clone()
     }
 
-    fn empty_observable(&self) -> ObservableState {
-        self.observable_kind.empty_state()
-    }
-
     fn eval_batch(
         &mut self,
         batch: &Batch,
+        observable: &ObservableConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
         let weights = batch
             .weights()
             .as_slice()
             .ok_or_else(|| EvalError::eval("Batch weights array must be standard-layout"))?;
-        let mut values = if options.require_training_values {
-            Some(Vec::with_capacity(batch.size()))
-        } else {
-            None
-        };
-
         let vec_res = self.evaluate(batch)?;
-
-        let observable = match self.observable_kind {
-            SemanticObservableKind::Scalar => {
-                let mut observable = ScalarObservableState::default();
-                for (sample_idx, value) in vec_res.iter().enumerate() {
-                    observable.add_sample(
-                        self.training_projection.project(*value),
-                        weights[sample_idx],
-                    );
-                    if let Some(values) = values.as_mut() {
-                        values.push(self.training_projection.project(*value));
-                    }
+        let mut observable_state = ObservableState::from_config(observable);
+        let weighted_values = match self.observable_kind {
+            SemanticObservableKind::Scalar => match &mut observable_state {
+                ObservableState::Scalar(observable) => self.eval_scalar_into(
+                    &vec_res,
+                    weights,
+                    options.require_training_values,
+                    observable,
+                ),
+                ObservableState::FullScalar(observable) => self.eval_scalar_into(
+                    &vec_res,
+                    weights,
+                    options.require_training_values,
+                    observable,
+                ),
+                other => {
+                    return Err(EvalError::eval(format!(
+                        "gammaloop scalar mode does not support observable kind {}",
+                        other.kind_str()
+                    )));
                 }
-                ObservableState::Scalar(observable)
-            }
-            SemanticObservableKind::Complex => {
-                let mut observable = ComplexObservableState::default();
-                for (sample_idx, value) in vec_res.iter().enumerate() {
-                    observable.add_sample(*value, weights[sample_idx]);
-                    if let Some(values) = values.as_mut() {
-                        values.push(self.training_projection.project(*value));
-                    }
+            },
+            SemanticObservableKind::Complex => match &mut observable_state {
+                ObservableState::Complex(observable) => self.eval_complex_into(
+                    &vec_res,
+                    weights,
+                    options.require_training_values,
+                    observable,
+                ),
+                ObservableState::FullComplex(observable) => self.eval_complex_into(
+                    &vec_res,
+                    weights,
+                    options.require_training_values,
+                    observable,
+                ),
+                other => {
+                    return Err(EvalError::eval(format!(
+                        "gammaloop complex mode does not support observable kind {}",
+                        other.kind_str()
+                    )));
                 }
-                ObservableState::Complex(observable)
-            }
+            },
         };
-
-        let weighted_values = values.map(|values| {
-            values
-                .into_iter()
-                .zip(weights.iter().copied())
-                .map(|(value, weight)| value * weight)
-                .collect()
-        });
-        Ok(BatchResult::new(weighted_values, observable))
+        Ok(BatchResult::new(weighted_values, observable_state))
     }
 
     fn get_init_metadata(&self) -> serde_json::Value {

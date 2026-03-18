@@ -1,7 +1,7 @@
-use crate::core::EvalError;
+use crate::core::{EvalError, ObservableConfig};
 use crate::evaluation::{
-    Batch, BatchResult, ComplexObservableState, EvalBatchOptions, Evaluator, ObservableState,
-    PointSpec, SinEvaluatorParams,
+    Batch, BatchResult, EvalBatchOptions, Evaluator, IngestComplex, ObservableState, PointSpec,
+    SinEvaluatorParams,
 };
 use num::complex::Complex64;
 use std::{
@@ -24,6 +24,35 @@ impl SincEvaluator {
     pub fn from_params(params: SincEvaluatorParams) -> Self {
         Self::new(params.min_eval_time_per_sample_ms)
     }
+
+    fn eval_complex_into<O: IngestComplex>(
+        &self,
+        batch: &Batch,
+        observable: &mut O,
+        capture_training_values: bool,
+    ) -> Result<Option<Vec<f64>>, EvalError> {
+        let weights = batch
+            .weights()
+            .as_slice()
+            .ok_or_else(|| EvalError::eval("Batch weights array must be standard-layout"))?;
+        let mut values = capture_training_values.then(|| Vec::with_capacity(batch.size()));
+
+        for (row, weight) in batch.continuous().rows().into_iter().zip(weights.iter()) {
+            let x = *row
+                .get(0)
+                .ok_or_else(|| EvalError::eval("missing continuous[0]"))?;
+            let y = *row
+                .get(1)
+                .ok_or_else(|| EvalError::eval("missing continuous[1]"))?;
+            let value = Complex64::new(x, y).sin();
+            observable.ingest_complex(value, *weight);
+            if let Some(values) = values.as_mut() {
+                values.push(value.norm() * *weight);
+            }
+        }
+
+        Ok(values)
+    }
 }
 
 pub type SincEvaluatorParams = SinEvaluatorParams;
@@ -36,41 +65,28 @@ impl Evaluator for SincEvaluator {
         }
     }
 
-    fn empty_observable(&self) -> ObservableState {
-        ObservableState::empty_complex()
-    }
-
     fn eval_batch(
         &mut self,
         batch: &Batch,
+        observable: &ObservableConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
-        let weights = batch
-            .weights()
-            .as_slice()
-            .ok_or_else(|| EvalError::eval("Batch weights array must be standard-layout"))?;
-        let mut observable = ComplexObservableState::default();
         let started = Instant::now();
-        let mut values = if options.require_training_values {
-            Some(Vec::with_capacity(batch.size()))
-        } else {
-            None
-        };
-
-        for (row, weight) in batch.continuous().rows().into_iter().zip(weights.iter()) {
-            let x = *row
-                .get(0)
-                .ok_or_else(|| EvalError::eval("missing continuous[0]"))?;
-            let y = *row
-                .get(1)
-                .ok_or_else(|| EvalError::eval("missing continuous[1]"))?;
-            let z = Complex64::new(x, y);
-            let value = z.sin();
-            observable.add_sample(value, *weight);
-            if let Some(values) = values.as_mut() {
-                values.push(value.norm());
+        let mut observable_state = ObservableState::from_config(observable);
+        let weighted_values = match &mut observable_state {
+            ObservableState::Complex(observable) => {
+                self.eval_complex_into(batch, observable, options.require_training_values)?
             }
-        }
+            ObservableState::FullComplex(observable) => {
+                self.eval_complex_into(batch, observable, options.require_training_values)?
+            }
+            other => {
+                return Err(EvalError::eval(format!(
+                    "sinc evaluator does not support observable kind {}",
+                    other.kind_str()
+                )));
+            }
+        };
 
         let min_total =
             Duration::from_millis(self.min_eval_time_per_sample_ms).mul_f64(batch.size() as f64);
@@ -79,16 +95,6 @@ impl Evaluator for SincEvaluator {
             thread::sleep(min_total - elapsed);
         }
 
-        let weighted_values = values.map(|values| {
-            values
-                .into_iter()
-                .zip(weights.iter().copied())
-                .map(|(value, weight)| value * weight)
-                .collect()
-        });
-        Ok(BatchResult::new(
-            weighted_values,
-            ObservableState::Complex(observable),
-        ))
+        Ok(BatchResult::new(weighted_values, observable_state))
     }
 }

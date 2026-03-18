@@ -1,7 +1,7 @@
 use super::Parametrization;
 use crate::core::EngineError;
 use crate::evaluation::Batch;
-use crate::sampling::LatentBatch;
+use crate::sampling::{LatentBatch, ParametrizationSnapshot};
 use serde::{Deserialize, Serialize};
 
 pub struct IdentityParametrization;
@@ -22,5 +22,9 @@ impl Parametrization for IdentityParametrization {
             .payload
             .as_batch()
             .map_err(|err| EngineError::engine(err.to_string()))
+    }
+
+    fn snapshot(&self) -> Result<ParametrizationSnapshot, EngineError> {
+        Ok(ParametrizationSnapshot::Identity {})
     }
 }
