@@ -41,6 +41,10 @@ impl Observable for ComplexObservableState {
     type Persistent = Self;
     type Digest = Self;
 
+    fn sample_count(&self) -> i64 {
+        self.count
+    }
+
     fn merge(&mut self, other: Self) {
         self.count += other.count;
         self.real_sum += other.real_sum;

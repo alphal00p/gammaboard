@@ -1,7 +1,5 @@
 use crate::core::StoreError;
-use crate::runners::sampler_aggregator::{
-    SamplerAggregatorRunner, SamplerAggregatorRunnerSnapshot,
-};
+use crate::runners::sampler_aggregator::SamplerAggregatorRunner;
 use std::time::Duration;
 use tokio::{sync::watch, time::sleep};
 use tracing::Instrument;
@@ -20,13 +18,7 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
     let saved_snapshot = worker
         .store
         .load_sampler_runner_snapshot(worker.run_id)
-        .await?
-        .map(|payload| {
-            serde_json::from_value::<SamplerAggregatorRunnerSnapshot>(payload).map_err(|err| {
-                StoreError::store(format!("failed to decode sampler snapshot: {err}"))
-            })
-        })
-        .transpose()?;
+        .await?;
 
     let engine_span = tracing::span!(tracing::Level::TRACE, "sampler_engine_context");
     let initial_task = match worker.store.load_active_run_task(worker.run_id).await? {

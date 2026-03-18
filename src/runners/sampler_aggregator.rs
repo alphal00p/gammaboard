@@ -23,7 +23,6 @@ use crate::sampling::{
 };
 use crate::stores::RunControlStore;
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 use tracing::info;
@@ -71,7 +70,7 @@ struct SamplerRuntimeState {
 pub struct SamplerAggregatorRunnerSnapshot {
     pub version: u32,
     pub engine: SamplerAggregatorSnapshot,
-    pub observable_state: JsonValue,
+    pub observable_state: ObservableState,
     active_runtime_task_id: Option<i64>,
     current_parametrization_state_version: i64,
     runtime_state: SamplerRuntimeState,
@@ -396,8 +395,7 @@ where
                 snapshot.version
             ))));
         }
-        self.observable_state =
-            ObservableState::from_json(&snapshot.observable_state).map_err(RunnerError::Engine)?;
+        self.observable_state = snapshot.observable_state;
         self.active_runtime_task_id = snapshot.active_runtime_task_id;
         self.current_parametrization_state_version = snapshot.current_parametrization_state_version;
         self.runtime_state = snapshot.runtime_state;
@@ -416,10 +414,7 @@ where
         Ok(SamplerAggregatorRunnerSnapshot {
             version: Self::SNAPSHOT_VERSION,
             engine: self.engine.snapshot().map_err(RunnerError::Engine)?,
-            observable_state: self
-                .observable_state
-                .to_json()
-                .map_err(RunnerError::Engine)?,
+            observable_state: self.observable_state.clone(),
             active_runtime_task_id: self.active_runtime_task_id,
             current_parametrization_state_version: self.current_parametrization_state_version,
             runtime_state: self.runtime_state.clone(),
@@ -431,10 +426,8 @@ where
 
     pub async fn persist_snapshot(&mut self) -> Result<(), RunnerError> {
         let snapshot = self.snapshot_state()?;
-        let payload = serde_json::to_value(&snapshot)
-            .map_err(|err| RunnerError::Engine(EngineError::from(err)))?;
         self.aggregation_store
-            .save_sampler_runner_snapshot(self.run_id, &payload)
+            .save_sampler_runner_snapshot(self.run_id, &snapshot)
             .await?;
         Ok(())
     }
@@ -815,15 +808,6 @@ where
         Ok(usize::try_from(remaining).ok())
     }
 
-    fn observable_sample_count(&self) -> i64 {
-        match &self.observable_state {
-            ObservableState::Scalar(state) => state.count,
-            ObservableState::Complex(state) => state.count,
-            ObservableState::FullScalar(state) => state.values.len() as i64,
-            ObservableState::FullComplex(state) => state.values.len() as i64,
-        }
-    }
-
     async fn clear_run_assignments_once(
         &mut self,
         reason: &'static str,
@@ -837,7 +821,7 @@ where
             run_id = self.run_id,
             nr_produced_samples = self.nr_produced_samples,
             nr_completed_samples = self.nr_completed_samples,
-            observable_samples = self.observable_sample_count(),
+            observable_samples = self.observable_state.sample_count(),
             assignments_cleared,
             reason,
             "run assignments cleared"

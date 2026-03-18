@@ -65,7 +65,7 @@ impl RunTaskSpec {
                 vec![
                     progress_panel(
                         "sample_progress",
-                        observable_sample_count(&observable) as f64,
+                        observable.sample_count() as f64,
                         nr_samples.map(|value| value as f64),
                         Some("samples"),
                     ),
@@ -501,15 +501,6 @@ fn decode_full_progress(persisted: &JsonValue) -> Result<FullObservableProgress,
         .map_err(|err| EngineError::build(format!("invalid full observable progress: {err}")))
 }
 
-fn observable_sample_count(observable: &ObservableState) -> i64 {
-    match observable {
-        ObservableState::Scalar(state) => state.count,
-        ObservableState::Complex(state) => state.count,
-        ObservableState::FullScalar(state) => state.values.len() as i64,
-        ObservableState::FullComplex(state) => state.values.len() as i64,
-    }
-}
-
 fn estimate_label(run_spec: &RunSpec) -> &'static str {
     match run_spec.evaluator.observable_kind() {
         SemanticObservableKind::Scalar => "Mean",
@@ -524,7 +515,7 @@ fn build_estimate_panels_from_observable(
     match run_spec.evaluator.observable_kind() {
         SemanticObservableKind::Scalar => vec![single_point_band(
             "real_estimate_history",
-            observable_sample_count(observable) as f64,
+            observable.sample_count() as f64,
             scalar_estimate(observable),
             Some(scalar_estimate(observable) - scalar_error(observable)),
             Some(scalar_estimate(observable) + scalar_error(observable)),
@@ -537,7 +528,7 @@ fn build_abs_signal_to_noise_panel_from_observable(observable: &ObservableState)
     scalar_timeseries_panel(
         "abs_signal_to_noise_history",
         vec![PlotPoint {
-            x: observable_sample_count(observable) as f64,
+            x: observable.sample_count() as f64,
             y: abs_signal_to_noise(observable),
             y_min: None,
             y_max: None,

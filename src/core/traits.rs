@@ -9,6 +9,7 @@ use super::models::{
 use crate::core::RunSpec;
 use crate::core::{RunTask, RunTaskSpec};
 use crate::evaluation::{BatchResult, PointSpec};
+use crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot;
 use crate::sampling::LatentBatch;
 use crate::stores::read_models::{
     EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress,
@@ -142,7 +143,7 @@ pub trait AggregationStore: Send + Sync {
     async fn load_sampler_runner_snapshot(
         &self,
         run_id: i32,
-    ) -> Result<Option<JsonValue>, StoreError>;
+    ) -> Result<Option<SamplerAggregatorRunnerSnapshot>, StoreError>;
     async fn load_latest_stage_snapshot_before_sequence(
         &self,
         run_id: i32,
@@ -163,7 +164,7 @@ pub trait AggregationStore: Send + Sync {
     async fn save_sampler_runner_snapshot(
         &self,
         run_id: i32,
-        snapshot: &JsonValue,
+        snapshot: &SamplerAggregatorRunnerSnapshot,
     ) -> Result<(), StoreError>;
     async fn save_run_sample_progress(
         &self,

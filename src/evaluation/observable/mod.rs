@@ -25,6 +25,7 @@ pub trait Observable: Clone + Serialize + DeserializeOwned {
     type Persistent: Clone + Serialize + DeserializeOwned;
     type Digest: Clone + Serialize + DeserializeOwned;
 
+    fn sample_count(&self) -> i64;
     fn merge(&mut self, other: Self);
     fn get_persistent(&self) -> Self::Persistent;
     fn get_digest(&self, _run_spec: &RunSpec) -> Result<Self::Digest, EngineError>
@@ -154,6 +155,15 @@ impl ObservableState {
                 left.kind_str(),
                 right.kind_str(),
             ))),
+        }
+    }
+
+    pub fn sample_count(&self) -> i64 {
+        match self {
+            Self::Scalar(observable) => observable.sample_count(),
+            Self::Complex(observable) => observable.sample_count(),
+            Self::FullScalar(observable) => observable.sample_count(),
+            Self::FullComplex(observable) => observable.sample_count(),
         }
     }
 

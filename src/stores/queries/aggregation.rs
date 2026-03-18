@@ -3,6 +3,7 @@ use sqlx::PgPool;
 
 use crate::core::RunStageSnapshot;
 use crate::evaluation::ObservableState;
+use crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot;
 use crate::sampling::SamplerAggregatorSnapshot;
 use crate::{core::ParametrizationState, core::SamplerAggregatorConfig};
 
@@ -73,8 +74,8 @@ pub(crate) async fn get_run_current_observable(
 pub(crate) async fn get_run_sampler_runner_snapshot(
     pool: &PgPool,
     run_id: i32,
-) -> Result<Option<JsonValue>, sqlx::Error> {
-    sqlx::query_scalar(
+) -> Result<Option<SamplerAggregatorRunnerSnapshot>, sqlx::Error> {
+    let row: Option<JsonValue> = sqlx::query_scalar(
         r#"
         SELECT sampler_runner_snapshot
         FROM runs
@@ -83,8 +84,14 @@ pub(crate) async fn get_run_sampler_runner_snapshot(
     )
     .bind(run_id)
     .fetch_optional(pool)
-    .await
-    .map(|row| row.flatten())
+    .await?
+    .flatten();
+    row.map(|payload| {
+        serde_json::from_value(payload).map_err(|err| {
+            sqlx::Error::Protocol(format!("failed to decode sampler_runner_snapshot: {err}"))
+        })
+    })
+    .transpose()
 }
 
 pub(crate) async fn get_latest_stage_snapshot_before_sequence(
@@ -182,8 +189,11 @@ pub(crate) async fn update_run_current_observable(
 pub(crate) async fn update_run_sampler_runner_snapshot(
     pool: &PgPool,
     run_id: i32,
-    snapshot: &JsonValue,
+    snapshot: &SamplerAggregatorRunnerSnapshot,
 ) -> Result<(), sqlx::Error> {
+    let payload = serde_json::to_value(snapshot).map_err(|err| {
+        sqlx::Error::Protocol(format!("failed to encode sampler_runner_snapshot: {err}"))
+    })?;
     sqlx::query(
         r#"
         UPDATE runs
@@ -191,7 +201,7 @@ pub(crate) async fn update_run_sampler_runner_snapshot(
         WHERE id = $2
         "#,
     )
-    .bind(snapshot)
+    .bind(payload)
     .bind(run_id)
     .execute(pool)
     .await?;

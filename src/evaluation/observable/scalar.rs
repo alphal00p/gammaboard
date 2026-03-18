@@ -30,6 +30,10 @@ impl Observable for ScalarObservableState {
     type Persistent = Self;
     type Digest = Self;
 
+    fn sample_count(&self) -> i64 {
+        self.count
+    }
+
     fn merge(&mut self, other: Self) {
         self.count += other.count;
         self.sum_weighted_value += other.sum_weighted_value;

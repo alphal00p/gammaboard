@@ -10,6 +10,7 @@ use crate::core::{
 };
 use crate::core::{IntegrationParams, RunSpec};
 use crate::evaluation::{BatchResult, PointSpec};
+use crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot;
 use crate::sampling::LatentBatch;
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
@@ -656,7 +657,7 @@ impl AggregationStore for PgStore {
     async fn load_sampler_runner_snapshot(
         &self,
         run_id: i32,
-    ) -> Result<Option<JsonValue>, StoreError> {
+    ) -> Result<Option<SamplerAggregatorRunnerSnapshot>, StoreError> {
         queries::get_run_sampler_runner_snapshot(&self.pool, run_id)
             .await
             .map_err(map_sqlx)
@@ -722,7 +723,7 @@ impl AggregationStore for PgStore {
     async fn save_sampler_runner_snapshot(
         &self,
         run_id: i32,
-        snapshot: &JsonValue,
+        snapshot: &SamplerAggregatorRunnerSnapshot,
     ) -> Result<(), StoreError> {
         queries::update_run_sampler_runner_snapshot(&self.pool, run_id, snapshot)
             .await

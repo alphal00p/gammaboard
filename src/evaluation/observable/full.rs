@@ -55,6 +55,10 @@ impl Observable for FullScalarObservableState {
     type Persistent = FullObservableProgress;
     type Digest = Self;
 
+    fn sample_count(&self) -> i64 {
+        self.values.len() as i64
+    }
+
     fn merge(&mut self, other: Self) {
         self.values.extend(other.values);
     }
@@ -69,6 +73,10 @@ impl Observable for FullScalarObservableState {
 impl Observable for FullComplexObservableState {
     type Persistent = FullObservableProgress;
     type Digest = Self;
+
+    fn sample_count(&self) -> i64 {
+        self.values.len() as i64
+    }
 
     fn merge(&mut self, other: Self) {
         self.values.extend(other.values);
