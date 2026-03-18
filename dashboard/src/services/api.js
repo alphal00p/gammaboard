@@ -4,6 +4,8 @@ if (!API_BASE_URL || !API_BASE_URL.trim()) {
   throw new Error("Missing REACT_APP_API_BASE_URL");
 }
 
+const asArray = (value) => (Array.isArray(value) ? value : []);
+
 const extractErrorDetails = async (response) => {
   const contentType = response.headers.get("content-type") || "";
 
@@ -97,7 +99,7 @@ const normalizeRunLogEntry = (entry) => {
 };
 
 const normalizeRunLogPage = (payload) => {
-  const rows = Array.isArray(payload?.items) ? payload.items : [];
+  const rows = asArray(payload?.items);
   return {
     items: rows.map(normalizeRunLogEntry).filter(Boolean),
     next_before_id: payload?.next_before_id != null ? String(payload.next_before_id) : null,
@@ -133,12 +135,12 @@ const normalizeRunTaskEntry = (entry) => {
 
 export const fetchRuns = async (signal) => {
   const data = await apiGet("/runs", "Failed to fetch runs", signal);
-  return (Array.isArray(data) ? data : []).map(normalizeRunEntry).filter(Boolean);
+  return asArray(data).map(normalizeRunEntry).filter(Boolean);
 };
 
 export const fetchNodes = async (runId = null, signal) => {
   const data = await apiGet(`/nodes${buildQueryString([["run_id", runId]])}`, "Failed to fetch nodes", signal);
-  return (Array.isArray(data) ? data : []).map(normalizeWorkerEntry).filter(Boolean);
+  return asArray(data).map(normalizeWorkerEntry).filter(Boolean);
 };
 
 export const fetchStats = async (runId, signal) => {
@@ -152,7 +154,7 @@ export const fetchRun = async (runId, signal) => {
 
 export const fetchRunTasks = async (runId, signal) => {
   const data = await apiGet(`/runs/${runId}/tasks`, "Failed to fetch run tasks", signal);
-  return (Array.isArray(data) ? data : []).map(normalizeRunTaskEntry).filter(Boolean);
+  return asArray(data).map(normalizeRunTaskEntry).filter(Boolean);
 };
 
 export const fetchRunTaskOutput = async (runId, taskId, signal) =>

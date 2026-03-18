@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchRunTaskOutput, fetchRunTaskOutputHistory } from "../services/api";
+import { asArray } from "../utils/collections";
 import { usePolling } from "./usePolling";
 
 const emptyState = Object.freeze({
@@ -9,7 +10,7 @@ const emptyState = Object.freeze({
 });
 
 const mergeHistoryItems = (previousItems, nextItems) => {
-  const items = [...previousItems, ...(Array.isArray(nextItems) ? nextItems : [])];
+  const items = [...previousItems, ...asArray(nextItems)];
   const seen = new Set();
   return items.filter((item) => {
     const id = item?.snapshot_id;
@@ -49,9 +50,7 @@ export const useTaskOutput = ({ runId, taskId, pollMs = 3000, historyLimit = 500
         setState((previous) => {
           const shouldReset = history?.reset_required === true || previous.output?.task_id !== output?.task_id;
           const historyItems = shouldReset
-            ? Array.isArray(history?.items)
-              ? history.items
-              : []
+            ? asArray(history?.items)
             : mergeHistoryItems(previous.historyItems, history?.items);
 
           return {

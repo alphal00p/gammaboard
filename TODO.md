@@ -31,4 +31,5 @@
 - [ ] introduce a shared deterministic full-observable task adapter for `image` and `plot_line`; both tasks currently duplicate progress/current-from-persisted/current-from-runtime wiring and only differ in geometry-specific rendering.
 - [ ] extract a small aggregate-observable panel builder for sample tasks; scalar/complex estimate, summary, and history projection still live as ad hoc helper sets inside `src/server/task_panels.rs`.
 - [ ] replace repeated frontend polling hooks with a shared `usePolledResource` abstraction that covers scheduling, stale-response protection, and `isConnected`/error handling consistently.
+- [ ] remove remaining silent JSON serialization fallbacks in `src/stores/queries/work_queue.rs`; several `serde_json::to_value(...).unwrap_or_default()` calls still hide persistence errors instead of surfacing them.
 - [ ] investigate the failing `just test-e2e` control-plane reassignment timeout (`timed out waiting for sampler replaces second evaluator`) and either fix the transition logic or make the failure mode explicit.

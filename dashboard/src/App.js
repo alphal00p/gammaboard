@@ -13,6 +13,7 @@ import RunScopedWorkspace from "./components/common/RunScopedWorkspace";
 import { useRuns } from "./hooks/useRuns";
 import { useRunTasks } from "./hooks/useRunTasks";
 import { useWorkersData } from "./hooks/useWorkersData";
+import { asArray } from "./utils/collections";
 import { asTaskList, getCurrentTask } from "./utils/tasks";
 
 const DashboardHeader = () => (
@@ -87,22 +88,23 @@ function App() {
   const [mode, setMode] = useState("runs");
   const [selectedRun, setSelectedRun] = useState(null);
   const [selectedLogRun, setSelectedLogRun] = useState(null);
+  const runList = asArray(runs);
 
   useEffect(() => {
-    if (!Array.isArray(runs) || runs.length === 0) {
+    if (runList.length === 0) {
       setSelectedRun(null);
       setSelectedLogRun(null);
       return;
     }
 
-    if (!selectedRun || !runs.some((run) => run.run_id === selectedRun)) {
-      setSelectedRun(runs[0].run_id);
+    if (!selectedRun || !runList.some((run) => run.run_id === selectedRun)) {
+      setSelectedRun(runList[0].run_id);
     }
 
-    if (!selectedLogRun || !runs.some((run) => run.run_id === selectedLogRun)) {
-      setSelectedLogRun(runs[0].run_id);
+    if (!selectedLogRun || !runList.some((run) => run.run_id === selectedLogRun)) {
+      setSelectedLogRun(runList[0].run_id);
     }
-  }, [runs, selectedRun, selectedLogRun]);
+  }, [runList, selectedRun, selectedLogRun]);
 
   return (
     <Container maxWidth="xl" sx={{ py: 3 }}>
@@ -117,7 +119,7 @@ function App() {
 
       {mode === "runs" ? (
         <RunsWorkspace
-          runs={runs}
+          runs={runList}
           selectedRun={selectedRun}
           setSelectedRun={setSelectedRun}
           isConnected={isConnected}
@@ -131,14 +133,14 @@ function App() {
         />
       ) : mode === "performance" ? (
         <PerformanceWorkspace
-          runs={runs}
+          runs={runList}
           selectedRun={selectedRun}
           setSelectedRun={setSelectedRun}
           isConnected={isConnected}
         />
       ) : (
         <LogsWorkspace
-          runs={runs}
+          runs={runList}
           workers={workersData.workers}
           selectedRun={selectedLogRun}
           setSelectedRun={setSelectedLogRun}
