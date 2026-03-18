@@ -129,35 +129,33 @@ fn sampler_panel_descriptors(entries: &[SamplerPerformanceHistoryEntry]) -> Vec<
 }
 
 fn build_evaluator_current_panels(entry: &EvaluatorPerformanceHistoryEntry) -> Vec<PanelState> {
-    let mut panels = vec![
-        multi_timeseries_panel(
-            "evaluator_throughput",
-            evaluator_throughput_series(&entry.metrics, entry.created_at),
-        ),
-        multi_timeseries_panel(
-            "evaluator_timing",
-            evaluator_timing_series(&entry.metrics, entry.created_at),
-        ),
-        key_value_panel(
-            "evaluator_summary",
-            evaluator_summary_entries(&entry.metrics),
-        ),
-    ];
-    if let Some(idle_profile) = entry.metrics.idle_profile.as_ref() {
-        panels.push(scalar_timeseries_panel(
-            "evaluator_idle_ratio",
-            vec![PlotPoint {
-                x: history_x(entry.created_at),
-                y: idle_profile.idle_ratio,
-                y_min: None,
-                y_max: None,
-            }],
-        ));
-    }
-    panels
+    evaluator_panels(entry, true)
 }
 
 fn build_evaluator_history_item(entry: &EvaluatorPerformanceHistoryEntry) -> TaskHistoryItem {
+    history_item(
+        entry.id,
+        Some(entry.created_at),
+        evaluator_panels(entry, false),
+    )
+}
+
+fn build_sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelState> {
+    sampler_panels(entry, true)
+}
+
+fn build_sampler_history_item(entry: &SamplerPerformanceHistoryEntry) -> TaskHistoryItem {
+    history_item(
+        entry.id,
+        Some(entry.created_at),
+        sampler_panels(entry, false),
+    )
+}
+
+fn evaluator_panels(
+    entry: &EvaluatorPerformanceHistoryEntry,
+    include_summary: bool,
+) -> Vec<PanelState> {
     let mut panels = vec![
         multi_timeseries_panel(
             "evaluator_throughput",
@@ -168,6 +166,12 @@ fn build_evaluator_history_item(entry: &EvaluatorPerformanceHistoryEntry) -> Tas
             evaluator_timing_series(&entry.metrics, entry.created_at),
         ),
     ];
+    if include_summary {
+        panels.push(key_value_panel(
+            "evaluator_summary",
+            evaluator_summary_entries(&entry.metrics),
+        ));
+    }
     if let Some(idle_profile) = entry.metrics.idle_profile.as_ref() {
         panels.push(scalar_timeseries_panel(
             "evaluator_idle_ratio",
@@ -179,10 +183,13 @@ fn build_evaluator_history_item(entry: &EvaluatorPerformanceHistoryEntry) -> Tas
             }],
         ));
     }
-    history_item(entry.id, Some(entry.created_at), panels)
+    panels
 }
 
-fn build_sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelState> {
+fn sampler_panels(
+    entry: &SamplerPerformanceHistoryEntry,
+    include_summary: bool,
+) -> Vec<PanelState> {
     let mut panels = vec![
         multi_timeseries_panel(
             "sampler_counts",
@@ -192,8 +199,13 @@ fn build_sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<P
             "sampler_timing",
             sampler_timing_series(&entry.metrics, entry.created_at),
         ),
-        key_value_panel("sampler_summary", sampler_summary_entries(entry)),
     ];
+    if include_summary {
+        panels.push(key_value_panel(
+            "sampler_summary",
+            sampler_summary_entries(entry),
+        ));
+    }
     if let Some(runtime) = decode_sampler_runtime_metrics(entry) {
         panels.push(multi_timeseries_panel(
             "sampler_runtime",
@@ -201,26 +213,6 @@ fn build_sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<P
         ));
     }
     panels
-}
-
-fn build_sampler_history_item(entry: &SamplerPerformanceHistoryEntry) -> TaskHistoryItem {
-    let mut panels = vec![
-        multi_timeseries_panel(
-            "sampler_counts",
-            sampler_count_series(&entry.metrics, entry.created_at),
-        ),
-        multi_timeseries_panel(
-            "sampler_timing",
-            sampler_timing_series(&entry.metrics, entry.created_at),
-        ),
-    ];
-    if let Some(runtime) = decode_sampler_runtime_metrics(entry) {
-        panels.push(multi_timeseries_panel(
-            "sampler_runtime",
-            sampler_runtime_series(&runtime, entry.created_at),
-        ));
-    }
-    history_item(entry.id, Some(entry.created_at), panels)
 }
 
 fn evaluator_throughput_series(
