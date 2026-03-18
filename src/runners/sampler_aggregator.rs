@@ -153,13 +153,6 @@ pub struct SamplerAggregatorRunner<WQ, AS, RC, PS, TS> {
     current_parametrization_state: ParametrizationState,
 }
 
-struct TransitionRuntimeState {
-    sampler_snapshot: Option<SamplerAggregatorSnapshot>,
-    sampler_config: SamplerAggregatorConfig,
-    parametrization_state: ParametrizationState,
-    observable_state: ObservableState,
-}
-
 impl<WQ, AS, RC, PS, TS> SamplerAggregatorRunner<WQ, AS, RC, PS, TS>
 where
     WQ: WorkQueueStore,
@@ -634,52 +627,6 @@ where
             })
     }
 
-    fn same_serialized<T: Serialize>(left: &T, right: &T) -> Result<bool, RunnerError> {
-        let left = serde_json::to_value(left).map_err(|err| {
-            RunnerError::Engine(EngineError::engine(format!(
-                "failed to serialize runtime config for comparison: {err}"
-            )))
-        })?;
-        let right = serde_json::to_value(right).map_err(|err| {
-            RunnerError::Engine(EngineError::engine(format!(
-                "failed to serialize runtime config for comparison: {err}"
-            )))
-        })?;
-        Ok(left == right)
-    }
-
-    fn decode_transition_runtime_state(
-        snapshot: RunStageSnapshot,
-    ) -> Result<TransitionRuntimeState, RunnerError> {
-        let runner_snapshot: SamplerAggregatorRunnerSnapshot =
-            serde_json::from_value(snapshot.sampler_runner_snapshot).map_err(|err| {
-                RunnerError::Engine(EngineError::engine(format!(
-                    "failed to decode stage sampler runner snapshot: {err}"
-                )))
-            })?;
-        let sampler_config: SamplerAggregatorConfig =
-            serde_json::from_value(snapshot.sampler_aggregator).map_err(|err| {
-                RunnerError::Engine(EngineError::engine(format!(
-                    "failed to decode stage sampler config: {err}"
-                )))
-            })?;
-        let parametrization_state: ParametrizationState =
-            serde_json::from_value(snapshot.parametrization).map_err(|err| {
-                RunnerError::Engine(EngineError::engine(format!(
-                    "failed to decode stage parametrization state: {err}"
-                )))
-            })?;
-        let observable_state =
-            ObservableState::from_json(&snapshot.observable_state).map_err(RunnerError::Engine)?;
-
-        Ok(TransitionRuntimeState {
-            sampler_snapshot: Some(runner_snapshot.engine),
-            sampler_config,
-            parametrization_state,
-            observable_state,
-        })
-    }
-
     async fn ensure_task_runtime(
         &mut self,
         task: &RunTask,
@@ -690,87 +637,66 @@ where
         if open_batch_count > 0 {
             return Ok(());
         }
+        if self.active_runtime_task_id == Some(task.id) {
+            return Ok(());
+        }
 
-        let transition_state = if self.active_runtime_task_id != Some(task.id) {
-            let snapshot = self
-                .aggregation_store
-                .load_latest_stage_snapshot_before_sequence(self.run_id, task.sequence_nr)
-                .await?;
-            snapshot
-                .map(Self::decode_transition_runtime_state)
-                .transpose()?
-        } else {
-            None
-        };
+        let previous_snapshot = self
+            .aggregation_store
+            .load_latest_stage_snapshot_before_sequence(self.run_id, task.sequence_nr)
+            .await?;
 
-        if self.active_runtime_task_id != Some(task.id) {
-            if let Some(state) = transition_state.as_ref() {
-                self.current_sampler_config = state.sampler_config.clone();
-                self.current_parametrization_state = state.parametrization_state.clone();
-            }
-            if let Some(observable_config) = task
-                .task
-                .explicit_observable_config(&self.observable_state.config())
-            {
-                self.observable_state = self
-                    .evaluator_config
-                    .empty_observable_state(&observable_config)
-                    .map_err(RunnerError::Engine)?;
-            } else if let Some(state) = transition_state.as_ref() {
-                self.observable_state = state.observable_state.clone();
-            }
+        if let Some(snapshot) = previous_snapshot.as_ref() {
+            self.current_sampler_config = snapshot.sampler_aggregator.clone();
+            self.current_parametrization_state = snapshot.parametrization.clone();
+        }
+        if let Some(observable_config) = task
+            .task
+            .explicit_observable_config(&self.observable_state.config())
+        {
+            self.observable_state = self
+                .evaluator_config
+                .empty_observable_state(&observable_config)
+                .map_err(RunnerError::Engine)?;
+        } else if let Some(snapshot) = previous_snapshot.as_ref() {
+            self.observable_state = snapshot.observable_state.clone();
         }
 
         let next_parametrization_state = Self::build_parametrization_state(
             parametrization,
             &self.point_spec,
-            transition_state
+            previous_snapshot
                 .as_ref()
-                .and_then(|state| state.sampler_snapshot.as_ref()),
-            transition_state
+                .map(|snapshot| &snapshot.sampler_snapshot),
+            previous_snapshot
                 .as_ref()
-                .map(|state| &state.parametrization_state)
+                .map(|snapshot| &snapshot.parametrization)
                 .or(Some(&self.current_parametrization_state)),
         )?;
 
-        if !Self::same_serialized(
-            &self.current_parametrization_state,
-            &next_parametrization_state,
-        )? {
-            self.current_parametrization_state_version += 1;
-            self.parametrization_state_store
-                .save_parametrization_version(
-                    self.run_id,
-                    self.current_parametrization_state_version,
-                    &next_parametrization_state,
-                )
-                .await?;
-            self.current_parametrization_state = next_parametrization_state;
-        }
+        self.current_parametrization_state_version += 1;
+        self.parametrization_state_store
+            .save_parametrization_version(
+                self.run_id,
+                self.current_parametrization_state_version,
+                &next_parametrization_state,
+            )
+            .await?;
+        self.current_parametrization_state = next_parametrization_state;
 
-        let current_sampler_config = transition_state
-            .as_ref()
-            .map(|state| &state.sampler_config)
-            .unwrap_or(&self.current_sampler_config);
-        if !Self::same_serialized(current_sampler_config, sampler_aggregator)? {
-            let sample_budget = task
-                .task
-                .nr_expected_samples()
-                .and_then(|n| usize::try_from(n).ok());
-            self.engine = match transition_state.and_then(|state| state.sampler_snapshot) {
-                Some(snapshot) => sampler_aggregator
-                    .build_from_params_and_snapshot(
-                        self.point_spec.clone(),
-                        sample_budget,
-                        snapshot,
-                    )
-                    .map_err(RunnerError::Engine)?,
-                None => sampler_aggregator
-                    .build(self.point_spec.clone(), sample_budget)
-                    .map_err(RunnerError::Engine)?,
-            };
-            self.current_sampler_config = sampler_aggregator.clone();
-        }
+        let sample_budget = task
+            .task
+            .nr_expected_samples()
+            .and_then(|n| usize::try_from(n).ok());
+        self.engine = match previous_snapshot.map(|snapshot| snapshot.sampler_snapshot) {
+            Some(snapshot) => sampler_aggregator
+                .build_from_params_and_snapshot(self.point_spec.clone(), sample_budget, snapshot)
+                .map_err(RunnerError::Engine)?,
+            None => sampler_aggregator
+                .build(self.point_spec.clone(), sample_budget)
+                .map_err(RunnerError::Engine)?,
+        };
+        self.current_sampler_config = sampler_aggregator.clone();
 
         self.training_completion_marked = self.engine.training_samples_remaining().is_none();
         self.active_runtime_task_id = Some(task.id);
@@ -836,32 +762,16 @@ where
         task: Option<&RunTask>,
         queue_empty: bool,
     ) -> Result<(), RunnerError> {
-        let runner_snapshot = self.snapshot_state()?;
-        let sampler_runner_snapshot = serde_json::to_value(&runner_snapshot)
-            .map_err(|err| RunnerError::Engine(EngineError::from(err)))?;
-        let observable_state = self
-            .observable_state
-            .to_json()
-            .map_err(RunnerError::Engine)?;
-        let persisted_observable = self
-            .observable_state
-            .to_persistent_json()
-            .map_err(RunnerError::Engine)?;
-        let sampler_aggregator = serde_json::to_value(&self.current_sampler_config)
-            .map_err(|err| RunnerError::Engine(EngineError::from(err)))?;
-        let parametrization = serde_json::to_value(&self.current_parametrization_state)
-            .map_err(|err| RunnerError::Engine(EngineError::from(err)))?;
         self.aggregation_store
             .save_run_stage_snapshot(&RunStageSnapshot {
                 run_id: self.run_id,
                 task_id: task.map(|task| task.id),
                 sequence_nr: task.map(|task| task.sequence_nr),
                 queue_empty,
-                sampler_runner_snapshot,
-                observable_state,
-                persisted_observable,
-                sampler_aggregator,
-                parametrization,
+                sampler_snapshot: self.engine.snapshot().map_err(RunnerError::Engine)?,
+                observable_state: self.observable_state.clone(),
+                sampler_aggregator: self.current_sampler_config.clone(),
+                parametrization: self.current_parametrization_state.clone(),
             })
             .await?;
         Ok(())

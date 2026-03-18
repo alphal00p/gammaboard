@@ -137,8 +137,7 @@ impl RunTaskSpec {
         snapshot: &TaskStageSnapshot,
         run_spec: &RunSpec,
     ) -> Result<Vec<PanelState>, EngineError> {
-        let observable = ObservableState::from_json(&snapshot.observable_state)?;
-        self.build_current_panels(task, Some(&observable), run_spec)
+        self.build_current_panels(task, Some(&snapshot.observable_state), run_spec)
     }
 }
 

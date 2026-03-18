@@ -59,8 +59,7 @@ pub struct TaskStageSnapshot {
     pub id: String,
     pub run_id: i32,
     pub task_id: String,
-    pub observable_state: serde_json::Value,
-    pub persisted_output: serde_json::Value,
+    pub observable_state: ObservableState,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -126,3 +125,4 @@ pub struct SamplerPerformanceHistoryEntry {
     pub engine_diagnostics: serde_json::Value,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
+use crate::evaluation::ObservableState;

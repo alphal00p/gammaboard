@@ -2,6 +2,9 @@ use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 
 use crate::core::RunStageSnapshot;
+use crate::evaluation::ObservableState;
+use crate::sampling::SamplerAggregatorSnapshot;
+use crate::{core::ParametrizationState, core::SamplerAggregatorConfig};
 
 #[derive(sqlx::FromRow)]
 struct RunStageSnapshotRow {
@@ -9,26 +12,44 @@ struct RunStageSnapshotRow {
     task_id: Option<i64>,
     sequence_nr: Option<i32>,
     queue_empty: bool,
-    sampler_runner_snapshot: JsonValue,
+    sampler_snapshot: JsonValue,
     observable_state: JsonValue,
-    persisted_observable: JsonValue,
     sampler_aggregator: JsonValue,
     parametrization: JsonValue,
 }
 
-impl From<RunStageSnapshotRow> for RunStageSnapshot {
-    fn from(value: RunStageSnapshotRow) -> Self {
-        Self {
+impl TryFrom<RunStageSnapshotRow> for RunStageSnapshot {
+    type Error = sqlx::Error;
+
+    fn try_from(value: RunStageSnapshotRow) -> Result<Self, Self::Error> {
+        let decode = |field: &str, err: serde_json::Error| {
+            sqlx::Error::Protocol(format!(
+                "failed to decode {field} from run_stage_snapshots: {err}"
+            ))
+        };
+        Ok(Self {
             run_id: value.run_id,
             task_id: value.task_id,
             sequence_nr: value.sequence_nr,
             queue_empty: value.queue_empty,
-            sampler_runner_snapshot: value.sampler_runner_snapshot,
-            observable_state: value.observable_state,
-            persisted_observable: value.persisted_observable,
-            sampler_aggregator: value.sampler_aggregator,
-            parametrization: value.parametrization,
-        }
+            sampler_snapshot: serde_json::from_value::<SamplerAggregatorSnapshot>(
+                value.sampler_snapshot,
+            )
+            .map_err(|err| decode("sampler_snapshot", err))?,
+            observable_state: ObservableState::from_json(&value.observable_state).map_err(
+                |err| {
+                    sqlx::Error::Protocol(format!(
+                        "failed to decode observable_state from run_stage_snapshots: {err}"
+                    ))
+                },
+            )?,
+            sampler_aggregator: serde_json::from_value::<SamplerAggregatorConfig>(
+                value.sampler_aggregator,
+            )
+            .map_err(|err| decode("sampler_aggregator", err))?,
+            parametrization: serde_json::from_value::<ParametrizationState>(value.parametrization)
+                .map_err(|err| decode("parametrization", err))?,
+        })
     }
 }
 
@@ -78,9 +99,8 @@ pub(crate) async fn get_latest_stage_snapshot_before_sequence(
             task_id,
             sequence_nr,
             queue_empty,
-            sampler_runner_snapshot,
+            sampler_snapshot,
             observable_state,
-            persisted_observable,
             sampler_aggregator,
             parametrization
         FROM run_stage_snapshots
@@ -96,7 +116,7 @@ pub(crate) async fn get_latest_stage_snapshot_before_sequence(
     .bind(sequence_nr)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(Into::into))
+    row.map(TryInto::try_into).transpose()
 }
 
 pub(crate) async fn get_run_sample_progress(
@@ -212,24 +232,44 @@ pub(crate) async fn insert_run_stage_snapshot(
             task_id,
             sequence_nr,
             queue_empty,
-            sampler_runner_snapshot,
+            sampler_snapshot,
             observable_state,
-            persisted_observable,
             sampler_aggregator,
             parametrization
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         "#,
     )
     .bind(snapshot.run_id)
     .bind(snapshot.task_id)
     .bind(snapshot.sequence_nr)
     .bind(snapshot.queue_empty)
-    .bind(&snapshot.sampler_runner_snapshot)
-    .bind(&snapshot.observable_state)
-    .bind(&snapshot.persisted_observable)
-    .bind(&snapshot.sampler_aggregator)
-    .bind(&snapshot.parametrization)
+    .bind(
+        serde_json::to_value(&snapshot.sampler_snapshot).map_err(|err| {
+            sqlx::Error::Protocol(format!(
+                "failed to encode sampler_snapshot for run_stage_snapshots: {err}"
+            ))
+        })?,
+    )
+    .bind(snapshot.observable_state.to_json().map_err(|err| {
+        sqlx::Error::Protocol(format!(
+            "failed to encode observable_state for run_stage_snapshots: {err}"
+        ))
+    })?)
+    .bind(
+        serde_json::to_value(&snapshot.sampler_aggregator).map_err(|err| {
+            sqlx::Error::Protocol(format!(
+                "failed to encode sampler_aggregator for run_stage_snapshots: {err}"
+            ))
+        })?,
+    )
+    .bind(
+        serde_json::to_value(&snapshot.parametrization).map_err(|err| {
+            sqlx::Error::Protocol(format!(
+                "failed to encode parametrization for run_stage_snapshots: {err}"
+            ))
+        })?,
+    )
     .execute(pool)
     .await?;
     Ok(())

@@ -71,6 +71,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - If a sampler has a finite training budget, only the exact training-suite samples may be produced with `requires_training`; the runner must not enqueue extra training batches beyond that boundary.
 - The latest full observable state for the active stage is cached on `runs.current_observable`; treat it as runner state, not as a run-global read-model contract.
 - Persisted observable history snapshots store each observable's reduced persistent payload, not the full in-memory observable state.
+- `run_stage_snapshots` are runtime handoff state only: store typed sampler snapshot, observable state, sampler config, and parametrization state there. Do not duplicate reduced persisted observable payloads in stage snapshots.
 - For full observables used by deterministic scan tasks, the reduced persistent payload is just progress (`processed` count). Completed-task rendering should come from `run_stage_snapshots.observable_state`, not from persisted history rows.
 - Observable API/read projections should be produced from typed run configuration context such as `RunSpec`, not by passing store read rows or ad-hoc JSON context into observable implementations.
 - `LatentBatchPayload::Batch` is the compatibility payload for now and stores the previous compact row-major batch JSON.

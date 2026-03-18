@@ -1,4 +1,5 @@
 use crate::core::{EvaluatorPerformanceMetrics, SamplerPerformanceMetrics};
+use crate::evaluation::ObservableState;
 use crate::evaluation::PointSpec;
 use crate::stores::{
     EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress,
@@ -106,20 +107,27 @@ struct TaskStageSnapshotRow {
     run_id: i32,
     task_id: i64,
     observable_state: JsonValue,
-    persisted_output: JsonValue,
     created_at: Option<DateTime<Utc>>,
 }
 
-impl From<TaskStageSnapshotRow> for TaskStageSnapshot {
-    fn from(value: TaskStageSnapshotRow) -> Self {
-        Self {
+impl TryFrom<TaskStageSnapshotRow> for TaskStageSnapshot {
+    type Error = sqlx::Error;
+
+    fn try_from(value: TaskStageSnapshotRow) -> Result<Self, Self::Error> {
+        let observable_state =
+            ObservableState::from_json(&value.observable_state).map_err(|err| {
+                sqlx::Error::Decode(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("failed to decode observable_state from run_stage_snapshots: {err}"),
+                )))
+            })?;
+        Ok(Self {
             id: value.id.to_string(),
             run_id: value.run_id,
             task_id: value.task_id.to_string(),
-            observable_state: value.observable_state,
-            persisted_output: value.persisted_output,
+            observable_state,
             created_at: value.created_at,
-        }
+        })
     }
 }
 
@@ -545,7 +553,6 @@ pub(crate) async fn get_latest_task_stage_snapshot(
             run_id,
             task_id,
             observable_state,
-            persisted_observable AS persisted_output,
             created_at
         FROM run_stage_snapshots
         WHERE run_id = $1
@@ -558,7 +565,7 @@ pub(crate) async fn get_latest_task_stage_snapshot(
     .bind(task_id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(Into::into))
+    row.map(TryInto::try_into).transpose()
 }
 
 pub(crate) async fn get_worker_logs(
