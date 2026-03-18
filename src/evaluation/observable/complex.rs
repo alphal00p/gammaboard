@@ -29,6 +29,42 @@ impl ComplexObservableState {
         self.imag_sq_sum += weighted_imag * weighted_imag;
         self.weight_sum += weight;
     }
+
+    pub fn real_mean(&self) -> f64 {
+        mean_from_sums(self.real_sum, self.count)
+    }
+
+    pub fn imag_mean(&self) -> f64 {
+        mean_from_sums(self.imag_sum, self.count)
+    }
+
+    pub fn abs_mean(&self) -> f64 {
+        mean_from_sums(self.abs_sum, self.count)
+    }
+
+    pub fn real_stderr(&self) -> f64 {
+        stderr_from_sums(self.real_sum, self.real_sq_sum, self.count)
+    }
+
+    pub fn imag_stderr(&self) -> f64 {
+        stderr_from_sums(self.imag_sum, self.imag_sq_sum, self.count)
+    }
+
+    pub fn abs_stderr(&self) -> f64 {
+        stderr_from_sums(self.abs_sum, self.abs_sq_sum, self.count)
+    }
+
+    pub fn abs_variance(&self) -> f64 {
+        variance_from_sums(self.abs_sum, self.abs_sq_sum, self.count)
+    }
+
+    pub fn signal_to_noise(&self) -> f64 {
+        signal_to_noise_ratio(self.abs_mean(), self.abs_stderr())
+    }
+
+    pub fn rsd(&self) -> f64 {
+        relative_squared_dispersion(self.abs_variance(), self.abs_mean())
+    }
 }
 
 impl IngestComplex for ComplexObservableState {
@@ -58,6 +94,44 @@ impl Observable for ComplexObservableState {
 
     fn get_persistent(&self) -> Self::Persistent {
         self.clone()
+    }
+}
+
+fn mean_from_sums(sum: f64, count: i64) -> f64 {
+    if count <= 0 { 0.0 } else { sum / count as f64 }
+}
+
+fn variance_from_sums(sum: f64, sum_sq: f64, count: i64) -> f64 {
+    if count <= 0 {
+        return 0.0;
+    }
+    let count_f = count as f64;
+    let mean = sum / count_f;
+    let second_moment = sum_sq / count_f;
+    (second_moment - mean * mean).max(0.0)
+}
+
+fn stderr_from_sums(sum: f64, sum_sq: f64, count: i64) -> f64 {
+    if count <= 0 {
+        0.0
+    } else {
+        (variance_from_sums(sum, sum_sq, count) / count as f64).sqrt()
+    }
+}
+
+fn signal_to_noise_ratio(mean_abs: f64, abs_err: f64) -> f64 {
+    if abs_err <= 0.0 {
+        0.0
+    } else {
+        (mean_abs * mean_abs) / (abs_err * abs_err)
+    }
+}
+
+fn relative_squared_dispersion(variance: f64, mean_abs: f64) -> f64 {
+    if mean_abs == 0.0 {
+        0.0
+    } else {
+        variance / (mean_abs * mean_abs)
     }
 }
 

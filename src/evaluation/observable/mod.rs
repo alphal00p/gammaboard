@@ -89,6 +89,28 @@ impl SemanticObservableKind {
 }
 
 impl ObservableState {
+    pub fn from_aggregate_persistent_json(
+        kind: SemanticObservableKind,
+        value: &JsonValue,
+    ) -> Result<Self, EngineError> {
+        match kind {
+            SemanticObservableKind::Scalar => serde_json::from_value(value.clone())
+                .map(Self::Scalar)
+                .map_err(|err| {
+                    EngineError::build(format!(
+                        "invalid scalar persistent observable payload: {err}"
+                    ))
+                }),
+            SemanticObservableKind::Complex => serde_json::from_value(value.clone())
+                .map(Self::Complex)
+                .map_err(|err| {
+                    EngineError::build(format!(
+                        "invalid complex persistent observable payload: {err}"
+                    ))
+                }),
+        }
+    }
+
     pub fn from_config(config: &ObservableConfig) -> Self {
         match config {
             ObservableConfig::Scalar => Self::empty_scalar(),
@@ -164,6 +186,14 @@ impl ObservableState {
             Self::Complex(observable) => observable.sample_count(),
             Self::FullScalar(observable) => observable.sample_count(),
             Self::FullComplex(observable) => observable.sample_count(),
+        }
+    }
+
+    pub fn abs_signal_to_noise(&self) -> f64 {
+        match self {
+            Self::Scalar(observable) => observable.signal_to_noise(),
+            Self::Complex(observable) => observable.signal_to_noise(),
+            Self::FullScalar(_) | Self::FullComplex(_) => 0.0,
         }
     }
 
