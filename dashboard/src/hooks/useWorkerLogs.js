@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchRunLogPage } from "../services/api";
+import { asArray } from "../utils/collections";
 
 const defaultFilters = Object.freeze({
   nodeId: "",
@@ -16,7 +17,7 @@ export const useWorkerLogs = ({ runId, workers = [], limit = 100 } = {}) => {
   const [error, setError] = useState(null);
 
   const workerOptions = useMemo(() => {
-    const runWorkers = (Array.isArray(workers) ? workers : []).filter(
+    const runWorkers = asArray(workers).filter(
       (worker) => runId == null || worker.current_run_id === runId || worker.desired_run_id === runId,
     );
     return runWorkers

@@ -1,5 +1,6 @@
 import ConnectionStatus from "../ConnectionStatus";
 import RunSelector from "../RunSelector";
+import { asArray } from "../../utils/collections";
 import EmptyStateCard from "./EmptyStateCard";
 
 const RunScopedWorkspace = ({
@@ -11,7 +12,8 @@ const RunScopedWorkspace = ({
   noSelectionMessage,
   children,
 }) => {
-  if (!Array.isArray(runs) || runs.length === 0) {
+  const runList = asArray(runs);
+  if (runList.length === 0) {
     return (
       <>
         <ConnectionStatus isConnected={isConnected} lastUpdate={null} />
@@ -23,7 +25,7 @@ const RunScopedWorkspace = ({
   return (
     <>
       <ConnectionStatus isConnected={isConnected} lastUpdate={null} />
-      <RunSelector runs={runs} selectedRun={selectedRun} onRunChange={setSelectedRun} />
+      <RunSelector runs={runList} selectedRun={selectedRun} onRunChange={setSelectedRun} />
       {!selectedRun ? <EmptyStateCard title="Select a run" message={noSelectionMessage} /> : children}
     </>
   );

@@ -19,6 +19,7 @@ import {
   Typography,
 } from "@mui/material";
 import { formatDateTime } from "../utils/formatters";
+import { asArray } from "../utils/collections";
 
 const levelTone = (level) => {
   switch ((level || "").toLowerCase()) {
@@ -47,9 +48,10 @@ const WorkerLogsPanel = ({
   title = "Node Logs",
 }) => {
   const [selectedLogId, setSelectedLogId] = useState(null);
+  const logItems = asArray(items);
   const selectedLog = useMemo(
-    () => (Array.isArray(items) ? items : []).find((entry) => String(entry.id) === selectedLogId) || null,
-    [items, selectedLogId],
+    () => logItems.find((entry) => String(entry.id) === selectedLogId) || null,
+    [logItems, selectedLogId],
   );
 
   return (
@@ -127,7 +129,7 @@ const WorkerLogsPanel = ({
               </TableRow>
             </TableHead>
             <TableBody>
-              {items.map((entry) => (
+              {logItems.map((entry) => (
                 <TableRow
                   key={entry.id}
                   hover
@@ -145,7 +147,7 @@ const WorkerLogsPanel = ({
                   <TableCell sx={{ fontFamily: "monospace" }}>{entry.message || ""}</TableCell>
                 </TableRow>
               ))}
-              {items.length === 0 ? (
+              {logItems.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={4}>
                     <Typography variant="body2" color="text.secondary">

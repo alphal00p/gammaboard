@@ -20,6 +20,7 @@ use axum::{
     routing::get,
 };
 use serde::Deserialize;
+use serde::Serialize;
 use std::{env, net::SocketAddr};
 use tower_http::cors::CorsLayer;
 use tracing::Instrument;
@@ -96,6 +97,16 @@ struct PerformanceHistoryQuery {
 
 fn default_perf_history_limit() -> i64 {
     500
+}
+
+fn clamp_limit(limit: i64) -> i64 {
+    limit.clamp(1, 10_000)
+}
+
+fn json_response<T: Serialize>(value: T) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(
+        serde_json::to_value(value).map_err(|err| ApiError::Internal(err.to_string()))?,
+    ))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -212,9 +223,7 @@ async fn get_runs(
     State(state): State<AppState>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let runs = state.store.get_all_runs().await?;
-    Ok(Json(
-        serde_json::to_value(runs).map_err(|e| ApiError::Internal(e.to_string()))?,
-    ))
+    json_response(runs)
 }
 
 async fn get_nodes(
@@ -222,9 +231,7 @@ async fn get_nodes(
     Query(params): Query<WorkersQuery>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let workers = state.store.get_registered_workers(params.run_id).await?;
-    Ok(Json(
-        serde_json::to_value(workers).map_err(|e| ApiError::Internal(e.to_string()))?,
-    ))
+    json_response(workers)
 }
 
 async fn get_run(
@@ -236,9 +243,7 @@ async fn get_run(
         .get_run_progress(id)
         .await?
         .ok_or_else(|| ApiError::NotFound("Run not found".to_string()))?;
-    Ok(Json(
-        serde_json::to_value(run).map_err(|e| ApiError::Internal(e.to_string()))?,
-    ))
+    json_response(run)
 }
 
 async fn get_run_tasks(
@@ -246,9 +251,7 @@ async fn get_run_tasks(
     AxumPath(id): AxumPath<i32>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let tasks = state.store.list_run_tasks(id).await?;
-    Ok(Json(
-        serde_json::to_value(tasks).map_err(|e| ApiError::Internal(e.to_string()))?,
-    ))
+    json_response(tasks)
 }
 
 async fn get_run_task_output(
@@ -336,9 +339,7 @@ async fn get_run_task_output(
             .or(Some(task.created_at)),
     };
 
-    Ok(Json(
-        serde_json::to_value(payload).map_err(|e| ApiError::Internal(e.to_string()))?,
-    ))
+    json_response(payload)
 }
 
 async fn get_run_task_output_history(
@@ -346,7 +347,7 @@ async fn get_run_task_output_history(
     AxumPath((run_id, task_id)): AxumPath<(i32, i64)>,
     Query(params): Query<LimitQuery>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let limit = params.limit.clamp(1, 10_000);
+    let limit = clamp_limit(params.limit);
     let task = load_run_task(&state.store, run_id, task_id).await?;
     let run_spec = state
         .store
@@ -367,15 +368,12 @@ async fn get_run_task_output_history(
         .map(|snapshot| task.task.build_history_item(&task, &snapshot, &run_spec))
         .map(|item| item.map_err(|err| ApiError::Internal(err.to_string())))
         .collect::<Result<Vec<_>, ApiError>>()?;
-    Ok(Json(
-        serde_json::to_value(TaskHistoryResponse {
-            task_id: task.id.to_string(),
-            latest_snapshot_id,
-            reset_required: false,
-            items: snapshots,
-        })
-        .map_err(|e| ApiError::Internal(e.to_string()))?,
-    ))
+    json_response(TaskHistoryResponse {
+        task_id: task.id.to_string(),
+        latest_snapshot_id,
+        reset_required: false,
+        items: snapshots,
+    })
 }
 
 async fn load_run_task(
@@ -396,9 +394,7 @@ async fn get_run_stats(
     AxumPath(id): AxumPath<i32>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let stats = state.store.get_work_queue_stats(id).await?;
-    Ok(Json(
-        serde_json::to_value(stats).map_err(|e| ApiError::Internal(e.to_string()))?,
-    ))
+    json_response(stats)
 }
 
 async fn get_run_logs(
@@ -406,7 +402,7 @@ async fn get_run_logs(
     AxumPath(id): AxumPath<i32>,
     Query(params): Query<LogQuery>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let limit = params.limit.clamp(1, 10_000);
+    let limit = clamp_limit(params.limit);
     let logs = state
         .store
         .get_worker_logs(
@@ -422,9 +418,7 @@ async fn get_run_logs(
             params.before_id,
         )
         .await?;
-    Ok(Json(
-        serde_json::to_value(logs).map_err(|e| ApiError::Internal(e.to_string()))?,
-    ))
+    json_response(logs)
 }
 
 async fn get_run_evaluator_performance_history(
@@ -432,16 +426,13 @@ async fn get_run_evaluator_performance_history(
     AxumPath(id): AxumPath<i32>,
     Query(params): Query<PerformanceHistoryQuery>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let limit = params.limit.clamp(1, 10_000);
+    let limit = clamp_limit(params.limit);
     let scope_id = params.node_id.clone().unwrap_or_else(|| id.to_string());
     let rows = state
         .store
         .get_evaluator_performance_history(id, limit, params.node_id.as_deref())
         .await?;
-    Ok(Json(
-        serde_json::to_value(build_evaluator_performance_response(Some(scope_id), rows))
-            .map_err(|e| ApiError::Internal(e.to_string()))?,
-    ))
+    json_response(build_evaluator_performance_response(Some(scope_id), rows))
 }
 
 async fn get_run_sampler_performance_history(
@@ -449,16 +440,13 @@ async fn get_run_sampler_performance_history(
     AxumPath(id): AxumPath<i32>,
     Query(params): Query<PerformanceHistoryQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let limit = params.limit.clamp(1, 10_000);
+    let limit = clamp_limit(params.limit);
     let scope_id = params.node_id.clone().unwrap_or_else(|| id.to_string());
     let rows = state
         .store
         .get_sampler_performance_history(id, limit, params.node_id.as_deref())
         .await?;
-    Ok(Json(
-        serde_json::to_value(build_sampler_performance_response(Some(scope_id), rows))
-            .map_err(|e| ApiError::Internal(e.to_string()))?,
-    ))
+    json_response(build_sampler_performance_response(Some(scope_id), rows))
 }
 
 async fn get_node_evaluator_performance_history(
@@ -466,15 +454,12 @@ async fn get_node_evaluator_performance_history(
     AxumPath(node_id): AxumPath<String>,
     Query(params): Query<PerformanceHistoryQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let limit = params.limit.clamp(1, 10_000);
+    let limit = clamp_limit(params.limit);
     let payload = state
         .store
         .get_worker_evaluator_performance_history(&node_id, limit)
         .await?;
-    Ok(Json(
-        serde_json::to_value(build_evaluator_performance_response(Some(node_id), payload))
-            .map_err(|e| ApiError::Internal(e.to_string()))?,
-    ))
+    json_response(build_evaluator_performance_response(Some(node_id), payload))
 }
 
 async fn get_node_sampler_performance_history(
@@ -482,13 +467,10 @@ async fn get_node_sampler_performance_history(
     AxumPath(node_id): AxumPath<String>,
     Query(params): Query<PerformanceHistoryQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let limit = params.limit.clamp(1, 10_000);
+    let limit = clamp_limit(params.limit);
     let payload = state
         .store
         .get_worker_sampler_performance_history(&node_id, limit)
         .await?;
-    Ok(Json(
-        serde_json::to_value(build_sampler_performance_response(Some(node_id), payload))
-            .map_err(|e| ApiError::Internal(e.to_string()))?,
-    ))
+    json_response(build_sampler_performance_response(Some(node_id), payload))
 }
