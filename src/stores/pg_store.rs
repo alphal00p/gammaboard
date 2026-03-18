@@ -62,6 +62,11 @@ fn map_sqlx(err: sqlx::Error) -> StoreError {
     StoreError::from(err)
 }
 
+fn serialize_task(task: &RunTaskSpec) -> Result<JsonValue, StoreError> {
+    serde_json::to_value(task)
+        .map_err(|err| store_err(format!("failed to serialize run task: {err}")))
+}
+
 fn run_spec_from_integration_params(
     run_id: i32,
     point_spec: PointSpec,
@@ -442,7 +447,7 @@ impl ControlPlaneStore for PgStore {
             )
             .bind(run_id)
             .bind(offset as i32 + 1)
-            .bind(serde_json::to_value(task).unwrap_or_default())
+            .bind(serialize_task(task)?)
             .execute(&mut *tx)
             .await
             .map_err(map_sqlx)?;

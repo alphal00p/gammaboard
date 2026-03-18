@@ -18,6 +18,11 @@ type RunTaskRow = (
     DateTime<Utc>,
 );
 
+fn encode_task(task: &RunTaskSpec) -> Result<JsonValue, sqlx::Error> {
+    serde_json::to_value(task)
+        .map_err(|err| sqlx::Error::Protocol(format!("failed to serialize run task: {err}")))
+}
+
 fn decode_task_row(row: RunTaskRow) -> Result<RunTask, sqlx::Error> {
     let (
         id,
@@ -107,7 +112,7 @@ pub(crate) async fn append_run_tasks(
         )
         .bind(run_id)
         .bind(next_sequence + offset as i32)
-        .bind(serde_json::to_value(task).unwrap_or_default())
+        .bind(encode_task(task)?)
         .fetch_one(&mut *tx)
         .await?;
         inserted.push(decode_task_row(row)?);

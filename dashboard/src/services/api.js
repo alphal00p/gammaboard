@@ -36,6 +36,23 @@ const parseJsonOrThrow = async (response, message) => {
   return response.json();
 };
 
+const buildQueryString = (entries) => {
+  const params = new URLSearchParams();
+  for (const [key, value] of entries) {
+    if (value == null) continue;
+    const text = typeof value === "string" ? value.trim() : String(value);
+    if (!text) continue;
+    params.set(key, text);
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
+};
+
+const apiGet = async (path, message, signal) => {
+  const response = await fetch(`${API_BASE_URL}${path}`, { signal });
+  return parseJsonOrThrow(response, message);
+};
+
 const normalizeWorkerEntry = (entry) => {
   if (!entry || typeof entry !== "object") return null;
   return {
@@ -115,41 +132,31 @@ const normalizeRunTaskEntry = (entry) => {
 };
 
 export const fetchRuns = async (signal) => {
-  const response = await fetch(`${API_BASE_URL}/runs`, { signal });
-  const data = await parseJsonOrThrow(response, "Failed to fetch runs");
+  const data = await apiGet("/runs", "Failed to fetch runs", signal);
   return (Array.isArray(data) ? data : []).map(normalizeRunEntry).filter(Boolean);
 };
 
 export const fetchNodes = async (runId = null, signal) => {
-  const params = new URLSearchParams();
-  if (runId != null) params.set("run_id", String(runId));
-  const suffix = params.toString() ? `?${params.toString()}` : "";
-  const response = await fetch(`${API_BASE_URL}/nodes${suffix}`, { signal });
-  const data = await parseJsonOrThrow(response, "Failed to fetch nodes");
+  const data = await apiGet(`/nodes${buildQueryString([["run_id", runId]])}`, "Failed to fetch nodes", signal);
   return (Array.isArray(data) ? data : []).map(normalizeWorkerEntry).filter(Boolean);
 };
 
 export const fetchStats = async (runId, signal) => {
-  const response = await fetch(`${API_BASE_URL}/runs/${runId}/stats`, { signal });
-  return parseJsonOrThrow(response, "Failed to fetch stats");
+  return apiGet(`/runs/${runId}/stats`, "Failed to fetch stats", signal);
 };
 
 export const fetchRun = async (runId, signal) => {
-  const response = await fetch(`${API_BASE_URL}/runs/${runId}`, { signal });
-  const data = await parseJsonOrThrow(response, "Failed to fetch run");
+  const data = await apiGet(`/runs/${runId}`, "Failed to fetch run", signal);
   return normalizeRunEntry(data) ?? data;
 };
 
 export const fetchRunTasks = async (runId, signal) => {
-  const response = await fetch(`${API_BASE_URL}/runs/${runId}/tasks`, { signal });
-  const data = await parseJsonOrThrow(response, "Failed to fetch run tasks");
+  const data = await apiGet(`/runs/${runId}/tasks`, "Failed to fetch run tasks", signal);
   return (Array.isArray(data) ? data : []).map(normalizeRunTaskEntry).filter(Boolean);
 };
 
-export const fetchRunTaskOutput = async (runId, taskId, signal) => {
-  const response = await fetch(`${API_BASE_URL}/runs/${runId}/tasks/${taskId}/output`, { signal });
-  return parseJsonOrThrow(response, "Failed to fetch task output");
-};
+export const fetchRunTaskOutput = async (runId, taskId, signal) =>
+  apiGet(`/runs/${runId}/tasks/${taskId}/output`, "Failed to fetch task output", signal);
 
 export const fetchRunTaskOutputHistory = async (
   runId,
@@ -157,12 +164,14 @@ export const fetchRunTaskOutputHistory = async (
   { limit = 500, afterSnapshotId = null } = {},
   signal,
 ) => {
-  const params = new URLSearchParams({ limit: String(limit) });
-  if (afterSnapshotId != null) params.set("after_snapshot_id", String(afterSnapshotId));
-  const response = await fetch(`${API_BASE_URL}/runs/${runId}/tasks/${taskId}/output/history?${params.toString()}`, {
+  return apiGet(
+    `/runs/${runId}/tasks/${taskId}/output/history${buildQueryString([
+      ["limit", limit],
+      ["after_snapshot_id", afterSnapshotId],
+    ])}`,
+    "Failed to fetch task output history",
     signal,
-  });
-  return parseJsonOrThrow(response, "Failed to fetch task output history");
+  );
 };
 
 export const fetchRunLogPage = async (
@@ -170,44 +179,52 @@ export const fetchRunLogPage = async (
   { limit = 100, nodeId = null, level = null, search = "", beforeId = null } = {},
   signal,
 ) => {
-  const params = new URLSearchParams({ limit: String(limit) });
-  if (nodeId) params.set("node_id", nodeId);
-  if (level) params.set("level", level);
-  if (search && search.trim()) params.set("q", search.trim());
-  if (beforeId != null) params.set("before_id", String(beforeId));
-  const response = await fetch(`${API_BASE_URL}/runs/${runId}/logs?${params.toString()}`, { signal });
-  const data = await parseJsonOrThrow(response, "Failed to fetch run logs");
+  const data = await apiGet(
+    `/runs/${runId}/logs${buildQueryString([
+      ["limit", limit],
+      ["node_id", nodeId],
+      ["level", level],
+      ["q", search],
+      ["before_id", beforeId],
+    ])}`,
+    "Failed to fetch run logs",
+    signal,
+  );
   return normalizeRunLogPage(data);
 };
 
 export const fetchEvaluatorPerformanceHistory = async (runId, limit = 500, nodeId = null, signal) => {
-  const params = new URLSearchParams({ limit: String(limit) });
-  if (nodeId) params.set("node_id", nodeId);
-  const response = await fetch(`${API_BASE_URL}/runs/${runId}/performance/evaluator?${params.toString()}`, { signal });
-  return parseJsonOrThrow(response, "Failed to fetch evaluator performance history");
+  return apiGet(
+    `/runs/${runId}/performance/evaluator${buildQueryString([
+      ["limit", limit],
+      ["node_id", nodeId],
+    ])}`,
+    "Failed to fetch evaluator performance history",
+    signal,
+  );
 };
 
 export const fetchSamplerPerformanceHistory = async (runId, limit = 500, nodeId = null, signal) => {
-  const params = new URLSearchParams({ limit: String(limit) });
-  if (nodeId) params.set("node_id", nodeId);
-  const response = await fetch(`${API_BASE_URL}/runs/${runId}/performance/sampler-aggregator?${params.toString()}`, {
+  return apiGet(
+    `/runs/${runId}/performance/sampler-aggregator${buildQueryString([
+      ["limit", limit],
+      ["node_id", nodeId],
+    ])}`,
+    "Failed to fetch sampler performance history",
     signal,
-  });
-  return parseJsonOrThrow(response, "Failed to fetch sampler performance history");
+  );
 };
 
-export const fetchNodeEvaluatorPerformanceHistory = async (nodeId, limit = 500, signal) => {
-  const params = new URLSearchParams({ limit: String(limit) });
-  const response = await fetch(`${API_BASE_URL}/nodes/${nodeId}/performance/evaluator?${params.toString()}`, {
+export const fetchNodeEvaluatorPerformanceHistory = async (nodeId, limit = 500, signal) =>
+  apiGet(
+    `/nodes/${nodeId}/performance/evaluator${buildQueryString([["limit", limit]])}`,
+    "Failed to fetch node evaluator performance history",
     signal,
-  });
-  return parseJsonOrThrow(response, "Failed to fetch node evaluator performance history");
-};
+  );
 
-export const fetchNodeSamplerPerformanceHistory = async (nodeId, limit = 500, signal) => {
-  const params = new URLSearchParams({ limit: String(limit) });
-  const response = await fetch(`${API_BASE_URL}/nodes/${nodeId}/performance/sampler-aggregator?${params.toString()}`, {
+export const fetchNodeSamplerPerformanceHistory = async (nodeId, limit = 500, signal) =>
+  apiGet(
+    `/nodes/${nodeId}/performance/sampler-aggregator${buildQueryString([["limit", limit]])}`,
+    "Failed to fetch node sampler performance history",
     signal,
-  });
-  return parseJsonOrThrow(response, "Failed to fetch node sampler performance history");
-};
+  );
