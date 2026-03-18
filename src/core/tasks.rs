@@ -36,6 +36,8 @@ pub enum RunTaskInputSpec {
         nr_samples: Option<i64>,
         sampler_aggregator: Option<SamplerAggregatorConfig>,
         parametrization: Option<ParametrizationConfig>,
+        #[serde(default)]
+        observable: Option<ObservableConfig>,
     },
     Image {
         geometry: PlaneRasterGeometry,
@@ -73,6 +75,7 @@ pub enum RunTaskSpec {
         nr_samples: Option<i64>,
         sampler_aggregator: SamplerAggregatorConfig,
         parametrization: ParametrizationConfig,
+        observable: Option<ObservableConfig>,
     },
     Image {
         geometry: PlaneRasterGeometry,
@@ -150,18 +153,37 @@ impl RunTaskSpec {
         }
     }
 
-    pub fn observable_config(&self, base_observable: &ObservableConfig) -> ObservableConfig {
+    pub fn explicit_observable_config(
+        &self,
+        base_observable: &ObservableConfig,
+    ) -> Option<ObservableConfig> {
         match self {
-            Self::Sample { .. } | Self::Pause => base_observable.clone(),
+            Self::Sample { observable, .. } => observable.clone(),
             Self::Image { .. } | Self::PlotLine { .. } => match base_observable {
                 ObservableConfig::Scalar | ObservableConfig::FullScalar => {
-                    ObservableConfig::FullScalar
+                    Some(ObservableConfig::FullScalar)
                 }
                 ObservableConfig::Complex | ObservableConfig::FullComplex => {
-                    ObservableConfig::FullComplex
+                    Some(ObservableConfig::FullComplex)
                 }
             },
+            Self::Pause => None,
         }
+    }
+
+    pub fn observable_config(&self, current_observable: &ObservableConfig) -> ObservableConfig {
+        self.explicit_observable_config(current_observable)
+            .unwrap_or_else(|| current_observable.clone())
+    }
+
+    pub fn empty_observable_state(
+        &self,
+        run_spec: &RunSpec,
+        current_observable: &ObservableConfig,
+    ) -> Result<ObservableState, BuildError> {
+        run_spec
+            .evaluator
+            .empty_observable_state(&self.observable_config(current_observable))
     }
 
     pub fn nr_expected_samples(&self) -> Option<i64> {
@@ -171,15 +193,6 @@ impl RunTaskSpec {
             Self::PlotLine { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::Pause => None,
         }
-    }
-
-    pub fn empty_observable_state(
-        &self,
-        run_spec: &RunSpec,
-    ) -> Result<ObservableState, BuildError> {
-        run_spec
-            .evaluator
-            .empty_observable_state(&self.observable_config(&run_spec.observable))
     }
 }
 
@@ -195,11 +208,13 @@ impl IntoPreflightTask for RunTaskSpec {
             Self::Sample {
                 sampler_aggregator,
                 parametrization,
+                observable,
                 ..
             } => Ok(Some(Self::Sample {
                 nr_samples: Some(1),
                 sampler_aggregator,
                 parametrization,
+                observable,
             })),
             Self::Image {
                 mut geometry,
@@ -236,6 +251,7 @@ pub fn resolve_task_queue(
                 nr_samples,
                 sampler_aggregator,
                 parametrization,
+                observable,
             } => {
                 if let Some(sampler_aggregator) = sampler_aggregator.as_ref() {
                     current_sampler_aggregator = sampler_aggregator.clone();
@@ -247,6 +263,7 @@ pub fn resolve_task_queue(
                     nr_samples: *nr_samples,
                     sampler_aggregator: current_sampler_aggregator.clone(),
                     parametrization: current_parametrization.clone(),
+                    observable: observable.clone(),
                 });
             }
             RunTaskInputSpec::Image { geometry, display } => {

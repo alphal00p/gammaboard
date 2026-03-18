@@ -27,10 +27,11 @@ pub(super) fn run_preflight(
             nr_samples: Some(1),
             sampler_aggregator: initial_sampler_aggregator.clone(),
             parametrization: initial_parametrization.clone(),
+            observable: None,
         };
         return preflight_single_stage(
             &initial_task,
-            base_observable,
+            base_observable.clone(),
             initial_sampler_aggregator,
             initial_parametrization,
             None,
@@ -45,14 +46,16 @@ pub(super) fn run_preflight(
     let mut sampler_metadata = None;
     let mut handoff_snapshot = None;
     let mut parametrization_state = None;
+    let mut current_observable = base_observable.clone();
 
     for task in preflight_tasks {
         if let (Some(sampler_aggregator), Some(parametrization)) =
             (task.sampler_config(), task.parametrization_config())
         {
+            let task_observable = task.observable_config(&current_observable);
             let metadata = preflight_single_stage(
                 &task,
-                base_observable,
+                task_observable.clone(),
                 &sampler_aggregator,
                 &parametrization,
                 task.nr_expected_samples()
@@ -65,6 +68,7 @@ pub(super) fn run_preflight(
             sampler_metadata.get_or_insert(metadata.0);
             handoff_snapshot = metadata.1;
             parametrization_state = metadata.2;
+            current_observable = task_observable;
         }
     }
 
@@ -74,8 +78,8 @@ pub(super) fn run_preflight(
 }
 
 fn preflight_single_stage(
-    task: &RunTaskSpec,
-    base_observable: &ObservableConfig,
+    _task: &RunTaskSpec,
+    task_observable: ObservableConfig,
     sampler_aggregator: &SamplerAggregatorConfig,
     parametrization_config: &ParametrizationConfig,
     sample_budget: Option<usize>,
@@ -122,7 +126,7 @@ fn preflight_single_stage(
                 sampler_aggregator.kind_str()
             ))
         })?
-        .with_observable_config(task.observable_config(base_observable))
+        .with_observable_config(task_observable)
         .with_version(1);
 
     let transformed_batch = parametrization

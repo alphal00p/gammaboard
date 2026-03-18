@@ -662,6 +662,16 @@ impl AggregationStore for PgStore {
             .map_err(map_sqlx)
     }
 
+    async fn load_latest_stage_snapshot_before_sequence(
+        &self,
+        run_id: i32,
+        sequence_nr: i32,
+    ) -> Result<Option<RunStageSnapshot>, StoreError> {
+        queries::get_latest_stage_snapshot_before_sequence(&self.pool, run_id, sequence_nr)
+            .await
+            .map_err(map_sqlx)
+    }
+
     async fn load_run_sample_progress(
         &self,
         run_id: i32,

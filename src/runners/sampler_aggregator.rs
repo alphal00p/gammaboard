@@ -15,9 +15,7 @@ use crate::core::{
     SamplerAggregatorPerformanceSnapshot, SamplerRollingAverages, SamplerRuntimeMetrics,
     StoreError, WorkQueueStore,
 };
-use crate::core::{
-    EngineError, EvaluatorConfig, ObservableConfig, ParametrizationConfig, SamplerAggregatorConfig,
-};
+use crate::core::{EngineError, EvaluatorConfig, ParametrizationConfig, SamplerAggregatorConfig};
 use crate::evaluation::{ObservableState, PointSpec};
 use crate::runners::rolling_metric::RollingMetric;
 use crate::sampling::{
@@ -151,9 +149,15 @@ pub struct SamplerAggregatorRunner<WQ, AS, RC, PS, TS> {
     current_task: Option<RunTask>,
     active_runtime_task_id: Option<i64>,
     evaluator_config: EvaluatorConfig,
-    base_observable_config: ObservableConfig,
     current_sampler_config: SamplerAggregatorConfig,
     current_parametrization_state: ParametrizationState,
+}
+
+struct TransitionRuntimeState {
+    sampler_snapshot: Option<SamplerAggregatorSnapshot>,
+    sampler_config: SamplerAggregatorConfig,
+    parametrization_state: ParametrizationState,
+    observable_state: ObservableState,
 }
 
 impl<WQ, AS, RC, PS, TS> SamplerAggregatorRunner<WQ, AS, RC, PS, TS>
@@ -278,7 +282,6 @@ where
         config: SamplerAggregatorRunnerParams,
         point_spec: PointSpec,
         evaluator_config: EvaluatorConfig,
-        base_observable_config: ObservableConfig,
         initial_sampler_config: SamplerAggregatorConfig,
         initial_parametrization_config: ParametrizationConfig,
     ) -> Result<Self, RunnerError> {
@@ -385,7 +388,6 @@ where
             current_task: None,
             active_runtime_task_id: None,
             evaluator_config,
-            base_observable_config,
             current_sampler_config: initial_sampler_config,
             current_parametrization_state,
         })
@@ -646,31 +648,89 @@ where
         Ok(left == right)
     }
 
+    fn decode_transition_runtime_state(
+        snapshot: RunStageSnapshot,
+    ) -> Result<TransitionRuntimeState, RunnerError> {
+        let runner_snapshot: SamplerAggregatorRunnerSnapshot =
+            serde_json::from_value(snapshot.sampler_runner_snapshot).map_err(|err| {
+                RunnerError::Engine(EngineError::engine(format!(
+                    "failed to decode stage sampler runner snapshot: {err}"
+                )))
+            })?;
+        let sampler_config: SamplerAggregatorConfig =
+            serde_json::from_value(snapshot.sampler_aggregator).map_err(|err| {
+                RunnerError::Engine(EngineError::engine(format!(
+                    "failed to decode stage sampler config: {err}"
+                )))
+            })?;
+        let parametrization_state: ParametrizationState =
+            serde_json::from_value(snapshot.parametrization).map_err(|err| {
+                RunnerError::Engine(EngineError::engine(format!(
+                    "failed to decode stage parametrization state: {err}"
+                )))
+            })?;
+        let observable_state =
+            ObservableState::from_json(&snapshot.observable_state).map_err(RunnerError::Engine)?;
+
+        Ok(TransitionRuntimeState {
+            sampler_snapshot: Some(runner_snapshot.engine),
+            sampler_config,
+            parametrization_state,
+            observable_state,
+        })
+    }
+
     async fn ensure_task_runtime(
         &mut self,
         task: &RunTask,
         sampler_aggregator: &SamplerAggregatorConfig,
         parametrization: &ParametrizationConfig,
-        handoff_snapshot: Option<SamplerAggregatorSnapshot>,
         open_batch_count: usize,
     ) -> Result<(), RunnerError> {
         if open_batch_count > 0 {
             return Ok(());
         }
 
+        let transition_state = if self.active_runtime_task_id != Some(task.id) {
+            let snapshot = self
+                .aggregation_store
+                .load_latest_stage_snapshot_before_sequence(self.run_id, task.sequence_nr)
+                .await?;
+            snapshot
+                .map(Self::decode_transition_runtime_state)
+                .transpose()?
+        } else {
+            None
+        };
+
         if self.active_runtime_task_id != Some(task.id) {
-            let observable_config = task.task.observable_config(&self.base_observable_config);
-            self.observable_state = self
-                .evaluator_config
-                .empty_observable_state(&observable_config)
-                .map_err(RunnerError::Engine)?;
+            if let Some(state) = transition_state.as_ref() {
+                self.current_sampler_config = state.sampler_config.clone();
+                self.current_parametrization_state = state.parametrization_state.clone();
+            }
+            if let Some(observable_config) = task
+                .task
+                .explicit_observable_config(&self.observable_state.config())
+            {
+                self.observable_state = self
+                    .evaluator_config
+                    .empty_observable_state(&observable_config)
+                    .map_err(RunnerError::Engine)?;
+            } else if let Some(state) = transition_state.as_ref() {
+                self.observable_state = state.observable_state.clone();
+            }
         }
 
         let next_parametrization_state = Self::build_parametrization_state(
             parametrization,
             &self.point_spec,
-            handoff_snapshot.as_ref(),
-            Some(&self.current_parametrization_state),
+            transition_state
+                .as_ref()
+                .and_then(|state| state.sampler_snapshot.as_ref()),
+            transition_state
+                .as_ref()
+                .map(|state| &state.parametrization_state)
+                .or(Some(&self.current_parametrization_state)),
         )?;
 
         if !Self::same_serialized(
@@ -688,12 +748,16 @@ where
             self.current_parametrization_state = next_parametrization_state;
         }
 
-        if !Self::same_serialized(&self.current_sampler_config, sampler_aggregator)? {
+        let current_sampler_config = transition_state
+            .as_ref()
+            .map(|state| &state.sampler_config)
+            .unwrap_or(&self.current_sampler_config);
+        if !Self::same_serialized(current_sampler_config, sampler_aggregator)? {
             let sample_budget = task
                 .task
                 .nr_expected_samples()
                 .and_then(|n| usize::try_from(n).ok());
-            self.engine = match handoff_snapshot {
+            self.engine = match transition_state.and_then(|state| state.sampler_snapshot) {
                 Some(snapshot) => sampler_aggregator
                     .build_from_params_and_snapshot(
                         self.point_spec.clone(),
@@ -930,7 +994,6 @@ where
         pending_before_tick: usize,
         open_batch_count: usize,
     ) -> Result<usize, RunnerError> {
-        let mut handoff_snapshot: Option<SamplerAggregatorSnapshot> = None;
         for _ in 0..8 {
             let Some(task) = self.ensure_active_task().await? else {
                 self.clear_run_assignments_once("run task queue exhausted; assignments cleared")
@@ -954,7 +1017,6 @@ where
                             &task,
                             &sampler_aggregator,
                             &parametrization,
-                            handoff_snapshot.take(),
                             open_batch_count,
                         )
                         .await
@@ -970,8 +1032,6 @@ where
                         && task.nr_completed_samples >= target
                     {
                         if open_batch_count == 0 {
-                            handoff_snapshot =
-                                Some(self.engine.snapshot().map_err(RunnerError::Engine)?);
                             self.persist_snapshot().await?;
                             self.save_stage_snapshot(Some(&task), true).await?;
                             self.complete_current_task().await?;
@@ -1004,11 +1064,7 @@ where
         &mut self,
         pending_before_tick: usize,
     ) -> Result<usize, RunnerError> {
-        let observable_config = self
-            .current_task
-            .as_ref()
-            .map(|task| task.task.observable_config(&self.base_observable_config))
-            .unwrap_or_else(|| self.base_observable_config.clone());
+        let observable_config = self.observable_state.config();
         let sample_plan = self.engine.sample_plan().map_err(RunnerError::Engine)?;
         let training_samples_remaining = self.engine.training_samples_remaining();
         let batch_plan = match sample_plan {

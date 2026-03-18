@@ -143,6 +143,11 @@ pub trait AggregationStore: Send + Sync {
         &self,
         run_id: i32,
     ) -> Result<Option<JsonValue>, StoreError>;
+    async fn load_latest_stage_snapshot_before_sequence(
+        &self,
+        run_id: i32,
+        sequence_nr: i32,
+    ) -> Result<Option<RunStageSnapshot>, StoreError>;
     async fn load_run_sample_progress(
         &self,
         run_id: i32,

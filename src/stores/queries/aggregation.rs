@@ -3,6 +3,35 @@ use sqlx::PgPool;
 
 use crate::core::RunStageSnapshot;
 
+#[derive(sqlx::FromRow)]
+struct RunStageSnapshotRow {
+    run_id: i32,
+    task_id: Option<i64>,
+    sequence_nr: Option<i32>,
+    queue_empty: bool,
+    sampler_runner_snapshot: JsonValue,
+    observable_state: JsonValue,
+    persisted_observable: JsonValue,
+    sampler_aggregator: JsonValue,
+    parametrization: JsonValue,
+}
+
+impl From<RunStageSnapshotRow> for RunStageSnapshot {
+    fn from(value: RunStageSnapshotRow) -> Self {
+        Self {
+            run_id: value.run_id,
+            task_id: value.task_id,
+            sequence_nr: value.sequence_nr,
+            queue_empty: value.queue_empty,
+            sampler_runner_snapshot: value.sampler_runner_snapshot,
+            observable_state: value.observable_state,
+            persisted_observable: value.persisted_observable,
+            sampler_aggregator: value.sampler_aggregator,
+            parametrization: value.parametrization,
+        }
+    }
+}
+
 pub(crate) async fn get_run_current_observable(
     pool: &PgPool,
     run_id: i32,
@@ -35,6 +64,39 @@ pub(crate) async fn get_run_sampler_runner_snapshot(
     .fetch_optional(pool)
     .await
     .map(|row| row.flatten())
+}
+
+pub(crate) async fn get_latest_stage_snapshot_before_sequence(
+    pool: &PgPool,
+    run_id: i32,
+    sequence_nr: i32,
+) -> Result<Option<RunStageSnapshot>, sqlx::Error> {
+    let row = sqlx::query_as::<_, RunStageSnapshotRow>(
+        r#"
+        SELECT
+            run_id,
+            task_id,
+            sequence_nr,
+            queue_empty,
+            sampler_runner_snapshot,
+            observable_state,
+            persisted_observable,
+            sampler_aggregator,
+            parametrization
+        FROM run_stage_snapshots
+        WHERE run_id = $1
+          AND queue_empty = TRUE
+          AND sequence_nr IS NOT NULL
+          AND sequence_nr < $2
+        ORDER BY sequence_nr DESC, id DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(run_id)
+    .bind(sequence_nr)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(Into::into))
 }
 
 pub(crate) async fn get_run_sample_progress(

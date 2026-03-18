@@ -122,6 +122,15 @@ impl ObservableState {
         }
     }
 
+    pub fn config(&self) -> ObservableConfig {
+        match self {
+            Self::Scalar(_) => ObservableConfig::Scalar,
+            Self::Complex(_) => ObservableConfig::Complex,
+            Self::FullScalar(_) => ObservableConfig::FullScalar,
+            Self::FullComplex(_) => ObservableConfig::FullComplex,
+        }
+    }
+
     pub fn merge(&mut self, other: Self) -> Result<(), EngineError> {
         match (self, other) {
             (Self::Scalar(left), Self::Scalar(right)) => {
