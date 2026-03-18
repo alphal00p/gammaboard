@@ -1,6 +1,7 @@
 use crate::core::{EvalError, ObservableConfig};
 use crate::evaluation::{
-    Batch, BatchResult, EvalBatchOptions, Evaluator, IngestScalar, ObservableState, PointSpec,
+    Batch, BatchResult, EvalBatchOptions, Evaluator, ObservableState, PointSpec,
+    ScalarSampleEvaluator,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -23,36 +24,22 @@ impl SinEvaluator {
     pub fn from_params(params: SinEvaluatorParams) -> Self {
         Self::new(params.min_eval_time_per_sample_ms)
     }
-
-    fn eval_scalar_into<O: IngestScalar>(
-        &self,
-        batch: &Batch,
-        observable: &mut O,
-        capture_training_values: bool,
-    ) -> Result<Option<Vec<f64>>, EvalError> {
-        let weights = batch
-            .weights()
-            .as_slice()
-            .ok_or_else(|| EvalError::eval("Batch weights array must be standard-layout"))?;
-        let mut values = capture_training_values.then(|| Vec::with_capacity(batch.size()));
-        for (row, weight) in batch.continuous().rows().into_iter().zip(weights.iter()) {
-            let x = *row
-                .get(0)
-                .ok_or_else(|| EvalError::eval("missing continuous[0]"))?;
-            let value = x.sin() * (-x * x).exp();
-            observable.ingest_scalar(value, *weight);
-            if let Some(values) = values.as_mut() {
-                values.push(value * *weight);
-            }
-        }
-        Ok(values)
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct SinEvaluatorParams {
     pub min_eval_time_per_sample_ms: u64,
+}
+
+impl ScalarSampleEvaluator for SinEvaluator {
+    fn eval_scalar_sample(&mut self, batch: &Batch, sample_idx: usize) -> Result<f64, EvalError> {
+        let row = batch.continuous().row(sample_idx);
+        let x = *row
+            .get(0)
+            .ok_or_else(|| EvalError::eval("missing continuous[0]"))?;
+        Ok(x.sin() * (-x * x).exp())
+    }
 }
 
 impl Evaluator for SinEvaluator {

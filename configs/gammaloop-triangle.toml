@@ -2,6 +2,16 @@
 
 name = "gammaloop-triangle"
 [[task_queue]]
+kind = "image"
+[task_queue.geometry]
+offset = [0.0, 0.0, 0.0]
+u_vector = [1.0, 0.0, 0.0]
+v_vector = [0.0, 0.0, 1.0]
+u_linspace = { start = -2.0, stop = 2.0, count = 128 }
+v_linspace = { start = -2.0, stop = 2.0, count = 128 }
+discrete = []
+
+[[task_queue]]
 kind = "sample"
 nr_samples = 500_000
 [task_queue.sampler_aggregator]

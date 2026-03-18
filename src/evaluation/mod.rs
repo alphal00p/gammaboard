@@ -12,4 +12,6 @@ pub use observable::{
     FullScalarObservableState, IngestComplex, IngestScalar, Observable, ObservableState,
     ScalarObservableState, SemanticObservableKind,
 };
-pub use traits::{EvalBatchOptions, Evaluator, Parametrization};
+pub use traits::{
+    ComplexSampleEvaluator, EvalBatchOptions, Evaluator, Parametrization, ScalarSampleEvaluator,
+};

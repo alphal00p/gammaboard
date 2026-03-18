@@ -21,10 +21,11 @@ pub use core::{
     RunTaskState, resolve_initial_sampler_aggregator, resolve_task_queue,
 };
 pub use evaluation::{
-    Batch, BatchError, BatchResult, ComplexObservableState, ComplexValue, EvalBatchOptions,
-    Evaluator, FullComplexObservableState, FullObservableProgress, FullScalarObservableState,
-    IngestComplex, IngestScalar, Observable, ObservableState, Parametrization, PointSpec,
-    ScalarObservableState, SemanticObservableKind,
+    Batch, BatchError, BatchResult, ComplexObservableState, ComplexSampleEvaluator, ComplexValue,
+    EvalBatchOptions, Evaluator, FullComplexObservableState, FullObservableProgress,
+    FullScalarObservableState, IngestComplex, IngestScalar, Observable, ObservableState,
+    Parametrization, PointSpec, ScalarObservableState, ScalarSampleEvaluator,
+    SemanticObservableKind,
 };
 pub use sampling::{
     LatentBatch, LatentBatchPayload, LatentBatchSpec, SamplePlan, SamplerAggregator,
