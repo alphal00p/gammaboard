@@ -11,7 +11,7 @@ const TaskOutputPanel = ({ runId, task }) => {
   });
 
   if (!task) {
-    return <Alert severity="info">No task output is available yet.</Alert>;
+    return <Alert severity="info">Select a task to inspect its output panels.</Alert>;
   }
 
   return (
@@ -20,7 +20,7 @@ const TaskOutputPanel = ({ runId, task }) => {
         Selected task: #{task.sequence_nr} {task.task?.kind || "unknown"} ({task.state})
       </Typography>
       <PanelCollection
-        title="Task Output"
+        title="Selected Task Output"
         descriptors={output?.panels || []}
         currentPanels={output?.current || []}
         historyItems={historyItems}

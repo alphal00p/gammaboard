@@ -1,6 +1,8 @@
+import { asArray } from "./collections";
+
 export const getTaskKindLabel = (task) => task?.task?.kind ?? "unknown";
 
-export const asTaskList = (tasks) => (Array.isArray(tasks) ? tasks : []);
+export const asTaskList = (tasks) => asArray(tasks);
 
 const getGeometryPointCount = (taskSpec) => {
   if (!taskSpec || typeof taskSpec !== "object") return null;

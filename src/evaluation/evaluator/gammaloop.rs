@@ -25,9 +25,10 @@ pub struct GammaLoopEvaluator {
     state_folder: PathBuf,
     process_id: usize,
     integrand_name: String,
+    momentum_space: bool,
     training_projection: TrainingProjection,
     observable_kind: SemanticObservableKind,
-    point_spec: PointSpec, //why?
+    point_spec: PointSpec,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, Eq)]
@@ -113,6 +114,7 @@ impl GammaLoopEvaluator {
             state_folder: params.state_folder,
             process_id,
             integrand_name,
+            momentum_space: params.momentum_space,
             training_projection: params.training_projection,
             observable_kind: params.observable_kind,
             point_spec: PointSpec {
@@ -141,22 +143,24 @@ impl GammaLoopEvaluator {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let (_, value) = inspect(
+            let (jac, value) = inspect(
                 &self.settings,
                 &mut self.integrand,
                 &self.model,
                 pt,
                 discrete_dim.as_slice(),
                 false,
-                false,
+                self.momentum_space,
                 false,
             )
             .map_err(|err| EvalError::eval(format!("failed to evaluate integrand: {err}")))?;
 
-            vec_res.push(num::complex::Complex64::new(
-                value.re.into(),
-                value.im.into(),
-            ));
+            let mut value = num::complex::Complex64::new(value.re.into(), value.im.into());
+            if let Some(jac) = jac {
+                value *= jac
+            }
+
+            vec_res.push(value);
         }
 
         Ok(vec_res)

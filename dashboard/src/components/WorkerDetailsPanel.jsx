@@ -1,9 +1,8 @@
 import { Alert, Box, Card, CardContent, Chip, Grid, Typography } from "@mui/material";
 import { formatDateTime } from "../utils/formatters";
+import { asObjectOrNull } from "../utils/collections";
 import JsonFallback from "./JsonFallback";
 import UnsupportedImplementationPanel from "./common/UnsupportedImplementationPanel";
-
-const toObjectOrNull = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : null);
 
 const statusColor = (status) => {
   switch ((status || "").toLowerCase()) {
@@ -21,11 +20,11 @@ const statusColor = (status) => {
 const fmtMs = (value) => (Number.isFinite(Number(value)) ? Number(value).toFixed(4) : "n/a");
 const fmtInt = (value) => (value == null || !Number.isFinite(Number(value)) ? "n/a" : Number(value).toLocaleString());
 
-const evaluatorMetrics = (worker) => toObjectOrNull(worker?.evaluator_metrics) || {};
-const samplerMetrics = (worker) => toObjectOrNull(worker?.sampler_metrics) || {};
+const evaluatorMetrics = (worker) => asObjectOrNull(worker?.evaluator_metrics) || {};
+const samplerMetrics = (worker) => asObjectOrNull(worker?.sampler_metrics) || {};
 
 const evaluatorIdleRatio = (worker) => {
-  const idleProfile = toObjectOrNull(evaluatorMetrics(worker).idle_profile) || {};
+  const idleProfile = asObjectOrNull(evaluatorMetrics(worker).idle_profile) || {};
   const ratio = Number(idleProfile.idle_ratio);
   if (!Number.isFinite(ratio)) return null;
   return Math.min(1, Math.max(0, ratio));
@@ -33,7 +32,7 @@ const evaluatorIdleRatio = (worker) => {
 
 const rollingMean = (metric) => {
   if (Number.isFinite(Number(metric))) return Number(metric);
-  const obj = toObjectOrNull(metric);
+  const obj = asObjectOrNull(metric);
   if (!obj) return null;
   const mean = Number(obj.mean);
   return Number.isFinite(mean) ? mean : null;
@@ -282,8 +281,8 @@ const SamplerRuntimePanel = ({ worker }) => {
     return <MetricsUnavailableCard title="Sampler Runtime Metrics" message={unavailableMessage} />;
   }
 
-  const root = toObjectOrNull(worker?.sampler_runtime_metrics) || {};
-  const rolling = toObjectOrNull(root.rolling);
+  const root = asObjectOrNull(worker?.sampler_runtime_metrics) || {};
+  const rolling = asObjectOrNull(root.rolling);
 
   if (Object.keys(root).length === 0) {
     return (
@@ -374,7 +373,7 @@ const SamplerRuntimePanel = ({ worker }) => {
 };
 
 const HavanaDiagnosticsPanel = ({ engineDiagnostics }) => {
-  const diagnostics = toObjectOrNull(engineDiagnostics) || {};
+  const diagnostics = asObjectOrNull(engineDiagnostics) || {};
   const chiSq = Number.isFinite(Number(diagnostics?.chi_sq)) ? Number(diagnostics.chi_sq) : null;
   const otherFields = Object.entries(diagnostics).filter(([key]) => key !== "chi_sq");
 
@@ -406,7 +405,7 @@ const HavanaDiagnosticsPanel = ({ engineDiagnostics }) => {
 };
 
 const NaiveMonteCarloDiagnosticsPanel = ({ engineDiagnostics }) => {
-  const merged = toObjectOrNull(engineDiagnostics) || {};
+  const merged = asObjectOrNull(engineDiagnostics) || {};
 
   if (Object.keys(merged).length === 0) {
     return (

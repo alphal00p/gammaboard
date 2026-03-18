@@ -1,4 +1,4 @@
-const isPlainObject = (value) => value && typeof value === "object" && !Array.isArray(value);
+import { isPlainObject } from "./collections";
 
 export const toConfigObject = (value) => {
   if (!value) return {};

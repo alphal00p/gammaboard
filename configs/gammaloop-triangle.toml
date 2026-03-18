@@ -1,12 +1,10 @@
-# todo: create run-cargd to make the state
-
 name = "gammaloop-triangle"
 [[task_queue]]
 kind = "plot_line"
 [task_queue.geometry]
 offset = [0.0, 0.0, 0.0]
 direction = [0.0, 0.0, 1.0]
-linspace = { start = -10.0, stop = 10.0, count = 128 }
+linspace = { start = -30.0, stop = 30.0, count = 128 }
 discrete = []
 
 [[task_queue]]
@@ -14,8 +12,20 @@ kind = "plot_line"
 [task_queue.geometry]
 offset = [0.0, 0.0, 0.0]
 direction = [1.0, 0.0, 0.0]
-linspace = { start = -10, stop = 10.0, count = 128 }
+linspace = { start = -30, stop = 30.0, count = 128 }
 discrete = []
+
+
+[[task_queue]]
+kind = "image"
+[task_queue.geometry]
+offset = [0.0, 0.0, 0.0]
+u_vector = [0.0, 1.0, 0.0]
+v_vector = [0.0, 0.0, 1.0]
+u_linspace = { start = -30.0, stop = 30.0, count = 128 }
+v_linspace = { start = -30.0, stop = 30.0, count = 128 }
+discrete = []
+
 
 [[task_queue]]
 kind = "image"
@@ -23,9 +33,21 @@ kind = "image"
 offset = [0.0, 0.0, 0.0]
 u_vector = [1.0, 0.0, 0.0]
 v_vector = [0.0, 0.0, 1.0]
-u_linspace = { start = -10.0, stop = 10.0, count = 128 }
-v_linspace = { start = -10.0, stop = 10.0, count = 128 }
+u_linspace = { start = -30.0, stop = 30.0, count = 128 }
+v_linspace = { start = -30.0, stop = 30.0, count = 128 }
 discrete = []
+
+
+[[task_queue]]
+kind = "image"
+[task_queue.geometry]
+offset = [0.0, 0.0, 0.0]
+u_vector = [1.0, 0.0, 0.0]
+v_vector = [0.0, 1.0, 0.0]
+u_linspace = { start = -30.0, stop = 30.0, count = 128 }
+v_linspace = { start = -30.0, stop = 30.0, count = 128 }
+discrete = []
+
 
 [[task_queue]]
 kind = "sample"
@@ -60,7 +82,7 @@ kind = "gammaloop"
 state_folder = "/home/cedricsigrist/Workspace/repos/gammaloop/my_triangle/state"
 # process_id = 0
 # integrand_name = "triangle"
-momentum_space = false
+momentum_space = true
 use_f128 = false
 training_projection = "abs"
 observable_kind = "complex"

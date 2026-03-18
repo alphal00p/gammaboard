@@ -76,7 +76,7 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected }) => (
     setSelectedRun={setSelectedRun}
     isConnected={isConnected}
     noRunsMessage="Create a run to start monitoring task output and engine configuration."
-    noSelectionMessage="Pick a run to view run-level task output and configuration."
+    noSelectionMessage="Pick a run to view task-scoped output and run configuration."
   >
     <RunModeContent runs={runs} selectedRun={selectedRun} />
   </RunScopedWorkspace>

@@ -8,7 +8,7 @@ Samplers queue versioned latent batches that evaluators materialize locally thro
 - `gammaboard node` assigns or unassigns nodes to runs.
 - `gammaboard run-node` starts one local worker process that reconciles into either an `evaluator` or `sampler_aggregator` role.
 - `gammaboard server` starts the backend used by the dashboard.
-- The dashboard shows runs, nodes, performance, and logs.
+- The dashboard shows runs, task-scoped output, nodes, performance, and logs.
 
 ## Install
 
@@ -72,6 +72,7 @@ Minimal config shape:
 ```toml
 name = "example"
 target = { kind = "scalar", value = 1.23 } # optional
+observable = "scalar" # optional; defaults from the evaluator's semantic value family
 
 [evaluator]
 kind = "unit"
@@ -137,6 +138,7 @@ linspace = { start = -2.0, stop = 2.0, count = 512 }
 ```
 
 `image` and `plot_line` tasks rasterize deterministic points directly in evaluator space, persist only compact progress history, and render their current result from the full task-local observable state.
+The dashboard task table can switch between active and older tasks; historical deterministic-task rendering comes from the latest stage snapshot for that task.
 
 ### Start local workers
 ```bash

@@ -14,22 +14,23 @@ import {
 } from "@mui/material";
 import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { formatScientific } from "../../utils/formatters";
+import { asArray } from "../../utils/collections";
 
 const aggregatePanelHistory = (items) => {
   const panels = new Map();
-  for (const item of Array.isArray(items) ? items : []) {
-    for (const panel of Array.isArray(item?.panels) ? item.panels : []) {
+  for (const item of asArray(items)) {
+    for (const panel of asArray(item?.panels)) {
       if (!panel?.panel_id || !panel?.kind) continue;
       if (panel.kind === "scalar_timeseries") {
         const existing = panels.get(panel.panel_id) || { ...panel, points: [] };
-        existing.points = [...existing.points, ...(Array.isArray(panel.points) ? panel.points : [])];
+        existing.points = [...existing.points, ...asArray(panel.points)];
         panels.set(panel.panel_id, existing);
       } else if (panel.kind === "multi_timeseries") {
         const existing = panels.get(panel.panel_id) || { ...panel, series: [] };
         const seriesMap = new Map((existing.series || []).map((series) => [series.id, { ...series }]));
-        for (const series of Array.isArray(panel.series) ? panel.series : []) {
+        for (const series of asArray(panel.series)) {
           const previous = seriesMap.get(series.id) || { ...series, points: [] };
-          previous.points = [...previous.points, ...(Array.isArray(series.points) ? series.points : [])];
+          previous.points = [...previous.points, ...asArray(series.points)];
           seriesMap.set(series.id, previous);
         }
         existing.series = Array.from(seriesMap.values());
@@ -43,11 +44,9 @@ const aggregatePanelHistory = (items) => {
 };
 
 const buildRenderablePanels = (descriptors, currentPanels, historyItems) => {
-  const currentMap = new Map(
-    (Array.isArray(currentPanels) ? currentPanels : []).map((panel) => [panel.panel_id, panel]),
-  );
+  const currentMap = new Map(asArray(currentPanels).map((panel) => [panel.panel_id, panel]));
   const historyMap = aggregatePanelHistory(historyItems);
-  return (Array.isArray(descriptors) ? descriptors : []).map((descriptor) => ({
+  return asArray(descriptors).map((descriptor) => ({
     descriptor,
     state:
       (descriptor.supports_history &&
@@ -88,8 +87,8 @@ const fitXDomain = (values) => {
 
 const buildMultiSeriesData = (seriesList) => {
   const rows = new Map();
-  for (const series of Array.isArray(seriesList) ? seriesList : []) {
-    for (const point of Array.isArray(series.points) ? series.points : []) {
+  for (const series of asArray(seriesList)) {
+    for (const point of asArray(series.points)) {
       const row = rows.get(point.x) || { x: point.x };
       row[series.id] = point.y;
       rows.set(point.x, row);
@@ -110,7 +109,9 @@ const buildScalarBandData = (points) =>
   }));
 
 const ScalarTimeseriesPanel = ({ title, state }) => {
-  const points = Array.isArray(state?.points) ? state.points.slice().sort((a, b) => a.x - b.x) : [];
+  const points = asArray(state?.points)
+    .slice()
+    .sort((a, b) => a.x - b.x);
   if (points.length === 0) return null;
   const data = buildScalarBandData(points);
   const domain = fitDomain(data.flatMap((point) => [point.y, point.y_min, point.y_max]));
@@ -159,7 +160,7 @@ const ScalarTimeseriesPanel = ({ title, state }) => {
 };
 
 const MultiTimeseriesPanel = ({ title, state }) => {
-  const series = Array.isArray(state?.series) ? state.series : [];
+  const series = asArray(state?.series);
   const data = buildMultiSeriesData(series);
   if (data.length === 0) return null;
   const domain = fitDomain(
@@ -231,7 +232,7 @@ const KeyValuePanel = ({ title, state }) => (
       </Typography>
       <Table size="small">
         <TableBody>
-          {(Array.isArray(state?.entries) ? state.entries : []).map((entry) => (
+          {asArray(state?.entries).map((entry) => (
             <TableRow key={entry.key}>
               <TableCell>{entry.label}</TableCell>
               <TableCell sx={{ fontFamily: "monospace" }}>
@@ -277,11 +278,11 @@ const Image2dPanel = ({ title, state }) => {
   const canvasRef = useRef(null);
   const width = Number(state?.width) || 0;
   const height = Number(state?.height) || 0;
-  const values = useMemo(() => (Array.isArray(state?.values) ? state.values : []), [state?.values]);
-  const imagValues = useMemo(
-    () => (Array.isArray(state?.imag_values) ? state.imag_values : null),
-    [state?.imag_values],
-  );
+  const values = useMemo(() => asArray(state?.values), [state?.values]);
+  const imagValues = useMemo(() => {
+    const next = asArray(state?.imag_values);
+    return next.length > 0 ? next : null;
+  }, [state?.imag_values]);
   const colorMode = state?.color_mode || "scalar_heatmap";
 
   useEffect(() => {

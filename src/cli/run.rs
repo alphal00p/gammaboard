@@ -22,7 +22,7 @@ pub struct RunArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum RunCommand {
-    Add { integration_params_file: PathBuf },
+    Add { config_file: PathBuf },
     Pause(RunSelection),
     Remove(RunSelection),
     Task(TaskArgs),
@@ -56,10 +56,8 @@ pub async fn run_run_commands(command: RunCommand, quiet: bool) -> Result<()> {
 
     async move {
         match command {
-            RunCommand::Add {
-                integration_params_file,
-            } => {
-                let config = load_run_add_config(&integration_params_file)?;
+            RunCommand::Add { config_file } => {
+                let config = load_run_add_config(&config_file)?;
                 let run_name = config.name.clone();
                 tracing::info!(run = %run_name, "run-add preflight started");
                 let processed = match preprocess_run_add(config) {

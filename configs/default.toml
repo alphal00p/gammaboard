@@ -1,4 +1,4 @@
-# Shared defaults merged into every `control_plane run-add <config.toml>` payload.
+# Shared defaults merged into every `gammaboard run add <config.toml>` payload.
 # `name` is intentionally omitted and must be provided per run.
 [evaluator]
 kind = "unit"

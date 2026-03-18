@@ -9,14 +9,13 @@ const fmtInt = (value) => (Number.isFinite(Number(value)) ? Number(value).toLoca
 
 const SamplerAggregatorPanel = ({ run, tasks = [] }) => {
   const currentTask = getCurrentSampleTask(tasks);
-  const integrationParams = toConfigObject(run?.integration_params);
   const pointSpec = toConfigObject(run?.point_spec);
   const samplerConfig = currentTask?.task?.sampler_aggregator ?? null;
   if (!samplerConfig) {
     return (
       <EnginePanelLayout
         title="Sampler Stage"
-        genericPanel={<Alert severity="info">No active sample task is currently selected.</Alert>}
+        genericPanel={<Alert severity="info">No sample task is currently active.</Alert>}
         customPanel={null}
         jsonTitle="current sample task JSON"
         jsonData={currentTask?.task ?? null}
@@ -26,7 +25,7 @@ const SamplerAggregatorPanel = ({ run, tasks = [] }) => {
   const { implementation, params: samplerParams } = splitKindConfig(samplerConfig, "unknown");
   const rawSamplerData = {
     current_task: currentTask?.task ?? null,
-    point_spec: integrationParams?.point_spec ?? run?.point_spec ?? null,
+    point_spec: run?.point_spec ?? null,
   };
 
   return (
