@@ -80,6 +80,49 @@ pub trait ComplexSampleEvaluator {
     }
 }
 
+pub trait ScalarValueEvaluator {
+    fn ingest_scalar_values<O: IngestScalar>(
+        &self,
+        values: &[f64],
+        weights: &[f64],
+        capture_training_values: bool,
+        observable: &mut O,
+    ) -> Option<Vec<f64>> {
+        let mut training_values = capture_training_values.then(|| Vec::with_capacity(values.len()));
+        for (sample_idx, value) in values.iter().enumerate() {
+            observable.ingest_scalar(*value, weights[sample_idx]);
+            if let Some(training_values) = training_values.as_mut() {
+                training_values.push(*value * weights[sample_idx]);
+            }
+        }
+        training_values
+    }
+}
+
+impl<T> ScalarValueEvaluator for T {}
+
+pub trait ComplexValueEvaluator {
+    fn ingest_complex_values<O: IngestComplex>(
+        &self,
+        values: &[Complex64],
+        weights: &[f64],
+        capture_training_values: bool,
+        observable: &mut O,
+        training_projection: impl Fn(Complex64) -> f64,
+    ) -> Option<Vec<f64>> {
+        let mut training_values = capture_training_values.then(|| Vec::with_capacity(values.len()));
+        for (sample_idx, value) in values.iter().enumerate() {
+            observable.ingest_complex(*value, weights[sample_idx]);
+            if let Some(training_values) = training_values.as_mut() {
+                training_values.push(training_projection(*value) * weights[sample_idx]);
+            }
+        }
+        training_values
+    }
+}
+
+impl<T> ComplexValueEvaluator for T {}
+
 pub trait Parametrization: Send + Sync {
     fn validate_point_spec(&self, _point_spec: &PointSpec) -> Result<(), BuildError> {
         Ok(())

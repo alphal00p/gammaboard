@@ -13,5 +13,6 @@ pub use observable::{
     ScalarObservableState, SemanticObservableKind,
 };
 pub use traits::{
-    ComplexSampleEvaluator, EvalBatchOptions, Evaluator, Parametrization, ScalarSampleEvaluator,
+    ComplexSampleEvaluator, ComplexValueEvaluator, EvalBatchOptions, Evaluator, Parametrization,
+    ScalarSampleEvaluator, ScalarValueEvaluator,
 };

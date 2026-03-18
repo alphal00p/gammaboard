@@ -22,10 +22,10 @@ pub use core::{
 };
 pub use evaluation::{
     Batch, BatchError, BatchResult, ComplexObservableState, ComplexSampleEvaluator, ComplexValue,
-    EvalBatchOptions, Evaluator, FullComplexObservableState, FullObservableProgress,
-    FullScalarObservableState, IngestComplex, IngestScalar, Observable, ObservableState,
-    Parametrization, PointSpec, ScalarObservableState, ScalarSampleEvaluator,
-    SemanticObservableKind,
+    ComplexValueEvaluator, EvalBatchOptions, Evaluator, FullComplexObservableState,
+    FullObservableProgress, FullScalarObservableState, IngestComplex, IngestScalar, Observable,
+    ObservableState, Parametrization, PointSpec, ScalarObservableState, ScalarSampleEvaluator,
+    ScalarValueEvaluator, SemanticObservableKind,
 };
 pub use sampling::{
     LatentBatch, LatentBatchPayload, LatentBatchSpec, SamplePlan, SamplerAggregator,

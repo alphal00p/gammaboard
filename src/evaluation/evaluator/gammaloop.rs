@@ -13,7 +13,7 @@ use crate::{
     Batch, BatchResult, BuildError, EvalError, PointSpec,
     core::ObservableConfig,
     evaluation::{
-        EvalBatchOptions, Evaluator, IngestComplex, IngestScalar, ObservableState,
+        ComplexValueEvaluator, EvalBatchOptions, Evaluator, ObservableState, ScalarValueEvaluator,
         SemanticObservableKind,
     },
 };
@@ -165,41 +165,6 @@ impl GammaLoopEvaluator {
 
         Ok(vec_res)
     }
-
-    fn eval_scalar_into<O: IngestScalar>(
-        &self,
-        values: &[num::complex::Complex64],
-        weights: &[f64],
-        capture_training_values: bool,
-        observable: &mut O,
-    ) -> Option<Vec<f64>> {
-        let mut training_values = capture_training_values.then(|| Vec::with_capacity(values.len()));
-        for (sample_idx, value) in values.iter().enumerate() {
-            let projected = self.training_projection.project(*value);
-            observable.ingest_scalar(projected, weights[sample_idx]);
-            if let Some(values) = training_values.as_mut() {
-                values.push(projected * weights[sample_idx]);
-            }
-        }
-        training_values
-    }
-
-    fn eval_complex_into<O: IngestComplex>(
-        &self,
-        values: &[num::complex::Complex64],
-        weights: &[f64],
-        capture_training_values: bool,
-        observable: &mut O,
-    ) -> Option<Vec<f64>> {
-        let mut training_values = capture_training_values.then(|| Vec::with_capacity(values.len()));
-        for (sample_idx, value) in values.iter().enumerate() {
-            observable.ingest_complex(*value, weights[sample_idx]);
-            if let Some(values) = training_values.as_mut() {
-                values.push(self.training_projection.project(*value) * weights[sample_idx]);
-            }
-        }
-        training_values
-    }
 }
 
 impl Evaluator for GammaLoopEvaluator {
@@ -221,14 +186,20 @@ impl Evaluator for GammaLoopEvaluator {
         let mut observable_state = ObservableState::from_config(observable);
         let weighted_values = match self.observable_kind {
             SemanticObservableKind::Scalar => match &mut observable_state {
-                ObservableState::Scalar(observable) => self.eval_scalar_into(
-                    &vec_res,
+                ObservableState::Scalar(observable) => self.ingest_scalar_values(
+                    &vec_res
+                        .iter()
+                        .map(|value| self.training_projection.project(*value))
+                        .collect::<Vec<_>>(),
                     weights,
                     options.require_training_values,
                     observable,
                 ),
-                ObservableState::FullScalar(observable) => self.eval_scalar_into(
-                    &vec_res,
+                ObservableState::FullScalar(observable) => self.ingest_scalar_values(
+                    &vec_res
+                        .iter()
+                        .map(|value| self.training_projection.project(*value))
+                        .collect::<Vec<_>>(),
                     weights,
                     options.require_training_values,
                     observable,
@@ -241,17 +212,19 @@ impl Evaluator for GammaLoopEvaluator {
                 }
             },
             SemanticObservableKind::Complex => match &mut observable_state {
-                ObservableState::Complex(observable) => self.eval_complex_into(
+                ObservableState::Complex(observable) => self.ingest_complex_values(
                     &vec_res,
                     weights,
                     options.require_training_values,
                     observable,
+                    |value| self.training_projection.project(value),
                 ),
-                ObservableState::FullComplex(observable) => self.eval_complex_into(
+                ObservableState::FullComplex(observable) => self.ingest_complex_values(
                     &vec_res,
                     weights,
                     options.require_training_values,
                     observable,
+                    |value| self.training_projection.project(value),
                 ),
                 other => {
                     return Err(EvalError::eval(format!(
