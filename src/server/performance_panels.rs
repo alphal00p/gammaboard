@@ -2,7 +2,8 @@ use crate::core::{EvaluatorPerformanceMetrics, SamplerPerformanceMetrics, Sample
 use crate::server::panels::{
     KeyValueEntry, PanelDescriptor, PanelKind, PanelState, PerformanceHistoryResponse, PlotPoint,
     PlotSeries, TaskHistoryItem, history_item, history_x, key_value, key_value_panel,
-    multi_timeseries_panel, panel_descriptor, scalar_timeseries_panel, single_point_series,
+    multi_timeseries_panel, panel_descriptor, scalar_timeseries_panel, single_point_band,
+    single_point_series,
 };
 use crate::stores::{EvaluatorPerformanceHistoryEntry, SamplerPerformanceHistoryEntry};
 use chrono::{DateTime, Utc};
@@ -71,8 +72,8 @@ fn evaluator_panel_descriptors(
         ),
         panel_descriptor(
             "evaluator_timing",
-            "Evaluator Timing",
-            PanelKind::MultiTimeseries,
+            "Time Per Sample (ms)",
+            PanelKind::ScalarTimeseries,
             true,
         ),
         panel_descriptor(
@@ -105,9 +106,15 @@ fn sampler_panel_descriptors(entries: &[SamplerPerformanceHistoryEntry]) -> Vec<
             true,
         ),
         panel_descriptor(
-            "sampler_timing",
-            "Sampler Timing",
-            PanelKind::MultiTimeseries,
+            "sampler_produce_timing",
+            "Produce Time (ms)",
+            PanelKind::ScalarTimeseries,
+            true,
+        ),
+        panel_descriptor(
+            "sampler_ingest_timing",
+            "Ingest Time (ms)",
+            PanelKind::ScalarTimeseries,
             true,
         ),
         panel_descriptor(
@@ -161,9 +168,12 @@ fn evaluator_panels(
             "evaluator_throughput",
             evaluator_throughput_series(&entry.metrics, entry.created_at),
         ),
-        multi_timeseries_panel(
+        single_point_band(
             "evaluator_timing",
-            evaluator_timing_series(&entry.metrics, entry.created_at),
+            history_x(entry.created_at),
+            entry.metrics.avg_time_per_sample_ms,
+            Some(entry.metrics.avg_time_per_sample_ms - entry.metrics.std_time_per_sample_ms),
+            Some(entry.metrics.avg_time_per_sample_ms + entry.metrics.std_time_per_sample_ms),
         ),
     ];
     if include_summary {
@@ -195,9 +205,31 @@ fn sampler_panels(
             "sampler_counts",
             sampler_count_series(&entry.metrics, entry.created_at),
         ),
-        multi_timeseries_panel(
-            "sampler_timing",
-            sampler_timing_series(&entry.metrics, entry.created_at),
+        single_point_band(
+            "sampler_produce_timing",
+            history_x(entry.created_at),
+            entry.metrics.avg_produce_time_per_sample_ms,
+            Some(
+                entry.metrics.avg_produce_time_per_sample_ms
+                    - entry.metrics.std_produce_time_per_sample_ms,
+            ),
+            Some(
+                entry.metrics.avg_produce_time_per_sample_ms
+                    + entry.metrics.std_produce_time_per_sample_ms,
+            ),
+        ),
+        single_point_band(
+            "sampler_ingest_timing",
+            history_x(entry.created_at),
+            entry.metrics.avg_ingest_time_per_sample_ms,
+            Some(
+                entry.metrics.avg_ingest_time_per_sample_ms
+                    - entry.metrics.std_ingest_time_per_sample_ms,
+            ),
+            Some(
+                entry.metrics.avg_ingest_time_per_sample_ms
+                    + entry.metrics.std_ingest_time_per_sample_ms,
+            ),
         ),
     ];
     if include_summary {
@@ -231,26 +263,6 @@ fn evaluator_throughput_series(
             "Samples Evaluated",
             created_at,
             metrics.samples_evaluated as f64,
-        ),
-    ]
-}
-
-fn evaluator_timing_series(
-    metrics: &EvaluatorPerformanceMetrics,
-    created_at: DateTime<Utc>,
-) -> Vec<PlotSeries> {
-    vec![
-        metric_series(
-            "avg_time_per_sample_ms",
-            "Avg Time Per Sample (ms)",
-            created_at,
-            metrics.avg_time_per_sample_ms,
-        ),
-        metric_series(
-            "std_time_per_sample_ms",
-            "Std Time Per Sample (ms)",
-            created_at,
-            metrics.std_time_per_sample_ms,
         ),
     ]
 }
@@ -316,38 +328,6 @@ fn sampler_count_series(
             "Ingested Samples",
             created_at,
             metrics.ingested_samples as f64,
-        ),
-    ]
-}
-
-fn sampler_timing_series(
-    metrics: &SamplerPerformanceMetrics,
-    created_at: DateTime<Utc>,
-) -> Vec<PlotSeries> {
-    vec![
-        metric_series(
-            "avg_produce_time_per_sample_ms",
-            "Avg Produce Time (ms)",
-            created_at,
-            metrics.avg_produce_time_per_sample_ms,
-        ),
-        metric_series(
-            "std_produce_time_per_sample_ms",
-            "Std Produce Time (ms)",
-            created_at,
-            metrics.std_produce_time_per_sample_ms,
-        ),
-        metric_series(
-            "avg_ingest_time_per_sample_ms",
-            "Avg Ingest Time (ms)",
-            created_at,
-            metrics.avg_ingest_time_per_sample_ms,
-        ),
-        metric_series(
-            "std_ingest_time_per_sample_ms",
-            "Std Ingest Time (ms)",
-            created_at,
-            metrics.std_ingest_time_per_sample_ms,
         ),
     ]
 }
