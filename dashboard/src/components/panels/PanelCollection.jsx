@@ -125,8 +125,8 @@ const ScalarTimeseriesPanel = ({ title, state }) => {
         <ResponsiveContainer width="100%" height={280}>
           <ComposedChart data={data}>
             <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="x" type="number" domain={xDomain} />
-            <YAxis tickFormatter={formatAxisNumber} domain={domain} />
+            <XAxis dataKey="x" type="number" domain={xDomain} allowDataOverflow />
+            <YAxis tickFormatter={formatAxisNumber} domain={domain} allowDataOverflow />
             <Tooltip formatter={(value) => formatScientific(value, 6)} />
             {hasBand ? (
               <>
@@ -179,8 +179,8 @@ const MultiTimeseriesPanel = ({ title, state }) => {
         <ResponsiveContainer width="100%" height={280}>
           <ComposedChart data={data}>
             <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="x" type="number" domain={xDomain} />
-            <YAxis tickFormatter={formatAxisNumber} domain={domain} />
+            <XAxis dataKey="x" type="number" domain={xDomain} allowDataOverflow />
+            <YAxis tickFormatter={formatAxisNumber} domain={domain} allowDataOverflow />
             <Tooltip formatter={(value) => formatScientific(value, 6)} />
             {series.map((item, index) => (
               <Line
