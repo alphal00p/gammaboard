@@ -77,27 +77,23 @@ impl RunTaskSpec {
             }
             Self::Image { geometry, .. } => {
                 let progress = decode_full_progress(&snapshot.persisted_output)?;
-                vec![
-                    progress_panel(
-                        "image_progress",
-                        progress.processed as f64,
-                        Some(geometry.nr_points() as f64),
-                        Some("pixels"),
-                    ),
+                full_progress_panels(
+                    "image_progress",
+                    progress.processed,
+                    geometry.nr_points(),
+                    "pixels",
                     image_completion_panel(geometry.nr_points(), progress.processed),
-                ]
+                )
             }
             Self::PlotLine { geometry, .. } => {
                 let progress = decode_full_progress(&snapshot.persisted_output)?;
-                vec![
-                    progress_panel(
-                        "line_progress",
-                        progress.processed as f64,
-                        Some(geometry.nr_points() as f64),
-                        Some("points"),
-                    ),
+                full_progress_panels(
+                    "line_progress",
+                    progress.processed,
+                    geometry.nr_points(),
+                    "points",
                     line_completion_panel(geometry.nr_points(), progress.processed),
-                ]
+                )
             }
         };
 
@@ -126,27 +122,23 @@ impl RunTaskSpec {
             }
             Self::Image { geometry, .. } => {
                 let progress = decode_full_progress(persisted)?;
-                Ok(vec![
-                    progress_panel(
-                        "image_progress",
-                        progress.processed as f64,
-                        Some(geometry.nr_points() as f64),
-                        Some("pixels"),
-                    ),
+                Ok(full_progress_panels(
+                    "image_progress",
+                    progress.processed,
+                    geometry.nr_points(),
+                    "pixels",
                     image_completion_panel(geometry.nr_points(), progress.processed),
-                ])
+                ))
             }
             Self::PlotLine { geometry, .. } => {
                 let progress = decode_full_progress(persisted)?;
-                Ok(vec![
-                    progress_panel(
-                        "line_progress",
-                        progress.processed as f64,
-                        Some(geometry.nr_points() as f64),
-                        Some("points"),
-                    ),
+                Ok(full_progress_panels(
+                    "line_progress",
+                    progress.processed,
+                    geometry.nr_points(),
+                    "points",
                     line_completion_panel(geometry.nr_points(), progress.processed),
-                ])
+                ))
             }
         }
     }
@@ -219,6 +211,24 @@ fn describe_image_panels() -> Vec<PanelDescriptor> {
     ]
 }
 
+fn full_progress_panels(
+    progress_panel_id: &str,
+    current: usize,
+    total: usize,
+    unit: &'static str,
+    completion_panel: PanelState,
+) -> Vec<PanelState> {
+    vec![
+        progress_panel(
+            progress_panel_id,
+            current as f64,
+            Some(total as f64),
+            Some(unit),
+        ),
+        completion_panel,
+    ]
+}
+
 fn describe_line_panels(run_spec: &RunSpec) -> Vec<PanelDescriptor> {
     let mut panels = vec![
         panel_descriptor("line_progress", "Line Progress", PanelKind::Progress, true),
@@ -284,14 +294,15 @@ fn build_image_current_panels(
     geometry: &crate::core::PlaneRasterGeometry,
     display: ImageDisplayMode,
 ) -> Result<Vec<PanelState>, EngineError> {
-    let mut panels = vec![progress_panel(
-        "image_progress",
-        task.nr_completed_samples as f64,
-        Some(geometry.nr_points() as f64),
-        Some("pixels"),
-    )];
+    let total = geometry.nr_points();
     let processed = task.nr_completed_samples.max(0) as usize;
-    panels.push(image_completion_panel(geometry.nr_points(), processed));
+    let mut panels = full_progress_panels(
+        "image_progress",
+        processed,
+        total,
+        "pixels",
+        image_completion_panel(total, processed),
+    );
     if let Some(observable) = observable {
         panels.push(build_image_view_panel(observable, geometry, display)?);
     }
@@ -305,14 +316,15 @@ fn build_line_current_panels(
     _display: LineDisplayMode,
     run_spec: &RunSpec,
 ) -> Result<Vec<PanelState>, EngineError> {
-    let mut panels = vec![progress_panel(
-        "line_progress",
-        task.nr_completed_samples as f64,
-        Some(geometry.nr_points() as f64),
-        Some("points"),
-    )];
+    let total = geometry.nr_points();
     let processed = task.nr_completed_samples.max(0) as usize;
-    panels.push(line_completion_panel(geometry.nr_points(), processed));
+    let mut panels = full_progress_panels(
+        "line_progress",
+        processed,
+        total,
+        "points",
+        line_completion_panel(total, processed),
+    );
     if let Some(observable) = observable {
         panels.extend(build_line_value_panels(observable, geometry, run_spec)?);
     }
@@ -427,9 +439,9 @@ fn build_line_value_panels(
     }
 }
 
-fn image_completion_panel(total: usize, processed: usize) -> PanelState {
+fn completion_panel(panel_id: &str, total: usize, processed: usize) -> PanelState {
     key_value_panel(
-        "image_completion",
+        panel_id,
         vec![
             key_value("processed", "Processed", processed),
             key_value("total", "Total", total),
@@ -446,23 +458,12 @@ fn image_completion_panel(total: usize, processed: usize) -> PanelState {
     )
 }
 
+fn image_completion_panel(total: usize, processed: usize) -> PanelState {
+    completion_panel("image_completion", total, processed)
+}
+
 fn line_completion_panel(total: usize, processed: usize) -> PanelState {
-    key_value_panel(
-        "line_completion",
-        vec![
-            key_value("processed", "Processed", processed),
-            key_value("total", "Total", total),
-            key_value(
-                "completion",
-                "Completion",
-                if total > 0 {
-                    processed as f64 / total as f64
-                } else {
-                    0.0
-                },
-            ),
-        ],
-    )
+    completion_panel("line_completion", total, processed)
 }
 
 fn decode_aggregate_persisted_observable(

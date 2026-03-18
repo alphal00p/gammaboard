@@ -1,5 +1,7 @@
 export const getTaskKindLabel = (task) => task?.task?.kind ?? "unknown";
 
+export const asTaskList = (tasks) => (Array.isArray(tasks) ? tasks : []);
+
 const getGeometryPointCount = (taskSpec) => {
   if (!taskSpec || typeof taskSpec !== "object") return null;
   if (taskSpec.kind === "image") {
@@ -24,9 +26,9 @@ export const getTaskTargetLabel = (task) => {
 };
 
 export const getCurrentTask = (tasks) =>
-  (Array.isArray(tasks) ? tasks : []).find((task) => task.state === "active") ||
-  (Array.isArray(tasks) ? tasks : []).find((task) => task.state === "pending") ||
-  (Array.isArray(tasks) ? tasks : []).find((task) => task.state === "completed") ||
+  asTaskList(tasks).find((task) => task.state === "active") ||
+  asTaskList(tasks).find((task) => task.state === "pending") ||
+  asTaskList(tasks).find((task) => task.state === "completed") ||
   null;
 
 export const getCurrentSampleTask = (tasks) => {

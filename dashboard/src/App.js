@@ -13,7 +13,7 @@ import RunScopedWorkspace from "./components/common/RunScopedWorkspace";
 import { useRuns } from "./hooks/useRuns";
 import { useRunTasks } from "./hooks/useRunTasks";
 import { useWorkersData } from "./hooks/useWorkersData";
-import { getCurrentTask } from "./utils/tasks";
+import { asTaskList, getCurrentTask } from "./utils/tasks";
 
 const DashboardHeader = () => (
   <Box sx={{ mb: 3 }}>
@@ -35,14 +35,15 @@ const RunModeContent = ({ runs, selectedRun }) => {
   const [selectedTaskId, setSelectedTaskId] = useState(null);
 
   useEffect(() => {
-    if (!Array.isArray(tasks) || tasks.length === 0) {
+    const taskList = asTaskList(tasks);
+    if (taskList.length === 0) {
       setSelectedTaskId(null);
       return;
     }
-    if (selectedTaskId != null && tasks.some((task) => task.id === selectedTaskId)) {
+    if (selectedTaskId != null && taskList.some((task) => task.id === selectedTaskId)) {
       return;
     }
-    setSelectedTaskId(getCurrentTask(tasks)?.id ?? tasks[0].id ?? null);
+    setSelectedTaskId(getCurrentTask(taskList)?.id ?? taskList[0].id ?? null);
   }, [selectedTaskId, tasks]);
 
   if (!currentRun) {
@@ -53,15 +54,16 @@ const RunModeContent = ({ runs, selectedRun }) => {
     );
   }
 
-  const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? getCurrentTask(tasks) ?? null;
+  const taskList = asTaskList(tasks);
+  const selectedTask = taskList.find((task) => task.id === selectedTaskId) ?? getCurrentTask(taskList) ?? null;
 
   return (
     <>
-      <RunInfo run={currentRun} tasks={tasks} />
-      <TaskQueuePanel tasks={tasks} selectedTaskId={selectedTask?.id ?? null} onSelectTask={setSelectedTaskId} />
+      <RunInfo run={currentRun} tasks={taskList} />
+      <TaskQueuePanel tasks={taskList} selectedTaskId={selectedTask?.id ?? null} onSelectTask={setSelectedTaskId} />
       <EvaluatorPanel run={currentRun} />
       <TaskOutputPanel runId={selectedRun} task={selectedTask} />
-      <SamplerAggregatorPanel run={currentRun} tasks={tasks} />
+      <SamplerAggregatorPanel run={currentRun} tasks={taskList} />
     </>
   );
 };
