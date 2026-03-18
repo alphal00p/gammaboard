@@ -75,7 +75,16 @@ const fitDomain = (values) => {
   return [min - padding, max + padding];
 };
 
-const fitXDomain = (values) => fitDomain(values);
+const fitXDomain = (values) => {
+  const finiteValues = values.filter((value) => Number.isFinite(value));
+  if (finiteValues.length === 0) return ["auto", "auto"];
+  const min = Math.min(...finiteValues);
+  const max = Math.max(...finiteValues);
+  if (min === max) {
+    return [min, max];
+  }
+  return [min, max];
+};
 
 const buildMultiSeriesData = (seriesList) => {
   const rows = new Map();

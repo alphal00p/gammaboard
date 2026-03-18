@@ -7,8 +7,8 @@ kind = "image"
 offset = [0.0, 0.0, 0.0]
 u_vector = [1.0, 0.0, 0.0]
 v_vector = [0.0, 0.0, 1.0]
-u_linspace = { start = -2.0, stop = 2.0, count = 128 }
-v_linspace = { start = -2.0, stop = 2.0, count = 128 }
+u_linspace = { start = -10.0, stop = 10.0, count = 128 }
+v_linspace = { start = -10.0, stop = 10.0, count = 128 }
 discrete = []
 
 [[task_queue]]
