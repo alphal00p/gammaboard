@@ -10,6 +10,7 @@ import TaskOutputPanel from "./components/TaskOutputPanel";
 import TaskQueuePanel from "./components/TaskQueuePanel";
 import WorkersWorkspace from "./components/WorkersWorkspace";
 import RunScopedWorkspace from "./components/common/RunScopedWorkspace";
+import { useRunConfigPanels } from "./hooks/useRunConfigPanels";
 import { useRuns } from "./hooks/useRuns";
 import { useRunTasks } from "./hooks/useRunTasks";
 import { useWorkersData } from "./hooks/useWorkersData";
@@ -33,6 +34,7 @@ const DashboardHeader = () => (
 const RunModeContent = ({ runs, selectedRun }) => {
   const currentRun = runs.find((entry) => entry.run_id === selectedRun);
   const { tasks } = useRunTasks(selectedRun, 2000);
+  const { evaluator, sampler } = useRunConfigPanels({ runId: selectedRun, pollMs: 5000 });
   const runWorkersData = useWorkersData({ runId: selectedRun, pollMs: 3000 });
   const [selectedTaskId, setSelectedTaskId] = useState(null);
 
@@ -63,9 +65,9 @@ const RunModeContent = ({ runs, selectedRun }) => {
     <>
       <RunInfo run={currentRun} tasks={taskList} workers={runWorkersData.workers} />
       <TaskQueuePanel tasks={taskList} selectedTaskId={selectedTask?.id ?? null} onSelectTask={setSelectedTaskId} />
-      <EvaluatorPanel run={currentRun} />
+      <EvaluatorPanel run={currentRun} panelResponse={evaluator} />
       <TaskOutputPanel runId={selectedRun} task={selectedTask} />
-      <SamplerAggregatorPanel run={currentRun} />
+      <SamplerAggregatorPanel run={currentRun} panelResponse={sampler} />
     </>
   );
 };

@@ -145,6 +145,12 @@ pub struct PerformanceHistoryResponse {
     pub items: Vec<TaskHistoryItem>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CurrentPanelsResponse {
+    pub panels: Vec<PanelDescriptor>,
+    pub current: Vec<PanelState>,
+}
+
 pub(crate) fn panel_descriptor(
     panel_id: &str,
     label: &str,

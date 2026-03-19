@@ -1,10 +1,14 @@
+mod config_panels;
 mod panels;
 mod performance_panels;
 mod task_panels;
 
 use crate::core::{AggregationStore, RunReadStore, RunSpecStore, RunTaskStore, StoreError};
 use crate::evaluation::ObservableState;
-use crate::server::panels::{TaskHistoryResponse, TaskOutputResponse};
+use crate::server::config_panels::{
+    CurrentPanelRenderer, EvaluatorPanelContext, SamplerAggregatorPanelContext,
+};
+use crate::server::panels::{CurrentPanelsResponse, TaskHistoryResponse, TaskOutputResponse};
 use crate::server::performance_panels::{
     build_evaluator_performance_response, build_sampler_performance_response,
 };
@@ -154,6 +158,11 @@ fn build_app(state: AppState) -> Router {
         .route("/nodes", get(get_nodes))
         .route("/runs/:id", get(get_run))
         .route("/runs/:id/tasks", get(get_run_tasks))
+        .route("/runs/:id/config/evaluator", get(get_run_evaluator_config))
+        .route(
+            "/runs/:id/config/sampler-aggregator",
+            get(get_run_sampler_aggregator_config),
+        )
         .route("/runs/:id/tasks/:task_id/output", get(get_run_task_output))
         .route(
             "/runs/:id/tasks/:task_id/output/history",
@@ -252,6 +261,50 @@ async fn get_run_tasks(
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let tasks = state.store.list_run_tasks(id).await?;
     json_response(tasks)
+}
+
+async fn get_run_evaluator_config(
+    State(state): State<AppState>,
+    AxumPath(run_id): AxumPath<i32>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    let run = state
+        .store
+        .get_run_progress(run_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
+    let run_spec = state
+        .store
+        .load_run_spec(run_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
+    let response: CurrentPanelsResponse = run_spec
+        .evaluator
+        .build_response(&EvaluatorPanelContext {
+            point_spec: &run_spec.point_spec,
+            runner_params: &run_spec.evaluator_runner_params,
+            init_metadata: run.evaluator_init_metadata.as_ref(),
+        })
+        .map_err(|err| ApiError::Internal(err.to_string()))?;
+    json_response(response)
+}
+
+async fn get_run_sampler_aggregator_config(
+    State(state): State<AppState>,
+    AxumPath(run_id): AxumPath<i32>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    let run_spec = state
+        .store
+        .load_run_spec(run_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
+    let response: CurrentPanelsResponse = run_spec
+        .sampler_aggregator
+        .build_response(&SamplerAggregatorPanelContext {
+            point_spec: &run_spec.point_spec,
+            runner_params: &run_spec.sampler_aggregator_runner_params,
+        })
+        .map_err(|err| ApiError::Internal(err.to_string()))?;
+    json_response(response)
 }
 
 async fn get_run_task_output(

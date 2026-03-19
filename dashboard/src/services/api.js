@@ -157,6 +157,12 @@ export const fetchRunTasks = async (runId, signal) => {
   return asArray(data).map(normalizeRunTaskEntry).filter(Boolean);
 };
 
+export const fetchRunEvaluatorConfigPanels = async (runId, signal) =>
+  apiGet(`/runs/${runId}/config/evaluator`, "Failed to fetch evaluator config panels", signal);
+
+export const fetchRunSamplerConfigPanels = async (runId, signal) =>
+  apiGet(`/runs/${runId}/config/sampler-aggregator`, "Failed to fetch sampler config panels", signal);
+
 export const fetchRunTaskOutput = async (runId, taskId, signal) =>
   apiGet(`/runs/${runId}/tasks/${taskId}/output`, "Failed to fetch task output", signal);
 
