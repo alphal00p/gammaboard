@@ -1,41 +1,41 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback } from "react";
 import { fetchRunEvaluatorConfigPanels, fetchRunSamplerConfigPanels } from "../services/api";
-import { usePolling } from "./usePolling";
-
-const emptyResponse = Object.freeze({
-  evaluator: null,
-  sampler: null,
-});
+import { usePanelSource } from "./usePanelSource";
 
 export const useRunConfigPanels = ({ runId, pollMs = 5000 } = {}) => {
-  const [state, setState] = useState(emptyResponse);
   const enabled = runId != null;
 
-  const poll = useCallback(
-    async (signal) => {
-      if (runId == null) return;
-      try {
-        const [evaluator, sampler] = await Promise.all([
-          fetchRunEvaluatorConfigPanels(runId, signal),
-          fetchRunSamplerConfigPanels(runId, signal),
-        ]);
-        setState({
-          evaluator: evaluator ?? null,
-          sampler: sampler ?? null,
-        });
-      } catch (err) {
-        if (err?.name === "AbortError") return;
-        setState(emptyResponse);
-      }
+  const fetchEvaluatorPanels = useCallback(
+    (_request, signal) => {
+      if (!enabled) return null;
+      return fetchRunEvaluatorConfigPanels(runId, signal);
     },
-    [runId],
+    [enabled, runId],
   );
 
-  const reset = useCallback(() => {
-    setState(emptyResponse);
-  }, []);
+  const fetchSamplerPanels = useCallback(
+    (_request, signal) => {
+      if (!enabled) return null;
+      return fetchRunSamplerConfigPanels(runId, signal);
+    },
+    [enabled, runId],
+  );
 
-  usePolling({ enabled, intervalMs: pollMs, poll, reset });
+  const evaluator = usePanelSource({
+    enabled,
+    pollMs,
+    fetchPanels: fetchEvaluatorPanels,
+    useCursor: false,
+  });
+  const sampler = usePanelSource({
+    enabled,
+    pollMs,
+    fetchPanels: fetchSamplerPanels,
+    useCursor: false,
+  });
 
-  return useMemo(() => state, [state]);
+  return {
+    evaluator,
+    sampler,
+  };
 };

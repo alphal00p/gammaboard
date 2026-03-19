@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
@@ -22,12 +21,20 @@ pub enum ImageColorMode {
     ComplexHueIntensity,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PanelHistoryMode {
+    None,
+    Append,
+    Replace,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PanelDescriptor {
+pub struct PanelSpec {
     pub panel_id: String,
     pub label: String,
     pub kind: PanelKind,
-    pub supports_history: bool,
+    pub history: PanelHistoryMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,59 +116,38 @@ pub enum PanelState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskOutputResponse {
-    pub task_id: String,
-    pub sequence_nr: i32,
-    pub task_kind: String,
-    pub task_state: String,
-    pub updated_at: Option<DateTime<Utc>>,
-    pub panels: Vec<PanelDescriptor>,
-    pub current: Vec<PanelState>,
-    pub latest_snapshot_id: Option<String>,
+#[serde(rename_all = "snake_case")]
+pub enum PanelUpdateMode {
+    Replace,
+    Append,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskHistoryItem {
-    pub snapshot_id: String,
-    pub created_at: Option<DateTime<Utc>>,
-    pub panels: Vec<PanelState>,
+pub struct PanelUpdate {
+    pub mode: PanelUpdateMode,
+    pub panel: PanelState,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskHistoryResponse {
-    pub task_id: String,
-    pub latest_snapshot_id: Option<String>,
+pub struct PanelResponse {
+    pub source_id: String,
+    pub cursor: Option<String>,
     pub reset_required: bool,
-    pub items: Vec<TaskHistoryItem>,
+    pub panels: Vec<PanelSpec>,
+    pub updates: Vec<PanelUpdate>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PerformanceHistoryResponse {
-    pub scope_id: Option<String>,
-    pub latest_snapshot_id: Option<String>,
-    pub reset_required: bool,
-    pub panels: Vec<PanelDescriptor>,
-    pub current: Vec<PanelState>,
-    pub items: Vec<TaskHistoryItem>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CurrentPanelsResponse {
-    pub panels: Vec<PanelDescriptor>,
-    pub current: Vec<PanelState>,
-}
-
-pub(crate) fn panel_descriptor(
+pub(crate) fn panel_spec(
     panel_id: &str,
     label: &str,
     kind: PanelKind,
-    supports_history: bool,
-) -> PanelDescriptor {
-    PanelDescriptor {
+    history: PanelHistoryMode,
+) -> PanelSpec {
+    PanelSpec {
         panel_id: panel_id.to_string(),
         label: label.to_string(),
         kind,
-        supports_history,
+        history,
     }
 }
 
@@ -218,18 +204,76 @@ pub(crate) fn key_value_panel(panel_id: &str, entries: Vec<KeyValueEntry>) -> Pa
     }
 }
 
-pub(crate) fn history_item(
-    snapshot_id: impl ToString,
-    created_at: Option<DateTime<Utc>>,
-    panels: Vec<PanelState>,
-) -> TaskHistoryItem {
-    TaskHistoryItem {
-        snapshot_id: snapshot_id.to_string(),
-        created_at,
-        panels,
+pub(crate) fn replace_panel(panel: PanelState) -> PanelUpdate {
+    PanelUpdate {
+        mode: PanelUpdateMode::Replace,
+        panel,
     }
 }
 
-pub(crate) fn history_x(created_at: DateTime<Utc>) -> f64 {
+pub(crate) fn append_panel(panel: PanelState) -> PanelUpdate {
+    PanelUpdate {
+        mode: PanelUpdateMode::Append,
+        panel,
+    }
+}
+
+impl PanelState {
+    pub fn panel_id(&self) -> &str {
+        match self {
+            Self::ScalarTimeseries { panel_id, .. }
+            | Self::MultiTimeseries { panel_id, .. }
+            | Self::Image2d { panel_id, .. }
+            | Self::Progress { panel_id, .. }
+            | Self::KeyValue { panel_id, .. }
+            | Self::Table { panel_id, .. }
+            | Self::Histogram { panel_id, .. }
+            | Self::Text { panel_id, .. } => panel_id,
+        }
+    }
+
+    pub fn kind(&self) -> PanelKind {
+        match self {
+            Self::ScalarTimeseries { .. } => PanelKind::ScalarTimeseries,
+            Self::MultiTimeseries { .. } => PanelKind::MultiTimeseries,
+            Self::Image2d { .. } => PanelKind::Image2d,
+            Self::Progress { .. } => PanelKind::Progress,
+            Self::KeyValue { .. } => PanelKind::KeyValue,
+            Self::Table { .. } => PanelKind::Table,
+            Self::Histogram { .. } => PanelKind::Histogram,
+            Self::Text { .. } => PanelKind::Text,
+        }
+    }
+}
+
+pub(crate) fn merge_panel_state(target: &mut PanelState, delta: PanelState) {
+    match (target, delta) {
+        (
+            PanelState::ScalarTimeseries { points, .. },
+            PanelState::ScalarTimeseries {
+                points: delta_points,
+                ..
+            },
+        ) => points.extend(delta_points),
+        (
+            PanelState::MultiTimeseries { series, .. },
+            PanelState::MultiTimeseries {
+                series: delta_series,
+                ..
+            },
+        ) => {
+            for delta in delta_series {
+                if let Some(existing) = series.iter_mut().find(|item| item.id == delta.id) {
+                    existing.points.extend(delta.points);
+                } else {
+                    series.push(delta);
+                }
+            }
+        }
+        (target, delta) => *target = delta,
+    }
+}
+
+pub(crate) fn history_x(created_at: chrono::DateTime<chrono::Utc>) -> f64 {
     created_at.timestamp_millis() as f64
 }

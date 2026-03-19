@@ -12,12 +12,16 @@ jest.mock("./services/api", () => ({
   })),
   fetchRun: jest.fn(async () => null),
   fetchRunTasks: jest.fn(async () => []),
-  fetchRunTaskOutput: jest.fn(async () => ({ panels: [], current: [], latest_snapshot_id: null })),
-  fetchRunTaskOutputHistory: jest.fn(async () => ({ items: [], latest_snapshot_id: null, reset_required: false })),
-  fetchEvaluatorPerformanceHistory: jest.fn(async () => []),
-  fetchSamplerPerformanceHistory: jest.fn(async () => []),
-  fetchNodeEvaluatorPerformanceHistory: jest.fn(async () => ({ run_id: null, entries: [] })),
-  fetchNodeSamplerPerformanceHistory: jest.fn(async () => ({ run_id: null, entries: [] })),
+  fetchRunEvaluatorConfigPanels: jest.fn(async () => ({ source_id: "cfg:evaluator", panels: [], updates: [] })),
+  fetchRunSamplerConfigPanels: jest.fn(async () => ({ source_id: "cfg:sampler", panels: [], updates: [] })),
+  fetchRunTaskPanels: jest.fn(async () => ({ source_id: "task", panels: [], updates: [] })),
+  fetchSamplerPerformanceHistory: jest.fn(async () => ({ source_id: "perf:sampler", panels: [], updates: [] })),
+  fetchNodeEvaluatorPerformanceHistory: jest.fn(async () => ({ source_id: "perf:evaluator", panels: [], updates: [] })),
+  fetchNodeSamplerPerformanceHistory: jest.fn(async () => ({
+    source_id: "perf:node:sampler",
+    panels: [],
+    updates: [],
+  })),
 }));
 
 /**

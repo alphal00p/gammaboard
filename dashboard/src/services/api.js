@@ -163,21 +163,13 @@ export const fetchRunEvaluatorConfigPanels = async (runId, signal) =>
 export const fetchRunSamplerConfigPanels = async (runId, signal) =>
   apiGet(`/runs/${runId}/config/sampler-aggregator`, "Failed to fetch sampler config panels", signal);
 
-export const fetchRunTaskOutput = async (runId, taskId, signal) =>
-  apiGet(`/runs/${runId}/tasks/${taskId}/output`, "Failed to fetch task output", signal);
-
-export const fetchRunTaskOutputHistory = async (
-  runId,
-  taskId,
-  { limit = 500, afterSnapshotId = null } = {},
-  signal,
-) => {
+export const fetchRunTaskPanels = async (runId, taskId, { limit = 500, afterCursor = null } = {}, signal) => {
   return apiGet(
-    `/runs/${runId}/tasks/${taskId}/output/history${buildQueryString([
+    `/runs/${runId}/tasks/${taskId}/output${buildQueryString([
       ["limit", limit],
-      ["after_snapshot_id", afterSnapshotId],
+      ["after_cursor", afterCursor],
     ])}`,
-    "Failed to fetch task output history",
+    "Failed to fetch task panels",
     signal,
   );
 };

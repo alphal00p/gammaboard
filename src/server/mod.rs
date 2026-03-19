@@ -6,9 +6,12 @@ mod task_panels;
 use crate::core::{AggregationStore, RunReadStore, RunSpecStore, RunTaskStore, StoreError};
 use crate::evaluation::ObservableState;
 use crate::server::config_panels::{
-    CurrentPanelRenderer, EvaluatorPanelContext, SamplerAggregatorPanelContext,
+    EvaluatorPanelContext, PanelRenderer, SamplerAggregatorPanelContext,
 };
-use crate::server::panels::{CurrentPanelsResponse, TaskHistoryResponse, TaskOutputResponse};
+use crate::server::panels::{
+    PanelHistoryMode, PanelResponse, PanelSpec, PanelState, append_panel, merge_panel_state,
+    replace_panel,
+};
 use crate::server::performance_panels::{
     build_evaluator_performance_response, build_sampler_performance_response,
 };
@@ -68,10 +71,10 @@ struct AppState {
 }
 
 #[derive(Deserialize)]
-struct LimitQuery {
+struct PanelQuery {
     #[serde(default = "default_limit")]
     limit: i64,
-    after_snapshot_id: Option<i64>,
+    after_cursor: Option<String>,
 }
 
 fn default_limit() -> i64 {
@@ -164,10 +167,6 @@ fn build_app(state: AppState) -> Router {
             get(get_run_sampler_aggregator_config),
         )
         .route("/runs/:id/tasks/:task_id/output", get(get_run_task_output))
-        .route(
-            "/runs/:id/tasks/:task_id/output/history",
-            get(get_run_task_output_history),
-        )
         .route("/runs/:id/stats", get(get_run_stats))
         .route("/runs/:id/logs", get(get_run_logs))
         .route(
@@ -277,13 +276,16 @@ async fn get_run_evaluator_config(
         .load_run_spec(run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
-    let response: CurrentPanelsResponse = run_spec
+    let response: PanelResponse = run_spec
         .evaluator
-        .build_response(&EvaluatorPanelContext {
-            point_spec: &run_spec.point_spec,
-            runner_params: &run_spec.evaluator_runner_params,
-            init_metadata: run.evaluator_init_metadata.as_ref(),
-        })
+        .build_response(
+            format!("run:{run_id}:config:evaluator"),
+            &EvaluatorPanelContext {
+                point_spec: &run_spec.point_spec,
+                runner_params: &run_spec.evaluator_runner_params,
+                init_metadata: run.evaluator_init_metadata.as_ref(),
+            },
+        )
         .map_err(|err| ApiError::Internal(err.to_string()))?;
     json_response(response)
 }
@@ -297,12 +299,15 @@ async fn get_run_sampler_aggregator_config(
         .load_run_spec(run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
-    let response: CurrentPanelsResponse = run_spec
+    let response: PanelResponse = run_spec
         .sampler_aggregator
-        .build_response(&SamplerAggregatorPanelContext {
-            point_spec: &run_spec.point_spec,
-            runner_params: &run_spec.sampler_aggregator_runner_params,
-        })
+        .build_response(
+            format!("run:{run_id}:config:sampler_aggregator"),
+            &SamplerAggregatorPanelContext {
+                point_spec: &run_spec.point_spec,
+                runner_params: &run_spec.sampler_aggregator_runner_params,
+            },
+        )
         .map_err(|err| ApiError::Internal(err.to_string()))?;
     json_response(response)
 }
@@ -310,13 +315,17 @@ async fn get_run_sampler_aggregator_config(
 async fn get_run_task_output(
     State(state): State<AppState>,
     AxumPath((run_id, task_id)): AxumPath<(i32, i64)>,
+    Query(params): Query<PanelQuery>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    let limit = clamp_limit(params.limit);
+    let after_snapshot_id = parse_snapshot_cursor(params.after_cursor.as_deref())?;
     let task = load_run_task(&state.store, run_id, task_id).await?;
     let run_spec = state
         .store
         .load_run_spec(run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
+    let panel_specs = task.task.panel_specs(&run_spec);
     let latest_persisted_snapshot = state
         .store
         .get_task_output_snapshots(run_id, task.id, None, 1)
@@ -376,57 +385,36 @@ async fn get_run_task_output(
             },
         }
     };
+    let history_snapshots = state
+        .store
+        .get_task_output_snapshots(run_id, task.id, after_snapshot_id, limit)
+        .await?;
+    let cursor = history_snapshots
+        .first()
+        .map(|snapshot| snapshot.id.clone())
+        .or(latest_snapshot_id)
+        .or(params.after_cursor.clone());
+    let history_panels = history_snapshots
+        .iter()
+        .rev()
+        .map(|snapshot| task.task.build_history_panels(snapshot, &run_spec))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| ApiError::Internal(err.to_string()))?;
+    let updates = if after_snapshot_id.is_some() {
+        incremental_task_updates(&panel_specs, current_output, history_panels)
+    } else {
+        full_task_updates(&panel_specs, current_output, history_panels)
+    };
 
-    let payload = TaskOutputResponse {
-        task_id: task.id.to_string(),
-        sequence_nr: task.sequence_nr,
-        task_kind: task.task.kind_str().to_string(),
-        task_state: task.state.as_str().to_string(),
-        panels: task.task.describe_panels(&run_spec),
-        current: current_output,
-        latest_snapshot_id,
-        updated_at: task
-            .completed_at
-            .or(task.failed_at)
-            .or(task.started_at)
-            .or(Some(task.created_at)),
+    let payload = PanelResponse {
+        source_id: format!("run:{run_id}:task:{}", task.id),
+        cursor,
+        reset_required: false,
+        panels: panel_specs,
+        updates,
     };
 
     json_response(payload)
-}
-
-async fn get_run_task_output_history(
-    State(state): State<AppState>,
-    AxumPath((run_id, task_id)): AxumPath<(i32, i64)>,
-    Query(params): Query<LimitQuery>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let limit = clamp_limit(params.limit);
-    let task = load_run_task(&state.store, run_id, task_id).await?;
-    let run_spec = state
-        .store
-        .load_run_spec(run_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
-    let snapshots = state
-        .store
-        .get_task_output_snapshots(run_id, task.id, params.after_snapshot_id, limit)
-        .await?;
-    let latest_snapshot_id = snapshots
-        .first()
-        .map(|item| item.id.clone())
-        .or_else(|| params.after_snapshot_id.map(|id| id.to_string()));
-    let snapshots = snapshots
-        .into_iter()
-        .rev()
-        .map(|snapshot| task.task.build_history_item(&task, &snapshot, &run_spec))
-        .map(|item| item.map_err(|err| ApiError::Internal(err.to_string())))
-        .collect::<Result<Vec<_>, ApiError>>()?;
-    json_response(TaskHistoryResponse {
-        task_id: task.id.to_string(),
-        latest_snapshot_id,
-        reset_required: false,
-        items: snapshots,
-    })
 }
 
 async fn load_run_task(
@@ -440,6 +428,82 @@ async fn load_run_task(
         .into_iter()
         .find(|task| task.id == task_id)
         .ok_or_else(|| ApiError::NotFound(format!("task {task_id} not found for run {run_id}")))
+}
+
+fn parse_snapshot_cursor(cursor: Option<&str>) -> Result<Option<i64>, ApiError> {
+    cursor
+        .map(|cursor| {
+            cursor
+                .parse::<i64>()
+                .map_err(|_| ApiError::BadRequest(format!("invalid after_cursor={cursor:?}")))
+        })
+        .transpose()
+}
+
+fn full_task_updates(
+    specs: &[PanelSpec],
+    current_panels: Vec<PanelState>,
+    history_panels: Vec<Vec<PanelState>>,
+) -> Vec<crate::server::panels::PanelUpdate> {
+    let mut state_by_id = panel_state_map(current_panels);
+    for panels in history_panels {
+        for panel in panels {
+            let panel_id = panel.panel_id().to_string();
+            if history_mode_for(specs, &panel_id) != PanelHistoryMode::Append {
+                continue;
+            }
+            if let Some(existing) = state_by_id.get_mut(&panel_id) {
+                merge_panel_state(existing, panel);
+            } else {
+                state_by_id.insert(panel_id, panel);
+            }
+        }
+    }
+    state_by_id.into_values().map(replace_panel).collect()
+}
+
+fn incremental_task_updates(
+    specs: &[PanelSpec],
+    current_panels: Vec<PanelState>,
+    history_panels: Vec<Vec<PanelState>>,
+) -> Vec<crate::server::panels::PanelUpdate> {
+    let mut updates = current_panels
+        .into_iter()
+        .filter(|panel| history_mode_for(specs, panel.panel_id()) == PanelHistoryMode::None)
+        .map(replace_panel)
+        .collect::<Vec<_>>();
+
+    let mut delta_by_id = std::collections::BTreeMap::new();
+    for panels in history_panels {
+        for panel in panels {
+            let panel_id = panel.panel_id().to_string();
+            if history_mode_for(specs, &panel_id) != PanelHistoryMode::Append {
+                continue;
+            }
+            if let Some(existing) = delta_by_id.get_mut(&panel_id) {
+                merge_panel_state(existing, panel);
+            } else {
+                delta_by_id.insert(panel_id, panel);
+            }
+        }
+    }
+    updates.extend(delta_by_id.into_values().map(append_panel));
+    updates
+}
+
+fn panel_state_map(panels: Vec<PanelState>) -> std::collections::BTreeMap<String, PanelState> {
+    panels
+        .into_iter()
+        .map(|panel| (panel.panel_id().to_string(), panel))
+        .collect()
+}
+
+fn history_mode_for(specs: &[PanelSpec], panel_id: &str) -> PanelHistoryMode {
+    specs
+        .iter()
+        .find(|spec| spec.panel_id == panel_id)
+        .map(|spec| spec.history.clone())
+        .unwrap_or(PanelHistoryMode::None)
 }
 
 async fn get_run_stats(

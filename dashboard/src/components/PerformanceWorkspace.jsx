@@ -55,13 +55,8 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
       <ConnectionStatus isConnected={isConnected} lastUpdate={null} />
       {selectedRun == null ? null : (
         <Stack spacing={2}>
-          {sampler ? (
-            <PanelCollection
-              title="Run Throughput"
-              descriptors={sampler.panels}
-              currentPanels={sampler.current}
-              historyItems={sampler.items}
-            />
+          {sampler?.sourceId ? (
+            <PanelCollection title="Run Throughput" panelSpecs={sampler.panelSpecs} panelStates={sampler.panelStates} />
           ) : (
             <EmptyStateCard
               title="No run performance snapshots"
@@ -88,12 +83,11 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
           </FormControl>
           {selectedEvaluatorNodeId == null ? (
             <Alert severity="info">No active evaluator selected for this run.</Alert>
-          ) : evaluator ? (
+          ) : evaluator?.sourceId ? (
             <PanelCollection
               title={`Evaluator ${selectedEvaluatorNodeId}`}
-              descriptors={evaluator.panels}
-              currentPanels={evaluator.current}
-              historyItems={evaluator.items}
+              panelSpecs={evaluator.panelSpecs}
+              panelStates={evaluator.panelStates}
             />
           ) : (
             <EmptyStateCard

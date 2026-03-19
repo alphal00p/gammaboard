@@ -16,46 +16,11 @@ import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip,
 import { formatScientific } from "../../utils/formatters";
 import { asArray } from "../../utils/collections";
 
-const aggregatePanelHistory = (items) => {
-  const panels = new Map();
-  for (const item of asArray(items)) {
-    for (const panel of asArray(item?.panels)) {
-      if (!panel?.panel_id || !panel?.kind) continue;
-      if (panel.kind === "scalar_timeseries") {
-        const existing = panels.get(panel.panel_id) || { ...panel, points: [] };
-        existing.points = [...existing.points, ...asArray(panel.points)];
-        panels.set(panel.panel_id, existing);
-      } else if (panel.kind === "multi_timeseries") {
-        const existing = panels.get(panel.panel_id) || { ...panel, series: [] };
-        const seriesMap = new Map((existing.series || []).map((series) => [series.id, { ...series }]));
-        for (const series of asArray(panel.series)) {
-          const previous = seriesMap.get(series.id) || { ...series, points: [] };
-          previous.points = [...previous.points, ...asArray(series.points)];
-          seriesMap.set(series.id, previous);
-        }
-        existing.series = Array.from(seriesMap.values());
-        panels.set(panel.panel_id, existing);
-      } else {
-        panels.set(panel.panel_id, panel);
-      }
-    }
-  }
-  return panels;
-};
-
-const buildRenderablePanels = (descriptors, currentPanels, historyItems) => {
-  const currentMap = new Map(asArray(currentPanels).map((panel) => [panel.panel_id, panel]));
-  const historyMap = aggregatePanelHistory(historyItems);
-  return asArray(descriptors).map((descriptor) => ({
-    descriptor,
-    state:
-      (descriptor.supports_history &&
-        (descriptor.kind === "scalar_timeseries" || descriptor.kind === "multi_timeseries"
-          ? historyMap.get(descriptor.panel_id)
-          : null)) ||
-      currentMap.get(descriptor.panel_id) ||
-      historyMap.get(descriptor.panel_id) ||
-      null,
+const buildRenderablePanels = (panelSpecs, panelStates) => {
+  const stateMap = new Map(asArray(panelStates).map((panel) => [panel.panel_id, panel]));
+  return asArray(panelSpecs).map((spec) => ({
+    descriptor: spec,
+    state: stateMap.get(spec.panel_id) || null,
   }));
 };
 
@@ -384,11 +349,8 @@ const PanelRenderer = ({ descriptor, state }) => {
   }
 };
 
-const PanelCollection = ({ title = null, descriptors, currentPanels, historyItems }) => {
-  const renderablePanels = useMemo(
-    () => buildRenderablePanels(descriptors, currentPanels, historyItems),
-    [currentPanels, descriptors, historyItems],
-  );
+const PanelCollection = ({ title = null, panelSpecs, panelStates }) => {
+  const renderablePanels = useMemo(() => buildRenderablePanels(panelSpecs, panelStates), [panelSpecs, panelStates]);
 
   return (
     <Box sx={{ mb: 3 }}>

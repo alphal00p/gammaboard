@@ -1,115 +1,104 @@
 use crate::core::SamplerRuntimeMetrics;
 use crate::server::panels::{
-    PanelDescriptor, PanelKind, PanelState, PerformanceHistoryResponse, PlotPoint, TaskHistoryItem,
-    history_item, history_x, panel_descriptor, scalar_timeseries_panel,
+    PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PlotPoint, history_x,
+    merge_panel_state, panel_spec, replace_panel, scalar_timeseries_panel,
 };
 use crate::stores::{EvaluatorPerformanceHistoryEntry, SamplerPerformanceHistoryEntry};
+use std::collections::BTreeMap;
 
 pub fn build_evaluator_performance_response(
     scope_id: Option<String>,
     entries: Vec<EvaluatorPerformanceHistoryEntry>,
-) -> PerformanceHistoryResponse {
-    build_performance_history_response(
-        scope_id,
+) -> PanelResponse {
+    build_performance_response(
+        scope_id.unwrap_or_else(|| "evaluator".to_string()),
         entries,
-        evaluator_panel_descriptors(),
+        evaluator_panel_specs(),
         |entry| entry.id.to_string(),
-        evaluator_current_panels,
-        evaluator_history_item,
+        evaluator_panels,
     )
 }
 
 pub fn build_sampler_performance_response(
     scope_id: Option<String>,
     entries: Vec<SamplerPerformanceHistoryEntry>,
-) -> PerformanceHistoryResponse {
-    build_performance_history_response(
-        scope_id,
+) -> PanelResponse {
+    build_performance_response(
+        scope_id.unwrap_or_else(|| "sampler".to_string()),
         entries,
-        sampler_panel_descriptors(),
+        sampler_panel_specs(),
         |entry| entry.id.to_string(),
-        sampler_current_panels,
-        sampler_history_item,
+        sampler_panels,
     )
 }
 
-fn build_performance_history_response<T>(
-    scope_id: Option<String>,
-    mut entries: Vec<T>,
-    panels: Vec<PanelDescriptor>,
-    snapshot_id: impl Fn(&T) -> String,
-    build_current: impl Fn(&T) -> Vec<PanelState>,
-    build_item: impl Fn(&T) -> TaskHistoryItem,
-) -> PerformanceHistoryResponse {
-    entries.reverse();
-    let current = entries.last().map(build_current).unwrap_or_default();
-    let latest_snapshot_id = entries.last().map(snapshot_id);
-    let items = entries.iter().map(build_item).collect();
+fn build_performance_response<T>(
+    source_id: String,
+    entries: Vec<T>,
+    panels: Vec<PanelSpec>,
+    cursor_for: impl Fn(&T) -> String,
+    build_panels: impl Fn(&T) -> Vec<PanelState>,
+) -> PanelResponse {
+    let cursor = entries.first().map(cursor_for);
+    let mut state_by_id = BTreeMap::new();
+    for entry in entries.iter().rev() {
+        for panel in build_panels(entry) {
+            let panel_id = panel.panel_id().to_string();
+            if let Some(existing) = state_by_id.get_mut(&panel_id) {
+                merge_panel_state(existing, panel);
+            } else {
+                state_by_id.insert(panel_id, panel);
+            }
+        }
+    }
 
-    PerformanceHistoryResponse {
-        scope_id,
-        latest_snapshot_id,
+    PanelResponse {
+        source_id,
+        cursor,
         reset_required: false,
         panels,
-        current,
-        items,
+        updates: state_by_id.into_values().map(replace_panel).collect(),
     }
 }
 
-fn evaluator_panel_descriptors() -> Vec<PanelDescriptor> {
+fn evaluator_panel_specs() -> Vec<PanelSpec> {
     vec![
-        panel_descriptor(
+        panel_spec(
             "evaluator_idle_ratio",
             "Idle Ratio",
             PanelKind::ScalarTimeseries,
-            true,
+            PanelHistoryMode::Append,
         ),
-        panel_descriptor(
+        panel_spec(
             "evaluator_evaluate_time_us",
             "Evaluate Time Per Sample (us)",
             PanelKind::ScalarTimeseries,
-            true,
+            PanelHistoryMode::Append,
         ),
-        panel_descriptor(
+        panel_spec(
             "evaluator_parametrization_time_us",
             "Parametrization Time Per Sample (us)",
             PanelKind::ScalarTimeseries,
-            true,
+            PanelHistoryMode::Append,
         ),
     ]
 }
 
-fn sampler_panel_descriptors() -> Vec<PanelDescriptor> {
+fn sampler_panel_specs() -> Vec<PanelSpec> {
     vec![
-        panel_descriptor(
+        panel_spec(
             "sampler_completed_samples_per_second",
             "Completed Samples Per Second",
             PanelKind::ScalarTimeseries,
-            true,
+            PanelHistoryMode::Append,
         ),
-        panel_descriptor(
+        panel_spec(
             "sampler_queue_remaining_ratio",
             "Queue Remaining Ratio",
             PanelKind::ScalarTimeseries,
-            true,
+            PanelHistoryMode::Append,
         ),
     ]
-}
-
-fn evaluator_current_panels(entry: &EvaluatorPerformanceHistoryEntry) -> Vec<PanelState> {
-    evaluator_panels(entry)
-}
-
-fn evaluator_history_item(entry: &EvaluatorPerformanceHistoryEntry) -> TaskHistoryItem {
-    history_item(entry.id, Some(entry.created_at), evaluator_panels(entry))
-}
-
-fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelState> {
-    sampler_panels(entry)
-}
-
-fn sampler_history_item(entry: &SamplerPerformanceHistoryEntry) -> TaskHistoryItem {
-    history_item(entry.id, Some(entry.created_at), sampler_panels(entry))
 }
 
 fn evaluator_panels(entry: &EvaluatorPerformanceHistoryEntry) -> Vec<PanelState> {

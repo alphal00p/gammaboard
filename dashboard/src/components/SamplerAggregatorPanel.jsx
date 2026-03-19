@@ -28,7 +28,7 @@ const SamplerAggregatorPanel = ({ run, panelResponse = null }) => {
     <EnginePanelLayout
       title="Sampler Aggregator"
       genericPanel={
-        <PanelCollection descriptors={panelResponse?.panels || []} currentPanels={panelResponse?.current || []} />
+        <PanelCollection panelSpecs={panelResponse?.panelSpecs || []} panelStates={panelResponse?.panelStates || []} />
       }
       customPanel={null}
       jsonTitle="sampler aggregator JSON"

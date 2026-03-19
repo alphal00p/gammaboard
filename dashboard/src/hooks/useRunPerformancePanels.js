@@ -1,14 +1,9 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback } from "react";
 import {
   fetchNodeEvaluatorPerformanceHistory,
   fetchSamplerPerformanceHistory,
 } from "../services/api";
-import { usePolling } from "./usePolling";
-
-const emptyResponse = Object.freeze({
-  evaluator: null,
-  sampler: null,
-});
+import { usePanelSource } from "./usePanelSource";
 
 export const useRunPerformancePanels = ({
   runId,
@@ -16,34 +11,40 @@ export const useRunPerformancePanels = ({
   limit = 200,
   pollMs = 5000,
 } = {}) => {
-  const [state, setState] = useState(emptyResponse);
-  const enabled = runId != null;
+  const samplerEnabled = runId != null;
+  const evaluatorEnabled = evaluatorNodeId != null;
 
-  const poll = useCallback(
-    async (signal) => {
-      if (runId == null) return;
-      try {
-        const [sampler, evaluator] = await Promise.all([
-          fetchSamplerPerformanceHistory(runId, limit, null, signal),
-          evaluatorNodeId ? fetchNodeEvaluatorPerformanceHistory(evaluatorNodeId, limit, signal) : Promise.resolve(null),
-        ]);
-        setState({
-          evaluator: evaluator ?? null,
-          sampler: sampler ?? null,
-        });
-      } catch (err) {
-        if (err?.name === "AbortError") return;
-        setState(emptyResponse);
-      }
+  const fetchSamplerPanels = useCallback(
+    (_request, signal) => {
+      if (!samplerEnabled) return null;
+      return fetchSamplerPerformanceHistory(runId, limit, null, signal);
     },
-    [evaluatorNodeId, limit, runId],
+    [limit, runId, samplerEnabled],
   );
 
-  const reset = useCallback(() => {
-    setState(emptyResponse);
-  }, []);
+  const fetchEvaluatorPanels = useCallback(
+    (_request, signal) => {
+      if (!evaluatorEnabled) return null;
+      return fetchNodeEvaluatorPerformanceHistory(evaluatorNodeId, limit, signal);
+    },
+    [evaluatorEnabled, evaluatorNodeId, limit],
+  );
 
-  usePolling({ enabled, intervalMs: pollMs, poll, reset });
+  const sampler = usePanelSource({
+    enabled: samplerEnabled,
+    pollMs,
+    fetchPanels: fetchSamplerPanels,
+    useCursor: false,
+  });
+  const evaluator = usePanelSource({
+    enabled: evaluatorEnabled,
+    pollMs,
+    fetchPanels: fetchEvaluatorPanels,
+    useCursor: false,
+  });
 
-  return useMemo(() => state, [state]);
+  return {
+    evaluator,
+    sampler,
+  };
 };

@@ -2,20 +2,27 @@ use crate::core::{EngineError, EvaluatorConfig, SamplerAggregatorConfig};
 use crate::evaluation::PointSpec;
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use crate::server::panels::{
-    CurrentPanelsResponse, PanelDescriptor, PanelKind, PanelState, key_value, key_value_panel,
-    panel_descriptor,
+    PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, key_value, key_value_panel,
+    panel_spec, replace_panel,
 };
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 
-pub trait CurrentPanelRenderer<C> {
-    fn panel_descriptors(&self, ctx: &C) -> Vec<PanelDescriptor>;
+pub trait PanelRenderer<C> {
+    fn panel_specs(&self, ctx: &C) -> Vec<PanelSpec>;
     fn panel_states(&self, ctx: &C) -> Result<Vec<PanelState>, EngineError>;
 
-    fn build_response(&self, ctx: &C) -> Result<CurrentPanelsResponse, EngineError> {
-        Ok(CurrentPanelsResponse {
-            panels: self.panel_descriptors(ctx),
-            current: self.panel_states(ctx)?,
+    fn build_response(&self, source_id: String, ctx: &C) -> Result<PanelResponse, EngineError> {
+        Ok(PanelResponse {
+            source_id,
+            cursor: None,
+            reset_required: false,
+            panels: self.panel_specs(ctx),
+            updates: self
+                .panel_states(ctx)?
+                .into_iter()
+                .map(replace_panel)
+                .collect(),
         })
     }
 }
@@ -31,28 +38,28 @@ pub struct SamplerAggregatorPanelContext<'a> {
     pub runner_params: &'a SamplerAggregatorRunnerParams,
 }
 
-impl CurrentPanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
-    fn panel_descriptors(&self, ctx: &EvaluatorPanelContext<'_>) -> Vec<PanelDescriptor> {
-        let mut panels = vec![panel_descriptor(
+impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
+    fn panel_specs(&self, ctx: &EvaluatorPanelContext<'_>) -> Vec<PanelSpec> {
+        let mut panels = vec![panel_spec(
             "evaluator_summary",
             "Evaluator Summary",
             PanelKind::KeyValue,
-            false,
+            PanelHistoryMode::None,
         )];
         if has_object_fields(self) {
-            panels.push(panel_descriptor(
+            panels.push(panel_spec(
                 "evaluator_config",
                 "Evaluator Config",
                 PanelKind::KeyValue,
-                false,
+                PanelHistoryMode::None,
             ));
         }
         if ctx.init_metadata.is_some_and(json_has_object_fields) {
-            panels.push(panel_descriptor(
+            panels.push(panel_spec(
                 "evaluator_init_metadata",
                 "Evaluator Init Metadata",
                 PanelKind::KeyValue,
-                false,
+                PanelHistoryMode::None,
             ));
         }
         panels
@@ -107,20 +114,20 @@ impl CurrentPanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
     }
 }
 
-impl CurrentPanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfig {
-    fn panel_descriptors(&self, _ctx: &SamplerAggregatorPanelContext<'_>) -> Vec<PanelDescriptor> {
-        let mut panels = vec![panel_descriptor(
+impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfig {
+    fn panel_specs(&self, _ctx: &SamplerAggregatorPanelContext<'_>) -> Vec<PanelSpec> {
+        let mut panels = vec![panel_spec(
             "sampler_summary",
             "Sampler Aggregator Summary",
             PanelKind::KeyValue,
-            false,
+            PanelHistoryMode::None,
         )];
         if has_object_fields(self) {
-            panels.push(panel_descriptor(
+            panels.push(panel_spec(
                 "sampler_config",
                 "Sampler Aggregator Config",
                 PanelKind::KeyValue,
-                false,
+                PanelHistoryMode::None,
             ));
         }
         panels

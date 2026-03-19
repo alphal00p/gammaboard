@@ -3,21 +3,21 @@ use crate::core::{
 };
 use crate::evaluation::{FullObservableProgress, ObservableState, SemanticObservableKind};
 use crate::server::panels::{
-    ImageColorMode, PanelDescriptor, PanelKind, PanelState, PlotPoint, PlotSeries, TaskHistoryItem,
-    history_item, key_value, key_value_panel, multi_timeseries_panel, panel_descriptor,
-    progress_panel, scalar_timeseries_panel, single_point_band,
+    ImageColorMode, PanelHistoryMode, PanelKind, PanelSpec, PanelState, PlotPoint, PlotSeries,
+    key_value, key_value_panel, multi_timeseries_panel, panel_spec, progress_panel,
+    scalar_timeseries_panel, single_point_band,
 };
 use crate::stores::{TaskOutputSnapshot, TaskStageSnapshot};
 use serde_json::Value as JsonValue;
 
 impl RunTaskSpec {
-    pub fn describe_panels(&self, run_spec: &RunSpec) -> Vec<PanelDescriptor> {
+    pub fn panel_specs(&self, run_spec: &RunSpec) -> Vec<PanelSpec> {
         match self {
-            Self::Pause => vec![panel_descriptor(
+            Self::Pause => vec![panel_spec(
                 "pause_state",
                 "Pause State",
                 PanelKind::Text,
-                false,
+                PanelHistoryMode::None,
             )],
             Self::Sample { .. } => describe_sample_panels(run_spec),
             Self::Image { .. } => describe_image_panels(),
@@ -46,12 +46,11 @@ impl RunTaskSpec {
         }
     }
 
-    pub fn build_history_item(
+    pub fn build_history_panels(
         &self,
-        task: &RunTask,
         snapshot: &TaskOutputSnapshot,
         run_spec: &RunSpec,
-    ) -> Result<TaskHistoryItem, EngineError> {
+    ) -> Result<Vec<PanelState>, EngineError> {
         let panels = match self {
             Self::Pause => Vec::new(),
             Self::Sample { nr_samples, .. } => build_sample_panels_from_persisted(
@@ -74,13 +73,7 @@ impl RunTaskSpec {
                 line_completion_panel,
             )?,
         };
-
-        let _ = task;
-        Ok(history_item(
-            snapshot.id.clone(),
-            snapshot.created_at,
-            panels,
-        ))
+        Ok(panels)
     }
 
     pub fn build_current_panels_from_persisted(
@@ -123,60 +116,65 @@ impl RunTaskSpec {
     }
 }
 
-fn describe_sample_panels(run_spec: &RunSpec) -> Vec<PanelDescriptor> {
-    let mut panels = vec![panel_descriptor(
+fn describe_sample_panels(run_spec: &RunSpec) -> Vec<PanelSpec> {
+    let mut panels = vec![panel_spec(
         "sample_progress",
         "Sample Progress",
         PanelKind::Progress,
-        true,
+        PanelHistoryMode::None,
     )];
-    panels.push(panel_descriptor(
+    panels.push(panel_spec(
         "real_estimate_history",
         estimate_label(run_spec),
         PanelKind::ScalarTimeseries,
-        true,
+        PanelHistoryMode::Append,
     ));
     if matches!(
         run_spec.evaluator.observable_kind(),
         SemanticObservableKind::Complex
     ) {
-        panels.push(panel_descriptor(
+        panels.push(panel_spec(
             "imag_estimate_history",
             "Imaginary Mean",
             PanelKind::ScalarTimeseries,
-            true,
+            PanelHistoryMode::Append,
         ));
     }
-    panels.push(panel_descriptor(
+    panels.push(panel_spec(
         "abs_signal_to_noise_history",
         "Mean(|x|)^2 / abs_err^2",
         PanelKind::ScalarTimeseries,
-        true,
+        PanelHistoryMode::Append,
     ));
-    panels.push(panel_descriptor(
+    panels.push(panel_spec(
         "estimate_summary",
         "Estimate Summary",
         PanelKind::KeyValue,
-        false,
+        PanelHistoryMode::None,
     ));
     panels
 }
 
-fn describe_image_panels() -> Vec<PanelDescriptor> {
+fn describe_image_panels() -> Vec<PanelSpec> {
     vec![
-        panel_descriptor(
+        panel_spec(
             "image_progress",
             "Image Progress",
             PanelKind::Progress,
-            true,
+            PanelHistoryMode::None,
         ),
-        panel_descriptor(
+        panel_spec(
             "image_completion",
             "Image Completion",
             PanelKind::KeyValue,
-            true,
+            PanelHistoryMode::None,
         ),
-        panel_descriptor("image_view", "Rendered Image", PanelKind::Image2d, false),
+        panel_spec(
+            "image_view",
+            "Rendered Image",
+            PanelKind::Image2d,
+            PanelHistoryMode::None,
+        ),
     ]
 }
 
@@ -215,25 +213,30 @@ fn persisted_full_progress_panels(
     ))
 }
 
-fn describe_line_panels(display: LineDisplayMode, run_spec: &RunSpec) -> Vec<PanelDescriptor> {
+fn describe_line_panels(display: LineDisplayMode, run_spec: &RunSpec) -> Vec<PanelSpec> {
     let mut panels = vec![
-        panel_descriptor("line_progress", "Line Progress", PanelKind::Progress, true),
-        panel_descriptor(
+        panel_spec(
+            "line_progress",
+            "Line Progress",
+            PanelKind::Progress,
+            PanelHistoryMode::None,
+        ),
+        panel_spec(
             "line_completion",
             "Line Completion",
             PanelKind::KeyValue,
-            true,
+            PanelHistoryMode::None,
         ),
     ];
     if line_uses_complex_components(display, run_spec) {
-        panels.push(panel_descriptor(
+        panels.push(panel_spec(
             "line_components",
             "Complex Components",
             PanelKind::MultiTimeseries,
-            false,
+            PanelHistoryMode::None,
         ));
     } else {
-        panels.push(panel_descriptor(
+        panels.push(panel_spec(
             "line_real",
             if matches!(
                 run_spec.evaluator.observable_kind(),
@@ -244,7 +247,7 @@ fn describe_line_panels(display: LineDisplayMode, run_spec: &RunSpec) -> Vec<Pan
                 "Value"
             },
             PanelKind::ScalarTimeseries,
-            false,
+            PanelHistoryMode::None,
         ));
     }
     panels
@@ -818,7 +821,7 @@ mod tests {
     fn complex_line_auto_uses_multi_timeseries_components_panel() {
         let run_spec = complex_run_spec();
         let task = plot_task(LineDisplayMode::Auto);
-        let descriptors = task.describe_panels(&run_spec);
+        let descriptors = task.panel_specs(&run_spec);
         assert!(
             descriptors
                 .iter()
@@ -851,7 +854,7 @@ mod tests {
     fn complex_line_scalar_curve_uses_single_real_panel() {
         let run_spec = complex_run_spec();
         let task = plot_task(LineDisplayMode::ScalarCurve);
-        let descriptors = task.describe_panels(&run_spec);
+        let descriptors = task.panel_specs(&run_spec);
         assert!(
             descriptors
                 .iter()

@@ -9,7 +9,7 @@ const EvaluatorPanel = ({ run, panelResponse = null }) => {
     <EnginePanelLayout
       title="Evaluator"
       genericPanel={
-        <PanelCollection descriptors={panelResponse?.panels || []} currentPanels={panelResponse?.current || []} />
+        <PanelCollection panelSpecs={panelResponse?.panelSpecs || []} panelStates={panelResponse?.panelStates || []} />
       }
       customPanel={null}
       jsonTitle="evaluator JSON"
