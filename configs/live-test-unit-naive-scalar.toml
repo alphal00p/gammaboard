@@ -12,11 +12,9 @@ kind = "naive_monte_carlo"
 kind = "identity"
 
 [evaluator_runner_params]
-min_loop_time_ms = 5
 performance_snapshot_interval_ms = 2000
 
 [sampler_aggregator_runner_params]
-min_poll_time_ms = 100
 performance_snapshot_interval_ms = 2000
 target_batch_eval_ms = 400.0
 target_queue_remaining = 0.5

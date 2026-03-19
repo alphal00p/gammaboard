@@ -22,7 +22,6 @@ use thiserror::Error;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerAggregatorRunnerParams {
-    pub min_poll_time_ms: u64,
     pub performance_snapshot_interval_ms: u64,
     pub target_batch_eval_ms: f64,
     pub target_queue_remaining: f64,

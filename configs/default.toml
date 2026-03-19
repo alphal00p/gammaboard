@@ -9,11 +9,9 @@ discrete_dims = 0
 kind = "identity"
 
 [evaluator_runner_params]
-min_loop_time_ms = 20
 performance_snapshot_interval_ms = 2000
 
 [sampler_aggregator_runner_params]
-min_poll_time_ms = 100
 performance_snapshot_interval_ms = 2000
 target_batch_eval_ms = 100.0
 target_queue_remaining = 0.5

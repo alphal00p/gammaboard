@@ -43,6 +43,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - `run-node` should own one in-process active role runner at a time. Reconciliation is the only place that matches on role and constructs a new role runner; active role runners should just expose `tick()` and `persist_state()`.
 - Active role runners must not clear node/run assignments themselves. On any unassign path, `run-node` should call `persist_state()` first, then clear assignments and reconcile.
 - `NodeRunnerConfig.min_tick_time` is a global pacing guard for the node loop; keep role-runner ticks free of ad hoc sleep/backoff logic unless a hot-loop reason forces it.
+- Do not keep stale per-role pacing knobs in run config. Evaluator and sampler runner params should only carry settings still used by the role runtime.
 
 ## Engine And Data Rules
 - Keep evaluator-side concrete batch/result semantics in `src/evaluation/*` and sampler-side latent queue semantics in `src/sampling/*`.

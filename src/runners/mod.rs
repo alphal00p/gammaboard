@@ -3,8 +3,6 @@ pub mod node_runner;
 pub(crate) mod rolling_metric;
 pub mod sampler_aggregator;
 
-pub use evaluator::{
-    EvaluatorRunner, EvaluatorRunnerError, EvaluatorRunnerParams, EvaluatorRunnerTick,
-};
+pub use evaluator::{EvaluatorRunner, EvaluatorRunnerError, EvaluatorRunnerParams};
 pub use node_runner::{NodeRunner, NodeRunnerConfig, NodeRunnerStore};
 pub use sampler_aggregator::{RunnerError, SamplerAggregatorRunner, SamplerAggregatorRunnerParams};

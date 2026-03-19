@@ -827,11 +827,9 @@ mod tests {
                 },
                 "parametrization": { "kind": "identity" },
                 "evaluator_runner_params": {
-                    "min_loop_time_ms": 42,
                     "performance_snapshot_interval_ms": 5000
                 },
                 "sampler_aggregator_runner_params": {
-                    "min_poll_time_ms": 500,
                     "performance_snapshot_interval_ms": 5000,
                     "target_batch_eval_ms": 200.0,
                     "target_queue_remaining": 0.0,
@@ -875,7 +873,6 @@ mod tests {
         assert_eq!(
             spec.evaluator_runner_params,
             EvaluatorRunnerParams::deserialize(json!({
-                "min_loop_time_ms": 42,
                 "performance_snapshot_interval_ms": 5000
             }))
             .unwrap()
@@ -883,7 +880,6 @@ mod tests {
         assert_eq!(
             spec.sampler_aggregator_runner_params,
             SamplerAggregatorRunnerParams::deserialize(json!({
-                "min_poll_time_ms": 500,
                 "performance_snapshot_interval_ms": 5000,
                 "target_batch_eval_ms": 200.0,
                 "target_queue_remaining": 0.0,

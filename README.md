@@ -148,6 +148,8 @@ just start 2
 
 That starts `w-1`, `w-2`, and so on.
 
+`gammaboard run-node --poll-ms ...` controls the global node-loop pacing. Per-role runner config no longer has separate polling/backoff fields.
+
 ### Assign roles
 ```bash
 gammaboard node assign w-1 evaluator <RUN_ID>

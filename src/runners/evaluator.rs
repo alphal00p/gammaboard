@@ -15,15 +15,7 @@ use thiserror::Error;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvaluatorRunnerParams {
-    pub min_loop_time_ms: u64,
     pub performance_snapshot_interval_ms: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct EvaluatorRunnerTick {
-    pub claimed_batch_id: Option<i64>,
-    pub processed_samples: usize,
-    pub eval_time_ms: f64,
 }
 
 #[derive(Debug, Error)]
@@ -113,7 +105,7 @@ where
         }
     }
 
-    pub async fn tick(&mut self) -> Result<EvaluatorRunnerTick, EvaluatorRunnerError> {
+    pub async fn tick(&mut self) -> Result<(), EvaluatorRunnerError> {
         let loop_started = Instant::now();
         let claimed = self
             .store
@@ -124,11 +116,7 @@ where
         let Some(claimed) = claimed else {
             self.observe_idle_ratio(loop_started, 0.0);
             self.flush_performance_snapshot_if_due(false).await?;
-            return Ok(EvaluatorRunnerTick {
-                claimed_batch_id: None,
-                processed_samples: 0,
-                eval_time_ms: 0.0,
-            });
+            return Ok(());
         };
 
         if let Err(err) = self.ensure_parametrization(claimed.task_id).await {
@@ -183,11 +171,10 @@ where
         ) {
             Ok(result) => {
                 let eval_time_ms = started.elapsed().as_secs_f64() * 1000.0;
-                let tick = self
-                    .submit_result(claimed.batch_id, &transformed_batch, result, eval_time_ms)
+                self.submit_result(claimed.batch_id, &transformed_batch, result, eval_time_ms)
                     .await?;
                 self.observe_idle_ratio(loop_started, eval_time_ms);
-                Ok(tick)
+                Ok(())
             }
             Err(err) => {
                 let eval_time_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -245,7 +232,7 @@ where
         batch: &Batch,
         result: BatchResult,
         eval_time_ms: f64,
-    ) -> Result<EvaluatorRunnerTick, EvaluatorRunnerError> {
+    ) -> Result<(), EvaluatorRunnerError> {
         if self.current_task_requires_training && result.values.is_none() {
             let err = EngineError::engine(format!(
                 "result is missing training values for training batch {}",
@@ -274,11 +261,7 @@ where
         self.observe_eval_batch(processed_samples, eval_time_ms);
         self.flush_performance_snapshot_if_due(false).await?;
 
-        Ok(EvaluatorRunnerTick {
-            claimed_batch_id: Some(batch_id),
-            processed_samples,
-            eval_time_ms,
-        })
+        Ok(())
     }
 
     fn observe_eval_batch(&mut self, samples: usize, eval_time_ms: f64) {

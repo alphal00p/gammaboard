@@ -200,9 +200,6 @@ impl<T> EvaluatorWorkerStore for T where T: WorkQueueStore + AggregationStore + 
 pub trait SamplerWorkerStore:
     WorkQueueStore + AggregationStore + RunTaskStore + ControlPlaneStore + Send + Sync
 {
-    async fn clear_run_assignments(&self, run_id: i32) -> Result<u64, StoreError> {
-        self.clear_desired_assignments_for_run(run_id).await
-    }
 }
 
 impl<T> SamplerWorkerStore for T where
