@@ -32,14 +32,10 @@ export const deriveObservableImplementation = (evaluatorConfig, observablePayloa
     return payload.kind;
   }
 
-  const { implementation, params } = splitKindConfig(evaluatorConfig, fallback);
+  const { params } = splitKindConfig(evaluatorConfig, fallback);
   if (typeof params.observable_kind === "string") {
     return params.observable_kind;
   }
 
-  if (implementation === "unit") return "scalar";
-  if (implementation === "gammaloop") return "complex";
-  if (implementation === "sinc_evaluator") return "complex";
-  if (implementation === "sin_evaluator" || implementation === "symbolica") return "scalar";
   return fallback;
 };

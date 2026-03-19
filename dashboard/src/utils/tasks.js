@@ -6,18 +6,14 @@ export const asTaskList = (tasks) => asArray(tasks);
 
 const getGeometryPointCount = (taskSpec) => {
   if (!taskSpec || typeof taskSpec !== "object") return null;
-  if (taskSpec.kind === "image") {
-    const uCount = Number(taskSpec.geometry?.u_linspace?.count);
-    const vCount = Number(taskSpec.geometry?.v_linspace?.count);
-    if (Number.isFinite(uCount) && Number.isFinite(vCount)) {
-      return uCount * vCount;
-    }
+  const uCount = Number(taskSpec.geometry?.u_linspace?.count);
+  const vCount = Number(taskSpec.geometry?.v_linspace?.count);
+  if (Number.isFinite(uCount) && Number.isFinite(vCount)) {
+    return uCount * vCount;
   }
-  if (taskSpec.kind === "plot_line") {
-    const count = Number(taskSpec.geometry?.linspace?.count);
-    if (Number.isFinite(count)) {
-      return count;
-    }
+  const count = Number(taskSpec.geometry?.linspace?.count);
+  if (Number.isFinite(count)) {
+    return count;
   }
   return null;
 };
@@ -32,11 +28,6 @@ export const getCurrentTask = (tasks) =>
   asTaskList(tasks).find((task) => task.state === "pending") ||
   asTaskList(tasks).find((task) => task.state === "completed") ||
   null;
-
-export const getCurrentSampleTask = (tasks) => {
-  const currentTask = getCurrentTask(tasks);
-  return currentTask?.task?.kind === "sample" ? currentTask : null;
-};
 
 export const formatTaskSnapshotRef = (snapshot) => {
   if (!snapshot || typeof snapshot !== "object") return "inherit";

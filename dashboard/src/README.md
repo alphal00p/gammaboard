@@ -20,8 +20,9 @@ Backend panel endpoints → hooks → PanelCollection → panel renderers
 
 ## Main Concepts
 
-- `TaskOutputPanel` renders the selected task using task-owned panel descriptors and task-local persisted history.
+- `TaskOutputPanel` renders the selected task using task-owned panel descriptors, task-local persisted history, and a small frontend metadata header for task identity/progress.
 - `PerformanceWorkspace` renders run-level sampler throughput panels plus a selected evaluator worker's timing/idle panels through the same panel vocabulary.
+- Engine config panels such as evaluator and sampler aggregator are config-oriented and should avoid reconstructing task-specific runtime state in the frontend.
 - `PanelCollection` is the shared frontend renderer. One component exists per panel kind.
 
 ## Hooks
