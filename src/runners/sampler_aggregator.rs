@@ -66,10 +66,9 @@ struct SamplerRuntimeState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SamplerAggregatorRunnerSnapshot {
-    pub version: u32, //why
     pub engine: SamplerAggregatorSnapshot,
     pub observable_state: ObservableState,
-    active_runtime_task_id: Option<i64>, //why option, why even stored?
+    active_runtime_task_id: Option<i64>,
     runtime_state: SamplerRuntimeState,
     last_pending_after_enqueue: Option<usize>,
     training_completion_marked: bool,
@@ -160,8 +159,6 @@ where
     const MAX_BATCH_SIZE_UP_FACTOR: f64 = 1.25;
     const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.80;
     const MIN_BATCH_SIZE_CHANGE_RATIO: f64 = 0.03;
-    pub const SNAPSHOT_VERSION: u32 = 1;
-
     fn tune_batch_size(&mut self) {
         let Some(eval_ms_per_sample) = self.runtime_state.rolling.eval_ms_per_sample.value() else {
             return;
@@ -344,12 +341,6 @@ where
         &mut self,
         snapshot: SamplerAggregatorRunnerSnapshot,
     ) -> Result<(), RunnerError> {
-        if snapshot.version != Self::SNAPSHOT_VERSION {
-            return Err(RunnerError::Engine(EngineError::engine(format!(
-                "unsupported sampler runner snapshot version: {}",
-                snapshot.version
-            ))));
-        }
         self.observable_state = snapshot.observable_state;
         self.active_runtime_task_id = snapshot.active_runtime_task_id;
         self.runtime_state = snapshot.runtime_state;
@@ -365,7 +356,6 @@ where
 
     pub fn snapshot_state(&mut self) -> Result<SamplerAggregatorRunnerSnapshot, RunnerError> {
         Ok(SamplerAggregatorRunnerSnapshot {
-            version: Self::SNAPSHOT_VERSION,
             engine: self.engine.snapshot().map_err(RunnerError::Engine)?,
             observable_state: self.observable_state.clone(),
             active_runtime_task_id: self.active_runtime_task_id,

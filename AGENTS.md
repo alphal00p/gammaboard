@@ -79,7 +79,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - Completed batches are consumed by the sampler-aggregator and deleted.
 
 ## Snapshot, Logging, And Read Rules
-- Sampler pause/resume snapshots are persisted on `runs.sampler_runner_snapshot`; keep the persisted shape explicit and versioned.
+- Sampler pause/resume snapshots are persisted on `runs.sampler_runner_snapshot`; keep the persisted shape explicit and typed.
 - Stage-boundary snapshots are also persisted on `run_stage_snapshots`; each row must record `queue_empty` so deterministic resume eligibility is explicit.
 - `run_tasks` should persist the effective snapshot origin used at activation time (`spawned_from_run_id`, `spawned_from_task_id`) so branching/debugging remains visible in the CLI and dashboard.
 - Adding a new sampler requires snapshot export/restore support for it.
