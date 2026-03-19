@@ -38,8 +38,11 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - `run-node` must stop the old role before starting a new one.
 - Role start failures are capped per desired target; after the cap is hit, retries stay disabled until desired assignment changes.
 - Node shutdown is a one-shot signal read from `nodes.shutdown_requested_at`.
-- Sampler task reconciliation belongs in `src/runners/node_runner/sampler_aggregator_role_runner.rs`; the sampler executor itself should own only one active task runtime and should not activate or select tasks on its own.
+- Overall worker reconciliation belongs in `src/runners/node_runner/reconcile.rs`: it should decide the exact active runtime for the current desired assignment, including sampler task activation, pause handling, and queue exhaustion.
+- The sampler executor itself should own only one active task runtime and should not activate or select tasks on its own.
 - `run-node` should own one in-process active role runner at a time. Reconciliation is the only place that matches on role and constructs a new role runner; active role runners should just expose `tick()` and `persist_state()`.
+- Active role runners must not clear node/run assignments themselves. On any unassign path, `run-node` should call `persist_state()` first, then clear assignments and reconcile.
+- `NodeRunnerConfig.min_tick_time` is a global pacing guard for the node loop; keep role-runner ticks free of ad hoc sleep/backoff logic unless a hot-loop reason forces it.
 
 ## Engine And Data Rules
 - Keep evaluator-side concrete batch/result semantics in `src/evaluation/*` and sampler-side latent queue semantics in `src/sampling/*`.

@@ -542,7 +542,10 @@ where
         }))
     }
 
-    pub async fn persist_state(&mut self, queue_empty: bool) -> Result<(), RunnerError> {
+    async fn persist_state_with_queue_empty(
+        &mut self,
+        queue_empty: bool,
+    ) -> Result<(), RunnerError> {
         let snapshot = SamplerAggregatorRunnerSnapshot {
             task_id: self.task.id,
             sampler_snapshot: self.sampler.snapshot().map_err(RunnerError::Engine)?,
@@ -568,6 +571,11 @@ where
         Ok(())
     }
 
+    pub async fn persist_state(&mut self) -> Result<(), RunnerError> {
+        let queue_empty = self.store.get_open_batch_count(self.run_id).await? <= 0;
+        self.persist_state_with_queue_empty(queue_empty).await
+    }
+
     pub async fn complete_task(&mut self) -> Result<(), RunnerError> {
         self.sync_task_progress().await?;
         self.store.complete_run_task(self.task.id).await?;
@@ -575,8 +583,7 @@ where
     }
 
     pub async fn fail_task(&mut self, reason: &str) -> Result<(), RunnerError> {
-        let queue_empty = self.store.get_open_batch_count(self.run_id).await? <= 0;
-        self.persist_state(queue_empty).await?;
+        self.persist_state().await?;
         self.store.fail_run_task(self.task.id, reason).await?;
         Ok(())
     }

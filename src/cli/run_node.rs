@@ -29,7 +29,7 @@ pub async fn run_node(args: RunNodeArgs, quiet: bool) -> Result<()> {
             store,
             node_id,
             NodeRunnerConfig {
-                poll_interval: Duration::from_millis(args.poll_ms),
+                min_tick_time: Duration::from_millis(args.poll_ms),
                 max_consecutive_start_failures: args.max_start_failures,
             },
         );

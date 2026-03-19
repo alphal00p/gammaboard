@@ -5,24 +5,23 @@
 //! and ticks it until desired assignment changes or the role finishes.
 
 mod active_worker;
-mod evaluator_role_runner;
 mod reconcile;
-mod sampler_aggregator_role_runner;
+mod role_runner;
 
 use crate::core::{
     ControlPlaneStore, EvaluatorWorkerStore, RunSpecStore, SamplerWorkerStore, StoreError,
     WorkerRole,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{Instrument, info, warn};
 
 use self::active_worker::ActiveWorker;
-use async_trait::async_trait;
+use self::role_runner::RoleRunner;
 
 #[derive(Debug, Clone)]
 pub struct NodeRunnerConfig {
-    pub poll_interval: Duration,
+    pub min_tick_time: Duration,
     pub max_consecutive_start_failures: u32,
 }
 
@@ -53,7 +52,7 @@ impl<T> NodeRunnerStore for T where
 impl Default for NodeRunnerConfig {
     fn default() -> Self {
         Self {
-            poll_interval: Duration::from_millis(1_000),
+            min_tick_time: Duration::from_millis(1_000),
             max_consecutive_start_failures: 3,
         }
     }
@@ -63,12 +62,6 @@ impl Default for NodeRunnerConfig {
 pub(super) struct RoleTarget {
     pub(super) role: WorkerRole,
     pub(super) run_id: i32,
-}
-
-#[async_trait(?Send)]
-pub(super) trait RoleRunner {
-    async fn tick(&mut self) -> Result<bool, StoreError>;
-    async fn persist_state(&mut self) -> Result<(), StoreError>;
 }
 
 pub(super) struct ActiveRoleRunner<S: NodeRunnerStore> {
@@ -117,6 +110,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             self.store.register_node(&self.node_id).await?;
 
             loop {
+                let tick_started = Instant::now();
                 self.store.heartbeat_node(&self.node_id).await?;
                 if self
                     .store
@@ -146,15 +140,22 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                         Ok(done) => done,
                         Err(err) => {
                             warn!("role runner tick failed: {err}");
-                            self.note_start_failure(target);
-                            self.stop_current().await;
-                            sleep(self.config.poll_interval).await;
-                            continue;
+                            self.fail_current_assignment(target, &err).await?;
+                            false
                         }
                     };
                     if done {
-                        self.note_role_stopped();
-                        self.stop_current().await;
+                        self.finish_current_assignment().await?;
+                    }
+                    let elapsed = tick_started.elapsed();
+                    if elapsed < self.config.min_tick_time {
+                        tokio::select! {
+                            _ = &mut shutdown => {
+                                info!("stopping node-runner");
+                                break;
+                            }
+                            _ = sleep(self.config.min_tick_time - elapsed) => {}
+                        }
                         continue;
                     }
                     continue;
@@ -165,7 +166,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                         info!("stopping node-runner");
                         break;
                     }
-                    _ = sleep(self.config.poll_interval) => {}
+                    _ = sleep(self.config.min_tick_time) => {}
                 }
             }
 
