@@ -7,6 +7,4 @@ pub use evaluator::{
     EvaluatorRunner, EvaluatorRunnerError, EvaluatorRunnerParams, EvaluatorRunnerTick,
 };
 pub use node_runner::{NodeRunner, NodeRunnerConfig, NodeRunnerStore};
-pub use sampler_aggregator::{
-    RunnerError, RunnerTick, SamplerAggregatorRunner, SamplerAggregatorRunnerParams,
-};
+pub use sampler_aggregator::{RunnerError, SamplerAggregatorRunner, SamplerAggregatorRunnerParams};

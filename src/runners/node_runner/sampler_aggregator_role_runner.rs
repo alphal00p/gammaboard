@@ -1,134 +1,237 @@
-use crate::core::StoreError;
-use crate::runners::sampler_aggregator::SamplerAggregatorRunner;
-use std::time::Duration;
-use tokio::{sync::watch, time::sleep};
+use crate::core::{RunTask, RunTaskSpec, StoreError};
+use crate::runners::sampler_aggregator::{
+    SamplerAggregatorRunner, SamplerAggregatorRunnerSnapshot,
+};
+use std::time::{Duration, Instant};
+use tokio::time::sleep;
 use tracing::Instrument;
-use tracing::{info, warn};
+use tracing::{Span, info, warn};
 
-use super::{NodeRunnerStore, active_worker::ActiveWorker};
+use super::{ActiveWorker, NodeRunnerStore, RoleRunner};
 
-pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
-    worker: &ActiveWorker<S>,
-    mut stop_rx: watch::Receiver<bool>,
-) -> Result<(), StoreError> {
-    let Some(spec) = worker.store.load_run_spec(worker.run_id).await? else {
-        warn!("run has no RunSpec; sampler-aggregator not started");
-        return Ok(());
-    };
-    let saved_snapshot = worker
-        .store
-        .load_sampler_runner_snapshot(worker.run_id)
-        .await?;
+pub(super) struct SamplerAggregatorRoleRunner<S: NodeRunnerStore> {
+    worker: ActiveWorker<S>,
+    interval: Duration,
+    engine_span: Span,
+    saved_snapshot: Option<SamplerAggregatorRunnerSnapshot>,
+    runner: Option<SamplerAggregatorRunner<S>>,
+}
 
-    let engine_span = tracing::span!(tracing::Level::TRACE, "sampler_engine_context");
-    let initial_task = match worker.store.load_active_run_task(worker.run_id).await? {
-        Some(task) => Some(task),
-        None => worker
-            .store
-            .list_run_tasks(worker.run_id)
-            .await?
-            .into_iter()
-            .find(|task| {
-                !matches!(task.task, crate::core::RunTaskSpec::Pause)
-                    && matches!(
-                        task.state,
-                        crate::core::RunTaskState::Pending | crate::core::RunTaskState::Active
-                    )
-            }),
-    };
-    let initial_sample_budget = initial_task.and_then(|task| {
-        task.task
-            .nr_expected_samples()
-            .and_then(|n| usize::try_from(n).ok())
-    });
-    let engine = {
-        let _engine_scope = engine_span.enter();
-        let engine = if let Some(snapshot) = saved_snapshot.as_ref() {
-            snapshot
-                .engine
-                .clone()
-                .into_runtime(&spec.point_spec)
-                .map_err(|err| {
-                    StoreError::store(format!(
-                        "failed to restore sampler-aggregator from snapshot: {err}"
-                    ))
-                })?
-        } else {
-            spec.sampler_aggregator
-                .build(spec.point_spec.clone(), initial_sample_budget, None)
-                .map_err(|err| {
-                    StoreError::store(format!("failed to build sampler-aggregator: {err}"))
-                })?
+impl<S: NodeRunnerStore> SamplerAggregatorRoleRunner<S> {
+    pub(super) async fn new(worker: &ActiveWorker<S>) -> Result<Self, StoreError> {
+        let Some(spec) = worker.store.load_run_spec(worker.run_id).await? else {
+            warn!("run has no RunSpec; sampler-aggregator not started");
+            return Err(StoreError::store("run has no RunSpec"));
         };
-        engine
-            .validate_point_spec(&spec.point_spec)
-            .map_err(|err| {
-                StoreError::store(format!(
-                    "incompatible sampler-aggregator for point_spec on run {}: {}",
-                    worker.run_id, err
-                ))
-            })?;
-        engine
-    };
-    let observable_state = spec
-        .evaluator
-        .empty_observable_state(&spec.observable)
-        .map_err(|err| {
-            StoreError::store(format!("failed to initialize observable state: {err}"))
-        })?;
-
-    let _ = spec.sampler_aggregator.kind_str();
-    worker.mark_active_with_log().await?;
-
-    info!("sampler-aggregator worker started");
-
-    let mut runner = SamplerAggregatorRunner::new(
-        worker.run_id,
-        worker.node_id.clone(),
-        engine,
-        observable_state,
-        worker.store.clone(),
-        spec.sampler_aggregator_runner_params.clone(),
-        spec.point_spec.clone(),
-        spec.evaluator.clone(),
-        spec.sampler_aggregator.clone(),
-        spec.parametrization.clone(),
-    )
-    .await
-    .map_err(|err| StoreError::store(err.to_string()))?;
-
-    if let Some(snapshot) = saved_snapshot {
-        runner.restore_snapshot(snapshot).map_err(|err| {
-            StoreError::store(format!("failed to restore sampler runner snapshot: {err}"))
-        })?;
+        info!("sampler-aggregator worker started");
+        Ok(Self {
+            worker: worker.clone(),
+            interval: Duration::from_millis(spec.sampler_aggregator_runner_params.min_poll_time_ms),
+            engine_span: tracing::span!(tracing::Level::TRACE, "sampler_engine_context"),
+            saved_snapshot: worker
+                .store
+                .load_sampler_runner_snapshot(worker.run_id)
+                .await?,
+            runner: None,
+        })
     }
 
-    let interval = Duration::from_millis(spec.sampler_aggregator_runner_params.min_poll_time_ms);
-
-    loop {
-        if *stop_rx.borrow() {
-            break;
+    async fn load_or_activate_task(
+        &self,
+        open_batch_count: usize,
+    ) -> Result<Option<RunTask>, StoreError> {
+        if let Some(task) = self
+            .worker
+            .store
+            .load_active_run_task(self.worker.run_id)
+            .await?
+        {
+            return Ok(Some(task));
         }
-
-        worker.heartbeat_with_log().await;
-
-        match runner.tick().instrument(engine_span.clone()).await {
-            Ok(_) => {}
-            Err(err) => warn!("sampler-aggregator tick failed: {err}"),
+        if open_batch_count > 0 {
+            return Ok(None);
         }
-
-        tokio::select! {
-            _ = stop_rx.changed() => {}
-            _ = sleep(interval) => {}
-        }
+        self.worker
+            .store
+            .activate_next_run_task(self.worker.run_id)
+            .await
     }
 
-    if let Err(err) = runner.persist_snapshot().await {
-        warn!("failed to persist sampler-aggregator snapshot on shutdown: {err}");
+    async fn ensure_runner(&mut self, task: &RunTask) -> Result<(), StoreError> {
+        if self.runner.as_ref().map(|runner| runner.task_id()) == Some(task.id) {
+            return Ok(());
+        }
+        let Some(spec) = self.worker.store.load_run_spec(self.worker.run_id).await? else {
+            return Err(StoreError::store("run has no RunSpec"));
+        };
+        let is_resuming = self
+            .saved_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.task_id == task.id);
+        let resumed_snapshot = if is_resuming {
+            self.saved_snapshot.take()
+        } else {
+            None
+        };
+        let mut runner = SamplerAggregatorRunner::new(
+            self.worker.run_id,
+            self.worker.node_id.clone(),
+            task.clone(),
+            self.worker.store.clone(),
+            spec.sampler_aggregator_runner_params.clone(),
+            spec.point_spec.clone(),
+            spec.evaluator.clone(),
+            resumed_snapshot,
+        )
+        .await
+        .map_err(|err| StoreError::store(err.to_string()))?;
+        if !is_resuming {
+            runner
+                .persist_state(true)
+                .await
+                .map_err(|err| StoreError::store(err.to_string()))?;
+        }
+        self.runner = Some(runner);
+        Ok(())
     }
 
-    worker.mark_inactive_with_log().await;
-    info!("sampler-aggregator worker stopped");
+    async fn finish_runner(&mut self) -> Result<(), StoreError> {
+        let Some(mut runner) = self.runner.take() else {
+            return Ok(());
+        };
+        runner
+            .persist_state(true)
+            .await
+            .map_err(|err| StoreError::store(err.to_string()))?;
+        runner
+            .complete_task()
+            .await
+            .map_err(|err| StoreError::store(err.to_string()))?;
+        self.saved_snapshot = None;
+        Ok(())
+    }
 
-    Ok(())
+    async fn fail_task(&mut self, task_id: i64, reason: &str) -> Result<(), StoreError> {
+        if let Some(mut runner) = self.runner.take() {
+            runner
+                .fail_task(reason)
+                .await
+                .map_err(|err| StoreError::store(err.to_string()))?;
+        } else {
+            self.worker.store.fail_run_task(task_id, reason).await?;
+        }
+        let cleared = self
+            .worker
+            .store
+            .clear_run_assignments(self.worker.run_id)
+            .await?;
+        info!(
+            run_id = self.worker.run_id,
+            task_id,
+            assignments_cleared = cleared,
+            "run task failed; assignments cleared"
+        );
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl<S: NodeRunnerStore> RoleRunner for SamplerAggregatorRoleRunner<S> {
+    async fn tick(&mut self) -> Result<bool, StoreError> {
+        let open_batch_count = self
+            .worker
+            .store
+            .get_open_batch_count(self.worker.run_id)
+            .await?
+            .max(0) as usize;
+
+        let Some(task) = self.load_or_activate_task(open_batch_count).await? else {
+            if open_batch_count == 0 {
+                let cleared = self
+                    .worker
+                    .store
+                    .clear_run_assignments(self.worker.run_id)
+                    .await?;
+                info!(
+                    run_id = self.worker.run_id,
+                    assignments_cleared = cleared,
+                    "run task queue exhausted; assignments cleared"
+                );
+                return Ok(true);
+            }
+            if self.interval > Duration::ZERO {
+                sleep(self.interval).await;
+            }
+            return Ok(false);
+        };
+
+        if matches!(task.task, RunTaskSpec::Pause) {
+            if open_batch_count == 0 {
+                self.worker.store.complete_run_task(task.id).await?;
+                let cleared = self
+                    .worker
+                    .store
+                    .clear_run_assignments(self.worker.run_id)
+                    .await?;
+                info!(
+                    run_id = self.worker.run_id,
+                    task_id = task.id,
+                    assignments_cleared = cleared,
+                    "pause task reached; run assignments cleared"
+                );
+                return Ok(true);
+            }
+            if self.interval > Duration::ZERO {
+                sleep(self.interval).await;
+            }
+            return Ok(false);
+        }
+
+        self.ensure_runner(&task).await?;
+
+        let started = Instant::now();
+        let done = match self
+            .runner
+            .as_mut()
+            .expect("runner should exist for non-pause task")
+            .tick()
+            .instrument(self.engine_span.clone())
+            .await
+        {
+            Ok(done) => done,
+            Err(err) => {
+                warn!("sampler-aggregator tick failed: {err}");
+                self.fail_task(task.id, &err.to_string()).await?;
+                return Ok(true);
+            }
+        };
+
+        if done {
+            self.finish_runner().await?;
+            return Ok(true);
+        }
+
+        let elapsed = started.elapsed();
+        if elapsed < self.interval {
+            sleep(self.interval - elapsed).await;
+        }
+
+        Ok(false)
+    }
+
+    async fn persist_state(&mut self) -> Result<(), StoreError> {
+        let Some(runner) = self.runner.as_mut() else {
+            return Ok(());
+        };
+        let queue_empty = self
+            .worker
+            .store
+            .get_open_batch_count(self.worker.run_id)
+            .await?
+            <= 0;
+        runner
+            .persist_state(queue_empty)
+            .await
+            .map_err(|err| StoreError::store(err.to_string()))
+    }
 }

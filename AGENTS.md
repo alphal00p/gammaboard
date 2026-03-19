@@ -8,7 +8,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - `src/core/*`: cross-stage shared contracts and types, including run-spec/config enums, shared errors, control-plane/store-facing contracts, DB row models, and worker assignment models.
 - `src/evaluation/*`: evaluator-side batch/result semantics, evaluator traits, evaluator implementations, and observables.
 - `src/sampling/*`: sampler-side latent batch semantics, sampling plans, sampler traits, sampler implementations, and parametrization implementations.
-- `src/runners/*`: evaluator, sampler-aggregator, and node orchestration loops only.
+- `src/runners/*`: evaluator, sampler task executors, and node orchestration loops only.
 - `src/stores/*`: PostgreSQL implementation, queries, read DTOs, and store composition.
 - `src/server/*`: dashboard read API runtime and handlers.
 - `src/tracing.rs`: tracing setup and DB log sink wiring.
@@ -38,6 +38,8 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - `run-node` must stop the old role before starting a new one.
 - Role start failures are capped per desired target; after the cap is hit, retries stay disabled until desired assignment changes.
 - Node shutdown is a one-shot signal read from `nodes.shutdown_requested_at`.
+- Sampler task reconciliation belongs in `src/runners/node_runner/sampler_aggregator_role_runner.rs`; the sampler executor itself should own only one active task runtime and should not activate or select tasks on its own.
+- `run-node` should own one in-process active role runner at a time. Reconciliation is the only place that matches on role and constructs a new role runner; active role runners should just expose `tick()` and `persist_state()`.
 
 ## Engine And Data Rules
 - Keep evaluator-side concrete batch/result semantics in `src/evaluation/*` and sampler-side latent queue semantics in `src/sampling/*`.
@@ -81,7 +83,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - Completed batches are consumed by the sampler-aggregator and deleted.
 
 ## Snapshot, Logging, And Read Rules
-- Sampler pause/resume snapshots are persisted on `runs.sampler_runner_snapshot`; keep the persisted shape explicit and typed.
+- Sampler pause/resume snapshots are persisted on `runs.sampler_runner_snapshot`; keep the persisted shape explicit, typed, and task-local.
 - Stage-boundary snapshots are also persisted on `run_stage_snapshots`; each row must record `queue_empty` so deterministic resume eligibility is explicit.
 - `run_tasks` should persist the effective snapshot origin used at activation time (`spawned_from_run_id`, `spawned_from_task_id`) so branching/debugging remains visible in the CLI and dashboard.
 - Adding a new sampler requires snapshot export/restore support for it.
