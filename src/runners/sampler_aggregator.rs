@@ -462,18 +462,20 @@ where
                 .as_ref()
                 .map(|snapshot| snapshot.observable_state.config())
                 .unwrap_or_else(|| evaluator_config.default_observable_config());
-            let observable_state = if let Some(observable_config) = task
-                .task
-                .explicit_observable_config(&base_observable_config)
+            let observable_config = task.task.observable_config(&base_observable_config);
+            let observable_state = if previous_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.observable_state.config() == observable_config)
+                .unwrap_or(false)
             {
-                evaluator_config
-                    .empty_observable_state(&observable_config)
-                    .map_err(RunnerError::Engine)?
-            } else if let Some(snapshot) = previous_snapshot.as_ref() {
-                snapshot.observable_state.clone()
+                previous_snapshot
+                    .as_ref()
+                    .expect("checked above")
+                    .observable_state
+                    .clone()
             } else {
                 evaluator_config
-                    .empty_observable_state(&base_observable_config)
+                    .empty_observable_state(&observable_config)
                     .map_err(RunnerError::Engine)?
             };
 

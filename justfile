@@ -2,26 +2,22 @@ set dotenv-load := true
 poll_ms := "500"
 bin := "./target/dev-optim/gammaboard"
 
-build:
+build-backend:
     cargo build --profile dev-optim
 
-symlink-build:
-    ln -sf "$(pwd)/target/dev-optim/gammaboard" "${HOME}/.cargo/bin/gammaboard"
+just build:
+    just build-frontend
+    just build-backend
 
-install-completions:
-    mkdir -p "${HOME}/.local/share/bash-completion/completions"
-    {{bin}} completion bash > "${HOME}/.local/share/bash-completion/completions/gammaboard"
+build-frontend:
+    cd dashboard && npm run build
 
-install:
-    cargo install --path . --profile dev-optim --force
 
-check:
-    cargo check --no-default-features --features 'cli,no_pyo3'
+serve-frontend:
+    cd dashboard && npx serve build
 
 test-e2e:
     cargo test -q --test full_stack_cli -- --ignored --nocapture
-
-
 
 db-init:
     initdb -D .postgres --username="{{ env_var('DB_USER') }}" --auth=trust
@@ -53,25 +49,14 @@ dump-db-sql:
     pg_dump -h "{{ invocation_directory() }}/.postgres-socket" -p "{{ env_var('DB_PORT') }}" -U "{{ env_var('DB_USER') }}" "{{ env_var('DB_NAME') }}" > "$out"
     echo "$out"
 
-serve-backend:
-    {{bin}} server
 
-build-frontend:
-    cd dashboard && npm run build
-
-serve-frontend:
-    cd dashboard && npx serve build
-
-start-workers n:
+start n:
     #!/usr/bin/env bash
     set -euo pipefail
 
     for i in $(seq 1 {{n}}); do
         {{bin}} run-node --node-id "w-${i}" --poll-ms {{ poll_ms }} &
     done
-
-start n:
-    @just start-workers {{n}}
 
 live-test-basic:
     #!/usr/bin/env bash
