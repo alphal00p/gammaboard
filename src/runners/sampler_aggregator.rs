@@ -76,17 +76,18 @@ pub struct SamplerAggregatorRunnerSnapshot {
     runtime_state: SamplerRuntimeState,
     last_pending_after_enqueue: Option<usize>,
     training_completion_marked: bool,
-    auto_stop_triggered: bool, //why?
 }
 
-impl SamplerRuntimeState {
-    //this should be moved to roling metric, why not impl serde for the rolling metric anyways?
-    fn rolling_metric_snapshot(metric: &RollingMetric) -> RollingMetricSnapshot {
-        RollingMetricSnapshot {
+impl From<&RollingMetric> for RollingMetricSnapshot {
+    fn from(metric: &RollingMetric) -> Self {
+        Self {
             mean: metric.value(),
             std_dev: metric.std_dev(),
         }
     }
+}
+
+impl SamplerRuntimeState {
     // why not promote completed_samples_per_second to another rolling metric?
     fn to_runtime_metrics(&self, completed_samples_per_second: f64) -> SamplerRuntimeMetrics {
         SamplerRuntimeMetrics {
@@ -97,18 +98,18 @@ impl SamplerRuntimeState {
             completed_samples_per_second,
             batch_size_current: self.batch_size_current,
             rolling: SamplerRollingAverages {
-                eval_ms_per_sample: Self::rolling_metric_snapshot(&self.rolling.eval_ms_per_sample),
-                eval_ms_per_batch: Self::rolling_metric_snapshot(&self.rolling.eval_ms_per_batch),
-                sampler_produce_ms_per_sample: Self::rolling_metric_snapshot(
+                eval_ms_per_sample: RollingMetricSnapshot::from(&self.rolling.eval_ms_per_sample),
+                eval_ms_per_batch: RollingMetricSnapshot::from(&self.rolling.eval_ms_per_batch),
+                sampler_produce_ms_per_sample: RollingMetricSnapshot::from(
                     &self.rolling.sampler_produce_ms_per_sample,
                 ),
-                sampler_ingest_ms_per_sample: Self::rolling_metric_snapshot(
+                sampler_ingest_ms_per_sample: RollingMetricSnapshot::from(
                     &self.rolling.sampler_ingest_ms_per_sample,
                 ),
-                queue_remaining_ratio: Self::rolling_metric_snapshot(
+                queue_remaining_ratio: RollingMetricSnapshot::from(
                     &self.rolling.queue_remaining_ratio,
                 ),
-                batches_consumed_per_tick: Self::rolling_metric_snapshot(
+                batches_consumed_per_tick: RollingMetricSnapshot::from(
                     &self.rolling.batches_consumed_per_tick,
                 ),
             },
@@ -145,7 +146,6 @@ pub struct SamplerAggregatorRunner<WQ, AS, RC, PS, TS> {
     last_performance_completed_samples: i64,
     last_pending_after_enqueue: Option<usize>,
     training_completion_marked: bool,
-    auto_stop_triggered: bool,
     current_task: Option<RunTask>,
     active_runtime_task_id: Option<i64>,
     evaluator_config: EvaluatorConfig,
@@ -267,7 +267,7 @@ where
         run_id: i32,
         node_id: impl Into<String>,
         engine: Box<dyn SamplerAggregator>,
-        mut observable_state: ObservableState,
+        observable_state: ObservableState,
         work_queue: WQ,
         aggregation_store: AS,
         run_control: RC,
@@ -306,11 +306,6 @@ where
         }
         let performance_snapshot_interval =
             Duration::from_millis(config.performance_snapshot_interval_ms);
-        let current_observable = aggregation_store.load_current_observable(run_id).await?;
-        if let Some(snapshot) = current_observable {
-            observable_state =
-                ObservableState::from_json(&snapshot).map_err(RunnerError::Engine)?;
-        }
         let persisted_progress = aggregation_store
             .load_run_sample_progress(run_id)
             .await?
@@ -379,7 +374,6 @@ where
             last_performance_completed_samples: persisted_progress.nr_completed_samples,
             last_pending_after_enqueue: None,
             training_completion_marked: false,
-            auto_stop_triggered: false,
             current_task: None,
             active_runtime_task_id: None,
             evaluator_config,
@@ -409,7 +403,6 @@ where
         self.last_performance_completed_samples = self.nr_completed_samples;
         self.last_pending_after_enqueue = snapshot.last_pending_after_enqueue;
         self.training_completion_marked = snapshot.training_completion_marked;
-        self.auto_stop_triggered = snapshot.auto_stop_triggered;
         Ok(())
     }
 
@@ -423,7 +416,6 @@ where
             runtime_state: self.runtime_state.clone(),
             last_pending_after_enqueue: self.last_pending_after_enqueue,
             training_completion_marked: self.training_completion_marked,
-            auto_stop_triggered: self.auto_stop_triggered,
         })
     }
 
@@ -843,15 +835,8 @@ where
         Ok(usize::try_from(remaining).ok())
     }
 
-    async fn clear_run_assignments_once(
-        &mut self,
-        reason: &'static str,
-    ) -> Result<(), RunnerError> {
-        if self.auto_stop_triggered {
-            return Ok(());
-        }
+    async fn clear_run_assignments(&mut self, reason: &'static str) -> Result<(), RunnerError> {
         let assignments_cleared = self.run_control.clear_run_assignments(self.run_id).await?;
-        self.auto_stop_triggered = true;
         info!(
             run_id = self.run_id,
             nr_produced_samples = self.nr_produced_samples,
@@ -912,7 +897,7 @@ where
             self.save_stage_snapshot(Some(&task), queue_empty).await?;
             self.task_store.fail_run_task(task.id, &reason).await?;
         }
-        self.clear_run_assignments_once("run task failed; assignments cleared")
+        self.clear_run_assignments("run task failed; assignments cleared")
             .await?;
         info!(run_id = self.run_id, error = %reason, "run task failed");
         Ok(())
@@ -927,7 +912,7 @@ where
         // i.e. a single function that starts working on a task until it gets paused, pausing should automatically produce a snapshot. once this function returns if we are still paused and if there are any other tasks remaining.
         for _ in 0..8 {
             let Some(task) = self.ensure_active_task().await? else {
-                self.clear_run_assignments_once("run task queue exhausted; assignments cleared")
+                self.clear_run_assignments("run task queue exhausted; assignments cleared")
                     .await?;
                 return Ok(0);
             };
@@ -979,7 +964,7 @@ where
                     self.persist_snapshot().await?;
                     self.save_stage_snapshot(Some(&task), true).await?;
                     self.complete_current_task().await?;
-                    self.clear_run_assignments_once("pause task reached; run assignments cleared")
+                    self.clear_run_assignments("pause task reached; run assignments cleared")
                         .await?;
                     return Ok(0);
                 }
