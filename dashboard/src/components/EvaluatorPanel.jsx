@@ -23,7 +23,6 @@ const EvaluatorPanel = ({ run }) => {
           implementation={implementation}
           chipColor="secondary"
           fields={[
-            { label: "min_loop_time_ms", value: runnerParams.min_loop_time_ms ?? "n/a", md: 6 },
             {
               label: "performance_snapshot_interval_ms",
               value: runnerParams.performance_snapshot_interval_ms ?? "n/a",

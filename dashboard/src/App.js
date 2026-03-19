@@ -33,6 +33,7 @@ const DashboardHeader = () => (
 const RunModeContent = ({ runs, selectedRun }) => {
   const currentRun = runs.find((entry) => entry.run_id === selectedRun);
   const { tasks } = useRunTasks(selectedRun, 2000);
+  const runWorkersData = useWorkersData({ runId: selectedRun, pollMs: 3000 });
   const [selectedTaskId, setSelectedTaskId] = useState(null);
 
   useEffect(() => {
@@ -60,7 +61,7 @@ const RunModeContent = ({ runs, selectedRun }) => {
 
   return (
     <>
-      <RunInfo run={currentRun} tasks={taskList} />
+      <RunInfo run={currentRun} tasks={taskList} workers={runWorkersData.workers} />
       <TaskQueuePanel tasks={taskList} selectedTaskId={selectedTask?.id ?? null} onSelectTask={setSelectedTaskId} />
       <EvaluatorPanel run={currentRun} />
       <TaskOutputPanel runId={selectedRun} task={selectedTask} />

@@ -5,8 +5,30 @@ import { parseScalarTarget } from "../utils/target";
 import { deriveObservableImplementation, splitKindConfig, toConfigObject } from "../utils/config";
 import { deriveRunLifecycle, formatRunLabel } from "../utils/runs";
 import { getCurrentTask, getTaskKindLabel } from "../utils/tasks";
+import { asArray, asObjectOrNull } from "../utils/collections";
 
-const RunInfo = ({ run, tasks = [] }) => {
+const fmtCount = (value, fallback = "0") =>
+  Number.isFinite(Number(value)) ? Number(value).toLocaleString() : fallback;
+
+const formatLifecycleDate = (value, fallback) => formatDateTime(value, fallback);
+
+const findActiveSamplerWorker = (workers) =>
+  asArray(workers).find((worker) => worker?.current_role === "sampler_aggregator") ?? null;
+
+const queueRemainingMean = (worker) => {
+  const rolling = asObjectOrNull(asObjectOrNull(worker?.sampler_runtime_metrics)?.rolling);
+  const metric = asObjectOrNull(rolling?.queue_remaining_ratio);
+  const mean = Number(metric?.mean);
+  return Number.isFinite(mean) ? mean : null;
+};
+
+const queueTarget = (integrationParams) => {
+  const params = toConfigObject(integrationParams?.sampler_aggregator_runner_params);
+  const value = Number(params?.target_queue_remaining);
+  return Number.isFinite(value) ? value : null;
+};
+
+const RunInfo = ({ run, tasks = [], workers = [] }) => {
   if (!run) return null;
 
   const integrationParams = toConfigObject(run.integration_params);
@@ -21,6 +43,9 @@ const RunInfo = ({ run, tasks = [] }) => {
   const hasProducedSamples = Number.isFinite(producedSamples);
   const hasCompletedSamples = Number.isFinite(completedSamples);
   const currentTask = getCurrentTask(tasks);
+  const activeSamplerWorker = findActiveSamplerWorker(workers);
+  const avgQueueRemaining = queueRemainingMean(activeSamplerWorker);
+  const targetQueueRemaining = queueTarget(integrationParams);
 
   return (
     <Box sx={{ mb: 3 }}>
@@ -77,10 +102,10 @@ const RunInfo = ({ run, tasks = [] }) => {
                 Lifecycle
               </Typography>
               <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                started: {formatDateTime(run.started_at)}
+                started: {formatLifecycleDate(run.started_at, "not started")}
               </Typography>
               <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                completed: {formatDateTime(run.completed_at)}
+                completed: {formatLifecycleDate(run.completed_at, "not completed")}
               </Typography>
             </CardContent>
           </Card>
@@ -104,6 +129,38 @@ const RunInfo = ({ run, tasks = [] }) => {
               </Typography>
               <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
                 completed_samples: {hasCompletedSamples ? completedSamples.toLocaleString() : "0"}
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12} sm={6} md={3}>
+          <Card sx={{ height: "100%" }}>
+            <CardContent>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ textTransform: "uppercase", display: "block", mb: 0.5 }}
+              >
+                Queue
+              </Typography>
+              <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                pending: {fmtCount(run.pending_batches)}
+              </Typography>
+              <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                claimed: {fmtCount(run.claimed_batches)}
+              </Typography>
+              <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                failed: {fmtCount(run.failed_batches)}
+              </Typography>
+              <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                completed: {fmtCount(run.completed_batches)}
+              </Typography>
+              <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                avg_queue_remaining: {avgQueueRemaining != null ? avgQueueRemaining.toFixed(4) : "waiting"}
+              </Typography>
+              <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                target_queue_remaining: {targetQueueRemaining != null ? targetQueueRemaining.toFixed(4) : "unset"}
               </Typography>
             </CardContent>
           </Card>

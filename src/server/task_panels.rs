@@ -54,18 +54,11 @@ impl RunTaskSpec {
     ) -> Result<TaskHistoryItem, EngineError> {
         let panels = match self {
             Self::Pause => Vec::new(),
-            Self::Sample { nr_samples, .. } => {
-                let observable = decode_aggregate_persisted_observable(
-                    run_spec.evaluator.observable_kind(),
-                    &snapshot.persisted_output,
-                )?;
-                build_sample_panels(
-                    observable.sample_count() as f64,
-                    nr_samples.map(|value| value as f64),
-                    Some(&observable),
-                    run_spec,
-                )
-            }
+            Self::Sample { nr_samples, .. } => build_sample_panels_from_persisted(
+                &snapshot.persisted_output,
+                nr_samples.map(|value| value as f64),
+                run_spec,
+            )?,
             Self::Image { geometry, .. } => persisted_full_progress_panels(
                 &snapshot.persisted_output,
                 "image_progress",
@@ -98,13 +91,11 @@ impl RunTaskSpec {
     ) -> Result<Vec<PanelState>, EngineError> {
         match self {
             Self::Pause => self.build_current_panels(task, None, run_spec),
-            Self::Sample { .. } => {
-                let observable = decode_aggregate_persisted_observable(
-                    run_spec.evaluator.observable_kind(),
-                    persisted,
-                )?;
-                self.build_current_panels(task, Some(&observable), run_spec)
-            }
+            Self::Sample { nr_samples, .. } => build_sample_panels_from_persisted(
+                persisted,
+                nr_samples.map(|value| value as f64),
+                run_spec,
+            ),
             Self::Image { geometry, .. } => persisted_full_progress_panels(
                 persisted,
                 "image_progress",
@@ -272,6 +263,43 @@ fn build_sample_current_panels(
         observable,
         run_spec,
     ))
+}
+
+fn build_sample_panels_from_persisted(
+    persisted: &JsonValue,
+    progress_total: Option<f64>,
+    run_spec: &RunSpec,
+) -> Result<Vec<PanelState>, EngineError> {
+    if let Ok(observable) =
+        decode_aggregate_persisted_observable(run_spec.evaluator.observable_kind(), persisted)
+    {
+        return Ok(build_sample_panels(
+            observable.sample_count() as f64,
+            progress_total,
+            Some(&observable),
+            run_spec,
+        ));
+    }
+
+    if let Ok(progress) = decode_full_progress(persisted) {
+        return Ok(build_sample_panels(
+            progress.processed as f64,
+            progress_total,
+            None,
+            run_spec,
+        ));
+    }
+
+    decode_aggregate_persisted_observable(run_spec.evaluator.observable_kind(), persisted).map(
+        |observable| {
+            build_sample_panels(
+                observable.sample_count() as f64,
+                progress_total,
+                Some(&observable),
+                run_spec,
+            )
+        },
+    )
 }
 
 fn build_sample_panels(
