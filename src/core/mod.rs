@@ -18,7 +18,7 @@ pub use run_spec::{
 };
 pub use tasks::{
     ImageDisplayMode, IntoPreflightTask, LineDisplayMode, LineRasterGeometry, Linspace,
-    PlaneRasterGeometry, RunTask, RunTaskInputSpec, RunTaskSpec, RunTaskState,
+    PlaneRasterGeometry, RunTask, RunTaskInputSpec, RunTaskSpec, RunTaskState, TaskSnapshotRef,
     resolve_initial_sampler_aggregator, resolve_task_queue,
 };
 pub use traits::{

@@ -84,6 +84,7 @@ pub async fn run_run_commands(command: RunCommand, quiet: bool) -> Result<()> {
                 )
                 .map_err(|err| anyhow!("failed to serialize integration_params: {err}"))?;
                 let initial_tasks = processed.resolved_task_queue.clone().unwrap_or_default();
+                validate_task_snapshot_refs(&store, &initial_tasks).await?;
                 let run_id = store
                     .create_run(
                         &processed.name,
@@ -136,6 +137,7 @@ pub async fn run_run_commands(command: RunCommand, quiet: bool) -> Result<()> {
                 TaskCommand::Add { run_id, task_file } => {
                     let tasks =
                         resolve_task_queue_file_for_run(&store, &store, run_id, &task_file).await?;
+                    validate_task_snapshot_refs(&store, &tasks).await?;
                     let inserted = store.append_run_tasks(run_id, &tasks).await?;
                     tracing::info!(run_id, tasks_added = inserted.len(), "appended run tasks");
                 }
@@ -150,6 +152,11 @@ pub async fn run_run_commands(command: RunCommand, quiet: bool) -> Result<()> {
                             kind = task.task.kind_str(),
                             nr_produced_samples = task.nr_produced_samples,
                             nr_completed_samples = task.nr_completed_samples,
+                            start_from = format_task_snapshot_ref(task.task.start_from()),
+                            spawned_from = format_task_snapshot_origin(
+                                task.spawned_from_run_id,
+                                task.spawned_from_task_id
+                            ),
                             failure_reason = task.failure_reason.as_deref().unwrap_or(""),
                             "run task"
                         );
@@ -264,6 +271,40 @@ async fn resolve_task_queue_file_for_run(
         &parsed.task_queue,
     )
     .map_err(|err| anyhow!("invalid task_queue entry: {err}"))
+}
+
+async fn validate_task_snapshot_refs(
+    store: &impl RunReadStore,
+    tasks: &[RunTaskSpec],
+) -> Result<()> {
+    for task in tasks {
+        if let Some(start_from) = task.start_from() {
+            let snapshot = store
+                .get_latest_task_stage_snapshot(start_from.run_id, start_from.task_id)
+                .await?;
+            if snapshot.is_none() {
+                return Err(anyhow!(
+                    "task start_from references run {} task {} but no stage snapshot exists",
+                    start_from.run_id,
+                    start_from.task_id
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn format_task_snapshot_ref(start_from: Option<&gammaboard::core::TaskSnapshotRef>) -> String {
+    start_from
+        .map(|snapshot| format!("{}:{}", snapshot.run_id, snapshot.task_id))
+        .unwrap_or_default()
+}
+
+fn format_task_snapshot_origin(run_id: Option<i32>, task_id: Option<i64>) -> String {
+    match (run_id, task_id) {
+        (Some(run_id), Some(task_id)) => format!("{run_id}:{task_id}"),
+        _ => String::new(),
+    }
 }
 
 fn read_run_add_toml(path: &PathBuf) -> Result<toml::Value> {

@@ -11,7 +11,13 @@ import {
   TableRow,
   Typography,
 } from "@mui/material";
-import { getCurrentTask, getTaskKindLabel, getTaskTargetLabel } from "../utils/tasks";
+import {
+  formatTaskSnapshotRef,
+  formatTaskSpawnOrigin,
+  getCurrentTask,
+  getTaskKindLabel,
+  getTaskTargetLabel,
+} from "../utils/tasks";
 
 const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null }) => {
   const currentTask = getCurrentTask(tasks);
@@ -37,6 +43,12 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
               <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
                 completed_samples: {Number(currentTask.nr_completed_samples || 0).toLocaleString()}
               </Typography>
+              <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                start_from: {formatTaskSnapshotRef(currentTask.task?.start_from)}
+              </Typography>
+              <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                spawned_from: {formatTaskSpawnOrigin(currentTask)}
+              </Typography>
             </Box>
           ) : (
             <Alert severity="info" sx={{ mb: 2 }}>
@@ -52,6 +64,8 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
                   <TableCell>Seq</TableCell>
                   <TableCell>State</TableCell>
                   <TableCell>Task</TableCell>
+                  <TableCell>Start From</TableCell>
+                  <TableCell>Spawned From</TableCell>
                   <TableCell align="right">Target</TableCell>
                   <TableCell align="right">Produced</TableCell>
                   <TableCell align="right">Completed</TableCell>
@@ -75,6 +89,8 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
                       <TableCell>{task.sequence_nr}</TableCell>
                       <TableCell>{task.state}</TableCell>
                       <TableCell>{getTaskKindLabel(task)}</TableCell>
+                      <TableCell>{formatTaskSnapshotRef(task.task?.start_from)}</TableCell>
+                      <TableCell>{formatTaskSpawnOrigin(task)}</TableCell>
                       <TableCell align="right">{getTaskTargetLabel(task)}</TableCell>
                       <TableCell align="right">{Number(task.nr_produced_samples || 0).toLocaleString()}</TableCell>
                       <TableCell align="right">{Number(task.nr_completed_samples || 0).toLocaleString()}</TableCell>

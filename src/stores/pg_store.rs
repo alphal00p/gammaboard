@@ -673,6 +673,16 @@ impl AggregationStore for PgStore {
             .map_err(map_sqlx)
     }
 
+    async fn load_latest_stage_snapshot_for_task(
+        &self,
+        run_id: i32,
+        task_id: i64,
+    ) -> Result<Option<RunStageSnapshot>, StoreError> {
+        queries::get_latest_task_stage_snapshot_for_runner(&self.pool, run_id, task_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
     async fn load_run_sample_progress(
         &self,
         run_id: i32,
@@ -800,6 +810,22 @@ impl RunTaskStore for PgStore {
             task_id,
             nr_produced_samples,
             nr_completed_samples,
+        )
+        .await
+        .map_err(map_sqlx)
+    }
+
+    async fn set_run_task_spawn_origin(
+        &self,
+        task_id: i64,
+        spawned_from_run_id: Option<i32>,
+        spawned_from_task_id: Option<i64>,
+    ) -> Result<(), StoreError> {
+        queries::set_run_task_spawn_origin(
+            &self.pool,
+            task_id,
+            spawned_from_run_id,
+            spawned_from_task_id,
         )
         .await
         .map_err(map_sqlx)

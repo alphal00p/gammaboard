@@ -18,7 +18,7 @@ pub use core::{BuildError, EngineError, EvalError, StoreError};
 pub use core::{
     ImageDisplayMode, IntoPreflightTask, LineDisplayMode, LineRasterGeometry, Linspace,
     ParametrizationState, PlaneRasterGeometry, RunTask, RunTaskInputSpec, RunTaskSpec,
-    RunTaskState, resolve_initial_sampler_aggregator, resolve_task_queue,
+    RunTaskState, TaskSnapshotRef, resolve_initial_sampler_aggregator, resolve_task_queue,
 };
 pub use evaluation::{
     Batch, BatchError, BatchResult, ComplexObservableState, ComplexSampleEvaluator, ComplexValue,

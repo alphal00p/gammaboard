@@ -28,6 +28,7 @@ pub(super) fn run_preflight(
             sampler_aggregator: initial_sampler_aggregator.clone(),
             parametrization: initial_parametrization.clone(),
             observable: None,
+            start_from: None,
         };
         return preflight_single_stage(
             &initial_task,

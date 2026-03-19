@@ -126,6 +126,37 @@ pub(crate) async fn get_latest_stage_snapshot_before_sequence(
     row.map(TryInto::try_into).transpose()
 }
 
+pub(crate) async fn get_latest_task_stage_snapshot_for_runner(
+    pool: &PgPool,
+    run_id: i32,
+    task_id: i64,
+) -> Result<Option<RunStageSnapshot>, sqlx::Error> {
+    let row = sqlx::query_as::<_, RunStageSnapshotRow>(
+        r#"
+        SELECT
+            run_id,
+            task_id,
+            sequence_nr,
+            queue_empty,
+            sampler_snapshot,
+            observable_state,
+            sampler_aggregator,
+            parametrization
+        FROM run_stage_snapshots
+        WHERE run_id = $1
+          AND task_id = $2
+          AND queue_empty = TRUE
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(run_id)
+    .bind(task_id)
+    .fetch_optional(pool)
+    .await?;
+    row.map(TryInto::try_into).transpose()
+}
+
 pub(crate) async fn get_run_sample_progress(
     pool: &PgPool,
     run_id: i32,

@@ -8,6 +8,8 @@ type RunTaskRow = (
     i32,
     i32,
     JsonValue,
+    Option<i32>,
+    Option<i64>,
     String,
     i64,
     i64,
@@ -29,6 +31,8 @@ fn decode_task_row(row: RunTaskRow) -> Result<RunTask, sqlx::Error> {
         run_id,
         sequence_nr,
         task,
+        spawned_from_run_id,
+        spawned_from_task_id,
         state,
         nr_produced_samples,
         nr_completed_samples,
@@ -56,6 +60,8 @@ fn decode_task_row(row: RunTaskRow) -> Result<RunTask, sqlx::Error> {
         run_id,
         sequence_nr,
         task,
+        spawned_from_run_id,
+        spawned_from_task_id,
         state,
         nr_produced_samples,
         nr_completed_samples,
@@ -100,6 +106,8 @@ pub(crate) async fn append_run_tasks(
                 run_id,
                 sequence_nr,
                 task,
+                spawned_from_run_id,
+                spawned_from_task_id,
                 state,
                 nr_produced_samples,
                 nr_completed_samples,
@@ -132,6 +140,8 @@ pub(crate) async fn list_run_tasks(
             run_id,
             sequence_nr,
             task,
+            spawned_from_run_id,
+            spawned_from_task_id,
             state,
             nr_produced_samples,
             nr_completed_samples,
@@ -183,6 +193,8 @@ pub(crate) async fn load_active_run_task(
             run_id,
             sequence_nr,
             task,
+            spawned_from_run_id,
+            spawned_from_task_id,
             state,
             nr_produced_samples,
             nr_completed_samples,
@@ -229,6 +241,8 @@ pub(crate) async fn activate_next_run_task(
             run_id,
             sequence_nr,
             task,
+            spawned_from_run_id,
+            spawned_from_task_id,
             state,
             nr_produced_samples,
             nr_completed_samples,
@@ -265,6 +279,29 @@ pub(crate) async fn update_run_task_progress(
     .bind(task_id)
     .bind(nr_produced_samples)
     .bind(nr_completed_samples)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn set_run_task_spawn_origin(
+    pool: &PgPool,
+    task_id: i64,
+    spawned_from_run_id: Option<i32>,
+    spawned_from_task_id: Option<i64>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        UPDATE run_tasks
+        SET
+            spawned_from_run_id = $2,
+            spawned_from_task_id = $3
+        WHERE id = $1
+        "#,
+    )
+    .bind(task_id)
+    .bind(spawned_from_run_id)
+    .bind(spawned_from_task_id)
     .execute(pool)
     .await?;
     Ok(())

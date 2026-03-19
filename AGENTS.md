@@ -55,6 +55,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - Parametrization versions are persisted separately in `parametrization_states (run_id, version)` as a canonical `{ config, snapshot }` state payload; evaluators rebuild the parametrization from that persisted state when the version changes, and the version row must be written before any latent batch references it.
 - Task-owned phase transitions replace sampler-emitted semantic advances: `sample` tasks carry both `sampler_aggregator` and `parametrization` config, while `image` and `plot_line` tasks own deterministic scan geometry and resolve internally to raster sampler + identity parametrization stages. The runner activates the next phase only after the current queue is drained and the current sampler snapshot is persisted.
 - Task transitions must restore unspecified runtime state from the latest prior queue-empty `run_stage_snapshots` row, not from transient in-memory handoff only. In particular, sampler snapshot, observable state, and parametrization snapshot handoff should be sourced from persisted stage snapshots.
+- Executable tasks may optionally declare `start_from = { run_id, task_id }`. When present, task activation must restore runtime state from the latest queue-empty stage snapshot of that referenced task instead of the default previous-stage lookup.
 - `sample` tasks may leave `observable` unspecified. In that case, transition activation must keep the current/snapshotted observable state instead of rebuilding a new one; specifying `observable` explicitly starts a fresh observable of that config.
 - Sample-task config files may omit `sampler_aggregator` and/or `parametrization`; preprocessing must resolve those fields by inheriting the previous effective sample-stage settings before tasks are persisted.
 - For task-driven runs, do not duplicate sampler config at the top level of the run-add TOML. Resolve the initial sampler from the first sample task during preprocessing and persist the concrete resolved `integration_params`.
@@ -80,6 +81,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 ## Snapshot, Logging, And Read Rules
 - Sampler pause/resume snapshots are persisted on `runs.sampler_runner_snapshot`; keep the persisted shape explicit and versioned.
 - Stage-boundary snapshots are also persisted on `run_stage_snapshots`; each row must record `queue_empty` so deterministic resume eligibility is explicit.
+- `run_tasks` should persist the effective snapshot origin used at activation time (`spawned_from_run_id`, `spawned_from_task_id`) so branching/debugging remains visible in the CLI and dashboard.
 - Adding a new sampler requires snapshot export/restore support for it.
 - Do not expose `runs.sampler_runner_snapshot` through the read API or dashboard payloads.
 - Runtime logs are persisted from tracing context through `RuntimeLogStore`.

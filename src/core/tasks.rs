@@ -30,6 +30,12 @@ impl RunTaskState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskSnapshotRef {
+    pub run_id: i32,
+    pub task_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RunTaskInputSpec {
     Sample {
@@ -38,16 +44,22 @@ pub enum RunTaskInputSpec {
         parametrization: Option<ParametrizationConfig>,
         #[serde(default)]
         observable: Option<ObservableConfig>,
+        #[serde(default)]
+        start_from: Option<TaskSnapshotRef>,
     },
     Image {
         geometry: PlaneRasterGeometry,
         #[serde(default)]
         display: ImageDisplayMode,
+        #[serde(default)]
+        start_from: Option<TaskSnapshotRef>,
     },
     PlotLine {
         geometry: LineRasterGeometry,
         #[serde(default)]
         display: LineDisplayMode,
+        #[serde(default)]
+        start_from: Option<TaskSnapshotRef>,
     },
     Pause,
 }
@@ -76,16 +88,21 @@ pub enum RunTaskSpec {
         sampler_aggregator: SamplerAggregatorConfig,
         parametrization: ParametrizationConfig,
         observable: Option<ObservableConfig>,
+        start_from: Option<TaskSnapshotRef>,
     },
     Image {
         geometry: PlaneRasterGeometry,
         #[serde(default)]
         display: ImageDisplayMode,
+        #[serde(default)]
+        start_from: Option<TaskSnapshotRef>,
     },
     PlotLine {
         geometry: LineRasterGeometry,
         #[serde(default)]
         display: LineDisplayMode,
+        #[serde(default)]
+        start_from: Option<TaskSnapshotRef>,
     },
     Pause,
 }
@@ -137,6 +154,15 @@ impl RunTaskSpec {
                     geometry: geometry.clone(),
                 },
             }),
+            Self::Pause => None,
+        }
+    }
+
+    pub fn start_from(&self) -> Option<&TaskSnapshotRef> {
+        match self {
+            Self::Sample { start_from, .. }
+            | Self::Image { start_from, .. }
+            | Self::PlotLine { start_from, .. } => start_from.as_ref(),
             Self::Pause => None,
         }
     }
@@ -209,26 +235,38 @@ impl IntoPreflightTask for RunTaskSpec {
                 sampler_aggregator,
                 parametrization,
                 observable,
+                start_from,
                 ..
             } => Ok(Some(Self::Sample {
                 nr_samples: Some(1),
                 sampler_aggregator,
                 parametrization,
                 observable,
+                start_from,
             })),
             Self::Image {
                 mut geometry,
                 display,
+                start_from,
             } => {
                 geometry.reduce_for_preflight(4, 4);
-                Ok(Some(Self::Image { geometry, display }))
+                Ok(Some(Self::Image {
+                    geometry,
+                    display,
+                    start_from,
+                }))
             }
             Self::PlotLine {
                 mut geometry,
                 display,
+                start_from,
             } => {
                 geometry.reduce_for_preflight(8);
-                Ok(Some(Self::PlotLine { geometry, display }))
+                Ok(Some(Self::PlotLine {
+                    geometry,
+                    display,
+                    start_from,
+                }))
             }
         }
     }
@@ -252,6 +290,7 @@ pub fn resolve_task_queue(
                 sampler_aggregator,
                 parametrization,
                 observable,
+                start_from,
             } => {
                 if let Some(sampler_aggregator) = sampler_aggregator.as_ref() {
                     current_sampler_aggregator = sampler_aggregator.clone();
@@ -264,18 +303,29 @@ pub fn resolve_task_queue(
                     sampler_aggregator: current_sampler_aggregator.clone(),
                     parametrization: current_parametrization.clone(),
                     observable: observable.clone(),
+                    start_from: start_from.clone(),
                 });
             }
-            RunTaskInputSpec::Image { geometry, display } => {
+            RunTaskInputSpec::Image {
+                geometry,
+                display,
+                start_from,
+            } => {
                 resolved.push(RunTaskSpec::Image {
                     geometry: geometry.clone(),
                     display: *display,
+                    start_from: start_from.clone(),
                 });
             }
-            RunTaskInputSpec::PlotLine { geometry, display } => {
+            RunTaskInputSpec::PlotLine {
+                geometry,
+                display,
+                start_from,
+            } => {
                 resolved.push(RunTaskSpec::PlotLine {
                     geometry: geometry.clone(),
                     display: *display,
+                    start_from: start_from.clone(),
                 });
             }
         }
@@ -459,6 +509,8 @@ pub struct RunTask {
     pub run_id: i32,
     pub sequence_nr: i32,
     pub task: RunTaskSpec,
+    pub spawned_from_run_id: Option<i32>,
+    pub spawned_from_task_id: Option<i64>,
     pub state: RunTaskState,
     pub nr_produced_samples: i64,
     pub nr_completed_samples: i64,

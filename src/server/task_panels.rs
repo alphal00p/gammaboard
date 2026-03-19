@@ -37,12 +37,12 @@ impl RunTaskSpec {
                 text: "Task is paused".to_string(),
             }]),
             Self::Sample { .. } => build_sample_current_panels(task, observable, run_spec),
-            Self::Image { geometry, display } => {
-                build_image_current_panels(task, observable, geometry, *display)
-            }
-            Self::PlotLine { geometry, display } => {
-                build_line_current_panels(task, observable, geometry, *display, run_spec)
-            }
+            Self::Image {
+                geometry, display, ..
+            } => build_image_current_panels(task, observable, geometry, *display),
+            Self::PlotLine {
+                geometry, display, ..
+            } => build_line_current_panels(task, observable, geometry, *display, run_spec),
         }
     }
 

@@ -149,6 +149,11 @@ pub trait AggregationStore: Send + Sync {
         run_id: i32,
         sequence_nr: i32,
     ) -> Result<Option<RunStageSnapshot>, StoreError>;
+    async fn load_latest_stage_snapshot_for_task(
+        &self,
+        run_id: i32,
+        task_id: i64,
+    ) -> Result<Option<RunStageSnapshot>, StoreError>;
     async fn load_run_sample_progress(
         &self,
         run_id: i32,
@@ -191,6 +196,12 @@ pub trait RunTaskStore: Send + Sync {
         task_id: i64,
         nr_produced_samples: i64,
         nr_completed_samples: i64,
+    ) -> Result<(), StoreError>;
+    async fn set_run_task_spawn_origin(
+        &self,
+        task_id: i64,
+        spawned_from_run_id: Option<i32>,
+        spawned_from_task_id: Option<i64>,
     ) -> Result<(), StoreError>;
     async fn complete_run_task(&self, task_id: i64) -> Result<(), StoreError>;
     async fn fail_run_task(&self, task_id: i64, reason: &str) -> Result<(), StoreError>;

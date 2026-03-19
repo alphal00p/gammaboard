@@ -68,25 +68,26 @@ struct SamplerRuntimeState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SamplerAggregatorRunnerSnapshot {
-    pub version: u32,
-    pub engine: SamplerAggregatorSnapshot,
+    pub version: u32,                      //why
+    pub engine: SamplerAggregatorSnapshot, //maybe change the type here if it's raw json anyways, e.g. (SamplerAggregatorSnapshot = SamplerAggregatorConfig, JSON) or simply rename to SamplerAggregatorState to be consistent with observable
     pub observable_state: ObservableState,
-    active_runtime_task_id: Option<i64>,
-    current_parametrization_state_version: i64,
+    active_runtime_task_id: Option<i64>, //why option, why even stored?
+    current_parametrization_state_version: i64, //should this be moved to the snapshotting? remove versioned parametrizations completely?
     runtime_state: SamplerRuntimeState,
     last_pending_after_enqueue: Option<usize>,
     training_completion_marked: bool,
-    auto_stop_triggered: bool,
+    auto_stop_triggered: bool, //why?
 }
 
 impl SamplerRuntimeState {
+    //this should be moved to roling metric, why not impl serde for the rolling metric anyways?
     fn rolling_metric_snapshot(metric: &RollingMetric) -> RollingMetricSnapshot {
         RollingMetricSnapshot {
             mean: metric.value(),
             std_dev: metric.std_dev(),
         }
     }
-
+    // why not promote completed_samples_per_second to another rolling metric?
     fn to_runtime_metrics(&self, completed_samples_per_second: f64) -> SamplerRuntimeMetrics {
         SamplerRuntimeMetrics {
             produced_batches_total: self.produced_batches_total,
@@ -152,6 +153,7 @@ pub struct SamplerAggregatorRunner<WQ, AS, RC, PS, TS> {
     current_parametrization_state: ParametrizationState,
 }
 
+//could it make sense to combine some of the stores to avoid clutter? I think so.
 impl<WQ, AS, RC, PS, TS> SamplerAggregatorRunner<WQ, AS, RC, PS, TS>
 where
     WQ: WorkQueueStore,
@@ -277,6 +279,7 @@ where
         initial_sampler_config: SamplerAggregatorConfig,
         initial_parametrization_config: ParametrizationConfig,
     ) -> Result<Self, RunnerError> {
+        // maybe move checking into a seperate function
         let initial_batch_size = config.max_batch_size.min(64).max(Self::MIN_BATCH_SIZE);
         if config.max_batch_size == 0 {
             return Err(RunnerError::Engine(EngineError::engine(
@@ -317,11 +320,11 @@ where
             });
         let latest_version = parametrization_state_store
             .load_latest_parametrization_version(run_id)
-            .await?;
+            .await?; // parametrization verioning should be unnecessary now that we have the snapshots per task, we enforce that parametrization only changes between tasks
         let initial_parametrization_state = Self::build_parametrization_state(
             &initial_parametrization_config,
             &point_spec,
-            None,
+            None, //shouldnt this be Option<(a,b)> instead of Option<a>, Option<b>?
             None,
         )?;
         let (current_parametrization_state_version, current_parametrization_state) =
@@ -461,6 +464,7 @@ where
             .work_queue
             .fetch_completed_batches(self.run_id, self.config.completed_batch_fetch_limit)
             .await?;
+        //maybe move getting and then deleting the batches into process completed.
         let consumed_ids = self.process_completed(&completed).await?;
         self.work_queue
             .delete_completed_batches(&consumed_ids)
@@ -583,6 +587,8 @@ where
     }
 
     async fn try_mark_training_completed(&mut self) -> Result<(), RunnerError> {
+        // this training_samples_remaining is legacy, since we have task switching.
+        // think about how to make checking for task completeness consistent! sample tasks in general have a nr_samples specified.
         if self.training_completion_marked || self.engine.training_samples_remaining().is_some() {
             return Ok(());
         }
@@ -634,9 +640,38 @@ where
             return Ok(());
         }
 
-        let previous_snapshot = self
-            .aggregation_store
-            .load_latest_stage_snapshot_before_sequence(self.run_id, task.sequence_nr)
+        let (previous_snapshot, spawn_origin) = if let Some(start_from) = task.task.start_from() {
+            let snapshot = self
+                .aggregation_store
+                .load_latest_stage_snapshot_for_task(start_from.run_id, start_from.task_id)
+                .await?;
+            let snapshot = snapshot.ok_or_else(|| {
+                RunnerError::Store(StoreError::not_found(format!(
+                    "no queue-empty stage snapshot found for run {} task {}",
+                    start_from.run_id, start_from.task_id
+                )))
+            })?;
+            (
+                Some(snapshot),
+                Some((start_from.run_id, start_from.task_id)),
+            )
+        } else {
+            let snapshot = self
+                .aggregation_store
+                .load_latest_stage_snapshot_before_sequence(self.run_id, task.sequence_nr)
+                .await?;
+            let origin = snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.task_id.map(|task_id| (snapshot.run_id, task_id)));
+            (snapshot, origin)
+        };
+
+        self.task_store
+            .set_run_task_spawn_origin(
+                task.id,
+                spawn_origin.map(|(run_id, _)| run_id),
+                spawn_origin.map(|(_, task_id)| task_id),
+            )
             .await?;
 
         if let Some(snapshot) = previous_snapshot.as_ref() {
@@ -888,6 +923,8 @@ where
         pending_before_tick: usize,
         open_batch_count: usize,
     ) -> Result<usize, RunnerError> {
+        // why not make this more "functional" instead of this very tick based approach
+        // i.e. a single function that starts working on a task until it gets paused, pausing should automatically produce a snapshot. once this function returns if we are still paused and if there are any other tasks remaining.
         for _ in 0..8 {
             let Some(task) = self.ensure_active_task().await? else {
                 self.clear_run_assignments_once("run task queue exhausted; assignments cleared")

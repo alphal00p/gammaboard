@@ -3,6 +3,8 @@ CREATE TABLE IF NOT EXISTS run_tasks (
     run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     sequence_nr INT NOT NULL,
     task JSONB NOT NULL,
+    spawned_from_run_id INT REFERENCES runs(id) ON DELETE SET NULL,
+    spawned_from_task_id BIGINT REFERENCES run_tasks(id) ON DELETE SET NULL,
     state TEXT NOT NULL DEFAULT 'pending',
     nr_produced_samples BIGINT NOT NULL DEFAULT 0,
     nr_completed_samples BIGINT NOT NULL DEFAULT 0,

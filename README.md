@@ -114,13 +114,14 @@ kind = "spherical"
 kind = "pause"
 ```
 
-Sample tasks support inheritance. Omitted `sampler_aggregator` and `parametrization` fields inherit from the previous effective sample stage, or from the run's initial integration settings for the first sample task. `observable` is different: if omitted, the task keeps the current/snapshotted observable state; if specified, the task starts a fresh observable of that config. If `task_queue` is omitted, the run is created idle and no work will be produced until tasks are appended.
+Sample tasks support inheritance. Omitted `sampler_aggregator` and `parametrization` fields inherit from the previous effective sample stage, or from the run's initial integration settings for the first sample task. `observable` is different: if omitted, the task keeps the current/snapshotted observable state; if specified, the task starts a fresh observable of that config. Executable tasks may also specify `start_from = { run_id = ..., task_id = ... }` to branch from the latest queue-empty stage snapshot of an older task instead of the default previous-stage handoff. If `task_queue` is omitted, the run is created idle and no work will be produced until tasks are appended.
 
 Deterministic scan tasks are also supported:
 ```toml
 [[task_queue]]
 kind = "image"
 display = "complex_hue_intensity" # optional; "auto" is the default
+start_from = { run_id = 7, task_id = 42 } # optional checkpoint branch
 [task_queue.geometry]
 offset = [0.0, 0.0]
 u_vector = [1.0, 0.0]
@@ -138,7 +139,7 @@ linspace = { start = -2.0, stop = 2.0, count = 512 }
 ```
 
 `image` and `plot_line` tasks rasterize deterministic points directly in evaluator space, persist only compact progress history, and render their current result from the full task-local observable state.
-The dashboard task table can switch between active and older tasks; historical deterministic-task rendering comes from the latest stage snapshot for that task.
+The dashboard task table can switch between active and older tasks, and it shows both the configured `start_from` checkpoint and the effective `spawned_from` snapshot that was used when the task activated.
 
 ### Start local workers
 ```bash
