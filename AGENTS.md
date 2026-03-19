@@ -122,6 +122,14 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 If you change structure, operations, CLI behavior, config schema, or runtime behavior, update `AGENTS.md` in the same change. If the change affects installation, setup, or normal operator workflow, update `README.md` too.
 
 ## Commit Discipline
+- Prefer commit-sized changes and pause between stages.
+- When a stage is commit-sized, suggest the commit message as a bare fenced text block only:
+  ```text
+  your commit message
+  ```
+  Do not add extra commentary around it.
+
+## Commit Discipline
 - Prefer commit-sized changes: finish one coherent stage, verify it, then stop and commit before starting the next stage.
 - After each small stage, explicitly check whether it is time to commit again instead of letting unrelated follow-up edits accumulate.
 - When a stage is ready, suggest a concrete commit message so the next commit is easy to make.
