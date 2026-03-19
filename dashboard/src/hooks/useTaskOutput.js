@@ -7,6 +7,7 @@ const emptyState = Object.freeze({
   output: null,
   historyItems: [],
   latestSnapshotId: null,
+  error: null,
 });
 
 const mergeHistoryItems = (previousItems, nextItems) => {
@@ -57,11 +58,15 @@ export const useTaskOutput = ({ runId, taskId, pollMs = 3000, historyLimit = 500
             output: output ?? null,
             historyItems,
             latestSnapshotId: history?.latest_snapshot_id ?? output?.latest_snapshot_id ?? previous.latestSnapshotId,
+            error: null,
           };
         });
       } catch (err) {
         if (err?.name === "AbortError") return;
-        setState(emptyState);
+        setState((previous) => ({
+          ...previous,
+          error: err?.message || "Failed to fetch task output",
+        }));
       }
     },
     [enabled, historyLimit, runId, taskId],

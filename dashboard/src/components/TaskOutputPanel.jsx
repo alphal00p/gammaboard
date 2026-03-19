@@ -4,7 +4,7 @@ import { useTaskOutput } from "../hooks/useTaskOutput";
 import { formatTaskSnapshotRef, formatTaskSpawnOrigin } from "../utils/tasks";
 
 const TaskOutputPanel = ({ runId, task }) => {
-  const { output, historyItems } = useTaskOutput({
+  const { output, historyItems, error } = useTaskOutput({
     runId,
     taskId: task?.id ?? null,
     pollMs: 3000,
@@ -13,6 +13,20 @@ const TaskOutputPanel = ({ runId, task }) => {
 
   if (!task) {
     return <Alert severity="info">Select a task to inspect its output panels.</Alert>;
+  }
+
+  if (error) {
+    return (
+      <>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          Selected task: #{task.sequence_nr} {task.task?.kind || "unknown"} ({task.state})
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          start_from={formatTaskSnapshotRef(task.task?.start_from)} spawned_from={formatTaskSpawnOrigin(task)}
+        </Typography>
+        <Alert severity="error">{error}</Alert>
+      </>
+    );
   }
 
   return (

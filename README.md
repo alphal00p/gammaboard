@@ -114,7 +114,7 @@ kind = "spherical"
 kind = "pause"
 ```
 
-Sample tasks support inheritance. Omitted `sampler_aggregator` and `parametrization` fields inherit from the previous effective sample stage, or from the run's initial integration settings for the first sample task. `observable` is different: if omitted, the task keeps the current/snapshotted observable state; if specified, the task starts a fresh observable of that config. Executable tasks may also specify `start_from = { run_id = ..., task_id = ... }` to branch from the latest queue-empty stage snapshot of an older task instead of the default previous-stage handoff. If `task_queue` is omitted, the run is created idle and no work will be produced until tasks are appended.
+Sample tasks support inheritance. Omitted `sampler_aggregator` and `parametrization` fields inherit from the previous effective sample stage, or from the run's initial integration settings for the first sample task. `observable` is different: if omitted, the task keeps the current aggregate observable semantics, but it does not inherit full image/line observables from deterministic scan tasks; if specified, the task starts a fresh observable of that config. Executable tasks may also specify `start_from = { run_id = ..., task_id = ... }` to branch from the latest queue-empty stage snapshot of an older task instead of the default previous-stage handoff. If `task_queue` is omitted, the run is created idle and no work will be produced until tasks are appended.
 
 Deterministic scan tasks are also supported:
 ```toml

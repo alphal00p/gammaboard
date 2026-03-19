@@ -198,8 +198,23 @@ impl RunTaskSpec {
     }
 
     pub fn observable_config(&self, current_observable: &ObservableConfig) -> ObservableConfig {
-        self.explicit_observable_config(current_observable)
-            .unwrap_or_else(|| current_observable.clone())
+        match self {
+            Self::Sample {
+                observable: Some(observable),
+                ..
+            } => observable.clone(),
+            Self::Sample {
+                observable: None, ..
+            } => match current_observable {
+                ObservableConfig::FullScalar => ObservableConfig::Scalar,
+                ObservableConfig::FullComplex => ObservableConfig::Complex,
+                other => other.clone(),
+            },
+            Self::Image { .. } | Self::PlotLine { .. } => self
+                .explicit_observable_config(current_observable)
+                .expect("image and plot_line tasks always resolve to a full observable"),
+            Self::Pause => current_observable.clone(),
+        }
     }
 
     pub fn empty_observable_state(
