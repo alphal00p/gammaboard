@@ -2,7 +2,6 @@ pub mod bootstrap;
 pub mod pg_store;
 mod queries;
 pub mod read_models;
-pub mod run_control;
 pub mod traits;
 
 pub use crate::core::RunReadStore;
@@ -13,4 +12,3 @@ pub use read_models::{
     SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot, WorkQueueStats,
     WorkerLogEntry, WorkerLogPage,
 };
-pub use run_control::RunControlStore;

@@ -13,6 +13,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - `src/server/*`: dashboard read API runtime and handlers.
 - `src/tracing.rs`: tracing setup and DB log sink wiring.
 - `src/cli/*` and `src/main.rs`: CLI argument parsing, wiring, and process bootstrap.
+- Keep shared CLI store/tracing bootstrap in `src/cli/shared.rs`; avoid repeating `init_pg_store` + `init_tracing` wiring in individual CLI commands.
 
 ## Core Invariants
 - PostgreSQL is the source of truth for runs, batches, node state, logs, and snapshots.
@@ -52,6 +53,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - Task-local structural validation and preflight reduction hooks belong on the task types in `src/core/tasks.rs`; `src/preprocess/*` should orchestrate them rather than duplicate task semantics.
 - Keep latent-batch queue types separate from concrete evaluator batch/result types in code layout: latent queue payloads belong with sampler-side semantics, while `Batch`/`BatchResult` are the concrete A/B interface.
 - `core` owns the cross-stage shared config/run-spec types and error types; concrete evaluator/sampler transport types should still live in `evaluation` or `sampling`.
+- Keep the fine-grained store traits in `src/core/traits.rs` for implementation composition, but prefer coarse runner-facing facades like `EvaluatorWorkerStore` and `SamplerWorkerStore` at runner boundaries so worker constructors stay readable.
 - Parametrization state lives in task/stage snapshots as `{ config, snapshot }`; evaluators rebuild parametrizations from the activation snapshot resolved through `batches.task_id`.
 - Task-owned phase transitions replace sampler-emitted semantic advances: `sample` tasks carry both `sampler_aggregator` and `parametrization` config, while `image` and `plot_line` tasks own deterministic scan geometry and resolve internally to raster sampler + identity parametrization stages. The runner activates the next phase only after the current queue is drained and the current sampler snapshot is persisted.
 - Task transitions must restore unspecified runtime state from the latest prior queue-empty `run_stage_snapshots` row, not from transient in-memory handoff only. In particular, sampler snapshot, observable state, and parametrization snapshot handoff should be sourced from persisted stage snapshots.

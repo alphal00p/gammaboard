@@ -1,11 +1,8 @@
-use anyhow::{Context, Result};
+use super::shared::with_cli_store;
+use anyhow::Result;
 use clap::Args;
-use gammaboard::init_pg_store;
 use gammaboard::runners::{NodeRunner, NodeRunnerConfig};
 use std::time::Duration;
-use tracing::Instrument;
-
-use super::shared::init_cli_tracing;
 
 #[derive(Debug, Args)]
 pub struct RunNodeArgs {
@@ -20,25 +17,24 @@ pub struct RunNodeArgs {
 }
 
 pub async fn run_node(args: RunNodeArgs, quiet: bool) -> Result<()> {
-    let store = init_pg_store(args.db_pool_size)
-        .await
-        .context("failed to initialize postgres store")?;
-    init_cli_tracing(&store, quiet)?;
     let node_id = args.node_id.clone();
-    let node_runner = NodeRunner::new(
-        store,
-        node_id.clone(),
-        NodeRunnerConfig {
-            poll_interval: Duration::from_millis(args.poll_ms),
-            max_consecutive_start_failures: args.max_start_failures,
-        },
-    );
     let span = tracing::span!(
         tracing::Level::TRACE,
         "run-node",
         source = "worker",
         node_id = %node_id
     );
-    node_runner.run().instrument(span).await?;
-    Ok(())
+    with_cli_store(args.db_pool_size, quiet, span, |store| async move {
+        let node_runner = NodeRunner::new(
+            store,
+            node_id,
+            NodeRunnerConfig {
+                poll_interval: Duration::from_millis(args.poll_ms),
+                max_consecutive_start_failures: args.max_start_failures,
+            },
+        );
+        node_runner.run().await?;
+        Ok(())
+    })
+    .await
 }

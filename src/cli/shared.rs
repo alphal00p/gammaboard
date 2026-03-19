@@ -1,8 +1,10 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use clap::{Args, ValueEnum};
-use gammaboard::PgStore;
 use gammaboard::core::WorkerRole;
 use gammaboard::tracing::init_tracing;
+use gammaboard::{PgStore, init_pg_store};
+use std::future::Future;
+use tracing::Instrument;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum RoleArg {
@@ -55,4 +57,26 @@ pub fn init_cli_tracing(store: &PgStore, quiet: bool) -> Result<()> {
     };
     init_tracing(runtime_log_store, quiet).map_err(|err| anyhow!(err.to_string()))?;
     Ok(())
+}
+
+pub async fn init_cli_store(db_pool_size: u32, quiet: bool) -> Result<PgStore> {
+    let store = init_pg_store(db_pool_size)
+        .await
+        .context("failed to initialize postgres store")?;
+    init_cli_tracing(&store, quiet)?;
+    Ok(store)
+}
+
+pub async fn with_cli_store<T, F, Fut>(
+    db_pool_size: u32,
+    quiet: bool,
+    span: tracing::Span,
+    f: F,
+) -> Result<T>
+where
+    F: FnOnce(PgStore) -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    let store = init_cli_store(db_pool_size, quiet).await?;
+    async move { f(store).await }.instrument(span).await
 }

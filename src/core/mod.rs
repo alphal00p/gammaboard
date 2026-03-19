@@ -22,6 +22,6 @@ pub use tasks::{
     resolve_initial_sampler_aggregator, resolve_task_queue,
 };
 pub use traits::{
-    AggregationStore, ControlPlaneStore, RunReadStore, RunSpecStore, RunTaskStore, RuntimeLogStore,
-    WorkQueueStore,
+    AggregationStore, ControlPlaneStore, EvaluatorWorkerStore, RunReadStore, RunSpecStore,
+    RunTaskStore, RuntimeLogStore, SamplerWorkerStore, WorkQueueStore,
 };

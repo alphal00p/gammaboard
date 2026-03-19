@@ -1,10 +1,8 @@
-use anyhow::Context;
 use clap::Args;
-use gammaboard::init_pg_store;
 use gammaboard::server::{resolve_bind, serve};
 use std::net::SocketAddr;
 
-use super::shared::init_cli_tracing;
+use super::shared::with_cli_store;
 
 #[derive(Debug, Args)]
 pub struct ServerArgs {
@@ -15,10 +13,15 @@ pub struct ServerArgs {
 }
 
 pub async fn run_server(args: ServerArgs, quiet: bool) -> anyhow::Result<()> {
-    let store = init_pg_store(args.db_pool_size)
-        .await
-        .context("failed to initialize postgres store")?;
-    init_cli_tracing(&store, quiet)?;
     let bind = resolve_bind(args.bind)?;
-    serve(store, bind).await
+    let span = tracing::span!(
+        tracing::Level::TRACE,
+        "server",
+        source = "server",
+        bind = %bind
+    );
+    with_cli_store(args.db_pool_size, quiet, span, |store| async move {
+        serve(store, bind).await
+    })
+    .await
 }

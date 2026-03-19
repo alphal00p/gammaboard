@@ -55,7 +55,6 @@ pub(crate) async fn run_evaluator_role<S: NodeRunnerStore>(
                 .performance_snapshot_interval_ms,
         ),
         worker.store.clone(),
-        worker.store.clone(),
     );
 
     let idle_backoff = Duration::from_millis(spec.evaluator_runner_params.min_loop_time_ms);

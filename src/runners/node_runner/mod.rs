@@ -9,7 +9,7 @@ mod reconcile;
 mod sampler_aggregator_role_runner;
 
 use crate::core::{
-    AggregationStore, ControlPlaneStore, RunSpecStore, RunTaskStore, StoreError, WorkQueueStore,
+    ControlPlaneStore, EvaluatorWorkerStore, RunSpecStore, SamplerWorkerStore, StoreError,
     WorkerRole,
 };
 use std::time::Duration;
@@ -27,9 +27,8 @@ pub struct NodeRunnerConfig {
 pub trait NodeRunnerStore:
     RunSpecStore
     + ControlPlaneStore
-    + WorkQueueStore
-    + AggregationStore
-    + RunTaskStore
+    + EvaluatorWorkerStore
+    + SamplerWorkerStore
     + Clone
     + Send
     + Sync
@@ -40,9 +39,8 @@ pub trait NodeRunnerStore:
 impl<T> NodeRunnerStore for T where
     T: RunSpecStore
         + ControlPlaneStore
-        + WorkQueueStore
-        + AggregationStore
-        + RunTaskStore
+        + EvaluatorWorkerStore
+        + SamplerWorkerStore
         + Clone
         + Send
         + Sync

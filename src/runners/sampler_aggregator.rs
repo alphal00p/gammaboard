@@ -10,15 +10,14 @@
 //! - delete consumed completed batches
 
 use crate::core::{
-    AggregationStore, ParametrizationState, RollingMetricSnapshot, RunSampleProgress,
-    RunStageSnapshot, RunTask, RunTaskSpec, RunTaskStore, SamplerAggregatorPerformanceSnapshot,
-    SamplerRollingAverages, SamplerRuntimeMetrics, StoreError, WorkQueueStore,
+    EngineError, EvaluatorConfig, ParametrizationConfig, ParametrizationState,
+    RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot, RunTask, RunTaskSpec,
+    SamplerAggregatorConfig, SamplerAggregatorPerformanceSnapshot, SamplerRollingAverages,
+    SamplerRuntimeMetrics, SamplerWorkerStore, StoreError,
 };
-use crate::core::{EngineError, EvaluatorConfig, ParametrizationConfig, SamplerAggregatorConfig};
 use crate::evaluation::{ObservableState, PointSpec};
 use crate::runners::rolling_metric::RollingMetric;
 use crate::sampling::{SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot, StageHandoff};
-use crate::stores::RunControlStore;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -123,15 +122,12 @@ pub enum RunnerError {
     Store(#[from] StoreError),
 }
 
-pub struct SamplerAggregatorRunner<WQ, AS, RC, TS> {
+pub struct SamplerAggregatorRunner<S> {
     run_id: i32,
     node_id: String,
     engine: Box<dyn SamplerAggregator>,
     observable_state: ObservableState,
-    work_queue: WQ,
-    aggregation_store: AS,
-    run_control: RC,
-    task_store: TS,
+    store: S,
     config: SamplerAggregatorRunnerParams,
     point_spec: PointSpec,
     nr_produced_samples: i64,
@@ -149,12 +145,9 @@ pub struct SamplerAggregatorRunner<WQ, AS, RC, TS> {
 }
 
 //could it make sense to combine some of the stores to avoid clutter? I think so.
-impl<WQ, AS, RC, TS> SamplerAggregatorRunner<WQ, AS, RC, TS>
+impl<S> SamplerAggregatorRunner<S>
 where
-    WQ: WorkQueueStore,
-    AS: AggregationStore,
-    RC: RunControlStore,
-    TS: RunTaskStore,
+    S: SamplerWorkerStore,
 {
     const MIN_BATCH_SIZE: usize = 1;
     const MAX_BATCH_SIZE_UP_FACTOR: f64 = 1.25;
@@ -288,10 +281,7 @@ where
         node_id: impl Into<String>,
         engine: Box<dyn SamplerAggregator>,
         observable_state: ObservableState,
-        work_queue: WQ,
-        aggregation_store: AS,
-        run_control: RC,
-        task_store: TS,
+        store: S,
         config: SamplerAggregatorRunnerParams,
         point_spec: PointSpec,
         evaluator_config: EvaluatorConfig,
@@ -302,13 +292,14 @@ where
         let initial_batch_size = config.max_batch_size.min(64).max(Self::MIN_BATCH_SIZE);
         let performance_snapshot_interval =
             Duration::from_millis(config.performance_snapshot_interval_ms);
-        let persisted_progress = aggregation_store
-            .load_run_sample_progress(run_id)
-            .await?
-            .unwrap_or(RunSampleProgress {
-                nr_produced_samples: 0,
-                nr_completed_samples: 0,
-            });
+        let persisted_progress =
+            store
+                .load_run_sample_progress(run_id)
+                .await?
+                .unwrap_or(RunSampleProgress {
+                    nr_produced_samples: 0,
+                    nr_completed_samples: 0,
+                });
         let initial_parametrization_state =
             Self::build_parametrization_state(&initial_parametrization_config, &point_spec, None)?;
 
@@ -317,10 +308,7 @@ where
             node_id: node_id.into(),
             engine,
             observable_state,
-            work_queue,
-            aggregation_store,
-            run_control,
-            task_store,
+            store,
             config,
             point_spec,
             nr_produced_samples: persisted_progress.nr_produced_samples,
@@ -370,7 +358,7 @@ where
 
     pub async fn persist_snapshot(&mut self) -> Result<(), RunnerError> {
         let snapshot = self.snapshot_state()?;
-        self.aggregation_store
+        self.store
             .save_sampler_runner_snapshot(self.run_id, &snapshot)
             .await?;
         Ok(())
@@ -378,7 +366,7 @@ where
 
     pub async fn tick(&mut self) -> Result<RunnerTick, RunnerError> {
         let pending_before_tick = self
-            .work_queue
+            .store
             .get_pending_batch_count(self.run_id)
             .await?
             .max(0) as usize;
@@ -389,11 +377,7 @@ where
 
         let processed_completed_batches = self.process_completed().await?;
         self.sync_active_task_progress().await?;
-        let open_batch_count = self
-            .work_queue
-            .get_open_batch_count(self.run_id)
-            .await?
-            .max(0) as usize;
+        let open_batch_count = self.store.get_open_batch_count(self.run_id).await?.max(0) as usize;
         let enqueued_batches = self
             .run_task_tick(pending_before_tick, open_batch_count)
             .await?;
@@ -426,7 +410,7 @@ where
 
     async fn process_completed(&mut self) -> Result<usize, RunnerError> {
         let completed = self
-            .work_queue
+            .store
             .fetch_completed_batches(self.run_id, self.config.completed_batch_fetch_limit)
             .await?;
         if completed.is_empty() {
@@ -509,7 +493,7 @@ where
             })?
             .id;
 
-        self.aggregation_store
+        self.store
             .save_aggregation(
                 self.run_id,
                 task_id,
@@ -523,9 +507,7 @@ where
             .iter()
             .map(|batch| batch.batch_id)
             .collect::<Vec<_>>();
-        self.work_queue
-            .delete_completed_batches(&consumed_ids)
-            .await?;
+        self.store.delete_completed_batches(&consumed_ids).await?;
 
         Ok(consumed_ids.len())
     }
@@ -568,7 +550,7 @@ where
 
         let (previous_snapshot, spawn_origin) = if let Some(start_from) = task.task.start_from() {
             let snapshot = self
-                .aggregation_store
+                .store
                 .load_latest_stage_snapshot_for_task(start_from.run_id, start_from.task_id)
                 .await?;
             let snapshot = snapshot.ok_or_else(|| {
@@ -583,7 +565,7 @@ where
             )
         } else {
             let snapshot = self
-                .aggregation_store
+                .store
                 .load_latest_stage_snapshot_before_sequence(self.run_id, task.sequence_nr)
                 .await?;
             let origin = snapshot
@@ -592,7 +574,7 @@ where
             (snapshot, origin)
         };
 
-        self.task_store
+        self.store
             .set_run_task_spawn_origin(
                 task.id,
                 spawn_origin.map(|(run_id, _)| run_id),
@@ -681,7 +663,7 @@ where
             engine_diagnostics: self.engine.get_diagnostics(),
         };
 
-        self.work_queue
+        self.store
             .record_sampler_performance_snapshot(&snapshot)
             .await?;
         self.last_performance_completed_samples = self.nr_completed_samples;
@@ -690,7 +672,7 @@ where
     }
 
     async fn flush_run_sample_progress(&mut self) -> Result<(), RunnerError> {
-        self.aggregation_store
+        self.store
             .save_run_sample_progress(
                 self.run_id,
                 self.nr_produced_samples,
@@ -705,7 +687,7 @@ where
         task: Option<&RunTask>,
         queue_empty: bool,
     ) -> Result<(), RunnerError> {
-        self.aggregation_store
+        self.store
             .save_run_stage_snapshot(&RunStageSnapshot {
                 run_id: self.run_id,
                 task_id: task.map(|task| task.id),
@@ -759,7 +741,7 @@ where
     }
 
     async fn clear_run_assignments(&mut self, reason: &'static str) -> Result<(), RunnerError> {
-        let assignments_cleared = self.run_control.clear_run_assignments(self.run_id).await?;
+        let assignments_cleared = self.store.clear_run_assignments(self.run_id).await?;
         info!(
             run_id = self.run_id,
             nr_produced_samples = self.nr_produced_samples,
@@ -779,18 +761,18 @@ where
         if task.task.nr_expected_samples().is_none() {
             return Ok(());
         }
-        self.task_store
+        self.store
             .update_run_task_progress(task.id, task.nr_produced_samples, task.nr_completed_samples)
             .await?;
         Ok(())
     }
 
     async fn ensure_active_task(&mut self) -> Result<Option<RunTask>, RunnerError> {
-        if let Some(task) = self.task_store.load_active_run_task(self.run_id).await? {
+        if let Some(task) = self.store.load_active_run_task(self.run_id).await? {
             self.current_task = Some(task.clone());
             return Ok(Some(task));
         }
-        let next = self.task_store.activate_next_run_task(self.run_id).await?;
+        let next = self.store.activate_next_run_task(self.run_id).await?;
         self.current_task = next.clone();
         Ok(next)
     }
@@ -801,7 +783,7 @@ where
         };
         self.active_runtime_task_id = None;
         if task.task.nr_expected_samples().is_some() {
-            self.task_store
+            self.store
                 .update_run_task_progress(
                     task.id,
                     task.nr_produced_samples,
@@ -809,16 +791,16 @@ where
                 )
                 .await?;
         }
-        self.task_store.complete_run_task(task.id).await?;
+        self.store.complete_run_task(task.id).await?;
         Ok(())
     }
 
     async fn fail_current_task(&mut self, reason: String) -> Result<(), RunnerError> {
         if let Some(task) = self.current_task.take() {
             self.active_runtime_task_id = None;
-            let queue_empty = self.work_queue.get_open_batch_count(self.run_id).await? <= 0;
+            let queue_empty = self.store.get_open_batch_count(self.run_id).await? <= 0;
             self.save_stage_snapshot(Some(&task), queue_empty).await?;
-            self.task_store.fail_run_task(task.id, &reason).await?;
+            self.store.fail_run_task(task.id, &reason).await?;
         }
         self.clear_run_assignments("run task failed; assignments cleared")
             .await?;
@@ -965,7 +947,7 @@ where
             .ok_or_else(|| RunnerError::Engine(EngineError::engine("missing active task")))?
             .id;
         for batch in produced {
-            self.work_queue
+            self.store
                 .insert_batch(self.run_id, task_id, &batch)
                 .await?;
         }

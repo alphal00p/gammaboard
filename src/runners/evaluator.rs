@@ -1,10 +1,9 @@
 //! Evaluator worker runner orchestration.
 
 use crate::core::{
-    AggregationStore, EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics,
-    EvaluatorPerformanceSnapshot, StoreError, WorkQueueStore,
+    EngineError, EvalError, EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics,
+    EvaluatorPerformanceSnapshot, EvaluatorWorkerStore, ParametrizationState, StoreError,
 };
-use crate::core::{EngineError, EvalError, ParametrizationState};
 use crate::evaluation::{
     Batch, BatchResult, EvalBatchOptions, Evaluator, Parametrization, PointSpec,
 };
@@ -37,7 +36,7 @@ pub enum EvaluatorRunnerError {
     Store(#[from] StoreError),
 }
 
-pub struct EvaluatorRunner<WQ, AS> {
+pub struct EvaluatorRunner<S> {
     run_id: i32,
     node_id: String,
     evaluator: Box<dyn Evaluator>,
@@ -47,8 +46,7 @@ pub struct EvaluatorRunner<WQ, AS> {
     batches_completed_total: i64,
     samples_evaluated_total: i64,
     rolling: EvaluatorRollingAverages,
-    work_queue: WQ,
-    aggregation_store: AS,
+    store: S,
     current_task_id: Option<i64>,
     current_task_requires_training: bool,
     current_parametrization: Option<Box<dyn Parametrization>>,
@@ -60,19 +58,42 @@ struct EvaluatorRollingAverages {
     idle_ratio: RollingMetric,
 }
 
-impl<WQ, AS> EvaluatorRunner<WQ, AS>
+impl<S> EvaluatorRunner<S>
 where
-    WQ: WorkQueueStore,
-    AS: AggregationStore,
+    S: EvaluatorWorkerStore,
 {
+    async fn fail_claimed_batch(
+        &mut self,
+        batch_id: i64,
+        err: &str,
+    ) -> Result<(), EvaluatorRunnerError> {
+        self.store
+            .fail_batch(batch_id, err)
+            .await
+            .map_err(EvaluatorRunnerError::Store)
+    }
+
+    async fn fail_tick<T>(
+        &mut self,
+        loop_started: Instant,
+        batch_id: i64,
+        compute_time_ms: f64,
+        err: impl Into<EvaluatorRunnerError>,
+    ) -> Result<T, EvaluatorRunnerError> {
+        let err = err.into();
+        self.fail_claimed_batch(batch_id, &err.to_string()).await?;
+        self.observe_idle_ratio(loop_started, compute_time_ms);
+        self.flush_performance_snapshot_if_due(false).await?;
+        Err(err)
+    }
+
     pub fn new(
         run_id: i32,
         node_id: impl Into<String>,
         evaluator: Box<dyn Evaluator>,
         point_spec: PointSpec,
         performance_snapshot_interval: Duration,
-        work_queue: WQ,
-        aggregation_store: AS,
+        store: S,
     ) -> Self {
         let now_instant = Instant::now();
         Self {
@@ -85,8 +106,7 @@ where
             batches_completed_total: 0,
             samples_evaluated_total: 0,
             rolling: EvaluatorRollingAverages::default(),
-            work_queue,
-            aggregation_store,
+            store,
             current_task_id: None,
             current_task_requires_training: false,
             current_parametrization: None,
@@ -96,7 +116,7 @@ where
     pub async fn tick(&mut self) -> Result<EvaluatorRunnerTick, EvaluatorRunnerError> {
         let loop_started = Instant::now();
         let claimed = self
-            .work_queue
+            .store
             .claim_batch(self.run_id, &self.node_id)
             .await
             .map_err(EvaluatorRunnerError::Store)?;
@@ -112,13 +132,14 @@ where
         };
 
         if let Err(err) = self.ensure_parametrization(claimed.task_id).await {
-            self.work_queue
-                .fail_batch(claimed.batch_id, &err.to_string())
-                .await
-                .map_err(EvaluatorRunnerError::Store)?;
-            self.observe_idle_ratio(loop_started, 0.0);
-            self.flush_performance_snapshot_if_due(false).await?;
-            return Err(EvaluatorRunnerError::Store(err));
+            return self
+                .fail_tick(
+                    loop_started,
+                    claimed.batch_id,
+                    0.0,
+                    EvaluatorRunnerError::Store(err),
+                )
+                .await;
         }
 
         let materialized = match self.current_parametrization.as_mut() {
@@ -130,24 +151,26 @@ where
         let transformed_batch = match materialized {
             Ok(batch) => batch,
             Err(err) => {
-                self.work_queue
-                    .fail_batch(claimed.batch_id, &err.to_string())
-                    .await
-                    .map_err(EvaluatorRunnerError::Store)?;
-                self.observe_idle_ratio(loop_started, 0.0);
-                self.flush_performance_snapshot_if_due(false).await?;
-                return Err(EvaluatorRunnerError::Engine(err));
+                return self
+                    .fail_tick(
+                        loop_started,
+                        claimed.batch_id,
+                        0.0,
+                        EvaluatorRunnerError::Engine(err),
+                    )
+                    .await;
             }
         };
         if let Err(err) = transformed_batch.validate_point_spec(&self.point_spec) {
             let err = EngineError::engine(format!("invalid materialized batch point shape: {err}"));
-            self.work_queue
-                .fail_batch(claimed.batch_id, &err.to_string())
-                .await
-                .map_err(EvaluatorRunnerError::Store)?;
-            self.observe_idle_ratio(loop_started, 0.0);
-            self.flush_performance_snapshot_if_due(false).await?;
-            return Err(EvaluatorRunnerError::Engine(err));
+            return self
+                .fail_tick(
+                    loop_started,
+                    claimed.batch_id,
+                    0.0,
+                    EvaluatorRunnerError::Engine(err),
+                )
+                .await;
         }
 
         let started = Instant::now();
@@ -168,13 +191,13 @@ where
             }
             Err(err) => {
                 let eval_time_ms = started.elapsed().as_secs_f64() * 1000.0;
-                self.work_queue
-                    .fail_batch(claimed.batch_id, &err.to_string())
-                    .await
-                    .map_err(EvaluatorRunnerError::Store)?;
-                self.observe_idle_ratio(loop_started, eval_time_ms);
-                self.flush_performance_snapshot_if_due(false).await?;
-                Err(EvaluatorRunnerError::Eval(err))
+                self.fail_tick(
+                    loop_started,
+                    claimed.batch_id,
+                    eval_time_ms,
+                    EvaluatorRunnerError::Eval(err),
+                )
+                .await
             }
         }
     }
@@ -184,7 +207,7 @@ where
             return Ok(());
         }
         let Some(snapshot) = self
-            .aggregation_store
+            .store
             .load_task_activation_snapshot(self.run_id, task_id)
             .await?
         else {
@@ -228,10 +251,7 @@ where
                 "result is missing training values for training batch {}",
                 batch_id
             ));
-            self.work_queue
-                .fail_batch(batch_id, &err.to_string())
-                .await
-                .map_err(EvaluatorRunnerError::Store)?;
+            self.fail_claimed_batch(batch_id, &err.to_string()).await?;
             return Err(EvaluatorRunnerError::Engine(err));
         }
         if !result.matches_batch(batch) {
@@ -241,14 +261,11 @@ where
                 batch.size(),
                 result.len()
             ));
-            self.work_queue
-                .fail_batch(batch_id, &err.to_string())
-                .await
-                .map_err(EvaluatorRunnerError::Store)?;
+            self.fail_claimed_batch(batch_id, &err.to_string()).await?;
             return Err(EvaluatorRunnerError::Engine(err));
         }
 
-        self.work_queue
+        self.store
             .submit_batch_results(batch_id, &result, eval_time_ms)
             .await
             .map_err(EvaluatorRunnerError::Store)?;
@@ -316,7 +333,7 @@ where
             //engine_diagnostics: self.evaluator.get_diagnostics(),
         };
 
-        self.work_queue
+        self.store
             .record_evaluator_performance_snapshot(&snapshot)
             .await
             .map_err(EvaluatorRunnerError::Store)?;

@@ -1,16 +1,13 @@
+use super::shared::{RunSelection, with_cli_store};
 use anyhow::{Context, Result, anyhow};
 use clap::{Args, Subcommand};
 use gammaboard::core::{
     ControlPlaneStore, RunReadStore, RunSpecStore, RunTaskInputSpec, RunTaskSpec, RunTaskStore,
     resolve_task_queue,
 };
-use gammaboard::init_pg_store;
 use gammaboard::preprocess::{RunAddConfig, preprocess_run_add};
 use serde::Deserialize;
 use std::path::PathBuf;
-use tracing::Instrument;
-
-use super::shared::{RunSelection, init_cli_tracing};
 
 const DEFAULT_RUN_CONFIG_PATH: &str = "configs/default.toml";
 
@@ -42,10 +39,6 @@ pub enum TaskCommand {
 }
 
 pub async fn run_run_commands(command: RunCommand, quiet: bool) -> Result<()> {
-    let store = init_pg_store(10)
-        .await
-        .context("failed to initialize postgres store")?;
-    init_cli_tracing(&store, quiet)?;
     let command_name = run_command_name(&command);
     let span = tracing::span!(
         tracing::Level::TRACE,
@@ -54,7 +47,7 @@ pub async fn run_run_commands(command: RunCommand, quiet: bool) -> Result<()> {
         command = command_name
     );
 
-    async move {
+    with_cli_store(10, quiet, span, |store| async move {
         match command {
             RunCommand::Add { config_file } => {
                 let config = load_run_add_config(&config_file)?;
@@ -174,8 +167,7 @@ pub async fn run_run_commands(command: RunCommand, quiet: bool) -> Result<()> {
             },
         }
         Ok(())
-    }
-    .instrument(span)
+    })
     .await
 }
 

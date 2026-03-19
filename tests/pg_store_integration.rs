@@ -68,7 +68,7 @@ async fn claim_batch_requires_active_assignment() {
     let batch = Batch::from_flat_data(1, 1, 0, vec![1.0], vec![]).expect("batch");
     let latent_batch = LatentBatchSpec::from_batch(&batch).build();
     store
-        .insert_batch(run_id, task_id, &latent_batch, true)
+        .insert_batch(run_id, task_id, &latent_batch)
         .await
         .expect("insert batch");
 
@@ -131,7 +131,7 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
     let batch = Batch::from_flat_data(1, 1, 0, vec![2.0], vec![]).expect("batch");
     let latent_batch = LatentBatchSpec::from_batch(&batch).build();
     store
-        .insert_batch(run_id, task_id, &latent_batch, true)
+        .insert_batch(run_id, task_id, &latent_batch)
         .await
         .expect("insert batch");
 
