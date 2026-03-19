@@ -1,5 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
-import { fetchEvaluatorPerformanceHistory, fetchSamplerPerformanceHistory } from "../services/api";
+import {
+  fetchNodeEvaluatorPerformanceHistory,
+  fetchSamplerPerformanceHistory,
+} from "../services/api";
 import { usePolling } from "./usePolling";
 
 const emptyResponse = Object.freeze({
@@ -7,7 +10,12 @@ const emptyResponse = Object.freeze({
   sampler: null,
 });
 
-export const useRunPerformancePanels = ({ runId, limit = 200, pollMs = 5000 } = {}) => {
+export const useRunPerformancePanels = ({
+  runId,
+  evaluatorNodeId = null,
+  limit = 200,
+  pollMs = 5000,
+} = {}) => {
   const [state, setState] = useState(emptyResponse);
   const enabled = runId != null;
 
@@ -15,9 +23,9 @@ export const useRunPerformancePanels = ({ runId, limit = 200, pollMs = 5000 } = 
     async (signal) => {
       if (runId == null) return;
       try {
-        const [evaluator, sampler] = await Promise.all([
-          fetchEvaluatorPerformanceHistory(runId, limit, null, signal),
+        const [sampler, evaluator] = await Promise.all([
           fetchSamplerPerformanceHistory(runId, limit, null, signal),
+          evaluatorNodeId ? fetchNodeEvaluatorPerformanceHistory(evaluatorNodeId, limit, signal) : Promise.resolve(null),
         ]);
         setState({
           evaluator: evaluator ?? null,
@@ -28,7 +36,7 @@ export const useRunPerformancePanels = ({ runId, limit = 200, pollMs = 5000 } = 
         setState(emptyResponse);
       }
     },
-    [limit, runId],
+    [evaluatorNodeId, limit, runId],
   );
 
   const reset = useCallback(() => {

@@ -122,12 +122,17 @@ pub struct EvaluatorIdleProfileMetrics {
     pub idle_ratio: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct EvaluatorPerformanceMetrics {
     pub batches_completed: i64,
     pub samples_evaluated: i64,
     pub avg_time_per_sample_ms: f64,
     pub std_time_per_sample_ms: f64,
+    pub avg_evaluate_time_per_sample_ms: f64,
+    pub std_evaluate_time_per_sample_ms: f64,
+    pub avg_parametrization_time_per_sample_ms: f64,
+    pub std_parametrization_time_per_sample_ms: f64,
     pub idle_profile: Option<EvaluatorIdleProfileMetrics>,
 }
 

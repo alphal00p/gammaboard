@@ -21,7 +21,7 @@ Backend panel endpoints → hooks → PanelCollection → panel renderers
 ## Main Concepts
 
 - `TaskOutputPanel` renders the selected task using task-owned panel descriptors and task-local persisted history.
-- `PerformanceWorkspace` renders evaluator and sampler performance through the same panel vocabulary.
+- `PerformanceWorkspace` renders run-level sampler throughput panels plus a selected evaluator worker's timing/idle panels through the same panel vocabulary.
 - `PanelCollection` is the shared frontend renderer. One component exists per panel kind.
 
 ## Hooks
@@ -29,7 +29,7 @@ Backend panel endpoints → hooks → PanelCollection → panel renderers
 - `useRuns()` polls the run list.
 - `useRunTasks(runId)` polls task state for the selected run.
 - `useTaskOutput({ runId, taskId })` polls the selected task output plus incremental persisted history.
-- `useRunPerformancePanels({ runId })` polls evaluator and sampler performance panel payloads.
+- `useRunPerformancePanels({ runId, evaluatorNodeId })` polls run-level sampler performance plus the selected evaluator worker's performance panels.
 - `useWorkerLogs()` fetches log history for the Logs tab.
 
 ## Configuration

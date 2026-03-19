@@ -159,19 +159,6 @@ pub(crate) fn panel_descriptor(
     }
 }
 
-pub(crate) fn single_point_series(id: &str, label: &str, x: f64, y: f64) -> PlotSeries {
-    PlotSeries {
-        id: id.to_string(),
-        label: label.to_string(),
-        points: vec![PlotPoint {
-            x,
-            y,
-            y_min: None,
-            y_max: None,
-        }],
-    }
-}
-
 pub(crate) fn single_point_band(
     panel_id: &str,
     x: f64,
@@ -194,13 +181,6 @@ pub(crate) fn scalar_timeseries_panel(panel_id: &str, points: Vec<PlotPoint>) ->
     PanelState::ScalarTimeseries {
         panel_id: panel_id.to_string(),
         points,
-    }
-}
-
-pub(crate) fn multi_timeseries_panel(panel_id: &str, series: Vec<PlotSeries>) -> PanelState {
-    PanelState::MultiTimeseries {
-        panel_id: panel_id.to_string(),
-        series,
     }
 }
 

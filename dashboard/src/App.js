@@ -135,6 +135,7 @@ function App() {
       ) : mode === "performance" ? (
         <PerformanceWorkspace
           runs={runList}
+          workers={workersData.workers}
           selectedRun={selectedRun}
           setSelectedRun={setSelectedRun}
           isConnected={isConnected}

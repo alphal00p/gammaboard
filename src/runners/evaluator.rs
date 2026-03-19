@@ -46,7 +46,9 @@ pub struct EvaluatorRunner<S> {
 
 #[derive(Debug, Clone, Serialize, Default)]
 struct EvaluatorRollingAverages {
-    eval_ms_per_sample: RollingMetric,
+    total_ms_per_sample: RollingMetric,
+    evaluate_ms_per_sample: RollingMetric,
+    parametrization_ms_per_sample: RollingMetric,
     idle_ratio: RollingMetric,
 }
 
@@ -130,12 +132,14 @@ where
                 .await;
         }
 
+        let parametrization_started = Instant::now();
         let materialized = match self.current_parametrization.as_mut() {
             Some(parametrization) => parametrization.materialize_batch(&claimed.latent_batch),
             None => Err(EngineError::engine(
                 "parametrization runtime missing after successful task activation snapshot load",
             )),
         };
+        let parametrization_time_ms = parametrization_started.elapsed().as_secs_f64() * 1000.0;
         let transformed_batch = match materialized {
             Ok(batch) => batch,
             Err(err) => {
@@ -143,7 +147,7 @@ where
                     .fail_tick(
                         loop_started,
                         claimed.batch_id,
-                        0.0,
+                        parametrization_time_ms,
                         EvaluatorRunnerError::Engine(err),
                     )
                     .await;
@@ -155,7 +159,7 @@ where
                 .fail_tick(
                     loop_started,
                     claimed.batch_id,
-                    0.0,
+                    parametrization_time_ms,
                     EvaluatorRunnerError::Engine(err),
                 )
                 .await;
@@ -171,17 +175,26 @@ where
         ) {
             Ok(result) => {
                 let eval_time_ms = started.elapsed().as_secs_f64() * 1000.0;
-                self.submit_result(claimed.batch_id, &transformed_batch, result, eval_time_ms)
-                    .await?;
-                self.observe_idle_ratio(loop_started, eval_time_ms);
+                let total_time_ms = parametrization_time_ms + eval_time_ms;
+                self.submit_result(
+                    claimed.batch_id,
+                    &transformed_batch,
+                    result,
+                    total_time_ms,
+                    parametrization_time_ms,
+                    eval_time_ms,
+                )
+                .await?;
+                self.observe_idle_ratio(loop_started, total_time_ms);
                 Ok(())
             }
             Err(err) => {
                 let eval_time_ms = started.elapsed().as_secs_f64() * 1000.0;
+                let total_time_ms = parametrization_time_ms + eval_time_ms;
                 self.fail_tick(
                     loop_started,
                     claimed.batch_id,
-                    eval_time_ms,
+                    total_time_ms,
                     EvaluatorRunnerError::Eval(err),
                 )
                 .await
@@ -231,6 +244,8 @@ where
         batch_id: i64,
         batch: &Batch,
         result: BatchResult,
+        total_time_ms: f64,
+        parametrization_time_ms: f64,
         eval_time_ms: f64,
     ) -> Result<(), EvaluatorRunnerError> {
         if self.current_task_requires_training && result.values.is_none() {
@@ -253,24 +268,48 @@ where
         }
 
         self.store
-            .submit_batch_results(batch_id, &result, eval_time_ms)
+            .submit_batch_results(batch_id, &result, total_time_ms)
             .await
             .map_err(EvaluatorRunnerError::Store)?;
 
         let processed_samples = batch.size();
-        self.observe_eval_batch(processed_samples, eval_time_ms);
+        self.observe_eval_batch(
+            processed_samples,
+            total_time_ms,
+            parametrization_time_ms,
+            eval_time_ms,
+        );
         self.flush_performance_snapshot_if_due(false).await?;
 
         Ok(())
     }
 
-    fn observe_eval_batch(&mut self, samples: usize, eval_time_ms: f64) {
+    fn observe_eval_batch(
+        &mut self,
+        samples: usize,
+        total_time_ms: f64,
+        parametrization_time_ms: f64,
+        eval_time_ms: f64,
+    ) {
         self.batches_completed_total += 1;
         self.samples_evaluated_total += samples as i64;
-        if samples > 0 && eval_time_ms.is_finite() && eval_time_ms >= 0.0 {
-            self.rolling
-                .eval_ms_per_sample
-                .observe(eval_time_ms / samples as f64);
+        if samples > 0 {
+            let samples = samples as f64;
+            if total_time_ms.is_finite() && total_time_ms >= 0.0 {
+                self.rolling
+                    .total_ms_per_sample
+                    .observe(total_time_ms / samples);
+            }
+            if parametrization_time_ms.is_finite() && parametrization_time_ms >= 0.0 {
+                self.rolling
+                    .parametrization_ms_per_sample
+                    .observe(parametrization_time_ms / samples);
+            }
+            if eval_time_ms.is_finite() && eval_time_ms >= 0.0 {
+                self.rolling
+                    .evaluate_ms_per_sample
+                    .observe(eval_time_ms / samples);
+            }
         }
     }
 
@@ -307,8 +346,23 @@ where
             metrics: EvaluatorPerformanceMetrics {
                 batches_completed: self.batches_completed_total,
                 samples_evaluated: self.samples_evaluated_total,
-                avg_time_per_sample_ms: self.rolling.eval_ms_per_sample.value().unwrap_or(0.0),
-                std_time_per_sample_ms: self.rolling.eval_ms_per_sample.std_dev(),
+                avg_time_per_sample_ms: self.rolling.total_ms_per_sample.value().unwrap_or(0.0),
+                std_time_per_sample_ms: self.rolling.total_ms_per_sample.std_dev(),
+                avg_evaluate_time_per_sample_ms: self
+                    .rolling
+                    .evaluate_ms_per_sample
+                    .value()
+                    .unwrap_or(0.0),
+                std_evaluate_time_per_sample_ms: self.rolling.evaluate_ms_per_sample.std_dev(),
+                avg_parametrization_time_per_sample_ms: self
+                    .rolling
+                    .parametrization_ms_per_sample
+                    .value()
+                    .unwrap_or(0.0),
+                std_parametrization_time_per_sample_ms: self
+                    .rolling
+                    .parametrization_ms_per_sample
+                    .std_dev(),
                 idle_profile: Some(EvaluatorIdleProfileMetrics {
                     idle_ratio: self.rolling.idle_ratio.value().unwrap_or(0.0),
                 }),

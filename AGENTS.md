@@ -100,6 +100,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - Worker performance history is stored in `evaluator_performance_history` and `sampler_aggregator_performance_history`.
 - Evaluator performance history stays generic-metrics-only; evaluator-specific diagnostics belong in init metadata.
 - Sampler performance history may include generic sampler metrics and sampler runtime metrics, but sampler-specific diagnostics should remain separate.
+- Performance read views should stay narrow: run-level performance is sampler-oriented throughput/queue state, while evaluator timing views are worker-specific.
 - Snapshot rows are point-in-time; do not reintroduce window semantics.
 - Read APIs should serialize `BIGINT` IDs as strings.
 - Run read payloads should expose `runs.point_spec` as `point_spec`.
