@@ -11,6 +11,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - `src/runners/*`: evaluator, sampler task executors, and node orchestration loops only.
 - `src/stores/*`: PostgreSQL implementation, queries, read DTOs, and store composition.
 - `src/server/*`: dashboard read API runtime and handlers.
+- `src/server/task_panels/*`: task-scoped panel projection helpers; keep `mod.rs` as thin dispatch and split task-family-specific panel logic into focused modules.
 - `src/tracing.rs`: tracing setup and DB log sink wiring.
 - `src/cli/*` and `src/main.rs`: CLI argument parsing, wiring, and process bootstrap.
 - Keep shared CLI store/tracing bootstrap in `src/cli/shared.rs`; avoid repeating `init_pg_store` + `init_tracing` wiring in individual CLI commands.

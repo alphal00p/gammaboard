@@ -57,9 +57,9 @@
 ## Sweep Findings (2026-03-18)
 
 ### Complexity
-- [ ] split `src/server/task_panels.rs` by task kind or adapter role; it still mixes sample-task aggregate decoding, deterministic full-observable rendering, descriptor definitions, and current/history projection in one file.
-- [ ] introduce a shared deterministic full-observable task adapter for `image` and `plot_line`; both tasks currently duplicate progress/current-from-persisted/current-from-runtime wiring and only differ in geometry-specific rendering.
-- [ ] extract a small aggregate-observable panel builder for sample tasks; scalar/complex estimate, summary, and history projection still live as ad hoc helper sets inside `src/server/task_panels.rs`.
+- [x] split `src/server/task_panels.rs` by task kind or adapter role; sample-task aggregate decoding and deterministic full-observable rendering now live in separate `task_panels` modules.
+- [x] introduce a shared deterministic full-observable task adapter for `image` and `plot_line`; both tasks now share progress/current-from-persisted/current-from-runtime wiring and differ only in geometry/value rendering.
+- [x] extract a small aggregate-observable panel builder for sample tasks; scalar/complex estimate, summary, and history projection now live in `src/server/task_panels/sample.rs`.
 - [ ] replace repeated frontend polling hooks with a shared `usePolledResource` abstraction that covers scheduling, stale-response protection, and `isConnected`/error handling consistently.
 
 ## Sweep Findings (2026-03-19)
