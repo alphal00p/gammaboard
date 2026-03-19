@@ -60,7 +60,6 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
             <Table size="small">
               <TableHead>
                 <TableRow>
-                  <TableCell />
                   <TableCell>Seq</TableCell>
                   <TableCell>State</TableCell>
                   <TableCell>Task</TableCell>
@@ -85,7 +84,6 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
                         ...(task.state === "active" ? { backgroundColor: "action.hover" } : {}),
                       }}
                     >
-                      <TableCell>{isSelected ? ">" : ""}</TableCell>
                       <TableCell>{task.sequence_nr}</TableCell>
                       <TableCell>{task.state}</TableCell>
                       <TableCell>{getTaskKindLabel(task)}</TableCell>
