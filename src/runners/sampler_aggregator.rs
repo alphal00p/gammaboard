@@ -10,17 +10,15 @@
 //! - delete consumed completed batches
 
 use crate::core::{
-    AggregationStore, CompletedBatch, ParametrizationState, ParametrizationVersionStore,
-    RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot, RunTask, RunTaskSpec, RunTaskStore,
+    AggregationStore, CompletedBatch, ParametrizationState, RollingMetricSnapshot,
+    RunSampleProgress, RunStageSnapshot, RunTask, RunTaskSpec, RunTaskStore,
     SamplerAggregatorPerformanceSnapshot, SamplerRollingAverages, SamplerRuntimeMetrics,
     StoreError, WorkQueueStore,
 };
 use crate::core::{EngineError, EvaluatorConfig, ParametrizationConfig, SamplerAggregatorConfig};
 use crate::evaluation::{ObservableState, PointSpec};
 use crate::runners::rolling_metric::RollingMetric;
-use crate::sampling::{
-    ParametrizationBuildContext, SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot,
-};
+use crate::sampling::{SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot, StageHandoff};
 use crate::stores::RunControlStore;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
@@ -68,11 +66,10 @@ struct SamplerRuntimeState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SamplerAggregatorRunnerSnapshot {
-    pub version: u32,                      //why
-    pub engine: SamplerAggregatorSnapshot, //maybe change the type here if it's raw json anyways, e.g. (SamplerAggregatorSnapshot = SamplerAggregatorConfig, JSON) or simply rename to SamplerAggregatorState to be consistent with observable
+    pub version: u32, //why
+    pub engine: SamplerAggregatorSnapshot,
     pub observable_state: ObservableState,
     active_runtime_task_id: Option<i64>, //why option, why even stored?
-    current_parametrization_state_version: i64, //should this be moved to the snapshotting? remove versioned parametrizations completely?
     runtime_state: SamplerRuntimeState,
     last_pending_after_enqueue: Option<usize>,
     training_completion_marked: bool,
@@ -125,7 +122,7 @@ pub enum RunnerError {
     Store(#[from] StoreError),
 }
 
-pub struct SamplerAggregatorRunner<WQ, AS, RC, PS, TS> {
+pub struct SamplerAggregatorRunner<WQ, AS, RC, TS> {
     run_id: i32,
     node_id: String,
     engine: Box<dyn SamplerAggregator>,
@@ -133,7 +130,6 @@ pub struct SamplerAggregatorRunner<WQ, AS, RC, PS, TS> {
     work_queue: WQ,
     aggregation_store: AS,
     run_control: RC,
-    parametrization_state_store: PS,
     task_store: TS,
     config: SamplerAggregatorRunnerParams,
     point_spec: PointSpec,
@@ -141,7 +137,6 @@ pub struct SamplerAggregatorRunner<WQ, AS, RC, PS, TS> {
     nr_completed_samples: i64,
     performance_snapshot_interval: Duration,
     last_snapshot_at: Instant,
-    current_parametrization_state_version: i64,
     runtime_state: SamplerRuntimeState,
     last_performance_completed_samples: i64,
     last_pending_after_enqueue: Option<usize>,
@@ -154,12 +149,11 @@ pub struct SamplerAggregatorRunner<WQ, AS, RC, PS, TS> {
 }
 
 //could it make sense to combine some of the stores to avoid clutter? I think so.
-impl<WQ, AS, RC, PS, TS> SamplerAggregatorRunner<WQ, AS, RC, PS, TS>
+impl<WQ, AS, RC, TS> SamplerAggregatorRunner<WQ, AS, RC, TS>
 where
     WQ: WorkQueueStore,
     AS: AggregationStore,
     RC: RunControlStore,
-    PS: ParametrizationVersionStore,
     TS: RunTaskStore,
 {
     const MIN_BATCH_SIZE: usize = 1;
@@ -271,7 +265,6 @@ where
         work_queue: WQ,
         aggregation_store: AS,
         run_control: RC,
-        parametrization_state_store: PS,
         task_store: TS,
         config: SamplerAggregatorRunnerParams,
         point_spec: PointSpec,
@@ -313,41 +306,8 @@ where
                 nr_produced_samples: 0,
                 nr_completed_samples: 0,
             });
-        let latest_version = parametrization_state_store
-            .load_latest_parametrization_version(run_id)
-            .await?; // parametrization verioning should be unnecessary now that we have the snapshots per task, we enforce that parametrization only changes between tasks
-        let initial_parametrization_state = Self::build_parametrization_state(
-            &initial_parametrization_config,
-            &point_spec,
-            None, //shouldnt this be Option<(a,b)> instead of Option<a>, Option<b>?
-            None,
-        )?;
-        let (current_parametrization_state_version, current_parametrization_state) =
-            match latest_version {
-                Some(version) => {
-                    let state = parametrization_state_store
-                        .load_parametrization_version(run_id, version)
-                        .await?
-                        .ok_or_else(|| {
-                            RunnerError::Store(StoreError::store(format!(
-                                "missing parametrization state for run {} version {}",
-                                run_id, version
-                            )))
-                        })?;
-                    (version, state)
-                }
-                None => {
-                    let version = 1;
-                    parametrization_state_store
-                        .save_parametrization_version(
-                            run_id,
-                            version,
-                            &initial_parametrization_state,
-                        )
-                        .await?;
-                    (version, initial_parametrization_state)
-                }
-            };
+        let initial_parametrization_state =
+            Self::build_parametrization_state(&initial_parametrization_config, &point_spec, None)?;
 
         Ok(Self {
             run_id,
@@ -357,7 +317,6 @@ where
             work_queue,
             aggregation_store,
             run_control,
-            parametrization_state_store,
             task_store,
             config,
             point_spec,
@@ -365,7 +324,6 @@ where
             nr_completed_samples: persisted_progress.nr_completed_samples,
             performance_snapshot_interval,
             last_snapshot_at: Instant::now(),
-            current_parametrization_state_version,
             runtime_state: SamplerRuntimeState {
                 produced_samples_total: persisted_progress.nr_produced_samples,
                 batch_size_current: initial_batch_size,
@@ -378,7 +336,7 @@ where
             active_runtime_task_id: None,
             evaluator_config,
             current_sampler_config: initial_sampler_config,
-            current_parametrization_state,
+            current_parametrization_state: initial_parametrization_state,
         })
     }
 
@@ -394,7 +352,6 @@ where
         }
         self.observable_state = snapshot.observable_state;
         self.active_runtime_task_id = snapshot.active_runtime_task_id;
-        self.current_parametrization_state_version = snapshot.current_parametrization_state_version;
         self.runtime_state = snapshot.runtime_state;
         self.runtime_state.produced_samples_total = self
             .runtime_state
@@ -412,7 +369,6 @@ where
             engine: self.engine.snapshot().map_err(RunnerError::Engine)?,
             observable_state: self.observable_state.clone(),
             active_runtime_task_id: self.active_runtime_task_id,
-            current_parametrization_state_version: self.current_parametrization_state_version,
             runtime_state: self.runtime_state.clone(),
             last_pending_after_enqueue: self.last_pending_after_enqueue,
             training_completion_marked: self.training_completion_marked,
@@ -595,14 +551,10 @@ where
     fn build_parametrization_state(
         parametrization: &ParametrizationConfig,
         point_spec: &PointSpec,
-        handoff_snapshot: Option<&SamplerAggregatorSnapshot>,
-        previous_state: Option<&ParametrizationState>,
+        handoff: Option<StageHandoff<'_>>,
     ) -> Result<ParametrizationState, RunnerError> {
         parametrization
-            .build(ParametrizationBuildContext {
-                sampler_aggregator_snapshot: handoff_snapshot,
-                parametrization_snapshot: previous_state.map(|state| &state.snapshot),
-            })
+            .build(handoff)
             .map_err(RunnerError::Engine)
             .and_then(|runtime| {
                 runtime
@@ -682,41 +634,29 @@ where
             self.observable_state = snapshot.observable_state.clone();
         }
 
-        let next_parametrization_state = Self::build_parametrization_state(
-            parametrization,
-            &self.point_spec,
-            previous_snapshot
-                .as_ref()
-                .map(|snapshot| &snapshot.sampler_snapshot),
-            previous_snapshot
-                .as_ref()
-                .map(|snapshot| &snapshot.parametrization)
-                .or(Some(&self.current_parametrization_state)),
-        )?;
-
-        self.current_parametrization_state_version += 1;
-        self.parametrization_state_store
-            .save_parametrization_version(
-                self.run_id,
-                self.current_parametrization_state_version,
-                &next_parametrization_state,
-            )
-            .await?;
+        let handoff = previous_snapshot.as_ref().map(|snapshot| StageHandoff {
+            sampler_snapshot: Some(&snapshot.sampler_snapshot),
+            parametrization_snapshot: Some(&snapshot.parametrization.snapshot),
+            observable_state: Some(&snapshot.observable_state),
+        });
+        let next_parametrization_state =
+            Self::build_parametrization_state(parametrization, &self.point_spec, handoff)?;
         self.current_parametrization_state = next_parametrization_state;
 
         let sample_budget = task
             .task
             .nr_expected_samples()
             .and_then(|n| usize::try_from(n).ok());
-        self.engine = match previous_snapshot.map(|snapshot| snapshot.sampler_snapshot) {
-            Some(snapshot) => sampler_aggregator
-                .build_from_params_and_snapshot(self.point_spec.clone(), sample_budget, snapshot)
-                .map_err(RunnerError::Engine)?,
-            None => sampler_aggregator
-                .build(self.point_spec.clone(), sample_budget)
-                .map_err(RunnerError::Engine)?,
-        };
+        let handoff = previous_snapshot.as_ref().map(|snapshot| StageHandoff {
+            sampler_snapshot: Some(&snapshot.sampler_snapshot),
+            parametrization_snapshot: Some(&snapshot.parametrization.snapshot),
+            observable_state: Some(&snapshot.observable_state),
+        });
+        self.engine = sampler_aggregator
+            .build(self.point_spec.clone(), sample_budget, handoff)
+            .map_err(RunnerError::Engine)?;
         self.current_sampler_config = sampler_aggregator.clone();
+        self.save_stage_snapshot(Some(task), true).await?;
 
         self.training_completion_marked = self.engine.training_samples_remaining().is_none();
         self.active_runtime_task_id = Some(task.id);
@@ -1033,14 +973,19 @@ where
             produced.push((
                 batch
                     .with_observable_config(observable_config.clone())
-                    .with_version(self.current_parametrization_state_version),
+                    .build(),
                 requires_training,
             ));
         }
         let enqueued_batches = produced.len();
+        let task_id = self
+            .current_task
+            .as_ref()
+            .ok_or_else(|| RunnerError::Engine(EngineError::engine("missing active task")))?
+            .id;
         for (batch, requires_training) in produced {
             self.work_queue
-                .insert_batch(self.run_id, &batch, requires_training)
+                .insert_batch(self.run_id, task_id, &batch, requires_training)
                 .await?;
         }
         let pending_after_enqueue = pending_before_tick.saturating_add(enqueued_batches);

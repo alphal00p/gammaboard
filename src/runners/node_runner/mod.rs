@@ -9,8 +9,8 @@ mod reconcile;
 mod sampler_aggregator_role_runner;
 
 use crate::core::{
-    AggregationStore, ControlPlaneStore, ParametrizationVersionStore, RunSpecStore, RunTaskStore,
-    StoreError, WorkQueueStore, WorkerRole,
+    AggregationStore, ControlPlaneStore, RunSpecStore, RunTaskStore, StoreError, WorkQueueStore,
+    WorkerRole,
 };
 use std::time::Duration;
 use tokio::{sync::watch, task::JoinHandle, time::sleep};
@@ -29,7 +29,6 @@ pub trait NodeRunnerStore:
     + ControlPlaneStore
     + WorkQueueStore
     + AggregationStore
-    + ParametrizationVersionStore
     + RunTaskStore
     + Clone
     + Send
@@ -43,7 +42,6 @@ impl<T> NodeRunnerStore for T where
         + ControlPlaneStore
         + WorkQueueStore
         + AggregationStore
-        + ParametrizationVersionStore
         + RunTaskStore
         + Clone
         + Send

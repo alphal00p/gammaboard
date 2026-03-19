@@ -3,10 +3,10 @@
 CREATE TABLE IF NOT EXISTS batches (
     id BIGSERIAL PRIMARY KEY,
     run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    task_id BIGINT NOT NULL,
 
     -- Versioned latent queue payload that evaluators materialize locally.
     latent_batch JSONB NOT NULL,
-    parametrization_state_version BIGINT NOT NULL,
 
     batch_size INT NOT NULL,
     -- Number of samples in this batch
@@ -39,21 +39,11 @@ CREATE TABLE IF NOT EXISTS batches (
     last_error TEXT
 );
 
-CREATE TABLE IF NOT EXISTS parametrization_states (
-    run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-    version BIGINT NOT NULL,
-    -- Canonical persisted parametrization state payload: { config, snapshot }.
-    state JSONB NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (run_id, version)
-);
-
-CREATE INDEX IF NOT EXISTS idx_parametrization_states_run_created
-    ON parametrization_states(run_id, created_at DESC);
-
 -- Indexes for work queue pattern (critical for performance)
 CREATE INDEX IF NOT EXISTS idx_batches_status_runid ON batches(run_id, status)
     WHERE status IN ('pending', 'claimed');
+
+CREATE INDEX IF NOT EXISTS idx_batches_task_created ON batches(task_id, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_batches_claimed ON batches(claimed_at)
     WHERE status = 'claimed';

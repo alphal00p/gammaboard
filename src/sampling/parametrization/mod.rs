@@ -1,6 +1,6 @@
 use crate::core::{BuildError, ParametrizationConfig};
 use crate::evaluation::Parametrization;
-use crate::sampling::SamplerAggregatorSnapshot;
+use crate::sampling::StageHandoff;
 use serde::{Deserialize, Serialize};
 
 mod frozen_havana_inference;
@@ -29,12 +29,6 @@ pub enum ParametrizationSnapshot {
     },
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ParametrizationBuildContext<'a> {
-    pub sampler_aggregator_snapshot: Option<&'a SamplerAggregatorSnapshot>,
-    pub parametrization_snapshot: Option<&'a ParametrizationSnapshot>,
-}
-
 impl ParametrizationConfig {
     pub fn kind_str(&self) -> &'static str {
         match self {
@@ -47,7 +41,7 @@ impl ParametrizationConfig {
 
     pub fn build(
         &self,
-        ctx: ParametrizationBuildContext<'_>,
+        handoff: Option<StageHandoff<'_>>,
     ) -> Result<Box<dyn Parametrization>, BuildError> {
         match self {
             Self::Identity { params } => Ok(Box::new(IdentityParametrization::from_params(
@@ -60,7 +54,7 @@ impl ParametrizationConfig {
                 params.clone(),
             ))),
             Self::HavanaInference { params } => Ok(Box::new(
-                HavanaInferenceParametrization::from_build_context(params.clone(), ctx)?,
+                HavanaInferenceParametrization::from_build_context(params.clone(), handoff)?,
             )),
         }
     }

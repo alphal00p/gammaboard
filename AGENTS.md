@@ -47,12 +47,12 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - `IntegrationParams` and `RunSpec` carry strongly typed runner params.
 - Evaluators are batch-oriented and must respect `batches.requires_training`.
 - Observable semantics are first-class run/task config via `ObservableConfig`, while serialized runtime/current state remains semantic `ObservableState`.
-- Queue payloads are latent and versioned: `batches.latent_batch` plus `batches.parametrization_state_version`.
+- Queue payloads are latent and task-bound: `batches.latent_batch` plus `batches.task_id`.
 - Top-level run task sequencing lives in `src/core/tasks.rs`; sampler/evaluator engines should not parse arbitrary task JSON directly.
 - Task-local structural validation and preflight reduction hooks belong on the task types in `src/core/tasks.rs`; `src/preprocess/*` should orchestrate them rather than duplicate task semantics.
 - Keep latent-batch queue types separate from concrete evaluator batch/result types in code layout: latent queue payloads belong with sampler-side semantics, while `Batch`/`BatchResult` are the concrete A/B interface.
 - `core` owns the cross-stage shared config/run-spec types and error types; concrete evaluator/sampler transport types should still live in `evaluation` or `sampling`.
-- Parametrization versions are persisted separately in `parametrization_states (run_id, version)` as a canonical `{ config, snapshot }` state payload; evaluators rebuild the parametrization from that persisted state when the version changes, and the version row must be written before any latent batch references it.
+- Parametrization state lives in task/stage snapshots as `{ config, snapshot }`; evaluators rebuild parametrizations from the activation snapshot resolved through `batches.task_id`.
 - Task-owned phase transitions replace sampler-emitted semantic advances: `sample` tasks carry both `sampler_aggregator` and `parametrization` config, while `image` and `plot_line` tasks own deterministic scan geometry and resolve internally to raster sampler + identity parametrization stages. The runner activates the next phase only after the current queue is drained and the current sampler snapshot is persisted.
 - Task transitions must restore unspecified runtime state from the latest prior queue-empty `run_stage_snapshots` row, not from transient in-memory handoff only. In particular, sampler snapshot, observable state, and parametrization snapshot handoff should be sourced from persisted stage snapshots.
 - Executable tasks may optionally declare `start_from = { run_id, task_id }`. When present, task activation must restore runtime state from the latest queue-empty stage snapshot of that referenced task instead of the default previous-stage lookup.
@@ -63,7 +63,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - `SamplerAggregatorConfig::HavanaTraining` is the adaptive training sampler phase, and `SamplerAggregatorConfig::HavanaInference` is the compact seed-dispatch phase.
 - Havana training budget comes from the active sample task's `nr_samples`, not from sampler config.
 - `ParametrizationConfig::HavanaInference` remains declarative; building it may require a persisted Havana training sampler snapshot and/or a persisted previous parametrization snapshot, and the resulting parametrization state must be snapshottable for replay on evaluator workers.
-- `LatentBatchPayload::HavanaInference` is the compact evaluator-side Havana inference payload and carries only the per-batch seed; the frozen grid lives in the persisted parametrization version.
+- `LatentBatchPayload::HavanaInference` is the compact evaluator-side Havana inference payload and carries only the per-batch seed; the frozen grid lives in the task activation snapshot's parametrization state.
 - If an evaluator supports multiple semantic value families, that choice still belongs in evaluator config via `observable_kind`, but the aggregate-vs-full observable shape is selected explicitly through `ObservableConfig`.
 - Evaluator implementations should reuse `IngestScalar` / `IngestComplex` helpers internally after locally matching the resolved observable config; do not reintroduce hidden capture-mode switches in batch/eval options.
 - Image and line tasks use full observables that store weighted per-sample values in deterministic task order; use those full observables as the canonical current-state artifact instead of tunneling sample values through training-mode side channels.

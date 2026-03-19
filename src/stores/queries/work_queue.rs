@@ -8,6 +8,7 @@ use sqlx::PgPool;
 
 pub(crate) struct CompletedBatchRaw {
     pub batch_id: i64,
+    pub task_id: i64,
     pub latent_batch: JsonValue,
     pub requires_training: bool,
     pub values: Option<JsonValue>,
@@ -24,6 +25,7 @@ fn encode_json<T: Serialize>(label: &str, value: &T) -> Result<JsonValue, sqlx::
 pub(crate) async fn insert_batch(
     pool: &PgPool,
     run_id: i32,
+    task_id: i64,
     batch: &LatentBatch,
     requires_training: bool,
 ) -> Result<i64, sqlx::Error> {
@@ -31,8 +33,8 @@ pub(crate) async fn insert_batch(
         r#"
         INSERT INTO batches (
             run_id,
+            task_id,
             latent_batch,
-            parametrization_state_version,
             batch_size,
             status,
             requires_training
@@ -42,8 +44,8 @@ pub(crate) async fn insert_batch(
         "#,
     )
     .bind(run_id)
+    .bind(task_id)
     .bind(batch.into_json())
-    .bind(batch.parametrization_state_version)
     .bind(batch.nr_samples as i32)
     .bind(requires_training)
     .fetch_one(pool)
@@ -88,8 +90,8 @@ pub(crate) async fn claim_batch(
     pool: &PgPool,
     run_id: i32,
     node_id: &str,
-) -> Result<Option<(i64, LatentBatch, bool)>, sqlx::Error> {
-    let row = sqlx::query_as::<_, (i64, JsonValue, bool)>(
+) -> Result<Option<(i64, i64, LatentBatch, bool)>, sqlx::Error> {
+    let row = sqlx::query_as::<_, (i64, i64, JsonValue, bool)>(
         r#"
         UPDATE batches
         SET status = 'claimed',
@@ -110,7 +112,7 @@ pub(crate) async fn claim_batch(
             LIMIT 1
             FOR UPDATE SKIP LOCKED
         )
-        RETURNING id, latent_batch, requires_training
+        RETURNING id, task_id, latent_batch, requires_training
         "#,
     )
     .bind(node_id)
@@ -118,10 +120,10 @@ pub(crate) async fn claim_batch(
     .fetch_optional(pool)
     .await?;
 
-    if let Some((batch_id, latent_json, requires_training)) = row {
+    if let Some((batch_id, task_id, latent_json, requires_training)) = row {
         let batch =
             LatentBatch::from_json(&latent_json).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-        Ok(Some((batch_id, batch, requires_training)))
+        Ok(Some((batch_id, task_id, batch, requires_training)))
     } else {
         Ok(None)
     }
@@ -272,6 +274,7 @@ pub(crate) async fn fetch_completed_batches(
         _,
         (
             i64,
+            i64,
             JsonValue,
             bool,
             Option<JsonValue>,
@@ -284,6 +287,7 @@ pub(crate) async fn fetch_completed_batches(
         WITH ordered AS (
             SELECT
                 id,
+                task_id,
                 status,
                 latent_batch,
                 requires_training,
@@ -304,6 +308,7 @@ pub(crate) async fn fetch_completed_batches(
         )
         SELECT
             o.id,
+            o.task_id,
             o.latent_batch,
             o.requires_training,
             o."values",
@@ -329,6 +334,7 @@ pub(crate) async fn fetch_completed_batches(
         .map(
             |(
                 batch_id,
+                task_id,
                 latent_batch,
                 requires_training,
                 values,
@@ -338,6 +344,7 @@ pub(crate) async fn fetch_completed_batches(
             )| {
                 CompletedBatchRaw {
                     batch_id,
+                    task_id,
                     latent_batch,
                     requires_training,
                     values,

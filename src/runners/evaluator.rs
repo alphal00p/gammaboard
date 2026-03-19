@@ -1,15 +1,15 @@
 //! Evaluator worker runner orchestration.
 
-use crate::core::{EngineError, EvalError, ParametrizationState};
 use crate::core::{
-    EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot,
-    ParametrizationVersionStore, StoreError, WorkQueueStore,
+    AggregationStore, EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics,
+    EvaluatorPerformanceSnapshot, StoreError, WorkQueueStore,
 };
+use crate::core::{EngineError, EvalError, ParametrizationState};
 use crate::evaluation::{
     Batch, BatchResult, EvalBatchOptions, Evaluator, Parametrization, PointSpec,
 };
 use crate::runners::rolling_metric::RollingMetric;
-use crate::sampling::ParametrizationBuildContext;
+use crate::sampling::StageHandoff;
 use serde::{Deserialize, Serialize};
 use std::{time::Duration, time::Instant};
 use thiserror::Error;
@@ -37,7 +37,7 @@ pub enum EvaluatorRunnerError {
     Store(#[from] StoreError),
 }
 
-pub struct EvaluatorRunner<WQ, PS> {
+pub struct EvaluatorRunner<WQ, AS> {
     run_id: i32,
     node_id: String,
     evaluator: Box<dyn Evaluator>,
@@ -48,8 +48,8 @@ pub struct EvaluatorRunner<WQ, PS> {
     samples_evaluated_total: i64,
     rolling: EvaluatorRollingAverages,
     work_queue: WQ,
-    parametrization_states: PS,
-    current_parametrization_version: Option<i64>,
+    aggregation_store: AS,
+    current_task_id: Option<i64>,
     current_parametrization: Option<Box<dyn Parametrization>>,
 }
 
@@ -59,10 +59,10 @@ struct EvaluatorRollingAverages {
     idle_ratio: RollingMetric,
 }
 
-impl<WQ, PS> EvaluatorRunner<WQ, PS>
+impl<WQ, AS> EvaluatorRunner<WQ, AS>
 where
     WQ: WorkQueueStore,
-    PS: ParametrizationVersionStore,
+    AS: AggregationStore,
 {
     pub fn new(
         run_id: i32,
@@ -71,7 +71,7 @@ where
         point_spec: PointSpec,
         performance_snapshot_interval: Duration,
         work_queue: WQ,
-        parametrization_states: PS,
+        aggregation_store: AS,
     ) -> Self {
         let now_instant = Instant::now();
         Self {
@@ -85,8 +85,8 @@ where
             samples_evaluated_total: 0,
             rolling: EvaluatorRollingAverages::default(),
             work_queue,
-            parametrization_states,
-            current_parametrization_version: None,
+            aggregation_store,
+            current_task_id: None,
             current_parametrization: None,
         }
     }
@@ -109,10 +109,7 @@ where
             });
         };
 
-        if let Err(err) = self
-            .ensure_parametrization(claimed.latent_batch.parametrization_state_version)
-            .await
-        {
+        if let Err(err) = self.ensure_parametrization(claimed.task_id).await {
             self.work_queue
                 .fail_batch(claimed.batch_id, &err.to_string())
                 .await
@@ -125,7 +122,7 @@ where
         let materialized = match self.current_parametrization.as_mut() {
             Some(parametrization) => parametrization.materialize_batch(&claimed.latent_batch),
             None => Err(EngineError::engine(
-                "parametrization runtime missing after successful version load",
+                "parametrization runtime missing after successful task activation snapshot load",
             )),
         };
         let transformed_batch = match materialized {
@@ -186,36 +183,38 @@ where
         }
     }
 
-    async fn ensure_parametrization(&mut self, version: i64) -> Result<(), StoreError> {
-        if self.current_parametrization_version == Some(version) {
+    async fn ensure_parametrization(&mut self, task_id: i64) -> Result<(), StoreError> {
+        if self.current_task_id == Some(task_id) {
             return Ok(());
         }
-        let Some(state): Option<ParametrizationState> = self
-            .parametrization_states
-            .load_parametrization_version(self.run_id, version)
+        let Some(snapshot) = self
+            .aggregation_store
+            .load_task_activation_snapshot(self.run_id, task_id)
             .await?
         else {
             return Err(StoreError::store(format!(
-                "missing parametrization state for run {} version {}",
-                self.run_id, version
+                "missing activation stage snapshot for run {} task {}",
+                self.run_id, task_id
             )));
         };
+        let state: &ParametrizationState = &snapshot.parametrization;
         let parametrization = state
             .config
-            .build(ParametrizationBuildContext {
-                sampler_aggregator_snapshot: None,
+            .build(Some(StageHandoff {
+                sampler_snapshot: Some(&snapshot.sampler_snapshot),
                 parametrization_snapshot: Some(&state.snapshot),
-            })
+                observable_state: Some(&snapshot.observable_state),
+            }))
             .map_err(|err| StoreError::store(format!("failed to build parametrization: {err}")))?;
         parametrization
             .validate_point_spec(&self.point_spec)
             .map_err(|err| {
                 StoreError::store(format!(
-                    "incompatible parametrization for point_spec on run {} version {}: {}",
-                    self.run_id, version, err
+                    "incompatible parametrization for point_spec on run {} task {}: {}",
+                    self.run_id, task_id, err
                 ))
             })?;
-        self.current_parametrization_version = Some(version);
+        self.current_task_id = Some(task_id);
         self.current_parametrization = Some(parametrization);
         Ok(())
     }

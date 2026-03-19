@@ -60,6 +60,7 @@ pub struct RegisteredNode {
 #[derive(Debug, Clone)]
 pub struct BatchClaim {
     pub batch_id: i64,
+    pub task_id: i64,
     pub latent_batch: LatentBatch,
     pub requires_training: bool,
 }
@@ -67,6 +68,7 @@ pub struct BatchClaim {
 #[derive(Debug, Clone)]
 pub struct CompletedBatch {
     pub batch_id: i64,
+    pub task_id: i64,
     pub latent_batch: LatentBatch,
     pub requires_training: bool,
     pub result: BatchResult,

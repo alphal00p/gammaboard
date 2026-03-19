@@ -1,7 +1,7 @@
 use crate::core::{BuildError, EngineError, ParametrizationConfig};
 use crate::evaluation::{Batch, Parametrization, PointSpec};
-use crate::sampling::parametrization::{ParametrizationBuildContext, ParametrizationSnapshot};
-use crate::sampling::{LatentBatch, LatentBatchPayload};
+use crate::sampling::parametrization::ParametrizationSnapshot;
+use crate::sampling::{LatentBatch, LatentBatchPayload, StageHandoff};
 use crate::utils::rng::SerializableMonteCarloRng;
 use serde::{Deserialize, Serialize};
 use symbolica::numerical_integration::{Grid, Sample};
@@ -31,9 +31,10 @@ impl Default for HavanaInferenceParametrizationParams {
 impl HavanaInferenceParametrization {
     pub fn from_build_context(
         params: HavanaInferenceParametrizationParams,
-        ctx: ParametrizationBuildContext<'_>,
+        handoff: Option<StageHandoff<'_>>,
     ) -> Result<Self, BuildError> {
-        let (grid, inner_snapshot) = match ctx.parametrization_snapshot {
+        let handoff = handoff.unwrap_or_default();
+        let (grid, inner_snapshot) = match handoff.parametrization_snapshot {
             Some(ParametrizationSnapshot::HavanaInference { grid, inner }) => {
                 let grid = serde_json::from_value(grid.clone()).map_err(|err| {
                     BuildError::build(format!(
@@ -44,7 +45,7 @@ impl HavanaInferenceParametrization {
             }
             None => {
                 let Some(crate::sampling::SamplerAggregatorSnapshot::HavanaTraining { raw }) =
-                    ctx.sampler_aggregator_snapshot
+                    handoff.sampler_snapshot
                 else {
                     return Err(BuildError::build(
                         "havana inference parametrization requires a havana training sampler snapshot or a parametrization snapshot",
@@ -69,7 +70,7 @@ impl HavanaInferenceParametrization {
             }
             Some(other_snapshot) => {
                 let Some(crate::sampling::SamplerAggregatorSnapshot::HavanaTraining { raw }) =
-                    ctx.sampler_aggregator_snapshot
+                    handoff.sampler_snapshot
                 else {
                     return Err(BuildError::build(format!(
                         "havana inference parametrization cannot restore from snapshot kind {other_snapshot:?}"
@@ -103,10 +104,10 @@ impl HavanaInferenceParametrization {
             }
         };
 
-        let inner = params.inner.build(ParametrizationBuildContext {
-            sampler_aggregator_snapshot: None,
+        let inner = params.inner.build(Some(StageHandoff {
             parametrization_snapshot: inner_snapshot,
-        })?;
+            ..StageHandoff::default()
+        }))?;
 
         Ok(Self {
             continuous_dims,
@@ -165,7 +166,6 @@ impl Parametrization for HavanaInferenceParametrization {
         .map_err(|err| EngineError::engine(err.to_string()))?;
         let inner_latent = LatentBatch {
             nr_samples: latent_batch.nr_samples,
-            parametrization_state_version: latent_batch.parametrization_state_version,
             observable: latent_batch.observable.clone(),
             payload: LatentBatchPayload::from_batch(&batch),
         };
@@ -189,7 +189,7 @@ impl Parametrization for HavanaInferenceParametrization {
 mod tests {
     use super::*;
     use crate::sampling::parametrization::IdentityParametrizationParams;
-    use crate::sampling::{ParametrizationBuildContext, SamplerAggregatorSnapshot};
+    use crate::sampling::{SamplerAggregatorSnapshot, StageHandoff};
     use serde_json::json;
     use symbolica::numerical_integration::ContinuousGrid;
 
@@ -209,10 +209,10 @@ mod tests {
         };
         let mut parametrization = HavanaInferenceParametrization::from_build_context(
             params,
-            ParametrizationBuildContext {
-                sampler_aggregator_snapshot: None,
+            Some(StageHandoff {
                 parametrization_snapshot: Some(&snapshot),
-            },
+                ..StageHandoff::default()
+            }),
         )
         .expect("build");
         parametrization
@@ -224,7 +224,6 @@ mod tests {
 
         let latent = LatentBatch {
             nr_samples: 4,
-            parametrization_state_version: 1,
             observable: crate::core::ObservableConfig::Scalar,
             payload: LatentBatchPayload::HavanaInference { seed: 42 },
         };
@@ -242,10 +241,10 @@ mod tests {
         };
         let parametrization = HavanaInferenceParametrization::from_build_context(
             params,
-            ParametrizationBuildContext {
-                sampler_aggregator_snapshot: Some(&sampler_snapshot),
-                parametrization_snapshot: None,
-            },
+            Some(StageHandoff {
+                sampler_snapshot: Some(&sampler_snapshot),
+                ..StageHandoff::default()
+            }),
         )
         .expect("build");
         assert_eq!(parametrization.continuous_dims, 2);
@@ -260,10 +259,11 @@ mod tests {
         let previous_inner_snapshot = ParametrizationSnapshot::Identity {};
         let parametrization = HavanaInferenceParametrization::from_build_context(
             params,
-            ParametrizationBuildContext {
-                sampler_aggregator_snapshot: Some(&sampler_snapshot),
+            Some(StageHandoff {
+                sampler_snapshot: Some(&sampler_snapshot),
                 parametrization_snapshot: Some(&previous_inner_snapshot),
-            },
+                ..StageHandoff::default()
+            }),
         )
         .expect("build");
         assert_eq!(parametrization.continuous_dims, 2);

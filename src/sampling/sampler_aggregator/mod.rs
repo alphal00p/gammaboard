@@ -4,7 +4,7 @@ mod raster;
 
 use crate::core::{BuildError, SamplerAggregatorConfig};
 use crate::evaluation::PointSpec;
-use crate::sampling::{SamplerAggregator, SamplerAggregatorSnapshot};
+use crate::sampling::{SamplerAggregator, SamplerAggregatorSnapshot, StageHandoff};
 
 pub use self::havana::HavanaInferenceSamplerParams;
 pub use self::havana::HavanaSamplerParams;
@@ -98,6 +98,7 @@ impl SamplerAggregatorConfig {
         &self,
         point_spec: PointSpec,
         sample_budget: Option<usize>,
+        handoff: Option<StageHandoff<'_>>,
     ) -> Result<Box<dyn SamplerAggregator>, BuildError> {
         match self {
             Self::NaiveMonteCarlo { params } => Ok(Box::new(
@@ -124,27 +125,13 @@ impl SamplerAggregatorConfig {
                     sample_budget,
                 )?))
             }
-            Self::HavanaInference { .. } => Err(BuildError::build(
-                "havana_inference sampler requires a persisted snapshot handoff",
-            )),
-        }
-    }
-
-    pub fn build_from_params_and_snapshot(
-        &self,
-        point_spec: PointSpec,
-        sample_budget: Option<usize>,
-        snapshot: SamplerAggregatorSnapshot,
-    ) -> Result<Box<dyn SamplerAggregator>, BuildError> {
-        match self {
-            Self::NaiveMonteCarlo { .. }
-            | Self::RasterPlane { .. }
-            | Self::RasterLine { .. }
-            | Self::HavanaTraining { .. } => {
-                let _ = snapshot;
-                self.build(point_spec, sample_budget)
-            }
             Self::HavanaInference { params } => {
+                let Some(snapshot) = handoff.and_then(|handoff| handoff.sampler_snapshot.cloned())
+                else {
+                    return Err(BuildError::build(
+                        "havana_inference sampler requires a persisted sampler snapshot handoff",
+                    ));
+                };
                 Ok(Box::new(HavanaInferenceSampler::from_params_and_snapshot(
                     params.clone(),
                     snapshot,

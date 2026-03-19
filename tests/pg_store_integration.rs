@@ -53,10 +53,22 @@ async fn claim_batch_requires_active_assignment() {
         .await
         .expect("set current evaluator assignment");
 
+    let task_id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO run_tasks (run_id, sequence_nr, task, state)
+        VALUES ($1, 0, '{"kind":"pause"}'::jsonb, 'completed')
+        RETURNING id
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(store.pool())
+    .await
+    .expect("insert run task");
+
     let batch = Batch::from_flat_data(1, 1, 0, vec![1.0], vec![]).expect("batch");
-    let latent_batch = LatentBatchSpec::from_batch(&batch).with_version(1);
+    let latent_batch = LatentBatchSpec::from_batch(&batch).build();
     store
-        .insert_batch(run_id, &latent_batch, true)
+        .insert_batch(run_id, task_id, &latent_batch, true)
         .await
         .expect("insert batch");
 
@@ -104,10 +116,22 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
 
     store.register_node(&node_id).await.expect("register node");
 
+    let task_id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO run_tasks (run_id, sequence_nr, task, state)
+        VALUES ($1, 0, '{"kind":"pause"}'::jsonb, 'completed')
+        RETURNING id
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(store.pool())
+    .await
+    .expect("insert run task");
+
     let batch = Batch::from_flat_data(1, 1, 0, vec![2.0], vec![]).expect("batch");
-    let latent_batch = LatentBatchSpec::from_batch(&batch).with_version(1);
+    let latent_batch = LatentBatchSpec::from_batch(&batch).build();
     store
-        .insert_batch(run_id, &latent_batch, true)
+        .insert_batch(run_id, task_id, &latent_batch, true)
         .await
         .expect("insert batch");
 

@@ -2,9 +2,8 @@
 
 use super::errors::StoreError;
 use super::models::{
-    BatchClaim, CompletedBatch, DesiredAssignment, EvaluatorPerformanceSnapshot,
-    ParametrizationState, RegisteredNode, RunSampleProgress, RunStageSnapshot, RuntimeLogEvent,
-    SamplerAggregatorPerformanceSnapshot,
+    BatchClaim, CompletedBatch, DesiredAssignment, EvaluatorPerformanceSnapshot, RegisteredNode,
+    RunSampleProgress, RunStageSnapshot, RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
 };
 use crate::core::RunSpec;
 use crate::core::{RunTask, RunTaskSpec};
@@ -78,6 +77,7 @@ pub trait WorkQueueStore: Send + Sync {
     async fn insert_batch(
         &self,
         run_id: i32,
+        task_id: i64,
         batch: &LatentBatch,
         requires_training: bool,
     ) -> Result<i64, StoreError>;
@@ -117,25 +117,6 @@ pub trait WorkQueueStore: Send + Sync {
     async fn delete_completed_batches(&self, batch_ids: &[i64]) -> Result<(), StoreError>;
 }
 
-#[async_trait]
-pub trait ParametrizationVersionStore: Send + Sync {
-    async fn load_parametrization_version(
-        &self,
-        run_id: i32,
-        version: i64,
-    ) -> Result<Option<ParametrizationState>, StoreError>;
-    async fn load_latest_parametrization_version(
-        &self,
-        run_id: i32,
-    ) -> Result<Option<i64>, StoreError>;
-    async fn save_parametrization_version(
-        &self,
-        run_id: i32,
-        version: i64,
-        state: &ParametrizationState,
-    ) -> Result<(), StoreError>;
-}
-
 /// Persists active-stage observable state and task-local persisted snapshots.
 #[async_trait]
 pub trait AggregationStore: Send + Sync {
@@ -150,6 +131,11 @@ pub trait AggregationStore: Send + Sync {
         sequence_nr: i32,
     ) -> Result<Option<RunStageSnapshot>, StoreError>;
     async fn load_latest_stage_snapshot_for_task(
+        &self,
+        run_id: i32,
+        task_id: i64,
+    ) -> Result<Option<RunStageSnapshot>, StoreError>;
+    async fn load_task_activation_snapshot(
         &self,
         run_id: i32,
         task_id: i64,

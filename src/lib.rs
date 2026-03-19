@@ -29,7 +29,7 @@ pub use evaluation::{
 };
 pub use sampling::{
     LatentBatch, LatentBatchPayload, LatentBatchSpec, SamplePlan, SamplerAggregator,
-    SamplerAggregatorSnapshot,
+    SamplerAggregatorSnapshot, StageHandoff,
 };
 pub use stores::PgStore;
 pub use stores::{RunProgress, TaskOutputSnapshot, TaskStageSnapshot, WorkQueueStats};

@@ -3,9 +3,8 @@
 use super::queries;
 use crate::core::{
     AggregationStore, BatchClaim, CompletedBatch, ControlPlaneStore, DesiredAssignment,
-    EvaluatorPerformanceSnapshot, ParametrizationState, ParametrizationVersionStore,
-    RegisteredNode, RunReadStore, RunSampleProgress, RunSpecStore, RunStageSnapshot, RunTask,
-    RunTaskSpec, RunTaskStore, RuntimeLogEvent, RuntimeLogStore,
+    EvaluatorPerformanceSnapshot, RegisteredNode, RunReadStore, RunSampleProgress, RunSpecStore,
+    RunStageSnapshot, RunTask, RunTaskSpec, RunTaskStore, RuntimeLogEvent, RuntimeLogStore,
     SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore, WorkerRole,
 };
 use crate::core::{IntegrationParams, RunSpec};
@@ -473,10 +472,11 @@ impl WorkQueueStore for PgStore {
     async fn insert_batch(
         &self,
         run_id: i32,
+        task_id: i64,
         batch: &LatentBatch,
         requires_training: bool,
     ) -> Result<i64, StoreError> {
-        queries::insert_batch(&self.pool, run_id, batch, requires_training)
+        queries::insert_batch(&self.pool, run_id, task_id, batch, requires_training)
             .await
             .map_err(map_sqlx)
     }
@@ -502,13 +502,14 @@ impl WorkQueueStore for PgStore {
             .await
             .map_err(map_sqlx)?;
 
-        Ok(
-            claimed.map(|(batch_id, latent_batch, requires_training)| BatchClaim {
+        Ok(claimed.map(
+            |(batch_id, task_id, latent_batch, requires_training)| BatchClaim {
                 batch_id,
+                task_id,
                 latent_batch,
                 requires_training,
-            }),
-        )
+            },
+        ))
     }
 
     async fn release_claimed_batches_for_worker(
@@ -582,6 +583,7 @@ impl WorkQueueStore for PgStore {
 
             out.push(CompletedBatch {
                 batch_id: row.batch_id,
+                task_id: row.task_id,
                 latent_batch,
                 requires_training: row.requires_training,
                 result,
@@ -600,47 +602,6 @@ impl WorkQueueStore for PgStore {
     }
     async fn delete_completed_batches(&self, batch_ids: &[i64]) -> Result<(), StoreError> {
         queries::delete_completed_batches(&self.pool, batch_ids)
-            .await
-            .map_err(map_sqlx)
-    }
-}
-
-#[async_trait::async_trait]
-impl ParametrizationVersionStore for PgStore {
-    async fn load_parametrization_version(
-        &self,
-        run_id: i32,
-        version: i64,
-    ) -> Result<Option<ParametrizationState>, StoreError> {
-        let row = queries::get_parametrization_state(&self.pool, run_id, version)
-            .await
-            .map_err(map_sqlx)?;
-        row.map(|payload| {
-            serde_json::from_value(payload)
-                .map_err(|err| store_err(format!("failed to decode parametrization state: {err}")))
-        })
-        .transpose()
-    }
-
-    async fn load_latest_parametrization_version(
-        &self,
-        run_id: i32,
-    ) -> Result<Option<i64>, StoreError> {
-        queries::get_latest_parametrization_state_version(&self.pool, run_id)
-            .await
-            .map_err(map_sqlx)
-    }
-
-    async fn save_parametrization_version(
-        &self,
-        run_id: i32,
-        version: i64,
-        state: &ParametrizationState,
-    ) -> Result<(), StoreError> {
-        let payload = serde_json::to_value(state).map_err(|err| {
-            store_err(format!("failed to serialize parametrization state: {err}"))
-        })?;
-        queries::upsert_parametrization_state(&self.pool, run_id, version, &payload)
             .await
             .map_err(map_sqlx)
     }
@@ -679,6 +640,16 @@ impl AggregationStore for PgStore {
         task_id: i64,
     ) -> Result<Option<RunStageSnapshot>, StoreError> {
         queries::get_latest_task_stage_snapshot_for_runner(&self.pool, run_id, task_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn load_task_activation_snapshot(
+        &self,
+        run_id: i32,
+        task_id: i64,
+    ) -> Result<Option<RunStageSnapshot>, StoreError> {
+        queries::get_task_activation_stage_snapshot(&self.pool, run_id, task_id)
             .await
             .map_err(map_sqlx)
     }

@@ -55,7 +55,7 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
                 })?
         } else {
             spec.sampler_aggregator
-                .build(spec.point_spec.clone(), initial_sample_budget)
+                .build(spec.point_spec.clone(), initial_sample_budget, None)
                 .map_err(|err| {
                     StoreError::store(format!("failed to build sampler-aggregator: {err}"))
                 })?
@@ -87,7 +87,6 @@ pub(crate) async fn run_sampler_aggregator_role<S: NodeRunnerStore>(
         worker.node_id.clone(),
         engine,
         observable_state,
-        worker.store.clone(),
         worker.store.clone(),
         worker.store.clone(),
         worker.store.clone(),

@@ -1,7 +1,7 @@
 # Gammaboard
 
 Gammaboard runs distributed numerical integration jobs with PostgreSQL as the shared control plane.
-Samplers queue versioned latent batches that evaluators materialize locally through the parametrization layer.
+Samplers queue task-bound latent batches that evaluators materialize locally through the parametrization layer.
 
 ## What It Does
 - `gammaboard run` creates, pauses, and removes runs.

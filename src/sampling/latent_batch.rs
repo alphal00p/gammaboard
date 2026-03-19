@@ -9,7 +9,6 @@ use crate::evaluation::{Batch, BatchError};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LatentBatch {
     pub nr_samples: usize,
-    pub parametrization_state_version: i64,
     pub observable: ObservableConfig,
     pub payload: LatentBatchPayload,
 }
@@ -70,10 +69,9 @@ impl LatentBatchSpec {
         }
     }
 
-    pub fn with_version(self, parametrization_state_version: i64) -> LatentBatch {
+    pub fn build(self) -> LatentBatch {
         LatentBatch {
             nr_samples: self.nr_samples,
-            parametrization_state_version,
             observable: self.observable,
             payload: self.payload,
         }
@@ -115,11 +113,10 @@ mod tests {
     fn latent_batch_roundtrips_batch_payload() {
         let batch =
             Batch::new(array![[0.5], [1.5]], Array2::zeros((2, 0)), None).expect("batch creation");
-        let latent = LatentBatchSpec::from_batch(&batch).with_version(1);
+        let latent = LatentBatchSpec::from_batch(&batch).build();
         let json = latent.into_json();
         let restored = LatentBatch::from_json(&json).expect("latent batch");
         assert_eq!(restored.nr_samples, 2);
-        assert_eq!(restored.parametrization_state_version, 1);
         let restored_batch = restored.payload.as_batch().expect("batch payload");
         assert_eq!(restored_batch.point_spec(), batch.point_spec());
         assert_eq!(restored_batch.weights(), batch.weights());

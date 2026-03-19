@@ -3,7 +3,7 @@ use crate::core::{
     RunTaskSpec, SamplerAggregatorConfig,
 };
 use crate::evaluation::{EvalBatchOptions, Evaluator, PointSpec};
-use crate::sampling::{ParametrizationBuildContext, SamplerAggregatorSnapshot};
+use crate::sampling::{SamplerAggregatorSnapshot, StageHandoff};
 
 pub(super) fn run_preflight(
     base_observable: &ObservableConfig,
@@ -39,14 +39,13 @@ pub(super) fn run_preflight(
             evaluator,
             point_spec,
             None,
-            None,
         )
         .map(|(metadata, _, _)| metadata);
     }
 
     let mut sampler_metadata = None;
     let mut handoff_snapshot = None;
-    let mut parametrization_state = None;
+    let mut parametrization_state: Option<ParametrizationState> = None;
     let mut current_observable = base_observable.clone();
 
     for task in preflight_tasks {
@@ -54,6 +53,14 @@ pub(super) fn run_preflight(
             (task.sampler_config(), task.parametrization_config())
         {
             let task_observable = task.observable_config(&current_observable);
+            let previous_handoff_snapshot = handoff_snapshot.take();
+            let previous_handoff = StageHandoff {
+                sampler_snapshot: previous_handoff_snapshot.as_ref(),
+                parametrization_snapshot: parametrization_state
+                    .as_ref()
+                    .map(|state| &state.snapshot),
+                ..StageHandoff::default()
+            };
             let metadata = preflight_single_stage(
                 &task,
                 task_observable.clone(),
@@ -63,8 +70,7 @@ pub(super) fn run_preflight(
                     .and_then(|n| usize::try_from(n).ok()),
                 evaluator,
                 point_spec,
-                handoff_snapshot.take(),
-                parametrization_state.as_ref(),
+                Some(previous_handoff),
             )?;
             sampler_metadata.get_or_insert(metadata.0);
             handoff_snapshot = metadata.1;
@@ -86,8 +92,7 @@ fn preflight_single_stage(
     sample_budget: Option<usize>,
     evaluator: &mut dyn Evaluator,
     point_spec: &PointSpec,
-    handoff_snapshot: Option<SamplerAggregatorSnapshot>,
-    previous_state: Option<&ParametrizationState>,
+    handoff: Option<StageHandoff<'_>>,
 ) -> Result<
     (
         serde_json::Value,
@@ -96,22 +101,11 @@ fn preflight_single_stage(
     ),
     BuildError,
 > {
-    let handoff_snapshot_for_parametrization = handoff_snapshot.clone();
-    let mut sampler = match handoff_snapshot {
-        Some(snapshot) => sampler_aggregator.build_from_params_and_snapshot(
-            point_spec.clone(),
-            sample_budget,
-            snapshot,
-        ),
-        None => sampler_aggregator.build(point_spec.clone(), sample_budget),
-    }?;
+    let mut sampler = sampler_aggregator.build(point_spec.clone(), sample_budget, handoff)?;
     sampler.validate_point_spec(point_spec)?;
     let sampler_metadata = sampler.get_init_metadata();
 
-    let mut parametrization = parametrization_config.build(ParametrizationBuildContext {
-        sampler_aggregator_snapshot: handoff_snapshot_for_parametrization.as_ref(),
-        parametrization_snapshot: previous_state.map(|state| &state.snapshot),
-    })?;
+    let mut parametrization = parametrization_config.build(handoff)?;
     parametrization.validate_point_spec(point_spec)?;
     let parametrization_state = Some(ParametrizationState {
         config: parametrization_config.clone(),
@@ -128,7 +122,7 @@ fn preflight_single_stage(
             ))
         })?
         .with_observable_config(task_observable)
-        .with_version(1);
+        .build();
 
     let transformed_batch = parametrization
         .materialize_batch(&latent_batch)
