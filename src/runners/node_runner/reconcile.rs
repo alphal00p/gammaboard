@@ -19,13 +19,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         &mut self,
         desired_target: Option<RoleTarget>,
     ) -> Result<(), StoreError> {
-        if desired_target != self.failure_target {
-            self.failure_target = desired_target;
-            self.consecutive_start_failures = 0;
-            if self.blocked_target != desired_target {
-                self.blocked_target = None;
-            }
-        }
+        self.retry_state
+            .reset_for_desired_target_change(desired_target);
 
         if self.current_target() == desired_target {
             return Ok(());
@@ -33,22 +28,41 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
         self.stop_current().await;
 
-        let Some(target) = desired_target else {
+        let Some((target, runner)) = self.build_reconciled_runner(desired_target).await? else {
             return Ok(());
         };
-        if self.blocked_target == Some(target) {
-            return Ok(());
-        }
-
-        if let Err(err) = self.start(target).await {
-            self.note_start_failure(target);
-            error!("failed to start role runner: {err}");
-        }
+        self.start(target, runner).await?;
 
         Ok(())
     }
 
-    async fn start(&mut self, target: RoleTarget) -> Result<(), StoreError> {
+    async fn build_reconciled_runner(
+        &mut self,
+        desired_target: Option<RoleTarget>,
+    ) -> Result<Option<(RoleTarget, Box<dyn RoleRunner>)>, StoreError> {
+        let Some(target) = desired_target else {
+            return Ok(None);
+        };
+        if self.retry_state.is_blocked(target) {
+            return Ok(None);
+        }
+
+        match self.build_runner_for_target(target).await {
+            Ok(Some(runner)) => Ok(Some((target, runner))),
+            Ok(None) => Ok(None),
+            Err(err) => {
+                self.note_start_failure(target);
+                error!("failed to start role runner: {err}");
+                Ok(None)
+            }
+        }
+    }
+
+    async fn start(
+        &mut self,
+        target: RoleTarget,
+        runner: Box<dyn RoleRunner>,
+    ) -> Result<(), StoreError> {
         let context_span = tracing::span!(
             tracing::Level::TRACE,
             "role_runner_context",
@@ -66,9 +80,6 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             target.role,
             target.run_id,
         );
-        let Some(runner) = self.build_runner(&worker).await? else {
-            return Ok(());
-        };
         worker.mark_active_with_log().await?;
         self.active_runner = Some(ActiveRoleRunner {
             target,
@@ -80,13 +91,19 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         Ok(())
     }
 
-    async fn build_runner(
+    async fn build_runner_for_target(
         &self,
-        worker: &ActiveWorker<S>,
+        target: RoleTarget,
     ) -> Result<Option<Box<dyn RoleRunner>>, StoreError> {
-        match worker.role {
-            crate::core::WorkerRole::Evaluator => self.build_evaluator_runner(worker).await,
-            crate::core::WorkerRole::SamplerAggregator => self.build_sampler_runner(worker).await,
+        let worker = ActiveWorker::new(
+            self.store.clone(),
+            self.node_id.clone(),
+            target.role,
+            target.run_id,
+        );
+        match target.role {
+            crate::core::WorkerRole::Evaluator => self.build_evaluator_runner(&worker).await,
+            crate::core::WorkerRole::SamplerAggregator => self.build_sampler_runner(&worker).await,
         }
     }
 
@@ -208,30 +225,18 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
     }
 
     pub(super) fn note_role_started(&mut self) {
-        self.failure_target = None;
-        self.consecutive_start_failures = 0;
-        self.blocked_target = None;
-    }
-
-    pub(super) fn note_role_stopped(&mut self) {
-        self.failure_target = None;
-        self.consecutive_start_failures = 0;
-        self.blocked_target = None;
+        self.retry_state.clear();
     }
 
     pub(super) fn note_start_failure(&mut self, target: RoleTarget) {
-        if self.failure_target == Some(target) {
-            self.consecutive_start_failures = self.consecutive_start_failures.saturating_add(1);
-        } else {
-            self.failure_target = Some(target);
-            self.consecutive_start_failures = 1;
-        }
-        if self.consecutive_start_failures >= self.config.max_consecutive_start_failures {
-            self.blocked_target = Some(target);
+        if self
+            .retry_state
+            .note_failure(target, self.config.max_consecutive_start_failures)
+        {
             warn!(
                 role = %target.role,
                 run_id = target.run_id,
-                consecutive_failures = self.consecutive_start_failures,
+                consecutive_failures = self.retry_state.consecutive_failures,
                 max_consecutive_start_failures = self.config.max_consecutive_start_failures,
                 "aborting role runner restarts after repeated failures; waiting for desired assignment change"
             );
@@ -239,7 +244,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
     }
 
     pub(super) async fn finish_current_assignment(&mut self) -> Result<(), StoreError> {
-        self.note_role_stopped();
+        self.retry_state.clear();
         self.stop_current().await;
         Ok(())
     }

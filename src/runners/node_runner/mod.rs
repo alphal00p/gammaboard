@@ -71,14 +71,55 @@ pub(super) struct ActiveRoleRunner<S: NodeRunnerStore> {
     runner: Box<dyn RoleRunner>,
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+pub(super) struct RetryState {
+    pub(super) blocked_target: Option<RoleTarget>,
+    pub(super) failure_target: Option<RoleTarget>,
+    pub(super) consecutive_failures: u32,
+}
+
+impl RetryState {
+    fn reset_for_desired_target_change(&mut self, desired_target: Option<RoleTarget>) {
+        if desired_target != self.failure_target {
+            self.failure_target = desired_target;
+            self.consecutive_failures = 0;
+            if self.blocked_target != desired_target {
+                self.blocked_target = None;
+            }
+        }
+    }
+
+    fn is_blocked(&self, target: RoleTarget) -> bool {
+        self.blocked_target == Some(target)
+    }
+
+    fn clear(&mut self) {
+        self.failure_target = None;
+        self.consecutive_failures = 0;
+        self.blocked_target = None;
+    }
+
+    fn note_failure(&mut self, target: RoleTarget, max_consecutive_failures: u32) -> bool {
+        if self.failure_target == Some(target) {
+            self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        } else {
+            self.failure_target = Some(target);
+            self.consecutive_failures = 1;
+        }
+        if self.consecutive_failures >= max_consecutive_failures {
+            self.blocked_target = Some(target);
+            return true;
+        }
+        false
+    }
+}
+
 pub struct NodeRunner<S: NodeRunnerStore> {
     store: S,
     node_id: String,
     config: NodeRunnerConfig,
     active_runner: Option<ActiveRoleRunner<S>>,
-    blocked_target: Option<RoleTarget>,
-    failure_target: Option<RoleTarget>,
-    consecutive_start_failures: u32,
+    retry_state: RetryState,
 }
 
 impl<S: NodeRunnerStore> NodeRunner<S> {
@@ -88,9 +129,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             node_id: node_id.into(),
             config,
             active_runner: None,
-            blocked_target: None,
-            failure_target: None,
-            consecutive_start_failures: 0,
+            retry_state: RetryState::default(),
         }
     }
 
