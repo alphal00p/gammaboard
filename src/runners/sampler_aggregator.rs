@@ -10,10 +10,9 @@
 //! - delete consumed completed batches
 
 use crate::core::{
-    AggregationStore, CompletedBatch, ParametrizationState, RollingMetricSnapshot,
-    RunSampleProgress, RunStageSnapshot, RunTask, RunTaskSpec, RunTaskStore,
-    SamplerAggregatorPerformanceSnapshot, SamplerRollingAverages, SamplerRuntimeMetrics,
-    StoreError, WorkQueueStore,
+    AggregationStore, ParametrizationState, RollingMetricSnapshot, RunSampleProgress,
+    RunStageSnapshot, RunTask, RunTaskSpec, RunTaskStore, SamplerAggregatorPerformanceSnapshot,
+    SamplerRollingAverages, SamplerRuntimeMetrics, StoreError, WorkQueueStore,
 };
 use crate::core::{EngineError, EvaluatorConfig, ParametrizationConfig, SamplerAggregatorConfig};
 use crate::evaluation::{ObservableState, PointSpec};
@@ -159,6 +158,34 @@ where
     const MAX_BATCH_SIZE_UP_FACTOR: f64 = 1.25;
     const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.80;
     const MIN_BATCH_SIZE_CHANGE_RATIO: f64 = 0.03;
+
+    fn validate_runner_config(config: &SamplerAggregatorRunnerParams) -> Result<(), RunnerError> {
+        if config.max_batch_size == 0 {
+            return Err(RunnerError::Engine(EngineError::engine(
+                "runner config max_batch_size must be > 0",
+            )));
+        }
+        if config.max_queue_size == 0 {
+            return Err(RunnerError::Engine(EngineError::engine(
+                "runner config max_queue_size must be > 0",
+            )));
+        }
+        if !config.target_batch_eval_ms.is_finite() || config.target_batch_eval_ms <= 0.0 {
+            return Err(RunnerError::Engine(EngineError::engine(
+                "runner config target_batch_eval_ms must be > 0",
+            )));
+        }
+        if !config.target_queue_remaining.is_finite()
+            || config.target_queue_remaining < 0.0
+            || config.target_queue_remaining > 1.0
+        {
+            return Err(RunnerError::Engine(EngineError::engine(
+                "runner config target_queue_remaining must be in [0, 1]",
+            )));
+        }
+        Ok(())
+    }
+
     fn tune_batch_size(&mut self) {
         let Some(eval_ms_per_sample) = self.runtime_state.rolling.eval_ms_per_sample.value() else {
             return;
@@ -269,31 +296,8 @@ where
         initial_sampler_config: SamplerAggregatorConfig,
         initial_parametrization_config: ParametrizationConfig,
     ) -> Result<Self, RunnerError> {
-        // maybe move checking into a seperate function
+        Self::validate_runner_config(&config)?;
         let initial_batch_size = config.max_batch_size.min(64).max(Self::MIN_BATCH_SIZE);
-        if config.max_batch_size == 0 {
-            return Err(RunnerError::Engine(EngineError::engine(
-                "runner config max_batch_size must be > 0",
-            )));
-        }
-        if config.max_queue_size == 0 {
-            return Err(RunnerError::Engine(EngineError::engine(
-                "runner config max_queue_size must be > 0",
-            )));
-        }
-        if !config.target_batch_eval_ms.is_finite() || config.target_batch_eval_ms <= 0.0 {
-            return Err(RunnerError::Engine(EngineError::engine(
-                "runner config target_batch_eval_ms must be > 0",
-            )));
-        }
-        if !config.target_queue_remaining.is_finite()
-            || config.target_queue_remaining < 0.0
-            || config.target_queue_remaining > 1.0
-        {
-            return Err(RunnerError::Engine(EngineError::engine(
-                "runner config target_queue_remaining must be in [0, 1]",
-            )));
-        }
         let performance_snapshot_interval =
             Duration::from_millis(config.performance_snapshot_interval_ms);
         let persisted_progress = aggregation_store
@@ -379,34 +383,12 @@ where
             .get_pending_batch_count(self.run_id)
             .await?
             .max(0) as usize;
-
-        if let Some(previous_pending_after) = self.last_pending_after_enqueue {
-            if previous_pending_after > 0 {
-                let observed_ratio = (pending_before_tick as f64) / (previous_pending_after as f64);
-                self.runtime_state
-                    .rolling
-                    .queue_remaining_ratio
-                    .observe(observed_ratio);
-                let consumed = previous_pending_after.saturating_sub(pending_before_tick) as f64;
-                self.runtime_state
-                    .rolling
-                    .batches_consumed_per_tick
-                    .observe(consumed);
-            }
-        }
+        self.observe_queue_metrics(pending_before_tick);
 
         self.tune_batch_size();
         let queue_depleted = pending_before_tick == 0;
 
-        let completed = self
-            .work_queue
-            .fetch_completed_batches(self.run_id, self.config.completed_batch_fetch_limit)
-            .await?;
-        //maybe move getting and then deleting the batches into process completed.
-        let consumed_ids = self.process_completed(&completed).await?;
-        self.work_queue
-            .delete_completed_batches(&consumed_ids)
-            .await?;
+        let processed_completed_batches = self.process_completed().await?;
         self.try_mark_training_completed().await?;
         self.sync_active_task_progress().await?;
         let open_batch_count = self
@@ -422,21 +404,39 @@ where
 
         Ok(RunnerTick {
             enqueued_batches,
-            processed_completed_batches: consumed_ids.len(),
+            processed_completed_batches,
             queue_depleted,
         })
     }
 
-    async fn process_completed(
-        &mut self,
-        completed: &[CompletedBatch],
-    ) -> Result<Vec<i64>, RunnerError> {
+    fn observe_queue_metrics(&mut self, pending_before_tick: usize) {
+        if let Some(previous_pending_after) = self.last_pending_after_enqueue
+            && previous_pending_after > 0
+        {
+            let observed_ratio = (pending_before_tick as f64) / (previous_pending_after as f64);
+            self.runtime_state
+                .rolling
+                .queue_remaining_ratio
+                .observe(observed_ratio);
+            let consumed = previous_pending_after.saturating_sub(pending_before_tick) as f64;
+            self.runtime_state
+                .rolling
+                .batches_consumed_per_tick
+                .observe(consumed);
+        }
+    }
+
+    async fn process_completed(&mut self) -> Result<usize, RunnerError> {
+        let completed = self
+            .work_queue
+            .fetch_completed_batches(self.run_id, self.config.completed_batch_fetch_limit)
+            .await?;
         if completed.is_empty() {
-            return Ok(Vec::new());
+            return Ok(0);
         }
 
         let mut completed_samples_delta = 0_i64;
-        for batch in completed {
+        for batch in &completed {
             let batch_samples = batch.latent_batch.nr_samples;
             completed_samples_delta += batch_samples as i64;
             if let Some(total_eval_time_ms) = batch.total_eval_time_ms
@@ -521,7 +521,15 @@ where
             )
             .await?;
 
-        Ok(completed.iter().map(|batch| batch.batch_id).collect())
+        let consumed_ids = completed
+            .iter()
+            .map(|batch| batch.batch_id)
+            .collect::<Vec<_>>();
+        self.work_queue
+            .delete_completed_batches(&consumed_ids)
+            .await?;
+
+        Ok(consumed_ids.len())
     }
 
     async fn try_mark_training_completed(&mut self) -> Result<(), RunnerError> {
