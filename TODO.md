@@ -68,3 +68,28 @@
 - [ ] reduce duplicated node-assignment SQL in `src/stores/queries/control_plane.rs`; clearing desired assignments, setting current assignments, and timestamp updates still repeat the same `nodes` update clauses and raw-row mapping patterns.
 - [ ] add shared decode helpers in `src/stores/queries/read.rs` for repeated JSON-to-typed-metrics conversion, `BIGINT`-to-string id mapping, and typed decode error wrapping; the current row adapters still repeat the same conversion shapes.
 - [ ] simplify `src/server/mod.rs`; most handlers are still thin boilerplate around `Path`/`Query` extraction, `store` calls, `NotFound` conversion, and `json_response(...)`, which suggests a small shared pattern for “load one”, “load many”, and “load history”.
+- [ ] refactor task/history panel projection around reusable panel-spec objects instead of large task-level switch helpers. Keep incremental history fetches by `after_snapshot_id`, but have each task register a small set of panel projectors that each know how to:
+  - expose one stable descriptor,
+  - build current panel state from runtime/stage state,
+  - project one persisted snapshot into an incremental history contribution.
+  This keeps transport efficient (only new snapshots are sent), avoids mutable panel runtime state, and makes current/history projection easier to extend panel-by-panel.
+  Concrete shape to aim for:
+  - `TaskPanelSpec` trait with methods roughly like:
+    - `descriptor(&self) -> PanelDescriptor`
+    - `current(&self, task: &RunTask, source: TaskPanelCurrentSource<'_>) -> Result<Option<PanelState>, EngineError>`
+    - `history_delta(&self, task: &RunTask, persisted: &JsonValue, run_spec: &RunSpec, created_at: DateTime<Utc>) -> Result<Option<PanelState>, EngineError>`
+  - each task adapter returns `Vec<Box<dyn TaskPanelSpec>>` (or an enum-backed small vector if dyn dispatch is undesirable)
+  - the history endpoint still queries `persisted_observable_snapshots` once per request, filtered by `after_snapshot_id`
+  - for each returned snapshot row, the server iterates the task's panel specs and asks each one for an incremental `history_delta(...)`
+  - the response still sends only the new `TaskHistoryItem`s; the frontend still merges them panel-by-panel exactly as today
+  Example:
+  - sample task registers `sample_progress`, `real_estimate_history`, `imag_estimate_history`, `abs_signal_to_noise_history`, `estimate_summary`
+  - `real_estimate_history.history_delta(...)` decodes one persisted aggregate observable snapshot, extracts one `(x=count, y=real_mean, band=stderr)` point, and returns a scalar-timeseries panel containing just that single point
+  - `estimate_summary.history_delta(...)` can return `None` if we decide summaries are current-only
+  - image task registers `image_progress`, `image_completion`, `image_view`
+  - `image_progress.history_delta(...)` decodes the persisted `FullObservableProgress` snapshot and returns one progress/key-value update, while `image_view.history_delta(...)` returns `None` because full image values are not stored in persisted history
+  Why this is simpler:
+  - panel logic is localized per panel instead of spread across one large file
+  - adding a new panel does not require editing a giant task-wide match in several places
+  - current vs history behavior is explicit per panel
+  - we keep the existing efficient API contract instead of inventing mutable persisted panel state
