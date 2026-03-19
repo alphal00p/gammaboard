@@ -3,9 +3,9 @@ use crate::core::{
 };
 use crate::evaluation::{FullObservableProgress, ObservableState, SemanticObservableKind};
 use crate::server::panels::{
-    ImageColorMode, PanelDescriptor, PanelKind, PanelState, PlotPoint, TaskHistoryItem,
-    history_item, key_value, key_value_panel, panel_descriptor, progress_panel,
-    scalar_timeseries_panel, single_point_band,
+    ImageColorMode, PanelDescriptor, PanelKind, PanelState, PlotPoint, PlotSeries, TaskHistoryItem,
+    history_item, key_value, key_value_panel, multi_timeseries_panel, panel_descriptor,
+    progress_panel, scalar_timeseries_panel, single_point_band,
 };
 use crate::stores::{TaskOutputSnapshot, TaskStageSnapshot};
 use serde_json::Value as JsonValue;
@@ -21,7 +21,7 @@ impl RunTaskSpec {
             )],
             Self::Sample { .. } => describe_sample_panels(run_spec),
             Self::Image { .. } => describe_image_panels(),
-            Self::PlotLine { .. } => describe_line_panels(run_spec),
+            Self::PlotLine { display, .. } => describe_line_panels(*display, run_spec),
         }
     }
 
@@ -215,7 +215,7 @@ fn persisted_full_progress_panels(
     ))
 }
 
-fn describe_line_panels(run_spec: &RunSpec) -> Vec<PanelDescriptor> {
+fn describe_line_panels(display: LineDisplayMode, run_spec: &RunSpec) -> Vec<PanelDescriptor> {
     let mut panels = vec![
         panel_descriptor("line_progress", "Line Progress", PanelKind::Progress, true),
         panel_descriptor(
@@ -225,26 +225,24 @@ fn describe_line_panels(run_spec: &RunSpec) -> Vec<PanelDescriptor> {
             true,
         ),
     ];
-    panels.push(panel_descriptor(
-        "line_real",
-        if matches!(
-            run_spec.evaluator.observable_kind(),
-            SemanticObservableKind::Complex
-        ) {
-            "Real Part"
-        } else {
-            "Value"
-        },
-        PanelKind::ScalarTimeseries,
-        false,
-    ));
-    if matches!(
-        run_spec.evaluator.observable_kind(),
-        SemanticObservableKind::Complex
-    ) {
+    if line_uses_complex_components(display, run_spec) {
         panels.push(panel_descriptor(
-            "line_imag",
-            "Imaginary Part",
+            "line_components",
+            "Complex Components",
+            PanelKind::MultiTimeseries,
+            false,
+        ));
+    } else {
+        panels.push(panel_descriptor(
+            "line_real",
+            if matches!(
+                run_spec.evaluator.observable_kind(),
+                SemanticObservableKind::Complex
+            ) {
+                "Real Part"
+            } else {
+                "Value"
+            },
             PanelKind::ScalarTimeseries,
             false,
         ));
@@ -350,7 +348,7 @@ fn build_line_current_panels(
     task: &RunTask,
     observable: Option<&ObservableState>,
     geometry: &crate::core::LineRasterGeometry,
-    _display: LineDisplayMode,
+    display: LineDisplayMode,
     run_spec: &RunSpec,
 ) -> Result<Vec<PanelState>, EngineError> {
     let total = geometry.nr_points();
@@ -363,7 +361,9 @@ fn build_line_current_panels(
         line_completion_panel(total, processed),
     );
     if let Some(observable) = observable {
-        panels.extend(build_line_value_panels(observable, geometry, run_spec)?);
+        panels.extend(build_line_value_panels(
+            observable, geometry, display, run_spec,
+        )?);
     }
     Ok(panels)
 }
@@ -416,6 +416,7 @@ fn build_image_view_panel(
 fn build_line_value_panels(
     observable: &ObservableState,
     geometry: &crate::core::LineRasterGeometry,
+    display: LineDisplayMode,
     run_spec: &RunSpec,
 ) -> Result<Vec<PanelState>, EngineError> {
     let xs = (0..geometry.nr_points())
@@ -436,44 +437,73 @@ fn build_line_value_panels(
                 .collect(),
         )]),
         ObservableState::FullComplex(state) => {
-            let mut panels = vec![scalar_timeseries_panel(
-                "line_real",
-                xs.iter()
-                    .copied()
-                    .zip(state.values.iter())
-                    .map(|(x, value)| PlotPoint {
-                        x,
-                        y: value.re,
-                        y_min: None,
-                        y_max: None,
-                    })
-                    .collect(),
-            )];
-            if matches!(
-                run_spec.evaluator.observable_kind(),
-                SemanticObservableKind::Complex
-            ) {
-                panels.push(scalar_timeseries_panel(
-                    "line_imag",
+            if line_uses_complex_components(display, run_spec) {
+                Ok(vec![multi_timeseries_panel(
+                    "line_components",
+                    vec![
+                        PlotSeries {
+                            id: "real".to_string(),
+                            label: "Real Part".to_string(),
+                            points: xs
+                                .iter()
+                                .copied()
+                                .zip(state.values.iter())
+                                .map(|(x, value)| PlotPoint {
+                                    x,
+                                    y: value.re,
+                                    y_min: None,
+                                    y_max: None,
+                                })
+                                .collect(),
+                        },
+                        PlotSeries {
+                            id: "imag".to_string(),
+                            label: "Imaginary Part".to_string(),
+                            points: xs
+                                .iter()
+                                .copied()
+                                .zip(state.values.iter())
+                                .map(|(x, value)| PlotPoint {
+                                    x,
+                                    y: value.im,
+                                    y_min: None,
+                                    y_max: None,
+                                })
+                                .collect(),
+                        },
+                    ],
+                )])
+            } else {
+                Ok(vec![scalar_timeseries_panel(
+                    "line_real",
                     xs.iter()
                         .copied()
                         .zip(state.values.iter())
                         .map(|(x, value)| PlotPoint {
                             x,
-                            y: value.im,
+                            y: value.re,
                             y_min: None,
                             y_max: None,
                         })
                         .collect(),
-                ));
+                )])
             }
-            Ok(panels)
         }
         other => Err(EngineError::engine(format!(
             "line task expected full observable, got {}",
             other.kind_str()
         ))),
     }
+}
+
+fn line_uses_complex_components(display: LineDisplayMode, run_spec: &RunSpec) -> bool {
+    matches!(
+        run_spec.evaluator.observable_kind(),
+        SemanticObservableKind::Complex
+    ) && matches!(
+        display,
+        LineDisplayMode::Auto | LineDisplayMode::ComplexComponents
+    )
 }
 
 fn completion_panel(panel_id: &str, total: usize, processed: usize) -> PanelState {
@@ -680,5 +710,175 @@ impl EvaluatorConfig {
             Self::Unit { params } => params.observable_kind,
             Self::Symbolica { .. } => SemanticObservableKind::Scalar,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{
+        ObservableConfig, ParametrizationConfig, RunTaskState, SamplerAggregatorConfig,
+    };
+    use crate::evaluation::{
+        ComplexValue, FullComplexObservableState, PointSpec, UnitEvaluatorParams,
+    };
+    use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
+    use crate::sampling::{IdentityParametrizationParams, RasterLineSamplerParams};
+    use chrono::Utc;
+
+    fn complex_run_spec() -> RunSpec {
+        RunSpec {
+            run_id: 1,
+            point_spec: PointSpec {
+                continuous_dims: 1,
+                discrete_dims: 0,
+            },
+            evaluator: EvaluatorConfig::Unit {
+                params: UnitEvaluatorParams {
+                    observable_kind: SemanticObservableKind::Complex,
+                    ..UnitEvaluatorParams::default()
+                },
+            },
+            observable: ObservableConfig::FullComplex,
+            sampler_aggregator: SamplerAggregatorConfig::RasterLine {
+                params: RasterLineSamplerParams {
+                    geometry: line_geometry(),
+                },
+            },
+            parametrization: ParametrizationConfig::Identity {
+                params: IdentityParametrizationParams::default(),
+            },
+            evaluator_runner_params: EvaluatorRunnerParams {
+                performance_snapshot_interval_ms: 1000,
+            },
+            sampler_aggregator_runner_params: SamplerAggregatorRunnerParams {
+                performance_snapshot_interval_ms: 1000,
+                target_batch_eval_ms: 100.0,
+                target_queue_remaining: 0.5,
+                max_batch_size: 16,
+                max_queue_size: 16,
+                max_batches_per_tick: 4,
+                completed_batch_fetch_limit: 16,
+            },
+        }
+    }
+
+    fn line_geometry() -> crate::core::LineRasterGeometry {
+        crate::core::LineRasterGeometry {
+            offset: vec![0.0],
+            direction: vec![1.0],
+            linspace: crate::core::Linspace {
+                start: -1.0,
+                stop: 1.0,
+                count: 3,
+            },
+            discrete: Vec::new(),
+        }
+    }
+
+    fn plot_task(display: LineDisplayMode) -> RunTaskSpec {
+        RunTaskSpec::PlotLine {
+            geometry: line_geometry(),
+            observable: crate::core::PlotObservableKind::Complex,
+            display,
+            start_from: None,
+        }
+    }
+
+    fn run_task(task: RunTaskSpec) -> RunTask {
+        RunTask {
+            id: 1,
+            run_id: 1,
+            sequence_nr: 1,
+            task,
+            spawned_from_run_id: None,
+            spawned_from_task_id: None,
+            state: RunTaskState::Active,
+            nr_produced_samples: 3,
+            nr_completed_samples: 3,
+            failure_reason: None,
+            started_at: None,
+            completed_at: None,
+            failed_at: None,
+            created_at: Utc::now(),
+        }
+    }
+
+    fn complex_observable() -> ObservableState {
+        ObservableState::FullComplex(FullComplexObservableState {
+            values: vec![
+                ComplexValue { re: 1.0, im: -1.0 },
+                ComplexValue { re: 2.0, im: -2.0 },
+                ComplexValue { re: 3.0, im: -3.0 },
+            ],
+        })
+    }
+
+    #[test]
+    fn complex_line_auto_uses_multi_timeseries_components_panel() {
+        let run_spec = complex_run_spec();
+        let task = plot_task(LineDisplayMode::Auto);
+        let descriptors = task.describe_panels(&run_spec);
+        assert!(
+            descriptors
+                .iter()
+                .any(|panel| panel.panel_id == "line_components")
+        );
+        assert!(
+            !descriptors
+                .iter()
+                .any(|panel| panel.panel_id == "line_imag")
+        );
+
+        let current = task
+            .build_current_panels(
+                &run_task(task.clone()),
+                Some(&complex_observable()),
+                &run_spec,
+            )
+            .unwrap();
+        let panel = current
+            .into_iter()
+            .find(|panel| matches!(panel, PanelState::MultiTimeseries { panel_id, .. } if panel_id == "line_components"))
+            .expect("missing line_components panel");
+        let PanelState::MultiTimeseries { series, .. } = panel else {
+            panic!("expected multi_timeseries panel");
+        };
+        assert_eq!(series.len(), 2);
+    }
+
+    #[test]
+    fn complex_line_scalar_curve_uses_single_real_panel() {
+        let run_spec = complex_run_spec();
+        let task = plot_task(LineDisplayMode::ScalarCurve);
+        let descriptors = task.describe_panels(&run_spec);
+        assert!(
+            descriptors
+                .iter()
+                .any(|panel| panel.panel_id == "line_real")
+        );
+        assert!(
+            !descriptors
+                .iter()
+                .any(|panel| panel.panel_id == "line_components")
+        );
+
+        let current = task
+            .build_current_panels(
+                &run_task(task.clone()),
+                Some(&complex_observable()),
+                &run_spec,
+            )
+            .unwrap();
+        assert!(
+            current
+                .iter()
+                .any(|panel| matches!(panel, PanelState::ScalarTimeseries { panel_id, .. } if panel_id == "line_real"))
+        );
+        assert!(
+            !current
+                .iter()
+                .any(|panel| matches!(panel, PanelState::MultiTimeseries { .. }))
+        );
     }
 }

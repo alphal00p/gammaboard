@@ -57,6 +57,7 @@ discrete = []
 [[task_queue]]
 kind = "sample"
 nr_samples = 500_000
+observable = "complex"
 [task_queue.sampler_aggregator]
 kind = "havana_training"
 seed = 0
@@ -67,8 +68,7 @@ initial_training_rate = 0.1
 final_training_rate = 0.001
 [task_queue.parametrization]
 kind = "identity"
-[task_queue.observable]
-scalar
+
 
 [[task_queue]]
 kind = "sample"

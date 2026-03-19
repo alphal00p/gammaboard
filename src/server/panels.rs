@@ -184,6 +184,13 @@ pub(crate) fn scalar_timeseries_panel(panel_id: &str, points: Vec<PlotPoint>) ->
     }
 }
 
+pub(crate) fn multi_timeseries_panel(panel_id: &str, series: Vec<PlotSeries>) -> PanelState {
+    PanelState::MultiTimeseries {
+        panel_id: panel_id.to_string(),
+        series,
+    }
+}
+
 pub(crate) fn progress_panel(
     panel_id: &str,
     current: f64,
