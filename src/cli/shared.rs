@@ -80,3 +80,25 @@ where
     let store = init_cli_store(db_pool_size, quiet).await?;
     async move { f(store).await }.instrument(span).await
 }
+
+pub fn control_command_span(name: &'static str) -> tracing::Span {
+    tracing::span!(
+        tracing::Level::TRACE,
+        "control_command",
+        source = "control",
+        command = name
+    )
+}
+
+pub async fn with_control_store<T, F, Fut>(
+    db_pool_size: u32,
+    quiet: bool,
+    command_name: &'static str,
+    f: F,
+) -> Result<T>
+where
+    F: FnOnce(PgStore) -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    with_cli_store(db_pool_size, quiet, control_command_span(command_name), f).await
+}

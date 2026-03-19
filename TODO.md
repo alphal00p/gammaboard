@@ -12,9 +12,6 @@
 - [ ] implement pausing a run by serializing the sampler_aggregator. When pausing a run, we would need to make sure to handle the batch queue
 
 ### Duplication Of Code
-- [ ] deduplicate repeated CLI command-name mapping and tracing-span setup patterns across `run.rs` and `node.rs`.
-- [ ] extract shared CLI bootstrap in `src/cli/*` for `init_pg_store(...)`, `init_cli_tracing(...)`, and span instrumentation used by `run.rs`, `node.rs`, `run_node.rs`, and `server.rs`.
-- [ ] collapse repeated run lifecycle control flow in `src/cli/run.rs`: `pause` and `remove` still branch on `selection.all` and then iterate with similar logging/update patterns.
 - [ ] replace repeated polling state machines in `dashboard/src/hooks/useRuns.js`, `useWorkersData.js`, `useTaskOutput.js`, `useRunPerformancePanels.js`, and `useWorkerLogs.js` with a reusable `usePolledResource`-style hook.
 - [ ] unify implementation-panel registry dispatch in `dashboard/src/components/evaluator/EvaluatorCustomPanel.jsx` and `dashboard/src/components/sampler/SamplerCustomPanel.jsx`, or fold both into the shared panel infrastructure when the remaining custom implementation views are retired.
 - [ ] factor shared control-plane node SQL in `src/stores/queries/control_plane.rs`: repeated `nodes` update clauses for clearing desired assignments and repeated fixed control-plane row defaults.
@@ -31,13 +28,6 @@
 ## Sweep Findings (2026-03-19)
 
 ### Backend
-- [ ] simplify `src/runners/node_runner/reconcile.rs`; it still spreads one conceptual reconciliation decision across `reconcile`, `start`, `build_runner`, `build_evaluator_runner`, `load_or_activate_sampler_task`, and `build_sampler_runner`, while also mixing selection logic with side effects like task activation, assignment clearing, and initial snapshot persistence.
-- [ ] collapse `NodeRunner` retry bookkeeping in `src/runners/node_runner/mod.rs` and `src/runners/node_runner/reconcile.rs`; `blocked_target`, `failure_target`, and `consecutive_start_failures` should become one small retry/backoff state or a helper instead of leaking into the main control flow.
 - [ ] reduce duplicated node-assignment SQL in `src/stores/queries/control_plane.rs`; clearing desired assignments, setting current assignments, and timestamp updates still repeat the same `nodes` update clauses and raw-row mapping patterns.
 - [ ] add shared decode helpers in `src/stores/queries/read.rs` for repeated JSON-to-typed-metrics conversion, `BIGINT`-to-string id mapping, and typed decode error wrapping; the current row adapters still repeat the same conversion shapes.
 - [ ] simplify `src/server/mod.rs`; most handlers are still thin boilerplate around `Path`/`Query` extraction, `store` calls, `NotFound` conversion, and `json_response(...)`, which suggests a small shared pattern for “load one”, “load many”, and “load history”.
-
-### CLI
-- [ ] split the `RunCommand::Add` path in `src/cli/run.rs` into a small pipeline helper; loading TOML, deep-merging defaults, validating task snapshot refs, preprocessing, serializing integration params, and creating the run all still live in one large match arm.
-- [ ] extract shared selection helpers in `src/cli/run.rs` and `src/cli/node.rs` for `--all` versus explicit ids; pause/remove/stop still open-code the same control flow and logging shape.
-- [ ] collapse duplicated command-span plumbing across `src/cli/run.rs` and `src/cli/node.rs`; both modules still keep parallel `*_command_name(...)` helpers and near-identical tracing span setup before entering `with_cli_store(...)`.

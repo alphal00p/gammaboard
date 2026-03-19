@@ -1,6 +1,7 @@
-use super::shared::{RunSelection, with_cli_store};
+use super::shared::{RunSelection, with_control_store};
 use anyhow::{Context, Result, anyhow};
 use clap::{Args, Subcommand};
+use gammaboard::PgStore;
 use gammaboard::core::{
     ControlPlaneStore, RunReadStore, RunSpecStore, RunTaskInputSpec, RunTaskSpec, RunTaskStore,
     resolve_task_queue,
@@ -39,132 +40,12 @@ pub enum TaskCommand {
 }
 
 pub async fn run_run_commands(command: RunCommand, quiet: bool) -> Result<()> {
-    let command_name = run_command_name(&command);
-    let span = tracing::span!(
-        tracing::Level::TRACE,
-        "control_run_command",
-        source = "control",
-        command = command_name
-    );
-
-    with_cli_store(10, quiet, span, |store| async move {
+    with_control_store(10, quiet, run_command_name(&command), |store| async move {
         match command {
-            RunCommand::Add { config_file } => {
-                let config = load_run_add_config(&config_file)?;
-                let run_name = config.name.clone();
-                tracing::info!(run = %run_name, "run-add preflight started");
-                let processed = match preprocess_run_add(config) {
-                    Ok(processed) => {
-                        tracing::info!(run = %run_name, "run-add preflight finished");
-                        processed
-                    }
-                    Err(err) => {
-                        tracing::info!(run = %run_name, error = %err, "run-add preflight failed");
-                        return Err(anyhow!("failed to preprocess run config: {err}"));
-                    }
-                };
-                let point_spec = processed
-                    .point_spec
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("preprocessing did not resolve point_spec"))?;
-                let integration_params = serde_json::to_value(
-                    processed
-                        .resolved_integration_params
-                        .as_ref()
-                        .ok_or_else(|| {
-                            anyhow!("preprocessing did not resolve integration_params")
-                        })?,
-                )
-                .map_err(|err| anyhow!("failed to serialize integration_params: {err}"))?;
-                let initial_tasks = processed.resolved_task_queue.clone().unwrap_or_default();
-                validate_task_snapshot_refs(&store, &initial_tasks).await?;
-                let run_id = store
-                    .create_run(
-                        &processed.name,
-                        &integration_params,
-                        processed.target.as_ref(),
-                        point_spec,
-                        processed.evaluator_init_metadata.as_ref(),
-                        processed.sampler_aggregator_init_metadata.as_ref(),
-                        &initial_tasks,
-                    )
-                    .await?;
-                tracing::info!("created run_id={} name={}", run_id, processed.name);
-            }
-            RunCommand::Pause(selection) => {
-                if selection.all {
-                    let assignments_cleared = store.clear_all_desired_assignments().await?;
-                    tracing::info!(
-                        "paused all runs: assignments_cleared={}",
-                        assignments_cleared
-                    );
-                } else {
-                    for run_id in selection.run_ids {
-                        let assignments_cleared =
-                            store.clear_desired_assignments_for_run(run_id).await?;
-                        tracing::info!(
-                            "run {} paused assignments_cleared={}",
-                            run_id,
-                            assignments_cleared
-                        );
-                    }
-                }
-            }
-            RunCommand::Remove(selection) => {
-                if selection.all {
-                    let runs = store.get_all_runs().await?;
-                    let mut removed = 0u64;
-                    for run in runs {
-                        store.remove_run(run.run_id).await?;
-                        removed += 1;
-                    }
-                    tracing::info!("removed all runs: removed={removed}");
-                } else {
-                    for run_id in selection.run_ids {
-                        store.remove_run(run_id).await?;
-                        tracing::info!("removed run {run_id}");
-                    }
-                }
-            }
-            RunCommand::Task(args) => match args.command {
-                TaskCommand::Add { run_id, task_file } => {
-                    let tasks =
-                        resolve_task_queue_file_for_run(&store, &store, run_id, &task_file).await?;
-                    validate_task_snapshot_refs(&store, &tasks).await?;
-                    let inserted = store.append_run_tasks(run_id, &tasks).await?;
-                    tracing::info!(run_id, tasks_added = inserted.len(), "appended run tasks");
-                }
-                TaskCommand::List { run_id } => {
-                    let tasks = store.list_run_tasks(run_id).await?;
-                    for task in tasks {
-                        tracing::info!(
-                            run_id = task.run_id,
-                            task_id = task.id,
-                            sequence_nr = task.sequence_nr,
-                            state = task.state.as_str(),
-                            kind = task.task.kind_str(),
-                            nr_produced_samples = task.nr_produced_samples,
-                            nr_completed_samples = task.nr_completed_samples,
-                            start_from = format_task_snapshot_ref(task.task.start_from()),
-                            spawned_from = format_task_snapshot_origin(
-                                task.spawned_from_run_id,
-                                task.spawned_from_task_id
-                            ),
-                            failure_reason = task.failure_reason.as_deref().unwrap_or(""),
-                            "run task"
-                        );
-                    }
-                }
-                TaskCommand::Remove { run_id, task_id } => {
-                    let removed = store.remove_pending_run_task(run_id, task_id).await?;
-                    if !removed {
-                        return Err(anyhow!(
-                            "run task {task_id} was not removed; only pending tasks can be removed"
-                        ));
-                    }
-                    tracing::info!(run_id, task_id, "removed pending run task");
-                }
-            },
+            RunCommand::Add { config_file } => run_add(&store, &config_file).await?,
+            RunCommand::Pause(selection) => pause_runs(&store, selection).await?,
+            RunCommand::Remove(selection) => remove_runs(&store, selection).await?,
+            RunCommand::Task(args) => run_task_command(&store, args.command).await?,
         }
         Ok(())
     })
@@ -178,6 +59,123 @@ fn run_command_name(command: &RunCommand) -> &'static str {
         RunCommand::Remove(_) => "run_remove",
         RunCommand::Task(_) => "run_task",
     }
+}
+
+async fn run_add(store: &PgStore, config_file: &PathBuf) -> Result<()> {
+    let config = load_run_add_config(config_file)?;
+    let run_name = config.name.clone();
+    tracing::info!(run = %run_name, "run-add preflight started");
+    let processed = preprocess_run_add(config).map_err(|err| {
+        tracing::info!(run = %run_name, error = %err, "run-add preflight failed");
+        anyhow!("failed to preprocess run config: {err}")
+    })?;
+    tracing::info!(run = %run_name, "run-add preflight finished");
+
+    let point_spec = processed
+        .point_spec
+        .as_ref()
+        .ok_or_else(|| anyhow!("preprocessing did not resolve point_spec"))?;
+    let integration_params = serde_json::to_value(
+        processed
+            .resolved_integration_params
+            .as_ref()
+            .ok_or_else(|| anyhow!("preprocessing did not resolve integration_params"))?,
+    )
+    .map_err(|err| anyhow!("failed to serialize integration_params: {err}"))?;
+    let initial_tasks = processed.resolved_task_queue.clone().unwrap_or_default();
+    validate_task_snapshot_refs(store, &initial_tasks).await?;
+    let run_id = store
+        .create_run(
+            &processed.name,
+            &integration_params,
+            processed.target.as_ref(),
+            point_spec,
+            processed.evaluator_init_metadata.as_ref(),
+            processed.sampler_aggregator_init_metadata.as_ref(),
+            &initial_tasks,
+        )
+        .await?;
+    tracing::info!("created run_id={} name={}", run_id, processed.name);
+    Ok(())
+}
+
+async fn pause_runs(store: &PgStore, selection: RunSelection) -> Result<()> {
+    if selection.all {
+        let assignments_cleared = store.clear_all_desired_assignments().await?;
+        tracing::info!("paused all runs: assignments_cleared={assignments_cleared}");
+        return Ok(());
+    }
+
+    for run_id in selection.run_ids {
+        let assignments_cleared = store.clear_desired_assignments_for_run(run_id).await?;
+        tracing::info!(
+            "run {} paused assignments_cleared={}",
+            run_id,
+            assignments_cleared
+        );
+    }
+    Ok(())
+}
+
+async fn remove_runs(store: &PgStore, selection: RunSelection) -> Result<()> {
+    if selection.all {
+        let runs = store.get_all_runs().await?;
+        let mut removed = 0u64;
+        for run in runs {
+            store.remove_run(run.run_id).await?;
+            removed += 1;
+        }
+        tracing::info!("removed all runs: removed={removed}");
+        return Ok(());
+    }
+
+    for run_id in selection.run_ids {
+        store.remove_run(run_id).await?;
+        tracing::info!("removed run {run_id}");
+    }
+    Ok(())
+}
+
+async fn run_task_command(store: &PgStore, command: TaskCommand) -> Result<()> {
+    match command {
+        TaskCommand::Add { run_id, task_file } => {
+            let tasks = resolve_task_queue_file_for_run(store, store, run_id, &task_file).await?;
+            validate_task_snapshot_refs(store, &tasks).await?;
+            let inserted = store.append_run_tasks(run_id, &tasks).await?;
+            tracing::info!(run_id, tasks_added = inserted.len(), "appended run tasks");
+        }
+        TaskCommand::List { run_id } => {
+            let tasks = store.list_run_tasks(run_id).await?;
+            for task in tasks {
+                tracing::info!(
+                    run_id = task.run_id,
+                    task_id = task.id,
+                    sequence_nr = task.sequence_nr,
+                    state = task.state.as_str(),
+                    kind = task.task.kind_str(),
+                    nr_produced_samples = task.nr_produced_samples,
+                    nr_completed_samples = task.nr_completed_samples,
+                    start_from = format_task_snapshot_ref(task.task.start_from()),
+                    spawned_from = format_task_snapshot_origin(
+                        task.spawned_from_run_id,
+                        task.spawned_from_task_id
+                    ),
+                    failure_reason = task.failure_reason.as_deref().unwrap_or(""),
+                    "run task"
+                );
+            }
+        }
+        TaskCommand::Remove { run_id, task_id } => {
+            let removed = store.remove_pending_run_task(run_id, task_id).await?;
+            if !removed {
+                return Err(anyhow!(
+                    "run task {task_id} was not removed; only pending tasks can be removed"
+                ));
+            }
+            tracing::info!(run_id, task_id, "removed pending run task");
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]

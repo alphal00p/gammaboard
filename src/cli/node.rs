@@ -1,7 +1,8 @@
-use super::shared::{NodeSelection, RoleArg, with_cli_store};
+use super::shared::{NodeSelection, RoleArg, with_control_store};
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use comfy_table::{Cell, CellAlignment, ContentArrangement, Table};
+use gammaboard::PgStore;
 use gammaboard::core::{ControlPlaneStore, RegisteredNode, WorkerRole};
 
 #[derive(Debug, Args)]
@@ -27,15 +28,7 @@ pub enum NodeCommand {
 }
 
 pub async fn run_node_commands(command: NodeCommand, quiet: bool) -> Result<()> {
-    let command_name = node_command_name(&command);
-    let span = tracing::span!(
-        tracing::Level::TRACE,
-        "control_node_command",
-        source = "control",
-        command = command_name
-    );
-
-    with_cli_store(10, quiet, span, |store| async move {
+    with_control_store(10, quiet, node_command_name(&command), |store| async move {
         match command {
             NodeCommand::Assign {
                 node_id,
@@ -60,19 +53,7 @@ pub async fn run_node_commands(command: NodeCommand, quiet: bool) -> Result<()> 
                 let nodes = store.list_nodes(node_id.as_deref()).await?;
                 print_node_table(build_node_rows(nodes));
             }
-            NodeCommand::Stop(selection) => {
-                if selection.all {
-                    let rows = store.request_all_nodes_shutdown().await?;
-                    tracing::info!("requested shutdown for all nodes: rows_updated={rows}");
-                } else {
-                    for node_id in selection.node_ids {
-                        let rows = store.request_node_shutdown(&node_id).await?;
-                        tracing::info!(
-                            "requested shutdown for node={node_id}: rows_updated={rows}"
-                        );
-                    }
-                }
-            }
+            NodeCommand::Stop(selection) => stop_nodes(&store, selection).await?,
         }
         Ok(())
     })
@@ -86,6 +67,20 @@ fn node_command_name(command: &NodeCommand) -> &'static str {
         NodeCommand::List { .. } => "node_list",
         NodeCommand::Stop(_) => "node_stop",
     }
+}
+
+async fn stop_nodes(store: &PgStore, selection: NodeSelection) -> Result<()> {
+    if selection.all {
+        let rows = store.request_all_nodes_shutdown().await?;
+        tracing::info!("requested shutdown for all nodes: rows_updated={rows}");
+        return Ok(());
+    }
+
+    for node_id in selection.node_ids {
+        let rows = store.request_node_shutdown(&node_id).await?;
+        tracing::info!("requested shutdown for node={node_id}: rows_updated={rows}");
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
