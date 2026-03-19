@@ -50,6 +50,7 @@ pub struct EvaluatorRunner<WQ, AS> {
     work_queue: WQ,
     aggregation_store: AS,
     current_task_id: Option<i64>,
+    current_task_requires_training: bool,
     current_parametrization: Option<Box<dyn Parametrization>>,
 }
 
@@ -87,6 +88,7 @@ where
             work_queue,
             aggregation_store,
             current_task_id: None,
+            current_task_requires_training: false,
             current_parametrization: None,
         }
     }
@@ -153,19 +155,13 @@ where
             &transformed_batch,
             &claimed.latent_batch.observable,
             EvalBatchOptions {
-                require_training_values: claimed.requires_training,
+                require_training_values: self.current_task_requires_training,
             },
         ) {
             Ok(result) => {
                 let eval_time_ms = started.elapsed().as_secs_f64() * 1000.0;
                 let tick = self
-                    .submit_result(
-                        claimed.batch_id,
-                        &transformed_batch,
-                        claimed.requires_training,
-                        result,
-                        eval_time_ms,
-                    )
+                    .submit_result(claimed.batch_id, &transformed_batch, result, eval_time_ms)
                     .await?;
                 self.observe_idle_ratio(loop_started, eval_time_ms);
                 Ok(tick)
@@ -215,6 +211,7 @@ where
                 ))
             })?;
         self.current_task_id = Some(task_id);
+        self.current_task_requires_training = snapshot.sampler_aggregator.requires_training();
         self.current_parametrization = Some(parametrization);
         Ok(())
     }
@@ -223,11 +220,10 @@ where
         &mut self,
         batch_id: i64,
         batch: &Batch,
-        requires_training: bool,
         result: BatchResult,
         eval_time_ms: f64,
     ) -> Result<EvaluatorRunnerTick, EvaluatorRunnerError> {
-        if requires_training && result.values.is_none() {
+        if self.current_task_requires_training && result.values.is_none() {
             let err = EngineError::engine(format!(
                 "result is missing training values for training batch {}",
                 batch_id

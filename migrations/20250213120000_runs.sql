@@ -4,7 +4,6 @@ CREATE TABLE IF NOT EXISTS runs (
     name TEXT NOT NULL,
     started_at TIMESTAMPTZ DEFAULT now(),
     completed_at TIMESTAMPTZ,
-    training_completed_at TIMESTAMPTZ,
     nr_produced_samples BIGINT NOT NULL DEFAULT 0,
     nr_completed_samples BIGINT NOT NULL DEFAULT 0,
 

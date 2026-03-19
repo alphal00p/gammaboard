@@ -15,8 +15,6 @@ const RunInfo = ({ run, tasks = [] }) => {
   const pointSpec = toConfigObject(run.point_spec);
   const hasPointSpec = Number.isInteger(pointSpec?.continuous_dims) && Number.isInteger(pointSpec?.discrete_dims);
   const scalarTarget = parseScalarTarget(run.target);
-  const trainingCompleted = Boolean(run.training_completed_at);
-  const trainingLabel = trainingCompleted ? "training completed" : "training";
   const lifecycle = deriveRunLifecycle(run);
   const producedSamples = Number(run.nr_produced_samples);
   const completedSamples = Number(run.nr_completed_samples);
@@ -46,12 +44,6 @@ const RunInfo = ({ run, tasks = [] }) => {
                 color={lifecycle === "running" ? "success" : lifecycle === "pausing" ? "warning" : "default"}
                 size="medium"
                 sx={{ mt: 1, fontWeight: 600 }}
-              />
-              <Chip
-                label={trainingLabel}
-                color={trainingCompleted ? "info" : "warning"}
-                size="small"
-                sx={{ mt: 1, fontWeight: 600, ml: 1 }}
               />
             </CardContent>
           </Card>
@@ -89,9 +81,6 @@ const RunInfo = ({ run, tasks = [] }) => {
               </Typography>
               <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
                 completed: {formatDateTime(run.completed_at)}
-              </Typography>
-              <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                training_completed_at: {formatDateTime(run.training_completed_at)}
               </Typography>
             </CardContent>
           </Card>

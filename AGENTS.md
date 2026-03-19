@@ -45,7 +45,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - Avoid adding runtime dispatch enums for evaluator/sampler/parametrization selection beyond the config enums.
 - Engine config enums should carry typed parameter structs directly; avoid untyped `serde_json::Value` maps at the config boundary.
 - `IntegrationParams` and `RunSpec` carry strongly typed runner params.
-- Evaluators are batch-oriented and must respect `batches.requires_training`.
+- Evaluators are batch-oriented and must request training values based on the active task's sampler config, not a per-batch persisted flag.
 - Observable semantics are first-class run/task config via `ObservableConfig`, while serialized runtime/current state remains semantic `ObservableState`.
 - Queue payloads are latent and task-bound: `batches.latent_batch` plus `batches.task_id`.
 - Top-level run task sequencing lives in `src/core/tasks.rs`; sampler/evaluator engines should not parse arbitrary task JSON directly.
@@ -69,7 +69,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - Image and line tasks use full observables that store weighted per-sample values in deterministic task order; use those full observables as the canonical current-state artifact instead of tunneling sample values through training-mode side channels.
 - Sampler-aggregator aggregation is `ObservableState` merge, not capability-style ingest.
 - Sampler-aggregators own any per-batch training correlation state internally; do not pass runner-managed batch context back into them.
-- If a sampler has a finite training budget, only the exact training-suite samples may be produced with `requires_training`; the runner must not enqueue extra training batches beyond that boundary.
+- If a sampler has a finite training budget, training-value capture is a task-level property derived from the active sampler config. The runner must not enqueue extra training-suite samples beyond that boundary.
 - The latest full observable state for the active stage is cached on `runs.current_observable`; treat it as runner state, not as a run-global read-model contract.
 - Persisted observable history snapshots store each observable's reduced persistent payload, not the full in-memory observable state.
 - `run_stage_snapshots` are runtime handoff state only: store typed sampler snapshot, observable state, sampler config, and parametrization state there. Do not duplicate reduced persisted observable payloads in stage snapshots.

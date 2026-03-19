@@ -70,7 +70,6 @@ pub struct SamplerAggregatorRunnerSnapshot {
     active_runtime_task_id: Option<i64>,
     runtime_state: SamplerRuntimeState,
     last_pending_after_enqueue: Option<usize>,
-    training_completion_marked: bool,
 }
 
 impl From<&RollingMetric> for RollingMetricSnapshot {
@@ -138,7 +137,6 @@ pub struct SamplerAggregatorRunner<WQ, AS, RC, TS> {
     runtime_state: SamplerRuntimeState,
     last_performance_completed_samples: i64,
     last_pending_after_enqueue: Option<usize>,
-    training_completion_marked: bool,
     current_task: Option<RunTask>,
     active_runtime_task_id: Option<i64>,
     evaluator_config: EvaluatorConfig,
@@ -332,7 +330,6 @@ where
             },
             last_performance_completed_samples: persisted_progress.nr_completed_samples,
             last_pending_after_enqueue: None,
-            training_completion_marked: false,
             current_task: None,
             active_runtime_task_id: None,
             evaluator_config,
@@ -354,7 +351,6 @@ where
             .max(self.nr_produced_samples);
         self.last_performance_completed_samples = self.nr_completed_samples;
         self.last_pending_after_enqueue = snapshot.last_pending_after_enqueue;
-        self.training_completion_marked = snapshot.training_completion_marked;
         Ok(())
     }
 
@@ -365,7 +361,6 @@ where
             active_runtime_task_id: self.active_runtime_task_id,
             runtime_state: self.runtime_state.clone(),
             last_pending_after_enqueue: self.last_pending_after_enqueue,
-            training_completion_marked: self.training_completion_marked,
         })
     }
 
@@ -389,7 +384,6 @@ where
         let queue_depleted = pending_before_tick == 0;
 
         let processed_completed_batches = self.process_completed().await?;
-        self.try_mark_training_completed().await?;
         self.sync_active_task_progress().await?;
         let open_batch_count = self
             .work_queue
@@ -451,7 +445,7 @@ where
                     .eval_ms_per_sample
                     .observe(total_eval_time_ms / batch_samples as f64);
             }
-            if batch.requires_training {
+            if self.current_sampler_config.requires_training() {
                 let training_weights = batch.result.values.as_deref().ok_or_else(|| {
                     RunnerError::Engine(EngineError::engine(format!(
                         "completed batch {} requires training but has no training values",
@@ -530,20 +524,6 @@ where
             .await?;
 
         Ok(consumed_ids.len())
-    }
-
-    async fn try_mark_training_completed(&mut self) -> Result<(), RunnerError> {
-        // this training_samples_remaining is legacy, since we have task switching.
-        // think about how to make checking for task completeness consistent! sample tasks in general have a nr_samples specified.
-        if self.training_completion_marked || self.engine.training_samples_remaining().is_some() {
-            return Ok(());
-        }
-        let _ = self
-            .work_queue
-            .try_set_training_completed_at(self.run_id)
-            .await?;
-        self.training_completion_marked = true;
-        Ok(())
     }
 
     fn build_parametrization_state(
@@ -656,7 +636,6 @@ where
         self.current_sampler_config = sampler_aggregator.clone();
         self.save_stage_snapshot(Some(task), true).await?;
 
-        self.training_completion_marked = self.engine.training_samples_remaining().is_none();
         self.active_runtime_task_id = Some(task.id);
         Ok(())
     }
@@ -949,7 +928,6 @@ where
         let mut produced = Vec::with_capacity(batch_plan.len());
         for nr_samples in batch_plan {
             let started = Instant::now();
-            let requires_training = training_samples_remaining.is_some();
             let batch = self
                 .engine
                 .produce_latent_batch(nr_samples)
@@ -968,12 +946,11 @@ where
                     .sampler_produce_ms_per_sample
                     .observe(produce_time_ms / produced_samples as f64);
             }
-            produced.push((
+            produced.push(
                 batch
                     .with_observable_config(observable_config.clone())
                     .build(),
-                requires_training,
-            ));
+            );
         }
         let enqueued_batches = produced.len();
         let task_id = self
@@ -981,9 +958,9 @@ where
             .as_ref()
             .ok_or_else(|| RunnerError::Engine(EngineError::engine("missing active task")))?
             .id;
-        for (batch, requires_training) in produced {
+        for batch in produced {
             self.work_queue
-                .insert_batch(self.run_id, task_id, &batch, requires_training)
+                .insert_batch(self.run_id, task_id, &batch)
                 .await?;
         }
         let pending_after_enqueue = pending_before_tick.saturating_add(enqueued_batches);

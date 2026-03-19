@@ -84,6 +84,10 @@ impl SamplerAggregatorSnapshot {
 }
 
 impl SamplerAggregatorConfig {
+    pub fn requires_training(&self) -> bool {
+        matches!(self, Self::HavanaTraining { .. })
+    }
+
     pub fn kind_str(&self) -> &'static str {
         match self {
             Self::NaiveMonteCarlo { .. } => "naive_monte_carlo",

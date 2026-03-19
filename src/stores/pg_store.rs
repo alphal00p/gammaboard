@@ -474,9 +474,8 @@ impl WorkQueueStore for PgStore {
         run_id: i32,
         task_id: i64,
         batch: &LatentBatch,
-        requires_training: bool,
     ) -> Result<i64, StoreError> {
-        queries::insert_batch(&self.pool, run_id, task_id, batch, requires_training)
+        queries::insert_batch(&self.pool, run_id, task_id, batch)
             .await
             .map_err(map_sqlx)
     }
@@ -502,14 +501,11 @@ impl WorkQueueStore for PgStore {
             .await
             .map_err(map_sqlx)?;
 
-        Ok(claimed.map(
-            |(batch_id, task_id, latent_batch, requires_training)| BatchClaim {
-                batch_id,
-                task_id,
-                latent_batch,
-                requires_training,
-            },
-        ))
+        Ok(claimed.map(|(batch_id, task_id, latent_batch)| BatchClaim {
+            batch_id,
+            task_id,
+            latent_batch,
+        }))
     }
 
     async fn release_claimed_batches_for_worker(
@@ -585,7 +581,6 @@ impl WorkQueueStore for PgStore {
                 batch_id: row.batch_id,
                 task_id: row.task_id,
                 latent_batch,
-                requires_training: row.requires_training,
                 result,
                 completed_at: row.completed_at,
                 total_eval_time_ms: row.total_eval_time_ms,
@@ -593,12 +588,6 @@ impl WorkQueueStore for PgStore {
         }
 
         Ok(out)
-    }
-    async fn try_set_training_completed_at(&self, run_id: i32) -> Result<bool, StoreError> {
-        let rows = queries::try_set_training_completed_at(&self.pool, run_id)
-            .await
-            .map_err(map_sqlx)?;
-        Ok(rows > 0)
     }
     async fn delete_completed_batches(&self, batch_ids: &[i64]) -> Result<(), StoreError> {
         queries::delete_completed_batches(&self.pool, batch_ids)

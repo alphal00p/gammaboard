@@ -11,9 +11,6 @@ CREATE TABLE IF NOT EXISTS batches (
     batch_size INT NOT NULL,
     -- Number of samples in this batch
 
-    requires_training BOOLEAN NOT NULL DEFAULT true,
-    -- Whether evaluator should emit per-sample training values for this batch
-
     -- Work queue status
     status TEXT NOT NULL DEFAULT 'pending',
     -- Status: 'pending', 'claimed', 'completed', 'failed'

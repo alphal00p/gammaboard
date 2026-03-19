@@ -22,7 +22,6 @@ pub struct RunProgress {
     pub nr_completed_samples: i64,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub training_completed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub batches_completed: i32,
     pub total_batches: i64,
     pub total_samples: i64,

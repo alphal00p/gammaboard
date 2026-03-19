@@ -348,24 +348,6 @@ pub(crate) async fn consume_node_shutdown_request(
     Ok(requested)
 }
 
-pub(crate) async fn try_set_training_completed_at(
-    pool: &PgPool,
-    run_id: i32,
-) -> Result<u64, sqlx::Error> {
-    let result = sqlx::query(
-        r#"
-        UPDATE runs
-        SET training_completed_at = now()
-        WHERE id = $1
-          AND training_completed_at IS NULL
-        "#,
-    )
-    .bind(run_id)
-    .execute(pool)
-    .await?;
-    Ok(result.rows_affected())
-}
-
 pub(crate) async fn remove_run(pool: &PgPool, run_id: i32) -> Result<u64, sqlx::Error> {
     let result = sqlx::query(
         r#"
