@@ -1,10 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::core::{
-    BuildError, ObservableConfig, ParametrizationConfig, RunSpec, SamplerAggregatorConfig,
-};
-use crate::evaluation::ObservableState;
+use crate::core::{BuildError, ObservableConfig, ParametrizationConfig, SamplerAggregatorConfig};
 use crate::sampling::{
     IdentityParametrizationParams, RasterLineSamplerParams, RasterPlaneSamplerParams,
 };
@@ -49,6 +46,7 @@ pub enum RunTaskInputSpec {
     },
     Image {
         geometry: PlaneRasterGeometry,
+        observable: PlotObservableKind,
         #[serde(default)]
         display: ImageDisplayMode,
         #[serde(default)]
@@ -56,6 +54,7 @@ pub enum RunTaskInputSpec {
     },
     PlotLine {
         geometry: LineRasterGeometry,
+        observable: PlotObservableKind,
         #[serde(default)]
         display: LineDisplayMode,
         #[serde(default)]
@@ -92,6 +91,7 @@ pub enum RunTaskSpec {
     },
     Image {
         geometry: PlaneRasterGeometry,
+        observable: PlotObservableKind,
         #[serde(default)]
         display: ImageDisplayMode,
         #[serde(default)]
@@ -99,6 +99,7 @@ pub enum RunTaskSpec {
     },
     PlotLine {
         geometry: LineRasterGeometry,
+        observable: PlotObservableKind,
         #[serde(default)]
         display: LineDisplayMode,
         #[serde(default)]
@@ -179,52 +180,16 @@ impl RunTaskSpec {
         }
     }
 
-    pub fn explicit_observable_config(
-        &self,
-        base_observable: &ObservableConfig,
-    ) -> Option<ObservableConfig> {
+    pub fn new_observable_config(&self) -> Result<Option<ObservableConfig>, BuildError> {
         match self {
-            Self::Sample { observable, .. } => observable.clone(),
-            Self::Image { .. } | Self::PlotLine { .. } => match base_observable {
-                ObservableConfig::Scalar | ObservableConfig::FullScalar => {
-                    Some(ObservableConfig::FullScalar)
-                }
-                ObservableConfig::Complex | ObservableConfig::FullComplex => {
-                    Some(ObservableConfig::FullComplex)
-                }
-            },
-            Self::Pause => None,
+            Self::Sample { observable, .. } => Ok(observable.clone()),
+            Self::Image { observable, .. } | Self::PlotLine { observable, .. } => {
+                Ok(Some(observable.full_config()))
+            }
+            Self::Pause => Err(BuildError::build(
+                "pause task does not create or reuse an observable",
+            )),
         }
-    }
-
-    pub fn observable_config(&self, current_observable: &ObservableConfig) -> ObservableConfig {
-        match self {
-            Self::Sample {
-                observable: Some(observable),
-                ..
-            } => observable.clone(),
-            Self::Sample {
-                observable: None, ..
-            } => match current_observable {
-                ObservableConfig::FullScalar => ObservableConfig::Scalar,
-                ObservableConfig::FullComplex => ObservableConfig::Complex,
-                other => other.clone(),
-            },
-            Self::Image { .. } | Self::PlotLine { .. } => self
-                .explicit_observable_config(current_observable)
-                .expect("image and plot_line tasks always resolve to a full observable"),
-            Self::Pause => current_observable.clone(),
-        }
-    }
-
-    pub fn empty_observable_state(
-        &self,
-        run_spec: &RunSpec,
-        current_observable: &ObservableConfig,
-    ) -> Result<ObservableState, BuildError> {
-        run_spec
-            .evaluator
-            .empty_observable_state(&self.observable_config(current_observable))
     }
 
     pub fn nr_expected_samples(&self) -> Option<i64> {
@@ -261,24 +226,28 @@ impl IntoPreflightTask for RunTaskSpec {
             })),
             Self::Image {
                 mut geometry,
+                observable,
                 display,
                 start_from,
             } => {
                 geometry.reduce_for_preflight(4, 4);
                 Ok(Some(Self::Image {
                     geometry,
+                    observable,
                     display,
                     start_from,
                 }))
             }
             Self::PlotLine {
                 mut geometry,
+                observable,
                 display,
                 start_from,
             } => {
                 geometry.reduce_for_preflight(8);
                 Ok(Some(Self::PlotLine {
                     geometry,
+                    observable,
                     display,
                     start_from,
                 }))
@@ -323,22 +292,26 @@ pub fn resolve_task_queue(
             }
             RunTaskInputSpec::Image {
                 geometry,
+                observable,
                 display,
                 start_from,
             } => {
                 resolved.push(RunTaskSpec::Image {
                     geometry: geometry.clone(),
+                    observable: *observable,
                     display: *display,
                     start_from: start_from.clone(),
                 });
             }
             RunTaskInputSpec::PlotLine {
                 geometry,
+                observable,
                 display,
                 start_from,
             } => {
                 resolved.push(RunTaskSpec::PlotLine {
                     geometry: geometry.clone(),
+                    observable: *observable,
                     display: *display,
                     start_from: start_from.clone(),
                 });
@@ -395,6 +368,22 @@ pub enum LineDisplayMode {
     Auto,
     ScalarCurve,
     ComplexComponents,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlotObservableKind {
+    Scalar,
+    Complex,
+}
+
+impl PlotObservableKind {
+    pub const fn full_config(self) -> ObservableConfig {
+        match self {
+            Self::Scalar => ObservableConfig::FullScalar,
+            Self::Complex => ObservableConfig::FullComplex,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -534,4 +523,76 @@ pub struct RunTask {
     pub completed_at: Option<DateTime<Utc>>,
     pub failed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sampling::{IdentityParametrizationParams, NaiveMonteCarloSamplerParams};
+
+    #[test]
+    fn sample_task_without_observable_reuses_previous_state() {
+        let task = RunTaskSpec::Sample {
+            nr_samples: Some(10),
+            sampler_aggregator: SamplerAggregatorConfig::NaiveMonteCarlo {
+                params: NaiveMonteCarloSamplerParams::default(),
+            },
+            parametrization: ParametrizationConfig::Identity {
+                params: IdentityParametrizationParams::default(),
+            },
+            observable: None,
+            start_from: None,
+        };
+
+        assert_eq!(task.new_observable_config().unwrap(), None);
+    }
+
+    #[test]
+    fn plotting_tasks_always_request_fresh_full_observables() {
+        let image = RunTaskSpec::Image {
+            geometry: PlaneRasterGeometry {
+                offset: vec![0.0, 0.0],
+                u_vector: vec![1.0, 0.0],
+                v_vector: vec![0.0, 1.0],
+                u_linspace: Linspace {
+                    start: -1.0,
+                    stop: 1.0,
+                    count: 8,
+                },
+                v_linspace: Linspace {
+                    start: -1.0,
+                    stop: 1.0,
+                    count: 8,
+                },
+                discrete: Vec::new(),
+            },
+            observable: PlotObservableKind::Complex,
+            display: ImageDisplayMode::Auto,
+            start_from: None,
+        };
+        let line = RunTaskSpec::PlotLine {
+            geometry: LineRasterGeometry {
+                offset: vec![0.0, 0.0],
+                direction: vec![1.0, 0.0],
+                linspace: Linspace {
+                    start: -1.0,
+                    stop: 1.0,
+                    count: 8,
+                },
+                discrete: Vec::new(),
+            },
+            observable: PlotObservableKind::Scalar,
+            display: LineDisplayMode::Auto,
+            start_from: None,
+        };
+
+        assert_eq!(
+            image.new_observable_config().unwrap(),
+            Some(ObservableConfig::FullComplex)
+        );
+        assert_eq!(
+            line.new_observable_config().unwrap(),
+            Some(ObservableConfig::FullScalar)
+        );
+    }
 }

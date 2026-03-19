@@ -458,25 +458,23 @@ where
             let sampler = sampler_config
                 .build(point_spec.clone(), sample_budget, handoff)
                 .map_err(RunnerError::Engine)?;
-            let base_observable_config = previous_snapshot
-                .as_ref()
-                .map(|snapshot| snapshot.observable_state.config())
-                .unwrap_or_else(|| evaluator_config.default_observable_config());
-            let observable_config = task.task.observable_config(&base_observable_config);
-            let observable_state = if previous_snapshot
-                .as_ref()
-                .map(|snapshot| snapshot.observable_state.config() == observable_config)
-                .unwrap_or(false)
+            let observable_state = match task
+                .task
+                .new_observable_config()
+                .map_err(RunnerError::Engine)?
             {
-                previous_snapshot
-                    .as_ref()
-                    .expect("checked above")
-                    .observable_state
-                    .clone()
-            } else {
-                evaluator_config
+                Some(observable_config) => evaluator_config
                     .empty_observable_state(&observable_config)
-                    .map_err(RunnerError::Engine)?
+                    .map_err(RunnerError::Engine)?,
+                None => previous_snapshot
+                    .as_ref()
+                    .ok_or_else(|| {
+                        RunnerError::Engine(EngineError::engine(
+                            "task requested observable reuse but no previous observable exists",
+                        ))
+                    })?
+                    .observable_state
+                    .clone(),
             };
 
             let runtime_state = SamplerRuntimeState {

@@ -52,7 +52,9 @@ pub(super) fn run_preflight(
         if let (Some(sampler_aggregator), Some(parametrization)) =
             (task.sampler_config(), task.parametrization_config())
         {
-            let task_observable = task.observable_config(&current_observable);
+            let task_observable = task
+                .new_observable_config()?
+                .unwrap_or_else(|| current_observable.clone());
             let previous_handoff_snapshot = handoff_snapshot.take();
             let previous_handoff = StageHandoff {
                 sampler_snapshot: previous_handoff_snapshot.as_ref(),
