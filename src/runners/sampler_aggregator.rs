@@ -49,6 +49,7 @@ struct RollingAveragesState {
     eval_ms_per_batch: RollingMetric,
     sampler_produce_ms_per_sample: RollingMetric,
     sampler_ingest_ms_per_sample: RollingMetric,
+    completed_samples_per_second: RollingMetric,
     queue_remaining_ratio: RollingMetric,
     batches_consumed_per_tick: RollingMetric,
 }
@@ -82,14 +83,17 @@ impl From<&RollingMetric> for RollingMetricSnapshot {
 }
 
 impl SamplerRuntimeState {
-    // why not promote completed_samples_per_second to another rolling metric?
-    fn to_runtime_metrics(&self, completed_samples_per_second: f64) -> SamplerRuntimeMetrics {
+    fn to_runtime_metrics(&self) -> SamplerRuntimeMetrics {
         SamplerRuntimeMetrics {
             produced_batches_total: self.produced_batches_total,
             produced_samples_total: self.produced_samples_total,
             ingested_batches_total: self.ingested_batches_total,
             ingested_samples_total: self.ingested_samples_total,
-            completed_samples_per_second,
+            completed_samples_per_second: self
+                .rolling
+                .completed_samples_per_second
+                .value()
+                .unwrap_or(0.0),
             batch_size_current: self.batch_size_current,
             rolling: SamplerRollingAverages {
                 eval_ms_per_sample: RollingMetricSnapshot::from(&self.rolling.eval_ms_per_sample),
@@ -665,13 +669,15 @@ where
         } else {
             0.0
         };
+        self.runtime_state
+            .rolling
+            .completed_samples_per_second
+            .observe(completed_samples_per_second);
 
         let snapshot = SamplerAggregatorPerformanceSnapshot {
             run_id: self.run_id,
             node_id: self.node_id.clone(),
-            runtime_metrics: self
-                .runtime_state
-                .to_runtime_metrics(completed_samples_per_second),
+            runtime_metrics: self.runtime_state.to_runtime_metrics(),
             engine_diagnostics: self.engine.get_diagnostics(),
         };
 
