@@ -10,6 +10,8 @@ use crate::server::panels::{
 use crate::stores::{TaskOutputSnapshot, TaskStageSnapshot};
 use serde_json::Value as JsonValue;
 
+const DEFAULT_HISTORY_POINT_BUDGET: usize = 256;
+
 type CurrentProjectorFn =
     dyn for<'a> Fn(&TaskPanelContext<'a>) -> Result<Option<PanelState>, EngineError> + Send + Sync;
 type HistoryProjectorFn = dyn for<'a> Fn(&TaskPanelHistoryContext<'a>) -> Result<Option<PanelState>, EngineError>
@@ -58,6 +60,12 @@ pub struct TaskPanelHistoryContext<'a> {
 
 pub struct TaskPanelSource {
     projectors: Vec<TaskPanelProjector>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TaskPanelCursor {
+    pub snapshot_id: Option<i64>,
+    pub downsample_level: u8,
 }
 
 impl TaskPanelProjector {
@@ -190,13 +198,14 @@ impl TaskPanelSource {
     pub fn build_response(
         &self,
         source_id: String,
-        requested_cursor: Option<String>,
+        requested_cursor: TaskPanelCursor,
         task: &RunTask,
         run_spec: &RunSpec,
         current_observable: Option<&ObservableState>,
         latest_stage_snapshot: Option<&TaskStageSnapshot>,
         latest_persisted_snapshot: Option<&TaskOutputSnapshot>,
-        history_snapshots: &[TaskOutputSnapshot],
+        full_history_snapshots: &[TaskOutputSnapshot],
+        delta_history_snapshots: &[TaskOutputSnapshot],
     ) -> Result<PanelResponse, EngineError> {
         let panels = self.panel_specs();
         let current_panels = self.current_panels(
@@ -206,22 +215,36 @@ impl TaskPanelSource {
             latest_stage_snapshot,
             latest_persisted_snapshot,
         )?;
-        let history_panels = history_snapshots
+        let full_history_panels = full_history_snapshots
             .iter()
             .rev()
             .map(|snapshot| {
                 project_history_panels(&self.projectors, &TaskPanelHistoryContext { snapshot })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let cursor = history_snapshots
-            .first()
-            .map(|snapshot| snapshot.id.clone())
-            .or_else(|| latest_persisted_snapshot.map(|snapshot| snapshot.id.clone()))
-            .or(requested_cursor.clone());
-        let updates = if requested_cursor.is_some() {
-            incremental_updates(&panels, current_panels, history_panels)
+        let compacted_full_updates =
+            compacted_full_updates(&panels, current_panels.clone(), full_history_panels);
+        let target_level = target_downsample_level(&panels, &compacted_full_updates);
+        let cursor_snapshot_id = latest_persisted_snapshot
+            .and_then(|snapshot| snapshot.id.parse::<i64>().ok())
+            .or(requested_cursor.snapshot_id);
+        let cursor = format_cursor(TaskPanelCursor {
+            snapshot_id: cursor_snapshot_id,
+            downsample_level: target_level,
+        });
+        let updates = if requested_cursor.snapshot_id.is_some()
+            && requested_cursor.downsample_level == target_level
+        {
+            let delta_history_panels = delta_history_snapshots
+                .iter()
+                .rev()
+                .map(|snapshot| {
+                    project_history_panels(&self.projectors, &TaskPanelHistoryContext { snapshot })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            incremental_updates(&panels, current_panels, delta_history_panels)
         } else {
-            full_updates(&panels, current_panels, history_panels)
+            compacted_full_updates
         };
 
         Ok(PanelResponse {
@@ -275,6 +298,25 @@ fn full_updates(
     state_by_id.into_values().map(replace_panel).collect()
 }
 
+fn compacted_full_updates(
+    specs: &[PanelSpec],
+    current_panels: Vec<PanelState>,
+    history_panels: Vec<Vec<PanelState>>,
+) -> Vec<PanelUpdate> {
+    let mut updates = full_updates(specs, current_panels, history_panels);
+    let level = target_downsample_level(specs, &updates);
+    if level == 0 {
+        return updates;
+    }
+
+    for update in &mut updates {
+        if history_mode_for(specs, update.panel.panel_id()) == PanelHistoryMode::Append {
+            downsample_panel_state(&mut update.panel, level);
+        }
+    }
+    updates
+}
+
 fn incremental_updates(
     specs: &[PanelSpec],
     current_panels: Vec<PanelState>,
@@ -319,6 +361,118 @@ fn history_mode_for(specs: &[PanelSpec], panel_id: &str) -> PanelHistoryMode {
         .unwrap_or(PanelHistoryMode::None)
 }
 
+fn target_downsample_level(specs: &[PanelSpec], updates: &[PanelUpdate]) -> u8 {
+    updates
+        .iter()
+        .filter(|update| {
+            history_mode_for(specs, update.panel.panel_id()) == PanelHistoryMode::Append
+        })
+        .filter_map(|update| history_point_count(&update.panel))
+        .map(required_downsample_level)
+        .max()
+        .unwrap_or(0)
+}
+
+fn required_downsample_level(point_count: usize) -> u8 {
+    let mut level = 0u8;
+    let mut visible_points = point_count;
+    while visible_points > DEFAULT_HISTORY_POINT_BUDGET {
+        level = level.saturating_add(1);
+        visible_points = visible_points.div_ceil(2);
+    }
+    level
+}
+
+fn history_point_count(panel: &PanelState) -> Option<usize> {
+    match panel {
+        PanelState::ScalarTimeseries { points, .. } => Some(points.len()),
+        PanelState::MultiTimeseries { series, .. } => Some(
+            series
+                .iter()
+                .map(|item| item.points.len())
+                .max()
+                .unwrap_or(0),
+        ),
+        _ => None,
+    }
+}
+
+fn downsample_panel_state(panel: &mut PanelState, level: u8) {
+    if level == 0 {
+        return;
+    }
+    let stride = 1usize << level;
+    match panel {
+        PanelState::ScalarTimeseries { points, .. } => {
+            *points = downsample_points(points, stride);
+        }
+        PanelState::MultiTimeseries { series, .. } => {
+            for item in series {
+                item.points = downsample_points(&item.points, stride);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn downsample_points(
+    points: &[crate::server::panels::PlotPoint],
+    stride: usize,
+) -> Vec<crate::server::panels::PlotPoint> {
+    if stride <= 1 || points.len() <= DEFAULT_HISTORY_POINT_BUDGET {
+        return points.to_vec();
+    }
+
+    let mut compacted = points
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| index % stride == 0)
+        .map(|(_, point)| point.clone())
+        .collect::<Vec<_>>();
+
+    if let Some(last) = points.last() {
+        let needs_last = compacted
+            .last()
+            .is_none_or(|point| point.x != last.x || point.y != last.y);
+        if needs_last {
+            compacted.push(last.clone());
+        }
+    }
+    compacted
+}
+
+pub fn parse_cursor(cursor: Option<&str>) -> Result<TaskPanelCursor, String> {
+    let Some(cursor) = cursor else {
+        return Ok(TaskPanelCursor::default());
+    };
+    let mut parts = cursor.split(':');
+    let snapshot_id = parts
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("invalid after_cursor={cursor:?}"))?
+        .parse::<i64>()
+        .map_err(|_| format!("invalid after_cursor={cursor:?}"))?;
+    let downsample_level = match parts.next() {
+        Some(value) if !value.is_empty() => value
+            .parse::<u8>()
+            .map_err(|_| format!("invalid after_cursor={cursor:?}"))?,
+        _ => 0,
+    };
+    if parts.next().is_some() {
+        return Err(format!("invalid after_cursor={cursor:?}"));
+    }
+    Ok(TaskPanelCursor {
+        snapshot_id: Some(snapshot_id),
+        downsample_level,
+    })
+}
+
+fn format_cursor(cursor: TaskPanelCursor) -> Option<String> {
+    cursor
+        .snapshot_id
+        .map(|snapshot_id| format!("{snapshot_id}:{}", cursor.downsample_level))
+}
+
 impl EvaluatorConfig {
     pub fn observable_kind(&self) -> SemanticObservableKind {
         match self {
@@ -343,6 +497,7 @@ mod tests {
     };
     use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
     use crate::sampling::{IdentityParametrizationParams, RasterLineSamplerParams};
+    use crate::server::panels::{PanelUpdateMode, PlotPoint, scalar_timeseries_panel};
     use chrono::Utc;
 
     fn complex_run_spec() -> RunSpec {
@@ -502,5 +657,51 @@ mod tests {
                 .iter()
                 .any(|panel| matches!(panel, PanelState::MultiTimeseries { .. }))
         );
+    }
+
+    #[test]
+    fn task_panel_cursor_round_trips_downsample_level() {
+        let cursor = parse_cursor(Some("42:3")).expect("cursor should parse");
+        assert_eq!(
+            cursor,
+            TaskPanelCursor {
+                snapshot_id: Some(42),
+                downsample_level: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn compacted_full_updates_replace_large_append_history_with_downsampled_series() {
+        let specs = vec![panel_spec(
+            "history",
+            "History",
+            PanelKind::ScalarTimeseries,
+            PanelHistoryMode::Append,
+        )];
+        let history = (0..300)
+            .map(|index| {
+                vec![scalar_timeseries_panel(
+                    "history",
+                    vec![PlotPoint {
+                        x: index as f64,
+                        y: index as f64,
+                        y_min: None,
+                        y_max: None,
+                    }],
+                )]
+            })
+            .collect::<Vec<_>>();
+
+        let updates = compacted_full_updates(&specs, Vec::new(), history);
+        let [update] = updates.as_slice() else {
+            panic!("expected one update");
+        };
+        assert!(matches!(update.mode, PanelUpdateMode::Replace));
+        let PanelState::ScalarTimeseries { points, .. } = &update.panel else {
+            panic!("expected scalar history panel");
+        };
+        assert!(points.len() <= DEFAULT_HISTORY_POINT_BUDGET);
+        assert_eq!(points.last().map(|point| point.x), Some(299.0));
     }
 }

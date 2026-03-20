@@ -13,7 +13,7 @@ use crate::server::panels::PanelResponse;
 use crate::server::performance_panels::{
     build_evaluator_performance_response, build_sampler_performance_response,
 };
-use crate::server::task_panels::TaskPanelSource;
+use crate::server::task_panels::{TaskPanelSource, parse_cursor as parse_task_panel_cursor};
 use crate::server::worker_panels::build_worker_panel_response;
 use crate::stores::PgStore;
 use anyhow::Context;
@@ -335,7 +335,8 @@ async fn get_run_task_output(
     Query(params): Query<PanelQuery>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let limit = clamp_limit(params.limit);
-    let after_snapshot_id = parse_snapshot_cursor(params.after_cursor.as_deref())?;
+    let cursor =
+        parse_task_panel_cursor(params.after_cursor.as_deref()).map_err(ApiError::BadRequest)?;
     let task = load_run_task(&state.store, run_id, task_id).await?;
     let run_spec = state
         .store
@@ -366,10 +367,18 @@ async fn get_run_task_output(
     } else {
         None
     };
-    let history_snapshots = if panel_source.needs_history() {
+    let delta_history_snapshots = if panel_source.needs_history() {
         state
             .store
-            .get_task_output_snapshots(run_id, task.id, after_snapshot_id, limit)
+            .get_task_output_snapshots(run_id, task.id, cursor.snapshot_id, limit)
+            .await?
+    } else {
+        Vec::new()
+    };
+    let full_history_snapshots = if panel_source.needs_history() {
+        state
+            .store
+            .get_task_output_snapshots(run_id, task.id, None, i64::MAX)
             .await?
     } else {
         Vec::new()
@@ -377,13 +386,14 @@ async fn get_run_task_output(
     let payload = panel_source
         .build_response(
             format!("run:{run_id}:task:{}", task.id),
-            params.after_cursor.clone(),
+            cursor,
             &task,
             &run_spec,
             current_observable.as_ref(),
             latest_stage_snapshot.as_ref(),
             latest_persisted_snapshot.as_ref(),
-            &history_snapshots,
+            &full_history_snapshots,
+            &delta_history_snapshots,
         )
         .map_err(|err| ApiError::Internal(err.to_string()))?;
 
@@ -401,16 +411,6 @@ async fn load_run_task(
         .into_iter()
         .find(|task| task.id == task_id)
         .ok_or_else(|| ApiError::NotFound(format!("task {task_id} not found for run {run_id}")))
-}
-
-fn parse_snapshot_cursor(cursor: Option<&str>) -> Result<Option<i64>, ApiError> {
-    cursor
-        .map(|cursor| {
-            cursor
-                .parse::<i64>()
-                .map_err(|_| ApiError::BadRequest(format!("invalid after_cursor={cursor:?}")))
-        })
-        .transpose()
 }
 
 async fn get_run_stats(
