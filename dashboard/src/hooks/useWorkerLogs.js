@@ -20,11 +20,13 @@ export const useWorkerLogs = ({ runId, workers = [], limit = 100 } = {}) => {
     const runWorkers = asArray(workers).filter(
       (worker) => runId == null || worker.current_run_id === runId || worker.desired_run_id === runId,
     );
-    return runWorkers
-      .map((worker) => worker.node_name)
-      .filter(Boolean)
-      .sort((left, right) => left.localeCompare(right));
-  }, [workers, runId]);
+    const options = new Set(runWorkers.map((worker) => worker.node_name).filter(Boolean));
+    for (const item of asArray(items)) {
+      if (item?.node_name) options.add(item.node_name);
+    }
+    if (filters.nodeName) options.add(filters.nodeName);
+    return Array.from(options).sort((left, right) => left.localeCompare(right));
+  }, [workers, runId, items, filters.nodeName]);
 
   useEffect(() => {
     setItems([]);

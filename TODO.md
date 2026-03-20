@@ -21,7 +21,6 @@
 - [ ] factor repeated node control-plane SQL in `src/stores/queries/control_plane.rs`
 - [ ] add shared decode helpers in `src/stores/queries/read.rs` for id/string conversion and JSON metric decoding
 - [ ] simplify `src/server/mod.rs` around common handler patterns
-- [ ] keep simplifying `src/server/task_panels/*` around smaller reusable projectors
 
 ## Open Design
 - [ ] decide whether raw log browsing should remain a custom paged resource or move onto a panel-owned selector model
