@@ -1,25 +1,13 @@
-import EnginePanelLayout from "./common/EnginePanelLayout";
+import { Box, Typography } from "@mui/material";
 import PanelCollection from "./panels/PanelCollection";
-import { toConfigObject } from "../utils/config";
 
-const EvaluatorPanel = ({ run, panelResponse = null }) => {
-  const integrationParams = toConfigObject(run?.integration_params);
-
-  return (
-    <EnginePanelLayout
-      title="Evaluator"
-      genericPanel={
-        <PanelCollection panelSpecs={panelResponse?.panelSpecs || []} panelStates={panelResponse?.panelStates || []} />
-      }
-      customPanel={null}
-      jsonTitle="evaluator JSON"
-      jsonData={{
-        evaluator: integrationParams?.evaluator ?? null,
-        evaluator_runner_params: integrationParams?.evaluator_runner_params ?? null,
-        evaluator_init_metadata: run?.evaluator_init_metadata ?? null,
-      }}
-    />
-  );
-};
+const EvaluatorPanel = ({ panelResponse = null }) => (
+  <Box sx={{ mb: 3 }}>
+    <Typography variant="h6" gutterBottom>
+      Evaluator
+    </Typography>
+    <PanelCollection panelSpecs={panelResponse?.panelSpecs || []} panelStates={panelResponse?.panelStates || []} />
+  </Box>
+);
 
 export default EvaluatorPanel;

@@ -8,13 +8,11 @@ use crate::evaluation::ObservableState;
 use crate::server::config_panels::{
     EvaluatorPanelContext, PanelRenderer, SamplerAggregatorPanelContext,
 };
-use crate::server::panels::{
-    PanelHistoryMode, PanelResponse, PanelSpec, PanelState, append_panel, merge_panel_state,
-    replace_panel,
-};
+use crate::server::panels::PanelResponse;
 use crate::server::performance_panels::{
     build_evaluator_performance_response, build_sampler_performance_response,
 };
+use crate::server::task_panels::TaskPanelSource;
 use crate::stores::PgStore;
 use anyhow::Context;
 use axum::{
@@ -325,7 +323,7 @@ async fn get_run_task_output(
         .load_run_spec(run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
-    let panel_specs = task.task.panel_specs(&run_spec);
+    let panel_source = TaskPanelSource::new(&task.task, &run_spec);
     let latest_persisted_snapshot = state
         .store
         .get_task_output_snapshots(run_id, task.id, None, 1)
@@ -339,80 +337,39 @@ async fn get_run_task_output(
         .store
         .get_latest_task_stage_snapshot(run_id, task.id)
         .await?;
-    let current_output = if matches!(task.state, crate::core::RunTaskState::Active) {
-        match state.store.load_current_observable(run_id).await? {
-            Some(current_observable) => {
-                let observable = ObservableState::from_json(&current_observable)
-                    .map_err(|err| ApiError::Internal(err.to_string()))?;
-                task.task
-                    .build_current_panels(&task, Some(&observable), &run_spec)
-                    .map_err(|err| ApiError::Internal(err.to_string()))?
-            }
-            None => match latest_persisted_snapshot.as_ref() {
-                Some(snapshot) => task
-                    .task
-                    .build_current_panels_from_persisted(
-                        &task,
-                        &snapshot.persisted_output,
-                        &run_spec,
-                    )
-                    .map_err(|err| ApiError::Internal(err.to_string()))?,
-                None => task
-                    .task
-                    .build_current_panels(&task, None, &run_spec)
-                    .map_err(|err| ApiError::Internal(err.to_string()))?,
-            },
-        }
+    let current_observable = if matches!(task.state, crate::core::RunTaskState::Active) {
+        state
+            .store
+            .load_current_observable(run_id)
+            .await?
+            .map(|current_observable| {
+                ObservableState::from_json(&current_observable)
+                    .map_err(|err| ApiError::Internal(err.to_string()))
+            })
+            .transpose()?
     } else {
-        match latest_stage_snapshot.as_ref() {
-            Some(snapshot) => task
-                .task
-                .build_current_panels_from_stage_snapshot(&task, snapshot, &run_spec)
-                .map_err(|err| ApiError::Internal(err.to_string()))?,
-            None => match latest_persisted_snapshot.as_ref() {
-                Some(snapshot) => task
-                    .task
-                    .build_current_panels_from_persisted(
-                        &task,
-                        &snapshot.persisted_output,
-                        &run_spec,
-                    )
-                    .map_err(|err| ApiError::Internal(err.to_string()))?,
-                None => task
-                    .task
-                    .build_current_panels(&task, None, &run_spec)
-                    .map_err(|err| ApiError::Internal(err.to_string()))?,
-            },
-        }
+        None
     };
-    let history_snapshots = state
-        .store
-        .get_task_output_snapshots(run_id, task.id, after_snapshot_id, limit)
-        .await?;
-    let cursor = history_snapshots
-        .first()
-        .map(|snapshot| snapshot.id.clone())
-        .or(latest_snapshot_id)
-        .or(params.after_cursor.clone());
-    let history_panels = history_snapshots
-        .iter()
-        .rev()
-        .map(|snapshot| task.task.build_history_panels(snapshot, &run_spec))
-        .collect::<Result<Vec<_>, _>>()
+    let history_snapshots = if panel_source.needs_history() {
+        state
+            .store
+            .get_task_output_snapshots(run_id, task.id, after_snapshot_id, limit)
+            .await?
+    } else {
+        Vec::new()
+    };
+    let payload = panel_source
+        .build_response(
+            format!("run:{run_id}:task:{}", task.id),
+            params.after_cursor.clone(),
+            &task,
+            &run_spec,
+            current_observable.as_ref(),
+            latest_stage_snapshot.as_ref(),
+            latest_persisted_snapshot.as_ref(),
+            &history_snapshots,
+        )
         .map_err(|err| ApiError::Internal(err.to_string()))?;
-    let updates = if after_snapshot_id.is_some() {
-        incremental_task_updates(&panel_specs, current_output, history_panels)
-    } else {
-        full_task_updates(&panel_specs, current_output, history_panels)
-    };
-
-    let payload = PanelResponse {
-        source_id: format!("run:{run_id}:task:{}", task.id),
-        cursor,
-        reset_required: false,
-        panels: panel_specs,
-        updates,
-    };
 
     json_response(payload)
 }
@@ -438,72 +395,6 @@ fn parse_snapshot_cursor(cursor: Option<&str>) -> Result<Option<i64>, ApiError> 
                 .map_err(|_| ApiError::BadRequest(format!("invalid after_cursor={cursor:?}")))
         })
         .transpose()
-}
-
-fn full_task_updates(
-    specs: &[PanelSpec],
-    current_panels: Vec<PanelState>,
-    history_panels: Vec<Vec<PanelState>>,
-) -> Vec<crate::server::panels::PanelUpdate> {
-    let mut state_by_id = panel_state_map(current_panels);
-    for panels in history_panels {
-        for panel in panels {
-            let panel_id = panel.panel_id().to_string();
-            if history_mode_for(specs, &panel_id) != PanelHistoryMode::Append {
-                continue;
-            }
-            if let Some(existing) = state_by_id.get_mut(&panel_id) {
-                merge_panel_state(existing, panel);
-            } else {
-                state_by_id.insert(panel_id, panel);
-            }
-        }
-    }
-    state_by_id.into_values().map(replace_panel).collect()
-}
-
-fn incremental_task_updates(
-    specs: &[PanelSpec],
-    current_panels: Vec<PanelState>,
-    history_panels: Vec<Vec<PanelState>>,
-) -> Vec<crate::server::panels::PanelUpdate> {
-    let mut updates = current_panels
-        .into_iter()
-        .filter(|panel| history_mode_for(specs, panel.panel_id()) == PanelHistoryMode::None)
-        .map(replace_panel)
-        .collect::<Vec<_>>();
-
-    let mut delta_by_id = std::collections::BTreeMap::new();
-    for panels in history_panels {
-        for panel in panels {
-            let panel_id = panel.panel_id().to_string();
-            if history_mode_for(specs, &panel_id) != PanelHistoryMode::Append {
-                continue;
-            }
-            if let Some(existing) = delta_by_id.get_mut(&panel_id) {
-                merge_panel_state(existing, panel);
-            } else {
-                delta_by_id.insert(panel_id, panel);
-            }
-        }
-    }
-    updates.extend(delta_by_id.into_values().map(append_panel));
-    updates
-}
-
-fn panel_state_map(panels: Vec<PanelState>) -> std::collections::BTreeMap<String, PanelState> {
-    panels
-        .into_iter()
-        .map(|panel| (panel.panel_id().to_string(), panel))
-        .collect()
-}
-
-fn history_mode_for(specs: &[PanelSpec], panel_id: &str) -> PanelHistoryMode {
-    specs
-        .iter()
-        .find(|spec| spec.panel_id == panel_id)
-        .map(|spec| spec.history.clone())
-        .unwrap_or(PanelHistoryMode::None)
 }
 
 async fn get_run_stats(

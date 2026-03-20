@@ -1,192 +1,164 @@
+use super::{TaskPanelContext, TaskPanelProjector, panel_projector};
 use crate::core::{
     EngineError, ImageDisplayMode, LineDisplayMode, LineRasterGeometry, PlaneRasterGeometry,
-    RunSpec, RunTask,
+    RunSpec,
 };
 use crate::evaluation::{FullObservableProgress, ObservableState, SemanticObservableKind};
 use crate::server::panels::{
-    ImageColorMode, PanelHistoryMode, PanelKind, PanelSpec, PanelState, PlotPoint, PlotSeries,
-    key_value, key_value_panel, multi_timeseries_panel, panel_spec, progress_panel,
-    scalar_timeseries_panel,
+    ImageColorMode, PanelHistoryMode, PanelKind, PanelState, PlotPoint, PlotSeries, key_value,
+    key_value_panel, multi_timeseries_panel, panel_spec, progress_panel, scalar_timeseries_panel,
 };
 use serde_json::Value as JsonValue;
 
-pub(super) fn image_panel_specs() -> Vec<PanelSpec> {
+pub(super) fn image_projectors(
+    geometry: PlaneRasterGeometry,
+    display: ImageDisplayMode,
+) -> Vec<TaskPanelProjector> {
     vec![
-        progress_spec("image_progress", "Image Progress"),
-        completion_spec("image_completion", "Image Completion"),
+        progress_projector(
+            "image_progress",
+            "Image Progress",
+            geometry.nr_points(),
+            "pixels",
+        ),
+        completion_projector("image_completion", "Image Completion", geometry.nr_points()),
+        image_view_projector(geometry, display),
+    ]
+}
+
+pub(super) fn line_projectors(
+    geometry: LineRasterGeometry,
+    display: LineDisplayMode,
+    run_spec: &RunSpec,
+) -> Vec<TaskPanelProjector> {
+    let mut projectors = vec![
+        progress_projector(
+            "line_progress",
+            "Line Progress",
+            geometry.nr_points(),
+            "points",
+        ),
+        completion_projector("line_completion", "Line Completion", geometry.nr_points()),
+    ];
+    if line_uses_complex_components(display, run_spec) {
+        projectors.push(line_components_projector(geometry));
+    } else {
+        let label = if matches!(
+            run_spec.evaluator.observable_kind(),
+            SemanticObservableKind::Complex
+        ) {
+            "Real Part"
+        } else {
+            "Value"
+        };
+        projectors.push(line_real_projector(geometry, label));
+    }
+    projectors
+}
+
+fn progress_projector(
+    panel_id: &'static str,
+    label: &'static str,
+    total: usize,
+    unit: &'static str,
+) -> TaskPanelProjector {
+    panel_projector(
+        panel_spec(panel_id, label, PanelKind::Progress, PanelHistoryMode::None),
+        move |ctx| {
+            let processed = current_processed(ctx, total)?;
+            Ok(Some(progress_panel(
+                panel_id,
+                processed as f64,
+                Some(total as f64),
+                Some(unit),
+            )))
+        },
+        |_ctx| Ok(None),
+    )
+}
+
+fn completion_projector(
+    panel_id: &'static str,
+    label: &'static str,
+    total: usize,
+) -> TaskPanelProjector {
+    panel_projector(
+        panel_spec(panel_id, label, PanelKind::KeyValue, PanelHistoryMode::None),
+        move |ctx| {
+            let processed = current_processed(ctx, total)?;
+            Ok(Some(completion_panel(panel_id, total, processed)))
+        },
+        |_ctx| Ok(None),
+    )
+}
+
+fn image_view_projector(
+    geometry: PlaneRasterGeometry,
+    display: ImageDisplayMode,
+) -> TaskPanelProjector {
+    panel_projector(
         panel_spec(
             "image_view",
             "Rendered Image",
             PanelKind::Image2d,
             PanelHistoryMode::None,
         ),
-    ]
+        move |ctx| match ctx.source.observable() {
+            Some(observable) => Ok(Some(image_view_panel(observable, &geometry, display)?)),
+            None => Ok(None),
+        },
+        |_ctx| Ok(None),
+    )
 }
 
-pub(super) fn line_panel_specs(display: LineDisplayMode, run_spec: &RunSpec) -> Vec<PanelSpec> {
-    let mut panels = vec![
-        progress_spec("line_progress", "Line Progress"),
-        completion_spec("line_completion", "Line Completion"),
-    ];
-    if line_uses_complex_components(display, run_spec) {
-        panels.push(panel_spec(
+fn line_components_projector(geometry: LineRasterGeometry) -> TaskPanelProjector {
+    panel_projector(
+        panel_spec(
             "line_components",
             "Complex Components",
             PanelKind::MultiTimeseries,
             PanelHistoryMode::None,
-        ));
-    } else {
-        panels.push(panel_spec(
+        ),
+        move |ctx| match ctx.source.observable() {
+            Some(observable) => line_components_panel(observable, &geometry),
+            None => Ok(None),
+        },
+        |_ctx| Ok(None),
+    )
+}
+
+fn line_real_projector(geometry: LineRasterGeometry, label: &'static str) -> TaskPanelProjector {
+    panel_projector(
+        panel_spec(
             "line_real",
-            if matches!(
-                run_spec.evaluator.observable_kind(),
-                SemanticObservableKind::Complex
-            ) {
-                "Real Part"
-            } else {
-                "Value"
-            },
+            label,
             PanelKind::ScalarTimeseries,
             PanelHistoryMode::None,
-        ));
-    }
-    panels
-}
-
-pub(super) fn build_image_current_panels(
-    task: &RunTask,
-    observable: Option<&ObservableState>,
-    geometry: &PlaneRasterGeometry,
-    display: ImageDisplayMode,
-) -> Result<Vec<PanelState>, EngineError> {
-    build_current_panels(
-        task,
-        geometry.nr_points(),
-        "image_progress",
-        "pixels",
-        |total, processed| image_completion_panel(total, processed),
-        observable.map(|observable| build_image_view_panel(observable, geometry, display)),
-    )
-}
-
-pub(super) fn build_line_current_panels(
-    task: &RunTask,
-    observable: Option<&ObservableState>,
-    geometry: &LineRasterGeometry,
-    display: LineDisplayMode,
-    run_spec: &RunSpec,
-) -> Result<Vec<PanelState>, EngineError> {
-    build_current_panels(
-        task,
-        geometry.nr_points(),
-        "line_progress",
-        "points",
-        |total, processed| line_completion_panel(total, processed),
-        observable
-            .map(|observable| build_line_value_panels(observable, geometry, display, run_spec)),
-    )
-}
-
-pub(super) fn build_image_panels_from_persisted(
-    persisted: &JsonValue,
-    geometry: &PlaneRasterGeometry,
-) -> Result<Vec<PanelState>, EngineError> {
-    build_progress_panels_from_persisted(
-        persisted,
-        "image_progress",
-        geometry.nr_points(),
-        "pixels",
-        image_completion_panel,
-    )
-}
-
-pub(super) fn build_line_panels_from_persisted(
-    persisted: &JsonValue,
-    geometry: &LineRasterGeometry,
-) -> Result<Vec<PanelState>, EngineError> {
-    build_progress_panels_from_persisted(
-        persisted,
-        "line_progress",
-        geometry.nr_points(),
-        "points",
-        line_completion_panel,
-    )
-}
-
-fn progress_spec(panel_id: &str, label: &str) -> PanelSpec {
-    panel_spec(panel_id, label, PanelKind::Progress, PanelHistoryMode::None)
-}
-
-fn completion_spec(panel_id: &str, label: &str) -> PanelSpec {
-    panel_spec(panel_id, label, PanelKind::KeyValue, PanelHistoryMode::None)
-}
-
-fn build_current_panels(
-    task: &RunTask,
-    total: usize,
-    progress_panel_id: &str,
-    unit: &'static str,
-    completion_panel: impl Fn(usize, usize) -> PanelState,
-    value_panels: Option<Result<Vec<PanelState>, EngineError>>,
-) -> Result<Vec<PanelState>, EngineError> {
-    let processed = task.nr_completed_samples.max(0) as usize;
-    let mut panels = progress_panels(
-        progress_panel_id,
-        processed,
-        total,
-        unit,
-        completion_panel(total, processed),
-    );
-    if let Some(value_panels) = value_panels {
-        panels.extend(value_panels?);
-    }
-    Ok(panels)
-}
-
-fn progress_panels(
-    progress_panel_id: &str,
-    current: usize,
-    total: usize,
-    unit: &'static str,
-    completion_panel: PanelState,
-) -> Vec<PanelState> {
-    vec![
-        progress_panel(
-            progress_panel_id,
-            current as f64,
-            Some(total as f64),
-            Some(unit),
         ),
-        completion_panel,
-    ]
+        move |ctx| match ctx.source.observable() {
+            Some(observable) => Ok(line_real_panel(observable, &geometry)?),
+            None => Ok(None),
+        },
+        |_ctx| Ok(None),
+    )
 }
 
-fn build_progress_panels_from_persisted(
-    persisted: &JsonValue,
-    progress_panel_id: &str,
-    total: usize,
-    unit: &'static str,
-    completion_panel: impl Fn(usize, usize) -> PanelState,
-) -> Result<Vec<PanelState>, EngineError> {
-    let progress = decode_full_progress(persisted)?;
-    Ok(progress_panels(
-        progress_panel_id,
-        progress.processed,
-        total,
-        unit,
-        completion_panel(total, progress.processed),
-    ))
+fn current_processed(ctx: &TaskPanelContext<'_>, total: usize) -> Result<usize, EngineError> {
+    match ctx.source.persisted() {
+        Some(persisted) => Ok(decode_full_progress(persisted)?.processed),
+        None => Ok((ctx.task.nr_completed_samples.max(0) as usize).min(total)),
+    }
 }
 
-fn build_image_view_panel(
+fn image_view_panel(
     observable: &ObservableState,
     geometry: &PlaneRasterGeometry,
     display: ImageDisplayMode,
-) -> Result<Vec<PanelState>, EngineError> {
+) -> Result<PanelState, EngineError> {
     let width = geometry.u_linspace.count;
     let height = geometry.v_linspace.count;
-    let panel = match observable {
-        ObservableState::FullScalar(state) => PanelState::Image2d {
+    match observable {
+        ObservableState::FullScalar(state) => Ok(PanelState::Image2d {
             panel_id: "image_view".to_string(),
             width,
             height,
@@ -200,8 +172,8 @@ fn build_image_view_panel(
                     ImageColorMode::ScalarHeatmap
                 }
             },
-        },
-        ObservableState::FullComplex(state) => PanelState::Image2d {
+        }),
+        ObservableState::FullComplex(state) => Ok(PanelState::Image2d {
             panel_id: "image_view".to_string(),
             width,
             height,
@@ -215,73 +187,75 @@ fn build_image_view_panel(
                 }
                 ImageDisplayMode::ScalarHeatmap => ImageColorMode::ScalarHeatmap,
             },
-        },
-        other => {
-            return Err(EngineError::engine(format!(
-                "image task expected full observable, got {}",
-                other.kind_str()
-            )));
-        }
-    };
-    Ok(vec![panel])
+        }),
+        other => Err(EngineError::engine(format!(
+            "image task expected full observable, got {}",
+            other.kind_str()
+        ))),
+    }
 }
 
-fn build_line_value_panels(
+fn line_components_panel(
     observable: &ObservableState,
     geometry: &LineRasterGeometry,
-    display: LineDisplayMode,
-    run_spec: &RunSpec,
-) -> Result<Vec<PanelState>, EngineError> {
-    let xs = (0..geometry.nr_points())
-        .map(|idx| line_x_value(geometry, idx))
-        .collect::<Vec<_>>();
+) -> Result<Option<PanelState>, EngineError> {
+    let xs = line_xs(geometry);
     match observable {
-        ObservableState::FullScalar(state) => Ok(vec![scalar_timeseries_panel(
+        ObservableState::FullComplex(state) => Ok(Some(multi_timeseries_panel(
+            "line_components",
+            vec![
+                PlotSeries {
+                    id: "real".to_string(),
+                    label: "Real Part".to_string(),
+                    points: xs
+                        .iter()
+                        .copied()
+                        .zip(state.values.iter().map(|value| value.re))
+                        .map(point)
+                        .collect(),
+                },
+                PlotSeries {
+                    id: "imag".to_string(),
+                    label: "Imaginary Part".to_string(),
+                    points: xs
+                        .iter()
+                        .copied()
+                        .zip(state.values.iter().map(|value| value.im))
+                        .map(point)
+                        .collect(),
+                },
+            ],
+        ))),
+        ObservableState::FullScalar(_) => Ok(None),
+        other => Err(EngineError::engine(format!(
+            "line task expected full observable, got {}",
+            other.kind_str()
+        ))),
+    }
+}
+
+fn line_real_panel(
+    observable: &ObservableState,
+    geometry: &LineRasterGeometry,
+) -> Result<Option<PanelState>, EngineError> {
+    let xs = line_xs(geometry);
+    match observable {
+        ObservableState::FullScalar(state) => Ok(Some(scalar_timeseries_panel(
             "line_real",
             xs.iter()
                 .copied()
                 .zip(state.values.iter().copied())
                 .map(point)
                 .collect(),
-        )]),
-        ObservableState::FullComplex(state) => {
-            if line_uses_complex_components(display, run_spec) {
-                Ok(vec![multi_timeseries_panel(
-                    "line_components",
-                    vec![
-                        PlotSeries {
-                            id: "real".to_string(),
-                            label: "Real Part".to_string(),
-                            points: xs
-                                .iter()
-                                .copied()
-                                .zip(state.values.iter().map(|value| value.re))
-                                .map(point)
-                                .collect(),
-                        },
-                        PlotSeries {
-                            id: "imag".to_string(),
-                            label: "Imaginary Part".to_string(),
-                            points: xs
-                                .iter()
-                                .copied()
-                                .zip(state.values.iter().map(|value| value.im))
-                                .map(point)
-                                .collect(),
-                        },
-                    ],
-                )])
-            } else {
-                Ok(vec![scalar_timeseries_panel(
-                    "line_real",
-                    xs.iter()
-                        .copied()
-                        .zip(state.values.iter().map(|value| value.re))
-                        .map(point)
-                        .collect(),
-                )])
-            }
-        }
+        ))),
+        ObservableState::FullComplex(state) => Ok(Some(scalar_timeseries_panel(
+            "line_real",
+            xs.iter()
+                .copied()
+                .zip(state.values.iter().map(|value| value.re))
+                .map(point)
+                .collect(),
+        ))),
         other => Err(EngineError::engine(format!(
             "line task expected full observable, got {}",
             other.kind_str()
@@ -297,6 +271,12 @@ fn line_uses_complex_components(display: LineDisplayMode, run_spec: &RunSpec) ->
         display,
         LineDisplayMode::Auto | LineDisplayMode::ComplexComponents
     )
+}
+
+fn line_xs(geometry: &LineRasterGeometry) -> Vec<f64> {
+    (0..geometry.nr_points())
+        .map(|idx| line_x_value(geometry, idx))
+        .collect()
 }
 
 fn point((x, y): (f64, f64)) -> PlotPoint {
@@ -325,14 +305,6 @@ fn completion_panel(panel_id: &str, total: usize, processed: usize) -> PanelStat
             ),
         ],
     )
-}
-
-fn image_completion_panel(total: usize, processed: usize) -> PanelState {
-    completion_panel("image_completion", total, processed)
-}
-
-fn line_completion_panel(total: usize, processed: usize) -> PanelState {
-    completion_panel("line_completion", total, processed)
 }
 
 fn decode_full_progress(persisted: &JsonValue) -> Result<FullObservableProgress, EngineError> {
