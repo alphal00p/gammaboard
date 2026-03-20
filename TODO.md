@@ -49,8 +49,7 @@
 - [ ] implement pausing a run by serializing the sampler_aggregator. When pausing a run, we would need to make sure to handle the batch queue
 
 ### Duplication Of Code
-- [ ] replace repeated polling state machines in `dashboard/src/hooks/useRuns.js`, `useWorkersData.js`, `useTaskOutput.js`, `useRunPerformancePanels.js`, and `useWorkerLogs.js` with a reusable `usePolledResource`-style hook.
-- [ ] unify implementation-panel registry dispatch in `dashboard/src/components/evaluator/EvaluatorCustomPanel.jsx` and `dashboard/src/components/sampler/SamplerCustomPanel.jsx`, or fold both into the shared panel infrastructure when the remaining custom implementation views are retired.
+- [ ] finish converting the remaining plain-resource polling hooks (`useWorkerLogs.js` and any future non-panel fetch loops) onto the shared `usePolledResource` abstraction. `useRuns.js`, `useWorkersData.js`, and `useRunTasks.js` already use it.
 - [ ] factor shared control-plane node SQL in `src/stores/queries/control_plane.rs`: repeated `nodes` update clauses for clearing desired assignments and repeated fixed control-plane row defaults.
 - [ ] add shared row-decoding helpers in `src/stores/queries/read.rs` for repeated bigint-to-string id conversion, JSON metric parsing, and default-on-decode-failure behavior.
 
@@ -60,7 +59,7 @@
 - [x] split `src/server/task_panels.rs` by task kind or adapter role; sample-task aggregate decoding and deterministic full-observable rendering now live in separate `task_panels` modules.
 - [x] introduce a shared deterministic full-observable task adapter for `image` and `plot_line`; both tasks now share progress/current-from-persisted/current-from-runtime wiring and differ only in geometry/value rendering.
 - [x] extract a small aggregate-observable panel builder for sample tasks; scalar/complex estimate, summary, and history projection now live in `src/server/task_panels/sample.rs`.
-- [ ] replace repeated frontend polling hooks with a shared `usePolledResource` abstraction that covers scheduling, stale-response protection, and `isConnected`/error handling consistently.
+- [ ] extend the `usePolledResource` cleanup to any remaining non-panel fetch flows that still manage their own request lifecycle manually.
 
 ## Sweep Findings (2026-03-19)
 
@@ -68,28 +67,5 @@
 - [ ] reduce duplicated node-assignment SQL in `src/stores/queries/control_plane.rs`; clearing desired assignments, setting current assignments, and timestamp updates still repeat the same `nodes` update clauses and raw-row mapping patterns.
 - [ ] add shared decode helpers in `src/stores/queries/read.rs` for repeated JSON-to-typed-metrics conversion, `BIGINT`-to-string id mapping, and typed decode error wrapping; the current row adapters still repeat the same conversion shapes.
 - [ ] simplify `src/server/mod.rs`; most handlers are still thin boilerplate around `Path`/`Query` extraction, `store` calls, `NotFound` conversion, and `json_response(...)`, which suggests a small shared pattern for “load one”, “load many”, and “load history”.
-- [ ] refactor task/history panel projection around reusable panel-spec objects instead of large task-level switch helpers. Keep incremental history fetches by `after_snapshot_id`, but have each task register a small set of panel projectors that each know how to:
-  - expose one stable descriptor,
-  - build current panel state from runtime/stage state,
-  - project one persisted snapshot into an incremental history contribution.
-  This keeps transport efficient (only new snapshots are sent), avoids mutable panel runtime state, and makes current/history projection easier to extend panel-by-panel.
-  Concrete shape to aim for:
-  - `TaskPanelSpec` trait with methods roughly like:
-    - `descriptor(&self) -> PanelDescriptor`
-    - `current(&self, task: &RunTask, source: TaskPanelCurrentSource<'_>) -> Result<Option<PanelState>, EngineError>`
-    - `history_delta(&self, task: &RunTask, persisted: &JsonValue, run_spec: &RunSpec, created_at: DateTime<Utc>) -> Result<Option<PanelState>, EngineError>`
-  - each task adapter returns `Vec<Box<dyn TaskPanelSpec>>` (or an enum-backed small vector if dyn dispatch is undesirable)
-  - the history endpoint still queries `persisted_observable_snapshots` once per request, filtered by `after_snapshot_id`
-  - for each returned snapshot row, the server iterates the task's panel specs and asks each one for an incremental `history_delta(...)`
-  - the response still sends only the new `TaskHistoryItem`s; the frontend still merges them panel-by-panel exactly as today
-  Example:
-  - sample task registers `sample_progress`, `real_estimate_history`, `imag_estimate_history`, `abs_signal_to_noise_history`, `estimate_summary`
-  - `real_estimate_history.history_delta(...)` decodes one persisted aggregate observable snapshot, extracts one `(x=count, y=real_mean, band=stderr)` point, and returns a scalar-timeseries panel containing just that single point
-  - `estimate_summary.history_delta(...)` can return `None` if we decide summaries are current-only
-  - image task registers `image_progress`, `image_completion`, `image_view`
-  - `image_progress.history_delta(...)` decodes the persisted `FullObservableProgress` snapshot and returns one progress/key-value update, while `image_view.history_delta(...)` returns `None` because full image values are not stored in persisted history
-  Why this is simpler:
-  - panel logic is localized per panel instead of spread across one large file
-  - adding a new panel does not require editing a giant task-wide match in several places
-  - current vs history behavior is explicit per panel
-  - we keep the existing efficient API contract instead of inventing mutable persisted panel state
+- [ ] keep simplifying `src/server/task_panels/*` around small reusable panel projectors. The transport is now `POST /runs/:id/tasks/:task_id/output` with `{ cursor, panel_state, panel_actions }`, but task adapters still have room to share more projector wiring across aggregate sample panels and deterministic full-observable panels.
+- [ ] keep the raw worker-log view deliberately raw, but decide whether worker performance should stay split across bespoke frontend selectors or move further onto backend-generated panels and panel-owned selectors.

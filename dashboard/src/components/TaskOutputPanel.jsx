@@ -70,7 +70,7 @@ const TaskOutputPanel = ({ runId, task }) => {
     runId,
     taskId: task?.id ?? null,
     pollMs: 3000,
-    historyLimit: 500,
+    panelLimit: 500,
   });
 
   if (!task) {

@@ -143,7 +143,7 @@ const WorkerLogsPanel = ({
                       {String(entry.level || "unknown").toUpperCase()}
                     </Box>
                   </TableCell>
-                  <TableCell>{entry.node_id || entry.worker_id || "-"}</TableCell>
+                  <TableCell>{entry.node_name || entry.node_uuid || "-"}</TableCell>
                   <TableCell sx={{ fontFamily: "monospace" }}>{entry.message || ""}</TableCell>
                 </TableRow>
               ))}
@@ -180,9 +180,9 @@ const WorkerLogsPanel = ({
                 id: selectedLog.id,
                 ts: selectedLog.ts,
                 run_id: selectedLog.run_id,
-                node_id: selectedLog.node_id,
+                node_name: selectedLog.node_name,
+                node_uuid: selectedLog.node_uuid,
                 level: selectedLog.level,
-                worker_id: selectedLog.worker_id,
                 message: selectedLog.message,
                 fields: selectedLog.fields || {},
               },

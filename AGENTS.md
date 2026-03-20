@@ -18,7 +18,9 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 
 ## Core Invariants
 - PostgreSQL is the source of truth for runs, batches, node state, logs, and snapshots.
+- Run names are human-facing labels and are intentionally not unique. CLI run references should accept either a numeric id or an exact run name; if a name matches multiple runs, fail and print the matching ids instead of inventing uniqueness rules.
 - Run config is TOML via `gammaboard run add <file.toml>` and is deep-merged over `configs/default.toml`.
+- Run names are intentionally not unique. CLI run references accept either numeric id or exact name; ambiguous names must fail and print all matching runs.
 - Preprocessing first resolves inherited `RunTaskInputSpec` entries into concrete `RunTaskSpec` stages. Preflight then derives `point_spec` from the evaluator, reduces the resolved task queue via each task's `into_preflight` hook, and executes that reduced queue synchronously in-memory before persistence.
 - `run add` persists evaluator and sampler init metadata.
 - Runs are driven by persisted `run_tasks`; this is the top-level execution queue and is distinct from the evaluator batch work queue.
@@ -70,6 +72,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - Task-owned phase transitions replace sampler-emitted semantic advances: `sample` tasks carry both `sampler_aggregator` and `parametrization` config, while `image` and `plot_line` tasks own deterministic scan geometry and resolve internally to raster sampler + identity parametrization stages. The runner activates the next phase only after the current queue is drained and the current sampler snapshot is persisted.
 - Task transitions must restore unspecified runtime state from the latest prior queue-empty `run_stage_snapshots` row, not from transient in-memory handoff only. In particular, sampler snapshot, observable state, and parametrization snapshot handoff should be sourced from persisted stage snapshots.
 - Executable tasks may optionally declare `start_from = { run_id, task_id }`. When present, task activation must restore runtime state from the latest queue-empty stage snapshot of that referenced task instead of the default previous-stage lookup.
+- `gammaboard run clone <SOURCE_RUN> <FROM_TASK_ID> <NEW_NAME>` should copy the source run config, keep only the task suffix after `FROM_TASK_ID`, and rewrite the first cloned executable task to `start_from` that source task snapshot.
 - `sample` tasks may leave `observable` unspecified. In that case, transition activation reuses the previous observable state as-is; specifying `observable` explicitly starts a fresh observable of that config.
 - `image` and `plot_line` tasks must declare their observable family explicitly in task config and always start with a fresh full observable of that family.
 - Sample-task config files may omit `sampler_aggregator` and/or `parametrization`; preprocessing must resolve those fields by inheriting the previous effective sample-stage settings before tasks are persisted.
@@ -101,7 +104,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - Do not expose `runs.sampler_runner_snapshot` through the read API or dashboard payloads.
 - Runtime logs are persisted from tracing context through `RuntimeLogStore`.
 - SQL for runtime log persistence lives in the store/query layer, not in tracing setup.
-- Runtime log context should include `source`, `run_id`, and node identity when available. Prefer the operator-facing node name in persisted `node_id`/`worker_id` compatibility fields unless the schema is explicitly widened later.
+- Runtime log context should include `source`, `run_id`, `node_name`, and `node_uuid` when available. The read API should expose the operator-facing `node_name` plus the live `node_uuid` even if the SQL column names still reflect older compatibility wording.
 - Set `GAMMABOARD_DISABLE_DB_LOGS=1` to disable DB log persistence.
 - DB log thresholds are configured with `GAMMABOARD_DB_LOG_LEVEL` and `GAMMABOARD_DB_EXTERNAL_LOG_LEVEL`.
 - Worker performance history is stored in `evaluator_performance_history` and `sampler_aggregator_performance_history`.
@@ -113,6 +116,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - Run read payloads should expose `runs.point_spec` as `point_spec`.
 - Backend observable/output APIs are task-scoped: persisted observable history only has meaning within a single task/stage, and task types own the digest/projection exposed to the frontend.
 - Backend visualization payloads should use the generic panel model in `src/server/panels.rs`; task output and performance/history views should share the same panel vocabulary instead of exposing raw backend-specific JSON shapes to the frontend.
+- Run summary/detail views should also prefer backend-generated generic panels over frontend config parsing or ad-hoc summary cards.
 - Panel APIs are poll-based and server-owned: clients send an optional last-seen `cursor`, and the backend returns one `PanelResponse` with stable panel specs plus ordered `replace`/`append` updates.
 - Panel cursors are opaque backend tokens. They may encode history compaction state in addition to the last seen snapshot id; the frontend must store and resend them unchanged.
 - Panels may also declare backend-owned UI state and actions. Frontends should store and resend `panel_state` keyed by `panel_id`, but should not invent panel semantics locally; interactive controls such as selects/toggles/tabs still belong to the backend panel contract.

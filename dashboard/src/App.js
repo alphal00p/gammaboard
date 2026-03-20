@@ -63,7 +63,7 @@ const RunModeContent = ({ runs, selectedRun }) => {
 
   return (
     <>
-      <RunInfo run={currentRun} tasks={taskList} workers={runWorkersData.workers} />
+      <RunInfo runId={selectedRun} />
       <TaskQueuePanel tasks={taskList} selectedTaskId={selectedTask?.id ?? null} onSelectTask={setSelectedTaskId} />
       <EvaluatorPanel run={currentRun} panelResponse={evaluator} />
       <TaskOutputPanel runId={selectedRun} task={selectedTask} />

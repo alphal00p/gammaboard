@@ -22,7 +22,11 @@ const WorkersWorkspace = ({ workers, isConnected, lastUpdate, error }) => {
   const nodeNameFor = (worker) => worker.node_name || null;
 
   const displayRole = (worker) => worker.current_role || "None";
-  const displayRun = (worker) => (worker.current_role ? (worker.current_run_id ?? "N/A") : "N/A");
+  const displayRun = (worker) => {
+    if (!worker.current_role) return "N/A";
+    if (worker.current_run_name) return `${worker.current_run_name} (#${worker.current_run_id})`;
+    return worker.current_run_id ?? "N/A";
+  };
 
   useEffect(() => {
     if (workers.length === 0) {

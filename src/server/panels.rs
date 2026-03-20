@@ -258,6 +258,13 @@ pub(crate) fn scalar_timeseries_panel(panel_id: &str, points: Vec<PlotPoint>) ->
     }
 }
 
+pub(crate) fn text_panel(panel_id: &str, text: impl Into<String>) -> PanelState {
+    PanelState::Text {
+        panel_id: panel_id.to_string(),
+        text: text.into(),
+    }
+}
+
 pub(crate) fn multi_timeseries_panel(panel_id: &str, series: Vec<PlotSeries>) -> PanelState {
     PanelState::MultiTimeseries {
         panel_id: panel_id.to_string(),

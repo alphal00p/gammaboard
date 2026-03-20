@@ -238,7 +238,7 @@ pub trait RunReadStore: Send + Sync {
         &self,
         run_id: i32,
         limit: i64,
-        worker_id: Option<&str>,
+        node_name: Option<&str>,
         level: Option<&str>,
         query: Option<&str>,
         before_id: Option<i64>,

@@ -29,9 +29,10 @@ Backend panel poll endpoints → `usePanelSource` → PanelCollection → panel 
 
 - `useRuns()` polls the run list.
 - `useRunTasks(runId)` polls task state for the selected run.
-- `useTaskOutput({ runId, taskId })` polls the selected task panel source with `after_cursor`.
+- `useTaskOutput({ runId, taskId })` polls the selected task panel source with the server-owned opaque `cursor`.
 - `useRunPerformancePanels({ runId, evaluatorNodeId })` polls run-level sampler performance plus the selected evaluator worker's performance panels.
 - `useRunConfigPanels({ runId })` polls backend-generated evaluator and sampler config panels for the selected run.
+- `RunInfo` now uses backend-generated run summary panels instead of frontend config parsing.
 - `useWorkerLogs()` fetches log history for the Logs tab.
 
 ## Configuration

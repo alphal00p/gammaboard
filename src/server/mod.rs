@@ -1,6 +1,7 @@
 mod config_panels;
 mod panels;
 mod performance_panels;
+mod run_panels;
 mod task_panels;
 mod worker_panels;
 
@@ -13,6 +14,7 @@ use crate::server::panels::{PanelRequest, PanelResponse};
 use crate::server::performance_panels::{
     build_evaluator_performance_response, build_sampler_performance_response,
 };
+use crate::server::run_panels::build_run_panel_response;
 use crate::server::task_panels::{TaskPanelSource, parse_cursor as parse_task_panel_cursor};
 use crate::server::worker_panels::build_worker_panel_response;
 use crate::stores::PgStore;
@@ -162,6 +164,7 @@ fn build_app(state: AppState) -> Router {
         .route("/nodes", get(get_nodes))
         .route("/nodes/:id/panels", get(get_node_panels))
         .route("/runs/:id", get(get_run))
+        .route("/runs/:id/panels", get(get_run_panels))
         .route("/runs/:id/tasks", get(get_run_tasks))
         .route("/runs/:id/config/evaluator", get(get_run_evaluator_config))
         .route(
@@ -268,6 +271,28 @@ async fn get_run(
         .await?
         .ok_or_else(|| ApiError::NotFound("Run not found".to_string()))?;
     json_response(run)
+}
+
+async fn get_run_panels(
+    State(state): State<AppState>,
+    AxumPath(run_id): AxumPath<i32>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    let run = state
+        .store
+        .get_run_progress(run_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
+    let run_spec = state
+        .store
+        .load_run_spec(run_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
+    let tasks = state.store.list_run_tasks(run_id).await?;
+    let workers = state.store.get_registered_workers(Some(run_id)).await?;
+    json_response(
+        build_run_panel_response(&run, &run_spec, &tasks, &workers)
+            .map_err(|err| ApiError::Internal(err.to_string()))?,
+    )
 }
 
 async fn get_run_tasks(

@@ -143,6 +143,9 @@ linspace = { start = -2.0, stop = 2.0, count = 512 }
 `image` and `plot_line` tasks rasterize deterministic points directly in evaluator space, require an explicit `observable = "scalar" | "complex"` field, persist only compact progress history, and render their current result from the full task-local observable state.
 The dashboard task table can switch between active and older tasks, and it shows both the configured `start_from` checkpoint and the effective `spawned_from` snapshot that was used when the task activated.
 
+Run names are not unique. CLI commands that take a run accept either a numeric id or an exact run name. If a name matches multiple runs, the CLI prints the matching ids and asks you to retry with the numeric id.
+`gammaboard run clone <SOURCE_RUN> <FROM_TASK_ID> <NEW_NAME>` creates a new run by copying the source run config and the task suffix after `FROM_TASK_ID`. The first cloned executable task is rewritten to branch from that task snapshot via `start_from`.
+
 ### Start local workers
 ```bash
 just start 2
@@ -156,27 +159,29 @@ On graceful shutdown, the worker expires its lease immediately so a replacement 
 
 ### Assign roles
 ```bash
-gammaboard node assign w-1 evaluator <RUN_ID>
-gammaboard node assign w-2 sampler-aggregator <RUN_ID>
+gammaboard node assign w-1 evaluator <RUN>
+gammaboard node assign w-2 sampler-aggregator <RUN>
 ```
 
 Or auto-assign currently free nodes:
 ```bash
-gammaboard auto-assign <RUN_ID> [MAX_EVALUATORS]
+gammaboard auto-assign <RUN> [MAX_EVALUATORS]
 ```
 
 ### Common commands
 ```bash
-gammaboard node assign <NODE_NAME> <ROLE> <RUN_ID>
+gammaboard run list [RUN_NAME]
+gammaboard node assign <NODE_NAME> <ROLE> <RUN>
 gammaboard node list
 gammaboard node unassign <NODE_NAME>
 gammaboard node stop <NODE_NAME>
-gammaboard auto-assign <RUN_ID> [MAX_EVALUATORS]
-gammaboard run pause <RUN_ID>
-gammaboard run task list <RUN_ID>
-gammaboard run task add <RUN_ID> <TASK_FILE.toml>
-gammaboard run task remove <RUN_ID> <TASK_ID>
-gammaboard run remove <RUN_ID>
+gammaboard auto-assign <RUN> [MAX_EVALUATORS]
+gammaboard run clone <SOURCE_RUN> <FROM_TASK_ID> <NEW_NAME>
+gammaboard run pause <RUN>
+gammaboard run task list <RUN>
+gammaboard run task add <RUN> <TASK_FILE.toml>
+gammaboard run task remove <RUN> <TASK_ID>
+gammaboard run remove <RUN>
 ```
 
 ### Useful local commands

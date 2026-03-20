@@ -1,4 +1,4 @@
-use super::shared::{NodeSelection, RoleArg, with_control_store};
+use super::shared::{NodeSelection, RoleArg, resolve_run_ref, with_control_store};
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use comfy_table::{Cell, CellAlignment, ContentArrangement, Table};
@@ -16,7 +16,7 @@ pub enum NodeCommand {
     Assign {
         node_name: String,
         role: RoleArg,
-        run_id: i32,
+        run: String,
     },
     Unassign {
         node_name: String,
@@ -33,16 +33,18 @@ pub async fn run_node_commands(command: NodeCommand, quiet: bool) -> Result<()> 
             NodeCommand::Assign {
                 node_name,
                 role,
-                run_id,
+                run,
             } => {
+                let run = resolve_run_ref(&store, &run).await?;
                 store
-                    .upsert_desired_assignment(&node_name, role.into(), run_id)
+                    .upsert_desired_assignment(&node_name, role.into(), run.run_id)
                     .await?;
                 tracing::info!(
-                    "assigned node={} role={} run_id={}",
+                    "assigned node={} role={} run_id={} run_name={}",
                     node_name,
                     WorkerRole::from(role),
-                    run_id
+                    run.run_id,
+                    run.run_name
                 );
             }
             NodeCommand::Unassign { node_name } => {
@@ -101,7 +103,10 @@ fn build_node_rows(nodes: Vec<RegisteredNode>) -> Vec<NodeRow> {
             run: node
                 .desired_assignment
                 .as_ref()
-                .map(|assignment| assignment.run_id.to_string())
+                .map(|assignment| match assignment.run_name.as_deref() {
+                    Some(run_name) => format!("{run_name} (#{})", assignment.run_id),
+                    None => assignment.run_id.to_string(),
+                })
                 .unwrap_or_else(|| "N/A".to_string()),
             role: node
                 .desired_assignment

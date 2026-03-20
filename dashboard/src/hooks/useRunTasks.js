@@ -1,29 +1,16 @@
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 import { fetchRunTasks } from "../services/api";
-import { usePolling } from "./usePolling";
+import { usePolledResource } from "./usePolledResource";
 
 export const useRunTasks = (runId, refreshInterval = 2000) => {
-  const [tasks, setTasks] = useState([]);
+  const fetchResource = useCallback((signal) => (runId == null ? [] : fetchRunTasks(runId, signal)), [runId]);
+  const { data } = usePolledResource({
+    enabled: runId != null,
+    pollMs: refreshInterval,
+    initialData: [],
+    fetchResource,
+    onError: (err) => console.error("Failed to fetch run tasks:", err),
+  });
 
-  const poll = useCallback(
-    async (signal) => {
-      if (runId == null) {
-        setTasks([]);
-        return;
-      }
-      try {
-        const data = await fetchRunTasks(runId, signal);
-        setTasks(data);
-      } catch (err) {
-        if (err?.name === "AbortError") return;
-        console.error("Failed to fetch run tasks:", err);
-        setTasks([]);
-      }
-    },
-    [runId],
-  );
-
-  usePolling({ intervalMs: refreshInterval, poll });
-
-  return { tasks };
+  return { tasks: data };
 };

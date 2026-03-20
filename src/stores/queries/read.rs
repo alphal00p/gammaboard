@@ -134,8 +134,8 @@ struct WorkerLogRow {
     id: i64,
     ts: DateTime<Utc>,
     run_id: Option<i32>,
-    node_id: Option<String>,
-    worker_id: Option<String>,
+    node_uuid: Option<String>,
+    node_name: Option<String>,
     level: String,
     message: String,
     fields: JsonValue,
@@ -147,8 +147,8 @@ impl From<WorkerLogRow> for WorkerLogEntry {
             id: value.id.to_string(),
             ts: value.ts,
             run_id: value.run_id,
-            node_id: value.node_id,
-            worker_id: value.worker_id,
+            node_uuid: value.node_uuid,
+            node_name: value.node_name,
             level: value.level,
             message: value.message,
             fields: value.fields,
@@ -161,8 +161,10 @@ struct RegisteredWorkerRow {
     node_name: String,
     node_uuid: String,
     desired_run_id: Option<i32>,
+    desired_run_name: Option<String>,
     desired_role: Option<String>,
     current_run_id: Option<i32>,
+    current_run_name: Option<String>,
     current_role: Option<String>,
     role: String,
     implementation: String,
@@ -181,8 +183,10 @@ impl From<RegisteredWorkerRow> for RegisteredWorkerEntry {
             node_name: value.node_name,
             node_uuid: value.node_uuid,
             desired_run_id: value.desired_run_id,
+            desired_run_name: value.desired_run_name,
             desired_role: value.desired_role,
             current_run_id: value.current_run_id,
+            current_run_name: value.current_run_name,
             current_role: value.current_role,
             role: value.role,
             implementation: value.implementation,
@@ -571,7 +575,7 @@ pub(crate) async fn get_worker_logs(
     pool: &PgPool,
     run_id: i32,
     limit: i64,
-    worker_id: Option<&str>,
+    node_name: Option<&str>,
     level: Option<&str>,
     query: Option<&str>,
     before_id: Option<i64>,
@@ -583,8 +587,8 @@ pub(crate) async fn get_worker_logs(
             id,
             ts,
             run_id,
-            node_id,
-            worker_id,
+            node_id AS node_uuid,
+            worker_id AS node_name,
             level,
             message,
             fields
@@ -593,8 +597,8 @@ pub(crate) async fn get_worker_logs(
                 id,
                 ts,
                 run_id,
-                node_id,
-                worker_id,
+                node_id AS node_uuid,
+                worker_id AS node_name,
                 level,
                 message,
                 fields
@@ -612,7 +616,7 @@ pub(crate) async fn get_worker_logs(
         "#,
     )
     .bind(run_id)
-    .bind(worker_id)
+    .bind(node_name)
     .bind(level)
     .bind(query_pattern)
     .bind(before_id)
@@ -649,8 +653,10 @@ pub(crate) async fn get_registered_workers(
             n.name AS node_name,
             n.uuid AS node_uuid,
             n.desired_run_id,
+            dr.name AS desired_run_name,
             n.desired_role,
             n.active_run_id AS current_run_id,
+            cr.name AS current_run_name,
             n.active_role AS current_role,
             COALESCE(n.active_role, n.desired_role, 'none') AS role,
             'run_node' AS implementation,
@@ -671,6 +677,8 @@ pub(crate) async fn get_registered_workers(
         LEFT JOIN evaluator_performance_latest e
             ON e.run_id = COALESCE($1, n.active_run_id, n.desired_run_id)
            AND e.worker_id = n.name
+        LEFT JOIN runs dr ON dr.id = n.desired_run_id
+        LEFT JOIN runs cr ON cr.id = n.active_run_id
         WHERE ($1::int IS NULL OR n.desired_run_id = $1 OR n.active_run_id = $1)
         ORDER BY
             CASE

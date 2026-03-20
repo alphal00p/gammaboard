@@ -28,16 +28,16 @@ const DEFAULT_DB_EXTERNAL_LOG_LEVEL: &str = "warn";
 struct RuntimeContext {
     source: Option<String>,
     run_id: Option<i32>,
-    node_id: Option<String>,
-    worker_id: Option<String>,
+    node_uuid: Option<String>,
+    node_name: Option<String>,
 }
 
 impl RuntimeContext {
     fn is_empty(&self) -> bool {
         self.source.is_none()
             && self.run_id.is_none()
-            && self.node_id.is_none()
-            && self.worker_id.is_none()
+            && self.node_uuid.is_none()
+            && self.node_name.is_none()
     }
 
     fn merge_from(&mut self, other: &RuntimeContext) {
@@ -47,11 +47,11 @@ impl RuntimeContext {
         if let Some(value) = other.run_id {
             self.run_id = Some(value);
         }
-        if let Some(value) = &other.node_id {
-            self.node_id = Some(value.clone());
+        if let Some(value) = &other.node_uuid {
+            self.node_uuid = Some(value.clone());
         }
-        if let Some(value) = &other.worker_id {
-            self.worker_id = Some(value.clone());
+        if let Some(value) = &other.node_name {
+            self.node_name = Some(value.clone());
         }
     }
 }
@@ -268,8 +268,8 @@ where
         let record = RuntimeLogEvent {
             source,
             run_id: context.run_id,
-            node_id: context.node_id,
-            worker_id: context.worker_id,
+            node_uuid: context.node_uuid,
+            node_name: context.node_name,
             level: metadata.level().to_string().to_lowercase(),
             target: metadata.target().to_string(),
             message,
@@ -377,8 +377,9 @@ fn extract_context_update(fields: &mut JsonMap<String, JsonValue>) -> RuntimeCon
     RuntimeContext {
         source: remove_string(fields, "source"),
         run_id: remove_i32(fields, "run_id"),
-        node_id: remove_string(fields, "node_id"),
-        worker_id: remove_string(fields, "worker_id"),
+        node_uuid: remove_string(fields, "node_uuid").or_else(|| remove_string(fields, "node_id")),
+        node_name: remove_string(fields, "node_name")
+            .or_else(|| remove_string(fields, "worker_id")),
     }
 }
 

@@ -388,12 +388,12 @@ name = "full-stack-e2e"
 
     harness
         .cli()
-        .args(["node", "assign", "w-1", "evaluator", &run_id.to_string()])
+        .args(["node", "assign", "w-1", "evaluator", "full-stack-e2e"])
         .assert()
         .success();
     harness
         .cli()
-        .args(["node", "assign", "w-2", "evaluator", &run_id.to_string()])
+        .args(["node", "assign", "w-2", "evaluator", "full-stack-e2e"])
         .assert()
         .success();
 
@@ -419,7 +419,7 @@ name = "full-stack-e2e"
             "assign",
             "ghost-node",
             "evaluator",
-            &run_id.to_string(),
+            "full-stack-e2e",
         ])
         .assert()
         .success();
@@ -437,7 +437,7 @@ name = "full-stack-e2e"
             "assign",
             "w-2",
             "sampler-aggregator",
-            &run_id.to_string(),
+            "full-stack-e2e",
         ])
         .assert()
         .success();
@@ -479,12 +479,12 @@ name = "full-stack-e2e"
 
     harness
         .cli()
-        .args(["node", "assign", "w-1", "evaluator", &run_id.to_string()])
+        .args(["node", "assign", "w-1", "evaluator", "full-stack-e2e"])
         .assert()
         .success();
     harness
         .cli()
-        .args(["node", "assign", "w-2", "evaluator", &run_id.to_string()])
+        .args(["node", "assign", "w-2", "evaluator", "full-stack-e2e"])
         .assert()
         .success();
 
@@ -509,7 +509,7 @@ name = "full-stack-e2e"
 
     harness
         .cli()
-        .args(["run", "pause", &run_id.to_string()])
+        .args(["run", "pause", "full-stack-e2e"])
         .assert()
         .success();
 
@@ -537,12 +537,12 @@ name = "full-stack-e2e"
 
     harness
         .cli()
-        .args(["node", "assign", "w-1", "evaluator", &run_id.to_string()])
+        .args(["node", "assign", "w-1", "evaluator", "full-stack-e2e"])
         .assert()
         .success();
     harness
         .cli()
-        .args(["node", "assign", "w-2", "evaluator", &run_id.to_string()])
+        .args(["node", "assign", "w-2", "evaluator", "full-stack-e2e"])
         .assert()
         .success();
 
@@ -563,7 +563,7 @@ name = "full-stack-e2e"
 
     harness
         .cli()
-        .args(["run", "pause", &run_id.to_string()])
+        .args(["run", "pause", "full-stack-e2e"])
         .assert()
         .success();
     harness
@@ -580,7 +580,7 @@ name = "full-stack-e2e"
 
     harness
         .cli()
-        .args(["run", "remove", &run_id.to_string()])
+        .args(["run", "remove", "full-stack-e2e"])
         .assert()
         .success();
 
@@ -650,6 +650,66 @@ async fn full_stack_cli_server_can_restart_while_nodes_keep_running() -> anyhow:
 
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_lists_duplicate_run_names_and_reports_ambiguity() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+
+    let config_a = temp_run_config("name = \"duplicate-run\"\n");
+    let config_b = temp_run_config("name = \"duplicate-run\"\n");
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config_a.path())
+        .assert()
+        .success();
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config_b.path())
+        .assert()
+        .success();
+
+    let rows = sqlx::query("SELECT id FROM runs WHERE name = 'duplicate-run' ORDER BY id ASC")
+        .fetch_all(&harness.pool)
+        .await?;
+    assert_eq!(rows.len(), 2);
+    let id_a: i32 = rows[0].try_get("id")?;
+    let id_b: i32 = rows[1].try_get("id")?;
+
+    let list_output = harness
+        .cli()
+        .args(["run", "list", "duplicate-run"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let list_output = String::from_utf8(list_output)?;
+    assert!(list_output.contains("duplicate-run"));
+    assert!(list_output.contains(&id_a.to_string()));
+    assert!(list_output.contains(&id_b.to_string()));
+
+    harness
+        .cli()
+        .args(["run", "pause", "duplicate-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "run name 'duplicate-run' matches multiple runs",
+        ))
+        .stderr(predicate::str::contains(&format!("id={id_a}")))
+        .stderr(predicate::str::contains(&format!("id={id_b}")));
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_reclaims_claimed_batches_after_worker_death() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
@@ -708,13 +768,13 @@ completed_batch_fetch_limit = 64
             "assign",
             "w-1",
             "sampler-aggregator",
-            &run_id.to_string(),
+            "worker-death-e2e",
         ])
         .assert()
         .success();
     harness
         .cli()
-        .args(["node", "assign", "w-2", "evaluator", &run_id.to_string()])
+        .args(["node", "assign", "w-2", "evaluator", "worker-death-e2e"])
         .assert()
         .success();
 
@@ -741,7 +801,7 @@ completed_batch_fetch_limit = 64
 
     harness
         .cli()
-        .args(["node", "assign", "w-3", "evaluator", &run_id.to_string()])
+        .args(["node", "assign", "w-3", "evaluator", "worker-death-e2e"])
         .assert()
         .success();
 
@@ -793,6 +853,177 @@ completed_batch_fetch_limit = 64
                     && pending_or_claimed == 0)
             },
         )
+        .await?;
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_can_clone_run_from_task_snapshot() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+
+    let config = temp_run_config(
+        r#"
+name = "clone-source-e2e"
+
+[evaluator]
+kind = "sin_evaluator"
+
+[[task_queue]]
+kind = "sample"
+nr_samples = 16
+observable = "scalar"
+[task_queue.sampler_aggregator]
+kind = "naive_monte_carlo"
+
+[[task_queue]]
+kind = "sample"
+nr_samples = 16
+
+[parametrization]
+kind = "identity"
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let source_run_id: i32 =
+        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'clone-source-e2e'")
+            .fetch_one(&harness.pool)
+            .await?;
+    let source_task_1: i64 =
+        sqlx::query_scalar("SELECT id FROM run_tasks WHERE run_id = $1 AND sequence_nr = 1")
+            .bind(source_run_id)
+            .fetch_one(&harness.pool)
+            .await?;
+
+    harness.start_node("w-1").await?;
+    harness.start_node("w-2").await?;
+
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-1",
+            "sampler-aggregator",
+            "clone-source-e2e",
+        ])
+        .assert()
+        .success();
+    harness
+        .cli()
+        .args(["node", "assign", "w-2", "evaluator", "clone-source-e2e"])
+        .assert()
+        .success();
+
+    harness
+        .wait_for("source run completes", Duration::from_secs(20), || async {
+            let w1 = harness.node_state("w-1").await?;
+            let w2 = harness.node_state("w-2").await?;
+            let completed: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM run_tasks WHERE run_id = $1 AND state = 'completed'",
+            )
+            .bind(source_run_id)
+            .fetch_one(&harness.pool)
+            .await?;
+            Ok(w1.0.is_none()
+                && w1.1.is_none()
+                && w1.2.is_none()
+                && w1.3.is_none()
+                && w2.0.is_none()
+                && w2.1.is_none()
+                && w2.2.is_none()
+                && w2.3.is_none()
+                && completed == 2)
+        })
+        .await?;
+
+    harness
+        .cli()
+        .args([
+            "run",
+            "clone",
+            "clone-source-e2e",
+            &source_task_1.to_string(),
+            "clone-branch-e2e",
+        ])
+        .assert()
+        .success();
+
+    let cloned_run_id: i32 =
+        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'clone-branch-e2e'")
+            .fetch_one(&harness.pool)
+            .await?;
+    let cloned_task_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM run_tasks WHERE run_id = $1")
+            .bind(cloned_run_id)
+            .fetch_one(&harness.pool)
+            .await?;
+    assert_eq!(cloned_task_count, 1);
+
+    let cloned_task_start_from_run: Option<i32> = sqlx::query_scalar(
+        "SELECT (task->'start_from'->>'run_id')::integer FROM run_tasks WHERE run_id = $1 ORDER BY sequence_nr ASC LIMIT 1",
+    )
+    .bind(cloned_run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    let cloned_task_start_from_task: Option<i64> = sqlx::query_scalar(
+        "SELECT (task->'start_from'->>'task_id')::bigint FROM run_tasks WHERE run_id = $1 ORDER BY sequence_nr ASC LIMIT 1",
+    )
+    .bind(cloned_run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(cloned_task_start_from_run, Some(source_run_id));
+    assert_eq!(cloned_task_start_from_task, Some(source_task_1));
+
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-1",
+            "sampler-aggregator",
+            "clone-branch-e2e",
+        ])
+        .assert()
+        .success();
+    harness
+        .cli()
+        .args(["node", "assign", "w-2", "evaluator", "clone-branch-e2e"])
+        .assert()
+        .success();
+
+    harness
+        .wait_for("cloned run completes", Duration::from_secs(20), || async {
+            let w1 = harness.node_state("w-1").await?;
+            let w2 = harness.node_state("w-2").await?;
+            let completed: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM run_tasks WHERE run_id = $1 AND state = 'completed'",
+            )
+            .bind(cloned_run_id)
+            .fetch_one(&harness.pool)
+            .await?;
+            Ok(w1.0.is_none()
+                && w1.1.is_none()
+                && w1.2.is_none()
+                && w1.3.is_none()
+                && w2.0.is_none()
+                && w2.1.is_none()
+                && w2.2.is_none()
+                && w2.3.is_none()
+                && completed == 1)
+        })
         .await?;
 
     harness.stop_children().await;

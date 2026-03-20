@@ -73,8 +73,10 @@ const normalizeWorkerEntry = (entry) => {
     node_name: entry.node_name ?? "",
     node_uuid: entry.node_uuid ?? "",
     desired_run_id: Number.isFinite(Number(entry.desired_run_id)) ? Number(entry.desired_run_id) : null,
+    desired_run_name: entry.desired_run_name ?? null,
     desired_role: entry.desired_role ?? null,
     current_run_id: Number.isFinite(Number(entry.current_run_id)) ? Number(entry.current_run_id) : null,
+    current_run_name: entry.current_run_name ?? null,
     current_role: entry.current_role ?? null,
     role: entry.role ?? "unknown",
     implementation: entry.implementation ?? "unknown",
@@ -102,8 +104,8 @@ const normalizeRunLogEntry = (entry) => {
     id: String(rawId),
     ts: timestamp,
     run_id: runId != null && Number.isFinite(runId) ? runId : null,
-    node_id: entry.node_id ?? null,
-    worker_id: entry.worker_id ?? null,
+    node_uuid: entry.node_uuid ?? null,
+    node_name: entry.node_name ?? null,
     level,
     message: entry.message ?? "",
     fields: entry.fields ?? {},
@@ -166,6 +168,9 @@ export const fetchRun = async (runId, signal) => {
   const data = await apiGet(`/runs/${runId}`, "Failed to fetch run", signal);
   return normalizeRunEntry(data) ?? data;
 };
+
+export const fetchRunPanels = async (runId, signal) =>
+  apiGet(`/runs/${runId}/panels`, "Failed to fetch run panels", signal);
 
 export const fetchRunTasks = async (runId, signal) => {
   const data = await apiGet(`/runs/${runId}/tasks`, "Failed to fetch run tasks", signal);

@@ -12,8 +12,10 @@ pub(crate) struct NodeRaw {
     pub uuid: String,
     pub desired_role: Option<String>,
     pub desired_run_id: Option<i32>,
+    pub desired_run_name: Option<String>,
     pub current_role: Option<String>,
     pub current_run_id: Option<i32>,
+    pub current_run_name: Option<String>,
     pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -222,7 +224,9 @@ pub(crate) async fn list_nodes(
             Option<String>,
             Option<i32>,
             Option<String>,
+            Option<String>,
             Option<i32>,
+            Option<String>,
             Option<chrono::DateTime<chrono::Utc>>,
         ),
     >(
@@ -232,10 +236,14 @@ pub(crate) async fn list_nodes(
             n.uuid,
             n.desired_role,
             n.desired_run_id,
+            dr.name AS desired_run_name,
             n.active_role AS current_role,
             n.active_run_id AS current_run_id,
+            cr.name AS current_run_name,
             n.last_seen
         FROM nodes n
+        LEFT JOIN runs dr ON dr.id = n.desired_run_id
+        LEFT JOIN runs cr ON cr.id = n.active_run_id
         WHERE ($1::text IS NULL OR n.name = $1)
         ORDER BY n.name ASC
         "#,
@@ -252,8 +260,10 @@ pub(crate) async fn list_nodes(
                 uuid,
                 desired_role,
                 desired_run_id,
+                desired_run_name,
                 current_role,
                 current_run_id,
+                current_run_name,
                 last_seen,
             )| {
                 NodeRaw {
@@ -261,8 +271,10 @@ pub(crate) async fn list_nodes(
                     uuid,
                     desired_role,
                     desired_run_id,
+                    desired_run_name,
                     current_role,
                     current_run_id,
+                    current_run_name,
                     last_seen,
                 }
             },

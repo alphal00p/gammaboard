@@ -172,13 +172,13 @@ impl RunReadStore for PgStore {
         &self,
         run_id: i32,
         limit: i64,
-        worker_id: Option<&str>,
+        node_name: Option<&str>,
         level: Option<&str>,
         query: Option<&str>,
         before_id: Option<i64>,
     ) -> Result<crate::stores::WorkerLogPage, StoreError> {
         Ok(queries::get_worker_logs(
-            &self.pool, run_id, limit, worker_id, level, query, before_id,
+            &self.pool, run_id, limit, node_name, level, query, before_id,
         )
         .await?)
     }
@@ -317,6 +317,7 @@ impl ControlPlaneStore for PgStore {
                     node_name: row.node_name,
                     role: row.role.parse().map_err(store_err)?,
                     run_id: row.run_id,
+                    run_name: None,
                 })
             })
             .transpose()
@@ -335,6 +336,7 @@ impl ControlPlaneStore for PgStore {
                 node_name: row.node_name,
                 role: row.role.parse().map_err(store_err)?,
                 run_id: row.run_id,
+                run_name: None,
             });
         }
         Ok(out)
@@ -351,6 +353,7 @@ impl ControlPlaneStore for PgStore {
                     node_name: row.name.clone(),
                     role: role.parse().map_err(store_err)?,
                     run_id,
+                    run_name: row.desired_run_name,
                 }),
                 (None, None) => None,
                 _ => return Err(store_err("invalid node assignment row")),
@@ -360,6 +363,7 @@ impl ControlPlaneStore for PgStore {
                     node_name: row.name.clone(),
                     role: role.parse().map_err(store_err)?,
                     run_id,
+                    run_name: row.current_run_name,
                 }),
                 (None, None) => None,
                 _ => return Err(store_err("invalid current node assignment row")),

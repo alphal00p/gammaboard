@@ -47,6 +47,7 @@ pub struct DesiredAssignment {
     pub node_name: String,
     pub role: WorkerRole,
     pub run_id: i32,
+    pub run_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,8 +112,8 @@ pub struct BatchRecord {
 pub struct RuntimeLogEvent {
     pub source: String,
     pub run_id: Option<i32>,
-    pub node_id: Option<String>,
-    pub worker_id: Option<String>,
+    pub node_uuid: Option<String>,
+    pub node_name: Option<String>,
     pub level: String,
     pub target: String,
     pub message: String,

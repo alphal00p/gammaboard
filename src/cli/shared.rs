@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Args, ValueEnum};
-use gammaboard::core::WorkerRole;
+use gammaboard::core::{RunReadStore, WorkerRole};
+use gammaboard::stores::RunProgress;
 use gammaboard::tracing::init_tracing;
 use gammaboard::{PgStore, init_pg_store};
 use std::future::Future;
@@ -23,10 +24,10 @@ impl From<RoleArg> for WorkerRole {
 
 #[derive(Debug, Args)]
 pub struct RunSelection {
-    #[arg(short = 'a', long = "all", conflicts_with = "run_ids")]
+    #[arg(short = 'a', long = "all", conflicts_with = "run_refs")]
     pub all: bool,
-    #[arg(value_name = "RUN_ID", required_unless_present = "all")]
-    pub run_ids: Vec<i32>,
+    #[arg(value_name = "RUN", required_unless_present = "all")]
+    pub run_refs: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -101,4 +102,66 @@ where
     Fut: Future<Output = Result<T>>,
 {
     with_cli_store(db_pool_size, quiet, control_command_span(command_name), f).await
+}
+
+pub async fn resolve_run_ref(store: &impl RunReadStore, run_ref: &str) -> Result<RunProgress> {
+    let runs = store.get_all_runs().await?;
+
+    if let Ok(run_id) = run_ref.parse::<i32>() {
+        if let Some(run) = runs.iter().find(|run| run.run_id == run_id) {
+            return Ok(run.clone());
+        }
+    }
+
+    let matches = runs
+        .into_iter()
+        .filter(|run| run.run_name == run_ref)
+        .collect::<Vec<_>>();
+
+    match matches.as_slice() {
+        [] => Err(anyhow!("run '{run_ref}' not found")),
+        [run] => Ok(run.clone()),
+        many => Err(anyhow!(format_ambiguous_runs(run_ref, many))),
+    }
+}
+
+pub async fn resolve_run_selection(
+    store: &impl RunReadStore,
+    selection: RunSelection,
+) -> Result<Vec<RunProgress>> {
+    if selection.all {
+        return store.get_all_runs().await.map_err(Into::into);
+    }
+
+    let mut resolved = Vec::with_capacity(selection.run_refs.len());
+    for run_ref in selection.run_refs {
+        resolved.push(resolve_run_ref(store, &run_ref).await?);
+    }
+    Ok(resolved)
+}
+
+pub async fn list_runs_by_name(
+    store: &impl RunReadStore,
+    run_name: &str,
+) -> Result<Vec<RunProgress>> {
+    Ok(store
+        .get_all_runs()
+        .await?
+        .into_iter()
+        .filter(|run| run.run_name == run_name)
+        .collect())
+}
+
+fn format_ambiguous_runs(run_ref: &str, runs: &[RunProgress]) -> String {
+    let mut message =
+        format!("run name '{run_ref}' matches multiple runs. Use the numeric id instead:\n");
+    for run in runs {
+        let line = format!(
+            "  id={} name={} state={}",
+            run.run_id, run.run_name, run.lifecycle_state
+        );
+        message.push_str(&line);
+        message.push('\n');
+    }
+    message.trim_end().to_string()
 }
