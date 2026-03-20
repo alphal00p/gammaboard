@@ -149,35 +149,43 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
     setState(emptyState);
   }, []);
 
-  const setPanelValue = useCallback((panelId, value) => {
-    setState((previous) => {
-      const panelValues = {
-        ...asObject(previous.panelValues),
-        [panelId]: value,
-      };
-      panelValuesRef.current = panelValues;
-      cursorRef.current = null;
-      return {
-        ...previous,
-        panelValues,
-        cursor: null,
-        panelStates: [],
-      };
-    });
-  }, []);
+  const triggerPoll = usePolling({ enabled, intervalMs: pollMs, poll, reset });
 
-  const invokePanelAction = useCallback((panelId, actionId, payload = null) => {
-    pendingActionsRef.current = [
-      ...pendingActionsRef.current,
-      {
-        panel_id: panelId,
-        action_id: actionId,
-        payload,
-      },
-    ];
-  }, []);
+  const setPanelValue = useCallback(
+    (panelId, value) => {
+      setState((previous) => {
+        const panelValues = {
+          ...asObject(previous.panelValues),
+          [panelId]: value,
+        };
+        panelValuesRef.current = panelValues;
+        cursorRef.current = null;
+        return {
+          ...previous,
+          panelValues,
+          cursor: null,
+          panelStates: [],
+        };
+      });
+      triggerPoll();
+    },
+    [triggerPoll],
+  );
 
-  usePolling({ enabled, intervalMs: pollMs, poll, reset });
+  const invokePanelAction = useCallback(
+    (panelId, actionId, payload = null) => {
+      pendingActionsRef.current = [
+        ...pendingActionsRef.current,
+        {
+          panel_id: panelId,
+          action_id: actionId,
+          payload,
+        },
+      ];
+      triggerPoll();
+    },
+    [triggerPoll],
+  );
 
   return useMemo(
     () => ({
