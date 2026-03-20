@@ -1,5 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import App from "./App";
+import { fetchNodes, fetchRuns } from "./services/api";
 
 jest.mock("./services/api", () => ({
   fetchRuns: jest.fn(async () => []),
@@ -31,29 +32,42 @@ jest.mock("./services/api", () => ({
  * and contains expected core elements.
  */
 describe("App Component", () => {
-  test("renders Gammaboard logo", () => {
-    render(<App />);
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  const renderApp = async () => {
+    await act(async () => {
+      render(<App />);
+    });
+    await waitFor(() => {
+      expect(fetchRuns).toHaveBeenCalled();
+      expect(fetchNodes).toHaveBeenCalled();
+    });
+  };
+
+  test("renders Gammaboard logo", async () => {
+    await renderApp();
     const logoElement = screen.getByAltText(/Gammaboard/i);
     expect(logoElement).toBeInTheDocument();
   });
 
-  test("renders connection status component", () => {
-    render(<App />);
-    // ConnectionStatus should show "Disconnected" initially
-    const statusElement = screen.getByText(/Disconnected/i);
+  test("renders connection status component", async () => {
+    await renderApp();
+    const statusElement = screen.getByText(/Connected/i);
     expect(statusElement).toBeInTheDocument();
   });
 
-  test("renders mode tabs", () => {
-    render(<App />);
+  test("renders mode tabs", async () => {
+    await renderApp();
     expect(screen.getByRole("tab", { name: /Runs/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Nodes/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Performance/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Logs/i })).toBeInTheDocument();
   });
 
-  test("shows no-runs empty state when run list is empty", () => {
-    render(<App />);
+  test("shows no-runs empty state when run list is empty", async () => {
+    await renderApp();
     const emptyMessage = screen.getByText(/No runs available/i);
     expect(emptyMessage).toBeInTheDocument();
   });
