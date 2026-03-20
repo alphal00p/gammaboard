@@ -30,15 +30,19 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - If an active run task fails at a transition boundary, persist that as task state `failed` with a reason and clear desired run assignments.
 
 ## Node Assignment Rules
-- Desired assignment is node-level: each node may have at most one desired role/run assignment at a time, and `node assign` replaces any existing desired assignment on that node.
+- Desired assignment is node-level: each node name may have at most one desired role/run assignment at a time, and `node assign` replaces any existing desired assignment on that node.
 - `node unassign` clears the node's desired assignment without requiring a role.
 - Desired assignments may include many evaluators per run, but at most one sampler-aggregator per run. Enforce that in the database and surface a clear CLI/store error on violation.
 - Current assignments may include many evaluators per run, but at most one current sampler-aggregator per run. Enforce that in the database. Recovery from stale current sampler state is manual for now.
 - Desired and current node assignments live directly on `nodes`, with `(desired_run_id, desired_role)` and `(active_run_id, active_role)` required to be both null or both set.
-- Nodes register and heartbeat through `nodes` even when idle so inventory is visible before any role assignment.
+- Node identity is split into `nodes.name` and `nodes.uuid`: `name` is the unique operator-facing handle, while `uuid` is the live `run-node` process incarnation that currently owns that name.
+- Nodes announce themselves through `nodes` even when idle so inventory is visible before any role assignment. `run-node` should use a single `announce_node(name, uuid)` operation that both registers missing rows and renews the 30-second lease for that live node uuid.
+- If `announce_node(name, uuid)` fails for any reason for 30 seconds, `run-node` should shut itself down instead of continuing without DB ownership.
+- After a node has announced successfully, runtime ownership checks and batch claims should prefer `nodes.uuid`; keep `nodes.name` for CLI/operator lookup and read-model display.
 - `run-node` must stop the old role before starting a new one.
 - Role start failures are capped per desired target; after the cap is hit, retries stay disabled until desired assignment changes.
 - Node shutdown is a one-shot signal read from `nodes.shutdown_requested_at`.
+- Graceful node shutdown should expire the node lease immediately so a replacement process with the same node name can announce itself without waiting for the 30-second lease timeout.
 - Overall worker reconciliation belongs in `src/runners/node_runner/reconcile.rs`: it should decide the exact active runtime for the current desired assignment, including sampler task activation, pause handling, and queue exhaustion.
 - The sampler executor itself should own only one active task runtime and should not activate or select tasks on its own.
 - `run-node` should own one in-process active role runner at a time. Reconciliation is the only place that matches on role and constructs a new role runner; active role runners should just expose `tick()` and `persist_state()`.
@@ -56,6 +60,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - Evaluators are batch-oriented and must request training values based on the active task's sampler config, not a per-batch persisted flag.
 - Observable semantics are first-class run/task config via `ObservableConfig`, while serialized runtime/current state remains semantic `ObservableState`.
 - Queue payloads are latent and task-bound: `batches.latent_batch` plus `batches.task_id`.
+- Claimed batches should store enough node ownership to fence stale workers, with runtime ownership keyed off the live node uuid. Batch abandonment is derived from missing/expired node leases; do not introduce a second independent batch lease.
 - Top-level run task sequencing lives in `src/core/tasks.rs`; sampler/evaluator engines should not parse arbitrary task JSON directly.
 - Task-local structural validation and preflight reduction hooks belong on the task types in `src/core/tasks.rs`; `src/preprocess/*` should orchestrate them rather than duplicate task semantics.
 - Keep latent-batch queue types separate from concrete evaluator batch/result types in code layout: latent queue payloads belong with sampler-side semantics, while `Batch`/`BatchResult` are the concrete A/B interface.
@@ -96,7 +101,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - Do not expose `runs.sampler_runner_snapshot` through the read API or dashboard payloads.
 - Runtime logs are persisted from tracing context through `RuntimeLogStore`.
 - SQL for runtime log persistence lives in the store/query layer, not in tracing setup.
-- Runtime log context should include `source`, `run_id`, and `node_id` when available. Include `worker_id` only when persisted schema still requires that name.
+- Runtime log context should include `source`, `run_id`, and node identity when available. Prefer the operator-facing node name in persisted `node_id`/`worker_id` compatibility fields unless the schema is explicitly widened later.
 - Set `GAMMABOARD_DISABLE_DB_LOGS=1` to disable DB log persistence.
 - DB log thresholds are configured with `GAMMABOARD_DB_LOG_LEVEL` and `GAMMABOARD_DB_EXTERNAL_LOG_LEVEL`.
 - Worker performance history is stored in `evaluator_performance_history` and `sampler_aggregator_performance_history`.

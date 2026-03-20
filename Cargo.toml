@@ -32,6 +32,7 @@ num = "0.4.3"
 tempfile = "3"
 anyhow = "1"
 comfy-table = "7"
+uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]
 assert_cmd = "2"

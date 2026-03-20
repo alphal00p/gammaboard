@@ -148,34 +148,34 @@ impl FullStackHarness {
         cmd
     }
 
-    async fn start_node(&mut self, node_id: &str) -> anyhow::Result<()> {
+    async fn start_node(&mut self, node_name: &str) -> anyhow::Result<()> {
         let mut child = TokioCommand::new(&self.bin_path);
         child
             .env("DATABASE_URL", &self.db.database_url)
             .env("GAMMABOARD_DISABLE_DB_LOGS", "1")
             .arg("run-node")
-            .arg("--node-id")
-            .arg(node_id)
+            .arg("--name")
+            .arg(node_name)
             .arg("--poll-ms")
             .arg("100")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit());
 
         let child = child.spawn()?;
         self.children.push(child);
 
         let pool = self.pool.clone();
-        let node_id = node_id.to_string();
+        let node_name = node_name.to_string();
         self.wait_for(
-            format!("node {node_id} registration"),
+            format!("node {node_name} registration"),
             Duration::from_secs(10),
             || {
                 let pool = pool.clone();
-                let node_id = node_id.clone();
+                let node_name = node_name.clone();
                 async move {
                     let count: i64 =
-                        sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE node_id = $1")
-                            .bind(&node_id)
+                        sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE name = $1")
+                            .bind(&node_name)
                             .fetch_one(&pool)
                             .await?;
                     Ok(count == 1)
@@ -211,7 +211,7 @@ impl FullStackHarness {
 
     async fn node_state(
         &self,
-        node_id: &str,
+        node_name: &str,
     ) -> anyhow::Result<(Option<i32>, Option<String>, Option<i32>, Option<String>)> {
         let row = sqlx::query(
             r#"
@@ -221,10 +221,10 @@ impl FullStackHarness {
                 active_run_id AS current_run_id,
                 active_role AS current_role
             FROM nodes
-            WHERE node_id = $1
+            WHERE name = $1
             "#,
         )
-        .bind(node_id)
+        .bind(node_name)
         .fetch_one(&self.pool)
         .await?;
 

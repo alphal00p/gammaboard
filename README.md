@@ -6,7 +6,7 @@ Samplers queue task-bound latent batches that evaluators materialize locally thr
 ## What It Does
 - `gammaboard run` creates, pauses, and removes runs.
 - `gammaboard node` assigns or unassigns nodes to runs.
-- `gammaboard run-node` starts one local worker process that reconciles into either an `evaluator` or `sampler_aggregator` role.
+- `gammaboard run-node --name <NODE_NAME>` starts one local worker process that reconciles into either an `evaluator` or `sampler_aggregator` role.
 - `gammaboard server` starts the backend used by the dashboard.
 - The dashboard shows runs, task-scoped output, nodes, performance, and logs.
 
@@ -150,7 +150,9 @@ just start 2
 
 That starts `w-1`, `w-2`, and so on.
 
-`gammaboard run-node --poll-ms ...` controls the global node-loop pacing. Per-role runner config no longer has separate polling/backoff fields.
+`gammaboard run-node --name ... --poll-ms ...` controls the global node-loop pacing. Node names are unique CLI handles; each live process also generates an internal UUID that owns that name in PostgreSQL. Per-role runner config no longer has separate polling/backoff fields.
+If PostgreSQL is unavailable or node ownership cannot be re-announced for 30 seconds, the worker shuts itself down instead of continuing detached from the control plane.
+On graceful shutdown, the worker expires its lease immediately so a replacement process can reuse the same node name right away.
 
 ### Assign roles
 ```bash
@@ -165,10 +167,10 @@ gammaboard auto-assign <RUN_ID> [MAX_EVALUATORS]
 
 ### Common commands
 ```bash
-gammaboard node assign <NODE_ID> <ROLE> <RUN_ID>
+gammaboard node assign <NODE_NAME> <ROLE> <RUN_ID>
 gammaboard node list
-gammaboard node unassign <NODE_ID>
-gammaboard node stop <NODE_ID>
+gammaboard node unassign <NODE_NAME>
+gammaboard node stop <NODE_NAME>
 gammaboard auto-assign <RUN_ID> [MAX_EVALUATORS]
 gammaboard run pause <RUN_ID>
 gammaboard run task list <RUN_ID>

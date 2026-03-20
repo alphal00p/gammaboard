@@ -15,6 +15,7 @@ use crate::core::{
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{Instrument, info, warn};
+use uuid::Uuid;
 
 use self::active_worker::ActiveWorker;
 use self::role_runner::RoleRunner;
@@ -116,17 +117,19 @@ impl RetryState {
 
 pub struct NodeRunner<S: NodeRunnerStore> {
     store: S,
-    node_id: String,
+    node_name: String,
+    node_uuid: String,
     config: NodeRunnerConfig,
     active_runner: Option<ActiveRoleRunner<S>>,
     retry_state: RetryState,
 }
 
 impl<S: NodeRunnerStore> NodeRunner<S> {
-    pub fn new(store: S, node_id: impl Into<String>, config: NodeRunnerConfig) -> Self {
+    pub fn new(store: S, node_name: impl Into<String>, config: NodeRunnerConfig) -> Self {
         Self {
             store,
-            node_id: node_id.into(),
+            node_name: node_name.into(),
+            node_uuid: Uuid::new_v4().to_string(),
             config,
             active_runner: None,
             retry_state: RetryState::default(),
@@ -142,18 +145,40 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             tracing::Level::TRACE,
             "node_runner_context",
             source = "worker",
-            node_id = %self.node_id
+            node_name = %self.node_name,
+            node_uuid = %self.node_uuid
         );
         async move {
             let mut shutdown = std::pin::pin!(tokio::signal::ctrl_c());
-            self.store.register_node(&self.node_id).await?;
+            let mut announce_failed_at: Option<Instant> = None;
 
             loop {
                 let tick_started = Instant::now();
-                self.store.heartbeat_node(&self.node_id).await?;
+                if let Err(err) = self
+                    .store
+                    .announce_node(&self.node_name, &self.node_uuid)
+                    .await
+                {
+                    warn!("node announce failed: {err}");
+                    let failed_at = *announce_failed_at.get_or_insert_with(Instant::now);
+                    if failed_at.elapsed() >= Duration::from_secs(30) {
+                        warn!("node announce failed for 30 seconds; shutting down node-runner");
+                        break;
+                    }
+                    tokio::select! {
+                        _ = &mut shutdown => {
+                            info!("stopping node-runner");
+                            break;
+                        }
+                        _ = sleep(self.config.min_tick_time) => {}
+                    }
+                    continue;
+                }
+                announce_failed_at = None;
+
                 if self
                     .store
-                    .consume_node_shutdown_request(&self.node_id)
+                    .consume_node_shutdown_request(&self.node_uuid)
                     .await?
                 {
                     info!("node shutdown requested by control-plane");
@@ -210,6 +235,9 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             }
 
             self.stop_current().await;
+            if let Err(err) = self.store.expire_node_lease(&self.node_uuid).await {
+                warn!("failed to expire node lease on shutdown: {err}");
+            }
             Ok(())
         }
         .instrument(span)

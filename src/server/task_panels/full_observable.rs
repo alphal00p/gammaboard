@@ -16,7 +16,6 @@ pub(super) fn image_projectors(
     display: ImageDisplayMode,
 ) -> Vec<TaskPanelProjector> {
     vec![
-        image_view_mode_projector(display),
         progress_projector(
             "image_progress",
             "Image Progress",
@@ -24,6 +23,7 @@ pub(super) fn image_projectors(
             "pixels",
         ),
         completion_projector("image_completion", "Image Completion", geometry.nr_points()),
+        image_view_mode_projector(display),
         image_view_projector(geometry, display),
     ]
 }

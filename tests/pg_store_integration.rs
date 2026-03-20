@@ -27,7 +27,8 @@ async fn claim_batch_requires_active_assignment() {
     let Some(store) = test_store().await else {
         return;
     };
-    let node_id = unique_id("node");
+    let node_name = unique_id("node");
+    let node_uuid = unique_id("uuid");
 
     let run_id: i32 = sqlx::query_scalar(
         r#"
@@ -47,9 +48,12 @@ async fn claim_batch_requires_active_assignment() {
     .await
     .expect("insert run");
 
-    store.register_node(&node_id).await.expect("register node");
     store
-        .set_current_assignment(&node_id, WorkerRole::Evaluator, run_id)
+        .announce_node(&node_name, &node_uuid)
+        .await
+        .expect("announce node");
+    store
+        .set_current_assignment(&node_uuid, WorkerRole::Evaluator, run_id)
         .await
         .expect("set current evaluator assignment");
 
@@ -73,7 +77,7 @@ async fn claim_batch_requires_active_assignment() {
         .expect("insert batch");
 
     let claimed = store
-        .claim_batch(run_id, &node_id)
+        .claim_batch(run_id, &node_uuid)
         .await
         .expect("claim batch");
     assert!(
@@ -94,7 +98,8 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
     let Some(store) = test_store().await else {
         return;
     };
-    let node_id = unique_id("node");
+    let node_name = unique_id("node");
+    let node_uuid = unique_id("uuid");
 
     let run_id: i32 = sqlx::query_scalar(
         r#"
@@ -114,7 +119,10 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
     .await
     .expect("insert run");
 
-    store.register_node(&node_id).await.expect("register node");
+    store
+        .announce_node(&node_name, &node_uuid)
+        .await
+        .expect("announce node");
 
     let task_id: i64 = sqlx::query_scalar(
         r#"
@@ -136,7 +144,7 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
         .expect("insert batch");
 
     let unassigned_claim = store
-        .claim_batch(run_id, &node_id)
+        .claim_batch(run_id, &node_uuid)
         .await
         .expect("claim batch while unassigned");
     assert!(
@@ -145,16 +153,16 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
     );
 
     store
-        .set_current_assignment(&node_id, WorkerRole::Evaluator, run_id)
+        .set_current_assignment(&node_uuid, WorkerRole::Evaluator, run_id)
         .await
         .expect("set current evaluator assignment");
     store
-        .clear_current_assignment(&node_id)
+        .clear_current_assignment(&node_uuid)
         .await
         .expect("clear current assignment");
 
     let inactive_claim = store
-        .claim_batch(run_id, &node_id)
+        .claim_batch(run_id, &node_uuid)
         .await
         .expect("claim batch while inactive");
     assert!(
@@ -229,7 +237,7 @@ async fn assigning_new_role_replaces_existing_desired_assignment_for_node() {
     let Some(store) = test_store().await else {
         return;
     };
-    let node_id = unique_id("node");
+    let node_name = unique_id("node");
 
     let run_a: i32 = sqlx::query_scalar(
         r#"
@@ -268,16 +276,16 @@ async fn assigning_new_role_replaces_existing_desired_assignment_for_node() {
     .expect("insert run b");
 
     store
-        .upsert_desired_assignment(&node_id, WorkerRole::Evaluator, run_a)
+        .upsert_desired_assignment(&node_name, WorkerRole::Evaluator, run_a)
         .await
         .expect("assign evaluator");
     store
-        .upsert_desired_assignment(&node_id, WorkerRole::SamplerAggregator, run_b)
+        .upsert_desired_assignment(&node_name, WorkerRole::SamplerAggregator, run_b)
         .await
         .expect("replace desired assignment");
 
     let assignment = store
-        .get_desired_assignment(&node_id)
+        .get_desired_assignment(&node_name)
         .await
         .expect("load desired assignment")
         .expect("assignment should exist");
@@ -288,12 +296,12 @@ async fn assigning_new_role_replaces_existing_desired_assignment_for_node() {
         r#"
         SELECT COUNT(*)
         FROM nodes
-        WHERE node_id = $1
+        WHERE name = $1
           AND desired_run_id IS NOT NULL
           AND desired_role IS NOT NULL
         "#,
     )
-    .bind(&node_id)
+    .bind(&node_name)
     .fetch_one(store.pool())
     .await
     .expect("count desired assignments");
@@ -303,12 +311,12 @@ async fn assigning_new_role_replaces_existing_desired_assignment_for_node() {
     );
 
     store
-        .clear_desired_assignment(&node_id)
+        .clear_desired_assignment(&node_name)
         .await
         .expect("clear desired assignment");
     assert!(
         store
-            .get_desired_assignment(&node_id)
+            .get_desired_assignment(&node_name)
             .await
             .expect("load cleared assignment")
             .is_none(),
@@ -331,6 +339,8 @@ async fn sampler_aggregator_current_assignment_is_unique_per_run() {
     };
     let node_a = unique_id("node-a");
     let node_b = unique_id("node-b");
+    let uuid_a = unique_id("uuid-a");
+    let uuid_b = unique_id("uuid-b");
 
     let run_id: i32 = sqlx::query_scalar(
         r#"
@@ -350,16 +360,22 @@ async fn sampler_aggregator_current_assignment_is_unique_per_run() {
     .await
     .expect("insert run");
 
-    store.register_node(&node_a).await.expect("register node a");
-    store.register_node(&node_b).await.expect("register node b");
+    store
+        .announce_node(&node_a, &uuid_a)
+        .await
+        .expect("announce node a");
+    store
+        .announce_node(&node_b, &uuid_b)
+        .await
+        .expect("announce node b");
 
     store
-        .set_current_assignment(&node_a, WorkerRole::SamplerAggregator, run_id)
+        .set_current_assignment(&uuid_a, WorkerRole::SamplerAggregator, run_id)
         .await
         .expect("set current sampler on node a");
 
     let err = store
-        .set_current_assignment(&node_b, WorkerRole::SamplerAggregator, run_id)
+        .set_current_assignment(&uuid_b, WorkerRole::SamplerAggregator, run_id)
         .await
         .expect_err("second current sampler should fail");
 

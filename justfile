@@ -17,6 +17,7 @@ serve-frontend:
     cd dashboard && npx serve build
 
 test-e2e:
+    just stop-kill
     cargo test -q --test full_stack_cli -- --ignored --nocapture
 
 db-init:

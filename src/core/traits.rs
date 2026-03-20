@@ -29,34 +29,34 @@ pub trait RunSpecStore: Send + Sync {
 pub trait ControlPlaneStore: Send + Sync {
     async fn upsert_desired_assignment(
         &self,
-        node_id: &str,
+        node_name: &str,
         role: super::models::WorkerRole,
         run_id: i32,
     ) -> Result<(), StoreError>;
-    async fn register_node(&self, node_id: &str) -> Result<(), StoreError>;
-    async fn heartbeat_node(&self, node_id: &str) -> Result<(), StoreError>;
+    async fn announce_node(&self, node_name: &str, node_uuid: &str) -> Result<(), StoreError>;
     async fn set_current_assignment(
         &self,
-        node_id: &str,
+        node_uuid: &str,
         role: super::models::WorkerRole,
         run_id: i32,
     ) -> Result<(), StoreError>;
-    async fn clear_current_assignment(&self, node_id: &str) -> Result<(), StoreError>;
-    async fn clear_desired_assignment(&self, node_id: &str) -> Result<(), StoreError>;
+    async fn clear_current_assignment(&self, node_uuid: &str) -> Result<(), StoreError>;
+    async fn clear_desired_assignment(&self, node_name: &str) -> Result<(), StoreError>;
     async fn clear_desired_assignments_for_run(&self, run_id: i32) -> Result<u64, StoreError>;
     async fn clear_all_desired_assignments(&self) -> Result<u64, StoreError>;
     async fn get_desired_assignment(
         &self,
-        node_id: &str,
+        node_name: &str,
     ) -> Result<Option<DesiredAssignment>, StoreError>;
     async fn list_desired_assignments(
         &self,
-        node_id: Option<&str>,
+        node_name: Option<&str>,
     ) -> Result<Vec<DesiredAssignment>, StoreError>;
-    async fn list_nodes(&self, node_id: Option<&str>) -> Result<Vec<RegisteredNode>, StoreError>;
-    async fn request_node_shutdown(&self, node_id: &str) -> Result<u64, StoreError>;
+    async fn list_nodes(&self, node_name: Option<&str>) -> Result<Vec<RegisteredNode>, StoreError>;
+    async fn request_node_shutdown(&self, node_name: &str) -> Result<u64, StoreError>;
     async fn request_all_nodes_shutdown(&self) -> Result<u64, StoreError>;
-    async fn consume_node_shutdown_request(&self, node_id: &str) -> Result<bool, StoreError>;
+    async fn consume_node_shutdown_request(&self, node_uuid: &str) -> Result<bool, StoreError>;
+    async fn expire_node_lease(&self, node_uuid: &str) -> Result<(), StoreError>;
 
     async fn create_run(
         &self,
@@ -85,16 +85,17 @@ pub trait WorkQueueStore: Send + Sync {
     async fn claim_batch(
         &self,
         run_id: i32,
-        node_id: &str,
+        node_uuid: &str,
     ) -> Result<Option<BatchClaim>, StoreError>;
     async fn release_claimed_batches_for_worker(
         &self,
         run_id: i32,
-        node_id: &str,
+        node_uuid: &str,
     ) -> Result<u64, StoreError>;
     async fn submit_batch_results(
         &self,
         batch_id: i64,
+        node_uuid: &str,
         result: &BatchResult,
         eval_time_ms: f64,
     ) -> Result<(), StoreError>;
@@ -113,6 +114,7 @@ pub trait WorkQueueStore: Send + Sync {
         limit: usize,
     ) -> Result<Vec<CompletedBatch>, StoreError>;
     async fn delete_completed_batches(&self, batch_ids: &[i64]) -> Result<(), StoreError>;
+    async fn reclaim_abandoned_batches(&self, run_id: i32) -> Result<u64, StoreError>;
 }
 
 /// Persists active-stage observable state and task-local persisted snapshots.

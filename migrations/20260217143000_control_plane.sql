@@ -1,7 +1,9 @@
 -- Control-plane tables for node registration and desired/current role state.
 
 CREATE TABLE IF NOT EXISTS nodes (
-    node_id TEXT PRIMARY KEY,
+    name TEXT PRIMARY KEY,
+    uuid TEXT NOT NULL,
+    lease_expires_at TIMESTAMPTZ NOT NULL,
     desired_run_id INT REFERENCES runs(id) ON DELETE SET NULL,
     desired_role TEXT CHECK (desired_role IN ('evaluator', 'sampler_aggregator')),
     active_run_id INT REFERENCES runs(id) ON DELETE SET NULL,

@@ -44,14 +44,15 @@ impl FromStr for WorkerRole {
 /// Desired node-level role assignment managed by the control plane.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesiredAssignment {
-    pub node_id: String,
+    pub node_name: String,
     pub role: WorkerRole,
     pub run_id: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisteredNode {
-    pub node_id: String,
+    pub name: String,
+    pub uuid: String,
     pub desired_assignment: Option<DesiredAssignment>,
     pub current_assignment: Option<DesiredAssignment>,
     pub last_seen: Option<DateTime<Utc>>,
@@ -102,7 +103,8 @@ pub struct BatchRecord {
     pub run_id: i32,
     pub batch: Batch,
     pub status: BatchStatus,
-    pub claimed_by: Option<String>,
+    pub claimed_by_node_name: Option<String>,
+    pub claimed_by_node_uuid: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

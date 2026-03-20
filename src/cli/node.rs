@@ -14,15 +14,15 @@ pub struct NodeArgs {
 #[derive(Debug, Subcommand)]
 pub enum NodeCommand {
     Assign {
-        node_id: String,
+        node_name: String,
         role: RoleArg,
         run_id: i32,
     },
     Unassign {
-        node_id: String,
+        node_name: String,
     },
     List {
-        node_id: Option<String>,
+        node_name: Option<String>,
     },
     Stop(NodeSelection),
 }
@@ -31,26 +31,26 @@ pub async fn run_node_commands(command: NodeCommand, quiet: bool) -> Result<()> 
     with_control_store(10, quiet, node_command_name(&command), |store| async move {
         match command {
             NodeCommand::Assign {
-                node_id,
+                node_name,
                 role,
                 run_id,
             } => {
                 store
-                    .upsert_desired_assignment(&node_id, role.into(), run_id)
+                    .upsert_desired_assignment(&node_name, role.into(), run_id)
                     .await?;
                 tracing::info!(
                     "assigned node={} role={} run_id={}",
-                    node_id,
+                    node_name,
                     WorkerRole::from(role),
                     run_id
                 );
             }
-            NodeCommand::Unassign { node_id } => {
-                store.clear_desired_assignment(&node_id).await?;
-                tracing::info!("unassigned node={}", node_id);
+            NodeCommand::Unassign { node_name } => {
+                store.clear_desired_assignment(&node_name).await?;
+                tracing::info!("unassigned node={}", node_name);
             }
-            NodeCommand::List { node_id } => {
-                let nodes = store.list_nodes(node_id.as_deref()).await?;
+            NodeCommand::List { node_name } => {
+                let nodes = store.list_nodes(node_name.as_deref()).await?;
                 print_node_table(build_node_rows(nodes));
             }
             NodeCommand::Stop(selection) => stop_nodes(&store, selection).await?,
@@ -76,16 +76,17 @@ async fn stop_nodes(store: &PgStore, selection: NodeSelection) -> Result<()> {
         return Ok(());
     }
 
-    for node_id in selection.node_ids {
-        let rows = store.request_node_shutdown(&node_id).await?;
-        tracing::info!("requested shutdown for node={node_id}: rows_updated={rows}");
+    for node_name in selection.node_names {
+        let rows = store.request_node_shutdown(&node_name).await?;
+        tracing::info!("requested shutdown for node={node_name}: rows_updated={rows}");
     }
     Ok(())
 }
 
 #[derive(Debug)]
 struct NodeRow {
-    node_id: String,
+    node_name: String,
+    node_uuid: String,
     run: String,
     role: String,
     last_seen: String,
@@ -95,7 +96,8 @@ fn build_node_rows(nodes: Vec<RegisteredNode>) -> Vec<NodeRow> {
     nodes
         .into_iter()
         .map(|node| NodeRow {
-            node_id: node.node_id,
+            node_name: node.name,
+            node_uuid: node.uuid,
             run: node
                 .desired_assignment
                 .as_ref()
@@ -120,14 +122,21 @@ fn print_node_table(rows: Vec<NodeRow>) {
     let mut table = Table::new();
     table.set_content_arrangement(ContentArrangement::Dynamic);
     table.set_header(vec![
-        Cell::new("ID").set_alignment(CellAlignment::Center),
+        Cell::new("Name").set_alignment(CellAlignment::Center),
+        Cell::new("UUID").set_alignment(CellAlignment::Center),
         Cell::new("Run").set_alignment(CellAlignment::Center),
         Cell::new("Role").set_alignment(CellAlignment::Center),
         Cell::new("Last Seen").set_alignment(CellAlignment::Center),
     ]);
 
     for row in rows {
-        table.add_row(vec![row.node_id, row.run, row.role, row.last_seen]);
+        table.add_row(vec![
+            row.node_name,
+            row.node_uuid,
+            row.run,
+            row.role,
+            row.last_seen,
+        ]);
     }
 
     println!("{table}");

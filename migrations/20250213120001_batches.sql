@@ -15,8 +15,9 @@ CREATE TABLE IF NOT EXISTS batches (
     status TEXT NOT NULL DEFAULT 'pending',
     -- Status: 'pending', 'claimed', 'completed', 'failed'
 
-    claimed_by TEXT,
-    -- Worker ID that claimed this batch
+    claimed_by_node_name TEXT,
+    claimed_by_node_uuid TEXT,
+    -- Live node owner that claimed this batch
 
     claimed_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,

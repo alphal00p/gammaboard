@@ -646,8 +646,8 @@ pub(crate) async fn get_registered_workers(
     let rows = sqlx::query_as::<_, RegisteredWorkerRow>(
         r#"
         SELECT
-            n.node_id AS worker_id,
-            n.node_id,
+            n.name AS worker_id,
+            n.uuid AS node_id,
             n.desired_run_id,
             n.desired_role,
             n.active_run_id AS current_run_id,
@@ -667,10 +667,10 @@ pub(crate) async fn get_registered_workers(
         FROM nodes n
         LEFT JOIN sampler_aggregator_performance_latest p
             ON p.run_id = COALESCE($1, n.active_run_id, n.desired_run_id)
-           AND p.worker_id = n.node_id
+           AND p.worker_id = n.name
         LEFT JOIN evaluator_performance_latest e
             ON e.run_id = COALESCE($1, n.active_run_id, n.desired_run_id)
-           AND e.worker_id = n.node_id
+           AND e.worker_id = n.name
         WHERE ($1::int IS NULL OR n.desired_run_id = $1 OR n.active_run_id = $1)
         ORDER BY
             CASE
@@ -678,7 +678,7 @@ pub(crate) async fn get_registered_workers(
                 ELSE 1
             END,
             n.last_seen DESC NULLS LAST,
-            n.node_id ASC
+            n.name ASC
         "#,
     )
     .bind(run_id)

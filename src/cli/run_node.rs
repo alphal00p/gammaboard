@@ -7,7 +7,7 @@ use std::time::Duration;
 #[derive(Debug, Args)]
 pub struct RunNodeArgs {
     #[arg(long)]
-    node_id: String,
+    name: String,
     #[arg(long, default_value_t = 1000)]
     poll_ms: u64,
     #[arg(long, default_value_t = 3)]
@@ -17,17 +17,17 @@ pub struct RunNodeArgs {
 }
 
 pub async fn run_node(args: RunNodeArgs, quiet: bool) -> Result<()> {
-    let node_id = args.node_id.clone();
+    let node_name = args.name.clone();
     let span = tracing::span!(
         tracing::Level::TRACE,
         "run-node",
         source = "worker",
-        node_id = %node_id
+        node_name = %node_name
     );
     with_cli_store(args.db_pool_size, quiet, span, |store| async move {
         let node_runner = NodeRunner::new(
             store,
-            node_id,
+            node_name,
             NodeRunnerConfig {
                 min_tick_time: Duration::from_millis(args.poll_ms),
                 max_consecutive_start_failures: args.max_start_failures,

@@ -113,7 +113,8 @@ pub enum RunnerError {
 
 pub struct SamplerAggregatorRunner<S> {
     run_id: i32,
-    node_id: String,
+    node_name: String,
+    _node_uuid: String,
     task: RunTask,
     sampler: Box<dyn SamplerAggregator>,
     observable_state: ObservableState,
@@ -331,7 +332,8 @@ where
 
     pub async fn new(
         run_id: i32,
-        node_id: impl Into<String>,
+        node_name: impl Into<String>,
+        node_uuid: impl Into<String>,
         task: RunTask,
         store: S,
         config: SamplerAggregatorRunnerParams,
@@ -494,7 +496,8 @@ where
 
         Ok(Self {
             run_id,
-            node_id: node_id.into(),
+            node_name: node_name.into(),
+            _node_uuid: node_uuid.into(),
             task,
             sampler,
             observable_state,
@@ -521,6 +524,7 @@ where
     }
 
     pub async fn tick(&mut self) -> Result<bool, RunnerError> {
+        self.store.reclaim_abandoned_batches(self.run_id).await?;
         let pending_before_tick = self
             .store
             .get_pending_batch_count(self.run_id)
@@ -798,7 +802,7 @@ where
 
         let snapshot = SamplerAggregatorPerformanceSnapshot {
             run_id: self.run_id,
-            node_id: self.node_id.clone(),
+            node_id: self.node_name.clone(),
             runtime_metrics: self.runtime_state.to_runtime_metrics(),
             engine_diagnostics: self.sampler.get_diagnostics(),
         };

@@ -254,46 +254,40 @@ impl RunSpecStore for PgStore {
 impl ControlPlaneStore for PgStore {
     async fn upsert_desired_assignment(
         &self,
-        node_id: &str,
+        node_name: &str,
         role: WorkerRole,
         run_id: i32,
     ) -> Result<(), StoreError> {
-        queries::upsert_desired_assignment(&self.pool, node_id, role, run_id)
+        queries::upsert_desired_assignment(&self.pool, node_name, role, run_id)
             .await
             .map_err(map_sqlx)
     }
 
-    async fn register_node(&self, node_id: &str) -> Result<(), StoreError> {
-        queries::register_node(&self.pool, node_id)
-            .await
-            .map_err(map_sqlx)
-    }
-
-    async fn heartbeat_node(&self, node_id: &str) -> Result<(), StoreError> {
-        queries::heartbeat_node(&self.pool, node_id)
+    async fn announce_node(&self, node_name: &str, node_uuid: &str) -> Result<(), StoreError> {
+        queries::announce_node(&self.pool, node_name, node_uuid)
             .await
             .map_err(map_sqlx)
     }
 
     async fn set_current_assignment(
         &self,
-        node_id: &str,
+        node_uuid: &str,
         role: WorkerRole,
         run_id: i32,
     ) -> Result<(), StoreError> {
-        queries::set_current_assignment(&self.pool, node_id, role, run_id)
+        queries::set_current_assignment(&self.pool, node_uuid, role, run_id)
             .await
             .map_err(map_sqlx)
     }
 
-    async fn clear_current_assignment(&self, node_id: &str) -> Result<(), StoreError> {
-        queries::clear_current_assignment(&self.pool, node_id)
+    async fn clear_current_assignment(&self, node_uuid: &str) -> Result<(), StoreError> {
+        queries::clear_current_assignment(&self.pool, node_uuid)
             .await
             .map_err(map_sqlx)
     }
 
-    async fn clear_desired_assignment(&self, node_id: &str) -> Result<(), StoreError> {
-        queries::clear_desired_assignment(&self.pool, node_id)
+    async fn clear_desired_assignment(&self, node_name: &str) -> Result<(), StoreError> {
+        queries::clear_desired_assignment(&self.pool, node_name)
             .await
             .map_err(map_sqlx)
     }
@@ -312,15 +306,15 @@ impl ControlPlaneStore for PgStore {
 
     async fn get_desired_assignment(
         &self,
-        node_id: &str,
+        node_name: &str,
     ) -> Result<Option<DesiredAssignment>, StoreError> {
-        let assignment = queries::get_desired_assignment(&self.pool, node_id)
+        let assignment = queries::get_desired_assignment(&self.pool, node_name)
             .await
             .map_err(map_sqlx)?;
         assignment
             .map(|row| {
                 Ok(DesiredAssignment {
-                    node_id: row.node_id,
+                    node_name: row.node_name,
                     role: row.role.parse().map_err(store_err)?,
                     run_id: row.run_id,
                 })
@@ -330,15 +324,15 @@ impl ControlPlaneStore for PgStore {
 
     async fn list_desired_assignments(
         &self,
-        node_id: Option<&str>,
+        node_name: Option<&str>,
     ) -> Result<Vec<DesiredAssignment>, StoreError> {
-        let rows = queries::list_desired_assignments(&self.pool, node_id)
+        let rows = queries::list_desired_assignments(&self.pool, node_name)
             .await
             .map_err(map_sqlx)?;
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             out.push(DesiredAssignment {
-                node_id: row.node_id,
+                node_name: row.node_name,
                 role: row.role.parse().map_err(store_err)?,
                 run_id: row.run_id,
             });
@@ -346,15 +340,15 @@ impl ControlPlaneStore for PgStore {
         Ok(out)
     }
 
-    async fn list_nodes(&self, node_id: Option<&str>) -> Result<Vec<RegisteredNode>, StoreError> {
-        let rows = queries::list_nodes(&self.pool, node_id)
+    async fn list_nodes(&self, node_name: Option<&str>) -> Result<Vec<RegisteredNode>, StoreError> {
+        let rows = queries::list_nodes(&self.pool, node_name)
             .await
             .map_err(map_sqlx)?;
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             let desired_assignment = match (row.desired_role, row.desired_run_id) {
                 (Some(role), Some(run_id)) => Some(DesiredAssignment {
-                    node_id: row.node_id.clone(),
+                    node_name: row.name.clone(),
                     role: role.parse().map_err(store_err)?,
                     run_id,
                 }),
@@ -363,7 +357,7 @@ impl ControlPlaneStore for PgStore {
             };
             let current_assignment = match (row.current_role, row.current_run_id) {
                 (Some(role), Some(run_id)) => Some(DesiredAssignment {
-                    node_id: row.node_id.clone(),
+                    node_name: row.name.clone(),
                     role: role.parse().map_err(store_err)?,
                     run_id,
                 }),
@@ -371,7 +365,8 @@ impl ControlPlaneStore for PgStore {
                 _ => return Err(store_err("invalid current node assignment row")),
             };
             out.push(RegisteredNode {
-                node_id: row.node_id,
+                name: row.name,
+                uuid: row.uuid,
                 desired_assignment,
                 current_assignment,
                 last_seen: row.last_seen,
@@ -380,8 +375,8 @@ impl ControlPlaneStore for PgStore {
         Ok(out)
     }
 
-    async fn request_node_shutdown(&self, node_id: &str) -> Result<u64, StoreError> {
-        queries::request_node_shutdown(&self.pool, node_id)
+    async fn request_node_shutdown(&self, node_name: &str) -> Result<u64, StoreError> {
+        queries::request_node_shutdown(&self.pool, node_name)
             .await
             .map_err(map_sqlx)
     }
@@ -392,8 +387,14 @@ impl ControlPlaneStore for PgStore {
             .map_err(map_sqlx)
     }
 
-    async fn consume_node_shutdown_request(&self, node_id: &str) -> Result<bool, StoreError> {
-        queries::consume_node_shutdown_request(&self.pool, node_id)
+    async fn consume_node_shutdown_request(&self, node_uuid: &str) -> Result<bool, StoreError> {
+        queries::consume_node_shutdown_request(&self.pool, node_uuid)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn expire_node_lease(&self, node_uuid: &str) -> Result<(), StoreError> {
+        queries::expire_node_lease(&self.pool, node_uuid)
             .await
             .map_err(map_sqlx)
     }
@@ -495,9 +496,9 @@ impl WorkQueueStore for PgStore {
     async fn claim_batch(
         &self,
         run_id: i32,
-        node_id: &str,
+        node_uuid: &str,
     ) -> Result<Option<BatchClaim>, StoreError> {
-        let claimed = queries::claim_batch(&self.pool, run_id, node_id)
+        let claimed = queries::claim_batch(&self.pool, run_id, node_uuid)
             .await
             .map_err(map_sqlx)?;
 
@@ -511,9 +512,9 @@ impl WorkQueueStore for PgStore {
     async fn release_claimed_batches_for_worker(
         &self,
         run_id: i32,
-        node_id: &str,
+        node_uuid: &str,
     ) -> Result<u64, StoreError> {
-        queries::release_claimed_batches_for_worker(&self.pool, run_id, node_id)
+        queries::release_claimed_batches_for_worker(&self.pool, run_id, node_uuid)
             .await
             .map_err(map_sqlx)
     }
@@ -521,10 +522,11 @@ impl WorkQueueStore for PgStore {
     async fn submit_batch_results(
         &self,
         batch_id: i64,
+        node_uuid: &str,
         result: &BatchResult,
         eval_time_ms: f64,
     ) -> Result<(), StoreError> {
-        queries::submit_batch_results(&self.pool, batch_id, result, eval_time_ms)
+        queries::submit_batch_results(&self.pool, batch_id, node_uuid, result, eval_time_ms)
             .await
             .map_err(map_sqlx)
     }
@@ -591,6 +593,12 @@ impl WorkQueueStore for PgStore {
     }
     async fn delete_completed_batches(&self, batch_ids: &[i64]) -> Result<(), StoreError> {
         queries::delete_completed_batches(&self.pool, batch_ids)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn reclaim_abandoned_batches(&self, run_id: i32) -> Result<u64, StoreError> {
+        queries::reclaim_abandoned_batches(&self.pool, run_id)
             .await
             .map_err(map_sqlx)
     }

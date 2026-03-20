@@ -31,10 +31,10 @@ pub struct RunSelection {
 
 #[derive(Debug, Args)]
 pub struct NodeSelection {
-    #[arg(short = 'a', long = "all", conflicts_with = "node_ids")]
+    #[arg(short = 'a', long = "all", conflicts_with = "node_names")]
     pub all: bool,
-    #[arg(value_name = "NODE_ID", required_unless_present = "all")]
-    pub node_ids: Vec<String>,
+    #[arg(value_name = "NODE_NAME", required_unless_present = "all")]
+    pub node_names: Vec<String>,
 }
 
 fn env_true(name: &str) -> bool {

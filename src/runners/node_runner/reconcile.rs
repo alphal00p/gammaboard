@@ -8,7 +8,7 @@ use tracing::{error, info, warn};
 
 impl<S: NodeRunnerStore> NodeRunner<S> {
     pub(super) async fn resolve_desired_target(&self) -> Result<Option<RoleTarget>, StoreError> {
-        let assignment = self.store.get_desired_assignment(&self.node_id).await?;
+        let assignment = self.store.get_desired_assignment(&self.node_name).await?;
         Ok(assignment.map(|assignment| RoleTarget {
             role: assignment.role,
             run_id: assignment.run_id,
@@ -67,7 +67,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             tracing::Level::TRACE,
             "role_runner_context",
             run_id = target.run_id,
-            node_id = %self.node_id,
+            node_name = %self.node_name,
+            node_uuid = %self.node_uuid,
             role = %target.role
         );
         let role_scope_span = context_span.clone();
@@ -76,7 +77,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
         let worker = ActiveWorker::new(
             self.store.clone(),
-            self.node_id.clone(),
+            self.node_name.clone(),
+            self.node_uuid.clone(),
             target.role,
             target.run_id,
         );
@@ -97,7 +99,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
     ) -> Result<Option<Box<dyn RoleRunner>>, StoreError> {
         let worker = ActiveWorker::new(
             self.store.clone(),
-            self.node_id.clone(),
+            self.node_name.clone(),
+            self.node_uuid.clone(),
             target.role,
             target.run_id,
         );
@@ -122,7 +125,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         info!("evaluator worker started");
         Ok(Some(Box::new(EvaluatorRunner::new(
             worker.run_id,
-            worker.node_id.clone(),
+            worker.node_name.clone(),
+            worker.node_uuid.clone(),
             evaluator,
             spec.point_spec.clone(),
             std::time::Duration::from_millis(
@@ -204,7 +208,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
         let mut runner = SamplerAggregatorRunner::new(
             worker.run_id,
-            worker.node_id.clone(),
+            worker.node_name.clone(),
+            worker.node_uuid.clone(),
             task,
             worker.store.clone(),
             spec.sampler_aggregator_runner_params.clone(),

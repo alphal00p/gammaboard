@@ -30,7 +30,8 @@ pub enum EvaluatorRunnerError {
 
 pub struct EvaluatorRunner<S> {
     run_id: i32,
-    node_id: String,
+    node_name: String,
+    node_uuid: String,
     evaluator: Box<dyn Evaluator>,
     point_spec: PointSpec,
     performance_snapshot_interval: Duration,
@@ -83,7 +84,8 @@ where
 
     pub fn new(
         run_id: i32,
-        node_id: impl Into<String>,
+        node_name: impl Into<String>,
+        node_uuid: impl Into<String>,
         evaluator: Box<dyn Evaluator>,
         point_spec: PointSpec,
         performance_snapshot_interval: Duration,
@@ -92,7 +94,8 @@ where
         let now_instant = Instant::now();
         Self {
             run_id,
-            node_id: node_id.into(),
+            node_name: node_name.into(),
+            node_uuid: node_uuid.into(),
             evaluator,
             point_spec,
             performance_snapshot_interval,
@@ -111,7 +114,7 @@ where
         let loop_started = Instant::now();
         let claimed = self
             .store
-            .claim_batch(self.run_id, &self.node_id)
+            .claim_batch(self.run_id, &self.node_uuid)
             .await
             .map_err(EvaluatorRunnerError::Store)?;
 
@@ -268,7 +271,7 @@ where
         }
 
         self.store
-            .submit_batch_results(batch_id, &result, total_time_ms)
+            .submit_batch_results(batch_id, &self.node_uuid, &result, total_time_ms)
             .await
             .map_err(EvaluatorRunnerError::Store)?;
 
@@ -342,7 +345,7 @@ where
 
         let snapshot = EvaluatorPerformanceSnapshot {
             run_id: self.run_id,
-            node_id: self.node_id.clone(),
+            node_id: self.node_name.clone(),
             metrics: EvaluatorPerformanceMetrics {
                 batches_completed: self.batches_completed_total,
                 samples_evaluated: self.samples_evaluated_total,

@@ -27,7 +27,7 @@ pub async fn run_auto_assign_command(args: AutoAssignArgs, quiet: bool) -> Resul
         let free_nodes = nodes
             .iter()
             .filter(|node| node.desired_assignment.is_none())
-            .map(|node| node.node_id.clone())
+            .map(|node| node.name.clone())
             .collect::<Vec<_>>();
         let sampler_already_assigned = nodes.iter().any(|node| {
             node.desired_assignment.as_ref().is_some_and(|assignment| {
@@ -41,19 +41,23 @@ pub async fn run_auto_assign_command(args: AutoAssignArgs, quiet: bool) -> Resul
         let mut free_iter = free_nodes.into_iter();
 
         if !sampler_already_assigned {
-            if let Some(node_id) = free_iter.next() {
+            if let Some(node_name) = free_iter.next() {
                 store
-                    .upsert_desired_assignment(&node_id, WorkerRole::SamplerAggregator, args.run_id)
+                    .upsert_desired_assignment(
+                        &node_name,
+                        WorkerRole::SamplerAggregator,
+                        args.run_id,
+                    )
                     .await?;
-                assigned_sampler = Some(node_id);
+                assigned_sampler = Some(node_name);
             }
         }
 
-        for node_id in free_iter.take(evaluator_limit) {
+        for node_name in free_iter.take(evaluator_limit) {
             store
-                .upsert_desired_assignment(&node_id, WorkerRole::Evaluator, args.run_id)
+                .upsert_desired_assignment(&node_name, WorkerRole::Evaluator, args.run_id)
                 .await?;
-            assigned_evaluators.push(node_id);
+            assigned_evaluators.push(node_name);
         }
 
         tracing::info!(

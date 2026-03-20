@@ -85,13 +85,18 @@ pub(crate) async fn get_open_batch_count(pool: &PgPool, run_id: i32) -> Result<i
 pub(crate) async fn claim_batch(
     pool: &PgPool,
     run_id: i32,
-    node_id: &str,
+    node_uuid: &str,
 ) -> Result<Option<(i64, i64, LatentBatch)>, sqlx::Error> {
     let row = sqlx::query_as::<_, (i64, i64, JsonValue)>(
         r#"
         UPDATE batches
         SET status = 'claimed',
-            claimed_by = $1,
+            claimed_by_node_name = (
+                SELECT n.name
+                FROM nodes n
+                WHERE n.uuid = $1
+            ),
+            claimed_by_node_uuid = $1,
             claimed_at = now()
         WHERE id IN (
             SELECT id FROM batches
@@ -100,9 +105,10 @@ pub(crate) async fn claim_batch(
               AND EXISTS (
                   SELECT 1
                   FROM nodes n
-                  WHERE n.node_id = $1
+                  WHERE n.uuid = $1
                     AND n.active_run_id = $2
                     AND n.active_role = 'evaluator'
+                    AND n.lease_expires_at > now()
               )
             ORDER BY created_at
             LIMIT 1
@@ -111,7 +117,7 @@ pub(crate) async fn claim_batch(
         RETURNING id, task_id, latent_batch
         "#,
     )
-    .bind(node_id)
+    .bind(node_uuid)
     .bind(run_id)
     .fetch_optional(pool)
     .await?;
@@ -128,21 +134,22 @@ pub(crate) async fn claim_batch(
 pub(crate) async fn release_claimed_batches_for_worker(
     pool: &PgPool,
     run_id: i32,
-    node_id: &str,
+    node_uuid: &str,
 ) -> Result<u64, sqlx::Error> {
     let result = sqlx::query(
         r#"
         UPDATE batches
         SET status = 'pending',
-            claimed_by = NULL,
+            claimed_by_node_name = NULL,
+            claimed_by_node_uuid = NULL,
             claimed_at = NULL
         WHERE run_id = $1
           AND status = 'claimed'
-          AND claimed_by = $2
+          AND claimed_by_node_uuid = $2
         "#,
     )
     .bind(run_id)
-    .bind(node_id)
+    .bind(node_uuid)
     .execute(pool)
     .await?;
     Ok(result.rows_affected())
@@ -151,11 +158,12 @@ pub(crate) async fn release_claimed_batches_for_worker(
 pub(crate) async fn submit_batch_results(
     pool: &PgPool,
     batch_id: i64,
+    node_uuid: &str,
     result: &BatchResult,
     eval_time_ms: f64,
 ) -> Result<(), sqlx::Error> {
     let observable = encode_json("batch observable", &result.observable)?;
-    sqlx::query(
+    let result = sqlx::query(
         r#"
         UPDATE batches
         SET status = 'completed',
@@ -164,15 +172,55 @@ pub(crate) async fn submit_batch_results(
             total_eval_time_ms = $3,
             completed_at = now()
         WHERE id = $4
+          AND claimed_by_node_uuid = $5
         "#,
     )
     .bind(result.values_to_json())
     .bind(observable)
     .bind(eval_time_ms)
     .bind(batch_id)
+    .bind(node_uuid)
     .execute(pool)
     .await?;
+    if result.rows_affected() == 0 {
+        return Err(sqlx::Error::Protocol(format!(
+            "batch {batch_id} is no longer owned by node uuid '{node_uuid}'"
+        )));
+    }
     Ok(())
+}
+
+pub(crate) async fn reclaim_abandoned_batches(
+    pool: &PgPool,
+    run_id: i32,
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        r#"
+        UPDATE batches b
+        SET
+            status = 'pending',
+            claimed_by_node_name = NULL,
+            claimed_by_node_uuid = NULL,
+            claimed_at = NULL,
+            retry_count = COALESCE(retry_count, 0) + 1,
+            last_error = 'abandoned evaluator claim reclaimed'
+        WHERE b.run_id = $1
+          AND b.status = 'claimed'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM nodes n
+              WHERE n.name = b.claimed_by_node_name
+                AND n.uuid = b.claimed_by_node_uuid
+                AND n.active_run_id = b.run_id
+                AND n.active_role = 'evaluator'
+                AND n.lease_expires_at > now()
+          )
+        "#,
+    )
+    .bind(run_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
 }
 
 pub(crate) async fn insert_evaluator_performance_snapshot(
