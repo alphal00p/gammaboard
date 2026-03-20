@@ -243,15 +243,58 @@ fn json_value_panel(panel_id: &str, value: &JsonValue) -> Result<Option<PanelSta
     let Some(object) = value.as_object() else {
         return Ok(None);
     };
-    let entries = object
-        .iter()
-        .filter(|(key, _)| key.as_str() != "kind")
-        .map(|(key, value)| key_value(key, &title_label(key), value.clone()))
-        .collect::<Vec<_>>();
+    let mut entries = Vec::new();
+    for (key, value) in object.iter().filter(|(key, _)| key.as_str() != "kind") {
+        collect_json_entries(key, &title_label(key), value, &mut entries);
+    }
     if entries.is_empty() {
         return Ok(None);
     }
     Ok(Some(key_value_panel(panel_id, entries)))
+}
+
+fn collect_json_entries(
+    key_prefix: &str,
+    label_prefix: &str,
+    value: &JsonValue,
+    entries: &mut Vec<crate::server::panels::KeyValueEntry>,
+) {
+    match value {
+        JsonValue::Object(object) => {
+            for (key, child) in object {
+                let next_key = format!("{key_prefix}.{key}");
+                let next_label = format!("{label_prefix} {}", title_label(key));
+                collect_json_entries(&next_key, &next_label, child, entries);
+            }
+        }
+        JsonValue::Array(values) => {
+            let rendered = values
+                .iter()
+                .map(compact_json_value)
+                .collect::<Vec<_>>()
+                .join(", ");
+            entries.push(key_value(key_prefix, label_prefix, format!("[{rendered}]")));
+        }
+        _ => entries.push(key_value(key_prefix, label_prefix, value.clone())),
+    }
+}
+
+fn compact_json_value(value: &JsonValue) -> String {
+    match value {
+        JsonValue::Null => "none".to_string(),
+        JsonValue::Bool(value) => value.to_string(),
+        JsonValue::Number(value) => value.to_string(),
+        JsonValue::String(value) => value.clone(),
+        JsonValue::Array(values) => {
+            let rendered = values
+                .iter()
+                .map(compact_json_value)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[{rendered}]")
+        }
+        JsonValue::Object(_) => serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()),
+    }
 }
 
 fn title_label(key: &str) -> String {
