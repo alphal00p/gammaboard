@@ -231,19 +231,6 @@ impl PanelState {
             | Self::Text { panel_id, .. } => panel_id,
         }
     }
-
-    pub fn kind(&self) -> PanelKind {
-        match self {
-            Self::ScalarTimeseries { .. } => PanelKind::ScalarTimeseries,
-            Self::MultiTimeseries { .. } => PanelKind::MultiTimeseries,
-            Self::Image2d { .. } => PanelKind::Image2d,
-            Self::Progress { .. } => PanelKind::Progress,
-            Self::KeyValue { .. } => PanelKind::KeyValue,
-            Self::Table { .. } => PanelKind::Table,
-            Self::Histogram { .. } => PanelKind::Histogram,
-            Self::Text { .. } => PanelKind::Text,
-        }
-    }
 }
 
 pub(crate) fn merge_panel_state(target: &mut PanelState, delta: PanelState) {

@@ -143,6 +143,9 @@ export const fetchNodes = async (runId = null, signal) => {
   return asArray(data).map(normalizeWorkerEntry).filter(Boolean);
 };
 
+export const fetchNodePanels = async (nodeId, signal) =>
+  apiGet(`/nodes/${nodeId}/panels`, "Failed to fetch node panels", signal);
+
 export const fetchStats = async (runId, signal) => {
   return apiGet(`/runs/${runId}/stats`, "Failed to fetch stats", signal);
 };

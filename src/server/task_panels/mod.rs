@@ -53,8 +53,6 @@ pub struct TaskPanelContext<'a> {
 }
 
 pub struct TaskPanelHistoryContext<'a> {
-    pub task: &'a RunTask,
-    pub run_spec: &'a RunSpec,
     pub snapshot: &'a TaskOutputSnapshot,
 }
 
@@ -65,10 +63,6 @@ pub struct TaskPanelSource {
 impl TaskPanelProjector {
     pub fn spec(&self) -> &PanelSpec {
         &self.spec
-    }
-
-    pub fn into_spec(self) -> PanelSpec {
-        self.spec
     }
 
     pub fn current(&self, ctx: &TaskPanelContext<'_>) -> Result<Option<PanelState>, EngineError> {
@@ -216,14 +210,7 @@ impl TaskPanelSource {
             .iter()
             .rev()
             .map(|snapshot| {
-                project_history_panels(
-                    &self.projectors,
-                    &TaskPanelHistoryContext {
-                        task,
-                        run_spec,
-                        snapshot,
-                    },
-                )
+                project_history_panels(&self.projectors, &TaskPanelHistoryContext { snapshot })
             })
             .collect::<Result<Vec<_>, _>>()?;
         let cursor = history_snapshots

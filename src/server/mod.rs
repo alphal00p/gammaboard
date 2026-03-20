@@ -2,6 +2,7 @@ mod config_panels;
 mod panels;
 mod performance_panels;
 mod task_panels;
+mod worker_panels;
 
 use crate::core::{AggregationStore, RunReadStore, RunSpecStore, RunTaskStore, StoreError};
 use crate::evaluation::ObservableState;
@@ -13,6 +14,7 @@ use crate::server::performance_panels::{
     build_evaluator_performance_response, build_sampler_performance_response,
 };
 use crate::server::task_panels::TaskPanelSource;
+use crate::server::worker_panels::build_worker_panel_response;
 use crate::stores::PgStore;
 use anyhow::Context;
 use axum::{
@@ -157,6 +159,7 @@ fn build_app(state: AppState) -> Router {
         .route("/health", get(health_check))
         .route("/runs", get(get_runs))
         .route("/nodes", get(get_nodes))
+        .route("/nodes/:id/panels", get(get_node_panels))
         .route("/runs/:id", get(get_run))
         .route("/runs/:id/tasks", get(get_run_tasks))
         .route("/runs/:id/config/evaluator", get(get_run_evaluator_config))
@@ -238,6 +241,22 @@ async fn get_nodes(
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let workers = state.store.get_registered_workers(params.run_id).await?;
     json_response(workers)
+}
+
+async fn get_node_panels(
+    State(state): State<AppState>,
+    AxumPath(node_id): AxumPath<String>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    let worker = state
+        .store
+        .get_registered_workers(None)
+        .await?
+        .into_iter()
+        .find(|worker| {
+            worker.node_id.as_deref() == Some(node_id.as_str()) || worker.worker_id == node_id
+        })
+        .ok_or_else(|| ApiError::NotFound(format!("node {node_id} not found")))?;
+    json_response(build_worker_panel_response(&worker))
 }
 
 async fn get_run(
@@ -330,9 +349,6 @@ async fn get_run_task_output(
         .await?
         .into_iter()
         .next();
-    let latest_snapshot_id = latest_persisted_snapshot
-        .as_ref()
-        .map(|snapshot| snapshot.id.clone());
     let latest_stage_snapshot = state
         .store
         .get_latest_task_stage_snapshot(run_id, task.id)
