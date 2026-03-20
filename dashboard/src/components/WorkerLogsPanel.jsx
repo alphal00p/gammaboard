@@ -113,7 +113,7 @@ const WorkerLogsPanel = ({
 
       {error ? (
         <Alert severity="error" sx={{ mb: 1.5 }}>
-          Failed to fetch logs.
+          {error?.message || "Failed to fetch logs."}
         </Alert>
       ) : null}
 

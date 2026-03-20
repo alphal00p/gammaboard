@@ -2,8 +2,8 @@ use crate::core::{EngineError, EvaluatorConfig, SamplerAggregatorConfig};
 use crate::evaluation::PointSpec;
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use crate::server::panels::{
-    PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, key_value, key_value_panel,
-    panel_spec, replace_panel,
+    PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelWidth, key_value,
+    key_value_panel, panel_spec, replace_panel, with_panel_width,
 };
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -46,20 +46,27 @@ impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
             PanelKind::KeyValue,
             PanelHistoryMode::None,
         )];
+        panels[0].width = PanelWidth::Half;
         if has_object_fields(self) {
-            panels.push(panel_spec(
-                "evaluator_config",
-                "Evaluator Config",
-                PanelKind::KeyValue,
-                PanelHistoryMode::None,
+            panels.push(with_panel_width(
+                panel_spec(
+                    "evaluator_config",
+                    "Evaluator Config",
+                    PanelKind::KeyValue,
+                    PanelHistoryMode::None,
+                ),
+                PanelWidth::Full,
             ));
         }
         if ctx.init_metadata.is_some_and(json_has_object_fields) {
-            panels.push(panel_spec(
-                "evaluator_init_metadata",
-                "Evaluator Init Metadata",
-                PanelKind::KeyValue,
-                PanelHistoryMode::None,
+            panels.push(with_panel_width(
+                panel_spec(
+                    "evaluator_init_metadata",
+                    "Evaluator Init Metadata",
+                    PanelKind::KeyValue,
+                    PanelHistoryMode::None,
+                ),
+                PanelWidth::Full,
             ));
         }
         panels
@@ -122,12 +129,16 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
             PanelKind::KeyValue,
             PanelHistoryMode::None,
         )];
+        panels[0].width = PanelWidth::Half;
         if has_object_fields(self) {
-            panels.push(panel_spec(
-                "sampler_config",
-                "Sampler Aggregator Config",
-                PanelKind::KeyValue,
-                PanelHistoryMode::None,
+            panels.push(with_panel_width(
+                panel_spec(
+                    "sampler_config",
+                    "Sampler Aggregator Config",
+                    PanelKind::KeyValue,
+                    PanelHistoryMode::None,
+                ),
+                PanelWidth::Full,
             ));
         }
         panels

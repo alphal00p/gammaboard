@@ -1,7 +1,7 @@
 use crate::core::{EvaluatorPerformanceMetrics, SamplerRuntimeMetrics};
 use crate::server::panels::{
-    PanelHistoryMode, PanelKind, PanelResponse, PanelState, key_value, key_value_panel, panel_spec,
-    replace_panel,
+    PanelHistoryMode, PanelKind, PanelResponse, PanelState, PanelWidth, key_value, key_value_panel,
+    panel_spec, replace_panel, with_panel_width,
 };
 use crate::stores::RegisteredWorkerEntry;
 use serde_json::Value as JsonValue;
@@ -24,89 +24,119 @@ pub fn build_worker_panel_response(worker: &RegisteredWorkerEntry) -> PanelRespo
 }
 
 fn worker_panel_specs(worker: &RegisteredWorkerEntry) -> Vec<crate::server::panels::PanelSpec> {
-    let mut panels = vec![panel_spec(
-        "worker_overview",
-        "Node Overview",
-        PanelKind::KeyValue,
-        PanelHistoryMode::None,
+    let mut panels = vec![with_panel_width(
+        panel_spec(
+            "worker_overview",
+            "Node Overview",
+            PanelKind::KeyValue,
+            PanelHistoryMode::None,
+        ),
+        PanelWidth::Half,
     )];
 
     match worker.current_role.as_deref() {
         Some("evaluator") => {
             if worker.evaluator_metrics.is_some() {
-                panels.push(panel_spec(
-                    "evaluator_metrics",
-                    "Evaluator Metrics",
-                    PanelKind::KeyValue,
-                    PanelHistoryMode::None,
+                panels.push(with_panel_width(
+                    panel_spec(
+                        "evaluator_metrics",
+                        "Evaluator Metrics",
+                        PanelKind::KeyValue,
+                        PanelHistoryMode::None,
+                    ),
+                    PanelWidth::Half,
                 ));
             } else {
-                panels.push(panel_spec(
-                    "evaluator_metrics_status",
-                    "Evaluator Metrics",
-                    PanelKind::Text,
-                    PanelHistoryMode::None,
+                panels.push(with_panel_width(
+                    panel_spec(
+                        "evaluator_metrics_status",
+                        "Evaluator Metrics",
+                        PanelKind::Text,
+                        PanelHistoryMode::None,
+                    ),
+                    PanelWidth::Half,
                 ));
             }
         }
         Some("sampler_aggregator") => {
             if worker.sampler_metrics.is_some() {
-                panels.push(panel_spec(
-                    "sampler_metrics",
-                    "Sampler Aggregator Metrics",
-                    PanelKind::KeyValue,
-                    PanelHistoryMode::None,
+                panels.push(with_panel_width(
+                    panel_spec(
+                        "sampler_metrics",
+                        "Sampler Aggregator Metrics",
+                        PanelKind::KeyValue,
+                        PanelHistoryMode::None,
+                    ),
+                    PanelWidth::Half,
                 ));
             } else {
-                panels.push(panel_spec(
-                    "sampler_metrics_status",
-                    "Sampler Aggregator Metrics",
-                    PanelKind::Text,
-                    PanelHistoryMode::None,
+                panels.push(with_panel_width(
+                    panel_spec(
+                        "sampler_metrics_status",
+                        "Sampler Aggregator Metrics",
+                        PanelKind::Text,
+                        PanelHistoryMode::None,
+                    ),
+                    PanelWidth::Half,
                 ));
             }
 
             match decode_sampler_runtime_metrics(worker) {
                 Some(_) => {
-                    panels.push(panel_spec(
-                        "sampler_runtime",
-                        "Sampler Runtime Metrics",
-                        PanelKind::KeyValue,
-                        PanelHistoryMode::None,
+                    panels.push(with_panel_width(
+                        panel_spec(
+                            "sampler_runtime",
+                            "Sampler Runtime Metrics",
+                            PanelKind::KeyValue,
+                            PanelHistoryMode::None,
+                        ),
+                        PanelWidth::Half,
                     ));
                 }
                 None => {
-                    panels.push(panel_spec(
-                        "sampler_runtime_status",
-                        "Sampler Runtime Metrics",
-                        PanelKind::Text,
-                        PanelHistoryMode::None,
+                    panels.push(with_panel_width(
+                        panel_spec(
+                            "sampler_runtime_status",
+                            "Sampler Runtime Metrics",
+                            PanelKind::Text,
+                            PanelHistoryMode::None,
+                        ),
+                        PanelWidth::Half,
                     ));
                 }
             }
 
             if json_has_object_fields(worker.sampler_engine_diagnostics.as_ref()) {
-                panels.push(panel_spec(
-                    "sampler_diagnostics",
-                    "Sampler Diagnostics",
-                    PanelKind::KeyValue,
-                    PanelHistoryMode::None,
+                panels.push(with_panel_width(
+                    panel_spec(
+                        "sampler_diagnostics",
+                        "Sampler Diagnostics",
+                        PanelKind::KeyValue,
+                        PanelHistoryMode::None,
+                    ),
+                    PanelWidth::Full,
                 ));
             } else {
-                panels.push(panel_spec(
-                    "sampler_diagnostics_status",
-                    "Sampler Diagnostics",
-                    PanelKind::Text,
-                    PanelHistoryMode::None,
+                panels.push(with_panel_width(
+                    panel_spec(
+                        "sampler_diagnostics_status",
+                        "Sampler Diagnostics",
+                        PanelKind::Text,
+                        PanelHistoryMode::None,
+                    ),
+                    PanelWidth::Full,
                 ));
             }
         }
         _ => {
-            panels.push(panel_spec(
-                "worker_role_status",
-                "Role Details",
-                PanelKind::Text,
-                PanelHistoryMode::None,
+            panels.push(with_panel_width(
+                panel_spec(
+                    "worker_role_status",
+                    "Role Details",
+                    PanelKind::Text,
+                    PanelHistoryMode::None,
+                ),
+                PanelWidth::Half,
             ));
         }
     }

@@ -113,7 +113,7 @@ fn progress_projector(
     panel_projector(
         with_panel_width(
             panel_spec(panel_id, label, PanelKind::Progress, PanelHistoryMode::None),
-            PanelWidth::Compact,
+            PanelWidth::Full,
         ),
         move |ctx| {
             let processed = current_processed(ctx, total)?;

@@ -2,8 +2,8 @@ use super::{TaskPanelContext, TaskPanelHistoryContext, TaskPanelProjector, panel
 use crate::core::{EngineError, RunSpec};
 use crate::evaluation::{FullObservableProgress, ObservableState, SemanticObservableKind};
 use crate::server::panels::{
-    PanelHistoryMode, PanelKind, PanelState, PlotPoint, key_value, key_value_panel, panel_spec,
-    progress_panel, scalar_timeseries_panel, single_point_band,
+    PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, key_value, key_value_panel,
+    panel_spec, progress_panel, scalar_timeseries_panel, single_point_band, with_panel_width,
 };
 use serde_json::Value as JsonValue;
 
@@ -11,23 +11,26 @@ pub(super) fn projectors(run_spec: &RunSpec) -> Vec<TaskPanelProjector> {
     let observable_kind = run_spec.evaluator.observable_kind();
     let mut projectors = vec![
         sample_progress_projector(),
+        estimate_summary_projector(observable_kind),
         real_estimate_history_projector(observable_kind),
     ];
     if matches!(observable_kind, SemanticObservableKind::Complex) {
         projectors.push(imag_estimate_history_projector());
     }
     projectors.push(abs_signal_to_noise_history_projector(observable_kind));
-    projectors.push(estimate_summary_projector(observable_kind));
     projectors
 }
 
 fn sample_progress_projector() -> TaskPanelProjector {
     panel_projector(
-        panel_spec(
-            "sample_progress",
-            "Sample Progress",
-            PanelKind::Progress,
-            PanelHistoryMode::None,
+        with_panel_width(
+            panel_spec(
+                "sample_progress",
+                "Sample Progress",
+                PanelKind::Progress,
+                PanelHistoryMode::None,
+            ),
+            PanelWidth::Full,
         ),
         |ctx| {
             let current = sample_progress_value(ctx)?;
@@ -47,11 +50,14 @@ fn sample_progress_projector() -> TaskPanelProjector {
 
 fn real_estimate_history_projector(observable_kind: SemanticObservableKind) -> TaskPanelProjector {
     panel_projector(
-        panel_spec(
-            "real_estimate_history",
-            estimate_label(observable_kind),
-            PanelKind::ScalarTimeseries,
-            PanelHistoryMode::Append,
+        with_panel_width(
+            panel_spec(
+                "real_estimate_history",
+                estimate_label(observable_kind),
+                PanelKind::ScalarTimeseries,
+                PanelHistoryMode::Append,
+            ),
+            PanelWidth::Full,
         ),
         move |ctx| Ok(sample_observable(ctx, observable_kind)?.map(real_estimate_history_panel)),
         move |ctx| {
@@ -62,11 +68,14 @@ fn real_estimate_history_projector(observable_kind: SemanticObservableKind) -> T
 
 fn imag_estimate_history_projector() -> TaskPanelProjector {
     panel_projector(
-        panel_spec(
-            "imag_estimate_history",
-            "Imaginary Mean",
-            PanelKind::ScalarTimeseries,
-            PanelHistoryMode::Append,
+        with_panel_width(
+            panel_spec(
+                "imag_estimate_history",
+                "Imaginary Mean",
+                PanelKind::ScalarTimeseries,
+                PanelHistoryMode::Append,
+            ),
+            PanelWidth::Full,
         ),
         |ctx| {
             Ok(sample_observable(ctx, SemanticObservableKind::Complex)?
@@ -85,11 +94,14 @@ fn abs_signal_to_noise_history_projector(
     observable_kind: SemanticObservableKind,
 ) -> TaskPanelProjector {
     panel_projector(
-        panel_spec(
-            "abs_signal_to_noise_history",
-            "Mean(|x|)^2 / abs_err^2",
-            PanelKind::ScalarTimeseries,
-            PanelHistoryMode::Append,
+        with_panel_width(
+            panel_spec(
+                "abs_signal_to_noise_history",
+                "Mean(|x|)^2 / abs_err^2",
+                PanelKind::ScalarTimeseries,
+                PanelHistoryMode::Append,
+            ),
+            PanelWidth::Full,
         ),
         move |ctx| Ok(sample_observable(ctx, observable_kind)?.map(abs_signal_to_noise_panel)),
         move |ctx| {
@@ -100,11 +112,14 @@ fn abs_signal_to_noise_history_projector(
 
 fn estimate_summary_projector(observable_kind: SemanticObservableKind) -> TaskPanelProjector {
     panel_projector(
-        panel_spec(
-            "estimate_summary",
-            "Estimate Summary",
-            PanelKind::KeyValue,
-            PanelHistoryMode::None,
+        with_panel_width(
+            panel_spec(
+                "estimate_summary",
+                "Estimate Summary",
+                PanelKind::KeyValue,
+                PanelHistoryMode::None,
+            ),
+            PanelWidth::Half,
         ),
         move |ctx| Ok(sample_observable(ctx, observable_kind)?.map(estimate_summary_panel)),
         |_ctx| Ok(None),

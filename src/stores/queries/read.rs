@@ -587,8 +587,8 @@ pub(crate) async fn get_worker_logs(
             id,
             ts,
             run_id,
-            node_id AS node_uuid,
-            worker_id AS node_name,
+            node_uuid,
+            node_name,
             level,
             message,
             fields
