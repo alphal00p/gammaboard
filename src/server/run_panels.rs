@@ -192,8 +192,14 @@ fn queue_remaining_mean(metrics: &JsonValue) -> Option<f64> {
 fn kind_of(value: &impl serde::Serialize) -> String {
     serde_json::to_value(value)
         .ok()
-        .and_then(|value| value.get("kind").cloned())
-        .and_then(|value| value.as_str().map(str::to_string))
+        .and_then(|value| match value {
+            JsonValue::String(value) => Some(value),
+            JsonValue::Object(value) => value
+                .get("kind")
+                .and_then(JsonValue::as_str)
+                .map(str::to_string),
+            _ => None,
+        })
         .unwrap_or_else(|| "unknown".to_string())
 }
 

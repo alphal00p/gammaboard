@@ -5,18 +5,14 @@ import {
   Card,
   CardContent,
   FormControl,
+  Grid,
   LinearProgress,
   MenuItem,
   Select,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableRow,
   Typography,
 } from "@mui/material";
 import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { formatScientific } from "../../utils/formatters";
+import { formatCompactNumber, formatDateTime, formatScientific } from "../../utils/formatters";
 import { asArray } from "../../utils/collections";
 
 const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
@@ -69,6 +65,37 @@ const buildMultiSeriesData = (seriesList) => {
 const lineColors = ["#005f73", "#bb3e03", "#0a9396", "#ae2012", "#ca6702"];
 
 const bandColor = "rgba(10, 147, 150, 0.18)";
+
+const isIsoDateTime = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value);
+
+const renderStructuredValue = (value) => {
+  if (value == null) return "none";
+  if (typeof value === "number") return formatCompactNumber(value);
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "string") {
+    if (!value.trim()) return "none";
+    if (isIsoDateTime(value)) return formatDateTime(value, value);
+    return value;
+  }
+  return JSON.stringify(value);
+};
+
+const panelGridSize = (descriptor) => {
+  switch (descriptor?.kind) {
+    case "scalar_timeseries":
+    case "multi_timeseries":
+    case "image2d":
+    case "table":
+    case "histogram":
+      return { xs: 12 };
+    case "progress":
+    case "key_value":
+    case "text":
+    case "select":
+    default:
+      return { xs: 12, md: 6, xl: 4 };
+  }
+};
 
 const buildScalarBandData = (points) =>
   points.map((point) => ({
@@ -199,18 +226,44 @@ const KeyValuePanel = ({ title, state }) => (
       <Typography variant="subtitle1" sx={{ mb: 2 }}>
         {title}
       </Typography>
-      <Table size="small">
-        <TableBody>
-          {asArray(state?.entries).map((entry) => (
-            <TableRow key={entry.key}>
-              <TableCell>{entry.label}</TableCell>
-              <TableCell sx={{ fontFamily: "monospace" }}>
-                {typeof entry.value === "number" ? formatScientific(entry.value, 6) : JSON.stringify(entry.value)}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: {
+            xs: "minmax(0, 1fr)",
+            lg: "minmax(0, 1fr) minmax(0, 1fr)",
+          },
+          gap: 1.5,
+        }}
+      >
+        {asArray(state?.entries).map((entry) => (
+          <Box
+            key={entry.key}
+            sx={{
+              display: "grid",
+              gridTemplateColumns: "minmax(120px, 0.9fr) minmax(0, 1.1fr)",
+              gap: 1,
+              py: 0.5,
+              borderBottom: "1px solid",
+              borderColor: "divider",
+            }}
+          >
+            <Typography variant="body2" color="text.secondary">
+              {entry.label}
+            </Typography>
+            <Typography
+              variant="body2"
+              sx={{
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace",
+                wordBreak: "break-word",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {renderStructuredValue(entry.value)}
+            </Typography>
+          </Box>
+        ))}
+      </Box>
     </CardContent>
   </Card>
 );
@@ -221,8 +274,8 @@ const TextPanel = ({ title, state }) => (
       <Typography variant="subtitle1" sx={{ mb: 1 }}>
         {title}
       </Typography>
-      <Typography variant="body2" color="text.secondary">
-        {state?.text || "No data"}
+      <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+        {renderStructuredValue(state?.text)}
       </Typography>
     </CardContent>
   </Card>
@@ -412,13 +465,13 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
         </Typography>
       ) : null}
       {renderablePanels.length === 0 ? <Alert severity="info">No panel data available yet.</Alert> : null}
-      <Stack spacing={2}>
+      <Grid container spacing={2}>
         {renderablePanels.map(({ descriptor, state, value }) => (
-          <Box key={descriptor.panel_id}>
+          <Grid key={descriptor.panel_id} item {...panelGridSize(descriptor)}>
             <PanelRenderer descriptor={descriptor} state={state} value={value} onValueChange={onPanelValueChange} />
-          </Box>
+          </Grid>
         ))}
-      </Stack>
+      </Grid>
     </Box>
   );
 };
