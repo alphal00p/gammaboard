@@ -66,7 +66,7 @@ const TaskMetadataPanel = ({ task }) => (
 );
 
 const TaskOutputPanel = ({ runId, task }) => {
-  const { panelSpecs, panelStates, error } = useTaskOutput({
+  const { panelSpecs, panelStates, panelValues, setPanelValue, error } = useTaskOutput({
     runId,
     taskId: task?.id ?? null,
     pollMs: 3000,
@@ -89,7 +89,13 @@ const TaskOutputPanel = ({ runId, task }) => {
   return (
     <Box>
       <TaskMetadataPanel task={task} />
-      <PanelCollection title="Selected Task Output" panelSpecs={panelSpecs} panelStates={panelStates} />
+      <PanelCollection
+        title="Selected Task Output"
+        panelSpecs={panelSpecs}
+        panelStates={panelStates}
+        panelValues={panelValues}
+        onPanelValueChange={setPanelValue}
+      />
     </Box>
   );
 };

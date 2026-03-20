@@ -9,7 +9,7 @@ use crate::evaluation::ObservableState;
 use crate::server::config_panels::{
     EvaluatorPanelContext, PanelRenderer, SamplerAggregatorPanelContext,
 };
-use crate::server::panels::PanelResponse;
+use crate::server::panels::{PanelRequest, PanelResponse};
 use crate::server::performance_panels::{
     build_evaluator_performance_response, build_sampler_performance_response,
 };
@@ -19,12 +19,12 @@ use crate::stores::PgStore;
 use anyhow::Context;
 use axum::{
     Router,
-    extract::{Path as AxumPath, Query, State},
+    extract::{Json as AxumJson, Path as AxumPath, Query, State},
     http::Request,
     http::StatusCode,
     middleware::{self, Next},
     response::{IntoResponse, Json, Response},
-    routing::get,
+    routing::{get, post},
 };
 use serde::Deserialize;
 use serde::Serialize;
@@ -71,10 +71,11 @@ struct AppState {
 }
 
 #[derive(Deserialize)]
-struct PanelQuery {
+struct TaskPanelRequest {
     #[serde(default = "default_limit")]
     limit: i64,
-    after_cursor: Option<String>,
+    #[serde(flatten)]
+    request: PanelRequest,
 }
 
 fn default_limit() -> i64 {
@@ -167,7 +168,7 @@ fn build_app(state: AppState) -> Router {
             "/runs/:id/config/sampler-aggregator",
             get(get_run_sampler_aggregator_config),
         )
-        .route("/runs/:id/tasks/:task_id/output", get(get_run_task_output))
+        .route("/runs/:id/tasks/:task_id/output", post(get_run_task_output))
         .route("/runs/:id/stats", get(get_run_stats))
         .route("/runs/:id/logs", get(get_run_logs))
         .route(
@@ -332,11 +333,11 @@ async fn get_run_sampler_aggregator_config(
 async fn get_run_task_output(
     State(state): State<AppState>,
     AxumPath((run_id, task_id)): AxumPath<(i32, i64)>,
-    Query(params): Query<PanelQuery>,
+    AxumJson(request): AxumJson<TaskPanelRequest>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let limit = clamp_limit(params.limit);
+    let limit = clamp_limit(request.limit);
     let cursor =
-        parse_task_panel_cursor(params.after_cursor.as_deref()).map_err(ApiError::BadRequest)?;
+        parse_task_panel_cursor(request.request.cursor.as_deref()).map_err(ApiError::BadRequest)?;
     let task = load_run_task(&state.store, run_id, task_id).await?;
     let run_spec = state
         .store
@@ -389,6 +390,7 @@ async fn get_run_task_output(
             cursor,
             &task,
             &run_spec,
+            &request.request.panel_state,
             current_observable.as_ref(),
             latest_stage_snapshot.as_ref(),
             latest_persisted_snapshot.as_ref(),

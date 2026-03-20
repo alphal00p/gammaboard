@@ -6,9 +6,12 @@ const emptyState = Object.freeze({
   sourceId: null,
   panelSpecs: [],
   panelStates: [],
+  panelValues: {},
   cursor: null,
   error: null,
 });
+
+const asObject = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : {});
 
 const panelIdOf = (panel) => panel?.panel_id ?? null;
 
@@ -38,7 +41,11 @@ const mergePanelState = (previous, incoming) => {
 const applyUpdates = (previousStates, updates, resetRequired) => {
   const next = resetRequired
     ? new Map()
-    : new Map(asArray(previousStates).map((panel) => [panelIdOf(panel), panel]).filter(([id]) => id));
+    : new Map(
+        asArray(previousStates)
+          .map((panel) => [panelIdOf(panel), panel])
+          .filter(([id]) => id),
+      );
 
   for (const update of asArray(updates)) {
     const panel = update?.panel;
@@ -54,18 +61,46 @@ const applyUpdates = (previousStates, updates, resetRequired) => {
   return Array.from(next.values());
 };
 
-export const usePanelSource = ({
-  enabled = true,
-  pollMs = 5000,
-  fetchPanels,
-  useCursor = true,
-} = {}) => {
+const defaultPanelValue = (spec) => {
+  const state = spec?.state;
+  if (!state || typeof state !== "object") return undefined;
+  if (state.kind === "select") return state.default_value ?? null;
+  return undefined;
+};
+
+const reconcilePanelValues = (previousValues, panelSpecs, resetRequired) => {
+  const next = resetRequired ? {} : { ...asObject(previousValues) };
+  const knownIds = new Set();
+
+  for (const spec of asArray(panelSpecs)) {
+    if (!spec?.panel_id) continue;
+    knownIds.add(spec.panel_id);
+    if (!(spec.panel_id in next)) {
+      const defaultValue = defaultPanelValue(spec);
+      if (defaultValue !== undefined) next[spec.panel_id] = defaultValue;
+    }
+  }
+
+  for (const key of Object.keys(next)) {
+    if (!knownIds.has(key)) delete next[key];
+  }
+
+  return next;
+};
+
+export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, useCursor = true } = {}) => {
   const [state, setState] = useState(emptyState);
   const cursorRef = useRef(null);
+  const panelValuesRef = useRef({});
+  const pendingActionsRef = useRef([]);
 
   useEffect(() => {
     cursorRef.current = state.cursor;
   }, [state.cursor]);
+
+  useEffect(() => {
+    panelValuesRef.current = state.panelValues;
+  }, [state.panelValues]);
 
   const poll = useCallback(
     async (signal) => {
@@ -73,19 +108,25 @@ export const usePanelSource = ({
       try {
         const response = await fetchPanels(
           {
-            afterCursor: useCursor ? cursorRef.current : null,
+            cursor: useCursor ? cursorRef.current : null,
+            panelState: panelValuesRef.current,
+            panelActions: pendingActionsRef.current,
           },
           signal,
         );
+        pendingActionsRef.current = [];
 
         setState((previous) => {
           const resetRequired =
             response?.reset_required === true ||
             (previous.sourceId != null && response?.source_id != null && previous.sourceId !== response.source_id);
+          const panelSpecs = asArray(response?.panels);
+          const panelValues = reconcilePanelValues(previous.panelValues, panelSpecs, resetRequired);
           return {
             sourceId: response?.source_id ?? previous.sourceId,
-            panelSpecs: asArray(response?.panels),
+            panelSpecs,
             panelStates: applyUpdates(previous.panelStates, response?.updates, resetRequired),
+            panelValues,
             cursor: response?.cursor ?? previous.cursor,
             error: null,
           };
@@ -103,10 +144,47 @@ export const usePanelSource = ({
 
   const reset = useCallback(() => {
     cursorRef.current = null;
+    panelValuesRef.current = {};
+    pendingActionsRef.current = [];
     setState(emptyState);
+  }, []);
+
+  const setPanelValue = useCallback((panelId, value) => {
+    setState((previous) => {
+      const panelValues = {
+        ...asObject(previous.panelValues),
+        [panelId]: value,
+      };
+      panelValuesRef.current = panelValues;
+      cursorRef.current = null;
+      return {
+        ...previous,
+        panelValues,
+        cursor: null,
+        panelStates: [],
+      };
+    });
+  }, []);
+
+  const invokePanelAction = useCallback((panelId, actionId, payload = null) => {
+    pendingActionsRef.current = [
+      ...pendingActionsRef.current,
+      {
+        panel_id: panelId,
+        action_id: actionId,
+        payload,
+      },
+    ];
   }, []);
 
   usePolling({ enabled, intervalMs: pollMs, poll, reset });
 
-  return useMemo(() => state, [state]);
+  return useMemo(
+    () => ({
+      ...state,
+      setPanelValue,
+      invokePanelAction,
+    }),
+    [invokePanelAction, setPanelValue, state],
+  );
 };

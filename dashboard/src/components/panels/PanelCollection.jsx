@@ -4,7 +4,10 @@ import {
   Box,
   Card,
   CardContent,
+  FormControl,
   LinearProgress,
+  MenuItem,
+  Select,
   Stack,
   Table,
   TableBody,
@@ -16,11 +19,12 @@ import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip,
 import { formatScientific } from "../../utils/formatters";
 import { asArray } from "../../utils/collections";
 
-const buildRenderablePanels = (panelSpecs, panelStates) => {
+const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
   const stateMap = new Map(asArray(panelStates).map((panel) => [panel.panel_id, panel]));
   return asArray(panelSpecs).map((spec) => ({
     descriptor: spec,
     state: stateMap.get(spec.panel_id) || null,
+    value: panelValues?.[spec.panel_id],
   }));
 };
 
@@ -239,6 +243,28 @@ const hsvToRgb = (h, s, v) => {
   return rgb.map((value) => Math.round((value + m) * 255));
 };
 
+const SelectPanel = ({ title, descriptor, value, onValueChange }) => {
+  const options = asArray(descriptor?.state?.options);
+  return (
+    <Card variant="outlined">
+      <CardContent>
+        <Typography variant="subtitle1" sx={{ mb: 2 }}>
+          {title}
+        </Typography>
+        <FormControl fullWidth size="small">
+          <Select value={value ?? ""} onChange={(event) => onValueChange?.(descriptor.panel_id, event.target.value)}>
+            {options.map((option) => (
+              <MenuItem key={String(option.value)} value={option.value}>
+                {option.label}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+      </CardContent>
+    </Card>
+  );
+};
+
 const Image2dPanel = ({ title, state }) => {
   const canvasRef = useRef(null);
   const width = Number(state?.width) || 0;
@@ -249,6 +275,7 @@ const Image2dPanel = ({ title, state }) => {
     return next.length > 0 ? next : null;
   }, [state?.imag_values]);
   const colorMode = state?.color_mode || "scalar_heatmap";
+  const normalizationMode = state?.normalization_mode || "min_max";
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -276,8 +303,20 @@ const Image2dPanel = ({ title, state }) => {
       }
     } else {
       const finite = values.filter((value) => Number.isFinite(value));
-      const min = finite.length > 0 ? Math.min(...finite) : 0;
-      const max = finite.length > 0 ? Math.max(...finite) : 1;
+      const min =
+        normalizationMode === "symmetric"
+          ? -(finite.length > 0 ? Math.max(...finite.map((value) => Math.abs(value))) : 1)
+          : finite.length > 0
+            ? Math.min(...finite)
+            : 0;
+      const max =
+        normalizationMode === "symmetric"
+          ? finite.length > 0
+            ? Math.max(...finite.map((value) => Math.abs(value)))
+            : 1
+          : finite.length > 0
+            ? Math.max(...finite)
+            : 1;
       const span = max - min || 1;
       for (let index = 0; index < values.length; index += 1) {
         const value = values[index];
@@ -294,7 +333,7 @@ const Image2dPanel = ({ title, state }) => {
     }
 
     ctx.putImageData(image, 0, 0);
-  }, [colorMode, height, imagValues, values, width]);
+  }, [colorMode, height, imagValues, normalizationMode, values, width]);
 
   if (width <= 0 || height <= 0 || values.length === 0) return null;
 
@@ -329,28 +368,41 @@ const Image2dPanel = ({ title, state }) => {
   );
 };
 
-const PanelRenderer = ({ descriptor, state }) => {
-  if (!descriptor || !state) return null;
+const PanelRenderer = ({ descriptor, state, value, onValueChange }) => {
+  if (!descriptor) return null;
   switch (descriptor.kind) {
+    case "select":
+      return (
+        <SelectPanel title={descriptor.label} descriptor={descriptor} value={value} onValueChange={onValueChange} />
+      );
     case "scalar_timeseries":
+      if (!state) return null;
       return <ScalarTimeseriesPanel title={descriptor.label} state={state} />;
     case "multi_timeseries":
+      if (!state) return null;
       return <MultiTimeseriesPanel title={descriptor.label} state={state} />;
     case "progress":
+      if (!state) return null;
       return <ProgressPanel title={descriptor.label} state={state} />;
     case "key_value":
+      if (!state) return null;
       return <KeyValuePanel title={descriptor.label} state={state} />;
     case "image2d":
+      if (!state) return null;
       return <Image2dPanel title={descriptor.label} state={state} />;
     case "text":
+      if (!state) return null;
       return <TextPanel title={descriptor.label} state={state} />;
     default:
       return null;
   }
 };
 
-const PanelCollection = ({ title = null, panelSpecs, panelStates }) => {
-  const renderablePanels = useMemo(() => buildRenderablePanels(panelSpecs, panelStates), [panelSpecs, panelStates]);
+const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = {}, onPanelValueChange = null }) => {
+  const renderablePanels = useMemo(
+    () => buildRenderablePanels(panelSpecs, panelStates, panelValues),
+    [panelSpecs, panelStates, panelValues],
+  );
 
   return (
     <Box sx={{ mb: 3 }}>
@@ -361,9 +413,9 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates }) => {
       ) : null}
       {renderablePanels.length === 0 ? <Alert severity="info">No panel data available yet.</Alert> : null}
       <Stack spacing={2}>
-        {renderablePanels.map(({ descriptor, state }) => (
+        {renderablePanels.map(({ descriptor, state, value }) => (
           <Box key={descriptor.panel_id}>
-            <PanelRenderer descriptor={descriptor} state={state} />
+            <PanelRenderer descriptor={descriptor} state={state} value={value} onValueChange={onPanelValueChange} />
           </Box>
         ))}
       </Stack>

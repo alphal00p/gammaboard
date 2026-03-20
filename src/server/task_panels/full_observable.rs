@@ -5,8 +5,9 @@ use crate::core::{
 };
 use crate::evaluation::{FullObservableProgress, ObservableState, SemanticObservableKind};
 use crate::server::panels::{
-    ImageColorMode, PanelHistoryMode, PanelKind, PanelState, PlotPoint, PlotSeries, key_value,
-    key_value_panel, multi_timeseries_panel, panel_spec, progress_panel, scalar_timeseries_panel,
+    ImageColorMode, ImageNormalizationMode, PanelHistoryMode, PanelKind, PanelSpec, PanelState,
+    PlotPoint, PlotSeries, key_value, key_value_panel, multi_timeseries_panel, panel_spec,
+    progress_panel, scalar_timeseries_panel, select_state_spec, state_option,
 };
 use serde_json::Value as JsonValue;
 
@@ -15,6 +16,7 @@ pub(super) fn image_projectors(
     display: ImageDisplayMode,
 ) -> Vec<TaskPanelProjector> {
     vec![
+        image_view_mode_projector(display),
         progress_projector(
             "image_progress",
             "Image Progress",
@@ -24,6 +26,50 @@ pub(super) fn image_projectors(
         completion_projector("image_completion", "Image Completion", geometry.nr_points()),
         image_view_projector(geometry, display),
     ]
+}
+
+#[derive(Clone, Copy)]
+enum ImageViewMode {
+    ScalarHeatmapMinMax,
+    ScalarHeatmapSymmetric,
+    ComplexHueIntensity,
+}
+
+impl ImageViewMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ScalarHeatmapMinMax => "scalar_heatmap_min_max",
+            Self::ScalarHeatmapSymmetric => "scalar_heatmap_symmetric",
+            Self::ComplexHueIntensity => "complex_hue_intensity",
+        }
+    }
+
+    fn panel_spec(default_mode: Self, display: ImageDisplayMode) -> PanelSpec {
+        let mut spec = panel_spec(
+            "image_view_mode",
+            "Image View Mode",
+            PanelKind::Select,
+            PanelHistoryMode::None,
+        );
+        let mut options = vec![
+            state_option(Self::ScalarHeatmapMinMax.as_str(), "Heatmap / Min-Max"),
+            state_option(Self::ScalarHeatmapSymmetric.as_str(), "Heatmap / Symmetric"),
+        ];
+        if matches!(
+            display,
+            ImageDisplayMode::Auto | ImageDisplayMode::ComplexHueIntensity
+        ) {
+            options.push(state_option(
+                Self::ComplexHueIntensity.as_str(),
+                "Complex Hue / Intensity",
+            ));
+        }
+        spec.state = Some(select_state_spec(
+            JsonValue::String(default_mode.as_str().to_string()),
+            options,
+        ));
+        spec
+    }
 }
 
 pub(super) fn line_projectors(
@@ -104,9 +150,22 @@ fn image_view_projector(
             PanelHistoryMode::None,
         ),
         move |ctx| match ctx.source.observable() {
-            Some(observable) => Ok(Some(image_view_panel(observable, &geometry, display)?)),
+            Some(observable) => Ok(Some(image_view_panel(
+                observable,
+                &geometry,
+                selected_image_view_mode(ctx, display),
+            )?)),
             None => Ok(None),
         },
+        |_ctx| Ok(None),
+    )
+}
+
+fn image_view_mode_projector(display: ImageDisplayMode) -> TaskPanelProjector {
+    let default_mode = default_image_view_mode(display);
+    panel_projector(
+        ImageViewMode::panel_spec(default_mode, display),
+        |_ctx| Ok(None),
         |_ctx| Ok(None),
     )
 }
@@ -153,7 +212,7 @@ fn current_processed(ctx: &TaskPanelContext<'_>, total: usize) -> Result<usize, 
 fn image_view_panel(
     observable: &ObservableState,
     geometry: &PlaneRasterGeometry,
-    display: ImageDisplayMode,
+    mode: ImageViewMode,
 ) -> Result<PanelState, EngineError> {
     let width = geometry.u_linspace.count;
     let height = geometry.v_linspace.count;
@@ -166,12 +225,8 @@ fn image_view_panel(
             imag_values: None,
             x_range: [geometry.u_linspace.start, geometry.u_linspace.stop],
             y_range: [geometry.v_linspace.start, geometry.v_linspace.stop],
-            color_mode: match display {
-                ImageDisplayMode::ComplexHueIntensity => ImageColorMode::ComplexHueIntensity,
-                ImageDisplayMode::Auto | ImageDisplayMode::ScalarHeatmap => {
-                    ImageColorMode::ScalarHeatmap
-                }
-            },
+            color_mode: image_color_mode(mode),
+            normalization_mode: image_normalization_mode(mode),
         }),
         ObservableState::FullComplex(state) => Ok(PanelState::Image2d {
             panel_id: "image_view".to_string(),
@@ -181,17 +236,52 @@ fn image_view_panel(
             imag_values: Some(state.values.iter().map(|value| value.im as f32).collect()),
             x_range: [geometry.u_linspace.start, geometry.u_linspace.stop],
             y_range: [geometry.v_linspace.start, geometry.v_linspace.stop],
-            color_mode: match display {
-                ImageDisplayMode::Auto | ImageDisplayMode::ComplexHueIntensity => {
-                    ImageColorMode::ComplexHueIntensity
-                }
-                ImageDisplayMode::ScalarHeatmap => ImageColorMode::ScalarHeatmap,
-            },
+            color_mode: image_color_mode(mode),
+            normalization_mode: image_normalization_mode(mode),
         }),
         other => Err(EngineError::engine(format!(
             "image task expected full observable, got {}",
             other.kind_str()
         ))),
+    }
+}
+
+fn default_image_view_mode(display: ImageDisplayMode) -> ImageViewMode {
+    match display {
+        ImageDisplayMode::ComplexHueIntensity => ImageViewMode::ComplexHueIntensity,
+        ImageDisplayMode::Auto | ImageDisplayMode::ScalarHeatmap => {
+            ImageViewMode::ScalarHeatmapMinMax
+        }
+    }
+}
+
+fn selected_image_view_mode(
+    ctx: &TaskPanelContext<'_>,
+    display: ImageDisplayMode,
+) -> ImageViewMode {
+    match ctx.selected_value("image_view_mode") {
+        Some("scalar_heatmap_symmetric") => ImageViewMode::ScalarHeatmapSymmetric,
+        Some("complex_hue_intensity") => ImageViewMode::ComplexHueIntensity,
+        Some("scalar_heatmap_min_max") => ImageViewMode::ScalarHeatmapMinMax,
+        _ => default_image_view_mode(display),
+    }
+}
+
+fn image_color_mode(mode: ImageViewMode) -> ImageColorMode {
+    match mode {
+        ImageViewMode::ComplexHueIntensity => ImageColorMode::ComplexHueIntensity,
+        ImageViewMode::ScalarHeatmapMinMax | ImageViewMode::ScalarHeatmapSymmetric => {
+            ImageColorMode::ScalarHeatmap
+        }
+    }
+}
+
+fn image_normalization_mode(mode: ImageViewMode) -> ImageNormalizationMode {
+    match mode {
+        ImageViewMode::ScalarHeatmapSymmetric => ImageNormalizationMode::Symmetric,
+        ImageViewMode::ScalarHeatmapMinMax | ImageViewMode::ComplexHueIntensity => {
+            ImageNormalizationMode::MinMax
+        }
     }
 }
 

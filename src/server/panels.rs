@@ -4,6 +4,7 @@ use serde_json::Value as JsonValue;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PanelKind {
+    Select,
     ScalarTimeseries,
     MultiTimeseries,
     Image2d,
@@ -21,6 +22,13 @@ pub enum ImageColorMode {
     ComplexHueIntensity,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageNormalizationMode {
+    MinMax,
+    Symmetric,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PanelHistoryMode {
@@ -35,6 +43,60 @@ pub struct PanelSpec {
     pub label: String,
     pub kind: PanelKind,
     pub history: PanelHistoryMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<PanelStateSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<PanelActionSpec>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PanelStateSpec {
+    Select {
+        default_value: JsonValue,
+        options: Vec<PanelStateOption>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PanelStateOption {
+    pub value: JsonValue,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PanelActionSpec {
+    pub action_id: String,
+    pub label: String,
+    pub kind: PanelActionKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PanelActionKind {
+    Invoke,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PanelRequest {
+    #[serde(default)]
+    pub cursor: Option<String>,
+    #[serde(default = "default_panel_state")]
+    pub panel_state: JsonValue,
+    #[serde(default)]
+    pub panel_actions: Vec<PanelActionInvocation>,
+}
+
+fn default_panel_state() -> JsonValue {
+    JsonValue::Object(Default::default())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PanelActionInvocation {
+    pub panel_id: String,
+    pub action_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<JsonValue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +151,7 @@ pub enum PanelState {
         x_range: [f64; 2],
         y_range: [f64; 2],
         color_mode: ImageColorMode,
+        normalization_mode: ImageNormalizationMode,
     },
     Progress {
         panel_id: String,
@@ -148,6 +211,25 @@ pub(crate) fn panel_spec(
         label: label.to_string(),
         kind,
         history,
+        state: None,
+        actions: Vec::new(),
+    }
+}
+
+pub(crate) fn select_state_spec(
+    default_value: JsonValue,
+    options: Vec<PanelStateOption>,
+) -> PanelStateSpec {
+    PanelStateSpec::Select {
+        default_value,
+        options,
+    }
+}
+
+pub(crate) fn state_option<T: Serialize>(value: T, label: &str) -> PanelStateOption {
+    PanelStateOption {
+        value: serde_json::to_value(value).unwrap_or(JsonValue::Null),
+        label: label.to_string(),
     }
 }
 

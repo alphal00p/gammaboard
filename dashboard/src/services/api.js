@@ -55,6 +55,18 @@ const apiGet = async (path, message, signal) => {
   return parseJsonOrThrow(response, message);
 };
 
+const apiPost = async (path, payload, message, signal) => {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(payload ?? {}),
+    signal,
+  });
+  return parseJsonOrThrow(response, message);
+};
+
 const normalizeWorkerEntry = (entry) => {
   if (!entry || typeof entry !== "object") return null;
   return {
@@ -166,12 +178,20 @@ export const fetchRunEvaluatorConfigPanels = async (runId, signal) =>
 export const fetchRunSamplerConfigPanels = async (runId, signal) =>
   apiGet(`/runs/${runId}/config/sampler-aggregator`, "Failed to fetch sampler config panels", signal);
 
-export const fetchRunTaskPanels = async (runId, taskId, { limit = 500, afterCursor = null } = {}, signal) => {
-  return apiGet(
-    `/runs/${runId}/tasks/${taskId}/output${buildQueryString([
-      ["limit", limit],
-      ["after_cursor", afterCursor],
-    ])}`,
+export const fetchRunTaskPanels = async (
+  runId,
+  taskId,
+  { limit = 500, cursor = null, panelState = {}, panelActions = [] } = {},
+  signal,
+) => {
+  return apiPost(
+    `/runs/${runId}/tasks/${taskId}/output`,
+    {
+      limit,
+      cursor,
+      panel_state: panelState,
+      panel_actions: panelActions,
+    },
     "Failed to fetch task panels",
     signal,
   );

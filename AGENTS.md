@@ -110,6 +110,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - Backend visualization payloads should use the generic panel model in `src/server/panels.rs`; task output and performance/history views should share the same panel vocabulary instead of exposing raw backend-specific JSON shapes to the frontend.
 - Panel APIs are poll-based and server-owned: clients send an optional last-seen `cursor`, and the backend returns one `PanelResponse` with stable panel specs plus ordered `replace`/`append` updates.
 - Panel cursors are opaque backend tokens. They may encode history compaction state in addition to the last seen snapshot id; the frontend must store and resend them unchanged.
+- Panels may also declare backend-owned UI state and actions. Frontends should store and resend `panel_state` keyed by `panel_id`, but should not invent panel semantics locally; interactive controls such as selects/toggles/tabs still belong to the backend panel contract.
 - Worker/node detail views should also use backend-generated generic panels; keep metric and diagnostics decoding in Rust instead of frontend JSON-shape checks.
 - Evaluator and sampler config/summary views should also prefer backend-generated generic panels over frontend implementation-specific card assembly.
 - Older task output should be reconstructed from the latest `run_stage_snapshots` row for that task when the active-stage runner state has already moved on.

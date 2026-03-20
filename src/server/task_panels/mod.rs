@@ -52,6 +52,16 @@ pub struct TaskPanelContext<'a> {
     pub task: &'a RunTask,
     pub run_spec: &'a RunSpec,
     pub source: TaskPanelCurrentSource<'a>,
+    pub panel_state: &'a JsonValue,
+}
+
+impl TaskPanelContext<'_> {
+    pub fn selected_value(&self, panel_id: &str) -> Option<&str> {
+        self.panel_state
+            .as_object()
+            .and_then(|state| state.get(panel_id))
+            .and_then(JsonValue::as_str)
+    }
 }
 
 pub struct TaskPanelHistoryContext<'a> {
@@ -176,6 +186,7 @@ impl TaskPanelSource {
         &self,
         task: &RunTask,
         run_spec: &RunSpec,
+        panel_state: &JsonValue,
         current_observable: Option<&ObservableState>,
         latest_stage_snapshot: Option<&TaskStageSnapshot>,
         latest_persisted_snapshot: Option<&TaskOutputSnapshot>,
@@ -191,6 +202,7 @@ impl TaskPanelSource {
                     latest_stage_snapshot,
                     latest_persisted_snapshot,
                 ),
+                panel_state,
             },
         )
     }
@@ -201,6 +213,7 @@ impl TaskPanelSource {
         requested_cursor: TaskPanelCursor,
         task: &RunTask,
         run_spec: &RunSpec,
+        panel_state: &JsonValue,
         current_observable: Option<&ObservableState>,
         latest_stage_snapshot: Option<&TaskStageSnapshot>,
         latest_persisted_snapshot: Option<&TaskOutputSnapshot>,
@@ -211,6 +224,7 @@ impl TaskPanelSource {
         let current_panels = self.current_panels(
             task,
             run_spec,
+            panel_state,
             current_observable,
             latest_stage_snapshot,
             latest_persisted_snapshot,
@@ -595,7 +609,14 @@ mod tests {
         run_spec: &RunSpec,
     ) -> Vec<PanelState> {
         TaskPanelSource::new(task_spec, run_spec)
-            .current_panels(task, run_spec, Some(observable), None, None)
+            .current_panels(
+                task,
+                run_spec,
+                &JsonValue::Object(Default::default()),
+                Some(observable),
+                None,
+                None,
+            )
             .unwrap()
     }
 

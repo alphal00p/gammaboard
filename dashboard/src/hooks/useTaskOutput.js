@@ -6,14 +6,16 @@ export const useTaskOutput = ({ runId, taskId, pollMs = 3000, historyLimit = 500
   const enabled = runId != null && taskId != null;
 
   const fetchPanels = useCallback(
-    ({ afterCursor }, signal) => {
+    ({ cursor, panelState, panelActions }, signal) => {
       if (!enabled) return null;
       return fetchRunTaskPanels(
         runId,
         taskId,
         {
           limit: historyLimit,
-          afterCursor,
+          cursor,
+          panelState,
+          panelActions,
         },
         signal,
       );
