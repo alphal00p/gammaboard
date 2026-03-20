@@ -158,8 +158,8 @@ impl From<WorkerLogRow> for WorkerLogEntry {
 
 #[derive(sqlx::FromRow)]
 struct RegisteredWorkerRow {
-    worker_id: String,
-    node_id: Option<String>,
+    node_name: String,
+    node_uuid: String,
     desired_run_id: Option<i32>,
     desired_role: Option<String>,
     current_run_id: Option<i32>,
@@ -178,8 +178,8 @@ struct RegisteredWorkerRow {
 impl From<RegisteredWorkerRow> for RegisteredWorkerEntry {
     fn from(value: RegisteredWorkerRow) -> Self {
         Self {
-            worker_id: value.worker_id,
-            node_id: value.node_id,
+            node_name: value.node_name,
+            node_uuid: value.node_uuid,
             desired_run_id: value.desired_run_id,
             desired_role: value.desired_role,
             current_run_id: value.current_run_id,
@@ -646,8 +646,8 @@ pub(crate) async fn get_registered_workers(
     let rows = sqlx::query_as::<_, RegisteredWorkerRow>(
         r#"
         SELECT
-            n.name AS worker_id,
-            n.uuid AS node_id,
+            n.name AS node_name,
+            n.uuid AS node_uuid,
             n.desired_run_id,
             n.desired_role,
             n.active_run_id AS current_run_id,

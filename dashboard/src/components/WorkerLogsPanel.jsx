@@ -65,9 +65,9 @@ const WorkerLogsPanel = ({
           <InputLabel id="worker-log-filter-worker">Node</InputLabel>
           <Select
             labelId="worker-log-filter-worker"
-            value={filters.nodeId}
+            value={filters.nodeName}
             label="Node"
-            onChange={(event) => setFilters((current) => ({ ...current, nodeId: event.target.value }))}
+            onChange={(event) => setFilters((current) => ({ ...current, nodeName: event.target.value }))}
           >
             <MenuItem value="">All nodes</MenuItem>
             {workerOptions.map((workerId) => (

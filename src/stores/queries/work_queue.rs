@@ -239,7 +239,7 @@ pub(crate) async fn insert_evaluator_performance_snapshot(
         "#,
     )
     .bind(snapshot.run_id)
-    .bind(&snapshot.node_id)
+    .bind(&snapshot.node_name)
     .bind(&metrics)
     .execute(pool)
     .await?;
@@ -274,7 +274,7 @@ pub(crate) async fn insert_sampler_aggregator_performance_snapshot(
         "#,
     )
     .bind(snapshot.run_id)
-    .bind(&snapshot.node_id)
+    .bind(&snapshot.node_name)
     .bind(&metrics)
     .bind(&runtime_metrics)
     .bind(&snapshot.engine_diagnostics)

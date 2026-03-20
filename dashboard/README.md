@@ -36,7 +36,7 @@ useWorkersData(3000)    // Poll node inventory once app-wide every 3 seconds
 ```
 
 **Logs Tab:** `GET /api/runs/:id/logs`
-- Server-side filters: `node_id`, `level`, `q`
+- Server-side filters: `node_name`, `level`, `q`
 - Cursor pagination: `before_id`
 - Response shape: `{ items, next_before_id, has_more_older }`
 - UI model: read-only table with `Refresh` and `Load older`

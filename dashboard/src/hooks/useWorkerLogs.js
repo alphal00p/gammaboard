@@ -3,7 +3,7 @@ import { fetchRunLogPage } from "../services/api";
 import { asArray } from "../utils/collections";
 
 const defaultFilters = Object.freeze({
-  nodeId: "",
+  nodeName: "",
   level: "",
   search: "",
 });
@@ -21,7 +21,7 @@ export const useWorkerLogs = ({ runId, workers = [], limit = 100 } = {}) => {
       (worker) => runId == null || worker.current_run_id === runId || worker.desired_run_id === runId,
     );
     return runWorkers
-      .map((worker) => worker.node_id || worker.worker_id)
+      .map((worker) => worker.node_name)
       .filter(Boolean)
       .sort((left, right) => left.localeCompare(right));
   }, [workers, runId]);
@@ -50,7 +50,7 @@ export const useWorkerLogs = ({ runId, workers = [], limit = 100 } = {}) => {
           runId,
           {
             limit,
-            nodeId: filters.nodeId || null,
+            nodeName: filters.nodeName || null,
             level: filters.level || null,
             search: filters.search || "",
             beforeId,

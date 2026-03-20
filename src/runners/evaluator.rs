@@ -345,7 +345,7 @@ where
 
         let snapshot = EvaluatorPerformanceSnapshot {
             run_id: self.run_id,
-            node_id: self.node_name.clone(),
+            node_name: self.node_name.clone(),
             metrics: EvaluatorPerformanceMetrics {
                 batches_completed: self.batches_completed_total,
                 samples_evaluated: self.samples_evaluated_total,

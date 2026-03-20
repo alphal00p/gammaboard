@@ -802,7 +802,7 @@ where
 
         let snapshot = SamplerAggregatorPerformanceSnapshot {
             run_id: self.run_id,
-            node_id: self.node_name.clone(),
+            node_name: self.node_name.clone(),
             runtime_metrics: self.runtime_state.to_runtime_metrics(),
             engine_diagnostics: self.sampler.get_diagnostics(),
         };

@@ -3,9 +3,9 @@ import PanelCollection from "./panels/PanelCollection";
 import { useNodePanels } from "../hooks/useNodePanels";
 
 const WorkerDetailsPanel = ({ worker }) => {
-  const nodeId = worker?.node_id || worker?.worker_id || null;
+  const nodeName = worker?.node_name || null;
   const { panelSpecs, panelStates, error } = useNodePanels({
-    nodeId,
+    nodeName,
     pollMs: 3000,
   });
 

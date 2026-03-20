@@ -70,8 +70,8 @@ const apiPost = async (path, payload, message, signal) => {
 const normalizeWorkerEntry = (entry) => {
   if (!entry || typeof entry !== "object") return null;
   return {
-    worker_id: entry.worker_id ?? "",
-    node_id: entry.node_id ?? null,
+    node_name: entry.node_name ?? "",
+    node_uuid: entry.node_uuid ?? "",
     desired_run_id: Number.isFinite(Number(entry.desired_run_id)) ? Number(entry.desired_run_id) : null,
     desired_role: entry.desired_role ?? null,
     current_run_id: Number.isFinite(Number(entry.current_run_id)) ? Number(entry.current_run_id) : null,
@@ -155,8 +155,8 @@ export const fetchNodes = async (runId = null, signal) => {
   return asArray(data).map(normalizeWorkerEntry).filter(Boolean);
 };
 
-export const fetchNodePanels = async (nodeId, signal) =>
-  apiGet(`/nodes/${nodeId}/panels`, "Failed to fetch node panels", signal);
+export const fetchNodePanels = async (nodeName, signal) =>
+  apiGet(`/nodes/${nodeName}/panels`, "Failed to fetch node panels", signal);
 
 export const fetchStats = async (runId, signal) => {
   return apiGet(`/runs/${runId}/stats`, "Failed to fetch stats", signal);
@@ -199,13 +199,13 @@ export const fetchRunTaskPanels = async (
 
 export const fetchRunLogPage = async (
   runId,
-  { limit = 100, nodeId = null, level = null, search = "", beforeId = null } = {},
+  { limit = 100, nodeName = null, level = null, search = "", beforeId = null } = {},
   signal,
 ) => {
   const data = await apiGet(
     `/runs/${runId}/logs${buildQueryString([
       ["limit", limit],
-      ["node_id", nodeId],
+      ["node_name", nodeName],
       ["level", level],
       ["q", search],
       ["before_id", beforeId],
@@ -216,38 +216,38 @@ export const fetchRunLogPage = async (
   return normalizeRunLogPage(data);
 };
 
-export const fetchEvaluatorPerformanceHistory = async (runId, limit = 500, nodeId = null, signal) => {
+export const fetchEvaluatorPerformanceHistory = async (runId, limit = 500, nodeName = null, signal) => {
   return apiGet(
     `/runs/${runId}/performance/evaluator${buildQueryString([
       ["limit", limit],
-      ["node_id", nodeId],
+      ["node_name", nodeName],
     ])}`,
     "Failed to fetch evaluator performance history",
     signal,
   );
 };
 
-export const fetchSamplerPerformanceHistory = async (runId, limit = 500, nodeId = null, signal) => {
+export const fetchSamplerPerformanceHistory = async (runId, limit = 500, nodeName = null, signal) => {
   return apiGet(
     `/runs/${runId}/performance/sampler-aggregator${buildQueryString([
       ["limit", limit],
-      ["node_id", nodeId],
+      ["node_name", nodeName],
     ])}`,
     "Failed to fetch sampler performance history",
     signal,
   );
 };
 
-export const fetchNodeEvaluatorPerformanceHistory = async (nodeId, limit = 500, signal) =>
+export const fetchNodeEvaluatorPerformanceHistory = async (nodeName, limit = 500, signal) =>
   apiGet(
-    `/nodes/${nodeId}/performance/evaluator${buildQueryString([["limit", limit]])}`,
+    `/nodes/${nodeName}/performance/evaluator${buildQueryString([["limit", limit]])}`,
     "Failed to fetch node evaluator performance history",
     signal,
   );
 
-export const fetchNodeSamplerPerformanceHistory = async (nodeId, limit = 500, signal) =>
+export const fetchNodeSamplerPerformanceHistory = async (nodeName, limit = 500, signal) =>
   apiGet(
-    `/nodes/${nodeId}/performance/sampler-aggregator${buildQueryString([["limit", limit]])}`,
+    `/nodes/${nodeName}/performance/sampler-aggregator${buildQueryString([["limit", limit]])}`,
     "Failed to fetch node sampler performance history",
     signal,
   );

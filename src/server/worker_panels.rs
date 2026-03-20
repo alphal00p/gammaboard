@@ -7,10 +7,7 @@ use crate::stores::RegisteredWorkerEntry;
 use serde_json::Value as JsonValue;
 
 pub fn build_worker_panel_response(worker: &RegisteredWorkerEntry) -> PanelResponse {
-    let source_id = format!(
-        "node:{}:details",
-        worker.node_id.as_deref().unwrap_or(&worker.worker_id)
-    );
+    let source_id = format!("node:{}:details", worker.node_name);
     let panels = worker_panel_specs(worker);
     let updates = worker_panel_states(worker)
         .into_iter()
@@ -121,11 +118,8 @@ fn worker_panel_states(worker: &RegisteredWorkerEntry) -> Vec<PanelState> {
     let mut panels = vec![key_value_panel(
         "worker_overview",
         vec![
-            key_value(
-                "node_id",
-                "Node ID",
-                worker.node_id.as_deref().unwrap_or(&worker.worker_id),
-            ),
+            key_value("node_name", "Node Name", worker.node_name.as_str()),
+            key_value("node_uuid", "Node UUID", worker.node_uuid.as_str()),
             key_value(
                 "current_role",
                 "Current Role",

@@ -7,7 +7,7 @@ import RunScopedWorkspace from "./common/RunScopedWorkspace";
 import { useRunPerformancePanels } from "../hooks/useRunPerformancePanels";
 import { asArray } from "../utils/collections";
 
-const evaluatorNodeIdFor = (worker) => worker?.node_id ?? worker?.worker_id ?? null;
+const evaluatorNodeNameFor = (worker) => worker?.node_name ?? null;
 
 const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isConnected }) => {
   const runWorkers = useMemo(
@@ -16,29 +16,29 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
         (worker) =>
           worker?.current_run_id === selectedRun &&
           worker?.current_role === "evaluator" &&
-          evaluatorNodeIdFor(worker) != null,
+          evaluatorNodeNameFor(worker) != null,
       ),
     [selectedRun, workers],
   );
-  const [selectedEvaluatorNodeId, setSelectedEvaluatorNodeId] = useState(null);
+  const [selectedEvaluatorNodeName, setSelectedEvaluatorNodeName] = useState(null);
 
   useEffect(() => {
     if (runWorkers.length === 0) {
-      setSelectedEvaluatorNodeId(null);
+      setSelectedEvaluatorNodeName(null);
       return;
     }
     if (
-      selectedEvaluatorNodeId &&
-      runWorkers.some((worker) => evaluatorNodeIdFor(worker) === selectedEvaluatorNodeId)
+      selectedEvaluatorNodeName &&
+      runWorkers.some((worker) => evaluatorNodeNameFor(worker) === selectedEvaluatorNodeName)
     ) {
       return;
     }
-    setSelectedEvaluatorNodeId(evaluatorNodeIdFor(runWorkers[0]));
-  }, [runWorkers, selectedEvaluatorNodeId]);
+    setSelectedEvaluatorNodeName(evaluatorNodeNameFor(runWorkers[0]));
+  }, [runWorkers, selectedEvaluatorNodeName]);
 
   const { evaluator, sampler } = useRunPerformancePanels({
     runId: selectedRun,
-    evaluatorNodeId: selectedEvaluatorNodeId,
+    evaluatorNodeName: selectedEvaluatorNodeName,
     limit: 500,
     pollMs: 5000,
   });
@@ -67,25 +67,25 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
             <InputLabel id="performance-evaluator-label">Evaluator</InputLabel>
             <Select
               labelId="performance-evaluator-label"
-              value={selectedEvaluatorNodeId ?? ""}
+              value={selectedEvaluatorNodeName ?? ""}
               label="Evaluator"
-              onChange={(event) => setSelectedEvaluatorNodeId(event.target.value || null)}
+              onChange={(event) => setSelectedEvaluatorNodeName(event.target.value || null)}
             >
               {runWorkers.map((worker) => {
-                const nodeId = evaluatorNodeIdFor(worker);
+                const nodeName = evaluatorNodeNameFor(worker);
                 return (
-                  <MenuItem key={nodeId} value={nodeId}>
-                    {nodeId}
+                  <MenuItem key={nodeName} value={nodeName}>
+                    {nodeName}
                   </MenuItem>
                 );
               })}
             </Select>
           </FormControl>
-          {selectedEvaluatorNodeId == null ? (
+          {selectedEvaluatorNodeName == null ? (
             <Alert severity="info">No active evaluator selected for this run.</Alert>
           ) : evaluator?.sourceId ? (
             <PanelCollection
-              title={`Evaluator ${selectedEvaluatorNodeId}`}
+              title={`Evaluator ${selectedEvaluatorNodeName}`}
               panelSpecs={evaluator.panelSpecs}
               panelStates={evaluator.panelStates}
             />

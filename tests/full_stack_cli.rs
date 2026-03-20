@@ -1,6 +1,7 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -121,7 +122,12 @@ struct FullStackHarness {
     db: TestDatabase,
     pool: PgPool,
     bin_path: PathBuf,
-    children: Vec<Child>,
+    children: Vec<ManagedChild>,
+}
+
+struct ManagedChild {
+    label: String,
+    child: Child,
 }
 
 impl FullStackHarness {
@@ -162,7 +168,10 @@ impl FullStackHarness {
             .stderr(Stdio::inherit());
 
         let child = child.spawn()?;
-        self.children.push(child);
+        self.children.push(ManagedChild {
+            label: node_name.to_string(),
+            child,
+        });
 
         let pool = self.pool.clone();
         let node_name = node_name.to_string();
@@ -183,6 +192,42 @@ impl FullStackHarness {
             },
         )
         .await
+    }
+
+    async fn start_server(&mut self) -> anyhow::Result<String> {
+        let listener = TcpListener::bind(("127.0.0.1", 0))?;
+        let addr = listener.local_addr()?;
+        drop(listener);
+
+        let mut child = TokioCommand::new(&self.bin_path);
+        child
+            .env("DATABASE_URL", &self.db.database_url)
+            .env("GAMMABOARD_DISABLE_DB_LOGS", "1")
+            .arg("server")
+            .arg("--bind")
+            .arg(addr.to_string())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit());
+
+        let child = child.spawn()?;
+        self.children.push(ManagedChild {
+            label: format!("server:{addr}"),
+            child,
+        });
+
+        let base_url = format!("http://{addr}");
+        self.wait_for("server health", Duration::from_secs(15), || {
+            let base_url = base_url.clone();
+            async move {
+                match http_get(&base_url, "/api/health").await {
+                    Ok(response) => Ok(response.contains("\"status\":\"ok\"")),
+                    Err(_) => Ok(false),
+                }
+            }
+        })
+        .await?;
+
+        Ok(base_url)
     }
 
     async fn wait_for<F, Fut>(
@@ -237,20 +282,32 @@ impl FullStackHarness {
     }
 
     async fn stop_children(&mut self) {
-        for child in &mut self.children {
-            let _ = child.start_kill();
+        for managed in &mut self.children {
+            let _ = managed.child.start_kill();
         }
-        for child in &mut self.children {
-            let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+        for managed in &mut self.children {
+            let _ = tokio::time::timeout(Duration::from_secs(5), managed.child.wait()).await;
         }
         self.children.clear();
+    }
+
+    async fn kill_child(&mut self, label: &str) -> anyhow::Result<()> {
+        let position = self
+            .children
+            .iter()
+            .position(|managed| managed.label == label)
+            .ok_or_else(|| anyhow::anyhow!("missing child process {label}"))?;
+        let mut managed = self.children.swap_remove(position);
+        managed.child.start_kill()?;
+        let _ = tokio::time::timeout(Duration::from_secs(5), managed.child.wait()).await;
+        Ok(())
     }
 }
 
 impl Drop for FullStackHarness {
     fn drop(&mut self) {
-        for child in &mut self.children {
-            let _ = child.start_kill();
+        for managed in &mut self.children {
+            let _ = managed.child.start_kill();
         }
     }
 }
@@ -259,6 +316,13 @@ fn temp_run_config(contents: &str) -> NamedTempFile {
     let file = NamedTempFile::new().expect("create temp config");
     std::fs::write(file.path(), contents).expect("write temp config");
     file
+}
+
+async fn http_get(base_url: &str, path: &str) -> anyhow::Result<String> {
+    let url = Url::parse(base_url)?.join(path)?;
+    let response = reqwest::get(url).await?;
+    let body = response.error_for_status()?.text().await?;
+    Ok(body)
 }
 
 #[tokio::test]
@@ -524,6 +588,212 @@ name = "full-stack-e2e"
         .fetch_one(&harness.pool)
         .await?;
     assert_eq!(remaining_runs, 0);
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_server_can_restart_while_nodes_keep_running() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+
+    let server_url = harness.start_server().await?;
+    harness.start_node("w-1").await?;
+    harness.start_node("w-2").await?;
+
+    harness
+        .wait_for(
+            "nodes visible through server api",
+            Duration::from_secs(10),
+            || {
+                let server_url = server_url.clone();
+                async move {
+                    let body = http_get(&server_url, "/api/nodes").await?;
+                    Ok(body.contains("\"node_name\":\"w-1\"")
+                        && body.contains("\"node_name\":\"w-2\""))
+                }
+            },
+        )
+        .await?;
+
+    let server_label = server_url.trim_start_matches("http://").to_string();
+    harness
+        .kill_child(&format!("server:{server_label}"))
+        .await?;
+
+    let restarted_server_url = harness.start_server().await?;
+    harness
+        .wait_for(
+            "nodes visible after server restart",
+            Duration::from_secs(10),
+            || {
+                let server_url = restarted_server_url.clone();
+                async move {
+                    let health = http_get(&server_url, "/api/health").await?;
+                    let nodes = http_get(&server_url, "/api/nodes").await?;
+                    Ok(health.contains("\"status\":\"ok\"")
+                        && nodes.contains("\"node_name\":\"w-1\"")
+                        && nodes.contains("\"node_name\":\"w-2\""))
+                }
+            },
+        )
+        .await?;
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_reclaims_claimed_batches_after_worker_death() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+
+    let config = temp_run_config(
+        r#"
+name = "worker-death-e2e"
+
+[evaluator]
+kind = "sin_evaluator"
+min_eval_time_per_sample_ms = 20
+
+[[task_queue]]
+kind = "sample"
+nr_samples = 128
+observable = "scalar"
+[task_queue.sampler_aggregator]
+kind = "naive_monte_carlo"
+
+[parametrization]
+kind = "identity"
+
+[evaluator_runner_params]
+performance_snapshot_interval_ms = 200
+
+[sampler_aggregator_runner_params]
+performance_snapshot_interval_ms = 200
+target_batch_eval_ms = 250.0
+target_queue_remaining = 0.5
+max_batch_size = 16
+max_batches_per_tick = 4
+max_queue_size = 32
+completed_batch_fetch_limit = 64
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = 'worker-death-e2e'")
+        .fetch_one(&harness.pool)
+        .await?;
+
+    harness.start_node("w-1").await?;
+    harness.start_node("w-2").await?;
+    harness.start_node("w-3").await?;
+
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-1",
+            "sampler-aggregator",
+            &run_id.to_string(),
+        ])
+        .assert()
+        .success();
+    harness
+        .cli()
+        .args(["node", "assign", "w-2", "evaluator", &run_id.to_string()])
+        .assert()
+        .success();
+
+    harness
+        .wait_for(
+            "batch claimed by evaluator before death",
+            Duration::from_secs(15),
+            || {
+                let pool = harness.pool.clone();
+                async move {
+                    let claimed: i64 = sqlx::query_scalar(
+                        "SELECT COUNT(*) FROM batches WHERE run_id = $1 AND status = 'claimed' AND claimed_by_node_name = 'w-2'",
+                    )
+                    .bind(run_id)
+                    .fetch_one(&pool)
+                    .await?;
+                    Ok(claimed > 0)
+                }
+            },
+        )
+        .await?;
+
+    harness.kill_child("w-2").await?;
+
+    harness
+        .cli()
+        .args(["node", "assign", "w-3", "evaluator", &run_id.to_string()])
+        .assert()
+        .success();
+
+    harness
+        .wait_for(
+            "dead worker lease expires and claimed batches are reclaimed",
+            Duration::from_secs(45),
+            || {
+                let pool = harness.pool.clone();
+                async move {
+                    let expired: bool = sqlx::query_scalar(
+                        "SELECT lease_expires_at <= now() FROM nodes WHERE name = 'w-2'",
+                    )
+                    .fetch_one(&pool)
+                    .await?;
+                    let stuck_claims: i64 = sqlx::query_scalar(
+                        "SELECT COUNT(*) FROM batches WHERE run_id = $1 AND claimed_by_node_name = 'w-2'",
+                    )
+                    .bind(run_id)
+                    .fetch_one(&pool)
+                    .await?;
+                    Ok(expired && stuck_claims == 0)
+                }
+            },
+        )
+        .await?;
+
+    harness
+        .wait_for(
+            "replacement evaluator finishes reopened work",
+            Duration::from_secs(45),
+            || async {
+                let w1 = harness.node_state("w-1").await?;
+                let w3 = harness.node_state("w-3").await?;
+                let pending_or_claimed: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM batches WHERE run_id = $1 AND status IN ('pending', 'claimed')",
+                )
+                .bind(run_id)
+                .fetch_one(&harness.pool)
+                .await?;
+                Ok(w1.0.is_none()
+                    && w1.1.is_none()
+                    && w1.2.is_none()
+                    && w1.3.is_none()
+                    && w3.0.is_none()
+                    && w3.1.is_none()
+                    && w3.2.is_none()
+                    && w3.3.is_none()
+                    && pending_or_claimed == 0)
+            },
+        )
+        .await?;
 
     harness.stop_children().await;
     harness.pool.close().await;

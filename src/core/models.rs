@@ -203,14 +203,14 @@ impl SamplerRuntimeMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvaluatorPerformanceSnapshot {
     pub run_id: i32,
-    pub node_id: String,
+    pub node_name: String,
     pub metrics: EvaluatorPerformanceMetrics,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SamplerAggregatorPerformanceSnapshot {
     pub run_id: i32,
-    pub node_id: String,
+    pub node_name: String,
     pub runtime_metrics: SamplerRuntimeMetrics,
     pub engine_diagnostics: JsonValue,
 }

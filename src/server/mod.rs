@@ -86,7 +86,7 @@ fn default_limit() -> i64 {
 struct LogQuery {
     #[serde(default = "default_log_limit")]
     limit: i64,
-    node_id: Option<String>,
+    node_name: Option<String>,
     level: Option<String>,
     q: Option<String>,
     before_id: Option<i64>,
@@ -100,7 +100,7 @@ fn default_log_limit() -> i64 {
 struct PerformanceHistoryQuery {
     #[serde(default = "default_perf_history_limit")]
     limit: i64,
-    node_id: Option<String>,
+    node_name: Option<String>,
 }
 
 fn default_perf_history_limit() -> i64 {
@@ -246,17 +246,15 @@ async fn get_nodes(
 
 async fn get_node_panels(
     State(state): State<AppState>,
-    AxumPath(node_id): AxumPath<String>,
+    AxumPath(node_name): AxumPath<String>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let worker = state
         .store
         .get_registered_workers(None)
         .await?
         .into_iter()
-        .find(|worker| {
-            worker.node_id.as_deref() == Some(node_id.as_str()) || worker.worker_id == node_id
-        })
-        .ok_or_else(|| ApiError::NotFound(format!("node {node_id} not found")))?;
+        .find(|worker| worker.node_name == node_name)
+        .ok_or_else(|| ApiError::NotFound(format!("node {node_name} not found")))?;
     json_response(build_worker_panel_response(&worker))
 }
 
@@ -434,7 +432,7 @@ async fn get_run_logs(
         .get_worker_logs(
             id,
             limit,
-            params.node_id.as_deref(),
+            params.node_name.as_deref(),
             params.level.as_deref(),
             params
                 .q
@@ -453,10 +451,10 @@ async fn get_run_evaluator_performance_history(
     Query(params): Query<PerformanceHistoryQuery>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let limit = clamp_limit(params.limit);
-    let scope_id = params.node_id.clone().unwrap_or_else(|| id.to_string());
+    let scope_id = params.node_name.clone().unwrap_or_else(|| id.to_string());
     let rows = state
         .store
-        .get_evaluator_performance_history(id, limit, params.node_id.as_deref())
+        .get_evaluator_performance_history(id, limit, params.node_name.as_deref())
         .await?;
     json_response(build_evaluator_performance_response(Some(scope_id), rows))
 }
@@ -467,36 +465,39 @@ async fn get_run_sampler_performance_history(
     Query(params): Query<PerformanceHistoryQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let limit = clamp_limit(params.limit);
-    let scope_id = params.node_id.clone().unwrap_or_else(|| id.to_string());
+    let scope_id = params.node_name.clone().unwrap_or_else(|| id.to_string());
     let rows = state
         .store
-        .get_sampler_performance_history(id, limit, params.node_id.as_deref())
+        .get_sampler_performance_history(id, limit, params.node_name.as_deref())
         .await?;
     json_response(build_sampler_performance_response(Some(scope_id), rows))
 }
 
 async fn get_node_evaluator_performance_history(
     State(state): State<AppState>,
-    AxumPath(node_id): AxumPath<String>,
+    AxumPath(node_name): AxumPath<String>,
     Query(params): Query<PerformanceHistoryQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let limit = clamp_limit(params.limit);
     let payload = state
         .store
-        .get_worker_evaluator_performance_history(&node_id, limit)
+        .get_worker_evaluator_performance_history(&node_name, limit)
         .await?;
-    json_response(build_evaluator_performance_response(Some(node_id), payload))
+    json_response(build_evaluator_performance_response(
+        Some(node_name),
+        payload,
+    ))
 }
 
 async fn get_node_sampler_performance_history(
     State(state): State<AppState>,
-    AxumPath(node_id): AxumPath<String>,
+    AxumPath(node_name): AxumPath<String>,
     Query(params): Query<PerformanceHistoryQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let limit = clamp_limit(params.limit);
     let payload = state
         .store
-        .get_worker_sampler_performance_history(&node_id, limit)
+        .get_worker_sampler_performance_history(&node_name, limit)
         .await?;
-    json_response(build_sampler_performance_response(Some(node_id), payload))
+    json_response(build_sampler_performance_response(Some(node_name), payload))
 }

@@ -86,8 +86,8 @@ pub struct WorkerLogPage {
 /// Registered node snapshot exposed through the `/nodes` read endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisteredWorkerEntry {
-    pub worker_id: String,
-    pub node_id: Option<String>,
+    pub node_name: String,
+    pub node_uuid: String,
     pub desired_run_id: Option<i32>,
     pub desired_role: Option<String>,
     pub current_run_id: Option<i32>,

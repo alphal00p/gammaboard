@@ -37,6 +37,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 [dev-dependencies]
 assert_cmd = "2"
 predicates = "3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 url = "2"
 
 [profile.dev-optim]

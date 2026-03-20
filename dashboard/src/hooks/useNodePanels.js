@@ -2,15 +2,15 @@ import { useCallback } from "react";
 import { fetchNodePanels } from "../services/api";
 import { usePanelSource } from "./usePanelSource";
 
-export const useNodePanels = ({ nodeId, pollMs = 3000 } = {}) => {
-  const enabled = nodeId != null;
+export const useNodePanels = ({ nodeName, pollMs = 3000 } = {}) => {
+  const enabled = nodeName != null;
 
   const fetchPanels = useCallback(
     (_request, signal) => {
       if (!enabled) return null;
-      return fetchNodePanels(nodeId, signal);
+      return fetchNodePanels(nodeName, signal);
     },
-    [enabled, nodeId],
+    [enabled, nodeName],
   );
 
   return usePanelSource({
