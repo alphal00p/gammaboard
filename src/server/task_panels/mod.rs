@@ -4,8 +4,9 @@ mod sample;
 use crate::core::{EngineError, EvaluatorConfig, RunSpec, RunTask, RunTaskSpec};
 use crate::evaluation::{ObservableState, SemanticObservableKind};
 use crate::server::panels::{
-    PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelUpdate, append_panel,
-    merge_panel_state, panel_spec, replace_panel,
+    PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelUpdate, PanelWidth,
+    append_panel, key_value, key_value_panel, merge_panel_state, panel_spec, replace_panel,
+    with_panel_width,
 };
 use crate::stores::{TaskOutputSnapshot, TaskStageSnapshot};
 use serde_json::Value as JsonValue;
@@ -135,7 +136,8 @@ fn project_history_panels(
 
 impl RunTaskSpec {
     fn panel_projectors(&self, run_spec: &RunSpec) -> Vec<TaskPanelProjector> {
-        match self {
+        let mut projectors = vec![task_summary_projector()];
+        projectors.extend(match self {
             Self::Pause => vec![panel_projector(
                 panel_spec(
                     "pause_state",
@@ -158,8 +160,57 @@ impl RunTaskSpec {
             Self::PlotLine {
                 geometry, display, ..
             } => full_observable::line_projectors(geometry.clone(), *display, run_spec),
-        }
+        });
+        projectors
     }
+}
+
+fn task_summary_projector() -> TaskPanelProjector {
+    panel_projector(
+        with_panel_width(
+            panel_spec(
+                "task_summary",
+                "Selected Task",
+                PanelKind::KeyValue,
+                PanelHistoryMode::None,
+            ),
+            PanelWidth::Half,
+        ),
+        |ctx| {
+            let task = ctx.task;
+            Ok(Some(key_value_panel(
+                "task_summary",
+                vec![
+                    key_value(
+                        "identity",
+                        "Identity",
+                        format!("#{} {}", task.sequence_nr, task.task.kind_str()),
+                    ),
+                    key_value("state", "State", task.state.as_str()),
+                    key_value("target", "Target", task.task.nr_expected_samples()),
+                    key_value("produced", "Produced", task.nr_produced_samples),
+                    key_value("completed", "Completed", task.nr_completed_samples),
+                    key_value(
+                        "start_from",
+                        "Start From",
+                        task.task
+                            .start_from()
+                            .map(|reference| format!("{}:{}", reference.run_id, reference.task_id))
+                            .unwrap_or_else(|| "inherit".to_string()),
+                    ),
+                    key_value(
+                        "spawned_from",
+                        "Spawned From",
+                        match (task.spawned_from_run_id, task.spawned_from_task_id) {
+                            (Some(run_id), Some(task_id)) => format!("{run_id}:{task_id}"),
+                            _ => "none".to_string(),
+                        },
+                    ),
+                ],
+            )))
+        },
+        |_ctx| Ok(None),
+    )
 }
 
 impl TaskPanelSource {

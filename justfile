@@ -5,7 +5,7 @@ bin := "./target/dev-optim/gammaboard"
 build-backend:
     cargo build --profile dev-optim
 
-just build:
+build:
     just build-frontend
     just build-backend
 

@@ -37,12 +37,22 @@ pub enum PanelHistoryMode {
     Replace,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PanelWidth {
+    Compact,
+    Half,
+    Full,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PanelSpec {
     pub panel_id: String,
     pub label: String,
     pub kind: PanelKind,
     pub history: PanelHistoryMode,
+    #[serde(default = "default_panel_width")]
+    pub width: PanelWidth,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<PanelStateSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -89,6 +99,10 @@ pub struct PanelRequest {
 
 fn default_panel_state() -> JsonValue {
     JsonValue::Object(Default::default())
+}
+
+fn default_panel_width() -> PanelWidth {
+    PanelWidth::Half
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -211,9 +225,15 @@ pub(crate) fn panel_spec(
         label: label.to_string(),
         kind,
         history,
+        width: PanelWidth::Half,
         state: None,
         actions: Vec::new(),
     }
+}
+
+pub(crate) fn with_panel_width(mut spec: PanelSpec, width: PanelWidth) -> PanelSpec {
+    spec.width = width;
+    spec
 }
 
 pub(crate) fn select_state_spec(

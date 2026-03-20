@@ -116,6 +116,7 @@ Use `README.md` for installation and basic usage. Keep this file focused on arch
 - Run read payloads should expose `runs.point_spec` as `point_spec`.
 - Backend observable/output APIs are task-scoped: persisted observable history only has meaning within a single task/stage, and task types own the digest/projection exposed to the frontend.
 - Backend visualization payloads should use the generic panel model in `src/server/panels.rs`; task output and performance/history views should share the same panel vocabulary instead of exposing raw backend-specific JSON shapes to the frontend.
+- Backend panel specs may carry simple layout hints such as compact/half/full width; prefer backend-owned placement intent over frontend kind-based guesses.
 - Run summary/detail views should also prefer backend-generated generic panels over frontend config parsing or ad-hoc summary cards.
 - Panel APIs are poll-based and server-owned: clients send an optional last-seen `cursor`, and the backend returns one `PanelResponse` with stable panel specs plus ordered `replace`/`append` updates.
 - Panel cursors are opaque backend tokens. They may encode history compaction state in addition to the last seen snapshot id; the frontend must store and resend them unchanged.

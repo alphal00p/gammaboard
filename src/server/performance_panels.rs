@@ -1,7 +1,8 @@
 use crate::core::SamplerRuntimeMetrics;
 use crate::server::panels::{
-    PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PlotPoint, history_x,
-    merge_panel_state, panel_spec, replace_panel, scalar_timeseries_panel,
+    PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelWidth, PlotPoint,
+    history_x, merge_panel_state, panel_spec, replace_panel, scalar_timeseries_panel,
+    with_panel_width,
 };
 use crate::stores::{EvaluatorPerformanceHistoryEntry, SamplerPerformanceHistoryEntry};
 use std::collections::BTreeMap;
@@ -63,40 +64,55 @@ fn build_performance_response<T>(
 
 fn evaluator_panel_specs() -> Vec<PanelSpec> {
     vec![
-        panel_spec(
-            "evaluator_idle_ratio",
-            "Idle Ratio",
-            PanelKind::ScalarTimeseries,
-            PanelHistoryMode::Append,
+        with_panel_width(
+            panel_spec(
+                "evaluator_idle_ratio",
+                "Idle Ratio",
+                PanelKind::ScalarTimeseries,
+                PanelHistoryMode::Append,
+            ),
+            PanelWidth::Full,
         ),
-        panel_spec(
-            "evaluator_evaluate_time_us",
-            "Evaluate Time Per Sample (us)",
-            PanelKind::ScalarTimeseries,
-            PanelHistoryMode::Append,
+        with_panel_width(
+            panel_spec(
+                "evaluator_evaluate_time_us",
+                "Evaluate Time Per Sample (us)",
+                PanelKind::ScalarTimeseries,
+                PanelHistoryMode::Append,
+            ),
+            PanelWidth::Full,
         ),
-        panel_spec(
-            "evaluator_parametrization_time_us",
-            "Parametrization Time Per Sample (us)",
-            PanelKind::ScalarTimeseries,
-            PanelHistoryMode::Append,
+        with_panel_width(
+            panel_spec(
+                "evaluator_parametrization_time_us",
+                "Parametrization Time Per Sample (us)",
+                PanelKind::ScalarTimeseries,
+                PanelHistoryMode::Append,
+            ),
+            PanelWidth::Full,
         ),
     ]
 }
 
 fn sampler_panel_specs() -> Vec<PanelSpec> {
     vec![
-        panel_spec(
-            "sampler_completed_samples_per_second",
-            "Completed Samples Per Second",
-            PanelKind::ScalarTimeseries,
-            PanelHistoryMode::Append,
+        with_panel_width(
+            panel_spec(
+                "sampler_completed_samples_per_second",
+                "Completed Samples Per Second",
+                PanelKind::ScalarTimeseries,
+                PanelHistoryMode::Append,
+            ),
+            PanelWidth::Full,
         ),
-        panel_spec(
-            "sampler_queue_remaining_ratio",
-            "Queue Remaining Ratio",
-            PanelKind::ScalarTimeseries,
-            PanelHistoryMode::Append,
+        with_panel_width(
+            panel_spec(
+                "sampler_queue_remaining_ratio",
+                "Queue Remaining Ratio",
+                PanelKind::ScalarTimeseries,
+                PanelHistoryMode::Append,
+            ),
+            PanelWidth::Full,
         ),
     ]
 }

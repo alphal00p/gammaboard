@@ -21,6 +21,7 @@ Backend panel poll endpoints → `usePanelSource` → PanelCollection → panel 
 ## Main Concepts
 
 - `TaskOutputPanel` renders the selected task using one server-owned poll response that includes panel specs plus `replace`/`append` updates.
+- Backend panel specs can also include simple layout hints, and `PanelCollection` uses those hints to keep summaries in a grid while letting plots/images span full width.
 - `PerformanceWorkspace` renders run-level sampler throughput panels plus a selected evaluator worker's timing/idle panels through the same shared panel transport.
 - Engine config panels such as evaluator and sampler aggregator use the same generic panel response, but only emit `replace` updates.
 - `usePanelSource` owns cursor tracking and patch application. `PanelCollection` only renders the resulting panel state.

@@ -66,7 +66,7 @@ const RunModeContent = ({ runs, selectedRun }) => {
       <RunInfo runId={selectedRun} />
       <TaskQueuePanel tasks={taskList} selectedTaskId={selectedTask?.id ?? null} onSelectTask={setSelectedTaskId} />
       <EvaluatorPanel run={currentRun} panelResponse={evaluator} />
-      <TaskOutputPanel runId={selectedRun} task={selectedTask} />
+      <TaskOutputPanel key={selectedTask?.id ?? "no-task"} runId={selectedRun} task={selectedTask} />
       <SamplerAggregatorPanel run={currentRun} panelResponse={sampler} />
     </>
   );

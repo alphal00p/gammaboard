@@ -6,8 +6,9 @@ use crate::core::{
 use crate::evaluation::{FullObservableProgress, ObservableState, SemanticObservableKind};
 use crate::server::panels::{
     ImageColorMode, ImageNormalizationMode, PanelHistoryMode, PanelKind, PanelSpec, PanelState,
-    PlotPoint, PlotSeries, key_value, key_value_panel, multi_timeseries_panel, panel_spec,
-    progress_panel, scalar_timeseries_panel, select_state_spec, state_option,
+    PanelWidth, PlotPoint, PlotSeries, key_value, key_value_panel, multi_timeseries_panel,
+    panel_spec, progress_panel, scalar_timeseries_panel, select_state_spec, state_option,
+    with_panel_width,
 };
 use serde_json::Value as JsonValue;
 
@@ -51,6 +52,7 @@ impl ImageViewMode {
             PanelKind::Select,
             PanelHistoryMode::None,
         );
+        spec.width = PanelWidth::Compact;
         let mut options = vec![
             state_option(Self::ScalarHeatmapMinMax.as_str(), "Heatmap / Min-Max"),
             state_option(Self::ScalarHeatmapSymmetric.as_str(), "Heatmap / Symmetric"),
@@ -109,7 +111,10 @@ fn progress_projector(
     unit: &'static str,
 ) -> TaskPanelProjector {
     panel_projector(
-        panel_spec(panel_id, label, PanelKind::Progress, PanelHistoryMode::None),
+        with_panel_width(
+            panel_spec(panel_id, label, PanelKind::Progress, PanelHistoryMode::None),
+            PanelWidth::Compact,
+        ),
         move |ctx| {
             let processed = current_processed(ctx, total)?;
             Ok(Some(progress_panel(
@@ -129,7 +134,10 @@ fn completion_projector(
     total: usize,
 ) -> TaskPanelProjector {
     panel_projector(
-        panel_spec(panel_id, label, PanelKind::KeyValue, PanelHistoryMode::None),
+        with_panel_width(
+            panel_spec(panel_id, label, PanelKind::KeyValue, PanelHistoryMode::None),
+            PanelWidth::Compact,
+        ),
         move |ctx| {
             let processed = current_processed(ctx, total)?;
             Ok(Some(completion_panel(panel_id, total, processed)))
@@ -143,11 +151,14 @@ fn image_view_projector(
     display: ImageDisplayMode,
 ) -> TaskPanelProjector {
     panel_projector(
-        panel_spec(
-            "image_view",
-            "Rendered Image",
-            PanelKind::Image2d,
-            PanelHistoryMode::None,
+        with_panel_width(
+            panel_spec(
+                "image_view",
+                "Rendered Image",
+                PanelKind::Image2d,
+                PanelHistoryMode::None,
+            ),
+            PanelWidth::Full,
         ),
         move |ctx| match ctx.source.observable() {
             Some(observable) => Ok(Some(image_view_panel(
@@ -172,11 +183,14 @@ fn image_view_mode_projector(display: ImageDisplayMode) -> TaskPanelProjector {
 
 fn line_components_projector(geometry: LineRasterGeometry) -> TaskPanelProjector {
     panel_projector(
-        panel_spec(
-            "line_components",
-            "Complex Components",
-            PanelKind::MultiTimeseries,
-            PanelHistoryMode::None,
+        with_panel_width(
+            panel_spec(
+                "line_components",
+                "Complex Components",
+                PanelKind::MultiTimeseries,
+                PanelHistoryMode::None,
+            ),
+            PanelWidth::Full,
         ),
         move |ctx| match ctx.source.observable() {
             Some(observable) => line_components_panel(observable, &geometry),
@@ -188,11 +202,14 @@ fn line_components_projector(geometry: LineRasterGeometry) -> TaskPanelProjector
 
 fn line_real_projector(geometry: LineRasterGeometry, label: &'static str) -> TaskPanelProjector {
     panel_projector(
-        panel_spec(
-            "line_real",
-            label,
-            PanelKind::ScalarTimeseries,
-            PanelHistoryMode::None,
+        with_panel_width(
+            panel_spec(
+                "line_real",
+                label,
+                PanelKind::ScalarTimeseries,
+                PanelHistoryMode::None,
+            ),
+            PanelWidth::Full,
         ),
         move |ctx| match ctx.source.observable() {
             Some(observable) => Ok(line_real_panel(observable, &geometry)?),

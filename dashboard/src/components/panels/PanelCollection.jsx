@@ -5,7 +5,6 @@ import {
   Card,
   CardContent,
   FormControl,
-  Grid,
   LinearProgress,
   MenuItem,
   Select,
@@ -80,20 +79,29 @@ const renderStructuredValue = (value) => {
   return JSON.stringify(value);
 };
 
-const panelGridSize = (descriptor) => {
-  switch (descriptor?.kind) {
-    case "scalar_timeseries":
-    case "multi_timeseries":
-    case "image2d":
-    case "table":
-    case "histogram":
-      return { xs: 12 };
-    case "progress":
-    case "key_value":
-    case "text":
-    case "select":
+const panelColumnSpan = (descriptor) => {
+  switch (descriptor?.width) {
+    case "compact":
+      return { xs: "1 / -1", md: "span 4" };
+    case "full":
+      return { xs: "1 / -1", md: "1 / -1" };
+    case "half":
+      return { xs: "1 / -1", md: "span 6" };
     default:
-      return { xs: 12, md: 6, xl: 4 };
+      switch (descriptor?.kind) {
+        case "scalar_timeseries":
+        case "multi_timeseries":
+        case "image2d":
+        case "table":
+        case "histogram":
+          return { xs: "1 / -1", md: "1 / -1" };
+        case "progress":
+        case "key_value":
+        case "text":
+        case "select":
+        default:
+          return { xs: "1 / -1", md: "span 6" };
+      }
   }
 };
 
@@ -465,13 +473,29 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
         </Typography>
       ) : null}
       {renderablePanels.length === 0 ? <Alert severity="info">No panel data available yet.</Alert> : null}
-      <Grid container spacing={2}>
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: {
+            xs: "minmax(0, 1fr)",
+            md: "repeat(12, minmax(0, 1fr))",
+          },
+          gap: 2,
+          alignItems: "start",
+        }}
+      >
         {renderablePanels.map(({ descriptor, state, value }) => (
-          <Grid key={descriptor.panel_id} item {...panelGridSize(descriptor)}>
+          <Box
+            key={descriptor.panel_id}
+            sx={{
+              minWidth: 0,
+              gridColumn: panelColumnSpan(descriptor),
+            }}
+          >
             <PanelRenderer descriptor={descriptor} state={state} value={value} onValueChange={onPanelValueChange} />
-          </Grid>
+          </Box>
         ))}
-      </Grid>
+      </Box>
     </Box>
   );
 };
