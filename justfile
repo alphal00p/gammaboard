@@ -56,12 +56,16 @@ start n:
     set -euo pipefail
 
     for i in $(seq 1 {{n}}); do
-        {{bin}} run-node --node-id "w-${i}" --poll-ms {{ poll_ms }} &
+        {{bin}} run-node --name "w-${i}" --poll-ms {{ poll_ms }} &
     done
 
 live-test-basic:
     #!/usr/bin/env bash
     set -euo pipefail
+
+    run_live_test="live-test"
+    run_symbolica_poly="symbolica-poly-test"
+    run_symbolica_sin="symbolica-sin-test"
 
     just db-reset
     just start 8
@@ -72,31 +76,31 @@ live-test-basic:
     {{bin}} run add "configs/symbolica-live-test.toml"
     {{bin}} run add "configs/symbolica-live-test-sin.toml"
 
-    {{bin}} node assign "w-1" evaluator 1
-    {{bin}} node assign "w-2" sampler-aggregator 1
+    {{bin}} node assign "w-1" evaluator "$run_live_test"
+    {{bin}} node assign "w-2" sampler-aggregator "$run_live_test"
 
-    {{bin}} auto-assign 2 5
+    {{bin}} auto-assign "$run_symbolica_poly" 5
 
     echo "initial assignments settled"
     sleep 10
 
     echo "move two workers from run 2 to run 3"
-    {{bin}} node assign "w-3" sampler-aggregator 3
-    {{bin}} node assign "w-8" evaluator 3
+    {{bin}} node assign "w-3" sampler-aggregator "$run_symbolica_sin"
+    {{bin}} node assign "w-8" evaluator "$run_symbolica_sin"
 
     sleep 10
 
     echo "pause run 3 and return workers to run 2"
-    {{bin}} run pause 3
+    {{bin}} run pause "$run_symbolica_sin"
     sleep 6
-    {{bin}} auto-assign 2 1
+    {{bin}} auto-assign "$run_symbolica_poly" 1
 
     sleep 10
 
     echo "pause run 2 and resume run 3 with all symbolica workers"
-    {{bin}} run pause 2
+    {{bin}} run pause "$run_symbolica_poly"
     sleep 6
-    {{bin}} auto-assign 3 5
+    {{bin}} auto-assign "$run_symbolica_sin" 5
 
 stop:
     -{{bin}} run pause -a
