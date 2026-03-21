@@ -463,13 +463,8 @@ name = "full-stack-e2e"
             "full-stack-e2e",
         ])
         .assert()
-        .success();
-
-    let ghost_state = harness.node_state("ghost-node").await?;
-    assert_eq!(ghost_state.0, Some(run_id));
-    assert_eq!(ghost_state.1.as_deref(), Some("evaluator"));
-    assert_eq!(ghost_state.2, None);
-    assert_eq!(ghost_state.3, None);
+        .failure()
+        .stderr(predicate::str::contains("node 'ghost-node' is not live"));
 
     harness
         .cli()
@@ -490,7 +485,6 @@ name = "full-stack-e2e"
             || async {
                 let w1 = harness.node_state("w-1").await?;
                 let w2 = harness.node_state("w-2").await?;
-                let ghost = harness.node_state("ghost-node").await?;
                 Ok(w1.0.is_none()
                     && w1.1.is_none()
                     && w1.2.is_none()
@@ -498,9 +492,7 @@ name = "full-stack-e2e"
                     && w2.0.is_none()
                     && w2.1.is_none()
                     && w2.2.is_none()
-                    && w2.3.is_none()
-                    && ghost.0.is_none()
-                    && ghost.1.is_none())
+                    && w2.3.is_none())
             },
         )
         .await?;
@@ -561,7 +553,6 @@ name = "full-stack-e2e"
             || async {
                 let w1 = harness.node_state("w-1").await?;
                 let w2 = harness.node_state("w-2").await?;
-                let ghost = harness.node_state("ghost-node").await?;
                 Ok(w1.0.is_none()
                     && w1.1.is_none()
                     && w1.2.is_none()
@@ -569,9 +560,7 @@ name = "full-stack-e2e"
                     && w2.0.is_none()
                     && w2.1.is_none()
                     && w2.2.is_none()
-                    && w2.3.is_none()
-                    && ghost.0.is_none()
-                    && ghost.1.is_none())
+                    && w2.3.is_none())
             },
         )
         .await?;

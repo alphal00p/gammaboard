@@ -258,9 +258,16 @@ impl ControlPlaneStore for PgStore {
         role: WorkerRole,
         run_id: i32,
     ) -> Result<(), StoreError> {
-        queries::upsert_desired_assignment(&self.pool, node_name, role, run_id)
+        let updated = queries::upsert_desired_assignment(&self.pool, node_name, role, run_id)
             .await
-            .map_err(map_sqlx)
+            .map_err(map_sqlx)?;
+        if updated {
+            Ok(())
+        } else {
+            Err(StoreError::not_found(format!(
+                "node '{node_name}' is not live"
+            )))
+        }
     }
 
     async fn announce_node(&self, node_name: &str, node_uuid: &str) -> Result<(), StoreError> {

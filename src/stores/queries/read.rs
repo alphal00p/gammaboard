@@ -685,7 +685,8 @@ pub(crate) async fn get_registered_workers(
            AND e.worker_id = n.name
         LEFT JOIN runs dr ON dr.id = n.desired_run_id
         LEFT JOIN runs cr ON cr.id = n.active_run_id
-        WHERE ($1::int IS NULL OR n.desired_run_id = $1 OR n.active_run_id = $1)
+        WHERE n.lease_expires_at > now()
+          AND ($1::int IS NULL OR n.desired_run_id = $1 OR n.active_run_id = $1)
         ORDER BY
             CASE
                 WHEN n.active_role IS NOT NULL THEN 0

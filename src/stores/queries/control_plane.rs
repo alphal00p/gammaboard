@@ -94,24 +94,16 @@ pub(crate) async fn upsert_desired_assignment(
     node_name: &str,
     role: WorkerRole,
     run_id: i32,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
         r#"
-        INSERT INTO nodes (
-            name,
-            uuid,
-            lease_expires_at,
-            desired_run_id,
-            desired_role,
-            updated_at
-        ) VALUES (
-            $1, '', to_timestamp(0), $2, $3, now()
-        )
-        ON CONFLICT (name) DO UPDATE
+        UPDATE nodes
         SET
-            desired_run_id = EXCLUDED.desired_run_id,
-            desired_role = EXCLUDED.desired_role,
+            desired_run_id = $2,
+            desired_role = $3,
             updated_at = now()
+        WHERE name = $1
+          AND lease_expires_at > now()
         "#,
     )
     .bind(node_name)
@@ -119,7 +111,7 @@ pub(crate) async fn upsert_desired_assignment(
     .bind(role.as_str())
     .execute(pool)
     .await?;
-    Ok(())
+    Ok(result.rows_affected() > 0)
 }
 
 pub(crate) async fn announce_node(
@@ -300,7 +292,8 @@ pub(crate) async fn list_nodes(
         FROM nodes n
         LEFT JOIN runs dr ON dr.id = n.desired_run_id
         LEFT JOIN runs cr ON cr.id = n.active_run_id
-        WHERE ($1::text IS NULL OR n.name = $1)
+        WHERE n.lease_expires_at > now()
+          AND ($1::text IS NULL OR n.name = $1)
         ORDER BY n.name ASC
         "#,
     )

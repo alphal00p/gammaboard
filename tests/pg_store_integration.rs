@@ -185,6 +185,8 @@ async fn sampler_aggregator_desired_assignment_is_unique_per_run() {
     };
     let node_a = unique_id("node-a");
     let node_b = unique_id("node-b");
+    let node_a_uuid = unique_id("uuid-a");
+    let node_b_uuid = unique_id("uuid-b");
 
     let run_id: i32 = sqlx::query_scalar(
         r#"
@@ -203,6 +205,15 @@ async fn sampler_aggregator_desired_assignment_is_unique_per_run() {
     .fetch_one(store.pool())
     .await
     .expect("insert run");
+
+    store
+        .announce_node(&node_a, &node_a_uuid)
+        .await
+        .expect("announce first node");
+    store
+        .announce_node(&node_b, &node_b_uuid)
+        .await
+        .expect("announce second node");
 
     store
         .upsert_desired_assignment(&node_a, WorkerRole::SamplerAggregator, run_id)
@@ -238,6 +249,7 @@ async fn assigning_new_role_replaces_existing_desired_assignment_for_node() {
         return;
     };
     let node_name = unique_id("node");
+    let node_uuid = unique_id("uuid");
 
     let run_a: i32 = sqlx::query_scalar(
         r#"
@@ -274,6 +286,11 @@ async fn assigning_new_role_replaces_existing_desired_assignment_for_node() {
     .fetch_one(store.pool())
     .await
     .expect("insert run b");
+
+    store
+        .announce_node(&node_name, &node_uuid)
+        .await
+        .expect("announce node");
 
     store
         .upsert_desired_assignment(&node_name, WorkerRole::Evaluator, run_a)
@@ -329,6 +346,64 @@ async fn assigning_new_role_replaces_existing_desired_assignment_for_node() {
         .execute(store.pool())
         .await
         .expect("cleanup runs");
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn assigning_dead_node_returns_not_found() {
+    let Some(store) = test_store().await else {
+        return;
+    };
+    let node_name = unique_id("dead-node");
+    let node_uuid = unique_id("dead-uuid");
+
+    let run_id: i32 = sqlx::query_scalar(
+        r#"
+        INSERT INTO runs (
+            name,
+            integration_params,
+            point_spec
+        ) VALUES (
+            'dead-node-run',
+            '{}'::jsonb,
+            '{"continuous_dims":0,"discrete_dims":0}'::jsonb
+        )
+        RETURNING id
+        "#,
+    )
+    .fetch_one(store.pool())
+    .await
+    .expect("insert run");
+
+    store
+        .announce_node(&node_name, &node_uuid)
+        .await
+        .expect("announce node");
+    store
+        .expire_node_lease(&node_uuid)
+        .await
+        .expect("expire node lease");
+
+    let err = store
+        .upsert_desired_assignment(&node_name, WorkerRole::Evaluator, run_id)
+        .await
+        .expect_err("dead node assignment should fail");
+
+    match err {
+        StoreError::NotFound(message) => {
+            assert!(
+                message.contains("is not live"),
+                "unexpected error message: {message}"
+            );
+        }
+        other => panic!("expected not found, got {other}"),
+    }
+
+    sqlx::query("DELETE FROM runs WHERE id = $1")
+        .bind(run_id)
+        .execute(store.pool())
+        .await
+        .expect("cleanup run");
 }
 
 #[tokio::test]
