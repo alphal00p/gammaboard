@@ -382,6 +382,12 @@ where
                     task.id, snapshot.task_id
                 ))));
             }
+            if !snapshot.sampler_snapshot.matches_config(&sampler_config) {
+                return Err(RunnerError::Engine(EngineError::engine(format!(
+                    "sampler runner snapshot kind does not match task {} sampler config",
+                    task.id
+                ))));
+            }
             let activation_snapshot = store
                 .load_task_activation_snapshot(run_id, task.id)
                 .await?
@@ -391,18 +397,10 @@ where
                         run_id, task.id
                     )))
                 })?;
-            let sampler = sampler_config
-                .build(
-                    point_spec.clone(),
-                    sample_budget,
-                    Some(StageHandoff {
-                        sampler_snapshot: Some(&snapshot.sampler_snapshot),
-                        parametrization_snapshot: Some(
-                            &activation_snapshot.parametrization.snapshot,
-                        ),
-                        observable_state: Some(&snapshot.observable_state),
-                    }),
-                )
+            let sampler = snapshot
+                .sampler_snapshot
+                .clone()
+                .into_runtime(&point_spec)
                 .map_err(RunnerError::Engine)?;
             (
                 sampler,
@@ -812,5 +810,69 @@ where
         self.last_performance_completed_samples = self.nr_completed_samples;
         self.last_snapshot_at = Instant::now();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::core::{LineRasterGeometry, Linspace, PlaneRasterGeometry, SamplerAggregatorConfig};
+    use crate::sampling::{
+        NaiveMonteCarloSamplerParams, RasterLineSamplerParams, RasterPlaneSamplerParams,
+        SamplerAggregatorSnapshot,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn snapshot_kind_match_requires_same_sampler_family() {
+        let raster_plane = SamplerAggregatorConfig::RasterPlane {
+            params: RasterPlaneSamplerParams {
+                geometry: PlaneRasterGeometry {
+                    offset: vec![0.0, 0.0],
+                    u_vector: vec![1.0, 0.0],
+                    v_vector: vec![0.0, 1.0],
+                    u_linspace: Linspace {
+                        start: 0.0,
+                        stop: 1.0,
+                        count: 2,
+                    },
+                    v_linspace: Linspace {
+                        start: 0.0,
+                        stop: 1.0,
+                        count: 2,
+                    },
+                    discrete: Vec::new(),
+                },
+            },
+        };
+        let raster_line = SamplerAggregatorConfig::RasterLine {
+            params: RasterLineSamplerParams {
+                geometry: LineRasterGeometry {
+                    offset: vec![0.0],
+                    direction: vec![1.0],
+                    linspace: Linspace {
+                        start: 0.0,
+                        stop: 1.0,
+                        count: 2,
+                    },
+                    discrete: Vec::new(),
+                },
+            },
+        };
+        let naive = SamplerAggregatorConfig::NaiveMonteCarlo {
+            params: NaiveMonteCarloSamplerParams::default(),
+        };
+
+        assert!(
+            SamplerAggregatorSnapshot::RasterPlane { raw: json!({}) }.matches_config(&raster_plane)
+        );
+        assert!(
+            !SamplerAggregatorSnapshot::RasterLine { raw: json!({}) }.matches_config(&raster_plane)
+        );
+        assert!(
+            !SamplerAggregatorSnapshot::RasterPlane { raw: json!({}) }.matches_config(&raster_line)
+        );
+        assert!(
+            SamplerAggregatorSnapshot::NaiveMonteCarlo { raw: json!({}) }.matches_config(&naive)
+        );
     }
 }

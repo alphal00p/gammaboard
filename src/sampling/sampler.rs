@@ -1,4 +1,4 @@
-use crate::core::{BuildError, EngineError};
+use crate::core::{BuildError, EngineError, SamplerAggregatorConfig};
 use crate::evaluation::PointSpec;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
@@ -13,6 +13,30 @@ pub enum SamplerAggregatorSnapshot {
     RasterLine { raw: JsonValue },
     HavanaTraining { raw: JsonValue },
     HavanaInference { raw: JsonValue },
+}
+
+impl SamplerAggregatorSnapshot {
+    pub fn matches_config(&self, config: &SamplerAggregatorConfig) -> bool {
+        matches!(
+            (self, config),
+            (
+                SamplerAggregatorSnapshot::NaiveMonteCarlo { .. },
+                SamplerAggregatorConfig::NaiveMonteCarlo { .. }
+            ) | (
+                SamplerAggregatorSnapshot::RasterPlane { .. },
+                SamplerAggregatorConfig::RasterPlane { .. }
+            ) | (
+                SamplerAggregatorSnapshot::RasterLine { .. },
+                SamplerAggregatorConfig::RasterLine { .. }
+            ) | (
+                SamplerAggregatorSnapshot::HavanaTraining { .. },
+                SamplerAggregatorConfig::HavanaTraining { .. }
+            ) | (
+                SamplerAggregatorSnapshot::HavanaInference { .. },
+                SamplerAggregatorConfig::HavanaInference { .. }
+            )
+        )
+    }
 }
 
 pub trait SamplerAggregator: Send {
