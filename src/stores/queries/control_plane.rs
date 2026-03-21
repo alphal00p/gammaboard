@@ -421,6 +421,8 @@ pub(crate) async fn expire_node_lease(pool: &PgPool, node_uuid: &str) -> Result<
         UPDATE nodes
         SET
             lease_expires_at = now(),
+            desired_run_id = NULL,
+            desired_role = NULL,
             active_run_id = NULL,
             active_role = NULL,
             updated_at = now()

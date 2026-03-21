@@ -408,6 +408,63 @@ async fn assigning_dead_node_returns_not_found() {
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
+async fn expiring_node_lease_clears_desired_assignment() {
+    let Some(store) = test_store().await else {
+        return;
+    };
+    let node_name = unique_id("expiring-node");
+    let node_uuid = unique_id("expiring-uuid");
+
+    let run_id: i32 = sqlx::query_scalar(
+        r#"
+        INSERT INTO runs (
+            name,
+            integration_params,
+            point_spec
+        ) VALUES (
+            'expiring-node-run',
+            '{}'::jsonb,
+            '{"continuous_dims":0,"discrete_dims":0}'::jsonb
+        )
+        RETURNING id
+        "#,
+    )
+    .fetch_one(store.pool())
+    .await
+    .expect("insert run");
+
+    store
+        .announce_node(&node_name, &node_uuid)
+        .await
+        .expect("announce node");
+    store
+        .upsert_desired_assignment(&node_name, WorkerRole::SamplerAggregator, run_id)
+        .await
+        .expect("assign sampler role");
+
+    store
+        .expire_node_lease(&node_uuid)
+        .await
+        .expect("expire node lease");
+
+    assert!(
+        store
+            .get_desired_assignment(&node_name)
+            .await
+            .expect("load desired assignment after expiry")
+            .is_none(),
+        "desired assignment should be cleared on lease expiry"
+    );
+
+    sqlx::query("DELETE FROM runs WHERE id = $1")
+        .bind(run_id)
+        .execute(store.pool())
+        .await
+        .expect("cleanup run");
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
 async fn sampler_aggregator_current_assignment_is_unique_per_run() {
     let Some(store) = test_store().await else {
         return;
