@@ -3,6 +3,7 @@ use crate::core::{LineRasterGeometry, PlaneRasterGeometry};
 use crate::evaluation::{Batch, PointSpec};
 use crate::sampling::{LatentBatchSpec, SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot};
 use ndarray::Array2;
+use num::Integer;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -19,22 +20,26 @@ pub struct RasterLineSamplerParams {
 pub struct RasterPlaneSamplerSnapshot {
     params: RasterPlaneSamplerParams,
     next_index: usize,
+    stride: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RasterLineSamplerSnapshot {
     params: RasterLineSamplerParams,
     next_index: usize,
+    stride: usize,
 }
 
 pub struct RasterPlaneSampler {
     params: RasterPlaneSamplerParams,
     next_index: usize,
+    stride: usize,
 }
 
 pub struct RasterLineSampler {
     params: RasterLineSamplerParams,
     next_index: usize,
+    stride: usize,
 }
 
 impl RasterPlaneSampler {
@@ -43,9 +48,11 @@ impl RasterPlaneSampler {
         point_spec: &PointSpec,
     ) -> Result<Self, BuildError> {
         validate_plane_geometry(&params.geometry, point_spec)?;
+        let total_samples = params.geometry.nr_points();
         Ok(Self {
             params,
             next_index: 0,
+            stride: coprime_stride(total_samples),
         })
     }
 
@@ -56,6 +63,7 @@ impl RasterPlaneSampler {
         let sampler = Self::from_params_and_point_spec(snapshot.params, point_spec)?;
         Ok(Self {
             next_index: snapshot.next_index,
+            stride: snapshot.stride,
             ..sampler
         })
     }
@@ -79,6 +87,10 @@ impl RasterPlaneSampler {
             .map(|((offset, basis_u), basis_v)| offset + u * basis_u + v * basis_v)
             .collect()
     }
+
+    fn permuted_index(&self, index: usize) -> usize {
+        permuted_raster_index(index, self.total_samples(), self.stride)
+    }
 }
 
 impl RasterLineSampler {
@@ -87,9 +99,11 @@ impl RasterLineSampler {
         point_spec: &PointSpec,
     ) -> Result<Self, BuildError> {
         validate_line_geometry(&params.geometry, point_spec)?;
+        let total_samples = params.geometry.nr_points();
         Ok(Self {
             params,
             next_index: 0,
+            stride: coprime_stride(total_samples),
         })
     }
 
@@ -100,6 +114,7 @@ impl RasterLineSampler {
         let sampler = Self::from_params_and_point_spec(snapshot.params, point_spec)?;
         Ok(Self {
             next_index: snapshot.next_index,
+            stride: snapshot.stride,
             ..sampler
         })
     }
@@ -117,6 +132,10 @@ impl RasterLineSampler {
             .zip(self.params.geometry.direction.iter())
             .map(|(offset, direction)| offset + t * direction)
             .collect()
+    }
+
+    fn permuted_index(&self, index: usize) -> usize {
+        permuted_raster_index(index, self.total_samples(), self.stride)
     }
 }
 
@@ -147,7 +166,7 @@ impl SamplerAggregator for RasterPlaneSampler {
         let dims = self.params.geometry.offset.len();
         let mut continuous = Array2::<f64>::zeros((nr_samples, dims));
         for row_idx in 0..nr_samples {
-            let point = self.point_at(self.next_index + row_idx);
+            let point = self.point_at(self.permuted_index(self.next_index + row_idx));
             for (col_idx, value) in point.into_iter().enumerate() {
                 continuous[(row_idx, col_idx)] = value;
             }
@@ -175,6 +194,7 @@ impl SamplerAggregator for RasterPlaneSampler {
             raw: serde_json::to_value(RasterPlaneSamplerSnapshot {
                 params: self.params.clone(),
                 next_index: self.next_index,
+                stride: self.stride,
             })
             .map_err(|err| EngineError::engine(err.to_string()))?,
         })
@@ -208,7 +228,7 @@ impl SamplerAggregator for RasterLineSampler {
         let dims = self.params.geometry.offset.len();
         let mut continuous = Array2::<f64>::zeros((nr_samples, dims));
         for row_idx in 0..nr_samples {
-            let point = self.point_at(self.next_index + row_idx);
+            let point = self.point_at(self.permuted_index(self.next_index + row_idx));
             for (col_idx, value) in point.into_iter().enumerate() {
                 continuous[(row_idx, col_idx)] = value;
             }
@@ -236,6 +256,7 @@ impl SamplerAggregator for RasterLineSampler {
             raw: serde_json::to_value(RasterLineSamplerSnapshot {
                 params: self.params.clone(),
                 next_index: self.next_index,
+                stride: self.stride,
             })
             .map_err(|err| EngineError::engine(err.to_string()))?,
         })
@@ -292,4 +313,110 @@ fn linspace_value(linspace: &crate::core::Linspace, index: usize) -> f64 {
     }
     let t = index as f64 / (linspace.count - 1) as f64;
     linspace.start + t * (linspace.stop - linspace.start)
+}
+
+fn permuted_raster_index(index: usize, total_samples: usize, stride: usize) -> usize {
+    if total_samples <= 1 {
+        return index.min(total_samples.saturating_sub(1));
+    }
+    (index * stride) % total_samples
+}
+
+fn coprime_stride(total_samples: usize) -> usize {
+    if total_samples <= 1 {
+        return 1;
+    }
+
+    let phi_minus_one = 0.618_033_988_749_894_9_f64;
+    let mut candidate =
+        ((total_samples as f64 * phi_minus_one).floor() as usize).clamp(1, total_samples - 1);
+    while candidate.gcd(&total_samples) != 1 {
+        candidate += 1;
+        if candidate >= total_samples {
+            candidate = 1;
+        }
+    }
+    candidate
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        RasterLineSampler, RasterLineSamplerParams, coprime_stride, permuted_raster_index,
+    };
+    use crate::core::{LineRasterGeometry, Linspace};
+    use crate::evaluation::PointSpec;
+    use crate::sampling::SamplerAggregator;
+    use num::Integer;
+
+    #[test]
+    fn permuted_raster_index_visits_each_sample_once() {
+        for total_samples in 1..32 {
+            let stride = coprime_stride(total_samples);
+            let mut seen = vec![false; total_samples];
+            for index in 0..total_samples {
+                let permuted = permuted_raster_index(index, total_samples, stride);
+                assert!(permuted < total_samples);
+                assert!(!seen[permuted], "duplicate index for n={total_samples}");
+                seen[permuted] = true;
+            }
+            assert!(seen.into_iter().all(|value| value));
+            assert_eq!(coprime_stride(total_samples).gcd(&total_samples), 1);
+        }
+    }
+
+    #[test]
+    fn raster_line_snapshot_restores_shuffled_progress() {
+        let point_spec = PointSpec {
+            continuous_dims: 1,
+            discrete_dims: 0,
+        };
+        let params = RasterLineSamplerParams {
+            geometry: LineRasterGeometry {
+                offset: vec![0.0],
+                direction: vec![1.0],
+                linspace: Linspace {
+                    start: 0.0,
+                    stop: 4.0,
+                    count: 5,
+                },
+                discrete: Vec::new(),
+            },
+        };
+        let mut sampler =
+            RasterLineSampler::from_params_and_point_spec(params.clone(), &point_spec)
+                .expect("build sampler");
+        let first_batch = sampler.produce_latent_batch(2).expect("first batch");
+        let snapshot = sampler.snapshot().expect("snapshot");
+        let restored_snapshot = match snapshot {
+            crate::sampling::SamplerAggregatorSnapshot::RasterLine { raw } => {
+                serde_json::from_value(raw).expect("decode raster line snapshot")
+            }
+            other => panic!("unexpected snapshot kind: {other:?}"),
+        };
+        let mut restored =
+            RasterLineSampler::from_snapshot(restored_snapshot, &point_spec).expect("restore");
+        let second_batch = restored.produce_latent_batch(3).expect("second batch");
+
+        let first_batch = first_batch.payload.as_batch().expect("decode first batch");
+        let second_batch = second_batch
+            .payload
+            .as_batch()
+            .expect("decode second batch");
+        let first_points = first_batch
+            .continuous()
+            .column(0)
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        let second_points = second_batch
+            .continuous()
+            .column(0)
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+
+        assert_eq!(first_points, vec![0.0, 3.0]);
+        assert_eq!(second_points, vec![1.0, 4.0, 2.0]);
+    }
 }

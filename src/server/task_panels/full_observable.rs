@@ -10,6 +10,7 @@ use crate::server::panels::{
     panel_spec, progress_panel, scalar_timeseries_panel, select_state_spec, state_option,
     with_panel_width,
 };
+use num::Integer;
 use serde_json::Value as JsonValue;
 
 pub(super) fn image_projectors(
@@ -233,12 +234,13 @@ fn image_view_panel(
 ) -> Result<PanelState, EngineError> {
     let width = geometry.u_linspace.count;
     let height = geometry.v_linspace.count;
+    let total = geometry.nr_points();
     match observable {
         ObservableState::FullScalar(state) => Ok(PanelState::Image2d {
             panel_id: "image_view".to_string(),
             width,
             height,
-            values: state.values.iter().map(|value| *value as f32).collect(),
+            values: reorder_scalar_values(&state.values, total),
             imag_values: None,
             x_range: [geometry.u_linspace.start, geometry.u_linspace.stop],
             y_range: [geometry.v_linspace.start, geometry.v_linspace.stop],
@@ -249,8 +251,12 @@ fn image_view_panel(
             panel_id: "image_view".to_string(),
             width,
             height,
-            values: state.values.iter().map(|value| value.re as f32).collect(),
-            imag_values: Some(state.values.iter().map(|value| value.im as f32).collect()),
+            values: reorder_complex_component_values(&state.values, total, |value| value.re),
+            imag_values: Some(reorder_complex_component_values(
+                &state.values,
+                total,
+                |value| value.im,
+            )),
             x_range: [geometry.u_linspace.start, geometry.u_linspace.stop],
             y_range: [geometry.v_linspace.start, geometry.v_linspace.stop],
             color_mode: image_color_mode(mode),
@@ -314,22 +320,12 @@ fn line_components_panel(
                 PlotSeries {
                     id: "real".to_string(),
                     label: "Real Part".to_string(),
-                    points: xs
-                        .iter()
-                        .copied()
-                        .zip(state.values.iter().map(|value| value.re))
-                        .map(point)
-                        .collect(),
+                    points: reordered_line_points(&xs, &state.values, |value| value.re),
                 },
                 PlotSeries {
                     id: "imag".to_string(),
                     label: "Imaginary Part".to_string(),
-                    points: xs
-                        .iter()
-                        .copied()
-                        .zip(state.values.iter().map(|value| value.im))
-                        .map(point)
-                        .collect(),
+                    points: reordered_line_points(&xs, &state.values, |value| value.im),
                 },
             ],
         ))),
@@ -349,19 +345,11 @@ fn line_real_panel(
     match observable {
         ObservableState::FullScalar(state) => Ok(Some(scalar_timeseries_panel(
             "line_real",
-            xs.iter()
-                .copied()
-                .zip(state.values.iter().copied())
-                .map(point)
-                .collect(),
+            reordered_line_scalar_points(&xs, &state.values),
         ))),
         ObservableState::FullComplex(state) => Ok(Some(scalar_timeseries_panel(
             "line_real",
-            xs.iter()
-                .copied()
-                .zip(state.values.iter().map(|value| value.re))
-                .map(point)
-                .collect(),
+            reordered_line_points(&xs, &state.values, |value| value.re),
         ))),
         other => Err(EngineError::engine(format!(
             "line task expected full observable, got {}",
@@ -393,6 +381,91 @@ fn point((x, y): (f64, f64)) -> PlotPoint {
         y_min: None,
         y_max: None,
     }
+}
+
+fn reordered_line_scalar_points(xs: &[f64], values: &[f64]) -> Vec<PlotPoint> {
+    let total = xs.len();
+    let stride = coprime_stride(total);
+    values
+        .iter()
+        .copied()
+        .enumerate()
+        .filter_map(|(shuffled_index, value)| {
+            let canonical_index = permuted_raster_index(shuffled_index, total, stride);
+            xs.get(canonical_index).copied().map(|x| point((x, value)))
+        })
+        .collect()
+}
+
+fn reordered_line_points<T>(
+    xs: &[f64],
+    values: &[T],
+    component: impl Fn(&T) -> f64,
+) -> Vec<PlotPoint> {
+    let total = xs.len();
+    let stride = coprime_stride(total);
+    values
+        .iter()
+        .enumerate()
+        .filter_map(|(shuffled_index, value)| {
+            let canonical_index = permuted_raster_index(shuffled_index, total, stride);
+            xs.get(canonical_index)
+                .copied()
+                .map(|x| point((x, component(value))))
+        })
+        .collect()
+}
+
+fn reorder_scalar_values(values: &[f64], total: usize) -> Vec<f32> {
+    let stride = coprime_stride(total);
+    let mut reordered = vec![f32::NAN; total];
+    for (shuffled_index, value) in values.iter().copied().enumerate() {
+        let canonical_index = permuted_raster_index(shuffled_index, total, stride);
+        if let Some(slot) = reordered.get_mut(canonical_index) {
+            *slot = value as f32;
+        }
+    }
+    reordered
+}
+
+fn reorder_complex_component_values<T>(
+    values: &[T],
+    total: usize,
+    component: impl Fn(&T) -> f64,
+) -> Vec<f32> {
+    let stride = coprime_stride(total);
+    let mut reordered = vec![f32::NAN; total];
+    for (shuffled_index, value) in values.iter().enumerate() {
+        let canonical_index = permuted_raster_index(shuffled_index, total, stride);
+        if let Some(slot) = reordered.get_mut(canonical_index) {
+            *slot = component(value) as f32;
+        }
+    }
+    reordered
+}
+
+fn permuted_raster_index(index: usize, total_samples: usize, stride: usize) -> usize {
+    if total_samples <= 1 {
+        return index.min(total_samples.saturating_sub(1));
+    }
+    (index * stride) % total_samples
+}
+
+fn coprime_stride(total_samples: usize) -> usize {
+    if total_samples <= 1 {
+        return 1;
+    }
+
+    let phi_minus_one = 0.618_033_988_749_894_9_f64;
+    let mut candidate =
+        ((total_samples as f64 * phi_minus_one).floor() as usize).clamp(1, total_samples - 1);
+    while candidate.gcd(&total_samples) != 1 {
+        candidate += 1;
+        if candidate >= total_samples {
+            candidate = 1;
+        }
+    }
+    candidate
 }
 
 fn completion_panel(panel_id: &str, total: usize, processed: usize) -> PanelState {

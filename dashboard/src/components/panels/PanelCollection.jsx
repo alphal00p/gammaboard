@@ -353,6 +353,11 @@ const Image2dPanel = ({ title, state }) => {
       for (let index = 0; index < values.length; index += 1) {
         const re = values[index];
         const im = imagValues[index] || 0;
+        if (!Number.isFinite(re) || !Number.isFinite(im)) {
+          const offset = index * 4;
+          image.data[offset + 3] = 0;
+          continue;
+        }
         const phase = (Math.atan2(im, re) / Math.PI) * 180 + 180;
         const magnitude = Math.hypot(re, im) / maxMagnitude;
         const [r, g, b] = hsvToRgb(phase, 1, Math.min(1, Math.sqrt(magnitude)));
@@ -381,6 +386,11 @@ const Image2dPanel = ({ title, state }) => {
       const span = max - min || 1;
       for (let index = 0; index < values.length; index += 1) {
         const value = values[index];
+        if (!Number.isFinite(value)) {
+          const offset = index * 4;
+          image.data[offset + 3] = 0;
+          continue;
+        }
         const t = Number.isFinite(value) ? (value - min) / span : 0;
         const r = Math.round(255 * t);
         const g = Math.round(200 * (1 - Math.abs(t - 0.5) * 2));

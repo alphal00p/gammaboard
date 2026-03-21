@@ -14,7 +14,7 @@ observable = "complex"
 [task_queue.geometry]
 offset = [0.0, 0.0, 0.0]
 direction = [1.0, 0.0, 0.0]
-linspace = { start = -30, stop = 30.0, count = 128 }
+linspace = { start = -30, stop = 30.0, count = 16384 }
 discrete = []
 
 
