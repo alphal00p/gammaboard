@@ -1,6 +1,7 @@
-import { Alert, Box, Container, Tab, Tabs, Typography } from "@mui/material";
+import { Alert, Box, Button, Chip, Container, Snackbar, Stack, Tab, Tabs, Typography } from "@mui/material";
 import { useEffect, useState } from "react";
 import gammaboardLogo from "./assets/gammalooplogo.svg";
+import { AuthProvider, useAuth } from "./auth/AuthProvider";
 import EvaluatorPanel from "./components/EvaluatorPanel";
 import LogsWorkspace from "./components/LogsWorkspace";
 import PerformanceWorkspace from "./components/PerformanceWorkspace";
@@ -9,34 +10,60 @@ import SamplerAggregatorPanel from "./components/SamplerAggregatorPanel";
 import TaskOutputPanel from "./components/TaskOutputPanel";
 import TaskQueuePanel from "./components/TaskQueuePanel";
 import WorkersWorkspace from "./components/WorkersWorkspace";
+import LoginDialog from "./components/auth/LoginDialog";
 import RunScopedWorkspace from "./components/common/RunScopedWorkspace";
 import { useRunConfigPanels } from "./hooks/useRunConfigPanels";
 import { useRuns } from "./hooks/useRuns";
 import { useRunTasks } from "./hooks/useRunTasks";
 import { useWorkersData } from "./hooks/useWorkersData";
+import { pauseRun } from "./services/api";
 import { asArray } from "./utils/collections";
 import { asTaskList, getCurrentTask } from "./utils/tasks";
 
-const DashboardHeader = () => (
-  <Box sx={{ mb: 3 }}>
-    <Box
-      component="img"
-      src={gammaboardLogo}
-      alt="Gammaboard"
-      sx={{ display: "block", width: "min(100%, 320px)", height: "auto", mb: 1 }}
-    />
-    <Typography variant="body2" color="text.secondary">
-      Real-time Monte Carlo simulation monitoring
-    </Typography>
-  </Box>
-);
+const DashboardHeader = () => {
+  const { authenticated, busy, ready, requestLogin, logout } = useAuth();
+
+  return (
+    <Box sx={{ mb: 3, display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 2 }}>
+      <Box>
+        <Box
+          component="img"
+          src={gammaboardLogo}
+          alt="Gammaboard"
+          sx={{ display: "block", width: "min(100%, 320px)", height: "auto", mb: 1 }}
+        />
+        <Typography variant="body2" color="text.secondary">
+          Real-time Monte Carlo simulation monitoring
+        </Typography>
+      </Box>
+      <Stack direction="row" spacing={1} alignItems="center">
+        <Chip
+          color={authenticated ? "success" : "default"}
+          label={authenticated ? "Operator mode" : ready ? "Read-only" : "Checking session"}
+          variant={authenticated ? "filled" : "outlined"}
+        />
+        {authenticated ? (
+          <Button onClick={logout} disabled={busy}>
+            Log Out
+          </Button>
+        ) : (
+          <Button onClick={() => requestLogin()} disabled={!ready || busy}>
+            Log In
+          </Button>
+        )}
+      </Stack>
+    </Box>
+  );
+};
 
 const RunModeContent = ({ runs, selectedRun }) => {
   const currentRun = runs.find((entry) => entry.run_id === selectedRun);
   const { tasks } = useRunTasks(selectedRun, 2000);
   const { evaluator, sampler } = useRunConfigPanels({ runId: selectedRun, pollMs: 5000 });
-  const runWorkersData = useWorkersData({ runId: selectedRun, pollMs: 3000 });
   const [selectedTaskId, setSelectedTaskId] = useState(null);
+  const [snackbar, setSnackbar] = useState(null);
+  const [pausing, setPausing] = useState(false);
+  const { authenticated, requireAuth } = useAuth();
 
   useEffect(() => {
     const taskList = asTaskList(tasks);
@@ -63,11 +90,40 @@ const RunModeContent = ({ runs, selectedRun }) => {
 
   return (
     <>
+      <Box sx={{ mb: 2, display: "flex", justifyContent: "flex-end" }}>
+        <Button
+          variant="contained"
+          color={authenticated ? "warning" : "inherit"}
+          disabled={!selectedRun || pausing}
+          onClick={() =>
+            requireAuth(async () => {
+              setPausing(true);
+              try {
+                await pauseRun(selectedRun);
+                setSnackbar({ message: "Pause requested.", severity: "success" });
+              } catch (err) {
+                setSnackbar({ message: err?.message || "Failed to pause run.", severity: "error" });
+                throw err;
+              } finally {
+                setPausing(false);
+              }
+            })
+          }
+        >
+          Pause Run
+        </Button>
+      </Box>
       <RunInfo runId={selectedRun} />
       <TaskQueuePanel tasks={taskList} selectedTaskId={selectedTask?.id ?? null} onSelectTask={setSelectedTaskId} />
       <EvaluatorPanel run={currentRun} panelResponse={evaluator} />
       <TaskOutputPanel key={selectedTask?.id ?? "no-task"} runId={selectedRun} task={selectedTask} />
       <SamplerAggregatorPanel run={currentRun} panelResponse={sampler} />
+      <Snackbar
+        open={Boolean(snackbar)}
+        autoHideDuration={4000}
+        onClose={() => setSnackbar(null)}
+        message={snackbar?.message || ""}
+      />
     </>
   );
 };
@@ -85,7 +141,7 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected }) => (
   </RunScopedWorkspace>
 );
 
-function App() {
+function AppContent() {
   const { runs, isConnected } = useRuns();
   const workersData = useWorkersData({ runId: null, pollMs: 3000 });
   const [mode, setMode] = useState("runs");
@@ -112,6 +168,7 @@ function App() {
   return (
     <Container maxWidth="xl" sx={{ py: 3 }}>
       <DashboardHeader />
+      <LoginDialog />
 
       <Tabs value={mode} onChange={(_, next) => setMode(next)} sx={{ mb: 3 }}>
         <Tab value="runs" label="Runs" />
@@ -152,6 +209,14 @@ function App() {
         />
       )}
     </Container>
+  );
+}
+
+function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   );
 }
 

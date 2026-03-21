@@ -51,13 +51,17 @@ const buildQueryString = (entries) => {
 };
 
 const apiGet = async (path, message, signal) => {
-  const response = await fetch(`${API_BASE_URL}${path}`, { signal });
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    credentials: "include",
+    signal,
+  });
   return parseJsonOrThrow(response, message);
 };
 
 const apiPost = async (path, payload, message, signal) => {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: "POST",
+    credentials: "include",
     headers: {
       "content-type": "application/json",
     },
@@ -151,6 +155,14 @@ export const fetchRuns = async (signal) => {
   const data = await apiGet("/runs", "Failed to fetch runs", signal);
   return asArray(data).map(normalizeRunEntry).filter(Boolean);
 };
+
+export const fetchSession = async (signal) => apiGet("/auth/session", "Failed to fetch session", signal);
+
+export const login = async (password, signal) => apiPost("/auth/login", { password }, "Failed to log in", signal);
+
+export const logout = async (signal) => apiPost("/auth/logout", {}, "Failed to log out", signal);
+
+export const pauseRun = async (runId, signal) => apiPost(`/runs/${runId}/pause`, {}, "Failed to pause run", signal);
 
 export const fetchNodes = async (runId = null, signal) => {
   const data = await apiGet(`/nodes${buildQueryString([["run_id", runId]])}`, "Failed to fetch nodes", signal);

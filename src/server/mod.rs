@@ -1,3 +1,4 @@
+mod auth;
 mod config_panels;
 mod panels;
 mod performance_panels;
@@ -5,7 +6,9 @@ mod run_panels;
 mod task_panels;
 mod worker_panels;
 
-use crate::core::{AggregationStore, RunReadStore, RunSpecStore, RunTaskStore, StoreError};
+use crate::core::{
+    AggregationStore, ControlPlaneStore, RunReadStore, RunSpecStore, RunTaskStore, StoreError,
+};
 use crate::evaluation::ObservableState;
 use crate::server::config_panels::{
     EvaluatorPanelContext, PanelRenderer, SamplerAggregatorPanelContext,
@@ -34,6 +37,11 @@ use std::{env, net::SocketAddr};
 use tower_http::cors::CorsLayer;
 use tracing::Instrument;
 
+use self::auth::{
+    AuthConfig, SessionStatus, load_auth_config, login, logout, parse_allowed_origin,
+    require_admin_session,
+};
+
 pub fn resolve_bind(bind: Option<SocketAddr>) -> anyhow::Result<SocketAddr> {
     match bind {
         Some(bind) => Ok(bind),
@@ -50,7 +58,11 @@ pub fn resolve_bind(bind: Option<SocketAddr>) -> anyhow::Result<SocketAddr> {
 }
 
 pub async fn serve(store: PgStore, bind: SocketAddr) -> anyhow::Result<()> {
-    let state = AppState { store };
+    let state = AppState {
+        store,
+        auth: load_auth_config()?,
+        allowed_origin: parse_allowed_origin(),
+    };
 
     let app = build_app(state);
 
@@ -68,8 +80,10 @@ pub async fn serve(store: PgStore, bind: SocketAddr) -> anyhow::Result<()> {
 }
 
 #[derive(Clone)]
-struct AppState {
+pub(crate) struct AppState {
     store: PgStore,
+    auth: Option<AuthConfig>,
+    allowed_origin: Option<axum::http::HeaderValue>,
 }
 
 #[derive(Deserialize)]
@@ -120,11 +134,15 @@ fn json_response<T: Serialize>(value: T) -> Result<Json<serde_json::Value>, ApiE
 }
 
 #[derive(Debug, thiserror::Error)]
-enum ApiError {
+pub(crate) enum ApiError {
     #[error("bad request: {0}")]
     BadRequest(String),
+    #[error("unauthorized: {0}")]
+    Unauthorized(String),
     #[error("not found: {0}")]
     NotFound(String),
+    #[error("unavailable: {0}")]
+    Unavailable(String),
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -145,7 +163,9 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             ApiError::BadRequest(message) => (StatusCode::BAD_REQUEST, message),
+            ApiError::Unauthorized(message) => (StatusCode::UNAUTHORIZED, message),
             ApiError::NotFound(message) => (StatusCode::NOT_FOUND, message),
+            ApiError::Unavailable(message) => (StatusCode::SERVICE_UNAVAILABLE, message),
             ApiError::Internal(message) => (StatusCode::INTERNAL_SERVER_ERROR, message),
         };
         (status, Json(serde_json::json!({ "error": message }))).into_response()
@@ -158,8 +178,11 @@ struct WorkersQuery {
 }
 
 fn build_app(state: AppState) -> Router {
-    let api_routes = Router::new()
+    let public_api_routes = Router::new()
         .route("/health", get(health_check))
+        .route("/auth/session", get(get_session_status))
+        .route("/auth/login", post(login))
+        .route("/auth/logout", post(logout))
         .route("/runs", get(get_runs))
         .route("/nodes", get(get_nodes))
         .route("/nodes/:id/panels", get(get_node_panels))
@@ -189,13 +212,35 @@ fn build_app(state: AppState) -> Router {
         .route(
             "/nodes/:id/performance/sampler-aggregator",
             get(get_node_sampler_performance_history),
-        )
-        .layer(middleware::from_fn(request_context_middleware))
-        .with_state(state);
+        );
+
+    let protected_api_routes = Router::new()
+        .route("/runs/:id/pause", post(pause_run))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_admin_session,
+        ));
 
     Router::new()
-        .nest("/api", api_routes)
-        .layer(CorsLayer::permissive())
+        .nest("/api", public_api_routes.merge(protected_api_routes))
+        .layer(build_cors_layer(state.allowed_origin.clone()))
+        .layer(middleware::from_fn(request_context_middleware))
+        .with_state(state)
+}
+
+fn build_cors_layer(allowed_origin: Option<axum::http::HeaderValue>) -> CorsLayer {
+    let layer = CorsLayer::new()
+        .allow_credentials(true)
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::OPTIONS,
+        ])
+        .allow_headers([axum::http::header::CONTENT_TYPE]);
+    match allowed_origin {
+        Some(origin) => layer.allow_origin(origin),
+        None => layer,
+    }
 }
 
 async fn request_context_middleware(request: Request<axum::body::Body>, next: Next) -> Response {
@@ -230,6 +275,13 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
         )
             .into_response(),
     }
+}
+
+async fn get_session_status(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<SessionStatus> {
+    Json(auth::auth_status_from_headers(&state, &headers))
 }
 
 async fn get_runs(
@@ -468,6 +520,34 @@ async fn get_run_logs(
         )
         .await?;
     json_response(logs)
+}
+
+async fn pause_run(
+    State(state): State<AppState>,
+    AxumPath(run_id): AxumPath<i32>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let run = state
+        .store
+        .get_run_progress(run_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
+    let cleared = state
+        .store
+        .clear_desired_assignments_for_run(run_id)
+        .await?;
+    tracing::info!(
+        source = "control",
+        control_surface = "dashboard",
+        action = "run_pause",
+        run_id,
+        run_name = %run.run_name,
+        assignments_cleared = cleared,
+        "dashboard action completed"
+    );
+    json_response(serde_json::json!({
+        "run_id": run_id,
+        "assignments_cleared": cleared,
+    }))
 }
 
 async fn get_run_evaluator_performance_history(

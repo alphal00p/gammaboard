@@ -1,5 +1,9 @@
 use assert_cmd::Command;
+use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
+use hmac::{Hmac, Mac};
 use predicates::prelude::*;
+use serde_json::json;
+use sha2::Sha256;
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -9,6 +13,8 @@ use tempfile::NamedTempFile;
 use tokio::process::{Child, Command as TokioCommand};
 use tokio::time::{Instant, sleep};
 use url::Url;
+
+type HmacSha256 = Hmac<Sha256>;
 
 fn unique_suffix() -> String {
     let nanos = SystemTime::now()
@@ -195,6 +201,13 @@ impl FullStackHarness {
     }
 
     async fn start_server(&mut self) -> anyhow::Result<String> {
+        self.start_server_with_envs(&[]).await
+    }
+
+    async fn start_server_with_envs(
+        &mut self,
+        extra_envs: &[(&str, String)],
+    ) -> anyhow::Result<String> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         let addr = listener.local_addr()?;
         drop(listener);
@@ -208,6 +221,9 @@ impl FullStackHarness {
             .arg(addr.to_string())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
+        for (key, value) in extra_envs {
+            child.env(key, value);
+        }
 
         let child = child.spawn()?;
         self.children.push(ManagedChild {
@@ -323,6 +339,54 @@ async fn http_get(base_url: &str, path: &str) -> anyhow::Result<String> {
     let response = reqwest::get(url).await?;
     let body = response.error_for_status()?.text().await?;
     Ok(body)
+}
+
+async fn http_post_json(
+    base_url: &str,
+    path: &str,
+    payload: serde_json::Value,
+    cookie: Option<&str>,
+) -> anyhow::Result<reqwest::Response> {
+    let url = Url::parse(base_url)?.join(path)?;
+    let client = reqwest::Client::new();
+    let mut request = client
+        .post(url)
+        .header("content-type", "application/json")
+        .body(payload.to_string());
+    if let Some(cookie) = cookie {
+        request = request.header("cookie", cookie);
+    }
+    Ok(request.send().await?)
+}
+
+fn pbkdf2_hash_for_tests(password: &str) -> String {
+    let iterations = 10_000u32;
+    let salt = b"gammaboard-test-salt";
+    let mut block_input = Vec::with_capacity(salt.len() + 4);
+    block_input.extend_from_slice(salt);
+    block_input.extend_from_slice(&1u32.to_be_bytes());
+
+    let mut u = hmac_sha256(password.as_bytes(), &block_input);
+    let mut out = u.clone();
+    for _ in 1..iterations {
+        u = hmac_sha256(password.as_bytes(), &u);
+        for (lhs, rhs) in out.iter_mut().zip(&u) {
+            *lhs ^= rhs;
+        }
+    }
+
+    format!(
+        "pbkdf2_sha256${}${}${}",
+        iterations,
+        STANDARD_NO_PAD.encode(salt),
+        STANDARD_NO_PAD.encode(out)
+    )
+}
+
+fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
+    let mut mac = HmacSha256::new_from_slice(key).expect("hmac key");
+    mac.update(data);
+    mac.finalize().into_bytes().to_vec()
 }
 
 #[tokio::test]
@@ -638,6 +702,113 @@ async fn full_stack_cli_server_can_restart_while_nodes_keep_running() -> anyhow:
                         && nodes.contains("\"node_name\":\"w-1\"")
                         && nodes.contains("\"node_name\":\"w-2\""))
                 }
+            },
+        )
+        .await?;
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+
+    let config = temp_run_config("name = \"auth-e2e\"\n");
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = 'auth-e2e'")
+        .fetch_one(&harness.pool)
+        .await?;
+
+    harness.start_node("w-1").await?;
+    harness
+        .cli()
+        .args(["node", "assign", "w-1", "evaluator", "auth-e2e"])
+        .assert()
+        .success();
+
+    harness
+        .wait_for(
+            "node assigned for auth test",
+            Duration::from_secs(10),
+            || async {
+                let state = harness.node_state("w-1").await?;
+                Ok(state.0 == Some(run_id) && state.1.as_deref() == Some("evaluator"))
+            },
+        )
+        .await?;
+
+    let password = "operator-secret";
+    let server_url = harness
+        .start_server_with_envs(&[
+            (
+                "GAMMABOARD_ADMIN_PASSWORD_HASH",
+                pbkdf2_hash_for_tests(password),
+            ),
+            (
+                "GAMMABOARD_SESSION_SECRET",
+                "test-session-secret".to_string(),
+            ),
+            (
+                "GAMMABOARD_ALLOWED_ORIGIN",
+                "http://localhost:3000".to_string(),
+            ),
+        ])
+        .await?;
+
+    let runs = http_get(&server_url, "/api/runs").await?;
+    assert!(runs.contains("\"run_name\":\"auth-e2e\""));
+
+    let unauthorized = http_post_json(
+        &server_url,
+        &format!("/api/runs/{run_id}/pause"),
+        json!({}),
+        None,
+    )
+    .await?;
+    assert_eq!(unauthorized.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    let login = http_post_json(
+        &server_url,
+        "/api/auth/login",
+        json!({ "password": password }),
+        None,
+    )
+    .await?;
+    assert_eq!(login.status(), reqwest::StatusCode::OK);
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.split(';').next().unwrap_or("").to_string())
+        .ok_or_else(|| anyhow::anyhow!("missing session cookie"))?;
+
+    let pause = http_post_json(
+        &server_url,
+        &format!("/api/runs/{run_id}/pause"),
+        json!({}),
+        Some(&cookie),
+    )
+    .await?;
+    assert_eq!(pause.status(), reqwest::StatusCode::OK);
+
+    harness
+        .wait_for(
+            "authenticated pause clears desired assignment",
+            Duration::from_secs(10),
+            || async {
+                let state = harness.node_state("w-1").await?;
+                Ok(state.0.is_none() && state.1.is_none())
             },
         )
         .await?;

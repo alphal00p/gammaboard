@@ -36,6 +36,19 @@ The dashboard shows runs, task output, nodes, performance, and logs.
 
 `serve-*` commands load `.env`. The backend port is controlled by `GAMMABOARD_BACKEND_PORT`. The frontend uses `REACT_APP_API_BASE_URL`.
 
+## Dashboard Auth
+- Read-only dashboard endpoints stay open.
+- Steering actions currently require admin login and are backed by a signed session cookie.
+- Set `GAMMABOARD_ADMIN_PASSWORD_HASH` to enable dashboard auth.
+- Set `GAMMABOARD_SESSION_SECRET` when auth is enabled.
+- Set `GAMMABOARD_ALLOWED_ORIGIN` if the frontend is served from a different origin than `http://localhost:3000`.
+- Deploy this behind HTTPS for real use. Set `GAMMABOARD_SECURE_COOKIE=1` when serving over HTTPS.
+
+Password hash format:
+```text
+pbkdf2_sha256$<iterations>$<salt_base64_no_pad>$<hash_base64_no_pad>
+```
+
 ## Run Configs
 Run configs are TOML and are deep-merged over `configs/default.toml`.
 

@@ -44,6 +44,9 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - `append` is only valid when the backend can safely extend existing state; otherwise it must send `replace`.
 - Panel specs may include simple width hints such as `compact`, `half`, and `full`.
 - Run info, task output, worker details, performance, and engine config should stay backend-owned.
+- Dashboard auth is operator-oriented: read-only endpoints may stay open, while explicit steering endpoints require admin auth.
+- Dashboard steering should use explicit endpoints such as `pause`, `assign`, `unassign`, `append task`, and `create run`, not generic patch endpoints.
+- Dashboard auth is intended for small trusted deployments behind HTTPS.
 
 ## Logging And Read APIs
 - Runtime logs are persisted through the tracing pipeline into PostgreSQL.
