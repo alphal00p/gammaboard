@@ -54,7 +54,7 @@ start n:
     set -euo pipefail
 
     for i in $(seq 1 {{n}}); do
-        {{bin}} run-node --name "w-${i}"
+        {{bin}} run-node --name "w-${i}" &
     done
 
 live-test-basic:

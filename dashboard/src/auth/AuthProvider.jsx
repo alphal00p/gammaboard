@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { fetchSession, login as loginRequest, logout as logoutRequest } from "../services/api";
 
 const AuthContext = createContext(null);
@@ -9,7 +9,6 @@ export const AuthProvider = ({ children }) => {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  const pendingActionRef = useRef(null);
 
   const refreshSession = useCallback(async () => {
     try {
@@ -28,8 +27,7 @@ export const AuthProvider = ({ children }) => {
     refreshSession();
   }, [refreshSession]);
 
-  const requestLogin = useCallback((action = null) => {
-    pendingActionRef.current = typeof action === "function" ? action : null;
+  const requestLogin = useCallback(() => {
     setError(null);
     setDialogOpen(true);
   }, []);
@@ -41,9 +39,6 @@ export const AuthProvider = ({ children }) => {
       setAuthenticated(true);
       setDialogOpen(false);
       setError(null);
-      const action = pendingActionRef.current;
-      pendingActionRef.current = null;
-      await action?.();
       return true;
     } catch (err) {
       setAuthenticated(false);
@@ -65,26 +60,6 @@ export const AuthProvider = ({ children }) => {
     }
   }, []);
 
-  const requireAuth = useCallback(
-    async (action) => {
-      if (authenticated) {
-        try {
-          await action?.();
-        } catch (err) {
-          if (err?.status === 401) {
-            setAuthenticated(false);
-            requestLogin(action);
-            return;
-          }
-          throw err;
-        }
-        return;
-      }
-      requestLogin(action);
-    },
-    [authenticated, requestLogin],
-  );
-
   const value = useMemo(
     () => ({
       authenticated,
@@ -96,10 +71,9 @@ export const AuthProvider = ({ children }) => {
       login,
       logout,
       requestLogin,
-      requireAuth,
       refreshSession,
     }),
-    [authenticated, ready, busy, error, dialogOpen, login, logout, requestLogin, requireAuth, refreshSession],
+    [authenticated, ready, busy, error, dialogOpen, login, logout, requestLogin, refreshSession],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

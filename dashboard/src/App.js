@@ -65,7 +65,7 @@ const RunModeContent = ({ runs, selectedRun }) => {
   const [pausing, setPausing] = useState(false);
   const [autoAssigning, setAutoAssigning] = useState(false);
   const [maxEvaluators, setMaxEvaluators] = useState("");
-  const { authenticated, requireAuth } = useAuth();
+  const { authenticated } = useAuth();
 
   useEffect(() => {
     const taskList = asTaskList(tasks);
@@ -92,20 +92,20 @@ const RunModeContent = ({ runs, selectedRun }) => {
 
   return (
     <>
-      <Box sx={{ mb: 2, display: "flex", justifyContent: "flex-end" }}>
-        <Stack direction={{ xs: "column", md: "row" }} spacing={1.5}>
-          <TextField
-            size="small"
-            label="Max Evaluators"
-            value={maxEvaluators}
-            onChange={(event) => setMaxEvaluators(event.target.value.replace(/[^\d]/g, ""))}
-            sx={{ minWidth: 160 }}
-          />
-          <Button
-            variant="contained"
-            disabled={!selectedRun || pausing || autoAssigning}
-            onClick={() =>
-              requireAuth(async () => {
+      {authenticated ? (
+        <Box sx={{ mb: 2, display: "flex", justifyContent: "flex-end" }}>
+          <Stack direction={{ xs: "column", md: "row" }} spacing={1.5}>
+            <TextField
+              size="small"
+              label="Max Evaluators"
+              value={maxEvaluators}
+              onChange={(event) => setMaxEvaluators(event.target.value.replace(/[^\d]/g, ""))}
+              sx={{ minWidth: 160 }}
+            />
+            <Button
+              variant="contained"
+              disabled={!selectedRun || pausing || autoAssigning}
+              onClick={async () => {
                 setAutoAssigning(true);
                 try {
                   const limit = maxEvaluators.trim() ? Number(maxEvaluators) : null;
@@ -120,38 +120,34 @@ const RunModeContent = ({ runs, selectedRun }) => {
                   });
                 } catch (err) {
                   setSnackbar({ message: err?.message || "Failed to auto-assign run.", severity: "error" });
-                  throw err;
                 } finally {
                   setAutoAssigning(false);
                 }
-              })
-            }
-          >
-            Auto-Assign
-          </Button>
-          <Button
-            variant="contained"
-            color={authenticated ? "warning" : "inherit"}
-            disabled={!selectedRun || pausing || autoAssigning}
-            onClick={() =>
-              requireAuth(async () => {
+              }}
+            >
+              Auto-Assign
+            </Button>
+            <Button
+              variant="contained"
+              color="warning"
+              disabled={!selectedRun || pausing || autoAssigning}
+              onClick={async () => {
                 setPausing(true);
                 try {
                   await pauseRun(selectedRun);
                   setSnackbar({ message: "Pause requested.", severity: "success" });
                 } catch (err) {
                   setSnackbar({ message: err?.message || "Failed to pause run.", severity: "error" });
-                  throw err;
                 } finally {
                   setPausing(false);
                 }
-              })
-            }
-          >
-            Pause Run
-          </Button>
-        </Stack>
-      </Box>
+              }}
+            >
+              Pause Run
+            </Button>
+          </Stack>
+        </Box>
+      ) : null}
       <RunInfo runId={selectedRun} />
       <TaskQueuePanel tasks={taskList} selectedTaskId={selectedTask?.id ?? null} onSelectTask={setSelectedTaskId} />
       <EvaluatorPanel run={currentRun} panelResponse={evaluator} />

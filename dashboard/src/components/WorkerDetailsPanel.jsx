@@ -27,7 +27,7 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
     nodeName,
     pollMs: 3000,
   });
-  const { authenticated, requireAuth } = useAuth();
+  const { authenticated } = useAuth();
   const [selectedRunId, setSelectedRunId] = useState("");
   const [selectedRole, setSelectedRole] = useState("evaluator");
   const [busy, setBusy] = useState(false);
@@ -49,81 +49,77 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
         Node Details
       </Typography>
       {error ? <Alert severity="error">{error}</Alert> : null}
-      <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
-        <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "center" }}>
-          <FormControl size="small" sx={{ minWidth: 220 }}>
-            <InputLabel id="assign-run-label">Run</InputLabel>
-            <Select
-              labelId="assign-run-label"
-              label="Run"
-              value={selectedRunId}
-              onChange={(event) => setSelectedRunId(Number(event.target.value))}
-            >
-              {runOptions.map((run) => (
-                <MenuItem key={run.run_id} value={run.run_id}>
-                  {run.run_name} (#{run.run_id})
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <FormControl size="small" sx={{ minWidth: 180 }}>
-            <InputLabel id="assign-role-label">Role</InputLabel>
-            <Select
-              labelId="assign-role-label"
-              label="Role"
-              value={selectedRole}
-              onChange={(event) => setSelectedRole(event.target.value)}
-            >
-              <MenuItem value="evaluator">Evaluator</MenuItem>
-              <MenuItem value="sampler_aggregator">Sampler Aggregator</MenuItem>
-            </Select>
-          </FormControl>
-          <Stack direction="row" spacing={1}>
-            <Button
-              variant="contained"
-              disabled={busy || !selectedRunId}
-              onClick={() =>
-                requireAuth(async () => {
+      {authenticated ? (
+        <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+          <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "center" }}>
+            <FormControl size="small" sx={{ minWidth: 220 }}>
+              <InputLabel id="assign-run-label">Run</InputLabel>
+              <Select
+                labelId="assign-run-label"
+                label="Run"
+                value={selectedRunId}
+                onChange={(event) => setSelectedRunId(Number(event.target.value))}
+              >
+                {runOptions.map((run) => (
+                  <MenuItem key={run.run_id} value={run.run_id}>
+                    {run.run_name} (#{run.run_id})
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <FormControl size="small" sx={{ minWidth: 180 }}>
+              <InputLabel id="assign-role-label">Role</InputLabel>
+              <Select
+                labelId="assign-role-label"
+                label="Role"
+                value={selectedRole}
+                onChange={(event) => setSelectedRole(event.target.value)}
+              >
+                <MenuItem value="evaluator">Evaluator</MenuItem>
+                <MenuItem value="sampler_aggregator">Sampler Aggregator</MenuItem>
+              </Select>
+            </FormControl>
+            <Stack direction="row" spacing={1}>
+              <Button
+                variant="contained"
+                disabled={busy || !selectedRunId}
+                onClick={async () => {
                   setBusy(true);
                   try {
                     await assignNode(nodeName, { runId: Number(selectedRunId), role: selectedRole });
                     setSnackbar({ message: "Assignment updated." });
                   } catch (err) {
                     setSnackbar({ message: err?.message || "Failed to assign node." });
-                    throw err;
                   } finally {
                     setBusy(false);
                   }
-                })
-              }
-            >
-              {authenticated ? "Assign" : "Log In To Assign"}
-            </Button>
-            <Button
-              disabled={busy}
-              onClick={() =>
-                requireAuth(async () => {
+                }}
+              >
+                Assign
+              </Button>
+              <Button
+                disabled={busy}
+                onClick={async () => {
                   setBusy(true);
                   try {
                     await unassignNode(nodeName);
                     setSnackbar({ message: "Node unassigned." });
                   } catch (err) {
                     setSnackbar({ message: err?.message || "Failed to unassign node." });
-                    throw err;
                   } finally {
                     setBusy(false);
                   }
-                })
-              }
-            >
-              {authenticated ? "Unassign" : "Log In To Unassign"}
-            </Button>
-            <Button color="error" disabled={busy} onClick={() => setConfirmStopOpen(true)}>
-              Stop Node
-            </Button>
+                }}
+              >
+                Unassign
+              </Button>
+              <Button color="error" disabled={busy} onClick={() => setConfirmStopOpen(true)}>
+                Stop Node
+              </Button>
+            </Stack>
           </Stack>
-        </Stack>
-      </Paper>
+        </Paper>
+      ) : null}
       <PanelCollection panelSpecs={panelSpecs} panelStates={panelStates} />
       <Dialog open={confirmStopOpen} onClose={() => (busy ? null : setConfirmStopOpen(false))} maxWidth="sm" fullWidth>
         <DialogTitle>Stop Node?</DialogTitle>
@@ -139,21 +135,18 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
             color="error"
             variant="contained"
             disabled={busy}
-            onClick={() =>
-              requireAuth(async () => {
-                setBusy(true);
-                try {
-                  await stopNode(nodeName);
-                  setConfirmStopOpen(false);
-                  setSnackbar({ message: "Shutdown requested for node." });
-                } catch (err) {
-                  setSnackbar({ message: err?.message || "Failed to stop node." });
-                  throw err;
-                } finally {
-                  setBusy(false);
-                }
-              })
-            }
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await stopNode(nodeName);
+                setConfirmStopOpen(false);
+                setSnackbar({ message: "Shutdown requested for node." });
+              } catch (err) {
+                setSnackbar({ message: err?.message || "Failed to stop node." });
+              } finally {
+                setBusy(false);
+              }
+            }}
           >
             Confirm Stop
           </Button>
