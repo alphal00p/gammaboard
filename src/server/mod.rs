@@ -231,6 +231,7 @@ fn build_app(state: AppState) -> Router {
         .route("/runs/:id/auto-assign", post(auto_assign_run))
         .route("/nodes/:id/assign", post(assign_node))
         .route("/nodes/:id/unassign", post(unassign_node))
+        .route("/nodes/:id/stop", post(stop_node))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_admin_session,
@@ -679,6 +680,25 @@ async fn unassign_node(
     );
     json_response(serde_json::json!({
         "node_name": node_name,
+    }))
+}
+
+async fn stop_node(
+    State(state): State<AppState>,
+    AxumPath(node_name): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let rows = state.store.request_node_shutdown(&node_name).await?;
+    tracing::info!(
+        source = "control",
+        control_surface = "dashboard",
+        action = "node_stop",
+        node_name = %node_name,
+        rows_updated = rows,
+        "dashboard action completed"
+    );
+    json_response(serde_json::json!({
+        "node_name": node_name,
+        "rows_updated": rows,
     }))
 }
 

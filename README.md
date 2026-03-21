@@ -39,6 +39,8 @@ The dashboard shows runs, task output, nodes, performance, and logs.
 ## Dashboard Auth
 - Read-only dashboard endpoints stay open.
 - Steering actions currently require admin login and are backed by a signed session cookie.
+- The dashboard currently supports pausing runs, auto-assigning free nodes, assigning and unassigning nodes, and requesting a node shutdown.
+- Node shutdown from the dashboard is guarded by a confirmation dialog because it cannot be undone from the web UI.
 - Set `GAMMABOARD_ADMIN_PASSWORD_HASH` to enable dashboard auth.
 - Set `GAMMABOARD_SESSION_SECRET` when auth is enabled.
 - Set `GAMMABOARD_ALLOWED_ORIGIN` if the frontend is served from a different origin than `http://localhost:3000`.

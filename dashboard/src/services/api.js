@@ -173,6 +173,9 @@ export const assignNode = async (nodeName, { runId, role }, signal) =>
 export const unassignNode = async (nodeName, signal) =>
   apiPost(`/nodes/${nodeName}/unassign`, {}, "Failed to unassign node", signal);
 
+export const stopNode = async (nodeName, signal) =>
+  apiPost(`/nodes/${nodeName}/stop`, {}, "Failed to stop node", signal);
+
 export const fetchNodes = async (runId = null, signal) => {
   const data = await apiGet(`/nodes${buildQueryString([["run_id", runId]])}`, "Failed to fetch nodes", signal);
   return asArray(data).map(normalizeWorkerEntry).filter(Boolean);

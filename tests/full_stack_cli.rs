@@ -855,6 +855,15 @@ async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> 
         )
         .await?;
 
+    let stop = http_post_json(&server_url, "/api/nodes/w-1/stop", json!({}), Some(&cookie)).await?;
+    assert_eq!(stop.status(), reqwest::StatusCode::OK);
+
+    let shutdown_requested_at: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT shutdown_requested_at FROM nodes WHERE name = 'w-1'")
+            .fetch_one(&harness.pool)
+            .await?;
+    assert!(shutdown_requested_at.is_some());
+
     harness.stop_children().await;
     harness.pool.close().await;
     harness.db.cleanup().await?;

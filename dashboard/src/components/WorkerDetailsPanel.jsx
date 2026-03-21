@@ -2,6 +2,10 @@ import {
   Alert,
   Box,
   Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   FormControl,
   InputLabel,
   MenuItem,
@@ -15,7 +19,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthProvider";
 import PanelCollection from "./panels/PanelCollection";
 import { useNodePanels } from "../hooks/useNodePanels";
-import { assignNode, unassignNode } from "../services/api";
+import { assignNode, stopNode, unassignNode } from "../services/api";
 
 const WorkerDetailsPanel = ({ worker, runs = [] }) => {
   const nodeName = worker?.node_name || null;
@@ -28,6 +32,7 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
   const [selectedRole, setSelectedRole] = useState("evaluator");
   const [busy, setBusy] = useState(false);
   const [snackbar, setSnackbar] = useState(null);
+  const [confirmStopOpen, setConfirmStopOpen] = useState(false);
 
   const runOptions = useMemo(() => runs.filter((run) => Number.isFinite(Number(run?.run_id))), [runs]);
 
@@ -113,10 +118,47 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
             >
               {authenticated ? "Unassign" : "Log In To Unassign"}
             </Button>
+            <Button color="error" disabled={busy} onClick={() => setConfirmStopOpen(true)}>
+              Stop Node
+            </Button>
           </Stack>
         </Stack>
       </Paper>
       <PanelCollection panelSpecs={panelSpecs} panelStates={panelStates} />
+      <Dialog open={confirmStopOpen} onClose={() => (busy ? null : setConfirmStopOpen(false))} maxWidth="sm" fullWidth>
+        <DialogTitle>Stop Node?</DialogTitle>
+        <DialogContent>
+          This will request a complete shutdown of <strong>{nodeName}</strong>. Do you really want to continue? This
+          will permanently shut this down without a way to restart from the webapp.
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmStopOpen(false)} disabled={busy}>
+            Cancel
+          </Button>
+          <Button
+            color="error"
+            variant="contained"
+            disabled={busy}
+            onClick={() =>
+              requireAuth(async () => {
+                setBusy(true);
+                try {
+                  await stopNode(nodeName);
+                  setConfirmStopOpen(false);
+                  setSnackbar({ message: "Shutdown requested for node." });
+                } catch (err) {
+                  setSnackbar({ message: err?.message || "Failed to stop node." });
+                  throw err;
+                } finally {
+                  setBusy(false);
+                }
+              })
+            }
+          >
+            Confirm Stop
+          </Button>
+        </DialogActions>
+      </Dialog>
       <Snackbar
         open={Boolean(snackbar)}
         autoHideDuration={4000}

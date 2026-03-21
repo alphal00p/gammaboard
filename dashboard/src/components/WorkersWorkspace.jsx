@@ -20,6 +20,16 @@ import { formatDateTime } from "../utils/formatters";
 const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => {
   const [selectedNodeName, setSelectedNodeName] = useState(null);
   const nodeNameFor = (worker) => worker.node_name || null;
+  const sortedWorkers = useMemo(
+    () =>
+      [...workers].sort((left, right) =>
+        String(nodeNameFor(left) || "").localeCompare(String(nodeNameFor(right) || ""), undefined, {
+          numeric: true,
+          sensitivity: "base",
+        }),
+      ),
+    [workers],
+  );
 
   const displayRole = (worker) => worker.current_role || "None";
   const displayRun = (worker) => {
@@ -34,13 +44,13 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
       return;
     }
 
-    const stillExists = workers.some((worker) => nodeNameFor(worker) === selectedNodeName);
-    if (!stillExists) setSelectedNodeName(nodeNameFor(workers[0]));
-  }, [workers, selectedNodeName]);
+    const stillExists = sortedWorkers.some((worker) => nodeNameFor(worker) === selectedNodeName);
+    if (!stillExists) setSelectedNodeName(nodeNameFor(sortedWorkers[0]));
+  }, [selectedNodeName, sortedWorkers, workers.length]);
 
   const selectedWorker = useMemo(
-    () => workers.find((worker) => nodeNameFor(worker) === selectedNodeName) || null,
-    [workers, selectedNodeName],
+    () => sortedWorkers.find((worker) => nodeNameFor(worker) === selectedNodeName) || null,
+    [selectedNodeName, sortedWorkers],
   );
   const workerRoleCounts = useMemo(() => {
     return workers.reduce((acc, worker) => {
@@ -101,7 +111,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {workers.map((worker) => {
+                  {sortedWorkers.map((worker) => {
                     const nodeName = nodeNameFor(worker);
                     const selected = nodeName === selectedNodeName;
                     return (

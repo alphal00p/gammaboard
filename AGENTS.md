@@ -69,4 +69,4 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 
 ## Commit Discipline
 - Prefer small coherent stages.
-- After a stage is ready, suggest a concrete commit message.
+- After a stage is ready, provide a concrete commit message as a bare fenced `text` block with no label or commentary around it.
