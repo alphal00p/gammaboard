@@ -26,6 +26,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             return Ok(());
         }
 
+        self.reset_reconcile_backoff();
+
         self.stop_current().await;
 
         let Some((target, runner)) = self.build_reconciled_runner(desired_target).await? else {
@@ -200,11 +202,19 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             return Ok(None);
         }
 
-        let restored_snapshot = worker
+        let latest_snapshot = worker
             .store
             .load_sampler_runner_snapshot(worker.run_id)
-            .await?
-            .filter(|snapshot| snapshot.task_id == task.id);
+            .await?;
+        let initial_batch_size = latest_snapshot
+            .as_ref()
+            .filter(|snapshot| snapshot.task_id != task.id)
+            .map(|snapshot| {
+                snapshot.reduced_carryover_batch_size(
+                    spec.sampler_aggregator_runner_params.max_batch_size,
+                )
+            });
+        let restored_snapshot = latest_snapshot.filter(|snapshot| snapshot.task_id == task.id);
 
         let mut runner = SamplerAggregatorRunner::new(
             worker.run_id,
@@ -216,6 +226,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             spec.point_spec.clone(),
             spec.evaluator.clone(),
             restored_snapshot,
+            initial_batch_size,
         )
         .await
         .map_err(|err| StoreError::store(err.to_string()))?;
@@ -231,6 +242,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
     pub(super) fn note_role_started(&mut self) {
         self.retry_state.clear();
+        self.reset_reconcile_backoff();
     }
 
     pub(super) fn note_start_failure(&mut self, target: RoleTarget) {
@@ -250,6 +262,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
     pub(super) async fn finish_current_assignment(&mut self) -> Result<(), StoreError> {
         self.retry_state.clear();
+        self.reset_reconcile_backoff();
         self.stop_current().await;
         Ok(())
     }
@@ -260,6 +273,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         err: &StoreError,
     ) -> Result<(), StoreError> {
         self.note_start_failure(target);
+        self.reset_reconcile_backoff();
         self.stop_current().await;
         if target.role == crate::core::WorkerRole::SamplerAggregator {
             let cleared = self

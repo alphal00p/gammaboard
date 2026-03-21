@@ -1,5 +1,4 @@
 set dotenv-load := true
-poll_ms := "500"
 bin := "./target/dev-optim/gammaboard"
 
 build-backend:
@@ -55,7 +54,7 @@ start n:
     set -euo pipefail
 
     for i in $(seq 1 {{n}}); do
-        {{bin}} run-node --name "w-${i}" --poll-ms {{ poll_ms }} &
+        {{bin}} run-node --name "w-${i}"
     done
 
 live-test-basic:

@@ -2,14 +2,11 @@ use super::shared::with_cli_store;
 use anyhow::Result;
 use clap::Args;
 use gammaboard::runners::{NodeRunner, NodeRunnerConfig};
-use std::time::Duration;
 
 #[derive(Debug, Args)]
 pub struct RunNodeArgs {
     #[arg(long)]
     name: String,
-    #[arg(long, default_value_t = 1000)]
-    poll_ms: u64,
     #[arg(long, default_value_t = 3)]
     max_start_failures: u32,
     #[arg(long, default_value_t = 10)]
@@ -29,8 +26,8 @@ pub async fn run_node(args: RunNodeArgs, quiet: bool) -> Result<()> {
             store,
             node_name,
             NodeRunnerConfig {
-                min_tick_time: Duration::from_millis(args.poll_ms),
                 max_consecutive_start_failures: args.max_start_failures,
+                ..NodeRunnerConfig::default()
             },
         );
         node_runner.run().await?;

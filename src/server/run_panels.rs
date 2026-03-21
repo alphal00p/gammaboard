@@ -67,6 +67,15 @@ fn panel_specs() -> Vec<PanelSpec> {
         ),
         with_panel_width(
             panel_spec(
+                "run_batch",
+                "Batch",
+                PanelKind::KeyValue,
+                PanelHistoryMode::None,
+            ),
+            PanelWidth::Half,
+        ),
+        with_panel_width(
+            panel_spec(
                 "run_engine",
                 "Engine Summary",
                 PanelKind::KeyValue,
@@ -100,6 +109,12 @@ fn panel_states(
     let avg_queue_remaining = active_sampler
         .and_then(|worker| worker.sampler_runtime_metrics.as_ref())
         .and_then(queue_remaining_mean);
+    let current_batch_size = active_sampler
+        .and_then(|worker| worker.sampler_runtime_metrics.as_ref())
+        .and_then(batch_size_current);
+    let current_batch_eval_ms = active_sampler
+        .and_then(|worker| worker.sampler_runtime_metrics.as_ref())
+        .and_then(batch_eval_ms_mean);
 
     Ok(vec![
         key_value_panel(
@@ -167,6 +182,33 @@ fn panel_states(
             ],
         ),
         key_value_panel(
+            "run_batch",
+            vec![
+                key_value(
+                    "current_batch_size",
+                    "Current Batch Size",
+                    current_batch_size,
+                ),
+                key_value(
+                    "max_batch_size",
+                    "Max Batch Size",
+                    run_spec.sampler_aggregator_runner_params.max_batch_size,
+                ),
+                key_value(
+                    "current_batch_eval_ms",
+                    "Current Batch Eval (ms)",
+                    current_batch_eval_ms,
+                ),
+                key_value(
+                    "target_batch_eval_ms",
+                    "Target Batch Eval (ms)",
+                    run_spec
+                        .sampler_aggregator_runner_params
+                        .target_batch_eval_ms,
+                ),
+            ],
+        ),
+        key_value_panel(
             "run_engine",
             vec![
                 key_value("evaluator", "Evaluator", kind_of(&run_spec.evaluator)),
@@ -202,6 +244,25 @@ fn queue_remaining_mean(metrics: &JsonValue) -> Option<f64> {
         .and_then(|value| value.get("rolling"))
         .and_then(JsonValue::as_object)
         .and_then(|value| value.get("queue_remaining_ratio"))
+        .and_then(JsonValue::as_object)
+        .and_then(|value| value.get("mean"))
+        .and_then(JsonValue::as_f64)
+}
+
+fn batch_size_current(metrics: &JsonValue) -> Option<usize> {
+    metrics
+        .as_object()
+        .and_then(|value| value.get("batch_size_current"))
+        .and_then(JsonValue::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+}
+
+fn batch_eval_ms_mean(metrics: &JsonValue) -> Option<f64> {
+    metrics
+        .as_object()
+        .and_then(|value| value.get("rolling"))
+        .and_then(JsonValue::as_object)
+        .and_then(|value| value.get("eval_ms_per_batch"))
         .and_then(JsonValue::as_object)
         .and_then(|value| value.get("mean"))
         .and_then(JsonValue::as_f64)

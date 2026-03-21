@@ -167,8 +167,6 @@ impl FullStackHarness {
             .arg("run-node")
             .arg("--name")
             .arg(node_name)
-            .arg("--poll-ms")
-            .arg("100")
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
 

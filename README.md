@@ -133,6 +133,8 @@ Or directly:
 gammaboard run-node --name w-1
 ```
 
+`run-node` uses a fast-start reconcile backoff internally: it starts polling at `100ms`, grows by a factor of `1.1`, and caps at `1s`.
+
 Node names are unique operator handles. Each live worker also owns an internal UUID lease in PostgreSQL. If the worker cannot re-announce itself for 30 seconds, it shuts down.
 
 Assign roles:

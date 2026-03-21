@@ -25,6 +25,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - `uuid` is the live `run-node` process incarnation.
 - Nodes use a single announce operation to register and renew their lease.
 - If announce fails for 30 seconds, the node shuts down.
+- `run-node` reconcile polling should use a fast-start backoff: start at `100ms`, multiply by `1.1`, cap at `1s`, and reset on meaningful role/task changes.
 - Graceful shutdown should expire the lease immediately so the same node name can be reused at once.
 - Desired/current assignments live directly on `nodes`.
 - At most one sampler-aggregator may be assigned to a run at a time. Many evaluators are allowed.
@@ -35,6 +36,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Executable tasks may declare `start_from = { run_id, task_id }` to branch from an older task snapshot.
 - Sample tasks may omit `observable`; that means reuse the previous observable state.
 - `image` and `plot_line` tasks must declare their observable family explicitly and start with a fresh full observable.
+- Fresh sampler tasks may inherit a reduced initial batch size from the previous sampler task, but should not carry over the full rolling metrics state.
 - Claimed batches are fenced by live node ownership. Do not add a second independent batch lease.
 
 ## Panels And Dashboard

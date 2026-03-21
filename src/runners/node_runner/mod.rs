@@ -24,6 +24,9 @@ use self::role_runner::RoleRunner;
 pub struct NodeRunnerConfig {
     pub min_tick_time: Duration,
     pub max_consecutive_start_failures: u32,
+    pub reconcile_initial_backoff: Duration,
+    pub reconcile_backoff_factor: f64,
+    pub reconcile_max_backoff: Duration,
 }
 
 pub trait NodeRunnerStore:
@@ -53,8 +56,11 @@ impl<T> NodeRunnerStore for T where
 impl Default for NodeRunnerConfig {
     fn default() -> Self {
         Self {
-            min_tick_time: Duration::from_millis(1_000),
+            min_tick_time: Duration::from_millis(50),
             max_consecutive_start_failures: 3,
+            reconcile_initial_backoff: Duration::from_millis(50),
+            reconcile_backoff_factor: 1.1,
+            reconcile_max_backoff: Duration::from_millis(1_000),
         }
     }
 }
@@ -122,6 +128,7 @@ pub struct NodeRunner<S: NodeRunnerStore> {
     config: NodeRunnerConfig,
     active_runner: Option<ActiveRoleRunner<S>>,
     retry_state: RetryState,
+    reconcile_backoff: Duration,
 }
 
 impl<S: NodeRunnerStore> NodeRunner<S> {
@@ -130,10 +137,23 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             store,
             node_name: node_name.into(),
             node_uuid: Uuid::new_v4().to_string(),
+            reconcile_backoff: config.reconcile_initial_backoff,
             config,
             active_runner: None,
             retry_state: RetryState::default(),
         }
+    }
+
+    pub(super) fn reset_reconcile_backoff(&mut self) {
+        self.reconcile_backoff = self.config.reconcile_initial_backoff;
+    }
+
+    fn next_reconcile_sleep(&mut self) -> Duration {
+        let current = self.reconcile_backoff;
+        let next_secs = (current.as_secs_f64() * self.config.reconcile_backoff_factor)
+            .min(self.config.reconcile_max_backoff.as_secs_f64());
+        self.reconcile_backoff = Duration::from_secs_f64(next_secs);
+        current
     }
 
     fn current_target(&self) -> Option<RoleTarget> {
@@ -170,7 +190,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                             info!("stopping node-runner");
                             break;
                         }
-                        _ = sleep(self.config.min_tick_time) => {}
+                        _ = sleep(self.next_reconcile_sleep()) => {}
                     }
                     continue;
                 }
@@ -205,11 +225,18 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                         Err(err) => {
                             warn!("role runner tick failed: {err}");
                             self.fail_current_assignment(target, &err).await?;
+                            self.reset_reconcile_backoff();
                             false
                         }
                     };
                     if done {
                         self.finish_current_assignment().await?;
+                        self.reset_reconcile_backoff();
+                        continue;
+                    }
+                    if self.active_runner.is_none() {
+                        self.reset_reconcile_backoff();
+                        continue;
                     }
                     let elapsed = tick_started.elapsed();
                     if elapsed < self.config.min_tick_time {
@@ -230,7 +257,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                         info!("stopping node-runner");
                         break;
                     }
-                    _ = sleep(self.config.min_tick_time) => {}
+                    _ = sleep(self.next_reconcile_sleep()) => {}
                 }
             }
 

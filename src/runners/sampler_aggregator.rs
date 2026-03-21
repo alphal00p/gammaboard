@@ -20,6 +20,10 @@ use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
+const MIN_BATCH_SIZE: usize = 16;
+const MAX_BATCH_SIZE_UP_FACTOR: f64 = 4.0;
+const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.25;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerAggregatorRunnerParams {
     pub performance_snapshot_interval_ms: u64,
@@ -67,6 +71,14 @@ impl From<&RollingMetric> for RollingMetricSnapshot {
             mean: metric.value(),
             std_dev: metric.std_dev(),
         }
+    }
+}
+
+impl SamplerAggregatorRunnerSnapshot {
+    pub fn reduced_carryover_batch_size(&self, max_batch_size: usize) -> usize {
+        let reduced = ((self.runtime_state.batch_size_current as f64) * MAX_BATCH_SIZE_DOWN_FACTOR)
+            .round() as usize;
+        reduced.clamp(MIN_BATCH_SIZE, max_batch_size)
     }
 }
 
@@ -135,11 +147,6 @@ impl<S> SamplerAggregatorRunner<S>
 where
     S: SamplerWorkerStore,
 {
-    const MIN_BATCH_SIZE: usize = 1;
-    const MAX_BATCH_SIZE_UP_FACTOR: f64 = 1.25;
-    const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.80;
-    const MIN_BATCH_SIZE_CHANGE_RATIO: f64 = 0.03;
-
     fn validate_runner_config(config: &SamplerAggregatorRunnerParams) -> Result<(), RunnerError> {
         if config.max_batch_size == 0 {
             return Err(RunnerError::Engine(EngineError::engine(
@@ -203,17 +210,11 @@ where
         let current_eval_batch_ms =
             eval_ms_per_sample * self.runtime_state.batch_size_current as f64;
         let raw_ratio = self.config.target_batch_eval_ms / current_eval_batch_ms;
-        let ratio = raw_ratio.clamp(
-            Self::MAX_BATCH_SIZE_DOWN_FACTOR,
-            Self::MAX_BATCH_SIZE_UP_FACTOR,
-        );
-        if (ratio - 1.0).abs() < Self::MIN_BATCH_SIZE_CHANGE_RATIO {
-            return;
-        }
+        let ratio = raw_ratio.clamp(MAX_BATCH_SIZE_DOWN_FACTOR, MAX_BATCH_SIZE_UP_FACTOR);
 
         let next = ((self.runtime_state.batch_size_current as f64) * ratio).round() as usize;
         self.runtime_state.batch_size_current =
-            next.clamp(Self::MIN_BATCH_SIZE, self.config.max_batch_size);
+            next.clamp(MIN_BATCH_SIZE, self.config.max_batch_size);
     }
 
     fn compute_produce_limit(&self, pending_before_tick: usize) -> usize {
@@ -340,6 +341,7 @@ where
         point_spec: PointSpec,
         evaluator_config: EvaluatorConfig,
         restored_snapshot: Option<SamplerAggregatorRunnerSnapshot>,
+        initial_batch_size: Option<usize>,
     ) -> Result<Self, RunnerError> {
         Self::validate_runner_config(&config)?;
         let Some(sampler_config) = task.task.sampler_config() else {
@@ -479,7 +481,8 @@ where
 
             let runtime_state = SamplerRuntimeState {
                 produced_samples_total: persisted_progress.nr_produced_samples,
-                batch_size_current: config.max_batch_size.min(64).max(Self::MIN_BATCH_SIZE),
+                batch_size_current: initial_batch_size
+                    .unwrap_or_else(|| config.max_batch_size.min(64).max(MIN_BATCH_SIZE)),
                 ..SamplerRuntimeState::default()
             };
 
@@ -815,6 +818,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::{SamplerAggregatorRunnerSnapshot, SamplerRuntimeState};
     use crate::core::{LineRasterGeometry, Linspace, PlaneRasterGeometry, SamplerAggregatorConfig};
     use crate::sampling::{
         NaiveMonteCarloSamplerParams, RasterLineSamplerParams, RasterPlaneSamplerParams,
@@ -874,5 +878,22 @@ mod tests {
         assert!(
             SamplerAggregatorSnapshot::NaiveMonteCarlo { raw: json!({}) }.matches_config(&naive)
         );
+    }
+
+    #[test]
+    fn carryover_batch_size_is_reduced_and_clamped() {
+        let snapshot = SamplerAggregatorRunnerSnapshot {
+            task_id: 1,
+            sampler_snapshot: SamplerAggregatorSnapshot::NaiveMonteCarlo { raw: json!({}) },
+            observable_state: crate::evaluation::ObservableState::empty_scalar(),
+            runtime_state: SamplerRuntimeState {
+                batch_size_current: 128,
+                ..SamplerRuntimeState::default()
+            },
+            last_pending_after_enqueue: None,
+        };
+
+        assert_eq!(snapshot.reduced_carryover_batch_size(512), 32);
+        assert_eq!(snapshot.reduced_carryover_batch_size(24), 24);
     }
 }
