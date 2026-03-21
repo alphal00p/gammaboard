@@ -1,3 +1,7 @@
+use argon2::{
+    Argon2,
+    password_hash::{PasswordHash, PasswordVerifier},
+};
 use axum::{
     body::Body,
     extract::State,
@@ -8,28 +12,23 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Json, Response},
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
-use hmac::{Hmac, Mac};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
 use std::{
     env,
     time::{SystemTime, UNIX_EPOCH},
 };
-use subtle::ConstantTimeEq;
 
 use super::{ApiError, AppState};
 
-type HmacSha256 = Hmac<Sha256>;
-
 const COOKIE_NAME: &str = "gammaboard_admin_session";
-const SESSION_TTL_SECS: i64 = 12 * 60 * 60;
-const PBKDF2_KEY_LEN: usize = 32;
+const SESSION_TTL_SECS: u64 = 12 * 60 * 60;
 
 #[derive(Clone)]
 pub struct AuthConfig {
     password_hash: String,
-    session_secret: Vec<u8>,
+    encoding_key: EncodingKey,
+    decoding_key: DecodingKey,
 }
 
 #[derive(Debug, Serialize)]
@@ -42,9 +41,9 @@ pub struct LoginRequest {
     pub password: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct SessionClaims {
-    exp: i64,
+    exp: u64,
 }
 
 pub fn load_auth_config() -> anyhow::Result<Option<AuthConfig>> {
@@ -62,7 +61,8 @@ pub fn load_auth_config() -> anyhow::Result<Option<AuthConfig>> {
 
     Ok(Some(AuthConfig {
         password_hash,
-        session_secret: session_secret.into_bytes(),
+        encoding_key: EncodingKey::from_secret(session_secret.as_bytes()),
+        decoding_key: DecodingKey::from_secret(session_secret.as_bytes()),
     }))
 }
 
@@ -91,12 +91,10 @@ pub async fn require_admin_session(
         return ApiError::Unauthorized("invalid origin".to_string()).into_response();
     }
 
-    let token = cookie_value(request.headers(), COOKIE_NAME);
-    if !token
-        .as_deref()
-        .and_then(|value| verify_session_token(&auth.session_secret, value))
-        .is_some()
-    {
+    let Some(token) = cookie_value(request.headers(), COOKIE_NAME) else {
+        return ApiError::Unauthorized("admin login required".to_string()).into_response();
+    };
+    if verify_session_token(auth, &token).is_none() {
         return ApiError::Unauthorized("admin login required".to_string()).into_response();
     }
 
@@ -120,7 +118,7 @@ pub async fn login(
         return Err(ApiError::Unauthorized("invalid password".to_string()));
     }
 
-    let token = sign_session_token(&auth.session_secret)?;
+    let token = sign_session_token(auth)?;
     Ok(response_with_cookie(
         session_cookie(&token, SESSION_TTL_SECS),
         SessionStatus {
@@ -149,12 +147,38 @@ pub fn auth_status_from_headers(state: &AppState, headers: &HeaderMap) -> Sessio
         .auth
         .as_ref()
         .and_then(|auth| {
-            cookie_value(headers, COOKIE_NAME)
-                .as_deref()
-                .and_then(|value| verify_session_token(&auth.session_secret, value))
+            cookie_value(headers, COOKIE_NAME).and_then(|value| verify_session_token(auth, &value))
         })
         .is_some();
     SessionStatus { authenticated }
+}
+
+fn verify_password_hash(encoded: &str, password: &str) -> bool {
+    let Ok(hash) = PasswordHash::new(encoded) else {
+        return false;
+    };
+    Argon2::default()
+        .verify_password(password.as_bytes(), &hash)
+        .is_ok()
+}
+
+fn sign_session_token(auth: &AuthConfig) -> Result<String, ApiError> {
+    encode(
+        &Header::new(Algorithm::HS256),
+        &SessionClaims {
+            exp: now_unix_secs() + SESSION_TTL_SECS,
+        },
+        &auth.encoding_key,
+    )
+    .map_err(|err| ApiError::Internal(err.to_string()))
+}
+
+fn verify_session_token(auth: &AuthConfig, token: &str) -> Option<SessionClaims> {
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.validate_exp = true;
+    decode::<SessionClaims>(token, &auth.decoding_key, &validation)
+        .ok()
+        .map(|value| value.claims)
 }
 
 fn response_with_cookie<T: Serialize>(cookie: String, payload: T) -> Response {
@@ -167,7 +191,7 @@ fn response_with_cookie<T: Serialize>(cookie: String, payload: T) -> Response {
     response
 }
 
-fn session_cookie(token: &str, max_age_secs: i64) -> String {
+fn session_cookie(token: &str, max_age_secs: u64) -> String {
     let secure = env_true("GAMMABOARD_SECURE_COOKIE");
     let mut parts = vec![
         format!("{COOKIE_NAME}={token}"),
@@ -205,90 +229,9 @@ fn origin_allowed(headers: &HeaderMap, allowed_origin: Option<&HeaderValue>) -> 
     allowed_origin.is_none_or(|allowed| allowed == origin)
 }
 
-fn sign_session_token(secret: &[u8]) -> Result<String, ApiError> {
-    let claims = SessionClaims {
-        exp: now_unix_secs() + SESSION_TTL_SECS,
-    };
-    let payload = serde_json::to_vec(&claims).map_err(|err| ApiError::Internal(err.to_string()))?;
-    let payload = STANDARD_NO_PAD.encode(payload);
-    let signature = sign(secret, payload.as_bytes())?;
-    Ok(format!("{payload}.{signature}"))
-}
-
-fn verify_session_token(secret: &[u8], token: &str) -> Option<SessionClaims> {
-    let (payload, signature) = token.split_once('.')?;
-    let expected = sign(secret, payload.as_bytes()).ok()?;
-    if expected.as_bytes().ct_eq(signature.as_bytes()).unwrap_u8() != 1 {
-        return None;
-    }
-    let claims: SessionClaims =
-        serde_json::from_slice(&STANDARD_NO_PAD.decode(payload).ok()?).ok()?;
-    (claims.exp > now_unix_secs()).then_some(claims)
-}
-
-fn sign(secret: &[u8], payload: &[u8]) -> Result<String, ApiError> {
-    let mut mac =
-        HmacSha256::new_from_slice(secret).map_err(|err| ApiError::Internal(err.to_string()))?;
-    mac.update(payload);
-    Ok(STANDARD_NO_PAD.encode(mac.finalize().into_bytes()))
-}
-
-fn verify_password_hash(encoded: &str, password: &str) -> bool {
-    let Some((prefix, rest)) = encoded.split_once('$') else {
-        return false;
-    };
-    if prefix != "pbkdf2_sha256" {
-        return false;
-    }
-    let mut pieces = rest.split('$');
-    let Some(iterations) = pieces.next().and_then(|value| value.parse::<u32>().ok()) else {
-        return false;
-    };
-    let Some(salt) = pieces
-        .next()
-        .and_then(|value| STANDARD_NO_PAD.decode(value).ok())
-    else {
-        return false;
-    };
-    let Some(expected) = pieces
-        .next()
-        .and_then(|value| STANDARD_NO_PAD.decode(value).ok())
-    else {
-        return false;
-    };
-    if pieces.next().is_some() || expected.len() != PBKDF2_KEY_LEN {
-        return false;
-    }
-
-    let actual = pbkdf2_sha256(password.as_bytes(), &salt, iterations);
-    actual.ct_eq(&expected).unwrap_u8() == 1
-}
-
-fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32) -> Vec<u8> {
-    let mut block_input = Vec::with_capacity(salt.len() + 4);
-    block_input.extend_from_slice(salt);
-    block_input.extend_from_slice(&1u32.to_be_bytes());
-
-    let mut u = hmac_sha256(password, &block_input);
-    let mut out = u.clone();
-    for _ in 1..iterations.max(1) {
-        u = hmac_sha256(password, &u);
-        for (lhs, rhs) in out.iter_mut().zip(&u) {
-            *lhs ^= rhs;
-        }
-    }
-    out
-}
-
-fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
-    let mut mac = HmacSha256::new_from_slice(key).expect("hmac key");
-    mac.update(data);
-    mac.finalize().into_bytes().to_vec()
-}
-
-fn now_unix_secs() -> i64 {
+fn now_unix_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs() as i64
+        .as_secs()
 }

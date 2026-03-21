@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod auto_assign;
 pub mod completion;
 pub mod node;
@@ -7,6 +8,7 @@ pub mod server;
 pub mod shared;
 
 use anyhow::Result;
+use auth::{AuthArgs, run_auth_hash_command};
 use auto_assign::{AutoAssignArgs, run_auto_assign_command};
 use clap::{ArgAction, Parser, Subcommand};
 use completion::{CompletionArgs, run_completion};
@@ -37,6 +39,8 @@ enum Command {
     RunNode(RunNodeArgs),
     /// API server
     Server(ServerArgs),
+    /// Auth helpers
+    Auth(AuthArgs),
     /// Generate shell completion scripts
     Completion(CompletionArgs),
 }
@@ -49,6 +53,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Command::Node(args) => run_node_commands(args.command, quiet).await,
         Command::RunNode(args) => run_node(args, quiet).await,
         Command::Server(args) => run_server(args, quiet).await,
+        Command::Auth(args) => run_auth_hash_command(args),
         Command::Completion(args) => run_completion(args),
     }
 }

@@ -1,9 +1,10 @@
+use argon2::{
+    Argon2,
+    password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
+};
 use assert_cmd::Command;
-use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
-use hmac::{Hmac, Mac};
 use predicates::prelude::*;
 use serde_json::json;
-use sha2::Sha256;
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -13,8 +14,6 @@ use tempfile::NamedTempFile;
 use tokio::process::{Child, Command as TokioCommand};
 use tokio::time::{Instant, sleep};
 use url::Url;
-
-type HmacSha256 = Hmac<Sha256>;
 
 fn unique_suffix() -> String {
     let nanos = SystemTime::now()
@@ -359,34 +358,12 @@ async fn http_post_json(
     Ok(request.send().await?)
 }
 
-fn pbkdf2_hash_for_tests(password: &str) -> String {
-    let iterations = 10_000u32;
-    let salt = b"gammaboard-test-salt";
-    let mut block_input = Vec::with_capacity(salt.len() + 4);
-    block_input.extend_from_slice(salt);
-    block_input.extend_from_slice(&1u32.to_be_bytes());
-
-    let mut u = hmac_sha256(password.as_bytes(), &block_input);
-    let mut out = u.clone();
-    for _ in 1..iterations {
-        u = hmac_sha256(password.as_bytes(), &u);
-        for (lhs, rhs) in out.iter_mut().zip(&u) {
-            *lhs ^= rhs;
-        }
-    }
-
-    format!(
-        "pbkdf2_sha256${}${}${}",
-        iterations,
-        STANDARD_NO_PAD.encode(salt),
-        STANDARD_NO_PAD.encode(out)
-    )
-}
-
-fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
-    let mut mac = HmacSha256::new_from_slice(key).expect("hmac key");
-    mac.update(data);
-    mac.finalize().into_bytes().to_vec()
+fn hash_password_for_tests(password: &str) -> String {
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .expect("argon2 hash")
+        .to_string()
 }
 
 #[tokio::test]
@@ -753,7 +730,7 @@ async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> 
         .start_server_with_envs(&[
             (
                 "GAMMABOARD_ADMIN_PASSWORD_HASH",
-                pbkdf2_hash_for_tests(password),
+                hash_password_for_tests(password),
             ),
             (
                 "GAMMABOARD_SESSION_SECRET",
