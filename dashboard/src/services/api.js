@@ -164,6 +164,15 @@ export const logout = async (signal) => apiPost("/auth/logout", {}, "Failed to l
 
 export const pauseRun = async (runId, signal) => apiPost(`/runs/${runId}/pause`, {}, "Failed to pause run", signal);
 
+export const autoAssignRun = async (runId, { maxEvaluators = null } = {}, signal) =>
+  apiPost(`/runs/${runId}/auto-assign`, { max_evaluators: maxEvaluators }, "Failed to auto-assign run", signal);
+
+export const assignNode = async (nodeName, { runId, role }, signal) =>
+  apiPost(`/nodes/${nodeName}/assign`, { run_id: runId, role }, "Failed to assign node", signal);
+
+export const unassignNode = async (nodeName, signal) =>
+  apiPost(`/nodes/${nodeName}/unassign`, {}, "Failed to unassign node", signal);
+
 export const fetchNodes = async (runId = null, signal) => {
   const data = await apiGet(`/nodes${buildQueryString([["run_id", runId]])}`, "Failed to fetch nodes", signal);
   return asArray(data).map(normalizeWorkerEntry).filter(Boolean);

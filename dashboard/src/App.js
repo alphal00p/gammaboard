@@ -1,4 +1,4 @@
-import { Alert, Box, Button, Chip, Container, Snackbar, Stack, Tab, Tabs, Typography } from "@mui/material";
+import { Alert, Box, Button, Chip, Container, Snackbar, Stack, Tab, Tabs, TextField, Typography } from "@mui/material";
 import { useEffect, useState } from "react";
 import gammaboardLogo from "./assets/gammalooplogo.svg";
 import { AuthProvider, useAuth } from "./auth/AuthProvider";
@@ -16,7 +16,7 @@ import { useRunConfigPanels } from "./hooks/useRunConfigPanels";
 import { useRuns } from "./hooks/useRuns";
 import { useRunTasks } from "./hooks/useRunTasks";
 import { useWorkersData } from "./hooks/useWorkersData";
-import { pauseRun } from "./services/api";
+import { autoAssignRun, pauseRun } from "./services/api";
 import { asArray } from "./utils/collections";
 import { asTaskList, getCurrentTask } from "./utils/tasks";
 
@@ -63,6 +63,8 @@ const RunModeContent = ({ runs, selectedRun }) => {
   const [selectedTaskId, setSelectedTaskId] = useState(null);
   const [snackbar, setSnackbar] = useState(null);
   const [pausing, setPausing] = useState(false);
+  const [autoAssigning, setAutoAssigning] = useState(false);
+  const [maxEvaluators, setMaxEvaluators] = useState("");
   const { authenticated, requireAuth } = useAuth();
 
   useEffect(() => {
@@ -91,27 +93,64 @@ const RunModeContent = ({ runs, selectedRun }) => {
   return (
     <>
       <Box sx={{ mb: 2, display: "flex", justifyContent: "flex-end" }}>
-        <Button
-          variant="contained"
-          color={authenticated ? "warning" : "inherit"}
-          disabled={!selectedRun || pausing}
-          onClick={() =>
-            requireAuth(async () => {
-              setPausing(true);
-              try {
-                await pauseRun(selectedRun);
-                setSnackbar({ message: "Pause requested.", severity: "success" });
-              } catch (err) {
-                setSnackbar({ message: err?.message || "Failed to pause run.", severity: "error" });
-                throw err;
-              } finally {
-                setPausing(false);
-              }
-            })
-          }
-        >
-          Pause Run
-        </Button>
+        <Stack direction={{ xs: "column", md: "row" }} spacing={1.5}>
+          <TextField
+            size="small"
+            label="Max Evaluators"
+            value={maxEvaluators}
+            onChange={(event) => setMaxEvaluators(event.target.value.replace(/[^\d]/g, ""))}
+            sx={{ minWidth: 160 }}
+          />
+          <Button
+            variant="contained"
+            disabled={!selectedRun || pausing || autoAssigning}
+            onClick={() =>
+              requireAuth(async () => {
+                setAutoAssigning(true);
+                try {
+                  const limit = maxEvaluators.trim() ? Number(maxEvaluators) : null;
+                  const response = await autoAssignRun(selectedRun, { maxEvaluators: limit });
+                  const assignedEvaluators = Array.isArray(response?.assigned_evaluators)
+                    ? response.assigned_evaluators.length
+                    : 0;
+                  const assignedSampler = response?.assigned_sampler ? 1 : 0;
+                  setSnackbar({
+                    message: `Auto-assign updated ${assignedSampler + assignedEvaluators} node(s).`,
+                    severity: "success",
+                  });
+                } catch (err) {
+                  setSnackbar({ message: err?.message || "Failed to auto-assign run.", severity: "error" });
+                  throw err;
+                } finally {
+                  setAutoAssigning(false);
+                }
+              })
+            }
+          >
+            Auto-Assign
+          </Button>
+          <Button
+            variant="contained"
+            color={authenticated ? "warning" : "inherit"}
+            disabled={!selectedRun || pausing || autoAssigning}
+            onClick={() =>
+              requireAuth(async () => {
+                setPausing(true);
+                try {
+                  await pauseRun(selectedRun);
+                  setSnackbar({ message: "Pause requested.", severity: "success" });
+                } catch (err) {
+                  setSnackbar({ message: err?.message || "Failed to pause run.", severity: "error" });
+                  throw err;
+                } finally {
+                  setPausing(false);
+                }
+              })
+            }
+          >
+            Pause Run
+          </Button>
+        </Stack>
       </Box>
       <RunInfo runId={selectedRun} />
       <TaskQueuePanel tasks={taskList} selectedTaskId={selectedTask?.id ?? null} onSelectTask={setSelectedTaskId} />
@@ -187,6 +226,7 @@ function AppContent() {
       ) : mode === "workers" ? (
         <WorkersWorkspace
           workers={workersData.workers}
+          runs={runList}
           isConnected={workersData.isConnected}
           lastUpdate={workersData.lastUpdate}
           error={workersData.error}

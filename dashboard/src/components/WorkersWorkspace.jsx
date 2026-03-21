@@ -17,7 +17,7 @@ import WorkerDetailsPanel from "./WorkerDetailsPanel";
 import EmptyStateCard from "./common/EmptyStateCard";
 import { formatDateTime } from "../utils/formatters";
 
-const WorkersWorkspace = ({ workers, isConnected, lastUpdate, error }) => {
+const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => {
   const [selectedNodeName, setSelectedNodeName] = useState(null);
   const nodeNameFor = (worker) => worker.node_name || null;
 
@@ -132,7 +132,7 @@ const WorkersWorkspace = ({ workers, isConnected, lastUpdate, error }) => {
       </Paper>
 
       {selectedWorker ? (
-        <WorkerDetailsPanel worker={selectedWorker} isConnected={isConnected} />
+        <WorkerDetailsPanel worker={selectedWorker} runs={runs} isConnected={isConnected} />
       ) : (
         <Alert severity="info">Select a node to view assignment and heartbeat details.</Alert>
       )}

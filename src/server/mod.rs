@@ -8,6 +8,7 @@ mod worker_panels;
 
 use crate::core::{
     AggregationStore, ControlPlaneStore, RunReadStore, RunSpecStore, RunTaskStore, StoreError,
+    WorkerRole,
 };
 use crate::evaluation::ObservableState;
 use crate::server::config_panels::{
@@ -177,6 +178,17 @@ struct WorkersQuery {
     run_id: Option<i32>,
 }
 
+#[derive(Deserialize)]
+struct AssignNodeRequest {
+    run_id: i32,
+    role: String,
+}
+
+#[derive(Deserialize)]
+struct AutoAssignRequest {
+    max_evaluators: Option<usize>,
+}
+
 fn build_app(state: AppState) -> Router {
     let public_api_routes = Router::new()
         .route("/health", get(health_check))
@@ -216,6 +228,9 @@ fn build_app(state: AppState) -> Router {
 
     let protected_api_routes = Router::new()
         .route("/runs/:id/pause", post(pause_run))
+        .route("/runs/:id/auto-assign", post(auto_assign_run))
+        .route("/nodes/:id/assign", post(assign_node))
+        .route("/nodes/:id/unassign", post(unassign_node))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_admin_session,
@@ -547,6 +562,123 @@ async fn pause_run(
     json_response(serde_json::json!({
         "run_id": run_id,
         "assignments_cleared": cleared,
+    }))
+}
+
+async fn assign_node(
+    State(state): State<AppState>,
+    AxumPath(node_name): AxumPath<String>,
+    AxumJson(payload): AxumJson<AssignNodeRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let role: WorkerRole = payload
+        .role
+        .parse()
+        .map_err(|err: String| ApiError::BadRequest(err))?;
+    let run = state
+        .store
+        .get_run_progress(payload.run_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("run {} not found", payload.run_id)))?;
+    state
+        .store
+        .upsert_desired_assignment(&node_name, role, payload.run_id)
+        .await?;
+    tracing::info!(
+        source = "control",
+        control_surface = "dashboard",
+        action = "node_assign",
+        node_name = %node_name,
+        run_id = payload.run_id,
+        run_name = %run.run_name,
+        role = %role,
+        "dashboard action completed"
+    );
+    json_response(serde_json::json!({
+        "node_name": node_name,
+        "run_id": payload.run_id,
+        "role": role.as_str(),
+    }))
+}
+
+async fn auto_assign_run(
+    State(state): State<AppState>,
+    AxumPath(run_id): AxumPath<i32>,
+    AxumJson(payload): AxumJson<AutoAssignRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let run = state
+        .store
+        .get_run_progress(run_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
+    let nodes = state.store.list_nodes(None).await?;
+    let free_nodes = nodes
+        .iter()
+        .filter(|node| node.desired_assignment.is_none())
+        .map(|node| node.name.clone())
+        .collect::<Vec<_>>();
+    let sampler_already_assigned = nodes.iter().any(|node| {
+        node.desired_assignment.as_ref().is_some_and(|assignment| {
+            assignment.run_id == run_id && assignment.role == WorkerRole::SamplerAggregator
+        })
+    });
+
+    let evaluator_limit = payload.max_evaluators.unwrap_or(usize::MAX);
+    let mut assigned_sampler = None;
+    let mut assigned_evaluators = Vec::new();
+    let mut free_iter = free_nodes.into_iter();
+
+    if !sampler_already_assigned {
+        if let Some(node_name) = free_iter.next() {
+            state
+                .store
+                .upsert_desired_assignment(&node_name, WorkerRole::SamplerAggregator, run_id)
+                .await?;
+            assigned_sampler = Some(node_name);
+        }
+    }
+
+    for node_name in free_iter.take(evaluator_limit) {
+        state
+            .store
+            .upsert_desired_assignment(&node_name, WorkerRole::Evaluator, run_id)
+            .await?;
+        assigned_evaluators.push(node_name);
+    }
+
+    tracing::info!(
+        source = "control",
+        control_surface = "dashboard",
+        action = "run_auto_assign",
+        run_id,
+        run_name = %run.run_name,
+        sampler_already_assigned,
+        assigned_sampler = assigned_sampler.as_deref().unwrap_or("none"),
+        assigned_evaluators = assigned_evaluators.len(),
+        requested_evaluator_limit = payload.max_evaluators,
+        "dashboard action completed"
+    );
+    json_response(serde_json::json!({
+        "run_id": run_id,
+        "sampler_already_assigned": sampler_already_assigned,
+        "assigned_sampler": assigned_sampler,
+        "assigned_evaluators": assigned_evaluators,
+    }))
+}
+
+async fn unassign_node(
+    State(state): State<AppState>,
+    AxumPath(node_name): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.store.clear_desired_assignment(&node_name).await?;
+    tracing::info!(
+        source = "control",
+        control_surface = "dashboard",
+        action = "node_unassign",
+        node_name = %node_name,
+        "dashboard action completed"
+    );
+    json_response(serde_json::json!({
+        "node_name": node_name,
     }))
 }
 

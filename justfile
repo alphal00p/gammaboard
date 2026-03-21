@@ -12,7 +12,6 @@ build:
 build-frontend:
     cd dashboard && npm run build
 
-
 serve-frontend:
     cd dashboard && npx serve build
 

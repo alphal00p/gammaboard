@@ -790,6 +790,71 @@ async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> 
         )
         .await?;
 
+    let assign = http_post_json(
+        &server_url,
+        "/api/nodes/w-1/assign",
+        json!({ "run_id": run_id, "role": "evaluator" }),
+        Some(&cookie),
+    )
+    .await?;
+    assert_eq!(assign.status(), reqwest::StatusCode::OK);
+
+    harness
+        .wait_for(
+            "authenticated assign restores desired assignment",
+            Duration::from_secs(10),
+            || async {
+                let state = harness.node_state("w-1").await?;
+                Ok(state.0 == Some(run_id) && state.1.as_deref() == Some("evaluator"))
+            },
+        )
+        .await?;
+
+    harness.start_node("w-2").await?;
+    let auto_assign = http_post_json(
+        &server_url,
+        &format!("/api/runs/{run_id}/auto-assign"),
+        json!({ "max_evaluators": 1 }),
+        Some(&cookie),
+    )
+    .await?;
+    assert_eq!(auto_assign.status(), reqwest::StatusCode::OK);
+
+    harness
+        .wait_for(
+            "authenticated auto-assign sets desired assignments",
+            Duration::from_secs(10),
+            || async {
+                let w1 = harness.node_state("w-1").await?;
+                let w2 = harness.node_state("w-2").await?;
+                Ok(
+                    (w1.0 == Some(run_id) && w1.1.as_deref() == Some("sampler_aggregator"))
+                        || (w2.0 == Some(run_id) && w2.1.as_deref() == Some("sampler_aggregator")),
+                )
+            },
+        )
+        .await?;
+
+    let unassign = http_post_json(
+        &server_url,
+        "/api/nodes/w-1/unassign",
+        json!({}),
+        Some(&cookie),
+    )
+    .await?;
+    assert_eq!(unassign.status(), reqwest::StatusCode::OK);
+
+    harness
+        .wait_for(
+            "authenticated unassign clears desired assignment",
+            Duration::from_secs(10),
+            || async {
+                let state = harness.node_state("w-1").await?;
+                Ok(state.0.is_none() && state.1.is_none())
+            },
+        )
+        .await?;
+
     harness.stop_children().await;
     harness.pool.close().await;
     harness.db.cleanup().await?;
