@@ -1,14 +1,51 @@
-use crate::core::{EvaluatorPerformanceMetrics, SamplerPerformanceMetrics};
+use crate::core::SamplerPerformanceMetrics;
 use crate::evaluation::ObservableState;
-use crate::evaluation::PointSpec;
 use crate::stores::{
     EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress,
     SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot, WorkQueueStats,
     WorkerLogEntry, WorkerLogPage,
 };
 use chrono::{DateTime, Utc};
+use serde::de::DeserializeOwned;
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
+use std::{fmt::Display, io};
+
+fn invalid_data_error(context: &str, err: impl Display) -> sqlx::Error {
+    sqlx::Error::Decode(Box::new(io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("{context}: {err}"),
+    )))
+}
+
+fn decode_json<T: DeserializeOwned>(value: JsonValue, context: &str) -> Result<T, sqlx::Error> {
+    serde_json::from_value(value).map_err(|err| invalid_data_error(context, err))
+}
+
+fn decode_optional_json<T: DeserializeOwned>(value: Option<JsonValue>) -> Option<T> {
+    value.and_then(|payload| serde_json::from_value(payload).ok())
+}
+
+fn decode_json_or_default<T: DeserializeOwned + Default>(value: JsonValue) -> T {
+    serde_json::from_value(value).unwrap_or_default()
+}
+
+fn default_sampler_performance_metrics() -> SamplerPerformanceMetrics {
+    SamplerPerformanceMetrics {
+        produced_batches: 0,
+        produced_samples: 0,
+        avg_produce_time_per_sample_ms: 0.0,
+        std_produce_time_per_sample_ms: 0.0,
+        ingested_batches: 0,
+        ingested_samples: 0,
+        avg_ingest_time_per_sample_ms: 0.0,
+        std_ingest_time_per_sample_ms: 0.0,
+    }
+}
+
+fn id_text(value: impl Display) -> String {
+    value.to_string()
+}
 
 #[derive(sqlx::FromRow)]
 struct RunProgressRow {
@@ -50,15 +87,9 @@ impl TryFrom<RunProgressRow> for RunProgress {
             integration_params: value.integration_params,
             point_spec: value
                 .point_spec
-                .map(serde_json::from_value::<PointSpec>)
-                .transpose()
-                .map_err(|err| {
-                    sqlx::Error::Decode(Box::new(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!("invalid point_spec payload: {err}"),
-                    )))
-                })?,
-            active_task_id: value.active_task_id.map(|id| id.to_string()),
+                .map(|payload| decode_json(payload, "invalid point_spec payload"))
+                .transpose()?,
+            active_task_id: value.active_task_id.map(id_text),
             target: value.target,
             evaluator_init_metadata: value.evaluator_init_metadata,
             sampler_aggregator_init_metadata: value.sampler_aggregator_init_metadata,
@@ -90,9 +121,9 @@ struct TaskOutputSnapshotRow {
 impl From<TaskOutputSnapshotRow> for TaskOutputSnapshot {
     fn from(value: TaskOutputSnapshotRow) -> Self {
         Self {
-            id: value.id.to_string(),
+            id: id_text(value.id),
             run_id: value.run_id,
-            task_id: value.task_id.to_string(),
+            task_id: id_text(value.task_id),
             persisted_output: value.persisted_output,
             created_at: value.created_at,
         }
@@ -114,15 +145,15 @@ impl TryFrom<TaskStageSnapshotRow> for TaskStageSnapshot {
     fn try_from(value: TaskStageSnapshotRow) -> Result<Self, Self::Error> {
         let observable_state =
             ObservableState::from_json(&value.observable_state).map_err(|err| {
-                sqlx::Error::Decode(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("failed to decode observable_state from run_stage_snapshots: {err}"),
-                )))
+                invalid_data_error(
+                    "failed to decode observable_state from run_stage_snapshots",
+                    err,
+                )
             })?;
         Ok(Self {
-            id: value.id.to_string(),
+            id: id_text(value.id),
             run_id: value.run_id,
-            task_id: value.task_id.to_string(),
+            task_id: id_text(value.task_id),
             observable_state,
             created_at: value.created_at,
         })
@@ -144,7 +175,7 @@ struct WorkerLogRow {
 impl From<WorkerLogRow> for WorkerLogEntry {
     fn from(value: WorkerLogRow) -> Self {
         Self {
-            id: value.id.to_string(),
+            id: id_text(value.id),
             ts: value.ts,
             run_id: value.run_id,
             node_uuid: value.node_uuid,
@@ -193,12 +224,8 @@ impl From<RegisteredWorkerRow> for RegisteredWorkerEntry {
             version: value.version,
             status: value.status,
             last_seen: value.last_seen,
-            evaluator_metrics: value.evaluator_metrics.and_then(|metrics| {
-                serde_json::from_value::<EvaluatorPerformanceMetrics>(metrics).ok()
-            }),
-            sampler_metrics: value.sampler_metrics.and_then(|metrics| {
-                serde_json::from_value::<SamplerPerformanceMetrics>(metrics).ok()
-            }),
+            evaluator_metrics: decode_optional_json(value.evaluator_metrics),
+            sampler_metrics: decode_optional_json(value.sampler_metrics),
             sampler_runtime_metrics: value.sampler_runtime_metrics,
             sampler_engine_diagnostics: value.sampler_engine_diagnostics,
         }
@@ -220,18 +247,7 @@ impl From<EvaluatorPerformanceHistoryRow> for EvaluatorPerformanceHistoryEntry {
             id: value.id,
             run_id: value.run_id,
             worker_id: value.worker_id,
-            metrics: serde_json::from_value::<EvaluatorPerformanceMetrics>(value.metrics)
-                .unwrap_or(EvaluatorPerformanceMetrics {
-                    batches_completed: 0,
-                    samples_evaluated: 0,
-                    avg_time_per_sample_ms: 0.0,
-                    std_time_per_sample_ms: 0.0,
-                    avg_evaluate_time_per_sample_ms: 0.0,
-                    std_evaluate_time_per_sample_ms: 0.0,
-                    avg_parametrization_time_per_sample_ms: 0.0,
-                    std_parametrization_time_per_sample_ms: 0.0,
-                    idle_profile: None,
-                }),
+            metrics: decode_json_or_default(value.metrics),
             created_at: value.created_at,
         }
     }
@@ -254,18 +270,8 @@ impl From<SamplerPerformanceHistoryRow> for SamplerPerformanceHistoryEntry {
             id: value.id,
             run_id: value.run_id,
             worker_id: value.worker_id,
-            metrics: serde_json::from_value::<SamplerPerformanceMetrics>(value.metrics).unwrap_or(
-                SamplerPerformanceMetrics {
-                    produced_batches: 0,
-                    produced_samples: 0,
-                    avg_produce_time_per_sample_ms: 0.0,
-                    std_produce_time_per_sample_ms: 0.0,
-                    ingested_batches: 0,
-                    ingested_samples: 0,
-                    avg_ingest_time_per_sample_ms: 0.0,
-                    std_ingest_time_per_sample_ms: 0.0,
-                },
-            ),
+            metrics: serde_json::from_value(value.metrics)
+                .unwrap_or_else(|_| default_sampler_performance_metrics()),
             runtime_metrics: value.runtime_metrics,
             engine_diagnostics: value.engine_diagnostics,
             created_at: value.created_at,

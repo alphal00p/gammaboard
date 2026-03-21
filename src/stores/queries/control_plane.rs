@@ -1,5 +1,17 @@
 use crate::core::WorkerRole;
-use sqlx::PgPool;
+use sqlx::{PgPool, postgres::PgQueryResult};
+
+const CLEAR_DESIRED_ASSIGNMENT_SET: &str = r#"
+    desired_run_id = NULL,
+    desired_role = NULL,
+    updated_at = now()
+"#;
+
+const CLEAR_CURRENT_ASSIGNMENT_SET: &str = r#"
+    active_run_id = NULL,
+    active_role = NULL,
+    updated_at = now()
+"#;
 
 pub(crate) struct DesiredAssignmentRaw {
     pub node_name: String,
@@ -17,6 +29,64 @@ pub(crate) struct NodeRaw {
     pub current_run_id: Option<i32>,
     pub current_run_name: Option<String>,
     pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+fn stale_node_uuid_error(node_uuid: &str) -> sqlx::Error {
+    sqlx::Error::Protocol(format!("node uuid '{node_uuid}' is no longer live"))
+}
+
+fn require_live_uuid(result: PgQueryResult, node_uuid: &str) -> Result<(), sqlx::Error> {
+    if result.rows_affected() == 0 {
+        Err(stale_node_uuid_error(node_uuid))
+    } else {
+        Ok(())
+    }
+}
+
+fn desired_assignment_raw(
+    (node_name, role, run_id): (String, String, i32),
+) -> DesiredAssignmentRaw {
+    DesiredAssignmentRaw {
+        node_name,
+        role,
+        run_id,
+    }
+}
+
+fn node_raw(
+    (
+        name,
+        uuid,
+        desired_role,
+        desired_run_id,
+        desired_run_name,
+        current_role,
+        current_run_id,
+        current_run_name,
+        last_seen,
+    ): (
+        String,
+        String,
+        Option<String>,
+        Option<i32>,
+        Option<String>,
+        Option<String>,
+        Option<i32>,
+        Option<String>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    ),
+) -> NodeRaw {
+    NodeRaw {
+        name,
+        uuid,
+        desired_role,
+        desired_run_id,
+        desired_run_name,
+        current_role,
+        current_run_id,
+        current_run_name,
+        last_seen,
+    }
 }
 
 pub(crate) async fn upsert_desired_assignment(
@@ -110,16 +180,15 @@ pub(crate) async fn clear_desired_assignment(
     pool: &PgPool,
     node_name: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query(&format!(
         r#"
         UPDATE nodes
         SET
-            desired_run_id = NULL,
-            desired_role = NULL,
-            updated_at = now()
+            {set_clause}
         WHERE name = $1
         "#,
-    )
+        set_clause = CLEAR_DESIRED_ASSIGNMENT_SET
+    ))
     .bind(node_name)
     .execute(pool)
     .await?;
@@ -130,16 +199,15 @@ pub(crate) async fn clear_desired_assignments_for_run(
     pool: &PgPool,
     run_id: i32,
 ) -> Result<u64, sqlx::Error> {
-    let result = sqlx::query(
+    let result = sqlx::query(&format!(
         r#"
         UPDATE nodes
         SET
-            desired_run_id = NULL,
-            desired_role = NULL,
-            updated_at = now()
+            {set_clause}
         WHERE desired_run_id = $1
         "#,
-    )
+        set_clause = CLEAR_DESIRED_ASSIGNMENT_SET
+    ))
     .bind(run_id)
     .execute(pool)
     .await?;
@@ -147,15 +215,14 @@ pub(crate) async fn clear_desired_assignments_for_run(
 }
 
 pub(crate) async fn clear_all_desired_assignments(pool: &PgPool) -> Result<u64, sqlx::Error> {
-    let result = sqlx::query(
+    let result = sqlx::query(&format!(
         r#"
         UPDATE nodes
         SET
-            desired_run_id = NULL,
-            desired_role = NULL,
-            updated_at = now()
+            {set_clause}
         "#,
-    )
+        set_clause = CLEAR_DESIRED_ASSIGNMENT_SET
+    ))
     .execute(pool)
     .await?;
     Ok(result.rows_affected())
@@ -178,11 +245,7 @@ pub(crate) async fn get_desired_assignment(
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(|(node_name, role, run_id)| DesiredAssignmentRaw {
-        node_name,
-        role,
-        run_id,
-    }))
+    Ok(row.map(desired_assignment_raw))
 }
 
 pub(crate) async fn list_desired_assignments(
@@ -202,14 +265,7 @@ pub(crate) async fn list_desired_assignments(
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(|(node_name, role, run_id)| DesiredAssignmentRaw {
-            node_name,
-            role,
-            run_id,
-        })
-        .collect())
+    Ok(rows.into_iter().map(desired_assignment_raw).collect())
 }
 
 pub(crate) async fn list_nodes(
@@ -252,34 +308,7 @@ pub(crate) async fn list_nodes(
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(
-            |(
-                name,
-                uuid,
-                desired_role,
-                desired_run_id,
-                desired_run_name,
-                current_role,
-                current_run_id,
-                current_run_name,
-                last_seen,
-            )| {
-                NodeRaw {
-                    name,
-                    uuid,
-                    desired_role,
-                    desired_run_id,
-                    desired_run_name,
-                    current_role,
-                    current_run_id,
-                    current_run_name,
-                    last_seen,
-                }
-            },
-        )
-        .collect())
+    Ok(rows.into_iter().map(node_raw).collect())
 }
 
 pub(crate) async fn set_current_assignment(
@@ -303,37 +332,26 @@ pub(crate) async fn set_current_assignment(
     .bind(role.as_str())
     .execute(pool)
     .await?;
-    if result.rows_affected() == 0 {
-        return Err(sqlx::Error::Protocol(format!(
-            "node uuid '{node_uuid}' is no longer live"
-        )));
-    }
-    Ok(())
+    require_live_uuid(result, node_uuid)
 }
 
 pub(crate) async fn clear_current_assignment(
     pool: &PgPool,
     node_uuid: &str,
 ) -> Result<(), sqlx::Error> {
-    let result = sqlx::query(
+    let result = sqlx::query(&format!(
         r#"
         UPDATE nodes
         SET
-            active_run_id = NULL,
-            active_role = NULL,
-            updated_at = now()
+            {set_clause}
         WHERE uuid = $1
         "#,
-    )
+        set_clause = CLEAR_CURRENT_ASSIGNMENT_SET
+    ))
     .bind(node_uuid)
     .execute(pool)
     .await?;
-    if result.rows_affected() == 0 {
-        return Err(sqlx::Error::Protocol(format!(
-            "node uuid '{node_uuid}' is no longer live"
-        )));
-    }
-    Ok(())
+    require_live_uuid(result, node_uuid)
 }
 
 pub(crate) async fn request_node_shutdown(
