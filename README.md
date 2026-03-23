@@ -142,6 +142,7 @@ Sample tasks may inherit omitted `sampler_aggregator`, `materializer`, and `batc
 Omitted `materializer` defaults to `identity` when no previous stage exists. Omitted `batch_transforms` inherit the previous list, while `batch_transforms = []` explicitly clears them.
 Sample tasks may omit `observable` to reuse the previous observable state.
 Use `nr_samples = 0` when you want a sample task to only update stage state without producing work.
+Task files used with `gammaboard run task add` may contain either a single `task = { ... }`, a `[[task_queue]]` array, or both. When both are present, `task` is appended first.
 
 Executable tasks may also branch from an older stage snapshot:
 ```toml

@@ -3,6 +3,7 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use comfy_table::{Cell, CellAlignment, ContentArrangement, Table};
 use gammaboard::PgStore;
+use gammaboard::api::nodes as node_api;
 use gammaboard::config::CliConfig;
 use gammaboard::core::{ControlPlaneStore, RegisteredNode, WorkerRole};
 
@@ -46,19 +47,18 @@ pub async fn run_node_commands(
                     run,
                 } => {
                     let run = resolve_run_ref(&store, &run).await?;
-                    store
-                        .upsert_desired_assignment(&node_name, role.into(), run.run_id)
-                        .await?;
+                    let assigned =
+                        node_api::assign_node(&store, &node_name, run.run_id, role.into()).await?;
                     tracing::info!(
                         "assigned node={} role={} run_id={} run_name={}",
-                        node_name,
-                        WorkerRole::from(role),
-                        run.run_id,
-                        run.run_name
+                        assigned.node_name,
+                        assigned.role,
+                        assigned.run_id,
+                        assigned.run_name
                     );
                 }
                 NodeCommand::Unassign { node_name } => {
-                    store.clear_desired_assignment(&node_name).await?;
+                    node_api::unassign_node(&store, &node_name).await?;
                     tracing::info!("unassigned node={}", node_name);
                 }
                 NodeCommand::List { node_name } => {
@@ -90,8 +90,12 @@ async fn stop_nodes(store: &PgStore, selection: NodeSelection) -> Result<()> {
     }
 
     for node_name in selection.node_names {
-        let rows = store.request_node_shutdown(&node_name).await?;
-        tracing::info!("requested shutdown for node={node_name}: rows_updated={rows}");
+        let stopped = node_api::stop_node(store, &node_name).await?;
+        tracing::info!(
+            "requested shutdown for node={}: rows_updated={}",
+            stopped.node_name,
+            stopped.rows_updated
+        );
     }
     Ok(())
 }

@@ -3,6 +3,7 @@
 Use this file for architecture and implementation rules. Use `README.md` for setup and normal usage.
 
 ## Ownership
+- `src/api/*`: high-level typed application use-cases shared by CLI and server.
 - `src/core/*`: shared contracts, run/task types, store traits, errors.
 - `src/evaluation/*`: evaluator-side batch/result semantics and observables.
 - `src/sampling/*`: sampler-side latent queue semantics, samplers, materializers, and batch transforms.
@@ -38,9 +39,11 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Snapshots are the branchable state timeline. Tasks are queued work items that may produce snapshots, but are not themselves the canonical branch identity.
 - Executable tasks may declare `start_from = { snapshot_id = ... }` to branch from an older stage snapshot.
 - Task preflight belongs on task insertion. Bare `run add` should validate run-global construction and root-stage creation, while appended tasks should be validated against the current or referenced stage snapshots before persistence.
+- Shared run and node orchestration should live in `src/api/*`; CLI and server should stay thin adapters around typed API calls.
 - Sample tasks may omit `sampler_aggregator`, `materializer`, and `batch_transforms`; omitted values inherit the previous effective stage, materializer falls back to `identity` when no prior stage exists, and `batch_transforms = []` explicitly clears the inherited transform list.
 - Sample tasks may omit `observable`; that means reuse the previous observable state.
 - `sample` with `nr_samples = 0` is the only supported no-work stage update task shape.
+- Task files used for `run task add` may contain either `task = { ... }`, `[[task_queue]]`, or both. Normalize them as `task` first, then `task_queue`. Missing both should resolve to an empty task list.
 - There is no run-level observable default. A first executable task that needs a fresh observable must declare it explicitly.
 - `image` and `plot_line` tasks must declare their observable family explicitly and start with a fresh full observable.
 - Fresh sampler tasks may inherit a reduced initial batch size from the previous sampler task, but should not carry over the full rolling metrics state.
