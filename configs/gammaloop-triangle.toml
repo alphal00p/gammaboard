@@ -34,8 +34,6 @@ min_samples_for_update = 1024
 samples_for_update = 16384
 initial_training_rate = 0.1
 final_training_rate = 0.001
-[task_queue.parametrization]
-kind = "identity"
 
 
 [[task_queue]]
@@ -43,10 +41,8 @@ kind = "sample"
 nr_samples = 10_000_000
 [task_queue.sampler_aggregator]
 kind = "havana_inference"
-[task_queue.parametrization]
+[task_queue.materializer]
 kind = "havana_inference"
-[task_queue.parametrization.inner]
-kind = "identity"
 
 [evaluator]
 kind = "gammaloop"
@@ -59,9 +55,6 @@ use_f128 = false
 training_projection = "abs"
 continuous_dims = 3
 discrete_dims = 0
-
-[parametrization]
-kind = "identity" # "spherical"
 
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 2000

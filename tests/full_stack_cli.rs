@@ -966,9 +966,6 @@ observable = "scalar"
 [task_queue.sampler_aggregator]
 kind = "naive_monte_carlo"
 
-[parametrization]
-kind = "identity"
-
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 200
 
@@ -1121,9 +1118,6 @@ kind = "naive_monte_carlo"
 [[task_queue]]
 kind = "sample"
 nr_samples = 16
-
-[parametrization]
-kind = "identity"
 "#,
     );
 

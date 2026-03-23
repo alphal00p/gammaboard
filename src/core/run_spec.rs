@@ -4,9 +4,9 @@ use crate::evaluation::{
 };
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use crate::sampling::{
-    HavanaInferenceParametrizationParams, HavanaInferenceSamplerParams, HavanaSamplerParams,
-    IdentityParametrizationParams, NaiveMonteCarloSamplerParams, RasterLineSamplerParams,
-    RasterPlaneSamplerParams, SphericalParametrizationParams, UnitBallParametrizationParams,
+    HavanaInferenceMaterializerParams, HavanaInferenceSamplerParams, HavanaSamplerParams,
+    IdentityMaterializerParams, NaiveMonteCarloSamplerParams, RasterLineSamplerParams,
+    RasterPlaneSamplerParams, SphericalBatchTransformParams, UnitBallBatchTransformParams,
 };
 use serde::{Deserialize, Serialize};
 
@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 pub struct IntegrationParams {
     pub evaluator: EvaluatorConfig,
     pub sampler_aggregator: SamplerAggregatorConfig,
-    pub parametrization: ParametrizationConfig,
+    pub materializer: MaterializerConfig,
+    pub batch_transforms: Vec<BatchTransformConfig>,
     pub evaluator_runner_params: EvaluatorRunnerParams,
     pub sampler_aggregator_runner_params: SamplerAggregatorRunnerParams,
 }
@@ -104,31 +105,34 @@ impl SamplerAggregatorConfig {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ParametrizationConfig {
+pub enum MaterializerConfig {
     Identity {
         #[serde(flatten)]
-        params: IdentityParametrizationParams,
-    },
-    UnitBall {
-        #[serde(flatten)]
-        params: UnitBallParametrizationParams,
-    },
-    Spherical {
-        #[serde(flatten)]
-        params: SphericalParametrizationParams,
+        params: IdentityMaterializerParams,
     },
     HavanaInference {
         #[serde(flatten)]
-        params: HavanaInferenceParametrizationParams,
+        params: HavanaInferenceMaterializerParams,
     },
 }
 
-impl ParametrizationConfig {}
-
-impl ParametrizationConfig {
+impl MaterializerConfig {
     pub fn identity_default() -> Self {
         Self::Identity {
-            params: IdentityParametrizationParams::default(),
+            params: IdentityMaterializerParams::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BatchTransformConfig {
+    UnitBall {
+        #[serde(flatten)]
+        params: UnitBallBatchTransformParams,
+    },
+    Spherical {
+        #[serde(flatten)]
+        params: SphericalBatchTransformParams,
+    },
 }

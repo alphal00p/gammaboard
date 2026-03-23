@@ -1,7 +1,7 @@
-use crate::core::ParametrizationConfig;
 use crate::core::SamplerAggregatorConfig;
+use crate::core::{BatchTransformConfig, MaterializerConfig};
 use crate::evaluation::{Batch, BatchResult, ObservableState};
-use crate::sampling::{LatentBatch, ParametrizationSnapshot, SamplerAggregatorSnapshot};
+use crate::sampling::{LatentBatch, MaterializerSnapshot, SamplerAggregatorSnapshot};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -134,8 +134,8 @@ pub struct EvaluatorPerformanceMetrics {
     pub std_time_per_sample_ms: f64,
     pub avg_evaluate_time_per_sample_ms: f64,
     pub std_evaluate_time_per_sample_ms: f64,
-    pub avg_parametrization_time_per_sample_ms: f64,
-    pub std_parametrization_time_per_sample_ms: f64,
+    pub avg_materialization_time_per_sample_ms: f64,
+    pub std_materialization_time_per_sample_ms: f64,
     pub idle_profile: Option<EvaluatorIdleProfileMetrics>,
 }
 
@@ -232,11 +232,12 @@ pub struct RunStageSnapshot {
     pub sampler_snapshot: SamplerAggregatorSnapshot,
     pub observable_state: Option<ObservableState>,
     pub sampler_aggregator: SamplerAggregatorConfig,
-    pub parametrization: ParametrizationState,
+    pub materializer: MaterializerState,
+    pub batch_transforms: Vec<BatchTransformConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ParametrizationState {
-    pub config: ParametrizationConfig,
-    pub snapshot: ParametrizationSnapshot,
+pub struct MaterializerState {
+    pub config: MaterializerConfig,
+    pub snapshot: MaterializerSnapshot,
 }

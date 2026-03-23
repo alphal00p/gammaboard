@@ -236,10 +236,10 @@ fn panel_states(
                         .unwrap_or_else(|| "none".to_string()),
                 ),
                 key_value(
-                    "parametrization",
-                    "Parametrization",
+                    "materializer",
+                    "Materializer",
                     current_task
-                        .and_then(|task| task.task.parametrization_config())
+                        .and_then(|task| task.task.materializer_config())
                         .map(|config| kind_of(&config))
                         .unwrap_or_else(|| "none".to_string()),
                 ),

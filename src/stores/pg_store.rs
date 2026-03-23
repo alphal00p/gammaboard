@@ -464,7 +464,8 @@ impl ControlPlaneStore for PgStore {
                 sampler_snapshot: initial_stage_snapshot.sampler_snapshot.clone(),
                 observable_state: initial_stage_snapshot.observable_state.clone(),
                 sampler_aggregator: initial_stage_snapshot.sampler_aggregator.clone(),
-                parametrization: initial_stage_snapshot.parametrization.clone(),
+                materializer: initial_stage_snapshot.materializer.clone(),
+                batch_transforms: initial_stage_snapshot.batch_transforms.clone(),
             },
         )
         .await
@@ -858,7 +859,8 @@ mod tests {
                 "kind": "naive_monte_carlo",
                 "training_target_samples": 2
             },
-            "parametrization": { "kind": "identity" },
+            "materializer": { "kind": "identity" },
+            "batch_transforms": [],
             "evaluator_runner_params": {
                 "performance_snapshot_interval_ms": 5000
             },
@@ -899,11 +901,12 @@ mod tests {
             crate::core::SamplerAggregatorConfig::NaiveMonteCarlo { params }
                 if params.training_target_samples == 2
         ));
-        assert_eq!(params.parametrization.kind_str(), "identity");
+        assert_eq!(params.materializer.kind_str(), "identity");
         assert!(matches!(
-            &params.parametrization,
-            crate::core::ParametrizationConfig::Identity { .. }
+            &params.materializer,
+            crate::core::MaterializerConfig::Identity { .. }
         ));
+        assert!(params.batch_transforms.is_empty());
         assert_eq!(
             spec.evaluator_runner_params,
             EvaluatorRunnerParams::deserialize(json!({
@@ -934,7 +937,8 @@ mod tests {
                 "evaluator": { "kind": "sin_evaluator" },
                 "observable": "scalar",
                 "sampler_aggregator": { "kind": "naive_monte_carlo" },
-                "parametrization": { "kind": "identity" }
+                "materializer": { "kind": "identity" },
+                "batch_transforms": []
             }),
             json!({
                 "continuous_dims": 1,
@@ -973,8 +977,8 @@ mod tests {
                 "discrete_dims": 0
             }),
         )
-        .expect_err("missing parametrization implementation should fail");
-        assert!(err.to_string().contains("parametrization"));
+        .expect_err("missing materializer implementation should fail");
+        assert!(err.to_string().contains("materializer"));
     }
 
     #[test]
@@ -996,7 +1000,7 @@ mod tests {
         let sanitized = parse_run_create_payload(&json!({
             "evaluator": { "kind": "sin_evaluator" },
             "sampler_aggregator": { "kind": "naive_monte_carlo" },
-            "parametrization": { "kind": "identity", "a": 1 }
+            "materializer": { "kind": "identity", "a": 1 }
         }))
         .expect("parse");
 
@@ -1005,7 +1009,7 @@ mod tests {
             json!({
                 "evaluator": { "kind": "sin_evaluator" },
                 "sampler_aggregator": { "kind": "naive_monte_carlo" },
-                "parametrization": { "kind": "identity", "a": 1 }
+                "materializer": { "kind": "identity", "a": 1 }
             })
         );
     }

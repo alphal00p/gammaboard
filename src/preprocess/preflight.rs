@@ -1,16 +1,16 @@
 use std::collections::BTreeMap;
 
 use crate::core::{
-    BuildError, IntoPreflightTask, ObservableConfig, ParametrizationConfig, ParametrizationState,
-    RunStageSnapshot, RunTaskSpec, SamplerAggregatorConfig,
+    BatchTransformConfig, BuildError, IntoPreflightTask, MaterializerConfig, MaterializerState,
+    ObservableConfig, RunStageSnapshot, RunTaskSpec, SamplerAggregatorConfig,
 };
-use crate::evaluation::{EvalBatchOptions, Evaluator, ObservableState, PointSpec};
+use crate::evaluation::{Batch, EvalBatchOptions, Evaluator, ObservableState, PointSpec};
 use crate::sampling::{SamplerAggregatorSnapshot, StageHandoff};
 
 #[derive(Debug, Clone)]
 struct PreflightStageState {
     sampler_snapshot: SamplerAggregatorSnapshot,
-    parametrization: ParametrizationState,
+    materializer: MaterializerState,
     observable_config: Option<ObservableConfig>,
 }
 
@@ -18,7 +18,7 @@ impl PreflightStageState {
     fn handoff(&self) -> StageHandoff<'_> {
         StageHandoff {
             sampler_snapshot: Some(&self.sampler_snapshot),
-            parametrization_snapshot: Some(&self.parametrization.snapshot),
+            materializer_snapshot: Some(&self.materializer.snapshot),
             observable_state: None,
         }
     }
@@ -26,7 +26,7 @@ impl PreflightStageState {
     fn from_snapshot(snapshot: &RunStageSnapshot) -> Self {
         Self {
             sampler_snapshot: snapshot.sampler_snapshot.clone(),
-            parametrization: snapshot.parametrization.clone(),
+            materializer: snapshot.materializer.clone(),
             observable_config: snapshot
                 .observable_state
                 .as_ref()
@@ -37,18 +37,22 @@ impl PreflightStageState {
 
 pub(super) fn build_initial_stage(
     initial_sampler_aggregator: &SamplerAggregatorConfig,
-    initial_parametrization: &ParametrizationConfig,
+    initial_materializer: &MaterializerConfig,
+    initial_batch_transforms: &[BatchTransformConfig],
     point_spec: &PointSpec,
 ) -> Result<(serde_json::Value, RunStageSnapshot), BuildError> {
     let mut sampler = initial_sampler_aggregator.build(point_spec.clone(), None, None)?;
     sampler.validate_point_spec(point_spec)?;
     let sampler_init_metadata = sampler.get_init_metadata();
 
-    let parametrization = initial_parametrization.build(None)?;
-    parametrization.validate_point_spec(point_spec)?;
-    let parametrization_state = ParametrizationState {
-        config: initial_parametrization.clone(),
-        snapshot: parametrization.snapshot()?,
+    let materializer = initial_materializer.build(None)?;
+    materializer.validate_point_spec(point_spec)?;
+    for transform in initial_batch_transforms {
+        transform.build()?.validate_point_spec(point_spec)?;
+    }
+    let materializer_state = MaterializerState {
+        config: initial_materializer.clone(),
+        snapshot: materializer.snapshot()?,
     };
 
     Ok((
@@ -62,7 +66,8 @@ pub(super) fn build_initial_stage(
             sampler_snapshot: sampler.snapshot()?,
             observable_state: None,
             sampler_aggregator: initial_sampler_aggregator.clone(),
-            parametrization: parametrization_state,
+            materializer: materializer_state,
+            batch_transforms: initial_batch_transforms.to_vec(),
         },
     ))
 }
@@ -99,9 +104,11 @@ pub fn preflight_task_suffix(
             );
         }
 
-        let (Some(sampler_aggregator), Some(parametrization)) =
-            (task.sampler_config(), task.parametrization_config())
-        else {
+        let (Some(sampler_aggregator), Some(materializer), Some(batch_transforms)) = (
+            task.sampler_config(),
+            task.materializer_config(),
+            task.batch_transforms_config(),
+        ) else {
             continue;
         };
         let observable_config = task
@@ -115,7 +122,8 @@ pub fn preflight_task_suffix(
         current_state = if task.nr_expected_samples() == Some(0) {
             preflight_configure_stage(
                 &sampler_aggregator,
-                &parametrization,
+                &materializer,
+                &batch_transforms,
                 Some(current_state.handoff()),
                 point_spec,
                 Some(observable_config),
@@ -126,7 +134,8 @@ pub fn preflight_task_suffix(
                     .and_then(|n| usize::try_from(n).ok()),
                 observable_config,
                 &sampler_aggregator,
-                &parametrization,
+                &materializer,
+                &batch_transforms,
                 evaluator,
                 point_spec,
                 Some(current_state.handoff()),
@@ -139,7 +148,8 @@ pub fn preflight_task_suffix(
 
 fn preflight_configure_stage(
     sampler_aggregator: &SamplerAggregatorConfig,
-    parametrization_config: &ParametrizationConfig,
+    materializer_config: &MaterializerConfig,
+    batch_transforms: &[BatchTransformConfig],
     handoff: Option<StageHandoff<'_>>,
     point_spec: &PointSpec,
     observable_config: Option<ObservableConfig>,
@@ -147,14 +157,17 @@ fn preflight_configure_stage(
     let mut sampler = sampler_aggregator.build(point_spec.clone(), None, handoff)?;
     sampler.validate_point_spec(point_spec)?;
 
-    let parametrization = parametrization_config.build(handoff)?;
-    parametrization.validate_point_spec(point_spec)?;
+    let materializer = materializer_config.build(handoff)?;
+    materializer.validate_point_spec(point_spec)?;
+    for transform in batch_transforms {
+        transform.build()?.validate_point_spec(point_spec)?;
+    }
 
     Ok(PreflightStageState {
         sampler_snapshot: sampler.snapshot()?,
-        parametrization: ParametrizationState {
-            config: parametrization_config.clone(),
-            snapshot: parametrization.snapshot()?,
+        materializer: MaterializerState {
+            config: materializer_config.clone(),
+            snapshot: materializer.snapshot()?,
         },
         observable_config,
     })
@@ -164,7 +177,8 @@ fn preflight_single_stage(
     sample_budget: Option<usize>,
     task_observable: ObservableConfig,
     sampler_aggregator: &SamplerAggregatorConfig,
-    parametrization_config: &ParametrizationConfig,
+    materializer_config: &MaterializerConfig,
+    batch_transforms: &[BatchTransformConfig],
     evaluator: &mut dyn Evaluator,
     point_spec: &PointSpec,
     handoff: Option<StageHandoff<'_>>,
@@ -172,8 +186,16 @@ fn preflight_single_stage(
     let mut sampler = sampler_aggregator.build(point_spec.clone(), sample_budget, handoff)?;
     sampler.validate_point_spec(point_spec)?;
 
-    let mut parametrization = parametrization_config.build(handoff)?;
-    parametrization.validate_point_spec(point_spec)?;
+    let mut materializer = materializer_config.build(handoff)?;
+    materializer.validate_point_spec(point_spec)?;
+    let transforms = batch_transforms
+        .iter()
+        .map(|config| {
+            let transform = config.build()?;
+            transform.validate_point_spec(point_spec)?;
+            Ok(transform)
+        })
+        .collect::<Result<Vec<_>, BuildError>>()?;
 
     let require_training_values = sampler.training_samples_remaining().is_some();
     let latent_batch = sampler
@@ -187,12 +209,16 @@ fn preflight_single_stage(
         .with_observable_config(task_observable.clone())
         .build();
 
-    let transformed_batch = parametrization
+    let materialized_batch = materializer
         .materialize_batch(&latent_batch)
         .map_err(|err| {
             BuildError::incompatible(format!(
-                "preflight parametrization materialization failed: {err}"
+                "preflight materializer materialization failed: {err}"
             ))
+        })?;
+    let transformed_batch =
+        apply_batch_transforms(materialized_batch, &transforms).map_err(|err| {
+            BuildError::incompatible(format!("preflight batch transform failed: {err}"))
         })?;
     transformed_batch
         .validate_point_spec(point_spec)
@@ -233,10 +259,20 @@ fn preflight_single_stage(
         sampler_snapshot: sampler
             .snapshot()
             .map_err(|err| BuildError::build(format!("preflight snapshot failed: {err}")))?,
-        parametrization: ParametrizationState {
-            config: parametrization_config.clone(),
-            snapshot: parametrization.snapshot()?,
+        materializer: MaterializerState {
+            config: materializer_config.clone(),
+            snapshot: materializer.snapshot()?,
         },
         observable_config: Some(task_observable),
     })
+}
+
+fn apply_batch_transforms(
+    mut batch: Batch,
+    transforms: &[Box<dyn crate::evaluation::BatchTransform>],
+) -> Result<Batch, crate::core::EngineError> {
+    for transform in transforms {
+        batch = transform.apply(batch)?;
+    }
+    Ok(batch)
 }

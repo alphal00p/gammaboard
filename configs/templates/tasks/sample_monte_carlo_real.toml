@@ -1,4 +1,4 @@
-# Real-valued Monte Carlo sampling with the default identity parametrization.
+# Real-valued Monte Carlo sampling with the default identity materializer.
 
 [[task_queue]]
 kind = "sample"

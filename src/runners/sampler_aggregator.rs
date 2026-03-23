@@ -8,7 +8,7 @@
 //! - persist snapshots for resume and task handoff
 
 use crate::core::{
-    EngineError, EvaluatorConfig, ParametrizationConfig, ParametrizationState,
+    BatchTransformConfig, EngineError, EvaluatorConfig, MaterializerConfig, MaterializerState,
     RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot, RunTask, SamplerAggregatorConfig,
     SamplerAggregatorPerformanceSnapshot, SamplerRollingAverages, SamplerRuntimeMetrics,
     SamplerWorkerStore, StoreError,
@@ -131,7 +131,8 @@ pub struct SamplerAggregatorRunner<S> {
     sampler: Box<dyn SamplerAggregator>,
     observable_state: ObservableState,
     sampler_config: SamplerAggregatorConfig,
-    parametrization_state: ParametrizationState,
+    materializer_state: MaterializerState,
+    batch_transforms: Vec<BatchTransformConfig>,
     store: S,
     config: SamplerAggregatorRunnerParams,
     nr_produced_samples: i64,
@@ -174,12 +175,12 @@ where
         Ok(())
     }
 
-    fn build_parametrization_state(
-        parametrization: &ParametrizationConfig,
+    fn build_materializer_state(
+        materializer: &MaterializerConfig,
         point_spec: &PointSpec,
         handoff: Option<StageHandoff<'_>>,
-    ) -> Result<ParametrizationState, RunnerError> {
-        parametrization
+    ) -> Result<MaterializerState, RunnerError> {
+        materializer
             .build(handoff)
             .map_err(RunnerError::Engine)
             .and_then(|runtime| {
@@ -188,8 +189,8 @@ where
                     .map_err(RunnerError::Engine)?;
                 runtime
                     .snapshot()
-                    .map(|snapshot| ParametrizationState {
-                        config: parametrization.clone(),
+                    .map(|snapshot| MaterializerState {
+                        config: materializer.clone(),
                         snapshot,
                     })
                     .map_err(RunnerError::Engine)
@@ -358,7 +359,7 @@ where
         run_id: i32,
         task: &RunTask,
         sampler_config: &SamplerAggregatorConfig,
-        parametrization_config: &ParametrizationConfig,
+        materializer_config: &MaterializerConfig,
         point_spec: &PointSpec,
         evaluator_config: &EvaluatorConfig,
         sample_budget: Option<usize>,
@@ -366,7 +367,7 @@ where
         (
             Box<dyn SamplerAggregator>,
             ObservableState,
-            ParametrizationState,
+            MaterializerState,
             Option<(i32, i64)>,
         ),
         RunnerError,
@@ -382,14 +383,14 @@ where
 
         let handoff = previous_snapshot.as_ref().map(|snapshot| StageHandoff {
             sampler_snapshot: Some(&snapshot.sampler_snapshot),
-            parametrization_snapshot: Some(&snapshot.parametrization.snapshot),
+            materializer_snapshot: Some(&snapshot.materializer.snapshot),
             observable_state: snapshot.observable_state.as_ref(),
         });
-        let parametrization_state =
-            Self::build_parametrization_state(parametrization_config, point_spec, handoff)?;
+        let materializer_state =
+            Self::build_materializer_state(materializer_config, point_spec, handoff)?;
         let handoff = previous_snapshot.as_ref().map(|snapshot| StageHandoff {
             sampler_snapshot: Some(&snapshot.sampler_snapshot),
-            parametrization_snapshot: Some(&snapshot.parametrization.snapshot),
+            materializer_snapshot: Some(&snapshot.materializer.snapshot),
             observable_state: snapshot.observable_state.as_ref(),
         });
         let sampler = sampler_config
@@ -423,7 +424,7 @@ where
         Ok((
             sampler,
             observable_state,
-            parametrization_state,
+            materializer_state,
             previous_snapshot
                 .as_ref()
                 .and_then(|snapshot| snapshot.task_id.map(|task_id| (snapshot.run_id, task_id))),
@@ -448,11 +449,14 @@ where
                 "task missing sampler config",
             )));
         };
-        let Some(parametrization_config) = task.task.parametrization_config() else {
+        let Some(materializer_config) = task.task.materializer_config() else {
             return Err(RunnerError::Engine(EngineError::engine(
-                "task missing parametrization config",
+                "task missing materializer config",
             )));
         };
+        let batch_transforms = task.task.batch_transforms_config().ok_or_else(|| {
+            RunnerError::Engine(EngineError::engine("task missing batch transform config"))
+        })?;
 
         let performance_snapshot_interval =
             Duration::from_millis(config.performance_snapshot_interval_ms);
@@ -475,7 +479,7 @@ where
             observable_state,
             runtime_state,
             last_pending_after_enqueue,
-            parametrization_state,
+            materializer_state,
         ) = if let Some(snapshot) = restored_snapshot {
             if snapshot.task_id != task.id {
                 return Err(RunnerError::Engine(EngineError::engine(format!(
@@ -508,21 +512,20 @@ where
                 snapshot.observable_state,
                 snapshot.runtime_state,
                 snapshot.last_pending_after_enqueue,
-                activation_snapshot.parametrization,
+                activation_snapshot.materializer,
             )
         } else {
-            let (sampler, observable_state, parametrization_state, _) =
-                Self::build_fresh_stage_state(
-                    &store,
-                    run_id,
-                    &task,
-                    &sampler_config,
-                    &parametrization_config,
-                    &point_spec,
-                    &evaluator_config,
-                    sample_budget,
-                )
-                .await?;
+            let (sampler, observable_state, materializer_state, _) = Self::build_fresh_stage_state(
+                &store,
+                run_id,
+                &task,
+                &sampler_config,
+                &materializer_config,
+                &point_spec,
+                &evaluator_config,
+                sample_budget,
+            )
+            .await?;
 
             let runtime_state = SamplerRuntimeState {
                 produced_samples_total: persisted_progress.nr_produced_samples,
@@ -536,7 +539,7 @@ where
                 observable_state,
                 runtime_state,
                 None,
-                parametrization_state,
+                materializer_state,
             )
         };
 
@@ -548,7 +551,8 @@ where
             sampler,
             observable_state,
             sampler_config,
-            parametrization_state,
+            materializer_state,
+            batch_transforms,
             store,
             config,
             nr_produced_samples: persisted_progress.nr_produced_samples,
@@ -615,7 +619,8 @@ where
                 sampler_snapshot: snapshot.sampler_snapshot.clone(),
                 observable_state: Some(self.observable_state.clone()),
                 sampler_aggregator: self.sampler_config.clone(),
-                parametrization: self.parametrization_state.clone(),
+                materializer: self.materializer_state.clone(),
+                batch_transforms: self.batch_transforms.clone(),
             })
             .await?;
         Ok(())

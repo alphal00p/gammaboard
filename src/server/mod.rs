@@ -854,7 +854,8 @@ async fn resolve_task_queue_payload_for_run(
     let base_snapshot = load_append_base_snapshot(store, run_id).await?;
     crate::core::resolve_task_queue(
         &base_snapshot.sampler_aggregator,
-        &base_snapshot.parametrization.config,
+        &base_snapshot.materializer.config,
+        &base_snapshot.batch_transforms,
         &parsed.task_queue,
     )
     .map_err(ApiError::BadRequest)
@@ -1085,7 +1086,8 @@ async fn clone_run(
                 sampler_snapshot: snapshot.sampler_snapshot.clone(),
                 observable_state: snapshot.observable_state.clone(),
                 sampler_aggregator: snapshot.sampler_aggregator.clone(),
-                parametrization: snapshot.parametrization.clone(),
+                materializer: snapshot.materializer.clone(),
+                batch_transforms: snapshot.batch_transforms.clone(),
             },
             &cloned_tasks,
         )

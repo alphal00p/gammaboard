@@ -2,11 +2,12 @@ use serde_json::Value as JsonValue;
 use sqlx::{Executor, PgPool, Postgres};
 use std::collections::HashMap;
 
-use crate::core::RunStageSnapshot;
+use crate::core::{
+    BatchTransformConfig, MaterializerState, RunStageSnapshot, SamplerAggregatorConfig,
+};
 use crate::evaluation::ObservableState;
 use crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot;
 use crate::sampling::SamplerAggregatorSnapshot;
-use crate::{core::ParametrizationState, core::SamplerAggregatorConfig};
 
 #[derive(sqlx::FromRow)]
 struct RunStageSnapshotRow {
@@ -18,7 +19,8 @@ struct RunStageSnapshotRow {
     sampler_snapshot: JsonValue,
     observable_state: Option<JsonValue>,
     sampler_aggregator: JsonValue,
-    parametrization: JsonValue,
+    materializer: JsonValue,
+    batch_transforms: JsonValue,
 }
 
 impl TryFrom<RunStageSnapshotRow> for RunStageSnapshot {
@@ -54,8 +56,12 @@ impl TryFrom<RunStageSnapshotRow> for RunStageSnapshot {
                 value.sampler_aggregator,
             )
             .map_err(|err| decode("sampler_aggregator", err))?,
-            parametrization: serde_json::from_value::<ParametrizationState>(value.parametrization)
-                .map_err(|err| decode("parametrization", err))?,
+            materializer: serde_json::from_value::<MaterializerState>(value.materializer)
+                .map_err(|err| decode("materializer", err))?,
+            batch_transforms: serde_json::from_value::<Vec<BatchTransformConfig>>(
+                value.batch_transforms,
+            )
+            .map_err(|err| decode("batch_transforms", err))?,
         })
     }
 }
@@ -116,7 +122,8 @@ pub(crate) async fn get_latest_stage_snapshot_before_sequence(
             sampler_snapshot,
             observable_state,
             sampler_aggregator,
-            parametrization
+            materializer,
+            batch_transforms
         FROM run_stage_snapshots
         WHERE run_id = $1
           AND queue_empty = TRUE
@@ -147,7 +154,8 @@ pub(crate) async fn get_stage_snapshot(
             sampler_snapshot,
             observable_state,
             sampler_aggregator,
-            parametrization
+            materializer,
+            batch_transforms
         FROM run_stage_snapshots
         WHERE id = $1
         LIMIT 1
@@ -195,7 +203,8 @@ pub(crate) async fn get_task_activation_stage_snapshot(
             sampler_snapshot,
             observable_state,
             sampler_aggregator,
-            parametrization
+            materializer,
+            batch_transforms
         FROM run_stage_snapshots
         WHERE run_id = $1
           AND task_id = $2
@@ -333,9 +342,10 @@ where
             sampler_snapshot,
             observable_state,
             sampler_aggregator,
-            parametrization
+            materializer,
+            batch_transforms
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         "#,
     )
     .bind(snapshot.run_id)
@@ -369,10 +379,15 @@ where
             ))
         })?,
     )
+    .bind(serde_json::to_value(&snapshot.materializer).map_err(|err| {
+        sqlx::Error::Protocol(format!(
+            "failed to encode materializer for run_stage_snapshots: {err}"
+        ))
+    })?)
     .bind(
-        serde_json::to_value(&snapshot.parametrization).map_err(|err| {
+        serde_json::to_value(&snapshot.batch_transforms).map_err(|err| {
             sqlx::Error::Protocol(format!(
-                "failed to encode parametrization for run_stage_snapshots: {err}"
+                "failed to encode batch_transforms for run_stage_snapshots: {err}"
             ))
         })?,
     )

@@ -2,11 +2,9 @@
 
 use crate::core::{
     EngineError, EvalError, EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics,
-    EvaluatorPerformanceSnapshot, EvaluatorWorkerStore, ParametrizationState, StoreError,
+    EvaluatorPerformanceSnapshot, EvaluatorWorkerStore, StoreError,
 };
-use crate::evaluation::{
-    Batch, BatchResult, EvalBatchOptions, Evaluator, Parametrization, PointSpec,
-};
+use crate::evaluation::{Batch, BatchResult, EvalBatchOptions, Evaluator, Materializer, PointSpec};
 use crate::runners::rolling_metric::RollingMetric;
 use crate::sampling::StageHandoff;
 use serde::{Deserialize, Serialize};
@@ -42,14 +40,15 @@ pub struct EvaluatorRunner<S> {
     store: S,
     current_task_id: Option<i64>,
     current_task_requires_training: bool,
-    current_parametrization: Option<Box<dyn Parametrization>>,
+    current_materializer: Option<Box<dyn Materializer>>,
+    current_batch_transforms: Vec<Box<dyn crate::evaluation::BatchTransform>>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
 struct EvaluatorRollingAverages {
     total_ms_per_sample: RollingMetric,
     evaluate_ms_per_sample: RollingMetric,
-    parametrization_ms_per_sample: RollingMetric,
+    materialization_ms_per_sample: RollingMetric,
     idle_ratio: RollingMetric,
 }
 
@@ -106,7 +105,8 @@ where
             store,
             current_task_id: None,
             current_task_requires_training: false,
-            current_parametrization: None,
+            current_materializer: None,
+            current_batch_transforms: Vec::new(),
         }
     }
 
@@ -124,7 +124,7 @@ where
             return Ok(());
         };
 
-        if let Err(err) = self.ensure_parametrization(claimed.task_id).await {
+        if let Err(err) = self.ensure_materialization_pipeline(claimed.task_id).await {
             return self
                 .fail_tick(
                     loop_started,
@@ -135,34 +135,50 @@ where
                 .await;
         }
 
-        let parametrization_started = Instant::now();
-        let materialized = match self.current_parametrization.as_mut() {
-            Some(parametrization) => parametrization.materialize_batch(&claimed.latent_batch),
+        let materialization_started = Instant::now();
+        let materialized = match self.current_materializer.as_mut() {
+            Some(materializer) => materializer.materialize_batch(&claimed.latent_batch),
             None => Err(EngineError::engine(
-                "parametrization runtime missing after successful task activation snapshot load",
+                "materializer runtime missing after successful task activation snapshot load",
             )),
         };
-        let parametrization_time_ms = parametrization_started.elapsed().as_secs_f64() * 1000.0;
-        let transformed_batch = match materialized {
+        let materialization_time_ms = materialization_started.elapsed().as_secs_f64() * 1000.0;
+        let materialized_batch = match materialized {
             Ok(batch) => batch,
             Err(err) => {
                 return self
                     .fail_tick(
                         loop_started,
                         claimed.batch_id,
-                        parametrization_time_ms,
+                        materialization_time_ms,
                         EvaluatorRunnerError::Engine(err),
                     )
                     .await;
             }
         };
+        let mut transformed_batch = materialized_batch;
+        for transform in &self.current_batch_transforms {
+            transformed_batch = match transform.apply(transformed_batch) {
+                Ok(batch) => batch,
+                Err(err) => {
+                    return self
+                        .fail_tick(
+                            loop_started,
+                            claimed.batch_id,
+                            materialization_time_ms,
+                            EvaluatorRunnerError::Engine(err),
+                        )
+                        .await;
+                }
+            };
+        }
         if let Err(err) = transformed_batch.validate_point_spec(&self.point_spec) {
             let err = EngineError::engine(format!("invalid materialized batch point shape: {err}"));
             return self
                 .fail_tick(
                     loop_started,
                     claimed.batch_id,
-                    parametrization_time_ms,
+                    materialization_time_ms,
                     EvaluatorRunnerError::Engine(err),
                 )
                 .await;
@@ -178,13 +194,13 @@ where
         ) {
             Ok(result) => {
                 let eval_time_ms = started.elapsed().as_secs_f64() * 1000.0;
-                let total_time_ms = parametrization_time_ms + eval_time_ms;
+                let total_time_ms = materialization_time_ms + eval_time_ms;
                 self.submit_result(
                     claimed.batch_id,
                     &transformed_batch,
                     result,
                     total_time_ms,
-                    parametrization_time_ms,
+                    materialization_time_ms,
                     eval_time_ms,
                 )
                 .await?;
@@ -193,7 +209,7 @@ where
             }
             Err(err) => {
                 let eval_time_ms = started.elapsed().as_secs_f64() * 1000.0;
-                let total_time_ms = parametrization_time_ms + eval_time_ms;
+                let total_time_ms = materialization_time_ms + eval_time_ms;
                 self.fail_tick(
                     loop_started,
                     claimed.batch_id,
@@ -205,7 +221,7 @@ where
         }
     }
 
-    async fn ensure_parametrization(&mut self, task_id: i64) -> Result<(), StoreError> {
+    async fn ensure_materialization_pipeline(&mut self, task_id: i64) -> Result<(), StoreError> {
         if self.current_task_id == Some(task_id) {
             return Ok(());
         }
@@ -219,26 +235,45 @@ where
                 self.run_id, task_id
             )));
         };
-        let state: &ParametrizationState = &snapshot.parametrization;
-        let parametrization = state
+        let state = &snapshot.materializer;
+        let materializer = state
             .config
             .build(Some(StageHandoff {
                 sampler_snapshot: Some(&snapshot.sampler_snapshot),
-                parametrization_snapshot: Some(&state.snapshot),
+                materializer_snapshot: Some(&state.snapshot),
                 observable_state: snapshot.observable_state.as_ref(),
             }))
-            .map_err(|err| StoreError::store(format!("failed to build parametrization: {err}")))?;
-        parametrization
+            .map_err(|err| StoreError::store(format!("failed to build materializer: {err}")))?;
+        materializer
             .validate_point_spec(&self.point_spec)
             .map_err(|err| {
                 StoreError::store(format!(
-                    "incompatible parametrization for point_spec on run {} task {}: {}",
+                    "incompatible materializer for point_spec on run {} task {}: {}",
                     self.run_id, task_id, err
                 ))
             })?;
+        let transforms = snapshot
+            .batch_transforms
+            .iter()
+            .map(|config| {
+                let transform = config.build().map_err(|err| {
+                    StoreError::store(format!("failed to build batch transform: {err}"))
+                })?;
+                transform
+                    .validate_point_spec(&self.point_spec)
+                    .map_err(|err| {
+                        StoreError::store(format!(
+                            "incompatible batch transform for point_spec on run {} task {}: {}",
+                            self.run_id, task_id, err
+                        ))
+                    })?;
+                Ok(transform)
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
         self.current_task_id = Some(task_id);
         self.current_task_requires_training = snapshot.sampler_aggregator.requires_training();
-        self.current_parametrization = Some(parametrization);
+        self.current_materializer = Some(materializer);
+        self.current_batch_transforms = transforms;
         Ok(())
     }
 
@@ -248,7 +283,7 @@ where
         batch: &Batch,
         result: BatchResult,
         total_time_ms: f64,
-        parametrization_time_ms: f64,
+        materialization_time_ms: f64,
         eval_time_ms: f64,
     ) -> Result<(), EvaluatorRunnerError> {
         if self.current_task_requires_training && result.values.is_none() {
@@ -279,7 +314,7 @@ where
         self.observe_eval_batch(
             processed_samples,
             total_time_ms,
-            parametrization_time_ms,
+            materialization_time_ms,
             eval_time_ms,
         );
         self.flush_performance_snapshot_if_due(false).await?;
@@ -291,7 +326,7 @@ where
         &mut self,
         samples: usize,
         total_time_ms: f64,
-        parametrization_time_ms: f64,
+        materialization_time_ms: f64,
         eval_time_ms: f64,
     ) {
         self.batches_completed_total += 1;
@@ -303,10 +338,10 @@ where
                     .total_ms_per_sample
                     .observe(total_time_ms / samples);
             }
-            if parametrization_time_ms.is_finite() && parametrization_time_ms >= 0.0 {
+            if materialization_time_ms.is_finite() && materialization_time_ms >= 0.0 {
                 self.rolling
-                    .parametrization_ms_per_sample
-                    .observe(parametrization_time_ms / samples);
+                    .materialization_ms_per_sample
+                    .observe(materialization_time_ms / samples);
             }
             if eval_time_ms.is_finite() && eval_time_ms >= 0.0 {
                 self.rolling
@@ -357,14 +392,14 @@ where
                     .value()
                     .unwrap_or(0.0),
                 std_evaluate_time_per_sample_ms: self.rolling.evaluate_ms_per_sample.std_dev(),
-                avg_parametrization_time_per_sample_ms: self
+                avg_materialization_time_per_sample_ms: self
                     .rolling
-                    .parametrization_ms_per_sample
+                    .materialization_ms_per_sample
                     .value()
                     .unwrap_or(0.0),
-                std_parametrization_time_per_sample_ms: self
+                std_materialization_time_per_sample_ms: self
                     .rolling
-                    .parametrization_ms_per_sample
+                    .materialization_ms_per_sample
                     .std_dev(),
                 idle_profile: Some(EvaluatorIdleProfileMetrics {
                     idle_ratio: self.rolling.idle_ratio.value().unwrap_or(0.0),

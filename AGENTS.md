@@ -5,7 +5,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 ## Ownership
 - `src/core/*`: shared contracts, run/task types, store traits, errors.
 - `src/evaluation/*`: evaluator-side batch/result semantics and observables.
-- `src/sampling/*`: sampler-side latent queue semantics, samplers, parametrizations.
+- `src/sampling/*`: sampler-side latent queue semantics, samplers, materializers, and batch transforms.
 - `src/runners/*`: evaluator/sampler runtimes and node reconciliation loops.
 - `src/stores/*`: PostgreSQL store, queries, read models.
 - `src/server/*`: dashboard API and backend panel projection.
@@ -14,7 +14,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 ## Core Rules
 - PostgreSQL is the source of truth for runs, tasks, batches, nodes, logs, and snapshots.
 - Runs are driven by persisted `run_tasks`. The evaluator work queue is lower-level and distinct.
-- `RunSpec` should keep only immutable run-global state. Task-varying sampler, parametrization, and observable choices belong on tasks or in stored integration defaults, not on `RunSpec`.
+- `RunSpec` should keep only immutable run-global state. Task-varying sampler, materializer, batch-transform, and observable choices belong on tasks or in stored integration defaults, not on `RunSpec`.
 - Run names are human-facing and not unique. CLI run references may be numeric ids or exact names; ambiguous names must fail and print matches.
 - If `task_queue` is omitted during `run add`, the run is created idle.
 - `run add` must persist an initial queue-empty `run_stage_snapshot` immediately.
@@ -38,7 +38,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Snapshots are the branchable state timeline. Tasks are queued work items that may produce snapshots, but are not themselves the canonical branch identity.
 - Executable tasks may declare `start_from = { snapshot_id = ... }` to branch from an older stage snapshot.
 - Task preflight belongs on task insertion. Bare `run add` should validate run-global construction and root-stage creation, while appended tasks should be validated against the current or referenced stage snapshots before persistence.
-- Sample tasks may omit `sampler_aggregator` and `parametrization`; omitted values inherit the previous effective stage, and parametrization falls back to `identity` when no prior stage exists.
+- Sample tasks may omit `sampler_aggregator`, `materializer`, and `batch_transforms`; omitted values inherit the previous effective stage, materializer falls back to `identity` when no prior stage exists, and `batch_transforms = []` explicitly clears the inherited transform list.
 - Sample tasks may omit `observable`; that means reuse the previous observable state.
 - `sample` with `nr_samples = 0` is the only supported no-work stage update task shape.
 - There is no run-level observable default. A first executable task that needs a fresh observable must declare it explicitly.

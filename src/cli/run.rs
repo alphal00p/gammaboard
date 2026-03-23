@@ -199,7 +199,8 @@ async fn clone_run(
                 sampler_snapshot: snapshot.sampler_snapshot.clone(),
                 observable_state: snapshot.observable_state.clone(),
                 sampler_aggregator: snapshot.sampler_aggregator.clone(),
-                parametrization: snapshot.parametrization.clone(),
+                materializer: snapshot.materializer.clone(),
+                batch_transforms: snapshot.batch_transforms.clone(),
             },
             &cloned_tasks,
         )
@@ -468,10 +469,12 @@ async fn resolve_task_queue_file_for_run(
         .ok_or_else(|| anyhow!("run {run_id} not found"))?;
     let base_snapshot = load_append_base_snapshot(store, run_id).await?;
     let base_sampler_aggregator = base_snapshot.sampler_aggregator;
-    let base_parametrization = base_snapshot.parametrization.config;
+    let base_materializer = base_snapshot.materializer.config;
+    let base_batch_transforms = base_snapshot.batch_transforms;
     resolve_task_queue(
         &base_sampler_aggregator,
-        &base_parametrization,
+        &base_materializer,
+        &base_batch_transforms,
         &parsed.task_queue,
     )
     .map_err(|err| anyhow!("invalid task_queue entry: {err}"))

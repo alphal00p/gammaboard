@@ -1,43 +1,37 @@
-use super::Parametrization;
 use crate::core::{BuildError, EngineError};
-use crate::evaluation::{Batch, PointSpec};
-use crate::sampling::{LatentBatch, ParametrizationSnapshot};
+use crate::evaluation::{Batch, BatchTransform, PointSpec};
 use ndarray::{Array1, Array2};
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
 
-pub struct UnitBallParametrization;
+pub struct UnitBallBatchTransform;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
-pub struct UnitBallParametrizationParams {}
+pub struct UnitBallBatchTransformParams {}
 
-impl UnitBallParametrization {
-    pub fn from_params(_params: UnitBallParametrizationParams) -> Self {
+impl UnitBallBatchTransform {
+    pub fn from_params(_params: UnitBallBatchTransformParams) -> Self {
         Self
     }
 }
 
-impl Parametrization for UnitBallParametrization {
+impl BatchTransform for UnitBallBatchTransform {
     fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError> {
         if point_spec.continuous_dims == 0 {
             return Err(BuildError::build(
-                "unit_ball parametrization requires continuous_dims >= 1",
+                "unit_ball batch transform requires continuous_dims >= 1",
             ));
         }
         Ok(())
     }
 
-    fn materialize_batch(&mut self, latent_batch: &LatentBatch) -> Result<Batch, EngineError> {
-        let batch = latent_batch
-            .payload
-            .as_batch()
-            .map_err(|err| EngineError::engine(err.to_string()))?;
+    fn apply(&self, batch: Batch) -> Result<Batch, EngineError> {
         let rows = batch.size();
         let dims = batch.continuous().ncols();
         if dims == 0 {
             return Err(EngineError::engine(
-                "unit_ball parametrization requires at least one continuous dimension",
+                "unit_ball batch transform requires at least one continuous dimension",
             ));
         }
 
@@ -49,7 +43,7 @@ impl Parametrization for UnitBallParametrization {
             for (dim_idx, value) in row.iter().copied().enumerate() {
                 if !(0.0..=1.0).contains(&value) {
                     return Err(EngineError::engine(format!(
-                        "unit_ball parametrization expects unit-hypercube inputs; row={row_idx} dim={dim_idx} value={value}"
+                        "unit_ball batch transform expects unit-hypercube inputs; row={row_idx} dim={dim_idx} value={value}"
                     )));
                 }
                 unit.push(value);
@@ -68,10 +62,6 @@ impl Parametrization for UnitBallParametrization {
             Some(transformed_weights),
         )
         .map_err(|err| EngineError::engine(err.to_string()))
-    }
-
-    fn snapshot(&self) -> Result<ParametrizationSnapshot, EngineError> {
-        Ok(ParametrizationSnapshot::UnitBall {})
     }
 }
 

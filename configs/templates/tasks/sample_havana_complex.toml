@@ -9,8 +9,5 @@ observable = "complex"
 [task_queue.sampler_aggregator]
 kind = "havana_inference"
 
-[task_queue.parametrization]
+[task_queue.materializer]
 kind = "havana_inference"
-
-[task_queue.parametrization.inner]
-kind = "identity"

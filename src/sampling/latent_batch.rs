@@ -45,7 +45,7 @@ impl LatentBatchPayload {
         match self {
             Self::Batch { batch } => Batch::from_json(&batch),
             Self::HavanaInference { .. } => Err(BatchError::layout(
-                "havana_inference latent payload must be materialized by a parametrization",
+                "havana_inference latent payload must be materialized by a materializer",
             )),
         }
     }
@@ -54,7 +54,7 @@ impl LatentBatchPayload {
         match self {
             Self::Batch { batch } => Batch::from_json(batch),
             Self::HavanaInference { .. } => Err(BatchError::layout(
-                "havana_inference latent payload must be materialized by a parametrization",
+                "havana_inference latent payload must be materialized by a materializer",
             )),
         }
     }

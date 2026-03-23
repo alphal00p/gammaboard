@@ -3,7 +3,7 @@ use num::complex::Complex64;
 use serde_json::{Value as JsonValue, json};
 
 use super::{Batch, BatchResult, IngestComplex, IngestScalar, PointSpec};
-use crate::sampling::{LatentBatch, ParametrizationSnapshot};
+use crate::sampling::{LatentBatch, MaterializerSnapshot};
 
 #[derive(Debug, Clone, Copy)]
 pub struct EvalBatchOptions {
@@ -123,12 +123,20 @@ pub trait ComplexValueEvaluator {
 
 impl<T> ComplexValueEvaluator for T {}
 
-pub trait Parametrization: Send + Sync {
+pub trait Materializer: Send + Sync {
     fn validate_point_spec(&self, _point_spec: &PointSpec) -> Result<(), BuildError> {
         Ok(())
     }
 
     fn materialize_batch(&mut self, latent_batch: &LatentBatch) -> Result<Batch, EngineError>;
 
-    fn snapshot(&self) -> Result<ParametrizationSnapshot, EngineError>;
+    fn snapshot(&self) -> Result<MaterializerSnapshot, EngineError>;
+}
+
+pub trait BatchTransform: Send + Sync {
+    fn validate_point_spec(&self, _point_spec: &PointSpec) -> Result<(), BuildError> {
+        Ok(())
+    }
+
+    fn apply(&self, batch: Batch) -> Result<Batch, EngineError>;
 }

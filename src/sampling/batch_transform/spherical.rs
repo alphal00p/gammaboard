@@ -1,43 +1,37 @@
-use super::Parametrization;
 use crate::core::{BuildError, EngineError};
-use crate::evaluation::{Batch, PointSpec};
-use crate::sampling::{LatentBatch, ParametrizationSnapshot};
+use crate::evaluation::{Batch, BatchTransform, PointSpec};
 use ndarray::{Array1, Array2};
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
 
-pub struct SphericalParametrization;
+pub struct SphericalBatchTransform;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
-pub struct SphericalParametrizationParams {}
+pub struct SphericalBatchTransformParams {}
 
-impl SphericalParametrization {
-    pub fn from_params(_params: SphericalParametrizationParams) -> Self {
+impl SphericalBatchTransform {
+    pub fn from_params(_params: SphericalBatchTransformParams) -> Self {
         Self
     }
 }
 
-impl Parametrization for SphericalParametrization {
+impl BatchTransform for SphericalBatchTransform {
     fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError> {
         if point_spec.continuous_dims != 3 {
             return Err(BuildError::build(
-                "spherical parametrization requires continuous_dims == 3",
+                "spherical batch transform requires continuous_dims == 3",
             ));
         }
         Ok(())
     }
 
-    fn materialize_batch(&mut self, latent_batch: &LatentBatch) -> Result<Batch, EngineError> {
-        let batch = latent_batch
-            .payload
-            .as_batch()
-            .map_err(|err| EngineError::engine(err.to_string()))?;
+    fn apply(&self, batch: Batch) -> Result<Batch, EngineError> {
         let rows = batch.size();
         let dims = batch.continuous().ncols();
         if dims != 3 {
             return Err(EngineError::engine(
-                "spherical parametrization requires exactly 3 continuous dimensions",
+                "spherical batch transform requires exactly 3 continuous dimensions",
             ));
         }
 
@@ -51,7 +45,7 @@ impl Parametrization for SphericalParametrization {
             for (dim_idx, value) in [u_r, u_theta, u_phi].into_iter().enumerate() {
                 if !(0.0..1.0).contains(&value) {
                     return Err(EngineError::engine(format!(
-                        "spherical parametrization expects [0,1) inputs; row={row_idx} dim={dim_idx} value={value}"
+                        "spherical batch transform expects [0,1) inputs; row={row_idx} dim={dim_idx} value={value}"
                     )));
                 }
             }
@@ -59,7 +53,7 @@ impl Parametrization for SphericalParametrization {
             let one_minus_u_r = 1.0 - u_r;
             if one_minus_u_r <= 0.0 {
                 return Err(EngineError::engine(format!(
-                    "spherical parametrization has singular radial map at u_r=1 (row={row_idx})"
+                    "spherical batch transform has singular radial map at u_r=1 (row={row_idx})"
                 )));
             }
             let r = u_r / one_minus_u_r;
@@ -84,9 +78,5 @@ impl Parametrization for SphericalParametrization {
             Some(transformed_weights),
         )
         .map_err(|err| EngineError::engine(err.to_string()))
-    }
-
-    fn snapshot(&self) -> Result<ParametrizationSnapshot, EngineError> {
-        Ok(ParametrizationSnapshot::Spherical {})
     }
 }

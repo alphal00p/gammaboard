@@ -84,8 +84,8 @@ fn evaluator_panel_specs() -> Vec<PanelSpec> {
         ),
         with_panel_width(
             panel_spec(
-                "evaluator_parametrization_time_us",
-                "Parametrization Time Per Sample (us)",
+                "evaluator_materialization_time_us",
+                "Materialization Time Per Sample (us)",
                 PanelKind::ScalarTimeseries,
                 PanelHistoryMode::Append,
             ),
@@ -133,16 +133,16 @@ fn evaluator_panels(entry: &EvaluatorPerformanceHistoryEntry) -> Vec<PanelState>
             )),
         ),
         scalar_point_panel(
-            "evaluator_parametrization_time_us",
+            "evaluator_materialization_time_us",
             history_x(entry.created_at),
-            ms_to_us(entry.metrics.avg_parametrization_time_per_sample_ms),
+            ms_to_us(entry.metrics.avg_materialization_time_per_sample_ms),
             Some(ms_to_us(
-                entry.metrics.avg_parametrization_time_per_sample_ms
-                    - entry.metrics.std_parametrization_time_per_sample_ms,
+                entry.metrics.avg_materialization_time_per_sample_ms
+                    - entry.metrics.std_materialization_time_per_sample_ms,
             )),
             Some(ms_to_us(
-                entry.metrics.avg_parametrization_time_per_sample_ms
-                    + entry.metrics.std_parametrization_time_per_sample_ms,
+                entry.metrics.avg_materialization_time_per_sample_ms
+                    + entry.metrics.std_materialization_time_per_sample_ms,
             )),
         ),
     ];
