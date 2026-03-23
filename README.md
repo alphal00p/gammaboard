@@ -35,7 +35,7 @@ The dashboard shows runs, task output, nodes, performance, and logs.
    just serve-frontend
    ```
 
-`serve-*` commands load `.env`. The frontend uses `REACT_APP_API_BASE_URL`. The CLI reads its shared database and tracing settings from `configs/gammaboard.toml`, and the backend reads its host, port, auth, and cookie settings from `configs/server.toml`.
+`serve-*` commands load `.env`. The frontend uses `REACT_APP_API_BASE_URL`. The CLI reads its shared database and tracing settings from `configs/gammaboard.toml`, and the backend reads its host, port, auth, cookie, and template settings from `configs/server.toml`.
 
 ## CLI Config
 - All commands load shared runtime config from [configs/gammaboard.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/gammaboard.toml) by default.
@@ -140,7 +140,19 @@ kind = "identity"
 If `task_queue` is omitted, the run is created idle.
 
 ### Task Queue
-Sample tasks may inherit omitted `sampler_aggregator` and `parametrization` fields from the previous effective sample stage.
+Sample and `configure` tasks may inherit omitted `sampler_aggregator` and `parametrization` fields from the previous effective stage.
+Sample and `configure` tasks may omit `observable` to reuse the previous observable state.
+
+`configure` tasks update sampler, parametrization, and observable state without producing any work:
+```toml
+[[task_queue]]
+kind = "configure"
+observable = "scalar" # optional; omit to reuse the previous observable
+[task_queue.sampler_aggregator]
+kind = "naive_monte_carlo"
+[task_queue.parametrization]
+kind = "identity"
+```
 
 Executable tasks may also branch from an older task snapshot:
 ```toml

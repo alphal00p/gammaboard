@@ -1,10 +1,11 @@
-# Example Gammaloop run with a training task followed by a complex image scan.
-# Replace `state_folder` with a real GammaLoop state folder before submitting.
+# Example Gammaloop run template.
+# Assumes `gammaloop` is a sister folder of `gammaboard`.
+# Add tasks from the dashboard task templates after creating the run.
 name = "gammaloop-triangle-scan"
 
 [evaluator]
 kind = "gammaloop"
-state_folder = "/path/to/gammaloop/state"
+state_folder = "../gammaloop/my_triangle/state"
 momentum_space = true
 use_f128 = false
 training_projection = "abs"
@@ -14,27 +15,3 @@ discrete_dims = 0
 
 [parametrization]
 kind = "identity"
-
-[[task_queue]]
-kind = "sample"
-nr_samples = 5000
-observable = "complex"
-[task_queue.sampler_aggregator]
-kind = "havana_training"
-seed = 0
-bins = 64
-min_samples_for_update = 1024
-samples_for_update = 16384
-initial_training_rate = 0.1
-final_training_rate = 0.001
-
-[[task_queue]]
-kind = "image"
-observable = "complex"
-[task_queue.geometry]
-offset = [0.0, 0.0, 0.0]
-u_vector = [1.0, 0.0, 0.0]
-v_vector = [0.0, 1.0, 0.0]
-u_linspace = { start = -2.0, stop = 2.0, count = 128 }
-v_linspace = { start = -2.0, stop = 2.0, count = 128 }
-discrete = []

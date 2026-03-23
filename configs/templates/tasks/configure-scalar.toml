@@ -1,5 +1,6 @@
-# Basic scalar sampling phase.
-# Configure the stage first, then run a sample task with only its required field.
+# Update stage state without producing work.
+# Omit fields you want to inherit from the previous stage.
+
 [[task_queue]]
 kind = "configure"
 observable = "scalar"
@@ -9,7 +10,3 @@ kind = "naive_monte_carlo"
 
 [task_queue.parametrization]
 kind = "identity"
-
-[[task_queue]]
-kind = "sample"
-nr_samples = 10000

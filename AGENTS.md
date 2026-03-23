@@ -35,7 +35,8 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Task sequencing lives in `src/core/tasks.rs`.
 - Task transitions must restore runtime state from persisted queue-empty `run_stage_snapshots`, not in-memory handoff only.
 - Executable tasks may declare `start_from = { run_id, task_id }` to branch from an older task snapshot.
-- Sample tasks may omit `observable`; that means reuse the previous observable state.
+- `configure` tasks update sampler, parametrization, and observable state without producing work; omitted fields inherit the previous effective stage.
+- Sample and `configure` tasks may omit `observable`; that means reuse the previous observable state.
 - There is no run-level observable default. A first executable task that needs a fresh observable must declare it explicitly.
 - `image` and `plot_line` tasks must declare their observable family explicitly and start with a fresh full observable.
 - Fresh sampler tasks may inherit a reduced initial batch size from the previous sampler task, but should not carry over the full rolling metrics state.

@@ -202,6 +202,22 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             return Ok(None);
         }
 
+        if matches!(task.task, RunTaskSpec::Configure { .. }) {
+            if open_batch_count == 0 {
+                SamplerAggregatorRunner::apply_configure_task(
+                    worker.run_id,
+                    task,
+                    worker.store.clone(),
+                    spec.point_spec.clone(),
+                    spec.evaluator.clone(),
+                )
+                .await
+                .map_err(|err| StoreError::store(err.to_string()))?;
+                info!(run_id = worker.run_id, "configure task applied");
+            }
+            return Ok(None);
+        }
+
         let latest_snapshot = worker
             .store
             .load_sampler_runner_snapshot(worker.run_id)

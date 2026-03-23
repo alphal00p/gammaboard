@@ -153,6 +153,21 @@ impl RunTaskSpec {
                 },
                 |_ctx| Ok(None),
             )],
+            Self::Configure { .. } => vec![panel_projector(
+                panel_spec(
+                    "configure_state",
+                    "Configure State",
+                    PanelKind::Text,
+                    PanelHistoryMode::None,
+                ),
+                |_ctx| {
+                    Ok(Some(PanelState::Text {
+                        panel_id: "configure_state".to_string(),
+                        text: "Task updates sampler, parametrization, and observable state without producing work.".to_string(),
+                    }))
+                },
+                |_ctx| Ok(None),
+            )],
             Self::Sample { .. } => sample::projectors(run_spec),
             Self::Image {
                 geometry, display, ..

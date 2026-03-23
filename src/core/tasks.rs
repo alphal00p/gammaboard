@@ -44,6 +44,16 @@ pub enum RunTaskInputSpec {
         #[serde(default)]
         start_from: Option<TaskSnapshotRef>,
     },
+    Configure {
+        #[serde(default)]
+        sampler_aggregator: Option<SamplerAggregatorConfig>,
+        #[serde(default)]
+        parametrization: Option<ParametrizationConfig>,
+        #[serde(default)]
+        observable: Option<ObservableConfig>,
+        #[serde(default)]
+        start_from: Option<TaskSnapshotRef>,
+    },
     Image {
         geometry: PlaneRasterGeometry,
         observable: PlotObservableKind,
@@ -72,6 +82,7 @@ impl RunTaskInputSpec {
             } if *nr_samples <= 0 => {
                 Err("sample task nr_samples must be a positive integer when set".to_string())
             }
+            Self::Configure { .. } => Ok(()),
             Self::Image { geometry, .. } => geometry.validate(),
             Self::PlotLine { geometry, .. } => geometry.validate(),
             _ => Ok(()),
@@ -84,6 +95,12 @@ impl RunTaskInputSpec {
 pub enum RunTaskSpec {
     Sample {
         nr_samples: Option<i64>,
+        sampler_aggregator: SamplerAggregatorConfig,
+        parametrization: ParametrizationConfig,
+        observable: Option<ObservableConfig>,
+        start_from: Option<TaskSnapshotRef>,
+    },
+    Configure {
         sampler_aggregator: SamplerAggregatorConfig,
         parametrization: ParametrizationConfig,
         observable: Option<ObservableConfig>,
@@ -125,6 +142,7 @@ impl RunTaskSpec {
                 "sample task with havana_training sampler requires nr_samples for training budget"
                     .to_string(),
             ),
+            Self::Configure { .. } => Ok(()),
             Self::Image { geometry, .. } => geometry.validate(),
             Self::PlotLine { geometry, .. } => geometry.validate(),
             _ => Ok(()),
@@ -134,6 +152,7 @@ impl RunTaskSpec {
     pub fn kind_str(&self) -> &'static str {
         match self {
             Self::Sample { .. } => "sample",
+            Self::Configure { .. } => "configure",
             Self::Image { .. } => "image",
             Self::PlotLine { .. } => "plot_line",
             Self::Pause => "pause",
@@ -143,6 +162,9 @@ impl RunTaskSpec {
     pub fn sampler_config(&self) -> Option<SamplerAggregatorConfig> {
         match self {
             Self::Sample {
+                sampler_aggregator, ..
+            }
+            | Self::Configure {
                 sampler_aggregator, ..
             } => Some(sampler_aggregator.clone()),
             Self::Image { geometry, .. } => Some(SamplerAggregatorConfig::RasterPlane {
@@ -162,6 +184,7 @@ impl RunTaskSpec {
     pub fn start_from(&self) -> Option<&TaskSnapshotRef> {
         match self {
             Self::Sample { start_from, .. }
+            | Self::Configure { start_from, .. }
             | Self::Image { start_from, .. }
             | Self::PlotLine { start_from, .. } => start_from.as_ref(),
             Self::Pause => None,
@@ -171,6 +194,9 @@ impl RunTaskSpec {
     pub fn parametrization_config(&self) -> Option<ParametrizationConfig> {
         match self {
             Self::Sample {
+                parametrization, ..
+            }
+            | Self::Configure {
                 parametrization, ..
             } => Some(parametrization.clone()),
             Self::Image { .. } | Self::PlotLine { .. } => Some(ParametrizationConfig::Identity {
@@ -182,7 +208,9 @@ impl RunTaskSpec {
 
     pub fn new_observable_config(&self) -> Result<Option<ObservableConfig>, BuildError> {
         match self {
-            Self::Sample { observable, .. } => Ok(observable.clone()),
+            Self::Sample { observable, .. } | Self::Configure { observable, .. } => {
+                Ok(observable.clone())
+            }
             Self::Image { observable, .. } | Self::PlotLine { observable, .. } => {
                 Ok(Some(observable.full_config()))
             }
@@ -195,6 +223,7 @@ impl RunTaskSpec {
     pub fn nr_expected_samples(&self) -> Option<i64> {
         match self {
             Self::Sample { nr_samples, .. } => *nr_samples,
+            Self::Configure { .. } => None,
             Self::Image { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::PlotLine { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::Pause => None,
@@ -219,6 +248,17 @@ impl IntoPreflightTask for RunTaskSpec {
                 ..
             } => Ok(Some(Self::Sample {
                 nr_samples: Some(1),
+                sampler_aggregator,
+                parametrization,
+                observable,
+                start_from,
+            })),
+            Self::Configure {
+                sampler_aggregator,
+                parametrization,
+                observable,
+                start_from,
+            } => Ok(Some(Self::Configure {
                 sampler_aggregator,
                 parametrization,
                 observable,
@@ -290,6 +330,25 @@ pub fn resolve_task_queue(
                     start_from: start_from.clone(),
                 });
             }
+            RunTaskInputSpec::Configure {
+                sampler_aggregator,
+                parametrization,
+                observable,
+                start_from,
+            } => {
+                if let Some(sampler_aggregator) = sampler_aggregator.as_ref() {
+                    current_sampler_aggregator = sampler_aggregator.clone();
+                }
+                if let Some(parametrization) = parametrization.as_ref() {
+                    current_parametrization = parametrization.clone();
+                }
+                resolved.push(RunTaskSpec::Configure {
+                    sampler_aggregator: current_sampler_aggregator.clone(),
+                    parametrization: current_parametrization.clone(),
+                    observable: observable.clone(),
+                    start_from: start_from.clone(),
+                });
+            }
             RunTaskInputSpec::Image {
                 geometry,
                 observable,
@@ -330,6 +389,9 @@ pub fn resolve_initial_sampler_aggregator(
         .and_then(|tasks| {
             tasks.iter().find_map(|task| match task {
                 RunTaskInputSpec::Sample {
+                    sampler_aggregator, ..
+                }
+                | RunTaskInputSpec::Configure {
                     sampler_aggregator, ..
                 } => sampler_aggregator.clone(),
                 RunTaskInputSpec::Image { geometry, .. } => {
@@ -545,6 +607,45 @@ mod tests {
         };
 
         assert_eq!(task.new_observable_config().unwrap(), None);
+    }
+
+    #[test]
+    fn configure_task_inherits_sampler_and_parametrization_when_omitted() {
+        let resolved = resolve_task_queue(
+            &SamplerAggregatorConfig::NaiveMonteCarlo {
+                params: NaiveMonteCarloSamplerParams::default(),
+            },
+            &ParametrizationConfig::Identity {
+                params: IdentityParametrizationParams::default(),
+            },
+            &[RunTaskInputSpec::Configure {
+                sampler_aggregator: None,
+                parametrization: None,
+                observable: None,
+                start_from: None,
+            }],
+        )
+        .unwrap();
+
+        match &resolved[0] {
+            RunTaskSpec::Configure {
+                sampler_aggregator,
+                parametrization,
+                observable,
+                ..
+            } => {
+                assert!(matches!(
+                    sampler_aggregator,
+                    SamplerAggregatorConfig::NaiveMonteCarlo { .. }
+                ));
+                assert!(matches!(
+                    parametrization,
+                    ParametrizationConfig::Identity { .. }
+                ));
+                assert_eq!(observable, &None);
+            }
+            other => panic!("expected configure task, got {other:?}"),
+        }
     }
 
     #[test]

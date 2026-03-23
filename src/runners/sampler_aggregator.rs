@@ -331,6 +331,107 @@ where
         }
     }
 
+    async fn load_previous_stage_for_task(
+        store: &S,
+        run_id: i32,
+        task: &RunTask,
+    ) -> Result<(Option<RunStageSnapshot>, Option<(i32, i64)>), RunnerError> {
+        if let Some(start_from) = task.task.start_from() {
+            let snapshot = store
+                .load_latest_stage_snapshot_for_task(start_from.run_id, start_from.task_id)
+                .await?;
+            let snapshot = snapshot.ok_or_else(|| {
+                RunnerError::Store(StoreError::not_found(format!(
+                    "no queue-empty stage snapshot found for run {} task {}",
+                    start_from.run_id, start_from.task_id
+                )))
+            })?;
+            Ok((
+                Some(snapshot),
+                Some((start_from.run_id, start_from.task_id)),
+            ))
+        } else {
+            let snapshot = store
+                .load_latest_stage_snapshot_before_sequence(run_id, task.sequence_nr)
+                .await?;
+            let origin = snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.task_id.map(|task_id| (snapshot.run_id, task_id)));
+            Ok((snapshot, origin))
+        }
+    }
+
+    async fn build_fresh_stage_state(
+        store: &S,
+        run_id: i32,
+        task: &RunTask,
+        sampler_config: &SamplerAggregatorConfig,
+        parametrization_config: &ParametrizationConfig,
+        point_spec: &PointSpec,
+        evaluator_config: &EvaluatorConfig,
+        sample_budget: Option<usize>,
+    ) -> Result<
+        (
+            Box<dyn SamplerAggregator>,
+            ObservableState,
+            ParametrizationState,
+            Option<(i32, i64)>,
+        ),
+        RunnerError,
+    > {
+        let (previous_snapshot, spawn_origin) =
+            Self::load_previous_stage_for_task(store, run_id, task).await?;
+
+        store
+            .set_run_task_spawn_origin(
+                task.id,
+                spawn_origin.map(|(from_run_id, _)| from_run_id),
+                spawn_origin.map(|(_, from_task_id)| from_task_id),
+            )
+            .await?;
+
+        let handoff = previous_snapshot.as_ref().map(|snapshot| StageHandoff {
+            sampler_snapshot: Some(&snapshot.sampler_snapshot),
+            parametrization_snapshot: Some(&snapshot.parametrization.snapshot),
+            observable_state: Some(&snapshot.observable_state),
+        });
+        let parametrization_state =
+            Self::build_parametrization_state(parametrization_config, point_spec, handoff)?;
+        let handoff = previous_snapshot.as_ref().map(|snapshot| StageHandoff {
+            sampler_snapshot: Some(&snapshot.sampler_snapshot),
+            parametrization_snapshot: Some(&snapshot.parametrization.snapshot),
+            observable_state: Some(&snapshot.observable_state),
+        });
+        let sampler = sampler_config
+            .build(point_spec.clone(), sample_budget, handoff)
+            .map_err(RunnerError::Engine)?;
+        let observable_state = match task
+            .task
+            .new_observable_config()
+            .map_err(RunnerError::Engine)?
+        {
+            Some(observable_config) => evaluator_config
+                .empty_observable_state(&observable_config)
+                .map_err(RunnerError::Engine)?,
+            None => previous_snapshot
+                .as_ref()
+                .ok_or_else(|| {
+                    RunnerError::Engine(EngineError::engine(
+                        "task requested observable reuse but no previous observable exists",
+                    ))
+                })?
+                .observable_state
+                .clone(),
+        };
+
+        Ok((
+            sampler,
+            observable_state,
+            parametrization_state,
+            spawn_origin,
+        ))
+    }
+
     pub async fn new(
         run_id: i32,
         node_name: impl Into<String>,
@@ -412,72 +513,18 @@ where
                 activation_snapshot.parametrization,
             )
         } else {
-            let (previous_snapshot, spawn_origin) = if let Some(start_from) = task.task.start_from()
-            {
-                let snapshot = store
-                    .load_latest_stage_snapshot_for_task(start_from.run_id, start_from.task_id)
-                    .await?;
-                let snapshot = snapshot.ok_or_else(|| {
-                    RunnerError::Store(StoreError::not_found(format!(
-                        "no queue-empty stage snapshot found for run {} task {}",
-                        start_from.run_id, start_from.task_id
-                    )))
-                })?;
-                (
-                    Some(snapshot),
-                    Some((start_from.run_id, start_from.task_id)),
-                )
-            } else {
-                let snapshot = store
-                    .load_latest_stage_snapshot_before_sequence(run_id, task.sequence_nr)
-                    .await?;
-                let origin = snapshot.as_ref().and_then(|snapshot| {
-                    snapshot.task_id.map(|task_id| (snapshot.run_id, task_id))
-                });
-                (snapshot, origin)
-            };
-
-            store
-                .set_run_task_spawn_origin(
-                    task.id,
-                    spawn_origin.map(|(from_run_id, _)| from_run_id),
-                    spawn_origin.map(|(_, from_task_id)| from_task_id),
+            let (sampler, observable_state, parametrization_state, _) =
+                Self::build_fresh_stage_state(
+                    &store,
+                    run_id,
+                    &task,
+                    &sampler_config,
+                    &parametrization_config,
+                    &point_spec,
+                    &evaluator_config,
+                    sample_budget,
                 )
                 .await?;
-
-            let handoff = previous_snapshot.as_ref().map(|snapshot| StageHandoff {
-                sampler_snapshot: Some(&snapshot.sampler_snapshot),
-                parametrization_snapshot: Some(&snapshot.parametrization.snapshot),
-                observable_state: Some(&snapshot.observable_state),
-            });
-            let parametrization_state =
-                Self::build_parametrization_state(&parametrization_config, &point_spec, handoff)?;
-            let handoff = previous_snapshot.as_ref().map(|snapshot| StageHandoff {
-                sampler_snapshot: Some(&snapshot.sampler_snapshot),
-                parametrization_snapshot: Some(&snapshot.parametrization.snapshot),
-                observable_state: Some(&snapshot.observable_state),
-            });
-            let sampler = sampler_config
-                .build(point_spec.clone(), sample_budget, handoff)
-                .map_err(RunnerError::Engine)?;
-            let observable_state = match task
-                .task
-                .new_observable_config()
-                .map_err(RunnerError::Engine)?
-            {
-                Some(observable_config) => evaluator_config
-                    .empty_observable_state(&observable_config)
-                    .map_err(RunnerError::Engine)?,
-                None => previous_snapshot
-                    .as_ref()
-                    .ok_or_else(|| {
-                        RunnerError::Engine(EngineError::engine(
-                            "task requested observable reuse but no previous observable exists",
-                        ))
-                    })?
-                    .observable_state
-                    .clone(),
-            };
 
             let runtime_state = SamplerRuntimeState {
                 produced_samples_total: persisted_progress.nr_produced_samples,
@@ -514,6 +561,51 @@ where
             last_performance_completed_samples: persisted_progress.nr_completed_samples,
             last_pending_after_enqueue,
         })
+    }
+
+    pub async fn apply_configure_task(
+        run_id: i32,
+        task: RunTask,
+        store: S,
+        point_spec: PointSpec,
+        evaluator_config: EvaluatorConfig,
+    ) -> Result<(), RunnerError> {
+        let Some(sampler_config) = task.task.sampler_config() else {
+            return Err(RunnerError::Engine(EngineError::engine(
+                "task missing sampler config",
+            )));
+        };
+        let Some(parametrization_config) = task.task.parametrization_config() else {
+            return Err(RunnerError::Engine(EngineError::engine(
+                "task missing parametrization config",
+            )));
+        };
+        let (mut sampler, observable_state, parametrization_state, _) =
+            Self::build_fresh_stage_state(
+                &store,
+                run_id,
+                &task,
+                &sampler_config,
+                &parametrization_config,
+                &point_spec,
+                &evaluator_config,
+                None,
+            )
+            .await?;
+        store
+            .save_run_stage_snapshot(&RunStageSnapshot {
+                run_id,
+                task_id: Some(task.id),
+                sequence_nr: Some(task.sequence_nr),
+                queue_empty: true,
+                sampler_snapshot: sampler.snapshot().map_err(RunnerError::Engine)?,
+                observable_state,
+                sampler_aggregator: sampler_config,
+                parametrization: parametrization_state,
+            })
+            .await?;
+        store.complete_run_task(task.id).await?;
+        Ok(())
     }
 
     pub fn task_id(&self) -> i64 {

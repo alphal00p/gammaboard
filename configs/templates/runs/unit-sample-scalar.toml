@@ -1,5 +1,5 @@
-# Small scalar sample run.
-# Uses the defaults from configs/default.toml for runner tuning.
+# Small scalar run template.
+# Add tasks from the dashboard task templates after creating the run.
 name = "unit-sample-scalar"
 
 [evaluator]
@@ -9,8 +9,3 @@ discrete_dims = 0
 
 [parametrization]
 kind = "identity"
-
-[[task_queue]]
-kind = "sample"
-nr_samples = 10000
-observable = "scalar"

@@ -351,6 +351,10 @@ fn set_task_start_from(task: &mut RunTaskSpec, start_from: TaskSnapshotRef) {
             start_from: task_start_from,
             ..
         }
+        | RunTaskSpec::Configure {
+            start_from: task_start_from,
+            ..
+        }
         | RunTaskSpec::Image {
             start_from: task_start_from,
             ..
@@ -436,14 +440,21 @@ async fn resolve_task_queue_file_for_run(
     let mut base_sampler_aggregator = integration_params.sampler_aggregator;
     let mut base_parametrization = integration_params.parametrization;
     for task in existing_tasks {
-        if let RunTaskSpec::Sample {
-            sampler_aggregator,
-            parametrization,
-            ..
-        } = task.task
-        {
-            base_sampler_aggregator = sampler_aggregator;
-            base_parametrization = parametrization;
+        match task.task {
+            RunTaskSpec::Sample {
+                sampler_aggregator,
+                parametrization,
+                ..
+            }
+            | RunTaskSpec::Configure {
+                sampler_aggregator,
+                parametrization,
+                ..
+            } => {
+                base_sampler_aggregator = sampler_aggregator;
+                base_parametrization = parametrization;
+            }
+            _ => {}
         }
     }
     resolve_task_queue(
