@@ -1,0 +1,16 @@
+# Small scalar sample run.
+# Uses the defaults from configs/default.toml for runner tuning.
+name = "unit-sample-scalar"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[parametrization]
+kind = "identity"
+
+[[task_queue]]
+kind = "sample"
+nr_samples = 10000
+observable = "scalar"

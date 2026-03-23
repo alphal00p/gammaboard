@@ -239,6 +239,15 @@ export const fetchRunTaskPanels = async (
   );
 };
 
+export const fetchTemplateList = async (kind, signal) => {
+  const data = await apiGet(`/templates/${kind}`, `Failed to fetch ${kind} templates`, signal);
+  return asArray(data?.items).filter((value) => typeof value === "string" && value.trim());
+};
+
+export const fetchTemplateFile = async (kind, name, signal) => {
+  return apiGet(`/templates/${kind}/${encodeURIComponent(name)}`, `Failed to fetch template ${name}`, signal);
+};
+
 export const fetchRunLogPage = async (
   runId,
   { limit = 100, nodeName = null, level = null, search = "", beforeId = null } = {},

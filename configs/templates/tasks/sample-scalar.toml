@@ -1,0 +1,7 @@
+# Basic scalar sampling task.
+# If you append this after another sample task, omitted sampler and parametrization
+# settings will inherit from the previous effective sample stage.
+[[task_queue]]
+kind = "sample"
+nr_samples = 10000
+observable = "scalar"

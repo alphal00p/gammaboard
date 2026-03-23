@@ -1,0 +1,8 @@
+# Fresh complex line-plot task.
+[[task_queue]]
+kind = "plot_line"
+observable = "complex"
+[task_queue.geometry]
+offset = [0.0, 0.0]
+direction = [1.0, 0.0]
+linspace = { start = -2.0, stop = 2.0, count = 512 }

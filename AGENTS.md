@@ -51,9 +51,10 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Dashboard auth is operator-oriented: read-only endpoints may stay open, while explicit steering endpoints require admin auth.
 - Dashboard steering should use explicit endpoints such as `pause`, `assign`, `unassign`, `append task`, `create run`, and `clone run`, not generic patch endpoints.
 - Dashboard auth is intended for small trusted deployments behind HTTPS.
+- Run and task templates should be simple `.toml` files served from server-configured directories; the frontend should treat them as editable starting points, not as a second schema.
 - Shared CLI database and tracing settings should come from `configs/gammaboard.toml` by default, with an optional global `--cli-config <PATH>` override.
 - Local Postgres lifecycle commands should live under `gammaboard db ...` and use the shared CLI config instead of separate env-driven just recipes.
-- Server host, port, allowed origin, secure cookie policy, and dashboard auth secrets should come from `configs/server.toml` by default, with an optional `gammaboard server --server-config <PATH>` override.
+- Server host, port, allowed origin, secure cookie policy, dashboard auth secrets, and template directories should come from `configs/server.toml` by default, with an optional `gammaboard server --server-config <PATH>` override.
 - Server TOML should be explicit; do not rely on implicit defaults for required server settings.
 
 ## Logging And Read APIs

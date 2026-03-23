@@ -89,6 +89,8 @@ These commands use `database.url` and `local_postgres` from `configs/gammaboard.
   port = 4000
   allowed_origin = "http://localhost:3000"
   secure_cookie = false
+  run_templates_dir = "templates/runs"
+  task_templates_dir = "templates/tasks"
 
   [auth]
   admin_password_hash = "$argon2id$..."
@@ -100,6 +102,7 @@ These commands use `database.url` and `local_postgres` from `configs/gammaboard.
 - Read-only dashboard endpoints stay open.
 - Steering actions currently require admin login and are backed by a signed session cookie.
 - The dashboard currently supports creating runs from raw TOML, cloning runs from a task snapshot, appending tasks from raw TOML, pausing runs, auto-assigning free nodes, assigning and unassigning nodes, and requesting a node shutdown.
+- The create-run and add-task dialogs can also load `.toml` templates from `run_templates_dir` and `task_templates_dir` in `server.toml`.
 - Node shutdown from the dashboard is guarded by a confirmation dialog because it cannot be undone from the web UI.
 - Put `auth.admin_password_hash` in `server.toml` to enable dashboard auth.
 - Put `auth.session_secret` in `server.toml` when auth is enabled.

@@ -18,7 +18,15 @@ import { useRunConfigPanels } from "./hooks/useRunConfigPanels";
 import { useRuns } from "./hooks/useRuns";
 import { useRunTasks } from "./hooks/useRunTasks";
 import { useWorkersData } from "./hooks/useWorkersData";
-import { addRunTasks, autoAssignRun, cloneRun, createRun, pauseRun } from "./services/api";
+import {
+  addRunTasks,
+  autoAssignRun,
+  cloneRun,
+  createRun,
+  fetchTemplateFile,
+  fetchTemplateList,
+  pauseRun,
+} from "./services/api";
 import { asArray } from "./utils/collections";
 import { asTaskList, getCurrentTask } from "./utils/tasks";
 
@@ -81,8 +89,23 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated }) => {
   const [addTasksBusy, setAddTasksBusy] = useState(false);
   const [cloneRunError, setCloneRunError] = useState(null);
   const [addTasksError, setAddTasksError] = useState(null);
+  const [taskTemplates, setTaskTemplates] = useState([]);
   const [maxEvaluators, setMaxEvaluators] = useState("");
   const { authenticated } = useAuth();
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchTemplateList("tasks")
+      .then((items) => {
+        if (!cancelled) setTaskTemplates(items);
+      })
+      .catch((err) => {
+        console.error("Failed to fetch task templates:", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (selectedRun != null) {
@@ -258,6 +281,11 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated }) => {
         submitLabel="Add Tasks"
         initialValue={DEFAULT_ADD_TASKS_TOML}
         helperText="Submit one or more [[task_queue]] entries."
+        templates={taskTemplates}
+        loadTemplate={async (name) => {
+          const response = await fetchTemplateFile("tasks", name);
+          return response?.toml || "";
+        }}
         busy={addTasksBusy}
         error={addTasksError}
         onClose={closeAddTasks}
@@ -294,6 +322,21 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, onRunCr
   const [createRunBusy, setCreateRunBusy] = useState(false);
   const [createRunError, setCreateRunError] = useState(null);
   const [snackbar, setSnackbar] = useState(null);
+  const [runTemplates, setRunTemplates] = useState([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchTemplateList("runs")
+      .then((items) => {
+        if (!cancelled) setRunTemplates(items);
+      })
+      .catch((err) => {
+        console.error("Failed to fetch run templates:", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <>
@@ -330,6 +373,11 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, onRunCr
         submitLabel="Create Run"
         initialValue={DEFAULT_CREATE_RUN_TOML}
         helperText="Enter a run config. The backend merges this with configs/default.toml."
+        templates={runTemplates}
+        loadTemplate={async (name) => {
+          const response = await fetchTemplateFile("runs", name);
+          return response?.toml || "";
+        }}
         busy={createRunBusy}
         error={createRunError}
         onClose={() => {

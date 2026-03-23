@@ -51,6 +51,8 @@ pub struct ServerConfig {
     pub port: u16,
     pub allowed_origin: String,
     pub secure_cookie: bool,
+    pub run_templates_dir: String,
+    pub task_templates_dir: String,
     pub auth: ServerAuthConfig,
 }
 
@@ -65,8 +67,20 @@ impl ServerConfig {
         let path = path.as_ref();
         let raw = fs::read_to_string(path)
             .with_context(|| format!("failed reading server config {}", path.display()))?;
-        toml::from_str(&raw)
-            .with_context(|| format!("failed parsing server config {}", path.display()))
+        let mut parsed: Self = toml::from_str(&raw)
+            .with_context(|| format!("failed parsing server config {}", path.display()))?;
+        let base_dir = path
+            .parent()
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")));
+        parsed.run_templates_dir =
+            normalize_config_path(base_dir, parsed.run_templates_dir.as_str())
+                .display()
+                .to_string();
+        parsed.task_templates_dir =
+            normalize_config_path(base_dir, parsed.task_templates_dir.as_str())
+                .display()
+                .to_string();
+        Ok(parsed)
     }
 
     pub fn bind_addr(&self) -> SocketAddr {
@@ -83,6 +97,8 @@ pub async fn serve(store: PgStore, config: ServerConfig) -> anyhow::Result<()> {
         auth: AuthConfig::from_server_config(&config.auth),
         allowed_origin,
         secure_cookie: config.secure_cookie,
+        run_templates_dir: PathBuf::from(&config.run_templates_dir),
+        task_templates_dir: PathBuf::from(&config.task_templates_dir),
     };
 
     let app = build_app(state);
@@ -106,6 +122,8 @@ pub(crate) struct AppState {
     auth: AuthConfig,
     allowed_origin: axum::http::HeaderValue,
     secure_cookie: bool,
+    run_templates_dir: PathBuf,
+    task_templates_dir: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -240,6 +258,17 @@ struct TaskQueueFile {
     task_queue: Vec<RunTaskInputSpec>,
 }
 
+#[derive(Serialize)]
+struct TemplateListResponse {
+    items: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct TemplateFileResponse {
+    name: String,
+    toml: String,
+}
+
 fn build_app(state: AppState) -> Router {
     let public_api_routes = Router::new()
         .route("/health", get(health_check))
@@ -252,6 +281,10 @@ fn build_app(state: AppState) -> Router {
         .route("/runs/:id", get(get_run))
         .route("/runs/:id/panels", get(get_run_panels))
         .route("/runs/:id/tasks", get(get_run_tasks))
+        .route("/templates/runs", get(list_run_templates))
+        .route("/templates/runs/:name", get(get_run_template))
+        .route("/templates/tasks", get(list_task_templates))
+        .route("/templates/tasks/:name", get(get_task_template))
         .route("/runs/:id/config/evaluator", get(get_run_evaluator_config))
         .route(
             "/runs/:id/config/sampler-aggregator",
@@ -308,6 +341,15 @@ fn build_cors_layer(allowed_origin: axum::http::HeaderValue) -> CorsLayer {
         ])
         .allow_headers([axum::http::header::CONTENT_TYPE])
         .allow_origin(allowed_origin)
+}
+
+fn normalize_config_path(base_dir: &Path, path: &str) -> PathBuf {
+    let candidate = PathBuf::from(path.trim());
+    if candidate.is_absolute() {
+        candidate
+    } else {
+        base_dir.join(candidate)
+    }
 }
 
 async fn request_context_middleware(request: Request<axum::body::Body>, next: Next) -> Response {
@@ -420,6 +462,36 @@ async fn get_run_tasks(
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let tasks = state.store.list_run_tasks(id).await?;
     json_response(tasks)
+}
+
+async fn list_run_templates(
+    State(state): State<AppState>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    json_response(TemplateListResponse {
+        items: list_template_files(&state.run_templates_dir)?,
+    })
+}
+
+async fn get_run_template(
+    State(state): State<AppState>,
+    AxumPath(name): AxumPath<String>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    json_response(read_template_file(&state.run_templates_dir, &name)?)
+}
+
+async fn list_task_templates(
+    State(state): State<AppState>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    json_response(TemplateListResponse {
+        items: list_template_files(&state.task_templates_dir)?,
+    })
+}
+
+async fn get_task_template(
+    State(state): State<AppState>,
+    AxumPath(name): AxumPath<String>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    json_response(read_template_file(&state.task_templates_dir, &name)?)
 }
 
 async fn get_run_evaluator_config(
@@ -625,6 +697,57 @@ fn read_default_run_add_toml() -> Result<toml::Value, ApiError> {
             path.display()
         ))
     })
+}
+
+fn list_template_files(dir: &Path) -> Result<Vec<String>, ApiError> {
+    let mut items = Vec::new();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Ok(items);
+    };
+    for entry in entries {
+        let entry = entry.map_err(|err| {
+            ApiError::Internal(format!(
+                "failed reading template dir {}: {err}",
+                dir.display()
+            ))
+        })?;
+        let path = entry.path();
+        if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        items.push(name.to_string());
+    }
+    items.sort();
+    Ok(items)
+}
+
+fn read_template_file(dir: &Path, name: &str) -> Result<TemplateFileResponse, ApiError> {
+    let path = resolve_template_path(dir, name)?;
+    let toml = fs::read_to_string(&path)
+        .map_err(|err| ApiError::Internal(format!("failed reading {}: {err}", path.display())))?;
+    Ok(TemplateFileResponse {
+        name: name.to_string(),
+        toml,
+    })
+}
+
+fn resolve_template_path(dir: &Path, name: &str) -> Result<PathBuf, ApiError> {
+    if name.is_empty()
+        || !name.ends_with(".toml")
+        || name.contains('/')
+        || name.contains('\\')
+        || Path::new(name).file_name().and_then(|value| value.to_str()) != Some(name)
+    {
+        return Err(ApiError::BadRequest("invalid template name".to_string()));
+    }
+    let path = dir.join(name);
+    if !path.is_file() {
+        return Err(ApiError::NotFound(format!("template {name} not found")));
+    }
+    Ok(path)
 }
 
 fn merge_toml(base: &mut toml::Value, overlay: toml::Value) {

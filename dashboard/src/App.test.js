@@ -1,10 +1,14 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import App from "./App";
 import { fetchNodes, fetchRuns } from "./services/api";
+import * as api from "./services/api";
 
 jest.mock("./services/api", () => ({
   fetchRuns: jest.fn(async () => []),
   fetchNodes: jest.fn(async () => []),
+  fetchSession: jest.fn(async () => ({ authenticated: false })),
+  login: jest.fn(async () => ({ authenticated: true })),
+  logout: jest.fn(async () => ({ authenticated: false })),
   fetchStats: jest.fn(async () => []),
   fetchRunLogPage: jest.fn(async () => ({
     items: [],
@@ -16,6 +20,8 @@ jest.mock("./services/api", () => ({
   fetchRunEvaluatorConfigPanels: jest.fn(async () => ({ source_id: "cfg:evaluator", panels: [], updates: [] })),
   fetchRunSamplerConfigPanels: jest.fn(async () => ({ source_id: "cfg:sampler", panels: [], updates: [] })),
   fetchRunTaskPanels: jest.fn(async () => ({ source_id: "task", panels: [], updates: [] })),
+  fetchTemplateList: jest.fn(async () => []),
+  fetchTemplateFile: jest.fn(async () => ({ name: "template.toml", toml: "" })),
   fetchSamplerPerformanceHistory: jest.fn(async () => ({ source_id: "perf:sampler", panels: [], updates: [] })),
   fetchNodeEvaluatorPerformanceHistory: jest.fn(async () => ({ source_id: "perf:evaluator", panels: [], updates: [] })),
   fetchNodeSamplerPerformanceHistory: jest.fn(async () => ({
@@ -34,6 +40,35 @@ jest.mock("./services/api", () => ({
 describe("App Component", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    api.fetchRuns.mockResolvedValue([]);
+    api.fetchNodes.mockResolvedValue([]);
+    api.fetchSession.mockResolvedValue({ authenticated: false });
+    api.login.mockResolvedValue({ authenticated: true });
+    api.logout.mockResolvedValue({ authenticated: false });
+    api.fetchStats.mockResolvedValue([]);
+    api.fetchRunLogPage.mockResolvedValue({
+      items: [],
+      next_before_id: null,
+      has_more_older: false,
+    });
+    api.fetchRun.mockResolvedValue(null);
+    api.fetchRunTasks.mockResolvedValue([]);
+    api.fetchRunEvaluatorConfigPanels.mockResolvedValue({ source_id: "cfg:evaluator", panels: [], updates: [] });
+    api.fetchRunSamplerConfigPanels.mockResolvedValue({ source_id: "cfg:sampler", panels: [], updates: [] });
+    api.fetchRunTaskPanels.mockResolvedValue({ source_id: "task", panels: [], updates: [] });
+    api.fetchTemplateList.mockResolvedValue([]);
+    api.fetchTemplateFile.mockResolvedValue({ name: "template.toml", toml: "" });
+    api.fetchSamplerPerformanceHistory.mockResolvedValue({ source_id: "perf:sampler", panels: [], updates: [] });
+    api.fetchNodeEvaluatorPerformanceHistory.mockResolvedValue({
+      source_id: "perf:evaluator",
+      panels: [],
+      updates: [],
+    });
+    api.fetchNodeSamplerPerformanceHistory.mockResolvedValue({
+      source_id: "perf:node:sampler",
+      panels: [],
+      updates: [],
+    });
   });
 
   const renderApp = async () => {
