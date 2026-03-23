@@ -1,8 +1,8 @@
 mod full_observable;
 mod sample;
 
-use crate::core::{EngineError, EvaluatorConfig, RunSpec, RunTask, RunTaskSpec};
-use crate::evaluation::{ObservableState, SemanticObservableKind};
+use crate::core::{EngineError, RunTask, RunTaskSpec};
+use crate::evaluation::ObservableState;
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelUpdate, PanelWidth,
     append_panel, key_value, key_value_panel, merge_panel_state, panel_spec, replace_panel,
@@ -51,7 +51,6 @@ impl TaskPanelCurrentSource<'_> {
 
 pub struct TaskPanelContext<'a> {
     pub task: &'a RunTask,
-    pub run_spec: &'a RunSpec,
     pub source: TaskPanelCurrentSource<'a>,
     pub panel_state: &'a JsonValue,
 }
@@ -135,7 +134,7 @@ fn project_history_panels(
 }
 
 impl RunTaskSpec {
-    fn panel_projectors(&self, run_spec: &RunSpec) -> Vec<TaskPanelProjector> {
+    fn panel_projectors(&self) -> Vec<TaskPanelProjector> {
         let mut projectors = vec![task_summary_projector()];
         projectors.extend(match self {
             Self::Pause => vec![panel_projector(
@@ -168,13 +167,16 @@ impl RunTaskSpec {
                 },
                 |_ctx| Ok(None),
             )],
-            Self::Sample { .. } => sample::projectors(run_spec),
+            Self::Sample { .. } => sample::projectors(self),
             Self::Image {
                 geometry, display, ..
             } => full_observable::image_projectors(geometry.clone(), *display),
             Self::PlotLine {
-                geometry, display, ..
-            } => full_observable::line_projectors(geometry.clone(), *display, run_spec),
+                geometry,
+                display,
+                observable,
+                ..
+            } => full_observable::line_projectors(geometry.clone(), *display, *observable),
         });
         projectors
     }
@@ -210,16 +212,15 @@ fn task_summary_projector() -> TaskPanelProjector {
                         "Start From",
                         task.task
                             .start_from()
-                            .map(|reference| format!("{}:{}", reference.run_id, reference.task_id))
+                            .map(|reference| reference.snapshot_id.to_string())
                             .unwrap_or_else(|| "inherit".to_string()),
                     ),
                     key_value(
                         "spawned_from",
                         "Spawned From",
-                        match (task.spawned_from_run_id, task.spawned_from_task_id) {
-                            (Some(run_id), Some(task_id)) => format!("{run_id}:{task_id}"),
-                            _ => "none".to_string(),
-                        },
+                        task.spawned_from_snapshot_id
+                            .map(|snapshot_id| snapshot_id.to_string())
+                            .unwrap_or_else(|| "none".to_string()),
                     ),
                 ],
             )))
@@ -229,9 +230,9 @@ fn task_summary_projector() -> TaskPanelProjector {
 }
 
 impl TaskPanelSource {
-    pub fn new(task_spec: &RunTaskSpec, run_spec: &RunSpec) -> Self {
+    pub fn new(task_spec: &RunTaskSpec) -> Self {
         Self {
-            projectors: task_spec.panel_projectors(run_spec),
+            projectors: task_spec.panel_projectors(),
         }
     }
 
@@ -251,7 +252,6 @@ impl TaskPanelSource {
     pub fn current_panels(
         &self,
         task: &RunTask,
-        run_spec: &RunSpec,
         panel_state: &JsonValue,
         current_observable: Option<&ObservableState>,
         latest_stage_snapshot: Option<&TaskStageSnapshot>,
@@ -261,7 +261,6 @@ impl TaskPanelSource {
             &self.projectors,
             &TaskPanelContext {
                 task,
-                run_spec,
                 source: resolve_current_source(
                     task,
                     current_observable,
@@ -278,7 +277,6 @@ impl TaskPanelSource {
         source_id: String,
         requested_cursor: TaskPanelCursor,
         task: &RunTask,
-        run_spec: &RunSpec,
         panel_state: &JsonValue,
         current_observable: Option<&ObservableState>,
         latest_stage_snapshot: Option<&TaskStageSnapshot>,
@@ -289,7 +287,6 @@ impl TaskPanelSource {
         let panels = self.panel_specs();
         let current_panels = self.current_panels(
             task,
-            run_spec,
             panel_state,
             current_observable,
             latest_stage_snapshot,
@@ -553,56 +550,13 @@ fn format_cursor(cursor: TaskPanelCursor) -> Option<String> {
         .map(|snapshot_id| format!("{snapshot_id}:{}", cursor.downsample_level))
 }
 
-impl EvaluatorConfig {
-    pub fn observable_kind(&self) -> SemanticObservableKind {
-        match self {
-            Self::Gammaloop { params } => params.observable_kind,
-            Self::SinEvaluator { .. } => SemanticObservableKind::Scalar,
-            Self::SincEvaluator { .. } => SemanticObservableKind::Complex,
-            Self::Unit { params } => params.observable_kind,
-            Self::Symbolica { .. } => SemanticObservableKind::Scalar,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::{LineDisplayMode, RunTaskState};
-    use crate::evaluation::{
-        ComplexValue, FullComplexObservableState, PointSpec, UnitEvaluatorParams,
-    };
-    use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
+    use crate::evaluation::{ComplexValue, FullComplexObservableState};
     use crate::server::panels::{PanelUpdateMode, PlotPoint, scalar_timeseries_panel};
     use chrono::Utc;
-
-    fn complex_run_spec() -> RunSpec {
-        RunSpec {
-            run_id: 1,
-            point_spec: PointSpec {
-                continuous_dims: 1,
-                discrete_dims: 0,
-            },
-            evaluator: EvaluatorConfig::Unit {
-                params: UnitEvaluatorParams {
-                    observable_kind: SemanticObservableKind::Complex,
-                    ..UnitEvaluatorParams::default()
-                },
-            },
-            evaluator_runner_params: EvaluatorRunnerParams {
-                performance_snapshot_interval_ms: 1000,
-            },
-            sampler_aggregator_runner_params: SamplerAggregatorRunnerParams {
-                performance_snapshot_interval_ms: 1000,
-                target_batch_eval_ms: 100.0,
-                target_queue_remaining: 0.5,
-                max_batch_size: 16,
-                max_queue_size: 16,
-                max_batches_per_tick: 4,
-                completed_batch_fetch_limit: 16,
-            },
-        }
-    }
 
     fn line_geometry() -> crate::core::LineRasterGeometry {
         crate::core::LineRasterGeometry {
@@ -632,8 +586,7 @@ mod tests {
             run_id: 1,
             sequence_nr: 1,
             task,
-            spawned_from_run_id: None,
-            spawned_from_task_id: None,
+            spawned_from_snapshot_id: None,
             state: RunTaskState::Active,
             nr_produced_samples: 3,
             nr_completed_samples: 3,
@@ -659,12 +612,10 @@ mod tests {
         task_spec: &RunTaskSpec,
         task: &RunTask,
         observable: &ObservableState,
-        run_spec: &RunSpec,
     ) -> Vec<PanelState> {
-        TaskPanelSource::new(task_spec, run_spec)
+        TaskPanelSource::new(task_spec)
             .current_panels(
                 task,
-                run_spec,
                 &JsonValue::Object(Default::default()),
                 Some(observable),
                 None,
@@ -675,9 +626,8 @@ mod tests {
 
     #[test]
     fn complex_line_auto_uses_multi_timeseries_components_panel() {
-        let run_spec = complex_run_spec();
         let task = plot_task(LineDisplayMode::Auto);
-        let descriptors = TaskPanelSource::new(&task, &run_spec).panel_specs();
+        let descriptors = TaskPanelSource::new(&task).panel_specs();
         assert!(
             descriptors
                 .iter()
@@ -691,7 +641,7 @@ mod tests {
 
         let run_task = run_task(task.clone());
         let observable = complex_observable();
-        let current = current_panels(&task, &run_task, &observable, &run_spec);
+        let current = current_panels(&task, &run_task, &observable);
         let panel = current
             .into_iter()
             .find(|panel| matches!(panel, PanelState::MultiTimeseries { panel_id, .. } if panel_id == "line_components"))
@@ -704,9 +654,8 @@ mod tests {
 
     #[test]
     fn complex_line_scalar_curve_uses_single_real_panel() {
-        let run_spec = complex_run_spec();
         let task = plot_task(LineDisplayMode::ScalarCurve);
-        let descriptors = TaskPanelSource::new(&task, &run_spec).panel_specs();
+        let descriptors = TaskPanelSource::new(&task).panel_specs();
         assert!(
             descriptors
                 .iter()
@@ -720,7 +669,7 @@ mod tests {
 
         let run_task = run_task(task.clone());
         let observable = complex_observable();
-        let current = current_panels(&task, &run_task, &observable, &run_spec);
+        let current = current_panels(&task, &run_task, &observable);
         assert!(
             current
                 .iter()

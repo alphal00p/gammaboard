@@ -39,6 +39,15 @@ pub enum ObservableConfig {
     FullComplex,
 }
 
+impl ObservableConfig {
+    pub const fn semantic_kind(&self) -> crate::evaluation::SemanticObservableKind {
+        match self {
+            Self::Scalar | Self::FullScalar => crate::evaluation::SemanticObservableKind::Scalar,
+            Self::Complex | Self::FullComplex => crate::evaluation::SemanticObservableKind::Complex,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EvaluatorConfig {

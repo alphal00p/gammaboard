@@ -17,6 +17,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - `RunSpec` should keep only immutable run-global state. Task-varying sampler, parametrization, and observable choices belong on tasks or in stored integration defaults, not on `RunSpec`.
 - Run names are human-facing and not unique. CLI run references may be numeric ids or exact names; ambiguous names must fail and print matches.
 - If `task_queue` is omitted during `run add`, the run is created idle.
+- `run add` must persist an initial queue-empty `run_stage_snapshot` immediately.
 - Run lifecycle is derived from control-plane state. Do not add a persisted run status column unless explicitly requested.
 - Pausing a run means clearing desired assignments so `run-node` reconciles down cleanly.
 
@@ -33,8 +34,10 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 
 ## Tasks, Snapshots, Queue
 - Task sequencing lives in `src/core/tasks.rs`.
-- Task transitions must restore runtime state from persisted queue-empty `run_stage_snapshots`, not in-memory handoff only.
-- Executable tasks may declare `start_from = { run_id, task_id }` to branch from an older task snapshot.
+- Task transitions must restore runtime state from persisted `run_stage_snapshots`, not in-memory handoff only.
+- Snapshots are the branchable state timeline. Tasks are queued work items that may produce snapshots, but are not themselves the canonical branch identity.
+- Executable tasks may declare `start_from = { snapshot_id = ... }` to branch from an older stage snapshot.
+- Task preflight belongs on task insertion. Bare `run add` should validate run-global construction and root-stage creation, while appended tasks should be validated against the current or referenced stage snapshots before persistence.
 - `configure` tasks update sampler, parametrization, and observable state without producing work; omitted fields inherit the previous effective stage.
 - Sample and `configure` tasks may omit `observable`; that means reuse the previous observable state.
 - There is no run-level observable default. A first executable task that needs a fresh observable must declare it explicitly.
@@ -57,6 +60,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Local Postgres lifecycle commands should live under `gammaboard db ...` and use the shared CLI config instead of separate env-driven just recipes.
 - Server host, port, allowed origin, secure cookie policy, dashboard auth secrets, and template directories should come from `configs/server.toml` by default, with an optional `gammaboard server --server-config <PATH>` override.
 - Server TOML should be explicit; do not rely on implicit defaults for required server settings.
+- `gammaboard server` should shut down cleanly on `Ctrl-C` instead of relying on default process signal behavior.
 
 ## Logging And Read APIs
 - Runtime logs are persisted through the tracing pipeline into PostgreSQL.

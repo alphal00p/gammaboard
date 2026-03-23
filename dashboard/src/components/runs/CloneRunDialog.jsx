@@ -75,7 +75,7 @@ const CloneRunDialog = ({
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
             <Typography variant="body2" color="text.secondary">
-              Create a new run from a stored task snapshot.
+              Create a new run from the latest stored snapshot of a selected task.
             </Typography>
             <TextField
               select
@@ -97,7 +97,9 @@ const CloneRunDialog = ({
               value={fromTaskId}
               onChange={(event) => setFromTaskId(event.target.value)}
               disabled={taskList.length === 0}
-              helperText={selectedTask ? `${getTaskKindLabel(selectedTask)} task #${selectedTask.id}` : "No tasks available"}
+              helperText={
+                selectedTask ? `${getTaskKindLabel(selectedTask)} task #${selectedTask.id}` : "No tasks available"
+              }
             >
               {taskList.map((task) => (
                 <MenuItem key={task.id} value={task.id}>

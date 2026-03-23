@@ -224,12 +224,13 @@ pub struct RunSampleProgress {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunStageSnapshot {
+    pub id: Option<i64>,
     pub run_id: i32,
     pub task_id: Option<i64>,
     pub sequence_nr: Option<i32>,
     pub queue_empty: bool,
     pub sampler_snapshot: SamplerAggregatorSnapshot,
-    pub observable_state: ObservableState,
+    pub observable_state: Option<ObservableState>,
     pub sampler_aggregator: SamplerAggregatorConfig,
     pub parametrization: ParametrizationState,
 }

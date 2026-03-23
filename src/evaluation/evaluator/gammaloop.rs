@@ -14,7 +14,6 @@ use crate::{
     core::ObservableConfig,
     evaluation::{
         ComplexValueEvaluator, EvalBatchOptions, Evaluator, ObservableState, ScalarValueEvaluator,
-        SemanticObservableKind,
     },
 };
 
@@ -27,7 +26,6 @@ pub struct GammaLoopEvaluator {
     integrand_name: String,
     momentum_space: bool,
     training_projection: TrainingProjection,
-    observable_kind: SemanticObservableKind,
     point_spec: PointSpec,
 }
 
@@ -61,7 +59,6 @@ pub struct GammaLoopParams {
     pub momentum_space: bool,
     pub use_f128: bool,
     pub training_projection: TrainingProjection,
-    pub observable_kind: SemanticObservableKind,
     pub continuous_dims: usize,
     pub discrete_dims: usize,
 }
@@ -75,7 +72,6 @@ impl Default for GammaLoopParams {
             momentum_space: true,
             use_f128: false,
             training_projection: TrainingProjection::default(),
-            observable_kind: SemanticObservableKind::Complex,
             continuous_dims: 3,
             discrete_dims: 0,
         }
@@ -116,7 +112,6 @@ impl GammaLoopEvaluator {
             integrand_name,
             momentum_space: params.momentum_space,
             training_projection: params.training_projection,
-            observable_kind: params.observable_kind,
             point_spec: PointSpec {
                 continuous_dims: params.continuous_dims,
                 discrete_dims: params.discrete_dims,
@@ -184,8 +179,8 @@ impl Evaluator for GammaLoopEvaluator {
             .ok_or_else(|| EvalError::eval("Batch weights array must be standard-layout"))?;
         let vec_res = self.evaluate(batch)?;
         let mut observable_state = ObservableState::from_config(observable);
-        let weighted_values = match self.observable_kind {
-            SemanticObservableKind::Scalar => match &mut observable_state {
+        let weighted_values = match observable.semantic_kind() {
+            crate::evaluation::SemanticObservableKind::Scalar => match &mut observable_state {
                 ObservableState::Scalar(observable) => self.ingest_scalar_values(
                     &vec_res
                         .iter()
@@ -211,7 +206,7 @@ impl Evaluator for GammaLoopEvaluator {
                     )));
                 }
             },
-            SemanticObservableKind::Complex => match &mut observable_state {
+            crate::evaluation::SemanticObservableKind::Complex => match &mut observable_state {
                 ObservableState::Complex(observable) => self.ingest_complex_values(
                     &vec_res,
                     weights,
@@ -243,7 +238,6 @@ impl Evaluator for GammaLoopEvaluator {
             "process_id": self.process_id,
             "integrand_name": self.integrand_name,
             "training_projection": self.training_projection,
-            "observable_kind": self.observable_kind,
         })
     }
 }

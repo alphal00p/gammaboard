@@ -1,5 +1,5 @@
 use super::{TaskPanelContext, TaskPanelHistoryContext, TaskPanelProjector, panel_projector};
-use crate::core::{EngineError, RunSpec};
+use crate::core::{EngineError, RunTaskSpec};
 use crate::evaluation::{FullObservableProgress, ObservableState, SemanticObservableKind};
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, key_value, key_value_panel,
@@ -7,14 +7,14 @@ use crate::server::panels::{
 };
 use serde_json::Value as JsonValue;
 
-pub(super) fn projectors(run_spec: &RunSpec) -> Vec<TaskPanelProjector> {
-    let observable_kind = run_spec.evaluator.observable_kind();
+pub(super) fn projectors(task_spec: &RunTaskSpec) -> Vec<TaskPanelProjector> {
+    let observable_kind = task_observable_kind(task_spec);
     let mut projectors = vec![
         sample_progress_projector(),
         estimate_summary_projector(observable_kind),
         real_estimate_history_projector(observable_kind),
     ];
-    if matches!(observable_kind, SemanticObservableKind::Complex) {
+    if matches!(observable_kind, Some(SemanticObservableKind::Complex)) {
         projectors.push(imag_estimate_history_projector());
     }
     projectors.push(abs_signal_to_noise_history_projector(observable_kind));
@@ -48,7 +48,9 @@ fn sample_progress_projector() -> TaskPanelProjector {
     )
 }
 
-fn real_estimate_history_projector(observable_kind: SemanticObservableKind) -> TaskPanelProjector {
+fn real_estimate_history_projector(
+    observable_kind: Option<SemanticObservableKind>,
+) -> TaskPanelProjector {
     panel_projector(
         with_panel_width(
             panel_spec(
@@ -78,12 +80,14 @@ fn imag_estimate_history_projector() -> TaskPanelProjector {
             PanelWidth::Full,
         ),
         |ctx| {
-            Ok(sample_observable(ctx, SemanticObservableKind::Complex)?
-                .and_then(imag_estimate_history_panel))
+            Ok(
+                sample_observable(ctx, Some(SemanticObservableKind::Complex))?
+                    .and_then(imag_estimate_history_panel),
+            )
         },
         |ctx| {
             Ok(
-                decode_history_observable(ctx, SemanticObservableKind::Complex)?
+                decode_history_observable(ctx, Some(SemanticObservableKind::Complex))?
                     .and_then(imag_estimate_history_panel),
             )
         },
@@ -91,7 +95,7 @@ fn imag_estimate_history_projector() -> TaskPanelProjector {
 }
 
 fn abs_signal_to_noise_history_projector(
-    observable_kind: SemanticObservableKind,
+    observable_kind: Option<SemanticObservableKind>,
 ) -> TaskPanelProjector {
     panel_projector(
         with_panel_width(
@@ -110,7 +114,9 @@ fn abs_signal_to_noise_history_projector(
     )
 }
 
-fn estimate_summary_projector(observable_kind: SemanticObservableKind) -> TaskPanelProjector {
+fn estimate_summary_projector(
+    observable_kind: Option<SemanticObservableKind>,
+) -> TaskPanelProjector {
     panel_projector(
         with_panel_width(
             panel_spec(
@@ -128,10 +134,10 @@ fn estimate_summary_projector(observable_kind: SemanticObservableKind) -> TaskPa
 
 fn sample_progress_value(ctx: &TaskPanelContext<'_>) -> Result<f64, EngineError> {
     if let Some(persisted) = ctx.source.persisted() {
-        if let Ok(observable) = decode_aggregate_persisted_observable(
-            ctx.run_spec.evaluator.observable_kind(),
+        if let Some(observable) = decode_aggregate_persisted_observable_with_fallback(
+            task_observable_kind(&ctx.task.task),
             persisted,
-        ) {
+        )? {
             return Ok(observable.sample_count() as f64);
         }
         if let Ok(progress) = decode_full_progress(persisted) {
@@ -143,22 +149,22 @@ fn sample_progress_value(ctx: &TaskPanelContext<'_>) -> Result<f64, EngineError>
 
 fn sample_observable(
     ctx: &TaskPanelContext<'_>,
-    kind: SemanticObservableKind,
+    kind: Option<SemanticObservableKind>,
 ) -> Result<Option<ObservableState>, EngineError> {
     if let Some(observable) = ctx.source.observable() {
         return Ok(Some(observable.clone()));
     }
     match ctx.source.persisted() {
-        Some(persisted) => decode_aggregate_persisted_observable(kind, persisted).map(Some),
+        Some(persisted) => decode_aggregate_persisted_observable_with_fallback(kind, persisted),
         None => Ok(None),
     }
 }
 
 fn decode_history_observable(
     ctx: &TaskPanelHistoryContext<'_>,
-    kind: SemanticObservableKind,
+    kind: Option<SemanticObservableKind>,
 ) -> Result<Option<ObservableState>, EngineError> {
-    decode_aggregate_persisted_observable(kind, &ctx.snapshot.persisted_output).map(Some)
+    decode_aggregate_persisted_observable_with_fallback(kind, &ctx.snapshot.persisted_output)
 }
 
 fn decode_aggregate_persisted_observable(
@@ -173,11 +179,39 @@ fn decode_full_progress(persisted: &JsonValue) -> Result<FullObservableProgress,
         .map_err(|err| EngineError::build(format!("invalid full observable progress: {err}")))
 }
 
-fn estimate_label(observable_kind: SemanticObservableKind) -> &'static str {
-    match observable_kind {
-        SemanticObservableKind::Scalar => "Mean",
-        SemanticObservableKind::Complex => "Real Mean",
+fn decode_aggregate_persisted_observable_with_fallback(
+    kind: Option<SemanticObservableKind>,
+    persisted: &JsonValue,
+) -> Result<Option<ObservableState>, EngineError> {
+    if let Some(kind) = kind {
+        return decode_aggregate_persisted_observable(kind, persisted).map(Some);
     }
+    if let Ok(observable) =
+        decode_aggregate_persisted_observable(SemanticObservableKind::Scalar, persisted)
+    {
+        return Ok(Some(observable));
+    }
+    if let Ok(observable) =
+        decode_aggregate_persisted_observable(SemanticObservableKind::Complex, persisted)
+    {
+        return Ok(Some(observable));
+    }
+    Ok(None)
+}
+
+fn estimate_label(observable_kind: Option<SemanticObservableKind>) -> &'static str {
+    match observable_kind {
+        Some(SemanticObservableKind::Scalar) => "Mean",
+        Some(SemanticObservableKind::Complex) => "Real Mean",
+        None => "Estimate",
+    }
+}
+
+fn task_observable_kind(task: &RunTaskSpec) -> Option<SemanticObservableKind> {
+    task.new_observable_config()
+        .ok()
+        .flatten()
+        .map(|config| config.semantic_kind())
 }
 
 fn real_estimate_history_panel(observable: ObservableState) -> PanelState {

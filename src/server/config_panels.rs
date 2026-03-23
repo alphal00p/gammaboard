@@ -76,39 +76,42 @@ impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
         &self,
         ctx: &EvaluatorPanelContext<'_>,
     ) -> Result<Vec<PanelState>, EngineError> {
-        let mut panels = vec![key_value_panel(
-            "evaluator_summary",
-            vec![
-                key_value(
-                    "implementation",
-                    "Implementation",
-                    implementation_kind(self),
-                ),
-                key_value(
-                    "continuous_dims",
-                    "Continuous Dims",
-                    ctx.point_spec.continuous_dims,
-                ),
-                key_value(
-                    "discrete_dims",
-                    "Discrete Dims",
-                    ctx.point_spec.discrete_dims,
-                ),
+        let mut summary = vec![
+            key_value(
+                "implementation",
+                "Implementation",
+                implementation_kind(self),
+            ),
+            key_value(
+                "continuous_dims",
+                "Continuous Dims",
+                ctx.point_spec.continuous_dims,
+            ),
+            key_value(
+                "discrete_dims",
+                "Discrete Dims",
+                ctx.point_spec.discrete_dims,
+            ),
+            key_value(
+                "snapshot_interval_ms",
+                "Snapshot Interval (ms)",
+                ctx.runner_params.performance_snapshot_interval_ms,
+            ),
+        ];
+        if let Some(observable_kind) = evaluator_observable_kind(self) {
+            summary.insert(
+                3,
                 key_value(
                     "observable_kind",
                     "Observable Kind",
-                    match self.observable_kind() {
+                    match observable_kind {
                         crate::evaluation::SemanticObservableKind::Scalar => "scalar",
                         crate::evaluation::SemanticObservableKind::Complex => "complex",
                     },
                 ),
-                key_value(
-                    "snapshot_interval_ms",
-                    "Snapshot Interval (ms)",
-                    ctx.runner_params.performance_snapshot_interval_ms,
-                ),
-            ],
-        )];
+            );
+        }
+        let mut panels = vec![key_value_panel("evaluator_summary", summary)];
         if let Some(config_panel) = json_object_panel("evaluator_config", self)? {
             panels.push(config_panel);
         }
@@ -118,6 +121,24 @@ impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
             }
         }
         Ok(panels)
+    }
+}
+
+fn evaluator_observable_kind(
+    config: &EvaluatorConfig,
+) -> Option<crate::evaluation::SemanticObservableKind> {
+    match config {
+        EvaluatorConfig::Gammaloop { .. } => None,
+        EvaluatorConfig::SinEvaluator { .. } => {
+            Some(crate::evaluation::SemanticObservableKind::Scalar)
+        }
+        EvaluatorConfig::SincEvaluator { .. } => {
+            Some(crate::evaluation::SemanticObservableKind::Complex)
+        }
+        EvaluatorConfig::Unit { params } => Some(params.observable_kind),
+        EvaluatorConfig::Symbolica { .. } => {
+            Some(crate::evaluation::SemanticObservableKind::Scalar)
+        }
     }
 }
 

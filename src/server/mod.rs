@@ -7,11 +7,12 @@ mod task_panels;
 mod worker_panels;
 
 use crate::core::{
-    AggregationStore, ControlPlaneStore, IntegrationParams, RunReadStore, RunSpecStore, RunTask,
-    RunTaskInputSpec, RunTaskSpec, RunTaskStore, StoreError, TaskSnapshotRef, WorkerRole,
+    AggregationStore, ControlPlaneStore, IntegrationParams, RunReadStore, RunSpecStore,
+    RunStageSnapshot, RunTask, RunTaskInputSpec, RunTaskSpec, RunTaskStore, StageSnapshotRef,
+    StoreError, WorkerRole,
 };
 use crate::evaluation::ObservableState;
-use crate::preprocess::{RunAddConfig, preprocess_run_add};
+use crate::preprocess::{RunAddConfig, preflight_task_suffix, preprocess_run_add};
 use crate::server::config_panels::{
     EvaluatorPanelContext, PanelRenderer, SamplerAggregatorPanelContext,
 };
@@ -109,7 +110,15 @@ pub async fn serve(store: PgStore, config: ServerConfig) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .with_context(|| format!("failed to bind server socket at {bind}"))?;
+    let shutdown = async {
+        if let Err(err) = tokio::signal::ctrl_c().await {
+            tracing::warn!("failed to install server Ctrl-C handler: {err}");
+            return;
+        }
+        tracing::info!("server shutdown requested by Ctrl-C");
+    };
     axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown)
         .await
         .context("api server exited with error")?;
 
@@ -244,7 +253,8 @@ struct CreateRunRequest {
 #[derive(Deserialize)]
 struct CloneRunRequest {
     source_run_id: i32,
-    from_task_id: i64,
+    from_snapshot_id: Option<i64>,
+    from_task_id: Option<i64>,
     new_name: String,
 }
 
@@ -573,12 +583,7 @@ async fn get_run_task_output(
     let cursor =
         parse_task_panel_cursor(request.request.cursor.as_deref()).map_err(ApiError::BadRequest)?;
     let task = load_run_task(&state.store, run_id, task_id).await?;
-    let run_spec = state
-        .store
-        .load_run_spec(run_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
-    let panel_source = TaskPanelSource::new(&task.task, &run_spec);
+    let panel_source = TaskPanelSource::new(&task.task);
     let latest_persisted_snapshot = state
         .store
         .get_task_output_snapshots(run_id, task.id, None, 1)
@@ -623,7 +628,6 @@ async fn get_run_task_output(
             format!("run:{run_id}:task:{}", task.id),
             cursor,
             &task,
-            &run_spec,
             &request.request.panel_state,
             current_observable.as_ref(),
             latest_stage_snapshot.as_ref(),
@@ -820,83 +824,87 @@ fn parse_task_queue_payload(raw: &str) -> Result<TaskQueueFile, ApiError> {
     Ok(parsed)
 }
 
-async fn validate_task_snapshot_refs(
-    store: &PgStore,
-    tasks: &[RunTaskSpec],
-) -> Result<(), ApiError> {
-    for task in tasks {
-        if let Some(start_from) = task.start_from() {
-            let snapshot = store
-                .get_latest_task_stage_snapshot(start_from.run_id, start_from.task_id)
-                .await?;
-            if snapshot.is_none() {
-                return Err(ApiError::BadRequest(format!(
-                    "task start_from references run {} task {} but no stage snapshot exists",
-                    start_from.run_id, start_from.task_id
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-
 async fn resolve_task_queue_payload_for_run(
     store: &PgStore,
     run_id: i32,
     raw: &str,
 ) -> Result<Vec<RunTaskSpec>, ApiError> {
     let parsed = parse_task_queue_payload(raw)?;
-    let run = store
+    let _run = store
         .get_run_progress(run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
-    let integration_params = decode_integration_params(
-        run_id,
-        run.integration_params.ok_or_else(|| {
-            ApiError::Internal(format!("run {run_id} is missing integration_params"))
-        })?,
-    )?;
-    let existing_tasks = store.list_run_tasks(run_id).await?;
-    let mut base_sampler_aggregator = integration_params.sampler_aggregator;
-    let mut base_parametrization = integration_params.parametrization;
-    for task in existing_tasks {
-        match task.task {
-            RunTaskSpec::Sample {
-                sampler_aggregator,
-                parametrization,
-                ..
-            }
-            | RunTaskSpec::Configure {
-                sampler_aggregator,
-                parametrization,
-                ..
-            } => {
-                base_sampler_aggregator = sampler_aggregator;
-                base_parametrization = parametrization;
-            }
-            _ => {}
-        }
-    }
+    let base_snapshot = load_append_base_snapshot(store, run_id).await?;
     crate::core::resolve_task_queue(
-        &base_sampler_aggregator,
-        &base_parametrization,
+        &base_snapshot.sampler_aggregator,
+        &base_snapshot.parametrization.config,
         &parsed.task_queue,
     )
     .map_err(ApiError::BadRequest)
 }
 
+async fn load_append_base_snapshot(
+    store: &PgStore,
+    run_id: i32,
+) -> Result<RunStageSnapshot, ApiError> {
+    store
+        .load_latest_stage_snapshot_before_sequence(run_id, i32::MAX)
+        .await?
+        .ok_or_else(|| ApiError::Internal(format!("run {run_id} has no base stage snapshot")))
+}
+
+async fn preflight_task_batch(
+    store: &PgStore,
+    base_snapshot: &RunStageSnapshot,
+    integration_params: &IntegrationParams,
+    tasks: &[RunTaskSpec],
+    point_spec: &crate::evaluation::PointSpec,
+) -> Result<(), ApiError> {
+    let mut referenced_snapshots = std::collections::BTreeMap::new();
+    for task in tasks {
+        if let Some(start_from) = task.start_from() {
+            let snapshot = store
+                .load_stage_snapshot(start_from.snapshot_id)
+                .await?
+                .ok_or_else(|| {
+                    ApiError::BadRequest(format!(
+                        "task start_from references snapshot {} but no stage snapshot exists",
+                        start_from.snapshot_id
+                    ))
+                })?;
+            referenced_snapshots.insert(start_from.snapshot_id, snapshot);
+        }
+    }
+    let mut evaluator = integration_params
+        .evaluator
+        .build()
+        .map_err(|err| ApiError::BadRequest(format!("failed to build evaluator: {err}")))?;
+    preflight_task_suffix(
+        base_snapshot,
+        &referenced_snapshots,
+        tasks,
+        &mut *evaluator,
+        point_spec,
+    )
+    .map_err(|err| ApiError::BadRequest(format!("failed to preflight task batch: {err}")))
+}
+
 fn clone_task_suffix(
     source_tasks: &[RunTask],
-    source_run_id: i32,
-    from_task_id: i64,
+    from_snapshot: &RunStageSnapshot,
 ) -> Result<Vec<RunTaskSpec>, ApiError> {
-    let source_index = source_tasks
-        .iter()
-        .position(|task| task.id == from_task_id)
-        .ok_or_else(|| ApiError::NotFound(format!("run task {from_task_id} not found")))?;
+    let source_index = match from_snapshot.task_id {
+        Some(task_id) => Some(
+            source_tasks
+                .iter()
+                .position(|task| task.id == task_id)
+                .ok_or_else(|| ApiError::NotFound(format!("run task {task_id} not found")))?,
+        ),
+        None => None,
+    };
     let mut cloned_tasks = source_tasks
         .iter()
-        .skip(source_index + 1)
+        .skip(source_index.map_or(0, |index| index + 1))
         .map(|task| task.task.clone())
         .collect::<Vec<_>>();
     if let Some(first_executable) = cloned_tasks
@@ -905,16 +913,17 @@ fn clone_task_suffix(
     {
         set_task_start_from(
             first_executable,
-            TaskSnapshotRef {
-                run_id: source_run_id,
-                task_id: from_task_id,
+            StageSnapshotRef {
+                snapshot_id: from_snapshot.id.ok_or_else(|| {
+                    ApiError::Internal("source stage snapshot is missing id".to_string())
+                })?,
             },
         );
     }
     Ok(cloned_tasks)
 }
 
-fn set_task_start_from(task: &mut RunTaskSpec, start_from: TaskSnapshotRef) {
+fn set_task_start_from(task: &mut RunTaskSpec, start_from: StageSnapshotRef) {
     match task {
         RunTaskSpec::Sample {
             start_from: task_start_from,
@@ -958,7 +967,22 @@ async fn create_run(
     )
     .map_err(|err| ApiError::Internal(format!("failed to serialize integration_params: {err}")))?;
     let initial_tasks = processed.resolved_task_queue.clone().unwrap_or_default();
-    validate_task_snapshot_refs(&state.store, &initial_tasks).await?;
+    let initial_stage_snapshot = processed.initial_stage_snapshot.as_ref().ok_or_else(|| {
+        ApiError::Internal("preprocessing did not build initial stage snapshot".to_string())
+    })?;
+    preflight_task_batch(
+        &state.store,
+        initial_stage_snapshot,
+        processed
+            .resolved_integration_params
+            .as_ref()
+            .ok_or_else(|| {
+                ApiError::Internal("preprocessing did not resolve integration_params".to_string())
+            })?,
+        &initial_tasks,
+        point_spec,
+    )
+    .await?;
     let run_id = state
         .store
         .create_run(
@@ -968,6 +992,7 @@ async fn create_run(
             point_spec,
             processed.evaluator_init_metadata.as_ref(),
             processed.sampler_aggregator_init_metadata.as_ref(),
+            initial_stage_snapshot,
             &initial_tasks,
         )
         .await?;
@@ -996,6 +1021,32 @@ async fn clone_run(
             "invalid run name (`new_name`): expected non-empty string".to_string(),
         ));
     }
+    let from_snapshot_id = match (payload.from_snapshot_id, payload.from_task_id) {
+        (Some(snapshot_id), _) => snapshot_id,
+        (None, Some(task_id)) => {
+            let snapshot = state
+                .store
+                .get_latest_task_stage_snapshot(payload.source_run_id, task_id)
+                .await?
+                .ok_or_else(|| {
+                    ApiError::BadRequest(format!(
+                        "cannot clone from run {} task {}: no stage snapshot exists",
+                        payload.source_run_id, task_id
+                    ))
+                })?;
+            snapshot.id.parse::<i64>().map_err(|err| {
+                ApiError::Internal(format!(
+                    "failed to parse latest task stage snapshot id for task {}: {err}",
+                    task_id
+                ))
+            })?
+        }
+        (None, None) => {
+            return Err(ApiError::BadRequest(
+                "clone request requires from_snapshot_id or from_task_id".to_string(),
+            ));
+        }
+    };
     let source_run = state
         .store
         .get_run_progress(payload.source_run_id)
@@ -1013,19 +1064,21 @@ async fn clone_run(
             payload.source_run_id
         ))
     })?;
-    let source_tasks = state.store.list_run_tasks(payload.source_run_id).await?;
-    let cloned_tasks =
-        clone_task_suffix(&source_tasks, payload.source_run_id, payload.from_task_id)?;
-    let snapshot = state
-        .store
-        .get_latest_task_stage_snapshot(payload.source_run_id, payload.from_task_id)
-        .await?;
-    if snapshot.is_none() {
+    let snapshot = state.store.load_stage_snapshot(from_snapshot_id).await?;
+    let snapshot = snapshot.ok_or_else(|| {
+        ApiError::BadRequest(format!(
+            "cannot clone from snapshot {}: no stage snapshot exists",
+            from_snapshot_id
+        ))
+    })?;
+    if snapshot.run_id != payload.source_run_id {
         return Err(ApiError::BadRequest(format!(
-            "cannot clone from run {} task {}: no stage snapshot exists",
-            payload.source_run_id, payload.from_task_id
+            "snapshot {} belongs to run {}, not source run {}",
+            from_snapshot_id, snapshot.run_id, payload.source_run_id
         )));
     }
+    let source_tasks = state.store.list_run_tasks(payload.source_run_id).await?;
+    let cloned_tasks = clone_task_suffix(&source_tasks, &snapshot)?;
     let run_id = state
         .store
         .create_run(
@@ -1035,6 +1088,17 @@ async fn clone_run(
             &point_spec,
             source_run.evaluator_init_metadata.as_ref(),
             source_run.sampler_aggregator_init_metadata.as_ref(),
+            &RunStageSnapshot {
+                id: None,
+                run_id: 0,
+                task_id: None,
+                sequence_nr: None,
+                queue_empty: snapshot.queue_empty,
+                sampler_snapshot: snapshot.sampler_snapshot.clone(),
+                observable_state: snapshot.observable_state.clone(),
+                sampler_aggregator: snapshot.sampler_aggregator.clone(),
+                parametrization: snapshot.parametrization.clone(),
+            },
             &cloned_tasks,
         )
         .await?;
@@ -1045,7 +1109,7 @@ async fn clone_run(
         run_id,
         new_name = %new_name,
         source_run_id = payload.source_run_id,
-        from_task_id = payload.from_task_id,
+        from_snapshot_id,
         cloned_tasks = cloned_tasks.len(),
         "dashboard action completed"
     );
@@ -1062,7 +1126,30 @@ async fn add_run_tasks(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let tasks =
         resolve_task_queue_payload_for_run(&state.store, run_id, payload.toml.trim()).await?;
-    validate_task_snapshot_refs(&state.store, &tasks).await?;
+    let run = state
+        .store
+        .get_run_progress(run_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
+    let point_spec = run
+        .point_spec
+        .as_ref()
+        .ok_or_else(|| ApiError::Internal(format!("run {run_id} is missing point_spec")))?;
+    let integration_params = decode_integration_params(
+        run_id,
+        run.integration_params.ok_or_else(|| {
+            ApiError::Internal(format!("run {run_id} is missing integration_params"))
+        })?,
+    )?;
+    let base_snapshot = load_append_base_snapshot(&state.store, run_id).await?;
+    preflight_task_batch(
+        &state.store,
+        &base_snapshot,
+        &integration_params,
+        &tasks,
+        point_spec,
+    )
+    .await?;
     let inserted = state.store.append_run_tasks(run_id, &tasks).await?;
     tracing::info!(
         source = "control",

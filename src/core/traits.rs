@@ -66,6 +66,7 @@ pub trait ControlPlaneStore: Send + Sync {
         point_spec: &PointSpec,
         evaluator_init_metadata: Option<&JsonValue>,
         sampler_aggregator_init_metadata: Option<&JsonValue>,
+        initial_stage_snapshot: &RunStageSnapshot,
         initial_tasks: &[RunTaskSpec],
     ) -> Result<i32, StoreError>;
     async fn remove_run(&self, run_id: i32) -> Result<(), StoreError>;
@@ -125,15 +126,14 @@ pub trait AggregationStore: Send + Sync {
         &self,
         run_id: i32,
     ) -> Result<Option<SamplerAggregatorRunnerSnapshot>, StoreError>;
+    async fn load_stage_snapshot(
+        &self,
+        snapshot_id: i64,
+    ) -> Result<Option<RunStageSnapshot>, StoreError>;
     async fn load_latest_stage_snapshot_before_sequence(
         &self,
         run_id: i32,
         sequence_nr: i32,
-    ) -> Result<Option<RunStageSnapshot>, StoreError>;
-    async fn load_latest_stage_snapshot_for_task(
-        &self,
-        run_id: i32,
-        task_id: i64,
     ) -> Result<Option<RunStageSnapshot>, StoreError>;
     async fn load_task_activation_snapshot(
         &self,
@@ -186,8 +186,7 @@ pub trait RunTaskStore: Send + Sync {
     async fn set_run_task_spawn_origin(
         &self,
         task_id: i64,
-        spawned_from_run_id: Option<i32>,
-        spawned_from_task_id: Option<i64>,
+        spawned_from_snapshot_id: Option<i64>,
     ) -> Result<(), StoreError>;
     async fn complete_run_task(&self, task_id: i64) -> Result<(), StoreError>;
     async fn fail_run_task(&self, task_id: i64, reason: &str) -> Result<(), StoreError>;

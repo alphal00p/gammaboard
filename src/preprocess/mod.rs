@@ -1,14 +1,17 @@
 mod preflight;
 
 use crate::core::{
-    BuildError, EvaluatorConfig, IntegrationParams, ParametrizationConfig, RunTaskInputSpec,
-    RunTaskSpec, SamplerAggregatorConfig, resolve_initial_sampler_aggregator, resolve_task_queue,
+    BuildError, EvaluatorConfig, IntegrationParams, ParametrizationConfig, RunStageSnapshot,
+    RunTaskInputSpec, RunTaskSpec, SamplerAggregatorConfig, resolve_initial_sampler_aggregator,
+    resolve_task_queue,
 };
 use crate::evaluation::PointSpec;
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use crate::sampling::NaiveMonteCarloSamplerParams;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
+
+pub use preflight::preflight_task_suffix;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RunAddIntegrationParams {
@@ -35,6 +38,8 @@ pub struct RunAddConfig {
     pub evaluator_init_metadata: Option<JsonValue>,
     #[serde(skip)]
     pub sampler_aggregator_init_metadata: Option<JsonValue>,
+    #[serde(skip)]
+    pub initial_stage_snapshot: Option<RunStageSnapshot>,
     #[serde(skip)]
     pub resolved_task_queue: Option<Vec<RunTaskSpec>>,
 }
@@ -75,21 +80,21 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
             .clone(),
     };
 
-    let mut evaluator = config.integration_params.evaluator.build()?;
+    let evaluator = config.integration_params.evaluator.build()?;
     let point_spec = evaluator.get_point_spec();
     let evaluator_init_metadata = evaluator.get_init_metadata();
     config.point_spec = Some(point_spec.clone());
 
-    let sampler_aggregator_init_metadata = preflight::run_preflight(
-        &resolved_sampler_aggregator,
-        &config.integration_params.parametrization,
-        resolved_task_queue.as_deref().unwrap_or(&[]),
-        &mut *evaluator,
-        &point_spec,
-    )?;
+    let (sampler_aggregator_init_metadata, initial_stage_snapshot) =
+        preflight::build_initial_stage(
+            &resolved_sampler_aggregator,
+            &config.integration_params.parametrization,
+            &point_spec,
+        )?;
     config.resolved_integration_params = Some(resolved_integration_params);
     config.evaluator_init_metadata = Some(evaluator_init_metadata);
-    config.sampler_aggregator_init_metadata = sampler_aggregator_init_metadata;
+    config.sampler_aggregator_init_metadata = Some(sampler_aggregator_init_metadata);
+    config.initial_stage_snapshot = Some(initial_stage_snapshot);
     config.resolved_task_queue = resolved_task_queue;
 
     Ok(config)

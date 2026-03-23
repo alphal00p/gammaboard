@@ -7,10 +7,10 @@ use comfy_table::{Cell, CellAlignment, ContentArrangement, Table};
 use gammaboard::PgStore;
 use gammaboard::config::CliConfig;
 use gammaboard::core::{
-    ControlPlaneStore, IntegrationParams, RunReadStore, RunTask, RunTaskInputSpec, RunTaskSpec,
-    RunTaskStore, TaskSnapshotRef, resolve_task_queue,
+    AggregationStore, ControlPlaneStore, IntegrationParams, RunReadStore, RunStageSnapshot,
+    RunTask, RunTaskInputSpec, RunTaskSpec, RunTaskStore, StageSnapshotRef, resolve_task_queue,
 };
-use gammaboard::preprocess::{RunAddConfig, preprocess_run_add};
+use gammaboard::preprocess::{RunAddConfig, preflight_task_suffix, preprocess_run_add};
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -29,7 +29,7 @@ pub enum RunCommand {
     },
     Clone {
         source_run: String,
-        from_task_id: i64,
+        from_snapshot_id: i64,
         new_name: String,
     },
     List {
@@ -64,9 +64,9 @@ pub async fn run_run_commands(command: RunCommand, config: &CliConfig, quiet: bo
                 RunCommand::Add { config_file } => run_add(&store, &config_file).await?,
                 RunCommand::Clone {
                     source_run,
-                    from_task_id,
+                    from_snapshot_id,
                     new_name,
-                } => clone_run(&store, &source_run, from_task_id, &new_name).await?,
+                } => clone_run(&store, &source_run, from_snapshot_id, &new_name).await?,
                 RunCommand::List { run_name } => list_runs(&store, run_name.as_deref()).await?,
                 RunCommand::Pause(selection) => pause_runs(&store, selection).await?,
                 RunCommand::Remove(selection) => remove_runs(&store, selection).await?,
@@ -111,7 +111,21 @@ async fn run_add(store: &PgStore, config_file: &PathBuf) -> Result<()> {
     )
     .map_err(|err| anyhow!("failed to serialize integration_params: {err}"))?;
     let initial_tasks = processed.resolved_task_queue.clone().unwrap_or_default();
-    validate_task_snapshot_refs(store, &initial_tasks).await?;
+    let initial_stage_snapshot = processed
+        .initial_stage_snapshot
+        .as_ref()
+        .ok_or_else(|| anyhow!("preprocessing did not build initial stage snapshot"))?;
+    preflight_task_batch(
+        store,
+        initial_stage_snapshot,
+        processed
+            .resolved_integration_params
+            .as_ref()
+            .ok_or_else(|| anyhow!("preprocessing did not resolve integration_params"))?,
+        &initial_tasks,
+        point_spec,
+    )
+    .await?;
     let run_id = store
         .create_run(
             &processed.name,
@@ -120,6 +134,7 @@ async fn run_add(store: &PgStore, config_file: &PathBuf) -> Result<()> {
             point_spec,
             processed.evaluator_init_metadata.as_ref(),
             processed.sampler_aggregator_init_metadata.as_ref(),
+            initial_stage_snapshot,
             &initial_tasks,
         )
         .await?;
@@ -130,7 +145,7 @@ async fn run_add(store: &PgStore, config_file: &PathBuf) -> Result<()> {
 async fn clone_run(
     store: &PgStore,
     source_run_ref: &str,
-    from_task_id: i64,
+    from_snapshot_id: i64,
     new_name: &str,
 ) -> Result<()> {
     let new_name = new_name.trim();
@@ -152,19 +167,20 @@ async fn clone_run(
         )
     })?;
 
-    let source_tasks = store.list_run_tasks(source_run.run_id).await?;
-    let cloned_tasks = clone_task_suffix(&source_tasks, source_run.run_id, from_task_id)?;
-
-    let snapshot = store
-        .get_latest_task_stage_snapshot(source_run.run_id, from_task_id)
-        .await?;
-    if snapshot.is_none() {
+    let snapshot = store.load_stage_snapshot(from_snapshot_id).await?;
+    let snapshot =
+        snapshot.ok_or_else(|| anyhow!("stage snapshot {from_snapshot_id} not found"))?;
+    if snapshot.run_id != source_run.run_id {
         return Err(anyhow!(
-            "cannot clone from run {} task {}: no stage snapshot exists",
-            source_run.run_id,
-            from_task_id
+            "stage snapshot {} belongs to run {}, not source run {}",
+            from_snapshot_id,
+            snapshot.run_id,
+            source_run.run_id
         ));
     }
+
+    let source_tasks = store.list_run_tasks(source_run.run_id).await?;
+    let cloned_tasks = clone_task_suffix(&source_tasks, &snapshot)?;
 
     let run_id = store
         .create_run(
@@ -174,6 +190,17 @@ async fn clone_run(
             &point_spec,
             source_run.evaluator_init_metadata.as_ref(),
             source_run.sampler_aggregator_init_metadata.as_ref(),
+            &RunStageSnapshot {
+                id: None,
+                run_id: 0,
+                task_id: None,
+                sequence_nr: None,
+                queue_empty: snapshot.queue_empty,
+                sampler_snapshot: snapshot.sampler_snapshot.clone(),
+                observable_state: snapshot.observable_state.clone(),
+                sampler_aggregator: snapshot.sampler_aggregator.clone(),
+                parametrization: snapshot.parametrization.clone(),
+            },
             &cloned_tasks,
         )
         .await?;
@@ -182,7 +209,7 @@ async fn clone_run(
         run_id,
         new_name,
         source_run_id = source_run.run_id,
-        from_task_id,
+        from_snapshot_id,
         cloned_tasks = cloned_tasks.len(),
         "cloned run"
     );
@@ -242,7 +269,17 @@ async fn run_task_command(store: &PgStore, command: TaskCommand) -> Result<()> {
             let run = resolve_run_ref(store, &run).await?;
             let run_id = run.run_id;
             let tasks = resolve_task_queue_file_for_run(store, run_id, &task_file).await?;
-            validate_task_snapshot_refs(store, &tasks).await?;
+            let run_spec = load_run_spec_for_preflight(store, run_id).await?;
+            let base_snapshot = load_append_base_snapshot(store, run_id).await?;
+            preflight_task_batch(
+                store,
+                &base_snapshot,
+                &run_spec,
+                &tasks,
+                &run.point_spec
+                    .ok_or_else(|| anyhow!("run {run_id} is missing point_spec"))?,
+            )
+            .await?;
             let inserted = store.append_run_tasks(run_id, &tasks).await?;
             tracing::info!(run_id, tasks_added = inserted.len(), "appended run tasks");
         }
@@ -260,10 +297,7 @@ async fn run_task_command(store: &PgStore, command: TaskCommand) -> Result<()> {
                     nr_produced_samples = task.nr_produced_samples,
                     nr_completed_samples = task.nr_completed_samples,
                     start_from = format_task_snapshot_ref(task.task.start_from()),
-                    spawned_from = format_task_snapshot_origin(
-                        task.spawned_from_run_id,
-                        task.spawned_from_task_id
-                    ),
+                    spawned_from = format_task_snapshot_origin(task.spawned_from_snapshot_id),
                     failure_reason = task.failure_reason.as_deref().unwrap_or(""),
                     "run task"
                 );
@@ -315,17 +349,21 @@ fn print_run_table(runs: Vec<gammaboard::stores::RunProgress>) {
 
 fn clone_task_suffix(
     source_tasks: &[RunTask],
-    source_run_id: i32,
-    from_task_id: i64,
+    from_snapshot: &gammaboard::core::RunStageSnapshot,
 ) -> Result<Vec<RunTaskSpec>> {
-    let source_index = source_tasks
-        .iter()
-        .position(|task| task.id == from_task_id)
-        .ok_or_else(|| anyhow!("run task {from_task_id} not found"))?;
+    let source_index = match from_snapshot.task_id {
+        Some(task_id) => Some(
+            source_tasks
+                .iter()
+                .position(|task| task.id == task_id)
+                .ok_or_else(|| anyhow!("run task {task_id} not found"))?,
+        ),
+        None => None,
+    };
 
     let mut cloned_tasks = source_tasks
         .iter()
-        .skip(source_index + 1)
+        .skip(source_index.map_or(0, |index| index + 1))
         .map(|task| task.task.clone())
         .collect::<Vec<_>>();
 
@@ -335,9 +373,10 @@ fn clone_task_suffix(
     {
         set_task_start_from(
             first_executable,
-            TaskSnapshotRef {
-                run_id: source_run_id,
-                task_id: from_task_id,
+            StageSnapshotRef {
+                snapshot_id: from_snapshot
+                    .id
+                    .ok_or_else(|| anyhow!("source stage snapshot is missing id"))?,
             },
         );
     }
@@ -345,7 +384,7 @@ fn clone_task_suffix(
     Ok(cloned_tasks)
 }
 
-fn set_task_start_from(task: &mut RunTaskSpec, start_from: TaskSnapshotRef) {
+fn set_task_start_from(task: &mut RunTaskSpec, start_from: StageSnapshotRef) {
     match task {
         RunTaskSpec::Sample {
             start_from: task_start_from,
@@ -413,7 +452,7 @@ fn load_run_add_config(path: &PathBuf) -> Result<RunAddConfig> {
 }
 
 async fn resolve_task_queue_file_for_run(
-    store: &(impl RunTaskStore + RunReadStore),
+    store: &(impl AggregationStore + RunReadStore),
     run_id: i32,
     path: &PathBuf,
 ) -> Result<Vec<RunTaskSpec>> {
@@ -427,36 +466,13 @@ async fn resolve_task_queue_file_for_run(
         task.validate()
             .map_err(|err| anyhow!("invalid task_queue entry: {err}"))?;
     }
-    let run = store
+    let _run = store
         .get_run_progress(run_id)
         .await?
         .ok_or_else(|| anyhow!("run {run_id} not found"))?;
-    let integration_params: IntegrationParams = serde_json::from_value(
-        run.integration_params
-            .ok_or_else(|| anyhow!("run {run_id} is missing integration_params"))?,
-    )
-    .map_err(|err| anyhow!("invalid integration_params for run {run_id}: {err}"))?;
-    let existing_tasks = store.list_run_tasks(run_id).await?;
-    let mut base_sampler_aggregator = integration_params.sampler_aggregator;
-    let mut base_parametrization = integration_params.parametrization;
-    for task in existing_tasks {
-        match task.task {
-            RunTaskSpec::Sample {
-                sampler_aggregator,
-                parametrization,
-                ..
-            }
-            | RunTaskSpec::Configure {
-                sampler_aggregator,
-                parametrization,
-                ..
-            } => {
-                base_sampler_aggregator = sampler_aggregator;
-                base_parametrization = parametrization;
-            }
-            _ => {}
-        }
-    }
+    let base_snapshot = load_append_base_snapshot(store, run_id).await?;
+    let base_sampler_aggregator = base_snapshot.sampler_aggregator;
+    let base_parametrization = base_snapshot.parametrization.config;
     resolve_task_queue(
         &base_sampler_aggregator,
         &base_parametrization,
@@ -465,38 +481,74 @@ async fn resolve_task_queue_file_for_run(
     .map_err(|err| anyhow!("invalid task_queue entry: {err}"))
 }
 
-async fn validate_task_snapshot_refs(
+async fn load_append_base_snapshot(
+    store: &impl AggregationStore,
+    run_id: i32,
+) -> Result<RunStageSnapshot> {
+    store
+        .load_latest_stage_snapshot_before_sequence(run_id, i32::MAX)
+        .await?
+        .ok_or_else(|| anyhow!("run {run_id} has no base stage snapshot"))
+}
+
+async fn load_run_spec_for_preflight(
     store: &impl RunReadStore,
+    run_id: i32,
+) -> Result<IntegrationParams> {
+    let run = store
+        .get_run_progress(run_id)
+        .await?
+        .ok_or_else(|| anyhow!("run {run_id} not found"))?;
+    serde_json::from_value(
+        run.integration_params
+            .ok_or_else(|| anyhow!("run {run_id} is missing integration_params"))?,
+    )
+    .map_err(|err| anyhow!("invalid integration_params for run {run_id}: {err}"))
+}
+
+async fn preflight_task_batch(
+    store: &impl AggregationStore,
+    base_snapshot: &RunStageSnapshot,
+    integration_params: &IntegrationParams,
     tasks: &[RunTaskSpec],
+    point_spec: &gammaboard::evaluation::PointSpec,
 ) -> Result<()> {
+    let mut referenced_snapshots = std::collections::BTreeMap::new();
     for task in tasks {
         if let Some(start_from) = task.start_from() {
             let snapshot = store
-                .get_latest_task_stage_snapshot(start_from.run_id, start_from.task_id)
-                .await?;
-            if snapshot.is_none() {
-                return Err(anyhow!(
-                    "task start_from references run {} task {} but no stage snapshot exists",
-                    start_from.run_id,
-                    start_from.task_id
-                ));
-            }
+                .load_stage_snapshot(start_from.snapshot_id)
+                .await?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "task start_from references snapshot {} but no stage snapshot exists",
+                        start_from.snapshot_id
+                    )
+                })?;
+            referenced_snapshots.insert(start_from.snapshot_id, snapshot);
         }
     }
-    Ok(())
+    let mut evaluator = integration_params.evaluator.build()?;
+    preflight_task_suffix(
+        base_snapshot,
+        &referenced_snapshots,
+        tasks,
+        &mut *evaluator,
+        point_spec,
+    )
+    .map_err(|err| anyhow!("failed to preflight task batch: {err}"))
 }
 
-fn format_task_snapshot_ref(start_from: Option<&gammaboard::core::TaskSnapshotRef>) -> String {
+fn format_task_snapshot_ref(start_from: Option<&gammaboard::core::StageSnapshotRef>) -> String {
     start_from
-        .map(|snapshot| format!("{}:{}", snapshot.run_id, snapshot.task_id))
+        .map(|snapshot| snapshot.snapshot_id.to_string())
         .unwrap_or_default()
 }
 
-fn format_task_snapshot_origin(run_id: Option<i32>, task_id: Option<i64>) -> String {
-    match (run_id, task_id) {
-        (Some(run_id), Some(task_id)) => format!("{run_id}:{task_id}"),
-        _ => String::new(),
-    }
+fn format_task_snapshot_origin(snapshot_id: Option<i64>) -> String {
+    snapshot_id
+        .map(|value| value.to_string())
+        .unwrap_or_default()
 }
 
 fn read_run_add_toml(path: &PathBuf) -> Result<toml::Value> {

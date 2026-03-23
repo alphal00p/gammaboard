@@ -31,19 +31,17 @@ export const getCurrentTask = (tasks) =>
 
 export const formatTaskSnapshotRef = (snapshot) => {
   if (!snapshot || typeof snapshot !== "object") return "inherit";
-  const runId = Number(snapshot.run_id);
-  const taskId = Number(snapshot.task_id);
-  if (Number.isFinite(runId) && Number.isFinite(taskId)) {
-    return `${runId}:${taskId}`;
+  const snapshotId = Number(snapshot.snapshot_id);
+  if (Number.isFinite(snapshotId)) {
+    return String(snapshotId);
   }
   return "inherit";
 };
 
 export const formatTaskSpawnOrigin = (task) => {
-  const runId = Number(task?.spawned_from_run_id);
-  const taskId = Number(task?.spawned_from_task_id);
-  if (Number.isFinite(runId) && Number.isFinite(taskId)) {
-    return `${runId}:${taskId}`;
+  const snapshotId = Number(task?.spawned_from_snapshot_id);
+  if (Number.isFinite(snapshotId)) {
+    return String(snapshotId);
   }
   return "auto";
 };

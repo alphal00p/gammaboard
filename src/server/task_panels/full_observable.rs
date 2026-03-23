@@ -1,9 +1,9 @@
 use super::{TaskPanelContext, TaskPanelProjector, panel_projector};
 use crate::core::{
     EngineError, ImageDisplayMode, LineDisplayMode, LineRasterGeometry, PlaneRasterGeometry,
-    RunSpec,
+    PlotObservableKind,
 };
-use crate::evaluation::{FullObservableProgress, ObservableState, SemanticObservableKind};
+use crate::evaluation::{FullObservableProgress, ObservableState};
 use crate::server::panels::{
     ImageColorMode, ImageNormalizationMode, PanelHistoryMode, PanelKind, PanelSpec, PanelState,
     PanelWidth, PlotPoint, PlotSeries, key_value, key_value_panel, multi_timeseries_panel,
@@ -78,7 +78,7 @@ impl ImageViewMode {
 pub(super) fn line_projectors(
     geometry: LineRasterGeometry,
     display: LineDisplayMode,
-    run_spec: &RunSpec,
+    observable: PlotObservableKind,
 ) -> Vec<TaskPanelProjector> {
     let mut projectors = vec![
         progress_projector(
@@ -89,13 +89,10 @@ pub(super) fn line_projectors(
         ),
         completion_projector("line_completion", "Line Completion", geometry.nr_points()),
     ];
-    if line_uses_complex_components(display, run_spec) {
+    if line_uses_complex_components(display, observable) {
         projectors.push(line_components_projector(geometry));
     } else {
-        let label = if matches!(
-            run_spec.evaluator.observable_kind(),
-            SemanticObservableKind::Complex
-        ) {
+        let label = if matches!(observable, PlotObservableKind::Complex) {
             "Real Part"
         } else {
             "Value"
@@ -358,14 +355,12 @@ fn line_real_panel(
     }
 }
 
-fn line_uses_complex_components(display: LineDisplayMode, run_spec: &RunSpec) -> bool {
-    matches!(
-        run_spec.evaluator.observable_kind(),
-        SemanticObservableKind::Complex
-    ) && matches!(
-        display,
-        LineDisplayMode::Auto | LineDisplayMode::ComplexComponents
-    )
+fn line_uses_complex_components(display: LineDisplayMode, observable: PlotObservableKind) -> bool {
+    matches!(observable, PlotObservableKind::Complex)
+        && matches!(
+            display,
+            LineDisplayMode::Auto | LineDisplayMode::ComplexComponents
+        )
 }
 
 fn line_xs(geometry: &LineRasterGeometry) -> Vec<f64> {

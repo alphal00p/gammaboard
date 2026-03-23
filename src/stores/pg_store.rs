@@ -415,6 +415,7 @@ impl ControlPlaneStore for PgStore {
         point_spec: &PointSpec,
         evaluator_init_metadata: Option<&JsonValue>,
         sampler_aggregator_init_metadata: Option<&JsonValue>,
+        initial_stage_snapshot: &RunStageSnapshot,
         initial_tasks: &[RunTaskSpec],
     ) -> Result<i32, StoreError> {
         let sanitized_params = parse_run_create_payload(integration_params)?;
@@ -440,6 +441,22 @@ impl ControlPlaneStore for PgStore {
         .bind(evaluator_init_metadata)
         .bind(sampler_aggregator_init_metadata)
         .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx)?;
+        queries::insert_run_stage_snapshot(
+            &mut *tx,
+            &RunStageSnapshot {
+                id: None,
+                run_id,
+                task_id: None,
+                sequence_nr: None,
+                queue_empty: initial_stage_snapshot.queue_empty,
+                sampler_snapshot: initial_stage_snapshot.sampler_snapshot.clone(),
+                observable_state: initial_stage_snapshot.observable_state.clone(),
+                sampler_aggregator: initial_stage_snapshot.sampler_aggregator.clone(),
+                parametrization: initial_stage_snapshot.parametrization.clone(),
+            },
+        )
         .await
         .map_err(map_sqlx)?;
         for (offset, task) in initial_tasks.iter().enumerate() {
@@ -629,22 +646,21 @@ impl AggregationStore for PgStore {
             .map_err(map_sqlx)
     }
 
+    async fn load_stage_snapshot(
+        &self,
+        snapshot_id: i64,
+    ) -> Result<Option<RunStageSnapshot>, StoreError> {
+        queries::get_stage_snapshot(&self.pool, snapshot_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
     async fn load_latest_stage_snapshot_before_sequence(
         &self,
         run_id: i32,
         sequence_nr: i32,
     ) -> Result<Option<RunStageSnapshot>, StoreError> {
         queries::get_latest_stage_snapshot_before_sequence(&self.pool, run_id, sequence_nr)
-            .await
-            .map_err(map_sqlx)
-    }
-
-    async fn load_latest_stage_snapshot_for_task(
-        &self,
-        run_id: i32,
-        task_id: i64,
-    ) -> Result<Option<RunStageSnapshot>, StoreError> {
-        queries::get_latest_task_stage_snapshot_for_runner(&self.pool, run_id, task_id)
             .await
             .map_err(map_sqlx)
     }
@@ -794,17 +810,11 @@ impl RunTaskStore for PgStore {
     async fn set_run_task_spawn_origin(
         &self,
         task_id: i64,
-        spawned_from_run_id: Option<i32>,
-        spawned_from_task_id: Option<i64>,
+        spawned_from_snapshot_id: Option<i64>,
     ) -> Result<(), StoreError> {
-        queries::set_run_task_spawn_origin(
-            &self.pool,
-            task_id,
-            spawned_from_run_id,
-            spawned_from_task_id,
-        )
-        .await
-        .map_err(map_sqlx)
+        queries::set_run_task_spawn_origin(&self.pool, task_id, spawned_from_snapshot_id)
+            .await
+            .map_err(map_sqlx)
     }
 
     async fn complete_run_task(&self, task_id: i64) -> Result<(), StoreError> {

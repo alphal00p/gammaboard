@@ -1187,13 +1187,21 @@ kind = "identity"
         })
         .await?;
 
+    let source_snapshot_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM run_stage_snapshots WHERE run_id = $1 AND task_id = $2 AND queue_empty = TRUE ORDER BY id DESC LIMIT 1",
+    )
+    .bind(source_run_id)
+    .bind(source_task_1)
+    .fetch_one(&harness.pool)
+    .await?;
+
     harness
         .cli()
         .args([
             "run",
             "clone",
             "clone-source-e2e",
-            &source_task_1.to_string(),
+            &source_snapshot_id.to_string(),
             "clone-branch-e2e",
         ])
         .assert()
@@ -1210,20 +1218,13 @@ kind = "identity"
             .await?;
     assert_eq!(cloned_task_count, 1);
 
-    let cloned_task_start_from_run: Option<i32> = sqlx::query_scalar(
-        "SELECT (task->'start_from'->>'run_id')::integer FROM run_tasks WHERE run_id = $1 ORDER BY sequence_nr ASC LIMIT 1",
+    let cloned_task_start_from_snapshot: Option<i64> = sqlx::query_scalar(
+        "SELECT (task->'start_from'->>'snapshot_id')::bigint FROM run_tasks WHERE run_id = $1 ORDER BY sequence_nr ASC LIMIT 1",
     )
     .bind(cloned_run_id)
     .fetch_one(&harness.pool)
     .await?;
-    let cloned_task_start_from_task: Option<i64> = sqlx::query_scalar(
-        "SELECT (task->'start_from'->>'task_id')::bigint FROM run_tasks WHERE run_id = $1 ORDER BY sequence_nr ASC LIMIT 1",
-    )
-    .bind(cloned_run_id)
-    .fetch_one(&harness.pool)
-    .await?;
-    assert_eq!(cloned_task_start_from_run, Some(source_run_id));
-    assert_eq!(cloned_task_start_from_task, Some(source_task_1));
+    assert_eq!(cloned_task_start_from_snapshot, Some(source_snapshot_id));
 
     harness
         .cli()

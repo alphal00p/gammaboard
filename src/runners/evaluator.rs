@@ -225,7 +225,7 @@ where
             .build(Some(StageHandoff {
                 sampler_snapshot: Some(&snapshot.sampler_snapshot),
                 parametrization_snapshot: Some(&state.snapshot),
-                observable_state: Some(&snapshot.observable_state),
+                observable_state: snapshot.observable_state.as_ref(),
             }))
             .map_err(|err| StoreError::store(format!("failed to build parametrization: {err}")))?;
         parametrization

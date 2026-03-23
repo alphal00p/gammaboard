@@ -1,5 +1,5 @@
 use serde_json::Value as JsonValue;
-use sqlx::PgPool;
+use sqlx::{Executor, PgPool, Postgres};
 
 use crate::core::RunStageSnapshot;
 use crate::evaluation::ObservableState;
@@ -9,12 +9,13 @@ use crate::{core::ParametrizationState, core::SamplerAggregatorConfig};
 
 #[derive(sqlx::FromRow)]
 struct RunStageSnapshotRow {
+    id: i64,
     run_id: i32,
     task_id: Option<i64>,
     sequence_nr: Option<i32>,
     queue_empty: bool,
     sampler_snapshot: JsonValue,
-    observable_state: JsonValue,
+    observable_state: Option<JsonValue>,
     sampler_aggregator: JsonValue,
     parametrization: JsonValue,
 }
@@ -29,6 +30,7 @@ impl TryFrom<RunStageSnapshotRow> for RunStageSnapshot {
             ))
         };
         Ok(Self {
+            id: Some(value.id),
             run_id: value.run_id,
             task_id: value.task_id,
             sequence_nr: value.sequence_nr,
@@ -37,13 +39,16 @@ impl TryFrom<RunStageSnapshotRow> for RunStageSnapshot {
                 value.sampler_snapshot,
             )
             .map_err(|err| decode("sampler_snapshot", err))?,
-            observable_state: ObservableState::from_json(&value.observable_state).map_err(
-                |err| {
-                    sqlx::Error::Protocol(format!(
-                        "failed to decode observable_state from run_stage_snapshots: {err}"
-                    ))
-                },
-            )?,
+            observable_state: value
+                .observable_state
+                .map(|payload| {
+                    ObservableState::from_json(&payload).map_err(|err| {
+                        sqlx::Error::Protocol(format!(
+                            "failed to decode observable_state from run_stage_snapshots: {err}"
+                        ))
+                    })
+                })
+                .transpose()?,
             sampler_aggregator: serde_json::from_value::<SamplerAggregatorConfig>(
                 value.sampler_aggregator,
             )
@@ -102,6 +107,7 @@ pub(crate) async fn get_latest_stage_snapshot_before_sequence(
     let row = sqlx::query_as::<_, RunStageSnapshotRow>(
         r#"
         SELECT
+            id,
             run_id,
             task_id,
             sequence_nr,
@@ -113,9 +119,8 @@ pub(crate) async fn get_latest_stage_snapshot_before_sequence(
         FROM run_stage_snapshots
         WHERE run_id = $1
           AND queue_empty = TRUE
-          AND sequence_nr IS NOT NULL
-          AND sequence_nr < $2
-        ORDER BY sequence_nr DESC, id DESC
+          AND (sequence_nr IS NULL OR sequence_nr < $2)
+        ORDER BY sequence_nr DESC NULLS LAST, id DESC
         LIMIT 1
         "#,
     )
@@ -126,14 +131,14 @@ pub(crate) async fn get_latest_stage_snapshot_before_sequence(
     row.map(TryInto::try_into).transpose()
 }
 
-pub(crate) async fn get_latest_task_stage_snapshot_for_runner(
+pub(crate) async fn get_stage_snapshot(
     pool: &PgPool,
-    run_id: i32,
-    task_id: i64,
+    snapshot_id: i64,
 ) -> Result<Option<RunStageSnapshot>, sqlx::Error> {
     let row = sqlx::query_as::<_, RunStageSnapshotRow>(
         r#"
         SELECT
+            id,
             run_id,
             task_id,
             sequence_nr,
@@ -143,15 +148,11 @@ pub(crate) async fn get_latest_task_stage_snapshot_for_runner(
             sampler_aggregator,
             parametrization
         FROM run_stage_snapshots
-        WHERE run_id = $1
-          AND task_id = $2
-          AND queue_empty = TRUE
-        ORDER BY created_at DESC, id DESC
+        WHERE id = $1
         LIMIT 1
         "#,
     )
-    .bind(run_id)
-    .bind(task_id)
+    .bind(snapshot_id)
     .fetch_optional(pool)
     .await?;
     row.map(TryInto::try_into).transpose()
@@ -165,6 +166,7 @@ pub(crate) async fn get_task_activation_stage_snapshot(
     let row = sqlx::query_as::<_, RunStageSnapshotRow>(
         r#"
         SELECT
+            id,
             run_id,
             task_id,
             sequence_nr,
@@ -293,10 +295,13 @@ pub(crate) async fn update_run_sample_progress(
     Ok(())
 }
 
-pub(crate) async fn insert_run_stage_snapshot(
-    pool: &PgPool,
+pub(crate) async fn insert_run_stage_snapshot<'a, E>(
+    executor: E,
     snapshot: &RunStageSnapshot,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), sqlx::Error>
+where
+    E: Executor<'a, Database = Postgres>,
+{
     sqlx::query(
         r#"
         INSERT INTO run_stage_snapshots (
@@ -323,11 +328,19 @@ pub(crate) async fn insert_run_stage_snapshot(
             ))
         })?,
     )
-    .bind(snapshot.observable_state.to_json().map_err(|err| {
-        sqlx::Error::Protocol(format!(
-            "failed to encode observable_state for run_stage_snapshots: {err}"
-        ))
-    })?)
+    .bind(
+        snapshot
+            .observable_state
+            .as_ref()
+            .map(|observable| {
+                observable.to_json().map_err(|err| {
+                    sqlx::Error::Protocol(format!(
+                        "failed to encode observable_state for run_stage_snapshots: {err}"
+                    ))
+                })
+            })
+            .transpose()?,
+    )
     .bind(
         serde_json::to_value(&snapshot.sampler_aggregator).map_err(|err| {
             sqlx::Error::Protocol(format!(
@@ -342,7 +355,7 @@ pub(crate) async fn insert_run_stage_snapshot(
             ))
         })?,
     )
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
 }

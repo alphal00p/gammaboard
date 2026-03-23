@@ -335,29 +335,21 @@ where
         store: &S,
         run_id: i32,
         task: &RunTask,
-    ) -> Result<(Option<RunStageSnapshot>, Option<(i32, i64)>), RunnerError> {
+    ) -> Result<Option<RunStageSnapshot>, RunnerError> {
         if let Some(start_from) = task.task.start_from() {
-            let snapshot = store
-                .load_latest_stage_snapshot_for_task(start_from.run_id, start_from.task_id)
-                .await?;
+            let snapshot = store.load_stage_snapshot(start_from.snapshot_id).await?;
             let snapshot = snapshot.ok_or_else(|| {
                 RunnerError::Store(StoreError::not_found(format!(
-                    "no queue-empty stage snapshot found for run {} task {}",
-                    start_from.run_id, start_from.task_id
+                    "no stage snapshot found for snapshot {}",
+                    start_from.snapshot_id
                 )))
             })?;
-            Ok((
-                Some(snapshot),
-                Some((start_from.run_id, start_from.task_id)),
-            ))
+            Ok(Some(snapshot))
         } else {
-            let snapshot = store
+            store
                 .load_latest_stage_snapshot_before_sequence(run_id, task.sequence_nr)
-                .await?;
-            let origin = snapshot
-                .as_ref()
-                .and_then(|snapshot| snapshot.task_id.map(|task_id| (snapshot.run_id, task_id)));
-            Ok((snapshot, origin))
+                .await
+                .map_err(Into::into)
         }
     }
 
@@ -379,28 +371,26 @@ where
         ),
         RunnerError,
     > {
-        let (previous_snapshot, spawn_origin) =
-            Self::load_previous_stage_for_task(store, run_id, task).await?;
+        let previous_snapshot = Self::load_previous_stage_for_task(store, run_id, task).await?;
 
         store
             .set_run_task_spawn_origin(
                 task.id,
-                spawn_origin.map(|(from_run_id, _)| from_run_id),
-                spawn_origin.map(|(_, from_task_id)| from_task_id),
+                previous_snapshot.as_ref().and_then(|snapshot| snapshot.id),
             )
             .await?;
 
         let handoff = previous_snapshot.as_ref().map(|snapshot| StageHandoff {
             sampler_snapshot: Some(&snapshot.sampler_snapshot),
             parametrization_snapshot: Some(&snapshot.parametrization.snapshot),
-            observable_state: Some(&snapshot.observable_state),
+            observable_state: snapshot.observable_state.as_ref(),
         });
         let parametrization_state =
             Self::build_parametrization_state(parametrization_config, point_spec, handoff)?;
         let handoff = previous_snapshot.as_ref().map(|snapshot| StageHandoff {
             sampler_snapshot: Some(&snapshot.sampler_snapshot),
             parametrization_snapshot: Some(&snapshot.parametrization.snapshot),
-            observable_state: Some(&snapshot.observable_state),
+            observable_state: snapshot.observable_state.as_ref(),
         });
         let sampler = sampler_config
             .build(point_spec.clone(), sample_budget, handoff)
@@ -421,6 +411,12 @@ where
                     ))
                 })?
                 .observable_state
+                .as_ref()
+                .ok_or_else(|| {
+                    RunnerError::Engine(EngineError::engine(
+                        "task requested observable reuse but the referenced snapshot has no observable state",
+                    ))
+                })?
                 .clone(),
         };
 
@@ -428,7 +424,9 @@ where
             sampler,
             observable_state,
             parametrization_state,
-            spawn_origin,
+            previous_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.task_id.map(|task_id| (snapshot.run_id, task_id))),
         ))
     }
 
@@ -594,12 +592,13 @@ where
             .await?;
         store
             .save_run_stage_snapshot(&RunStageSnapshot {
+                id: None,
                 run_id,
                 task_id: Some(task.id),
                 sequence_nr: Some(task.sequence_nr),
                 queue_empty: true,
                 sampler_snapshot: sampler.snapshot().map_err(RunnerError::Engine)?,
-                observable_state,
+                observable_state: Some(observable_state),
                 sampler_aggregator: sampler_config,
                 parametrization: parametrization_state,
             })
@@ -654,12 +653,13 @@ where
             .await?;
         self.store
             .save_run_stage_snapshot(&RunStageSnapshot {
+                id: None,
                 run_id: self.run_id,
                 task_id: Some(self.task.id),
                 sequence_nr: Some(self.task.sequence_nr),
                 queue_empty,
                 sampler_snapshot: snapshot.sampler_snapshot.clone(),
-                observable_state: self.observable_state.clone(),
+                observable_state: Some(self.observable_state.clone()),
                 sampler_aggregator: self.sampler_config.clone(),
                 parametrization: self.parametrization_state.clone(),
             })

@@ -27,9 +27,8 @@ impl RunTaskState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskSnapshotRef {
-    pub run_id: i32,
-    pub task_id: i64,
+pub struct StageSnapshotRef {
+    pub snapshot_id: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,7 +41,7 @@ pub enum RunTaskInputSpec {
         #[serde(default)]
         observable: Option<ObservableConfig>,
         #[serde(default)]
-        start_from: Option<TaskSnapshotRef>,
+        start_from: Option<StageSnapshotRef>,
     },
     Configure {
         #[serde(default)]
@@ -52,7 +51,7 @@ pub enum RunTaskInputSpec {
         #[serde(default)]
         observable: Option<ObservableConfig>,
         #[serde(default)]
-        start_from: Option<TaskSnapshotRef>,
+        start_from: Option<StageSnapshotRef>,
     },
     Image {
         geometry: PlaneRasterGeometry,
@@ -60,7 +59,7 @@ pub enum RunTaskInputSpec {
         #[serde(default)]
         display: ImageDisplayMode,
         #[serde(default)]
-        start_from: Option<TaskSnapshotRef>,
+        start_from: Option<StageSnapshotRef>,
     },
     PlotLine {
         geometry: LineRasterGeometry,
@@ -68,7 +67,7 @@ pub enum RunTaskInputSpec {
         #[serde(default)]
         display: LineDisplayMode,
         #[serde(default)]
-        start_from: Option<TaskSnapshotRef>,
+        start_from: Option<StageSnapshotRef>,
     },
     Pause,
 }
@@ -98,13 +97,13 @@ pub enum RunTaskSpec {
         sampler_aggregator: SamplerAggregatorConfig,
         parametrization: ParametrizationConfig,
         observable: Option<ObservableConfig>,
-        start_from: Option<TaskSnapshotRef>,
+        start_from: Option<StageSnapshotRef>,
     },
     Configure {
         sampler_aggregator: SamplerAggregatorConfig,
         parametrization: ParametrizationConfig,
         observable: Option<ObservableConfig>,
-        start_from: Option<TaskSnapshotRef>,
+        start_from: Option<StageSnapshotRef>,
     },
     Image {
         geometry: PlaneRasterGeometry,
@@ -112,7 +111,7 @@ pub enum RunTaskSpec {
         #[serde(default)]
         display: ImageDisplayMode,
         #[serde(default)]
-        start_from: Option<TaskSnapshotRef>,
+        start_from: Option<StageSnapshotRef>,
     },
     PlotLine {
         geometry: LineRasterGeometry,
@@ -120,7 +119,7 @@ pub enum RunTaskSpec {
         #[serde(default)]
         display: LineDisplayMode,
         #[serde(default)]
-        start_from: Option<TaskSnapshotRef>,
+        start_from: Option<StageSnapshotRef>,
     },
     Pause,
 }
@@ -181,7 +180,7 @@ impl RunTaskSpec {
         }
     }
 
-    pub fn start_from(&self) -> Option<&TaskSnapshotRef> {
+    pub fn start_from(&self) -> Option<&StageSnapshotRef> {
         match self {
             Self::Sample { start_from, .. }
             | Self::Configure { start_from, .. }
@@ -575,8 +574,7 @@ pub struct RunTask {
     pub run_id: i32,
     pub sequence_nr: i32,
     pub task: RunTaskSpec,
-    pub spawned_from_run_id: Option<i32>,
-    pub spawned_from_task_id: Option<i64>,
+    pub spawned_from_snapshot_id: Option<i64>,
     pub state: RunTaskState,
     pub nr_produced_samples: i64,
     pub nr_completed_samples: i64,
