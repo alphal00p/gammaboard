@@ -553,15 +553,11 @@ impl EvaluatorConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{
-        LineDisplayMode, ObservableConfig, ParametrizationConfig, RunTaskState,
-        SamplerAggregatorConfig,
-    };
+    use crate::core::{LineDisplayMode, RunTaskState};
     use crate::evaluation::{
         ComplexValue, FullComplexObservableState, PointSpec, UnitEvaluatorParams,
     };
     use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
-    use crate::sampling::{IdentityParametrizationParams, RasterLineSamplerParams};
     use crate::server::panels::{PanelUpdateMode, PlotPoint, scalar_timeseries_panel};
     use chrono::Utc;
 
@@ -577,15 +573,6 @@ mod tests {
                     observable_kind: SemanticObservableKind::Complex,
                     ..UnitEvaluatorParams::default()
                 },
-            },
-            observable: ObservableConfig::FullComplex,
-            sampler_aggregator: SamplerAggregatorConfig::RasterLine {
-                params: RasterLineSamplerParams {
-                    geometry: line_geometry(),
-                },
-            },
-            parametrization: ParametrizationConfig::Identity {
-                params: IdentityParametrizationParams::default(),
             },
             evaluator_runner_params: EvaluatorRunnerParams {
                 performance_snapshot_interval_ms: 1000,

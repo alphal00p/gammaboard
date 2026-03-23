@@ -124,7 +124,6 @@ Minimal shape:
 ```toml
 name = "example"
 target = { kind = "scalar", value = 1.23 } # optional
-observable = "scalar" # optional
 
 [evaluator]
 kind = "unit"

@@ -212,7 +212,13 @@ fn panel_states(
             "run_engine",
             vec![
                 key_value("evaluator", "Evaluator", kind_of(&run_spec.evaluator)),
-                key_value("observable", "Observable", kind_of(&run_spec.observable)),
+                key_value(
+                    "observable",
+                    "Observable",
+                    current_task
+                        .map(|task| observable_label(&task.task))
+                        .unwrap_or_else(|| "none".to_string()),
+                ),
                 key_value(
                     "point_spec",
                     "Point Spec",
@@ -221,16 +227,34 @@ fn panel_states(
                         run_spec.point_spec.continuous_dims, run_spec.point_spec.discrete_dims
                     ),
                 ),
-                key_value("sampler", "Sampler", kind_of(&run_spec.sampler_aggregator)),
+                key_value(
+                    "sampler",
+                    "Sampler",
+                    current_task
+                        .and_then(|task| task.task.sampler_config())
+                        .map(|config| kind_of(&config))
+                        .unwrap_or_else(|| "none".to_string()),
+                ),
                 key_value(
                     "parametrization",
                     "Parametrization",
-                    kind_of(&run_spec.parametrization),
+                    current_task
+                        .and_then(|task| task.task.parametrization_config())
+                        .map(|config| kind_of(&config))
+                        .unwrap_or_else(|| "none".to_string()),
                 ),
             ],
         ),
         text_panel("run_target", &target_summary(run.target.as_ref())),
     ])
+}
+
+fn observable_label(task: &crate::core::RunTaskSpec) -> String {
+    match task.new_observable_config() {
+        Ok(Some(config)) => kind_of(&config),
+        Ok(None) => "reuse_previous".to_string(),
+        Err(_) => "none".to_string(),
+    }
 }
 
 fn current_task_label(task: Option<&RunTask>) -> String {

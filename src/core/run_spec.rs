@@ -14,7 +14,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegrationParams {
     pub evaluator: EvaluatorConfig,
-    pub observable: ObservableConfig,
     pub sampler_aggregator: SamplerAggregatorConfig,
     pub parametrization: ParametrizationConfig,
     pub evaluator_runner_params: EvaluatorRunnerParams,
@@ -27,9 +26,6 @@ pub struct RunSpec {
     pub run_id: i32,
     pub point_spec: PointSpec,
     pub evaluator: EvaluatorConfig,
-    pub observable: ObservableConfig,
-    pub sampler_aggregator: SamplerAggregatorConfig,
-    pub parametrization: ParametrizationConfig,
     pub evaluator_runner_params: EvaluatorRunnerParams,
     pub sampler_aggregator_runner_params: SamplerAggregatorRunnerParams,
 }

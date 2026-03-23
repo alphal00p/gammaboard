@@ -7,8 +7,8 @@ mod task_panels;
 mod worker_panels;
 
 use crate::core::{
-    AggregationStore, ControlPlaneStore, RunReadStore, RunSpecStore, RunTaskStore, StoreError,
-    WorkerRole,
+    AggregationStore, ControlPlaneStore, IntegrationParams, RunReadStore, RunSpecStore,
+    RunTaskStore, StoreError, WorkerRole,
 };
 use crate::evaluation::ObservableState;
 use crate::server::config_panels::{
@@ -152,6 +152,17 @@ fn json_response<T: Serialize>(value: T) -> Result<Json<serde_json::Value>, ApiE
     Ok(Json(
         serde_json::to_value(value).map_err(|err| ApiError::Internal(err.to_string()))?,
     ))
+}
+
+fn decode_integration_params(
+    run_id: i32,
+    value: serde_json::Value,
+) -> Result<IntegrationParams, ApiError> {
+    serde_json::from_value(value).map_err(|err| {
+        ApiError::Internal(format!(
+            "invalid integration_params for run {run_id}: {err}"
+        ))
+    })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -422,8 +433,28 @@ async fn get_run_sampler_aggregator_config(
         .load_run_spec(run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
-    let response: PanelResponse = run_spec
-        .sampler_aggregator
+    let sampler_config = if let Some(task) = state.store.load_active_run_task(run_id).await? {
+        task.task.sampler_config().ok_or_else(|| {
+            ApiError::BadRequest(format!(
+                "task {} does not define a sampler_aggregator config",
+                task.id
+            ))
+        })?
+    } else {
+        let run = state
+            .store
+            .get_run_progress(run_id)
+            .await?
+            .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
+        let integration_params = decode_integration_params(
+            run_id,
+            run.integration_params.ok_or_else(|| {
+                ApiError::Internal(format!("run {run_id} is missing integration_params"))
+            })?,
+        )?;
+        integration_params.sampler_aggregator
+    };
+    let response: PanelResponse = sampler_config
         .build_response(
             format!("run:{run_id}:config:sampler_aggregator"),
             &SamplerAggregatorPanelContext {

@@ -56,8 +56,7 @@ fn init_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
 fn start_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
     let connection = LocalDbConnection::from_url(database_url)?;
     ensure_parent_dir(&local.log_file)?;
-    fs::create_dir_all(&local.socket_dir)
-        .with_context(|| format!("failed to create socket dir {}", local.socket_dir))?;
+    let socket_dir = ensure_absolute_dir(&local.socket_dir)?;
     run_command(
         Command::new("pg_ctl")
             .arg("-D")
@@ -65,7 +64,11 @@ fn start_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
             .arg("-l")
             .arg(&local.log_file)
             .arg("-o")
-            .arg(format!("-k {} -p {}", local.socket_dir, connection.port))
+            .arg(format!(
+                "-k {} -p {}",
+                socket_dir.display(),
+                connection.port
+            ))
             .arg("start"),
         "pg_ctl start",
     )
@@ -73,9 +76,10 @@ fn start_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
 
 fn create_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
     let connection = LocalDbConnection::from_url(database_url)?;
+    let socket_dir = ensure_absolute_dir(&local.socket_dir)?;
     let status = Command::new("createdb")
         .arg("-h")
-        .arg(&local.socket_dir)
+        .arg(&socket_dir)
         .arg("-p")
         .arg(connection.port.to_string())
         .arg("-U")
@@ -124,6 +128,7 @@ fn reset_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
 
 fn dump_db_sql(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
     let connection = LocalDbConnection::from_url(database_url)?;
+    let socket_dir = ensure_absolute_dir(&local.socket_dir)?;
     fs::create_dir_all("dump").context("failed to create dump directory")?;
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -134,7 +139,7 @@ fn dump_db_sql(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
         .with_context(|| format!("failed to create {}", output_path.display()))?;
     let status = Command::new("pg_dump")
         .arg("-h")
-        .arg(&local.socket_dir)
+        .arg(&socket_dir)
         .arg("-p")
         .arg(connection.port.to_string())
         .arg("-U")
@@ -169,6 +174,15 @@ fn ensure_parent_dir(path: &str) -> Result<()> {
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     Ok(())
+}
+
+fn ensure_absolute_dir(path: &str) -> Result<PathBuf> {
+    fs::create_dir_all(path).with_context(|| format!("failed to create directory {path}"))?;
+    std::env::current_dir()
+        .context("failed to resolve current working directory")?
+        .join(path)
+        .canonicalize()
+        .with_context(|| format!("failed to resolve absolute path for {path}"))
 }
 
 fn remove_path_if_exists(path: &str) -> Result<()> {

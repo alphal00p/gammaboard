@@ -1,9 +1,8 @@
 mod preflight;
 
 use crate::core::{
-    BuildError, EvaluatorConfig, IntegrationParams, ObservableConfig, ParametrizationConfig,
-    RunTaskInputSpec, RunTaskSpec, SamplerAggregatorConfig, resolve_initial_sampler_aggregator,
-    resolve_task_queue,
+    BuildError, EvaluatorConfig, IntegrationParams, ParametrizationConfig, RunTaskInputSpec,
+    RunTaskSpec, SamplerAggregatorConfig, resolve_initial_sampler_aggregator, resolve_task_queue,
 };
 use crate::evaluation::PointSpec;
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
@@ -14,8 +13,6 @@ use serde_json::Value as JsonValue;
 #[derive(Debug, Clone, Deserialize)]
 pub struct RunAddIntegrationParams {
     pub evaluator: EvaluatorConfig,
-    #[serde(default)]
-    pub observable: Option<ObservableConfig>,
     #[serde(default)]
     pub sampler_aggregator: Option<SamplerAggregatorConfig>,
     pub parametrization: ParametrizationConfig,
@@ -69,16 +66,6 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
     }
     let resolved_integration_params = IntegrationParams {
         evaluator: config.integration_params.evaluator.clone(),
-        observable: config
-            .integration_params
-            .observable
-            .clone()
-            .unwrap_or_else(|| {
-                config
-                    .integration_params
-                    .evaluator
-                    .default_observable_config()
-            }),
         sampler_aggregator: resolved_sampler_aggregator.clone(),
         parametrization: config.integration_params.parametrization.clone(),
         evaluator_runner_params: config.integration_params.evaluator_runner_params.clone(),
@@ -94,7 +81,6 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
     config.point_spec = Some(point_spec.clone());
 
     let sampler_aggregator_init_metadata = preflight::run_preflight(
-        &resolved_integration_params.observable,
         &resolved_sampler_aggregator,
         &config.integration_params.parametrization,
         resolved_task_queue.as_deref().unwrap_or(&[]),
@@ -103,7 +89,7 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
     )?;
     config.resolved_integration_params = Some(resolved_integration_params);
     config.evaluator_init_metadata = Some(evaluator_init_metadata);
-    config.sampler_aggregator_init_metadata = Some(sampler_aggregator_init_metadata);
+    config.sampler_aggregator_init_metadata = sampler_aggregator_init_metadata;
     config.resolved_task_queue = resolved_task_queue;
 
     Ok(config)

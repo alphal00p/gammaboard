@@ -76,9 +76,6 @@ fn run_spec_from_integration_params(
         run_id,
         point_spec,
         evaluator: params.evaluator,
-        observable: params.observable,
-        sampler_aggregator: params.sampler_aggregator,
-        parametrization: params.parametrization,
         evaluator_runner_params: params.evaluator_runner_params,
         sampler_aggregator_runner_params: params.sampler_aggregator_runner_params,
     })
@@ -832,38 +829,40 @@ mod tests {
 
     #[test]
     fn decode_run_spec_supports_current_schema() {
+        let integration_params = json!({
+            "evaluator": {
+                "kind": "sin_evaluator",
+                "min_eval_time_per_sample_ms": 1
+            },
+            "sampler_aggregator": {
+                "kind": "naive_monte_carlo",
+                "training_target_samples": 2
+            },
+            "parametrization": { "kind": "identity" },
+            "evaluator_runner_params": {
+                "performance_snapshot_interval_ms": 5000
+            },
+            "sampler_aggregator_runner_params": {
+                "performance_snapshot_interval_ms": 5000,
+                "target_batch_eval_ms": 200.0,
+                "target_queue_remaining": 0.0,
+                "max_batch_size": 64,
+                "max_queue_size": 128,
+                "max_batches_per_tick": 1,
+                "completed_batch_fetch_limit": 512
+            }
+        });
         let spec = decode_run_spec(
             7,
-            json!({
-                "evaluator": {
-                    "kind": "sin_evaluator",
-                    "min_eval_time_per_sample_ms": 1
-                },
-                "observable": "scalar",
-                "sampler_aggregator": {
-                    "kind": "naive_monte_carlo",
-                    "training_target_samples": 2
-                },
-                "parametrization": { "kind": "identity" },
-                "evaluator_runner_params": {
-                    "performance_snapshot_interval_ms": 5000
-                },
-                "sampler_aggregator_runner_params": {
-                    "performance_snapshot_interval_ms": 5000,
-                    "target_batch_eval_ms": 200.0,
-                    "target_queue_remaining": 0.0,
-                    "max_batch_size": 64,
-                    "max_queue_size": 128,
-                    "max_batches_per_tick": 1,
-                    "completed_batch_fetch_limit": 512
-                }
-            }),
+            integration_params.clone(),
             json!({
                 "continuous_dims": 1,
                 "discrete_dims": 0
             }),
         )
         .expect("decode");
+        let params: IntegrationParams =
+            serde_json::from_value(integration_params).expect("integration params");
 
         assert_eq!(spec.run_id, 7);
         assert_eq!(spec.point_spec.continuous_dims, 1);
@@ -874,19 +873,15 @@ mod tests {
             crate::core::EvaluatorConfig::SinEvaluator { params }
                 if params.min_eval_time_per_sample_ms == 1
         ));
+        assert_eq!(params.sampler_aggregator.kind_str(), "naive_monte_carlo");
         assert!(matches!(
-            spec.observable,
-            crate::core::ObservableConfig::Scalar
-        ));
-        assert_eq!(spec.sampler_aggregator.kind_str(), "naive_monte_carlo");
-        assert!(matches!(
-            &spec.sampler_aggregator,
+            &params.sampler_aggregator,
             crate::core::SamplerAggregatorConfig::NaiveMonteCarlo { params }
                 if params.training_target_samples == 2
         ));
-        assert_eq!(spec.parametrization.kind_str(), "identity");
+        assert_eq!(params.parametrization.kind_str(), "identity");
         assert!(matches!(
-            &spec.parametrization,
+            &params.parametrization,
             crate::core::ParametrizationConfig::Identity { .. }
         ));
         assert_eq!(

@@ -47,16 +47,6 @@ impl EvaluatorConfig {
         }
     }
 
-    pub fn default_observable_config(&self) -> ObservableConfig {
-        match self {
-            Self::Gammaloop { params } => params.observable_kind.aggregate_observable_config(),
-            Self::SinEvaluator { .. } => ObservableConfig::Scalar,
-            Self::SincEvaluator { .. } => ObservableConfig::Complex,
-            Self::Unit { params } => params.observable_kind.aggregate_observable_config(),
-            Self::Symbolica { .. } => ObservableConfig::Scalar,
-        }
-    }
-
     pub fn empty_observable_state(
         &self,
         config: &ObservableConfig,

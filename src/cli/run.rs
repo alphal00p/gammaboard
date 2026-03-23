@@ -7,7 +7,7 @@ use comfy_table::{Cell, CellAlignment, ContentArrangement, Table};
 use gammaboard::PgStore;
 use gammaboard::config::CliConfig;
 use gammaboard::core::{
-    ControlPlaneStore, RunReadStore, RunSpecStore, RunTask, RunTaskInputSpec, RunTaskSpec,
+    ControlPlaneStore, IntegrationParams, RunReadStore, RunTask, RunTaskInputSpec, RunTaskSpec,
     RunTaskStore, TaskSnapshotRef, resolve_task_queue,
 };
 use gammaboard::preprocess::{RunAddConfig, preprocess_run_add};
@@ -241,7 +241,7 @@ async fn run_task_command(store: &PgStore, command: TaskCommand) -> Result<()> {
         TaskCommand::Add { run, task_file } => {
             let run = resolve_run_ref(store, &run).await?;
             let run_id = run.run_id;
-            let tasks = resolve_task_queue_file_for_run(store, store, run_id, &task_file).await?;
+            let tasks = resolve_task_queue_file_for_run(store, run_id, &task_file).await?;
             validate_task_snapshot_refs(store, &tasks).await?;
             let inserted = store.append_run_tasks(run_id, &tasks).await?;
             tracing::info!(run_id, tasks_added = inserted.len(), "appended run tasks");
@@ -409,8 +409,7 @@ fn load_run_add_config(path: &PathBuf) -> Result<RunAddConfig> {
 }
 
 async fn resolve_task_queue_file_for_run(
-    store: &impl RunTaskStore,
-    run_spec_store: &impl RunSpecStore,
+    store: &(impl RunTaskStore + RunReadStore),
     run_id: i32,
     path: &PathBuf,
 ) -> Result<Vec<RunTaskSpec>> {
@@ -424,13 +423,18 @@ async fn resolve_task_queue_file_for_run(
         task.validate()
             .map_err(|err| anyhow!("invalid task_queue entry: {err}"))?;
     }
-    let run_spec = run_spec_store
-        .load_run_spec(run_id)
+    let run = store
+        .get_run_progress(run_id)
         .await?
         .ok_or_else(|| anyhow!("run {run_id} not found"))?;
+    let integration_params: IntegrationParams = serde_json::from_value(
+        run.integration_params
+            .ok_or_else(|| anyhow!("run {run_id} is missing integration_params"))?,
+    )
+    .map_err(|err| anyhow!("invalid integration_params for run {run_id}: {err}"))?;
     let existing_tasks = store.list_run_tasks(run_id).await?;
-    let mut base_sampler_aggregator = run_spec.sampler_aggregator;
-    let mut base_parametrization = run_spec.parametrization;
+    let mut base_sampler_aggregator = integration_params.sampler_aggregator;
+    let mut base_parametrization = integration_params.parametrization;
     for task in existing_tasks {
         if let RunTaskSpec::Sample {
             sampler_aggregator,

@@ -6,13 +6,12 @@ use crate::evaluation::{EvalBatchOptions, Evaluator, PointSpec};
 use crate::sampling::{SamplerAggregatorSnapshot, StageHandoff};
 
 pub(super) fn run_preflight(
-    base_observable: &ObservableConfig,
     initial_sampler_aggregator: &SamplerAggregatorConfig,
     initial_parametrization: &ParametrizationConfig,
     resolved_tasks: &[RunTaskSpec],
     evaluator: &mut dyn Evaluator,
     point_spec: &PointSpec,
-) -> Result<serde_json::Value, BuildError> {
+) -> Result<Option<serde_json::Value>, BuildError> {
     let preflight_tasks = resolved_tasks
         .iter()
         .cloned()
@@ -23,30 +22,18 @@ pub(super) fn run_preflight(
         .collect::<Vec<_>>();
 
     if preflight_tasks.is_empty() {
-        let initial_task = RunTaskSpec::Sample {
-            nr_samples: Some(1),
-            sampler_aggregator: initial_sampler_aggregator.clone(),
-            parametrization: initial_parametrization.clone(),
-            observable: None,
-            start_from: None,
-        };
-        return preflight_single_stage(
-            &initial_task,
-            base_observable.clone(),
+        validate_initial_stage(
             initial_sampler_aggregator,
             initial_parametrization,
-            None,
-            evaluator,
             point_spec,
-            None,
-        )
-        .map(|(metadata, _, _)| metadata);
+        )?;
+        return Ok(None);
     }
 
-    let mut sampler_metadata = None;
+    let mut sampler_metadata = None::<serde_json::Value>;
     let mut handoff_snapshot = None;
     let mut parametrization_state: Option<ParametrizationState> = None;
-    let mut current_observable = base_observable.clone();
+    let mut current_observable = None;
 
     for task in preflight_tasks {
         if let (Some(sampler_aggregator), Some(parametrization)) =
@@ -54,7 +41,12 @@ pub(super) fn run_preflight(
         {
             let task_observable = task
                 .new_observable_config()?
-                .unwrap_or_else(|| current_observable.clone());
+                .or_else(|| current_observable.clone())
+                .ok_or_else(|| {
+                    BuildError::build(
+                        "task requested observable reuse but no previous observable exists",
+                    )
+                })?;
             let previous_handoff_snapshot = handoff_snapshot.take();
             let previous_handoff = StageHandoff {
                 sampler_snapshot: previous_handoff_snapshot.as_ref(),
@@ -77,13 +69,26 @@ pub(super) fn run_preflight(
             sampler_metadata.get_or_insert(metadata.0);
             handoff_snapshot = metadata.1;
             parametrization_state = metadata.2;
-            current_observable = task_observable;
+            current_observable = Some(task_observable);
         }
     }
 
-    sampler_metadata.ok_or_else(|| {
+    sampler_metadata.map(Some).ok_or_else(|| {
         BuildError::build("preflight produced no executable stage and no initial sampler metadata")
     })
+}
+
+fn validate_initial_stage(
+    sampler_aggregator: &SamplerAggregatorConfig,
+    parametrization_config: &ParametrizationConfig,
+    point_spec: &PointSpec,
+) -> Result<(), BuildError> {
+    let sampler = sampler_aggregator.build(point_spec.clone(), None, None)?;
+    sampler.validate_point_spec(point_spec)?;
+
+    let parametrization = parametrization_config.build(None)?;
+    parametrization.validate_point_spec(point_spec)?;
+    Ok(())
 }
 
 fn preflight_single_stage(

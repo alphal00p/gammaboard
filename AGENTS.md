@@ -14,6 +14,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 ## Core Rules
 - PostgreSQL is the source of truth for runs, tasks, batches, nodes, logs, and snapshots.
 - Runs are driven by persisted `run_tasks`. The evaluator work queue is lower-level and distinct.
+- `RunSpec` should keep only immutable run-global state. Task-varying sampler, parametrization, and observable choices belong on tasks or in stored integration defaults, not on `RunSpec`.
 - Run names are human-facing and not unique. CLI run references may be numeric ids or exact names; ambiguous names must fail and print matches.
 - If `task_queue` is omitted during `run add`, the run is created idle.
 - Run lifecycle is derived from control-plane state. Do not add a persisted run status column unless explicitly requested.
@@ -35,6 +36,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Task transitions must restore runtime state from persisted queue-empty `run_stage_snapshots`, not in-memory handoff only.
 - Executable tasks may declare `start_from = { run_id, task_id }` to branch from an older task snapshot.
 - Sample tasks may omit `observable`; that means reuse the previous observable state.
+- There is no run-level observable default. A first executable task that needs a fresh observable must declare it explicitly.
 - `image` and `plot_line` tasks must declare their observable family explicitly and start with a fresh full observable.
 - Fresh sampler tasks may inherit a reduced initial batch size from the previous sampler task, but should not carry over the full rolling metrics state.
 - Claimed batches are fenced by live node ownership. Do not add a second independent batch lease.
