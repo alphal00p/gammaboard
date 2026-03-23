@@ -11,6 +11,9 @@ build:
 build-frontend:
     cd dashboard && npm run build
 
+serve-backend:
+    {{bin}} server configs/server.toml
+
 serve-frontend:
     cd dashboard && npx serve build
 

@@ -49,6 +49,8 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Dashboard auth is operator-oriented: read-only endpoints may stay open, while explicit steering endpoints require admin auth.
 - Dashboard steering should use explicit endpoints such as `pause`, `assign`, `unassign`, `append task`, and `create run`, not generic patch endpoints.
 - Dashboard auth is intended for small trusted deployments behind HTTPS.
+- Server host, port, allowed origin, secure cookie policy, and dashboard auth secrets should come from a single server TOML config passed to `gammaboard server <CONFIG_PATH>`.
+- Server TOML should be explicit; do not rely on implicit defaults for required server settings.
 
 ## Logging And Read APIs
 - Runtime logs are persisted through the tracing pipeline into PostgreSQL.

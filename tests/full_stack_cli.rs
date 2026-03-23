@@ -128,6 +128,7 @@ struct FullStackHarness {
     pool: PgPool,
     bin_path: PathBuf,
     children: Vec<ManagedChild>,
+    temp_files: Vec<NamedTempFile>,
 }
 
 struct ManagedChild {
@@ -149,6 +150,7 @@ impl FullStackHarness {
             pool,
             bin_path,
             children: Vec::new(),
+            temp_files: Vec::new(),
         })
     }
 
@@ -198,31 +200,34 @@ impl FullStackHarness {
     }
 
     async fn start_server(&mut self) -> anyhow::Result<String> {
-        self.start_server_with_envs(&[]).await
+        let password_hash = hash_password_for_tests("test-password");
+        self.start_server_with_auth((&password_hash, "test-session-secret"))
+            .await
     }
 
-    async fn start_server_with_envs(
-        &mut self,
-        extra_envs: &[(&str, String)],
-    ) -> anyhow::Result<String> {
+    async fn start_server_with_auth(&mut self, auth: (&str, &str)) -> anyhow::Result<String> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         let addr = listener.local_addr()?;
         drop(listener);
+        let server_config = temp_server_config(
+            &addr.ip().to_string(),
+            addr.port(),
+            "http://localhost:3000",
+            false,
+            auth,
+        );
 
         let mut child = TokioCommand::new(&self.bin_path);
         child
             .env("DATABASE_URL", &self.db.database_url)
             .env("GAMMABOARD_DISABLE_DB_LOGS", "1")
             .arg("server")
-            .arg("--bind")
-            .arg(addr.to_string())
+            .arg(server_config.path())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
-        for (key, value) in extra_envs {
-            child.env(key, value);
-        }
 
         let child = child.spawn()?;
+        self.temp_files.push(server_config);
         self.children.push(ManagedChild {
             label: format!("server:{addr}"),
             child,
@@ -302,6 +307,7 @@ impl FullStackHarness {
             let _ = tokio::time::timeout(Duration::from_secs(5), managed.child.wait()).await;
         }
         self.children.clear();
+        self.temp_files.clear();
     }
 
     async fn kill_child(&mut self, label: &str) -> anyhow::Result<()> {
@@ -328,6 +334,22 @@ impl Drop for FullStackHarness {
 fn temp_run_config(contents: &str) -> NamedTempFile {
     let file = NamedTempFile::new().expect("create temp config");
     std::fs::write(file.path(), contents).expect("write temp config");
+    file
+}
+
+fn temp_server_config(
+    host: &str,
+    port: u16,
+    allowed_origin: &str,
+    secure_cookie: bool,
+    auth: (&str, &str),
+) -> NamedTempFile {
+    let (admin_password_hash, session_secret) = auth;
+    let contents = format!(
+        "host = {host:?}\nport = {port}\nallowed_origin = {allowed_origin:?}\nsecure_cookie = {secure_cookie}\n\n[auth]\nadmin_password_hash = {admin_password_hash:?}\nsession_secret = {session_secret:?}\n"
+    );
+    let file = NamedTempFile::new().expect("create temp server config");
+    std::fs::write(file.path(), contents).expect("write temp server config");
     file
 }
 
@@ -713,21 +735,9 @@ async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> 
         .await?;
 
     let password = "operator-secret";
+    let password_hash = hash_password_for_tests(password);
     let server_url = harness
-        .start_server_with_envs(&[
-            (
-                "GAMMABOARD_ADMIN_PASSWORD_HASH",
-                hash_password_for_tests(password),
-            ),
-            (
-                "GAMMABOARD_SESSION_SECRET",
-                "test-session-secret".to_string(),
-            ),
-            (
-                "GAMMABOARD_ALLOWED_ORIGIN",
-                "http://localhost:3000".to_string(),
-            ),
-        ])
+        .start_server_with_auth((&password_hash, "test-session-secret"))
         .await?;
 
     let runs = http_get(&server_url, "/api/runs").await?;

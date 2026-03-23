@@ -1,12 +1,4 @@
 name = "gammaloop-triangle"
-[[task_queue]]
-kind = "plot_line"
-observable = "complex"
-[task_queue.geometry]
-offset = [0.0, 0.0, 0.0]
-direction = [0.0, 0.0, 1.0]
-linspace = { start = -30.0, stop = 30.0, count = 1000 }
-discrete = []
 
 [[task_queue]]
 kind = "plot_line"
@@ -15,30 +7,6 @@ observable = "complex"
 offset = [0.0, 0.0, 0.0]
 direction = [1.0, 0.0, 0.0]
 linspace = { start = -30, stop = 30.0, count = 1000 }
-discrete = []
-
-
-[[task_queue]]
-kind = "image"
-observable = "complex"
-[task_queue.geometry]
-offset = [0.0, 0.0, 0.0]
-u_vector = [0.0, 1.0, 0.0]
-v_vector = [0.0, 0.0, 1.0]
-u_linspace = { start = -30.0, stop = 30.0, count = 128 }
-v_linspace = { start = -30.0, stop = 30.0, count = 128 }
-discrete = []
-
-
-[[task_queue]]
-kind = "image"
-observable = "complex"
-[task_queue.geometry]
-offset = [0.0, 0.0, 0.0]
-u_vector = [1.0, 0.0, 0.0]
-v_vector = [0.0, 0.0, 1.0]
-u_linspace = { start = -30.0, stop = 30.0, count = 128 }
-v_linspace = { start = -30.0, stop = 30.0, count = 128 }
 discrete = []
 
 
@@ -72,7 +40,7 @@ kind = "identity"
 
 [[task_queue]]
 kind = "sample"
-nr_samples = 1_000_000
+nr_samples = 10_000_000
 [task_queue.sampler_aggregator]
 kind = "havana_inference"
 [task_queue.parametrization]

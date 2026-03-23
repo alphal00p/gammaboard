@@ -34,35 +34,54 @@ use axum::{
 };
 use serde::Deserialize;
 use serde::Serialize;
-use std::{env, net::SocketAddr};
+use std::{
+    fs,
+    net::{IpAddr, SocketAddr},
+    path::Path,
+};
 use tower_http::cors::CorsLayer;
 use tracing::Instrument;
 
-use self::auth::{
-    AuthConfig, SessionStatus, load_auth_config, login, logout, parse_allowed_origin,
-    require_admin_session,
-};
+use self::auth::{AuthConfig, SessionStatus, login, logout, require_admin_session};
 
-pub fn resolve_bind(bind: Option<SocketAddr>) -> anyhow::Result<SocketAddr> {
-    match bind {
-        Some(bind) => Ok(bind),
-        None => {
-            let value = env::var("GAMMABOARD_BACKEND_PORT").context(
-                "missing GAMMABOARD_BACKEND_PORT (set it in environment or pass --bind)",
-            )?;
-            let port = value
-                .parse::<u16>()
-                .with_context(|| format!("invalid GAMMABOARD_BACKEND_PORT={value:?}"))?;
-            Ok(SocketAddr::from(([0, 0, 0, 0], port)))
-        }
+#[derive(Debug, Clone, Deserialize)]
+pub struct ServerConfig {
+    pub host: IpAddr,
+    pub port: u16,
+    pub allowed_origin: String,
+    pub secure_cookie: bool,
+    pub auth: ServerAuthConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ServerAuthConfig {
+    pub admin_password_hash: String,
+    pub session_secret: String,
+}
+
+impl ServerConfig {
+    pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let path = path.as_ref();
+        let raw = fs::read_to_string(path)
+            .with_context(|| format!("failed reading server config {}", path.display()))?;
+        toml::from_str(&raw)
+            .with_context(|| format!("failed parsing server config {}", path.display()))
+    }
+
+    pub fn bind_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.host, self.port)
     }
 }
 
-pub async fn serve(store: PgStore, bind: SocketAddr) -> anyhow::Result<()> {
+pub async fn serve(store: PgStore, config: ServerConfig) -> anyhow::Result<()> {
+    let bind = config.bind_addr();
+    let allowed_origin = axum::http::HeaderValue::from_str(config.allowed_origin.trim())
+        .with_context(|| format!("invalid server.allowed_origin={:?}", config.allowed_origin))?;
     let state = AppState {
         store,
-        auth: load_auth_config()?,
-        allowed_origin: parse_allowed_origin(),
+        auth: AuthConfig::from_server_config(&config.auth),
+        allowed_origin,
+        secure_cookie: config.secure_cookie,
     };
 
     let app = build_app(state);
@@ -83,8 +102,9 @@ pub async fn serve(store: PgStore, bind: SocketAddr) -> anyhow::Result<()> {
 #[derive(Clone)]
 pub(crate) struct AppState {
     store: PgStore,
-    auth: Option<AuthConfig>,
-    allowed_origin: Option<axum::http::HeaderValue>,
+    auth: AuthConfig,
+    allowed_origin: axum::http::HeaderValue,
+    secure_cookie: bool,
 }
 
 #[derive(Deserialize)]
@@ -244,19 +264,16 @@ fn build_app(state: AppState) -> Router {
         .with_state(state)
 }
 
-fn build_cors_layer(allowed_origin: Option<axum::http::HeaderValue>) -> CorsLayer {
-    let layer = CorsLayer::new()
+fn build_cors_layer(allowed_origin: axum::http::HeaderValue) -> CorsLayer {
+    CorsLayer::new()
         .allow_credentials(true)
         .allow_methods([
             axum::http::Method::GET,
             axum::http::Method::POST,
             axum::http::Method::OPTIONS,
         ])
-        .allow_headers([axum::http::header::CONTENT_TYPE]);
-    match allowed_origin {
-        Some(origin) => layer.allow_origin(origin),
-        None => layer,
-    }
+        .allow_headers([axum::http::header::CONTENT_TYPE])
+        .allow_origin(allowed_origin)
 }
 
 async fn request_context_middleware(request: Request<axum::body::Body>, next: Next) -> Response {

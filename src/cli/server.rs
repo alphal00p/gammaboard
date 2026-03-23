@@ -1,27 +1,27 @@
 use clap::Args;
-use gammaboard::server::{resolve_bind, serve};
-use std::net::SocketAddr;
+use gammaboard::server::{ServerConfig, serve};
+use std::path::PathBuf;
 
 use super::shared::with_cli_store;
 
+const SERVER_DB_POOL_SIZE: u32 = 10;
+
 #[derive(Debug, Args)]
 pub struct ServerArgs {
-    #[arg(long)]
-    bind: Option<SocketAddr>,
-    #[arg(long, default_value_t = 10)]
-    db_pool_size: u32,
+    config_path: PathBuf,
 }
 
 pub async fn run_server(args: ServerArgs, quiet: bool) -> anyhow::Result<()> {
-    let bind = resolve_bind(args.bind)?;
+    let config = ServerConfig::load(&args.config_path)?;
+    let bind = config.bind_addr();
     let span = tracing::span!(
         tracing::Level::TRACE,
         "server",
         source = "server",
         bind = %bind
     );
-    with_cli_store(args.db_pool_size, quiet, span, |store| async move {
-        serve(store, bind).await
+    with_cli_store(SERVER_DB_POOL_SIZE, quiet, span, |store| async move {
+        serve(store, config).await
     })
     .await
 }

@@ -6,7 +6,7 @@ Gammaboard runs distributed numerical integration jobs with PostgreSQL as the sh
 - `gammaboard run`: create, list, pause, clone, and remove runs.
 - `gammaboard node`: list, assign, unassign, and stop nodes.
 - `gammaboard run-node --name <NODE_NAME>`: start one local worker process.
-- `gammaboard server`: start the dashboard backend.
+- `gammaboard server <SERVER_CONFIG>`: start the dashboard backend.
 
 The dashboard shows runs, task output, nodes, performance, and logs.
 
@@ -34,23 +34,42 @@ The dashboard shows runs, task output, nodes, performance, and logs.
    just serve-frontend
    ```
 
-`serve-*` commands load `.env`. The backend port is controlled by `GAMMABOARD_BACKEND_PORT`. The frontend uses `REACT_APP_API_BASE_URL`.
+`serve-*` commands load `.env`. The frontend uses `REACT_APP_API_BASE_URL`. The backend reads its host, port, auth, and cookie settings from `configs/server.toml`.
+
+## Server Config
+- The server is configured from a single TOML file, for example:
+  ```bash
+  gammaboard server configs/server.toml
+  ```
+- The checked-in local default is [configs/server.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server.toml).
+- Required shape:
+  ```toml
+  host = "0.0.0.0"
+  port = 4000
+  allowed_origin = "http://localhost:3000"
+  secure_cookie = false
+
+  [auth]
+  admin_password_hash = "$argon2id$..."
+  session_secret = "replace-me"
+  ```
+- All server config fields are explicit; the server does not fill in defaults.
 
 ## Dashboard Auth
 - Read-only dashboard endpoints stay open.
 - Steering actions currently require admin login and are backed by a signed session cookie.
 - The dashboard currently supports pausing runs, auto-assigning free nodes, assigning and unassigning nodes, and requesting a node shutdown.
 - Node shutdown from the dashboard is guarded by a confirmation dialog because it cannot be undone from the web UI.
-- Set `GAMMABOARD_ADMIN_PASSWORD_HASH` to enable dashboard auth.
-- Set `GAMMABOARD_SESSION_SECRET` when auth is enabled.
-- Set `GAMMABOARD_ALLOWED_ORIGIN` if the frontend is served from a different origin than `http://localhost:3000`.
-- Deploy this behind HTTPS for real use. Set `GAMMABOARD_SECURE_COOKIE=1` when serving over HTTPS.
+- Put `auth.admin_password_hash` in `server.toml` to enable dashboard auth.
+- Put `auth.session_secret` in `server.toml` when auth is enabled.
+- Set `allowed_origin` in `server.toml` if the frontend is served from a different origin than `http://localhost:3000`.
+- Deploy this behind HTTPS for real use and set `secure_cookie = true` in `server.toml`.
 - Generate the password hash with:
   ```bash
   gammaboard auth --password 'your-password'
   ```
 
-`GAMMABOARD_ADMIN_PASSWORD_HASH` should contain the full Argon2 encoded hash output from that command.
+`auth.admin_password_hash` should contain the full Argon2 encoded hash output from that command.
 
 ## Run Configs
 Run configs are TOML and are deep-merged over `configs/default.toml`.
