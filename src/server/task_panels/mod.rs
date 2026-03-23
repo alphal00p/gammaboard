@@ -137,21 +137,6 @@ impl RunTaskSpec {
     fn panel_projectors(&self) -> Vec<TaskPanelProjector> {
         let mut projectors = vec![task_summary_projector()];
         projectors.extend(match self {
-            Self::Pause => vec![panel_projector(
-                panel_spec(
-                    "pause_state",
-                    "Pause State",
-                    PanelKind::Text,
-                    PanelHistoryMode::None,
-                ),
-                |_ctx| {
-                    Ok(Some(PanelState::Text {
-                        panel_id: "pause_state".to_string(),
-                        text: "Task is paused".to_string(),
-                    }))
-                },
-                |_ctx| Ok(None),
-            )],
             Self::Sample { .. } => sample::projectors(self),
             Self::Image {
                 geometry, display, ..

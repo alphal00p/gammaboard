@@ -3,7 +3,9 @@ use super::{
     role_runner::RoleRunner,
 };
 use crate::PgStore;
-use crate::core::{RunTask, RunTaskState, StoreError};
+use crate::core::{
+    BatchTransformConfig, ObservableConfig, RunStageSnapshot, RunTask, RunTaskState, StoreError,
+};
 use crate::runners::{EvaluatorRunner, SamplerAggregatorRunner};
 use tracing::{error, info, warn};
 
@@ -127,7 +129,46 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             .map_err(|err| StoreError::store(format!("failed to build evaluator: {err}")))?;
         info!("evaluator worker started");
 
-        let runner: EvaluatorRunner<PgStore> = todo!();
+        let stage_snapshot = match worker
+            .store
+            .load_latest_stage_snapshot_before_sequence(worker.run_id, i32::MAX)
+            .await?
+        {
+            Some(snapshot) => snapshot,
+            None => {
+                warn!(
+                    run_id = worker.run_id,
+                    "run has no stage snapshot; evaluator not started"
+                );
+                return Ok(None);
+            }
+        };
+
+        let batch_transforms = Self::build_batch_transforms(&stage_snapshot.batch_transforms)?;
+
+        let materializer = stage_snapshot
+            .sampler_aggregator
+            .build_materializer(
+                spec.point_spec.clone(),
+                None,
+                Some(Self::stage_handoff_from_stage_snapshot(&stage_snapshot)),
+            )
+            .map_err(|err| StoreError::store(format!("failed to build materializer: {err}")))?;
+
+        let requires_training_values = stage_snapshot.sampler_aggregator.requires_training();
+
+        let runner = EvaluatorRunner::new(
+            worker.store.clone(),
+            worker.run_id,
+            self.node_name.clone(),
+            self.node_uuid.clone(),
+            evaluator,
+            materializer,
+            spec.point_spec.clone(),
+            spec.evaluator_runner_params.clone(),
+            requires_training_values,
+            batch_transforms,
+        );
 
         Ok(Some(Box::new(runner)))
     }
@@ -182,7 +223,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             .store
             .load_sampler_runner_snapshot(worker.run_id)
             .await?;
-        let initial_batch_size = latest_snapshot
+        let initial_batch_size_hint = latest_snapshot
             .as_ref()
             .filter(|snapshot| snapshot.task_id != task.id)
             .map(|snapshot| {
@@ -190,9 +231,69 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                     spec.sampler_aggregator_runner_params.max_batch_size,
                 )
             });
-        let restored_snapshot = latest_snapshot.filter(|snapshot| snapshot.task_id == task.id);
+        let restored_snapshot = latest_snapshot
+            .as_ref()
+            .filter(|snapshot| snapshot.task_id == task.id)
+            .cloned();
 
-        let runner: SamplerAggregatorRunner<PgStore> = todo!();
+        let sampler_config = task.task.sampler_config().clone().ok_or_else(|| {
+            StoreError::store(format!(
+                "run {} task {} has no sampler configuration",
+                worker.run_id, task.id
+            ))
+        })?;
+
+        let sample_budget = task
+            .task
+            .nr_expected_samples()
+            .and_then(|value| usize::try_from(value).ok());
+
+        let sampler = sampler_config
+            .build(
+                spec.point_spec.clone(),
+                sample_budget,
+                restored_snapshot
+                    .as_ref()
+                    .map(Self::stage_handoff_from_runner_snapshot),
+            )
+            .map_err(|err| StoreError::store(format!("failed to build sampler: {err}")))?;
+
+        let new_observable_config = task
+            .task
+            .new_observable_config()
+            .map_err(|err| StoreError::store(err.to_string()))?;
+
+        let observable_state = if let Some(snapshot) = restored_snapshot.as_ref() {
+            snapshot.observable_state.clone()
+        } else if let Some(config) = new_observable_config {
+            Self::observable_state_from_config(config)
+        } else if let Some(snapshot) = latest_snapshot.as_ref() {
+            snapshot.observable_state.clone()
+        } else {
+            crate::evaluation::ObservableState::empty_scalar()
+        };
+
+        let run_progress = worker.store.load_run_sample_progress(worker.run_id).await?;
+
+        let initial_batch_size =
+            initial_batch_size_hint.unwrap_or(spec.sampler_aggregator_runner_params.max_batch_size);
+
+        let restored_snapshot_for_runner = restored_snapshot.clone();
+        let task_for_runner = task.clone();
+
+        let mut runner = SamplerAggregatorRunner::new(
+            worker.store.clone(),
+            worker.run_id,
+            self.node_name.clone(),
+            task_for_runner,
+            sampler,
+            observable_state,
+            sampler_config,
+            spec.sampler_aggregator_runner_params.clone(),
+            initial_batch_size,
+            restored_snapshot_for_runner,
+            run_progress,
+        );
 
         if runner.task_state().state == RunTaskState::Active {
             runner
@@ -202,6 +303,56 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         }
         info!("sampler-aggregator worker started");
         Ok(Some(Box::new(runner)))
+    }
+
+    fn build_batch_transforms(
+        configs: &[BatchTransformConfig],
+    ) -> Result<Vec<Box<dyn crate::evaluation::BatchTransform>>, StoreError> {
+        configs
+            .iter()
+            .map(|config| {
+                config.build().map_err(|err| {
+                    StoreError::store(format!("failed to build batch transform: {err}"))
+                })
+            })
+            .collect()
+    }
+
+    fn stage_handoff_from_stage_snapshot<'a>(
+        snapshot: &'a RunStageSnapshot,
+    ) -> crate::sampling::StageHandoff<'a> {
+        crate::sampling::StageHandoff {
+            sampler_snapshot: Some(&snapshot.sampler_snapshot),
+            observable_state: snapshot.observable_state.as_ref(),
+        }
+    }
+
+    fn stage_handoff_from_runner_snapshot<'a>(
+        snapshot: &'a crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot,
+    ) -> crate::sampling::StageHandoff<'a> {
+        crate::sampling::StageHandoff {
+            sampler_snapshot: Some(&snapshot.sampler_snapshot),
+            observable_state: Some(&snapshot.observable_state),
+        }
+    }
+
+    fn observable_state_from_config(
+        config: ObservableConfig,
+    ) -> crate::evaluation::ObservableState {
+        match config {
+            crate::core::ObservableConfig::Scalar => {
+                crate::evaluation::ObservableState::empty_scalar()
+            }
+            crate::core::ObservableConfig::Complex => {
+                crate::evaluation::ObservableState::empty_complex()
+            }
+            crate::core::ObservableConfig::FullScalar => {
+                crate::evaluation::ObservableState::empty_full_scalar()
+            }
+            crate::core::ObservableConfig::FullComplex => {
+                crate::evaluation::ObservableState::empty_full_complex()
+            }
+        }
     }
 
     pub(super) fn note_role_started(&mut self) {

@@ -54,6 +54,38 @@ impl<S> EvaluatorRunner<S>
 where
     S: EvaluatorWorkerStore,
 {
+    pub fn new(
+        store: S,
+        run_id: i32,
+        node_name: impl Into<String>,
+        node_uuid: impl Into<String>,
+        evaluator: Box<dyn Evaluator>,
+        materializer: Box<dyn Materializer>,
+        point_spec: PointSpec,
+        params: EvaluatorRunnerParams,
+        requires_training_values: bool,
+        batch_transforms: Vec<Box<dyn crate::evaluation::BatchTransform>>,
+    ) -> Self {
+        Self {
+            run_id,
+            node_name: node_name.into(),
+            node_uuid: node_uuid.into(),
+            evaluator,
+            materializer,
+            point_spec,
+            performance_snapshot_interval: Duration::from_millis(
+                params.performance_snapshot_interval_ms,
+            ),
+            last_snapshot_at: Instant::now(),
+            batches_completed_total: 0,
+            samples_evaluated_total: 0,
+            rolling: EvaluatorRollingAverages::default(),
+            store,
+            current_task_requires_training: requires_training_values,
+            current_batch_transforms: batch_transforms,
+        }
+    }
+
     async fn fail_claimed_batch(
         &mut self,
         batch_id: i64,

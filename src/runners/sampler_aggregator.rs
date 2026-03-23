@@ -8,7 +8,7 @@
 //! - persist snapshots for resume and task handoff
 
 use crate::core::{
-    BatchTransformConfig, EngineError, RollingMetricSnapshot, RunStageSnapshot, RunTask,
+    EngineError, RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot, RunTask,
     SamplerAggregatorConfig, SamplerAggregatorPerformanceSnapshot, SamplerRollingAverages,
     SamplerRuntimeMetrics, SamplerWorkerStore, StoreError,
 };
@@ -129,7 +129,6 @@ pub struct SamplerAggregatorRunner<S> {
     sampler: Box<dyn SamplerAggregator>,
     observable_state: ObservableState,
     sampler_config: SamplerAggregatorConfig,
-    batch_transforms: Vec<BatchTransformConfig>,
     store: S,
     config: SamplerAggregatorRunnerParams,
     nr_produced_samples: i64,
@@ -145,31 +144,59 @@ impl<S> SamplerAggregatorRunner<S>
 where
     S: SamplerWorkerStore,
 {
-    fn validate_runner_config(config: &SamplerAggregatorRunnerParams) -> Result<(), RunnerError> {
-        if config.max_batch_size == 0 {
-            return Err(RunnerError::Engine(EngineError::engine(
-                "runner config max_batch_size must be > 0",
-            )));
+    pub fn new(
+        store: S,
+        run_id: i32,
+        node_name: impl Into<String>,
+        task: RunTask,
+        sampler: Box<dyn SamplerAggregator>,
+        observable_state: ObservableState,
+        sampler_config: SamplerAggregatorConfig,
+        params: SamplerAggregatorRunnerParams,
+        initial_batch_size: usize,
+        resume_snapshot: Option<SamplerAggregatorRunnerSnapshot>,
+        run_progress: Option<RunSampleProgress>,
+    ) -> Self {
+        let mut runtime_state;
+        let last_pending_after_enqueue;
+        if let Some(snapshot) = resume_snapshot {
+            runtime_state = snapshot.runtime_state.clone();
+            last_pending_after_enqueue = snapshot.last_pending_after_enqueue;
+        } else {
+            runtime_state = SamplerRuntimeState {
+                batch_size_current: initial_batch_size.clamp(MIN_BATCH_SIZE, params.max_batch_size),
+                ..SamplerRuntimeState::default()
+            };
+            last_pending_after_enqueue = None;
         }
-        if config.max_queue_size == 0 {
-            return Err(RunnerError::Engine(EngineError::engine(
-                "runner config max_queue_size must be > 0",
-            )));
+        runtime_state.batch_size_current = runtime_state
+            .batch_size_current
+            .clamp(MIN_BATCH_SIZE, params.max_batch_size);
+
+        let (nr_produced_samples, nr_completed_samples) = run_progress
+            .map(|progress| (progress.nr_produced_samples, progress.nr_completed_samples))
+            .unwrap_or((0, 0));
+
+        let performance_snapshot_interval =
+            Duration::from_millis(params.performance_snapshot_interval_ms);
+
+        Self {
+            run_id,
+            node_name: node_name.into(),
+            task,
+            sampler,
+            observable_state,
+            sampler_config,
+            store,
+            config: params,
+            nr_produced_samples,
+            nr_completed_samples,
+            performance_snapshot_interval,
+            last_snapshot_at: Instant::now(),
+            runtime_state,
+            last_performance_completed_samples: nr_completed_samples,
+            last_pending_after_enqueue,
         }
-        if !config.target_batch_eval_ms.is_finite() || config.target_batch_eval_ms <= 0.0 {
-            return Err(RunnerError::Engine(EngineError::engine(
-                "runner config target_batch_eval_ms must be > 0",
-            )));
-        }
-        if !config.target_queue_remaining.is_finite()
-            || config.target_queue_remaining < 0.0
-            || config.target_queue_remaining > 1.0
-        {
-            return Err(RunnerError::Engine(EngineError::engine(
-                "runner config target_queue_remaining must be in [0, 1]",
-            )));
-        }
-        Ok(())
     }
 
     fn tune_batch_size(&mut self) {
@@ -307,28 +334,6 @@ where
         }
     }
 
-    async fn load_previous_stage_for_task(
-        store: &S,
-        run_id: i32,
-        task: &RunTask,
-    ) -> Result<Option<RunStageSnapshot>, RunnerError> {
-        if let Some(start_from) = task.task.start_from() {
-            let snapshot = store.load_stage_snapshot(start_from.snapshot_id).await?;
-            let snapshot = snapshot.ok_or_else(|| {
-                RunnerError::Store(StoreError::not_found(format!(
-                    "no stage snapshot found for snapshot {}",
-                    start_from.snapshot_id
-                )))
-            })?;
-            Ok(Some(snapshot))
-        } else {
-            store
-                .load_latest_stage_snapshot_before_sequence(run_id, task.sequence_nr)
-                .await
-                .map_err(Into::into)
-        }
-    }
-
     pub fn task_id(&self) -> i64 {
         self.task.id
     }
@@ -373,6 +378,13 @@ where
         self.store
             .save_sampler_runner_snapshot(self.run_id, &snapshot)
             .await?;
+
+        let batch_transforms = self
+            .task
+            .task
+            .batch_transforms_config()
+            .unwrap_or_else(Vec::new);
+
         self.store
             .save_run_stage_snapshot(&RunStageSnapshot {
                 id: None,
@@ -383,7 +395,7 @@ where
                 sampler_snapshot: snapshot.sampler_snapshot.clone(),
                 observable_state: Some(self.observable_state.clone()),
                 sampler_aggregator: self.sampler_config.clone(),
-                batch_transforms: self.batch_transforms.clone(),
+                batch_transforms,
             })
             .await?;
         Ok(())
