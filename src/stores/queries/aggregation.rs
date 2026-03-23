@@ -2,9 +2,7 @@ use serde_json::Value as JsonValue;
 use sqlx::{Executor, PgPool, Postgres};
 use std::collections::HashMap;
 
-use crate::core::{
-    BatchTransformConfig, MaterializerState, RunStageSnapshot, SamplerAggregatorConfig,
-};
+use crate::core::{BatchTransformConfig, RunStageSnapshot, SamplerAggregatorConfig};
 use crate::evaluation::ObservableState;
 use crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot;
 use crate::sampling::SamplerAggregatorSnapshot;
@@ -19,7 +17,6 @@ struct RunStageSnapshotRow {
     sampler_snapshot: JsonValue,
     observable_state: Option<JsonValue>,
     sampler_aggregator: JsonValue,
-    materializer: JsonValue,
     batch_transforms: JsonValue,
 }
 
@@ -56,8 +53,6 @@ impl TryFrom<RunStageSnapshotRow> for RunStageSnapshot {
                 value.sampler_aggregator,
             )
             .map_err(|err| decode("sampler_aggregator", err))?,
-            materializer: serde_json::from_value::<MaterializerState>(value.materializer)
-                .map_err(|err| decode("materializer", err))?,
             batch_transforms: serde_json::from_value::<Vec<BatchTransformConfig>>(
                 value.batch_transforms,
             )
@@ -379,11 +374,6 @@ where
             ))
         })?,
     )
-    .bind(serde_json::to_value(&snapshot.materializer).map_err(|err| {
-        sqlx::Error::Protocol(format!(
-            "failed to encode materializer for run_stage_snapshots: {err}"
-        ))
-    })?)
     .bind(
         serde_json::to_value(&snapshot.batch_transforms).map_err(|err| {
             sqlx::Error::Protocol(format!(

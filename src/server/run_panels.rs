@@ -235,14 +235,6 @@ fn panel_states(
                         .map(|config| kind_of(&config))
                         .unwrap_or_else(|| "none".to_string()),
                 ),
-                key_value(
-                    "materializer",
-                    "Materializer",
-                    current_task
-                        .and_then(|task| task.task.materializer_config())
-                        .map(|config| kind_of(&config))
-                        .unwrap_or_else(|| "none".to_string()),
-                ),
             ],
         ),
         text_panel("run_target", &target_summary(run.target.as_ref())),

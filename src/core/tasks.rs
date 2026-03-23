@@ -1,9 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::core::{
-    BatchTransformConfig, BuildError, MaterializerConfig, ObservableConfig, SamplerAggregatorConfig,
-};
+use crate::core::{BatchTransformConfig, BuildError, ObservableConfig, SamplerAggregatorConfig};
 use crate::sampling::{RasterLineSamplerParams, RasterPlaneSamplerParams};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,7 +35,7 @@ pub enum RunTaskInputSpec {
     Sample {
         nr_samples: Option<i64>,
         sampler_aggregator: Option<SamplerAggregatorConfig>,
-        materializer: Option<MaterializerConfig>,
+        //materializer: Option<MaterializerConfig>,
         #[serde(default)]
         batch_transforms: Option<Vec<BatchTransformConfig>>,
         #[serde(default)]
@@ -61,7 +59,6 @@ pub enum RunTaskInputSpec {
         #[serde(default)]
         start_from: Option<StageSnapshotRef>,
     },
-    Pause,
 }
 
 impl RunTaskInputSpec {
@@ -86,7 +83,6 @@ pub enum RunTaskSpec {
     Sample {
         nr_samples: Option<i64>,
         sampler_aggregator: SamplerAggregatorConfig,
-        materializer: MaterializerConfig,
         batch_transforms: Vec<BatchTransformConfig>,
         observable: Option<ObservableConfig>,
         start_from: Option<StageSnapshotRef>,
@@ -107,7 +103,6 @@ pub enum RunTaskSpec {
         #[serde(default)]
         start_from: Option<StageSnapshotRef>,
     },
-    Pause,
 }
 
 impl RunTaskSpec {
@@ -138,7 +133,6 @@ impl RunTaskSpec {
             Self::Sample { .. } => "sample",
             Self::Image { .. } => "image",
             Self::PlotLine { .. } => "plot_line",
-            Self::Pause => "pause",
         }
     }
 
@@ -157,7 +151,6 @@ impl RunTaskSpec {
                     geometry: geometry.clone(),
                 },
             }),
-            Self::Pause => None,
         }
     }
 
@@ -166,17 +159,6 @@ impl RunTaskSpec {
             Self::Sample { start_from, .. }
             | Self::Image { start_from, .. }
             | Self::PlotLine { start_from, .. } => start_from.as_ref(),
-            Self::Pause => None,
-        }
-    }
-
-    pub fn materializer_config(&self) -> Option<MaterializerConfig> {
-        match self {
-            Self::Sample { materializer, .. } => Some(materializer.clone()),
-            Self::Image { .. } | Self::PlotLine { .. } => {
-                Some(MaterializerConfig::identity_default())
-            }
-            Self::Pause => None,
         }
     }
 
@@ -186,7 +168,6 @@ impl RunTaskSpec {
                 batch_transforms, ..
             } => Some(batch_transforms.clone()),
             Self::Image { .. } | Self::PlotLine { .. } => Some(Vec::new()),
-            Self::Pause => None,
         }
     }
 
@@ -196,9 +177,6 @@ impl RunTaskSpec {
             Self::Image { observable, .. } | Self::PlotLine { observable, .. } => {
                 Ok(Some(observable.full_config()))
             }
-            Self::Pause => Err(BuildError::build(
-                "pause task does not create or reuse an observable",
-            )),
         }
     }
 
@@ -207,7 +185,6 @@ impl RunTaskSpec {
             Self::Sample { nr_samples, .. } => *nr_samples,
             Self::Image { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::PlotLine { geometry, .. } => Some(geometry.nr_points() as i64),
-            Self::Pause => None,
         }
     }
 }
@@ -220,18 +197,15 @@ impl IntoPreflightTask for RunTaskSpec {
     fn into_preflight(self) -> Result<Option<Self>, BuildError> {
         self.validate().map_err(BuildError::invalid_input)?;
         match self {
-            Self::Pause => Ok(None),
             Self::Sample {
                 nr_samples,
                 sampler_aggregator,
-                materializer,
                 batch_transforms,
                 observable,
                 start_from,
             } => Ok(Some(Self::Sample {
                 nr_samples: Some(if nr_samples == Some(0) { 0 } else { 1 }),
                 sampler_aggregator,
-                materializer,
                 batch_transforms,
                 observable,
                 start_from,
@@ -270,23 +244,19 @@ impl IntoPreflightTask for RunTaskSpec {
 
 pub fn resolve_task_queue(
     base_sampler_aggregator: &SamplerAggregatorConfig,
-    base_materializer: &MaterializerConfig,
     base_batch_transforms: &[BatchTransformConfig],
     tasks: &[RunTaskInputSpec],
 ) -> Result<Vec<RunTaskSpec>, String> {
     let mut resolved = Vec::with_capacity(tasks.len());
     let mut current_sampler_aggregator = base_sampler_aggregator.clone();
-    let mut current_materializer = base_materializer.clone();
     let mut current_batch_transforms = base_batch_transforms.to_vec();
 
     for task in tasks {
         task.validate()?;
         match task {
-            RunTaskInputSpec::Pause => resolved.push(RunTaskSpec::Pause),
             RunTaskInputSpec::Sample {
                 nr_samples,
                 sampler_aggregator,
-                materializer,
                 batch_transforms,
                 observable,
                 start_from,
@@ -294,16 +264,12 @@ pub fn resolve_task_queue(
                 if let Some(sampler_aggregator) = sampler_aggregator.as_ref() {
                     current_sampler_aggregator = sampler_aggregator.clone();
                 }
-                if let Some(materializer) = materializer.as_ref() {
-                    current_materializer = materializer.clone();
-                }
                 if let Some(batch_transforms) = batch_transforms.as_ref() {
                     current_batch_transforms = batch_transforms.clone();
                 }
                 resolved.push(RunTaskSpec::Sample {
                     nr_samples: *nr_samples,
                     sampler_aggregator: current_sampler_aggregator.clone(),
-                    materializer: current_materializer.clone(),
                     batch_transforms: current_batch_transforms.clone(),
                     observable: observable.clone(),
                     start_from: start_from.clone(),
@@ -365,7 +331,6 @@ pub fn resolve_initial_sampler_aggregator(
                         },
                     })
                 }
-                RunTaskInputSpec::Pause => None,
             })
         })
         .or_else(|| fallback.cloned())
@@ -555,7 +520,6 @@ mod tests {
             sampler_aggregator: SamplerAggregatorConfig::NaiveMonteCarlo {
                 params: NaiveMonteCarloSamplerParams::default(),
             },
-            materializer: MaterializerConfig::identity_default(),
             batch_transforms: Vec::new(),
             observable: None,
             start_from: None,
@@ -570,14 +534,12 @@ mod tests {
             &SamplerAggregatorConfig::NaiveMonteCarlo {
                 params: NaiveMonteCarloSamplerParams::default(),
             },
-            &MaterializerConfig::identity_default(),
             &[BatchTransformConfig::UnitBall {
                 params: Default::default(),
             }],
             &[RunTaskInputSpec::Sample {
                 nr_samples: Some(0),
                 sampler_aggregator: None,
-                materializer: None,
                 batch_transforms: None,
                 observable: None,
                 start_from: None,
@@ -589,7 +551,6 @@ mod tests {
             RunTaskSpec::Sample {
                 nr_samples: Some(0),
                 sampler_aggregator,
-                materializer,
                 batch_transforms,
                 observable,
                 ..
@@ -598,7 +559,6 @@ mod tests {
                     sampler_aggregator,
                     SamplerAggregatorConfig::NaiveMonteCarlo { .. }
                 ));
-                assert!(matches!(materializer, MaterializerConfig::Identity { .. }));
                 assert_eq!(batch_transforms.len(), 1);
                 assert_eq!(observable, &None);
             }

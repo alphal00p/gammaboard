@@ -3,7 +3,7 @@ use num::complex::Complex64;
 use serde_json::{Value as JsonValue, json};
 
 use super::{Batch, BatchResult, IngestComplex, IngestScalar, PointSpec};
-use crate::sampling::{LatentBatch, MaterializerSnapshot};
+use crate::sampling::LatentBatch;
 
 #[derive(Debug, Clone, Copy)]
 pub struct EvalBatchOptions {
@@ -129,8 +129,6 @@ pub trait Materializer: Send + Sync {
     }
 
     fn materialize_batch(&mut self, latent_batch: &LatentBatch) -> Result<Batch, EngineError>;
-
-    fn snapshot(&self) -> Result<MaterializerSnapshot, EngineError>;
 }
 
 pub trait BatchTransform: Send + Sync {

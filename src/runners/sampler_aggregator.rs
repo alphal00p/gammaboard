@@ -8,14 +8,13 @@
 //! - persist snapshots for resume and task handoff
 
 use crate::core::{
-    BatchTransformConfig, EngineError, EvaluatorConfig, MaterializerConfig, MaterializerState,
-    RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot, RunTask, SamplerAggregatorConfig,
-    SamplerAggregatorPerformanceSnapshot, SamplerRollingAverages, SamplerRuntimeMetrics,
-    SamplerWorkerStore, StoreError,
+    BatchTransformConfig, EngineError, RollingMetricSnapshot, RunStageSnapshot, RunTask,
+    SamplerAggregatorConfig, SamplerAggregatorPerformanceSnapshot, SamplerRollingAverages,
+    SamplerRuntimeMetrics, SamplerWorkerStore, StoreError,
 };
-use crate::evaluation::{ObservableState, PointSpec};
+use crate::evaluation::ObservableState;
 use crate::runners::rolling_metric::RollingMetric;
-use crate::sampling::{SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot, StageHandoff};
+use crate::sampling::{SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -126,12 +125,10 @@ pub enum RunnerError {
 pub struct SamplerAggregatorRunner<S> {
     run_id: i32,
     node_name: String,
-    _node_uuid: String,
     task: RunTask,
     sampler: Box<dyn SamplerAggregator>,
     observable_state: ObservableState,
     sampler_config: SamplerAggregatorConfig,
-    materializer_state: MaterializerState,
     batch_transforms: Vec<BatchTransformConfig>,
     store: S,
     config: SamplerAggregatorRunnerParams,
@@ -173,28 +170,6 @@ where
             )));
         }
         Ok(())
-    }
-
-    fn build_materializer_state(
-        materializer: &MaterializerConfig,
-        point_spec: &PointSpec,
-        handoff: Option<StageHandoff<'_>>,
-    ) -> Result<MaterializerState, RunnerError> {
-        materializer
-            .build(handoff)
-            .map_err(RunnerError::Engine)
-            .and_then(|runtime| {
-                runtime
-                    .validate_point_spec(point_spec)
-                    .map_err(RunnerError::Engine)?;
-                runtime
-                    .snapshot()
-                    .map(|snapshot| MaterializerState {
-                        config: materializer.clone(),
-                        snapshot,
-                    })
-                    .map_err(RunnerError::Engine)
-            })
     }
 
     fn tune_batch_size(&mut self) {
@@ -354,217 +329,6 @@ where
         }
     }
 
-    async fn build_fresh_stage_state(
-        store: &S,
-        run_id: i32,
-        task: &RunTask,
-        sampler_config: &SamplerAggregatorConfig,
-        materializer_config: &MaterializerConfig,
-        point_spec: &PointSpec,
-        evaluator_config: &EvaluatorConfig,
-        sample_budget: Option<usize>,
-    ) -> Result<
-        (
-            Box<dyn SamplerAggregator>,
-            ObservableState,
-            MaterializerState,
-            Option<(i32, i64)>,
-        ),
-        RunnerError,
-    > {
-        let previous_snapshot = Self::load_previous_stage_for_task(store, run_id, task).await?;
-
-        store
-            .set_run_task_spawn_origin(
-                task.id,
-                previous_snapshot.as_ref().and_then(|snapshot| snapshot.id),
-            )
-            .await?;
-
-        let handoff = previous_snapshot.as_ref().map(|snapshot| StageHandoff {
-            sampler_snapshot: Some(&snapshot.sampler_snapshot),
-            materializer_snapshot: Some(&snapshot.materializer.snapshot),
-            observable_state: snapshot.observable_state.as_ref(),
-        });
-        let materializer_state =
-            Self::build_materializer_state(materializer_config, point_spec, handoff)?;
-        let handoff = previous_snapshot.as_ref().map(|snapshot| StageHandoff {
-            sampler_snapshot: Some(&snapshot.sampler_snapshot),
-            materializer_snapshot: Some(&snapshot.materializer.snapshot),
-            observable_state: snapshot.observable_state.as_ref(),
-        });
-        let sampler = sampler_config
-            .build(point_spec.clone(), sample_budget, handoff)
-            .map_err(RunnerError::Engine)?;
-        let observable_state = match task
-            .task
-            .new_observable_config()
-            .map_err(RunnerError::Engine)?
-        {
-            Some(observable_config) => evaluator_config
-                .empty_observable_state(&observable_config)
-                .map_err(RunnerError::Engine)?,
-            None => previous_snapshot
-                .as_ref()
-                .ok_or_else(|| {
-                    RunnerError::Engine(EngineError::engine(
-                        "task requested observable reuse but no previous observable exists",
-                    ))
-                })?
-                .observable_state
-                .as_ref()
-                .ok_or_else(|| {
-                    RunnerError::Engine(EngineError::engine(
-                        "task requested observable reuse but the referenced snapshot has no observable state",
-                    ))
-                })?
-                .clone(),
-        };
-
-        Ok((
-            sampler,
-            observable_state,
-            materializer_state,
-            previous_snapshot
-                .as_ref()
-                .and_then(|snapshot| snapshot.task_id.map(|task_id| (snapshot.run_id, task_id))),
-        ))
-    }
-
-    pub async fn new(
-        run_id: i32,
-        node_name: impl Into<String>,
-        node_uuid: impl Into<String>,
-        task: RunTask,
-        store: S,
-        config: SamplerAggregatorRunnerParams,
-        point_spec: PointSpec,
-        evaluator_config: EvaluatorConfig,
-        restored_snapshot: Option<SamplerAggregatorRunnerSnapshot>,
-        initial_batch_size: Option<usize>,
-    ) -> Result<Self, RunnerError> {
-        Self::validate_runner_config(&config)?;
-        let Some(sampler_config) = task.task.sampler_config() else {
-            return Err(RunnerError::Engine(EngineError::engine(
-                "task missing sampler config",
-            )));
-        };
-        let Some(materializer_config) = task.task.materializer_config() else {
-            return Err(RunnerError::Engine(EngineError::engine(
-                "task missing materializer config",
-            )));
-        };
-        let batch_transforms = task.task.batch_transforms_config().ok_or_else(|| {
-            RunnerError::Engine(EngineError::engine("task missing batch transform config"))
-        })?;
-
-        let performance_snapshot_interval =
-            Duration::from_millis(config.performance_snapshot_interval_ms);
-        let persisted_progress =
-            store
-                .load_run_sample_progress(run_id)
-                .await?
-                .unwrap_or(RunSampleProgress {
-                    nr_produced_samples: 0,
-                    nr_completed_samples: 0,
-                });
-
-        let sample_budget = task
-            .task
-            .nr_expected_samples()
-            .and_then(|n| usize::try_from(n).ok());
-
-        let (
-            sampler,
-            observable_state,
-            runtime_state,
-            last_pending_after_enqueue,
-            materializer_state,
-        ) = if let Some(snapshot) = restored_snapshot {
-            if snapshot.task_id != task.id {
-                return Err(RunnerError::Engine(EngineError::engine(format!(
-                    "sampler runner snapshot task mismatch: expected {}, got {}",
-                    task.id, snapshot.task_id
-                ))));
-            }
-            if !snapshot.sampler_snapshot.matches_config(&sampler_config) {
-                return Err(RunnerError::Engine(EngineError::engine(format!(
-                    "sampler runner snapshot kind does not match task {} sampler config",
-                    task.id
-                ))));
-            }
-            let activation_snapshot = store
-                .load_task_activation_snapshot(run_id, task.id)
-                .await?
-                .ok_or_else(|| {
-                    RunnerError::Store(StoreError::not_found(format!(
-                        "missing activation stage snapshot for run {} task {}",
-                        run_id, task.id
-                    )))
-                })?;
-            let sampler = snapshot
-                .sampler_snapshot
-                .clone()
-                .into_runtime(&point_spec)
-                .map_err(RunnerError::Engine)?;
-            (
-                sampler,
-                snapshot.observable_state,
-                snapshot.runtime_state,
-                snapshot.last_pending_after_enqueue,
-                activation_snapshot.materializer,
-            )
-        } else {
-            let (sampler, observable_state, materializer_state, _) = Self::build_fresh_stage_state(
-                &store,
-                run_id,
-                &task,
-                &sampler_config,
-                &materializer_config,
-                &point_spec,
-                &evaluator_config,
-                sample_budget,
-            )
-            .await?;
-
-            let runtime_state = SamplerRuntimeState {
-                produced_samples_total: persisted_progress.nr_produced_samples,
-                batch_size_current: initial_batch_size
-                    .unwrap_or_else(|| config.max_batch_size.min(64).max(MIN_BATCH_SIZE)),
-                ..SamplerRuntimeState::default()
-            };
-
-            (
-                sampler,
-                observable_state,
-                runtime_state,
-                None,
-                materializer_state,
-            )
-        };
-
-        Ok(Self {
-            run_id,
-            node_name: node_name.into(),
-            _node_uuid: node_uuid.into(),
-            task,
-            sampler,
-            observable_state,
-            sampler_config,
-            materializer_state,
-            batch_transforms,
-            store,
-            config,
-            nr_produced_samples: persisted_progress.nr_produced_samples,
-            nr_completed_samples: persisted_progress.nr_completed_samples,
-            performance_snapshot_interval,
-            last_snapshot_at: Instant::now(),
-            runtime_state,
-            last_performance_completed_samples: persisted_progress.nr_completed_samples,
-            last_pending_after_enqueue,
-        })
-    }
-
     pub fn task_id(&self) -> i64 {
         self.task.id
     }
@@ -619,7 +383,6 @@ where
                 sampler_snapshot: snapshot.sampler_snapshot.clone(),
                 observable_state: Some(self.observable_state.clone()),
                 sampler_aggregator: self.sampler_config.clone(),
-                materializer: self.materializer_state.clone(),
                 batch_transforms: self.batch_transforms.clone(),
             })
             .await?;

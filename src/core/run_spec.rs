@@ -2,10 +2,11 @@ use crate::evaluation::PointSpec;
 use crate::evaluation::{
     GammaLoopParams, SinEvaluatorParams, SincEvaluatorParams, SymbolicaParams, UnitEvaluatorParams,
 };
+
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
+use crate::sampling::HavanaInferenceSamplerParams;
 use crate::sampling::{
-    HavanaInferenceMaterializerParams, HavanaInferenceSamplerParams, HavanaSamplerParams,
-    IdentityMaterializerParams, NaiveMonteCarloSamplerParams, RasterLineSamplerParams,
+    HavanaSamplerParams, NaiveMonteCarloSamplerParams, RasterLineSamplerParams,
     RasterPlaneSamplerParams, SphericalBatchTransformParams, UnitBallBatchTransformParams,
 };
 use serde::{Deserialize, Serialize};
@@ -15,7 +16,6 @@ use serde::{Deserialize, Serialize};
 pub struct IntegrationParams {
     pub evaluator: EvaluatorConfig,
     pub sampler_aggregator: SamplerAggregatorConfig,
-    pub materializer: MaterializerConfig,
     pub batch_transforms: Vec<BatchTransformConfig>,
     pub evaluator_runner_params: EvaluatorRunnerParams,
     pub sampler_aggregator_runner_params: SamplerAggregatorRunnerParams,
@@ -99,29 +99,6 @@ pub enum SamplerAggregatorConfig {
         #[serde(flatten)]
         params: HavanaInferenceSamplerParams,
     },
-}
-
-impl SamplerAggregatorConfig {}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum MaterializerConfig {
-    Identity {
-        #[serde(flatten)]
-        params: IdentityMaterializerParams,
-    },
-    HavanaInference {
-        #[serde(flatten)]
-        params: HavanaInferenceMaterializerParams,
-    },
-}
-
-impl MaterializerConfig {
-    pub fn identity_default() -> Self {
-        Self::Identity {
-            params: IdentityMaterializerParams::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

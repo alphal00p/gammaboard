@@ -2,8 +2,10 @@ mod havana;
 mod naive_monte_carlo;
 mod raster;
 
+use crate::Materializer;
 use crate::core::{BuildError, SamplerAggregatorConfig};
 use crate::evaluation::PointSpec;
+use crate::sampling::materializer::{HavanaInferenceMaterializer, IdentityMaterializer};
 use crate::sampling::{SamplerAggregator, SamplerAggregatorSnapshot, StageHandoff};
 
 pub use self::havana::HavanaInferenceSamplerParams;
@@ -143,5 +145,18 @@ impl SamplerAggregatorConfig {
                 )?))
             }
         }
+    }
+    pub fn build_materializer(
+        &self,
+        _point_spec: PointSpec,
+        _sample_budget: Option<usize>,
+        handoff: Option<StageHandoff<'_>>,
+    ) -> Result<Box<dyn Materializer>, BuildError> {
+        Ok(match self {
+            SamplerAggregatorConfig::HavanaInference { params } => {
+                Box::new(HavanaInferenceMaterializer::new(handoff)?)
+            }
+            _ => Box::new(IdentityMaterializer::new()),
+        })
     }
 }

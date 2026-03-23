@@ -8,9 +8,6 @@ use crate::evaluation::ObservableState;
 
 pub use batch_transform::{SphericalBatchTransformParams, UnitBallBatchTransformParams};
 pub use latent_batch::{LatentBatch, LatentBatchPayload, LatentBatchSpec, SamplePlan};
-pub use materializer::{
-    HavanaInferenceMaterializerParams, IdentityMaterializerParams, MaterializerSnapshot,
-};
 pub use sampler::{SamplerAggregator, SamplerAggregatorSnapshot};
 pub use sampler_aggregator::{
     HavanaInferenceSamplerParams, HavanaSamplerParams, NaiveMonteCarloSamplerParams,
@@ -20,6 +17,5 @@ pub use sampler_aggregator::{
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StageHandoff<'a> {
     pub sampler_snapshot: Option<&'a SamplerAggregatorSnapshot>,
-    pub materializer_snapshot: Option<&'a MaterializerSnapshot>,
     pub observable_state: Option<&'a ObservableState>,
 }

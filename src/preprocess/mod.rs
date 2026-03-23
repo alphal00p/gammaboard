@@ -1,9 +1,9 @@
 mod preflight;
 
 use crate::core::{
-    BatchTransformConfig, BuildError, EvaluatorConfig, IntegrationParams, MaterializerConfig,
-    RunStageSnapshot, RunTaskInputSpec, RunTaskSpec, SamplerAggregatorConfig,
-    resolve_initial_sampler_aggregator, resolve_task_queue,
+    BatchTransformConfig, BuildError, EvaluatorConfig, IntegrationParams, RunStageSnapshot,
+    RunTaskInputSpec, RunTaskSpec, SamplerAggregatorConfig, resolve_initial_sampler_aggregator,
+    resolve_task_queue,
 };
 use crate::evaluation::PointSpec;
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
@@ -18,8 +18,6 @@ pub struct RunAddIntegrationParams {
     pub evaluator: EvaluatorConfig,
     #[serde(default)]
     pub sampler_aggregator: Option<SamplerAggregatorConfig>,
-    #[serde(default)]
-    pub materializer: Option<MaterializerConfig>,
     #[serde(default)]
     pub batch_transforms: Option<Vec<BatchTransformConfig>>,
     pub evaluator_runner_params: EvaluatorRunnerParams,
@@ -48,11 +46,6 @@ pub struct RunAddConfig {
 }
 
 pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, BuildError> {
-    let resolved_materializer = config
-        .integration_params
-        .materializer
-        .clone()
-        .unwrap_or_else(MaterializerConfig::identity_default);
     let resolved_batch_transforms = config
         .integration_params
         .batch_transforms
@@ -71,7 +64,6 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
         .map(|tasks| {
             resolve_task_queue(
                 &resolved_sampler_aggregator,
-                &resolved_materializer,
                 &resolved_batch_transforms,
                 tasks,
             )
@@ -86,7 +78,6 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
     let resolved_integration_params = IntegrationParams {
         evaluator: config.integration_params.evaluator.clone(),
         sampler_aggregator: resolved_sampler_aggregator.clone(),
-        materializer: resolved_materializer.clone(),
         batch_transforms: resolved_batch_transforms.clone(),
         evaluator_runner_params: config.integration_params.evaluator_runner_params.clone(),
         sampler_aggregator_runner_params: config
@@ -103,7 +94,6 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
     let (sampler_aggregator_init_metadata, initial_stage_snapshot) =
         preflight::build_initial_stage(
             &resolved_sampler_aggregator,
-            &resolved_materializer,
             &resolved_batch_transforms,
             &point_spec,
         )?;

@@ -202,7 +202,6 @@ pub async fn clone_run(
                 sampler_snapshot: snapshot.sampler_snapshot.clone(),
                 observable_state: snapshot.observable_state.clone(),
                 sampler_aggregator: snapshot.sampler_aggregator.clone(),
-                materializer: snapshot.materializer.clone(),
                 batch_transforms: snapshot.batch_transforms.clone(),
             },
             &cloned_tasks,
@@ -271,7 +270,6 @@ async fn resolve_task_file_for_run(
     let tasks = task_file.into_tasks();
     resolve_task_queue(
         &base_snapshot.sampler_aggregator,
-        &base_snapshot.materializer.config,
         &base_snapshot.batch_transforms,
         &tasks,
     )
@@ -342,19 +340,6 @@ fn clone_task_suffix(
         .skip(source_index.map_or(0, |index| index + 1))
         .map(|task| task.task.clone())
         .collect::<Vec<_>>();
-    if let Some(first_executable) = cloned_tasks
-        .iter_mut()
-        .find(|task| !matches!(task, RunTaskSpec::Pause))
-    {
-        set_task_start_from(
-            first_executable,
-            StageSnapshotRef {
-                snapshot_id: from_snapshot.id.ok_or_else(|| {
-                    ApiError::Internal("source stage snapshot is missing id".to_string())
-                })?,
-            },
-        );
-    }
     Ok(cloned_tasks)
 }
 
@@ -374,7 +359,6 @@ fn set_task_start_from(task: &mut RunTaskSpec, start_from: StageSnapshotRef) {
         } => {
             *task_start_from = Some(start_from);
         }
-        RunTaskSpec::Pause => {}
     }
 }
 

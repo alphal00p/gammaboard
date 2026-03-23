@@ -19,9 +19,8 @@ pub use core::{BatchRecord, BatchStatus};
 pub use core::{BuildError, EngineError, EvalError, StoreError};
 pub use core::{
     ImageDisplayMode, IntoPreflightTask, LineDisplayMode, LineRasterGeometry, Linspace,
-    MaterializerState, PlaneRasterGeometry, PlotObservableKind, RunTask, RunTaskInputSpec,
-    RunTaskSpec, RunTaskState, StageSnapshotRef, resolve_initial_sampler_aggregator,
-    resolve_task_queue,
+    PlaneRasterGeometry, PlotObservableKind, RunTask, RunTaskInputSpec, RunTaskSpec, RunTaskState,
+    StageSnapshotRef, resolve_initial_sampler_aggregator, resolve_task_queue,
 };
 pub use evaluation::{
     Batch, BatchError, BatchResult, BatchTransform, ComplexObservableState, ComplexSampleEvaluator,

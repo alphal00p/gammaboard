@@ -2,7 +2,8 @@ use super::{
     ActiveRoleRunner, ActiveWorker, NodeRunner, NodeRunnerStore, RoleTarget,
     role_runner::RoleRunner,
 };
-use crate::core::{RunTask, RunTaskSpec, RunTaskState, StoreError};
+use crate::PgStore;
+use crate::core::{RunTask, RunTaskState, StoreError};
 use crate::runners::{EvaluatorRunner, SamplerAggregatorRunner};
 use tracing::{error, info, warn};
 
@@ -125,18 +126,10 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             .build()
             .map_err(|err| StoreError::store(format!("failed to build evaluator: {err}")))?;
         info!("evaluator worker started");
-        Ok(Some(Box::new(EvaluatorRunner::new(
-            worker.run_id,
-            worker.node_name.clone(),
-            worker.node_uuid.clone(),
-            evaluator,
-            spec.point_spec.clone(),
-            std::time::Duration::from_millis(
-                spec.evaluator_runner_params
-                    .performance_snapshot_interval_ms,
-            ),
-            worker.store.clone(),
-        ))))
+
+        let runner: EvaluatorRunner<PgStore> = todo!();
+
+        Ok(Some(Box::new(runner)))
     }
 
     async fn load_or_activate_sampler_task(
@@ -185,23 +178,6 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             return Ok(None);
         };
 
-        if matches!(task.task, RunTaskSpec::Pause) {
-            if open_batch_count == 0 {
-                worker.store.complete_run_task(task.id).await?;
-                let cleared = self
-                    .store
-                    .clear_desired_assignments_for_run(worker.run_id)
-                    .await?;
-                info!(
-                    run_id = worker.run_id,
-                    task_id = task.id,
-                    assignments_cleared = cleared,
-                    "pause task reached; desired assignments cleared"
-                );
-            }
-            return Ok(None);
-        }
-
         let latest_snapshot = worker
             .store
             .load_sampler_runner_snapshot(worker.run_id)
@@ -216,20 +192,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             });
         let restored_snapshot = latest_snapshot.filter(|snapshot| snapshot.task_id == task.id);
 
-        let mut runner = SamplerAggregatorRunner::new(
-            worker.run_id,
-            worker.node_name.clone(),
-            worker.node_uuid.clone(),
-            task,
-            worker.store.clone(),
-            spec.sampler_aggregator_runner_params.clone(),
-            spec.point_spec.clone(),
-            spec.evaluator.clone(),
-            restored_snapshot,
-            initial_batch_size,
-        )
-        .await
-        .map_err(|err| StoreError::store(err.to_string()))?;
+        let runner: SamplerAggregatorRunner<PgStore> = todo!();
+
         if runner.task_state().state == RunTaskState::Active {
             runner
                 .persist_state()

@@ -1,7 +1,7 @@
+use crate::core::BatchTransformConfig;
 use crate::core::SamplerAggregatorConfig;
-use crate::core::{BatchTransformConfig, MaterializerConfig};
 use crate::evaluation::{Batch, BatchResult, ObservableState};
-use crate::sampling::{LatentBatch, MaterializerSnapshot, SamplerAggregatorSnapshot};
+use crate::sampling::{LatentBatch, SamplerAggregatorSnapshot};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -232,12 +232,5 @@ pub struct RunStageSnapshot {
     pub sampler_snapshot: SamplerAggregatorSnapshot,
     pub observable_state: Option<ObservableState>,
     pub sampler_aggregator: SamplerAggregatorConfig,
-    pub materializer: MaterializerState,
     pub batch_transforms: Vec<BatchTransformConfig>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MaterializerState {
-    pub config: MaterializerConfig,
-    pub snapshot: MaterializerSnapshot,
 }

@@ -6,7 +6,6 @@ use crate::core::{
 };
 use crate::evaluation::{Batch, BatchResult, EvalBatchOptions, Evaluator, Materializer, PointSpec};
 use crate::runners::rolling_metric::RollingMetric;
-use crate::sampling::StageHandoff;
 use serde::{Deserialize, Serialize};
 use std::{time::Duration, time::Instant};
 use thiserror::Error;
@@ -31,6 +30,7 @@ pub struct EvaluatorRunner<S> {
     node_name: String,
     node_uuid: String,
     evaluator: Box<dyn Evaluator>,
+    materializer: Box<dyn Materializer>,
     point_spec: PointSpec,
     performance_snapshot_interval: Duration,
     last_snapshot_at: Instant,
@@ -38,9 +38,7 @@ pub struct EvaluatorRunner<S> {
     samples_evaluated_total: i64,
     rolling: EvaluatorRollingAverages,
     store: S,
-    current_task_id: Option<i64>,
     current_task_requires_training: bool,
-    current_materializer: Option<Box<dyn Materializer>>,
     current_batch_transforms: Vec<Box<dyn crate::evaluation::BatchTransform>>,
 }
 
@@ -81,35 +79,6 @@ where
         Err(err)
     }
 
-    pub fn new(
-        run_id: i32,
-        node_name: impl Into<String>,
-        node_uuid: impl Into<String>,
-        evaluator: Box<dyn Evaluator>,
-        point_spec: PointSpec,
-        performance_snapshot_interval: Duration,
-        store: S,
-    ) -> Self {
-        let now_instant = Instant::now();
-        Self {
-            run_id,
-            node_name: node_name.into(),
-            node_uuid: node_uuid.into(),
-            evaluator,
-            point_spec,
-            performance_snapshot_interval,
-            last_snapshot_at: now_instant,
-            batches_completed_total: 0,
-            samples_evaluated_total: 0,
-            rolling: EvaluatorRollingAverages::default(),
-            store,
-            current_task_id: None,
-            current_task_requires_training: false,
-            current_materializer: None,
-            current_batch_transforms: Vec::new(),
-        }
-    }
-
     pub async fn tick(&mut self) -> Result<(), EvaluatorRunnerError> {
         let loop_started = Instant::now();
         let claimed = self
@@ -124,24 +93,8 @@ where
             return Ok(());
         };
 
-        if let Err(err) = self.ensure_materialization_pipeline(claimed.task_id).await {
-            return self
-                .fail_tick(
-                    loop_started,
-                    claimed.batch_id,
-                    0.0,
-                    EvaluatorRunnerError::Store(err),
-                )
-                .await;
-        }
-
         let materialization_started = Instant::now();
-        let materialized = match self.current_materializer.as_mut() {
-            Some(materializer) => materializer.materialize_batch(&claimed.latent_batch),
-            None => Err(EngineError::engine(
-                "materializer runtime missing after successful task activation snapshot load",
-            )),
-        };
+        let materialized = self.materializer.materialize_batch(&claimed.latent_batch);
         let materialization_time_ms = materialization_started.elapsed().as_secs_f64() * 1000.0;
         let materialized_batch = match materialized {
             Ok(batch) => batch,
@@ -219,62 +172,6 @@ where
                 .await
             }
         }
-    }
-
-    async fn ensure_materialization_pipeline(&mut self, task_id: i64) -> Result<(), StoreError> {
-        if self.current_task_id == Some(task_id) {
-            return Ok(());
-        }
-        let Some(snapshot) = self
-            .store
-            .load_task_activation_snapshot(self.run_id, task_id)
-            .await?
-        else {
-            return Err(StoreError::store(format!(
-                "missing activation stage snapshot for run {} task {}",
-                self.run_id, task_id
-            )));
-        };
-        let state = &snapshot.materializer;
-        let materializer = state
-            .config
-            .build(Some(StageHandoff {
-                sampler_snapshot: Some(&snapshot.sampler_snapshot),
-                materializer_snapshot: Some(&state.snapshot),
-                observable_state: snapshot.observable_state.as_ref(),
-            }))
-            .map_err(|err| StoreError::store(format!("failed to build materializer: {err}")))?;
-        materializer
-            .validate_point_spec(&self.point_spec)
-            .map_err(|err| {
-                StoreError::store(format!(
-                    "incompatible materializer for point_spec on run {} task {}: {}",
-                    self.run_id, task_id, err
-                ))
-            })?;
-        let transforms = snapshot
-            .batch_transforms
-            .iter()
-            .map(|config| {
-                let transform = config.build().map_err(|err| {
-                    StoreError::store(format!("failed to build batch transform: {err}"))
-                })?;
-                transform
-                    .validate_point_spec(&self.point_spec)
-                    .map_err(|err| {
-                        StoreError::store(format!(
-                            "incompatible batch transform for point_spec on run {} task {}: {}",
-                            self.run_id, task_id, err
-                        ))
-                    })?;
-                Ok(transform)
-            })
-            .collect::<Result<Vec<_>, StoreError>>()?;
-        self.current_task_id = Some(task_id);
-        self.current_task_requires_training = snapshot.sampler_aggregator.requires_training();
-        self.current_materializer = Some(materializer);
-        self.current_batch_transforms = transforms;
-        Ok(())
     }
 
     async fn submit_result(

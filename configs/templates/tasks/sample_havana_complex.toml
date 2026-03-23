@@ -1,9 +1,16 @@
 # Complex Havana inference sampling.
-# This expects a previous stage snapshot with persisted Havana state.
 
 [[task_queue]]
 kind = "sample"
-nr_samples = 1_000_000
+nr_samples = 1000
+observable = "complex"
+
+[task_queue.sampler_aggregator]
+kind = "havana_training"
+
+[[task_queue]]
+kind = "sample"
+nr_samples = 1000
 observable = "complex"
 
 [task_queue.sampler_aggregator]

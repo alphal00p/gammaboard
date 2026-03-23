@@ -2,7 +2,7 @@
 
 [[task_queue]]
 kind = "sample"
-nr_samples = 100_000
+nr_samples = 1_000
 observable = "scalar"
 
 [task_queue.sampler_aggregator]

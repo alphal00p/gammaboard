@@ -8,13 +8,13 @@ pub use errors::{BuildError, EngineError, EvalError, StoreError};
 pub use models::{
     BatchClaim, BatchRecord, BatchStatus, CompletedBatch, DesiredAssignment,
     EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot,
-    MaterializerState, RegisteredNode, RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot,
-    RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot, SamplerPerformanceMetrics,
-    SamplerRollingAverages, SamplerRuntimeMetrics, WorkerRole,
+    RegisteredNode, RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot, RuntimeLogEvent,
+    SamplerAggregatorPerformanceSnapshot, SamplerPerformanceMetrics, SamplerRollingAverages,
+    SamplerRuntimeMetrics, WorkerRole,
 };
 pub use run_spec::{
-    BatchTransformConfig, EvaluatorConfig, IntegrationParams, MaterializerConfig, ObservableConfig,
-    RunSpec, SamplerAggregatorConfig,
+    BatchTransformConfig, EvaluatorConfig, IntegrationParams, ObservableConfig, RunSpec,
+    SamplerAggregatorConfig,
 };
 pub use tasks::{
     ImageDisplayMode, IntoPreflightTask, LineDisplayMode, LineRasterGeometry, Linspace,
