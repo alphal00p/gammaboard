@@ -1,0 +1,8 @@
+# Minimal Symbolica run.
+
+name = "symbolica"
+
+[evaluator]
+kind = "symbolica"
+expr = "x^2 + y^2 + z^2"
+args = ["x", "y", "z"]

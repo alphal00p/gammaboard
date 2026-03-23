@@ -254,11 +254,11 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated }) => {
         busy={cloneRunBusy}
         error={cloneRunError}
         onClose={closeCloneRun}
-        onSubmit={async ({ sourceRunId, fromTaskId, newName }) => {
+        onSubmit={async ({ sourceRunId, fromSnapshotId, newName }) => {
           setCloneRunBusy(true);
           setCloneRunError(null);
           try {
-            const response = await cloneRun({ sourceRunId, fromTaskId, newName });
+            const response = await cloneRun({ sourceRunId, fromSnapshotId, newName });
             setCloneRunOpen(false);
             setSnackbar({
               message: `Cloned run ${response?.run_name || "run"} (#${response?.run_id ?? "?"}).`,

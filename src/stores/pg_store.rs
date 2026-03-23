@@ -13,6 +13,7 @@ use crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot;
 use crate::sampling::LatentBatch;
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
+use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct PgStore {
@@ -26,6 +27,15 @@ impl PgStore {
 
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    pub async fn list_latest_stage_snapshot_ids_by_task(
+        &self,
+        run_id: i32,
+    ) -> Result<HashMap<i64, i64>, StoreError> {
+        queries::list_latest_stage_snapshot_ids_by_task(&self.pool, run_id)
+            .await
+            .map_err(map_sqlx)
     }
 }
 

@@ -253,8 +253,7 @@ struct CreateRunRequest {
 #[derive(Deserialize)]
 struct CloneRunRequest {
     source_run_id: i32,
-    from_snapshot_id: Option<i64>,
-    from_task_id: Option<i64>,
+    from_snapshot_id: i64,
     new_name: String,
 }
 
@@ -277,6 +276,13 @@ struct TemplateListResponse {
 struct TemplateFileResponse {
     name: String,
     toml: String,
+}
+
+#[derive(Serialize)]
+struct RunTaskResponse {
+    #[serde(flatten)]
+    task: RunTask,
+    latest_stage_snapshot_id: Option<i64>,
 }
 
 fn build_app(state: AppState) -> Router {
@@ -471,7 +477,18 @@ async fn get_run_tasks(
     AxumPath(id): AxumPath<i32>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let tasks = state.store.list_run_tasks(id).await?;
-    json_response(tasks)
+    let latest_snapshot_ids = state
+        .store
+        .list_latest_stage_snapshot_ids_by_task(id)
+        .await?;
+    let response = tasks
+        .into_iter()
+        .map(|task| RunTaskResponse {
+            latest_stage_snapshot_id: latest_snapshot_ids.get(&task.id).copied(),
+            task,
+        })
+        .collect::<Vec<_>>();
+    json_response(response)
 }
 
 async fn list_run_templates(
@@ -929,10 +946,6 @@ fn set_task_start_from(task: &mut RunTaskSpec, start_from: StageSnapshotRef) {
             start_from: task_start_from,
             ..
         }
-        | RunTaskSpec::Configure {
-            start_from: task_start_from,
-            ..
-        }
         | RunTaskSpec::Image {
             start_from: task_start_from,
             ..
@@ -1021,32 +1034,7 @@ async fn clone_run(
             "invalid run name (`new_name`): expected non-empty string".to_string(),
         ));
     }
-    let from_snapshot_id = match (payload.from_snapshot_id, payload.from_task_id) {
-        (Some(snapshot_id), _) => snapshot_id,
-        (None, Some(task_id)) => {
-            let snapshot = state
-                .store
-                .get_latest_task_stage_snapshot(payload.source_run_id, task_id)
-                .await?
-                .ok_or_else(|| {
-                    ApiError::BadRequest(format!(
-                        "cannot clone from run {} task {}: no stage snapshot exists",
-                        payload.source_run_id, task_id
-                    ))
-                })?;
-            snapshot.id.parse::<i64>().map_err(|err| {
-                ApiError::Internal(format!(
-                    "failed to parse latest task stage snapshot id for task {}: {err}",
-                    task_id
-                ))
-            })?
-        }
-        (None, None) => {
-            return Err(ApiError::BadRequest(
-                "clone request requires from_snapshot_id or from_task_id".to_string(),
-            ));
-        }
-    };
+    let from_snapshot_id = payload.from_snapshot_id;
     let source_run = state
         .store
         .get_run_progress(payload.source_run_id)

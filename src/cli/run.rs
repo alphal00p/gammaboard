@@ -390,10 +390,6 @@ fn set_task_start_from(task: &mut RunTaskSpec, start_from: StageSnapshotRef) {
             start_from: task_start_from,
             ..
         }
-        | RunTaskSpec::Configure {
-            start_from: task_start_from,
-            ..
-        }
         | RunTaskSpec::Image {
             start_from: task_start_from,
             ..

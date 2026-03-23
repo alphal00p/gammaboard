@@ -133,27 +133,15 @@ target = { kind = "scalar", value = 1.23 } # optional
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-
-[parametrization]
-kind = "identity"
 ```
 
 If `task_queue` is omitted, the run is created idle.
 
 ### Task Queue
-Sample and `configure` tasks may inherit omitted `sampler_aggregator` and `parametrization` fields from the previous effective stage.
-Sample and `configure` tasks may omit `observable` to reuse the previous observable state.
-
-`configure` tasks update sampler, parametrization, and observable state without producing any work:
-```toml
-[[task_queue]]
-kind = "configure"
-observable = "scalar" # optional; omit to reuse the previous observable
-[task_queue.sampler_aggregator]
-kind = "naive_monte_carlo"
-[task_queue.parametrization]
-kind = "identity"
-```
+Sample tasks may inherit omitted `sampler_aggregator` and `parametrization` fields from the previous effective stage.
+Omitted `parametrization` defaults to `identity` when no previous stage exists.
+Sample tasks may omit `observable` to reuse the previous observable state.
+Use `nr_samples = 0` when you want a sample task to only update stage state without producing work.
 
 Executable tasks may also branch from an older stage snapshot:
 ```toml

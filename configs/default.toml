@@ -5,9 +5,6 @@ kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
 
-[parametrization]
-kind = "identity"
-
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 2000
 

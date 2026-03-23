@@ -26,8 +26,8 @@ const CloneRunDialog = ({
   onSubmit,
 }) => {
   const [newName, setNewName] = useState(initialName);
-  const [fromTaskId, setFromTaskId] = useState("");
-  const taskList = asTaskList(sourceTasks);
+  const [fromSnapshotId, setFromSnapshotId] = useState("");
+  const taskList = asTaskList(sourceTasks).filter((task) => Number.isFinite(Number(task.latest_stage_snapshot_id)));
 
   useEffect(() => {
     if (!open) return;
@@ -37,21 +37,21 @@ const CloneRunDialog = ({
   useEffect(() => {
     if (!open) return;
     if (taskList.length === 0) {
-      setFromTaskId("");
+      setFromSnapshotId("");
       return;
     }
-    if (taskList.some((task) => String(task.id) === String(fromTaskId))) {
+    if (taskList.some((task) => String(task.latest_stage_snapshot_id) === String(fromSnapshotId))) {
       return;
     }
     const completedTask = taskList.find((task) => task.state === "completed");
-    setFromTaskId(String((completedTask ?? taskList[0]).id));
-  }, [fromTaskId, open, taskList]);
+    setFromSnapshotId(String((completedTask ?? taskList[0]).latest_stage_snapshot_id));
+  }, [fromSnapshotId, open, taskList]);
 
   const selectedRunValue = sourceRunId == null ? "" : String(sourceRunId);
 
   const selectedTask = useMemo(
-    () => taskList.find((task) => String(task.id) === String(fromTaskId)) ?? null,
-    [fromTaskId, taskList],
+    () => taskList.find((task) => String(task.latest_stage_snapshot_id) === String(fromSnapshotId)) ?? null,
+    [fromSnapshotId, taskList],
   );
 
   const handleClose = () => {
@@ -63,7 +63,7 @@ const CloneRunDialog = ({
     event.preventDefault();
     await onSubmit({
       sourceRunId,
-      fromTaskId: Number(fromTaskId),
+      fromSnapshotId: Number(fromSnapshotId),
       newName,
     });
   };
@@ -75,7 +75,7 @@ const CloneRunDialog = ({
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
             <Typography variant="body2" color="text.secondary">
-              Create a new run from the latest stored snapshot of a selected task.
+              Create a new run from the latest stored stage snapshot of a selected task.
             </Typography>
             <TextField
               select
@@ -94,16 +94,18 @@ const CloneRunDialog = ({
               select
               fullWidth
               label="From Task"
-              value={fromTaskId}
-              onChange={(event) => setFromTaskId(event.target.value)}
+              value={fromSnapshotId}
+              onChange={(event) => setFromSnapshotId(event.target.value)}
               disabled={taskList.length === 0}
               helperText={
-                selectedTask ? `${getTaskKindLabel(selectedTask)} task #${selectedTask.id}` : "No tasks available"
+                selectedTask
+                  ? `${getTaskKindLabel(selectedTask)} task #${selectedTask.id} -> snapshot #${selectedTask.latest_stage_snapshot_id}`
+                  : "No tasks with stored stage snapshots available"
               }
             >
               {taskList.map((task) => (
-                <MenuItem key={task.id} value={task.id}>
-                  #{task.id} · {task.state} · {getTaskKindLabel(task)}
+                <MenuItem key={task.id} value={task.latest_stage_snapshot_id}>
+                  #{task.id} · {task.state} · {getTaskKindLabel(task)} · snapshot #{task.latest_stage_snapshot_id}
                 </MenuItem>
               ))}
             </TextField>
@@ -124,7 +126,7 @@ const CloneRunDialog = ({
           <Button
             type="submit"
             variant="contained"
-            disabled={busy || sourceRunId == null || !fromTaskId || !newName.trim()}
+            disabled={busy || sourceRunId == null || !fromSnapshotId || !newName.trim()}
           >
             Clone Run
           </Button>

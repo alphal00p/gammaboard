@@ -1,7 +1,7 @@
-# Example Gammaloop run template.
+# Example GammaLoop run.
 # Assumes `gammaloop` is a sister folder of `gammaboard`.
-# Add tasks from the dashboard task templates after creating the run.
-name = "gammaloop-triangle-scan"
+
+name = "gammaloop-triangle"
 
 [evaluator]
 kind = "gammaloop"
@@ -11,6 +11,3 @@ use_f128 = false
 training_projection = "abs"
 continuous_dims = 3
 discrete_dims = 0
-
-[parametrization]
-kind = "identity"

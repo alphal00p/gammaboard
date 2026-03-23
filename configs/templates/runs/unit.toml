@@ -1,0 +1,8 @@
+# Minimal unit evaluator run.
+
+name = "unit"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0

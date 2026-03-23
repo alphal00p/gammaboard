@@ -1,7 +1,9 @@
-# Fresh complex image task.
+# Fresh complex image plot.
+
 [[task_queue]]
 kind = "image"
 observable = "complex"
+
 [task_queue.geometry]
 offset = [0.0, 0.0]
 u_vector = [1.0, 0.0]

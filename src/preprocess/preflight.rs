@@ -112,7 +112,7 @@ pub fn preflight_task_suffix(
                     "task requested observable reuse but no previous observable exists",
                 )
             })?;
-        current_state = if matches!(task, RunTaskSpec::Configure { .. }) {
+        current_state = if task.nr_expected_samples() == Some(0) {
             preflight_configure_stage(
                 &sampler_aggregator,
                 &parametrization,

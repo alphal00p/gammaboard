@@ -124,3 +124,11 @@ pub enum ParametrizationConfig {
 }
 
 impl ParametrizationConfig {}
+
+impl ParametrizationConfig {
+    pub fn identity_default() -> Self {
+        Self::Identity {
+            params: IdentityParametrizationParams::default(),
+        }
+    }
+}

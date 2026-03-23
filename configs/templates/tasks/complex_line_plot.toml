@@ -1,7 +1,9 @@
-# Fresh complex line-plot task.
+# Fresh complex line plot.
+
 [[task_queue]]
 kind = "plot_line"
 observable = "complex"
+
 [task_queue.geometry]
 offset = [0.0, 0.0]
 direction = [1.0, 0.0]

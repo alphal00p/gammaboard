@@ -1,4 +1,0 @@
-# Pause marker.
-# Useful when you want to split a long run into explicit phases.
-[[task_queue]]
-kind = "pause"

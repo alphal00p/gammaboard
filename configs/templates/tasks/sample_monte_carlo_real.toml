@@ -1,0 +1,9 @@
+# Real-valued Monte Carlo sampling with the default identity parametrization.
+
+[[task_queue]]
+kind = "sample"
+nr_samples = 100_000
+observable = "scalar"
+
+[task_queue.sampler_aggregator]
+kind = "naive_monte_carlo"

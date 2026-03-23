@@ -18,7 +18,8 @@ pub struct RunAddIntegrationParams {
     pub evaluator: EvaluatorConfig,
     #[serde(default)]
     pub sampler_aggregator: Option<SamplerAggregatorConfig>,
-    pub parametrization: ParametrizationConfig,
+    #[serde(default)]
+    pub parametrization: Option<ParametrizationConfig>,
     pub evaluator_runner_params: EvaluatorRunnerParams,
     pub sampler_aggregator_runner_params: SamplerAggregatorRunnerParams,
 }
@@ -45,6 +46,11 @@ pub struct RunAddConfig {
 }
 
 pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, BuildError> {
+    let resolved_parametrization = config
+        .integration_params
+        .parametrization
+        .clone()
+        .unwrap_or_else(ParametrizationConfig::identity_default);
     let resolved_sampler_aggregator = resolve_initial_sampler_aggregator(
         config.task_queue.as_deref(),
         config.integration_params.sampler_aggregator.as_ref(),
@@ -58,7 +64,7 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
         .map(|tasks| {
             resolve_task_queue(
                 &resolved_sampler_aggregator,
-                &config.integration_params.parametrization,
+                &resolved_parametrization,
                 tasks,
             )
         })
@@ -72,7 +78,7 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
     let resolved_integration_params = IntegrationParams {
         evaluator: config.integration_params.evaluator.clone(),
         sampler_aggregator: resolved_sampler_aggregator.clone(),
-        parametrization: config.integration_params.parametrization.clone(),
+        parametrization: resolved_parametrization.clone(),
         evaluator_runner_params: config.integration_params.evaluator_runner_params.clone(),
         sampler_aggregator_runner_params: config
             .integration_params
@@ -88,7 +94,7 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
     let (sampler_aggregator_init_metadata, initial_stage_snapshot) =
         preflight::build_initial_stage(
             &resolved_sampler_aggregator,
-            &config.integration_params.parametrization,
+            &resolved_parametrization,
             &point_spec,
         )?;
     config.resolved_integration_params = Some(resolved_integration_params);

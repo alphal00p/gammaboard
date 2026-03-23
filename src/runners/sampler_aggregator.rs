@@ -561,52 +561,6 @@ where
         })
     }
 
-    pub async fn apply_configure_task(
-        run_id: i32,
-        task: RunTask,
-        store: S,
-        point_spec: PointSpec,
-        evaluator_config: EvaluatorConfig,
-    ) -> Result<(), RunnerError> {
-        let Some(sampler_config) = task.task.sampler_config() else {
-            return Err(RunnerError::Engine(EngineError::engine(
-                "task missing sampler config",
-            )));
-        };
-        let Some(parametrization_config) = task.task.parametrization_config() else {
-            return Err(RunnerError::Engine(EngineError::engine(
-                "task missing parametrization config",
-            )));
-        };
-        let (mut sampler, observable_state, parametrization_state, _) =
-            Self::build_fresh_stage_state(
-                &store,
-                run_id,
-                &task,
-                &sampler_config,
-                &parametrization_config,
-                &point_spec,
-                &evaluator_config,
-                None,
-            )
-            .await?;
-        store
-            .save_run_stage_snapshot(&RunStageSnapshot {
-                id: None,
-                run_id,
-                task_id: Some(task.id),
-                sequence_nr: Some(task.sequence_nr),
-                queue_empty: true,
-                sampler_snapshot: sampler.snapshot().map_err(RunnerError::Engine)?,
-                observable_state: Some(observable_state),
-                sampler_aggregator: sampler_config,
-                parametrization: parametrization_state,
-            })
-            .await?;
-        store.complete_run_task(task.id).await?;
-        Ok(())
-    }
-
     pub fn task_id(&self) -> i64 {
         self.task.id
     }
@@ -673,6 +627,7 @@ where
     }
 
     pub async fn complete_task(&mut self) -> Result<(), RunnerError> {
+        self.persist_state_with_queue_empty(true).await?;
         self.sync_task_progress().await?;
         self.store.complete_run_task(self.task.id).await?;
         Ok(())

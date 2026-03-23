@@ -146,6 +146,9 @@ const normalizeRunTaskEntry = (entry) => {
     id: Number.isFinite(Number(entry.id)) ? Number(entry.id) : entry.id,
     run_id: Number.isFinite(Number(entry.run_id)) ? Number(entry.run_id) : entry.run_id,
     sequence_nr: Number.isFinite(Number(entry.sequence_nr)) ? Number(entry.sequence_nr) : entry.sequence_nr,
+    latest_stage_snapshot_id: Number.isFinite(Number(entry.latest_stage_snapshot_id))
+      ? Number(entry.latest_stage_snapshot_id)
+      : null,
     nr_produced_samples: Number.isFinite(Number(entry.nr_produced_samples)) ? Number(entry.nr_produced_samples) : 0,
     nr_completed_samples: Number.isFinite(Number(entry.nr_completed_samples)) ? Number(entry.nr_completed_samples) : 0,
   };
@@ -166,10 +169,10 @@ export const pauseRun = async (runId, signal) => apiPost(`/runs/${runId}/pause`,
 
 export const createRun = async (toml, signal) => apiPost("/runs", { toml }, "Failed to create run", signal);
 
-export const cloneRun = async ({ sourceRunId, fromTaskId, newName }, signal) =>
+export const cloneRun = async ({ sourceRunId, fromSnapshotId, newName }, signal) =>
   apiPost(
     "/runs/clone",
-    { source_run_id: sourceRunId, from_task_id: fromTaskId, new_name: newName },
+    { source_run_id: sourceRunId, from_snapshot_id: fromSnapshotId, new_name: newName },
     "Failed to clone run",
     signal,
   );
