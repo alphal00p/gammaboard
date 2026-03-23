@@ -3,6 +3,7 @@
 //! This library provides database abstractions for distributed adaptive
 //! numerical integration using PostgreSQL as a work queue.
 
+pub mod config;
 pub mod core;
 pub mod evaluation;
 pub mod preprocess;

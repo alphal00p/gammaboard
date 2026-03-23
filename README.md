@@ -6,7 +6,8 @@ Gammaboard runs distributed numerical integration jobs with PostgreSQL as the sh
 - `gammaboard run`: create, list, pause, clone, and remove runs.
 - `gammaboard node`: list, assign, unassign, and stop nodes.
 - `gammaboard run-node --name <NODE_NAME>`: start one local worker process.
-- `gammaboard server <SERVER_CONFIG>`: start the dashboard backend.
+- `gammaboard server`: start the dashboard backend.
+- `gammaboard db`: manage the local PostgreSQL instance used for development.
 
 The dashboard shows runs, task output, nodes, performance, and logs.
 
@@ -34,12 +35,52 @@ The dashboard shows runs, task output, nodes, performance, and logs.
    just serve-frontend
    ```
 
-`serve-*` commands load `.env`. The frontend uses `REACT_APP_API_BASE_URL`. The backend reads its host, port, auth, and cookie settings from `configs/server.toml`.
+`serve-*` commands load `.env`. The frontend uses `REACT_APP_API_BASE_URL`. The CLI reads its shared database and tracing settings from `configs/gammaboard.toml`, and the backend reads its host, port, auth, and cookie settings from `configs/server.toml`.
+
+## CLI Config
+- All commands load shared runtime config from [configs/gammaboard.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/gammaboard.toml) by default.
+- Override it when needed with:
+  ```bash
+  gammaboard --cli-config path/to/gammaboard.toml <COMMAND>
+  ```
+- Required shape:
+  ```toml
+  [database]
+  url = "postgresql://postgres:password@127.0.0.1:5433/gammaboard_db"
+
+  [tracing]
+  persist_runtime_logs = true
+  db_gammaboard_level = "info"
+  db_external_level = "warn"
+
+  [local_postgres]
+  data_dir = ".postgres"
+  socket_dir = ".postgres-socket"
+  log_file = ".postgres/logfile"
+  ```
+
+## Local Postgres Commands
+Use the CLI for local database lifecycle:
+
+```bash
+gammaboard db init
+gammaboard db start
+gammaboard db create
+gammaboard db stop
+gammaboard db reset
+gammaboard db dump-sql
+```
+
+These commands use `database.url` and `local_postgres` from `configs/gammaboard.toml`.
 
 ## Server Config
-- The server is configured from a single TOML file, for example:
+- The server is configured from a single TOML file. By default:
   ```bash
-  gammaboard server configs/server.toml
+  gammaboard server
+  ```
+- Override the server config path when needed with:
+  ```bash
+  gammaboard server --server-config path/to/server.toml
   ```
 - The checked-in local default is [configs/server.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server.toml).
 - Required shape:
@@ -186,7 +227,6 @@ gammaboard node stop <NODE_NAME>
 ## Useful Local Commands
 ```bash
 just stop
-just restart-db
 just live-test-basic
 just live-test-gammaloop
 ```

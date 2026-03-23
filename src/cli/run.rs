@@ -5,6 +5,7 @@ use anyhow::{Context, Result, anyhow};
 use clap::{Args, Subcommand};
 use comfy_table::{Cell, CellAlignment, ContentArrangement, Table};
 use gammaboard::PgStore;
+use gammaboard::config::CliConfig;
 use gammaboard::core::{
     ControlPlaneStore, RunReadStore, RunSpecStore, RunTask, RunTaskInputSpec, RunTaskSpec,
     RunTaskStore, TaskSnapshotRef, resolve_task_queue,
@@ -52,22 +53,28 @@ pub enum TaskCommand {
     Remove { run: String, task_id: i64 },
 }
 
-pub async fn run_run_commands(command: RunCommand, quiet: bool) -> Result<()> {
-    with_control_store(10, quiet, run_command_name(&command), |store| async move {
-        match command {
-            RunCommand::Add { config_file } => run_add(&store, &config_file).await?,
-            RunCommand::Clone {
-                source_run,
-                from_task_id,
-                new_name,
-            } => clone_run(&store, &source_run, from_task_id, &new_name).await?,
-            RunCommand::List { run_name } => list_runs(&store, run_name.as_deref()).await?,
-            RunCommand::Pause(selection) => pause_runs(&store, selection).await?,
-            RunCommand::Remove(selection) => remove_runs(&store, selection).await?,
-            RunCommand::Task(args) => run_task_command(&store, args.command).await?,
-        }
-        Ok(())
-    })
+pub async fn run_run_commands(command: RunCommand, config: &CliConfig, quiet: bool) -> Result<()> {
+    with_control_store(
+        config,
+        10,
+        quiet,
+        run_command_name(&command),
+        |store| async move {
+            match command {
+                RunCommand::Add { config_file } => run_add(&store, &config_file).await?,
+                RunCommand::Clone {
+                    source_run,
+                    from_task_id,
+                    new_name,
+                } => clone_run(&store, &source_run, from_task_id, &new_name).await?,
+                RunCommand::List { run_name } => list_runs(&store, run_name.as_deref()).await?,
+                RunCommand::Pause(selection) => pause_runs(&store, selection).await?,
+                RunCommand::Remove(selection) => remove_runs(&store, selection).await?,
+                RunCommand::Task(args) => run_task_command(&store, args.command).await?,
+            }
+            Ok(())
+        },
+    )
     .await
 }
 

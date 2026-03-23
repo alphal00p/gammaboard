@@ -1,17 +1,12 @@
 use super::PgStore;
-use dotenvy::dotenv;
 use sqlx::{Pool, Postgres, postgres::PgPoolOptions};
-use std::env;
 use tokio::time::{Duration, sleep};
 
 /// Create a PostgreSQL connection pool.
-///
-/// Loads DATABASE_URL from environment (via .env file) and creates
-/// a connection pool with the specified maximum number of connections.
-pub async fn get_pg_pool(max_connections: u32) -> Result<Pool<Postgres>, sqlx::Error> {
-    dotenv().ok();
-    let db_url =
-        env::var("DATABASE_URL").map_err(|err| sqlx::Error::Configuration(Box::new(err)))?;
+pub async fn get_pg_pool(
+    database_url: &str,
+    max_connections: u32,
+) -> Result<Pool<Postgres>, sqlx::Error> {
     // Retry transient DB startup races (e.g. connection resets while Postgres is coming up).
     const MAX_ATTEMPTS: u32 = 20;
     const BASE_DELAY_MS: u64 = 150;
@@ -21,7 +16,7 @@ pub async fn get_pg_pool(max_connections: u32) -> Result<Pool<Postgres>, sqlx::E
     loop {
         match PgPoolOptions::new()
             .max_connections(max_connections)
-            .connect(&db_url)
+            .connect(database_url)
             .await
         {
             Ok(pool) => return Ok(pool),
@@ -41,7 +36,10 @@ pub async fn get_pg_pool(max_connections: u32) -> Result<Pool<Postgres>, sqlx::E
 }
 
 /// Initialize a Postgres-backed store with the given max pool size.
-pub async fn init_pg_store(max_connections: u32) -> Result<PgStore, sqlx::Error> {
-    let pool = get_pg_pool(max_connections).await?;
+pub async fn init_pg_store(
+    database_url: &str,
+    max_connections: u32,
+) -> Result<PgStore, sqlx::Error> {
+    let pool = get_pg_pool(database_url, max_connections).await?;
     Ok(PgStore::new(pool))
 }

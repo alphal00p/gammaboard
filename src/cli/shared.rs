@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Args, ValueEnum};
+use gammaboard::config::CliConfig;
 use gammaboard::core::{RunReadStore, WorkerRole};
 use gammaboard::stores::RunProgress;
 use gammaboard::tracing::init_tracing;
@@ -38,37 +39,27 @@ pub struct NodeSelection {
     pub node_names: Vec<String>,
 }
 
-fn env_true(name: &str) -> bool {
-    std::env::var(name)
-        .map(|value| {
-            let value = value.trim();
-            value == "1"
-                || value.eq_ignore_ascii_case("true")
-                || value.eq_ignore_ascii_case("yes")
-                || value.eq_ignore_ascii_case("on")
-        })
-        .unwrap_or(false)
-}
-
-pub fn init_cli_tracing(store: &PgStore, quiet: bool) -> Result<()> {
-    let runtime_log_store = if env_true("GAMMABOARD_DISABLE_DB_LOGS") {
-        None
-    } else {
+pub fn init_cli_tracing(store: &PgStore, config: &CliConfig, quiet: bool) -> Result<()> {
+    let runtime_log_store = if config.tracing.persist_runtime_logs {
         Some(store.clone())
+    } else {
+        None
     };
-    init_tracing(runtime_log_store, quiet).map_err(|err| anyhow!(err.to_string()))?;
+    init_tracing(runtime_log_store, &config.tracing, quiet)
+        .map_err(|err| anyhow!(err.to_string()))?;
     Ok(())
 }
 
-pub async fn init_cli_store(db_pool_size: u32, quiet: bool) -> Result<PgStore> {
-    let store = init_pg_store(db_pool_size)
+pub async fn init_cli_store(config: &CliConfig, db_pool_size: u32, quiet: bool) -> Result<PgStore> {
+    let store = init_pg_store(&config.database.url, db_pool_size)
         .await
         .context("failed to initialize postgres store")?;
-    init_cli_tracing(&store, quiet)?;
+    init_cli_tracing(&store, config, quiet)?;
     Ok(store)
 }
 
 pub async fn with_cli_store<T, F, Fut>(
+    config: &CliConfig,
     db_pool_size: u32,
     quiet: bool,
     span: tracing::Span,
@@ -78,7 +69,7 @@ where
     F: FnOnce(PgStore) -> Fut,
     Fut: Future<Output = Result<T>>,
 {
-    let store = init_cli_store(db_pool_size, quiet).await?;
+    let store = init_cli_store(config, db_pool_size, quiet).await?;
     async move { f(store).await }.instrument(span).await
 }
 
@@ -92,6 +83,7 @@ pub fn control_command_span(name: &'static str) -> tracing::Span {
 }
 
 pub async fn with_control_store<T, F, Fut>(
+    config: &CliConfig,
     db_pool_size: u32,
     quiet: bool,
     command_name: &'static str,
@@ -101,7 +93,14 @@ where
     F: FnOnce(PgStore) -> Fut,
     Fut: Future<Output = Result<T>>,
 {
-    with_cli_store(db_pool_size, quiet, control_command_span(command_name), f).await
+    with_cli_store(
+        config,
+        db_pool_size,
+        quiet,
+        control_command_span(command_name),
+        f,
+    )
+    .await
 }
 
 pub async fn resolve_run_ref(store: &impl RunReadStore, run_ref: &str) -> Result<RunProgress> {

@@ -1,5 +1,6 @@
 //! Tracing initialization and DB-backed runtime log sink.
 
+use crate::config::TracingConfig;
 use crate::core::{RuntimeLogEvent, RuntimeLogStore};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use std::{
@@ -78,17 +79,19 @@ struct SpanLevelPolicy {
 }
 
 impl SpanLevelPolicy {
-    fn db_from_env() -> Self {
-        Self {
-            gammaboard: parse_db_level_env(
-                "GAMMABOARD_DB_LOG_LEVEL",
+    fn db_from_config(config: &TracingConfig) -> Result<Self, String> {
+        Ok(Self {
+            gammaboard: parse_db_level_config(
+                "tracing.db_gammaboard_level",
+                &config.db_gammaboard_level,
                 DEFAULT_DB_GAMMABOARD_LOG_LEVEL,
-            ),
-            external: parse_db_level_env(
-                "GAMMABOARD_DB_EXTERNAL_LOG_LEVEL",
+            )?,
+            external: parse_db_level_config(
+                "tracing.db_external_level",
+                &config.db_external_level,
                 DEFAULT_DB_EXTERNAL_LOG_LEVEL,
-            ),
-        }
+            )?,
+        })
     }
 
     fn fmt_from_quiet(quiet: bool) -> Self {
@@ -291,13 +294,15 @@ where
     }
 }
 
-fn parse_db_level_env(var_name: &str, default: &str) -> Option<LevelFilter> {
-    let raw = std::env::var(var_name).unwrap_or_else(|_| default.to_string());
-    parse_level_filter_or_off(&raw).unwrap_or_else(|| {
-        eprintln!(
-            "invalid {var_name}={raw:?}; expected one of off,error,warn,info,debug,trace; using default {default}"
-        );
-        parse_level_filter_or_off(default).unwrap_or(Some(LevelFilter::INFO))
+fn parse_db_level_config(
+    field_name: &str,
+    raw: &str,
+    default: &str,
+) -> Result<Option<LevelFilter>, String> {
+    parse_level_filter_or_off(raw).ok_or_else(|| {
+        format!(
+            "invalid {field_name}={raw:?}; expected one of off,error,warn,info,debug,trace; default recommendation is {default}"
+        )
     })
 }
 
@@ -408,6 +413,7 @@ where
 /// persisted through that store.
 pub fn init_tracing<S>(
     runtime_log_store: Option<S>,
+    config: &TracingConfig,
     quiet: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
@@ -417,7 +423,10 @@ where
         let (tx, rx) = mpsc::channel::<RuntimeLogEvent>(DEFAULT_CHANNEL_CAPACITY);
         tokio::spawn(write_runtime_logs(store, rx));
 
-        let db_filter = SpanLevelFilter::new(SpanLevelPolicy::db_from_env());
+        let db_filter = SpanLevelFilter::new(
+            SpanLevelPolicy::db_from_config(config)
+                .map_err(Box::<dyn std::error::Error + Send + Sync>::from)?,
+        );
         let db_layer = DbLogLayer::new(tx).with_filter(db_filter);
         let fmt_filter = SpanLevelFilter::new(SpanLevelPolicy::fmt_from_quiet(quiet));
         let fmt_layer = tracing_subscriber::fmt::layer().with_filter(fmt_filter);

@@ -3,6 +3,7 @@ use argon2::{
     password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
 };
 use assert_cmd::Command;
+use gammaboard::config::CliConfig;
 use predicates::prelude::*;
 use serde_json::json;
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
@@ -59,8 +60,7 @@ struct TestDatabase {
 
 impl TestDatabase {
     async fn create() -> anyhow::Result<Self> {
-        let base_url = std::env::var("DATABASE_URL")
-            .map_err(|_| anyhow::anyhow!("DATABASE_URL must be set for full-stack tests"))?;
+        let base_url = CliConfig::load("configs/gammaboard.toml")?.database.url;
 
         let mut admin_url = Url::parse(&base_url)?;
         admin_url.set_path("/postgres");
@@ -128,6 +128,7 @@ struct FullStackHarness {
     pool: PgPool,
     bin_path: PathBuf,
     children: Vec<ManagedChild>,
+    cli_config_path: PathBuf,
     temp_files: Vec<NamedTempFile>,
 }
 
@@ -144,28 +145,33 @@ impl FullStackHarness {
             .connect(&db.database_url)
             .await?;
         let bin_path = resolve_bin_path()?;
+        let cli_config = temp_cli_config(&db.database_url, false);
+        let cli_config_path = cli_config.path().to_path_buf();
+
+        let mut temp_files = Vec::new();
+        temp_files.push(cli_config);
 
         Ok(Self {
             db,
             pool,
             bin_path,
             children: Vec::new(),
-            temp_files: Vec::new(),
+            cli_config_path,
+            temp_files,
         })
     }
 
     fn cli(&self) -> Command {
         let mut cmd = Command::new(&self.bin_path);
-        cmd.env("DATABASE_URL", &self.db.database_url);
-        cmd.env("GAMMABOARD_DISABLE_DB_LOGS", "1");
+        cmd.arg("--cli-config").arg(&self.cli_config_path);
         cmd
     }
 
     async fn start_node(&mut self, node_name: &str) -> anyhow::Result<()> {
         let mut child = TokioCommand::new(&self.bin_path);
         child
-            .env("DATABASE_URL", &self.db.database_url)
-            .env("GAMMABOARD_DISABLE_DB_LOGS", "1")
+            .arg("--cli-config")
+            .arg(&self.cli_config_path)
             .arg("run-node")
             .arg("--name")
             .arg(node_name)
@@ -219,9 +225,10 @@ impl FullStackHarness {
 
         let mut child = TokioCommand::new(&self.bin_path);
         child
-            .env("DATABASE_URL", &self.db.database_url)
-            .env("GAMMABOARD_DISABLE_DB_LOGS", "1")
+            .arg("--cli-config")
+            .arg(&self.cli_config_path)
             .arg("server")
+            .arg("--server-config")
             .arg(server_config.path())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
@@ -350,6 +357,15 @@ fn temp_server_config(
     );
     let file = NamedTempFile::new().expect("create temp server config");
     std::fs::write(file.path(), contents).expect("write temp server config");
+    file
+}
+
+fn temp_cli_config(database_url: &str, persist_runtime_logs: bool) -> NamedTempFile {
+    let contents = format!(
+        "[database]\nurl = {database_url:?}\n\n[tracing]\npersist_runtime_logs = {persist_runtime_logs}\ndb_gammaboard_level = \"info\"\ndb_external_level = \"warn\"\n\n[local_postgres]\ndata_dir = \".postgres\"\nsocket_dir = \".postgres-socket\"\nlog_file = \".postgres/logfile\"\n"
+    );
+    let file = NamedTempFile::new().expect("create temp cli config");
+    std::fs::write(file.path(), contents).expect("write temp cli config");
     file
 }
 

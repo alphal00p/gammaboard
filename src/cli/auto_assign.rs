@@ -1,6 +1,7 @@
 use super::shared::{resolve_run_ref, with_cli_store};
 use anyhow::Result;
 use clap::Args;
+use gammaboard::config::CliConfig;
 use gammaboard::core::{ControlPlaneStore, WorkerRole};
 
 #[derive(Debug, Args)]
@@ -9,7 +10,11 @@ pub struct AutoAssignArgs {
     pub max_evaluators: Option<usize>,
 }
 
-pub async fn run_auto_assign_command(args: AutoAssignArgs, quiet: bool) -> Result<()> {
+pub async fn run_auto_assign_command(
+    args: AutoAssignArgs,
+    config: &CliConfig,
+    quiet: bool,
+) -> Result<()> {
     let span = tracing::span!(
         tracing::Level::TRACE,
         "control_auto_assign_command",
@@ -18,7 +23,7 @@ pub async fn run_auto_assign_command(args: AutoAssignArgs, quiet: bool) -> Resul
         run = args.run
     );
 
-    with_cli_store(10, quiet, span, |store| async move {
+    with_cli_store(config, 10, quiet, span, |store| async move {
         let run = resolve_run_ref(&store, &args.run).await?;
         let nodes = store.list_nodes(None).await?;
         let free_nodes = nodes

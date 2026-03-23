@@ -1,3 +1,4 @@
+use gammaboard::config::CliConfig;
 use gammaboard::core::{ControlPlaneStore, StoreError, WorkQueueStore, WorkerRole};
 use gammaboard::{Batch, LatentBatchSpec, PgStore};
 use sqlx::postgres::PgPoolOptions;
@@ -12,7 +13,10 @@ fn unique_id(prefix: &str) -> String {
 }
 
 async fn test_store() -> Option<PgStore> {
-    let db_url = std::env::var("DATABASE_URL").ok()?;
+    let db_url = CliConfig::load("configs/gammaboard.toml")
+        .ok()?
+        .database
+        .url;
     let pool = PgPoolOptions::new()
         .max_connections(2)
         .connect(&db_url)

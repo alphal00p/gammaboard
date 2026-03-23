@@ -162,8 +162,6 @@ pub(crate) enum ApiError {
     Unauthorized(String),
     #[error("not found: {0}")]
     NotFound(String),
-    #[error("unavailable: {0}")]
-    Unavailable(String),
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -186,7 +184,6 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(message) => (StatusCode::BAD_REQUEST, message),
             ApiError::Unauthorized(message) => (StatusCode::UNAUTHORIZED, message),
             ApiError::NotFound(message) => (StatusCode::NOT_FOUND, message),
-            ApiError::Unavailable(message) => (StatusCode::SERVICE_UNAVAILABLE, message),
             ApiError::Internal(message) => (StatusCode::INTERNAL_SERVER_ERROR, message),
         };
         (status, Json(serde_json::json!({ "error": message }))).into_response()

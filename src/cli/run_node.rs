@@ -1,6 +1,7 @@
 use super::shared::with_cli_store;
 use anyhow::Result;
 use clap::Args;
+use gammaboard::config::CliConfig;
 use gammaboard::runners::{NodeRunner, NodeRunnerConfig};
 
 #[derive(Debug, Args)]
@@ -13,7 +14,7 @@ pub struct RunNodeArgs {
     db_pool_size: u32,
 }
 
-pub async fn run_node(args: RunNodeArgs, quiet: bool) -> Result<()> {
+pub async fn run_node(args: RunNodeArgs, config: &CliConfig, quiet: bool) -> Result<()> {
     let node_name = args.name.clone();
     let span = tracing::span!(
         tracing::Level::TRACE,
@@ -21,7 +22,7 @@ pub async fn run_node(args: RunNodeArgs, quiet: bool) -> Result<()> {
         source = "worker",
         node_name = %node_name
     );
-    with_cli_store(args.db_pool_size, quiet, span, |store| async move {
+    with_cli_store(config, args.db_pool_size, quiet, span, |store| async move {
         let node_runner = NodeRunner::new(
             store,
             node_name,

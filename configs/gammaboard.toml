@@ -1,0 +1,12 @@
+[database]
+url = "postgresql://postgres:NqVj2yt5WsCE5nYCOx01MkeFD8n8awoZ@127.0.0.1:5433/gammaboard_db"
+
+[tracing]
+persist_runtime_logs = true
+db_gammaboard_level = "info"
+db_external_level = "warn"
+
+[local_postgres]
+data_dir = ".postgres"
+socket_dir = ".postgres-socket"
+log_file = ".postgres/logfile"

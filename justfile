@@ -12,7 +12,7 @@ build-frontend:
     cd dashboard && npm run build
 
 serve-backend:
-    {{bin}} server configs/server.toml
+    {{bin}} server
 
 serve-frontend:
     cd dashboard && npx serve build
@@ -20,37 +20,6 @@ serve-frontend:
 test-e2e:
     just stop-kill
     cargo test -q --test full_stack_cli -- --ignored --nocapture
-
-db-init:
-    initdb -D .postgres --username="{{ env_var('DB_USER') }}" --auth=trust
-    mkdir -p .postgres-socket
-
-db-start:
-    mkdir -p .postgres-socket
-    pg_ctl -D .postgres -l .postgres/logfile -o "-k {{ invocation_directory() }}/.postgres-socket -p {{ env_var('DB_PORT') }}" start
-
-db-create:
-    createdb -h "{{ invocation_directory() }}/.postgres-socket" -p "{{ env_var('DB_PORT') }}" -U "{{ env_var('DB_USER') }}" "{{ env_var('DB_NAME') }}" || true
-    sqlx migrate run
-
-db-stop:
-    pg_ctl -D .postgres stop || true
-
-db-reset:
-    pg_ctl -D .postgres stop || true
-    rm -rf .postgres .postgres-socket
-    just db-init
-    just db-start
-    just db-create
-
-dump-db-sql:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    mkdir -p dump
-    out="dump/db-$(date +%Y%m%d-%H%M%S).sql"
-    pg_dump -h "{{ invocation_directory() }}/.postgres-socket" -p "{{ env_var('DB_PORT') }}" -U "{{ env_var('DB_USER') }}" "{{ env_var('DB_NAME') }}" > "$out"
-    echo "$out"
-
 
 start n:
     #!/usr/bin/env bash
@@ -68,7 +37,7 @@ live-test-basic:
     run_symbolica_poly="symbolica-poly-test"
     run_symbolica_sin="symbolica-sin-test"
 
-    just db-reset
+    {{bin}} db reset
     just start 8
 
     sleep 4

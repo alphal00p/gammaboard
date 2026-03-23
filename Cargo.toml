@@ -8,7 +8,6 @@ gammalooprs = { path = "../gammaloop/crates/gammalooprs" }
 gammaloop_api = { package = "gammaloop-api", path = "../gammaloop/crates/gammaloop-api", default-features = false, features = ["cli", "no_pyo3"] }
 tokio = { version = "1.46", features = ["full"] }
 sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-native-tls", "chrono", "macros"] }
-dotenvy = "0.15"
 rand = { package = "rand", version = "0.9" }
 rand_xoshiro = { version = "0.7", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -35,12 +34,12 @@ comfy-table = "7"
 uuid = { version = "1", features = ["v4", "serde"] }
 argon2 = "0.5"
 jsonwebtoken = "9"
+url = "2"
 
 [dev-dependencies]
 assert_cmd = "2"
 predicates = "3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
-url = "2"
 
 [profile.dev-optim]
 inherits = "dev"

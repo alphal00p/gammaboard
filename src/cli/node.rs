@@ -3,6 +3,7 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use comfy_table::{Cell, CellAlignment, ContentArrangement, Table};
 use gammaboard::PgStore;
+use gammaboard::config::CliConfig;
 use gammaboard::core::{ControlPlaneStore, RegisteredNode, WorkerRole};
 
 #[derive(Debug, Args)]
@@ -27,38 +28,48 @@ pub enum NodeCommand {
     Stop(NodeSelection),
 }
 
-pub async fn run_node_commands(command: NodeCommand, quiet: bool) -> Result<()> {
-    with_control_store(10, quiet, node_command_name(&command), |store| async move {
-        match command {
-            NodeCommand::Assign {
-                node_name,
-                role,
-                run,
-            } => {
-                let run = resolve_run_ref(&store, &run).await?;
-                store
-                    .upsert_desired_assignment(&node_name, role.into(), run.run_id)
-                    .await?;
-                tracing::info!(
-                    "assigned node={} role={} run_id={} run_name={}",
+pub async fn run_node_commands(
+    command: NodeCommand,
+    config: &CliConfig,
+    quiet: bool,
+) -> Result<()> {
+    with_control_store(
+        config,
+        10,
+        quiet,
+        node_command_name(&command),
+        |store| async move {
+            match command {
+                NodeCommand::Assign {
                     node_name,
-                    WorkerRole::from(role),
-                    run.run_id,
-                    run.run_name
-                );
+                    role,
+                    run,
+                } => {
+                    let run = resolve_run_ref(&store, &run).await?;
+                    store
+                        .upsert_desired_assignment(&node_name, role.into(), run.run_id)
+                        .await?;
+                    tracing::info!(
+                        "assigned node={} role={} run_id={} run_name={}",
+                        node_name,
+                        WorkerRole::from(role),
+                        run.run_id,
+                        run.run_name
+                    );
+                }
+                NodeCommand::Unassign { node_name } => {
+                    store.clear_desired_assignment(&node_name).await?;
+                    tracing::info!("unassigned node={}", node_name);
+                }
+                NodeCommand::List { node_name } => {
+                    let nodes = store.list_nodes(node_name.as_deref()).await?;
+                    print_node_table(build_node_rows(nodes));
+                }
+                NodeCommand::Stop(selection) => stop_nodes(&store, selection).await?,
             }
-            NodeCommand::Unassign { node_name } => {
-                store.clear_desired_assignment(&node_name).await?;
-                tracing::info!("unassigned node={}", node_name);
-            }
-            NodeCommand::List { node_name } => {
-                let nodes = store.list_nodes(node_name.as_deref()).await?;
-                print_node_table(build_node_rows(nodes));
-            }
-            NodeCommand::Stop(selection) => stop_nodes(&store, selection).await?,
-        }
-        Ok(())
-    })
+            Ok(())
+        },
+    )
     .await
 }
 
