@@ -49,7 +49,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Panel specs may include simple width hints such as `compact`, `half`, and `full`.
 - Run info, task output, worker details, performance, and engine config should stay backend-owned.
 - Dashboard auth is operator-oriented: read-only endpoints may stay open, while explicit steering endpoints require admin auth.
-- Dashboard steering should use explicit endpoints such as `pause`, `assign`, `unassign`, `append task`, and `create run`, not generic patch endpoints.
+- Dashboard steering should use explicit endpoints such as `pause`, `assign`, `unassign`, `append task`, `create run`, and `clone run`, not generic patch endpoints.
 - Dashboard auth is intended for small trusted deployments behind HTTPS.
 - Shared CLI database and tracing settings should come from `configs/gammaboard.toml` by default, with an optional global `--cli-config <PATH>` override.
 - Local Postgres lifecycle commands should live under `gammaboard db ...` and use the shared CLI config instead of separate env-driven just recipes.

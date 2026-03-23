@@ -7,10 +7,11 @@ mod task_panels;
 mod worker_panels;
 
 use crate::core::{
-    AggregationStore, ControlPlaneStore, IntegrationParams, RunReadStore, RunSpecStore,
-    RunTaskStore, StoreError, WorkerRole,
+    AggregationStore, ControlPlaneStore, IntegrationParams, RunReadStore, RunSpecStore, RunTask,
+    RunTaskInputSpec, RunTaskSpec, RunTaskStore, StoreError, TaskSnapshotRef, WorkerRole,
 };
 use crate::evaluation::ObservableState;
+use crate::preprocess::{RunAddConfig, preprocess_run_add};
 use crate::server::config_panels::{
     EvaluatorPanelContext, PanelRenderer, SamplerAggregatorPanelContext,
 };
@@ -37,7 +38,7 @@ use serde::Serialize;
 use std::{
     fs,
     net::{IpAddr, SocketAddr},
-    path::Path,
+    path::{Path, PathBuf},
 };
 use tower_http::cors::CorsLayer;
 use tracing::Instrument;
@@ -217,6 +218,28 @@ struct AutoAssignRequest {
     max_evaluators: Option<usize>,
 }
 
+#[derive(Deserialize)]
+struct CreateRunRequest {
+    toml: String,
+}
+
+#[derive(Deserialize)]
+struct CloneRunRequest {
+    source_run_id: i32,
+    from_task_id: i64,
+    new_name: String,
+}
+
+#[derive(Deserialize)]
+struct AddTasksRequest {
+    toml: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TaskQueueFile {
+    task_queue: Vec<RunTaskInputSpec>,
+}
+
 fn build_app(state: AppState) -> Router {
     let public_api_routes = Router::new()
         .route("/health", get(health_check))
@@ -255,7 +278,10 @@ fn build_app(state: AppState) -> Router {
         );
 
     let protected_api_routes = Router::new()
+        .route("/runs", post(create_run))
+        .route("/runs/clone", post(clone_run))
         .route("/runs/:id/pause", post(pause_run))
+        .route("/runs/:id/tasks", post(add_run_tasks))
         .route("/runs/:id/auto-assign", post(auto_assign_run))
         .route("/nodes/:id/assign", post(assign_node))
         .route("/nodes/:id/unassign", post(unassign_node))
@@ -581,6 +607,338 @@ async fn get_run_logs(
         )
         .await?;
     json_response(logs)
+}
+
+const DEFAULT_RUN_CONFIG_PATH: &str = "configs/default.toml";
+
+fn read_default_run_add_toml() -> Result<toml::Value, ApiError> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_RUN_CONFIG_PATH);
+    let raw = fs::read_to_string(&path).map_err(|err| {
+        ApiError::Internal(format!(
+            "failed reading default run config {}: {err}",
+            path.display()
+        ))
+    })?;
+    toml::from_str(&raw).map_err(|err| {
+        ApiError::Internal(format!(
+            "failed parsing default run config {}: {err}",
+            path.display()
+        ))
+    })
+}
+
+fn merge_toml(base: &mut toml::Value, overlay: toml::Value) {
+    match (base, overlay) {
+        (toml::Value::Table(base_table), toml::Value::Table(overlay_table)) => {
+            for (key, value) in overlay_table {
+                if let Some(base_value) = base_table.get_mut(&key) {
+                    merge_toml(base_value, value);
+                } else {
+                    base_table.insert(key, value);
+                }
+            }
+        }
+        (base_value, overlay_value) => {
+            *base_value = overlay_value;
+        }
+    }
+}
+
+fn parse_run_add_config(raw: &str) -> Result<RunAddConfig, ApiError> {
+    let mut merged = read_default_run_add_toml()?;
+    let overlay = toml::from_str(raw)
+        .map_err(|err| ApiError::BadRequest(format!("failed parsing run TOML: {err}")))?;
+    merge_toml(&mut merged, overlay);
+    if merged
+        .as_table()
+        .and_then(|table| table.get("point_spec"))
+        .is_some()
+    {
+        return Err(ApiError::BadRequest(
+            "top-level [point_spec] is no longer supported; define dimensions in [evaluator]"
+                .to_string(),
+        ));
+    }
+    let parsed: RunAddConfig = merged
+        .try_into()
+        .map_err(|err| ApiError::BadRequest(format!("invalid run-add payload: {err}")))?;
+    let name = parsed.name.trim().to_string();
+    if name.is_empty() {
+        return Err(ApiError::BadRequest(
+            "invalid run name (`name`): expected non-empty string".to_string(),
+        ));
+    }
+    if let Some(task_queue) = parsed.task_queue.as_ref() {
+        if task_queue.is_empty() {
+            return Err(ApiError::BadRequest(
+                "invalid task_queue: expected at least one task when set".to_string(),
+            ));
+        }
+        for task in task_queue {
+            task.validate()
+                .map_err(|err| ApiError::BadRequest(format!("invalid task_queue entry: {err}")))?;
+        }
+    }
+    Ok(RunAddConfig { name, ..parsed })
+}
+
+fn parse_task_queue_payload(raw: &str) -> Result<TaskQueueFile, ApiError> {
+    let parsed: TaskQueueFile = toml::from_str(raw)
+        .map_err(|err| ApiError::BadRequest(format!("invalid run-task payload: {err}")))?;
+    if parsed.task_queue.is_empty() {
+        return Err(ApiError::BadRequest(
+            "invalid task_queue: expected at least one task".to_string(),
+        ));
+    }
+    for task in &parsed.task_queue {
+        task.validate()
+            .map_err(|err| ApiError::BadRequest(format!("invalid task_queue entry: {err}")))?;
+    }
+    Ok(parsed)
+}
+
+async fn validate_task_snapshot_refs(
+    store: &PgStore,
+    tasks: &[RunTaskSpec],
+) -> Result<(), ApiError> {
+    for task in tasks {
+        if let Some(start_from) = task.start_from() {
+            let snapshot = store
+                .get_latest_task_stage_snapshot(start_from.run_id, start_from.task_id)
+                .await?;
+            if snapshot.is_none() {
+                return Err(ApiError::BadRequest(format!(
+                    "task start_from references run {} task {} but no stage snapshot exists",
+                    start_from.run_id, start_from.task_id
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn resolve_task_queue_payload_for_run(
+    store: &PgStore,
+    run_id: i32,
+    raw: &str,
+) -> Result<Vec<RunTaskSpec>, ApiError> {
+    let parsed = parse_task_queue_payload(raw)?;
+    let run = store
+        .get_run_progress(run_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
+    let integration_params = decode_integration_params(
+        run_id,
+        run.integration_params.ok_or_else(|| {
+            ApiError::Internal(format!("run {run_id} is missing integration_params"))
+        })?,
+    )?;
+    let existing_tasks = store.list_run_tasks(run_id).await?;
+    let mut base_sampler_aggregator = integration_params.sampler_aggregator;
+    let mut base_parametrization = integration_params.parametrization;
+    for task in existing_tasks {
+        if let RunTaskSpec::Sample {
+            sampler_aggregator,
+            parametrization,
+            ..
+        } = task.task
+        {
+            base_sampler_aggregator = sampler_aggregator;
+            base_parametrization = parametrization;
+        }
+    }
+    crate::core::resolve_task_queue(
+        &base_sampler_aggregator,
+        &base_parametrization,
+        &parsed.task_queue,
+    )
+    .map_err(ApiError::BadRequest)
+}
+
+fn clone_task_suffix(
+    source_tasks: &[RunTask],
+    source_run_id: i32,
+    from_task_id: i64,
+) -> Result<Vec<RunTaskSpec>, ApiError> {
+    let source_index = source_tasks
+        .iter()
+        .position(|task| task.id == from_task_id)
+        .ok_or_else(|| ApiError::NotFound(format!("run task {from_task_id} not found")))?;
+    let mut cloned_tasks = source_tasks
+        .iter()
+        .skip(source_index + 1)
+        .map(|task| task.task.clone())
+        .collect::<Vec<_>>();
+    if let Some(first_executable) = cloned_tasks
+        .iter_mut()
+        .find(|task| !matches!(task, RunTaskSpec::Pause))
+    {
+        set_task_start_from(
+            first_executable,
+            TaskSnapshotRef {
+                run_id: source_run_id,
+                task_id: from_task_id,
+            },
+        );
+    }
+    Ok(cloned_tasks)
+}
+
+fn set_task_start_from(task: &mut RunTaskSpec, start_from: TaskSnapshotRef) {
+    match task {
+        RunTaskSpec::Sample {
+            start_from: task_start_from,
+            ..
+        }
+        | RunTaskSpec::Image {
+            start_from: task_start_from,
+            ..
+        }
+        | RunTaskSpec::PlotLine {
+            start_from: task_start_from,
+            ..
+        } => {
+            *task_start_from = Some(start_from);
+        }
+        RunTaskSpec::Pause => {}
+    }
+}
+
+async fn create_run(
+    State(state): State<AppState>,
+    AxumJson(payload): AxumJson<CreateRunRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let run_config = parse_run_add_config(payload.toml.trim())?;
+    let processed = preprocess_run_add(run_config)
+        .map_err(|err| ApiError::BadRequest(format!("failed to preprocess run config: {err}")))?;
+    let point_spec = processed.point_spec.as_ref().ok_or_else(|| {
+        ApiError::Internal("preprocessing did not resolve point_spec".to_string())
+    })?;
+    let integration_params = serde_json::to_value(
+        processed
+            .resolved_integration_params
+            .as_ref()
+            .ok_or_else(|| {
+                ApiError::Internal("preprocessing did not resolve integration_params".to_string())
+            })?,
+    )
+    .map_err(|err| ApiError::Internal(format!("failed to serialize integration_params: {err}")))?;
+    let initial_tasks = processed.resolved_task_queue.clone().unwrap_or_default();
+    validate_task_snapshot_refs(&state.store, &initial_tasks).await?;
+    let run_id = state
+        .store
+        .create_run(
+            &processed.name,
+            &integration_params,
+            processed.target.as_ref(),
+            point_spec,
+            processed.evaluator_init_metadata.as_ref(),
+            processed.sampler_aggregator_init_metadata.as_ref(),
+            &initial_tasks,
+        )
+        .await?;
+    tracing::info!(
+        source = "control",
+        control_surface = "dashboard",
+        action = "run_create",
+        run_id,
+        run_name = %processed.name,
+        tasks_created = initial_tasks.len(),
+        "dashboard action completed"
+    );
+    json_response(serde_json::json!({
+        "run_id": run_id,
+        "run_name": processed.name,
+    }))
+}
+
+async fn clone_run(
+    State(state): State<AppState>,
+    AxumJson(payload): AxumJson<CloneRunRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let new_name = payload.new_name.trim().to_string();
+    if new_name.is_empty() {
+        return Err(ApiError::BadRequest(
+            "invalid run name (`new_name`): expected non-empty string".to_string(),
+        ));
+    }
+    let source_run = state
+        .store
+        .get_run_progress(payload.source_run_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("run {} not found", payload.source_run_id)))?;
+    let point_spec = source_run.point_spec.clone().ok_or_else(|| {
+        ApiError::Internal(format!(
+            "source run {} is missing point_spec",
+            payload.source_run_id
+        ))
+    })?;
+    let integration_params = source_run.integration_params.clone().ok_or_else(|| {
+        ApiError::Internal(format!(
+            "source run {} is missing integration_params",
+            payload.source_run_id
+        ))
+    })?;
+    let source_tasks = state.store.list_run_tasks(payload.source_run_id).await?;
+    let cloned_tasks =
+        clone_task_suffix(&source_tasks, payload.source_run_id, payload.from_task_id)?;
+    let snapshot = state
+        .store
+        .get_latest_task_stage_snapshot(payload.source_run_id, payload.from_task_id)
+        .await?;
+    if snapshot.is_none() {
+        return Err(ApiError::BadRequest(format!(
+            "cannot clone from run {} task {}: no stage snapshot exists",
+            payload.source_run_id, payload.from_task_id
+        )));
+    }
+    let run_id = state
+        .store
+        .create_run(
+            &new_name,
+            &integration_params,
+            source_run.target.as_ref(),
+            &point_spec,
+            source_run.evaluator_init_metadata.as_ref(),
+            source_run.sampler_aggregator_init_metadata.as_ref(),
+            &cloned_tasks,
+        )
+        .await?;
+    tracing::info!(
+        source = "control",
+        control_surface = "dashboard",
+        action = "run_clone",
+        run_id,
+        new_name = %new_name,
+        source_run_id = payload.source_run_id,
+        from_task_id = payload.from_task_id,
+        cloned_tasks = cloned_tasks.len(),
+        "dashboard action completed"
+    );
+    json_response(serde_json::json!({
+        "run_id": run_id,
+        "run_name": new_name,
+    }))
+}
+
+async fn add_run_tasks(
+    State(state): State<AppState>,
+    AxumPath(run_id): AxumPath<i32>,
+    AxumJson(payload): AxumJson<AddTasksRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let tasks =
+        resolve_task_queue_payload_for_run(&state.store, run_id, payload.toml.trim()).await?;
+    validate_task_snapshot_refs(&state.store, &tasks).await?;
+    let inserted = state.store.append_run_tasks(run_id, &tasks).await?;
+    tracing::info!(
+        source = "control",
+        control_surface = "dashboard",
+        action = "run_add_tasks",
+        run_id,
+        tasks_added = inserted.len(),
+        "dashboard action completed"
+    );
+    json_response(inserted)
 }
 
 async fn pause_run(

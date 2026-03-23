@@ -1,6 +1,7 @@
 import {
   Card,
   CardContent,
+  Stack,
   Table,
   TableBody,
   TableCell,
@@ -11,12 +12,13 @@ import {
 } from "@mui/material";
 import { formatTaskSnapshotRef, formatTaskSpawnOrigin, getTaskKindLabel, getTaskTargetLabel } from "../utils/tasks";
 
-const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null }) => {
+const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null, actions = null }) => {
   return (
     <>
-      <Typography variant="h6" gutterBottom>
-        Task Queue
-      </Typography>
+      <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
+        <Typography variant="h6">Task Queue</Typography>
+        {actions}
+      </Stack>
       <Card>
         <CardContent>
           <TableContainer>

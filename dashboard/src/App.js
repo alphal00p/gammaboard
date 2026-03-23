@@ -1,5 +1,5 @@
 import { Alert, Box, Button, Chip, Container, Snackbar, Stack, Tab, Tabs, TextField, Typography } from "@mui/material";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import gammaboardLogo from "./assets/gammalooplogo.svg";
 import { AuthProvider, useAuth } from "./auth/AuthProvider";
 import EvaluatorPanel from "./components/EvaluatorPanel";
@@ -12,13 +12,22 @@ import TaskQueuePanel from "./components/TaskQueuePanel";
 import WorkersWorkspace from "./components/WorkersWorkspace";
 import LoginDialog from "./components/auth/LoginDialog";
 import RunScopedWorkspace from "./components/common/RunScopedWorkspace";
+import CloneRunDialog from "./components/runs/CloneRunDialog";
+import TomlActionDialog from "./components/runs/TomlActionDialog";
 import { useRunConfigPanels } from "./hooks/useRunConfigPanels";
 import { useRuns } from "./hooks/useRuns";
 import { useRunTasks } from "./hooks/useRunTasks";
 import { useWorkersData } from "./hooks/useWorkersData";
-import { autoAssignRun, pauseRun } from "./services/api";
+import { addRunTasks, autoAssignRun, cloneRun, createRun, pauseRun } from "./services/api";
 import { asArray } from "./utils/collections";
 import { asTaskList, getCurrentTask } from "./utils/tasks";
+
+const DEFAULT_CREATE_RUN_TOML = `name = "new-run"`;
+
+const DEFAULT_ADD_TASKS_TOML = `[[task_queue]]
+kind = "sample"
+nr_samples = 10000
+observable = "scalar"`;
 
 const DashboardHeader = () => {
   const { authenticated, busy, ready, requestLogin, logout } = useAuth();
@@ -56,16 +65,30 @@ const DashboardHeader = () => {
   );
 };
 
-const RunModeContent = ({ runs, selectedRun }) => {
+const RunModeContent = ({ runs, selectedRun, onRunCreated }) => {
   const currentRun = runs.find((entry) => entry.run_id === selectedRun);
   const { tasks } = useRunTasks(selectedRun, 2000);
   const { evaluator, sampler } = useRunConfigPanels({ runId: selectedRun, pollMs: 5000 });
+  const [cloneSourceRunId, setCloneSourceRunId] = useState(selectedRun);
+  const { tasks: cloneSourceTasks } = useRunTasks(cloneSourceRunId, 2000);
   const [selectedTaskId, setSelectedTaskId] = useState(null);
   const [snackbar, setSnackbar] = useState(null);
   const [pausing, setPausing] = useState(false);
   const [autoAssigning, setAutoAssigning] = useState(false);
+  const [cloneRunOpen, setCloneRunOpen] = useState(false);
+  const [addTasksOpen, setAddTasksOpen] = useState(false);
+  const [cloneRunBusy, setCloneRunBusy] = useState(false);
+  const [addTasksBusy, setAddTasksBusy] = useState(false);
+  const [cloneRunError, setCloneRunError] = useState(null);
+  const [addTasksError, setAddTasksError] = useState(null);
   const [maxEvaluators, setMaxEvaluators] = useState("");
   const { authenticated } = useAuth();
+
+  useEffect(() => {
+    if (selectedRun != null) {
+      setCloneSourceRunId(selectedRun);
+    }
+  }, [selectedRun]);
 
   useEffect(() => {
     const taskList = asTaskList(tasks);
@@ -79,6 +102,13 @@ const RunModeContent = ({ runs, selectedRun }) => {
     setSelectedTaskId(getCurrentTask(taskList)?.id ?? taskList[0].id ?? null);
   }, [selectedTaskId, tasks]);
 
+  const taskList = asTaskList(tasks);
+  const selectedTask = taskList.find((task) => task.id === selectedTaskId) ?? getCurrentTask(taskList) ?? null;
+  const cloneInitialName = useMemo(() => {
+    if (!currentRun?.run_name) return "cloned-run";
+    return `${currentRun.run_name}-clone`;
+  }, [currentRun]);
+
   if (!currentRun) {
     return (
       <Alert severity="warning" sx={{ mb: 3 }}>
@@ -87,14 +117,33 @@ const RunModeContent = ({ runs, selectedRun }) => {
     );
   }
 
-  const taskList = asTaskList(tasks);
-  const selectedTask = taskList.find((task) => task.id === selectedTaskId) ?? getCurrentTask(taskList) ?? null;
+  const closeCloneRun = () => {
+    if (cloneRunBusy) return;
+    setCloneRunError(null);
+    setCloneRunOpen(false);
+  };
+
+  const closeAddTasks = () => {
+    if (addTasksBusy) return;
+    setAddTasksError(null);
+    setAddTasksOpen(false);
+  };
 
   return (
     <>
       {authenticated ? (
         <Box sx={{ mb: 2, display: "flex", justifyContent: "flex-end" }}>
           <Stack direction={{ xs: "column", md: "row" }} spacing={1.5}>
+            <Button
+              variant="outlined"
+              disabled={!selectedRun || cloneRunBusy || addTasksBusy || pausing || autoAssigning}
+              onClick={() => {
+                setCloneRunError(null);
+                setCloneRunOpen(true);
+              }}
+            >
+              Clone Run
+            </Button>
             <TextField
               size="small"
               label="Max Evaluators"
@@ -149,10 +198,86 @@ const RunModeContent = ({ runs, selectedRun }) => {
         </Box>
       ) : null}
       <RunInfo runId={selectedRun} />
-      <TaskQueuePanel tasks={taskList} selectedTaskId={selectedTask?.id ?? null} onSelectTask={setSelectedTaskId} />
+      <TaskQueuePanel
+        tasks={taskList}
+        selectedTaskId={selectedTask?.id ?? null}
+        onSelectTask={setSelectedTaskId}
+        actions={
+          authenticated ? (
+            <Button
+              size="small"
+              variant="outlined"
+              disabled={!selectedRun || addTasksBusy || cloneRunBusy}
+              onClick={() => {
+                setAddTasksError(null);
+                setAddTasksOpen(true);
+              }}
+            >
+              Add Task
+            </Button>
+          ) : null
+        }
+      />
       <EvaluatorPanel run={currentRun} panelResponse={evaluator} />
       <TaskOutputPanel key={selectedTask?.id ?? "no-task"} runId={selectedRun} task={selectedTask} />
       <SamplerAggregatorPanel run={currentRun} panelResponse={sampler} />
+      <CloneRunDialog
+        open={cloneRunOpen}
+        runs={runs}
+        sourceRunId={cloneSourceRunId}
+        setSourceRunId={setCloneSourceRunId}
+        sourceTasks={cloneSourceTasks}
+        initialName={cloneInitialName}
+        busy={cloneRunBusy}
+        error={cloneRunError}
+        onClose={closeCloneRun}
+        onSubmit={async ({ sourceRunId, fromTaskId, newName }) => {
+          setCloneRunBusy(true);
+          setCloneRunError(null);
+          try {
+            const response = await cloneRun({ sourceRunId, fromTaskId, newName });
+            setCloneRunOpen(false);
+            setSnackbar({
+              message: `Cloned run ${response?.run_name || "run"} (#${response?.run_id ?? "?"}).`,
+              severity: "success",
+            });
+            if (Number.isFinite(Number(response?.run_id))) {
+              onRunCreated(Number(response.run_id));
+            }
+          } catch (err) {
+            setCloneRunError(err?.message || "Failed to clone run.");
+          } finally {
+            setCloneRunBusy(false);
+          }
+        }}
+      />
+      <TomlActionDialog
+        open={addTasksOpen}
+        title="Add Tasks"
+        label="Task Queue TOML"
+        submitLabel="Add Tasks"
+        initialValue={DEFAULT_ADD_TASKS_TOML}
+        helperText="Submit one or more [[task_queue]] entries."
+        busy={addTasksBusy}
+        error={addTasksError}
+        onClose={closeAddTasks}
+        onSubmit={async (toml) => {
+          setAddTasksBusy(true);
+          setAddTasksError(null);
+          try {
+            const inserted = await addRunTasks(selectedRun, toml);
+            setAddTasksOpen(false);
+            setSnackbar({
+              message: `Added ${Array.isArray(inserted) ? inserted.length : 0} task(s).`,
+              severity: "success",
+            });
+          } catch (err) {
+            setAddTasksError(err?.message || "Failed to add tasks.");
+          } finally {
+            setAddTasksBusy(false);
+          }
+        }}
+      />
       <Snackbar
         open={Boolean(snackbar)}
         autoHideDuration={4000}
@@ -163,18 +288,84 @@ const RunModeContent = ({ runs, selectedRun }) => {
   );
 };
 
-const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected }) => (
-  <RunScopedWorkspace
-    runs={runs}
-    selectedRun={selectedRun}
-    setSelectedRun={setSelectedRun}
-    isConnected={isConnected}
-    noRunsMessage="Create a run to start monitoring task output and engine configuration."
-    noSelectionMessage="Pick a run to view task-scoped output and run configuration."
-  >
-    <RunModeContent runs={runs} selectedRun={selectedRun} />
-  </RunScopedWorkspace>
-);
+const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, onRunCreated }) => {
+  const { authenticated } = useAuth();
+  const [createRunOpen, setCreateRunOpen] = useState(false);
+  const [createRunBusy, setCreateRunBusy] = useState(false);
+  const [createRunError, setCreateRunError] = useState(null);
+  const [snackbar, setSnackbar] = useState(null);
+
+  return (
+    <>
+      <RunScopedWorkspace
+        runs={runs}
+        selectedRun={selectedRun}
+        setSelectedRun={setSelectedRun}
+        isConnected={isConnected}
+        noRunsMessage="Create a run to start monitoring task output and engine configuration."
+        noSelectionMessage="Pick a run to view task-scoped output and run configuration."
+        headerActions={
+          authenticated ? (
+            <Box sx={{ mb: 2, display: "flex", justifyContent: "flex-end" }}>
+              <Button
+                variant="outlined"
+                disabled={createRunBusy}
+                onClick={() => {
+                  setCreateRunError(null);
+                  setCreateRunOpen(true);
+                }}
+              >
+                New Run
+              </Button>
+            </Box>
+          ) : null
+        }
+      >
+        <RunModeContent runs={runs} selectedRun={selectedRun} onRunCreated={onRunCreated} />
+      </RunScopedWorkspace>
+      <TomlActionDialog
+        open={createRunOpen}
+        title="Create Run"
+        label="Run TOML"
+        submitLabel="Create Run"
+        initialValue={DEFAULT_CREATE_RUN_TOML}
+        helperText="Enter a run config. The backend merges this with configs/default.toml."
+        busy={createRunBusy}
+        error={createRunError}
+        onClose={() => {
+          if (createRunBusy) return;
+          setCreateRunError(null);
+          setCreateRunOpen(false);
+        }}
+        onSubmit={async (toml) => {
+          setCreateRunBusy(true);
+          setCreateRunError(null);
+          try {
+            const response = await createRun(toml);
+            setCreateRunOpen(false);
+            setSnackbar({
+              message: `Created run ${response?.run_name || "run"} (#${response?.run_id ?? "?"}).`,
+              severity: "success",
+            });
+            if (Number.isFinite(Number(response?.run_id))) {
+              onRunCreated(Number(response.run_id));
+            }
+          } catch (err) {
+            setCreateRunError(err?.message || "Failed to create run.");
+          } finally {
+            setCreateRunBusy(false);
+          }
+        }}
+      />
+      <Snackbar
+        open={Boolean(snackbar)}
+        autoHideDuration={4000}
+        onClose={() => setSnackbar(null)}
+        message={snackbar?.message || ""}
+      />
+    </>
+  );
+};
 
 function AppContent() {
   const { runs, isConnected } = useRuns();
@@ -182,6 +373,7 @@ function AppContent() {
   const [mode, setMode] = useState("runs");
   const [selectedRun, setSelectedRun] = useState(null);
   const [selectedLogRun, setSelectedLogRun] = useState(null);
+  const [pendingRunSelection, setPendingRunSelection] = useState(null);
   const runList = asArray(runs);
 
   useEffect(() => {
@@ -199,6 +391,14 @@ function AppContent() {
       setSelectedLogRun(runList[0].run_id);
     }
   }, [runList, selectedRun, selectedLogRun]);
+
+  useEffect(() => {
+    if (pendingRunSelection == null) return;
+    if (!runList.some((run) => run.run_id === pendingRunSelection)) return;
+    setSelectedRun(pendingRunSelection);
+    setMode("runs");
+    setPendingRunSelection(null);
+  }, [pendingRunSelection, runList]);
 
   return (
     <Container maxWidth="xl" sx={{ py: 3 }}>
@@ -218,6 +418,7 @@ function AppContent() {
           selectedRun={selectedRun}
           setSelectedRun={setSelectedRun}
           isConnected={isConnected}
+          onRunCreated={setPendingRunSelection}
         />
       ) : mode === "workers" ? (
         <WorkersWorkspace

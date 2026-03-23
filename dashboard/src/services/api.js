@@ -164,6 +164,19 @@ export const logout = async (signal) => apiPost("/auth/logout", {}, "Failed to l
 
 export const pauseRun = async (runId, signal) => apiPost(`/runs/${runId}/pause`, {}, "Failed to pause run", signal);
 
+export const createRun = async (toml, signal) => apiPost("/runs", { toml }, "Failed to create run", signal);
+
+export const cloneRun = async ({ sourceRunId, fromTaskId, newName }, signal) =>
+  apiPost(
+    "/runs/clone",
+    { source_run_id: sourceRunId, from_task_id: fromTaskId, new_name: newName },
+    "Failed to clone run",
+    signal,
+  );
+
+export const addRunTasks = async (runId, toml, signal) =>
+  apiPost(`/runs/${runId}/tasks`, { toml }, "Failed to add tasks", signal);
+
 export const autoAssignRun = async (runId, { maxEvaluators = null } = {}, signal) =>
   apiPost(`/runs/${runId}/auto-assign`, { max_evaluators: maxEvaluators }, "Failed to auto-assign run", signal);
 
