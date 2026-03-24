@@ -189,14 +189,6 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         let batch_transforms = Self::build_batch_transforms(&stage_snapshot.batch_transforms)?;
 
         // Debug: report selected stage snapshot and sampler snapshot/config before building materializer
-        info!(
-            "build_evaluator_runner: selected stage_snapshot id={:?} sequence_nr={:?} run_id={}",
-            stage_snapshot.id, stage_snapshot.sequence_nr, worker.run_id
-        );
-        info!(
-            "build_evaluator_runner: sampler_aggregator config={:?} sampler_snapshot={:?}",
-            stage_snapshot.sampler_aggregator, stage_snapshot.sampler_snapshot
-        );
 
         let materializer = stage_snapshot
             .sampler_aggregator
@@ -208,10 +200,6 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             .map_err(|err| StoreError::store(format!("failed to build materializer: {err}")))?;
 
         // Debug: confirm materializer construction completed
-        info!(
-            "build_evaluator_runner: materializer built for run_id={} stage_snapshot_id={:?}",
-            worker.run_id, stage_snapshot.id
-        );
 
         let requires_training_values = stage_snapshot.sampler_aggregator.requires_training();
 
