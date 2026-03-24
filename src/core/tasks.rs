@@ -39,8 +39,12 @@ pub enum RunTaskInputSpec {
         batch_transforms: Option<Vec<BatchTransformConfig>>,
         #[serde(default)]
         observable: Option<ObservableConfig>,
+        /// Optional explicit sampler handoff snapshot id.
         #[serde(default)]
         start_from: Option<StageSnapshotRef>,
+        /// Optional explicit observable snapshot id (separate from sampler handoff).
+        #[serde(default)]
+        obs_start_from: Option<StageSnapshotRef>,
     },
     Image {
         geometry: PlaneRasterGeometry,
@@ -49,6 +53,8 @@ pub enum RunTaskInputSpec {
         display: ImageDisplayMode,
         #[serde(default)]
         start_from: Option<StageSnapshotRef>,
+        #[serde(default)]
+        obs_start_from: Option<StageSnapshotRef>,
     },
     PlotLine {
         geometry: LineRasterGeometry,
@@ -57,6 +63,8 @@ pub enum RunTaskInputSpec {
         display: LineDisplayMode,
         #[serde(default)]
         start_from: Option<StageSnapshotRef>,
+        #[serde(default)]
+        obs_start_from: Option<StageSnapshotRef>,
     },
 }
 
@@ -84,7 +92,10 @@ pub enum RunTaskSpec {
         sampler_aggregator: SamplerAggregatorConfig,
         batch_transforms: Vec<BatchTransformConfig>,
         observable: Option<ObservableConfig>,
+        /// sampler handoff snapshot id (if any)
         start_from: Option<StageSnapshotRef>,
+        /// observable snapshot id (if any) - separate from sampler handoff
+        obs_start_from: Option<StageSnapshotRef>,
     },
     Image {
         geometry: PlaneRasterGeometry,
@@ -93,6 +104,8 @@ pub enum RunTaskSpec {
         display: ImageDisplayMode,
         #[serde(default)]
         start_from: Option<StageSnapshotRef>,
+        #[serde(default)]
+        obs_start_from: Option<StageSnapshotRef>,
     },
     PlotLine {
         geometry: LineRasterGeometry,
@@ -101,6 +114,8 @@ pub enum RunTaskSpec {
         display: LineDisplayMode,
         #[serde(default)]
         start_from: Option<StageSnapshotRef>,
+        #[serde(default)]
+        obs_start_from: Option<StageSnapshotRef>,
     },
 }
 
@@ -153,11 +168,22 @@ impl RunTaskSpec {
         }
     }
 
+    /// Return the sampler handoff `start_from` snapshot reference (if any).
+    /// Note: this preserves the previous `start_from` accessor semantics for sampler handoff.
     pub fn start_from(&self) -> Option<&StageSnapshotRef> {
         match self {
             Self::Sample { start_from, .. }
             | Self::Image { start_from, .. }
             | Self::PlotLine { start_from, .. } => start_from.as_ref(),
+        }
+    }
+
+    /// Return the observable `start_from` snapshot reference (if any).
+    pub fn obs_start_from(&self) -> Option<&StageSnapshotRef> {
+        match self {
+            Self::Sample { obs_start_from, .. }
+            | Self::Image { obs_start_from, .. }
+            | Self::PlotLine { obs_start_from, .. } => obs_start_from.as_ref(),
         }
     }
 
@@ -202,18 +228,21 @@ impl IntoPreflightTask for RunTaskSpec {
                 batch_transforms,
                 observable,
                 start_from,
+                obs_start_from,
             } => Ok(Some(Self::Sample {
                 nr_samples: Some(if nr_samples == Some(0) { 0 } else { 1 }),
                 sampler_aggregator,
                 batch_transforms,
                 observable,
                 start_from,
+                obs_start_from,
             })),
             Self::Image {
                 mut geometry,
                 observable,
                 display,
                 start_from,
+                obs_start_from,
             } => {
                 geometry.reduce_for_preflight(4, 4);
                 Ok(Some(Self::Image {
@@ -221,6 +250,7 @@ impl IntoPreflightTask for RunTaskSpec {
                     observable,
                     display,
                     start_from,
+                    obs_start_from,
                 }))
             }
             Self::PlotLine {
@@ -228,6 +258,7 @@ impl IntoPreflightTask for RunTaskSpec {
                 observable,
                 display,
                 start_from,
+                obs_start_from,
             } => {
                 geometry.reduce_for_preflight(8);
                 Ok(Some(Self::PlotLine {
@@ -235,6 +266,7 @@ impl IntoPreflightTask for RunTaskSpec {
                     observable,
                     display,
                     start_from,
+                    obs_start_from,
                 }))
             }
         }
@@ -259,6 +291,7 @@ pub fn resolve_task_queue(
                 batch_transforms,
                 observable,
                 start_from,
+                obs_start_from,
             } => {
                 if let Some(sampler_aggregator) = sampler_aggregator.as_ref() {
                     current_sampler_aggregator = sampler_aggregator.clone();
@@ -272,6 +305,7 @@ pub fn resolve_task_queue(
                     batch_transforms: current_batch_transforms.clone(),
                     observable: observable.clone(),
                     start_from: start_from.clone(),
+                    obs_start_from: obs_start_from.clone(),
                 });
             }
             RunTaskInputSpec::Image {
@@ -279,12 +313,14 @@ pub fn resolve_task_queue(
                 observable,
                 display,
                 start_from,
+                obs_start_from,
             } => {
                 resolved.push(RunTaskSpec::Image {
                     geometry: geometry.clone(),
                     observable: *observable,
                     display: *display,
                     start_from: start_from.clone(),
+                    obs_start_from: obs_start_from.clone(),
                 });
             }
             RunTaskInputSpec::PlotLine {
@@ -292,12 +328,14 @@ pub fn resolve_task_queue(
                 observable,
                 display,
                 start_from,
+                obs_start_from,
             } => {
                 resolved.push(RunTaskSpec::PlotLine {
                     geometry: geometry.clone(),
                     observable: *observable,
                     display: *display,
                     start_from: start_from.clone(),
+                    obs_start_from: obs_start_from.clone(),
                 });
             }
         }
@@ -522,6 +560,7 @@ mod tests {
             batch_transforms: Vec::new(),
             observable: None,
             start_from: None,
+            obs_start_from: None,
         };
 
         assert_eq!(task.new_observable_config().unwrap(), None);
@@ -542,6 +581,7 @@ mod tests {
                 batch_transforms: None,
                 observable: None,
                 start_from: None,
+                obs_start_from: None,
             }],
         )
         .unwrap();
@@ -587,6 +627,7 @@ mod tests {
             observable: PlotObservableKind::Complex,
             display: ImageDisplayMode::Auto,
             start_from: None,
+            obs_start_from: None,
         };
         let line = RunTaskSpec::PlotLine {
             geometry: LineRasterGeometry {
@@ -602,6 +643,7 @@ mod tests {
             observable: PlotObservableKind::Scalar,
             display: LineDisplayMode::Auto,
             start_from: None,
+            obs_start_from: None,
         };
 
         assert_eq!(

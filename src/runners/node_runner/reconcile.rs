@@ -2,7 +2,7 @@ use super::{
     ActiveRoleRunner, ActiveWorker, NodeRunner, NodeRunnerStore, RoleTarget,
     role_runner::RoleRunner,
 };
-use crate::PgStore;
+
 use crate::core::{
     BatchTransformConfig, ObservableConfig, RunStageSnapshot, RunTask, RunTaskState, StoreError,
 };
@@ -129,22 +129,74 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             .map_err(|err| StoreError::store(format!("failed to build evaluator: {err}")))?;
         info!("evaluator worker started");
 
-        let stage_snapshot = match worker
-            .store
-            .load_latest_stage_snapshot_before_sequence(worker.run_id, i32::MAX)
-            .await?
-        {
-            Some(snapshot) => snapshot,
-            None => {
-                warn!(
-                    run_id = worker.run_id,
-                    "run has no stage snapshot; evaluator not started"
-                );
-                return Ok(None);
+        // Choose the most appropriate stage snapshot for building the evaluator materializer.
+        // Prefer a `HavanaTraining` snapshot (it contains the grid required by the materializer).
+        // If no training snapshot exists, fall back to the latest snapshot available.
+        let stage_snapshot = {
+            // Search backward from the latest sequence for a HavanaTraining snapshot.
+            let mut search_seq = i32::MAX;
+            let mut chosen: Option<RunStageSnapshot> = None;
+
+            loop {
+                let opt_snap = worker
+                    .store
+                    .load_latest_stage_snapshot_before_sequence(worker.run_id, search_seq)
+                    .await?;
+                let snap = match opt_snap {
+                    Some(s) => s,
+                    None => break,
+                };
+
+                // If this snapshot contains a HavanaTraining sampler_aggregator, prefer it.
+                if matches!(
+                    snap.sampler_aggregator,
+                    crate::core::SamplerAggregatorConfig::HavanaTraining { .. }
+                ) {
+                    chosen = Some(snap);
+                    break;
+                }
+
+                // If there is an earlier snapshot, continue searching before its sequence_nr.
+                let prev_seq = snap.sequence_nr.unwrap_or(0);
+                if prev_seq <= 0 {
+                    // No earlier snapshots to try.
+                    break;
+                }
+                search_seq = prev_seq - 1;
+            }
+
+            if let Some(s) = chosen {
+                s
+            } else {
+                // Fallback: use the latest snapshot (whatever kind it is).
+                match worker
+                    .store
+                    .load_latest_stage_snapshot_before_sequence(worker.run_id, i32::MAX)
+                    .await?
+                {
+                    Some(s) => s,
+                    None => {
+                        warn!(
+                            run_id = worker.run_id,
+                            "run has no stage snapshot; evaluator not started"
+                        );
+                        return Ok(None);
+                    }
+                }
             }
         };
 
         let batch_transforms = Self::build_batch_transforms(&stage_snapshot.batch_transforms)?;
+
+        // Debug: report selected stage snapshot and sampler snapshot/config before building materializer
+        info!(
+            "build_evaluator_runner: selected stage_snapshot id={:?} sequence_nr={:?} run_id={}",
+            stage_snapshot.id, stage_snapshot.sequence_nr, worker.run_id
+        );
+        info!(
+            "build_evaluator_runner: sampler_aggregator config={:?} sampler_snapshot={:?}",
+            stage_snapshot.sampler_aggregator, stage_snapshot.sampler_snapshot
+        );
 
         let materializer = stage_snapshot
             .sampler_aggregator
@@ -154,6 +206,12 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                 Some(Self::stage_handoff_from_stage_snapshot(&stage_snapshot)),
             )
             .map_err(|err| StoreError::store(format!("failed to build materializer: {err}")))?;
+
+        // Debug: confirm materializer construction completed
+        info!(
+            "build_evaluator_runner: materializer built for run_id={} stage_snapshot_id={:?}",
+            worker.run_id, stage_snapshot.id
+        );
 
         let requires_training_values = stage_snapshot.sampler_aggregator.requires_training();
 
@@ -248,23 +306,171 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             .nr_expected_samples()
             .and_then(|value| usize::try_from(value).ok());
 
-        let sampler = sampler_config
-            .build(
-                spec.point_spec.clone(),
-                sample_budget,
-                restored_snapshot
-                    .as_ref()
-                    .map(Self::stage_handoff_from_runner_snapshot),
-            )
-            .map_err(|err| StoreError::store(format!("failed to build sampler: {err}")))?;
+        // Determine an appropriate StageHandoff for building the sampler.
+        // Precedence:
+        //  - runner-restored snapshot (restored_snapshot)
+        //  - explicit task start_from (task.task.start_from())
+        //  - for havana_inference sampler: search backwards for a prior HavanaTraining or HavanaInference snapshot
+        //  - otherwise: fall back to the latest snapshot before sequence
+        let mut handoff_snapshot: Option<RunStageSnapshot> = None;
+        let handoff = if let Some(ref runner_snap) = restored_snapshot.as_ref() {
+            Some(Self::stage_handoff_from_runner_snapshot(runner_snap))
+        } else if let Some(start_from) = task.task.start_from() {
+            handoff_snapshot = worker
+                .store
+                .load_stage_snapshot(start_from.snapshot_id)
+                .await?;
+            handoff_snapshot
+                .as_ref()
+                .map(|s| Self::stage_handoff_from_stage_snapshot(s))
+        } else {
+            // No explicit start_from: if the sampler is HavanaInference, search backwards
+            // for a compatible Havana snapshot (training or inference). Otherwise use the
+            // latest snapshot.
+            match &sampler_config {
+                crate::core::SamplerAggregatorConfig::HavanaInference { .. } => {
+                    // Backward search.
+                    let mut search_seq = i32::MAX;
+                    loop {
+                        let opt_snap = worker
+                            .store
+                            .load_latest_stage_snapshot_before_sequence(worker.run_id, search_seq)
+                            .await?;
+                        let snap = match opt_snap {
+                            Some(s) => s,
+                            None => break,
+                        };
+                        // Accept HavanaTraining or HavanaInference snapshots (inference snapshots
+                        // should include the grid per the new snapshot format).
+                        match &snap.sampler_snapshot {
+                            crate::sampling::SamplerAggregatorSnapshot::HavanaTraining {
+                                ..
+                            }
+                            | crate::sampling::SamplerAggregatorSnapshot::HavanaInference {
+                                ..
+                            } => {
+                                handoff_snapshot = Some(snap);
+                                break;
+                            }
+                            _ => {}
+                        }
+                        let prev_seq = snap.sequence_nr.unwrap_or(0);
+                        if prev_seq <= 0 {
+                            break;
+                        }
+                        search_seq = prev_seq - 1;
+                    }
+
+                    if let Some(s) = handoff_snapshot.as_ref() {
+                        Some(Self::stage_handoff_from_stage_snapshot(s))
+                    } else {
+                        // No compatible snapshot found. Mark the task as failed and pause the run
+                        // (clear desired assignments) so the operator can intervene and replace
+                        // the failing task. Defer heavy compatibility enforcement to runtime.
+                        let reason = "havana_inference sampler requires a havana training or inference snapshot handoff; provide a start_from snapshot id";
+                        // Persist task failure. Best-effort: log if persistence fails.
+                        if let Err(e) = worker.store.fail_run_task(task.id, reason).await {
+                            warn!(
+                                run_id = worker.run_id,
+                                task_id = task.id,
+                                error = %e,
+                                "failed to persist task failure for activation error"
+                            );
+                        }
+                        // Clear desired assignments to pause the run so nodes won't keep trying.
+                        if let Err(e) = self
+                            .store
+                            .clear_desired_assignments_for_run(worker.run_id)
+                            .await
+                        {
+                            warn!(
+                                run_id = worker.run_id,
+                                error = %e,
+                                "failed to clear desired assignments for run after task activation failure"
+                            );
+                        } else {
+                            info!(
+                                run_id = worker.run_id,
+                                task_id = task.id,
+                                "task activation failed (missing havana snapshot); desired assignments cleared"
+                            );
+                        }
+                        return Ok(None);
+                    }
+                }
+                _ => {
+                    handoff_snapshot = worker
+                        .store
+                        .load_latest_stage_snapshot_before_sequence(worker.run_id, i32::MAX)
+                        .await?;
+                    handoff_snapshot
+                        .as_ref()
+                        .map(|s| Self::stage_handoff_from_stage_snapshot(s))
+                }
+            }
+        };
+
+        let sampler = match sampler_config.build(spec.point_spec.clone(), sample_budget, handoff) {
+            Ok(s) => s,
+            Err(err) => {
+                // Sampler build failed at activation time. Persist a task failure and pause the run
+                // (clear desired assignments) so an operator can inspect and add a replacement.
+                let reason = format!("failed to build sampler: {err}");
+                if let Err(e) = worker.store.fail_run_task(task.id, &reason).await {
+                    warn!(
+                        run_id = worker.run_id,
+                        task_id = task.id,
+                        error = %e,
+                        "failed to persist task failure after sampler build error"
+                    );
+                }
+                if let Err(e) = self
+                    .store
+                    .clear_desired_assignments_for_run(worker.run_id)
+                    .await
+                {
+                    warn!(
+                        run_id = worker.run_id,
+                        error = %e,
+                        "failed to clear desired assignments for run after sampler build error"
+                    );
+                } else {
+                    info!(
+                        run_id = worker.run_id,
+                        task_id = task.id,
+                        "task activation failed during sampler build; desired assignments cleared"
+                    );
+                }
+                return Ok(None);
+            }
+        };
 
         let new_observable_config = task
             .task
             .new_observable_config()
             .map_err(|err| StoreError::store(err.to_string()))?;
 
+        // Resolve observable state. Precedence:
+        //  - runner-resume snapshot
+        //  - explicit task.obs_start_from
+        //  - task-specified fresh observable config
+        //  - latest sampler-runner snapshot observable (fallback)
         let observable_state = if let Some(snapshot) = restored_snapshot.as_ref() {
             snapshot.observable_state.clone()
+        } else if let Some(obs_ref) = task.task.obs_start_from() {
+            let snap = worker
+                .store
+                .load_stage_snapshot(obs_ref.snapshot_id)
+                .await?;
+            let snap = snap.ok_or_else(|| {
+                StoreError::store(format!(
+                    "observable start_from references snapshot {} but no stage snapshot exists",
+                    obs_ref.snapshot_id
+                ))
+            })?;
+            snap.observable_state
+                .clone()
+                .unwrap_or_else(|| crate::evaluation::ObservableState::empty_scalar())
         } else if let Some(config) = new_observable_config {
             Self::observable_state_from_config(config)
         } else if let Some(snapshot) = latest_snapshot.as_ref() {

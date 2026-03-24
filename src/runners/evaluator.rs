@@ -9,6 +9,7 @@ use crate::runners::rolling_metric::RollingMetric;
 use serde::{Deserialize, Serialize};
 use std::{time::Duration, time::Instant};
 use thiserror::Error;
+use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvaluatorRunnerParams {
@@ -126,11 +127,25 @@ where
         };
 
         let materialization_started = Instant::now();
+        info!(
+            "evaluator tick: starting materialization run_id={} node={} batch_id={}",
+            self.run_id, self.node_name, claimed.batch_id
+        );
         let materialized = self.materializer.materialize_batch(&claimed.latent_batch);
         let materialization_time_ms = materialization_started.elapsed().as_secs_f64() * 1000.0;
         let materialized_batch = match materialized {
-            Ok(batch) => batch,
+            Ok(batch) => {
+                info!(
+                    "evaluator tick: materialization succeeded run_id={} node={} batch_id={} materialization_ms={:.2}",
+                    self.run_id, self.node_name, claimed.batch_id, materialization_time_ms
+                );
+                batch
+            }
             Err(err) => {
+                info!(
+                    "evaluator tick: materialization failed run_id={} node={} batch_id={} err={}",
+                    self.run_id, self.node_name, claimed.batch_id, err
+                );
                 return self
                     .fail_tick(
                         loop_started,
@@ -170,6 +185,10 @@ where
         }
 
         let started = Instant::now();
+        info!(
+            "evaluator tick: starting evaluation run_id={} node={} batch_id={}",
+            self.run_id, self.node_name, claimed.batch_id
+        );
         match self.evaluator.eval_batch(
             &transformed_batch,
             &claimed.latent_batch.observable,
@@ -180,6 +199,10 @@ where
             Ok(result) => {
                 let eval_time_ms = started.elapsed().as_secs_f64() * 1000.0;
                 let total_time_ms = materialization_time_ms + eval_time_ms;
+                info!(
+                    "evaluator tick: evaluation succeeded run_id={} node={} batch_id={} eval_ms={:.2}",
+                    self.run_id, self.node_name, claimed.batch_id, eval_time_ms
+                );
                 self.submit_result(
                     claimed.batch_id,
                     &transformed_batch,
@@ -195,6 +218,10 @@ where
             Err(err) => {
                 let eval_time_ms = started.elapsed().as_secs_f64() * 1000.0;
                 let total_time_ms = materialization_time_ms + eval_time_ms;
+                info!(
+                    "evaluator tick: evaluation failed run_id={} node={} batch_id={} err={}",
+                    self.run_id, self.node_name, claimed.batch_id, err
+                );
                 self.fail_tick(
                     loop_started,
                     claimed.batch_id,

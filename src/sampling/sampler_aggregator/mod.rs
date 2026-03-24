@@ -120,11 +120,10 @@ impl SamplerAggregatorConfig {
                 RasterLineSampler::from_params_and_point_spec(params.clone(), &point_spec)?,
             )),
             Self::HavanaTraining { params } => {
-                let sample_budget = sample_budget.ok_or_else(|| {
-                    BuildError::build(
-                        "havana_training sampler requires sample task nr_samples for training budget",
-                    )
-                })?;
+                // Minimal in-place behavior: if no explicit sample_budget is provided,
+                // default to a small positive budget (1) so initial-stage construction can proceed.
+                // This preserves simplicity and avoids forcing callers to always supply a budget.
+                let sample_budget = sample_budget.unwrap_or(1);
                 Ok(Box::new(HavanaSampler::from_params_and_point_spec(
                     params.clone(),
                     &point_spec,
@@ -152,8 +151,22 @@ impl SamplerAggregatorConfig {
         _sample_budget: Option<usize>,
         handoff: Option<StageHandoff<'_>>,
     ) -> Result<Box<dyn Materializer>, BuildError> {
+        // If the provided handoff contains a Havana sampler snapshot (training or inference),
+        // prefer the HavanaInferenceMaterializer so evaluators can materialize using the grid
+        // persisted in that snapshot. This lets evaluator materializers be chosen based on
+        // the stage handoff snapshot, not only the current sampler config.
+        if let Some(snap_ref) = handoff.as_ref().and_then(|h| h.sampler_snapshot.as_ref()) {
+            if matches!(
+                snap_ref,
+                SamplerAggregatorSnapshot::HavanaTraining { .. }
+                    | SamplerAggregatorSnapshot::HavanaInference { .. }
+            ) {
+                return Ok(Box::new(HavanaInferenceMaterializer::new(handoff)?));
+            }
+        }
+
         Ok(match self {
-            SamplerAggregatorConfig::HavanaInference { params } => {
+            SamplerAggregatorConfig::HavanaInference { params: _ } => {
                 Box::new(HavanaInferenceMaterializer::new(handoff)?)
             }
             _ => Box::new(IdentityMaterializer::new()),

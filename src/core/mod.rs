@@ -17,9 +17,9 @@ pub use run_spec::{
     SamplerAggregatorConfig,
 };
 pub use tasks::{
-    ImageDisplayMode, IntoPreflightTask, LineDisplayMode, LineRasterGeometry, Linspace,
-    PlaneRasterGeometry, PlotObservableKind, RunTask, RunTaskInputSpec, RunTaskSpec, RunTaskState,
-    StageSnapshotRef, resolve_initial_sampler_aggregator, resolve_task_queue,
+    ImageDisplayMode, LineDisplayMode, LineRasterGeometry, Linspace, PlaneRasterGeometry,
+    PlotObservableKind, RunTask, RunTaskInputSpec, RunTaskSpec, RunTaskState, StageSnapshotRef,
+    resolve_initial_sampler_aggregator, resolve_task_queue,
 };
 pub use traits::{
     AggregationStore, ControlPlaneStore, EvaluatorWorkerStore, RunReadStore, RunSpecStore,

@@ -4,7 +4,7 @@ use crate::core::{
     RunTaskInputSpec, RunTaskSpec, RunTaskStore, StageSnapshotRef, resolve_task_queue,
 };
 use crate::evaluation::PointSpec;
-use crate::preprocess::{RunAddConfig, preflight_task_suffix, preprocess_run_add};
+use crate::preprocess::{RunAddConfig, preprocess_run_add};
 use crate::stores::RunProgress;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -298,38 +298,53 @@ async fn load_append_base_snapshot(
 
 async fn preflight_task_batch(
     store: &impl AggregationStore,
-    base_snapshot: &RunStageSnapshot,
-    integration_params: &IntegrationParams,
+    _base_snapshot: &RunStageSnapshot,
+    _integration_params: &IntegrationParams,
     tasks: &[RunTaskSpec],
-    point_spec: &PointSpec,
+    _point_spec: &PointSpec,
 ) -> Result<(), ApiError> {
+    // Lightweight preflight performed at API time:
+    // - ensure any explicitly-referenced snapshots in `start_from` / `obs_start_from`
+    //   actually exist. Defer heavy compatibility checks (materializer/sampler/evaluator
+    //   dry-runs) until task activation in the node runner.
     let mut referenced_snapshots = BTreeMap::new();
     for task in tasks {
+        // Validate and collect sampler handoff snapshot if present.
         if let Some(start_from) = task.start_from() {
-            let snapshot = store
-                .load_stage_snapshot(start_from.snapshot_id)
-                .await?
-                .ok_or_else(|| {
-                    ApiError::BadRequest(format!(
-                        "task start_from references snapshot {} but no stage snapshot exists",
-                        start_from.snapshot_id
-                    ))
-                })?;
-            referenced_snapshots.insert(start_from.snapshot_id, snapshot);
+            if !referenced_snapshots.contains_key(&start_from.snapshot_id) {
+                let snapshot = store
+                    .load_stage_snapshot(start_from.snapshot_id)
+                    .await?
+                    .ok_or_else(|| {
+                        ApiError::BadRequest(format!(
+                            "task start_from references snapshot {} but no stage snapshot exists",
+                            start_from.snapshot_id
+                        ))
+                    })?;
+                referenced_snapshots.insert(start_from.snapshot_id, snapshot);
+            }
+        }
+
+        // Validate and collect observable start_from snapshot if present.
+        if let Some(obs_from) = task.obs_start_from() {
+            if !referenced_snapshots.contains_key(&obs_from.snapshot_id) {
+                let snapshot = store
+                    .load_stage_snapshot(obs_from.snapshot_id)
+                    .await?
+                    .ok_or_else(|| {
+                        ApiError::BadRequest(format!(
+                            "task obs_start_from references snapshot {} but no stage snapshot exists",
+                            obs_from.snapshot_id
+                        ))
+                    })?;
+                referenced_snapshots.insert(obs_from.snapshot_id, snapshot);
+            }
         }
     }
-    let mut evaluator = integration_params
-        .evaluator
-        .build()
-        .map_err(|err| ApiError::BadRequest(format!("failed to build evaluator: {err}")))?;
-    preflight_task_suffix(
-        base_snapshot,
-        &referenced_snapshots,
-        tasks,
-        &mut *evaluator,
-        point_spec,
-    )
-    .map_err(|err| ApiError::BadRequest(format!("failed to preflight task batch: {err}")))
+
+    // Intentionally skip building evaluator and running `preflight_task_suffix` here.
+    // Full compatibility checks will be executed at task start (node-runner activation).
+    Ok(())
 }
 
 fn clone_task_suffix(

@@ -547,6 +547,7 @@ mod tests {
             observable: crate::core::PlotObservableKind::Complex,
             display,
             start_from: None,
+            obs_start_from: None,
         }
     }
 

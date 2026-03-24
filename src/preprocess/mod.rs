@@ -11,8 +11,6 @@ use crate::sampling::NaiveMonteCarloSamplerParams;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
-pub use preflight::preflight_task_suffix;
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct RunAddIntegrationParams {
     pub evaluator: EvaluatorConfig,
@@ -91,11 +89,24 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
     let evaluator_init_metadata = evaluator.get_init_metadata();
     config.point_spec = Some(point_spec.clone());
 
+    // Determine an initial sample budget from the first resolved task when available.
+    // This is used to construct an initial sampler for samplers that require a training
+    // budget (e.g. HavanaTraining). Keep behavior minimal and in-place.
+    let initial_sample_budget = resolved_task_queue.as_ref().and_then(|tasks| {
+        tasks.first().and_then(|first_task| {
+            // `nr_expected_samples` returns Option<i64>; convert to usize when possible.
+            first_task
+                .nr_expected_samples()
+                .and_then(|n| usize::try_from(n).ok())
+        })
+    });
+
     let (sampler_aggregator_init_metadata, initial_stage_snapshot) =
-        preflight::build_initial_stage(
+        preflight::build_initial_stage_with_budget(
             &resolved_sampler_aggregator,
             &resolved_batch_transforms,
             &point_spec,
+            initial_sample_budget,
         )?;
     config.resolved_integration_params = Some(resolved_integration_params);
     config.evaluator_init_metadata = Some(evaluator_init_metadata);

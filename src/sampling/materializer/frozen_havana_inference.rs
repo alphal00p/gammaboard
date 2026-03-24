@@ -14,11 +14,17 @@ impl HavanaInferenceMaterializer {
     pub fn new(handoff: Option<StageHandoff<'_>>) -> Result<Self, BuildError> {
         let handoff = handoff.unwrap_or_default();
 
-        let Some(SamplerAggregatorSnapshot::HavanaTraining { raw }) = handoff.sampler_snapshot
-        else {
-            return Err(BuildError::build(
-                "havana inference materializer requires a havana training sampler snapshot",
-            ));
+        // Accept either a HavanaTraining snapshot (which contains the grid) or a
+        // HavanaInference snapshot that has been persisted with a grid. This keeps
+        // materializer construction simple and compatible with both snapshot kinds.
+        let raw = match handoff.sampler_snapshot {
+            Some(SamplerAggregatorSnapshot::HavanaTraining { raw }) => raw.clone(),
+            Some(SamplerAggregatorSnapshot::HavanaInference { raw }) => raw.clone(),
+            _ => {
+                return Err(BuildError::build(
+                    "havana inference materializer requires a havana training or inference sampler snapshot containing a grid",
+                ));
+            }
         };
 
         #[derive(Deserialize)]
@@ -63,40 +69,42 @@ impl Materializer for HavanaInferenceMaterializer {
     }
 
     fn materialize_batch(&mut self, latent_batch: &LatentBatch) -> Result<Batch, EngineError> {
-        let LatentBatchPayload::HavanaInference { seed } = latent_batch.payload.clone() else {
-            return Err(EngineError::engine(
-                "havana inference materializer requires havana_inference latent payloads",
-            ));
-        };
+        match &latent_batch.payload {
+            LatentBatchPayload::HavanaInference { seed } => {
+                let mut rng = SerializableMonteCarloRng::new(*seed, 0);
+                let mut coords = Vec::with_capacity(latent_batch.nr_samples * self.continuous_dims);
+                let mut weights = Vec::with_capacity(latent_batch.nr_samples);
 
-        let mut rng = SerializableMonteCarloRng::new(seed, 0);
-        let mut coords = Vec::with_capacity(latent_batch.nr_samples * self.continuous_dims);
-        let mut weights = Vec::with_capacity(latent_batch.nr_samples);
+                for _ in 0..latent_batch.nr_samples {
+                    let mut sample = Sample::new();
+                    self.grid.sample(&mut rng, &mut sample);
+                    match sample {
+                        Sample::Continuous(weight, x) => {
+                            coords.extend_from_slice(&x);
+                            weights.push(weight);
+                        }
+                        _ => {
+                            return Err(EngineError::engine(
+                                "havana inference materializer expected continuous samples",
+                            ));
+                        }
+                    }
+                }
 
-        for _ in 0..latent_batch.nr_samples {
-            let mut sample = Sample::new();
-            self.grid.sample(&mut rng, &mut sample);
-            match sample {
-                Sample::Continuous(weight, x) => {
-                    coords.extend_from_slice(&x);
-                    weights.push(weight);
-                }
-                _ => {
-                    return Err(EngineError::engine(
-                        "havana inference materializer expected continuous samples",
-                    ));
-                }
+                Batch::from_flat_data_with_weights(
+                    latent_batch.nr_samples,
+                    self.continuous_dims,
+                    0,
+                    coords,
+                    Vec::new(),
+                    Some(weights),
+                )
+                .map_err(|err| EngineError::engine(err.to_string()))
+            }
+            LatentBatchPayload::Batch { batch } => {
+                // If the latent payload is already a concrete batch, accept it directly.
+                Batch::from_json(batch).map_err(|err| EngineError::engine(err.to_string()))
             }
         }
-
-        Batch::from_flat_data_with_weights(
-            latent_batch.nr_samples,
-            self.continuous_dims,
-            0,
-            coords,
-            Vec::new(),
-            Some(weights),
-        )
-        .map_err(|err| EngineError::engine(err.to_string()))
     }
 }

@@ -344,6 +344,238 @@ fn temp_run_config(contents: &str) -> NamedTempFile {
     file
 }
 
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_alternating_havana_e2e() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+
+    // Initial run with tasks 1..4:
+    // 1: havana_training
+    // 2: havana_inference
+    // 3: naive_monte_carlo
+    // 4: image
+    let config = temp_run_config(
+        r#"
+name = "havana-alt-e2e"
+
+[evaluator]
+kind = "sinc_evaluator"
+
+[[task_queue]]
+kind = "sample"
+nr_samples = 128
+observable = "complex"
+[task_queue.sampler_aggregator]
+kind = "havana_training"
+seed = 0
+bins = 8
+min_samples_for_update = 4
+samples_for_update = 8
+
+[[task_queue]]
+kind = "sample"
+nr_samples = 128
+observable = "complex"
+[task_queue.sampler_aggregator]
+kind = "havana_inference"
+[task_queue.materializer]
+kind = "havana_inference"
+
+[[task_queue]]
+kind = "sample"
+nr_samples = 32
+observable = "complex"
+[task_queue.sampler_aggregator]
+kind = "naive_monte_carlo"
+
+[[task_queue]]
+kind = "image"
+observable = "complex"
+[task_queue.geometry]
+offset = [0.0, 0.0]
+u_vector = [1.0, 0.0]
+v_vector = [0.0, 1.0]
+[task_queue.geometry.u_linspace]
+start = -1.0
+stop = 1.0
+count = 8
+[task_queue.geometry.v_linspace]
+start = -1.0
+stop = 1.0
+count = 8
+"#,
+    );
+
+    // Create the run
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = 'havana-alt-e2e'")
+        .fetch_one(&harness.pool)
+        .await?;
+
+    // Start nodes and assign roles
+    harness.start_node("w-1").await?;
+    harness.start_node("w-2").await?;
+
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-1",
+            "sampler-aggregator",
+            "havana-alt-e2e",
+        ])
+        .assert()
+        .success();
+    harness
+        .cli()
+        .args(["node", "assign", "w-2", "evaluator", "havana-alt-e2e"])
+        .assert()
+        .success();
+
+    // Wait for the first four tasks to complete (sequence_nr 1..4)
+    harness
+        .wait_for("first 4 tasks complete", Duration::from_secs(60), || {
+            let pool = harness.pool.clone();
+            async move {
+                let completed: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM run_tasks WHERE run_id = $1 AND state = 'completed' AND sequence_nr <= 4",
+                )
+                .bind(run_id)
+                .fetch_one(&pool)
+                .await?;
+                Ok(completed == 4)
+            }
+        })
+        .await?;
+
+    // Lookup snapshot ids produced by task sequence 2 and 3
+    let task2_id: i64 =
+        sqlx::query_scalar("SELECT id FROM run_tasks WHERE run_id = $1 AND sequence_nr = 2")
+            .bind(run_id)
+            .fetch_one(&harness.pool)
+            .await?;
+    let task3_id: i64 =
+        sqlx::query_scalar("SELECT id FROM run_tasks WHERE run_id = $1 AND sequence_nr = 3")
+            .bind(run_id)
+            .fetch_one(&harness.pool)
+            .await?;
+
+    let snapshot2_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM run_stage_snapshots WHERE run_id = $1 AND task_id = $2 AND queue_empty = TRUE ORDER BY id DESC LIMIT 1",
+    )
+    .bind(run_id)
+    .bind(task2_id)
+    .fetch_one(&harness.pool)
+    .await?;
+
+    let snapshot3_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM run_stage_snapshots WHERE run_id = $1 AND task_id = $2 AND queue_empty = TRUE ORDER BY id DESC LIMIT 1",
+    )
+    .bind(run_id)
+    .bind(task3_id)
+    .fetch_one(&harness.pool)
+    .await?;
+
+    // Now append task 5 and 6:
+    // 5: havana_training that uses sampler snapshot from task 2 but observable from task 3
+    // 6: havana_inference (will use the most recent compatible training/inference snapshot)
+    let tasks_toml = format!(
+        r#"
+[[task_queue]]
+kind = "sample"
+nr_samples = 128
+observable = "complex"
+start_from = {{ snapshot_id = {snap2} }}
+obs_start_from = {{ snapshot_id = {snap3} }}
+[task_queue.sampler_aggregator]
+kind = "havana_training"
+seed = 0
+bins = 8
+min_samples_for_update = 4
+samples_for_update = 8
+
+[[task_queue]]
+kind = "sample"
+nr_samples = 128
+observable = "complex"
+[task_queue.sampler_aggregator]
+kind = "havana_inference"
+[task_queue.materializer]
+kind = "havana_inference"
+"#,
+        snap2 = snapshot2_id,
+        snap3 = snapshot3_id
+    );
+
+    let task_file = temp_run_config(&tasks_toml);
+
+    harness
+        .cli()
+        .args([
+            "run",
+            "task",
+            "add",
+            &run_id.to_string(),
+            task_file.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Reassign nodes so the newly appended tasks will be picked up by workers.
+    // Use auto-assign to let the system pick appropriate nodes.
+    harness
+        .cli()
+        .args(["auto-assign", &run_id.to_string()])
+        .assert()
+        .success();
+
+    // Wait for all 6 tasks to complete
+    harness
+        .wait_for("all tasks complete", Duration::from_secs(120), || {
+            let pool = harness.pool.clone();
+            async move {
+                let completed: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM run_tasks WHERE run_id = $1 AND state = 'completed'",
+                )
+                .bind(run_id)
+                .fetch_one(&pool)
+                .await?;
+                Ok(completed == 6)
+            }
+        })
+        .await?;
+
+    // Verify task 5 has the expected start_from and obs_start_from references
+    let t5_start_from: Option<i64> = sqlx::query_scalar(
+        "SELECT (task->'start_from'->>'snapshot_id')::bigint FROM run_tasks WHERE run_id = $1 AND sequence_nr = 5",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(t5_start_from, Some(snapshot2_id));
+
+    let t5_obs_from: Option<i64> = sqlx::query_scalar(
+        "SELECT (task->'obs_start_from'->>'snapshot_id')::bigint FROM run_tasks WHERE run_id = $1 AND sequence_nr = 5",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(t5_obs_from, Some(snapshot3_id));
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
 fn temp_server_config(
     host: &str,
     port: u16,
