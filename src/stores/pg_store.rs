@@ -102,51 +102,35 @@ fn decode_run_spec(
         )));
     }
 
-    if let Some(obj) = integration_params.as_object() {
-        if !obj.contains_key("sampler_aggregator") {
-            return Err(store_err(format!(
-                "invalid integration_params payload for run_id={run_id}: missing sampler_aggregator"
-            )));
-        }
-        if !obj.contains_key("parametrization") {
-            if !integration_params.is_object() {
-                return Err(store_err(format!(
-                    "invalid integration_params payload for run_id={run_id}: expected object"
-                )));
-            }
-
-            if let Some(obj) = integration_params.as_object() {
-                if !obj.contains_key("sampler_aggregator") {
-                    return Err(store_err(format!(
-                        "invalid integration_params payload for run_id={run_id}: missing sampler_aggregator"
-                    )));
-                }
-                if !obj.contains_key("parametrization") {
-                    return Err(store_err(format!(
-                        "invalid integration_params payload for run_id={run_id}: missing parametrization"
-                    )));
-                }
-            }
-
-            let params: IntegrationParams =
-                serde_json::from_value(integration_params).map_err(|err| {
-                    store_err(format!(
-                        "invalid integration_params payload for run_id={run_id}: {err}"
-                    ))
-                })?;
-            let point_spec: PointSpec = serde_json::from_value(point_spec).map_err(|err| {
-                store_err(format!(
-                    "invalid point_spec payload for run_id={run_id}: {err}"
-                ))
-            })?;
-
-            run_spec_from_integration_params(run_id, point_spec, params)
-        } else {
-            Err(StoreError::not_found("")) //TODO check this
-        }
-    } else {
-        Err(StoreError::not_found("")) //TODO check this
+    let obj = integration_params.as_object().unwrap();
+    if !obj.contains_key("sampler_aggregator") {
+        return Err(store_err(format!(
+            "invalid integration_params payload for run_id={run_id}: missing sampler_aggregator"
+        )));
     }
+    if !obj.contains_key("evaluator_runner_params") {
+        return Err(store_err(format!(
+            "invalid integration_params payload for run_id={run_id}: missing evaluator_runner_params"
+        )));
+    }
+    if !obj.contains_key("sampler_aggregator_runner_params") {
+        return Err(store_err(format!(
+            "invalid integration_params payload for run_id={run_id}: missing sampler_aggregator_runner_params"
+        )));
+    }
+
+    let params: IntegrationParams = serde_json::from_value(integration_params).map_err(|err| {
+        store_err(format!(
+            "invalid integration_params payload for run_id={run_id}: {err}"
+        ))
+    })?;
+    let point_spec: PointSpec = serde_json::from_value(point_spec).map_err(|err| {
+        store_err(format!(
+            "invalid point_spec payload for run_id={run_id}: {err}"
+        ))
+    })?;
+
+    run_spec_from_integration_params(run_id, point_spec, params)
 }
 
 fn parse_run_create_payload(integration_params: &JsonValue) -> Result<JsonValue, StoreError> {
@@ -1000,8 +984,8 @@ mod tests {
                 "discrete_dims": 0
             }),
         )
-        .expect_err("missing parametrization implementation should fail");
-        assert!(err.to_string().contains("parametrization"));
+        .expect_err("missing evaluator_runner_params should fail");
+        assert!(err.to_string().contains("evaluator_runner_params"));
     }
 
     #[test]

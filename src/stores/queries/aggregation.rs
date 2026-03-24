@@ -117,7 +117,6 @@ pub(crate) async fn get_latest_stage_snapshot_before_sequence(
             sampler_snapshot,
             observable_state,
             sampler_aggregator,
-            materializer,
             batch_transforms
         FROM run_stage_snapshots
         WHERE run_id = $1
@@ -149,7 +148,6 @@ pub(crate) async fn get_stage_snapshot(
             sampler_snapshot,
             observable_state,
             sampler_aggregator,
-            materializer,
             batch_transforms
         FROM run_stage_snapshots
         WHERE id = $1
@@ -198,7 +196,6 @@ pub(crate) async fn get_task_activation_stage_snapshot(
             sampler_snapshot,
             observable_state,
             sampler_aggregator,
-            materializer,
             batch_transforms
         FROM run_stage_snapshots
         WHERE run_id = $1
@@ -337,10 +334,9 @@ where
             sampler_snapshot,
             observable_state,
             sampler_aggregator,
-            materializer,
             batch_transforms
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         "#,
     )
     .bind(snapshot.run_id)

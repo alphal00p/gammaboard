@@ -1,65 +1,54 @@
 use crate::core::{BuildError, EngineError};
 use crate::evaluation::{Batch, Materializer, PointSpec};
-use crate::sampling::{LatentBatch, LatentBatchPayload, StageHandoff};
+use crate::sampling::{LatentBatch, LatentBatchPayload, SamplerAggregatorSnapshot, StageHandoff};
 use crate::utils::rng::SerializableMonteCarloRng;
+use serde::Deserialize;
 use symbolica::numerical_integration::{Grid, Sample};
 
 pub struct HavanaInferenceMaterializer {
     continuous_dims: usize,
     grid: Grid<f64>,
 }
-pub struct HavanaInferenceSamplerParams {}
+
 impl HavanaInferenceMaterializer {
     pub fn new(handoff: Option<StageHandoff<'_>>) -> Result<Self, BuildError> {
         let handoff = handoff.unwrap_or_default();
-        todo!()
-        //let grid = match handoff.materializer_snapshot {
-        //    Some(MaterializerSnapshot::HavanaInference { grid }) => {
-        //        serde_json::from_value(grid.clone()).map_err(|err| {
-        //            BuildError::build(format!(
-        //                "failed to decode havana inference materializer snapshot grid: {err}"
-        //            ))
-        //        })?
-        //    }
-        //    Some(MaterializerSnapshot::Identity {}) | None => {
-        //        let Some(crate::sampling::SamplerAggregatorSnapshot::HavanaTraining { raw }) =
-        //            handoff.sampler_snapshot
-        //        else {
-        //            return Err(BuildError::build(
-        //                "havana inference materializer requires a havana training sampler snapshot or materializer snapshot",
-        //            ));
-        //        };
-        //        #[derive(Deserialize)]
-        //        struct GridOnlySnapshot {
-        //            grid: serde_json::Value,
-        //        }
-        //        let grid_only: GridOnlySnapshot =
-        //            serde_json::from_value(raw.clone()).map_err(|err| {
-        //                BuildError::build(format!(
-        //                    "failed to decode havana sampler snapshot grid for materializer handoff: {err}"
-        //                ))
-        //            })?;
-        //        serde_json::from_value(grid_only.grid).map_err(|err| {
-        //            BuildError::build(format!(
-        //                "failed to decode havana grid for materializer handoff: {err}"
-        //            ))
-        //        })?
-        //    }
-        //};
-        //
-        //let continuous_dims = match &grid {
-        //    Grid::Continuous(grid) => grid.continuous_dimensions.len(),
-        //    Grid::Discrete(_) | Grid::Uniform(_, _) => {
-        //        return Err(BuildError::build(
-        //            "havana inference materializer requires a continuous grid",
-        //        ));
-        //    }
-        //};
-        //
-        //Ok(Self {
-        //    continuous_dims,
-        //    grid,
-        //})
+
+        let Some(SamplerAggregatorSnapshot::HavanaTraining { raw }) = handoff.sampler_snapshot
+        else {
+            return Err(BuildError::build(
+                "havana inference materializer requires a havana training sampler snapshot",
+            ));
+        };
+
+        #[derive(Deserialize)]
+        struct GridOnlySnapshot {
+            grid: serde_json::Value,
+        }
+        let grid_only: GridOnlySnapshot = serde_json::from_value(raw.clone()).map_err(|err| {
+            BuildError::build(format!(
+                "failed to decode havana sampler snapshot grid for materializer handoff: {err}"
+            ))
+        })?;
+        let grid: Grid<f64> = serde_json::from_value(grid_only.grid).map_err(|err| {
+            BuildError::build(format!(
+                "failed to decode havana grid for materializer handoff: {err}"
+            ))
+        })?;
+
+        let continuous_dims = match &grid {
+            Grid::Continuous(grid) => grid.continuous_dimensions.len(),
+            Grid::Discrete(_) | Grid::Uniform(_, _) => {
+                return Err(BuildError::build(
+                    "havana inference materializer requires a continuous grid",
+                ));
+            }
+        };
+
+        Ok(Self {
+            continuous_dims,
+            grid,
+        })
     }
 }
 

@@ -184,7 +184,17 @@ pub async fn clone_run(
     }
 
     let source_tasks = store.list_run_tasks(source_run_id).await?;
-    let cloned_tasks = clone_task_suffix(&source_tasks, &snapshot)?;
+    let mut cloned_tasks = clone_task_suffix(&source_tasks, &snapshot)?;
+    // Ensure the first cloned task continues from the provided snapshot so the cloned run
+    // resumes from the exact stage snapshot we cloned from.
+    if let Some(first) = cloned_tasks.first_mut() {
+        set_task_start_from(
+            first,
+            StageSnapshotRef {
+                snapshot_id: from_snapshot_id,
+            },
+        );
+    }
     let run_id = store
         .create_run(
             new_name,

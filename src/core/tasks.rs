@@ -35,7 +35,6 @@ pub enum RunTaskInputSpec {
     Sample {
         nr_samples: Option<i64>,
         sampler_aggregator: Option<SamplerAggregatorConfig>,
-        //materializer: Option<MaterializerConfig>,
         #[serde(default)]
         batch_transforms: Option<Vec<BatchTransformConfig>>,
         #[serde(default)]

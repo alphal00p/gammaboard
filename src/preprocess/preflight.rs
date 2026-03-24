@@ -143,8 +143,7 @@ fn preflight_configure_stage(
 ) -> Result<PreflightStageState, BuildError> {
     let mut sampler = sampler_aggregator.build(point_spec.clone(), None, handoff)?;
     sampler.validate_point_spec(point_spec)?;
-    let mut materializer =
-        sampler_aggregator.build_materializer(point_spec.clone(), None, handoff)?;
+    let materializer = sampler_aggregator.build_materializer(point_spec.clone(), None, handoff)?;
     materializer.validate_point_spec(point_spec)?;
     for transform in batch_transforms {
         transform.build()?.validate_point_spec(point_spec)?;

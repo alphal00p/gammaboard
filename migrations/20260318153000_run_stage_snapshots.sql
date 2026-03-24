@@ -7,7 +7,6 @@ CREATE TABLE IF NOT EXISTS run_stage_snapshots (
     sampler_snapshot JSONB NOT NULL,
     observable_state JSONB,
     sampler_aggregator JSONB NOT NULL,
-    materializer JSONB NOT NULL,
     batch_transforms JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
