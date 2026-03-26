@@ -9,5 +9,3 @@ state_folder = "../gammaloop/my_triangle/state"
 momentum_space = true
 use_f128 = false
 training_projection = "abs"
-continuous_dims = 3
-discrete_dims = 0

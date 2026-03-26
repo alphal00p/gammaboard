@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use gammaloop_api::state::{ProcessRef, State};
 use gammalooprs::initialisation::initialise;
+use gammalooprs::integrands::HasIntegrand;
 use gammalooprs::integrands::process::{MomentumSpaceEvaluationInput, ProcessIntegrand};
 use gammalooprs::model::Model;
 use gammalooprs::settings::runtime::SamplingSettings;
@@ -55,8 +56,6 @@ pub struct GammaLoopParams {
     pub momentum_space: bool,
     pub use_f128: bool,
     pub training_projection: TrainingProjection,
-    pub continuous_dims: usize,
-    pub discrete_dims: usize,
 }
 
 impl Default for GammaLoopParams {
@@ -68,8 +67,6 @@ impl Default for GammaLoopParams {
             momentum_space: true,
             use_f128: false,
             training_projection: TrainingProjection::default(),
-            continuous_dims: 3,
-            discrete_dims: 0,
         }
     }
 }
@@ -94,6 +91,19 @@ impl GammaLoopEvaluator {
             .map_err(|err| BuildError::build(err.to_string()))?
             .clone();
         let model = state.model.clone();
+        let discrete_dims = integrand.discrete_sampling_depth();
+        let continuous_dims = if params.momentum_space {
+            integrand.get_n_dim()
+        } else {
+            // TODO: tropical sampling can have group-dependent x-space dimensions.
+            // We currently infer a single run-global dimension from the zero discrete selection.
+            let default_discrete_selection = vec![0; discrete_dims];
+            integrand
+                .expected_x_space_dimension(default_discrete_selection.as_slice())
+                .map_err(|err| {
+                    BuildError::build(format!("failed to infer x-space dimensions: {err}"))
+                })?
+        };
 
         Ok(Self {
             integrand,
@@ -101,8 +111,8 @@ impl GammaLoopEvaluator {
             momentum_space: params.momentum_space,
             training_projection: params.training_projection,
             point_spec: PointSpec {
-                continuous_dims: params.continuous_dims,
-                discrete_dims: params.discrete_dims,
+                continuous_dims,
+                discrete_dims,
             },
         })
     }
