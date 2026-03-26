@@ -37,6 +37,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Task sequencing lives in `src/core/tasks.rs`.
 - Task ordering may still use internal sequence numbers, but operator-facing task identity is the task `name`.
 - Task names must be unique per run.
+- Task names are optional in task TOML. If omitted, the system auto-generates a stable default name.
 - Use a single task shape (`RunTaskSpec`) end-to-end; do not reintroduce separate task input/spec indirection.
 - Task transitions must restore runtime state from persisted `run_stage_snapshots`, not in-memory handoff only.
 - Snapshots are the branchable state timeline. Tasks are queued work items that may produce snapshots, but are not themselves the canonical branch identity.

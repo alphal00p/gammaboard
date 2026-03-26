@@ -2,7 +2,7 @@ mod preflight;
 
 use crate::core::{
     BatchTransformConfig, BuildError, EvaluatorConfig, IntegrationParams, RunStageSnapshot,
-    RunTaskSpec, SamplerAggregatorConfig,
+    RunTaskInput, SamplerAggregatorConfig,
 };
 use crate::evaluation::PointSpec;
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
@@ -24,7 +24,7 @@ pub struct RunAddIntegrationParams {
 #[derive(Debug, Clone, Deserialize)]
 pub struct RunAddConfig {
     pub name: String,
-    pub task_queue: Option<Vec<RunTaskSpec>>,
+    pub task_queue: Option<Vec<RunTaskInput>>,
     #[serde(flatten)]
     pub integration_params: RunAddIntegrationParams,
     pub target: Option<JsonValue>,
@@ -35,7 +35,7 @@ pub struct RunAddConfig {
     #[serde(skip)]
     pub initial_stage_snapshot: Option<RunStageSnapshot>,
     #[serde(skip)]
-    pub resolved_task_queue: Option<Vec<RunTaskSpec>>,
+    pub resolved_task_queue: Option<Vec<RunTaskInput>>,
 }
 
 pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, BuildError> {
@@ -79,6 +79,7 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
         tasks.first().and_then(|first_task| {
             // `nr_expected_samples` returns Option<i64>; convert to usize when possible.
             first_task
+                .task
                 .nr_expected_samples()
                 .and_then(|n| usize::try_from(n).ok())
         })

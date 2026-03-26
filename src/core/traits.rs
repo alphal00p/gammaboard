@@ -6,7 +6,7 @@ use super::models::{
     RunSampleProgress, RunStageSnapshot, RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
 };
 use crate::core::RunSpec;
-use crate::core::{RunTask, RunTaskSpec};
+use crate::core::{RunTask, RunTaskInput};
 use crate::evaluation::{BatchResult, PointSpec};
 use crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot;
 use crate::sampling::LatentBatch;
@@ -65,7 +65,7 @@ pub trait ControlPlaneStore: Send + Sync {
         target: Option<&JsonValue>,
         point_spec: &PointSpec,
         initial_stage_snapshot: &RunStageSnapshot,
-        initial_tasks: &[RunTaskSpec],
+        initial_tasks: &[RunTaskInput],
     ) -> Result<i32, StoreError>;
     async fn remove_run(&self, run_id: i32) -> Result<(), StoreError>;
 }
@@ -169,7 +169,7 @@ pub trait RunTaskStore: Send + Sync {
     async fn append_run_tasks(
         &self,
         run_id: i32,
-        tasks: &[RunTaskSpec],
+        tasks: &[RunTaskInput],
     ) -> Result<Vec<RunTask>, StoreError>;
     async fn list_run_tasks(&self, run_id: i32) -> Result<Vec<RunTask>, StoreError>;
     async fn remove_pending_run_task(&self, run_id: i32, task_id: i64) -> Result<bool, StoreError>;

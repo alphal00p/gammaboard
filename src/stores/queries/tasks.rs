@@ -1,4 +1,4 @@
-use crate::core::{RunTask, RunTaskSpec, RunTaskState};
+use crate::core::{RunTask, RunTaskInput, RunTaskSpec, RunTaskState, generated_task_name};
 use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
@@ -76,7 +76,7 @@ fn decode_task_row(row: RunTaskRow) -> Result<RunTask, sqlx::Error> {
 pub(crate) async fn append_run_tasks(
     pool: &PgPool,
     run_id: i32,
-    tasks: &[RunTaskSpec],
+    tasks: &[RunTaskInput],
 ) -> Result<Vec<RunTask>, sqlx::Error> {
     let mut tx = pool.begin().await?;
     let next_sequence = sqlx::query_scalar::<_, i32>(
@@ -120,12 +120,13 @@ pub(crate) async fn append_run_tasks(
             "#,
         )
         .bind(run_id)
-        .bind(crate::core::generated_task_name(
-            task,
-            next_sequence + offset as i32,
-        ))
+        .bind(
+            task.name
+                .clone()
+                .unwrap_or_else(|| generated_task_name(&task.task, next_sequence + offset as i32)),
+        )
         .bind(next_sequence + offset as i32)
-        .bind(encode_task(task)?)
+        .bind(encode_task(&task.task)?)
         .fetch_one(&mut *tx)
         .await?;
         inserted.push(decode_task_row(row)?);

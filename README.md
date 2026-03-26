@@ -154,6 +154,7 @@ Relative indices are supported too: `snapshot_id = -1` means "latest prior stage
 Sample task config example:
 ```toml
 [[task_queue]]
+name = "warmup-sample" # optional; auto-generated when omitted
 kind = "sample"
 nr_samples = 10000
 [task_queue.config]

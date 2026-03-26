@@ -4,7 +4,7 @@ use super::queries;
 use crate::core::{
     AggregationStore, BatchClaim, CompletedBatch, ControlPlaneStore, DesiredAssignment,
     EvaluatorPerformanceSnapshot, RegisteredNode, RunReadStore, RunSampleProgress, RunSpecStore,
-    RunStageSnapshot, RunTask, RunTaskSpec, RunTaskStore, RuntimeLogEvent, RuntimeLogStore,
+    RunStageSnapshot, RunTask, RunTaskInput, RunTaskStore, RuntimeLogEvent, RuntimeLogStore,
     SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore, WorkerRole,
     generated_task_name,
 };
@@ -63,6 +63,9 @@ fn map_sqlx(err: sqlx::Error) -> StoreError {
                     "run already has a current sampler_aggregator node; clear the existing current sampler before starting another node",
                 );
             }
+            if db_err.constraint() == Some("run_tasks_name_unique") {
+                return StoreError::invalid_input("task name must be unique within a run");
+            }
         }
         if db_err.code().as_deref() == Some("23514") {
             if matches!(
@@ -79,8 +82,8 @@ fn map_sqlx(err: sqlx::Error) -> StoreError {
     StoreError::from(err)
 }
 
-fn serialize_task(task: &RunTaskSpec) -> Result<JsonValue, StoreError> {
-    serde_json::to_value(task)
+fn serialize_task(task: &RunTaskInput) -> Result<JsonValue, StoreError> {
+    serde_json::to_value(&task.task)
         .map_err(|err| store_err(format!("failed to serialize run task: {err}")))
 }
 
@@ -447,7 +450,7 @@ impl ControlPlaneStore for PgStore {
         target: Option<&JsonValue>,
         point_spec: &PointSpec,
         initial_stage_snapshot: &RunStageSnapshot,
-        initial_tasks: &[RunTaskSpec],
+        initial_tasks: &[RunTaskInput],
     ) -> Result<i32, StoreError> {
         let sanitized_params = parse_run_create_payload(integration_params)?;
         let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
@@ -488,6 +491,11 @@ impl ControlPlaneStore for PgStore {
         .await
         .map_err(map_sqlx)?;
         for (offset, task) in initial_tasks.iter().enumerate() {
+            let sequence_nr = offset as i32 + 1;
+            let task_name = task
+                .name
+                .clone()
+                .unwrap_or_else(|| generated_task_name(&task.task, sequence_nr));
             sqlx::query(
                 r#"
                 INSERT INTO run_tasks (
@@ -501,8 +509,8 @@ impl ControlPlaneStore for PgStore {
                 "#,
             )
             .bind(run_id)
-            .bind(generated_task_name(task, offset as i32 + 1))
-            .bind(offset as i32 + 1)
+            .bind(task_name)
+            .bind(sequence_nr)
             .bind(serialize_task(task)?)
             .execute(&mut *tx)
             .await
@@ -790,7 +798,7 @@ impl RunTaskStore for PgStore {
     async fn append_run_tasks(
         &self,
         run_id: i32,
-        tasks: &[RunTaskSpec],
+        tasks: &[RunTaskInput],
     ) -> Result<Vec<RunTask>, StoreError> {
         queries::append_run_tasks(&self.pool, run_id, tasks)
             .await

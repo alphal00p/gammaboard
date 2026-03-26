@@ -409,6 +409,29 @@ pub struct RunTask {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunTaskInput {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub task: RunTaskSpec,
+}
+
+impl RunTaskInput {
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(name) = self.name.as_deref() {
+            let trimmed = name.trim();
+            if trimmed.is_empty() {
+                return Err("task name must be non-empty when set".to_string());
+            }
+            if trimmed != name {
+                return Err("task name cannot have leading or trailing whitespace".to_string());
+            }
+        }
+        self.task.validate()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

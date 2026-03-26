@@ -1,7 +1,7 @@
 use crate::api::ApiError;
 use crate::core::{
-    AggregationStore, ControlPlaneStore, IntegrationParams, RunStageSnapshot, RunTask, RunTaskSpec,
-    RunTaskStore,
+    AggregationStore, ControlPlaneStore, IntegrationParams, RunStageSnapshot, RunTask,
+    RunTaskInput, RunTaskStore,
 };
 use crate::evaluation::PointSpec;
 use crate::preprocess::{RunAddConfig, preprocess_run_add};
@@ -44,13 +44,13 @@ pub struct PausedRun {
 #[derive(Debug, Clone, Deserialize)]
 pub struct TaskQueueFile {
     #[serde(default)]
-    pub task: Option<RunTaskSpec>,
+    pub task: Option<RunTaskInput>,
     #[serde(default)]
-    pub task_queue: Option<Vec<RunTaskSpec>>,
+    pub task_queue: Option<Vec<RunTaskInput>>,
 }
 
 impl TaskQueueFile {
-    pub fn into_tasks(self) -> Vec<RunTaskSpec> {
+    pub fn into_tasks(self) -> Vec<RunTaskInput> {
         let mut tasks = Vec::new();
         if let Some(task) = self.task {
             tasks.push(task);
@@ -184,7 +184,7 @@ pub async fn clone_run(
     let source_tasks = store.list_run_tasks(source_run_id).await?;
     let root_snapshot_name =
         format_clone_root_snapshot_name(&source_run.run_name, &source_tasks, &snapshot);
-    let cloned_tasks: Vec<RunTaskSpec> = Vec::new();
+    let cloned_tasks: Vec<RunTaskInput> = Vec::new();
     let run_id = store
         .create_run(
             new_name,
@@ -263,7 +263,7 @@ async fn resolve_task_file_for_run(
     store: &(impl AggregationStore + crate::core::RunReadStore),
     run_id: i32,
     task_file: TaskQueueFile,
-) -> Result<Vec<RunTaskSpec>, ApiError> {
+) -> Result<Vec<RunTaskInput>, ApiError> {
     let _run = load_run_progress(store, run_id).await?;
     Ok(task_file.into_tasks())
 }
@@ -282,7 +282,7 @@ async fn preflight_task_batch(
     store: &impl AggregationStore,
     base_snapshot: &RunStageSnapshot,
     _integration_params: &IntegrationParams,
-    tasks: &[RunTaskSpec],
+    tasks: &[RunTaskInput],
     _point_spec: &PointSpec,
 ) -> Result<(), ApiError> {
     // API-time preflight rules (kept intentionally lightweight):
@@ -298,7 +298,7 @@ async fn preflight_task_batch(
     // resource-heavy checks for the execution environment.
     let mut referenced_snapshots = BTreeMap::new();
     for task in tasks {
-        if let Some(snapshot_id) = task.source_snapshot_id() {
+        if let Some(snapshot_id) = task.task.source_snapshot_id() {
             if snapshot_id < 0 {
                 // Relative snapshot references are resolved at task activation time.
                 // They intentionally bypass API-time absolute-id validation.

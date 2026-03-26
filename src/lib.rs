@@ -19,7 +19,7 @@ pub use core::{BatchRecord, BatchStatus};
 pub use core::{BuildError, EngineError, EvalError, StoreError};
 pub use core::{
     ImageDisplayMode, LineDisplayMode, LineRasterGeometry, Linspace, PlaneRasterGeometry,
-    PlotObservableKind, RunTask, RunTaskSpec, RunTaskState, SampleTaskConfig,
+    PlotObservableKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState, SampleTaskConfig,
 };
 pub use evaluation::{
     Batch, BatchError, BatchResult, BatchTransform, ComplexObservableState, ComplexSampleEvaluator,
