@@ -62,7 +62,7 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
               >
                 {runOptions.map((run) => (
                   <MenuItem key={run.run_id} value={run.run_id}>
-                    {run.run_name} (#{run.run_id})
+                    {run.run_name || "Unnamed run"}
                   </MenuItem>
                 ))}
               </Select>

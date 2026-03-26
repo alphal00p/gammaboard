@@ -17,9 +17,9 @@ pub use run_spec::{
     SamplerAggregatorConfig,
 };
 pub use tasks::{
-    ImageDisplayMode, LineDisplayMode, LineRasterGeometry, Linspace, PlaneRasterGeometry,
-    PlotObservableKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState, SampleTaskConfig,
-    generated_task_name,
+    ImageDisplayMode, LineDisplayMode, LineRasterGeometry, Linspace, ObservableSourceSpec,
+    PlaneRasterGeometry, PlotObservableKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState,
+    SampleTaskConfig, SamplerAggregatorSourceSpec, SourceRefSpec, generated_task_name,
 };
 pub use traits::{
     AggregationStore, ControlPlaneStore, EvaluatorWorkerStore, RunReadStore, RunSpecStore,

@@ -1,6 +1,6 @@
 export const formatRunLabel = (run) => {
   if (!run) return "Unknown run";
-  return run.run_name ? `${run.run_name} (#${run.run_id})` : `Run #${run.run_id}`;
+  return run.run_name ? run.run_name : "Unnamed run";
 };
 
 export const deriveRunLifecycle = (run) => {

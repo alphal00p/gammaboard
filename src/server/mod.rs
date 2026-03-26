@@ -592,15 +592,13 @@ async fn resolve_active_task_sampler_config(
     if let Some(config) = task.task.sampler_config() {
         return Ok(config);
     }
-    if let Some(config) = task
-        .task
-        .sample_config()
-        .and_then(|config| config.sampler_aggregator.clone())
-    {
+    if let Some(config) = task.task.sample_sampler_config() {
         return Ok(config);
     }
 
-    if let Some(source_snapshot) = resolve_task_source_snapshot(state, run_id, task).await? {
+    if let Some(source_snapshot) =
+        resolve_task_source_snapshot(state, run_id, task, task.task.sample_sampler_source()).await?
+    {
         return Ok(source_snapshot.sampler_aggregator);
     }
 
@@ -619,58 +617,53 @@ async fn resolve_task_source_snapshot(
     state: &AppState,
     run_id: i32,
     task: &RunTask,
+    source: Option<crate::core::SourceRefSpec>,
 ) -> Result<Option<crate::core::RunStageSnapshot>, ApiError> {
-    let Some(snapshot_id) = task.task.source_snapshot_id() else {
-        return Ok(None);
-    };
-
-    if snapshot_id > 0 {
-        let snapshot = state
+    match source {
+        Some(crate::core::SourceRefSpec::Latest) => state
             .store
-            .load_stage_snapshot(snapshot_id)
-            .await?
-            .ok_or_else(|| {
-                ApiError::BadRequest(format!(
-                    "task {} references snapshot {} but no stage snapshot exists",
-                    task.id, snapshot_id
-                ))
-            })?;
-        if snapshot.run_id != run_id {
-            return Err(ApiError::BadRequest(format!(
-                "task {} references snapshot {} from run {}, expected run {}",
-                task.id, snapshot_id, snapshot.run_id, run_id
-            )));
+            .load_latest_stage_snapshot_before_sequence(run_id, task.sequence_nr)
+            .await
+            .map_err(Into::into),
+        Some(crate::core::SourceRefSpec::FromName(source_task_name)) => {
+            let source_task = state
+                .store
+                .list_run_tasks(run_id)
+                .await?
+                .into_iter()
+                .find(|candidate| candidate.name == source_task_name)
+                .ok_or_else(|| {
+                    ApiError::BadRequest(format!(
+                        "task {} references source task '{}' but no such task exists in run {}",
+                        task.id, source_task_name, run_id
+                    ))
+                })?;
+            if source_task.sequence_nr >= task.sequence_nr {
+                return Err(ApiError::BadRequest(format!(
+                    "task {} references source task '{}' which is not prior in sequence",
+                    task.id, source_task_name
+                )));
+            }
+            let snapshot = state
+                .store
+                .load_latest_stage_snapshot_before_sequence(run_id, source_task.sequence_nr + 1)
+                .await?
+                .ok_or_else(|| {
+                    ApiError::BadRequest(format!(
+                        "task {} source task '{}' has no queue-empty stage snapshot",
+                        task.id, source_task_name
+                    ))
+                })?;
+            if snapshot.task_id != Some(source_task.id) {
+                return Err(ApiError::BadRequest(format!(
+                    "task {} source task '{}' has no queue-empty stage snapshot",
+                    task.id, source_task_name
+                )));
+            }
+            Ok(Some(snapshot))
         }
-        return Ok(Some(snapshot));
+        None => Ok(None),
     }
-
-    let mut remaining = (-snapshot_id) as usize;
-    let mut search_sequence = task.sequence_nr;
-    let mut resolved: Option<crate::core::RunStageSnapshot> = None;
-
-    while remaining > 0 {
-        let snapshot = state
-            .store
-            .load_latest_stage_snapshot_before_sequence(run_id, search_sequence)
-            .await?
-            .ok_or_else(|| {
-                ApiError::BadRequest(format!(
-                    "task {} references relative snapshot {} but only {} prior stage snapshot(s) exist",
-                    task.id, snapshot_id, (-snapshot_id) as usize - remaining
-                ))
-            })?;
-        let sequence_nr = snapshot.sequence_nr.ok_or_else(|| {
-            ApiError::Internal(format!(
-                "relative snapshot resolution for task {} reached a snapshot without sequence_nr",
-                task.id
-            ))
-        })?;
-        search_sequence = sequence_nr;
-        resolved = Some(snapshot);
-        remaining -= 1;
-    }
-
-    Ok(resolved)
 }
 
 async fn get_run_task_output(

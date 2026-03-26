@@ -51,15 +51,16 @@ const CloneRunDialog = ({
     if (Number.isFinite(Number(rootSnapshotId))) {
       optionList.push({
         value: String(rootSnapshotId),
-        label: `Initial state (snapshot #${rootSnapshotId})`,
-        helper: "Root stage snapshot",
+        label: "Initial state",
+        helper: "Run root state",
       });
     }
     for (const task of snapshotTaskList) {
+      const taskName = task.name || "Unnamed task";
       optionList.push({
         value: String(task.latest_stage_snapshot_id),
-        label: `${task.name || `task-${task.id}`} · ${task.state} · ${getTaskKindLabel(task)} · snapshot #${task.latest_stage_snapshot_id}`,
-        helper: `${task.name || `task-${task.id}`} -> snapshot #${task.latest_stage_snapshot_id}`,
+        label: `${taskName} · ${task.state} · ${getTaskKindLabel(task)}`,
+        helper: taskName,
       });
     }
     return optionList;
@@ -122,7 +123,7 @@ const CloneRunDialog = ({
             >
               {runs.map((run) => (
                 <MenuItem key={run.run_id} value={run.run_id}>
-                  {run.run_name} (#{run.run_id})
+                  {run.run_name || "Unnamed run"}
                 </MenuItem>
               ))}
             </TextField>

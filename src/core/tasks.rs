@@ -27,13 +27,74 @@ impl RunTaskState {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SampleTaskConfig {
-    pub sampler_aggregator: Option<SamplerAggregatorConfig>,
     pub batch_transforms: Option<Vec<BatchTransformConfig>>,
-    pub observable: Option<ObservableConfig>,
 }
 
-fn default_from_seq_minus_one() -> i64 {
-    -1
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceRefSpec {
+    Latest,
+    FromName(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SamplerAggregatorSourceSpec {
+    Latest(String),
+    FromName { from_name: String },
+    Config { config: SamplerAggregatorConfig },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ObservableSourceSpec {
+    Latest(String),
+    FromName { from_name: String },
+    Config { config: ObservableConfig },
+}
+
+fn validate_source_name(field: &str, from_name: &str) -> Result<(), String> {
+    let trimmed = from_name.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{field}.from_name must be non-empty"));
+    }
+    if trimmed != from_name {
+        return Err(format!(
+            "{field}.from_name cannot have leading/trailing whitespace"
+        ));
+    }
+    Ok(())
+}
+
+impl SamplerAggregatorSourceSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Latest(value) => {
+                if value == "latest" {
+                    Ok(())
+                } else {
+                    Err("sampler_aggregator must be one of: \"latest\", { from_name = ... }, { config = ... }".to_string())
+                }
+            }
+            Self::FromName { from_name } => validate_source_name("sampler_aggregator", from_name),
+            Self::Config { .. } => Ok(()),
+        }
+    }
+}
+
+impl ObservableSourceSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Latest(value) => {
+                if value == "latest" {
+                    Ok(())
+                } else {
+                    Err("observable must be one of: \"latest\", { from_name = ... }, { config = ... }".to_string())
+                }
+            }
+            Self::FromName { from_name } => validate_source_name("observable", from_name),
+            Self::Config { .. } => Ok(()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,10 +102,12 @@ fn default_from_seq_minus_one() -> i64 {
 pub enum RunTaskSpec {
     Sample {
         nr_samples: Option<i64>,
-        #[serde(default = "default_from_seq_minus_one")]
-        snapshot_id: i64,
         #[serde(default)]
-        config: Option<SampleTaskConfig>,
+        sampler_aggregator: Option<SamplerAggregatorSourceSpec>,
+        #[serde(default)]
+        observable: Option<ObservableSourceSpec>,
+        #[serde(default)]
+        batch_transforms: Option<Vec<BatchTransformConfig>>,
     },
     Image {
         geometry: PlaneRasterGeometry,
@@ -70,30 +133,24 @@ impl RunTaskSpec {
                 Err("sample task nr_samples must be a non-negative integer when set".to_string())
             }
             Self::Sample {
-                snapshot_id,
-                config: Some(_),
-                ..
-            } if *snapshot_id != -1 => Err(
-                "sample task must define exactly one source: either `snapshot_id` or `config`"
-                    .to_string(),
-            ),
-            Self::Sample { snapshot_id: 0, .. } => Err(
-                "sample task snapshot_id cannot be 0 (use >0 absolute id or <0 relative index)"
-                    .to_string(),
-            ),
-            Self::Sample {
                 nr_samples: None,
-                snapshot_id: -1,
-                config:
-                    Some(SampleTaskConfig {
-                        sampler_aggregator: Some(SamplerAggregatorConfig::HavanaTraining { .. }),
-                        ..
+                sampler_aggregator:
+                    Some(SamplerAggregatorSourceSpec::Config {
+                        config: SamplerAggregatorConfig::HavanaTraining { .. },
                     }),
                 ..
             } => Err(
                 "sample task with havana_training sampler requires nr_samples for training budget"
                     .to_string(),
             ),
+            Self::Sample {
+                sampler_aggregator: Some(source),
+                ..
+            } => source.validate(),
+            Self::Sample {
+                observable: Some(source),
+                ..
+            } => source.validate(),
             Self::Image { geometry, .. } => geometry.validate(),
             Self::PlotLine { geometry, .. } => geometry.validate(),
             _ => Ok(()),
@@ -124,54 +181,72 @@ impl RunTaskSpec {
         }
     }
 
-    pub fn source_snapshot_id(&self) -> Option<i64> {
+    pub fn sample_sampler_source(&self) -> Option<SourceRefSpec> {
         match self {
             Self::Sample {
-                snapshot_id,
-                config,
-                ..
-            } => {
-                if config.is_some() {
-                    None
-                } else {
-                    Some(*snapshot_id)
+                sampler_aggregator, ..
+            } => match sampler_aggregator {
+                None | Some(SamplerAggregatorSourceSpec::Latest(_)) => Some(SourceRefSpec::Latest),
+                Some(SamplerAggregatorSourceSpec::FromName { from_name }) => {
+                    Some(SourceRefSpec::FromName(from_name.clone()))
                 }
-            }
+                Some(SamplerAggregatorSourceSpec::Config { .. }) => None,
+            },
             Self::Image { .. } | Self::PlotLine { .. } => None,
         }
     }
 
-    pub fn sample_config(&self) -> Option<&SampleTaskConfig> {
+    pub fn sample_sampler_config(&self) -> Option<SamplerAggregatorConfig> {
         match self {
-            Self::Sample { config, .. } => config.as_ref(),
+            Self::Sample {
+                sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config { config }),
+                ..
+            } => Some(config.clone()),
+            Self::Sample { .. } => None,
             Self::Image { .. } | Self::PlotLine { .. } => None,
         }
     }
 
     pub fn batch_transforms_config(&self) -> Option<Vec<BatchTransformConfig>> {
         match self {
-            Self::Sample { config, .. } => config
-                .as_ref()
-                .and_then(|sample_config| sample_config.batch_transforms.clone()),
+            Self::Sample {
+                batch_transforms, ..
+            } => batch_transforms.clone(),
             Self::Image { .. } | Self::PlotLine { .. } => Some(Vec::new()),
         }
+    }
+
+    pub fn sample_observable_source(&self) -> Option<SourceRefSpec> {
+        match self {
+            Self::Sample { observable, .. } => match observable {
+                None | Some(ObservableSourceSpec::Latest(_)) => Some(SourceRefSpec::Latest),
+                Some(ObservableSourceSpec::FromName { from_name }) => {
+                    Some(SourceRefSpec::FromName(from_name.clone()))
+                }
+                Some(ObservableSourceSpec::Config { .. }) => None,
+            },
+            Self::Image { .. } | Self::PlotLine { .. } => None,
+        }
+    }
+
+    pub fn source_task_names(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(SourceRefSpec::FromName(name)) = self.sample_sampler_source() {
+            out.push(name);
+        }
+        if let Some(SourceRefSpec::FromName(name)) = self.sample_observable_source() {
+            out.push(name);
+        }
+        out
     }
 
     pub fn new_observable_config(&self) -> Result<Option<ObservableConfig>, BuildError> {
         match self {
             Self::Sample {
-                snapshot_id,
-                config,
+                observable: Some(ObservableSourceSpec::Config { config }),
                 ..
-            } => {
-                if *snapshot_id != -1 {
-                    Ok(None)
-                } else {
-                    Ok(config
-                        .as_ref()
-                        .and_then(|sample_config| sample_config.observable.clone()))
-                }
-            }
+            } => Ok(Some(config.clone())),
+            Self::Sample { .. } => Ok(None),
             Self::Image { observable, .. } | Self::PlotLine { observable, .. } => {
                 Ok(Some(observable.full_config()))
             }
@@ -201,12 +276,14 @@ impl IntoPreflightTask for RunTaskSpec {
         match self {
             Self::Sample {
                 nr_samples,
-                snapshot_id,
-                config,
+                sampler_aggregator,
+                observable,
+                batch_transforms,
             } => Ok(Some(Self::Sample {
                 nr_samples: Some(if nr_samples == Some(0) { 0 } else { 1 }),
-                snapshot_id,
-                config,
+                sampler_aggregator,
+                observable,
+                batch_transforms,
             })),
             Self::Image {
                 mut geometry,
@@ -441,14 +518,13 @@ mod tests {
     fn sample_task_without_observable_reuses_previous_state() {
         let task = RunTaskSpec::Sample {
             nr_samples: Some(10),
-            snapshot_id: -1,
-            config: Some(SampleTaskConfig {
-                sampler_aggregator: Some(SamplerAggregatorConfig::NaiveMonteCarlo {
+            sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
+                config: SamplerAggregatorConfig::NaiveMonteCarlo {
                     params: NaiveMonteCarloSamplerParams::default(),
-                }),
-                batch_transforms: Some(Vec::new()),
-                observable: None,
+                },
             }),
+            observable: Some(ObservableSourceSpec::Latest("latest".to_string())),
+            batch_transforms: Some(Vec::new()),
         };
 
         assert_eq!(task.new_observable_config().unwrap(), None);
@@ -458,31 +534,32 @@ mod tests {
     fn sample_task_rejects_dual_source() {
         let missing = RunTaskSpec::Sample {
             nr_samples: Some(0),
-            snapshot_id: -1,
-            config: None,
+            sampler_aggregator: None,
+            observable: None,
+            batch_transforms: None,
         };
         assert!(missing.validate().is_ok());
 
         let both = RunTaskSpec::Sample {
             nr_samples: Some(0),
-            snapshot_id: 1,
-            config: Some(SampleTaskConfig::default()),
+            sampler_aggregator: Some(SamplerAggregatorSourceSpec::Latest("latest".to_string())),
+            observable: None,
+            batch_transforms: None,
         };
-        assert!(both.validate().is_err());
+        assert!(both.validate().is_ok());
     }
 
     #[test]
     fn sample_task_with_havana_training_requires_budget_in_config_mode() {
         let task = RunTaskSpec::Sample {
             nr_samples: None,
-            snapshot_id: -1,
-            config: Some(SampleTaskConfig {
-                sampler_aggregator: Some(SamplerAggregatorConfig::HavanaTraining {
+            sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
+                config: SamplerAggregatorConfig::HavanaTraining {
                     params: HavanaSamplerParams::default(),
-                }),
-                batch_transforms: None,
-                observable: None,
+                },
             }),
+            observable: None,
+            batch_transforms: None,
         };
         assert!(task.validate().is_err());
     }

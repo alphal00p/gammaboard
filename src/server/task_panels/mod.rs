@@ -178,12 +178,14 @@ fn task_summary_projector() -> TaskPanelProjector {
                     key_value("produced", "Produced", task.nr_produced_samples),
                     key_value("completed", "Completed", task.nr_completed_samples),
                     key_value(
-                        "source_snapshot",
-                        "Source Snapshot",
-                        task.task
-                            .source_snapshot_id()
-                            .map(|snapshot_id| snapshot_id.to_string())
-                            .unwrap_or_else(|| "config".to_string()),
+                        "sampler_source",
+                        "Sampler Source",
+                        source_ref_label(task.task.sample_sampler_source()),
+                    ),
+                    key_value(
+                        "observable_source",
+                        "Observable Source",
+                        source_ref_label(task.task.sample_observable_source()),
                     ),
                     key_value(
                         "spawned_from",
@@ -321,6 +323,14 @@ fn resolve_current_source<'a>(
         return TaskPanelCurrentSource::Persisted(&snapshot.persisted_output);
     }
     TaskPanelCurrentSource::Empty
+}
+
+fn source_ref_label(source: Option<crate::core::SourceRefSpec>) -> String {
+    match source {
+        Some(crate::core::SourceRefSpec::Latest) => "latest".to_string(),
+        Some(crate::core::SourceRefSpec::FromName(name)) => format!("from_name:{name}"),
+        None => "config".to_string(),
+    }
 }
 
 fn full_updates(

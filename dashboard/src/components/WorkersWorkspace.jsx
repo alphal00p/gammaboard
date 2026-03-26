@@ -34,8 +34,8 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
   const displayRole = (worker) => worker.current_role || "None";
   const displayRun = (worker) => {
     if (!worker.current_role) return "N/A";
-    if (worker.current_run_name) return `${worker.current_run_name} (#${worker.current_run_id})`;
-    return worker.current_run_id ?? "N/A";
+    if (worker.current_run_name) return worker.current_run_name;
+    return "N/A";
   };
 
   useEffect(() => {

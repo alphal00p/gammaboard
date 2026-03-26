@@ -35,8 +35,7 @@ const DEFAULT_CREATE_RUN_TOML = `name = "new-run"`;
 const DEFAULT_ADD_TASKS_TOML = `[[task_queue]]
 kind = "sample"
 nr_samples = 10000
-[task_queue.config]
-observable = "scalar"`;
+observable = { config = "scalar" }`;
 
 const DashboardHeader = () => {
   const { authenticated, busy, ready, requestLogin, logout } = useAuth();
@@ -281,7 +280,7 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated }) => {
         label="Task Queue TOML"
         submitLabel="Add Tasks"
         initialValue={DEFAULT_ADD_TASKS_TOML}
-        helperText="Submit one or more [[task_queue]] entries using either task_queue.snapshot_id or task_queue.config."
+        helperText='Submit one or more [[task_queue]] entries using sampler_aggregator / observable sources: omitted = latest, or { from_name = "..." }, or { config = ... }.'
         templates={taskTemplates}
         loadTemplate={async (name) => {
           const response = await fetchTemplateFile("tasks", name);

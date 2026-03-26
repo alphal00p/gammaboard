@@ -7,7 +7,7 @@ use crate::evaluation::PointSpec;
 use crate::preprocess::{RunAddConfig, preprocess_run_add};
 use crate::stores::RunProgress;
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
@@ -94,7 +94,7 @@ pub fn load_task_queue_file(path: &Path) -> Result<TaskQueueFile, ApiError> {
 }
 
 pub async fn create_run(
-    store: &(impl ControlPlaneStore + AggregationStore),
+    store: &(impl ControlPlaneStore + AggregationStore + RunTaskStore),
     config: RunAddConfig,
 ) -> Result<CreatedRun, ApiError> {
     let processed = preprocess_run_add(config)?;
@@ -279,7 +279,7 @@ async fn load_append_base_snapshot(
 }
 
 async fn preflight_task_batch(
-    store: &impl AggregationStore,
+    store: &(impl AggregationStore + RunTaskStore),
     base_snapshot: &RunStageSnapshot,
     _integration_params: &IntegrationParams,
     tasks: &[RunTaskInput],
@@ -296,41 +296,48 @@ async fn preflight_task_batch(
     //
     // Rationale: keep create/append fast and catch obvious user errors early while reserving
     // resource-heavy checks for the execution environment.
-    let mut referenced_snapshots = BTreeMap::new();
+    let existing_tasks = if base_snapshot.run_id > 0 {
+        store.list_run_tasks(base_snapshot.run_id).await?
+    } else {
+        Vec::new()
+    };
+    let mut known_names = existing_tasks
+        .iter()
+        .map(|task| task.name.clone())
+        .collect::<BTreeSet<_>>();
+    let mut prior_sourceable_names = known_names.clone();
+    let mut next_sequence = existing_tasks
+        .iter()
+        .map(|task| task.sequence_nr)
+        .max()
+        .unwrap_or(0)
+        + 1;
+
     for task in tasks {
-        if let Some(snapshot_id) = task.task.source_snapshot_id() {
-            if snapshot_id < 0 {
-                // Relative snapshot references are resolved at task activation time.
-                // They intentionally bypass API-time absolute-id validation.
-                task.validate()
-                    .map_err(|err| ApiError::BadRequest(format!("invalid task entry: {err}")))?;
-                continue;
-            }
-            if !referenced_snapshots.contains_key(&snapshot_id) {
-                let snapshot = store
-                    .load_stage_snapshot(snapshot_id)
-                    .await?
-                    .ok_or_else(|| {
-                        ApiError::BadRequest(format!(
-                            "task snapshot_id references snapshot {} but no stage snapshot exists",
-                            snapshot_id
-                        ))
-                    })?;
-                // Enforce same-run snapshot usage at API time.
-                if snapshot.run_id != base_snapshot.run_id {
-                    return Err(ApiError::BadRequest(format!(
-                        "task snapshot_id references snapshot {} which belongs to run {}, expected run {}",
-                        snapshot_id, snapshot.run_id, base_snapshot.run_id
-                    )));
-                }
-                referenced_snapshots.insert(snapshot_id, snapshot);
+        task.validate()
+            .map_err(|err| ApiError::BadRequest(format!("invalid task entry: {err}")))?;
+
+        for source_name in task.task.source_task_names() {
+            if !prior_sourceable_names.contains(&source_name) {
+                return Err(ApiError::BadRequest(format!(
+                    "task source from_name='{}' does not reference a prior task in this run",
+                    source_name
+                )));
             }
         }
 
-        // Basic per-task validation (guard against malformed entries).
-        // Note: re-check for append flows to keep behavior consistent.
-        task.validate()
-            .map_err(|err| ApiError::BadRequest(format!("invalid task entry: {err}")))?;
+        let task_name = task
+            .name
+            .clone()
+            .unwrap_or_else(|| crate::core::generated_task_name(&task.task, next_sequence));
+        if !known_names.insert(task_name.clone()) {
+            return Err(ApiError::BadRequest(format!(
+                "task name '{}' is duplicated in this run",
+                task_name
+            )));
+        }
+        prior_sourceable_names.insert(task_name);
+        next_sequence += 1;
     }
 
     // Intentionally skip building evaluator and running `preflight_task_suffix` here.

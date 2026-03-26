@@ -3,8 +3,5 @@
 [[task_queue]]
 kind = "sample"
 nr_samples = 1_000
-[task_queue.config]
-observable = "scalar"
-
-[task_queue.config.sampler_aggregator]
-kind = "naive_monte_carlo"
+observable = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }

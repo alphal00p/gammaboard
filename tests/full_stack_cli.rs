@@ -362,32 +362,23 @@ name = "havana-alt-e2e"
 kind = "sinc_evaluator"
 
 [[task_queue]]
+name = "train-a"
 kind = "sample"
 nr_samples = 128
-[task_queue.config]
-observable = "complex"
-[task_queue.config.sampler_aggregator]
-kind = "havana_training"
-seed = 0
-bins = 8
-min_samples_for_update = 4
-samples_for_update = 8
+observable = { config = "complex" }
+sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 8, min_samples_for_update = 4, samples_for_update = 8 } }
 
 [[task_queue]]
+name = "infer-a"
 kind = "sample"
 nr_samples = 128
-[task_queue.config]
-observable = "complex"
-[task_queue.config.sampler_aggregator]
-kind = "havana_inference"
+sampler_aggregator = { config = { kind = "havana_inference" } }
 
 [[task_queue]]
+name = "naive-a"
 kind = "sample"
 nr_samples = 32
-[task_queue.config]
-observable = "complex"
-[task_queue.config.sampler_aggregator]
-kind = "naive_monte_carlo"
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 [[task_queue]]
 kind = "image"
@@ -457,41 +448,22 @@ count = 8
         })
         .await?;
 
-    // Lookup snapshot id produced by task sequence 2
-    let task2_id: i64 =
-        sqlx::query_scalar("SELECT id FROM run_tasks WHERE run_id = $1 AND sequence_nr = 2")
-            .bind(run_id)
-            .fetch_one(&harness.pool)
-            .await?;
-
-    let snapshot2_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM run_stage_snapshots WHERE run_id = $1 AND task_id = $2 AND queue_empty = TRUE ORDER BY id DESC LIMIT 1",
-    )
-    .bind(run_id)
-    .bind(task2_id)
-    .fetch_one(&harness.pool)
-    .await?;
-
     // Now append task 5 and 6:
-    // 5: resumes directly from snapshot produced by task 2
+    // 5: resumes directly from task "infer-a"
     // 6: havana_inference (uses most recent compatible training/inference snapshot by default)
-    let tasks_toml = format!(
-        r#"
+    let tasks_toml = r#"
 [[task_queue]]
 kind = "sample"
 nr_samples = 128
-snapshot_id = {snap2}
+sampler_aggregator = { from_name = "infer-a" }
+observable = { from_name = "infer-a" }
 
 [[task_queue]]
 kind = "sample"
 nr_samples = 128
-[task_queue.config]
-observable = "complex"
-[task_queue.config.sampler_aggregator]
-kind = "havana_inference"
-"#,
-        snap2 = snapshot2_id,
-    );
+sampler_aggregator = { config = { kind = "havana_inference" } }
+"#
+    .to_string();
 
     let task_file = temp_run_config(&tasks_toml);
 
@@ -531,14 +503,14 @@ kind = "havana_inference"
         })
         .await?;
 
-    // Verify task 5 has the expected snapshot source reference
-    let t5_snapshot_source: Option<i64> = sqlx::query_scalar(
-        "SELECT (task->>'snapshot_id')::bigint FROM run_tasks WHERE run_id = $1 AND sequence_nr = 5",
+    // Verify task 5 has the expected named source reference
+    let t5_sampler_source: Option<String> = sqlx::query_scalar(
+        "SELECT task->'sampler_aggregator'->>'from_name' FROM run_tasks WHERE run_id = $1 AND sequence_nr = 5",
     )
     .bind(run_id)
     .fetch_one(&harness.pool)
     .await?;
-    assert_eq!(t5_snapshot_source, Some(snapshot2_id));
+    assert_eq!(t5_sampler_source.as_deref(), Some("infer-a"));
 
     harness.stop_children().await;
     harness.pool.close().await;
@@ -1165,8 +1137,7 @@ min_eval_time_per_sample_ms = 20
 kind = "sample"
 nr_samples = 128
 observable = "scalar"
-[task_queue.sampler_aggregator]
-kind = "naive_monte_carlo"
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 200
@@ -1314,8 +1285,7 @@ kind = "sin_evaluator"
 kind = "sample"
 nr_samples = 16
 observable = "scalar"
-[task_queue.sampler_aggregator]
-kind = "naive_monte_carlo"
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 [[task_queue]]
 kind = "sample"

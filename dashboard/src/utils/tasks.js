@@ -29,15 +29,21 @@ export const getCurrentTask = (tasks) =>
   asTaskList(tasks).find((task) => task.state === "completed") ||
   null;
 
-export const formatTaskSnapshotRef = (snapshotIdValue) => {
-  if (snapshotIdValue == null) {
-    return "inherit";
+export const formatTaskSourceRef = (task) => {
+  const spec = task?.task;
+  if (!spec || spec.kind !== "sample") {
+    return "-";
   }
-  const snapshotId = Number(snapshotIdValue);
-  if (Number.isFinite(snapshotId)) {
-    return String(snapshotId);
+  if (spec?.sampler_aggregator?.config != null) {
+    return "config";
   }
-  return "inherit";
+  if (spec?.sampler_aggregator?.from_name) {
+    return `from_name:${spec.sampler_aggregator.from_name}`;
+  }
+  if (spec?.sampler_aggregator === "latest") {
+    return "latest";
+  }
+  return "latest";
 };
 
 export const formatTaskSpawnOrigin = (task) => {

@@ -7,7 +7,7 @@ use comfy_table::{Cell, CellAlignment, ContentArrangement, Table};
 use gammaboard::PgStore;
 use gammaboard::api::runs as run_api;
 use gammaboard::config::CliConfig;
-use gammaboard::core::{ControlPlaneStore, RunReadStore, RunTaskStore};
+use gammaboard::core::{ControlPlaneStore, RunReadStore, RunTaskSpec, RunTaskStore, SourceRefSpec};
 use std::path::PathBuf;
 
 #[derive(Debug, Args)]
@@ -203,7 +203,16 @@ async fn run_task_command(store: &PgStore, command: TaskCommand) -> Result<()> {
                     kind = task.task.kind_str(),
                     nr_produced_samples = task.nr_produced_samples,
                     nr_completed_samples = task.nr_completed_samples,
-                    source_snapshot = format_task_snapshot_ref(task.task.source_snapshot_id()),
+                    sampler_source = format_task_source_ref(
+                        &task.task,
+                        task.task.sample_sampler_source(),
+                        task.task.sample_sampler_config().is_some(),
+                    ),
+                    observable_source = format_task_source_ref(
+                        &task.task,
+                        task.task.sample_observable_source(),
+                        task.task.new_observable_config().ok().flatten().is_some(),
+                    ),
                     spawned_from = format_task_snapshot_origin(task.spawned_from_snapshot_id),
                     failure_reason = task.failure_reason.as_deref().unwrap_or(""),
                     "run task"
@@ -254,10 +263,21 @@ fn print_run_table(runs: Vec<gammaboard::stores::RunProgress>) {
     println!("{table}");
 }
 
-fn format_task_snapshot_ref(snapshot_id: Option<i64>) -> String {
-    snapshot_id
-        .map(|value| value.to_string())
-        .unwrap_or_default()
+fn format_task_source_ref(
+    task: &RunTaskSpec,
+    source: Option<SourceRefSpec>,
+    has_inline_config: bool,
+) -> String {
+    if !matches!(task, RunTaskSpec::Sample { .. }) {
+        return String::new();
+    }
+    if has_inline_config {
+        return "config".to_string();
+    }
+    match source {
+        Some(SourceRefSpec::Latest) | None => "latest".to_string(),
+        Some(SourceRefSpec::FromName(name)) => format!("from_name:{name}"),
+    }
 }
 
 fn format_task_snapshot_origin(snapshot_id: Option<i64>) -> String {

@@ -25,23 +25,19 @@ discrete = []
 [[task_queue]]
 kind = "sample"
 nr_samples = 500_000
-[task_queue.config]
-observable = "complex"
-[task_queue.config.sampler_aggregator]
-kind = "havana_training"
-seed = 0
-bins = 64
-min_samples_for_update = 1024
-samples_for_update = 16384
-initial_training_rate = 0.1
-final_training_rate = 0.001
+observable = { config = "complex" }
+sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 64, min_samples_for_update = 1024, samples_for_update = 16384, initial_training_rate = 0.1, final_training_rate = 0.001 } }
 
 
 [[task_queue]]
 kind = "sample"
 nr_samples = 10_000_000
-[task_queue.config.sampler_aggregator]
-kind = "havana_inference"
+sampler_aggregator = { config = { kind = "havana_inference" } }
+
+[[task_queue]]
+kind = "sample"
+nr_samples = 10_000_000
+sampler_aggregator = { config = { kind = "havana_inference" } }
 
 [evaluator]
 kind = "gammaloop"

@@ -10,7 +10,7 @@ import {
   TableRow,
   Typography,
 } from "@mui/material";
-import { formatTaskSnapshotRef, getTaskKindLabel, getTaskTargetLabel } from "../utils/tasks";
+import { formatTaskSourceRef, getTaskKindLabel, getTaskTargetLabel } from "../utils/tasks";
 
 const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null, actions = null }) => {
   return (
@@ -28,7 +28,7 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
                   <TableCell>Name</TableCell>
                   <TableCell>State</TableCell>
                   <TableCell>Task</TableCell>
-                  <TableCell>Source Snapshot</TableCell>
+                  <TableCell>Sampler Source</TableCell>
                   <TableCell align="right">Target</TableCell>
                   <TableCell align="right">Produced</TableCell>
                   <TableCell align="right">Completed</TableCell>
@@ -48,10 +48,10 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
                         ...(task.state === "active" ? { backgroundColor: "action.hover" } : {}),
                       }}
                     >
-                      <TableCell>{task.name || "-"}</TableCell>
+                      <TableCell>{task.name || "Unnamed task"}</TableCell>
                       <TableCell>{task.state}</TableCell>
                       <TableCell>{getTaskKindLabel(task)}</TableCell>
-                      <TableCell>{formatTaskSnapshotRef(task.task?.snapshot_id)}</TableCell>
+                      <TableCell>{formatTaskSourceRef(task)}</TableCell>
                       <TableCell align="right">{getTaskTargetLabel(task)}</TableCell>
                       <TableCell align="right">{Number(task.nr_produced_samples || 0).toLocaleString()}</TableCell>
                       <TableCell align="right">{Number(task.nr_completed_samples || 0).toLocaleString()}</TableCell>

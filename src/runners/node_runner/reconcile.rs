@@ -5,7 +5,7 @@ use super::{
 
 use crate::core::{
     BatchTransformConfig, ObservableConfig, RunStageSnapshot, RunTask, RunTaskSpec, RunTaskState,
-    StoreError,
+    SourceRefSpec, StoreError,
 };
 use crate::runners::{EvaluatorRunner, SamplerAggregatorRunner};
 use tracing::{error, info, warn};
@@ -287,16 +287,19 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             .store
             .load_latest_stage_snapshot_before_sequence(worker.run_id, i32::MAX)
             .await?;
-        let source_snapshot = Self::resolve_source_snapshot(worker, &task).await?;
+        let sampler_source_snapshot =
+            Self::resolve_source_snapshot(worker, &task, task.task.sample_sampler_source()).await?;
+        let observable_source_snapshot =
+            Self::resolve_source_snapshot(worker, &task, task.task.sample_observable_source())
+                .await?;
 
         let sampler_config = if let Some(config) = task.task.sampler_config() {
             config
         } else {
             task.task
-                .sample_config()
-                .and_then(|sample_config| sample_config.sampler_aggregator.clone())
+                .sample_sampler_config()
                 .or_else(|| {
-                    source_snapshot
+                    sampler_source_snapshot
                         .as_ref()
                         .map(|snapshot| snapshot.sampler_aggregator.clone())
                 })
@@ -320,10 +323,9 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             Vec::new()
         } else {
             task.task
-                .sample_config()
-                .and_then(|sample_config| sample_config.batch_transforms.clone())
+                .batch_transforms_config()
                 .or_else(|| {
-                    source_snapshot
+                    sampler_source_snapshot
                         .as_ref()
                         .map(|snapshot| snapshot.batch_transforms.clone())
                 })
@@ -343,7 +345,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         let mut handoff_snapshot_storage: Option<RunStageSnapshot> = None;
         let handoff = if let Some(ref runner_snap) = restored_snapshot.as_ref() {
             Some(Self::stage_handoff_from_runner_snapshot(runner_snap))
-        } else if let Some(snapshot) = source_snapshot.as_ref() {
+        } else if let Some(snapshot) = sampler_source_snapshot.as_ref() {
             handoff_snapshot_storage = Some(snapshot.clone());
             handoff_snapshot_storage
                 .as_ref()
@@ -439,7 +441,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
         let observable_state = if let Some(snapshot) = restored_snapshot.as_ref() {
             snapshot.observable_state.clone()
-        } else if let Some(source_snapshot) = source_snapshot.as_ref() {
+        } else if let Some(source_snapshot) = observable_source_snapshot.as_ref() {
             source_snapshot
                 .observable_state
                 .clone()
@@ -504,57 +506,57 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
     async fn resolve_source_snapshot(
         worker: &ActiveWorker<S>,
         task: &RunTask,
+        source: Option<SourceRefSpec>,
     ) -> Result<Option<RunStageSnapshot>, StoreError> {
-        let Some(snapshot_id) = task.task.source_snapshot_id() else {
-            return Ok(None);
-        };
-
-        if snapshot_id > 0 {
-            let snapshot = worker.store.load_stage_snapshot(snapshot_id).await?;
-            let snapshot = snapshot.ok_or_else(|| {
-                StoreError::store(format!(
-                    "task {} references snapshot {} but no stage snapshot exists",
-                    task.id, snapshot_id
-                ))
-            })?;
-            if snapshot.run_id != worker.run_id {
-                return Err(StoreError::store(format!(
-                    "task {} references snapshot {} from run {}, expected run {}",
-                    task.id, snapshot_id, snapshot.run_id, worker.run_id
-                )));
+        match source {
+            Some(SourceRefSpec::Latest) => {
+                worker
+                    .store
+                    .load_latest_stage_snapshot_before_sequence(worker.run_id, task.sequence_nr)
+                    .await
             }
-            return Ok(Some(snapshot));
+            Some(SourceRefSpec::FromName(source_task_name)) => {
+                let source_task = worker
+                    .store
+                    .list_run_tasks(worker.run_id)
+                    .await?
+                    .into_iter()
+                    .find(|candidate| candidate.name == source_task_name)
+                    .ok_or_else(|| {
+                        StoreError::store(format!(
+                            "task {} references source task '{}' but no such task exists in run {}",
+                            task.id, source_task_name, worker.run_id
+                        ))
+                    })?;
+                if source_task.sequence_nr >= task.sequence_nr {
+                    return Err(StoreError::store(format!(
+                        "task {} references source task '{}' which is not prior in sequence",
+                        task.id, source_task_name
+                    )));
+                }
+                let snapshot = worker
+                    .store
+                    .load_latest_stage_snapshot_before_sequence(
+                        worker.run_id,
+                        source_task.sequence_nr + 1,
+                    )
+                    .await?
+                    .ok_or_else(|| {
+                        StoreError::store(format!(
+                            "task {} source task '{}' has no queue-empty stage snapshot",
+                            task.id, source_task_name
+                        ))
+                    })?;
+                if snapshot.task_id != Some(source_task.id) {
+                    return Err(StoreError::store(format!(
+                        "task {} source task '{}' has no queue-empty stage snapshot",
+                        task.id, source_task_name
+                    )));
+                }
+                Ok(Some(snapshot))
+            }
+            None => Ok(None),
         }
-
-        let mut remaining = (-snapshot_id) as usize;
-        let mut search_sequence = task.sequence_nr;
-        let mut resolved: Option<RunStageSnapshot> = None;
-
-        while remaining > 0 {
-            let snapshot = worker
-                .store
-                .load_latest_stage_snapshot_before_sequence(worker.run_id, search_sequence)
-                .await?
-                .ok_or_else(|| {
-                    StoreError::store(format!(
-                        "task {} references relative snapshot {} but only {} prior stage snapshot(s) exist",
-                        task.id, snapshot_id, (-snapshot_id) as usize - remaining
-                    ))
-                })?;
-
-            let sequence_nr = snapshot.sequence_nr.ok_or_else(|| {
-                StoreError::store(format!(
-                    "relative snapshot resolution for task {} reached a snapshot without sequence_nr",
-                    task.id
-                ))
-            })?;
-
-            search_sequence = sequence_nr;
-            resolved = Some(snapshot);
-            remaining -= 1;
-        }
-
-        Ok(resolved)
     }
 
     async fn find_latest_havana_snapshot(

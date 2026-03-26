@@ -139,17 +139,15 @@ If `task_queue` is omitted, the run is created idle.
 Every run stores an initial root stage snapshot (`sequence_nr = 0`) immediately at creation.
 
 ### Task Queue
-Sample tasks use either `snapshot_id` (branch from an existing stage snapshot) or `config` (derive from current effective stage with overrides). Do not set both.
-Within `config`, omitted `sampler_aggregator` and `batch_transforms` inherit from the previous effective stage. `batch_transforms = []` explicitly clears the inherited transform list.
-`config.observable` may be omitted to reuse the previous observable state.
+Sample tasks use direct per-component source specs:
+- omit `sampler_aggregator` or `observable` to use `latest`
+- use `{ from_name = "..." }` to load from a prior task name
+- use `{ config = ... }` to set explicit inline config
+
+Task names are unique per run and can be referenced by `from_name`.
+`batch_transforms` remains a direct field on sample tasks. Omitted inherits; `batch_transforms = []` explicitly clears inherited transforms.
 Use `nr_samples = 0` when you want a sample task to only update stage state without producing work.
 Task files used with `gammaboard run task add` may contain either a single `task = { ... }`, a `[[task_queue]]` array, or both. When both are present, `task` is appended first.
-
-Executable sample tasks may also branch from an older stage snapshot:
-```toml
-snapshot_id = 42
-```
-Relative indices are supported too: `snapshot_id = -1` means "latest prior stage snapshot", `-2` means "second latest prior snapshot", etc.
 
 Sample task config example:
 ```toml
@@ -157,10 +155,8 @@ Sample task config example:
 name = "warmup-sample" # optional; auto-generated when omitted
 kind = "sample"
 nr_samples = 10000
-[task_queue.config]
-observable = "scalar"
-[task_queue.config.sampler_aggregator]
-kind = "naive_monte_carlo"
+observable = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 ```
 
 Deterministic scan tasks are supported:

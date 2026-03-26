@@ -18,8 +18,9 @@ pub mod utils;
 pub use core::{BatchRecord, BatchStatus};
 pub use core::{BuildError, EngineError, EvalError, StoreError};
 pub use core::{
-    ImageDisplayMode, LineDisplayMode, LineRasterGeometry, Linspace, PlaneRasterGeometry,
-    PlotObservableKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState, SampleTaskConfig,
+    ImageDisplayMode, LineDisplayMode, LineRasterGeometry, Linspace, ObservableSourceSpec,
+    PlaneRasterGeometry, PlotObservableKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState,
+    SampleTaskConfig, SamplerAggregatorSourceSpec, SourceRefSpec,
 };
 pub use evaluation::{
     Batch, BatchError, BatchResult, BatchTransform, ComplexObservableState, ComplexSampleEvaluator,
