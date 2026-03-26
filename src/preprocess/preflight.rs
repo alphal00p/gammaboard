@@ -24,6 +24,7 @@ pub(super) fn build_initial_stage_with_budget(
         id: None,
         run_id: 0,
         task_id: None,
+        name: "root".to_string(),
         sequence_nr: None,
         queue_empty: true,
         sampler_snapshot: sampler.snapshot()?,

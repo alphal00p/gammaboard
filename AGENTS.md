@@ -35,11 +35,15 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 
 ## Tasks, Snapshots, Queue
 - Task sequencing lives in `src/core/tasks.rs`.
+- Task ordering may still use internal sequence numbers, but operator-facing task identity is the task `name`.
+- Task names must be unique per run.
 - Use a single task shape (`RunTaskSpec`) end-to-end; do not reintroduce separate task input/spec indirection.
 - Task transitions must restore runtime state from persisted `run_stage_snapshots`, not in-memory handoff only.
 - Snapshots are the branchable state timeline. Tasks are queued work items that may produce snapshots, but are not themselves the canonical branch identity.
 - Every run must persist a root stage snapshot at initialization with `sequence_nr = 0` and `task_id = null`.
 - Sample tasks may set `snapshot_id` to branch from an older stage snapshot.
+- Cloning a run from a stage snapshot must not copy queued tasks; the cloned run starts idle at that cloned root snapshot.
+- A cloned run root snapshot name should identify the source run and source task (or root) it was cloned from.
 - `sample.snapshot_id` supports absolute ids (`> 0`) and relative indices (`< 0`), where `-1` means the latest prior queue-empty stage snapshot before the task sequence.
 - Sample task source semantics are exclusive: use either `config` or `snapshot_id`, never both.
 - Task preflight belongs on task insertion. Bare `run add` should validate run-global construction and root-stage creation, while appended tasks should be validated against the current or referenced stage snapshots before persistence.

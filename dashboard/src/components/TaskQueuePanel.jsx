@@ -25,7 +25,7 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
             <Table size="small">
               <TableHead>
                 <TableRow>
-                  <TableCell>Seq</TableCell>
+                  <TableCell>Name</TableCell>
                   <TableCell>State</TableCell>
                   <TableCell>Task</TableCell>
                   <TableCell>Source Snapshot</TableCell>
@@ -48,7 +48,7 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
                         ...(task.state === "active" ? { backgroundColor: "action.hover" } : {}),
                       }}
                     >
-                      <TableCell>{task.sequence_nr}</TableCell>
+                      <TableCell>{task.name || "-"}</TableCell>
                       <TableCell>{task.state}</TableCell>
                       <TableCell>{getTaskKindLabel(task)}</TableCell>
                       <TableCell>{formatTaskSnapshotRef(task.task?.snapshot_id)}</TableCell>

@@ -63,8 +63,8 @@ async fn claim_batch_requires_active_assignment() {
 
     let task_id: i64 = sqlx::query_scalar(
         r#"
-        INSERT INTO run_tasks (run_id, sequence_nr, task, state)
-        VALUES ($1, 0, '{"kind":"pause"}'::jsonb, 'completed')
+        INSERT INTO run_tasks (run_id, name, sequence_nr, task, state)
+        VALUES ($1, 'sample-0', 0, '{"kind":"pause"}'::jsonb, 'completed')
         RETURNING id
         "#,
     )
@@ -130,8 +130,8 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
 
     let task_id: i64 = sqlx::query_scalar(
         r#"
-        INSERT INTO run_tasks (run_id, sequence_nr, task, state)
-        VALUES ($1, 0, '{"kind":"pause"}'::jsonb, 'completed')
+        INSERT INTO run_tasks (run_id, name, sequence_nr, task, state)
+        VALUES ($1, 'sample-0', 0, '{"kind":"pause"}'::jsonb, 'completed')
         RETURNING id
         "#,
     )

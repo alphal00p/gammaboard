@@ -250,7 +250,7 @@ fn observable_label(task: &crate::core::RunTaskSpec) -> String {
 }
 
 fn current_task_label(task: Option<&RunTask>) -> String {
-    task.map(|task| format!("#{} {}", task.sequence_nr, task.task.kind_str()))
+    task.map(|task| format!("{} ({})", task.name, task.task.kind_str()))
         .unwrap_or_else(|| "none".to_string())
 }
 

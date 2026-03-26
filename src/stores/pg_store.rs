@@ -6,6 +6,7 @@ use crate::core::{
     EvaluatorPerformanceSnapshot, RegisteredNode, RunReadStore, RunSampleProgress, RunSpecStore,
     RunStageSnapshot, RunTask, RunTaskSpec, RunTaskStore, RuntimeLogEvent, RuntimeLogStore,
     SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore, WorkerRole,
+    generated_task_name,
 };
 use crate::core::{IntegrationParams, RunSpec};
 use crate::evaluation::{BatchResult, PointSpec};
@@ -475,6 +476,7 @@ impl ControlPlaneStore for PgStore {
                 id: None,
                 run_id,
                 task_id: None,
+                name: initial_stage_snapshot.name.clone(),
                 sequence_nr: Some(0),
                 queue_empty: initial_stage_snapshot.queue_empty,
                 sampler_snapshot: initial_stage_snapshot.sampler_snapshot.clone(),
@@ -490,14 +492,16 @@ impl ControlPlaneStore for PgStore {
                 r#"
                 INSERT INTO run_tasks (
                     run_id,
+                    name,
                     sequence_nr,
                     task,
                     state
                 )
-                VALUES ($1, $2, $3, 'pending')
+                VALUES ($1, $2, $3, $4, 'pending')
                 "#,
             )
             .bind(run_id)
+            .bind(generated_task_name(task, offset as i32 + 1))
             .bind(offset as i32 + 1)
             .bind(serialize_task(task)?)
             .execute(&mut *tx)

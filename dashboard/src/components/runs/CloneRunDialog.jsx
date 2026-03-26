@@ -58,8 +58,8 @@ const CloneRunDialog = ({
     for (const task of snapshotTaskList) {
       optionList.push({
         value: String(task.latest_stage_snapshot_id),
-        label: `#${task.id} · ${task.state} · ${getTaskKindLabel(task)} · snapshot #${task.latest_stage_snapshot_id}`,
-        helper: `${getTaskKindLabel(task)} task #${task.id} -> snapshot #${task.latest_stage_snapshot_id}`,
+        label: `${task.name || `task-${task.id}`} · ${task.state} · ${getTaskKindLabel(task)} · snapshot #${task.latest_stage_snapshot_id}`,
+        helper: `${task.name || `task-${task.id}`} -> snapshot #${task.latest_stage_snapshot_id}`,
       });
     }
     return optionList;

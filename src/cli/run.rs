@@ -198,7 +198,7 @@ async fn run_task_command(store: &PgStore, command: TaskCommand) -> Result<()> {
                 tracing::info!(
                     run_id = task.run_id,
                     task_id = task.id,
-                    sequence_nr = task.sequence_nr,
+                    task_name = task.name,
                     state = task.state.as_str(),
                     kind = task.task.kind_str(),
                     nr_produced_samples = task.nr_produced_samples,

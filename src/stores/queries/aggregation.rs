@@ -12,6 +12,7 @@ struct RunStageSnapshotRow {
     id: i64,
     run_id: i32,
     task_id: Option<i64>,
+    name: String,
     sequence_nr: Option<i32>,
     queue_empty: bool,
     sampler_snapshot: JsonValue,
@@ -33,6 +34,7 @@ impl TryFrom<RunStageSnapshotRow> for RunStageSnapshot {
             id: Some(value.id),
             run_id: value.run_id,
             task_id: value.task_id,
+            name: value.name,
             sequence_nr: value.sequence_nr,
             queue_empty: value.queue_empty,
             sampler_snapshot: serde_json::from_value::<SamplerAggregatorSnapshot>(
@@ -112,6 +114,7 @@ pub(crate) async fn get_latest_stage_snapshot_before_sequence(
             id,
             run_id,
             task_id,
+            name,
             sequence_nr,
             queue_empty,
             sampler_snapshot,
@@ -143,6 +146,7 @@ pub(crate) async fn get_stage_snapshot(
             id,
             run_id,
             task_id,
+            name,
             sequence_nr,
             queue_empty,
             sampler_snapshot,
@@ -211,6 +215,7 @@ pub(crate) async fn get_task_activation_stage_snapshot(
             id,
             run_id,
             task_id,
+            name,
             sequence_nr,
             queue_empty,
             sampler_snapshot,
@@ -349,6 +354,7 @@ where
         INSERT INTO run_stage_snapshots (
             run_id,
             task_id,
+            name,
             sequence_nr,
             queue_empty,
             sampler_snapshot,
@@ -356,11 +362,12 @@ where
             sampler_aggregator,
             batch_transforms
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         "#,
     )
     .bind(snapshot.run_id)
     .bind(snapshot.task_id)
+    .bind(snapshot.name.as_str())
     .bind(snapshot.sequence_nr)
     .bind(snapshot.queue_empty)
     .bind(

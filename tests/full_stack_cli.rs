@@ -1412,54 +1412,18 @@ nr_samples = 16
             .bind(cloned_run_id)
             .fetch_one(&harness.pool)
             .await?;
-    assert_eq!(cloned_task_count, 1);
+    assert_eq!(cloned_task_count, 0);
 
-    let cloned_task_start_from_snapshot: Option<i64> = sqlx::query_scalar(
-        "SELECT (task->>'snapshot_id')::bigint FROM run_tasks WHERE run_id = $1 ORDER BY sequence_nr ASC LIMIT 1",
+    let cloned_root_snapshot_name: String = sqlx::query_scalar(
+        "SELECT name FROM run_stage_snapshots WHERE run_id = $1 AND task_id IS NULL ORDER BY id ASC LIMIT 1",
     )
     .bind(cloned_run_id)
     .fetch_one(&harness.pool)
     .await?;
-    assert_eq!(cloned_task_start_from_snapshot, Some(source_snapshot_id));
-
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-1",
-            "sampler-aggregator",
-            "clone-branch-e2e",
-        ])
-        .assert()
-        .success();
-    harness
-        .cli()
-        .args(["node", "assign", "w-2", "evaluator", "clone-branch-e2e"])
-        .assert()
-        .success();
-
-    harness
-        .wait_for("cloned run completes", Duration::from_secs(20), || async {
-            let w1 = harness.node_state("w-1").await?;
-            let w2 = harness.node_state("w-2").await?;
-            let completed: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM run_tasks WHERE run_id = $1 AND state = 'completed'",
-            )
-            .bind(cloned_run_id)
-            .fetch_one(&harness.pool)
-            .await?;
-            Ok(w1.0.is_none()
-                && w1.1.is_none()
-                && w1.2.is_none()
-                && w1.3.is_none()
-                && w2.0.is_none()
-                && w2.1.is_none()
-                && w2.2.is_none()
-                && w2.3.is_none()
-                && completed == 1)
-        })
-        .await?;
+    assert!(
+        cloned_root_snapshot_name.contains("clone_of:clone-source-e2e"),
+        "unexpected cloned root snapshot name: {cloned_root_snapshot_name}"
+    );
 
     harness.stop_children().await;
     harness.pool.close().await;

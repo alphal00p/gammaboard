@@ -198,6 +198,7 @@ Clone a run branch from a specific stage snapshot:
 ```bash
 gammaboard run clone <SOURCE_RUN> <FROM_SNAPSHOT_ID> <NEW_NAME>
 ```
+Clone creates a new run rooted at that snapshot and does not copy queued tasks from the source run.
 The dashboard clone dialog also exposes the initial root snapshot as a selectable clone source.
 
 ## Nodes

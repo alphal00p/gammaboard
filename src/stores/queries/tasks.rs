@@ -6,6 +6,7 @@ use sqlx::PgPool;
 type RunTaskRow = (
     i64,
     i32,
+    String,
     i32,
     JsonValue,
     Option<i64>,
@@ -28,6 +29,7 @@ fn decode_task_row(row: RunTaskRow) -> Result<RunTask, sqlx::Error> {
     let (
         id,
         run_id,
+        name,
         sequence_nr,
         task,
         spawned_from_snapshot_id,
@@ -56,6 +58,7 @@ fn decode_task_row(row: RunTaskRow) -> Result<RunTask, sqlx::Error> {
     Ok(RunTask {
         id,
         run_id,
+        name,
         sequence_nr,
         task,
         spawned_from_snapshot_id,
@@ -93,14 +96,16 @@ pub(crate) async fn append_run_tasks(
             r#"
             INSERT INTO run_tasks (
                 run_id,
+                name,
                 sequence_nr,
                 task,
                 state
             )
-            VALUES ($1, $2, $3, 'pending')
+            VALUES ($1, $2, $3, $4, 'pending')
             RETURNING
                 id,
                 run_id,
+                name,
                 sequence_nr,
                 task,
                 spawned_from_snapshot_id,
@@ -115,6 +120,10 @@ pub(crate) async fn append_run_tasks(
             "#,
         )
         .bind(run_id)
+        .bind(crate::core::generated_task_name(
+            task,
+            next_sequence + offset as i32,
+        ))
         .bind(next_sequence + offset as i32)
         .bind(encode_task(task)?)
         .fetch_one(&mut *tx)
@@ -134,6 +143,7 @@ pub(crate) async fn list_run_tasks(
         SELECT
             id,
             run_id,
+            name,
             sequence_nr,
             task,
             spawned_from_snapshot_id,
@@ -186,6 +196,7 @@ pub(crate) async fn load_active_run_task(
         SELECT
             id,
             run_id,
+            name,
             sequence_nr,
             task,
             spawned_from_snapshot_id,
@@ -233,6 +244,7 @@ pub(crate) async fn activate_next_run_task(
         RETURNING
             id,
             run_id,
+            name,
             sequence_nr,
             task,
             spawned_from_snapshot_id,

@@ -171,7 +171,7 @@ fn task_summary_projector() -> TaskPanelProjector {
                     key_value(
                         "identity",
                         "Identity",
-                        format!("#{} {}", task.sequence_nr, task.task.kind_str()),
+                        format!("{} ({})", task.name, task.task.kind_str()),
                     ),
                     key_value("state", "State", task.state.as_str()),
                     key_value("target", "Target", task.task.nr_expected_samples()),
@@ -553,6 +553,7 @@ mod tests {
         RunTask {
             id: 1,
             run_id: 1,
+            name: "plot_line-1".to_string(),
             sequence_nr: 1,
             task,
             spawned_from_snapshot_id: None,

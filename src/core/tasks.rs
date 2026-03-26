@@ -187,6 +187,10 @@ impl RunTaskSpec {
     }
 }
 
+pub fn generated_task_name(task: &RunTaskSpec, sequence_nr: i32) -> String {
+    format!("{}-{sequence_nr}", task.kind_str())
+}
+
 pub trait IntoPreflightTask: Sized {
     fn into_preflight(self) -> Result<Option<Self>, BuildError>;
 }
@@ -391,6 +395,7 @@ fn vectors_are_independent(left: &[f64], right: &[f64]) -> bool {
 pub struct RunTask {
     pub id: i64,
     pub run_id: i32,
+    pub name: String,
     pub sequence_nr: i32,
     pub task: RunTaskSpec,
     pub spawned_from_snapshot_id: Option<i64>,

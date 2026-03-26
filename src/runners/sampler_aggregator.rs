@@ -398,6 +398,7 @@ where
                 id: None,
                 run_id: self.run_id,
                 task_id: Some(self.task.id),
+                name: self.task.name.clone(),
                 sequence_nr: Some(self.task.sequence_nr),
                 queue_empty,
                 sampler_snapshot: snapshot.sampler_snapshot.clone(),

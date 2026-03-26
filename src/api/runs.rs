@@ -182,10 +182,9 @@ pub async fn clone_run(
     }
 
     let source_tasks = store.list_run_tasks(source_run_id).await?;
-    let mut cloned_tasks = clone_task_suffix(&source_tasks, &snapshot)?;
-    if let Some(first) = cloned_tasks.first_mut() {
-        set_task_source_snapshot(first, from_snapshot_id);
-    }
+    let root_snapshot_name =
+        format_clone_root_snapshot_name(&source_run.run_name, &source_tasks, &snapshot);
+    let cloned_tasks: Vec<RunTaskSpec> = Vec::new();
     let run_id = store
         .create_run(
             new_name,
@@ -196,6 +195,7 @@ pub async fn clone_run(
                 id: None,
                 run_id: 0,
                 task_id: None,
+                name: root_snapshot_name,
                 sequence_nr: Some(0),
                 queue_empty: snapshot.queue_empty,
                 sampler_snapshot: snapshot.sampler_snapshot.clone(),
@@ -339,36 +339,30 @@ async fn preflight_task_batch(
     Ok(())
 }
 
-fn clone_task_suffix(
+fn format_clone_root_snapshot_name(
+    source_run_name: &str,
     source_tasks: &[RunTask],
-    from_snapshot: &RunStageSnapshot,
-) -> Result<Vec<RunTaskSpec>, ApiError> {
-    let source_index = match from_snapshot.task_id {
-        Some(task_id) => Some(
-            source_tasks
-                .iter()
-                .position(|task| task.id == task_id)
-                .ok_or_else(|| ApiError::NotFound(format!("run task {task_id} not found")))?,
+    snapshot: &RunStageSnapshot,
+) -> String {
+    match snapshot.task_id {
+        None => format!(
+            "clone_of:{}:root_snapshot:{}",
+            source_run_name,
+            snapshot.id.unwrap_or_default()
         ),
-        None => None,
-    };
-    let cloned_tasks = source_tasks
-        .iter()
-        .skip(source_index.map_or(0, |index| index + 1))
-        .map(|task| task.task.clone())
-        .collect::<Vec<_>>();
-    Ok(cloned_tasks)
-}
-
-fn set_task_source_snapshot(task: &mut RunTaskSpec, snapshot_id: i64) {
-    if let RunTaskSpec::Sample {
-        snapshot_id: task_snapshot_id,
-        config,
-        ..
-    } = task
-    {
-        *task_snapshot_id = snapshot_id;
-        *config = None;
+        Some(task_id) => {
+            let task_name = source_tasks
+                .iter()
+                .find(|task| task.id == task_id)
+                .map(|task| task.name.as_str())
+                .unwrap_or("unknown_task");
+            format!(
+                "clone_of:{}:{}:snapshot:{}",
+                source_run_name,
+                task_name,
+                snapshot.id.unwrap_or_default()
+            )
+        }
     }
 }
 

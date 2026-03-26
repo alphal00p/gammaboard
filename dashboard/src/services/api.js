@@ -148,7 +148,7 @@ const normalizeRunTaskEntry = (entry) => {
     ...entry,
     id: Number.isFinite(Number(entry.id)) ? Number(entry.id) : entry.id,
     run_id: Number.isFinite(Number(entry.run_id)) ? Number(entry.run_id) : entry.run_id,
-    sequence_nr: Number.isFinite(Number(entry.sequence_nr)) ? Number(entry.sequence_nr) : entry.sequence_nr,
+    name: typeof entry.name === "string" ? entry.name : String(entry.name ?? ""),
     latest_stage_snapshot_id: Number.isFinite(Number(entry.latest_stage_snapshot_id))
       ? Number(entry.latest_stage_snapshot_id)
       : null,
