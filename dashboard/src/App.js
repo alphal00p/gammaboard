@@ -23,6 +23,8 @@ import {
   autoAssignRun,
   cloneRun,
   createRun,
+  deleteRun,
+  deleteRunTask,
   fetchTemplateFile,
   fetchTemplateList,
   pauseRun,
@@ -73,7 +75,7 @@ const DashboardHeader = () => {
   );
 };
 
-const RunModeContent = ({ runs, selectedRun, onRunCreated }) => {
+const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
   const currentRun = runs.find((entry) => entry.run_id === selectedRun);
   const { tasks } = useRunTasks(selectedRun, 2000);
   const { evaluator, sampler } = useRunConfigPanels({ runId: selectedRun, pollMs: 5000 });
@@ -82,6 +84,8 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated }) => {
   const [selectedTaskId, setSelectedTaskId] = useState(null);
   const [snackbar, setSnackbar] = useState(null);
   const [pausing, setPausing] = useState(false);
+  const [deletingRun, setDeletingRun] = useState(false);
+  const [deletingTask, setDeletingTask] = useState(false);
   const [autoAssigning, setAutoAssigning] = useState(false);
   const [cloneRunOpen, setCloneRunOpen] = useState(false);
   const [addTasksOpen, setAddTasksOpen] = useState(false);
@@ -202,7 +206,7 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated }) => {
             <Button
               variant="contained"
               color="warning"
-              disabled={!selectedRun || pausing || autoAssigning}
+              disabled={!selectedRun || pausing || autoAssigning || deletingRun}
               onClick={async () => {
                 setPausing(true);
                 try {
@@ -217,6 +221,26 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated }) => {
             >
               Pause Run
             </Button>
+            <Button
+              variant="outlined"
+              color="error"
+              disabled={!selectedRun || pausing || autoAssigning || deletingRun || cloneRunBusy || addTasksBusy}
+              onClick={async () => {
+                if (!window.confirm("Delete this run? This cannot be undone.")) return;
+                setDeletingRun(true);
+                try {
+                  await deleteRun(selectedRun);
+                  onRunDeleted?.(selectedRun);
+                  setSnackbar({ message: "Run deleted.", severity: "success" });
+                } catch (err) {
+                  setSnackbar({ message: err?.message || "Failed to delete run.", severity: "error" });
+                } finally {
+                  setDeletingRun(false);
+                }
+              }}
+            >
+              Delete Run
+            </Button>
           </Stack>
         </Box>
       ) : null}
@@ -227,17 +251,40 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated }) => {
         onSelectTask={setSelectedTaskId}
         actions={
           authenticated ? (
-            <Button
-              size="small"
-              variant="outlined"
-              disabled={!selectedRun || addTasksBusy || cloneRunBusy}
-              onClick={() => {
-                setAddTasksError(null);
-                setAddTasksOpen(true);
-              }}
-            >
-              Add Task
-            </Button>
+            <Stack direction="row" spacing={1}>
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={!selectedRun || addTasksBusy || cloneRunBusy || deletingRun}
+                onClick={() => {
+                  setAddTasksError(null);
+                  setAddTasksOpen(true);
+                }}
+              >
+                Add Task
+              </Button>
+              <Button
+                size="small"
+                variant="outlined"
+                color="error"
+                disabled={!selectedRun || deletingTask || deletingRun || selectedTask?.state !== "pending"}
+                onClick={async () => {
+                  if (!selectedTask?.id) return;
+                  if (!window.confirm(`Delete pending task "${selectedTask.name}"?`)) return;
+                  setDeletingTask(true);
+                  try {
+                    await deleteRunTask(selectedRun, selectedTask.id);
+                    setSnackbar({ message: "Pending task deleted.", severity: "success" });
+                  } catch (err) {
+                    setSnackbar({ message: err?.message || "Failed to delete pending task.", severity: "error" });
+                  } finally {
+                    setDeletingTask(false);
+                  }
+                }}
+              >
+                Delete Task
+              </Button>
+            </Stack>
           ) : null
         }
       />
@@ -364,7 +411,16 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, onRunCr
           ) : null
         }
       >
-        <RunModeContent runs={runs} selectedRun={selectedRun} onRunCreated={onRunCreated} />
+        <RunModeContent
+          runs={runs}
+          selectedRun={selectedRun}
+          onRunCreated={onRunCreated}
+          onRunDeleted={(runId) => {
+            if (selectedRun === runId) {
+              setSelectedRun(null);
+            }
+          }}
+        />
       </RunScopedWorkspace>
       <TomlActionDialog
         open={createRunOpen}

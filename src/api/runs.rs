@@ -41,6 +41,18 @@ pub struct PausedRun {
     pub assignments_cleared: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct RemovedRun {
+    pub run_id: i32,
+    pub run_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RemovedPendingTask {
+    pub run_id: i32,
+    pub task_id: i64,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct TaskQueueFile {
     #[serde(default)]
@@ -257,6 +269,33 @@ pub async fn pause_run(
         run_name: run.run_name,
         assignments_cleared,
     })
+}
+
+pub async fn remove_run(
+    store: &(impl ControlPlaneStore + crate::core::RunReadStore),
+    run_id: i32,
+) -> Result<RemovedRun, ApiError> {
+    let run = load_run_progress(store, run_id).await?;
+    store.remove_run(run_id).await?;
+    Ok(RemovedRun {
+        run_id,
+        run_name: run.run_name,
+    })
+}
+
+pub async fn remove_pending_task(
+    store: &(impl crate::core::RunReadStore + RunTaskStore),
+    run_id: i32,
+    task_id: i64,
+) -> Result<RemovedPendingTask, ApiError> {
+    let _run = load_run_progress(store, run_id).await?;
+    let removed = store.remove_pending_run_task(run_id, task_id).await?;
+    if !removed {
+        return Err(ApiError::BadRequest(format!(
+            "run task {task_id} was not removed; only pending tasks can be removed"
+        )));
+    }
+    Ok(RemovedPendingTask { run_id, task_id })
 }
 
 async fn resolve_task_file_for_run(

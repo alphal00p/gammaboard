@@ -28,7 +28,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - `uuid` is the live `run-node` process incarnation.
 - Nodes use a single announce operation to register and renew their lease.
 - If announce fails for 30 seconds, the node shuts down.
-- `run-node` reconcile polling should use a fast-start backoff: start at `100ms`, multiply by `1.1`, cap at `1s`, and reset on meaningful role/task changes.
+- `run-node` reconcile polling should use a fast-start backoff: start at `50ms`, multiply by `2.0`, cap at `2s`, and reset on meaningful role/task changes.
 - Graceful shutdown should expire the lease immediately so the same node name can be reused at once.
 - Desired/current assignments live directly on `nodes`.
 - At most one sampler-aggregator may be assigned to a run at a time. Many evaluators are allowed.
@@ -70,14 +70,14 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Panel specs may include simple width hints such as `compact`, `half`, and `full`.
 - Run info, task output, worker details, performance, and engine config should stay backend-owned.
 - Dashboard auth is operator-oriented: read-only endpoints may stay open, while explicit steering endpoints require admin auth.
-- Dashboard steering should use explicit endpoints such as `pause`, `assign`, `unassign`, `append task`, `create run`, and `clone run`, not generic patch endpoints.
+- Dashboard steering should use explicit endpoints such as `pause`, `assign`, `unassign`, `append task`, `remove pending task`, `create run`, `clone run`, and `remove run`, not generic patch endpoints.
 - Dashboard auth is intended for small trusted deployments behind HTTPS.
 - Run and task templates should be simple `.toml` files served from server-configured directories; the frontend should treat them as editable starting points, not as a second schema.
 - Shared CLI database and tracing settings should come from `configs/gammaboard.toml` by default, with an optional global `--cli-config <PATH>` override.
 - Local Postgres lifecycle commands should live under `gammaboard db ...` and use the shared CLI config instead of separate env-driven just recipes.
 - Server host, port, allowed origin, secure cookie policy, dashboard auth secrets, and template directories should come from `configs/server.toml` by default, with an optional `gammaboard server --server-config <PATH>` override.
 - Server TOML should be explicit; do not rely on implicit defaults for required server settings.
-- `gammaboard server` should use two-phase shutdown: first `Ctrl-C` requests graceful drain, while a second `Ctrl-C` or 10-second timeout forces process exit.
+- `gammaboard server` should terminate immediately on `Ctrl-C` (no graceful-drain wait path).
 
 ## Logging And Read APIs
 - Runtime logs are persisted through the tracing pipeline into PostgreSQL.

@@ -130,7 +130,7 @@ pub(crate) async fn announce_node(
         ) VALUES (
             $1,
             $2,
-            now() + interval '30 seconds',
+            now() + interval '10 seconds',
             now(),
             now()
         )

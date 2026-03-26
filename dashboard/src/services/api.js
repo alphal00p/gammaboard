@@ -71,6 +71,15 @@ const apiPost = async (path, payload, message, signal) => {
   return parseJsonOrThrow(response, message);
 };
 
+const apiDelete = async (path, message, signal) => {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: "DELETE",
+    credentials: "include",
+    signal,
+  });
+  return parseJsonOrThrow(response, message);
+};
+
 const normalizeWorkerEntry = (entry) => {
   if (!entry || typeof entry !== "object") return null;
   return {
@@ -185,6 +194,11 @@ export const cloneRun = async ({ sourceRunId, fromSnapshotId, newName }, signal)
 
 export const addRunTasks = async (runId, toml, signal) =>
   apiPost(`/runs/${runId}/tasks`, { toml }, "Failed to add tasks", signal);
+
+export const deleteRun = async (runId, signal) => apiDelete(`/runs/${runId}`, "Failed to delete run", signal);
+
+export const deleteRunTask = async (runId, taskId, signal) =>
+  apiDelete(`/runs/${runId}/tasks/${taskId}`, "Failed to delete pending task", signal);
 
 export const autoAssignRun = async (runId, { maxEvaluators = null } = {}, signal) =>
   apiPost(`/runs/${runId}/auto-assign`, { max_evaluators: maxEvaluators }, "Failed to auto-assign run", signal);

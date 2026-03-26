@@ -83,7 +83,7 @@ These commands use `database.url` and `local_postgres` from `configs/gammaboard.
   gammaboard server --server-config path/to/server.toml
   ```
 - The checked-in local default is [configs/server.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server.toml).
-- First `Ctrl-C` requests graceful shutdown. If draining hangs, press `Ctrl-C` again to force shutdown; the server also force-exits automatically after 10 seconds.
+- `Ctrl-C` terminates the server process immediately.
 - Required shape:
   ```toml
   host = "0.0.0.0"
@@ -102,7 +102,7 @@ These commands use `database.url` and `local_postgres` from `configs/gammaboard.
 ## Dashboard Auth
 - Read-only dashboard endpoints stay open.
 - Steering actions currently require admin login and are backed by a signed session cookie.
-- The dashboard currently supports creating runs from raw TOML, cloning runs from a stored stage snapshot, appending tasks from raw TOML, pausing runs, auto-assigning free nodes, assigning and unassigning nodes, and requesting a node shutdown.
+- The dashboard currently supports creating runs from raw TOML, cloning runs from a stored stage snapshot, appending tasks from raw TOML, deleting pending tasks, pausing runs, removing runs, auto-assigning free nodes, assigning and unassigning nodes, and requesting a node shutdown.
 - The create-run and add-task dialogs can also load `.toml` templates from `run_templates_dir` and `task_templates_dir` in `server.toml`.
 - Node shutdown from the dashboard is guarded by a confirmation dialog because it cannot be undone from the web UI.
 - Put `auth.admin_password_hash` in `server.toml` to enable dashboard auth.

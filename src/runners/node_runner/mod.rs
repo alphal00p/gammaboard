@@ -59,8 +59,8 @@ impl Default for NodeRunnerConfig {
             min_tick_time: Duration::from_millis(50),
             max_consecutive_start_failures: 3,
             reconcile_initial_backoff: Duration::from_millis(50),
-            reconcile_backoff_factor: 1.1,
-            reconcile_max_backoff: Duration::from_millis(1_000),
+            reconcile_backoff_factor: 2.0,
+            reconcile_max_backoff: Duration::from_millis(2_000),
         }
     }
 }
@@ -171,6 +171,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         async move {
             let mut shutdown = std::pin::pin!(tokio::signal::ctrl_c());
             let mut announce_failed_at: Option<Instant> = None;
+            let mut announce_failures: u32 = 0;
 
             loop {
                 let tick_started = Instant::now();
@@ -179,10 +180,14 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                     .announce_node(&self.node_name, &self.node_uuid)
                     .await
                 {
-                    warn!("node announce failed: {err}");
+                    announce_failures = announce_failures.saturating_add(1);
                     let failed_at = *announce_failed_at.get_or_insert_with(Instant::now);
                     if failed_at.elapsed() >= Duration::from_secs(30) {
-                        warn!("node announce failed for 30 seconds; shutting down node-runner");
+                        info!(
+                            retries = announce_failures,
+                            last_error = %err,
+                            "node announce failed for 30 seconds; shutting down node-runner"
+                        );
                         break;
                     }
                     tokio::select! {
@@ -194,7 +199,14 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                     }
                     continue;
                 }
+                if announce_failures > 0 {
+                    info!(
+                        retries = announce_failures,
+                        "node announce recovered after retries"
+                    );
+                }
                 announce_failed_at = None;
+                announce_failures = 0;
 
                 if self
                     .store

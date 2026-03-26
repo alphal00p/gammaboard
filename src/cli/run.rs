@@ -158,7 +158,9 @@ async fn remove_runs(store: &PgStore, selection: RunSelection) -> Result<()> {
         let runs = store.get_all_runs().await?;
         let mut removed = 0u64;
         for run in runs {
-            store.remove_run(run.run_id).await?;
+            run_api::remove_run(store, run.run_id)
+                .await
+                .map_err(api_to_anyhow)?;
             removed += 1;
         }
         tracing::info!("removed all runs: removed={removed}");
@@ -166,7 +168,9 @@ async fn remove_runs(store: &PgStore, selection: RunSelection) -> Result<()> {
     }
 
     for run in resolve_run_selection(store, selection).await? {
-        store.remove_run(run.run_id).await?;
+        run_api::remove_run(store, run.run_id)
+            .await
+            .map_err(api_to_anyhow)?;
         tracing::info!("removed run {} ({})", run.run_id, run.run_name);
     }
     Ok(())
@@ -222,12 +226,9 @@ async fn run_task_command(store: &PgStore, command: TaskCommand) -> Result<()> {
         TaskCommand::Remove { run, task_id } => {
             let run = resolve_run_ref(store, &run).await?;
             let run_id = run.run_id;
-            let removed = store.remove_pending_run_task(run_id, task_id).await?;
-            if !removed {
-                return Err(anyhow!(
-                    "run task {task_id} was not removed; only pending tasks can be removed"
-                ));
-            }
+            run_api::remove_pending_task(store, run_id, task_id)
+                .await
+                .map_err(api_to_anyhow)?;
             tracing::info!(run_id, task_id, "removed pending run task");
         }
     }
