@@ -2,11 +2,12 @@ use std::path::PathBuf;
 
 use gammaloop_api::state::{ProcessRef, State};
 use gammalooprs::initialisation::initialise;
-use gammalooprs::integrands::{inspect::inspect, process::ProcessIntegrand};
+use gammalooprs::integrands::process::{MomentumSpaceEvaluationInput, ProcessIntegrand};
 use gammalooprs::model::Model;
-use gammalooprs::settings::RuntimeSettings;
+use gammalooprs::settings::runtime::SamplingSettings;
 use gammalooprs::utils::F;
 use serde::{Deserialize, Serialize};
+use symbolica::numerical_integration::Sample;
 
 use crate::{
     Batch, BatchResult, BuildError, EvalError, PointSpec,
@@ -19,10 +20,6 @@ use crate::{
 pub struct GammaLoopEvaluator {
     integrand: ProcessIntegrand,
     model: Model,
-    settings: RuntimeSettings,
-    state_folder: PathBuf,
-    process_id: usize,
-    integrand_name: String,
     momentum_space: bool,
     training_projection: TrainingProjection,
     point_spec: PointSpec,
@@ -80,7 +77,7 @@ impl Default for GammaLoopParams {
 impl GammaLoopEvaluator {
     pub fn from_params(params: GammaLoopParams) -> Result<Self, BuildError> {
         _ = initialise();
-        let state = State::load(params.state_folder.clone(), None, None).map_err(|err| {
+        let mut state = State::load(params.state_folder.clone(), None, None).map_err(|err| {
             BuildError::build(format!(
                 "failed to load state from {}: {err}",
                 params.state_folder.display()
@@ -91,24 +88,16 @@ impl GammaLoopEvaluator {
             .find_integrand_ref(params.process_id.as_ref(), params.integrand_name.as_ref())
             .map_err(|err| BuildError::build(format!("failed to find integrand: {err}")))?;
 
-        let mut integrand = state
+        let integrand = state
             .process_list
-            .get_integrand(process_id, integrand_name.clone())
+            .get_integrand_mut(process_id, integrand_name.clone())
             .map_err(|err| BuildError::build(err.to_string()))?
             .clone();
-
-        _ = integrand.warm_up(&state.model);
-
-        let settings = integrand.get_settings().clone();
         let model = state.model.clone();
 
         Ok(Self {
             integrand,
             model,
-            settings,
-            state_folder: params.state_folder,
-            process_id,
-            integrand_name,
             momentum_space: params.momentum_space,
             training_projection: params.training_projection,
             point_spec: PointSpec {
@@ -119,45 +108,167 @@ impl GammaLoopEvaluator {
     }
 
     fn evaluate(&mut self, batch: &Batch) -> Result<Vec<num::complex::Complex64>, EvalError> {
-        let mut vec_res = vec![];
+        if self.momentum_space {
+            let inputs = batch
+                .continuous()
+                .outer_iter()
+                .zip(batch.discrete().outer_iter())
+                .map(|(point, discrete_dim)| {
+                    let point = point.to_vec();
+                    if !point.len().is_multiple_of(3) {
+                        return Err(EvalError::eval(format!(
+                            "momentum-space evaluation expects point dimension divisible by 3, got {}",
+                            point.len()
+                        )));
+                    }
+                    let loop_momenta = point
+                        .chunks_exact(3)
+                        .map(|coords| gammalooprs::momentum::ThreeMomentum {
+                            px: F(coords[0]),
+                            py: F(coords[1]),
+                            pz: F(coords[2]),
+                        })
+                        .collect::<Vec<_>>();
+                    let discrete_dim = discrete_dim
+                        .iter()
+                        .copied()
+                        .map(|dim| {
+                            usize::try_from(dim).map_err(|_| {
+                                EvalError::eval(format!(
+                                    "batch has negative discrete index {}",
+                                    dim
+                                ))
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
 
-        for (point, discrete_dim) in batch
-            .continuous()
-            .outer_iter()
-            .zip(batch.discrete().outer_iter())
-        {
-            let pt = point.iter().map(|&x| F(x)).collect::<Vec<F<f64>>>();
-            let discrete_dim = discrete_dim
-                .iter()
-                .copied()
-                .map(|dim| {
-                    usize::try_from(dim).map_err(|_| {
-                        EvalError::eval(format!("batch has negative discrete index {}", dim))
+                    let (group_id, orientation, channel_id) = match &self.integrand.get_settings().sampling
+                    {
+                        SamplingSettings::Default(_) | SamplingSettings::MultiChanneling(_) => {
+                            if !discrete_dim.is_empty() {
+                                return Err(EvalError::eval(format!(
+                                    "integrand does not use discrete graph sampling, but received discrete dimensions {:?}",
+                                    discrete_dim
+                                )));
+                            }
+                            (None, None, None)
+                        }
+                        SamplingSettings::DiscreteGraphs(_) => self
+                            .integrand
+                            .resolve_discrete_selection(discrete_dim.as_slice())
+                            .map_err(|err| {
+                                EvalError::eval(format!(
+                                    "invalid momentum-space discrete selection: {err}"
+                                ))
+                            })?,
+                    };
+
+                    Ok(MomentumSpaceEvaluationInput {
+                        loop_momenta,
+                        integrator_weight: F(1.0),
+                        graph_id: None,
+                        group_id,
+                        orientation,
+                        channel_id,
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let (jac, value) = inspect(
-                &self.settings,
-                &mut self.integrand,
+            let results = self
+                .integrand
+                .evaluate_momentum_configurations_raw(&self.model, inputs.as_slice(), false)
+                .map_err(|err| EvalError::eval(format!("failed to evaluate integrand: {err}")))?;
+
+            return Ok(results
+                .samples
+                .into_iter()
+                .map(|res| {
+                    num::complex::Complex64::new(
+                        res.integrand_result.re.0,
+                        res.integrand_result.im.0,
+                    )
+                })
+                .collect());
+        }
+
+        let samples = batch
+            .continuous()
+            .outer_iter()
+            .zip(batch.discrete().outer_iter())
+            .map(|(point, discrete_dim)| {
+                let cont = point.iter().map(|&x| F(x)).collect::<Vec<_>>();
+                let discrete_dim = discrete_dim
+                    .iter()
+                    .copied()
+                    .map(|dim| {
+                        usize::try_from(dim).map_err(|_| {
+                            EvalError::eval(format!("batch has negative discrete index {}", dim))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let expected_dimension = self
+                    .integrand
+                    .expected_x_space_dimension(discrete_dim.as_slice())
+                    .map_err(|err| EvalError::eval(format!("invalid x-space selection: {err}")))?;
+                if cont.len() != expected_dimension {
+                    return Err(EvalError::eval(format!(
+                        "expected {expected_dimension} x-space coordinates for this selection, got {}",
+                        cont.len()
+                    )));
+                }
+                Ok(havana_sample(cont, discrete_dim.as_slice(), F(1.0)))
+            })
+            .collect::<Result<Vec<Sample<F<f64>>>, _>>()?;
+
+        let results = self
+            .integrand
+            .evaluate_samples_raw(
                 &self.model,
-                pt,
-                discrete_dim.as_slice(),
+                samples.as_slice(),
+                1,
                 false,
-                self.momentum_space,
                 false,
+                Default::default(),
             )
             .map_err(|err| EvalError::eval(format!("failed to evaluate integrand: {err}")))?;
 
-            let mut value = num::complex::Complex64::new(value.re.into(), value.im.into());
-            if let Some(jac) = jac {
-                value *= jac
-            }
+        Ok(results
+            .samples
+            .into_iter()
+            .map(|res| {
+                let mut value = num::complex::Complex64::new(
+                    res.integrand_result.re.0,
+                    res.integrand_result.im.0,
+                );
+                if let Some(jac) = res.parameterization_jacobian {
+                    value *= jac.0;
+                }
+                value
+            })
+            .collect())
+    }
+}
 
-            vec_res.push(value);
-        }
+fn havana_sample(
+    cont: Vec<F<f64>>,
+    discrete_dimensions: &[usize],
+    integrator_weight: F<f64>,
+) -> Sample<F<f64>> {
+    let mut sample = Sample::Continuous(F(1.0), cont);
 
-        Ok(vec_res)
+    for &discrete_dimension in discrete_dimensions.iter().rev() {
+        sample = Sample::Discrete(F(1.0), discrete_dimension, Some(Box::new(sample)));
+    }
+
+    set_top_level_sample_weight(&mut sample, integrator_weight);
+    sample
+}
+
+fn set_top_level_sample_weight(sample: &mut Sample<F<f64>>, integrator_weight: F<f64>) {
+    match sample {
+        Sample::Continuous(weight, _)
+        | Sample::Discrete(weight, _, _)
+        | Sample::Uniform(weight, _, _) => *weight = integrator_weight,
     }
 }
 

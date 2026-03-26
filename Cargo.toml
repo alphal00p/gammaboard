@@ -52,11 +52,8 @@ crate-type = ["rlib"]
 
 [patch.crates-io]
 #graphica = { git = "https://github.com/benruijl/symbolica", branch = "dev" }
-#idenso = { git = "https://github.com/alphal00p/spenso", rev = "c052f22dc98a18535e114eede758674befc2758f" }
-#linnet = { git = "https://github.com/alphal00p/linnet", rev = "406272c24bcb5bde5551d7d29620459e0671c82e" }
 #numerica = { git = "https://github.com/benruijl/symbolica", branch = "dev" }
-#spenso = { git = "https://github.com/alphal00p/spenso", rev = "c052f22dc98a18535e114eede758674befc2758f" }
-#spenso-hep-lib = { git = "https://github.com/alphal00p/spenso", rev = "c052f22dc98a18535e114eede758674befc2758f" }
-#spenso-macros = { git = "https://github.com/alphal00p/spenso", rev = "c052f22dc98a18535e114eede758674befc2758f" }
 #symbolica = { git = "https://github.com/benruijl/symbolica", branch = "dev" }
-#vakint = { git = "https://github.com/alphal00p/vakint", rev = "bf91ee57aa62604c7ae3fb919203bf6f09544470" }
+graphica = { git = "https://github.com/benruijl/symbolica", rev = "650ba97bf3da7cf2ff5ada92875f92d5f71e7a31" }
+numerica = { git = "https://github.com/benruijl/symbolica", rev = "650ba97bf3da7cf2ff5ada92875f92d5f71e7a31" }
+symbolica = { git = "https://github.com/benruijl/symbolica", rev = "650ba97bf3da7cf2ff5ada92875f92d5f71e7a31" }
