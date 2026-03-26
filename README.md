@@ -83,7 +83,7 @@ These commands use `database.url` and `local_postgres` from `configs/gammaboard.
   gammaboard server --server-config path/to/server.toml
   ```
 - The checked-in local default is [configs/server.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server.toml).
-- `Ctrl-C` shuts the server down cleanly.
+- First `Ctrl-C` requests graceful shutdown. If draining hangs, press `Ctrl-C` again to force shutdown; the server also force-exits automatically after 10 seconds.
 - Required shape:
   ```toml
   host = "0.0.0.0"

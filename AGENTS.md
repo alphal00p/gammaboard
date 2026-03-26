@@ -69,7 +69,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Local Postgres lifecycle commands should live under `gammaboard db ...` and use the shared CLI config instead of separate env-driven just recipes.
 - Server host, port, allowed origin, secure cookie policy, dashboard auth secrets, and template directories should come from `configs/server.toml` by default, with an optional `gammaboard server --server-config <PATH>` override.
 - Server TOML should be explicit; do not rely on implicit defaults for required server settings.
-- `gammaboard server` should shut down cleanly on `Ctrl-C` instead of relying on default process signal behavior.
+- `gammaboard server` should use two-phase shutdown: first `Ctrl-C` requests graceful drain, while a second `Ctrl-C` or 10-second timeout forces process exit.
 
 ## Logging And Read APIs
 - Runtime logs are persisted through the tracing pipeline into PostgreSQL.

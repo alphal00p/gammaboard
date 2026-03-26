@@ -36,11 +36,16 @@ use std::{
     fs,
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
 };
+use tokio::sync::{Notify, oneshot};
 use tower_http::cors::CorsLayer;
 use tracing::Instrument;
 
 use self::auth::{AuthConfig, SessionStatus, login, logout, require_admin_session};
+
+const SERVER_FORCE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerConfig {
@@ -106,17 +111,47 @@ pub async fn serve(store: PgStore, config: ServerConfig) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .with_context(|| format!("failed to bind server socket at {bind}"))?;
-    let shutdown = async {
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let server_stopped = Arc::new(Notify::new());
+    let server_stopped_for_signal = Arc::clone(&server_stopped);
+    tokio::spawn(async move {
         if let Err(err) = tokio::signal::ctrl_c().await {
             tracing::warn!("failed to install server Ctrl-C handler: {err}");
             return;
         }
         tracing::info!("server shutdown requested by Ctrl-C");
+        let _ = shutdown_tx.send(());
+
+        tokio::select! {
+            signal_result = tokio::signal::ctrl_c() => {
+                match signal_result {
+                    Ok(()) => {
+                        tracing::warn!("server force shutdown requested by second Ctrl-C");
+                    }
+                    Err(err) => {
+                        tracing::warn!("failed waiting for second Ctrl-C: {err}; forcing shutdown");
+                    }
+                }
+                std::process::exit(130);
+            }
+            _ = tokio::time::sleep(SERVER_FORCE_SHUTDOWN_TIMEOUT) => {
+                tracing::warn!(
+                    "server graceful shutdown timed out after {}s; forcing shutdown",
+                    SERVER_FORCE_SHUTDOWN_TIMEOUT.as_secs()
+                );
+                std::process::exit(130);
+            }
+            _ = server_stopped_for_signal.notified() => {}
+        }
+    });
+    let shutdown = async move {
+        let _ = shutdown_rx.await;
     };
-    axum::serve(listener, app)
+    let serve_result = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
-        .await
-        .context("api server exited with error")?;
+        .await;
+    server_stopped.notify_waiters();
+    serve_result.context("api server exited with error")?;
 
     Ok(())
 }
