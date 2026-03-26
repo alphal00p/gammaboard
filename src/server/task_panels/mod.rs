@@ -137,6 +137,7 @@ impl RunTaskSpec {
     fn panel_projectors(&self) -> Vec<TaskPanelProjector> {
         let mut projectors = vec![task_summary_projector()];
         projectors.extend(match self {
+            Self::Init => Vec::new(),
             Self::Sample { .. } => sample::projectors(self),
             Self::Image {
                 geometry, display, ..

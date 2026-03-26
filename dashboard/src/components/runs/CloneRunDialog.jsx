@@ -34,14 +34,8 @@ const CloneRunDialog = ({
   );
   const rootSnapshotId = useMemo(() => {
     const runRootSnapshotId = Number(selectedRun?.root_stage_snapshot_id);
-    if (Number.isFinite(runRootSnapshotId)) {
-      return runRootSnapshotId;
-    }
-    return (
-      taskList.map((task) => Number(task.root_stage_snapshot_id)).find((snapshotId) => Number.isFinite(snapshotId)) ??
-      null
-    );
-  }, [selectedRun, taskList]);
+    return Number.isFinite(runRootSnapshotId) ? runRootSnapshotId : null;
+  }, [selectedRun]);
   const snapshotTaskList = useMemo(
     () => taskList.filter((task) => Number.isFinite(Number(task.latest_stage_snapshot_id))),
     [taskList],

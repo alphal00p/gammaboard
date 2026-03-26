@@ -8,7 +8,7 @@ use crate::core::{
     SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore, WorkerRole,
     generated_task_name,
 };
-use crate::core::{IntegrationParams, RunSpec};
+use crate::core::{IntegrationParams, RunSpec, RunTaskSpec};
 use crate::evaluation::{BatchResult, PointSpec};
 use crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot;
 use crate::sampling::LatentBatch;
@@ -490,6 +490,31 @@ impl ControlPlaneStore for PgStore {
         )
         .await
         .map_err(map_sqlx)?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO run_tasks (
+                run_id,
+                name,
+                sequence_nr,
+                task,
+                state,
+                started_at,
+                completed_at
+            )
+            VALUES ($1, $2, 0, $3, 'completed', now(), now())
+            "#,
+        )
+        .bind(run_id)
+        .bind(initial_stage_snapshot.name.clone())
+        .bind(
+            serde_json::to_value(RunTaskSpec::Init)
+                .map_err(|err| store_err(format!("failed to serialize init run task: {err}")))?,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx)?;
+
         for (offset, task) in initial_tasks.iter().enumerate() {
             let sequence_nr = offset as i32 + 1;
             let task_name = task

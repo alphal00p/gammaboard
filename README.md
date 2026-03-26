@@ -137,6 +137,7 @@ discrete_dims = 0
 
 If `task_queue` is omitted, the run is created idle.
 Every run stores an initial root stage snapshot (`sequence_nr = 0`) immediately at creation.
+Every run also stores a completed reserved `init` task at `sequence_nr = 0` so initialization appears in the task list.
 
 ### Task Queue
 Sample tasks use direct per-component source specs:

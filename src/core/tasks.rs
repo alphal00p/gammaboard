@@ -100,6 +100,7 @@ impl ObservableSourceSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RunTaskSpec {
+    Init,
     Sample {
         nr_samples: Option<i64>,
         #[serde(default)]
@@ -126,6 +127,7 @@ pub enum RunTaskSpec {
 impl RunTaskSpec {
     pub fn validate(&self) -> Result<(), String> {
         match self {
+            Self::Init => Err("init task is reserved and cannot be added manually".to_string()),
             Self::Sample {
                 nr_samples: Some(nr_samples),
                 ..
@@ -159,6 +161,7 @@ impl RunTaskSpec {
 
     pub fn kind_str(&self) -> &'static str {
         match self {
+            Self::Init => "init",
             Self::Sample { .. } => "sample",
             Self::Image { .. } => "image",
             Self::PlotLine { .. } => "plot_line",
@@ -167,6 +170,7 @@ impl RunTaskSpec {
 
     pub fn sampler_config(&self) -> Option<SamplerAggregatorConfig> {
         match self {
+            Self::Init => None,
             Self::Sample { .. } => None,
             Self::Image { geometry, .. } => Some(SamplerAggregatorConfig::RasterPlane {
                 params: RasterPlaneSamplerParams {
@@ -183,6 +187,7 @@ impl RunTaskSpec {
 
     pub fn sample_sampler_source(&self) -> Option<SourceRefSpec> {
         match self {
+            Self::Init => None,
             Self::Sample {
                 sampler_aggregator, ..
             } => match sampler_aggregator {
@@ -198,6 +203,7 @@ impl RunTaskSpec {
 
     pub fn sample_sampler_config(&self) -> Option<SamplerAggregatorConfig> {
         match self {
+            Self::Init => None,
             Self::Sample {
                 sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config { config }),
                 ..
@@ -209,6 +215,7 @@ impl RunTaskSpec {
 
     pub fn batch_transforms_config(&self) -> Option<Vec<BatchTransformConfig>> {
         match self {
+            Self::Init => Some(Vec::new()),
             Self::Sample {
                 batch_transforms, ..
             } => batch_transforms.clone(),
@@ -218,6 +225,7 @@ impl RunTaskSpec {
 
     pub fn sample_observable_source(&self) -> Option<SourceRefSpec> {
         match self {
+            Self::Init => None,
             Self::Sample { observable, .. } => match observable {
                 None | Some(ObservableSourceSpec::Latest(_)) => Some(SourceRefSpec::Latest),
                 Some(ObservableSourceSpec::FromName { from_name }) => {
@@ -240,8 +248,13 @@ impl RunTaskSpec {
         out
     }
 
+    pub fn is_sourceable(&self) -> bool {
+        !matches!(self, Self::Init)
+    }
+
     pub fn new_observable_config(&self) -> Result<Option<ObservableConfig>, BuildError> {
         match self {
+            Self::Init => Ok(None),
             Self::Sample {
                 observable: Some(ObservableSourceSpec::Config { config }),
                 ..
@@ -255,6 +268,7 @@ impl RunTaskSpec {
 
     pub fn nr_expected_samples(&self) -> Option<i64> {
         match self {
+            Self::Init => None,
             Self::Sample { nr_samples, .. } => *nr_samples,
             Self::Image { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::PlotLine { geometry, .. } => Some(geometry.nr_points() as i64),
@@ -274,6 +288,7 @@ impl IntoPreflightTask for RunTaskSpec {
     fn into_preflight(self) -> Result<Option<Self>, BuildError> {
         self.validate().map_err(BuildError::invalid_input)?;
         match self {
+            Self::Init => Ok(None),
             Self::Sample {
                 nr_samples,
                 sampler_aggregator,

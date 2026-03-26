@@ -438,7 +438,7 @@ count = 8
             let pool = harness.pool.clone();
             async move {
                 let completed: i64 = sqlx::query_scalar(
-                    "SELECT COUNT(*) FROM run_tasks WHERE run_id = $1 AND state = 'completed' AND sequence_nr <= 4",
+                    "SELECT COUNT(*) FROM run_tasks WHERE run_id = $1 AND state = 'completed' AND sequence_nr >= 1 AND sequence_nr <= 4",
                 )
                 .bind(run_id)
                 .fetch_one(&pool)
@@ -498,7 +498,7 @@ sampler_aggregator = { config = { kind = "havana_inference" } }
                 .bind(run_id)
                 .fetch_one(&pool)
                 .await?;
-                Ok(completed == 6)
+                Ok(completed == 7)
             }
         })
         .await?;
@@ -1349,7 +1349,7 @@ nr_samples = 16
                 && w2.1.is_none()
                 && w2.2.is_none()
                 && w2.3.is_none()
-                && completed == 2)
+                && completed == 3)
         })
         .await?;
 
@@ -1382,7 +1382,7 @@ nr_samples = 16
             .bind(cloned_run_id)
             .fetch_one(&harness.pool)
             .await?;
-    assert_eq!(cloned_task_count, 0);
+    assert_eq!(cloned_task_count, 1);
 
     let cloned_root_snapshot_name: String = sqlx::query_scalar(
         "SELECT name FROM run_stage_snapshots WHERE run_id = $1 AND task_id IS NULL ORDER BY id ASC LIMIT 1",

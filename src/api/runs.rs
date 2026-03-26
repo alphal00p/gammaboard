@@ -305,7 +305,11 @@ async fn preflight_task_batch(
         .iter()
         .map(|task| task.name.clone())
         .collect::<BTreeSet<_>>();
-    let mut prior_sourceable_names = known_names.clone();
+    let mut prior_sourceable_names = existing_tasks
+        .iter()
+        .filter(|task| task.task.is_sourceable())
+        .map(|task| task.name.clone())
+        .collect::<BTreeSet<_>>();
     let mut next_sequence = existing_tasks
         .iter()
         .map(|task| task.sequence_nr)
@@ -336,7 +340,9 @@ async fn preflight_task_batch(
                 task_name
             )));
         }
-        prior_sourceable_names.insert(task_name);
+        if task.task.is_sourceable() {
+            prior_sourceable_names.insert(task_name);
+        }
         next_sequence += 1;
     }
 

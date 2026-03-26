@@ -42,6 +42,8 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Task transitions must restore runtime state from persisted `run_stage_snapshots`, not in-memory handoff only.
 - Snapshots are the branchable state timeline. Tasks are queued work items that may produce snapshots, but are not themselves the canonical branch identity.
 - Every run must persist a root stage snapshot at initialization with `sequence_nr = 0` and `task_id = null`.
+- Every run must also persist a completed reserved `init` run task at `sequence_nr = 0` so initialization is visible in task lists.
+- `init` is system-reserved and must not be accepted from user task TOML.
 - Sample source selection is per component (`sampler_aggregator`, `observable`), not a task-level snapshot id.
 - Cloning a run from a stage snapshot must not copy queued tasks; the cloned run starts idle at that cloned root snapshot.
 - A cloned run root snapshot name should identify the source run and source task (or root) it was cloned from.
