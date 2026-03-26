@@ -10,8 +10,8 @@ pub(crate) async fn insert_runtime_log(
         INSERT INTO runtime_logs (
             source,
             run_id,
-            node_id,
-            worker_id,
+            node_uuid,
+            node_name,
             level,
             target,
             message,

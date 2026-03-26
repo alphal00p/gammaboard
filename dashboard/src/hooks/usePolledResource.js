@@ -36,7 +36,6 @@ export const usePolledResource = ({ enabled = true, pollMs, initialData, fetchRe
         setLastUpdate(formatTime());
       } catch (err) {
         if (err?.name === "AbortError") return;
-        setData(initialDataRef.current);
         setError(err);
         setIsConnected(false);
         onErrorRef.current?.(err);

@@ -80,7 +80,7 @@ impl TryFrom<RunProgressRow> for RunProgress {
         Ok(RunProgress {
             run_id: value.run_id,
             run_name: value.run_name,
-            root_stage_snapshot_id: value.root_stage_snapshot_id,
+            root_stage_snapshot_id: value.root_stage_snapshot_id.map(id_text),
             lifecycle_state: value.lifecycle_state,
             desired_assignment_count: value.desired_assignment_count,
             active_worker_count: value.active_worker_count,
@@ -282,31 +282,6 @@ pub(crate) async fn health_check(pool: &PgPool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-const RUN_PROGRESS_COLUMNS: &str = r#"
-    run_id,
-    run_name,
-    root_stage_snapshot_id,
-    lifecycle_state,
-    desired_assignment_count,
-    active_worker_count,
-    integration_params,
-    point_spec,
-    active_task_id,
-    target,
-    nr_produced_samples,
-    nr_completed_samples,
-    started_at,
-    completed_at,
-    batches_completed,
-    total_batches,
-    total_samples,
-    pending_batches,
-    claimed_batches,
-    completed_batches,
-    failed_batches,
-    completion_rate
-"#;
-
 const RUN_ASSIGNMENT_STATS_SUBQUERY: &str = r#"
     SELECT
         r.id AS run_id,
@@ -330,10 +305,23 @@ const RUN_ASSIGNMENT_STATS_SUBQUERY: &str = r#"
 const RUN_ROOT_STAGE_SNAPSHOT_SUBQUERY: &str = r#"
     SELECT
         run_id,
-        MIN(id) AS root_stage_snapshot_id
+        id AS root_stage_snapshot_id
     FROM run_stage_snapshots
     WHERE queue_empty = TRUE
       AND task_id IS NULL
+      AND sequence_nr = 0
+"#;
+
+const RUN_BATCH_STATS_SUBQUERY_ALL_RUNS: &str = r#"
+    SELECT
+        run_id,
+        COUNT(*) as total_batches,
+        SUM(batch_size) as total_samples,
+        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_batches,
+        SUM(CASE WHEN status = 'claimed' THEN 1 ELSE 0 END) as claimed_batches,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_batches,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_batches
+    FROM batches
     GROUP BY run_id
 "#;
 
@@ -351,8 +339,8 @@ const RUN_BATCH_STATS_SUBQUERY_FOR_ONE_RUN: &str = r#"
     GROUP BY run_id
 "#;
 
-pub(crate) async fn get_all_runs(pool: &PgPool) -> Result<Vec<RunProgress>, sqlx::Error> {
-    let sql = format!(
+fn run_progress_sql(batch_stats_subquery: &str, run_where_clause: &str) -> String {
+    format!(
         r#"
         WITH assignment_stats AS (
             {assignment_stats_subquery}
@@ -390,16 +378,7 @@ pub(crate) async fn get_all_runs(pool: &PgPool) -> Result<Vec<RunProgress>, sqlx
             END as completion_rate
         FROM runs r
         LEFT JOIN (
-            SELECT
-                run_id,
-                COUNT(*) as total_batches,
-                SUM(batch_size) as total_samples,
-                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_batches,
-                SUM(CASE WHEN status = 'claimed' THEN 1 ELSE 0 END) as claimed_batches,
-                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_batches,
-                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_batches
-            FROM batches
-            GROUP BY run_id
+            {batch_stats_subquery}
         ) b ON r.id = b.run_id
         LEFT JOIN assignment_stats a ON r.id = a.run_id
         LEFT JOIN (
@@ -408,11 +387,18 @@ pub(crate) async fn get_all_runs(pool: &PgPool) -> Result<Vec<RunProgress>, sqlx
         LEFT JOIN run_tasks active_task
             ON active_task.run_id = r.id
            AND active_task.state = 'active'
-        ORDER BY started_at DESC
+        {run_where_clause}
         "#,
         assignment_stats_subquery = RUN_ASSIGNMENT_STATS_SUBQUERY,
-        root_stage_snapshot_subquery = RUN_ROOT_STAGE_SNAPSHOT_SUBQUERY
-    );
+        batch_stats_subquery = batch_stats_subquery,
+        root_stage_snapshot_subquery = RUN_ROOT_STAGE_SNAPSHOT_SUBQUERY,
+        run_where_clause = run_where_clause
+    )
+}
+
+pub(crate) async fn get_all_runs(pool: &PgPool) -> Result<Vec<RunProgress>, sqlx::Error> {
+    let mut sql = run_progress_sql(RUN_BATCH_STATS_SUBQUERY_ALL_RUNS, "");
+    sql.push_str("\nORDER BY started_at DESC");
 
     let rows = sqlx::query_as::<_, RunProgressRow>(&sql)
         .fetch_all(pool)
@@ -425,65 +411,7 @@ pub(crate) async fn get_run_progress(
     pool: &PgPool,
     run_id: i32,
 ) -> Result<Option<RunProgress>, sqlx::Error> {
-    let sql = format!(
-        r#"
-        WITH assignment_stats AS (
-            {assignment_stats_subquery}
-        ),
-        run_progress AS (
-            SELECT
-                r.id as run_id,
-                r.name as run_name,
-                root.root_stage_snapshot_id,
-                CASE
-                    WHEN COALESCE(a.desired_assignment_count, 0) > 0 THEN 'running'
-                    WHEN COALESCE(b.claimed_batches, 0) > 0 OR COALESCE(a.active_worker_count, 0) > 0 THEN 'pausing'
-                    ELSE 'paused'
-                END as lifecycle_state,
-                COALESCE(a.desired_assignment_count, 0) as desired_assignment_count,
-                COALESCE(a.active_worker_count, 0) as active_worker_count,
-                COALESCE(r.integration_params, '{{}}'::jsonb) as integration_params,
-                r.point_spec as point_spec,
-                active_task.id as active_task_id,
-                r.target,
-                r.nr_produced_samples,
-                r.nr_completed_samples,
-                r.started_at,
-                r.completed_at,
-                r.batches_completed,
-                COALESCE(b.total_batches, 0) as total_batches,
-                COALESCE(b.total_samples, 0) as total_samples,
-                COALESCE(b.pending_batches, 0) as pending_batches,
-                COALESCE(b.claimed_batches, 0) as claimed_batches,
-                COALESCE(b.completed_batches, 0) as completed_batches,
-                COALESCE(b.failed_batches, 0) as failed_batches,
-                CASE
-                    WHEN COALESCE(b.total_batches, 0) > 0
-                    THEN CAST(COALESCE(b.completed_batches, 0) AS FLOAT) / b.total_batches
-                    ELSE 0.0
-                END as completion_rate
-            FROM runs r
-            LEFT JOIN (
-                {batch_stats_subquery}
-            ) b ON r.id = b.run_id
-            LEFT JOIN assignment_stats a ON r.id = a.run_id
-            LEFT JOIN (
-                {root_stage_snapshot_subquery}
-            ) root ON r.id = root.run_id
-            LEFT JOIN run_tasks active_task
-                ON active_task.run_id = r.id
-               AND active_task.state = 'active'
-            WHERE r.id = $1
-        )
-        SELECT
-            {columns}
-        FROM run_progress
-        "#,
-        columns = RUN_PROGRESS_COLUMNS,
-        batch_stats_subquery = RUN_BATCH_STATS_SUBQUERY_FOR_ONE_RUN,
-        assignment_stats_subquery = RUN_ASSIGNMENT_STATS_SUBQUERY,
-        root_stage_snapshot_subquery = RUN_ROOT_STAGE_SNAPSHOT_SUBQUERY
-    );
+    let sql = run_progress_sql(RUN_BATCH_STATS_SUBQUERY_FOR_ONE_RUN, "WHERE r.id = $1");
 
     let row = sqlx::query_as::<_, RunProgressRow>(&sql)
         .bind(run_id)
@@ -616,15 +544,15 @@ pub(crate) async fn get_worker_logs(
                 id,
                 ts,
                 run_id,
-                node_id AS node_uuid,
-                worker_id AS node_name,
+                node_uuid,
+                node_name,
                 level,
                 message,
                 fields
             FROM runtime_logs
             WHERE source = 'worker'
               AND run_id = $1
-              AND ($2::text IS NULL OR worker_id = $2)
+              AND ($2::text IS NULL OR node_name = $2)
               AND ($3::text IS NULL OR level = $3)
               AND ($4::text IS NULL OR message ILIKE $4 OR fields::text ILIKE $4)
               AND ($5::bigint IS NULL OR id < $5)

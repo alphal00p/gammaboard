@@ -79,8 +79,6 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
   const currentRun = runs.find((entry) => entry.run_id === selectedRun);
   const { tasks } = useRunTasks(selectedRun, 2000);
   const { evaluator, sampler } = useRunConfigPanels({ runId: selectedRun, pollMs: 5000 });
-  const [cloneSourceRunId, setCloneSourceRunId] = useState(selectedRun);
-  const { tasks: cloneSourceTasks } = useRunTasks(cloneSourceRunId, 2000);
   const [selectedTaskId, setSelectedTaskId] = useState(null);
   const [snackbar, setSnackbar] = useState(null);
   const [pausing, setPausing] = useState(false);
@@ -110,12 +108,6 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
       cancelled = true;
     };
   }, []);
-
-  useEffect(() => {
-    if (selectedRun != null) {
-      setCloneSourceRunId(selectedRun);
-    }
-  }, [selectedRun]);
 
   useEffect(() => {
     const taskList = asTaskList(tasks);
@@ -161,16 +153,6 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
       {authenticated ? (
         <Box sx={{ mb: 2, display: "flex", justifyContent: "flex-end" }}>
           <Stack direction={{ xs: "column", md: "row" }} spacing={1.5}>
-            <Button
-              variant="outlined"
-              disabled={!selectedRun || cloneRunBusy || addTasksBusy || pausing || autoAssigning}
-              onClick={() => {
-                setCloneRunError(null);
-                setCloneRunOpen(true);
-              }}
-            >
-              Clone Run
-            </Button>
             <TextField
               size="small"
               label="Max Evaluators"
@@ -255,6 +237,23 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
               <Button
                 size="small"
                 variant="outlined"
+                disabled={
+                  !selectedRun ||
+                  cloneRunBusy ||
+                  addTasksBusy ||
+                  deletingRun ||
+                  (!selectedTask?.latest_stage_snapshot_id && !currentRun?.root_stage_snapshot_id)
+                }
+                onClick={() => {
+                  setCloneRunError(null);
+                  setCloneRunOpen(true);
+                }}
+              >
+                Clone Run
+              </Button>
+              <Button
+                size="small"
+                variant="outlined"
                 disabled={!selectedRun || addTasksBusy || cloneRunBusy || deletingRun}
                 onClick={() => {
                   setAddTasksError(null);
@@ -293,19 +292,20 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
       <SamplerAggregatorPanel run={currentRun} panelResponse={sampler} />
       <CloneRunDialog
         open={cloneRunOpen}
-        runs={runs}
-        sourceRunId={cloneSourceRunId}
-        setSourceRunId={setCloneSourceRunId}
-        sourceTasks={cloneSourceTasks}
         initialName={cloneInitialName}
         busy={cloneRunBusy}
         error={cloneRunError}
         onClose={closeCloneRun}
-        onSubmit={async ({ sourceRunId, fromSnapshotId, newName }) => {
+        onSubmit={async ({ newName }) => {
+          const fromSnapshotId = selectedTask?.latest_stage_snapshot_id ?? currentRun?.root_stage_snapshot_id ?? null;
+          if (!selectedRun || !fromSnapshotId) {
+            setCloneRunError("No source snapshot is available for cloning.");
+            return;
+          }
           setCloneRunBusy(true);
           setCloneRunError(null);
           try {
-            const response = await cloneRun({ sourceRunId, fromSnapshotId, newName });
+            const response = await cloneRun({ sourceRunId: selectedRun, fromSnapshotId, newName });
             setCloneRunOpen(false);
             setSnackbar({
               message: `Cloned run ${response?.run_name || "run"} (#${response?.run_id ?? "?"}).`,

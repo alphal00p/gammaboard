@@ -53,9 +53,5 @@ export const formatTaskSpawnOrigin = (task) => {
   if (task?.spawned_from_snapshot_id == null) {
     return "auto";
   }
-  const snapshotId = Number(task?.spawned_from_snapshot_id);
-  if (Number.isFinite(snapshotId)) {
-    return String(snapshotId);
-  }
-  return "auto";
+  return String(task.spawned_from_snapshot_id);
 };

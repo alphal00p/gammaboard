@@ -206,6 +206,9 @@ struct CreateRunRequest {
 #[derive(Deserialize)]
 struct CloneRunRequest {
     source_run_id: i32,
+    #[serde(
+        deserialize_with = "crate::utils::serde_bigint::deserialize_i64_from_string_or_number"
+    )]
     from_snapshot_id: i64,
     new_name: String,
 }
@@ -230,7 +233,9 @@ struct TemplateFileResponse {
 struct RunTaskResponse {
     #[serde(flatten)]
     task: RunTask,
+    #[serde(serialize_with = "crate::utils::serde_bigint::serialize_option_i64_as_string")]
     latest_stage_snapshot_id: Option<i64>,
+    #[serde(serialize_with = "crate::utils::serde_bigint::serialize_option_i64_as_string")]
     root_stage_snapshot_id: Option<i64>,
 }
 

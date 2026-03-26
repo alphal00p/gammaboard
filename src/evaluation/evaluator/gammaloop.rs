@@ -85,7 +85,7 @@ impl GammaLoopEvaluator {
             .find_integrand_ref(params.process_id.as_ref(), params.integrand_name.as_ref())
             .map_err(|err| BuildError::build(format!("failed to find integrand: {err}")))?;
 
-        let integrand = state
+        let mut integrand = state
             .process_list
             .get_integrand_mut(process_id, integrand_name.clone())
             .map_err(|err| BuildError::build(err.to_string()))?
@@ -104,6 +104,9 @@ impl GammaLoopEvaluator {
                     BuildError::build(format!("failed to infer x-space dimensions: {err}"))
                 })?
         };
+        integrand
+            .warm_up(&model)
+            .map_err(|err| BuildError::build(format!("failed to warm up integrand: {err}")))?;
 
         Ok(Self {
             integrand,

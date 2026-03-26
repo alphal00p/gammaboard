@@ -485,11 +485,13 @@ fn vectors_are_independent(left: &[f64], right: &[f64]) -> bool {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunTask {
+    #[serde(serialize_with = "crate::utils::serde_bigint::serialize_i64_as_string")]
     pub id: i64,
     pub run_id: i32,
     pub name: String,
     pub sequence_nr: i32,
     pub task: RunTaskSpec,
+    #[serde(serialize_with = "crate::utils::serde_bigint::serialize_option_i64_as_string")]
     pub spawned_from_snapshot_id: Option<i64>,
     pub state: RunTaskState,
     pub nr_produced_samples: i64,
