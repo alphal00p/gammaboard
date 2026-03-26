@@ -44,8 +44,8 @@ observable = "complex"
 offset = [0.0, 0.0, 0.0]
 u_vector = [1.0, 0.0, 0.0]
 v_vector = [0.0, 0.0, 1.0]
-u_linspace = { start = -50.0, stop = 50.0, count = 192 }
-v_linspace = { start = -50.0, stop = 50.0, count = 192 }
+u_linspace = { start = -50.0, stop = 50.0, count = 512 }
+v_linspace = { start = -50.0, stop = 50.0, count = 512 }
 discrete = []
 
 [[task_queue]]
