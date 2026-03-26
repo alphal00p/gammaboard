@@ -364,8 +364,9 @@ kind = "sinc_evaluator"
 [[task_queue]]
 kind = "sample"
 nr_samples = 128
+[task_queue.config]
 observable = "complex"
-[task_queue.sampler_aggregator]
+[task_queue.config.sampler_aggregator]
 kind = "havana_training"
 seed = 0
 bins = 8
@@ -375,17 +376,17 @@ samples_for_update = 8
 [[task_queue]]
 kind = "sample"
 nr_samples = 128
+[task_queue.config]
 observable = "complex"
-[task_queue.sampler_aggregator]
-kind = "havana_inference"
-[task_queue.materializer]
+[task_queue.config.sampler_aggregator]
 kind = "havana_inference"
 
 [[task_queue]]
 kind = "sample"
 nr_samples = 32
+[task_queue.config]
 observable = "complex"
-[task_queue.sampler_aggregator]
+[task_queue.config.sampler_aggregator]
 kind = "naive_monte_carlo"
 
 [[task_queue]]
@@ -456,14 +457,9 @@ count = 8
         })
         .await?;
 
-    // Lookup snapshot ids produced by task sequence 2 and 3
+    // Lookup snapshot id produced by task sequence 2
     let task2_id: i64 =
         sqlx::query_scalar("SELECT id FROM run_tasks WHERE run_id = $1 AND sequence_nr = 2")
-            .bind(run_id)
-            .fetch_one(&harness.pool)
-            .await?;
-    let task3_id: i64 =
-        sqlx::query_scalar("SELECT id FROM run_tasks WHERE run_id = $1 AND sequence_nr = 3")
             .bind(run_id)
             .fetch_one(&harness.pool)
             .await?;
@@ -476,43 +472,25 @@ count = 8
     .fetch_one(&harness.pool)
     .await?;
 
-    let snapshot3_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM run_stage_snapshots WHERE run_id = $1 AND task_id = $2 AND queue_empty = TRUE ORDER BY id DESC LIMIT 1",
-    )
-    .bind(run_id)
-    .bind(task3_id)
-    .fetch_one(&harness.pool)
-    .await?;
-
     // Now append task 5 and 6:
-    // 5: havana_training that uses sampler snapshot from task 2 but observable from task 3
-    // 6: havana_inference (will use the most recent compatible training/inference snapshot)
+    // 5: resumes directly from snapshot produced by task 2
+    // 6: havana_inference (uses most recent compatible training/inference snapshot by default)
     let tasks_toml = format!(
         r#"
 [[task_queue]]
 kind = "sample"
 nr_samples = 128
-observable = "complex"
-start_from = {{ snapshot_id = {snap2} }}
-obs_start_from = {{ snapshot_id = {snap3} }}
-[task_queue.sampler_aggregator]
-kind = "havana_training"
-seed = 0
-bins = 8
-min_samples_for_update = 4
-samples_for_update = 8
+snapshot_id = {snap2}
 
 [[task_queue]]
 kind = "sample"
 nr_samples = 128
+[task_queue.config]
 observable = "complex"
-[task_queue.sampler_aggregator]
-kind = "havana_inference"
-[task_queue.materializer]
+[task_queue.config.sampler_aggregator]
 kind = "havana_inference"
 "#,
         snap2 = snapshot2_id,
-        snap3 = snapshot3_id
     );
 
     let task_file = temp_run_config(&tasks_toml);
@@ -553,22 +531,14 @@ kind = "havana_inference"
         })
         .await?;
 
-    // Verify task 5 has the expected start_from and obs_start_from references
-    let t5_start_from: Option<i64> = sqlx::query_scalar(
-        "SELECT (task->'start_from'->>'snapshot_id')::bigint FROM run_tasks WHERE run_id = $1 AND sequence_nr = 5",
+    // Verify task 5 has the expected snapshot source reference
+    let t5_snapshot_source: Option<i64> = sqlx::query_scalar(
+        "SELECT (task->>'snapshot_id')::bigint FROM run_tasks WHERE run_id = $1 AND sequence_nr = 5",
     )
     .bind(run_id)
     .fetch_one(&harness.pool)
     .await?;
-    assert_eq!(t5_start_from, Some(snapshot2_id));
-
-    let t5_obs_from: Option<i64> = sqlx::query_scalar(
-        "SELECT (task->'obs_start_from'->>'snapshot_id')::bigint FROM run_tasks WHERE run_id = $1 AND sequence_nr = 5",
-    )
-    .bind(run_id)
-    .fetch_one(&harness.pool)
-    .await?;
-    assert_eq!(t5_obs_from, Some(snapshot3_id));
+    assert_eq!(t5_snapshot_source, Some(snapshot2_id));
 
     harness.stop_children().await;
     harness.pool.close().await;
@@ -1445,7 +1415,7 @@ nr_samples = 16
     assert_eq!(cloned_task_count, 1);
 
     let cloned_task_start_from_snapshot: Option<i64> = sqlx::query_scalar(
-        "SELECT (task->'start_from'->>'snapshot_id')::bigint FROM run_tasks WHERE run_id = $1 ORDER BY sequence_nr ASC LIMIT 1",
+        "SELECT (task->>'snapshot_id')::bigint FROM run_tasks WHERE run_id = $1 ORDER BY sequence_nr ASC LIMIT 1",
     )
     .bind(cloned_run_id)
     .fetch_one(&harness.pool)

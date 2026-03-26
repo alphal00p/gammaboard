@@ -8,8 +8,8 @@
 //! - persist snapshots for resume and task handoff
 
 use crate::core::{
-    EngineError, RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot, RunTask,
-    SamplerAggregatorConfig, SamplerAggregatorPerformanceSnapshot, SamplerRollingAverages,
+    BatchTransformConfig, EngineError, RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot,
+    RunTask, SamplerAggregatorConfig, SamplerAggregatorPerformanceSnapshot, SamplerRollingAverages,
     SamplerRuntimeMetrics, SamplerWorkerStore, StoreError,
 };
 use crate::evaluation::ObservableState;
@@ -129,6 +129,7 @@ pub struct SamplerAggregatorRunner<S> {
     sampler: Box<dyn SamplerAggregator>,
     observable_state: ObservableState,
     sampler_config: SamplerAggregatorConfig,
+    batch_transforms: Vec<BatchTransformConfig>,
     store: S,
     config: SamplerAggregatorRunnerParams,
     nr_produced_samples: i64,
@@ -152,6 +153,7 @@ where
         sampler: Box<dyn SamplerAggregator>,
         observable_state: ObservableState,
         sampler_config: SamplerAggregatorConfig,
+        batch_transforms: Vec<BatchTransformConfig>,
         params: SamplerAggregatorRunnerParams,
         initial_batch_size: usize,
         resume_snapshot: Option<SamplerAggregatorRunnerSnapshot>,
@@ -187,6 +189,7 @@ where
             sampler,
             observable_state,
             sampler_config,
+            batch_transforms,
             store,
             config: params,
             nr_produced_samples,
@@ -352,13 +355,24 @@ where
         self.observe_queue_metrics(pending_before_tick);
         self.tune_batch_size();
 
-        self.process_completed().await?;
-        self.produce(pending_before_tick).await?;
+        let completed_batches = self.process_completed().await?;
+        let produced_batches = self.produce(pending_before_tick).await?;
         self.sync_task_progress().await?;
         self.flush_run_sample_progress().await?;
         self.flush_performance_snapshot().await?;
 
         let open_batch_count = self.store.get_open_batch_count(self.run_id).await?.max(0) as usize;
+        if let Some(target) = self.task.task.nr_expected_samples()
+            && self.task.nr_completed_samples < target
+            && open_batch_count == 0
+            && completed_batches == 0
+            && produced_batches == 0
+        {
+            return Err(RunnerError::Engine(EngineError::engine(format!(
+                "run {} task {} cannot make further progress: completed={} target={} and sampler produced no new batches",
+                self.run_id, self.task.id, self.task.nr_completed_samples, target
+            ))));
+        }
         Ok(self.task.task.nr_expected_samples().is_some_and(|target| {
             self.task.nr_completed_samples >= target && open_batch_count == 0
         }))
@@ -379,12 +393,6 @@ where
             .save_sampler_runner_snapshot(self.run_id, &snapshot)
             .await?;
 
-        let batch_transforms = self
-            .task
-            .task
-            .batch_transforms_config()
-            .unwrap_or_else(Vec::new);
-
         self.store
             .save_run_stage_snapshot(&RunStageSnapshot {
                 id: None,
@@ -395,7 +403,7 @@ where
                 sampler_snapshot: snapshot.sampler_snapshot.clone(),
                 observable_state: Some(self.observable_state.clone()),
                 sampler_aggregator: self.sampler_config.clone(),
-                batch_transforms,
+                batch_transforms: self.batch_transforms.clone(),
             })
             .await?;
         Ok(())

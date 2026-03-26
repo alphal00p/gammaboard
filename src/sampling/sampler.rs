@@ -41,9 +41,6 @@ impl SamplerAggregatorSnapshot {
 
 pub trait SamplerAggregator: Send {
     fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError>;
-    fn get_init_metadata(&mut self) -> JsonValue {
-        json!({})
-    }
     fn training_samples_remaining(&self) -> Option<usize> {
         None
     }

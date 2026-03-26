@@ -24,64 +24,16 @@ impl RunTaskState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StageSnapshotRef {
-    pub snapshot_id: i64,
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SampleTaskConfig {
+    pub sampler_aggregator: Option<SamplerAggregatorConfig>,
+    pub batch_transforms: Option<Vec<BatchTransformConfig>>,
+    pub observable: Option<ObservableConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum RunTaskInputSpec {
-    Sample {
-        nr_samples: Option<i64>,
-        sampler_aggregator: Option<SamplerAggregatorConfig>,
-        #[serde(default)]
-        batch_transforms: Option<Vec<BatchTransformConfig>>,
-        #[serde(default)]
-        observable: Option<ObservableConfig>,
-        /// Optional explicit sampler handoff snapshot id.
-        #[serde(default)]
-        start_from: Option<StageSnapshotRef>,
-        /// Optional explicit observable snapshot id (separate from sampler handoff).
-        #[serde(default)]
-        obs_start_from: Option<StageSnapshotRef>,
-    },
-    Image {
-        geometry: PlaneRasterGeometry,
-        observable: PlotObservableKind,
-        #[serde(default)]
-        display: ImageDisplayMode,
-        #[serde(default)]
-        start_from: Option<StageSnapshotRef>,
-        #[serde(default)]
-        obs_start_from: Option<StageSnapshotRef>,
-    },
-    PlotLine {
-        geometry: LineRasterGeometry,
-        observable: PlotObservableKind,
-        #[serde(default)]
-        display: LineDisplayMode,
-        #[serde(default)]
-        start_from: Option<StageSnapshotRef>,
-        #[serde(default)]
-        obs_start_from: Option<StageSnapshotRef>,
-    },
-}
-
-impl RunTaskInputSpec {
-    pub fn validate(&self) -> Result<(), String> {
-        match self {
-            Self::Sample {
-                nr_samples: Some(nr_samples),
-                ..
-            } if *nr_samples < 0 => {
-                Err("sample task nr_samples must be a non-negative integer when set".to_string())
-            }
-            Self::Image { geometry, .. } => geometry.validate(),
-            Self::PlotLine { geometry, .. } => geometry.validate(),
-            _ => Ok(()),
-        }
-    }
+fn default_from_seq_minus_one() -> i64 {
+    -1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,33 +41,22 @@ impl RunTaskInputSpec {
 pub enum RunTaskSpec {
     Sample {
         nr_samples: Option<i64>,
-        sampler_aggregator: SamplerAggregatorConfig,
-        batch_transforms: Vec<BatchTransformConfig>,
-        observable: Option<ObservableConfig>,
-        /// sampler handoff snapshot id (if any)
-        start_from: Option<StageSnapshotRef>,
-        /// observable snapshot id (if any) - separate from sampler handoff
-        obs_start_from: Option<StageSnapshotRef>,
+        #[serde(default = "default_from_seq_minus_one")]
+        snapshot_id: i64,
+        #[serde(default)]
+        config: Option<SampleTaskConfig>,
     },
     Image {
         geometry: PlaneRasterGeometry,
         observable: PlotObservableKind,
         #[serde(default)]
         display: ImageDisplayMode,
-        #[serde(default)]
-        start_from: Option<StageSnapshotRef>,
-        #[serde(default)]
-        obs_start_from: Option<StageSnapshotRef>,
     },
     PlotLine {
         geometry: LineRasterGeometry,
         observable: PlotObservableKind,
         #[serde(default)]
         display: LineDisplayMode,
-        #[serde(default)]
-        start_from: Option<StageSnapshotRef>,
-        #[serde(default)]
-        obs_start_from: Option<StageSnapshotRef>,
     },
 }
 
@@ -129,8 +70,25 @@ impl RunTaskSpec {
                 Err("sample task nr_samples must be a non-negative integer when set".to_string())
             }
             Self::Sample {
+                snapshot_id,
+                config: Some(_),
+                ..
+            } if *snapshot_id != -1 => Err(
+                "sample task must define exactly one source: either `snapshot_id` or `config`"
+                    .to_string(),
+            ),
+            Self::Sample { snapshot_id: 0, .. } => Err(
+                "sample task snapshot_id cannot be 0 (use >0 absolute id or <0 relative index)"
+                    .to_string(),
+            ),
+            Self::Sample {
                 nr_samples: None,
-                sampler_aggregator: SamplerAggregatorConfig::HavanaTraining { .. },
+                snapshot_id: -1,
+                config:
+                    Some(SampleTaskConfig {
+                        sampler_aggregator: Some(SamplerAggregatorConfig::HavanaTraining { .. }),
+                        ..
+                    }),
                 ..
             } => Err(
                 "sample task with havana_training sampler requires nr_samples for training budget"
@@ -152,9 +110,7 @@ impl RunTaskSpec {
 
     pub fn sampler_config(&self) -> Option<SamplerAggregatorConfig> {
         match self {
-            Self::Sample {
-                sampler_aggregator, ..
-            } => Some(sampler_aggregator.clone()),
+            Self::Sample { .. } => None,
             Self::Image { geometry, .. } => Some(SamplerAggregatorConfig::RasterPlane {
                 params: RasterPlaneSamplerParams {
                     geometry: geometry.clone(),
@@ -168,37 +124,54 @@ impl RunTaskSpec {
         }
     }
 
-    /// Return the sampler handoff `start_from` snapshot reference (if any).
-    /// Note: this preserves the previous `start_from` accessor semantics for sampler handoff.
-    pub fn start_from(&self) -> Option<&StageSnapshotRef> {
+    pub fn source_snapshot_id(&self) -> Option<i64> {
         match self {
-            Self::Sample { start_from, .. }
-            | Self::Image { start_from, .. }
-            | Self::PlotLine { start_from, .. } => start_from.as_ref(),
+            Self::Sample {
+                snapshot_id,
+                config,
+                ..
+            } => {
+                if config.is_some() {
+                    None
+                } else {
+                    Some(*snapshot_id)
+                }
+            }
+            Self::Image { .. } | Self::PlotLine { .. } => None,
         }
     }
 
-    /// Return the observable `start_from` snapshot reference (if any).
-    pub fn obs_start_from(&self) -> Option<&StageSnapshotRef> {
+    pub fn sample_config(&self) -> Option<&SampleTaskConfig> {
         match self {
-            Self::Sample { obs_start_from, .. }
-            | Self::Image { obs_start_from, .. }
-            | Self::PlotLine { obs_start_from, .. } => obs_start_from.as_ref(),
+            Self::Sample { config, .. } => config.as_ref(),
+            Self::Image { .. } | Self::PlotLine { .. } => None,
         }
     }
 
     pub fn batch_transforms_config(&self) -> Option<Vec<BatchTransformConfig>> {
         match self {
-            Self::Sample {
-                batch_transforms, ..
-            } => Some(batch_transforms.clone()),
+            Self::Sample { config, .. } => config
+                .as_ref()
+                .and_then(|sample_config| sample_config.batch_transforms.clone()),
             Self::Image { .. } | Self::PlotLine { .. } => Some(Vec::new()),
         }
     }
 
     pub fn new_observable_config(&self) -> Result<Option<ObservableConfig>, BuildError> {
         match self {
-            Self::Sample { observable, .. } => Ok(observable.clone()),
+            Self::Sample {
+                snapshot_id,
+                config,
+                ..
+            } => {
+                if *snapshot_id != -1 {
+                    Ok(None)
+                } else {
+                    Ok(config
+                        .as_ref()
+                        .and_then(|sample_config| sample_config.observable.clone()))
+                }
+            }
             Self::Image { observable, .. } | Self::PlotLine { observable, .. } => {
                 Ok(Some(observable.full_config()))
             }
@@ -224,153 +197,39 @@ impl IntoPreflightTask for RunTaskSpec {
         match self {
             Self::Sample {
                 nr_samples,
-                sampler_aggregator,
-                batch_transforms,
-                observable,
-                start_from,
-                obs_start_from,
+                snapshot_id,
+                config,
             } => Ok(Some(Self::Sample {
                 nr_samples: Some(if nr_samples == Some(0) { 0 } else { 1 }),
-                sampler_aggregator,
-                batch_transforms,
-                observable,
-                start_from,
-                obs_start_from,
+                snapshot_id,
+                config,
             })),
             Self::Image {
                 mut geometry,
                 observable,
                 display,
-                start_from,
-                obs_start_from,
             } => {
                 geometry.reduce_for_preflight(4, 4);
                 Ok(Some(Self::Image {
                     geometry,
                     observable,
                     display,
-                    start_from,
-                    obs_start_from,
                 }))
             }
             Self::PlotLine {
                 mut geometry,
                 observable,
                 display,
-                start_from,
-                obs_start_from,
             } => {
                 geometry.reduce_for_preflight(8);
                 Ok(Some(Self::PlotLine {
                     geometry,
                     observable,
                     display,
-                    start_from,
-                    obs_start_from,
                 }))
             }
         }
     }
-}
-
-pub fn resolve_task_queue(
-    base_sampler_aggregator: &SamplerAggregatorConfig,
-    base_batch_transforms: &[BatchTransformConfig],
-    tasks: &[RunTaskInputSpec],
-) -> Result<Vec<RunTaskSpec>, String> {
-    let mut resolved = Vec::with_capacity(tasks.len());
-    let mut current_sampler_aggregator = base_sampler_aggregator.clone();
-    let mut current_batch_transforms = base_batch_transforms.to_vec();
-
-    for task in tasks {
-        task.validate()?;
-        match task {
-            RunTaskInputSpec::Sample {
-                nr_samples,
-                sampler_aggregator,
-                batch_transforms,
-                observable,
-                start_from,
-                obs_start_from,
-            } => {
-                if let Some(sampler_aggregator) = sampler_aggregator.as_ref() {
-                    current_sampler_aggregator = sampler_aggregator.clone();
-                }
-                if let Some(batch_transforms) = batch_transforms.as_ref() {
-                    current_batch_transforms = batch_transforms.clone();
-                }
-                resolved.push(RunTaskSpec::Sample {
-                    nr_samples: *nr_samples,
-                    sampler_aggregator: current_sampler_aggregator.clone(),
-                    batch_transforms: current_batch_transforms.clone(),
-                    observable: observable.clone(),
-                    start_from: start_from.clone(),
-                    obs_start_from: obs_start_from.clone(),
-                });
-            }
-            RunTaskInputSpec::Image {
-                geometry,
-                observable,
-                display,
-                start_from,
-                obs_start_from,
-            } => {
-                resolved.push(RunTaskSpec::Image {
-                    geometry: geometry.clone(),
-                    observable: *observable,
-                    display: *display,
-                    start_from: start_from.clone(),
-                    obs_start_from: obs_start_from.clone(),
-                });
-            }
-            RunTaskInputSpec::PlotLine {
-                geometry,
-                observable,
-                display,
-                start_from,
-                obs_start_from,
-            } => {
-                resolved.push(RunTaskSpec::PlotLine {
-                    geometry: geometry.clone(),
-                    observable: *observable,
-                    display: *display,
-                    start_from: start_from.clone(),
-                    obs_start_from: obs_start_from.clone(),
-                });
-            }
-        }
-    }
-
-    Ok(resolved)
-}
-
-pub fn resolve_initial_sampler_aggregator(
-    tasks: Option<&[RunTaskInputSpec]>,
-    fallback: Option<&SamplerAggregatorConfig>,
-) -> Option<SamplerAggregatorConfig> {
-    tasks
-        .and_then(|tasks| {
-            tasks.iter().find_map(|task| match task {
-                RunTaskInputSpec::Sample {
-                    sampler_aggregator, ..
-                } => sampler_aggregator.clone(),
-                RunTaskInputSpec::Image { geometry, .. } => {
-                    Some(SamplerAggregatorConfig::RasterPlane {
-                        params: RasterPlaneSamplerParams {
-                            geometry: geometry.clone(),
-                        },
-                    })
-                }
-                RunTaskInputSpec::PlotLine { geometry, .. } => {
-                    Some(SamplerAggregatorConfig::RasterLine {
-                        params: RasterLineSamplerParams {
-                            geometry: geometry.clone(),
-                        },
-                    })
-                }
-            })
-        })
-        .or_else(|| fallback.cloned())
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -548,61 +407,56 @@ pub struct RunTask {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sampling::NaiveMonteCarloSamplerParams;
+    use crate::sampling::{HavanaSamplerParams, NaiveMonteCarloSamplerParams};
 
     #[test]
     fn sample_task_without_observable_reuses_previous_state() {
         let task = RunTaskSpec::Sample {
             nr_samples: Some(10),
-            sampler_aggregator: SamplerAggregatorConfig::NaiveMonteCarlo {
-                params: NaiveMonteCarloSamplerParams::default(),
-            },
-            batch_transforms: Vec::new(),
-            observable: None,
-            start_from: None,
-            obs_start_from: None,
+            snapshot_id: -1,
+            config: Some(SampleTaskConfig {
+                sampler_aggregator: Some(SamplerAggregatorConfig::NaiveMonteCarlo {
+                    params: NaiveMonteCarloSamplerParams::default(),
+                }),
+                batch_transforms: Some(Vec::new()),
+                observable: None,
+            }),
         };
 
         assert_eq!(task.new_observable_config().unwrap(), None);
     }
 
     #[test]
-    fn sample_task_inherits_sampler_materializer_and_transforms_when_omitted() {
-        let resolved = resolve_task_queue(
-            &SamplerAggregatorConfig::NaiveMonteCarlo {
-                params: NaiveMonteCarloSamplerParams::default(),
-            },
-            &[BatchTransformConfig::UnitBall {
-                params: Default::default(),
-            }],
-            &[RunTaskInputSpec::Sample {
-                nr_samples: Some(0),
-                sampler_aggregator: None,
+    fn sample_task_rejects_dual_source() {
+        let missing = RunTaskSpec::Sample {
+            nr_samples: Some(0),
+            snapshot_id: -1,
+            config: None,
+        };
+        assert!(missing.validate().is_ok());
+
+        let both = RunTaskSpec::Sample {
+            nr_samples: Some(0),
+            snapshot_id: 1,
+            config: Some(SampleTaskConfig::default()),
+        };
+        assert!(both.validate().is_err());
+    }
+
+    #[test]
+    fn sample_task_with_havana_training_requires_budget_in_config_mode() {
+        let task = RunTaskSpec::Sample {
+            nr_samples: None,
+            snapshot_id: -1,
+            config: Some(SampleTaskConfig {
+                sampler_aggregator: Some(SamplerAggregatorConfig::HavanaTraining {
+                    params: HavanaSamplerParams::default(),
+                }),
                 batch_transforms: None,
                 observable: None,
-                start_from: None,
-                obs_start_from: None,
-            }],
-        )
-        .unwrap();
-
-        match &resolved[0] {
-            RunTaskSpec::Sample {
-                nr_samples: Some(0),
-                sampler_aggregator,
-                batch_transforms,
-                observable,
-                ..
-            } => {
-                assert!(matches!(
-                    sampler_aggregator,
-                    SamplerAggregatorConfig::NaiveMonteCarlo { .. }
-                ));
-                assert_eq!(batch_transforms.len(), 1);
-                assert_eq!(observable, &None);
-            }
-            other => panic!("expected sample task, got {other:?}"),
-        }
+            }),
+        };
+        assert!(task.validate().is_err());
     }
 
     #[test]
@@ -626,8 +480,6 @@ mod tests {
             },
             observable: PlotObservableKind::Complex,
             display: ImageDisplayMode::Auto,
-            start_from: None,
-            obs_start_from: None,
         };
         let line = RunTaskSpec::PlotLine {
             geometry: LineRasterGeometry {
@@ -642,8 +494,6 @@ mod tests {
             },
             observable: PlotObservableKind::Scalar,
             display: LineDisplayMode::Auto,
-            start_from: None,
-            obs_start_from: None,
         };
 
         assert_eq!(

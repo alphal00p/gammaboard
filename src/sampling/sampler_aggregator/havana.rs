@@ -24,9 +24,23 @@ pub struct HavanaSamplerParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HavanaInferenceSource {
+    LatestTrainingSamplerAggregator,
+    Snapshot { snapshot_id: i64 },
+}
+
+impl Default for HavanaInferenceSource {
+    fn default() -> Self {
+        Self::LatestTrainingSamplerAggregator
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct HavanaInferenceSamplerParams {
     pub seed: Option<u64>,
+    pub source: HavanaInferenceSource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,7 +81,10 @@ impl Default for HavanaSamplerParams {
 
 impl Default for HavanaInferenceSamplerParams {
     fn default() -> Self {
-        Self { seed: None }
+        Self {
+            seed: None,
+            source: HavanaInferenceSource::LatestTrainingSamplerAggregator,
+        }
     }
 }
 

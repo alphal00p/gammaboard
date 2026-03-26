@@ -27,7 +27,43 @@ const CloneRunDialog = ({
 }) => {
   const [newName, setNewName] = useState(initialName);
   const [fromSnapshotId, setFromSnapshotId] = useState("");
-  const taskList = asTaskList(sourceTasks).filter((task) => Number.isFinite(Number(task.latest_stage_snapshot_id)));
+  const taskList = asTaskList(sourceTasks);
+  const selectedRun = useMemo(
+    () => runs.find((run) => String(run.run_id) === String(sourceRunId)) ?? null,
+    [runs, sourceRunId],
+  );
+  const rootSnapshotId = useMemo(() => {
+    const runRootSnapshotId = Number(selectedRun?.root_stage_snapshot_id);
+    if (Number.isFinite(runRootSnapshotId)) {
+      return runRootSnapshotId;
+    }
+    return (
+      taskList.map((task) => Number(task.root_stage_snapshot_id)).find((snapshotId) => Number.isFinite(snapshotId)) ??
+      null
+    );
+  }, [selectedRun, taskList]);
+  const snapshotTaskList = useMemo(
+    () => taskList.filter((task) => Number.isFinite(Number(task.latest_stage_snapshot_id))),
+    [taskList],
+  );
+  const options = useMemo(() => {
+    const optionList = [];
+    if (Number.isFinite(Number(rootSnapshotId))) {
+      optionList.push({
+        value: String(rootSnapshotId),
+        label: `Initial state (snapshot #${rootSnapshotId})`,
+        helper: "Root stage snapshot",
+      });
+    }
+    for (const task of snapshotTaskList) {
+      optionList.push({
+        value: String(task.latest_stage_snapshot_id),
+        label: `#${task.id} · ${task.state} · ${getTaskKindLabel(task)} · snapshot #${task.latest_stage_snapshot_id}`,
+        helper: `${getTaskKindLabel(task)} task #${task.id} -> snapshot #${task.latest_stage_snapshot_id}`,
+      });
+    }
+    return optionList;
+  }, [rootSnapshotId, snapshotTaskList]);
 
   useEffect(() => {
     if (!open) return;
@@ -36,22 +72,22 @@ const CloneRunDialog = ({
 
   useEffect(() => {
     if (!open) return;
-    if (taskList.length === 0) {
+    if (options.length === 0) {
       setFromSnapshotId("");
       return;
     }
-    if (taskList.some((task) => String(task.latest_stage_snapshot_id) === String(fromSnapshotId))) {
+    if (options.some((option) => option.value === String(fromSnapshotId))) {
       return;
     }
-    const completedTask = taskList.find((task) => task.state === "completed");
-    setFromSnapshotId(String((completedTask ?? taskList[0]).latest_stage_snapshot_id));
-  }, [fromSnapshotId, open, taskList]);
+    const completedTask = snapshotTaskList.find((task) => task.state === "completed");
+    setFromSnapshotId(String(completedTask?.latest_stage_snapshot_id ?? options[0].value));
+  }, [fromSnapshotId, open, options, snapshotTaskList]);
 
   const selectedRunValue = sourceRunId == null ? "" : String(sourceRunId);
 
-  const selectedTask = useMemo(
-    () => taskList.find((task) => String(task.latest_stage_snapshot_id) === String(fromSnapshotId)) ?? null,
-    [fromSnapshotId, taskList],
+  const selectedOption = useMemo(
+    () => options.find((option) => option.value === String(fromSnapshotId)) ?? null,
+    [fromSnapshotId, options],
   );
 
   const handleClose = () => {
@@ -75,7 +111,7 @@ const CloneRunDialog = ({
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
             <Typography variant="body2" color="text.secondary">
-              Create a new run from the latest stored stage snapshot of a selected task.
+              Create a new run from a stored stage snapshot, including the initial root snapshot.
             </Typography>
             <TextField
               select
@@ -93,19 +129,15 @@ const CloneRunDialog = ({
             <TextField
               select
               fullWidth
-              label="From Task"
+              label="From Snapshot"
               value={fromSnapshotId}
               onChange={(event) => setFromSnapshotId(event.target.value)}
-              disabled={taskList.length === 0}
-              helperText={
-                selectedTask
-                  ? `${getTaskKindLabel(selectedTask)} task #${selectedTask.id} -> snapshot #${selectedTask.latest_stage_snapshot_id}`
-                  : "No tasks with stored stage snapshots available"
-              }
+              disabled={options.length === 0}
+              helperText={selectedOption?.helper ?? "No stored stage snapshots available"}
             >
-              {taskList.map((task) => (
-                <MenuItem key={task.id} value={task.latest_stage_snapshot_id}>
-                  #{task.id} · {task.state} · {getTaskKindLabel(task)} · snapshot #{task.latest_stage_snapshot_id}
+              {options.map((option) => (
+                <MenuItem key={option.value} value={option.value}>
+                  {option.label}
                 </MenuItem>
               ))}
             </TextField>

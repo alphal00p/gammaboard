@@ -7,19 +7,15 @@ use crate::{
     evaluation::{IngestScalar, ObservableState},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value as JsonValue, json};
+use symbolica::evaluate::{
+    BatchEvaluator, CompileOptions, CompiledRealEvaluator, FunctionMap, OptimizationSettings,
+};
+use symbolica::parser::ParseSettings;
 use symbolica::wrap_input;
 use symbolica::{
     atom::{Atom, AtomCore},
     evaluate::ExportSettings,
 };
-use symbolica::{
-    evaluate::{
-        BatchEvaluator, CompileOptions, CompiledRealEvaluator, FunctionMap, OptimizationSettings,
-    },
-    printer::PrintOptions,
-};
-use symbolica::{parser::ParseSettings, printer::PrintState};
 use tempfile::TempDir;
 
 pub struct SymbolicaEngine {
@@ -164,18 +160,5 @@ impl Evaluator for SymbolicaEngine {
         } else {
             Ok(BatchResult::new(None, observable_state))
         }
-    }
-
-    fn get_init_metadata(&self) -> JsonValue {
-        let mut str = String::new();
-        _ = self
-            .parsed_expr
-            .format(&mut str, &PrintOptions::latex(), PrintState::new());
-
-        json!({
-            "expr": &self.expr,
-            "args": &self.args,
-            "expr_latex": str,
-        })
     }
 }

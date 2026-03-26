@@ -64,8 +64,6 @@ pub trait ControlPlaneStore: Send + Sync {
         integration_params: &JsonValue,
         target: Option<&JsonValue>,
         point_spec: &PointSpec,
-        evaluator_init_metadata: Option<&JsonValue>,
-        sampler_aggregator_init_metadata: Option<&JsonValue>,
         initial_stage_snapshot: &RunStageSnapshot,
         initial_tasks: &[RunTaskSpec],
     ) -> Result<i32, StoreError>;

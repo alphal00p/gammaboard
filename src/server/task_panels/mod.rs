@@ -178,12 +178,12 @@ fn task_summary_projector() -> TaskPanelProjector {
                     key_value("produced", "Produced", task.nr_produced_samples),
                     key_value("completed", "Completed", task.nr_completed_samples),
                     key_value(
-                        "start_from",
-                        "Start From",
+                        "source_snapshot",
+                        "Source Snapshot",
                         task.task
-                            .start_from()
-                            .map(|reference| reference.snapshot_id.to_string())
-                            .unwrap_or_else(|| "inherit".to_string()),
+                            .source_snapshot_id()
+                            .map(|snapshot_id| snapshot_id.to_string())
+                            .unwrap_or_else(|| "config".to_string()),
                     ),
                     key_value(
                         "spawned_from",
@@ -546,8 +546,6 @@ mod tests {
             geometry: line_geometry(),
             observable: crate::core::PlotObservableKind::Complex,
             display,
-            start_from: None,
-            obs_start_from: None,
         }
     }
 

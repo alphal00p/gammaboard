@@ -2,8 +2,7 @@ mod preflight;
 
 use crate::core::{
     BatchTransformConfig, BuildError, EvaluatorConfig, IntegrationParams, RunStageSnapshot,
-    RunTaskInputSpec, RunTaskSpec, SamplerAggregatorConfig, resolve_initial_sampler_aggregator,
-    resolve_task_queue,
+    RunTaskSpec, SamplerAggregatorConfig,
 };
 use crate::evaluation::PointSpec;
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
@@ -25,7 +24,7 @@ pub struct RunAddIntegrationParams {
 #[derive(Debug, Clone, Deserialize)]
 pub struct RunAddConfig {
     pub name: String,
-    pub task_queue: Option<Vec<RunTaskInputSpec>>,
+    pub task_queue: Option<Vec<RunTaskSpec>>,
     #[serde(flatten)]
     pub integration_params: RunAddIntegrationParams,
     pub target: Option<JsonValue>,
@@ -33,10 +32,6 @@ pub struct RunAddConfig {
     pub point_spec: Option<PointSpec>,
     #[serde(skip)]
     pub resolved_integration_params: Option<IntegrationParams>,
-    #[serde(skip)]
-    pub evaluator_init_metadata: Option<JsonValue>,
-    #[serde(skip)]
-    pub sampler_aggregator_init_metadata: Option<JsonValue>,
     #[serde(skip)]
     pub initial_stage_snapshot: Option<RunStageSnapshot>,
     #[serde(skip)]
@@ -49,25 +44,14 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
         .batch_transforms
         .clone()
         .unwrap_or_default();
-    let resolved_sampler_aggregator = resolve_initial_sampler_aggregator(
-        config.task_queue.as_deref(),
-        config.integration_params.sampler_aggregator.as_ref(),
-    )
-    .unwrap_or_else(|| SamplerAggregatorConfig::NaiveMonteCarlo {
-        params: NaiveMonteCarloSamplerParams::default(),
-    });
-    let resolved_task_queue = config
-        .task_queue
-        .as_ref()
-        .map(|tasks| {
-            resolve_task_queue(
-                &resolved_sampler_aggregator,
-                &resolved_batch_transforms,
-                tasks,
-            )
-        })
-        .transpose()
-        .map_err(BuildError::build)?;
+    let resolved_sampler_aggregator = config
+        .integration_params
+        .sampler_aggregator
+        .clone()
+        .unwrap_or_else(|| SamplerAggregatorConfig::NaiveMonteCarlo {
+            params: NaiveMonteCarloSamplerParams::default(),
+        });
+    let resolved_task_queue = config.task_queue.clone();
     if let Some(tasks) = resolved_task_queue.as_ref() {
         for task in tasks {
             task.validate().map_err(BuildError::invalid_input)?;
@@ -86,7 +70,6 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
 
     let evaluator = config.integration_params.evaluator.build()?;
     let point_spec = evaluator.get_point_spec();
-    let evaluator_init_metadata = evaluator.get_init_metadata();
     config.point_spec = Some(point_spec.clone());
 
     // Determine an initial sample budget from the first resolved task when available.
@@ -101,16 +84,13 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
         })
     });
 
-    let (sampler_aggregator_init_metadata, initial_stage_snapshot) =
-        preflight::build_initial_stage_with_budget(
-            &resolved_sampler_aggregator,
-            &resolved_batch_transforms,
-            &point_spec,
-            initial_sample_budget,
-        )?;
+    let initial_stage_snapshot = preflight::build_initial_stage_with_budget(
+        &resolved_sampler_aggregator,
+        &resolved_batch_transforms,
+        &point_spec,
+        initial_sample_budget,
+    )?;
     config.resolved_integration_params = Some(resolved_integration_params);
-    config.evaluator_init_metadata = Some(evaluator_init_metadata);
-    config.sampler_aggregator_init_metadata = Some(sampler_aggregator_init_metadata);
     config.initial_stage_snapshot = Some(initial_stage_snapshot);
     config.resolved_task_queue = resolved_task_queue;
 

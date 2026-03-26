@@ -1,6 +1,5 @@
 use crate::core::{BuildError, EngineError, EvalError, ObservableConfig};
 use num::complex::Complex64;
-use serde_json::{Value as JsonValue, json};
 
 use super::{Batch, BatchResult, IngestComplex, IngestScalar, PointSpec};
 use crate::sampling::LatentBatch;
@@ -18,9 +17,6 @@ pub trait Evaluator: Send {
         observable: &ObservableConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError>;
-    fn get_init_metadata(&self) -> JsonValue {
-        json!({})
-    }
 }
 
 pub trait ScalarSampleEvaluator {

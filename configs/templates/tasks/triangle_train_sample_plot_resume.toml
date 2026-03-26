@@ -1,0 +1,61 @@
+# GammaLoop triangle workflow using the new sample task model.
+# Sequence:
+# 1) train (100k)
+# 2) sample (100k)
+# 3) line plot
+# 4) x-z image plot over (-50, 50)^2
+# 5) resume training from relative snapshot -3 (post-sample state)
+# 6) sample again (100k)
+
+[[task_queue]]
+kind = "sample"
+nr_samples = 100_000
+[task_queue.config]
+observable = "complex"
+[task_queue.config.sampler_aggregator]
+kind = "havana_training"
+seed = 0
+bins = 64
+min_samples_for_update = 1024
+samples_for_update = 16384
+initial_training_rate = 0.1
+final_training_rate = 0.001
+
+[[task_queue]]
+kind = "sample"
+nr_samples = 100_000
+# Keep sampling on the same training aggregator so later resume-training from -3
+# picks up both the sampled observable and the intended sampler state.
+snapshot_id = -1
+
+[[task_queue]]
+kind = "plot_line"
+observable = "complex"
+[task_queue.geometry]
+offset = [0.0, 0.0, 0.0]
+direction = [1.0, 0.0, 0.0]
+linspace = { start = -50.0, stop = 50.0, count = 1024 }
+discrete = []
+
+[[task_queue]]
+kind = "image"
+observable = "complex"
+[task_queue.geometry]
+offset = [0.0, 0.0, 0.0]
+u_vector = [1.0, 0.0, 0.0]
+v_vector = [0.0, 0.0, 1.0]
+u_linspace = { start = -50.0, stop = 50.0, count = 192 }
+v_linspace = { start = -50.0, stop = 50.0, count = 192 }
+discrete = []
+
+[[task_queue]]
+kind = "sample"
+nr_samples = 100_000
+# Relative source: from current point, go back three queue-empty stage snapshots
+# (image <- plot_line <- sample), so this resumes from the sampled observable state.
+snapshot_id = -3
+
+[[task_queue]]
+kind = "sample"
+nr_samples = 100_000
+snapshot_id = -1

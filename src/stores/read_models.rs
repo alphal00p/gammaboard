@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub struct RunProgress {
     pub run_id: i32,
     pub run_name: String,
+    pub root_stage_snapshot_id: Option<i64>,
     pub lifecycle_state: String,
     pub desired_assignment_count: i64,
     pub active_worker_count: i64,
@@ -16,8 +17,6 @@ pub struct RunProgress {
     pub point_spec: Option<PointSpec>,
     pub active_task_id: Option<String>,
     pub target: Option<serde_json::Value>,
-    pub evaluator_init_metadata: Option<serde_json::Value>,
-    pub sampler_aggregator_init_metadata: Option<serde_json::Value>,
     pub nr_produced_samples: i64,
     pub nr_completed_samples: i64,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,

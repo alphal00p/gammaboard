@@ -51,6 +51,7 @@ fn id_text(value: impl Display) -> String {
 struct RunProgressRow {
     run_id: i32,
     run_name: String,
+    root_stage_snapshot_id: Option<i64>,
     lifecycle_state: String,
     desired_assignment_count: i64,
     active_worker_count: i64,
@@ -58,8 +59,6 @@ struct RunProgressRow {
     point_spec: Option<JsonValue>,
     active_task_id: Option<i64>,
     target: Option<JsonValue>,
-    evaluator_init_metadata: Option<JsonValue>,
-    sampler_aggregator_init_metadata: Option<JsonValue>,
     nr_produced_samples: i64,
     nr_completed_samples: i64,
     started_at: Option<DateTime<Utc>>,
@@ -81,6 +80,7 @@ impl TryFrom<RunProgressRow> for RunProgress {
         Ok(RunProgress {
             run_id: value.run_id,
             run_name: value.run_name,
+            root_stage_snapshot_id: value.root_stage_snapshot_id,
             lifecycle_state: value.lifecycle_state,
             desired_assignment_count: value.desired_assignment_count,
             active_worker_count: value.active_worker_count,
@@ -91,8 +91,6 @@ impl TryFrom<RunProgressRow> for RunProgress {
                 .transpose()?,
             active_task_id: value.active_task_id.map(id_text),
             target: value.target,
-            evaluator_init_metadata: value.evaluator_init_metadata,
-            sampler_aggregator_init_metadata: value.sampler_aggregator_init_metadata,
             nr_produced_samples: value.nr_produced_samples,
             nr_completed_samples: value.nr_completed_samples,
             started_at: value.started_at,
@@ -287,6 +285,7 @@ pub(crate) async fn health_check(pool: &PgPool) -> Result<(), sqlx::Error> {
 const RUN_PROGRESS_COLUMNS: &str = r#"
     run_id,
     run_name,
+    root_stage_snapshot_id,
     lifecycle_state,
     desired_assignment_count,
     active_worker_count,
@@ -294,8 +293,6 @@ const RUN_PROGRESS_COLUMNS: &str = r#"
     point_spec,
     active_task_id,
     target,
-    evaluator_init_metadata,
-    sampler_aggregator_init_metadata,
     nr_produced_samples,
     nr_completed_samples,
     started_at,
@@ -330,6 +327,16 @@ const RUN_ASSIGNMENT_STATS_SUBQUERY: &str = r#"
     ) aw ON r.id = aw.run_id
 "#;
 
+const RUN_ROOT_STAGE_SNAPSHOT_SUBQUERY: &str = r#"
+    SELECT
+        run_id,
+        MIN(id) AS root_stage_snapshot_id
+    FROM run_stage_snapshots
+    WHERE queue_empty = TRUE
+      AND task_id IS NULL
+    GROUP BY run_id
+"#;
+
 const RUN_BATCH_STATS_SUBQUERY_FOR_ONE_RUN: &str = r#"
     SELECT
         run_id,
@@ -353,6 +360,7 @@ pub(crate) async fn get_all_runs(pool: &PgPool) -> Result<Vec<RunProgress>, sqlx
         SELECT
             r.id as run_id,
             r.name as run_name,
+            root.root_stage_snapshot_id,
             CASE
                 WHEN COALESCE(a.desired_assignment_count, 0) > 0 THEN 'running'
                 WHEN COALESCE(b.claimed_batches, 0) > 0 OR COALESCE(a.active_worker_count, 0) > 0 THEN 'pausing'
@@ -364,8 +372,6 @@ pub(crate) async fn get_all_runs(pool: &PgPool) -> Result<Vec<RunProgress>, sqlx
             r.point_spec as point_spec,
             active_task.id as active_task_id,
             r.target,
-            r.evaluator_init_metadata,
-            r.sampler_aggregator_init_metadata,
             r.nr_produced_samples,
             r.nr_completed_samples,
             r.started_at,
@@ -396,12 +402,16 @@ pub(crate) async fn get_all_runs(pool: &PgPool) -> Result<Vec<RunProgress>, sqlx
             GROUP BY run_id
         ) b ON r.id = b.run_id
         LEFT JOIN assignment_stats a ON r.id = a.run_id
+        LEFT JOIN (
+            {root_stage_snapshot_subquery}
+        ) root ON r.id = root.run_id
         LEFT JOIN run_tasks active_task
             ON active_task.run_id = r.id
            AND active_task.state = 'active'
         ORDER BY started_at DESC
         "#,
-        assignment_stats_subquery = RUN_ASSIGNMENT_STATS_SUBQUERY
+        assignment_stats_subquery = RUN_ASSIGNMENT_STATS_SUBQUERY,
+        root_stage_snapshot_subquery = RUN_ROOT_STAGE_SNAPSHOT_SUBQUERY
     );
 
     let rows = sqlx::query_as::<_, RunProgressRow>(&sql)
@@ -424,6 +434,7 @@ pub(crate) async fn get_run_progress(
             SELECT
                 r.id as run_id,
                 r.name as run_name,
+                root.root_stage_snapshot_id,
                 CASE
                     WHEN COALESCE(a.desired_assignment_count, 0) > 0 THEN 'running'
                     WHEN COALESCE(b.claimed_batches, 0) > 0 OR COALESCE(a.active_worker_count, 0) > 0 THEN 'pausing'
@@ -435,8 +446,6 @@ pub(crate) async fn get_run_progress(
                 r.point_spec as point_spec,
                 active_task.id as active_task_id,
                 r.target,
-                r.evaluator_init_metadata,
-                r.sampler_aggregator_init_metadata,
                 r.nr_produced_samples,
                 r.nr_completed_samples,
                 r.started_at,
@@ -458,6 +467,9 @@ pub(crate) async fn get_run_progress(
                 {batch_stats_subquery}
             ) b ON r.id = b.run_id
             LEFT JOIN assignment_stats a ON r.id = a.run_id
+            LEFT JOIN (
+                {root_stage_snapshot_subquery}
+            ) root ON r.id = root.run_id
             LEFT JOIN run_tasks active_task
                 ON active_task.run_id = r.id
                AND active_task.state = 'active'
@@ -469,7 +481,8 @@ pub(crate) async fn get_run_progress(
         "#,
         columns = RUN_PROGRESS_COLUMNS,
         batch_stats_subquery = RUN_BATCH_STATS_SUBQUERY_FOR_ONE_RUN,
-        assignment_stats_subquery = RUN_ASSIGNMENT_STATS_SUBQUERY
+        assignment_stats_subquery = RUN_ASSIGNMENT_STATS_SUBQUERY,
+        root_stage_snapshot_subquery = RUN_ROOT_STAGE_SNAPSHOT_SUBQUERY
     );
 
     let row = sqlx::query_as::<_, RunProgressRow>(&sql)

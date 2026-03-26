@@ -203,7 +203,7 @@ async fn run_task_command(store: &PgStore, command: TaskCommand) -> Result<()> {
                     kind = task.task.kind_str(),
                     nr_produced_samples = task.nr_produced_samples,
                     nr_completed_samples = task.nr_completed_samples,
-                    start_from = format_task_snapshot_ref(task.task.start_from()),
+                    source_snapshot = format_task_snapshot_ref(task.task.source_snapshot_id()),
                     spawned_from = format_task_snapshot_origin(task.spawned_from_snapshot_id),
                     failure_reason = task.failure_reason.as_deref().unwrap_or(""),
                     "run task"
@@ -254,9 +254,9 @@ fn print_run_table(runs: Vec<gammaboard::stores::RunProgress>) {
     println!("{table}");
 }
 
-fn format_task_snapshot_ref(start_from: Option<&gammaboard::core::StageSnapshotRef>) -> String {
-    start_from
-        .map(|snapshot| snapshot.snapshot_id.to_string())
+fn format_task_snapshot_ref(snapshot_id: Option<i64>) -> String {
+    snapshot_id
+        .map(|value| value.to_string())
         .unwrap_or_default()
 }
 

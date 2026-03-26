@@ -25,8 +25,9 @@ discrete = []
 [[task_queue]]
 kind = "sample"
 nr_samples = 500_000
+[task_queue.config]
 observable = "complex"
-[task_queue.sampler_aggregator]
+[task_queue.config.sampler_aggregator]
 kind = "havana_training"
 seed = 0
 bins = 64
@@ -39,9 +40,7 @@ final_training_rate = 0.001
 [[task_queue]]
 kind = "sample"
 nr_samples = 10_000_000
-[task_queue.sampler_aggregator]
-kind = "havana_inference"
-[task_queue.materializer]
+[task_queue.config.sampler_aggregator]
 kind = "havana_inference"
 
 [evaluator]

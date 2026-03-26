@@ -7,7 +7,6 @@ use gammalooprs::model::Model;
 use gammalooprs::settings::RuntimeSettings;
 use gammalooprs::utils::F;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use crate::{
     Batch, BatchResult, BuildError, EvalError, PointSpec,
@@ -230,14 +229,5 @@ impl Evaluator for GammaLoopEvaluator {
             },
         };
         Ok(BatchResult::new(weighted_values, observable_state))
-    }
-
-    fn get_init_metadata(&self) -> serde_json::Value {
-        json!({
-            "state_folder": self.state_folder,
-            "process_id": self.process_id,
-            "integrand_name": self.integrand_name,
-            "training_projection": self.training_projection,
-        })
     }
 }

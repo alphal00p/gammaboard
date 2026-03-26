@@ -10,8 +10,6 @@ CREATE TABLE IF NOT EXISTS runs (
     -- Per-run engine and runner configuration (TOML/JSON payload)
     integration_params JSONB,
     target JSONB,
-    evaluator_init_metadata JSONB,
-    sampler_aggregator_init_metadata JSONB,
     point_spec JSONB NOT NULL,
     current_observable JSONB,
     sampler_runner_snapshot JSONB,

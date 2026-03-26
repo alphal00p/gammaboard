@@ -18,8 +18,7 @@ pub use run_spec::{
 };
 pub use tasks::{
     ImageDisplayMode, LineDisplayMode, LineRasterGeometry, Linspace, PlaneRasterGeometry,
-    PlotObservableKind, RunTask, RunTaskInputSpec, RunTaskSpec, RunTaskState, StageSnapshotRef,
-    resolve_initial_sampler_aggregator, resolve_task_queue,
+    PlotObservableKind, RunTask, RunTaskSpec, RunTaskState, SampleTaskConfig,
 };
 pub use traits::{
     AggregationStore, ControlPlaneStore, EvaluatorWorkerStore, RunReadStore, RunSpecStore,

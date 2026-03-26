@@ -180,6 +180,26 @@ pub(crate) async fn list_latest_stage_snapshot_ids_by_task(
     Ok(rows.into_iter().collect())
 }
 
+pub(crate) async fn get_root_stage_snapshot_id(
+    pool: &PgPool,
+    run_id: i32,
+) -> Result<Option<i64>, sqlx::Error> {
+    sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT id
+        FROM run_stage_snapshots
+        WHERE run_id = $1
+          AND queue_empty = TRUE
+          AND task_id IS NULL
+        ORDER BY sequence_nr ASC NULLS LAST, id ASC
+        LIMIT 1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_optional(pool)
+    .await
+}
+
 pub(crate) async fn get_task_activation_stage_snapshot(
     pool: &PgPool,
     run_id: i32,

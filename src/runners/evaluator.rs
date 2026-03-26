@@ -9,8 +9,6 @@ use crate::runners::rolling_metric::RollingMetric;
 use serde::{Deserialize, Serialize};
 use std::{time::Duration, time::Instant};
 use thiserror::Error;
-use tracing::info;
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvaluatorRunnerParams {
     pub performance_snapshot_interval_ms: u64,
@@ -126,11 +124,6 @@ where
             return Ok(());
         };
 
-        let materialization_started = Instant::now();
-        info!(
-            "evaluator tick: starting materialization run_id={} node={} batch_id={}",
-            self.run_id, self.node_name, claimed.batch_id
-        );
         let materialization_started = Instant::now();
         let materialized = self.materializer.materialize_batch(&claimed.latent_batch);
         let materialization_time_ms = materialization_started.elapsed().as_secs_f64() * 1000.0;

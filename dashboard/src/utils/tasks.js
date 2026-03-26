@@ -29,9 +29,11 @@ export const getCurrentTask = (tasks) =>
   asTaskList(tasks).find((task) => task.state === "completed") ||
   null;
 
-export const formatTaskSnapshotRef = (snapshot) => {
-  if (!snapshot || typeof snapshot !== "object") return "inherit";
-  const snapshotId = Number(snapshot.snapshot_id);
+export const formatTaskSnapshotRef = (snapshotIdValue) => {
+  if (snapshotIdValue == null) {
+    return "inherit";
+  }
+  const snapshotId = Number(snapshotIdValue);
   if (Number.isFinite(snapshotId)) {
     return String(snapshotId);
   }
@@ -39,6 +41,9 @@ export const formatTaskSnapshotRef = (snapshot) => {
 };
 
 export const formatTaskSpawnOrigin = (task) => {
+  if (task?.spawned_from_snapshot_id == null) {
+    return "auto";
+  }
   const snapshotId = Number(task?.spawned_from_snapshot_id);
   if (Number.isFinite(snapshotId)) {
     return String(snapshotId);

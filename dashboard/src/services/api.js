@@ -131,6 +131,9 @@ const normalizeRunEntry = (entry) => {
   return {
     ...entry,
     run_id: Number.isFinite(runId) ? runId : entry.run_id,
+    root_stage_snapshot_id: Number.isFinite(Number(entry.root_stage_snapshot_id))
+      ? Number(entry.root_stage_snapshot_id)
+      : null,
     nr_produced_samples: Number.isFinite(Number(entry.nr_produced_samples)) ? Number(entry.nr_produced_samples) : 0,
     nr_completed_samples: Number.isFinite(Number(entry.nr_completed_samples)) ? Number(entry.nr_completed_samples) : 0,
     integration_params: entry.integration_params ?? {},
@@ -148,6 +151,9 @@ const normalizeRunTaskEntry = (entry) => {
     sequence_nr: Number.isFinite(Number(entry.sequence_nr)) ? Number(entry.sequence_nr) : entry.sequence_nr,
     latest_stage_snapshot_id: Number.isFinite(Number(entry.latest_stage_snapshot_id))
       ? Number(entry.latest_stage_snapshot_id)
+      : null,
+    root_stage_snapshot_id: Number.isFinite(Number(entry.root_stage_snapshot_id))
+      ? Number(entry.root_stage_snapshot_id)
       : null,
     nr_produced_samples: Number.isFinite(Number(entry.nr_produced_samples)) ? Number(entry.nr_produced_samples) : 0,
     nr_completed_samples: Number.isFinite(Number(entry.nr_completed_samples)) ? Number(entry.nr_completed_samples) : 0,

@@ -35,13 +35,18 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 
 ## Tasks, Snapshots, Queue
 - Task sequencing lives in `src/core/tasks.rs`.
+- Use a single task shape (`RunTaskSpec`) end-to-end; do not reintroduce separate task input/spec indirection.
 - Task transitions must restore runtime state from persisted `run_stage_snapshots`, not in-memory handoff only.
 - Snapshots are the branchable state timeline. Tasks are queued work items that may produce snapshots, but are not themselves the canonical branch identity.
-- Executable tasks may declare `start_from = { snapshot_id = ... }` to branch from an older stage snapshot.
+- Every run must persist a root stage snapshot at initialization with `sequence_nr = 0` and `task_id = null`.
+- Sample tasks may set `snapshot_id` to branch from an older stage snapshot.
+- `sample.snapshot_id` supports absolute ids (`> 0`) and relative indices (`< 0`), where `-1` means the latest prior queue-empty stage snapshot before the task sequence.
+- Sample task source semantics are exclusive: use either `config` or `snapshot_id`, never both.
 - Task preflight belongs on task insertion. Bare `run add` should validate run-global construction and root-stage creation, while appended tasks should be validated against the current or referenced stage snapshots before persistence.
 - Shared run and node orchestration should live in `src/api/*`; CLI and server should stay thin adapters around typed API calls.
-- Sample tasks may omit `sampler_aggregator`, `materializer`, and `batch_transforms`; omitted values inherit the previous effective stage, materializer falls back to `identity` when no prior stage exists, and `batch_transforms = []` explicitly clears the inherited transform list.
+- Sample tasks may omit `sampler_aggregator` and `batch_transforms`; omitted values inherit the previous effective stage, and `batch_transforms = []` explicitly clears the inherited transform list.
 - Sample tasks may omit `observable`; that means reuse the previous observable state.
+- Havana inference source selection lives inside Havana sampler config. Default is `latest_training_sampler_aggregator`, with optional explicit `snapshot_id`.
 - `sample` with `nr_samples = 0` is the only supported no-work stage update task shape.
 - Task files used for `run task add` may contain either `task = { ... }`, `[[task_queue]]`, or both. Normalize them as `task` first, then `task_queue`. Missing both should resolve to an empty task list.
 - There is no run-level observable default. A first executable task that needs a fresh observable must declare it explicitly.
@@ -70,6 +75,9 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Runtime logs are persisted through the tracing pipeline into PostgreSQL.
 - Log read APIs should expose `node_name` and `node_uuid` even if SQL columns still use older names.
 - Read APIs should serialize `BIGINT` ids as strings.
+
+## Runtime Metadata
+- Do not persist evaluator/sampler init metadata on runs or expose it in run panels/apis unless explicitly requested.
 
 ## Schema Policy
 - No backward-compat requirement by default.

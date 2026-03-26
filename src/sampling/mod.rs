@@ -10,8 +10,8 @@ pub use batch_transform::{SphericalBatchTransformParams, UnitBallBatchTransformP
 pub use latent_batch::{LatentBatch, LatentBatchPayload, LatentBatchSpec, SamplePlan};
 pub use sampler::{SamplerAggregator, SamplerAggregatorSnapshot};
 pub use sampler_aggregator::{
-    HavanaInferenceSamplerParams, HavanaSamplerParams, NaiveMonteCarloSamplerParams,
-    RasterLineSamplerParams, RasterPlaneSamplerParams,
+    HavanaInferenceSamplerParams, HavanaInferenceSource, HavanaSamplerParams,
+    NaiveMonteCarloSamplerParams, RasterLineSamplerParams, RasterPlaneSamplerParams,
 };
 
 #[derive(Debug, Clone, Copy, Default)]

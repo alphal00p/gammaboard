@@ -239,6 +239,7 @@ struct RunTaskResponse {
     #[serde(flatten)]
     task: RunTask,
     latest_stage_snapshot_id: Option<i64>,
+    root_stage_snapshot_id: Option<i64>,
 }
 
 fn build_app(state: AppState) -> Router {
@@ -437,10 +438,12 @@ async fn get_run_tasks(
         .store
         .list_latest_stage_snapshot_ids_by_task(id)
         .await?;
+    let root_stage_snapshot_id = state.store.get_root_stage_snapshot_id(id).await?;
     let response = tasks
         .into_iter()
         .map(|task| RunTaskResponse {
             latest_stage_snapshot_id: latest_snapshot_ids.get(&task.id).copied(),
+            root_stage_snapshot_id,
             task,
         })
         .collect::<Vec<_>>();
@@ -489,11 +492,6 @@ async fn get_run_evaluator_config(
     State(state): State<AppState>,
     AxumPath(run_id): AxumPath<i32>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let run = state
-        .store
-        .get_run_progress(run_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
     let run_spec = state
         .store
         .load_run_spec(run_id)
@@ -506,7 +504,6 @@ async fn get_run_evaluator_config(
             &EvaluatorPanelContext {
                 point_spec: &run_spec.point_spec,
                 runner_params: &run_spec.evaluator_runner_params,
-                init_metadata: run.evaluator_init_metadata.as_ref(),
             },
         )
         .map_err(|err| ApiError::Internal(err.to_string()))?;
@@ -517,31 +514,27 @@ async fn get_run_sampler_aggregator_config(
     State(state): State<AppState>,
     AxumPath(run_id): AxumPath<i32>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    let run = state
+        .store
+        .get_run_progress(run_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
+    let integration_params = run_api::decode_integration_params(
+        run_id,
+        run.integration_params.ok_or_else(|| {
+            ApiError::Internal(format!("run {run_id} is missing integration_params"))
+        })?,
+    )?;
+    let fallback_sampler_config = integration_params.sampler_aggregator.clone();
     let run_spec = state
         .store
         .load_run_spec(run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
     let sampler_config = if let Some(task) = state.store.load_active_run_task(run_id).await? {
-        task.task.sampler_config().ok_or_else(|| {
-            ApiError::BadRequest(format!(
-                "task {} does not define a sampler_aggregator config",
-                task.id
-            ))
-        })?
+        resolve_active_task_sampler_config(&state, run_id, &task, &fallback_sampler_config).await?
     } else {
-        let run = state
-            .store
-            .get_run_progress(run_id)
-            .await?
-            .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
-        let integration_params = run_api::decode_integration_params(
-            run_id,
-            run.integration_params.ok_or_else(|| {
-                ApiError::Internal(format!("run {run_id} is missing integration_params"))
-            })?,
-        )?;
-        integration_params.sampler_aggregator
+        fallback_sampler_config
     };
     let response: PanelResponse = sampler_config
         .build_response(
@@ -553,6 +546,96 @@ async fn get_run_sampler_aggregator_config(
         )
         .map_err(|err: crate::core::BuildError| ApiError::Internal(err.to_string()))?;
     json_response(response)
+}
+
+async fn resolve_active_task_sampler_config(
+    state: &AppState,
+    run_id: i32,
+    task: &RunTask,
+    fallback_sampler_config: &crate::core::SamplerAggregatorConfig,
+) -> Result<crate::core::SamplerAggregatorConfig, ApiError> {
+    if let Some(config) = task.task.sampler_config() {
+        return Ok(config);
+    }
+    if let Some(config) = task
+        .task
+        .sample_config()
+        .and_then(|config| config.sampler_aggregator.clone())
+    {
+        return Ok(config);
+    }
+
+    if let Some(source_snapshot) = resolve_task_source_snapshot(state, run_id, task).await? {
+        return Ok(source_snapshot.sampler_aggregator);
+    }
+
+    if let Some(base_snapshot) = state
+        .store
+        .load_latest_stage_snapshot_before_sequence(run_id, i32::MAX)
+        .await?
+    {
+        return Ok(base_snapshot.sampler_aggregator);
+    }
+
+    Ok(fallback_sampler_config.clone())
+}
+
+async fn resolve_task_source_snapshot(
+    state: &AppState,
+    run_id: i32,
+    task: &RunTask,
+) -> Result<Option<crate::core::RunStageSnapshot>, ApiError> {
+    let Some(snapshot_id) = task.task.source_snapshot_id() else {
+        return Ok(None);
+    };
+
+    if snapshot_id > 0 {
+        let snapshot = state
+            .store
+            .load_stage_snapshot(snapshot_id)
+            .await?
+            .ok_or_else(|| {
+                ApiError::BadRequest(format!(
+                    "task {} references snapshot {} but no stage snapshot exists",
+                    task.id, snapshot_id
+                ))
+            })?;
+        if snapshot.run_id != run_id {
+            return Err(ApiError::BadRequest(format!(
+                "task {} references snapshot {} from run {}, expected run {}",
+                task.id, snapshot_id, snapshot.run_id, run_id
+            )));
+        }
+        return Ok(Some(snapshot));
+    }
+
+    let mut remaining = (-snapshot_id) as usize;
+    let mut search_sequence = task.sequence_nr;
+    let mut resolved: Option<crate::core::RunStageSnapshot> = None;
+
+    while remaining > 0 {
+        let snapshot = state
+            .store
+            .load_latest_stage_snapshot_before_sequence(run_id, search_sequence)
+            .await?
+            .ok_or_else(|| {
+                ApiError::BadRequest(format!(
+                    "task {} references relative snapshot {} but only {} prior stage snapshot(s) exist",
+                    task.id, snapshot_id, (-snapshot_id) as usize - remaining
+                ))
+            })?;
+        let sequence_nr = snapshot.sequence_nr.ok_or_else(|| {
+            ApiError::Internal(format!(
+                "relative snapshot resolution for task {} reached a snapshot without sequence_nr",
+                task.id
+            ))
+        })?;
+        search_sequence = sequence_nr;
+        resolved = Some(snapshot);
+        remaining -= 1;
+    }
+
+    Ok(resolved)
 }
 
 async fn get_run_task_output(

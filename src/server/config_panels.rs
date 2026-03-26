@@ -30,7 +30,6 @@ pub trait PanelRenderer<C> {
 pub struct EvaluatorPanelContext<'a> {
     pub point_spec: &'a PointSpec,
     pub runner_params: &'a EvaluatorRunnerParams,
-    pub init_metadata: Option<&'a JsonValue>,
 }
 
 pub struct SamplerAggregatorPanelContext<'a> {
@@ -39,7 +38,7 @@ pub struct SamplerAggregatorPanelContext<'a> {
 }
 
 impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
-    fn panel_specs(&self, ctx: &EvaluatorPanelContext<'_>) -> Vec<PanelSpec> {
+    fn panel_specs(&self, _ctx: &EvaluatorPanelContext<'_>) -> Vec<PanelSpec> {
         let mut panels = vec![panel_spec(
             "evaluator_summary",
             "Evaluator Summary",
@@ -52,17 +51,6 @@ impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
                 panel_spec(
                     "evaluator_config",
                     "Evaluator Config",
-                    PanelKind::KeyValue,
-                    PanelHistoryMode::None,
-                ),
-                PanelWidth::Full,
-            ));
-        }
-        if ctx.init_metadata.is_some_and(json_has_object_fields) {
-            panels.push(with_panel_width(
-                panel_spec(
-                    "evaluator_init_metadata",
-                    "Evaluator Init Metadata",
                     PanelKind::KeyValue,
                     PanelHistoryMode::None,
                 ),
@@ -114,11 +102,6 @@ impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
         let mut panels = vec![key_value_panel("evaluator_summary", summary)];
         if let Some(config_panel) = json_object_panel("evaluator_config", self)? {
             panels.push(config_panel);
-        }
-        if let Some(metadata) = ctx.init_metadata {
-            if let Some(metadata_panel) = json_value_panel("evaluator_init_metadata", metadata)? {
-                panels.push(metadata_panel);
-            }
         }
         Ok(panels)
     }

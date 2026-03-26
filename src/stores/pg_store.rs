@@ -37,6 +37,12 @@ impl PgStore {
             .await
             .map_err(map_sqlx)
     }
+
+    pub async fn get_root_stage_snapshot_id(&self, run_id: i32) -> Result<Option<i64>, StoreError> {
+        queries::get_root_stage_snapshot_id(&self.pool, run_id)
+            .await
+            .map_err(map_sqlx)
+    }
 }
 
 fn store_err(message: impl Into<String>) -> StoreError {
@@ -439,8 +445,6 @@ impl ControlPlaneStore for PgStore {
         integration_params: &JsonValue,
         target: Option<&JsonValue>,
         point_spec: &PointSpec,
-        evaluator_init_metadata: Option<&JsonValue>,
-        sampler_aggregator_init_metadata: Option<&JsonValue>,
         initial_stage_snapshot: &RunStageSnapshot,
         initial_tasks: &[RunTaskSpec],
     ) -> Result<i32, StoreError> {
@@ -452,11 +456,9 @@ impl ControlPlaneStore for PgStore {
                 name,
                 integration_params,
                 target,
-                point_spec,
-                evaluator_init_metadata,
-                sampler_aggregator_init_metadata
+                point_spec
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4)
             RETURNING id
             "#,
         )
@@ -464,8 +466,6 @@ impl ControlPlaneStore for PgStore {
         .bind(&sanitized_params)
         .bind(target)
         .bind(sqlx::types::Json(point_spec))
-        .bind(evaluator_init_metadata)
-        .bind(sampler_aggregator_init_metadata)
         .fetch_one(&mut *tx)
         .await
         .map_err(map_sqlx)?;
@@ -475,7 +475,7 @@ impl ControlPlaneStore for PgStore {
                 id: None,
                 run_id,
                 task_id: None,
-                sequence_nr: None,
+                sequence_nr: Some(0),
                 queue_empty: initial_stage_snapshot.queue_empty,
                 sampler_snapshot: initial_stage_snapshot.sampler_snapshot.clone(),
                 observable_state: initial_stage_snapshot.observable_state.clone(),

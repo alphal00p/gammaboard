@@ -9,6 +9,7 @@ use crate::sampling::materializer::{HavanaInferenceMaterializer, IdentityMateria
 use crate::sampling::{SamplerAggregator, SamplerAggregatorSnapshot, StageHandoff};
 
 pub use self::havana::HavanaInferenceSamplerParams;
+pub use self::havana::HavanaInferenceSource;
 pub use self::havana::HavanaSamplerParams;
 use self::havana::{
     HavanaInferenceSampler, HavanaInferenceSamplerSnapshot, HavanaSampler, HavanaSamplerSnapshot,

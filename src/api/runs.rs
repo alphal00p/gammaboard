@@ -1,7 +1,7 @@
 use crate::api::ApiError;
 use crate::core::{
-    AggregationStore, ControlPlaneStore, IntegrationParams, RunStageSnapshot, RunTask,
-    RunTaskInputSpec, RunTaskSpec, RunTaskStore, StageSnapshotRef, resolve_task_queue,
+    AggregationStore, ControlPlaneStore, IntegrationParams, RunStageSnapshot, RunTask, RunTaskSpec,
+    RunTaskStore,
 };
 use crate::evaluation::PointSpec;
 use crate::preprocess::{RunAddConfig, preprocess_run_add};
@@ -44,13 +44,13 @@ pub struct PausedRun {
 #[derive(Debug, Clone, Deserialize)]
 pub struct TaskQueueFile {
     #[serde(default)]
-    pub task: Option<RunTaskInputSpec>,
+    pub task: Option<RunTaskSpec>,
     #[serde(default)]
-    pub task_queue: Option<Vec<RunTaskInputSpec>>,
+    pub task_queue: Option<Vec<RunTaskSpec>>,
 }
 
 impl TaskQueueFile {
-    pub fn into_tasks(self) -> Vec<RunTaskInputSpec> {
+    pub fn into_tasks(self) -> Vec<RunTaskSpec> {
         let mut tasks = Vec::new();
         if let Some(task) = self.task {
             tasks.push(task);
@@ -131,8 +131,6 @@ pub async fn create_run(
             &integration_params,
             processed.target.as_ref(),
             point_spec,
-            processed.evaluator_init_metadata.as_ref(),
-            processed.sampler_aggregator_init_metadata.as_ref(),
             initial_stage_snapshot,
             &initial_tasks,
         )
@@ -185,15 +183,8 @@ pub async fn clone_run(
 
     let source_tasks = store.list_run_tasks(source_run_id).await?;
     let mut cloned_tasks = clone_task_suffix(&source_tasks, &snapshot)?;
-    // Ensure the first cloned task continues from the provided snapshot so the cloned run
-    // resumes from the exact stage snapshot we cloned from.
     if let Some(first) = cloned_tasks.first_mut() {
-        set_task_start_from(
-            first,
-            StageSnapshotRef {
-                snapshot_id: from_snapshot_id,
-            },
-        );
+        set_task_source_snapshot(first, from_snapshot_id);
     }
     let run_id = store
         .create_run(
@@ -201,13 +192,11 @@ pub async fn clone_run(
             &integration_params,
             source_run.target.as_ref(),
             &point_spec,
-            source_run.evaluator_init_metadata.as_ref(),
-            source_run.sampler_aggregator_init_metadata.as_ref(),
             &RunStageSnapshot {
                 id: None,
                 run_id: 0,
                 task_id: None,
-                sequence_nr: None,
+                sequence_nr: Some(0),
                 queue_empty: snapshot.queue_empty,
                 sampler_snapshot: snapshot.sampler_snapshot.clone(),
                 observable_state: snapshot.observable_state.clone(),
@@ -276,14 +265,7 @@ async fn resolve_task_file_for_run(
     task_file: TaskQueueFile,
 ) -> Result<Vec<RunTaskSpec>, ApiError> {
     let _run = load_run_progress(store, run_id).await?;
-    let base_snapshot = load_append_base_snapshot(store, run_id).await?;
-    let tasks = task_file.into_tasks();
-    resolve_task_queue(
-        &base_snapshot.sampler_aggregator,
-        &base_snapshot.batch_transforms,
-        &tasks,
-    )
-    .map_err(ApiError::BadRequest)
+    Ok(task_file.into_tasks())
 }
 
 async fn load_append_base_snapshot(
@@ -298,52 +280,62 @@ async fn load_append_base_snapshot(
 
 async fn preflight_task_batch(
     store: &impl AggregationStore,
-    _base_snapshot: &RunStageSnapshot,
+    base_snapshot: &RunStageSnapshot,
     _integration_params: &IntegrationParams,
     tasks: &[RunTaskSpec],
     _point_spec: &PointSpec,
 ) -> Result<(), ApiError> {
-    // Lightweight preflight performed at API time:
-    // - ensure any explicitly-referenced snapshots in `start_from` / `obs_start_from`
-    //   actually exist. Defer heavy compatibility checks (materializer/sampler/evaluator
-    //   dry-runs) until task activation in the node runner.
+    // API-time preflight rules (kept intentionally lightweight):
+    // 1) Verify any explicitly-referenced task source snapshots exist.
+    // 2) Verify referenced snapshots belong to the same run as the provided `base_snapshot`.
+    //    This prevents cross-run snapshot references during `run add` / `run task append`.
+    // 3) Perform basic task input validation (shape and simple constraints).
+    // 4) Defer heavy compatibility checks (building evaluator/materializer/sampler dry-runs,
+    //    or any sample/eval execution) to task activation in the node-runner, where full
+    //    runtime context and leases are available.
+    //
+    // Rationale: keep create/append fast and catch obvious user errors early while reserving
+    // resource-heavy checks for the execution environment.
     let mut referenced_snapshots = BTreeMap::new();
     for task in tasks {
-        // Validate and collect sampler handoff snapshot if present.
-        if let Some(start_from) = task.start_from() {
-            if !referenced_snapshots.contains_key(&start_from.snapshot_id) {
+        if let Some(snapshot_id) = task.source_snapshot_id() {
+            if snapshot_id < 0 {
+                // Relative snapshot references are resolved at task activation time.
+                // They intentionally bypass API-time absolute-id validation.
+                task.validate()
+                    .map_err(|err| ApiError::BadRequest(format!("invalid task entry: {err}")))?;
+                continue;
+            }
+            if !referenced_snapshots.contains_key(&snapshot_id) {
                 let snapshot = store
-                    .load_stage_snapshot(start_from.snapshot_id)
+                    .load_stage_snapshot(snapshot_id)
                     .await?
                     .ok_or_else(|| {
                         ApiError::BadRequest(format!(
-                            "task start_from references snapshot {} but no stage snapshot exists",
-                            start_from.snapshot_id
+                            "task snapshot_id references snapshot {} but no stage snapshot exists",
+                            snapshot_id
                         ))
                     })?;
-                referenced_snapshots.insert(start_from.snapshot_id, snapshot);
+                // Enforce same-run snapshot usage at API time.
+                if snapshot.run_id != base_snapshot.run_id {
+                    return Err(ApiError::BadRequest(format!(
+                        "task snapshot_id references snapshot {} which belongs to run {}, expected run {}",
+                        snapshot_id, snapshot.run_id, base_snapshot.run_id
+                    )));
+                }
+                referenced_snapshots.insert(snapshot_id, snapshot);
             }
         }
 
-        // Validate and collect observable start_from snapshot if present.
-        if let Some(obs_from) = task.obs_start_from() {
-            if !referenced_snapshots.contains_key(&obs_from.snapshot_id) {
-                let snapshot = store
-                    .load_stage_snapshot(obs_from.snapshot_id)
-                    .await?
-                    .ok_or_else(|| {
-                        ApiError::BadRequest(format!(
-                            "task obs_start_from references snapshot {} but no stage snapshot exists",
-                            obs_from.snapshot_id
-                        ))
-                    })?;
-                referenced_snapshots.insert(obs_from.snapshot_id, snapshot);
-            }
-        }
+        // Basic per-task validation (guard against malformed entries).
+        // Note: re-check for append flows to keep behavior consistent.
+        task.validate()
+            .map_err(|err| ApiError::BadRequest(format!("invalid task entry: {err}")))?;
     }
 
     // Intentionally skip building evaluator and running `preflight_task_suffix` here.
-    // Full compatibility checks will be executed at task start (node-runner activation).
+    // Full compatibility checks (materializer/sampler/evaluator dry-runs) will be executed
+    // at task start (node-runner activation) where the runtime context is available.
     Ok(())
 }
 
@@ -360,7 +352,7 @@ fn clone_task_suffix(
         ),
         None => None,
     };
-    let mut cloned_tasks = source_tasks
+    let cloned_tasks = source_tasks
         .iter()
         .skip(source_index.map_or(0, |index| index + 1))
         .map(|task| task.task.clone())
@@ -368,22 +360,15 @@ fn clone_task_suffix(
     Ok(cloned_tasks)
 }
 
-fn set_task_start_from(task: &mut RunTaskSpec, start_from: StageSnapshotRef) {
-    match task {
-        RunTaskSpec::Sample {
-            start_from: task_start_from,
-            ..
-        }
-        | RunTaskSpec::Image {
-            start_from: task_start_from,
-            ..
-        }
-        | RunTaskSpec::PlotLine {
-            start_from: task_start_from,
-            ..
-        } => {
-            *task_start_from = Some(start_from);
-        }
+fn set_task_source_snapshot(task: &mut RunTaskSpec, snapshot_id: i64) {
+    if let RunTaskSpec::Sample {
+        snapshot_id: task_snapshot_id,
+        config,
+        ..
+    } = task
+    {
+        *task_snapshot_id = snapshot_id;
+        *config = None;
     }
 }
 

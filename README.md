@@ -136,17 +136,30 @@ discrete_dims = 0
 ```
 
 If `task_queue` is omitted, the run is created idle.
+Every run stores an initial root stage snapshot (`sequence_nr = 0`) immediately at creation.
 
 ### Task Queue
-Sample tasks may inherit omitted `sampler_aggregator`, `materializer`, and `batch_transforms` fields from the previous effective stage.
-Omitted `materializer` defaults to `identity` when no previous stage exists. Omitted `batch_transforms` inherit the previous list, while `batch_transforms = []` explicitly clears them.
-Sample tasks may omit `observable` to reuse the previous observable state.
+Sample tasks use either `snapshot_id` (branch from an existing stage snapshot) or `config` (derive from current effective stage with overrides). Do not set both.
+Within `config`, omitted `sampler_aggregator` and `batch_transforms` inherit from the previous effective stage. `batch_transforms = []` explicitly clears the inherited transform list.
+`config.observable` may be omitted to reuse the previous observable state.
 Use `nr_samples = 0` when you want a sample task to only update stage state without producing work.
 Task files used with `gammaboard run task add` may contain either a single `task = { ... }`, a `[[task_queue]]` array, or both. When both are present, `task` is appended first.
 
-Executable tasks may also branch from an older stage snapshot:
+Executable sample tasks may also branch from an older stage snapshot:
 ```toml
-start_from = { snapshot_id = 42 }
+snapshot_id = 42
+```
+Relative indices are supported too: `snapshot_id = -1` means "latest prior stage snapshot", `-2` means "second latest prior snapshot", etc.
+
+Sample task config example:
+```toml
+[[task_queue]]
+kind = "sample"
+nr_samples = 10000
+[task_queue.config]
+observable = "scalar"
+[task_queue.config.sampler_aggregator]
+kind = "naive_monte_carlo"
 ```
 
 Deterministic scan tasks are supported:
@@ -185,6 +198,7 @@ Clone a run branch from a specific stage snapshot:
 ```bash
 gammaboard run clone <SOURCE_RUN> <FROM_SNAPSHOT_ID> <NEW_NAME>
 ```
+The dashboard clone dialog also exposes the initial root snapshot as a selectable clone source.
 
 ## Nodes
 Start local workers:
