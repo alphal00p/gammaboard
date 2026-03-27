@@ -123,6 +123,7 @@ Use this flow when the server is only reachable through Tailscale/SSH.
    ```text
    http://localhost:8080
    ```
+6. The SSH tunnel is only needed while ITPhlies is private. Once you expose an external HTTP/HTTPS port (and ideally a domain via nginx), access the frontend directly and skip the tunnel.
 
 Config files used:
 - backend: [configs/server/itphlies-prod.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server/itphlies-prod.toml)
