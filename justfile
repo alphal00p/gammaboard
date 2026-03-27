@@ -83,7 +83,7 @@ deploy-itphlies-nginx:
     if [[ -f "$nginx_pid_file" ]]; then
         old_pid=$(cat "$nginx_pid_file")
         if kill -0 "$old_pid" >/dev/null 2>&1; then
-            nginx -p "$PWD" -c "$nginx_config" -s quit || true
+    nginx -e "$PWD/logs/nginx-itphlies-error.log" -p "$PWD" -c "$nginx_config" -s quit || true
             sleep 1
             if kill -0 "$old_pid" >/dev/null 2>&1; then
                 kill "$old_pid" || true
@@ -91,7 +91,7 @@ deploy-itphlies-nginx:
         fi
     fi
 
-    nginx -p "$PWD" -c "$nginx_config"
+    nginx -e "$PWD/logs/nginx-itphlies-error.log" -p "$PWD" -c "$nginx_config"
 
     echo "ITPhlies nginx is up on 127.0.0.1:8080"
     echo "Nginx PID file: $nginx_pid_file"
