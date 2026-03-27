@@ -7,5 +7,5 @@ run_templates_dir = "../runs"
 task_templates_dir = "../tasks"
 
 [auth]
-admin_password_hash = "REPLACE_WITH_ARGON2_HASH"
-session_secret = "REPLACE_WITH_LONG_RANDOM_SECRET"
+admin_password_hash = "$argon2id$v=19$m=19456,t=2,p=1$IlJKLA7MFGA5iaXoS0KnGQ$ukiPLlZKlWme0artScJVv7dfc/mslAB2Cy9MbM1mDjk"
+session_secret = "VU8l2fh4VKEhWLtxAT4s"

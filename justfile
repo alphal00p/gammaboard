@@ -105,6 +105,86 @@ deploy-itphlies-nginx:
     echo "ITPhlies nginx is up on 127.0.0.1:8080"
     echo "Nginx PID file: $nginx_pid_file"
 
+stop-itphlies-deploy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    backend_pid_file="$PWD/logs/itphlies-backend.pid"
+    frontend_pid_file="$PWD/logs/itphlies-frontend.pid"
+    nginx_pid_file="$PWD/logs/nginx-itphlies.pid"
+    nginx_config="$PWD/configs/nginx/itphlies-tunnel.conf"
+
+    mkdir -p logs
+
+    if [[ -f "$frontend_pid_file" ]]; then
+        frontend_pid=$(cat "$frontend_pid_file")
+        if kill -0 "$frontend_pid" >/dev/null 2>&1; then
+            kill "$frontend_pid" || true
+            wait "$frontend_pid" >/dev/null 2>&1 || true
+            echo "stopped itphlies frontend (pid=$frontend_pid)"
+        fi
+        rm -f "$frontend_pid_file"
+    else
+        echo "itphlies frontend already stopped"
+    fi
+
+    if [[ -f "$backend_pid_file" ]]; then
+        backend_pid=$(cat "$backend_pid_file")
+        if kill -0 "$backend_pid" >/dev/null 2>&1; then
+            kill "$backend_pid" || true
+            wait "$backend_pid" >/dev/null 2>&1 || true
+            echo "stopped itphlies backend (pid=$backend_pid)"
+        fi
+        rm -f "$backend_pid_file"
+    else
+        echo "itphlies backend already stopped"
+    fi
+
+    mapfile -t stale_backend_pids < <(pgrep -f "{{bin}} server" || true)
+    for pid in "${stale_backend_pids[@]}"; do
+        if [[ -n "$pid" ]]; then
+            kill "$pid" >/dev/null 2>&1 || true
+            wait "$pid" >/dev/null 2>&1 || true
+            echo "killed stale backend pid=$pid"
+        fi
+    done
+
+    if [[ -f "$nginx_pid_file" ]]; then
+        nginx -e "$PWD/logs/nginx-itphlies-error.log" -p "$PWD" -c "$nginx_config" -s quit || true
+        sleep 1
+        nginx_pid=$(cat "$nginx_pid_file")
+        if kill -0 "$nginx_pid" >/dev/null 2>&1; then
+            kill "$nginx_pid" || true
+        fi
+        rm -f "$nginx_pid_file"
+        echo "stopped itphlies nginx"
+    else
+        echo "itphlies nginx already stopped"
+    fi
+
+deploy-itphlies-all:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    frontend_pid_file="$PWD/logs/itphlies-frontend.pid"
+    frontend_log_file="$PWD/logs/itphlies-frontend.log"
+
+    just stop-itphlies-deploy
+    {{bin}} db start
+    just deploy-itphlies
+    just deploy-itphlies-nginx
+
+    cd dashboard
+    npx serve build >"$frontend_log_file" 2>&1 &
+    frontend_pid=$!
+    cd ..
+    echo "$frontend_pid" > "$frontend_pid_file"
+
+    echo "ITPhlies full deploy is up"
+    echo "Frontend PID: $frontend_pid"
+    echo "Frontend log: $frontend_log_file"
+    echo "Open via tunnel: http://localhost:8080"
+
 stop-local-prod:
     #!/usr/bin/env bash
     set -euo pipefail

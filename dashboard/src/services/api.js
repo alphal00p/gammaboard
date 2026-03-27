@@ -2,6 +2,12 @@ import { asArray } from "../utils/collections";
 
 const API_BASE_URL = "/api";
 
+const stripHtml = (value) =>
+  value
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
 const extractErrorDetails = async (response) => {
   const contentType = response.headers.get("content-type") || "";
 
@@ -15,9 +21,22 @@ const extractErrorDetails = async (response) => {
     }
 
     const text = await response.text();
-    if (text.trim()) return text.trim();
+    if (text.trim()) {
+      if (contentType.includes("text/html")) {
+        const summary = stripHtml(text);
+        if (response.status === 502 || response.status === 503 || response.status === 504) {
+          return `gateway error (${response.status}): backend unavailable or restarting`;
+        }
+        return summary || `HTTP ${response.status}`;
+      }
+      return text.trim();
+    }
   } catch {
     // Fall through to status fallback.
+  }
+
+  if (response.status === 502 || response.status === 503 || response.status === 504) {
+    return `gateway error (${response.status}): backend unavailable or restarting`;
   }
 
   return response.statusText || `HTTP ${response.status}`;

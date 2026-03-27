@@ -68,7 +68,12 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
             .clone(),
     };
 
-    let evaluator = config.integration_params.evaluator.build()?;
+    let evaluator_kind = config.integration_params.evaluator.kind_str();
+    let evaluator = config.integration_params.evaluator.build().map_err(|err| {
+        BuildError::build(format!(
+            "failed to initialize evaluator {evaluator_kind}: {err}"
+        ))
+    })?;
     let point_spec = evaluator.get_point_spec();
     config.point_spec = Some(point_spec.clone());
 

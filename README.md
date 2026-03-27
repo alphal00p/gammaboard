@@ -103,27 +103,23 @@ To reset local state: run `gammaboard db delete --yes` then `gammaboard db start
 ## ITPhlies Deployment
 Use this flow when the server is only reachable through Tailscale/SSH.
 
-1. On ITPhlies, from the repo root, ensure local Postgres is running:
+1. On ITPhlies, from the repo root, run:
    ```bash
-   target/dev-optim/gammaboard db start
+   just deploy-itphlies-all
    ```
-2. Deploy backend (build + restart process):
-   ```bash
-   just deploy-itphlies
-   ```
-3. Deploy nginx tunnel entrypoint (serves frontend build + proxies `/api`):
-   ```bash
-   just deploy-itphlies-nginx
-   ```
-4. On your laptop, open an SSH tunnel:
+2. On your laptop, open an SSH tunnel:
    ```bash
    ssh -N -L 8080:127.0.0.1:8080 ITPhliesTails
    ```
-5. Open:
+3. Open:
    ```text
    http://localhost:8080
    ```
-6. The SSH tunnel is only needed while ITPhlies is private. Once you expose an external HTTP/HTTPS port (and ideally a domain via nginx), access the frontend directly and skip the tunnel.
+4. To stop all deployed ITPhlies processes:
+   ```bash
+   just stop-itphlies-deploy
+   ```
+5. The SSH tunnel is only needed while ITPhlies is private. Once you expose an external HTTP/HTTPS port (and ideally a domain via nginx), access the frontend directly and skip the tunnel.
 
 Config files used:
 - backend: [configs/server/itphlies-prod.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server/itphlies-prod.toml)

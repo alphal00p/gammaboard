@@ -100,51 +100,60 @@ impl GammaLoopEvaluator {
     }
 
     pub fn from_params(params: GammaLoopParams) -> Result<Self, BuildError> {
-        _ = initialise();
-        let mut state = State::load(params.state_folder.clone(), None, None).map_err(|err| {
-            BuildError::build(format!(
-                "failed to load state from {}: {err}",
-                params.state_folder.display()
-            ))
-        })?;
+        match std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<Self, BuildError> {
+            _ = initialise();
+            let mut state =
+                State::load(params.state_folder.clone(), None, None).map_err(|err| {
+                    BuildError::build(format!(
+                        "failed to load state from {}: {err}",
+                        params.state_folder.display()
+                    ))
+                })?;
 
-        let (process_id, integrand_name) = state
-            .find_integrand_ref(params.process_id.as_ref(), params.integrand_name.as_ref())
-            .map_err(|err| BuildError::build(format!("failed to find integrand: {err}")))?;
+            let (process_id, integrand_name) = state
+                .find_integrand_ref(params.process_id.as_ref(), params.integrand_name.as_ref())
+                .map_err(|err| BuildError::build(format!("failed to find integrand: {err}")))?;
 
-        let mut integrand = state
-            .process_list
-            .get_integrand_mut(process_id, integrand_name.clone())
-            .map_err(|err| BuildError::build(err.to_string()))?
-            .clone();
-        let model = state.model.clone();
-        let discrete_dims = integrand.discrete_sampling_depth();
-        let continuous_dims = if params.momentum_space {
-            integrand.get_n_dim()
-        } else {
-            // TODO: tropical sampling can have group-dependent x-space dimensions.
-            // We currently infer a single run-global dimension from the zero discrete selection.
-            let default_discrete_selection = vec![0; discrete_dims];
+            let mut integrand = state
+                .process_list
+                .get_integrand_mut(process_id, integrand_name.clone())
+                .map_err(|err| BuildError::build(err.to_string()))?
+                .clone();
+            let model = state.model.clone();
+            let discrete_dims = integrand.discrete_sampling_depth();
+            let continuous_dims = if params.momentum_space {
+                integrand.get_n_dim()
+            } else {
+                // TODO: tropical sampling can have group-dependent x-space dimensions.
+                // We currently infer a single run-global dimension from the zero discrete selection.
+                let default_discrete_selection = vec![0; discrete_dims];
+                integrand
+                    .expected_x_space_dimension(default_discrete_selection.as_slice())
+                    .map_err(|err| {
+                        BuildError::build(format!("failed to infer x-space dimensions: {err}"))
+                    })?
+            };
             integrand
-                .expected_x_space_dimension(default_discrete_selection.as_slice())
-                .map_err(|err| {
-                    BuildError::build(format!("failed to infer x-space dimensions: {err}"))
-                })?
-        };
-        integrand
-            .warm_up(&model)
-            .map_err(|err| BuildError::build(format!("failed to warm up integrand: {err}")))?;
+                .warm_up(&model)
+                .map_err(|err| BuildError::build(format!("failed to warm up integrand: {err}")))?;
 
-        Ok(Self {
-            integrand,
-            model,
-            momentum_space: params.momentum_space,
-            training_projection: params.training_projection,
-            point_spec: PointSpec {
-                continuous_dims,
-                discrete_dims,
-            },
-        })
+            Ok(Self {
+                integrand,
+                model,
+                momentum_space: params.momentum_space,
+                training_projection: params.training_projection,
+                point_spec: PointSpec {
+                    continuous_dims,
+                    discrete_dims,
+                },
+            })
+        })) {
+            Ok(result) => result,
+            Err(payload) => Err(BuildError::build(format!(
+                "gammaloop evaluator initialization panicked: {}",
+                Self::panic_message(payload)
+            ))),
+        }
     }
 
     fn evaluate(&mut self, batch: &Batch) -> Result<Vec<num::complex::Complex64>, EvalError> {
