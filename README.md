@@ -110,10 +110,15 @@ To reset local state: run `gammaboard db delete --yes` then `gammaboard db start
   just deploy-itphlies
   ```
 - Run this command directly on ITPhlies from the checked-out repo.
+- Start/restart the local nginx tunnel entrypoint with:
+  ```bash
+  just deploy-itphlies-nginx
+  ```
 
 `deploy-itphlies` runs `just build`, then restarts the backend process from this repo using `target/dev-optim/gammaboard server --server-config configs/server/itphlies-prod.toml`. It writes:
 - pid: `logs/itphlies-backend.pid`
 - log: `logs/itphlies-backend.log`
+`deploy-itphlies-nginx` starts/restarts nginx with `configs/nginx/itphlies-tunnel.conf` (listens on `127.0.0.1:8080` and proxies `/api` to `127.0.0.1:4000`).
 
 Operational note: with nginx in front, keep backend on `127.0.0.1:4000` and expose only `80/443` (+`22` for SSH).
 

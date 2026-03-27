@@ -8,7 +8,14 @@ build:
     just build-backend
 
 build-frontend:
-    cd dashboard && npm run build
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    cd dashboard
+    if [[ ! -x node_modules/.bin/react-scripts ]]; then
+        npm ci
+    fi
+    npm run build
 
 serve-backend:
     {{bin}} server
@@ -63,6 +70,31 @@ deploy-itphlies:
     echo "Deployed on $(hostname)"
     echo "Backend PID: $new_pid"
     echo "Backend log: $backend_log_file"
+
+deploy-itphlies-nginx:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    mkdir -p logs tmp/nginx/client_body tmp/nginx/proxy tmp/nginx/fastcgi tmp/nginx/uwsgi tmp/nginx/scgi
+
+    nginx_pid_file="$PWD/logs/nginx-itphlies.pid"
+    nginx_config="$PWD/configs/nginx/itphlies-tunnel.conf"
+
+    if [[ -f "$nginx_pid_file" ]]; then
+        old_pid=$(cat "$nginx_pid_file")
+        if kill -0 "$old_pid" >/dev/null 2>&1; then
+            nginx -p "$PWD" -c "$nginx_config" -s quit || true
+            sleep 1
+            if kill -0 "$old_pid" >/dev/null 2>&1; then
+                kill "$old_pid" || true
+            fi
+        fi
+    fi
+
+    nginx -p "$PWD" -c "$nginx_config"
+
+    echo "ITPhlies nginx is up on 127.0.0.1:8080"
+    echo "Nginx PID file: $nginx_pid_file"
 
 stop-local-prod:
     #!/usr/bin/env bash
