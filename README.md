@@ -105,7 +105,7 @@ Use this flow when the server is only reachable through Tailscale/SSH.
 
 1. On ITPhlies, from the repo root, run:
    ```bash
-   just deploy-itphlies-all
+   just deploy-itphlies
    ```
 2. On your laptop, open an SSH tunnel:
    ```bash
@@ -128,7 +128,7 @@ Config files used:
 Important:
 - `configs/server/itphlies-prod.toml` currently expects tunnel testing origin `allowed_origin = "http://localhost:8080"`.
 - Backend listens on `127.0.0.1:4000`; nginx listens on `127.0.0.1:8080`.
-- `just deploy-itphlies` writes backend PID/log to `logs/itphlies-backend.pid` and `logs/itphlies-backend.log`.
+- `just deploy-itphlies-server` writes backend PID/log to `logs/itphlies-backend.pid` and `logs/itphlies-backend.log`.
 
 ## Frontend API Routing
 - The dashboard frontend always calls relative `/api` endpoints.

@@ -45,15 +45,13 @@ deploy-local-prod:
     echo "Open: http://localhost:8080"
     nginx -e "$PWD/logs/nginx-local-prod-error.log" -p "$PWD" -c "$PWD/configs/nginx/local-prod.conf" -g 'daemon off;'
 
-deploy-itphlies:
+deploy-itphlies-server:
     #!/usr/bin/env bash
     set -euo pipefail
 
     backend_pid_file="$PWD/logs/itphlies-backend.pid"
     backend_log_file="$PWD/logs/itphlies-backend.log"
     server_pattern="{{bin}} server"
-
-    just build
 
     mkdir -p logs
     if [[ -f "$backend_pid_file" ]]; then
@@ -92,7 +90,7 @@ deploy-itphlies-nginx:
     if [[ -f "$nginx_pid_file" ]]; then
         old_pid=$(cat "$nginx_pid_file")
         if kill -0 "$old_pid" >/dev/null 2>&1; then
-    nginx -e "$PWD/logs/nginx-itphlies-error.log" -p "$PWD" -c "$nginx_config" -s quit || true
+            nginx -e "$PWD/logs/nginx-itphlies-error.log" -p "$PWD" -c "$nginx_config" -s quit || true
             sleep 1
             if kill -0 "$old_pid" >/dev/null 2>&1; then
                 kill "$old_pid" || true
@@ -162,7 +160,7 @@ stop-itphlies-deploy:
         echo "itphlies nginx already stopped"
     fi
 
-deploy-itphlies-all:
+deploy-itphlies:
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -171,7 +169,8 @@ deploy-itphlies-all:
 
     just stop-itphlies-deploy
     {{bin}} db start
-    just deploy-itphlies
+    just build
+    just deploy-itphlies-server
     just deploy-itphlies-nginx
 
     cd dashboard
