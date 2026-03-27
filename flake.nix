@@ -126,6 +126,7 @@
           maturin
           virtualenv
           postgresql
+          nginx
           sqlx-cli
           nodejs
           (pkgs.rustPlatform.buildRustPackage rec {

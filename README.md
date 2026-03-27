@@ -101,26 +101,37 @@ To reset local state: run `gammaboard db delete --yes` then `gammaboard db start
 - Set `allow_db_admin = true` only for trusted local/operator setups; it enables dashboard-triggered `db stop && db start`.
 
 ## ITPhlies Deployment
-- Recommended production server config is [configs/server/itphlies-prod.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server/itphlies-prod.toml):
-  - backend bound to localhost
-  - `secure_cookie = true`
-  - `allow_db_admin = false`
-- Deploy with:
-  ```bash
-  just deploy-itphlies
-  ```
-- Run this command directly on ITPhlies from the checked-out repo.
-- Start/restart the local nginx tunnel entrypoint with:
-  ```bash
-  just deploy-itphlies-nginx
-  ```
+Use this flow when the server is only reachable through Tailscale/SSH.
 
-`deploy-itphlies` runs `just build`, then restarts the backend process from this repo using `target/dev-optim/gammaboard server --server-config configs/server/itphlies-prod.toml`. It writes:
-- pid: `logs/itphlies-backend.pid`
-- log: `logs/itphlies-backend.log`
-`deploy-itphlies-nginx` starts/restarts nginx with `configs/nginx/itphlies-tunnel.conf` (listens on `127.0.0.1:8080` and proxies `/api` to `127.0.0.1:4000`).
+1. On ITPhlies, from the repo root, ensure local Postgres is running:
+   ```bash
+   target/dev-optim/gammaboard db start
+   ```
+2. Deploy backend (build + restart process):
+   ```bash
+   just deploy-itphlies
+   ```
+3. Deploy nginx tunnel entrypoint (serves frontend build + proxies `/api`):
+   ```bash
+   just deploy-itphlies-nginx
+   ```
+4. On your laptop, open an SSH tunnel:
+   ```bash
+   ssh -N -L 8080:127.0.0.1:8080 ITPhliesTails
+   ```
+5. Open:
+   ```text
+   http://localhost:8080
+   ```
 
-Operational note: with nginx in front, keep backend on `127.0.0.1:4000` and expose only `80/443` (+`22` for SSH).
+Config files used:
+- backend: [configs/server/itphlies-prod.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server/itphlies-prod.toml)
+- nginx: [configs/nginx/itphlies-tunnel.conf](/home/cedricsigrist/Workspace/repos/gammaboard/configs/nginx/itphlies-tunnel.conf)
+
+Important:
+- `configs/server/itphlies-prod.toml` currently expects tunnel testing origin `allowed_origin = "http://localhost:8080"`.
+- Backend listens on `127.0.0.1:4000`; nginx listens on `127.0.0.1:8080`.
+- `just deploy-itphlies` writes backend PID/log to `logs/itphlies-backend.pid` and `logs/itphlies-backend.log`.
 
 ## Frontend API Routing
 - The dashboard frontend always calls relative `/api` endpoints.
