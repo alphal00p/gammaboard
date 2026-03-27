@@ -148,10 +148,10 @@ stop-itphlies-deploy:
     done
 
     if [[ -f "$nginx_pid_file" ]]; then
+        nginx_pid="$(cat "$nginx_pid_file" 2>/dev/null || true)"
         nginx -e "$PWD/logs/nginx-itphlies-error.log" -p "$PWD" -c "$nginx_config" -s quit || true
         sleep 1
-        nginx_pid=$(cat "$nginx_pid_file")
-        if kill -0 "$nginx_pid" >/dev/null 2>&1; then
+        if [[ -n "$nginx_pid" ]] && kill -0 "$nginx_pid" >/dev/null 2>&1; then
             kill "$nginx_pid" || true
         fi
         rm -f "$nginx_pid_file"

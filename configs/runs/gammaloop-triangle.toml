@@ -1,62 +1,22 @@
+# Example GammaLoop run.
+# Assumes `gammaloop` is a sister folder of `gammaboard`.
+
 name = "gammaloop-triangle"
-
-[[task_queue]]
-kind = "plot_line"
-observable = "complex"
-[task_queue.geometry]
-offset = [0.0, 0.0, 0.0]
-direction = [1.0, 0.0, 0.0]
-linspace = { start = -30, stop = 30.0, count = 1000 }
-discrete = []
-
-
-[[task_queue]]
-kind = "image"
-observable = "complex"
-[task_queue.geometry]
-offset = [0.0, 0.0, 0.0]
-u_vector = [1.0, 0.0, 0.0]
-v_vector = [0.0, 1.0, 0.0]
-u_linspace = { start = -30.0, stop = 30.0, count = 128 }
-v_linspace = { start = -30.0, stop = 30.0, count = 128 }
-discrete = []
-
-
-[[task_queue]]
-kind = "sample"
-nr_samples = 500_000
-observable = { config = "complex" }
-sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 64, min_samples_for_update = 1024, samples_for_update = 16384, initial_training_rate = 0.1, final_training_rate = 0.001 } }
-
-
-[[task_queue]]
-kind = "sample"
-nr_samples = 10_000_000
-sampler_aggregator = { config = { kind = "havana_inference" } }
-
-[[task_queue]]
-kind = "sample"
-nr_samples = 10_000_000
-sampler_aggregator = { config = { kind = "havana_inference" } }
 
 [evaluator]
 kind = "gammaloop"
-# Path to a pre-generated GammaLoop state folder containing model/process/integrand artifacts.
-state_folder = "/home/cedricsigrist/Workspace/repos/gammaloop/my_triangle/state"
-# process_id = 0
-# integrand_name = "triangle"
+state_folder = "../gammaloop/my_triangle/state"
 momentum_space = true
 use_f128 = false
 training_projection = "abs"
-
 [evaluator_runner_params]
-performance_snapshot_interval_ms = 2000
+performance_snapshot_interval_ms = 1000
 
 [sampler_aggregator_runner_params]
-performance_snapshot_interval_ms = 2000
-target_batch_eval_ms = 200.0
-target_queue_remaining = 0.8
-max_batch_size = 10_000
-max_batches_per_tick = 128
-max_queue_size = 128
-completed_batch_fetch_limit = 128
+performance_snapshot_interval_ms = 1000
+target_batch_eval_ms = 500.0
+target_queue_remaining = 0.5
+max_batch_size = 16384
+max_queue_size = 4096
+max_batches_per_tick = 8
+completed_batch_fetch_limit = 4096
