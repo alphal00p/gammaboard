@@ -3,6 +3,7 @@ use clap::{Args, Subcommand};
 use gammaboard::config::{CliConfig, LocalPostgresConfig};
 use std::{
     fs::{self, File},
+    io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
@@ -17,24 +18,56 @@ pub struct DbArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum DbCommand {
-    Init,
+    Status,
     Start,
-    Create,
     Stop,
-    Reset,
+    Delete {
+        #[arg(short = 'y', long, action = clap::ArgAction::SetTrue)]
+        yes: bool,
+    },
     DumpSql,
 }
 
 pub fn run_db_command(args: DbArgs, config: &CliConfig) -> Result<()> {
     let local = &config.local_postgres;
     match args.command {
-        DbCommand::Init => init_db(local, &config.database.url),
+        DbCommand::Status => status_db(local, &config.database.url),
         DbCommand::Start => start_db(local, &config.database.url),
-        DbCommand::Create => create_db(local, &config.database.url),
         DbCommand::Stop => stop_db(local),
-        DbCommand::Reset => reset_db(local, &config.database.url),
+        DbCommand::Delete { yes } => delete_db(local, yes),
         DbCommand::DumpSql => dump_db_sql(local, &config.database.url),
     }
+}
+
+fn status_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
+    let initialized = is_cluster_initialized(local);
+    let running = if initialized {
+        is_db_running(local)?
+    } else {
+        false
+    };
+    let db_exists = if running {
+        Some(database_exists(local, database_url)?)
+    } else {
+        None
+    };
+    let healthy = if running {
+        Some(database_connection_healthy(local, database_url)?)
+    } else {
+        None
+    };
+
+    println!("initialized: {}", yes_no(initialized));
+    println!("running: {}", yes_no(running));
+    match db_exists {
+        Some(value) => println!("database_exists: {}", yes_no(value)),
+        None => println!("database_exists: unknown (postgres not running)"),
+    }
+    match healthy {
+        Some(value) => println!("connection_healthy: {}", yes_no(value)),
+        None => println!("connection_healthy: unknown (postgres not running)"),
+    }
+    Ok(())
 }
 
 fn init_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
@@ -53,7 +86,7 @@ fn init_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
     Ok(())
 }
 
-fn start_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
+fn start_postgres(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
     let connection = LocalDbConnection::from_url(database_url)?;
     ensure_parent_dir(&local.log_file)?;
     let socket_dir = ensure_absolute_dir(&local.socket_dir)?;
@@ -74,23 +107,21 @@ fn start_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
     )
 }
 
-fn create_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
+fn ensure_database_and_migrations(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
     let connection = LocalDbConnection::from_url(database_url)?;
-    let socket_dir = ensure_absolute_dir(&local.socket_dir)?;
-    let status = Command::new("createdb")
-        .arg("-h")
-        .arg(&socket_dir)
-        .arg("-p")
-        .arg(connection.port.to_string())
-        .arg("-U")
-        .arg(&connection.user)
-        .arg(&connection.database)
-        .status()
-        .context("failed to spawn createdb")?;
-    if !status.success() {
-        eprintln!(
-            "createdb exited with status {status}; continuing to migrations in case the database already exists"
-        );
+    if !database_exists(local, database_url)? {
+        let socket_dir = ensure_absolute_dir(&local.socket_dir)?;
+        run_command(
+            Command::new("createdb")
+                .arg("-h")
+                .arg(&socket_dir)
+                .arg("-p")
+                .arg(connection.port.to_string())
+                .arg("-U")
+                .arg(&connection.user)
+                .arg(&connection.database),
+            "createdb",
+        )?;
     }
     run_command(
         Command::new("sqlx")
@@ -102,7 +133,22 @@ fn create_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
     )
 }
 
+fn start_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
+    if !is_cluster_initialized(local) {
+        init_db(local, database_url)?;
+    }
+
+    if !is_db_running(local)? {
+        start_postgres(local, database_url)?;
+    }
+
+    ensure_database_and_migrations(local, database_url)
+}
+
 fn stop_db(local: &LocalPostgresConfig) -> Result<()> {
+    if !Path::new(&local.data_dir).exists() {
+        return Ok(());
+    }
     let status = Command::new("pg_ctl")
         .arg("-D")
         .arg(&local.data_dir)
@@ -117,13 +163,37 @@ fn stop_db(local: &LocalPostgresConfig) -> Result<()> {
     }
 }
 
-fn reset_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
+fn delete_db(local: &LocalPostgresConfig, assume_yes: bool) -> Result<()> {
+    confirm_delete(local, assume_yes)?;
     stop_db(local)?;
     remove_path_if_exists(&local.data_dir)?;
     remove_path_if_exists(&local.socket_dir)?;
-    init_db(local, database_url)?;
-    start_db(local, database_url)?;
-    create_db(local, database_url)
+    Ok(())
+}
+
+fn confirm_delete(local: &LocalPostgresConfig, assume_yes: bool) -> Result<()> {
+    if assume_yes {
+        return Ok(());
+    }
+    if !io::stdin().is_terminal() {
+        bail!("db delete requires --yes in non-interactive mode");
+    }
+
+    print!(
+        "Delete local postgres state? This deletes '{}' and '{}'. [y/N]: ",
+        local.data_dir, local.socket_dir
+    );
+    io::stdout().flush().context("failed to flush stdout")?;
+    let mut line = String::new();
+    io::stdin()
+        .read_line(&mut line)
+        .context("failed reading confirmation response")?;
+    let answer = line.trim().to_ascii_lowercase();
+    if answer == "y" || answer == "yes" {
+        Ok(())
+    } else {
+        bail!("aborted delete");
+    }
 }
 
 fn dump_db_sql(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
@@ -153,6 +223,79 @@ fn dump_db_sql(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
     }
     println!("{}", output_path.display());
     Ok(())
+}
+
+fn is_cluster_initialized(local: &LocalPostgresConfig) -> bool {
+    Path::new(&local.data_dir).join("PG_VERSION").is_file()
+}
+
+fn is_db_running(local: &LocalPostgresConfig) -> Result<bool> {
+    let output = Command::new("pg_ctl")
+        .arg("-D")
+        .arg(&local.data_dir)
+        .arg("status")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("failed to spawn pg_ctl status")?;
+    Ok(output.success())
+}
+
+fn database_exists(local: &LocalPostgresConfig, database_url: &str) -> Result<bool> {
+    let connection = LocalDbConnection::from_url(database_url)?;
+    let query = format!(
+        "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = '{}');",
+        escape_sql_literal(&connection.database)
+    );
+    let output = run_psql_query(local, &connection, "template1", &query)?;
+    match output.trim() {
+        "t" => Ok(true),
+        "f" => Ok(false),
+        other => bail!("unexpected database_exists query output: {other}"),
+    }
+}
+
+fn database_connection_healthy(local: &LocalPostgresConfig, database_url: &str) -> Result<bool> {
+    let connection = LocalDbConnection::from_url(database_url)?;
+    let output = run_psql_query(local, &connection, &connection.database, "SELECT 1;")?;
+    Ok(output.trim() == "1")
+}
+
+fn run_psql_query(
+    local: &LocalPostgresConfig,
+    connection: &LocalDbConnection,
+    database: &str,
+    sql: &str,
+) -> Result<String> {
+    let socket_dir = ensure_absolute_dir(&local.socket_dir)?;
+    let output = Command::new("psql")
+        .arg("-h")
+        .arg(&socket_dir)
+        .arg("-p")
+        .arg(connection.port.to_string())
+        .arg("-U")
+        .arg(&connection.user)
+        .arg("-d")
+        .arg(database)
+        .arg("-t")
+        .arg("-A")
+        .arg("-c")
+        .arg(sql)
+        .output()
+        .context("failed to spawn psql")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        bail!("psql query failed with status {}: {stderr}", output.status);
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn escape_sql_literal(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
 }
 
 fn run_command(command: &mut Command, label: &str) -> Result<()> {

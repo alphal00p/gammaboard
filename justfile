@@ -37,7 +37,8 @@ live-test-basic:
     run_symbolica_poly="symbolica-poly-test"
     run_symbolica_sin="symbolica-sin-test"
 
-    {{bin}} db reset
+    {{bin}} db delete --yes
+    {{bin}} db start
     just start 8
 
     sleep 4

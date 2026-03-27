@@ -63,15 +63,15 @@ The dashboard shows runs, task output, nodes, performance, and logs.
 Use the CLI for local database lifecycle:
 
 ```bash
-gammaboard db init
+gammaboard db status
 gammaboard db start
-gammaboard db create
 gammaboard db stop
-gammaboard db reset
+gammaboard db delete
 gammaboard db dump-sql
 ```
 
 These commands use `database.url` and `local_postgres` from `configs/gammaboard.toml`.
+To reset local state: run `gammaboard db delete --yes` then `gammaboard db start`.
 
 ## Server Config
 - The server is configured from a single TOML file. By default:
