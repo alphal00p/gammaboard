@@ -1,3 +1,4 @@
+pub mod db;
 mod errors;
 pub mod nodes;
 pub mod runs;

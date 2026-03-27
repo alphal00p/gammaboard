@@ -26,6 +26,11 @@ pub struct StoppedNode {
 }
 
 #[derive(Debug, Clone)]
+pub struct StoppedAllNodes {
+    pub rows_updated: u64,
+}
+
+#[derive(Debug, Clone)]
 pub struct AutoRunNodesPlan {
     pub requested_count: usize,
     pub node_names: Vec<String>,
@@ -72,6 +77,12 @@ pub async fn stop_node(
         node_name: node_name.to_string(),
         rows_updated,
     })
+}
+
+/// Requests shutdown for all currently registered nodes.
+pub async fn stop_all_nodes(store: &impl ControlPlaneStore) -> Result<StoppedAllNodes, ApiError> {
+    let rows_updated = store.request_all_nodes_shutdown().await?;
+    Ok(StoppedAllNodes { rows_updated })
 }
 
 /// Auto-assigns currently free nodes to sampler/evaluator roles for a run.

@@ -3,6 +3,10 @@ import {
   Alert,
   Box,
   Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Paper,
   Snackbar,
   Stack,
@@ -20,13 +24,16 @@ import WorkerDetailsPanel from "./WorkerDetailsPanel";
 import EmptyStateCard from "./common/EmptyStateCard";
 import { formatDateTime } from "../utils/formatters";
 import { useAuth } from "../auth/AuthProvider";
-import { autoRunNodes } from "../services/api";
+import { autoRunNodes, restartDatabase, stopAllNodes } from "../services/api";
 
 const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => {
   const { authenticated } = useAuth();
   const [selectedNodeName, setSelectedNodeName] = useState(null);
   const [startCount, setStartCount] = useState("1");
   const [startingNodes, setStartingNodes] = useState(false);
+  const [stoppingAllNodes, setStoppingAllNodes] = useState(false);
+  const [restartDbOpen, setRestartDbOpen] = useState(false);
+  const [restartingDb, setRestartingDb] = useState(false);
   const [snackbar, setSnackbar] = useState(null);
   const nodeNameFor = (worker) => worker.node_name || null;
   const sortedWorkers = useMemo(
@@ -122,6 +129,31 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
             >
               Start Nodes
             </Button>
+            <Button
+              color="error"
+              variant="outlined"
+              disabled={stoppingAllNodes}
+              onClick={async () => {
+                setStoppingAllNodes(true);
+                try {
+                  const response = await stopAllNodes();
+                  const rows = Number(response?.rows_updated ?? 0);
+                  setSnackbar({
+                    message: `Requested shutdown for ${rows} node${rows === 1 ? "" : "s"}.`,
+                    severity: "success",
+                  });
+                } catch (err) {
+                  setSnackbar({ message: err?.message || "Failed to stop all nodes.", severity: "error" });
+                } finally {
+                  setStoppingAllNodes(false);
+                }
+              }}
+            >
+              Stop All Nodes
+            </Button>
+            <Button color="warning" variant="outlined" disabled={restartingDb} onClick={() => setRestartDbOpen(true)}>
+              Restart DB
+            </Button>
           </Stack>
         ) : null}
 
@@ -198,6 +230,42 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
         onClose={() => setSnackbar(null)}
         message={snackbar?.message || ""}
       />
+      <Dialog
+        open={restartDbOpen}
+        onClose={() => (restartingDb ? null : setRestartDbOpen(false))}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Restart Database?</DialogTitle>
+        <DialogContent>
+          This will stop and start the local database. Running nodes and run execution may temporarily fail while the
+          database is restarting. Do you want to continue?
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRestartDbOpen(false)} disabled={restartingDb}>
+            Cancel
+          </Button>
+          <Button
+            color="warning"
+            variant="contained"
+            disabled={restartingDb}
+            onClick={async () => {
+              setRestartingDb(true);
+              try {
+                await restartDatabase();
+                setRestartDbOpen(false);
+                setSnackbar({ message: "Database restarted.", severity: "success" });
+              } catch (err) {
+                setSnackbar({ message: err?.message || "Failed to restart database.", severity: "error" });
+              } finally {
+                setRestartingDb(false);
+              }
+            }}
+          >
+            Confirm Restart
+          </Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 };

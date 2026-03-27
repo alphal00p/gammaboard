@@ -89,6 +89,7 @@ To reset local state: run `gammaboard db delete --yes` then `gammaboard db start
   port = 4000
   allowed_origin = "http://localhost:3000"
   secure_cookie = false
+  allow_db_admin = true
   run_templates_dir = "../runs"
   task_templates_dir = "../tasks"
 
@@ -97,6 +98,7 @@ To reset local state: run `gammaboard db delete --yes` then `gammaboard db start
   session_secret = "replace-me"
   ```
 - All server config fields are explicit; the server does not fill in defaults.
+- Set `allow_db_admin = true` only for trusted local/operator setups; it enables dashboard-triggered `db stop && db start`.
 
 ## Frontend API Routing
 - The dashboard frontend always calls relative `/api` endpoints.
@@ -114,7 +116,8 @@ To reset local state: run `gammaboard db delete --yes` then `gammaboard db start
 ## Dashboard Auth
 - Read-only dashboard endpoints stay open.
 - Steering actions currently require admin login and are backed by a signed session cookie.
-- The dashboard currently supports creating runs from raw TOML, cloning runs from a stored stage snapshot, appending tasks from raw TOML, deleting pending tasks, pausing runs, removing runs, auto-assigning free nodes, assigning and unassigning nodes, requesting node shutdown, and starting new local nodes.
+- The dashboard currently supports creating runs from raw TOML, cloning runs from a stored stage snapshot, appending tasks from raw TOML, deleting pending tasks, pausing runs, removing runs, auto-assigning free nodes, assigning and unassigning nodes, requesting node shutdown (single or all), and starting new local nodes.
+- The dashboard currently supports creating runs from raw TOML, cloning runs from a stored stage snapshot, appending tasks from raw TOML, deleting pending tasks, pausing runs, removing runs, auto-assigning free nodes, assigning and unassigning nodes, requesting node shutdown (single or all), starting new local nodes, and restarting the local database when enabled.
 - The create-run and add-task dialogs can also load `.toml` templates from `run_templates_dir` and `task_templates_dir` in `server/default.toml`.
 - Node shutdown from the dashboard is guarded by a confirmation dialog.
 - Put `auth.admin_password_hash` in `server/default.toml` to enable dashboard auth.

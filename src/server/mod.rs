@@ -6,7 +6,9 @@ mod run_panels;
 mod task_panels;
 mod worker_panels;
 
-use crate::api::{ApiError, nodes as node_api, runs as run_api, templates as template_api};
+use crate::api::{
+    ApiError, db as db_api, nodes as node_api, runs as run_api, templates as template_api,
+};
 use crate::core::{AggregationStore, RunReadStore, RunSpecStore, RunTask, RunTaskStore};
 use crate::evaluation::ObservableState;
 use crate::server::config_panels::{
@@ -48,6 +50,7 @@ pub struct ServerConfig {
     pub port: u16,
     pub allowed_origin: String,
     pub secure_cookie: bool,
+    pub allow_db_admin: bool,
     pub run_templates_dir: String,
     pub task_templates_dir: String,
     pub auth: ServerAuthConfig,
@@ -98,6 +101,7 @@ pub async fn serve(
         auth: AuthConfig::from_server_config(&config.auth),
         allowed_origin,
         secure_cookie: config.secure_cookie,
+        allow_db_admin: config.allow_db_admin,
         run_templates_dir: PathBuf::from(&config.run_templates_dir),
         task_templates_dir: PathBuf::from(&config.task_templates_dir),
         cli_config_path,
@@ -124,6 +128,7 @@ pub(crate) struct AppState {
     auth: AuthConfig,
     allowed_origin: axum::http::HeaderValue,
     secure_cookie: bool,
+    allow_db_admin: bool,
     run_templates_dir: PathBuf,
     task_templates_dir: PathBuf,
     cli_config_path: PathBuf,
@@ -304,7 +309,9 @@ fn build_app(state: AppState) -> Router {
         .route("/nodes/:id/assign", post(assign_node))
         .route("/nodes/:id/unassign", post(unassign_node))
         .route("/nodes/:id/stop", post(stop_node))
+        .route("/nodes/stop-all", post(stop_all_nodes))
         .route("/nodes/auto-run", post(auto_run_nodes))
+        .route("/admin/db/restart", post(restart_db))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_admin_session,
@@ -983,6 +990,22 @@ async fn stop_node(
     }))
 }
 
+async fn stop_all_nodes(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = node_api::stop_all_nodes(&state.store).await?;
+    tracing::info!(
+        source = "control",
+        control_surface = "dashboard",
+        action = "node_stop_all",
+        rows_updated = result.rows_updated,
+        "dashboard action completed"
+    );
+    json_response(serde_json::json!({
+        "rows_updated": result.rows_updated,
+    }))
+}
+
 async fn auto_run_nodes(
     State(state): State<AppState>,
     AxumJson(payload): AxumJson<AutoRunNodesRequest>,
@@ -1021,6 +1044,33 @@ async fn auto_run_nodes(
         "requested": plan.requested_count,
         "started": plan.node_names.len(),
         "node_names": plan.node_names,
+    }))
+}
+
+async fn restart_db(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    if !state.allow_db_admin {
+        return Err(ApiError::BadRequest(
+            "database admin endpoints are disabled by server config".to_string(),
+        ));
+    }
+
+    let binary = std::env::current_exe().map_err(|err| {
+        ApiError::Internal(format!("failed to resolve current executable: {err}"))
+    })?;
+    let result = db_api::restart_local_database(&binary, &state.cli_config_path)?;
+
+    tracing::info!(
+        source = "control",
+        control_surface = "dashboard",
+        action = "db_restart",
+        stopped = result.stopped,
+        started = result.started,
+        "dashboard action completed"
+    );
+
+    json_response(serde_json::json!({
+        "stopped": result.stopped,
+        "started": result.started,
     }))
 }
 
