@@ -51,6 +51,7 @@ deploy-itphlies:
 
     backend_pid_file="$PWD/logs/itphlies-backend.pid"
     backend_log_file="$PWD/logs/itphlies-backend.log"
+    server_pattern="{{bin}} server"
 
     just build
 
@@ -62,6 +63,14 @@ deploy-itphlies:
             wait "$old_pid" >/dev/null 2>&1 || true
         fi
     fi
+
+    mapfile -t stale_pids < <(pgrep -f "$server_pattern" || true)
+    for pid in "${stale_pids[@]}"; do
+        if [[ -n "$pid" ]]; then
+            kill "$pid" >/dev/null 2>&1 || true
+            wait "$pid" >/dev/null 2>&1 || true
+        fi
+    done
 
     {{bin}} server --server-config configs/server/itphlies-prod.toml >"$backend_log_file" 2>&1 &
     new_pid=$!
