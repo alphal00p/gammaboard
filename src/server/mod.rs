@@ -85,7 +85,11 @@ impl ServerConfig {
     }
 }
 
-pub async fn serve(store: PgStore, config: ServerConfig) -> anyhow::Result<()> {
+pub async fn serve(
+    store: PgStore,
+    config: ServerConfig,
+    cli_config_path: PathBuf,
+) -> anyhow::Result<()> {
     let bind = config.bind_addr();
     let allowed_origin = axum::http::HeaderValue::from_str(config.allowed_origin.trim())
         .with_context(|| format!("invalid server.allowed_origin={:?}", config.allowed_origin))?;
@@ -96,6 +100,7 @@ pub async fn serve(store: PgStore, config: ServerConfig) -> anyhow::Result<()> {
         secure_cookie: config.secure_cookie,
         run_templates_dir: PathBuf::from(&config.run_templates_dir),
         task_templates_dir: PathBuf::from(&config.task_templates_dir),
+        cli_config_path,
     };
 
     let app = build_app(state);
@@ -121,6 +126,7 @@ pub(crate) struct AppState {
     secure_cookie: bool,
     run_templates_dir: PathBuf,
     task_templates_dir: PathBuf,
+    cli_config_path: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -196,6 +202,13 @@ struct AssignNodeRequest {
 #[derive(Deserialize)]
 struct AutoAssignRequest {
     max_evaluators: Option<usize>,
+}
+
+#[derive(Deserialize)]
+struct AutoRunNodesRequest {
+    count: usize,
+    max_start_failures: Option<u32>,
+    db_pool_size: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -291,6 +304,7 @@ fn build_app(state: AppState) -> Router {
         .route("/nodes/:id/assign", post(assign_node))
         .route("/nodes/:id/unassign", post(unassign_node))
         .route("/nodes/:id/stop", post(stop_node))
+        .route("/nodes/auto-run", post(auto_run_nodes))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_admin_session,
@@ -967,6 +981,82 @@ async fn stop_node(
         "node_name": result.node_name,
         "rows_updated": result.rows_updated,
     }))
+}
+
+async fn auto_run_nodes(
+    State(state): State<AppState>,
+    AxumJson(payload): AxumJson<AutoRunNodesRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let max_start_failures = payload.max_start_failures.unwrap_or(3);
+    let db_pool_size = payload.db_pool_size.unwrap_or(10);
+    let plan = node_api::plan_auto_run_nodes(&state.store, payload.count).await?;
+
+    let binary = std::env::current_exe().map_err(|err| {
+        ApiError::Internal(format!("failed to resolve current executable: {err}"))
+    })?;
+
+    for node_name in &plan.node_names {
+        spawn_node_process(
+            &binary,
+            &state.cli_config_path,
+            node_name,
+            max_start_failures,
+            db_pool_size,
+        )?;
+    }
+
+    tracing::info!(
+        source = "control",
+        control_surface = "dashboard",
+        action = "node_auto_run",
+        requested = plan.requested_count,
+        started = plan.node_names.len(),
+        node_names = ?plan.node_names,
+        max_start_failures,
+        db_pool_size,
+        "dashboard action completed"
+    );
+
+    json_response(serde_json::json!({
+        "requested": plan.requested_count,
+        "started": plan.node_names.len(),
+        "node_names": plan.node_names,
+    }))
+}
+
+fn spawn_node_process(
+    binary: &Path,
+    cli_config_path: &Path,
+    node_name: &str,
+    max_start_failures: u32,
+    db_pool_size: u32,
+) -> Result<(), ApiError> {
+    use std::process::Stdio;
+    use tokio::process::Command;
+
+    let mut command = Command::new(binary);
+    command
+        .arg("--cli-config")
+        .arg(cli_config_path)
+        .args(node_api::node_run_cli_args(
+            node_name,
+            max_start_failures,
+            db_pool_size,
+        ))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    let mut child = command
+        .spawn()
+        .map_err(|err| ApiError::Internal(format!("failed to spawn node {node_name}: {err}")))?;
+    let name = node_name.to_string();
+    tokio::spawn(async move {
+        if let Err(err) = child.wait().await {
+            tracing::warn!(node_name = %name, error = %err, "spawned node process wait failed");
+        }
+    });
+    Ok(())
 }
 
 async fn get_run_evaluator_performance_history(

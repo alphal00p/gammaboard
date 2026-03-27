@@ -37,7 +37,6 @@ pub struct EvaluatorRunner<S> {
     samples_evaluated_total: i64,
     rolling: EvaluatorRollingAverages,
     store: S,
-    current_task_requires_training: bool,
     current_batch_transforms: Vec<Box<dyn crate::evaluation::BatchTransform>>,
 }
 
@@ -62,7 +61,6 @@ where
         materializer: Box<dyn Materializer>,
         point_spec: PointSpec,
         params: EvaluatorRunnerParams,
-        requires_training_values: bool,
         batch_transforms: Vec<Box<dyn crate::evaluation::BatchTransform>>,
     ) -> Self {
         Self {
@@ -80,7 +78,6 @@ where
             samples_evaluated_total: 0,
             rolling: EvaluatorRollingAverages::default(),
             store,
-            current_task_requires_training: requires_training_values,
             current_batch_transforms: batch_transforms,
         }
     }
@@ -173,7 +170,7 @@ where
             &transformed_batch,
             &claimed.latent_batch.observable,
             EvalBatchOptions {
-                require_training_values: self.current_task_requires_training,
+                require_training_values: claimed.requires_training_values,
             },
         ) {
             Ok(result) => {
@@ -181,6 +178,7 @@ where
                 let total_time_ms = materialization_time_ms + eval_time_ms;
                 self.submit_result(
                     claimed.batch_id,
+                    claimed.requires_training_values,
                     &transformed_batch,
                     result,
                     total_time_ms,
@@ -208,13 +206,14 @@ where
     async fn submit_result(
         &mut self,
         batch_id: i64,
+        requires_training_values: bool,
         batch: &Batch,
         result: BatchResult,
         total_time_ms: f64,
         materialization_time_ms: f64,
         eval_time_ms: f64,
     ) -> Result<(), EvaluatorRunnerError> {
-        if self.current_task_requires_training && result.values.is_none() {
+        if requires_training_values && result.values.is_none() {
             let err = EngineError::engine(format!(
                 "result is missing training values for training batch {}",
                 batch_id

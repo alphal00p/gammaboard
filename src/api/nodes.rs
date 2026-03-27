@@ -1,5 +1,6 @@
 use crate::api::ApiError;
 use crate::core::{ControlPlaneStore, RunReadStore, WorkerRole};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct AssignedNode {
@@ -22,6 +23,12 @@ pub struct AutoAssignResult {
 pub struct StoppedNode {
     pub node_name: String,
     pub rows_updated: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct AutoRunNodesPlan {
+    pub requested_count: usize,
+    pub node_names: Vec<String>,
 }
 
 /// Assigns a node to a run/role in desired control-plane state.
@@ -117,4 +124,56 @@ pub async fn auto_assign_run(
         assigned_sampler,
         assigned_evaluators,
     })
+}
+
+/// Plans `w-N` node names for launching local node processes, skipping existing names.
+pub async fn plan_auto_run_nodes(
+    store: &impl ControlPlaneStore,
+    requested_count: usize,
+) -> Result<AutoRunNodesPlan, ApiError> {
+    if requested_count == 0 {
+        return Err(ApiError::BadRequest(
+            "requested node count must be greater than zero".to_string(),
+        ));
+    }
+
+    let existing = store
+        .list_nodes(None)
+        .await?
+        .into_iter()
+        .map(|node| node.name)
+        .collect::<HashSet<_>>();
+
+    let mut planned = Vec::with_capacity(requested_count);
+    let mut index = 1usize;
+    while planned.len() < requested_count {
+        let candidate = format!("w-{index}");
+        if !existing.contains(&candidate) && !planned.iter().any(|name| name == &candidate) {
+            planned.push(candidate);
+        }
+        index = index.saturating_add(1);
+    }
+
+    Ok(AutoRunNodesPlan {
+        requested_count,
+        node_names: planned,
+    })
+}
+
+/// Builds CLI arguments for launching one node process.
+pub fn node_run_cli_args(
+    node_name: &str,
+    max_start_failures: u32,
+    db_pool_size: u32,
+) -> Vec<String> {
+    vec![
+        "node".to_string(),
+        "run".to_string(),
+        "--name".to_string(),
+        node_name.to_string(),
+        "--max-start-failures".to_string(),
+        max_start_failures.to_string(),
+        "--db-pool-size".to_string(),
+        db_pool_size.to_string(),
+    ]
 }

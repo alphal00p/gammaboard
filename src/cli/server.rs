@@ -16,6 +16,7 @@ pub struct ServerArgs {
 pub async fn run_server(
     args: ServerArgs,
     cli_config: &CliConfig,
+    cli_config_path: &std::path::Path,
     quiet: bool,
 ) -> anyhow::Result<()> {
     let config = ServerConfig::load(&args.server_config)?;
@@ -31,7 +32,7 @@ pub async fn run_server(
         SERVER_DB_POOL_SIZE,
         quiet,
         span,
-        |store| async move { serve(store, config).await },
+        |store| async move { serve(store, config, cli_config_path.to_path_buf()).await },
     )
     .await
 }

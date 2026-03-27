@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Box,
+  Button,
   Paper,
+  Snackbar,
   Stack,
   Table,
   TableBody,
@@ -10,15 +12,22 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TextField,
   Typography,
 } from "@mui/material";
 import ConnectionStatus from "./ConnectionStatus";
 import WorkerDetailsPanel from "./WorkerDetailsPanel";
 import EmptyStateCard from "./common/EmptyStateCard";
 import { formatDateTime } from "../utils/formatters";
+import { useAuth } from "../auth/AuthProvider";
+import { autoRunNodes } from "../services/api";
 
 const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => {
+  const { authenticated } = useAuth();
   const [selectedNodeName, setSelectedNodeName] = useState(null);
+  const [startCount, setStartCount] = useState("1");
+  const [startingNodes, setStartingNodes] = useState(false);
+  const [snackbar, setSnackbar] = useState(null);
   const nodeNameFor = (worker) => worker.node_name || null;
   const sortedWorkers = useMemo(
     () =>
@@ -78,11 +87,48 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
         <Typography variant="h6" gutterBottom>
           Nodes
         </Typography>
+        {authenticated ? (
+          <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
+            <TextField
+              size="small"
+              label="Count"
+              value={startCount}
+              onChange={(event) => setStartCount(event.target.value)}
+              sx={{ width: 120 }}
+            />
+            <Button
+              variant="outlined"
+              disabled={startingNodes}
+              onClick={async () => {
+                const count = Number.parseInt(String(startCount).trim(), 10);
+                if (!Number.isFinite(count) || count <= 0) {
+                  setSnackbar({ message: "Count must be a positive integer.", severity: "error" });
+                  return;
+                }
+                setStartingNodes(true);
+                try {
+                  const response = await autoRunNodes({ count });
+                  const started = Number(response?.started ?? 0);
+                  setSnackbar({
+                    message: `Started ${started} node${started === 1 ? "" : "s"}.`,
+                    severity: "success",
+                  });
+                } catch (err) {
+                  setSnackbar({ message: err?.message || "Failed to start nodes.", severity: "error" });
+                } finally {
+                  setStartingNodes(false);
+                }
+              }}
+            >
+              Start Nodes
+            </Button>
+          </Stack>
+        ) : null}
 
         {workers.length === 0 ? (
           <EmptyStateCard
             title="No nodes registered"
-            message="Start one or more run-node processes to inspect desired assignment, current role, and heartbeat."
+            message="Start one or more node run processes to inspect desired assignment, current role, and heartbeat."
           />
         ) : (
           <Stack spacing={2}>
@@ -146,6 +192,12 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
       ) : (
         <Alert severity="info">Select a node to view assignment and heartbeat details.</Alert>
       )}
+      <Snackbar
+        open={Boolean(snackbar)}
+        autoHideDuration={4000}
+        onClose={() => setSnackbar(null)}
+        message={snackbar?.message || ""}
+      />
     </>
   );
 };

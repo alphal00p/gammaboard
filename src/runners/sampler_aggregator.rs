@@ -454,7 +454,7 @@ where
                     .observe(total_eval_time_ms / batch_samples as f64);
             }
 
-            if self.sampler_config.requires_training() {
+            if batch.requires_training_values {
                 let training_weights = batch.result.values.as_deref().ok_or_else(|| {
                     RunnerError::Engine(EngineError::engine(format!(
                         "completed batch {} requires training but has no training values",
@@ -575,7 +575,12 @@ where
 
         for batch in &produced {
             self.store
-                .insert_batch(self.run_id, self.task.id, batch)
+                .insert_batch(
+                    self.run_id,
+                    self.task.id,
+                    self.sampler_config.requires_training(),
+                    batch,
+                )
                 .await?;
         }
         self.last_pending_after_enqueue = Some(pending_before_tick.saturating_add(produced.len()));

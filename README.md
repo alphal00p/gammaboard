@@ -5,7 +5,6 @@ Gammaboard runs distributed numerical integration jobs with PostgreSQL as the sh
 ## Main Commands
 - `gammaboard run`: create, list, pause, clone, and remove runs.
 - `gammaboard node`: list, assign, unassign, and stop nodes.
-- `gammaboard run-node --name <NODE_NAME>`: start one local worker process.
 - `gammaboard server`: start the dashboard backend.
 - `gammaboard db`: manage the local PostgreSQL instance used for development.
 
@@ -115,9 +114,9 @@ To reset local state: run `gammaboard db delete --yes` then `gammaboard db start
 ## Dashboard Auth
 - Read-only dashboard endpoints stay open.
 - Steering actions currently require admin login and are backed by a signed session cookie.
-- The dashboard currently supports creating runs from raw TOML, cloning runs from a stored stage snapshot, appending tasks from raw TOML, deleting pending tasks, pausing runs, removing runs, auto-assigning free nodes, assigning and unassigning nodes, and requesting a node shutdown.
+- The dashboard currently supports creating runs from raw TOML, cloning runs from a stored stage snapshot, appending tasks from raw TOML, deleting pending tasks, pausing runs, removing runs, auto-assigning free nodes, assigning and unassigning nodes, requesting node shutdown, and starting new local nodes.
 - The create-run and add-task dialogs can also load `.toml` templates from `run_templates_dir` and `task_templates_dir` in `server/default.toml`.
-- Node shutdown from the dashboard is guarded by a confirmation dialog because it cannot be undone from the web UI.
+- Node shutdown from the dashboard is guarded by a confirmation dialog.
 - Put `auth.admin_password_hash` in `server/default.toml` to enable dashboard auth.
 - Put `auth.session_secret` in `server/default.toml` when auth is enabled.
 - Set `allowed_origin` in `server/default.toml` if the frontend is served from a different origin than `http://localhost:3000`.
@@ -218,16 +217,17 @@ In the dashboard, clone source is inferred from the selected task (falling back 
 ## Nodes
 Start local workers:
 ```bash
-just start 2
+gammaboard node auto-run 2
 ```
 
 Or directly:
 ```bash
-gammaboard run-node --name w-1
+gammaboard node run --name w-1
 ```
 
-`run-node` uses a fast-start reconcile backoff internally: it starts polling at `50ms`, grows by a factor of `2.0`, and caps at `2s`.
-`run-node` exits on `Ctrl-C` and `SIGTERM`, and expires its lease on shutdown so the same node name can be reused immediately.
+`node run` uses a fast-start reconcile backoff internally: it starts polling at `50ms`, grows by a factor of `2.0`, and caps at `2s`.
+`node run` exits on `Ctrl-C` and `SIGTERM`, and expires its lease on shutdown so the same node name can be reused immediately.
+`node auto-run N` picks names `w-1`, `w-2`, ... and skips names that already exist in the control plane.
 
 Node names are unique operator handles. Each live worker also owns an internal UUID lease in PostgreSQL. If the worker cannot re-announce itself for 30 seconds, it shuts down.
 
@@ -253,6 +253,8 @@ gammaboard run task remove <RUN> <TASK_ID>
 gammaboard run remove <RUN>
 
 gammaboard node list
+gammaboard node run --name <NODE_NAME>
+gammaboard node auto-run <COUNT>
 gammaboard node assign <NODE_NAME> <ROLE> <RUN>
 gammaboard node unassign <NODE_NAME>
 gammaboard node stop <NODE_NAME>

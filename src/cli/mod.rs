@@ -4,7 +4,6 @@ pub mod completion;
 pub mod db;
 pub mod node;
 pub mod run;
-pub mod run_node;
 pub mod server;
 pub mod shared;
 
@@ -17,7 +16,6 @@ use db::{DbArgs, run_db_command};
 use gammaboard::config::{CliConfig, DEFAULT_CLI_CONFIG_PATH};
 use node::{NodeArgs, run_node_commands};
 use run::{RunArgs, run_run_commands};
-use run_node::{RunNodeArgs, run_node};
 use server::{ServerArgs, run_server};
 use std::path::PathBuf;
 
@@ -41,8 +39,6 @@ enum Command {
     Run(RunArgs),
     /// Node assignment and node lifecycle commands
     Node(NodeArgs),
-    /// Node-local role reconciler
-    RunNode(RunNodeArgs),
     /// API server
     Server(ServerArgs),
     /// Auth helpers
@@ -55,13 +51,15 @@ enum Command {
 
 pub async fn dispatch(cli: Cli) -> Result<()> {
     let quiet = cli.quiet;
-    let config = CliConfig::load(&cli.cli_config)?;
+    let cli_config_path = cli.cli_config.clone();
+    let config = CliConfig::load(&cli_config_path)?;
     match cli.command {
         Command::AutoAssign(args) => run_auto_assign_command(args, &config, quiet).await,
         Command::Run(args) => run_run_commands(args.command, &config, quiet).await,
-        Command::Node(args) => run_node_commands(args.command, &config, quiet).await,
-        Command::RunNode(args) => run_node(args, &config, quiet).await,
-        Command::Server(args) => run_server(args, &config, quiet).await,
+        Command::Node(args) => {
+            run_node_commands(args.command, &config, cli_config_path.as_path(), quiet).await
+        }
+        Command::Server(args) => run_server(args, &config, cli_config_path.as_path(), quiet).await,
         Command::Auth(args) => run_auth_hash_command(args),
         Command::Completion(args) => run_completion(args),
         Command::Db(args) => run_db_command(args, &config),

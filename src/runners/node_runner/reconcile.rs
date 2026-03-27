@@ -202,8 +202,6 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
         // Debug: confirm materializer construction completed
 
-        let requires_training_values = stage_snapshot.sampler_aggregator.requires_training();
-
         let runner = EvaluatorRunner::new(
             worker.store.clone(),
             worker.run_id,
@@ -213,7 +211,6 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             materializer,
             spec.point_spec.clone(),
             spec.evaluator_runner_params.clone(),
-            requires_training_values,
             batch_transforms,
         );
 

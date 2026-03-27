@@ -1,4 +1,4 @@
-use super::shared::{NodeSelection, RoleArg, resolve_run_ref, with_control_store};
+use super::shared::{NodeSelection, RoleArg, resolve_run_ref, with_cli_store, with_control_store};
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use comfy_table::{Cell, CellAlignment, ContentArrangement, Table};
@@ -6,6 +6,8 @@ use gammaboard::PgStore;
 use gammaboard::api::nodes as node_api;
 use gammaboard::config::CliConfig;
 use gammaboard::core::{ControlPlaneStore, RegisteredNode, WorkerRole};
+use gammaboard::runners::{NodeRunner, NodeRunnerConfig};
+use std::{path::Path, process::Stdio};
 
 #[derive(Debug, Args)]
 pub struct NodeArgs {
@@ -15,6 +17,8 @@ pub struct NodeArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum NodeCommand {
+    Run(NodeRunArgs),
+    AutoRun(AutoRunArgs),
     Assign {
         node_name: String,
         role: RoleArg,
@@ -29,11 +33,39 @@ pub enum NodeCommand {
     Stop(NodeSelection),
 }
 
+#[derive(Debug, Args)]
+pub struct NodeRunArgs {
+    #[arg(long)]
+    name: String,
+    #[arg(long, default_value_t = 3)]
+    max_start_failures: u32,
+    #[arg(long, default_value_t = 10)]
+    db_pool_size: u32,
+}
+
+#[derive(Debug, Args)]
+pub struct AutoRunArgs {
+    count: usize,
+    #[arg(long, default_value_t = 3)]
+    max_start_failures: u32,
+    #[arg(long, default_value_t = 10)]
+    db_pool_size: u32,
+}
+
 pub async fn run_node_commands(
     command: NodeCommand,
     config: &CliConfig,
+    cli_config_path: &Path,
     quiet: bool,
 ) -> Result<()> {
+    if let NodeCommand::Run(args) = command {
+        return run_node(args, config, quiet).await;
+    }
+
+    if let NodeCommand::AutoRun(args) = command {
+        return run_auto_run_command(args, config, cli_config_path, quiet).await;
+    }
+
     with_control_store(
         config,
         10,
@@ -66,6 +98,7 @@ pub async fn run_node_commands(
                     print_node_table(build_node_rows(nodes));
                 }
                 NodeCommand::Stop(selection) => stop_nodes(&store, selection).await?,
+                NodeCommand::Run(_) | NodeCommand::AutoRun(_) => unreachable!(),
             }
             Ok(())
         },
@@ -75,11 +108,73 @@ pub async fn run_node_commands(
 
 fn node_command_name(command: &NodeCommand) -> &'static str {
     match command {
+        NodeCommand::Run(_) => "node_run",
+        NodeCommand::AutoRun(_) => "node_auto_run",
         NodeCommand::Assign { .. } => "node_assign",
         NodeCommand::Unassign { .. } => "node_unassign",
         NodeCommand::List { .. } => "node_list",
         NodeCommand::Stop(_) => "node_stop",
     }
+}
+
+async fn run_node(args: NodeRunArgs, config: &CliConfig, quiet: bool) -> Result<()> {
+    let node_name = args.name.clone();
+    let span = tracing::span!(
+        tracing::Level::TRACE,
+        "node-run",
+        source = "worker",
+        node_name = %node_name
+    );
+    with_cli_store(config, args.db_pool_size, quiet, span, |store| async move {
+        let node_runner = NodeRunner::new(
+            store,
+            node_name,
+            NodeRunnerConfig {
+                max_consecutive_start_failures: args.max_start_failures,
+                ..NodeRunnerConfig::default()
+            },
+        );
+        node_runner.run().await?;
+        Ok(())
+    })
+    .await
+}
+
+async fn run_auto_run_command(
+    args: AutoRunArgs,
+    config: &CliConfig,
+    cli_config_path: &Path,
+    quiet: bool,
+) -> Result<()> {
+    let planned = with_control_store(config, 10, quiet, "node_auto_run", |store| async move {
+        Ok(node_api::plan_auto_run_nodes(&store, args.count).await?)
+    })
+    .await?;
+
+    let binary = std::env::current_exe()?;
+    for node_name in &planned.node_names {
+        let mut command = std::process::Command::new(&binary);
+        command
+            .arg("--cli-config")
+            .arg(cli_config_path)
+            .args(node_api::node_run_cli_args(
+                node_name,
+                args.max_start_failures,
+                args.db_pool_size,
+            ))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command.spawn()?;
+    }
+
+    tracing::info!(
+        requested = planned.requested_count,
+        started = planned.node_names.len(),
+        node_names = ?planned.node_names,
+        "started node processes"
+    );
+    Ok(())
 }
 
 async fn stop_nodes(store: &PgStore, selection: NodeSelection) -> Result<()> {

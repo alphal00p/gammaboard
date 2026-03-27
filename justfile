@@ -71,14 +71,6 @@ test-e2e:
     just stop-kill
     cargo test -q --test full_stack_cli -- --ignored --nocapture
 
-start n:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    for i in $(seq 1 {{n}}); do
-        {{bin}} run-node --name "w-${i}" &
-    done
-
 live-test-basic:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -89,7 +81,7 @@ live-test-basic:
 
     {{bin}} db delete --yes
     {{bin}} db start
-    just start 8
+    {{bin}} node auto-run 8
 
     sleep 4
 
@@ -130,6 +122,6 @@ stop:
 
 stop-kill:
     just stop
-    -pkill -f "{{bin}} run-node"
+    -pkill -f "{{bin}} node run"
     -pkill -f "{{bin}} server"
     -@stty sane

@@ -1,6 +1,6 @@
 //! Node-local worker orchestration and role reconciliation.
 //!
-//! A `run-node` process is role-agnostic. Desired role/run comes from DB.
+//! A `node run` process is role-agnostic. Desired role/run comes from DB.
 //! The supervisor loop polls desired assignment, reconciles one in-process role runner,
 //! and ticks it until desired assignment changes or the role finishes.
 

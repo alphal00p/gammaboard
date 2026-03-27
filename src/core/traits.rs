@@ -77,6 +77,7 @@ pub trait WorkQueueStore: Send + Sync {
         &self,
         run_id: i32,
         task_id: i64,
+        requires_training_values: bool,
         batch: &LatentBatch,
     ) -> Result<i64, StoreError>;
     async fn get_pending_batch_count(&self, run_id: i32) -> Result<i64, StoreError>;

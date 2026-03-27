@@ -20,16 +20,16 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - If `task_queue` is omitted during `run add`, the run is created idle.
 - `run add` must persist an initial queue-empty `run_stage_snapshot` immediately.
 - Run lifecycle is derived from control-plane state. Do not add a persisted run status column unless explicitly requested.
-- Pausing a run means clearing desired assignments so `run-node` reconciles down cleanly.
+- Pausing a run means clearing desired assignments so `node run` workers reconcile down cleanly.
 
 ## Nodes
 - Node identity is split into `nodes.name` and `nodes.uuid`.
 - `name` is the unique operator-facing handle.
-- `uuid` is the live `run-node` process incarnation.
+- `uuid` is the live `node run` process incarnation.
 - Nodes use a single announce operation to register and renew their lease.
 - If announce fails for 30 seconds, the node shuts down.
-- `run-node` reconcile polling should use a fast-start backoff: start at `50ms`, multiply by `2.0`, cap at `2s`, and reset on meaningful role/task changes.
-- `run-node` should terminate immediately on `Ctrl-C` and `SIGTERM`.
+- `node run` reconcile polling should use a fast-start backoff: start at `50ms`, multiply by `2.0`, cap at `2s`, and reset on meaningful role/task changes.
+- `node run` should terminate immediately on `Ctrl-C` and `SIGTERM`.
 - Graceful shutdown should expire the lease immediately so the same node name can be reused at once.
 - Desired/current assignments live directly on `nodes`.
 - At most one sampler-aggregator may be assigned to a run at a time. Many evaluators are allowed.
@@ -63,6 +63,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - `image` and `plot_line` tasks must declare their observable family explicitly and start with a fresh full observable.
 - Fresh sampler tasks may inherit a reduced initial batch size from the previous sampler task, but should not carry over the full rolling metrics state.
 - Claimed batches are fenced by live node ownership. Do not add a second independent batch lease.
+- Whether evaluator training values are required is a per-batch persisted contract (`batches.requires_training_values`), not inferred at ingest time from the currently active sampler config.
 
 ## Panels And Dashboard
 - Backend visualization uses the generic panel model in `src/server/panels.rs`.

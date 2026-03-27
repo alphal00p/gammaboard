@@ -125,7 +125,7 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
         <DialogTitle>Stop Node?</DialogTitle>
         <DialogContent>
           This will request a complete shutdown of <strong>{nodeName}</strong>. Do you really want to continue? This
-          will permanently shut this down without a way to restart from the webapp.
+          will stop the current process; you can start a replacement from the Nodes tab.
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmStopOpen(false)} disabled={busy}>

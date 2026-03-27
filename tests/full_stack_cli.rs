@@ -172,7 +172,8 @@ impl FullStackHarness {
         child
             .arg("--cli-config")
             .arg(&self.cli_config_path)
-            .arg("run-node")
+            .arg("node")
+            .arg("run")
             .arg("--name")
             .arg(node_name)
             .stdout(Stdio::inherit())

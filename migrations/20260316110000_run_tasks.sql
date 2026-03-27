@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS run_tasks (
     id BIGSERIAL PRIMARY KEY,
     run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
     sequence_nr INT NOT NULL,
     task JSONB NOT NULL,
     spawned_from_snapshot_id BIGINT,
@@ -20,7 +21,8 @@ CREATE TABLE IF NOT EXISTS run_tasks (
         AND nr_completed_samples >= 0
         AND nr_completed_samples <= nr_produced_samples
     ),
-    CONSTRAINT run_tasks_sequence_unique UNIQUE (run_id, sequence_nr)
+    CONSTRAINT run_tasks_sequence_unique UNIQUE (run_id, sequence_nr),
+    CONSTRAINT run_tasks_name_unique UNIQUE (run_id, name)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_run_tasks_active_one_per_run
@@ -29,6 +31,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_run_tasks_active_one_per_run
 
 CREATE INDEX IF NOT EXISTS idx_run_tasks_run_sequence
     ON run_tasks(run_id, sequence_nr);
+
+CREATE INDEX IF NOT EXISTS idx_run_tasks_run_name
+    ON run_tasks(run_id, name);
 
 ALTER TABLE batches
     ADD CONSTRAINT batches_task_id_fkey

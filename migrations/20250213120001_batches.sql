@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS batches (
     id BIGSERIAL PRIMARY KEY,
     run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     task_id BIGINT NOT NULL,
+    requires_training_values BOOLEAN NOT NULL DEFAULT FALSE,
 
     -- Versioned latent queue payload that evaluators materialize locally.
     latent_batch JSONB NOT NULL,

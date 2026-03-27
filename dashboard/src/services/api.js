@@ -204,6 +204,18 @@ export const unassignNode = async (nodeName, signal) =>
 export const stopNode = async (nodeName, signal) =>
   apiPost(`/nodes/${nodeName}/stop`, {}, "Failed to stop node", signal);
 
+export const autoRunNodes = async ({ count, maxStartFailures = null, dbPoolSize = null }, signal) =>
+  apiPost(
+    "/nodes/auto-run",
+    {
+      count,
+      max_start_failures: maxStartFailures,
+      db_pool_size: dbPoolSize,
+    },
+    "Failed to start nodes",
+    signal,
+  );
+
 export const fetchNodes = async (runId = null, signal) => {
   const data = await apiGet(`/nodes${buildQueryString([["run_id", runId]])}`, "Failed to fetch nodes", signal);
   return asArray(data).map(normalizeWorkerEntry).filter(Boolean);
