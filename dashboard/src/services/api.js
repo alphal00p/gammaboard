@@ -1,10 +1,6 @@
 import { asArray } from "../utils/collections";
 
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
-
-if (!API_BASE_URL || !API_BASE_URL.trim()) {
-  throw new Error("Missing REACT_APP_API_BASE_URL");
-}
+const API_BASE_URL = "/api";
 
 const extractErrorDetails = async (response) => {
   const contentType = response.headers.get("content-type") || "";

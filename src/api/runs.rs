@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-const DEFAULT_RUN_CONFIG_PATH: &str = "configs/default.toml";
+const DEFAULT_RUN_CONFIG_PATH: &str = "configs/runs/default.toml";
 
 #[derive(Debug, Clone)]
 pub struct CreatedRun {
@@ -83,7 +83,7 @@ pub fn parse_run_add_config_toml(raw: &str) -> Result<RunAddConfig, ApiError> {
     parse_run_add_config_value(merged)
 }
 
-/// Loads a run-add TOML file and merges it over `configs/default.toml`.
+/// Loads a run-add TOML file and merges it over `configs/runs/default.toml`.
 pub fn load_run_add_config_file(path: &Path) -> Result<RunAddConfig, ApiError> {
     let default_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_RUN_CONFIG_PATH);
     let mut merged = read_toml_file(&default_path, "default run config")?;

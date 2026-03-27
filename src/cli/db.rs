@@ -111,6 +111,7 @@ fn ensure_database_and_migrations(local: &LocalPostgresConfig, database_url: &st
     let connection = LocalDbConnection::from_url(database_url)?;
     if !database_exists(local, database_url)? {
         let socket_dir = ensure_absolute_dir(&local.socket_dir)?;
+        println!("creating database '{}'", connection.database);
         run_command(
             Command::new("createdb")
                 .arg("-h")
@@ -122,7 +123,10 @@ fn ensure_database_and_migrations(local: &LocalPostgresConfig, database_url: &st
                 .arg(&connection.database),
             "createdb",
         )?;
+    } else {
+        println!("database '{}' already exists", connection.database);
     }
+    println!("applying migrations");
     run_command(
         Command::new("sqlx")
             .arg("migrate")
@@ -135,11 +139,17 @@ fn ensure_database_and_migrations(local: &LocalPostgresConfig, database_url: &st
 
 fn start_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
     if !is_cluster_initialized(local) {
+        println!("postgres cluster not initialized; creating new cluster");
         init_db(local, database_url)?;
+    } else {
+        println!("postgres cluster already initialized");
     }
 
     if !is_db_running(local)? {
+        println!("postgres is stopped; starting");
         start_postgres(local, database_url)?;
+    } else {
+        println!("postgres already running");
     }
 
     ensure_database_and_migrations(local, database_url)
@@ -147,8 +157,14 @@ fn start_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
 
 fn stop_db(local: &LocalPostgresConfig) -> Result<()> {
     if !Path::new(&local.data_dir).exists() {
+        println!("postgres already stopped (data directory missing)");
         return Ok(());
     }
+    if !is_db_running(local)? {
+        println!("postgres already stopped");
+        return Ok(());
+    }
+    println!("stopping postgres");
     let status = Command::new("pg_ctl")
         .arg("-D")
         .arg(&local.data_dir)
@@ -166,8 +182,18 @@ fn stop_db(local: &LocalPostgresConfig) -> Result<()> {
 fn delete_db(local: &LocalPostgresConfig, assume_yes: bool) -> Result<()> {
     confirm_delete(local, assume_yes)?;
     stop_db(local)?;
-    remove_path_if_exists(&local.data_dir)?;
-    remove_path_if_exists(&local.socket_dir)?;
+    let removed_data = remove_path_if_exists(&local.data_dir)?;
+    let removed_socket = remove_path_if_exists(&local.socket_dir)?;
+    if !removed_data && !removed_socket {
+        println!("nothing to delete (no local postgres state found)");
+    } else {
+        if removed_data {
+            println!("deleted {}", local.data_dir);
+        }
+        if removed_socket {
+            println!("deleted {}", local.socket_dir);
+        }
+    }
     Ok(())
 }
 
@@ -328,16 +354,17 @@ fn ensure_absolute_dir(path: &str) -> Result<PathBuf> {
         .with_context(|| format!("failed to resolve absolute path for {path}"))
 }
 
-fn remove_path_if_exists(path: &str) -> Result<()> {
+fn remove_path_if_exists(path: &str) -> Result<bool> {
     let path = Path::new(path);
     if !path.exists() {
-        return Ok(());
+        return Ok(false);
     }
     if path.is_dir() {
-        fs::remove_dir_all(path).with_context(|| format!("failed to remove {}", path.display()))
+        fs::remove_dir_all(path).with_context(|| format!("failed to remove {}", path.display()))?;
     } else {
-        fs::remove_file(path).with_context(|| format!("failed to remove {}", path.display()))
+        fs::remove_file(path).with_context(|| format!("failed to remove {}", path.display()))?;
     }
+    Ok(true)
 }
 
 struct LocalDbConnection {

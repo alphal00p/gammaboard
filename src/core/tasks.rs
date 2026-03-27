@@ -115,12 +115,16 @@ pub enum RunTaskSpec {
         observable: PlotObservableKind,
         #[serde(default)]
         display: ImageDisplayMode,
+        #[serde(default)]
+        batch_transforms: Option<Vec<BatchTransformConfig>>,
     },
     PlotLine {
         geometry: LineRasterGeometry,
         observable: PlotObservableKind,
         #[serde(default)]
         display: LineDisplayMode,
+        #[serde(default)]
+        batch_transforms: Option<Vec<BatchTransformConfig>>,
     },
 }
 
@@ -219,7 +223,12 @@ impl RunTaskSpec {
             Self::Sample {
                 batch_transforms, ..
             } => batch_transforms.clone(),
-            Self::Image { .. } | Self::PlotLine { .. } => Some(Vec::new()),
+            Self::Image {
+                batch_transforms, ..
+            }
+            | Self::PlotLine {
+                batch_transforms, ..
+            } => batch_transforms.clone(),
         }
     }
 
@@ -304,24 +313,28 @@ impl IntoPreflightTask for RunTaskSpec {
                 mut geometry,
                 observable,
                 display,
+                batch_transforms,
             } => {
                 geometry.reduce_for_preflight(4, 4);
                 Ok(Some(Self::Image {
                     geometry,
                     observable,
                     display,
+                    batch_transforms,
                 }))
             }
             Self::PlotLine {
                 mut geometry,
                 observable,
                 display,
+                batch_transforms,
             } => {
                 geometry.reduce_for_preflight(8);
                 Ok(Some(Self::PlotLine {
                     geometry,
                     observable,
                     display,
+                    batch_transforms,
                 }))
             }
         }
@@ -602,6 +615,7 @@ mod tests {
             },
             observable: PlotObservableKind::Complex,
             display: ImageDisplayMode::Auto,
+            batch_transforms: None,
         };
         let line = RunTaskSpec::PlotLine {
             geometry: LineRasterGeometry {
@@ -616,6 +630,7 @@ mod tests {
             },
             observable: PlotObservableKind::Scalar,
             display: LineDisplayMode::Auto,
+            batch_transforms: None,
         };
 
         assert_eq!(

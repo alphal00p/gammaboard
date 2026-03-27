@@ -428,7 +428,7 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, onRunCr
         label="Run TOML"
         submitLabel="Create Run"
         initialValue={DEFAULT_CREATE_RUN_TOML}
-        helperText="Enter a run config. The backend merges this with configs/default.toml."
+        helperText="Enter a run config. The backend merges this with configs/runs/default.toml."
         templates={runTemplates}
         loadTemplate={async (name) => {
           const response = await fetchTemplateFile("runs", name);

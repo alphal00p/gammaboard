@@ -4,8 +4,8 @@ use super::{
 };
 
 use crate::core::{
-    BatchTransformConfig, ObservableConfig, RunStageSnapshot, RunTask, RunTaskSpec, RunTaskState,
-    SourceRefSpec, StoreError,
+    BatchTransformConfig, ObservableConfig, RunStageSnapshot, RunTask, RunTaskState, SourceRefSpec,
+    StoreError,
 };
 use crate::runners::{EvaluatorRunner, SamplerAggregatorRunner};
 use tracing::{error, info, warn};
@@ -316,26 +316,20 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                 })?
         };
 
-        let batch_transforms = if matches!(
-            task.task,
-            RunTaskSpec::Image { .. } | RunTaskSpec::PlotLine { .. }
-        ) {
-            Vec::new()
-        } else {
-            task.task
-                .batch_transforms_config()
-                .or_else(|| {
-                    sampler_source_snapshot
-                        .as_ref()
-                        .map(|snapshot| snapshot.batch_transforms.clone())
-                })
-                .or_else(|| {
-                    base_stage_snapshot
-                        .as_ref()
-                        .map(|snapshot| snapshot.batch_transforms.clone())
-                })
-                .unwrap_or_default()
-        };
+        let batch_transforms = task
+            .task
+            .batch_transforms_config()
+            .or_else(|| {
+                sampler_source_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.batch_transforms.clone())
+            })
+            .or_else(|| {
+                base_stage_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.batch_transforms.clone())
+            })
+            .unwrap_or_default();
 
         let sample_budget = task
             .task

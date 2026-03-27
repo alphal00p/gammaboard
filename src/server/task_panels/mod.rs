@@ -557,6 +557,7 @@ mod tests {
             geometry: line_geometry(),
             observable: crate::core::PlotObservableKind::Complex,
             display,
+            batch_transforms: None,
         }
     }
 

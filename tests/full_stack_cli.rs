@@ -60,7 +60,7 @@ struct TestDatabase {
 
 impl TestDatabase {
     async fn create() -> anyhow::Result<Self> {
-        let base_url = CliConfig::load("configs/gammaboard.toml")?.database.url;
+        let base_url = CliConfig::load("configs/cli/default.toml")?.database.url;
 
         let mut admin_url = Url::parse(&base_url)?;
         admin_url.set_path("/postgres");
@@ -553,8 +553,8 @@ fn temp_server_config(
 ) -> NamedTempFile {
     let (admin_password_hash, session_secret) = auth;
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let run_templates_dir = manifest_dir.join("configs/templates/runs");
-    let task_templates_dir = manifest_dir.join("configs/templates/tasks");
+    let run_templates_dir = manifest_dir.join("configs/runs");
+    let task_templates_dir = manifest_dir.join("configs/tasks");
     let contents = format!(
         "host = {host:?}\nport = {port}\nallowed_origin = {allowed_origin:?}\nsecure_cookie = {secure_cookie}\nrun_templates_dir = {run_templates_dir:?}\ntask_templates_dir = {task_templates_dir:?}\n\n[auth]\nadmin_password_hash = {admin_password_hash:?}\nsession_secret = {session_secret:?}\n"
     );

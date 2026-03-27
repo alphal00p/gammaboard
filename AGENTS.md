@@ -52,7 +52,8 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Omitted source fields must resolve as latest; no legacy snapshot-id fallback is allowed.
 - Task preflight belongs on task insertion. Bare `run add` should validate run-global construction and root-stage creation, while appended tasks should be validated against the current or referenced stage snapshots before persistence.
 - Shared run and node orchestration should live in `src/api/*`; CLI and server should stay thin adapters around typed API calls.
-- Sample tasks may omit `sampler_aggregator` and `batch_transforms`; omitted values inherit the previous effective stage, and `batch_transforms = []` explicitly clears the inherited transform list.
+- Task `batch_transforms` is stage state: omitted inherits the previous effective stage, and `batch_transforms = []` explicitly clears inherited transforms.
+- Sample tasks may omit `sampler_aggregator`; omitted sampler uses the previous effective stage.
 - Sample tasks may omit `observable`; that means reuse the previous observable state.
 - Havana inference source selection lives inside Havana sampler config. Default is `latest_training_sampler_aggregator`, with optional explicit `snapshot_id`.
 - `sample` with `nr_samples = 0` is the only supported no-work stage update task shape.
@@ -74,9 +75,9 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Dashboard steering should use explicit endpoints such as `pause`, `assign`, `unassign`, `append task`, `remove pending task`, `create run`, `clone run`, and `remove run`, not generic patch endpoints.
 - Dashboard auth is intended for small trusted deployments behind HTTPS.
 - Run and task templates should be simple `.toml` files served from server-configured directories; the frontend should treat them as editable starting points, not as a second schema.
-- Shared CLI database and tracing settings should come from `configs/gammaboard.toml` by default, with an optional global `--cli-config <PATH>` override.
+- Shared CLI database and tracing settings should come from `configs/cli/default.toml` by default, with an optional global `--cli-config <PATH>` override.
 - Local Postgres lifecycle commands should live under `gammaboard db ...` and use the shared CLI config instead of separate env-driven just recipes.
-- Server host, port, allowed origin, secure cookie policy, dashboard auth secrets, and template directories should come from `configs/server.toml` by default, with an optional `gammaboard server --server-config <PATH>` override.
+- Server host, port, allowed origin, secure cookie policy, dashboard auth secrets, and template directories should come from `configs/server/default.toml` by default, with an optional `gammaboard server --server-config <PATH>` override.
 - Server TOML should be explicit; do not rely on implicit defaults for required server settings.
 - `gammaboard server` should terminate immediately on `Ctrl-C` (no graceful-drain wait path).
 

@@ -2,8 +2,8 @@ use anyhow::Context;
 use serde::Deserialize;
 use std::{fs, path::Path};
 
-pub const DEFAULT_CLI_CONFIG_PATH: &str = "configs/gammaboard.toml";
-pub const DEFAULT_SERVER_CONFIG_PATH: &str = "configs/server.toml";
+pub const DEFAULT_CLI_CONFIG_PATH: &str = "configs/cli/default.toml";
+pub const DEFAULT_SERVER_CONFIG_PATH: &str = "configs/server/default.toml";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CliConfig {

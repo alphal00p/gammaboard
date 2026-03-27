@@ -38,7 +38,8 @@ Backend panel poll endpoints → `usePanelSource` → PanelCollection → panel 
 
 ## Configuration
 
-Set `REACT_APP_API_BASE_URL`.
+The API base URL is fixed to relative `/api` in `src/services/api.js`.
+For local development, CRA proxying is configured in `dashboard/package.json`.
 
 ## Tech Stack
 

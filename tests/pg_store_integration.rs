@@ -13,7 +13,7 @@ fn unique_id(prefix: &str) -> String {
 }
 
 async fn test_store() -> Option<PgStore> {
-    let db_url = CliConfig::load("configs/gammaboard.toml")
+    let db_url = CliConfig::load("configs/cli/default.toml")
         .ok()?
         .database
         .url;

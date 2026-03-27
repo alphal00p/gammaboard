@@ -35,13 +35,13 @@ The dashboard shows runs, task output, nodes, performance, and logs.
    just serve-frontend
    ```
 
-`serve-*` commands load `.env`. The frontend uses `REACT_APP_API_BASE_URL`. The CLI reads its shared database and tracing settings from `configs/gammaboard.toml`, and the backend reads its host, port, auth, cookie, and template settings from `configs/server.toml`.
+The CLI reads its shared database and tracing settings from `configs/cli/default.toml`, and the backend reads its host, port, auth, cookie, and template settings from `configs/server/default.toml`. The frontend uses relative `/api` calls and does not require `.env`.
 
 ## CLI Config
-- All commands load shared runtime config from [configs/gammaboard.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/gammaboard.toml) by default.
+- All commands load shared runtime config from [configs/cli/default.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/cli/default.toml) by default.
 - Override it when needed with:
   ```bash
-  gammaboard --cli-config path/to/gammaboard.toml <COMMAND>
+  gammaboard --cli-config path/to/cli/default.toml <COMMAND>
   ```
 - Required shape:
   ```toml
@@ -70,7 +70,7 @@ gammaboard db delete
 gammaboard db dump-sql
 ```
 
-These commands use `database.url` and `local_postgres` from `configs/gammaboard.toml`.
+These commands use `database.url` and `local_postgres` from `configs/cli/default.toml`.
 To reset local state: run `gammaboard db delete --yes` then `gammaboard db start`.
 
 ## Server Config
@@ -80,9 +80,9 @@ To reset local state: run `gammaboard db delete --yes` then `gammaboard db start
   ```
 - Override the server config path when needed with:
   ```bash
-  gammaboard server --server-config path/to/server.toml
+  gammaboard server --server-config path/to/server/default.toml
   ```
-- The checked-in local default is [configs/server.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server.toml).
+- The checked-in local default is [configs/server/default.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server/default.toml).
 - `Ctrl-C` terminates the server process immediately.
 - Required shape:
   ```toml
@@ -90,8 +90,8 @@ To reset local state: run `gammaboard db delete --yes` then `gammaboard db start
   port = 4000
   allowed_origin = "http://localhost:3000"
   secure_cookie = false
-  run_templates_dir = "templates/runs"
-  task_templates_dir = "templates/tasks"
+  run_templates_dir = "../runs"
+  task_templates_dir = "../tasks"
 
   [auth]
   admin_password_hash = "$argon2id$..."
@@ -99,16 +99,29 @@ To reset local state: run `gammaboard db delete --yes` then `gammaboard db start
   ```
 - All server config fields are explicit; the server does not fill in defaults.
 
+## Frontend API Routing
+- The dashboard frontend always calls relative `/api` endpoints.
+- Local dev: `dashboard/package.json` sets `"proxy": "http://127.0.0.1:4000"` so `npm start` forwards `/api/*` to the backend.
+- Production: serve frontend and backend behind the same origin, and route `/api/*` to `gammaboard server` via your reverse proxy.
+- Example nginx layout:
+  - `location / { root <dashboard-build-dir>; try_files $uri /index.html; }`
+  - `location /api/ { proxy_pass http://127.0.0.1:4000/api/; }`
+- Local production-like test setup:
+  - nginx config: [configs/nginx/local-prod.conf](/home/cedricsigrist/Workspace/repos/gammaboard/configs/nginx/local-prod.conf)
+  - server config: [configs/server/local-prod.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server/local-prod.toml)
+  - run with: `just deploy-local-prod` (serves at `http://localhost:8080`)
+  - stop with: `just stop-local-prod`
+
 ## Dashboard Auth
 - Read-only dashboard endpoints stay open.
 - Steering actions currently require admin login and are backed by a signed session cookie.
 - The dashboard currently supports creating runs from raw TOML, cloning runs from a stored stage snapshot, appending tasks from raw TOML, deleting pending tasks, pausing runs, removing runs, auto-assigning free nodes, assigning and unassigning nodes, and requesting a node shutdown.
-- The create-run and add-task dialogs can also load `.toml` templates from `run_templates_dir` and `task_templates_dir` in `server.toml`.
+- The create-run and add-task dialogs can also load `.toml` templates from `run_templates_dir` and `task_templates_dir` in `server/default.toml`.
 - Node shutdown from the dashboard is guarded by a confirmation dialog because it cannot be undone from the web UI.
-- Put `auth.admin_password_hash` in `server.toml` to enable dashboard auth.
-- Put `auth.session_secret` in `server.toml` when auth is enabled.
-- Set `allowed_origin` in `server.toml` if the frontend is served from a different origin than `http://localhost:3000`.
-- Deploy this behind HTTPS for real use and set `secure_cookie = true` in `server.toml`.
+- Put `auth.admin_password_hash` in `server/default.toml` to enable dashboard auth.
+- Put `auth.session_secret` in `server/default.toml` when auth is enabled.
+- Set `allowed_origin` in `server/default.toml` if the frontend is served from a different origin than `http://localhost:3000`.
+- Deploy this behind HTTPS for real use and set `secure_cookie = true` in `server/default.toml`.
 - Generate the password hash with:
   ```bash
   gammaboard auth --password 'your-password'
@@ -117,11 +130,11 @@ To reset local state: run `gammaboard db delete --yes` then `gammaboard db start
 `auth.admin_password_hash` should contain the full Argon2 encoded hash output from that command.
 
 ## Run Configs
-Run configs are TOML and are deep-merged over `configs/default.toml`.
+Run configs are TOML and are deep-merged over `configs/runs/default.toml`.
 
 Add a run with:
 ```bash
-gammaboard run add configs/live-test-unit-naive-scalar.toml
+gammaboard run add configs/runs/live-test-unit-naive-scalar.toml
 ```
 
 Minimal shape:
@@ -148,7 +161,8 @@ Sample tasks use direct per-component source specs:
 - use `{ config = ... }` to set explicit inline config
 
 Task names are unique per run and can be referenced by `from_name`.
-`batch_transforms` remains a direct field on sample tasks. Omitted inherits; `batch_transforms = []` explicitly clears inherited transforms.
+`batch_transforms` is stage state for tasks. Omitted inherits; `batch_transforms = []` explicitly clears inherited transforms.
+When you want raster `image`/`plot_line` tasks to evaluate directly in declared geometry coordinates after transformed sampling stages, set `batch_transforms = []` on those raster tasks.
 Use `nr_samples = 0` when you want a sample task to only update stage state without producing work.
 Task files used with `gammaboard run task add` may contain either a single `task = { ... }`, a `[[task_queue]]` array, or both. When both are present, `task` is appended first.
 
