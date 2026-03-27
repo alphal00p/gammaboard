@@ -199,7 +199,7 @@ Clone a run branch from a specific stage snapshot:
 gammaboard run clone <SOURCE_RUN> <FROM_SNAPSHOT_ID> <NEW_NAME>
 ```
 Clone creates a new run rooted at that snapshot and does not copy queued tasks from the source run.
-The dashboard clone dialog also exposes the initial root snapshot as a selectable clone source.
+In the dashboard, clone source is inferred from the selected task (falling back to the run root snapshot).
 
 ## Nodes
 Start local workers:
@@ -212,7 +212,8 @@ Or directly:
 gammaboard run-node --name w-1
 ```
 
-`run-node` uses a fast-start reconcile backoff internally: it starts polling at `100ms`, grows by a factor of `1.1`, and caps at `1s`.
+`run-node` uses a fast-start reconcile backoff internally: it starts polling at `50ms`, grows by a factor of `2.0`, and caps at `2s`.
+`run-node` exits on `Ctrl-C` and `SIGTERM`, and expires its lease on shutdown so the same node name can be reused immediately.
 
 Node names are unique operator handles. Each live worker also owns an internal UUID lease in PostgreSQL. If the worker cannot re-announce itself for 30 seconds, it shuts down.
 

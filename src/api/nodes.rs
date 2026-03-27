@@ -24,6 +24,7 @@ pub struct StoppedNode {
     pub rows_updated: u64,
 }
 
+/// Assigns a node to a run/role in desired control-plane state.
 pub async fn assign_node(
     store: &(impl ControlPlaneStore + RunReadStore),
     node_name: &str,
@@ -45,6 +46,7 @@ pub async fn assign_node(
     })
 }
 
+/// Clears a node's desired assignment.
 pub async fn unassign_node(
     store: &impl ControlPlaneStore,
     node_name: &str,
@@ -53,6 +55,7 @@ pub async fn unassign_node(
     Ok(())
 }
 
+/// Requests shutdown for a specific node name.
 pub async fn stop_node(
     store: &impl ControlPlaneStore,
     node_name: &str,
@@ -64,6 +67,7 @@ pub async fn stop_node(
     })
 }
 
+/// Auto-assigns currently free nodes to sampler/evaluator roles for a run.
 pub async fn auto_assign_run(
     store: &(impl ControlPlaneStore + RunReadStore),
     run_id: i32,

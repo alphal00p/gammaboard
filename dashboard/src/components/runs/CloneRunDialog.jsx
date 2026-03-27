@@ -38,8 +38,7 @@ const CloneRunDialog = ({ open, initialName, busy = false, error = null, onClose
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
             <Typography variant="body2" color="text.secondary">
-              Create a new run from the currently selected task (or initial run state when no task snapshot is
-              available).
+              Create a new run from the currently selected task snapshot.
             </Typography>
             <TextField
               autoFocus

@@ -48,10 +48,3 @@ export const formatTaskSourceRef = (task) => {
   }
   return "latest";
 };
-
-export const formatTaskSpawnOrigin = (task) => {
-  if (task?.spawned_from_snapshot_id == null) {
-    return "auto";
-  }
-  return String(task.spawned_from_snapshot_id);
-};

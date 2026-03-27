@@ -170,6 +170,11 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         );
         async move {
             let mut shutdown = std::pin::pin!(tokio::signal::ctrl_c());
+            #[cfg(unix)]
+            let mut sigterm =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).map_err(
+                    |err| StoreError::store(format!("failed to install SIGTERM handler: {err}")),
+                )?;
             let mut announce_failed_at: Option<Instant> = None;
             let mut announce_failures: u32 = 0;
 
@@ -190,6 +195,19 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                         );
                         break;
                     }
+                    #[cfg(unix)]
+                    tokio::select! {
+                        _ = &mut shutdown => {
+                            info!("stopping node-runner");
+                            break;
+                        }
+                        _ = sigterm.recv() => {
+                            info!("stopping node-runner (SIGTERM)");
+                            break;
+                        }
+                        _ = sleep(self.next_reconcile_sleep()) => {}
+                    }
+                    #[cfg(not(unix))]
                     tokio::select! {
                         _ = &mut shutdown => {
                             info!("stopping node-runner");
@@ -252,6 +270,19 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                     }
                     let elapsed = tick_started.elapsed();
                     if elapsed < self.config.min_tick_time {
+                        #[cfg(unix)]
+                        tokio::select! {
+                            _ = &mut shutdown => {
+                                info!("stopping node-runner");
+                                break;
+                            }
+                            _ = sigterm.recv() => {
+                                info!("stopping node-runner (SIGTERM)");
+                                break;
+                            }
+                            _ = sleep(self.config.min_tick_time - elapsed) => {}
+                        }
+                        #[cfg(not(unix))]
                         tokio::select! {
                             _ = &mut shutdown => {
                                 info!("stopping node-runner");
@@ -264,6 +295,19 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                     continue;
                 }
 
+                #[cfg(unix)]
+                tokio::select! {
+                    _ = &mut shutdown => {
+                        info!("stopping node-runner");
+                        break;
+                    }
+                    _ = sigterm.recv() => {
+                        info!("stopping node-runner (SIGTERM)");
+                        break;
+                    }
+                    _ = sleep(self.next_reconcile_sleep()) => {}
+                }
+                #[cfg(not(unix))]
                 tokio::select! {
                     _ = &mut shutdown => {
                         info!("stopping node-runner");

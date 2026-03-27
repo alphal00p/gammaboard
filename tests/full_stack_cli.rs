@@ -328,6 +328,32 @@ impl FullStackHarness {
         let _ = tokio::time::timeout(Duration::from_secs(5), managed.child.wait()).await;
         Ok(())
     }
+
+    #[cfg(unix)]
+    async fn terminate_child(&mut self, label: &str) -> anyhow::Result<()> {
+        let position = self
+            .children
+            .iter()
+            .position(|managed| managed.label == label)
+            .ok_or_else(|| anyhow::anyhow!("missing child process {label}"))?;
+        let mut managed = self.children.swap_remove(position);
+        let pid = managed
+            .child
+            .id()
+            .ok_or_else(|| anyhow::anyhow!("child process {label} has no pid"))?;
+
+        let status = TokioCommand::new("kill")
+            .arg("-TERM")
+            .arg(pid.to_string())
+            .status()
+            .await?;
+        if !status.success() {
+            anyhow::bail!("failed to send SIGTERM to child process {label}");
+        }
+
+        let _ = tokio::time::timeout(Duration::from_secs(10), managed.child.wait()).await;
+        Ok(())
+    }
 }
 
 impl Drop for FullStackHarness {
@@ -916,6 +942,42 @@ async fn full_stack_cli_server_can_restart_while_nodes_keep_running() -> anyhow:
             },
         )
         .await?;
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_run_node_exits_on_sigterm_and_releases_name() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    harness.start_node("w-1").await?;
+
+    harness.terminate_child("w-1").await?;
+
+    harness
+        .wait_for(
+            "node lease expired after sigterm",
+            Duration::from_secs(10),
+            || {
+                let pool = harness.pool.clone();
+                async move {
+                    let count: i64 = sqlx::query_scalar(
+                        "SELECT COUNT(*) FROM nodes WHERE name = $1 AND lease_expires_at > now()",
+                    )
+                    .bind("w-1")
+                    .fetch_one(&pool)
+                    .await?;
+                    Ok(count == 0)
+                }
+            },
+        )
+        .await?;
+
+    harness.start_node("w-1").await?;
 
     harness.stop_children().await;
     harness.pool.close().await;

@@ -8,6 +8,7 @@ pub struct TemplateFile {
     pub toml: String,
 }
 
+/// Lists `.toml` templates in a directory by file name.
 pub fn list_templates(dir: &Path) -> Result<Vec<String>, ApiError> {
     let mut items = Vec::new();
     let Ok(entries) = fs::read_dir(dir) else {
@@ -33,6 +34,7 @@ pub fn list_templates(dir: &Path) -> Result<Vec<String>, ApiError> {
     Ok(items)
 }
 
+/// Loads a named template file from a template directory.
 pub fn load_template(dir: &Path, name: &str) -> Result<TemplateFile, ApiError> {
     let path = resolve_template_path(dir, name)?;
     let toml = fs::read_to_string(&path)

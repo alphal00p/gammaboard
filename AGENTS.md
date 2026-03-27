@@ -29,6 +29,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Nodes use a single announce operation to register and renew their lease.
 - If announce fails for 30 seconds, the node shuts down.
 - `run-node` reconcile polling should use a fast-start backoff: start at `50ms`, multiply by `2.0`, cap at `2s`, and reset on meaningful role/task changes.
+- `run-node` should terminate immediately on `Ctrl-C` and `SIGTERM`.
 - Graceful shutdown should expire the lease immediately so the same node name can be reused at once.
 - Desired/current assignments live directly on `nodes`.
 - At most one sampler-aggregator may be assigned to a run at a time. Many evaluators are allowed.

@@ -61,6 +61,7 @@ pub struct TaskQueueFile {
 }
 
 impl TaskQueueFile {
+    /// Normalizes accepted task-file shapes into a single ordered task list.
     pub fn into_tasks(self) -> Vec<RunTaskInput> {
         let mut tasks = Vec::new();
         if let Some(task) = self.task {
@@ -73,6 +74,7 @@ impl TaskQueueFile {
     }
 }
 
+/// Parses run-add TOML, merging it over the default run config.
 pub fn parse_run_add_config_toml(raw: &str) -> Result<RunAddConfig, ApiError> {
     let mut merged = read_default_run_add_toml()?;
     let overlay = toml::from_str(raw)
@@ -81,6 +83,7 @@ pub fn parse_run_add_config_toml(raw: &str) -> Result<RunAddConfig, ApiError> {
     parse_run_add_config_value(merged)
 }
 
+/// Loads a run-add TOML file and merges it over `configs/default.toml`.
 pub fn load_run_add_config_file(path: &Path) -> Result<RunAddConfig, ApiError> {
     let default_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_RUN_CONFIG_PATH);
     let mut merged = read_toml_file(&default_path, "default run config")?;
@@ -89,17 +92,20 @@ pub fn load_run_add_config_file(path: &Path) -> Result<RunAddConfig, ApiError> {
     parse_run_add_config_value(merged)
 }
 
+/// Parses task-append TOML supporting `task`, `task_queue`, or both.
 pub fn parse_task_queue_toml(raw: &str) -> Result<TaskQueueFile, ApiError> {
     toml::from_str(raw)
         .map_err(|err| ApiError::BadRequest(format!("invalid run-task payload: {err}")))
 }
 
+/// Loads and parses a task file from disk.
 pub fn load_task_queue_file(path: &Path) -> Result<TaskQueueFile, ApiError> {
     read_toml_file(path, "run-task TOML")?
         .try_into()
         .map_err(|err| ApiError::BadRequest(format!("invalid run-task payload: {err}")))
 }
 
+/// Creates a run, persists the root stage snapshot, and appends initial tasks if provided.
 pub async fn create_run(
     store: &(impl ControlPlaneStore + AggregationStore + RunTaskStore),
     config: RunAddConfig,
@@ -143,6 +149,7 @@ pub async fn create_run(
     })
 }
 
+/// Clones a run from a specific persisted stage snapshot into a new idle run.
 pub async fn clone_run(
     store: &(impl ControlPlaneStore + AggregationStore + RunTaskStore + crate::core::RunReadStore),
     source_run_id: i32,
@@ -216,6 +223,7 @@ pub async fn clone_run(
     })
 }
 
+/// Appends validated tasks to an existing run.
 pub async fn append_tasks(
     store: &(impl AggregationStore + crate::core::RunReadStore + RunTaskStore),
     run_id: i32,
@@ -233,6 +241,7 @@ pub async fn append_tasks(
     Ok(AppendedTasks { tasks })
 }
 
+/// Pauses a run by clearing desired node assignments for that run.
 pub async fn pause_run(
     store: &(impl ControlPlaneStore + crate::core::RunReadStore),
     run_id: i32,
@@ -246,6 +255,7 @@ pub async fn pause_run(
     })
 }
 
+/// Removes a run and its dependent data.
 pub async fn remove_run(
     store: &(impl ControlPlaneStore + crate::core::RunReadStore),
     run_id: i32,
@@ -258,6 +268,7 @@ pub async fn remove_run(
     })
 }
 
+/// Removes a pending task from a run.
 pub async fn remove_pending_task(
     store: &(impl crate::core::RunReadStore + RunTaskStore),
     run_id: i32,
@@ -388,6 +399,7 @@ async fn load_run_progress(
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))
 }
 
+/// Decodes persisted run integration params into a typed value.
 pub fn decode_integration_params(
     run_id: i32,
     value: serde_json::Value,
