@@ -658,16 +658,33 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         self.note_start_failure(target);
         self.reset_reconcile_backoff();
         self.stop_current().await;
-        if target.role == crate::core::WorkerRole::SamplerAggregator {
+        let role = target.role;
+        if matches!(
+            role,
+            crate::core::WorkerRole::SamplerAggregator | crate::core::WorkerRole::Evaluator
+        ) {
+            if let Some(task) = self.store.load_active_run_task(target.run_id).await? {
+                let reason = format!("{role} role failed: {err}");
+                if let Err(fail_err) = self.store.fail_run_task(task.id, &reason).await {
+                    warn!(
+                        run_id = target.run_id,
+                        task_id = task.id,
+                        error = %fail_err,
+                        "failed to persist task failure after role error"
+                    );
+                }
+            }
+
             let cleared = self
                 .store
                 .clear_desired_assignments_for_run(target.run_id)
                 .await?;
             info!(
                 run_id = target.run_id,
+                role = %role,
                 assignments_cleared = cleared,
                 error = %err,
-                "sampler role failed; desired assignments cleared"
+                "role failed; desired assignments cleared"
             );
         }
         Ok(())

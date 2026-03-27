@@ -14,6 +14,9 @@ pub struct NaiveMonteCarloSamplerAggregator {
     training_delay_per_sample_ms: u64,
     trained_samples: usize,
     pending_training_samples: usize,
+    fail_on_produce_batch_nr: Option<usize>,
+    #[serde(default)]
+    produced_batches_total: usize,
     nr_batches: i64,
     nr_samples: i64,
     sum: f64,
@@ -25,6 +28,7 @@ impl NaiveMonteCarloSamplerAggregator {
         discrete_dims: usize,
         training_target_samples: usize,
         training_delay_per_sample_ms: u64,
+        fail_on_produce_batch_nr: Option<usize>,
     ) -> Self {
         Self {
             continuous_dims,
@@ -33,6 +37,8 @@ impl NaiveMonteCarloSamplerAggregator {
             training_delay_per_sample_ms,
             trained_samples: 0,
             pending_training_samples: 0,
+            fail_on_produce_batch_nr,
+            produced_batches_total: 0,
             nr_batches: 0,
             nr_samples: 0,
             sum: 0.0,
@@ -45,6 +51,10 @@ impl NaiveMonteCarloSamplerAggregator {
 pub struct NaiveMonteCarloSamplerParams {
     pub training_target_samples: usize,
     pub training_delay_per_sample_ms: u64,
+    #[serde(default)]
+    pub fail_on_produce_batch_nr: Option<usize>,
+    #[serde(default)]
+    pub fail_on_materialize_batch_nr: Option<usize>,
 }
 
 impl Default for NaiveMonteCarloSamplerParams {
@@ -52,6 +62,8 @@ impl Default for NaiveMonteCarloSamplerParams {
         Self {
             training_target_samples: 0,
             training_delay_per_sample_ms: 0,
+            fail_on_produce_batch_nr: None,
+            fail_on_materialize_batch_nr: None,
         }
     }
 }
@@ -66,6 +78,7 @@ impl NaiveMonteCarloSamplerAggregator {
             point_spec.discrete_dims,
             params.training_target_samples,
             params.training_delay_per_sample_ms,
+            params.fail_on_produce_batch_nr,
         ))
     }
 
@@ -122,6 +135,16 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
     }
 
     fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
+        self.produced_batches_total = self.produced_batches_total.saturating_add(1);
+        if self
+            .fail_on_produce_batch_nr
+            .is_some_and(|n| n > 0 && self.produced_batches_total == n)
+        {
+            return Err(EngineError::engine(format!(
+                "naive_monte_carlo injected produce failure on batch {}",
+                self.produced_batches_total
+            )));
+        }
         if nr_samples == 0 {
             return Err(EngineError::engine(
                 "naive_monte_carlo sampler requires nr_samples > 0",
@@ -194,7 +217,7 @@ mod tests {
             continuous_dims: 2,
             discrete_dims: 1,
         };
-        let mut sampler = NaiveMonteCarloSamplerAggregator::new(2, 1, 100, 7);
+        let mut sampler = NaiveMonteCarloSamplerAggregator::new(2, 1, 100, 7, None);
         sampler.trained_samples = 13;
         sampler.nr_batches = 5;
         sampler.nr_samples = 29;

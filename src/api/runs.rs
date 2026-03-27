@@ -3,7 +3,6 @@ use crate::core::{
     AggregationStore, ControlPlaneStore, IntegrationParams, RunStageSnapshot, RunTask,
     RunTaskInput, RunTaskStore,
 };
-use crate::evaluation::PointSpec;
 use crate::preprocess::{RunAddConfig, preprocess_run_add};
 use crate::stores::RunProgress;
 use serde::Deserialize;
@@ -91,18 +90,14 @@ pub fn load_run_add_config_file(path: &Path) -> Result<RunAddConfig, ApiError> {
 }
 
 pub fn parse_task_queue_toml(raw: &str) -> Result<TaskQueueFile, ApiError> {
-    let parsed: TaskQueueFile = toml::from_str(raw)
-        .map_err(|err| ApiError::BadRequest(format!("invalid run-task payload: {err}")))?;
-    validate_task_inputs(&parsed)?;
-    Ok(parsed)
+    toml::from_str(raw)
+        .map_err(|err| ApiError::BadRequest(format!("invalid run-task payload: {err}")))
 }
 
 pub fn load_task_queue_file(path: &Path) -> Result<TaskQueueFile, ApiError> {
-    let parsed: TaskQueueFile = read_toml_file(path, "run-task TOML")?
+    read_toml_file(path, "run-task TOML")?
         .try_into()
-        .map_err(|err| ApiError::BadRequest(format!("invalid run-task payload: {err}")))?;
-    validate_task_inputs(&parsed)?;
-    Ok(parsed)
+        .map_err(|err| ApiError::BadRequest(format!("invalid run-task payload: {err}")))
 }
 
 pub async fn create_run(
@@ -128,14 +123,7 @@ pub async fn create_run(
         ApiError::Internal("preprocessing did not build initial stage snapshot".to_string())
     })?;
 
-    preflight_task_batch(
-        store,
-        initial_stage_snapshot,
-        resolved_integration_params,
-        &initial_tasks,
-        point_spec,
-    )
-    .await?;
+    preflight_task_batch(store, initial_stage_snapshot.run_id, &initial_tasks).await?;
 
     let run_id = store
         .create_run(
@@ -233,27 +221,14 @@ pub async fn append_tasks(
     run_id: i32,
     task_file: TaskQueueFile,
 ) -> Result<AppendedTasks, ApiError> {
-    let tasks = resolve_task_file_for_run(store, run_id, task_file).await?;
+    let tasks = task_file.into_tasks();
     let run = load_run_progress(store, run_id).await?;
-    let point_spec = run
-        .point_spec
-        .as_ref()
-        .ok_or_else(|| ApiError::Internal(format!("run {run_id} is missing point_spec")))?;
-    let integration_params = decode_integration_params(
-        run_id,
-        run.integration_params.ok_or_else(|| {
-            ApiError::Internal(format!("run {run_id} is missing integration_params"))
-        })?,
-    )?;
-    let base_snapshot = load_append_base_snapshot(store, run_id).await?;
-    preflight_task_batch(
-        store,
-        &base_snapshot,
-        &integration_params,
-        &tasks,
-        point_spec,
-    )
-    .await?;
+    if run.integration_params.is_none() {
+        return Err(ApiError::Internal(format!(
+            "run {run_id} is missing integration_params"
+        )));
+    }
+    preflight_task_batch(store, run_id, &tasks).await?;
     let tasks = store.append_run_tasks(run_id, &tasks).await?;
     Ok(AppendedTasks { tasks })
 }
@@ -298,70 +273,59 @@ pub async fn remove_pending_task(
     Ok(RemovedPendingTask { run_id, task_id })
 }
 
-async fn resolve_task_file_for_run(
-    store: &(impl AggregationStore + crate::core::RunReadStore),
-    run_id: i32,
-    task_file: TaskQueueFile,
-) -> Result<Vec<RunTaskInput>, ApiError> {
-    let _run = load_run_progress(store, run_id).await?;
-    Ok(task_file.into_tasks())
-}
-
-async fn load_append_base_snapshot(
-    store: &impl AggregationStore,
-    run_id: i32,
-) -> Result<RunStageSnapshot, ApiError> {
-    store
-        .load_latest_stage_snapshot_before_sequence(run_id, i32::MAX)
-        .await?
-        .ok_or_else(|| ApiError::Internal(format!("run {run_id} has no base stage snapshot")))
-}
-
 async fn preflight_task_batch(
     store: &(impl AggregationStore + RunTaskStore),
-    base_snapshot: &RunStageSnapshot,
-    _integration_params: &IntegrationParams,
+    run_id: i32,
     tasks: &[RunTaskInput],
-    _point_spec: &PointSpec,
 ) -> Result<(), ApiError> {
-    // API-time preflight rules (kept intentionally lightweight):
-    // 1) Verify any explicitly-referenced task source snapshots exist.
-    // 2) Verify referenced snapshots belong to the same run as the provided `base_snapshot`.
-    //    This prevents cross-run snapshot references during `run add` / `run task append`.
-    // 3) Perform basic task input validation (shape and simple constraints).
-    // 4) Defer heavy compatibility checks (building evaluator/materializer/sampler dry-runs,
-    //    or any sample/eval execution) to task activation in the node-runner, where full
-    //    runtime context and leases are available.
-    //
-    // Rationale: keep create/append fast and catch obvious user errors early while reserving
-    // resource-heavy checks for the execution environment.
-    let existing_tasks = if base_snapshot.run_id > 0 {
-        store.list_run_tasks(base_snapshot.run_id).await?
+    let existing_tasks = if run_id > 0 {
+        store.list_run_tasks(run_id).await?
     } else {
         Vec::new()
     };
-    let mut known_names = existing_tasks
+    let context = build_task_preflight_context(&existing_tasks);
+    validate_task_batch_against_context(tasks, context)
+}
+
+struct TaskPreflightContext {
+    known_names: BTreeSet<String>,
+    prior_sourceable_names: BTreeSet<String>,
+    next_sequence: i32,
+}
+
+fn build_task_preflight_context(existing_tasks: &[RunTask]) -> TaskPreflightContext {
+    let known_names = existing_tasks
         .iter()
         .map(|task| task.name.clone())
         .collect::<BTreeSet<_>>();
-    let mut prior_sourceable_names = existing_tasks
+    let prior_sourceable_names = existing_tasks
         .iter()
         .filter(|task| task.task.is_sourceable())
         .map(|task| task.name.clone())
         .collect::<BTreeSet<_>>();
-    let mut next_sequence = existing_tasks
+    let next_sequence = existing_tasks
         .iter()
         .map(|task| task.sequence_nr)
         .max()
         .unwrap_or(0)
         + 1;
+    TaskPreflightContext {
+        known_names,
+        prior_sourceable_names,
+        next_sequence,
+    }
+}
 
+fn validate_task_batch_against_context(
+    tasks: &[RunTaskInput],
+    mut context: TaskPreflightContext,
+) -> Result<(), ApiError> {
     for task in tasks {
         task.validate()
             .map_err(|err| ApiError::BadRequest(format!("invalid task entry: {err}")))?;
 
         for source_name in task.task.source_task_names() {
-            if !prior_sourceable_names.contains(&source_name) {
+            if !context.prior_sourceable_names.contains(&source_name) {
                 return Err(ApiError::BadRequest(format!(
                     "task source from_name='{}' does not reference a prior task in this run",
                     source_name
@@ -372,22 +336,18 @@ async fn preflight_task_batch(
         let task_name = task
             .name
             .clone()
-            .unwrap_or_else(|| crate::core::generated_task_name(&task.task, next_sequence));
-        if !known_names.insert(task_name.clone()) {
+            .unwrap_or_else(|| crate::core::generated_task_name(&task.task, context.next_sequence));
+        if !context.known_names.insert(task_name.clone()) {
             return Err(ApiError::BadRequest(format!(
                 "task name '{}' is duplicated in this run",
                 task_name
             )));
         }
         if task.task.is_sourceable() {
-            prior_sourceable_names.insert(task_name);
+            context.prior_sourceable_names.insert(task_name);
         }
-        next_sequence += 1;
+        context.next_sequence += 1;
     }
-
-    // Intentionally skip building evaluator and running `preflight_task_suffix` here.
-    // Full compatibility checks (materializer/sampler/evaluator dry-runs) will be executed
-    // at task start (node-runner activation) where the runtime context is available.
     Ok(())
 }
 
@@ -473,25 +433,7 @@ fn parse_run_add_config_value(merged: toml::Value) -> Result<RunAddConfig, ApiEr
             "invalid run name (`name`): expected non-empty string".to_string(),
         ));
     }
-    if let Some(task_queue) = parsed.task_queue.as_ref() {
-        for task in task_queue {
-            task.validate()
-                .map_err(|err| ApiError::BadRequest(format!("invalid task_queue entry: {err}")))?;
-        }
-    }
     Ok(RunAddConfig { name, ..parsed })
-}
-
-fn validate_task_inputs(task_file: &TaskQueueFile) -> Result<(), ApiError> {
-    for task in task_file
-        .task
-        .iter()
-        .chain(task_file.task_queue.as_deref().unwrap_or(&[]).iter())
-    {
-        task.validate()
-            .map_err(|err| ApiError::BadRequest(format!("invalid task entry: {err}")))?;
-    }
-    Ok(())
 }
 
 fn merge_toml(base: &mut toml::Value, overlay: toml::Value) {

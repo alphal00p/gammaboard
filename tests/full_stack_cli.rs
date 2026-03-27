@@ -579,6 +579,38 @@ fn hash_password_for_tests(password: &str) -> String {
         .to_string()
 }
 
+async fn wait_for_task_failed_and_run_unassigned(
+    harness: &FullStackHarness,
+    run_id: i32,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    harness
+        .wait_for("task failed and run unassigned", timeout, || async {
+            let task: Option<(String, Option<String>)> = sqlx::query_as(
+                "SELECT state, failure_reason FROM run_tasks WHERE run_id = $1 AND sequence_nr = 1",
+            )
+            .bind(run_id)
+            .fetch_optional(&harness.pool)
+            .await?;
+            let Some((state, failure_reason)) = task else {
+                return Ok(false);
+            };
+            let w1 = harness.node_state("w-1").await?;
+            let w2 = harness.node_state("w-2").await?;
+            Ok(state == "failed"
+                && failure_reason.is_some()
+                && w1.0.is_none()
+                && w1.1.is_none()
+                && w1.2.is_none()
+                && w1.3.is_none()
+                && w2.0.is_none()
+                && w2.1.is_none()
+                && w2.2.is_none()
+                && w2.3.is_none())
+        })
+        .await
+}
+
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_flow_exercises_run_and_node_lifecycle() -> anyhow::Result<()> {
@@ -1262,6 +1294,223 @@ completed_batch_fetch_limit = 64
             },
         )
         .await?;
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_fails_task_gracefully_on_sampler_error() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+
+    let config = temp_run_config(
+        r#"
+name = "sampler-error-e2e"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+observable_kind = "scalar"
+
+[[task_queue]]
+kind = "sample"
+nr_samples = 32
+observable = "scalar"
+sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_produce_batch_nr = 1 } }
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = 'sampler-error-e2e'")
+        .fetch_one(&harness.pool)
+        .await?;
+
+    harness.start_node("w-1").await?;
+    harness.start_node("w-2").await?;
+
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-1",
+            "sampler-aggregator",
+            "sampler-error-e2e",
+        ])
+        .assert()
+        .success();
+    harness
+        .cli()
+        .args(["node", "assign", "w-2", "evaluator", "sampler-error-e2e"])
+        .assert()
+        .success();
+
+    wait_for_task_failed_and_run_unassigned(&harness, run_id, Duration::from_secs(30)).await?;
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_fails_task_gracefully_on_materializer_error() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+
+    let config = temp_run_config(
+        r#"
+name = "materializer-error-e2e"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+observable_kind = "scalar"
+
+[[task_queue]]
+kind = "sample"
+nr_samples = 32
+observable = "scalar"
+sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materialize_batch_nr = 1 } }
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 =
+        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'materializer-error-e2e'")
+            .fetch_one(&harness.pool)
+            .await?;
+
+    harness.start_node("w-1").await?;
+    harness.start_node("w-2").await?;
+
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-1",
+            "sampler-aggregator",
+            "materializer-error-e2e",
+        ])
+        .assert()
+        .success();
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-2",
+            "evaluator",
+            "materializer-error-e2e",
+        ])
+        .assert()
+        .success();
+
+    wait_for_task_failed_and_run_unassigned(&harness, run_id, Duration::from_secs(40)).await?;
+
+    let failed_batches: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM batches WHERE run_id = $1 AND status = 'failed'")
+            .bind(run_id)
+            .fetch_one(&harness.pool)
+            .await?;
+    assert!(
+        failed_batches > 0,
+        "expected failed batches for materializer error"
+    );
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_fails_task_gracefully_on_evaluator_error() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+
+    let config = temp_run_config(
+        r#"
+name = "evaluator-error-e2e"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+observable_kind = "scalar"
+fail_on_batch_nr = 1
+
+[[task_queue]]
+kind = "sample"
+nr_samples = 32
+observable = "scalar"
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = 'evaluator-error-e2e'")
+        .fetch_one(&harness.pool)
+        .await?;
+
+    harness.start_node("w-1").await?;
+    harness.start_node("w-2").await?;
+
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-1",
+            "sampler-aggregator",
+            "evaluator-error-e2e",
+        ])
+        .assert()
+        .success();
+    harness
+        .cli()
+        .args(["node", "assign", "w-2", "evaluator", "evaluator-error-e2e"])
+        .assert()
+        .success();
+
+    wait_for_task_failed_and_run_unassigned(&harness, run_id, Duration::from_secs(40)).await?;
+
+    let failed_batches: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM batches WHERE run_id = $1 AND status = 'failed'")
+            .bind(run_id)
+            .fetch_one(&harness.pool)
+            .await?;
+    assert!(
+        failed_batches > 0,
+        "expected failed batches for evaluator error"
+    );
 
     harness.stop_children().await;
     harness.pool.close().await;

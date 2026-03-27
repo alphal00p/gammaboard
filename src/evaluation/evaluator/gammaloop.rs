@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{any::Any, panic::AssertUnwindSafe, path::PathBuf};
 
 use gammaloop_api::state::{ProcessRef, State};
 use gammalooprs::initialisation::initialise;
@@ -72,6 +72,33 @@ impl Default for GammaLoopParams {
 }
 
 impl GammaLoopEvaluator {
+    fn panic_message(payload: Box<dyn Any + Send>) -> String {
+        if let Some(message) = payload.downcast_ref::<&str>() {
+            return (*message).to_string();
+        }
+        if let Some(message) = payload.downcast_ref::<String>() {
+            return message.clone();
+        }
+        "unknown panic payload".to_string()
+    }
+
+    fn call_external<T, E>(
+        label: &str,
+        action: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, EvalError>
+    where
+        E: std::fmt::Display,
+    {
+        match std::panic::catch_unwind(AssertUnwindSafe(action)) {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(err)) => Err(EvalError::eval(format!("{label} failed: {err}"))),
+            Err(payload) => Err(EvalError::eval(format!(
+                "{label} panicked: {}",
+                Self::panic_message(payload)
+            ))),
+        }
+    }
+
     pub fn from_params(params: GammaLoopParams) -> Result<Self, BuildError> {
         _ = initialise();
         let mut state = State::load(params.state_folder.clone(), None, None).map_err(|err| {
@@ -166,14 +193,10 @@ impl GammaLoopEvaluator {
                             }
                             (None, None, None)
                         }
-                        SamplingSettings::DiscreteGraphs(_) => self
-                            .integrand
-                            .resolve_discrete_selection(discrete_dim.as_slice())
-                            .map_err(|err| {
-                                EvalError::eval(format!(
-                                    "invalid momentum-space discrete selection: {err}"
-                                ))
-                            })?,
+                        SamplingSettings::DiscreteGraphs(_) => Self::call_external(
+                            "resolve_discrete_selection",
+                            || self.integrand.resolve_discrete_selection(discrete_dim.as_slice()),
+                        )?,
                     };
 
                     Ok(MomentumSpaceEvaluationInput {
@@ -187,10 +210,13 @@ impl GammaLoopEvaluator {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let results = self
-                .integrand
-                .evaluate_momentum_configurations_raw(&self.model, inputs.as_slice(), false)
-                .map_err(|err| EvalError::eval(format!("failed to evaluate integrand: {err}")))?;
+            let results = Self::call_external("evaluate_momentum_configurations_raw", || {
+                self.integrand.evaluate_momentum_configurations_raw(
+                    &self.model,
+                    inputs.as_slice(),
+                    false,
+                )
+            })?;
 
             return Ok(results
                 .samples
@@ -219,10 +245,10 @@ impl GammaLoopEvaluator {
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let expected_dimension = self
-                    .integrand
-                    .expected_x_space_dimension(discrete_dim.as_slice())
-                    .map_err(|err| EvalError::eval(format!("invalid x-space selection: {err}")))?;
+                let expected_dimension = Self::call_external("expected_x_space_dimension", || {
+                    self.integrand
+                        .expected_x_space_dimension(discrete_dim.as_slice())
+                })?;
                 if cont.len() != expected_dimension {
                     return Err(EvalError::eval(format!(
                         "expected {expected_dimension} x-space coordinates for this selection, got {}",
@@ -233,9 +259,8 @@ impl GammaLoopEvaluator {
             })
             .collect::<Result<Vec<Sample<F<f64>>>, _>>()?;
 
-        let results = self
-            .integrand
-            .evaluate_samples_raw(
+        let results = Self::call_external("evaluate_samples_raw", || {
+            self.integrand.evaluate_samples_raw(
                 &self.model,
                 samples.as_slice(),
                 1,
@@ -243,7 +268,7 @@ impl GammaLoopEvaluator {
                 false,
                 Default::default(),
             )
-            .map_err(|err| EvalError::eval(format!("failed to evaluate integrand: {err}")))?;
+        })?;
 
         Ok(results
             .samples

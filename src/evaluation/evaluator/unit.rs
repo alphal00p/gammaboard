@@ -9,13 +9,21 @@ use serde::{Deserialize, Serialize};
 pub struct UnitEvaluator {
     point_spec: PointSpec,
     observable_kind: SemanticObservableKind,
+    fail_on_batch_nr: Option<usize>,
+    eval_batches_total: usize,
 }
 
 impl UnitEvaluator {
-    pub fn new(point_spec: PointSpec, observable_kind: SemanticObservableKind) -> Self {
+    pub fn new(
+        point_spec: PointSpec,
+        observable_kind: SemanticObservableKind,
+        fail_on_batch_nr: Option<usize>,
+    ) -> Self {
         Self {
             point_spec,
             observable_kind,
+            fail_on_batch_nr,
+            eval_batches_total: 0,
         }
     }
 
@@ -26,6 +34,7 @@ impl UnitEvaluator {
                 discrete_dims: params.discrete_dims,
             },
             params.observable_kind,
+            params.fail_on_batch_nr,
         )
     }
 }
@@ -36,6 +45,8 @@ pub struct UnitEvaluatorParams {
     pub continuous_dims: usize,
     pub discrete_dims: usize,
     pub observable_kind: SemanticObservableKind,
+    #[serde(default)]
+    pub fail_on_batch_nr: Option<usize>,
 }
 
 impl Default for UnitEvaluatorParams {
@@ -44,6 +55,7 @@ impl Default for UnitEvaluatorParams {
             continuous_dims: 1,
             discrete_dims: 0,
             observable_kind: SemanticObservableKind::Scalar,
+            fail_on_batch_nr: None,
         }
     }
 }
@@ -75,6 +87,16 @@ impl Evaluator for UnitEvaluator {
         observable: &ObservableConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
+        self.eval_batches_total = self.eval_batches_total.saturating_add(1);
+        if self
+            .fail_on_batch_nr
+            .is_some_and(|n| n > 0 && self.eval_batches_total == n)
+        {
+            return Err(EvalError::eval(format!(
+                "unit evaluator injected failure on batch {}",
+                self.eval_batches_total
+            )));
+        }
         let mut observable_state = ObservableState::from_config(observable);
         let weighted_values = match self.observable_kind {
             SemanticObservableKind::Scalar => match &mut observable_state {
@@ -138,6 +160,7 @@ mod tests {
                 discrete_dims: 0,
             },
             SemanticObservableKind::Scalar,
+            None,
         );
 
         let result = evaluator
@@ -175,6 +198,7 @@ mod tests {
                 discrete_dims: 0,
             },
             SemanticObservableKind::Complex,
+            None,
         );
 
         let result = evaluator

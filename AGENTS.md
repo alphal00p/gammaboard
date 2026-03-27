@@ -86,6 +86,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 
 ## Runtime Metadata
 - Do not persist evaluator/sampler init metadata on runs or expose it in run panels/apis unless explicitly requested.
+- `unit` evaluator and `naive_monte_carlo` sampler include optional fault-injection parameters for e2e testing (`fail_on_batch_nr`, `fail_on_produce_batch_nr`, `fail_on_materialize_batch_nr`); keep them optional and default-off.
 
 ## Schema Policy
 - No backward-compat requirement by default.
