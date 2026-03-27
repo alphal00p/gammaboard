@@ -100,6 +100,23 @@ To reset local state: run `gammaboard db delete --yes` then `gammaboard db start
 - All server config fields are explicit; the server does not fill in defaults.
 - Set `allow_db_admin = true` only for trusted local/operator setups; it enables dashboard-triggered `db stop && db start`.
 
+## ITPhlies Deployment
+- Recommended production server config is [configs/server/itphlies-prod.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server/itphlies-prod.toml):
+  - backend bound to localhost
+  - `secure_cookie = true`
+  - `allow_db_admin = false`
+- Deploy with:
+  ```bash
+  just deploy-itphlies
+  ```
+- Run this command directly on ITPhlies from the checked-out repo.
+
+`deploy-itphlies` runs `just build`, then restarts the backend process from this repo using `target/dev-optim/gammaboard server --server-config configs/server/itphlies-prod.toml`. It writes:
+- pid: `logs/itphlies-backend.pid`
+- log: `logs/itphlies-backend.log`
+
+Operational note: with nginx in front, keep backend on `127.0.0.1:4000` and expose only `80/443` (+`22` for SSH).
+
 ## Frontend API Routing
 - The dashboard frontend always calls relative `/api` endpoints.
 - Local dev: `dashboard/package.json` sets `"proxy": "http://127.0.0.1:4000"` so `npm start` forwards `/api/*` to the backend.

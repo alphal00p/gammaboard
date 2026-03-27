@@ -1063,13 +1063,13 @@ async fn restart_db(State(state): State<AppState>) -> Result<Json<serde_json::Va
         source = "control",
         control_surface = "dashboard",
         action = "db_restart",
-        stopped = result.stopped,
+        deleted = result.deleted,
         started = result.started,
         "dashboard action completed"
     );
 
     json_response(serde_json::json!({
-        "stopped": result.stopped,
+        "deleted": result.deleted,
         "started": result.started,
     }))
 }

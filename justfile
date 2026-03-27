@@ -38,6 +38,32 @@ deploy-local-prod:
     echo "Open: http://localhost:8080"
     nginx -e "$PWD/logs/nginx-local-prod-error.log" -p "$PWD" -c "$PWD/configs/nginx/local-prod.conf" -g 'daemon off;'
 
+deploy-itphlies:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    backend_pid_file="$PWD/logs/itphlies-backend.pid"
+    backend_log_file="$PWD/logs/itphlies-backend.log"
+
+    just build
+
+    mkdir -p logs
+    if [[ -f "$backend_pid_file" ]]; then
+        old_pid=$(cat "$backend_pid_file")
+        if kill -0 "$old_pid" >/dev/null 2>&1; then
+            kill "$old_pid"
+            wait "$old_pid" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    {{bin}} server --server-config configs/server/itphlies-prod.toml >"$backend_log_file" 2>&1 &
+    new_pid=$!
+    echo "$new_pid" > "$backend_pid_file"
+
+    echo "Deployed on $(hostname)"
+    echo "Backend PID: $new_pid"
+    echo "Backend log: $backend_log_file"
+
 stop-local-prod:
     #!/usr/bin/env bash
     set -euo pipefail

@@ -238,8 +238,8 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
       >
         <DialogTitle>Restart Database?</DialogTitle>
         <DialogContent>
-          This will stop and start the local database. Running nodes and run execution may temporarily fail while the
-          database is restarting. Do you want to continue?
+          This will delete local database state and recreate it from migrations. Running nodes and run execution will be
+          interrupted and existing local runs/data will be lost. Do you want to continue?
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setRestartDbOpen(false)} disabled={restartingDb}>

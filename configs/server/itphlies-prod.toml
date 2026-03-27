@@ -1,0 +1,11 @@
+host = "127.0.0.1"
+port = 4000
+allowed_origin = "https://itphlies.example.org"
+secure_cookie = true
+allow_db_admin = false
+run_templates_dir = "../runs"
+task_templates_dir = "../tasks"
+
+[auth]
+admin_password_hash = "REPLACE_WITH_ARGON2_HASH"
+session_secret = "REPLACE_WITH_LONG_RANDOM_SECRET"
