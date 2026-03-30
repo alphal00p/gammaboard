@@ -20,7 +20,7 @@ pub(super) fn projectors(task_spec: &RunTaskSpec) -> Vec<TaskPanelProjector> {
         observable_config,
         Some(ObservableConfig::Complex | ObservableConfig::Gammaloop)
     ) {
-        projectors.push(imag_estimate_history_projector());
+        projectors.push(imag_estimate_history_projector(observable_config.as_ref()));
     }
     projectors.push(abs_signal_to_noise_history_projector(
         observable_config.as_ref(),
@@ -81,8 +81,10 @@ fn real_estimate_history_projector(
     )
 }
 
-fn imag_estimate_history_projector() -> TaskPanelProjector {
-    let observable_config = Some(ObservableConfig::Complex);
+fn imag_estimate_history_projector(
+    observable_config: Option<&ObservableConfig>,
+) -> TaskPanelProjector {
+    let observable_config = observable_config.cloned();
     let current_config = observable_config.clone();
     let history_config = observable_config.clone();
     panel_projector(
