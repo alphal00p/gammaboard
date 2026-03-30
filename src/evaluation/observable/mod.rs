@@ -106,6 +106,19 @@ impl ObservableState {
                 }),
             SemanticObservableKind::Complex => serde_json::from_value(value.clone())
                 .map(Self::Complex)
+                .or_else(|_| {
+                    value
+                        .get("estimate")
+                        .cloned()
+                        .ok_or_else(|| {
+                            serde_json::Error::io(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "missing estimate field",
+                            ))
+                        })
+                        .and_then(serde_json::from_value)
+                        .map(Self::Complex)
+                })
                 .map_err(|err| {
                     EngineError::build(format!(
                         "invalid complex persistent observable payload: {err}"
@@ -117,6 +130,14 @@ impl ObservableState {
     pub fn from_gammaloop_persistent_json(value: &JsonValue) -> Result<Self, EngineError> {
         serde_json::from_value(value.clone())
             .map(Self::Gammaloop)
+            .or_else(|_| {
+                serde_json::from_value(value.clone()).map(|bundle| {
+                    Self::Gammaloop(GammaLoopObservableState {
+                        bundle,
+                        estimate: ComplexObservableState::default(),
+                    })
+                })
+            })
             .map_err(|err| {
                 EngineError::build(format!(
                     "invalid gammaloop persistent observable payload: {err}"
