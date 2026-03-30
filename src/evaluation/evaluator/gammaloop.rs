@@ -4,8 +4,10 @@ use gammaloop_api::state::{ProcessRef, State};
 use gammalooprs::graph::GroupId;
 use gammalooprs::initialisation::initialise;
 use gammalooprs::integrands::HasIntegrand;
+use gammalooprs::integrands::evaluation::EvaluationResult;
 use gammalooprs::integrands::process::{MomentumSpaceEvaluationInput, ProcessIntegrand};
 use gammalooprs::model::Model;
+use gammalooprs::observables::ObservableSnapshotBundle;
 use gammalooprs::settings::runtime::{DiscreteGraphSamplingType, SamplingSettings};
 use gammalooprs::utils::F;
 use serde::{Deserialize, Serialize};
@@ -15,7 +17,8 @@ use crate::{
     Batch, BatchResult, BuildError, Domain, DomainBranch, EvalError,
     core::ObservableConfig,
     evaluation::{
-        ComplexValueEvaluator, EvalBatchOptions, Evaluator, ObservableState, ScalarValueEvaluator,
+        ComplexValueEvaluator, EvalBatchOptions, Evaluator, GammaLoopObservableState,
+        ObservableState, ScalarValueEvaluator,
     },
 };
 
@@ -25,6 +28,7 @@ pub struct GammaLoopEvaluator {
     momentum_space: bool,
     training_projection: TrainingProjection,
     domain: Domain,
+    empty_observable_bundle: Option<ObservableSnapshotBundle>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, Eq)]
@@ -273,6 +277,7 @@ impl GammaLoopEvaluator {
             integrand
                 .warm_up(&model)
                 .map_err(|err| BuildError::build(format!("failed to warm up integrand: {err}")))?;
+            let empty_observable_bundle = integrand.observable_snapshot_bundle();
 
             Ok(Self {
                 integrand,
@@ -280,6 +285,7 @@ impl GammaLoopEvaluator {
                 momentum_space: params.momentum_space,
                 training_projection: params.training_projection,
                 domain,
+                empty_observable_bundle,
             })
         })) {
             Ok(result) => result,
@@ -290,7 +296,36 @@ impl GammaLoopEvaluator {
         }
     }
 
-    fn evaluate(&mut self, batch: &Batch) -> Result<Vec<num::complex::Complex64>, EvalError> {
+    fn project_result_value(result: &EvaluationResult) -> num::complex::Complex64 {
+        let mut value = num::complex::Complex64::new(
+            result.integrand_result.re.0,
+            result.integrand_result.im.0,
+        );
+        if let Some(jac) = result.parameterization_jacobian {
+            value *= jac.0;
+        }
+        value
+    }
+
+    fn restore_empty_observable_bundle(&mut self) -> Result<(), EvalError> {
+        let Some(bundle) = self.empty_observable_bundle.clone() else {
+            return Ok(());
+        };
+        Self::call_external("restore_observable_snapshot_bundle", || {
+            self.integrand.restore_observable_snapshot_bundle(&bundle)
+        })
+    }
+
+    fn batch_gammaloop_observable(&self) -> GammaLoopObservableState {
+        GammaLoopObservableState {
+            bundle: self
+                .integrand
+                .observable_snapshot_bundle()
+                .unwrap_or_default(),
+        }
+    }
+
+    fn evaluate(&mut self, batch: &Batch) -> Result<Vec<EvaluationResult>, EvalError> {
         if self.momentum_space {
             let inputs = batch
                 .points()
@@ -361,16 +396,7 @@ impl GammaLoopEvaluator {
                 )
             })?;
 
-            return Ok(results
-                .samples
-                .into_iter()
-                .map(|res| {
-                    num::complex::Complex64::new(
-                        res.integrand_result.re.0,
-                        res.integrand_result.im.0,
-                    )
-                })
-                .collect());
+            return Ok(results.samples);
         }
 
         let samples = batch
@@ -413,20 +439,7 @@ impl GammaLoopEvaluator {
             )
         })?;
 
-        Ok(results
-            .samples
-            .into_iter()
-            .map(|res| {
-                let mut value = num::complex::Complex64::new(
-                    res.integrand_result.re.0,
-                    res.integrand_result.im.0,
-                );
-                if let Some(jac) = res.parameterization_jacobian {
-                    value *= jac.0;
-                }
-                value
-            })
-            .collect())
+        Ok(results.samples)
     }
 }
 
@@ -464,57 +477,91 @@ impl Evaluator for GammaLoopEvaluator {
         observable: &ObservableConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
+        if matches!(observable, ObservableConfig::Gammaloop) {
+            self.restore_empty_observable_bundle()?;
+        }
         let weights = batch.weights();
-        let vec_res = self.evaluate(batch)?;
+        let evaluation_results = self.evaluate(batch)?;
         let mut observable_state = ObservableState::from_config(observable);
-        let weighted_values = match observable.semantic_kind() {
-            crate::evaluation::SemanticObservableKind::Scalar => match &mut observable_state {
-                ObservableState::Scalar(observable) => self.ingest_scalar_values(
-                    &vec_res
-                        .iter()
-                        .map(|value| self.training_projection.project(*value))
-                        .collect::<Vec<_>>(),
-                    weights.as_slice(),
-                    options.require_training_values,
-                    observable,
-                ),
-                ObservableState::FullScalar(observable) => self.ingest_scalar_values(
-                    &vec_res
-                        .iter()
-                        .map(|value| self.training_projection.project(*value))
-                        .collect::<Vec<_>>(),
-                    weights.as_slice(),
-                    options.require_training_values,
-                    observable,
-                ),
-                other => {
-                    return Err(EvalError::eval(format!(
-                        "gammaloop scalar mode does not support observable kind {}",
-                        other.kind_str()
-                    )));
+        let weighted_values = match observable {
+            ObservableConfig::Gammaloop => {
+                observable_state = ObservableState::Gammaloop(self.batch_gammaloop_observable());
+                self.restore_empty_observable_bundle()?;
+                if options.require_training_values {
+                    Some(
+                        evaluation_results
+                            .iter()
+                            .map(|result| {
+                                self.training_projection
+                                    .project(Self::project_result_value(result))
+                            })
+                            .collect(),
+                    )
+                } else {
+                    None
                 }
-            },
-            crate::evaluation::SemanticObservableKind::Complex => match &mut observable_state {
-                ObservableState::Complex(observable) => self.ingest_complex_values(
-                    &vec_res,
-                    weights.as_slice(),
-                    options.require_training_values,
-                    observable,
-                    |value| self.training_projection.project(value),
-                ),
-                ObservableState::FullComplex(observable) => self.ingest_complex_values(
-                    &vec_res,
-                    weights.as_slice(),
-                    options.require_training_values,
-                    observable,
-                    |value| self.training_projection.project(value),
-                ),
-                other => {
-                    return Err(EvalError::eval(format!(
-                        "gammaloop complex mode does not support observable kind {}",
-                        other.kind_str()
-                    )));
-                }
+            }
+            _ => match observable.semantic_kind() {
+                crate::evaluation::SemanticObservableKind::Scalar => match &mut observable_state {
+                    ObservableState::Scalar(observable) => self.ingest_scalar_values(
+                        &evaluation_results
+                            .iter()
+                            .map(|result| {
+                                self.training_projection
+                                    .project(Self::project_result_value(result))
+                            })
+                            .collect::<Vec<_>>(),
+                        weights.as_slice(),
+                        options.require_training_values,
+                        observable,
+                    ),
+                    ObservableState::FullScalar(observable) => self.ingest_scalar_values(
+                        &evaluation_results
+                            .iter()
+                            .map(|result| {
+                                self.training_projection
+                                    .project(Self::project_result_value(result))
+                            })
+                            .collect::<Vec<_>>(),
+                        weights.as_slice(),
+                        options.require_training_values,
+                        observable,
+                    ),
+                    other => {
+                        return Err(EvalError::eval(format!(
+                            "gammaloop scalar mode does not support observable kind {}",
+                            other.kind_str()
+                        )));
+                    }
+                },
+                crate::evaluation::SemanticObservableKind::Complex => match &mut observable_state {
+                    ObservableState::Complex(observable) => self.ingest_complex_values(
+                        &evaluation_results
+                            .iter()
+                            .map(Self::project_result_value)
+                            .collect::<Vec<_>>(),
+                        weights.as_slice(),
+                        options.require_training_values,
+                        observable,
+                        |value| self.training_projection.project(value),
+                    ),
+                    ObservableState::FullComplex(observable) => self.ingest_complex_values(
+                        &evaluation_results
+                            .iter()
+                            .map(Self::project_result_value)
+                            .collect::<Vec<_>>(),
+                        weights.as_slice(),
+                        options.require_training_values,
+                        observable,
+                        |value| self.training_projection.project(value),
+                    ),
+                    other => {
+                        return Err(EvalError::eval(format!(
+                            "gammaloop complex mode does not support observable kind {}",
+                            other.kind_str()
+                        )));
+                    }
+                },
             },
         };
         Ok(BatchResult::new(weighted_values, observable_state))

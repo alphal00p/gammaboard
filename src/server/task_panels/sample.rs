@@ -1,6 +1,8 @@
 use super::{TaskPanelContext, TaskPanelHistoryContext, TaskPanelProjector, panel_projector};
-use crate::core::{EngineError, RunTaskSpec};
-use crate::evaluation::{FullObservableProgress, ObservableState, SemanticObservableKind};
+use crate::core::{EngineError, ObservableConfig, RunTaskSpec};
+use crate::evaluation::{
+    FullObservableProgress, Observable, ObservableState, SemanticObservableKind,
+};
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, key_value, key_value_panel,
     panel_spec, progress_panel, scalar_timeseries_panel, single_point_band, with_panel_width,
@@ -8,16 +10,18 @@ use crate::server::panels::{
 use serde_json::Value as JsonValue;
 
 pub(super) fn projectors(task_spec: &RunTaskSpec) -> Vec<TaskPanelProjector> {
-    let observable_kind = task_observable_kind(task_spec);
+    let observable_config = task_observable_config(task_spec);
     let mut projectors = vec![
         sample_progress_projector(),
-        estimate_summary_projector(observable_kind),
-        real_estimate_history_projector(observable_kind),
+        estimate_summary_projector(observable_config.as_ref()),
+        real_estimate_history_projector(observable_config.as_ref()),
     ];
-    if matches!(observable_kind, Some(SemanticObservableKind::Complex)) {
+    if matches!(observable_config, Some(ObservableConfig::Complex)) {
         projectors.push(imag_estimate_history_projector());
     }
-    projectors.push(abs_signal_to_noise_history_projector(observable_kind));
+    projectors.push(abs_signal_to_noise_history_projector(
+        observable_config.as_ref(),
+    ));
     projectors
 }
 
@@ -49,26 +53,35 @@ fn sample_progress_projector() -> TaskPanelProjector {
 }
 
 fn real_estimate_history_projector(
-    observable_kind: Option<SemanticObservableKind>,
+    observable_config: Option<&ObservableConfig>,
 ) -> TaskPanelProjector {
+    let observable_config = observable_config.cloned();
+    let current_config = observable_config.clone();
+    let history_config = observable_config.clone();
     panel_projector(
         with_panel_width(
             panel_spec(
                 "real_estimate_history",
-                estimate_label(observable_kind),
+                estimate_label(observable_config.as_ref()),
                 PanelKind::ScalarTimeseries,
                 PanelHistoryMode::Append,
             ),
             PanelWidth::Full,
         ),
-        move |ctx| Ok(sample_observable(ctx, observable_kind)?.map(real_estimate_history_panel)),
         move |ctx| {
-            Ok(decode_history_observable(ctx, observable_kind)?.map(real_estimate_history_panel))
+            Ok(sample_observable(ctx, current_config.as_ref())?.map(real_estimate_history_panel))
+        },
+        move |ctx| {
+            Ok(decode_history_observable(ctx, history_config.as_ref())?
+                .map(real_estimate_history_panel))
         },
     )
 }
 
 fn imag_estimate_history_projector() -> TaskPanelProjector {
+    let observable_config = Some(ObservableConfig::Complex);
+    let current_config = observable_config.clone();
+    let history_config = observable_config.clone();
     panel_projector(
         with_panel_width(
             panel_spec(
@@ -79,24 +92,23 @@ fn imag_estimate_history_projector() -> TaskPanelProjector {
             ),
             PanelWidth::Full,
         ),
-        |ctx| {
-            Ok(
-                sample_observable(ctx, Some(SemanticObservableKind::Complex))?
-                    .and_then(imag_estimate_history_panel),
-            )
+        move |ctx| {
+            Ok(sample_observable(ctx, current_config.as_ref())?
+                .and_then(imag_estimate_history_panel))
         },
-        |ctx| {
-            Ok(
-                decode_history_observable(ctx, Some(SemanticObservableKind::Complex))?
-                    .and_then(imag_estimate_history_panel),
-            )
+        move |ctx| {
+            Ok(decode_history_observable(ctx, history_config.as_ref())?
+                .and_then(imag_estimate_history_panel))
         },
     )
 }
 
 fn abs_signal_to_noise_history_projector(
-    observable_kind: Option<SemanticObservableKind>,
+    observable_config: Option<&ObservableConfig>,
 ) -> TaskPanelProjector {
+    let observable_config = observable_config.cloned();
+    let current_config = observable_config.clone();
+    let history_config = observable_config.clone();
     panel_projector(
         with_panel_width(
             panel_spec(
@@ -107,16 +119,18 @@ fn abs_signal_to_noise_history_projector(
             ),
             PanelWidth::Full,
         ),
-        move |ctx| Ok(sample_observable(ctx, observable_kind)?.map(abs_signal_to_noise_panel)),
         move |ctx| {
-            Ok(decode_history_observable(ctx, observable_kind)?.map(abs_signal_to_noise_panel))
+            Ok(sample_observable(ctx, current_config.as_ref())?.map(abs_signal_to_noise_panel))
+        },
+        move |ctx| {
+            Ok(decode_history_observable(ctx, history_config.as_ref())?
+                .map(abs_signal_to_noise_panel))
         },
     )
 }
 
-fn estimate_summary_projector(
-    observable_kind: Option<SemanticObservableKind>,
-) -> TaskPanelProjector {
+fn estimate_summary_projector(observable_config: Option<&ObservableConfig>) -> TaskPanelProjector {
+    let observable_config = observable_config.cloned();
     panel_projector(
         with_panel_width(
             panel_spec(
@@ -127,7 +141,9 @@ fn estimate_summary_projector(
             ),
             PanelWidth::Half,
         ),
-        move |ctx| Ok(sample_observable(ctx, observable_kind)?.map(estimate_summary_panel)),
+        move |ctx| {
+            Ok(sample_observable(ctx, observable_config.as_ref())?.map(estimate_summary_panel))
+        },
         |_ctx| Ok(None),
     )
 }
@@ -135,7 +151,7 @@ fn estimate_summary_projector(
 fn sample_progress_value(ctx: &TaskPanelContext<'_>) -> Result<f64, EngineError> {
     if let Some(persisted) = ctx.source.persisted() {
         if let Some(observable) = decode_aggregate_persisted_observable_with_fallback(
-            task_observable_kind(&ctx.task.task),
+            task_observable_config(&ctx.task.task).as_ref(),
             persisted,
         )? {
             return Ok(observable.sample_count() as f64);
@@ -149,29 +165,50 @@ fn sample_progress_value(ctx: &TaskPanelContext<'_>) -> Result<f64, EngineError>
 
 fn sample_observable(
     ctx: &TaskPanelContext<'_>,
-    kind: Option<SemanticObservableKind>,
+    observable_config: Option<&ObservableConfig>,
 ) -> Result<Option<ObservableState>, EngineError> {
     if let Some(observable) = ctx.source.observable() {
         return Ok(Some(observable.clone()));
     }
     match ctx.source.persisted() {
-        Some(persisted) => decode_aggregate_persisted_observable_with_fallback(kind, persisted),
+        Some(persisted) => {
+            decode_aggregate_persisted_observable_with_fallback(observable_config, persisted)
+        }
         None => Ok(None),
     }
 }
 
 fn decode_history_observable(
     ctx: &TaskPanelHistoryContext<'_>,
-    kind: Option<SemanticObservableKind>,
+    observable_config: Option<&ObservableConfig>,
 ) -> Result<Option<ObservableState>, EngineError> {
-    decode_aggregate_persisted_observable_with_fallback(kind, &ctx.snapshot.persisted_output)
+    decode_aggregate_persisted_observable_with_fallback(
+        observable_config,
+        &ctx.snapshot.persisted_output,
+    )
 }
 
 fn decode_aggregate_persisted_observable(
-    kind: SemanticObservableKind,
+    config: &ObservableConfig,
     persisted: &JsonValue,
 ) -> Result<ObservableState, EngineError> {
-    ObservableState::from_aggregate_persistent_json(kind, persisted)
+    match config {
+        ObservableConfig::Scalar => ObservableState::from_aggregate_persistent_json(
+            SemanticObservableKind::Scalar,
+            persisted,
+        ),
+        ObservableConfig::Complex => ObservableState::from_aggregate_persistent_json(
+            SemanticObservableKind::Complex,
+            persisted,
+        ),
+        ObservableConfig::Gammaloop => ObservableState::from_gammaloop_persistent_json(persisted),
+        ObservableConfig::FullScalar | ObservableConfig::FullComplex => {
+            Err(EngineError::build(format!(
+                "sample task expected aggregate observable, got {}",
+                config_label(config)
+            )))
+        }
+    }
 }
 
 fn decode_full_progress(persisted: &JsonValue) -> Result<FullObservableProgress, EngineError> {
@@ -180,38 +217,52 @@ fn decode_full_progress(persisted: &JsonValue) -> Result<FullObservableProgress,
 }
 
 fn decode_aggregate_persisted_observable_with_fallback(
-    kind: Option<SemanticObservableKind>,
+    observable_config: Option<&ObservableConfig>,
     persisted: &JsonValue,
 ) -> Result<Option<ObservableState>, EngineError> {
-    if let Some(kind) = kind {
-        return decode_aggregate_persisted_observable(kind, persisted).map(Some);
+    if let Some(config) = observable_config {
+        return decode_aggregate_persisted_observable(config, persisted).map(Some);
     }
     if let Ok(observable) =
-        decode_aggregate_persisted_observable(SemanticObservableKind::Scalar, persisted)
+        decode_aggregate_persisted_observable(&ObservableConfig::Scalar, persisted)
     {
         return Ok(Some(observable));
     }
     if let Ok(observable) =
-        decode_aggregate_persisted_observable(SemanticObservableKind::Complex, persisted)
+        decode_aggregate_persisted_observable(&ObservableConfig::Complex, persisted)
+    {
+        return Ok(Some(observable));
+    }
+    if let Ok(observable) =
+        decode_aggregate_persisted_observable(&ObservableConfig::Gammaloop, persisted)
     {
         return Ok(Some(observable));
     }
     Ok(None)
 }
 
-fn estimate_label(observable_kind: Option<SemanticObservableKind>) -> &'static str {
-    match observable_kind {
-        Some(SemanticObservableKind::Scalar) => "Mean",
-        Some(SemanticObservableKind::Complex) => "Real Mean",
+fn estimate_label(observable_config: Option<&ObservableConfig>) -> &'static str {
+    match observable_config {
+        Some(ObservableConfig::Scalar) => "Mean",
+        Some(ObservableConfig::Complex) => "Real Mean",
+        Some(ObservableConfig::Gammaloop) => "Primary Histogram Mean",
         None => "Estimate",
+        Some(ObservableConfig::FullScalar) | Some(ObservableConfig::FullComplex) => "Estimate",
     }
 }
 
-fn task_observable_kind(task: &RunTaskSpec) -> Option<SemanticObservableKind> {
-    task.new_observable_config()
-        .ok()
-        .flatten()
-        .map(|config| config.semantic_kind())
+fn task_observable_config(task: &RunTaskSpec) -> Option<ObservableConfig> {
+    task.new_observable_config().ok().flatten()
+}
+
+fn config_label(config: &ObservableConfig) -> &'static str {
+    match config {
+        ObservableConfig::Scalar => "scalar",
+        ObservableConfig::Complex => "complex",
+        ObservableConfig::Gammaloop => "gammaloop",
+        ObservableConfig::FullScalar => "full_scalar",
+        ObservableConfig::FullComplex => "full_complex",
+    }
 }
 
 fn real_estimate_history_panel(observable: ObservableState) -> PanelState {
@@ -229,6 +280,13 @@ fn real_estimate_history_panel(observable: ObservableState) -> PanelState {
             state.real_mean(),
             Some(state.real_mean() - state.real_stderr()),
             Some(state.real_mean() + state.real_stderr()),
+        ),
+        ObservableState::Gammaloop(state) => single_point_band(
+            "real_estimate_history",
+            state.sample_count() as f64,
+            state.primary_mean(),
+            Some(state.primary_mean() - state.primary_stderr()),
+            Some(state.primary_mean() + state.primary_stderr()),
         ),
         _ => scalar_timeseries_panel("real_estimate_history", Vec::new()),
     }
@@ -292,6 +350,21 @@ fn estimate_summary_panel(observable: ObservableState) -> PanelState {
                     state.signal_to_noise(),
                 ),
                 key_value("rsd", "RSD", state.rsd()),
+            ],
+        ),
+        ObservableState::Gammaloop(state) => key_value_panel(
+            "estimate_summary",
+            vec![
+                key_value("count", "Count", state.sample_count()),
+                key_value("histograms", "Histograms", state.histogram_count()),
+                key_value(
+                    "primary_histogram",
+                    "Primary Histogram",
+                    state.primary_histogram_name().unwrap_or("-"),
+                ),
+                key_value("mean", "Primary Mean", state.primary_mean()),
+                key_value("error", "Primary Error", state.primary_stderr()),
+                key_value("signal_to_noise", "Mean^2 / err^2", state.signal_to_noise()),
             ],
         ),
         ObservableState::FullScalar(state) => key_value_panel(

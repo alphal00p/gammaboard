@@ -195,6 +195,7 @@ Sample tasks use direct per-component source specs:
 - omit `sampler_aggregator` or `observable` to use `latest`
 - use `{ from_name = "..." }` to load from a prior task name
 - use `{ config = ... }` to set explicit inline config
+- `observable = { config = "gammaloop" }` is available for GammaLoop runs and persists GammaLoop's native histogram snapshot bundle
 
 Task names are unique per run and can be referenced by `from_name`.
 `batch_transforms` is stage state for tasks. Omitted inherits; `batch_transforms = []` explicitly clears inherited transforms.

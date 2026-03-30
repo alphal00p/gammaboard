@@ -1,5 +1,6 @@
 mod complex;
 mod full;
+mod gammaloop;
 mod scalar;
 
 use crate::core::{EngineError, ObservableConfig, RunSpec};
@@ -11,6 +12,7 @@ pub use self::complex::ComplexObservableState;
 pub use self::full::{
     ComplexValue, FullComplexObservableState, FullObservableProgress, FullScalarObservableState,
 };
+pub use self::gammaloop::{GammaLoopObservableDigest, GammaLoopObservableState};
 pub use self::scalar::ScalarObservableState;
 
 pub trait IngestScalar {
@@ -60,6 +62,7 @@ pub trait Observable: Clone + Serialize + DeserializeOwned {
 pub enum ObservableState {
     Scalar(ScalarObservableState),
     Complex(ComplexObservableState),
+    Gammaloop(GammaLoopObservableState),
     FullScalar(FullScalarObservableState),
     FullComplex(FullComplexObservableState),
 }
@@ -111,10 +114,21 @@ impl ObservableState {
         }
     }
 
+    pub fn from_gammaloop_persistent_json(value: &JsonValue) -> Result<Self, EngineError> {
+        serde_json::from_value(value.clone())
+            .map(|bundle| Self::Gammaloop(GammaLoopObservableState { bundle }))
+            .map_err(|err| {
+                EngineError::build(format!(
+                    "invalid gammaloop persistent observable payload: {err}"
+                ))
+            })
+    }
+
     pub fn from_config(config: &ObservableConfig) -> Self {
         match config {
             ObservableConfig::Scalar => Self::empty_scalar(),
             ObservableConfig::Complex => Self::empty_complex(),
+            ObservableConfig::Gammaloop => Self::empty_gammaloop(),
             ObservableConfig::FullScalar => Self::empty_full_scalar(),
             ObservableConfig::FullComplex => Self::empty_full_complex(),
         }
@@ -126,6 +140,10 @@ impl ObservableState {
 
     pub fn empty_complex() -> Self {
         Self::Complex(ComplexObservableState::default())
+    }
+
+    pub fn empty_gammaloop() -> Self {
+        Self::Gammaloop(GammaLoopObservableState::default())
     }
 
     pub fn empty_full_scalar() -> Self {
@@ -140,6 +158,7 @@ impl ObservableState {
         match self {
             Self::Scalar(_) => "scalar",
             Self::Complex(_) => "complex",
+            Self::Gammaloop(_) => "gammaloop",
             Self::FullScalar(_) => "full_scalar",
             Self::FullComplex(_) => "full_complex",
         }
@@ -149,6 +168,7 @@ impl ObservableState {
         match self {
             Self::Scalar(_) => ObservableConfig::Scalar,
             Self::Complex(_) => ObservableConfig::Complex,
+            Self::Gammaloop(_) => ObservableConfig::Gammaloop,
             Self::FullScalar(_) => ObservableConfig::FullScalar,
             Self::FullComplex(_) => ObservableConfig::FullComplex,
         }
@@ -164,6 +184,7 @@ impl ObservableState {
                 Observable::merge(left, right);
                 Ok(())
             }
+            (Self::Gammaloop(left), Self::Gammaloop(right)) => left.merge_in_place(right),
             (Self::FullScalar(left), Self::FullScalar(right)) => {
                 Observable::merge(left, right);
                 Ok(())
@@ -184,6 +205,7 @@ impl ObservableState {
         match self {
             Self::Scalar(observable) => observable.sample_count(),
             Self::Complex(observable) => observable.sample_count(),
+            Self::Gammaloop(observable) => observable.sample_count(),
             Self::FullScalar(observable) => observable.sample_count(),
             Self::FullComplex(observable) => observable.sample_count(),
         }
@@ -193,6 +215,7 @@ impl ObservableState {
         match self {
             Self::Scalar(observable) => observable.signal_to_noise(),
             Self::Complex(observable) => observable.signal_to_noise(),
+            Self::Gammaloop(observable) => observable.signal_to_noise(),
             Self::FullScalar(_) | Self::FullComplex(_) => 0.0,
         }
     }
@@ -211,6 +234,7 @@ impl ObservableState {
         match self {
             Self::Scalar(observable) => observable.to_persistent_json(),
             Self::Complex(observable) => observable.to_persistent_json(),
+            Self::Gammaloop(observable) => observable.to_persistent_json(),
             Self::FullScalar(observable) => observable.to_persistent_json(),
             Self::FullComplex(observable) => observable.to_persistent_json(),
         }
@@ -220,6 +244,7 @@ impl ObservableState {
         match self {
             Self::Scalar(observable) => observable.to_digest_json(run_spec),
             Self::Complex(observable) => observable.to_digest_json(run_spec),
+            Self::Gammaloop(observable) => observable.to_digest_json(run_spec),
             Self::FullScalar(observable) => observable.to_digest_json(run_spec),
             Self::FullComplex(observable) => observable.to_digest_json(run_spec),
         }

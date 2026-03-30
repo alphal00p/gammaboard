@@ -37,6 +37,7 @@ pub struct RunSpec {
 pub enum ObservableConfig {
     Scalar,
     Complex,
+    Gammaloop,
     FullScalar,
     FullComplex,
 }
@@ -46,6 +47,7 @@ impl ObservableConfig {
         match self {
             Self::Scalar | Self::FullScalar => crate::evaluation::SemanticObservableKind::Scalar,
             Self::Complex | Self::FullComplex => crate::evaluation::SemanticObservableKind::Complex,
+            Self::Gammaloop => crate::evaluation::SemanticObservableKind::Scalar,
         }
     }
 }

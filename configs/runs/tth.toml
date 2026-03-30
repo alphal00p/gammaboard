@@ -21,3 +21,10 @@ max_batch_size = 16384
 max_queue_size = 4096
 max_batches_per_tick = 256
 completed_batch_fetch_limit = 4096
+
+[[task_queue]]
+name = "havana-train-1m"
+kind = "sample"
+nr_samples = 1_000_000
+observable = { config = "gammaloop" }
+sampler_aggregator = { config = { kind = "havana_training" } }

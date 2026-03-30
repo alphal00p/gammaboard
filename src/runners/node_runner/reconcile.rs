@@ -404,6 +404,9 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             crate::core::ObservableConfig::Complex => {
                 crate::evaluation::ObservableState::empty_complex()
             }
+            crate::core::ObservableConfig::Gammaloop => {
+                crate::evaluation::ObservableState::empty_gammaloop()
+            }
             crate::core::ObservableConfig::FullScalar => {
                 crate::evaluation::ObservableState::empty_full_scalar()
             }

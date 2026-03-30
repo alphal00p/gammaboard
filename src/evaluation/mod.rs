@@ -9,8 +9,8 @@ pub use evaluator::{
 };
 pub use observable::{
     ComplexObservableState, ComplexValue, FullComplexObservableState, FullObservableProgress,
-    FullScalarObservableState, IngestComplex, IngestScalar, Observable, ObservableState,
-    ScalarObservableState, SemanticObservableKind,
+    FullScalarObservableState, GammaLoopObservableDigest, GammaLoopObservableState, IngestComplex,
+    IngestScalar, Observable, ObservableState, ScalarObservableState, SemanticObservableKind,
 };
 pub use traits::{
     BatchTransform, ComplexSampleEvaluator, ComplexValueEvaluator, EvalBatchOptions, Evaluator,
