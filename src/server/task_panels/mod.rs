@@ -534,7 +534,7 @@ fn format_cursor(cursor: TaskPanelCursor) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{LineDisplayMode, RunTaskState};
+    use crate::core::{LineDisplayMode, RunTaskInput, RunTaskState, canonical_task_toml};
     use crate::evaluation::{ComplexValue, FullComplexObservableState};
     use crate::server::panels::{PanelUpdateMode, PlotPoint, scalar_timeseries_panel};
     use chrono::Utc;
@@ -562,12 +562,13 @@ mod tests {
     }
 
     fn run_task(task: RunTaskSpec) -> RunTask {
+        let name = "plot_line-1".to_string();
         RunTask {
             id: 1,
             run_id: 1,
-            name: "plot_line-1".to_string(),
+            name: name.clone(),
             sequence_nr: 1,
-            task,
+            task: task.clone(),
             spawned_from_snapshot_id: None,
             state: RunTaskState::Active,
             nr_produced_samples: 3,
@@ -577,6 +578,11 @@ mod tests {
             completed_at: None,
             failed_at: None,
             created_at: Utc::now(),
+            task_toml: canonical_task_toml(&RunTaskInput {
+                name: Some(name),
+                task,
+            })
+            .expect("task toml"),
         }
     }
 

@@ -20,7 +20,7 @@ pub use core::{BuildError, EngineError, EvalError, StoreError};
 pub use core::{
     ImageDisplayMode, LineDisplayMode, LineRasterGeometry, Linspace, ObservableSourceSpec,
     PlaneRasterGeometry, PlotObservableKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState,
-    SampleTaskConfig, SamplerAggregatorSourceSpec, SourceRefSpec,
+    SampleTaskConfig, SamplerAggregatorSourceSpec, SourceRefSpec, canonical_task_toml,
 };
 pub use evaluation::{
     Batch, BatchError, BatchResult, BatchTransform, ComplexObservableState, ComplexSampleEvaluator,

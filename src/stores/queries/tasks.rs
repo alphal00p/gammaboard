@@ -1,4 +1,6 @@
-use crate::core::{RunTask, RunTaskInput, RunTaskSpec, RunTaskState, generated_task_name};
+use crate::core::{
+    RunTask, RunTaskInput, RunTaskSpec, RunTaskState, canonical_task_toml, generated_task_name,
+};
 use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
@@ -9,6 +11,7 @@ type RunTaskRow = (
     String,
     i32,
     JsonValue,
+    String,
     Option<i64>,
     String,
     i64,
@@ -32,6 +35,7 @@ fn decode_task_row(row: RunTaskRow) -> Result<RunTask, sqlx::Error> {
         name,
         sequence_nr,
         task,
+        task_toml,
         spawned_from_snapshot_id,
         state,
         nr_produced_samples,
@@ -70,6 +74,7 @@ fn decode_task_row(row: RunTaskRow) -> Result<RunTask, sqlx::Error> {
         completed_at,
         failed_at,
         created_at,
+        task_toml,
     })
 }
 
@@ -99,15 +104,17 @@ pub(crate) async fn append_run_tasks(
                 name,
                 sequence_nr,
                 task,
+                task_toml,
                 state
             )
-            VALUES ($1, $2, $3, $4, 'pending')
+            VALUES ($1, $2, $3, $4, $5, 'pending')
             RETURNING
                 id,
                 run_id,
                 name,
                 sequence_nr,
                 task,
+                task_toml,
                 spawned_from_snapshot_id,
                 state,
                 nr_produced_samples,
@@ -127,6 +134,9 @@ pub(crate) async fn append_run_tasks(
         )
         .bind(next_sequence + offset as i32)
         .bind(encode_task(&task.task)?)
+        .bind(canonical_task_toml(task).map_err(|err| {
+            sqlx::Error::Protocol(format!("failed to serialize task TOML: {err}"))
+        })?)
         .fetch_one(&mut *tx)
         .await?;
         inserted.push(decode_task_row(row)?);
@@ -147,6 +157,7 @@ pub(crate) async fn list_run_tasks(
             name,
             sequence_nr,
             task,
+            task_toml,
             spawned_from_snapshot_id,
             state,
             nr_produced_samples,
@@ -200,6 +211,7 @@ pub(crate) async fn load_active_run_task(
             name,
             sequence_nr,
             task,
+            task_toml,
             spawned_from_snapshot_id,
             state,
             nr_produced_samples,
@@ -234,6 +246,7 @@ pub(crate) async fn load_run_task(
             name,
             sequence_nr,
             task,
+            task_toml,
             spawned_from_snapshot_id,
             state,
             nr_produced_samples,
@@ -281,6 +294,7 @@ pub(crate) async fn activate_next_run_task(
             name,
             sequence_nr,
             task,
+            task_toml,
             spawned_from_snapshot_id,
             state,
             nr_produced_samples,

@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS run_tasks (
     name TEXT NOT NULL,
     sequence_nr INT NOT NULL,
     task JSONB NOT NULL,
+    task_toml TEXT NOT NULL,
     spawned_from_snapshot_id BIGINT,
     state TEXT NOT NULL DEFAULT 'pending',
     nr_produced_samples BIGINT NOT NULL DEFAULT 0,

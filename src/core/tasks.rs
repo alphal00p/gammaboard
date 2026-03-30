@@ -514,6 +514,7 @@ pub struct RunTask {
     pub completed_at: Option<DateTime<Utc>>,
     pub failed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    pub task_toml: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -539,6 +540,15 @@ impl RunTaskInput {
     }
 }
 
+#[derive(Serialize)]
+struct TaskTomlFile<'a> {
+    task: &'a RunTaskInput,
+}
+
+pub fn canonical_task_toml(task: &RunTaskInput) -> Result<String, toml::ser::Error> {
+    toml::to_string_pretty(&TaskTomlFile { task })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -558,6 +568,25 @@ mod tests {
         };
 
         assert_eq!(task.new_observable_config().unwrap(), None);
+    }
+
+    #[test]
+    fn canonical_task_toml_wraps_single_task_payload() {
+        let input = RunTaskInput {
+            name: Some("sample-1".to_string()),
+            task: RunTaskSpec::Sample {
+                nr_samples: Some(10),
+                sampler_aggregator: None,
+                observable: None,
+                batch_transforms: None,
+            },
+        };
+
+        let toml = canonical_task_toml(&input).expect("task toml");
+
+        assert!(toml.contains("[task]"));
+        assert!(toml.contains("name = \"sample-1\""));
+        assert!(toml.contains("kind = \"sample\""));
     }
 
     #[test]

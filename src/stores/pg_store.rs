@@ -8,7 +8,7 @@ use crate::core::{
     SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore, WorkerRole,
     generated_task_name,
 };
-use crate::core::{IntegrationParams, RunSpec, RunTaskSpec};
+use crate::core::{IntegrationParams, RunSpec, RunTaskSpec, canonical_task_toml};
 use crate::evaluation::BatchResult;
 use crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot;
 use crate::sampling::LatentBatch;
@@ -86,6 +86,11 @@ fn map_sqlx(err: sqlx::Error) -> StoreError {
 fn serialize_task(task: &RunTaskInput) -> Result<JsonValue, StoreError> {
     serde_json::to_value(&task.task)
         .map_err(|err| store_err(format!("failed to serialize run task: {err}")))
+}
+
+fn serialize_task_toml(task: &RunTaskInput) -> Result<String, StoreError> {
+    canonical_task_toml(task)
+        .map_err(|err| store_err(format!("failed to serialize run task TOML: {err}")))
 }
 
 fn run_spec_from_integration_params(
@@ -496,11 +501,12 @@ impl ControlPlaneStore for PgStore {
                 name,
                 sequence_nr,
                 task,
+                task_toml,
                 state,
                 started_at,
                 completed_at
             )
-            VALUES ($1, $2, 0, $3, 'completed', now(), now())
+            VALUES ($1, $2, 0, $3, $4, 'completed', now(), now())
             "#,
         )
         .bind(run_id)
@@ -509,6 +515,10 @@ impl ControlPlaneStore for PgStore {
             serde_json::to_value(RunTaskSpec::Init)
                 .map_err(|err| store_err(format!("failed to serialize init run task: {err}")))?,
         )
+        .bind(serialize_task_toml(&RunTaskInput {
+            name: Some(initial_stage_snapshot.name.clone()),
+            task: RunTaskSpec::Init,
+        })?)
         .execute(&mut *tx)
         .await
         .map_err(map_sqlx)?;
@@ -526,15 +536,17 @@ impl ControlPlaneStore for PgStore {
                     name,
                     sequence_nr,
                     task,
+                    task_toml,
                     state
                 )
-                VALUES ($1, $2, $3, $4, 'pending')
+                VALUES ($1, $2, $3, $4, $5, 'pending')
                 "#,
             )
             .bind(run_id)
             .bind(task_name)
             .bind(sequence_nr)
             .bind(serialize_task(task)?)
+            .bind(serialize_task_toml(task)?)
             .execute(&mut *tx)
             .await
             .map_err(map_sqlx)?;
