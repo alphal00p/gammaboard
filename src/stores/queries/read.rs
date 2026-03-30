@@ -18,10 +18,6 @@ fn invalid_data_error(context: &str, err: impl Display) -> sqlx::Error {
     )))
 }
 
-fn decode_json<T: DeserializeOwned>(value: JsonValue, context: &str) -> Result<T, sqlx::Error> {
-    serde_json::from_value(value).map_err(|err| invalid_data_error(context, err))
-}
-
 fn decode_optional_json<T: DeserializeOwned>(value: Option<JsonValue>) -> Option<T> {
     value.and_then(|payload| serde_json::from_value(payload).ok())
 }
@@ -85,10 +81,7 @@ impl TryFrom<RunProgressRow> for RunProgress {
             desired_assignment_count: value.desired_assignment_count,
             active_worker_count: value.active_worker_count,
             integration_params: value.integration_params,
-            domain: value
-                .domain
-                .map(|payload| decode_json(payload, "invalid domain payload"))
-                .transpose()?,
+            domain: decode_optional_json(value.domain),
             active_task_id: value.active_task_id.map(id_text),
             target: value.target,
             nr_produced_samples: value.nr_produced_samples,
