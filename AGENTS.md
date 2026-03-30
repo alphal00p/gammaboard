@@ -45,8 +45,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Task transitions must restore runtime state from persisted `run_stage_snapshots`, not in-memory handoff only.
 - Snapshots are the branchable state timeline. Tasks are queued work items that may produce snapshots, but are not themselves the canonical branch identity.
 - Every run must persist a root stage snapshot at initialization with `sequence_nr = 0` and `task_id = null`.
-- Every run must also persist a completed reserved `init` run task at `sequence_nr = 0` so initialization is visible in task lists.
-- `init` is system-reserved and must not be accepted from user task TOML.
+- There is no reserved `init` run task; initialization is represented only by the root stage snapshot.
 - Sample source selection is per component (`sampler_aggregator`, `observable`), not a task-level snapshot id.
 - Cloning a run from a stage snapshot must not copy queued tasks; the cloned run starts idle at that cloned root snapshot.
 - A cloned run root snapshot name should identify the source run and source task (or root) it was cloned from.
@@ -58,7 +57,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Sample tasks may omit `sampler_aggregator`; omitted sampler uses the previous effective stage.
 - Sample tasks may omit `observable`; that means reuse the previous observable state.
 - Havana inference source selection lives inside Havana sampler config. Default is `latest_training_sampler_aggregator`, with optional explicit `snapshot_id`.
-- `sample` with `nr_samples = 0` is the only supported no-work stage update task shape.
+- `sample` with `nr_samples = 0` is the only supported no-work stage update task shape, including pure configuration updates.
 - GammaLoop evaluator point dimensions are inferred from the selected integrand. Do not configure `continuous_dims` or `discrete_dims` for `evaluator.kind = "gammaloop"`.
 - `observable = { config = "gammaloop" }` is supported only with `evaluator.kind = "gammaloop"` and persists GammaLoop's native histogram snapshot bundle directly.
 - Task files used for `run task add` may contain either `task = { ... }`, `[[task_queue]]`, or both. Normalize them as `task` first, then `task_queue`. Missing both should resolve to an empty task list.

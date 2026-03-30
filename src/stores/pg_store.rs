@@ -8,7 +8,7 @@ use crate::core::{
     SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore, WorkerRole,
     generated_task_name,
 };
-use crate::core::{IntegrationParams, RunSpec, RunTaskSpec, canonical_task_toml};
+use crate::core::{IntegrationParams, RunSpec, canonical_task_toml};
 use crate::evaluation::BatchResult;
 use crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot;
 use crate::sampling::LatentBatch;
@@ -119,11 +119,6 @@ fn decode_run_spec(
     }
 
     let obj = integration_params.as_object().unwrap();
-    if !obj.contains_key("sampler_aggregator") {
-        return Err(store_err(format!(
-            "invalid integration_params payload for run_id={run_id}: missing sampler_aggregator"
-        )));
-    }
     if !obj.contains_key("evaluator_runner_params") {
         return Err(store_err(format!(
             "invalid integration_params payload for run_id={run_id}: missing evaluator_runner_params"
@@ -491,35 +486,6 @@ impl ControlPlaneStore for PgStore {
                 batch_transforms: initial_stage_snapshot.batch_transforms.clone(),
             },
         )
-        .await
-        .map_err(map_sqlx)?;
-
-        sqlx::query(
-            r#"
-            INSERT INTO run_tasks (
-                run_id,
-                name,
-                sequence_nr,
-                task,
-                task_toml,
-                state,
-                started_at,
-                completed_at
-            )
-            VALUES ($1, $2, 0, $3, $4, 'completed', now(), now())
-            "#,
-        )
-        .bind(run_id)
-        .bind(initial_stage_snapshot.name.clone())
-        .bind(
-            serde_json::to_value(RunTaskSpec::Init)
-                .map_err(|err| store_err(format!("failed to serialize init run task: {err}")))?,
-        )
-        .bind(serialize_task_toml(&RunTaskInput {
-            name: Some(initial_stage_snapshot.name.clone()),
-            task: RunTaskSpec::Init,
-        })?)
-        .execute(&mut *tx)
         .await
         .map_err(map_sqlx)?;
 
@@ -928,11 +894,6 @@ mod tests {
                 "kind": "sin_evaluator",
                 "min_eval_time_per_sample_ms": 1
             },
-            "sampler_aggregator": {
-                "kind": "naive_monte_carlo",
-                "training_target_samples": 2
-            },
-            "parametrization": { "kind": "identity" },
             "evaluator_runner_params": {
                 "performance_snapshot_interval_ms": 5000
             },
@@ -956,9 +917,6 @@ mod tests {
             }),
         )
         .expect("decode");
-        let params: IntegrationParams =
-            serde_json::from_value(integration_params).expect("integration params");
-
         assert_eq!(spec.run_id, 7);
         assert_eq!(spec.domain, Domain::continuous(1));
         assert_eq!(spec.evaluator.kind_str(), "sin_evaluator");
@@ -966,12 +924,6 @@ mod tests {
             &spec.evaluator,
             crate::core::EvaluatorConfig::SinEvaluator { params }
                 if params.min_eval_time_per_sample_ms == 1
-        ));
-        assert_eq!(params.sampler_aggregator.kind_str(), "naive_monte_carlo");
-        assert!(matches!(
-            &params.sampler_aggregator,
-            crate::core::SamplerAggregatorConfig::NaiveMonteCarlo { params }
-                if params.training_target_samples == 2
         ));
         assert_eq!(
             spec.evaluator_runner_params,
@@ -1000,10 +952,7 @@ mod tests {
         let err = decode_run_spec(
             8,
             json!({
-                "evaluator": { "kind": "sin_evaluator" },
-                "observable": "scalar",
-                "sampler_aggregator": { "kind": "naive_monte_carlo" },
-                "parametrization": { "kind": "identity" }
+                "evaluator": { "kind": "sin_evaluator" }
             }),
             json!({
                 "continuous_dims": 1,
@@ -1019,8 +968,18 @@ mod tests {
         let err = decode_run_spec(
             9,
             json!({
-                "evaluator": { "kind": "sin_evaluator" },
-                "observable": "scalar"
+                "evaluator_runner_params": {
+                    "performance_snapshot_interval_ms": 5000
+                },
+                "sampler_aggregator_runner_params": {
+                    "performance_snapshot_interval_ms": 5000,
+                    "target_batch_eval_ms": 200.0,
+                    "target_queue_remaining": 0.0,
+                    "max_batch_size": 64,
+                    "max_queue_size": 128,
+                    "max_batches_per_tick": 1,
+                    "completed_batch_fetch_limit": 512
+                }
             }),
             json!({
                 "continuous_dims": 1,
@@ -1028,14 +987,21 @@ mod tests {
             }),
         )
         .expect_err("missing required components should fail");
-        assert!(err.to_string().contains("sampler_aggregator"));
+        assert!(err.to_string().contains("evaluator"));
 
         let err = decode_run_spec(
             9,
             json!({
                 "evaluator": { "kind": "sin_evaluator" },
-                "observable": "scalar",
-                "sampler_aggregator": { "kind": "naive_monte_carlo" }
+                "sampler_aggregator_runner_params": {
+                    "performance_snapshot_interval_ms": 5000,
+                    "target_batch_eval_ms": 200.0,
+                    "target_queue_remaining": 0.0,
+                    "max_batch_size": 64,
+                    "max_queue_size": 128,
+                    "max_batches_per_tick": 1,
+                    "completed_batch_fetch_limit": 512
+                }
             }),
             json!({
                 "continuous_dims": 1,

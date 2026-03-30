@@ -15,9 +15,9 @@ struct RunStageSnapshotRow {
     name: String,
     sequence_nr: Option<i32>,
     queue_empty: bool,
-    sampler_snapshot: JsonValue,
+    sampler_snapshot: Option<JsonValue>,
     observable_state: Option<JsonValue>,
-    sampler_aggregator: JsonValue,
+    sampler_aggregator: Option<JsonValue>,
     batch_transforms: JsonValue,
 }
 
@@ -37,10 +37,13 @@ impl TryFrom<RunStageSnapshotRow> for RunStageSnapshot {
             name: value.name,
             sequence_nr: value.sequence_nr,
             queue_empty: value.queue_empty,
-            sampler_snapshot: serde_json::from_value::<SamplerAggregatorSnapshot>(
-                value.sampler_snapshot,
-            )
-            .map_err(|err| decode("sampler_snapshot", err))?,
+            sampler_snapshot: value
+                .sampler_snapshot
+                .map(|payload| {
+                    serde_json::from_value::<SamplerAggregatorSnapshot>(payload)
+                        .map_err(|err| decode("sampler_snapshot", err))
+                })
+                .transpose()?,
             observable_state: value
                 .observable_state
                 .map(|payload| {
@@ -51,10 +54,13 @@ impl TryFrom<RunStageSnapshotRow> for RunStageSnapshot {
                     })
                 })
                 .transpose()?,
-            sampler_aggregator: serde_json::from_value::<SamplerAggregatorConfig>(
-                value.sampler_aggregator,
-            )
-            .map_err(|err| decode("sampler_aggregator", err))?,
+            sampler_aggregator: value
+                .sampler_aggregator
+                .map(|payload| {
+                    serde_json::from_value::<SamplerAggregatorConfig>(payload)
+                        .map_err(|err| decode("sampler_aggregator", err))
+                })
+                .transpose()?,
             batch_transforms: serde_json::from_value::<Vec<BatchTransformConfig>>(
                 value.batch_transforms,
             )
@@ -371,11 +377,17 @@ where
     .bind(snapshot.sequence_nr)
     .bind(snapshot.queue_empty)
     .bind(
-        serde_json::to_value(&snapshot.sampler_snapshot).map_err(|err| {
-            sqlx::Error::Protocol(format!(
-                "failed to encode sampler_snapshot for run_stage_snapshots: {err}"
-            ))
-        })?,
+        snapshot
+            .sampler_snapshot
+            .as_ref()
+            .map(|sampler_snapshot| {
+                serde_json::to_value(sampler_snapshot).map_err(|err| {
+                    sqlx::Error::Protocol(format!(
+                        "failed to encode sampler_snapshot for run_stage_snapshots: {err}"
+                    ))
+                })
+            })
+            .transpose()?,
     )
     .bind(
         snapshot
@@ -391,11 +403,17 @@ where
             .transpose()?,
     )
     .bind(
-        serde_json::to_value(&snapshot.sampler_aggregator).map_err(|err| {
-            sqlx::Error::Protocol(format!(
-                "failed to encode sampler_aggregator for run_stage_snapshots: {err}"
-            ))
-        })?,
+        snapshot
+            .sampler_aggregator
+            .as_ref()
+            .map(|sampler_aggregator| {
+                serde_json::to_value(sampler_aggregator).map_err(|err| {
+                    sqlx::Error::Protocol(format!(
+                        "failed to encode sampler_aggregator for run_stage_snapshots: {err}"
+                    ))
+                })
+            })
+            .transpose()?,
     )
     .bind(
         serde_json::to_value(&snapshot.batch_transforms).map_err(|err| {

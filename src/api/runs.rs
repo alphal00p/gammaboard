@@ -1,7 +1,6 @@
 use crate::api::ApiError;
 use crate::core::{
-    AggregationStore, ControlPlaneStore, IntegrationParams, RunStageSnapshot, RunTask,
-    RunTaskInput, RunTaskStore,
+    AggregationStore, ControlPlaneStore, RunStageSnapshot, RunTask, RunTaskInput, RunTaskStore,
 };
 use crate::preprocess::{RunAddConfig, preprocess_run_add};
 use crate::stores::RunProgress;
@@ -231,12 +230,7 @@ pub async fn append_tasks(
     task_file: TaskQueueFile,
 ) -> Result<AppendedTasks, ApiError> {
     let tasks = task_file.into_tasks();
-    let run = load_run_progress(store, run_id).await?;
-    if run.integration_params.is_none() {
-        return Err(ApiError::Internal(format!(
-            "run {run_id} is missing integration_params"
-        )));
-    }
+    let _run = load_run_progress(store, run_id).await?;
     preflight_task_batch(store, run_id, &tasks).await?;
     let tasks = store.append_run_tasks(run_id, &tasks).await?;
     Ok(AppendedTasks { tasks })
@@ -398,18 +392,6 @@ async fn load_run_progress(
         .get_run_progress(run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))
-}
-
-/// Decodes persisted run integration params into a typed value.
-pub fn decode_integration_params(
-    run_id: i32,
-    value: serde_json::Value,
-) -> Result<IntegrationParams, ApiError> {
-    serde_json::from_value(value).map_err(|err| {
-        ApiError::Internal(format!(
-            "invalid integration_params for run {run_id}: {err}"
-        ))
-    })
 }
 
 fn read_default_run_add_toml() -> Result<toml::Value, ApiError> {

@@ -413,9 +413,9 @@ where
                 name: self.task.name.clone(),
                 sequence_nr: Some(self.task.sequence_nr),
                 queue_empty,
-                sampler_snapshot: snapshot.sampler_snapshot.clone(),
+                sampler_snapshot: Some(snapshot.sampler_snapshot.clone()),
                 observable_state: Some(self.observable_state.clone()),
-                sampler_aggregator: self.sampler_config.clone(),
+                sampler_aggregator: Some(self.sampler_config.clone()),
                 batch_transforms: self.batch_transforms.clone(),
             })
             .await?;

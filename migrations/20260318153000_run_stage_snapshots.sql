@@ -5,9 +5,9 @@ CREATE TABLE IF NOT EXISTS run_stage_snapshots (
     name TEXT NOT NULL,
     sequence_nr INT,
     queue_empty BOOLEAN NOT NULL,
-    sampler_snapshot JSONB NOT NULL,
+    sampler_snapshot JSONB,
     observable_state JSONB,
-    sampler_aggregator JSONB NOT NULL,
+    sampler_aggregator JSONB,
     batch_transforms JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

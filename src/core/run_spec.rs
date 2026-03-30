@@ -15,9 +15,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegrationParams {
     pub evaluator: EvaluatorConfig,
-    pub sampler_aggregator: SamplerAggregatorConfig,
-    #[serde(default)]
-    pub batch_transforms: Vec<BatchTransformConfig>,
     pub evaluator_runner_params: EvaluatorRunnerParams,
     pub sampler_aggregator_runner_params: SamplerAggregatorRunnerParams,
 }

@@ -90,7 +90,11 @@ where
         else {
             return Ok(None);
         };
-        if snapshot.sampler_snapshot.contains_havana_grid() {
+        if snapshot
+            .sampler_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.contains_havana_grid())
+        {
             return Ok(Some(snapshot));
         }
         let prev_seq = snapshot.sequence_nr.unwrap_or(0);
@@ -124,12 +128,12 @@ where
         .or_else(|| {
             source_snapshot
                 .as_ref()
-                .map(|snapshot| snapshot.sampler_aggregator.clone())
+                .and_then(|snapshot| snapshot.sampler_aggregator.clone())
         })
         .or_else(|| {
             base_stage_snapshot
                 .as_ref()
-                .map(|snapshot| snapshot.sampler_aggregator.clone())
+                .and_then(|snapshot| snapshot.sampler_aggregator.clone())
         })
         .ok_or_else(|| {
             StoreError::store(format!(

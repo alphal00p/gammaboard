@@ -232,8 +232,8 @@ pub struct RunStageSnapshot {
     pub name: String,
     pub sequence_nr: Option<i32>,
     pub queue_empty: bool,
-    pub sampler_snapshot: SamplerAggregatorSnapshot,
+    pub sampler_snapshot: Option<SamplerAggregatorSnapshot>,
     pub observable_state: Option<ObservableState>,
-    pub sampler_aggregator: SamplerAggregatorConfig,
+    pub sampler_aggregator: Option<SamplerAggregatorConfig>,
     pub batch_transforms: Vec<BatchTransformConfig>,
 }

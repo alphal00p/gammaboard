@@ -1,24 +1,6 @@
-use crate::core::{BatchTransformConfig, BuildError, RunStageSnapshot, SamplerAggregatorConfig};
-use crate::utils::domain::Domain;
+use crate::core::{BuildError, RunStageSnapshot};
 
-/// New variant which accepts an optional `sample_budget`. When creating an initial stage for
-/// a sampler that requires a training budget (e.g. `HavanaTraining`), callers can pass the
-/// intended budget so the sampler can be constructed properly for initial snapshot construction.
-pub(super) fn build_initial_stage_with_budget(
-    initial_sampler_aggregator: &SamplerAggregatorConfig,
-    initial_batch_transforms: &[BatchTransformConfig],
-    domain: &Domain,
-    sample_budget: Option<usize>,
-) -> Result<RunStageSnapshot, BuildError> {
-    // Pass the provided sample_budget into the sampler builder. The handoff is None for initial stage.
-    let mut sampler = initial_sampler_aggregator.build(domain.clone(), sample_budget, None)?;
-    sampler.validate_domain(domain)?;
-    let materializer = initial_sampler_aggregator.build_materializer(None)?;
-    materializer.validate_domain(domain)?;
-    for transform in initial_batch_transforms {
-        transform.build()?.validate_domain(domain)?;
-    }
-
+pub(super) fn build_initial_stage() -> Result<RunStageSnapshot, BuildError> {
     Ok(RunStageSnapshot {
         id: None,
         run_id: 0,
@@ -26,9 +8,9 @@ pub(super) fn build_initial_stage_with_budget(
         name: "root".to_string(),
         sequence_nr: None,
         queue_empty: true,
-        sampler_snapshot: sampler.snapshot()?,
+        sampler_snapshot: None,
         observable_state: None,
-        sampler_aggregator: initial_sampler_aggregator.clone(),
-        batch_transforms: initial_batch_transforms.to_vec(),
+        sampler_aggregator: None,
+        batch_transforms: Vec::new(),
     })
 }

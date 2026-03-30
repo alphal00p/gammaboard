@@ -100,7 +100,6 @@ impl ObservableSourceSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RunTaskSpec {
-    Init,
     Sample {
         nr_samples: Option<i64>,
         #[serde(default)]
@@ -131,11 +130,9 @@ pub enum RunTaskSpec {
 impl RunTaskSpec {
     pub fn validate(&self) -> Result<(), String> {
         match self {
-            Self::Init => Err("init task is reserved and cannot be added manually".to_string()),
-            Self::Sample {
-                nr_samples: Some(nr_samples),
-                ..
-            } if *nr_samples < 0 => {
+            Self::Sample { nr_samples, .. }
+                if nr_samples.is_some_and(|nr_samples| nr_samples < 0) =>
+            {
                 Err("sample task nr_samples must be a non-negative integer when set".to_string())
             }
             Self::Sample {
@@ -150,22 +147,25 @@ impl RunTaskSpec {
                     .to_string(),
             ),
             Self::Sample {
-                sampler_aggregator: Some(source),
+                sampler_aggregator,
+                observable,
                 ..
-            } => source.validate(),
-            Self::Sample {
-                observable: Some(source),
-                ..
-            } => source.validate(),
+            } => {
+                if let Some(source) = sampler_aggregator {
+                    source.validate()?;
+                }
+                if let Some(source) = observable {
+                    source.validate()?;
+                }
+                Ok(())
+            }
             Self::Image { geometry, .. } => geometry.validate(),
             Self::PlotLine { geometry, .. } => geometry.validate(),
-            _ => Ok(()),
         }
     }
 
     pub fn kind_str(&self) -> &'static str {
         match self {
-            Self::Init => "init",
             Self::Sample { .. } => "sample",
             Self::Image { .. } => "image",
             Self::PlotLine { .. } => "plot_line",
@@ -174,7 +174,6 @@ impl RunTaskSpec {
 
     pub fn sampler_config(&self) -> Option<SamplerAggregatorConfig> {
         match self {
-            Self::Init => None,
             Self::Sample { .. } => None,
             Self::Image { geometry, .. } => Some(SamplerAggregatorConfig::RasterPlane {
                 params: RasterPlaneSamplerParams {
@@ -191,7 +190,6 @@ impl RunTaskSpec {
 
     pub fn sample_sampler_source(&self) -> Option<SourceRefSpec> {
         match self {
-            Self::Init => None,
             Self::Sample {
                 sampler_aggregator, ..
             } => match sampler_aggregator {
@@ -207,7 +205,6 @@ impl RunTaskSpec {
 
     pub fn sample_sampler_config(&self) -> Option<SamplerAggregatorConfig> {
         match self {
-            Self::Init => None,
             Self::Sample {
                 sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config { config }),
                 ..
@@ -219,7 +216,6 @@ impl RunTaskSpec {
 
     pub fn batch_transforms_config(&self) -> Option<Vec<BatchTransformConfig>> {
         match self {
-            Self::Init => Some(Vec::new()),
             Self::Sample {
                 batch_transforms, ..
             } => batch_transforms.clone(),
@@ -234,7 +230,6 @@ impl RunTaskSpec {
 
     pub fn sample_observable_source(&self) -> Option<SourceRefSpec> {
         match self {
-            Self::Init => None,
             Self::Sample { observable, .. } => match observable {
                 None | Some(ObservableSourceSpec::Latest(_)) => Some(SourceRefSpec::Latest),
                 Some(ObservableSourceSpec::FromName { from_name }) => {
@@ -258,12 +253,11 @@ impl RunTaskSpec {
     }
 
     pub fn is_sourceable(&self) -> bool {
-        !matches!(self, Self::Init)
+        true
     }
 
     pub fn new_observable_config(&self) -> Result<Option<ObservableConfig>, BuildError> {
         match self {
-            Self::Init => Ok(None),
             Self::Sample {
                 observable: Some(ObservableSourceSpec::Config { config }),
                 ..
@@ -277,7 +271,6 @@ impl RunTaskSpec {
 
     pub fn nr_expected_samples(&self) -> Option<i64> {
         match self {
-            Self::Init => None,
             Self::Sample { nr_samples, .. } => *nr_samples,
             Self::Image { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::PlotLine { geometry, .. } => Some(geometry.nr_points() as i64),
@@ -297,7 +290,6 @@ impl IntoPreflightTask for RunTaskSpec {
     fn into_preflight(self) -> Result<Option<Self>, BuildError> {
         self.validate().map_err(BuildError::invalid_input)?;
         match self {
-            Self::Init => Ok(None),
             Self::Sample {
                 nr_samples,
                 sampler_aggregator,

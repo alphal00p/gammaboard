@@ -346,19 +346,26 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         let observable_state = if let Some(snapshot) = restored_snapshot.as_ref() {
             snapshot.observable_state.clone()
         } else if let Some(source_snapshot) = observable_source_snapshot.as_ref() {
-            source_snapshot
-                .observable_state
-                .clone()
-                .unwrap_or_else(|| crate::evaluation::ObservableState::empty_scalar())
+            source_snapshot.observable_state.clone().ok_or_else(|| {
+                StoreError::store(format!(
+                    "run {} task {} source snapshot has no observable state",
+                    worker.run_id, task.id
+                ))
+            })?
         } else if let Some(config) = new_observable_config {
             Self::observable_state_from_config(config)
         } else if let Some(snapshot) = base_stage_snapshot.as_ref() {
-            snapshot
-                .observable_state
-                .clone()
-                .unwrap_or_else(|| crate::evaluation::ObservableState::empty_scalar())
+            snapshot.observable_state.clone().ok_or_else(|| {
+                StoreError::store(format!(
+                    "run {} task {} has no observable configuration",
+                    worker.run_id, task.id
+                ))
+            })?
         } else {
-            crate::evaluation::ObservableState::empty_scalar()
+            return Err(StoreError::store(format!(
+                "run {} task {} has no observable configuration",
+                worker.run_id, task.id
+            )));
         };
 
         let run_progress = worker.store.load_run_sample_progress(worker.run_id).await?;

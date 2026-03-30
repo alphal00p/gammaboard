@@ -530,7 +530,7 @@ sampler_aggregator = { config = { kind = "havana_inference" } }
                 .bind(run_id)
                 .fetch_one(&pool)
                 .await?;
-                Ok(completed == 7)
+                Ok(completed == 6)
             }
         })
         .await?;
@@ -1236,7 +1236,7 @@ min_eval_time_per_sample_ms = 20
 [[task_queue]]
 kind = "sample"
 nr_samples = 128
-observable = "scalar"
+observable = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 [evaluator_runner_params]
@@ -1387,7 +1387,7 @@ observable_kind = "scalar"
 [[task_queue]]
 kind = "sample"
 nr_samples = 32
-observable = "scalar"
+observable = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_produce_batch_nr = 1 } }
 "#,
     );
@@ -1450,7 +1450,7 @@ observable_kind = "scalar"
 [[task_queue]]
 kind = "sample"
 nr_samples = 32
-observable = "scalar"
+observable = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materialize_batch_nr = 1 } }
 "#,
     );
@@ -1531,7 +1531,7 @@ fail_on_batch_nr = 1
 [[task_queue]]
 kind = "sample"
 nr_samples = 32
-observable = "scalar"
+observable = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 "#,
     );
@@ -1601,7 +1601,7 @@ kind = "sin_evaluator"
 [[task_queue]]
 kind = "sample"
 nr_samples = 16
-observable = "scalar"
+observable = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 [[task_queue]]
@@ -1666,7 +1666,7 @@ nr_samples = 16
                 && w2.1.is_none()
                 && w2.2.is_none()
                 && w2.3.is_none()
-                && completed == 3)
+                && completed == 2)
         })
         .await?;
 
@@ -1699,7 +1699,7 @@ nr_samples = 16
             .bind(cloned_run_id)
             .fetch_one(&harness.pool)
             .await?;
-    assert_eq!(cloned_task_count, 1);
+    assert_eq!(cloned_task_count, 0);
 
     let cloned_root_snapshot_name: String = sqlx::query_scalar(
         "SELECT name FROM run_stage_snapshots WHERE run_id = $1 AND task_id IS NULL ORDER BY id ASC LIMIT 1",

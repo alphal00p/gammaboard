@@ -545,27 +545,32 @@ async fn get_run_sampler_aggregator_config(
     State(state): State<AppState>,
     AxumPath(run_id): AxumPath<i32>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let run = state
+    let _run = state
         .store
         .get_run_progress(run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
-    let integration_params = run_api::decode_integration_params(
-        run_id,
-        run.integration_params.ok_or_else(|| {
-            ApiError::Internal(format!("run {run_id} is missing integration_params"))
-        })?,
-    )?;
-    let fallback_sampler_config = integration_params.sampler_aggregator.clone();
     let run_spec = state
         .store
         .load_run_spec(run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
     let sampler_config = if let Some(task) = state.store.load_active_run_task(run_id).await? {
-        resolve_active_task_sampler_config(&state, run_id, &task, &fallback_sampler_config).await?
+        resolve_active_task_sampler_config(&state, run_id, &task).await?
+    } else if let Some(latest_snapshot) = state
+        .store
+        .load_latest_stage_snapshot_before_sequence(run_id, i32::MAX)
+        .await?
+    {
+        latest_snapshot.sampler_aggregator.ok_or_else(|| {
+            ApiError::BadRequest(format!(
+                "run {run_id} has no configured sampler_aggregator yet"
+            ))
+        })?
     } else {
-        fallback_sampler_config
+        return Err(ApiError::BadRequest(format!(
+            "run {run_id} has no configured sampler_aggregator yet"
+        )));
     };
     let response: PanelResponse = sampler_config
         .build_response(
@@ -583,7 +588,6 @@ async fn resolve_active_task_sampler_config(
     state: &AppState,
     run_id: i32,
     task: &RunTask,
-    fallback_sampler_config: &crate::core::SamplerAggregatorConfig,
 ) -> Result<crate::core::SamplerAggregatorConfig, ApiError> {
     if let Some(config) = task.task.sampler_config() {
         return Ok(config);
@@ -595,18 +599,25 @@ async fn resolve_active_task_sampler_config(
     if let Some(source_snapshot) =
         resolve_task_source_snapshot(state, run_id, task, task.task.sample_sampler_source()).await?
     {
-        return Ok(source_snapshot.sampler_aggregator);
+        if let Some(config) = source_snapshot.sampler_aggregator {
+            return Ok(config);
+        }
     }
 
     if let Some(base_snapshot) = state
         .store
-        .load_latest_stage_snapshot_before_sequence(run_id, i32::MAX)
+        .load_latest_stage_snapshot_before_sequence(run_id, task.sequence_nr)
         .await?
     {
-        return Ok(base_snapshot.sampler_aggregator);
+        if let Some(config) = base_snapshot.sampler_aggregator {
+            return Ok(config);
+        }
     }
 
-    Ok(fallback_sampler_config.clone())
+    Err(ApiError::BadRequest(format!(
+        "task {} has no effective sampler_aggregator configuration",
+        task.id
+    )))
 }
 
 async fn resolve_task_source_snapshot(

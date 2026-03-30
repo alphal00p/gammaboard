@@ -188,7 +188,6 @@ For `evaluator.kind = "gammaloop"`, `continuous_dims` and `discrete_dims` are in
 
 If `task_queue` is omitted, the run is created idle.
 Every run stores an initial root stage snapshot (`sequence_nr = 0`) immediately at creation.
-Every run also stores a completed reserved `init` task at `sequence_nr = 0` so initialization appears in the task list.
 
 ### Task Queue
 Sample tasks use direct per-component source specs:
@@ -200,7 +199,7 @@ Sample tasks use direct per-component source specs:
 Task names are unique per run and can be referenced by `from_name`.
 `batch_transforms` is stage state for tasks. Omitted inherits; `batch_transforms = []` explicitly clears inherited transforms.
 When you want raster `image`/`plot_line` tasks to evaluate directly in declared geometry coordinates after transformed sampling stages, set `batch_transforms = []` on those raster tasks.
-Use `nr_samples = 0` when you want a sample task to only update stage state without producing work.
+Use `nr_samples = 0` when you want a sample task to only update stage state without producing work. This is the configuration-only task shape.
 Task files used with `gammaboard run task add` may contain either a single `task = { ... }`, a `[[task_queue]]` array, or both. When both are present, `task` is appended first.
 
 Sample task config example:

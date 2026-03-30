@@ -40,7 +40,7 @@ impl StageHandoffOwned {
 impl From<RunStageSnapshot> for StageHandoffOwned {
     fn from(snapshot: RunStageSnapshot) -> Self {
         Self {
-            sampler_snapshot: Some(snapshot.sampler_snapshot),
+            sampler_snapshot: snapshot.sampler_snapshot,
             observable_state: snapshot.observable_state,
         }
     }
