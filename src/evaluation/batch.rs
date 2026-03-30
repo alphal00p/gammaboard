@@ -129,6 +129,28 @@ impl BatchResult {
         }
     }
 
+    pub fn validate_json_safe(&self) -> Result<(), BatchError> {
+        if let Some(values) = &self.values {
+            for (idx, value) in values.iter().enumerate() {
+                if !value.is_finite() {
+                    return Err(BatchError::layout(format!(
+                        "batch values contain non-finite f64 at index {idx}: {value}"
+                    )));
+                }
+            }
+        }
+
+        let observable_json = self.observable.to_json().map_err(|err| {
+            BatchError::layout(format!(
+                "failed to serialize batch observable payload: {err}"
+            ))
+        })?;
+        ObservableState::from_json(&observable_json).map_err(|err| {
+            BatchError::layout(format!("batch observable is not JSON-safe: {err}"))
+        })?;
+        Ok(())
+    }
+
     pub fn values_from_json(
         values: Option<&JsonValue>,
         observable: &JsonValue,
@@ -145,5 +167,29 @@ impl BatchResult {
             BatchError::layout(format!("invalid batch observable payload: {err}"))
         })?;
         Ok(Self::new(parsed_values, parsed_observable))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BatchResult;
+    use crate::evaluation::{FullScalarObservableState, ObservableState};
+
+    #[test]
+    fn validate_json_safe_rejects_non_finite_full_observable_values() {
+        let result = BatchResult::new(
+            None,
+            ObservableState::FullScalar(FullScalarObservableState {
+                values: vec![1.0, f64::NAN],
+            }),
+        );
+
+        let err = result
+            .validate_json_safe()
+            .expect_err("expected non-finite error");
+        assert!(
+            err.to_string()
+                .contains("batch observable is not JSON-safe")
+        );
     }
 }

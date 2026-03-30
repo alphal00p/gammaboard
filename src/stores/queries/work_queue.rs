@@ -166,6 +166,9 @@ pub(crate) async fn submit_batch_results(
     result: &BatchResult,
     eval_time_ms: f64,
 ) -> Result<(), sqlx::Error> {
+    result
+        .validate_json_safe()
+        .map_err(|err| sqlx::Error::Protocol(format!("invalid batch result payload: {err}")))?;
     let observable = encode_json("batch observable", &result.observable)?;
     let result = sqlx::query(
         r#"

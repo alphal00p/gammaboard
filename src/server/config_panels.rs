@@ -65,11 +65,7 @@ impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
         ctx: &EvaluatorPanelContext<'_>,
     ) -> Result<Vec<PanelState>, EngineError> {
         let mut summary = vec![
-            key_value(
-                "implementation",
-                "Implementation",
-                implementation_kind(self),
-            ),
+            key_value("implementation", "Implementation", self.kind_str()),
             key_value("domain", "Domain", summarize_domain(ctx.domain)),
             key_value(
                 "snapshot_interval_ms",
@@ -146,11 +142,7 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
         let mut panels = vec![key_value_panel(
             "sampler_summary",
             vec![
-                key_value(
-                    "implementation",
-                    "Implementation",
-                    implementation_kind(self),
-                ),
+                key_value("implementation", "Implementation", self.kind_str()),
                 key_value("domain", "Domain", summarize_domain(ctx.domain)),
                 key_value(
                     "target_queue_remaining",
@@ -189,19 +181,6 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
         }
         Ok(panels)
     }
-}
-
-fn implementation_kind<T: Serialize>(value: &T) -> String {
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|value| {
-            value
-                .as_object()
-                .and_then(|object| object.get("kind"))
-                .and_then(JsonValue::as_str)
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn summarize_domain(domain: &Domain) -> String {
