@@ -4,6 +4,9 @@ use crate::core::{
 use crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot;
 use crate::sampling::StageHandoffOwned;
 
+pub(crate) const HAVANA_HANDOFF_REQUIRED_ERROR: &str =
+    "havana_inference sampler requires a havana training or inference snapshot handoff";
+
 pub(crate) struct ResolvedStageContext {
     pub(crate) sampler_config: crate::core::SamplerAggregatorConfig,
     pub(crate) batch_transforms: Vec<BatchTransformConfig>,
@@ -173,9 +176,7 @@ where
                 match snapshot {
                     Some(snapshot) => Some(snapshot.into()),
                     None => {
-                        return Err(StoreError::store(
-                            "havana_inference sampler requires a havana training or inference snapshot handoff",
-                        ));
+                        return Err(StoreError::store(HAVANA_HANDOFF_REQUIRED_ERROR));
                     }
                 }
             }

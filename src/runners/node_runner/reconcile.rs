@@ -3,11 +3,13 @@ use super::{
     role_runner::RoleRunner,
 };
 
-use crate::core::{
-    BatchTransformConfig, ObservableConfig, RunStageSnapshot, RunTask, RunTaskState, SourceRefSpec,
-    StoreError,
+use crate::core::{BatchTransformConfig, ObservableConfig, RunTask, RunTaskState, StoreError};
+use crate::runners::{
+    EvaluatorRunner, SamplerAggregatorRunner,
+    stage_context::{
+        HAVANA_HANDOFF_REQUIRED_ERROR, resolve_source_snapshot, resolve_stage_context,
+    },
 };
-use crate::runners::{EvaluatorRunner, SamplerAggregatorRunner};
 use crate::sampling::StageHandoffOwned;
 use tracing::{error, info, warn};
 
@@ -32,106 +34,52 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             .as_ref()
             .filter(|snapshot| snapshot.task_id == task.id)
             .cloned();
-        let base_stage_snapshot = worker
-            .store
-            .load_latest_stage_snapshot_before_sequence(worker.run_id, i32::MAX)
-            .await?;
-        let sampler_source_snapshot =
-            Self::resolve_source_snapshot(worker, task, task.task.sample_sampler_source()).await?;
-
-        let sampler_config = if let Some(config) = task.task.sampler_config() {
-            config
-        } else {
-            task.task
-                .sample_sampler_config()
-                .or_else(|| {
-                    sampler_source_snapshot
-                        .as_ref()
-                        .map(|snapshot| snapshot.sampler_aggregator.clone())
-                })
-                .or_else(|| {
-                    base_stage_snapshot
-                        .as_ref()
-                        .map(|snapshot| snapshot.sampler_aggregator.clone())
-                })
-                .ok_or_else(|| {
-                    StoreError::store(format!(
-                        "run {} task {} has no sampler configuration",
-                        worker.run_id, task.id
-                    ))
-                })?
-        };
-
-        let batch_transforms = task
-            .task
-            .batch_transforms_config()
-            .or_else(|| {
-                sampler_source_snapshot
-                    .as_ref()
-                    .map(|snapshot| snapshot.batch_transforms.clone())
-            })
-            .or_else(|| {
-                base_stage_snapshot
-                    .as_ref()
-                    .map(|snapshot| snapshot.batch_transforms.clone())
-            })
-            .unwrap_or_default();
-
-        let handoff = if let Some(runner_snapshot) = restored_snapshot {
-            Some(Self::owned_stage_handoff_from_runner_snapshot(
-                runner_snapshot,
-            ))
-        } else if let Some(snapshot) = sampler_source_snapshot {
-            Some(Self::owned_stage_handoff_from_stage_snapshot(snapshot))
-        } else {
-            match &sampler_config {
-                crate::core::SamplerAggregatorConfig::HavanaInference { params } => {
-                    let snapshot = match &params.source {
-                        crate::sampling::HavanaInferenceSource::Snapshot { snapshot_id } => {
-                            worker.store.load_stage_snapshot(*snapshot_id).await?
-                        }
-                        crate::sampling::HavanaInferenceSource::LatestTrainingSamplerAggregator => {
-                            Self::find_latest_havana_snapshot(worker).await?
-                        }
-                    };
-                    if let Some(snapshot) = snapshot {
-                        Some(Self::owned_stage_handoff_from_stage_snapshot(snapshot))
-                    } else {
-                        let reason = "havana_inference sampler requires a havana training or inference snapshot handoff";
-                        if let Err(e) = worker.store.fail_run_task(task.id, reason).await {
-                            warn!(
-                                run_id = worker.run_id,
-                                task_id = task.id,
-                                error = %e,
-                                "failed to persist task failure for activation error"
-                            );
-                        }
-                        if let Err(e) = self
-                            .store
-                            .clear_desired_assignments_for_run(worker.run_id)
-                            .await
-                        {
-                            warn!(
-                                run_id = worker.run_id,
-                                error = %e,
-                                "failed to clear desired assignments for run after task activation failure"
-                            );
-                        } else {
-                            warn!(
-                                run_id = worker.run_id,
-                                task_id = task.id,
-                                reason,
-                                "task activation failed (missing havana snapshot); desired assignments cleared"
-                            );
-                        }
-                        return Err(StoreError::store(reason));
-                    }
+        match resolve_stage_context(
+            &worker.store,
+            worker.run_id,
+            task,
+            i32::MAX,
+            restored_snapshot,
+        )
+        .await
+        {
+            Ok(resolved) => Ok((
+                resolved.sampler_config,
+                resolved.batch_transforms,
+                resolved.handoff,
+            )),
+            Err(err) if err.to_string() == HAVANA_HANDOFF_REQUIRED_ERROR => {
+                let reason = err.to_string();
+                if let Err(e) = worker.store.fail_run_task(task.id, &reason).await {
+                    warn!(
+                        run_id = worker.run_id,
+                        task_id = task.id,
+                        error = %e,
+                        "failed to persist task failure for activation error"
+                    );
                 }
-                _ => base_stage_snapshot.map(Self::owned_stage_handoff_from_stage_snapshot),
+                if let Err(e) = self
+                    .store
+                    .clear_desired_assignments_for_run(worker.run_id)
+                    .await
+                {
+                    warn!(
+                        run_id = worker.run_id,
+                        error = %e,
+                        "failed to clear desired assignments for run after task activation failure"
+                    );
+                } else {
+                    warn!(
+                        run_id = worker.run_id,
+                        task_id = task.id,
+                        reason,
+                        "task activation failed (missing havana snapshot); desired assignments cleared"
+                    );
+                }
+                Err(err)
             }
-        };
-
-        Ok((sampler_config, batch_transforms, handoff))
+            Err(err) => Err(err),
+        }
     }
 
     pub(super) async fn resolve_desired_target(&self) -> Result<Option<RoleTarget>, StoreError> {
@@ -336,9 +284,13 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             .store
             .load_latest_stage_snapshot_before_sequence(worker.run_id, i32::MAX)
             .await?;
-        let observable_source_snapshot =
-            Self::resolve_source_snapshot(worker, &task, task.task.sample_observable_source())
-                .await?;
+        let observable_source_snapshot = resolve_source_snapshot(
+            &worker.store,
+            worker.run_id,
+            &task,
+            task.task.sample_observable_source(),
+        )
+        .await?;
 
         let sample_budget = task
             .task
@@ -440,101 +392,6 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         }
         info!("sampler-aggregator worker started");
         Ok(Some(Box::new(runner)))
-    }
-
-    async fn resolve_source_snapshot(
-        worker: &ActiveWorker<S>,
-        task: &RunTask,
-        source: Option<SourceRefSpec>,
-    ) -> Result<Option<RunStageSnapshot>, StoreError> {
-        match source {
-            Some(SourceRefSpec::Latest) => {
-                worker
-                    .store
-                    .load_latest_stage_snapshot_before_sequence(worker.run_id, task.sequence_nr)
-                    .await
-            }
-            Some(SourceRefSpec::FromName(source_task_name)) => {
-                let source_task = worker
-                    .store
-                    .list_run_tasks(worker.run_id)
-                    .await?
-                    .into_iter()
-                    .find(|candidate| candidate.name == source_task_name)
-                    .ok_or_else(|| {
-                        StoreError::store(format!(
-                            "task {} references source task '{}' but no such task exists in run {}",
-                            task.id, source_task_name, worker.run_id
-                        ))
-                    })?;
-                if source_task.sequence_nr >= task.sequence_nr {
-                    return Err(StoreError::store(format!(
-                        "task {} references source task '{}' which is not prior in sequence",
-                        task.id, source_task_name
-                    )));
-                }
-                let snapshot = worker
-                    .store
-                    .load_latest_stage_snapshot_before_sequence(
-                        worker.run_id,
-                        source_task.sequence_nr + 1,
-                    )
-                    .await?
-                    .ok_or_else(|| {
-                        StoreError::store(format!(
-                            "task {} source task '{}' has no queue-empty stage snapshot",
-                            task.id, source_task_name
-                        ))
-                    })?;
-                if snapshot.task_id != Some(source_task.id) {
-                    return Err(StoreError::store(format!(
-                        "task {} source task '{}' has no queue-empty stage snapshot",
-                        task.id, source_task_name
-                    )));
-                }
-                Ok(Some(snapshot))
-            }
-            None => Ok(None),
-        }
-    }
-
-    async fn find_latest_havana_snapshot(
-        worker: &ActiveWorker<S>,
-    ) -> Result<Option<RunStageSnapshot>, StoreError> {
-        let mut search_seq = i32::MAX;
-        loop {
-            let Some(snapshot) = worker
-                .store
-                .load_latest_stage_snapshot_before_sequence(worker.run_id, search_seq)
-                .await?
-            else {
-                return Ok(None);
-            };
-            if snapshot.sampler_snapshot.contains_havana_grid() {
-                return Ok(Some(snapshot));
-            }
-            let prev_seq = snapshot.sequence_nr.unwrap_or(0);
-            if prev_seq <= 0 {
-                return Ok(None);
-            }
-            search_seq = prev_seq;
-        }
-    }
-
-    fn owned_stage_handoff_from_stage_snapshot(snapshot: RunStageSnapshot) -> StageHandoffOwned {
-        StageHandoffOwned {
-            sampler_snapshot: Some(snapshot.sampler_snapshot),
-            observable_state: snapshot.observable_state,
-        }
-    }
-
-    fn owned_stage_handoff_from_runner_snapshot(
-        snapshot: crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot,
-    ) -> StageHandoffOwned {
-        StageHandoffOwned {
-            sampler_snapshot: Some(snapshot.sampler_snapshot),
-            observable_state: Some(snapshot.observable_state),
-        }
     }
 
     fn observable_state_from_config(
