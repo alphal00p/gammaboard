@@ -107,6 +107,7 @@ Use this flow when you want both direct LAN access and the SSH tunnel option.
    ```bash
    just deploy-itphlies
    ```
+   This builds the backend in release mode and launches `target/release/gammaboard`.
 2. On your laptop, open an SSH tunnel:
    ```bash
    ssh -N -L 8080:127.0.0.1:8080 ITPhliesTails
@@ -131,6 +132,7 @@ Important:
 - If you want to access the UI via a raw LAN IP or another hostname, add that exact origin to `allowed_origins`.
 - Backend listens on `127.0.0.1:4000`; nginx listens on `0.0.0.0:8080`.
 - `just deploy-itphlies-server` writes backend PID/log to `logs/itphlies-backend.pid` and `logs/itphlies-backend.log`.
+- ITPhlies deployment uses the release backend binary; local dev/local-prod flows still use the `dev-optim` profile.
 
 ## Frontend API Routing
 - The dashboard frontend always calls relative `/api` endpoints.

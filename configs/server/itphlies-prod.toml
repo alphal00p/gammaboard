@@ -3,6 +3,7 @@ port = 4000
 allowed_origins = [
     "http://localhost:8080",
     "http://itphlies:8080",
+    "http://itphlies.tailb3264.ts.net:8080",
 ]
 secure_cookie = false
 allow_db_admin = true

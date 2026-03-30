@@ -1,7 +1,7 @@
 # Example GammaLoop run.
 # Assumes `gammaloop` is a sister folder of `gammaboard`.
 
-name = "gammaloop-triangle"
+name = "tth"
 
 [evaluator]
 kind = "gammaloop"

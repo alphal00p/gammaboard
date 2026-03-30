@@ -1,7 +1,11 @@
 bin := "./target/dev-optim/gammaboard"
+release_bin := "./target/release/gammaboard"
 
 build-backend:
     cargo build --profile dev-optim
+
+build-backend-release:
+    cargo build --release
 
 build:
     just build-frontend
@@ -51,7 +55,7 @@ deploy-itphlies-server:
 
     backend_pid_file="$PWD/logs/itphlies-backend.pid"
     backend_log_file="$PWD/logs/itphlies-backend.log"
-    server_pattern="{{bin}} server"
+    server_pattern="{{release_bin}} server"
 
     mkdir -p logs
     if [[ -f "$backend_pid_file" ]]; then
@@ -70,7 +74,7 @@ deploy-itphlies-server:
         fi
     done
 
-    {{bin}} server --server-config configs/server/itphlies-prod.toml >"$backend_log_file" 2>&1 &
+    {{release_bin}} server --server-config configs/server/itphlies-prod.toml >"$backend_log_file" 2>&1 &
     new_pid=$!
     echo "$new_pid" > "$backend_pid_file"
 
@@ -138,12 +142,21 @@ stop-itphlies-deploy:
         echo "itphlies backend already stopped"
     fi
 
-    mapfile -t stale_backend_pids < <(pgrep -f "{{bin}} server" || true)
+    mapfile -t stale_backend_pids < <(pgrep -f "{{release_bin}} server" || true)
     for pid in "${stale_backend_pids[@]}"; do
         if [[ -n "$pid" ]]; then
             kill "$pid" >/dev/null 2>&1 || true
             wait "$pid" >/dev/null 2>&1 || true
             echo "killed stale backend pid=$pid"
+        fi
+    done
+
+    mapfile -t stale_dev_backend_pids < <(pgrep -f "{{bin}} server" || true)
+    for pid in "${stale_dev_backend_pids[@]}"; do
+        if [[ -n "$pid" ]]; then
+            kill "$pid" >/dev/null 2>&1 || true
+            wait "$pid" >/dev/null 2>&1 || true
+            echo "killed stale dev backend pid=$pid"
         fi
     done
 
@@ -168,8 +181,9 @@ deploy-itphlies:
     frontend_log_file="$PWD/logs/itphlies-frontend.log"
 
     just stop-itphlies-deploy
-    {{bin}} db start
-    just build
+    just build-frontend
+    just build-backend-release
+    {{release_bin}} db start
     just deploy-itphlies-server
     just deploy-itphlies-nginx
 
