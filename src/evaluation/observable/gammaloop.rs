@@ -1,4 +1,4 @@
-use super::Observable;
+use super::{ComplexObservableState, Observable};
 use crate::core::{EngineError, RunSpec};
 use gammalooprs::observables::{HistogramSnapshot, ObservableSnapshotBundle};
 use serde::{Deserialize, Serialize};
@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GammaLoopObservableState {
     pub bundle: ObservableSnapshotBundle,
+    pub estimate: ComplexObservableState,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,24 +15,25 @@ pub struct GammaLoopObservableDigest {
     pub sample_count: i64,
     pub primary_histogram_name: Option<String>,
     pub primary_histogram_title: Option<String>,
-    pub primary_histogram_mean: Option<f64>,
-    pub primary_histogram_error: Option<f64>,
+    pub real_mean: f64,
+    pub imag_mean: f64,
+    pub real_error: f64,
+    pub imag_error: f64,
 }
 
 impl GammaLoopObservableState {
     pub fn merge_in_place(&mut self, other: Self) -> Result<(), EngineError> {
         if self.bundle.histograms.is_empty() {
             self.bundle = other.bundle;
-            return Ok(());
+        } else if !other.bundle.histograms.is_empty() {
+            self.bundle.merge_in_place(&other.bundle).map_err(|err| {
+                EngineError::engine(format!(
+                    "failed to merge gammaloop observable bundle: {err}"
+                ))
+            })?;
         }
-        if other.bundle.histograms.is_empty() {
-            return Ok(());
-        }
-        self.bundle.merge_in_place(&other.bundle).map_err(|err| {
-            EngineError::engine(format!(
-                "failed to merge gammaloop observable bundle: {err}"
-            ))
-        })
+        self.estimate.merge(other.estimate);
+        Ok(())
     }
 
     pub fn histogram_count(&self) -> usize {
@@ -50,49 +52,54 @@ impl GammaLoopObservableState {
         self.bundle.histograms.values().next()
     }
 
-    pub fn primary_mean(&self) -> f64 {
-        self.primary_histogram()
-            .map(histogram_total_mean)
-            .unwrap_or(0.0)
+    pub fn real_mean(&self) -> f64 {
+        self.estimate.real_mean()
     }
 
-    pub fn primary_stderr(&self) -> f64 {
-        self.primary_histogram()
-            .map(histogram_total_stderr)
-            .unwrap_or(0.0)
+    pub fn imag_mean(&self) -> f64 {
+        self.estimate.imag_mean()
+    }
+
+    pub fn abs_mean(&self) -> f64 {
+        self.estimate.abs_mean()
+    }
+
+    pub fn real_stderr(&self) -> f64 {
+        self.estimate.real_stderr()
+    }
+
+    pub fn imag_stderr(&self) -> f64 {
+        self.estimate.imag_stderr()
+    }
+
+    pub fn abs_stderr(&self) -> f64 {
+        self.estimate.abs_stderr()
     }
 
     pub fn signal_to_noise(&self) -> f64 {
-        let stderr = self.primary_stderr();
-        if stderr <= 0.0 {
-            0.0
-        } else {
-            let mean = self.primary_mean();
-            (mean * mean) / (stderr * stderr)
-        }
+        self.estimate.signal_to_noise()
+    }
+
+    pub fn rsd(&self) -> f64 {
+        self.estimate.rsd()
     }
 }
 
 impl Observable for GammaLoopObservableState {
-    type Persistent = ObservableSnapshotBundle;
+    type Persistent = Self;
     type Digest = GammaLoopObservableDigest;
 
     fn sample_count(&self) -> i64 {
-        self.bundle
-            .histograms
-            .values()
-            .map(|histogram| histogram.sample_count as i64)
-            .max()
-            .unwrap_or(0)
+        self.estimate.sample_count()
     }
 
     fn merge(&mut self, other: Self) {
         self.merge_in_place(other)
-            .expect("gammaloop observable bundles should be merge-compatible");
+            .expect("gammaloop observable payloads should be merge-compatible");
     }
 
     fn get_persistent(&self) -> Self::Persistent {
-        self.bundle.clone()
+        self.clone()
     }
 
     fn get_digest(&self, _run_spec: &RunSpec) -> Result<Self::Digest, EngineError> {
@@ -102,8 +109,10 @@ impl Observable for GammaLoopObservableState {
             sample_count: self.sample_count(),
             primary_histogram_name: self.primary_histogram_name().map(str::to_string),
             primary_histogram_title: primary_histogram.map(|histogram| histogram.title.clone()),
-            primary_histogram_mean: primary_histogram.map(histogram_total_mean),
-            primary_histogram_error: primary_histogram.map(histogram_total_stderr),
+            real_mean: self.real_mean(),
+            imag_mean: self.imag_mean(),
+            real_error: self.real_stderr(),
+            imag_error: self.imag_stderr(),
         })
     }
 }
@@ -118,61 +127,18 @@ impl From<GammaLoopObservableState> for GammaLoopObservableDigest {
             primary_histogram_title: primary_histogram
                 .as_ref()
                 .map(|histogram| histogram.title.clone()),
-            primary_histogram_mean: primary_histogram.as_ref().map(histogram_total_mean),
-            primary_histogram_error: primary_histogram.as_ref().map(histogram_total_stderr),
+            real_mean: state.real_mean(),
+            imag_mean: state.imag_mean(),
+            real_error: state.real_stderr(),
+            imag_error: state.imag_stderr(),
         }
     }
-}
-
-fn histogram_total_mean(histogram: &HistogramSnapshot) -> f64 {
-    let sample_count = histogram.sample_count;
-    if sample_count == 0 {
-        return 0.0;
-    }
-    histogram_total_sum_weights(histogram) / sample_count as f64
-}
-
-fn histogram_total_stderr(histogram: &HistogramSnapshot) -> f64 {
-    let sample_count = histogram.sample_count;
-    if sample_count <= 1 {
-        return 0.0;
-    }
-
-    let n = sample_count as f64;
-    let sum = histogram_total_sum_weights(histogram);
-    let sum_sq = histogram_total_sum_weights_squared(histogram);
-    let variance_numerator = sum_sq - (sum * sum) / n;
-    if !variance_numerator.is_finite() || variance_numerator <= 0.0 {
-        0.0
-    } else {
-        (variance_numerator / (n * (n - 1.0))).sqrt()
-    }
-}
-
-fn histogram_total_sum_weights(histogram: &HistogramSnapshot) -> f64 {
-    histogram
-        .bins
-        .iter()
-        .map(|bin| bin.sum_weights)
-        .sum::<f64>()
-        + histogram.underflow_bin.sum_weights
-        + histogram.overflow_bin.sum_weights
-}
-
-fn histogram_total_sum_weights_squared(histogram: &HistogramSnapshot) -> f64 {
-    histogram
-        .bins
-        .iter()
-        .map(|bin| bin.sum_weights_squared)
-        .sum::<f64>()
-        + histogram.underflow_bin.sum_weights_squared
-        + histogram.overflow_bin.sum_weights_squared
 }
 
 #[cfg(test)]
 mod tests {
     use super::GammaLoopObservableState;
-    use crate::evaluation::Observable;
+    use crate::evaluation::{ComplexObservableState, Observable};
     use gammalooprs::observables::{
         HistogramBinSnapshot, HistogramSnapshot, HistogramStatisticsSnapshot, ObservablePhase,
         ObservableSnapshotBundle, ObservableValueTransform,
@@ -180,9 +146,12 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn state(
-        sum_weights: f64,
-        sum_weights_squared: f64,
-        sample_count: usize,
+        histogram_sum_weights: f64,
+        histogram_sum_weights_squared: f64,
+        histogram_sample_count: usize,
+        estimate_real_sum: f64,
+        estimate_real_sq_sum: f64,
+        estimate_count: i64,
     ) -> GammaLoopObservableState {
         GammaLoopObservableState {
             bundle: ObservableSnapshotBundle {
@@ -196,15 +165,15 @@ mod tests {
                         supports_misbinning_mitigation: false,
                         x_min: 0.0,
                         x_max: 1.0,
-                        sample_count,
+                        sample_count: histogram_sample_count,
                         log_x_axis: false,
                         log_y_axis: false,
                         bins: vec![HistogramBinSnapshot {
                             x_min: Some(0.0),
                             x_max: Some(1.0),
-                            entry_count: sample_count,
-                            sum_weights,
-                            sum_weights_squared,
+                            entry_count: histogram_sample_count,
+                            sum_weights: histogram_sum_weights,
+                            sum_weights_squared: histogram_sum_weights_squared,
                             mitigated_fill_count: 0,
                         }],
                         underflow_bin: HistogramBinSnapshot {
@@ -224,12 +193,22 @@ mod tests {
                             mitigated_fill_count: 0,
                         },
                         statistics: HistogramStatisticsSnapshot {
-                            in_range_entry_count: sample_count,
+                            in_range_entry_count: histogram_sample_count,
                             nan_value_count: 0,
                             mitigated_pair_count: 0,
                         },
                     },
                 )]),
+            },
+            estimate: ComplexObservableState {
+                count: estimate_count,
+                real_sum: estimate_real_sum,
+                imag_sum: 0.0,
+                abs_sum: estimate_real_sum.abs(),
+                abs_sq_sum: estimate_real_sq_sum,
+                real_sq_sum: estimate_real_sq_sum,
+                imag_sq_sum: 0.0,
+                weight_sum: estimate_count as f64,
             },
         }
     }
@@ -237,20 +216,30 @@ mod tests {
     #[test]
     fn empty_state_accepts_first_non_empty_merge() {
         let mut left = GammaLoopObservableState::default();
-        let right = state(4.0, 20.0, 2);
+        let right = state(4.0, 20.0, 2, 6.0, 20.0, 2);
 
-        left.merge_in_place(right).expect("merge should succeed");
+        left.merge(right.clone());
 
-        assert_eq!(left.sample_count(), 2);
         assert_eq!(left.histogram_count(), 1);
+        assert_eq!(left.sample_count(), 2);
+        assert_eq!(left.real_mean(), 3.0);
+        assert_eq!(left.primary_histogram_name(), Some("pt"));
     }
 
     #[test]
-    fn primary_summary_uses_histogram_totals() {
-        let state = state(6.0, 20.0, 3);
+    fn merge_combines_bundle_and_estimate() {
+        let mut left = state(4.0, 20.0, 2, 6.0, 20.0, 2);
+        let right = state(2.0, 10.0, 1, 1.0, 1.0, 1);
 
-        assert_eq!(state.sample_count(), 3);
-        assert_eq!(state.primary_mean(), 2.0);
-        assert!(state.primary_stderr() >= 0.0);
+        left.merge(right);
+
+        assert_eq!(left.sample_count(), 3);
+        assert_eq!(left.real_mean(), 7.0 / 3.0);
+        assert_eq!(
+            left.primary_histogram()
+                .expect("primary histogram")
+                .sample_count,
+            3
+        );
     }
 }

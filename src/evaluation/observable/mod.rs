@@ -116,7 +116,7 @@ impl ObservableState {
 
     pub fn from_gammaloop_persistent_json(value: &JsonValue) -> Result<Self, EngineError> {
         serde_json::from_value(value.clone())
-            .map(|bundle| Self::Gammaloop(GammaLoopObservableState { bundle }))
+            .map(Self::Gammaloop)
             .map_err(|err| {
                 EngineError::build(format!(
                     "invalid gammaloop persistent observable payload: {err}"

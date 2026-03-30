@@ -17,8 +17,8 @@ use crate::{
     Batch, BatchResult, BuildError, Domain, DomainBranch, EvalError,
     core::ObservableConfig,
     evaluation::{
-        ComplexValueEvaluator, EvalBatchOptions, Evaluator, GammaLoopObservableState,
-        ObservableState, ScalarValueEvaluator,
+        ComplexObservableState, ComplexValueEvaluator, EvalBatchOptions, Evaluator,
+        GammaLoopObservableState, ObservableState, ScalarValueEvaluator,
     },
 };
 
@@ -316,12 +316,21 @@ impl GammaLoopEvaluator {
         })
     }
 
-    fn batch_gammaloop_observable(&self) -> GammaLoopObservableState {
+    fn batch_gammaloop_observable(
+        &self,
+        evaluation_results: &[EvaluationResult],
+        weights: &[f64],
+    ) -> GammaLoopObservableState {
+        let mut estimate = ComplexObservableState::default();
+        for (result, &weight) in evaluation_results.iter().zip(weights.iter()) {
+            estimate.add_sample(Self::project_result_value(result), weight);
+        }
         GammaLoopObservableState {
             bundle: self
                 .integrand
                 .observable_snapshot_bundle()
                 .unwrap_or_default(),
+            estimate,
         }
     }
 
@@ -485,7 +494,9 @@ impl Evaluator for GammaLoopEvaluator {
         let mut observable_state = ObservableState::from_config(observable);
         let weighted_values = match observable {
             ObservableConfig::Gammaloop => {
-                observable_state = ObservableState::Gammaloop(self.batch_gammaloop_observable());
+                observable_state = ObservableState::Gammaloop(
+                    self.batch_gammaloop_observable(&evaluation_results, weights.as_slice()),
+                );
                 self.restore_empty_observable_bundle()?;
                 if options.require_training_values {
                     Some(

@@ -16,7 +16,10 @@ pub(super) fn projectors(task_spec: &RunTaskSpec) -> Vec<TaskPanelProjector> {
         estimate_summary_projector(observable_config.as_ref()),
         real_estimate_history_projector(observable_config.as_ref()),
     ];
-    if matches!(observable_config, Some(ObservableConfig::Complex)) {
+    if matches!(
+        observable_config,
+        Some(ObservableConfig::Complex | ObservableConfig::Gammaloop)
+    ) {
         projectors.push(imag_estimate_history_projector());
     }
     projectors.push(abs_signal_to_noise_history_projector(
@@ -245,7 +248,7 @@ fn estimate_label(observable_config: Option<&ObservableConfig>) -> &'static str 
     match observable_config {
         Some(ObservableConfig::Scalar) => "Mean",
         Some(ObservableConfig::Complex) => "Real Mean",
-        Some(ObservableConfig::Gammaloop) => "Primary Histogram Mean",
+        Some(ObservableConfig::Gammaloop) => "Real Mean",
         None => "Estimate",
         Some(ObservableConfig::FullScalar) | Some(ObservableConfig::FullComplex) => "Estimate",
     }
@@ -284,9 +287,9 @@ fn real_estimate_history_panel(observable: ObservableState) -> PanelState {
         ObservableState::Gammaloop(state) => single_point_band(
             "real_estimate_history",
             state.sample_count() as f64,
-            state.primary_mean(),
-            Some(state.primary_mean() - state.primary_stderr()),
-            Some(state.primary_mean() + state.primary_stderr()),
+            state.real_mean(),
+            Some(state.real_mean() - state.real_stderr()),
+            Some(state.real_mean() + state.real_stderr()),
         ),
         _ => scalar_timeseries_panel("real_estimate_history", Vec::new()),
     }
@@ -297,6 +300,13 @@ fn imag_estimate_history_panel(observable: ObservableState) -> Option<PanelState
         ObservableState::Complex(state) => Some(single_point_band(
             "imag_estimate_history",
             state.count as f64,
+            state.imag_mean(),
+            Some(state.imag_mean() - state.imag_stderr()),
+            Some(state.imag_mean() + state.imag_stderr()),
+        )),
+        ObservableState::Gammaloop(state) => Some(single_point_band(
+            "imag_estimate_history",
+            state.sample_count() as f64,
             state.imag_mean(),
             Some(state.imag_mean() - state.imag_stderr()),
             Some(state.imag_mean() + state.imag_stderr()),
@@ -362,9 +372,18 @@ fn estimate_summary_panel(observable: ObservableState) -> PanelState {
                     "Primary Histogram",
                     state.primary_histogram_name().unwrap_or("-"),
                 ),
-                key_value("mean", "Primary Mean", state.primary_mean()),
-                key_value("error", "Primary Error", state.primary_stderr()),
-                key_value("signal_to_noise", "Mean^2 / err^2", state.signal_to_noise()),
+                key_value("real_mean", "Real Mean", state.real_mean()),
+                key_value("imag_mean", "Imag Mean", state.imag_mean()),
+                key_value("real_error", "Real Error", state.real_stderr()),
+                key_value("imag_error", "Imag Error", state.imag_stderr()),
+                key_value("abs_mean", "Abs Mean", state.abs_mean()),
+                key_value("abs_error", "Abs Error", state.abs_stderr()),
+                key_value(
+                    "signal_to_noise",
+                    "Mean(|x|)^2 / abs_err^2",
+                    state.signal_to_noise(),
+                ),
+                key_value("rsd", "RSD", state.rsd()),
             ],
         ),
         ObservableState::FullScalar(state) => key_value_panel(
