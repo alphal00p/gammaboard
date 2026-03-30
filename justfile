@@ -100,7 +100,7 @@ deploy-itphlies-nginx:
 
     nginx -e "$PWD/logs/nginx-itphlies-error.log" -p "$PWD" -c "$nginx_config"
 
-    echo "ITPhlies nginx is up on 127.0.0.1:8080"
+    echo "ITPhlies nginx is up on http://localhost:8080"
     echo "Nginx PID file: $nginx_pid_file"
 
 stop-itphlies-deploy:

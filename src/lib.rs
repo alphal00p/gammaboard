@@ -36,4 +36,5 @@ pub use sampling::{
 pub use stores::PgStore;
 pub use stores::{RunProgress, TaskOutputSnapshot, TaskStageSnapshot, WorkQueueStats};
 pub use stores::{get_pg_pool, init_pg_store};
+pub use utils::domain::{Domain, DomainBranch};
 pub type BinResult<T = ()> = Result<T, Box<dyn std::error::Error>>;

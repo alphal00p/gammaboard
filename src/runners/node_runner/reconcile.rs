@@ -375,9 +375,10 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                                 "failed to clear desired assignments for run after task activation failure"
                             );
                         } else {
-                            info!(
+                            warn!(
                                 run_id = worker.run_id,
                                 task_id = task.id,
+                                reason,
                                 "task activation failed (missing havana snapshot); desired assignments cleared"
                             );
                         }
@@ -415,9 +416,11 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                         "failed to clear desired assignments for run after sampler build error"
                     );
                 } else {
-                    info!(
+                    warn!(
                         run_id = worker.run_id,
                         task_id = task.id,
+                        error = %err,
+                        failure_reason = %reason,
                         "task activation failed during sampler build; desired assignments cleared"
                     );
                 }
@@ -670,7 +673,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                 .store
                 .clear_desired_assignments_for_run(target.run_id)
                 .await?;
-            info!(
+            warn!(
                 run_id = target.run_id,
                 role = %role,
                 assignments_cleared = cleared,

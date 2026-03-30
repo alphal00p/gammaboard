@@ -188,7 +188,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                     announce_failures = announce_failures.saturating_add(1);
                     let failed_at = *announce_failed_at.get_or_insert_with(Instant::now);
                     if failed_at.elapsed() >= Duration::from_secs(30) {
-                        info!(
+                        warn!(
                             retries = announce_failures,
                             last_error = %err,
                             "node announce failed for 30 seconds; shutting down node-runner"

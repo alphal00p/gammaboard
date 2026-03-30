@@ -1,0 +1,23 @@
+# Example GammaLoop run.
+# Assumes `gammaloop` is a sister folder of `gammaboard`.
+
+name = "gammaloop-triangle"
+
+[evaluator]
+kind = "gammaloop"
+state_folder = "../gammaloop/examples/cli/epem_a_ttxh/LO/state"
+integrand_name = "LO"
+momentum_space = false
+
+
+[evaluator_runner_params]
+performance_snapshot_interval_ms = 1000
+
+[sampler_aggregator_runner_params]
+performance_snapshot_interval_ms = 1000
+target_batch_eval_ms = 500.0
+target_queue_remaining = 0.5
+max_batch_size = 16384
+max_queue_size = 4096
+max_batches_per_tick = 256
+completed_batch_fetch_limit = 4096
