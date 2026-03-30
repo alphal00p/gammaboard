@@ -29,6 +29,7 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
                   <TableCell>State</TableCell>
                   <TableCell>Task</TableCell>
                   <TableCell>Sampler Source</TableCell>
+                  <TableCell>Failure</TableCell>
                   <TableCell align="right">Target</TableCell>
                   <TableCell align="right">Produced</TableCell>
                   <TableCell align="right">Completed</TableCell>
@@ -52,6 +53,7 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
                       <TableCell>{task.state}</TableCell>
                       <TableCell>{getTaskKindLabel(task)}</TableCell>
                       <TableCell>{formatTaskSourceRef(task)}</TableCell>
+                      <TableCell>{task.failure_reason || "-"}</TableCell>
                       <TableCell align="right">{getTaskTargetLabel(task)}</TableCell>
                       <TableCell align="right">{Number(task.nr_produced_samples || 0).toLocaleString()}</TableCell>
                       <TableCell align="right">{Number(task.nr_completed_samples || 0).toLocaleString()}</TableCell>

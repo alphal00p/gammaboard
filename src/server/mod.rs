@@ -36,6 +36,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::{
     fs,
+    fs::File,
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
 };
@@ -1020,7 +1021,7 @@ async fn auto_run_nodes(
     AxumJson(payload): AxumJson<AutoRunNodesRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let max_start_failures = payload.max_start_failures.unwrap_or(3);
-    let db_pool_size = payload.db_pool_size.unwrap_or(10);
+    let db_pool_size = payload.db_pool_size.unwrap_or(2);
     let plan = node_api::plan_auto_run_nodes(&state.store, payload.count).await?;
 
     let binary = std::env::current_exe().map_err(|err| {
@@ -1093,6 +1094,20 @@ fn spawn_node_process(
     use std::process::Stdio;
     use tokio::process::Command;
 
+    let (stdout_log_path, stderr_log_path) = node_process_log_paths(node_name)?;
+    let stdout_log = File::create(&stdout_log_path).map_err(|err| {
+        ApiError::Internal(format!(
+            "failed to open stdout log for node {node_name} at {}: {err}",
+            stdout_log_path.display()
+        ))
+    })?;
+    let stderr_log = File::create(&stderr_log_path).map_err(|err| {
+        ApiError::Internal(format!(
+            "failed to open stderr log for node {node_name} at {}: {err}",
+            stderr_log_path.display()
+        ))
+    })?;
+
     let mut command = Command::new(binary);
     command
         .arg("--cli-config")
@@ -1103,19 +1118,51 @@ fn spawn_node_process(
             db_pool_size,
         ))
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(Stdio::from(stdout_log))
+        .stderr(Stdio::from(stderr_log));
 
     let mut child = command
         .spawn()
         .map_err(|err| ApiError::Internal(format!("failed to spawn node {node_name}: {err}")))?;
     let name = node_name.to_string();
     tokio::spawn(async move {
-        if let Err(err) = child.wait().await {
-            tracing::warn!(node_name = %name, error = %err, "spawned node process wait failed");
+        match child.wait().await {
+            Ok(status) if !status.success() => {
+                tracing::warn!(
+                    node_name = %name,
+                    exit_status = %status,
+                    stdout_log = %stdout_log_path.display(),
+                    stderr_log = %stderr_log_path.display(),
+                    "spawned node process exited unsuccessfully"
+                );
+            }
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!(
+                    node_name = %name,
+                    error = %err,
+                    stdout_log = %stdout_log_path.display(),
+                    stderr_log = %stderr_log_path.display(),
+                    "spawned node process wait failed"
+                );
+            }
         }
     });
     Ok(())
+}
+
+fn node_process_log_paths(node_name: &str) -> Result<(PathBuf, PathBuf), ApiError> {
+    let dir = PathBuf::from("logs").join("nodes");
+    fs::create_dir_all(&dir).map_err(|err| {
+        ApiError::Internal(format!(
+            "failed to create node log directory {}: {err}",
+            dir.display()
+        ))
+    })?;
+    Ok((
+        dir.join(format!("{node_name}.stdout.log")),
+        dir.join(format!("{node_name}.stderr.log")),
+    ))
 }
 
 async fn get_run_evaluator_performance_history(

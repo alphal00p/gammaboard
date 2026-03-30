@@ -265,6 +265,9 @@ gammaboard node run --name w-1
 `node run` uses a fast-start reconcile backoff internally: it starts polling at `50ms`, grows by a factor of `2.0`, and caps at `2s`.
 `node run` exits on `Ctrl-C` and `SIGTERM`, and expires its lease on shutdown so the same node name can be reused immediately.
 `node auto-run N` picks names `w-1`, `w-2`, ... and skips names that already exist in the control plane.
+`node auto-run` uses a smaller default `--db-pool-size 2` so large fanout is less likely to fail immediately on database connection pressure.
+Auto-run workers now write per-node startup logs to `logs/nodes/<NODE_NAME>.stdout.log` and `logs/nodes/<NODE_NAME>.stderr.log`.
+If an auto-run child exits unsuccessfully, the parent control process logs the exit status together with those log paths.
 
 Node names are unique operator handles. Each live worker also owns an internal UUID lease in PostgreSQL. If the worker cannot re-announce itself for 30 seconds, it shuts down.
 

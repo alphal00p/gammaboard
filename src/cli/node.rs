@@ -7,7 +7,12 @@ use gammaboard::api::nodes as node_api;
 use gammaboard::config::CliConfig;
 use gammaboard::core::{ControlPlaneStore, RegisteredNode, WorkerRole};
 use gammaboard::runners::{NodeRunner, NodeRunnerConfig};
-use std::{path::Path, process::Stdio};
+use std::{
+    fs,
+    fs::File,
+    path::{Path, PathBuf},
+    process::Stdio,
+};
 
 #[derive(Debug, Args)]
 pub struct NodeArgs {
@@ -48,7 +53,7 @@ pub struct AutoRunArgs {
     count: usize,
     #[arg(long, default_value_t = 3)]
     max_start_failures: u32,
-    #[arg(long, default_value_t = 10)]
+    #[arg(long, default_value_t = 2)]
     db_pool_size: u32,
 }
 
@@ -153,6 +158,9 @@ async fn run_auto_run_command(
 
     let binary = std::env::current_exe()?;
     for node_name in &planned.node_names {
+        let (stdout_log_path, stderr_log_path) = node_process_log_paths(node_name)?;
+        let stdout_log = File::create(&stdout_log_path)?;
+        let stderr_log = File::create(&stderr_log_path)?;
         let mut command = std::process::Command::new(&binary);
         command
             .arg("--cli-config")
@@ -163,9 +171,31 @@ async fn run_auto_run_command(
                 args.db_pool_size,
             ))
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        command.spawn()?;
+            .stdout(Stdio::from(stdout_log))
+            .stderr(Stdio::from(stderr_log));
+        let mut child = command.spawn()?;
+        let name = node_name.clone();
+        std::thread::spawn(move || match child.wait() {
+            Ok(status) if !status.success() => {
+                tracing::warn!(
+                    node_name = %name,
+                    exit_status = %status,
+                    stdout_log = %stdout_log_path.display(),
+                    stderr_log = %stderr_log_path.display(),
+                    "spawned node process exited unsuccessfully"
+                );
+            }
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!(
+                    node_name = %name,
+                    error = %err,
+                    stdout_log = %stdout_log_path.display(),
+                    stderr_log = %stderr_log_path.display(),
+                    "spawned node process wait failed"
+                );
+            }
+        });
     }
 
     tracing::info!(
@@ -175,6 +205,15 @@ async fn run_auto_run_command(
         "started node processes"
     );
     Ok(())
+}
+
+fn node_process_log_paths(node_name: &str) -> Result<(PathBuf, PathBuf)> {
+    let dir = PathBuf::from("logs").join("nodes");
+    fs::create_dir_all(&dir)?;
+    Ok((
+        dir.join(format!("{node_name}.stdout.log")),
+        dir.join(format!("{node_name}.stderr.log")),
+    ))
 }
 
 async fn stop_nodes(store: &PgStore, selection: NodeSelection) -> Result<()> {
