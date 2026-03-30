@@ -2,13 +2,14 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::VecDeque;
-use symbolica::numerical_integration::{ContinuousGrid, Grid, Sample};
+use symbolica::numerical_integration::{Grid, Sample};
 use tracing::info;
 
 use crate::utils::domain::Domain;
 use crate::{
     Batch, EngineError, LatentBatchSpec, Point, SamplePlan,
     core::BuildError,
+    sampling::havana_grid::{build_havana_grid, sample_to_point, validate_havana_grid_domain},
     sampling::{LatentBatchPayload, SamplerAggregator, SamplerAggregatorSnapshot},
     utils::rng::SerializableMonteCarloRng,
 };
@@ -61,9 +62,9 @@ pub struct HavanaSamplerSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HavanaInferenceSamplerSnapshot {
-    continuous_dims: usize,
     batches_produced: usize,
     samples_produced: usize,
+    grid: Grid<f64>,
     rng: SerializableMonteCarloRng,
 }
 
@@ -91,21 +92,8 @@ impl Default for HavanaInferenceSamplerParams {
 
 fn validate_havana_sampler_params(
     parsed: &HavanaSamplerParams,
-    domain: &Domain,
+    _domain: &Domain,
 ) -> Result<(), BuildError> {
-    let (continuous_dims, discrete_dims) = domain
-        .fixed_rectangular_dims()
-        .ok_or_else(|| BuildError::build("havana sampler requires a fixed rectangular domain"))?;
-    if continuous_dims == 0 {
-        return Err(BuildError::build(
-            "havana sampler requires continuous_dims > 0",
-        ));
-    }
-    if discrete_dims != 0 {
-        return Err(BuildError::build(
-            "havana sampler requires discrete_dims == 0",
-        ));
-    }
     if parsed.bins == 0 {
         return Err(BuildError::build("havana sampler requires bins > 0"));
     }
@@ -134,7 +122,6 @@ fn validate_havana_sampler_params(
 }
 
 pub struct HavanaSampler {
-    continuous_dims: usize,
     batches_produced: usize,
     samples_produced: usize,
     batches_ingested: usize,
@@ -149,15 +136,14 @@ pub struct HavanaSampler {
 }
 
 pub struct HavanaInferenceSampler {
-    continuous_dims: usize,
     batches_produced: usize,
     samples_produced: usize,
+    grid: Grid<f64>,
     rng: SerializableMonteCarloRng,
 }
 
 impl HavanaSampler {
     fn new(
-        continuous_dims: usize,
         grid: Grid<f64>,
         rng: SerializableMonteCarloRng,
         samples_for_update: usize,
@@ -166,7 +152,6 @@ impl HavanaSampler {
         final_training_rate: f64,
     ) -> Self {
         Self {
-            continuous_dims,
             batches_produced: 0,
             samples_produced: 0,
             batches_ingested: 0,
@@ -211,15 +196,6 @@ impl HavanaSampler {
             * (self.final_training_rate / self.initial_training_rate).powf(progress)
     }
 
-    fn grid_continuous_dims(grid: &Grid<f64>) -> Result<usize, BuildError> {
-        match grid {
-            Grid::Continuous(grid) => Ok(grid.continuous_dimensions.len()),
-            Grid::Discrete(_) | Grid::Uniform(_, _) => Err(BuildError::build(
-                "havana snapshot requires a continuous grid",
-            )),
-        }
-    }
-
     fn to_snapshot(&self) -> HavanaSamplerSnapshot {
         HavanaSamplerSnapshot {
             batches_produced: self.batches_produced,
@@ -240,26 +216,9 @@ impl HavanaSampler {
         snapshot: HavanaSamplerSnapshot,
         domain: &Domain,
     ) -> Result<Self, BuildError> {
-        let continuous_dims = Self::grid_continuous_dims(&snapshot.grid)?;
-        let (domain_continuous_dims, domain_discrete_dims) =
-            domain.fixed_rectangular_dims().ok_or_else(|| {
-                BuildError::build("havana sampler requires a fixed rectangular domain")
-            })?;
-        if domain_continuous_dims != continuous_dims {
-            return Err(BuildError::build(format!(
-                "havana snapshot expects continuous_dims={}, got {}",
-                continuous_dims, domain_continuous_dims
-            )));
-        }
-        if domain_discrete_dims != 0 {
-            return Err(BuildError::build(format!(
-                "havana snapshot expects discrete_dims=0, got {}",
-                domain_discrete_dims
-            )));
-        }
+        validate_havana_grid_domain(&snapshot.grid, domain, "havana snapshot")?;
 
         Ok(Self {
-            continuous_dims,
             batches_produced: snapshot.batches_produced,
             samples_produced: snapshot.samples_produced,
             batches_ingested: snapshot.batches_ingested,
@@ -287,21 +246,11 @@ impl HavanaSampler {
                 "havana sampler requires sample task nr_samples > 0",
             ));
         }
-        let (continuous_dims, _) = domain.fixed_rectangular_dims().ok_or_else(|| {
-            BuildError::build("havana sampler requires a fixed rectangular domain")
-        })?;
 
         let rng = SerializableMonteCarloRng::new(params.seed, 0);
-        let grid = Grid::Continuous(ContinuousGrid::new(
-            continuous_dims,
-            params.bins,
-            params.min_samples_for_update,
-            None,
-            false,
-        ));
+        let grid = build_havana_grid(domain, &params)?;
 
         Ok(HavanaSampler::new(
-            continuous_dims,
             grid,
             rng,
             params.samples_for_update,
@@ -316,9 +265,9 @@ impl HavanaSampler {
         params: HavanaInferenceSamplerParams,
     ) -> HavanaInferenceSampler {
         HavanaInferenceSampler {
-            continuous_dims: self.continuous_dims,
             batches_produced: 0,
             samples_produced: 0,
+            grid: self.grid,
             rng: params
                 .seed
                 .map(|seed| SerializableMonteCarloRng::new(seed, 0))
@@ -365,35 +314,20 @@ impl HavanaInferenceSampler {
         snapshot: HavanaInferenceSamplerSnapshot,
         domain: &Domain,
     ) -> Result<Self, BuildError> {
-        let (continuous_dims, discrete_dims) =
-            domain.fixed_rectangular_dims().ok_or_else(|| {
-                BuildError::build("havana inference sampler requires a fixed rectangular domain")
-            })?;
-        if continuous_dims != snapshot.continuous_dims {
-            return Err(BuildError::build(format!(
-                "havana inference snapshot expects continuous_dims={}, got {}",
-                snapshot.continuous_dims, continuous_dims
-            )));
-        }
-        if discrete_dims != 0 {
-            return Err(BuildError::build(format!(
-                "havana inference snapshot expects discrete_dims=0, got {}",
-                discrete_dims
-            )));
-        }
+        validate_havana_grid_domain(&snapshot.grid, domain, "havana inference snapshot")?;
         Ok(Self {
-            continuous_dims: snapshot.continuous_dims,
             batches_produced: snapshot.batches_produced,
             samples_produced: snapshot.samples_produced,
+            grid: snapshot.grid,
             rng: snapshot.rng,
         })
     }
 
     fn to_snapshot(&self) -> HavanaInferenceSamplerSnapshot {
         HavanaInferenceSamplerSnapshot {
-            continuous_dims: self.continuous_dims,
             batches_produced: self.batches_produced,
             samples_produced: self.samples_produced,
+            grid: self.grid.clone(),
             rng: self.rng.clone(),
         }
     }
@@ -401,23 +335,7 @@ impl HavanaInferenceSampler {
 
 impl SamplerAggregator for HavanaSampler {
     fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
-        let (continuous_dims, discrete_dims) =
-            domain.fixed_rectangular_dims().ok_or_else(|| {
-                BuildError::build("havana sampler requires a fixed rectangular domain")
-            })?;
-        if continuous_dims != self.continuous_dims {
-            return Err(BuildError::build(format!(
-                "havana sampler expects continuous_dims={}, got {}",
-                self.continuous_dims, continuous_dims
-            )));
-        }
-        if discrete_dims != 0 {
-            return Err(BuildError::build(format!(
-                "havana sampler expects discrete_dims=0, got {}",
-                discrete_dims
-            )));
-        }
-        Ok(())
+        validate_havana_grid_domain(&self.grid, domain, "havana sampler")
     }
 
     fn training_samples_remaining(&self) -> Option<usize> {
@@ -450,15 +368,7 @@ impl SamplerAggregator for HavanaSampler {
             for _ in 0..nr_samples {
                 let mut sample = Sample::new();
                 self.grid.sample(&mut self.rng, &mut sample);
-
-                match &sample {
-                    Sample::Continuous(weight, x) => {
-                        debug_assert_eq!(x.len(), self.continuous_dims);
-                        points.push(Point::new(x.clone(), Vec::new(), *weight));
-                    }
-                    _ => unreachable!("continuous grid produced non-continuous sample"),
-                }
-
+                points.push(sample_to_point(&sample)?);
                 samples.push(sample);
             }
             self.pending_training_samples.push_back(samples);
@@ -466,14 +376,7 @@ impl SamplerAggregator for HavanaSampler {
             for _ in 0..nr_samples {
                 let mut sample = Sample::new();
                 self.grid.sample(&mut self.rng, &mut sample);
-
-                match &sample {
-                    Sample::Continuous(weight, x) => {
-                        debug_assert_eq!(x.len(), self.continuous_dims);
-                        points.push(Point::new(x.clone(), Vec::new(), *weight));
-                    }
-                    _ => unreachable!("continuous grid produced non-continuous sample"),
-                }
+                points.push(sample_to_point(&sample)?);
             }
         }
 
@@ -547,23 +450,7 @@ impl SamplerAggregator for HavanaSampler {
 
 impl SamplerAggregator for HavanaInferenceSampler {
     fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
-        let (continuous_dims, discrete_dims) =
-            domain.fixed_rectangular_dims().ok_or_else(|| {
-                BuildError::build("havana inference sampler requires a fixed rectangular domain")
-            })?;
-        if continuous_dims != self.continuous_dims {
-            return Err(BuildError::build(format!(
-                "havana inference sampler expects continuous_dims={}, got {}",
-                self.continuous_dims, continuous_dims
-            )));
-        }
-        if discrete_dims != 0 {
-            return Err(BuildError::build(format!(
-                "havana inference sampler expects discrete_dims=0, got {}",
-                discrete_dims
-            )));
-        }
-        Ok(())
+        validate_havana_grid_domain(&self.grid, domain, "havana inference sampler")
     }
 
     fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
@@ -639,10 +526,8 @@ mod tests {
         };
         let mut state: HavanaSamplerSnapshot =
             serde_json::from_value(raw).expect("decode restored havana snapshot");
-        let Grid::Continuous(grid) = &state.grid else {
-            panic!("expected continuous grid");
-        };
-        assert_eq!(grid.continuous_dimensions.len(), 2);
+        validate_havana_grid_domain(&state.grid, &domain, "havana snapshot")
+            .expect("grid matches domain");
         assert_eq!(state.batches_produced, 2);
         assert_eq!(state.samples_produced, 8);
         assert_eq!(state.batches_ingested, 1);
@@ -722,5 +607,91 @@ mod tests {
             other => panic!("expected havana_inference payload, got {other:?}"),
         }
         assert_eq!(inference.training_samples_remaining(), None);
+    }
+
+    #[test]
+    fn havana_sampler_produces_discrete_points_for_nested_domains() {
+        let domain = Domain::discrete(
+            Some("group".to_string()),
+            [
+                crate::DomainBranch::new(0, Domain::continuous(2)),
+                crate::DomainBranch::new(
+                    1,
+                    Domain::discrete(
+                        Some("orientation".to_string()),
+                        [
+                            crate::DomainBranch::new(0, Domain::continuous(1)),
+                            crate::DomainBranch::new(1, Domain::continuous(1)),
+                        ],
+                    ),
+                ),
+            ],
+        );
+        let params = HavanaSamplerParams {
+            seed: 7,
+            bins: 8,
+            min_samples_for_update: 4,
+            samples_for_update: 16,
+            initial_training_rate: 0.1,
+            final_training_rate: 0.01,
+        };
+        let mut sampler = HavanaSampler::from_params_and_domain(params, &domain, 8)
+            .expect("build havana sampler");
+
+        let batch = sampler.produce_latent_batch(16).expect("produce batch");
+        let batch = batch.payload.into_batch().expect("batch payload");
+
+        assert_eq!(batch.size(), 16);
+        assert!(
+            batch
+                .points()
+                .iter()
+                .all(|point| !point.discrete.is_empty())
+        );
+        assert!(
+            batch
+                .points()
+                .iter()
+                .all(|point| point.discrete[0] == 0 || point.discrete[0] == 1)
+        );
+    }
+
+    #[test]
+    fn havana_inference_snapshot_restores_discrete_grid_topology() {
+        let domain = Domain::rectangular(2, 1);
+        let params = HavanaSamplerParams {
+            seed: 7,
+            bins: 8,
+            min_samples_for_update: 4,
+            samples_for_update: 16,
+            initial_training_rate: 0.1,
+            final_training_rate: 0.01,
+        };
+        let mut sampler = HavanaSampler::from_params_and_domain(params, &domain, 8)
+            .expect("build havana sampler");
+        let _ = sampler
+            .produce_latent_batch(4)
+            .expect("produce training batch");
+        sampler
+            .ingest_training_weights(&[1.0, 2.0, 3.0, 4.0])
+            .expect("ingest training batch");
+
+        let snapshot = sampler.snapshot().expect("snapshot");
+        let mut inference = HavanaInferenceSampler::from_params_and_snapshot(
+            HavanaInferenceSamplerParams::default(),
+            snapshot,
+            &domain,
+        )
+        .expect("build inference sampler");
+
+        let SamplerAggregatorSnapshot::HavanaInference { raw } =
+            inference.snapshot().expect("inference snapshot")
+        else {
+            panic!("expected havana inference snapshot");
+        };
+        let restored: HavanaInferenceSamplerSnapshot =
+            serde_json::from_value(raw).expect("decode inference snapshot");
+        validate_havana_grid_domain(&restored.grid, &domain, "havana inference snapshot")
+            .expect("grid matches domain");
     }
 }

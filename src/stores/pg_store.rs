@@ -764,7 +764,7 @@ impl AggregationStore for PgStore {
         persisted_observable: &JsonValue,
         delta_batches_completed: i32,
     ) -> Result<(), StoreError> {
-        if delta_batches_completed <= 0 {
+        if delta_batches_completed < 0 {
             return Ok(());
         }
 

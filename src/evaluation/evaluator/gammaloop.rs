@@ -77,6 +77,25 @@ impl GammaLoopEvaluator {
         integrand: &ProcessIntegrand,
         momentum_space: bool,
     ) -> Result<Domain, BuildError> {
+        fn discrete_group_count(integrand: &ProcessIntegrand) -> usize {
+            let discrete_depth = integrand.discrete_sampling_depth();
+            debug_assert!(discrete_depth > 0);
+
+            let mut group_count = 0usize;
+            loop {
+                let mut selection = vec![0; discrete_depth];
+                selection[0] = group_count;
+                if integrand
+                    .resolve_discrete_selection(selection.as_slice())
+                    .is_err()
+                {
+                    break;
+                }
+                group_count += 1;
+            }
+            group_count
+        }
+
         fn continuous_leaf(
             integrand: &ProcessIntegrand,
             momentum_space: bool,
@@ -183,15 +202,11 @@ impl GammaLoopEvaluator {
                 continuous_leaf(integrand, momentum_space, &[])
             }
             SamplingSettings::DiscreteGraphs(_) => {
-                let mut group_branches = Vec::new();
-                let mut group_idx = 0usize;
-                while integrand
-                    .group_orientation_count(GroupId::from(group_idx))
-                    .is_some()
-                {
+                let group_count = discrete_group_count(integrand);
+                let mut group_branches = Vec::with_capacity(group_count);
+                for group_idx in 0..group_count {
                     let branch = build_group_branch(integrand, momentum_space, group_idx)?;
                     group_branches.push(DomainBranch::new(group_idx, branch));
-                    group_idx += 1;
                 }
                 if group_branches.is_empty() {
                     return Err(BuildError::build(

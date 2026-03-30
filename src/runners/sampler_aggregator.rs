@@ -45,6 +45,14 @@ struct RollingAveragesState {
     batches_consumed_per_tick: RollingMetric,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+enum ObservableCheckpointState {
+    #[default]
+    NeedsInitialRoundTrip,
+    WaitingForInitialRoundTrip,
+    Ready,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct SamplerRuntimeState {
     produced_batches_total: i64,
@@ -52,6 +60,7 @@ struct SamplerRuntimeState {
     ingested_batches_total: i64,
     ingested_samples_total: i64,
     batch_size_current: usize,
+    observable_checkpoint_state: ObservableCheckpointState,
     rolling: RollingAveragesState,
 }
 
@@ -178,6 +187,9 @@ where
         let (nr_produced_samples, nr_completed_samples) = run_progress
             .map(|progress| (progress.nr_produced_samples, progress.nr_completed_samples))
             .unwrap_or((0, 0));
+        if nr_completed_samples > 0 {
+            runtime_state.observable_checkpoint_state = ObservableCheckpointState::Ready;
+        }
 
         let performance_snapshot_interval =
             Duration::from_millis(params.performance_snapshot_interval_ms);
@@ -416,6 +428,17 @@ where
     }
 
     pub async fn complete_task(&mut self) -> Result<(), RunnerError> {
+        let current_observable = self
+            .observable_state
+            .to_json()
+            .map_err(RunnerError::Engine)?;
+        let snapshot = self
+            .observable_state
+            .to_persistent_json()
+            .map_err(RunnerError::Engine)?;
+        self.store
+            .save_aggregation(self.run_id, self.task.id, &current_observable, &snapshot, 0)
+            .await?;
         self.persist_state_with_queue_empty(true).await?;
         self.sync_task_progress().await?;
         self.store.complete_run_task(self.task.id).await?;
@@ -511,6 +534,9 @@ where
                 completed.len() as i32,
             )
             .await?;
+        if completed_samples_delta > 0 {
+            self.runtime_state.observable_checkpoint_state = ObservableCheckpointState::Ready;
+        }
 
         let consumed_ids = completed
             .iter()
@@ -527,7 +553,6 @@ where
         let batch_plan = match sample_plan {
             SamplePlan::Pause => Vec::new(),
             SamplePlan::Produce { nr_samples } => {
-                let base_produce_limit = self.compute_produce_limit(pending_before_tick);
                 let requested = if nr_samples == usize::MAX {
                     None
                 } else {
@@ -540,10 +565,30 @@ where
                     ),
                     None => training_samples_remaining,
                 };
-                self.build_batch_plan(
-                    base_produce_limit,
-                    self.max_samples_to_produce_this_tick(engine_max_samples)?,
-                )
+                let max_samples = self.max_samples_to_produce_this_tick(engine_max_samples)?;
+                match self.runtime_state.observable_checkpoint_state {
+                    ObservableCheckpointState::NeedsInitialRoundTrip => {
+                        let nr_samples = max_samples.unwrap_or(MIN_BATCH_SIZE);
+                        if nr_samples == 0 {
+                            Vec::new()
+                        } else {
+                            self.runtime_state.observable_checkpoint_state =
+                                ObservableCheckpointState::WaitingForInitialRoundTrip;
+                            vec![nr_samples.min(MIN_BATCH_SIZE)]
+                        }
+                    }
+                    ObservableCheckpointState::WaitingForInitialRoundTrip => {
+                        if pending_before_tick == 0 {
+                            self.runtime_state.observable_checkpoint_state =
+                                ObservableCheckpointState::NeedsInitialRoundTrip;
+                        }
+                        Vec::new()
+                    }
+                    ObservableCheckpointState::Ready => {
+                        let base_produce_limit = self.compute_produce_limit(pending_before_tick);
+                        self.build_batch_plan(base_produce_limit, max_samples)
+                    }
+                }
             }
         };
 

@@ -1,4 +1,5 @@
 pub mod batch_transform;
+pub(crate) mod havana_grid;
 pub mod latent_batch;
 pub mod materializer;
 pub mod sampler;
