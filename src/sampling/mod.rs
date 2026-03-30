@@ -5,6 +5,7 @@ pub mod sampler;
 pub mod sampler_aggregator;
 
 use crate::evaluation::ObservableState;
+use crate::{core::RunStageSnapshot, runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot};
 
 pub use batch_transform::{SphericalBatchTransformParams, UnitBallBatchTransformParams};
 pub use latent_batch::{LatentBatch, LatentBatchPayload, LatentBatchSpec, SamplePlan};
@@ -31,6 +32,24 @@ impl StageHandoffOwned {
         StageHandoff {
             sampler_snapshot: self.sampler_snapshot.as_ref(),
             observable_state: self.observable_state.as_ref(),
+        }
+    }
+}
+
+impl From<RunStageSnapshot> for StageHandoffOwned {
+    fn from(snapshot: RunStageSnapshot) -> Self {
+        Self {
+            sampler_snapshot: Some(snapshot.sampler_snapshot),
+            observable_state: snapshot.observable_state,
+        }
+    }
+}
+
+impl From<SamplerAggregatorRunnerSnapshot> for StageHandoffOwned {
+    fn from(snapshot: SamplerAggregatorRunnerSnapshot) -> Self {
+        Self {
+            sampler_snapshot: Some(snapshot.sampler_snapshot),
+            observable_state: Some(snapshot.observable_state),
         }
     }
 }

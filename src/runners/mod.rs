@@ -2,6 +2,7 @@ pub mod evaluator;
 pub mod node_runner;
 pub(crate) mod rolling_metric;
 pub mod sampler_aggregator;
+pub(crate) mod stage_context;
 
 pub use evaluator::{EvaluatorRunner, EvaluatorRunnerError, EvaluatorRunnerParams};
 pub use node_runner::{NodeRunner, NodeRunnerConfig, NodeRunnerStore};
