@@ -1,6 +1,6 @@
 host = "0.0.0.0"
 port = 4000
-allowed_origin = "http://localhost:3000"
+allowed_origins = ["http://localhost:3000"]
 secure_cookie = false
 allow_db_admin = true
 run_templates_dir = "../runs"

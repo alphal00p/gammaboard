@@ -100,7 +100,7 @@ deploy-itphlies-nginx:
 
     nginx -e "$PWD/logs/nginx-itphlies-error.log" -p "$PWD" -c "$nginx_config"
 
-    echo "ITPhlies nginx is up on http://localhost:8080"
+    echo "ITPhlies nginx is up on http://localhost:8080 and http://itphlies:8080"
     echo "Nginx PID file: $nginx_pid_file"
 
 stop-itphlies-deploy:
@@ -183,6 +183,7 @@ deploy-itphlies:
     echo "Frontend PID: $frontend_pid"
     echo "Frontend log: $frontend_log_file"
     echo "Open via tunnel: http://localhost:8080"
+    echo "Open on LAN: http://itphlies:8080"
 
 stop-local-prod:
     #!/usr/bin/env bash

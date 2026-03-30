@@ -87,7 +87,7 @@ To reset local state: run `gammaboard db delete --yes` then `gammaboard db start
   ```toml
   host = "0.0.0.0"
   port = 4000
-  allowed_origin = "http://localhost:3000"
+  allowed_origins = ["http://localhost:3000"]
   secure_cookie = false
   allow_db_admin = true
   run_templates_dir = "../runs"
@@ -101,7 +101,7 @@ To reset local state: run `gammaboard db delete --yes` then `gammaboard db start
 - Set `allow_db_admin = true` only for trusted local/operator setups; it enables dashboard-triggered `db stop && db start`.
 
 ## ITPhlies Deployment
-Use this flow when the server is only reachable through Tailscale/SSH.
+Use this flow when you want both direct LAN access and the SSH tunnel option.
 
 1. On ITPhlies, from the repo root, run:
    ```bash
@@ -111,23 +111,25 @@ Use this flow when the server is only reachable through Tailscale/SSH.
    ```bash
    ssh -N -L 8080:127.0.0.1:8080 ITPhliesTails
    ```
-3. Open:
+3. Open either:
    ```text
    http://localhost:8080
    ```
+   or `http://itphlies:8080` if your local network resolves that hostname. If you access the server by LAN IP instead, add that origin to `allowed_origins` in the server config first.
 4. To stop all deployed ITPhlies processes:
    ```bash
    just stop-itphlies-deploy
    ```
-5. The SSH tunnel is only needed while ITPhlies is private. Once you expose an external HTTP/HTTPS port (and ideally a domain via nginx), access the frontend directly and skip the tunnel.
+5. The SSH tunnel remains optional; direct LAN access works because nginx listens on `0.0.0.0:8080`, while the backend still stays private on `127.0.0.1:4000`.
 
 Config files used:
 - backend: [configs/server/itphlies-prod.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server/itphlies-prod.toml)
 - nginx: [configs/nginx/itphlies-tunnel.conf](/home/cedricsigrist/Workspace/repos/gammaboard/configs/nginx/itphlies-tunnel.conf)
 
 Important:
-- `configs/server/itphlies-prod.toml` currently expects tunnel testing origin `allowed_origin = "http://localhost:8080"`.
-- Backend listens on `127.0.0.1:4000`; nginx listens on `127.0.0.1:8080`.
+- `configs/server/itphlies-prod.toml` currently allows `http://localhost:8080` and `http://itphlies:8080`.
+- If you want to access the UI via a raw LAN IP or another hostname, add that exact origin to `allowed_origins`.
+- Backend listens on `127.0.0.1:4000`; nginx listens on `0.0.0.0:8080`.
 - `just deploy-itphlies-server` writes backend PID/log to `logs/itphlies-backend.pid` and `logs/itphlies-backend.log`.
 
 ## Frontend API Routing
@@ -152,7 +154,7 @@ Important:
 - Node shutdown from the dashboard is guarded by a confirmation dialog.
 - Put `auth.admin_password_hash` in `server/default.toml` to enable dashboard auth.
 - Put `auth.session_secret` in `server/default.toml` when auth is enabled.
-- Set `allowed_origin` in `server/default.toml` if the frontend is served from a different origin than `http://localhost:3000`.
+- Set `allowed_origins` in `server/default.toml` if the frontend is served from origins other than `http://localhost:3000`.
 - Deploy this behind HTTPS for real use and set `secure_cookie = true` in `server/default.toml`.
 - Generate the password hash with:
   ```bash

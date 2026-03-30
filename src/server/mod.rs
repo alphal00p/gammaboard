@@ -39,7 +39,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
 };
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::Instrument;
 
 use self::auth::{AuthConfig, SessionStatus, login, logout, require_admin_session};
@@ -48,7 +48,7 @@ use self::auth::{AuthConfig, SessionStatus, login, logout, require_admin_session
 pub struct ServerConfig {
     pub host: IpAddr,
     pub port: u16,
-    pub allowed_origin: String,
+    pub allowed_origins: Vec<String>,
     pub secure_cookie: bool,
     pub allow_db_admin: bool,
     pub run_templates_dir: String,
@@ -94,12 +94,21 @@ pub async fn serve(
     cli_config_path: PathBuf,
 ) -> anyhow::Result<()> {
     let bind = config.bind_addr();
-    let allowed_origin = axum::http::HeaderValue::from_str(config.allowed_origin.trim())
-        .with_context(|| format!("invalid server.allowed_origin={:?}", config.allowed_origin))?;
+    let allowed_origins = config
+        .allowed_origins
+        .iter()
+        .map(|origin| {
+            axum::http::HeaderValue::from_str(origin.trim())
+                .with_context(|| format!("invalid server.allowed_origins entry={origin:?}"))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    if allowed_origins.is_empty() {
+        anyhow::bail!("server.allowed_origins must not be empty");
+    }
     let state = AppState {
         store,
         auth: AuthConfig::from_server_config(&config.auth),
-        allowed_origin,
+        allowed_origins,
         secure_cookie: config.secure_cookie,
         allow_db_admin: config.allow_db_admin,
         run_templates_dir: PathBuf::from(&config.run_templates_dir),
@@ -126,7 +135,7 @@ pub async fn serve(
 pub(crate) struct AppState {
     store: PgStore,
     auth: AuthConfig,
-    allowed_origin: axum::http::HeaderValue,
+    allowed_origins: Vec<axum::http::HeaderValue>,
     secure_cookie: bool,
     allow_db_admin: bool,
     run_templates_dir: PathBuf,
@@ -319,12 +328,12 @@ fn build_app(state: AppState) -> Router {
 
     Router::new()
         .nest("/api", public_api_routes.merge(protected_api_routes))
-        .layer(build_cors_layer(state.allowed_origin.clone()))
+        .layer(build_cors_layer(state.allowed_origins.clone()))
         .layer(middleware::from_fn(request_context_middleware))
         .with_state(state)
 }
 
-fn build_cors_layer(allowed_origin: axum::http::HeaderValue) -> CorsLayer {
+fn build_cors_layer(allowed_origins: Vec<axum::http::HeaderValue>) -> CorsLayer {
     CorsLayer::new()
         .allow_credentials(true)
         .allow_methods([
@@ -334,7 +343,7 @@ fn build_cors_layer(allowed_origin: axum::http::HeaderValue) -> CorsLayer {
             axum::http::Method::OPTIONS,
         ])
         .allow_headers([axum::http::header::CONTENT_TYPE])
-        .allow_origin(allowed_origin)
+        .allow_origin(AllowOrigin::list(allowed_origins))
 }
 
 fn normalize_config_path(base_dir: &Path, path: &str) -> PathBuf {

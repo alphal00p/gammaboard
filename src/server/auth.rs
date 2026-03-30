@@ -58,7 +58,7 @@ pub async fn require_admin_session(
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    if !origin_allowed(request.headers(), &state.allowed_origin) {
+    if !origin_allowed(request.headers(), &state.allowed_origins) {
         return ApiError::Unauthorized("invalid origin".to_string()).into_response();
     }
 
@@ -77,7 +77,7 @@ pub async fn login(
     headers: HeaderMap,
     axum::extract::Json(payload): axum::extract::Json<LoginRequest>,
 ) -> Result<Response, ApiError> {
-    if !origin_allowed(&headers, &state.allowed_origin) {
+    if !origin_allowed(&headers, &state.allowed_origins) {
         return Err(ApiError::Unauthorized("invalid origin".to_string()));
     }
     if !verify_password_hash(&state.auth.password_hash, &payload.password) {
@@ -97,7 +97,7 @@ pub async fn logout(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    if !origin_allowed(&headers, &state.allowed_origin) {
+    if !origin_allowed(&headers, &state.allowed_origins) {
         return Err(ApiError::Unauthorized("invalid origin".to_string()));
     }
     Ok(response_with_cookie(
@@ -177,11 +177,13 @@ fn cookie_value(headers: &HeaderMap, key: &str) -> Option<String> {
     })
 }
 
-fn origin_allowed(headers: &HeaderMap, allowed_origin: &HeaderValue) -> bool {
+fn origin_allowed(headers: &HeaderMap, allowed_origins: &[HeaderValue]) -> bool {
     let Some(origin) = headers.get(ORIGIN) else {
         return true;
     };
-    allowed_origin == origin
+    allowed_origins
+        .iter()
+        .any(|allowed_origin| allowed_origin == origin)
 }
 
 fn now_unix_secs() -> u64 {
