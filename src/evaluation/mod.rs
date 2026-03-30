@@ -3,7 +3,7 @@ pub mod evaluator;
 pub mod observable;
 pub mod traits;
 
-pub use batch::{Batch, BatchError, BatchResult, PointSpec};
+pub use batch::{Batch, BatchError, BatchResult, Point};
 pub use evaluator::{
     GammaLoopParams, SinEvaluatorParams, SincEvaluatorParams, SymbolicaParams, UnitEvaluatorParams,
 };

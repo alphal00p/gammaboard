@@ -523,7 +523,7 @@ async fn get_run_evaluator_config(
         .build_response(
             format!("run:{run_id}:config:evaluator"),
             &EvaluatorPanelContext {
-                point_spec: &run_spec.point_spec,
+                domain: &run_spec.domain,
                 runner_params: &run_spec.evaluator_runner_params,
             },
         )
@@ -561,7 +561,7 @@ async fn get_run_sampler_aggregator_config(
         .build_response(
             format!("run:{run_id}:config:sampler_aggregator"),
             &SamplerAggregatorPanelContext {
-                point_spec: &run_spec.point_spec,
+                domain: &run_spec.domain,
                 runner_params: &run_spec.sampler_aggregator_runner_params,
             },
         )

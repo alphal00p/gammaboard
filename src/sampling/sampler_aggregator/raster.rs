@@ -1,8 +1,8 @@
 use crate::core::{BuildError, EngineError};
 use crate::core::{LineRasterGeometry, PlaneRasterGeometry};
-use crate::evaluation::{Batch, PointSpec};
+use crate::evaluation::{Batch, Point};
 use crate::sampling::{LatentBatchSpec, SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot};
-use ndarray::Array2;
+use crate::utils::domain::Domain;
 use num::Integer;
 use serde::{Deserialize, Serialize};
 
@@ -43,11 +43,11 @@ pub struct RasterLineSampler {
 }
 
 impl RasterPlaneSampler {
-    pub fn from_params_and_point_spec(
+    pub fn from_params_and_domain(
         params: RasterPlaneSamplerParams,
-        point_spec: &PointSpec,
+        domain: &Domain,
     ) -> Result<Self, BuildError> {
-        validate_plane_geometry(&params.geometry, point_spec)?;
+        validate_plane_geometry(&params.geometry, domain)?;
         let total_samples = params.geometry.nr_points();
         Ok(Self {
             params,
@@ -58,9 +58,9 @@ impl RasterPlaneSampler {
 
     pub fn from_snapshot(
         snapshot: RasterPlaneSamplerSnapshot,
-        point_spec: &PointSpec,
+        domain: &Domain,
     ) -> Result<Self, BuildError> {
-        let sampler = Self::from_params_and_point_spec(snapshot.params, point_spec)?;
+        let sampler = Self::from_params_and_domain(snapshot.params, domain)?;
         Ok(Self {
             next_index: snapshot.next_index,
             stride: snapshot.stride,
@@ -94,11 +94,11 @@ impl RasterPlaneSampler {
 }
 
 impl RasterLineSampler {
-    pub fn from_params_and_point_spec(
+    pub fn from_params_and_domain(
         params: RasterLineSamplerParams,
-        point_spec: &PointSpec,
+        domain: &Domain,
     ) -> Result<Self, BuildError> {
-        validate_line_geometry(&params.geometry, point_spec)?;
+        validate_line_geometry(&params.geometry, domain)?;
         let total_samples = params.geometry.nr_points();
         Ok(Self {
             params,
@@ -109,9 +109,9 @@ impl RasterLineSampler {
 
     pub fn from_snapshot(
         snapshot: RasterLineSamplerSnapshot,
-        point_spec: &PointSpec,
+        domain: &Domain,
     ) -> Result<Self, BuildError> {
-        let sampler = Self::from_params_and_point_spec(snapshot.params, point_spec)?;
+        let sampler = Self::from_params_and_domain(snapshot.params, domain)?;
         Ok(Self {
             next_index: snapshot.next_index,
             stride: snapshot.stride,
@@ -140,8 +140,8 @@ impl RasterLineSampler {
 }
 
 impl SamplerAggregator for RasterPlaneSampler {
-    fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError> {
-        validate_plane_geometry(&self.params.geometry, point_spec)
+    fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
+        validate_plane_geometry(&self.params.geometry, domain)
     }
 
     fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
@@ -163,23 +163,13 @@ impl SamplerAggregator for RasterPlaneSampler {
                 "raster plane sampler cannot produce an empty batch",
             ));
         }
-        let dims = self.params.geometry.offset.len();
-        let mut continuous = Array2::<f64>::zeros((nr_samples, dims));
-        for row_idx in 0..nr_samples {
-            let point = self.point_at(self.permuted_index(self.next_index + row_idx));
-            for (col_idx, value) in point.into_iter().enumerate() {
-                continuous[(row_idx, col_idx)] = value;
-            }
-        }
-        let (continuous_data, offset) = continuous.into_raw_vec_and_offset();
-        debug_assert_eq!(offset, Some(0));
-        let batch = Batch::from_flat_data(
-            nr_samples,
-            dims,
-            self.params.geometry.discrete.len(),
-            continuous_data,
-            self.params.geometry.discrete.repeat(nr_samples),
-        )
+        let batch = Batch::from_points((0..nr_samples).map(|row_idx| {
+            Point::new(
+                self.point_at(self.permuted_index(self.next_index + row_idx)),
+                self.params.geometry.discrete.clone(),
+                1.0,
+            )
+        }))
         .map_err(|err| EngineError::engine(err.to_string()))?;
         self.next_index += nr_samples;
         Ok(LatentBatchSpec::from_batch(&batch))
@@ -202,8 +192,8 @@ impl SamplerAggregator for RasterPlaneSampler {
 }
 
 impl SamplerAggregator for RasterLineSampler {
-    fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError> {
-        validate_line_geometry(&self.params.geometry, point_spec)
+    fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
+        validate_line_geometry(&self.params.geometry, domain)
     }
 
     fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
@@ -225,23 +215,13 @@ impl SamplerAggregator for RasterLineSampler {
                 "raster line sampler cannot produce an empty batch",
             ));
         }
-        let dims = self.params.geometry.offset.len();
-        let mut continuous = Array2::<f64>::zeros((nr_samples, dims));
-        for row_idx in 0..nr_samples {
-            let point = self.point_at(self.permuted_index(self.next_index + row_idx));
-            for (col_idx, value) in point.into_iter().enumerate() {
-                continuous[(row_idx, col_idx)] = value;
-            }
-        }
-        let (continuous_data, offset) = continuous.into_raw_vec_and_offset();
-        debug_assert_eq!(offset, Some(0));
-        let batch = Batch::from_flat_data(
-            nr_samples,
-            dims,
-            self.params.geometry.discrete.len(),
-            continuous_data,
-            self.params.geometry.discrete.repeat(nr_samples),
-        )
+        let batch = Batch::from_points((0..nr_samples).map(|row_idx| {
+            Point::new(
+                self.point_at(self.permuted_index(self.next_index + row_idx)),
+                self.params.geometry.discrete.clone(),
+                1.0,
+            )
+        }))
         .map_err(|err| EngineError::engine(err.to_string()))?;
         self.next_index += nr_samples;
         Ok(LatentBatchSpec::from_batch(&batch))
@@ -265,20 +245,23 @@ impl SamplerAggregator for RasterLineSampler {
 
 fn validate_plane_geometry(
     geometry: &PlaneRasterGeometry,
-    point_spec: &PointSpec,
+    domain: &Domain,
 ) -> Result<(), BuildError> {
+    let (continuous_dims, discrete_dims) = domain.fixed_rectangular_dims().ok_or_else(|| {
+        BuildError::incompatible("plane geometry requires a fixed rectangular domain")
+    })?;
     geometry.validate().map_err(BuildError::invalid_input)?;
-    if geometry.offset.len() != point_spec.continuous_dims {
+    if geometry.offset.len() != continuous_dims {
         return Err(BuildError::incompatible(format!(
             "plane geometry continuous dimension mismatch: expected {}, got {}",
-            point_spec.continuous_dims,
+            continuous_dims,
             geometry.offset.len()
         )));
     }
-    if geometry.discrete.len() != point_spec.discrete_dims {
+    if geometry.discrete.len() != discrete_dims {
         return Err(BuildError::incompatible(format!(
             "plane geometry discrete dimension mismatch: expected {}, got {}",
-            point_spec.discrete_dims,
+            discrete_dims,
             geometry.discrete.len()
         )));
     }
@@ -287,20 +270,23 @@ fn validate_plane_geometry(
 
 fn validate_line_geometry(
     geometry: &LineRasterGeometry,
-    point_spec: &PointSpec,
+    domain: &Domain,
 ) -> Result<(), BuildError> {
+    let (continuous_dims, discrete_dims) = domain.fixed_rectangular_dims().ok_or_else(|| {
+        BuildError::incompatible("line geometry requires a fixed rectangular domain")
+    })?;
     geometry.validate().map_err(BuildError::invalid_input)?;
-    if geometry.offset.len() != point_spec.continuous_dims {
+    if geometry.offset.len() != continuous_dims {
         return Err(BuildError::incompatible(format!(
             "line geometry continuous dimension mismatch: expected {}, got {}",
-            point_spec.continuous_dims,
+            continuous_dims,
             geometry.offset.len()
         )));
     }
-    if geometry.discrete.len() != point_spec.discrete_dims {
+    if geometry.discrete.len() != discrete_dims {
         return Err(BuildError::incompatible(format!(
             "line geometry discrete dimension mismatch: expected {}, got {}",
-            point_spec.discrete_dims,
+            discrete_dims,
             geometry.discrete.len()
         )));
     }
@@ -345,8 +331,8 @@ mod tests {
         RasterLineSampler, RasterLineSamplerParams, coprime_stride, permuted_raster_index,
     };
     use crate::core::{LineRasterGeometry, Linspace};
-    use crate::evaluation::PointSpec;
     use crate::sampling::SamplerAggregator;
+    use crate::utils::domain::Domain;
     use num::Integer;
 
     #[test]
@@ -367,10 +353,7 @@ mod tests {
 
     #[test]
     fn raster_line_snapshot_restores_shuffled_progress() {
-        let point_spec = PointSpec {
-            continuous_dims: 1,
-            discrete_dims: 0,
-        };
+        let domain = Domain::rectangular(1, 0);
         let params = RasterLineSamplerParams {
             geometry: LineRasterGeometry {
                 offset: vec![0.0],
@@ -383,9 +366,8 @@ mod tests {
                 discrete: Vec::new(),
             },
         };
-        let mut sampler =
-            RasterLineSampler::from_params_and_point_spec(params.clone(), &point_spec)
-                .expect("build sampler");
+        let mut sampler = RasterLineSampler::from_params_and_domain(params.clone(), &domain)
+            .expect("build sampler");
         let first_batch = sampler.produce_latent_batch(2).expect("first batch");
         let snapshot = sampler.snapshot().expect("snapshot");
         let restored_snapshot = match snapshot {
@@ -395,7 +377,7 @@ mod tests {
             other => panic!("unexpected snapshot kind: {other:?}"),
         };
         let mut restored =
-            RasterLineSampler::from_snapshot(restored_snapshot, &point_spec).expect("restore");
+            RasterLineSampler::from_snapshot(restored_snapshot, &domain).expect("restore");
         let second_batch = restored.produce_latent_batch(3).expect("second batch");
 
         let first_batch = first_batch.payload.as_batch().expect("decode first batch");
@@ -404,16 +386,14 @@ mod tests {
             .as_batch()
             .expect("decode second batch");
         let first_points = first_batch
-            .continuous()
-            .column(0)
+            .points()
             .iter()
-            .copied()
+            .map(|point| point.continuous[0])
             .collect::<Vec<_>>();
         let second_points = second_batch
-            .continuous()
-            .column(0)
+            .points()
             .iter()
-            .copied()
+            .map(|point| point.continuous[0])
             .collect::<Vec<_>>();
 
         assert_eq!(first_points, vec![0.0, 3.0]);

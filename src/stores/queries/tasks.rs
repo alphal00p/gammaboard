@@ -222,6 +222,39 @@ pub(crate) async fn load_active_run_task(
     row.map(decode_task_row).transpose()
 }
 
+pub(crate) async fn load_run_task(
+    pool: &PgPool,
+    task_id: i64,
+) -> Result<Option<RunTask>, sqlx::Error> {
+    let row = sqlx::query_as::<_, RunTaskRow>(
+        r#"
+        SELECT
+            id,
+            run_id,
+            name,
+            sequence_nr,
+            task,
+            spawned_from_snapshot_id,
+            state,
+            nr_produced_samples,
+            nr_completed_samples,
+            failure_reason,
+            started_at,
+            completed_at,
+            failed_at,
+            created_at
+        FROM run_tasks
+        WHERE id = $1
+        LIMIT 1
+        "#,
+    )
+    .bind(task_id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(decode_task_row).transpose()
+}
+
 pub(crate) async fn activate_next_run_task(
     pool: &PgPool,
     run_id: i32,

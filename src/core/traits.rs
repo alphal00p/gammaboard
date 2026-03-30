@@ -7,7 +7,7 @@ use super::models::{
 };
 use crate::core::RunSpec;
 use crate::core::{RunTask, RunTaskInput};
-use crate::evaluation::{BatchResult, PointSpec};
+use crate::evaluation::BatchResult;
 use crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot;
 use crate::sampling::LatentBatch;
 use crate::stores::read_models::{
@@ -15,6 +15,7 @@ use crate::stores::read_models::{
     SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot, WorkQueueStats,
     WorkerLogPage,
 };
+use crate::utils::domain::Domain;
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 
@@ -63,7 +64,7 @@ pub trait ControlPlaneStore: Send + Sync {
         name: &str,
         integration_params: &JsonValue,
         target: Option<&JsonValue>,
-        point_spec: &PointSpec,
+        domain: &Domain,
         initial_stage_snapshot: &RunStageSnapshot,
         initial_tasks: &[RunTaskInput],
     ) -> Result<i32, StoreError>;
@@ -173,6 +174,7 @@ pub trait RunTaskStore: Send + Sync {
         tasks: &[RunTaskInput],
     ) -> Result<Vec<RunTask>, StoreError>;
     async fn list_run_tasks(&self, run_id: i32) -> Result<Vec<RunTask>, StoreError>;
+    async fn load_run_task(&self, task_id: i64) -> Result<Option<RunTask>, StoreError>;
     async fn remove_pending_run_task(&self, run_id: i32, task_id: i64) -> Result<bool, StoreError>;
     async fn load_active_run_task(&self, run_id: i32) -> Result<Option<RunTask>, StoreError>;
     async fn activate_next_run_task(&self, run_id: i32) -> Result<Option<RunTask>, StoreError>;
@@ -192,9 +194,15 @@ pub trait RunTaskStore: Send + Sync {
 }
 
 #[async_trait]
-pub trait EvaluatorWorkerStore: WorkQueueStore + AggregationStore + Send + Sync {}
+pub trait EvaluatorWorkerStore:
+    WorkQueueStore + AggregationStore + RunTaskStore + Send + Sync
+{
+}
 
-impl<T> EvaluatorWorkerStore for T where T: WorkQueueStore + AggregationStore + Send + Sync {}
+impl<T> EvaluatorWorkerStore for T where
+    T: WorkQueueStore + AggregationStore + RunTaskStore + Send + Sync
+{
+}
 
 #[async_trait]
 pub trait SamplerWorkerStore:

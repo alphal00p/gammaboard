@@ -1,7 +1,7 @@
 //! Read models for API/dashboard responses.
 
 use crate::core::{EvaluatorPerformanceMetrics, SamplerPerformanceMetrics};
-use crate::evaluation::PointSpec;
+use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
 
 /// Run progress information.
@@ -14,7 +14,7 @@ pub struct RunProgress {
     pub desired_assignment_count: i64,
     pub active_worker_count: i64,
     pub integration_params: Option<serde_json::Value>,
-    pub point_spec: Option<PointSpec>,
+    pub domain: Option<Domain>,
     pub active_task_id: Option<String>,
     pub target: Option<serde_json::Value>,
     pub nr_produced_samples: i64,

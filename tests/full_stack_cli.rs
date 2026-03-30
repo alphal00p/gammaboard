@@ -10,18 +10,23 @@ use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tempfile::NamedTempFile;
 use tokio::process::{Child, Command as TokioCommand};
 use tokio::time::{Instant, sleep};
 use url::Url;
 
+static UNIQUE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 fn unique_suffix() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("time went backwards")
         .as_nanos();
-    nanos.to_string()
+    let pid = std::process::id();
+    let counter = UNIQUE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{pid}_{nanos}_{counter}")
 }
 
 fn resolve_bin_path() -> anyhow::Result<PathBuf> {
@@ -661,7 +666,7 @@ discrete_dims = 0
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "top-level [point_spec] is no longer supported",
+            "top-level [point_spec] or [domain] is no longer supported",
         ));
 
     let valid_config = temp_run_config(

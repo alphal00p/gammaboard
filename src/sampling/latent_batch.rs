@@ -107,18 +107,20 @@ impl LatentBatch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::{Array2, array};
+    use crate::evaluation::Point;
 
     #[test]
     fn latent_batch_roundtrips_batch_payload() {
-        let batch =
-            Batch::new(array![[0.5], [1.5]], Array2::zeros((2, 0)), None).expect("batch creation");
+        let batch = Batch::from_points([
+            Point::new(vec![0.5], Vec::new(), 1.0),
+            Point::new(vec![1.5], Vec::new(), 1.0),
+        ])
+        .expect("batch creation");
         let latent = LatentBatchSpec::from_batch(&batch).build();
         let json = latent.into_json();
         let restored = LatentBatch::from_json(&json).expect("latent batch");
         assert_eq!(restored.nr_samples, 2);
         let restored_batch = restored.payload.as_batch().expect("batch payload");
-        assert_eq!(restored_batch.point_spec(), batch.point_spec());
-        assert_eq!(restored_batch.weights(), batch.weights());
+        assert_eq!(restored_batch, batch);
     }
 }

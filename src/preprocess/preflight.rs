@@ -1,5 +1,5 @@
 use crate::core::{BatchTransformConfig, BuildError, RunStageSnapshot, SamplerAggregatorConfig};
-use crate::evaluation::PointSpec;
+use crate::utils::domain::Domain;
 
 /// New variant which accepts an optional `sample_budget`. When creating an initial stage for
 /// a sampler that requires a training budget (e.g. `HavanaTraining`), callers can pass the
@@ -7,17 +7,16 @@ use crate::evaluation::PointSpec;
 pub(super) fn build_initial_stage_with_budget(
     initial_sampler_aggregator: &SamplerAggregatorConfig,
     initial_batch_transforms: &[BatchTransformConfig],
-    point_spec: &PointSpec,
+    domain: &Domain,
     sample_budget: Option<usize>,
 ) -> Result<RunStageSnapshot, BuildError> {
     // Pass the provided sample_budget into the sampler builder. The handoff is None for initial stage.
-    let mut sampler = initial_sampler_aggregator.build(point_spec.clone(), sample_budget, None)?;
-    sampler.validate_point_spec(point_spec)?;
-    let materializer =
-        initial_sampler_aggregator.build_materializer(point_spec.clone(), None, None)?;
-    materializer.validate_point_spec(point_spec)?;
+    let mut sampler = initial_sampler_aggregator.build(domain.clone(), sample_budget, None)?;
+    sampler.validate_domain(domain)?;
+    let materializer = initial_sampler_aggregator.build_materializer(None)?;
+    materializer.validate_domain(domain)?;
     for transform in initial_batch_transforms {
-        transform.build()?.validate_point_spec(point_spec)?;
+        transform.build()?.validate_domain(domain)?;
     }
 
     Ok(RunStageSnapshot {

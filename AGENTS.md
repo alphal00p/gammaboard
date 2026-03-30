@@ -14,6 +14,8 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 
 ## Core Rules
 - PostgreSQL is the source of truth for runs, tasks, batches, nodes, logs, and snapshots.
+- Concrete evaluator batches are `Vec<Point>`, not rectangular matrices.
+- Run-global layout metadata uses `Domain`, not `PointSpec`.
 - Runs are driven by persisted `run_tasks`. The evaluator work queue is lower-level and distinct.
 - `RunSpec` should keep only immutable run-global state. Task-varying sampler, materializer, batch-transform, and observable choices belong on tasks or in stored integration defaults, not on `RunSpec`.
 - Run names are human-facing and not unique. CLI run references may be numeric ids or exact names; ambiguous names must fail and print matches.

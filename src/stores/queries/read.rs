@@ -56,7 +56,7 @@ struct RunProgressRow {
     desired_assignment_count: i64,
     active_worker_count: i64,
     integration_params: Option<JsonValue>,
-    point_spec: Option<JsonValue>,
+    domain: Option<JsonValue>,
     active_task_id: Option<i64>,
     target: Option<JsonValue>,
     nr_produced_samples: i64,
@@ -85,9 +85,9 @@ impl TryFrom<RunProgressRow> for RunProgress {
             desired_assignment_count: value.desired_assignment_count,
             active_worker_count: value.active_worker_count,
             integration_params: value.integration_params,
-            point_spec: value
-                .point_spec
-                .map(|payload| decode_json(payload, "invalid point_spec payload"))
+            domain: value
+                .domain
+                .map(|payload| decode_json(payload, "invalid domain payload"))
                 .transpose()?,
             active_task_id: value.active_task_id.map(id_text),
             target: value.target,
@@ -357,7 +357,7 @@ fn run_progress_sql(batch_stats_subquery: &str, run_where_clause: &str) -> Strin
             COALESCE(a.desired_assignment_count, 0) as desired_assignment_count,
             COALESCE(a.active_worker_count, 0) as active_worker_count,
             COALESCE(r.integration_params, '{{}}'::jsonb) as integration_params,
-            r.point_spec as point_spec,
+            r.point_spec as domain,
             active_task.id as active_task_id,
             r.target,
             r.nr_produced_samples,

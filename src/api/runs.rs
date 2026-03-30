@@ -111,9 +111,10 @@ pub async fn create_run(
     config: RunAddConfig,
 ) -> Result<CreatedRun, ApiError> {
     let processed = preprocess_run_add(config)?;
-    let point_spec = processed.point_spec.as_ref().ok_or_else(|| {
-        ApiError::Internal("preprocessing did not resolve point_spec".to_string())
-    })?;
+    let domain = processed
+        .domain
+        .as_ref()
+        .ok_or_else(|| ApiError::Internal("preprocessing did not resolve domain".to_string()))?;
     let resolved_integration_params =
         processed
             .resolved_integration_params
@@ -136,7 +137,7 @@ pub async fn create_run(
             &processed.name,
             &integration_params,
             processed.target.as_ref(),
-            point_spec,
+            domain,
             initial_stage_snapshot,
             &initial_tasks,
         )
@@ -164,8 +165,8 @@ pub async fn clone_run(
     }
 
     let source_run = load_run_progress(store, source_run_id).await?;
-    let point_spec = source_run.point_spec.clone().ok_or_else(|| {
-        ApiError::Internal(format!("source run {source_run_id} is missing point_spec"))
+    let domain = source_run.domain.clone().ok_or_else(|| {
+        ApiError::Internal(format!("source run {source_run_id} is missing domain"))
     })?;
     let integration_params = source_run.integration_params.clone().ok_or_else(|| {
         ApiError::Internal(format!(
@@ -197,7 +198,7 @@ pub async fn clone_run(
             new_name,
             &integration_params,
             source_run.target.as_ref(),
-            &point_spec,
+            &domain,
             &RunStageSnapshot {
                 id: None,
                 run_id: 0,
@@ -428,11 +429,11 @@ fn read_toml_file(path: &Path, label: &str) -> Result<toml::Value, ApiError> {
 fn parse_run_add_config_value(merged: toml::Value) -> Result<RunAddConfig, ApiError> {
     if merged
         .as_table()
-        .and_then(|table| table.get("point_spec"))
+        .and_then(|table| table.get("point_spec").or_else(|| table.get("domain")))
         .is_some()
     {
         return Err(ApiError::BadRequest(
-            "top-level [point_spec] is no longer supported; define dimensions in [evaluator]"
+            "top-level [point_spec] or [domain] is no longer supported; define layout in [evaluator]"
                 .to_string(),
         ));
     }

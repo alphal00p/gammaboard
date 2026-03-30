@@ -1,6 +1,6 @@
 use crate::core::{BuildError, EngineError};
-use crate::evaluation::{Batch, BatchTransform, PointSpec};
-use ndarray::{Array1, Array2};
+use crate::evaluation::{Batch, BatchTransform, Point};
+use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
 
@@ -17,8 +17,8 @@ impl SphericalBatchTransform {
 }
 
 impl BatchTransform for SphericalBatchTransform {
-    fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError> {
-        if point_spec.continuous_dims != 3 {
+    fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
+        if domain.fixed_continuous_dims() != Some(3) {
             return Err(BuildError::build(
                 "spherical batch transform requires continuous_dims == 3",
             ));
@@ -27,21 +27,29 @@ impl BatchTransform for SphericalBatchTransform {
     }
 
     fn apply(&self, batch: Batch) -> Result<Batch, EngineError> {
-        let rows = batch.size();
-        let dims = batch.continuous().ncols();
+        let dims = batch
+            .points()
+            .first()
+            .map(|point| point.continuous.len())
+            .unwrap_or(0);
         if dims != 3 {
             return Err(EngineError::engine(
                 "spherical batch transform requires exactly 3 continuous dimensions",
             ));
         }
 
-        let mut transformed_continuous = Array2::<f64>::zeros((rows, 3));
-        let mut transformed_weights = Array1::<f64>::zeros(rows);
-
-        for (row_idx, row) in batch.continuous().rows().into_iter().enumerate() {
-            let u_r = row[0];
-            let u_theta = row[1];
-            let u_phi = row[2];
+        let mut transformed_points = Vec::with_capacity(batch.size());
+        for (row_idx, point) in batch.points().iter().enumerate() {
+            if point.continuous.len() != 3 {
+                return Err(EngineError::engine(format!(
+                    "spherical batch transform requires homogeneous 3D points, got {} at row {}",
+                    point.continuous.len(),
+                    row_idx
+                )));
+            }
+            let u_r = point.continuous[0];
+            let u_theta = point.continuous[1];
+            let u_phi = point.continuous[2];
             for (dim_idx, value) in [u_r, u_theta, u_phi].into_iter().enumerate() {
                 if !(0.0..1.0).contains(&value) {
                     return Err(EngineError::engine(format!(
@@ -63,20 +71,20 @@ impl BatchTransform for SphericalBatchTransform {
             let sin_theta = (1.0 - cos_theta * cos_theta).max(0.0).sqrt();
             let phi = 2.0 * PI * u_phi;
             let (sin_phi, cos_phi) = phi.sin_cos();
-
-            transformed_continuous[(row_idx, 0)] = r * sin_theta * cos_phi;
-            transformed_continuous[(row_idx, 1)] = r * sin_theta * sin_phi;
-            transformed_continuous[(row_idx, 2)] = r * cos_theta;
+            let transformed_continuous = vec![
+                r * sin_theta * cos_phi,
+                r * sin_theta * sin_phi,
+                r * cos_theta,
+            ];
 
             let jacobian = 4.0 * PI * r * r * dr_du_r;
-            transformed_weights[row_idx] = batch.weights()[row_idx] * jacobian.abs();
+            transformed_points.push(Point::new(
+                transformed_continuous,
+                point.discrete.clone(),
+                point.weight * jacobian.abs(),
+            ));
         }
 
-        Batch::new(
-            transformed_continuous,
-            batch.discrete().clone(),
-            Some(transformed_weights),
-        )
-        .map_err(|err| EngineError::engine(err.to_string()))
+        Batch::new(transformed_points).map_err(|err| EngineError::engine(err.to_string()))
     }
 }

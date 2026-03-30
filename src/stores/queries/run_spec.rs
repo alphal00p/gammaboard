@@ -9,7 +9,7 @@ pub(crate) async fn load_run_spec_payload(
         r#"
         SELECT
             COALESCE(integration_params, '{}'::jsonb) AS integration_params,
-            point_spec
+            point_spec AS domain
         FROM runs
         WHERE id = $1
         "#,

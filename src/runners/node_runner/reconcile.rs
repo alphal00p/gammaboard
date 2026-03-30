@@ -8,9 +8,132 @@ use crate::core::{
     StoreError,
 };
 use crate::runners::{EvaluatorRunner, SamplerAggregatorRunner};
+use crate::sampling::StageHandoffOwned;
 use tracing::{error, info, warn};
 
 impl<S: NodeRunnerStore> NodeRunner<S> {
+    async fn resolve_effective_sampler_context(
+        &self,
+        worker: &ActiveWorker<S>,
+        task: &RunTask,
+    ) -> Result<
+        (
+            crate::core::SamplerAggregatorConfig,
+            Vec<BatchTransformConfig>,
+            Option<StageHandoffOwned>,
+        ),
+        StoreError,
+    > {
+        let latest_snapshot = worker
+            .store
+            .load_sampler_runner_snapshot(worker.run_id)
+            .await?;
+        let restored_snapshot = latest_snapshot
+            .as_ref()
+            .filter(|snapshot| snapshot.task_id == task.id)
+            .cloned();
+        let base_stage_snapshot = worker
+            .store
+            .load_latest_stage_snapshot_before_sequence(worker.run_id, i32::MAX)
+            .await?;
+        let sampler_source_snapshot =
+            Self::resolve_source_snapshot(worker, task, task.task.sample_sampler_source()).await?;
+
+        let sampler_config = if let Some(config) = task.task.sampler_config() {
+            config
+        } else {
+            task.task
+                .sample_sampler_config()
+                .or_else(|| {
+                    sampler_source_snapshot
+                        .as_ref()
+                        .map(|snapshot| snapshot.sampler_aggregator.clone())
+                })
+                .or_else(|| {
+                    base_stage_snapshot
+                        .as_ref()
+                        .map(|snapshot| snapshot.sampler_aggregator.clone())
+                })
+                .ok_or_else(|| {
+                    StoreError::store(format!(
+                        "run {} task {} has no sampler configuration",
+                        worker.run_id, task.id
+                    ))
+                })?
+        };
+
+        let batch_transforms = task
+            .task
+            .batch_transforms_config()
+            .or_else(|| {
+                sampler_source_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.batch_transforms.clone())
+            })
+            .or_else(|| {
+                base_stage_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.batch_transforms.clone())
+            })
+            .unwrap_or_default();
+
+        let handoff = if let Some(runner_snapshot) = restored_snapshot {
+            Some(Self::owned_stage_handoff_from_runner_snapshot(
+                runner_snapshot,
+            ))
+        } else if let Some(snapshot) = sampler_source_snapshot {
+            Some(Self::owned_stage_handoff_from_stage_snapshot(snapshot))
+        } else {
+            match &sampler_config {
+                crate::core::SamplerAggregatorConfig::HavanaInference { params } => {
+                    let snapshot = match &params.source {
+                        crate::sampling::HavanaInferenceSource::Snapshot { snapshot_id } => {
+                            worker.store.load_stage_snapshot(*snapshot_id).await?
+                        }
+                        crate::sampling::HavanaInferenceSource::LatestTrainingSamplerAggregator => {
+                            Self::find_latest_havana_snapshot(worker).await?
+                        }
+                    };
+                    if let Some(snapshot) = snapshot {
+                        Some(Self::owned_stage_handoff_from_stage_snapshot(snapshot))
+                    } else {
+                        let reason = "havana_inference sampler requires a havana training or inference snapshot handoff";
+                        if let Err(e) = worker.store.fail_run_task(task.id, reason).await {
+                            warn!(
+                                run_id = worker.run_id,
+                                task_id = task.id,
+                                error = %e,
+                                "failed to persist task failure for activation error"
+                            );
+                        }
+                        if let Err(e) = self
+                            .store
+                            .clear_desired_assignments_for_run(worker.run_id)
+                            .await
+                        {
+                            warn!(
+                                run_id = worker.run_id,
+                                error = %e,
+                                "failed to clear desired assignments for run after task activation failure"
+                            );
+                        } else {
+                            warn!(
+                                run_id = worker.run_id,
+                                task_id = task.id,
+                                reason,
+                                "task activation failed (missing havana snapshot); desired assignments cleared"
+                            );
+                        }
+                        return Err(StoreError::store(reason));
+                    }
+                }
+                _ => base_stage_snapshot.map(Self::owned_stage_handoff_from_stage_snapshot),
+            }
+        };
+
+        Ok((sampler_config, batch_transforms, handoff))
+    }
+
     pub(super) async fn resolve_desired_target(&self) -> Result<Option<RoleTarget>, StoreError> {
         let assignment = self.store.get_desired_assignment(&self.node_name).await?;
         Ok(assignment.map(|assignment| RoleTarget {
@@ -130,88 +253,14 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             .map_err(|err| StoreError::store(format!("failed to build evaluator: {err}")))?;
         info!("evaluator worker started");
 
-        // Choose the most appropriate stage snapshot for building the evaluator materializer.
-        // Prefer a `HavanaTraining` snapshot (it contains the grid required by the materializer).
-        // If no training snapshot exists, fall back to the latest snapshot available.
-        let stage_snapshot = {
-            // Search backward from the latest sequence for a HavanaTraining snapshot.
-            let mut search_seq = i32::MAX;
-            let mut chosen: Option<RunStageSnapshot> = None;
-
-            loop {
-                let opt_snap = worker
-                    .store
-                    .load_latest_stage_snapshot_before_sequence(worker.run_id, search_seq)
-                    .await?;
-                let snap = match opt_snap {
-                    Some(s) => s,
-                    None => break,
-                };
-
-                // If this snapshot contains a HavanaTraining sampler_aggregator, prefer it.
-                if matches!(
-                    snap.sampler_aggregator,
-                    crate::core::SamplerAggregatorConfig::HavanaTraining { .. }
-                ) {
-                    chosen = Some(snap);
-                    break;
-                }
-
-                // If there is an earlier snapshot, continue searching before its sequence_nr.
-                let prev_seq = snap.sequence_nr.unwrap_or(0);
-                if prev_seq <= 0 {
-                    // No earlier snapshots to try.
-                    break;
-                }
-                search_seq = prev_seq;
-            }
-
-            if let Some(s) = chosen {
-                s
-            } else {
-                // Fallback: use the latest snapshot (whatever kind it is).
-                match worker
-                    .store
-                    .load_latest_stage_snapshot_before_sequence(worker.run_id, i32::MAX)
-                    .await?
-                {
-                    Some(s) => s,
-                    None => {
-                        warn!(
-                            run_id = worker.run_id,
-                            "run has no stage snapshot; evaluator not started"
-                        );
-                        return Ok(None);
-                    }
-                }
-            }
-        };
-
-        let batch_transforms = Self::build_batch_transforms(&stage_snapshot.batch_transforms)?;
-
-        // Debug: report selected stage snapshot and sampler snapshot/config before building materializer
-
-        let materializer = stage_snapshot
-            .sampler_aggregator
-            .build_materializer(
-                spec.point_spec.clone(),
-                None,
-                Some(Self::stage_handoff_from_stage_snapshot(&stage_snapshot)),
-            )
-            .map_err(|err| StoreError::store(format!("failed to build materializer: {err}")))?;
-
-        // Debug: confirm materializer construction completed
-
         let runner = EvaluatorRunner::new(
             worker.store.clone(),
             worker.run_id,
             self.node_name.clone(),
             self.node_uuid.clone(),
             evaluator,
-            materializer,
-            spec.point_spec.clone(),
+            spec.domain.clone(),
             spec.evaluator_runner_params.clone(),
-            batch_transforms,
         );
 
         Ok(Some(Box::new(runner)))
@@ -280,118 +329,27 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             .filter(|snapshot| snapshot.task_id == task.id)
             .cloned();
 
+        let (sampler_config, batch_transforms, handoff) = self
+            .resolve_effective_sampler_context(worker, &task)
+            .await?;
         let base_stage_snapshot = worker
             .store
             .load_latest_stage_snapshot_before_sequence(worker.run_id, i32::MAX)
             .await?;
-        let sampler_source_snapshot =
-            Self::resolve_source_snapshot(worker, &task, task.task.sample_sampler_source()).await?;
         let observable_source_snapshot =
             Self::resolve_source_snapshot(worker, &task, task.task.sample_observable_source())
                 .await?;
-
-        let sampler_config = if let Some(config) = task.task.sampler_config() {
-            config
-        } else {
-            task.task
-                .sample_sampler_config()
-                .or_else(|| {
-                    sampler_source_snapshot
-                        .as_ref()
-                        .map(|snapshot| snapshot.sampler_aggregator.clone())
-                })
-                .or_else(|| {
-                    base_stage_snapshot
-                        .as_ref()
-                        .map(|snapshot| snapshot.sampler_aggregator.clone())
-                })
-                .ok_or_else(|| {
-                    StoreError::store(format!(
-                        "run {} task {} has no sampler configuration",
-                        worker.run_id, task.id
-                    ))
-                })?
-        };
-
-        let batch_transforms = task
-            .task
-            .batch_transforms_config()
-            .or_else(|| {
-                sampler_source_snapshot
-                    .as_ref()
-                    .map(|snapshot| snapshot.batch_transforms.clone())
-            })
-            .or_else(|| {
-                base_stage_snapshot
-                    .as_ref()
-                    .map(|snapshot| snapshot.batch_transforms.clone())
-            })
-            .unwrap_or_default();
 
         let sample_budget = task
             .task
             .nr_expected_samples()
             .and_then(|value| usize::try_from(value).ok());
 
-        let mut handoff_snapshot_storage: Option<RunStageSnapshot> = None;
-        let handoff = if let Some(ref runner_snap) = restored_snapshot.as_ref() {
-            Some(Self::stage_handoff_from_runner_snapshot(runner_snap))
-        } else if let Some(snapshot) = sampler_source_snapshot.as_ref() {
-            handoff_snapshot_storage = Some(snapshot.clone());
-            handoff_snapshot_storage
-                .as_ref()
-                .map(Self::stage_handoff_from_stage_snapshot)
-        } else {
-            match &sampler_config {
-                crate::core::SamplerAggregatorConfig::HavanaInference { params } => {
-                    handoff_snapshot_storage = match &params.source {
-                        crate::sampling::HavanaInferenceSource::Snapshot { snapshot_id } => {
-                            worker.store.load_stage_snapshot(*snapshot_id).await?
-                        }
-                        crate::sampling::HavanaInferenceSource::LatestTrainingSamplerAggregator => {
-                            Self::find_latest_havana_snapshot(&worker).await?
-                        }
-                    };
-                    if let Some(snapshot) = handoff_snapshot_storage.as_ref() {
-                        Some(Self::stage_handoff_from_stage_snapshot(snapshot))
-                    } else {
-                        let reason = "havana_inference sampler requires a havana training or inference snapshot handoff";
-                        if let Err(e) = worker.store.fail_run_task(task.id, reason).await {
-                            warn!(
-                                run_id = worker.run_id,
-                                task_id = task.id,
-                                error = %e,
-                                "failed to persist task failure for activation error"
-                            );
-                        }
-                        if let Err(e) = self
-                            .store
-                            .clear_desired_assignments_for_run(worker.run_id)
-                            .await
-                        {
-                            warn!(
-                                run_id = worker.run_id,
-                                error = %e,
-                                "failed to clear desired assignments for run after task activation failure"
-                            );
-                        } else {
-                            warn!(
-                                run_id = worker.run_id,
-                                task_id = task.id,
-                                reason,
-                                "task activation failed (missing havana snapshot); desired assignments cleared"
-                            );
-                        }
-                        return Ok(None);
-                    }
-                }
-                _ => base_stage_snapshot
-                    .as_ref()
-                    .map(Self::stage_handoff_from_stage_snapshot),
-            }
-        };
-
-        let sampler = match sampler_config.build(spec.point_spec.clone(), sample_budget, handoff) {
+        let sampler = match sampler_config.build(
+            spec.domain.clone(),
+            sample_budget,
+            handoff.as_ref().map(StageHandoffOwned::as_ref),
+        ) {
             Ok(s) => s,
             Err(err) => {
                 // Sampler build failed at activation time. Persist a task failure and pause the run
@@ -484,19 +442,6 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         Ok(Some(Box::new(runner)))
     }
 
-    fn build_batch_transforms(
-        configs: &[BatchTransformConfig],
-    ) -> Result<Vec<Box<dyn crate::evaluation::BatchTransform>>, StoreError> {
-        configs
-            .iter()
-            .map(|config| {
-                config.build().map_err(|err| {
-                    StoreError::store(format!("failed to build batch transform: {err}"))
-                })
-            })
-            .collect()
-    }
-
     async fn resolve_source_snapshot(
         worker: &ActiveWorker<S>,
         task: &RunTask,
@@ -565,12 +510,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             else {
                 return Ok(None);
             };
-            match &snapshot.sampler_snapshot {
-                crate::sampling::SamplerAggregatorSnapshot::HavanaTraining { .. }
-                | crate::sampling::SamplerAggregatorSnapshot::HavanaInference { .. } => {
-                    return Ok(Some(snapshot));
-                }
-                _ => {}
+            if snapshot.sampler_snapshot.contains_havana_grid() {
+                return Ok(Some(snapshot));
             }
             let prev_seq = snapshot.sequence_nr.unwrap_or(0);
             if prev_seq <= 0 {
@@ -580,21 +521,19 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         }
     }
 
-    fn stage_handoff_from_stage_snapshot<'a>(
-        snapshot: &'a RunStageSnapshot,
-    ) -> crate::sampling::StageHandoff<'a> {
-        crate::sampling::StageHandoff {
-            sampler_snapshot: Some(&snapshot.sampler_snapshot),
-            observable_state: snapshot.observable_state.as_ref(),
+    fn owned_stage_handoff_from_stage_snapshot(snapshot: RunStageSnapshot) -> StageHandoffOwned {
+        StageHandoffOwned {
+            sampler_snapshot: Some(snapshot.sampler_snapshot),
+            observable_state: snapshot.observable_state,
         }
     }
 
-    fn stage_handoff_from_runner_snapshot<'a>(
-        snapshot: &'a crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot,
-    ) -> crate::sampling::StageHandoff<'a> {
-        crate::sampling::StageHandoff {
-            sampler_snapshot: Some(&snapshot.sampler_snapshot),
-            observable_state: Some(&snapshot.observable_state),
+    fn owned_stage_handoff_from_runner_snapshot(
+        snapshot: crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot,
+    ) -> StageHandoffOwned {
+        StageHandoffOwned {
+            sampler_snapshot: Some(snapshot.sampler_snapshot),
+            observable_state: Some(snapshot.observable_state),
         }
     }
 

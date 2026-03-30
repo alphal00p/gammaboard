@@ -1,6 +1,7 @@
 use crate::core::{BuildError, EngineError};
-use crate::evaluation::{Batch, Materializer, PointSpec};
+use crate::evaluation::{Batch, Materializer, Point};
 use crate::sampling::{LatentBatch, LatentBatchPayload, SamplerAggregatorSnapshot, StageHandoff};
+use crate::utils::domain::Domain;
 use crate::utils::rng::SerializableMonteCarloRng;
 use serde::Deserialize;
 use symbolica::numerical_integration::{Grid, Sample};
@@ -59,11 +60,23 @@ impl HavanaInferenceMaterializer {
 }
 
 impl Materializer for HavanaInferenceMaterializer {
-    fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError> {
-        if point_spec.discrete_dims != 0 {
+    fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
+        let (continuous_dims, discrete_dims) =
+            domain.fixed_rectangular_dims().ok_or_else(|| {
+                BuildError::build(
+                    "havana inference materializer requires a fixed rectangular domain",
+                )
+            })?;
+        if discrete_dims != 0 {
             return Err(BuildError::build(
-                "havana inference materializer requires point_spec.discrete_dims == 0",
+                "havana inference materializer requires discrete_dims == 0",
             ));
+        }
+        if continuous_dims != self.continuous_dims {
+            return Err(BuildError::build(format!(
+                "havana inference materializer expects continuous_dims={}, got {}",
+                self.continuous_dims, continuous_dims
+            )));
         }
         Ok(())
     }
@@ -72,16 +85,14 @@ impl Materializer for HavanaInferenceMaterializer {
         match &latent_batch.payload {
             LatentBatchPayload::HavanaInference { seed } => {
                 let mut rng = SerializableMonteCarloRng::new(*seed, 0);
-                let mut coords = Vec::with_capacity(latent_batch.nr_samples * self.continuous_dims);
-                let mut weights = Vec::with_capacity(latent_batch.nr_samples);
+                let mut points = Vec::with_capacity(latent_batch.nr_samples);
 
                 for _ in 0..latent_batch.nr_samples {
                     let mut sample = Sample::new();
                     self.grid.sample(&mut rng, &mut sample);
                     match sample {
                         Sample::Continuous(weight, x) => {
-                            coords.extend_from_slice(&x);
-                            weights.push(weight);
+                            points.push(Point::new(x, Vec::new(), weight));
                         }
                         _ => {
                             return Err(EngineError::engine(
@@ -91,15 +102,7 @@ impl Materializer for HavanaInferenceMaterializer {
                     }
                 }
 
-                Batch::from_flat_data_with_weights(
-                    latent_batch.nr_samples,
-                    self.continuous_dims,
-                    0,
-                    coords,
-                    Vec::new(),
-                    Some(weights),
-                )
-                .map_err(|err| EngineError::engine(err.to_string()))
+                Batch::new(points).map_err(|err| EngineError::engine(err.to_string()))
             }
             LatentBatchPayload::Batch { batch } => {
                 // If the latent payload is already a concrete batch, accept it directly.

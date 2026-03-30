@@ -1,6 +1,6 @@
 use gammaboard::config::CliConfig;
 use gammaboard::core::{ControlPlaneStore, StoreError, WorkQueueStore, WorkerRole};
-use gammaboard::{Batch, LatentBatchSpec, PgStore};
+use gammaboard::{Batch, LatentBatchSpec, PgStore, Point};
 use sqlx::postgres::PgPoolOptions;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -43,7 +43,7 @@ async fn claim_batch_requires_active_assignment() {
         ) VALUES (
             'claim-batch-active',
             '{}'::jsonb,
-            '{"continuous_dims":1,"discrete_dims":0}'::jsonb
+            '{"Continuous":{"dims":1}}'::jsonb
         )
         RETURNING id
         "#,
@@ -73,7 +73,7 @@ async fn claim_batch_requires_active_assignment() {
     .await
     .expect("insert run task");
 
-    let batch = Batch::from_flat_data(1, 1, 0, vec![1.0], vec![]).expect("batch");
+    let batch = Batch::from_points([Point::new(vec![1.0], Vec::new(), 1.0)]).expect("batch");
     let latent_batch = LatentBatchSpec::from_batch(&batch).build();
     store
         .insert_batch(run_id, task_id, false, &latent_batch)
@@ -114,7 +114,7 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
         ) VALUES (
             'claim-batch-inactive',
             '{}'::jsonb,
-            '{"continuous_dims":1,"discrete_dims":0}'::jsonb
+            '{"Continuous":{"dims":1}}'::jsonb
         )
         RETURNING id
         "#,
@@ -140,7 +140,7 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
     .await
     .expect("insert run task");
 
-    let batch = Batch::from_flat_data(1, 1, 0, vec![2.0], vec![]).expect("batch");
+    let batch = Batch::from_points([Point::new(vec![2.0], Vec::new(), 1.0)]).expect("batch");
     let latent_batch = LatentBatchSpec::from_batch(&batch).build();
     store
         .insert_batch(run_id, task_id, false, &latent_batch)
@@ -201,7 +201,7 @@ async fn sampler_aggregator_desired_assignment_is_unique_per_run() {
         ) VALUES (
             'test-run',
             '{}'::jsonb,
-            '{"continuous_dims":0,"discrete_dims":0}'::jsonb
+            '{"Continuous":{"dims":0}}'::jsonb
         )
         RETURNING id
         "#,

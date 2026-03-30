@@ -1,11 +1,14 @@
 //! Evaluator worker runner orchestration.
 
 use crate::core::{
-    EngineError, EvalError, EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics,
-    EvaluatorPerformanceSnapshot, EvaluatorWorkerStore, StoreError,
+    BatchTransformConfig, EngineError, EvalError, EvaluatorIdleProfileMetrics,
+    EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot, EvaluatorWorkerStore, RunTask,
+    SourceRefSpec, StoreError,
 };
-use crate::evaluation::{Batch, BatchResult, EvalBatchOptions, Evaluator, Materializer, PointSpec};
+use crate::evaluation::{Batch, BatchResult, EvalBatchOptions, Evaluator, Materializer};
 use crate::runners::rolling_metric::RollingMetric;
+use crate::sampling::StageHandoffOwned;
+use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
 use std::{time::Duration, time::Instant};
 use thiserror::Error;
@@ -29,8 +32,9 @@ pub struct EvaluatorRunner<S> {
     node_name: String,
     node_uuid: String,
     evaluator: Box<dyn Evaluator>,
-    materializer: Box<dyn Materializer>,
-    point_spec: PointSpec,
+    domain: Domain,
+    current_task_id: Option<i64>,
+    materializer: Option<Box<dyn Materializer>>,
     performance_snapshot_interval: Duration,
     last_snapshot_at: Instant,
     batches_completed_total: i64,
@@ -38,6 +42,11 @@ pub struct EvaluatorRunner<S> {
     rolling: EvaluatorRollingAverages,
     store: S,
     current_batch_transforms: Vec<Box<dyn crate::evaluation::BatchTransform>>,
+}
+
+struct TaskRuntimeContext {
+    materializer: Box<dyn Materializer>,
+    batch_transforms: Vec<Box<dyn crate::evaluation::BatchTransform>>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -58,18 +67,17 @@ where
         node_name: impl Into<String>,
         node_uuid: impl Into<String>,
         evaluator: Box<dyn Evaluator>,
-        materializer: Box<dyn Materializer>,
-        point_spec: PointSpec,
+        domain: Domain,
         params: EvaluatorRunnerParams,
-        batch_transforms: Vec<Box<dyn crate::evaluation::BatchTransform>>,
     ) -> Self {
         Self {
             run_id,
             node_name: node_name.into(),
             node_uuid: node_uuid.into(),
             evaluator,
-            materializer,
-            point_spec,
+            domain,
+            current_task_id: None,
+            materializer: None,
             performance_snapshot_interval: Duration::from_millis(
                 params.performance_snapshot_interval_ms,
             ),
@@ -78,7 +86,253 @@ where
             samples_evaluated_total: 0,
             rolling: EvaluatorRollingAverages::default(),
             store,
-            current_batch_transforms: batch_transforms,
+            current_batch_transforms: Vec::new(),
+        }
+    }
+
+    fn build_batch_transforms(
+        configs: &[BatchTransformConfig],
+        domain: &Domain,
+    ) -> Result<Vec<Box<dyn crate::evaluation::BatchTransform>>, EvaluatorRunnerError> {
+        configs
+            .iter()
+            .map(|config| {
+                let transform = config.build().map_err(|err| {
+                    EvaluatorRunnerError::Store(StoreError::store(format!(
+                        "failed to build batch transform: {err}"
+                    )))
+                })?;
+                transform.validate_domain(domain).map_err(|err| {
+                    EvaluatorRunnerError::Store(StoreError::store(format!(
+                        "failed to validate batch transform domain: {err}"
+                    )))
+                })?;
+                Ok(transform)
+            })
+            .collect()
+    }
+
+    async fn ensure_task_context(&mut self, task_id: i64) -> Result<(), EvaluatorRunnerError> {
+        if self.current_task_id == Some(task_id) {
+            return Ok(());
+        }
+
+        let TaskRuntimeContext {
+            materializer,
+            batch_transforms,
+        } = self.load_task_context(task_id).await?;
+
+        self.current_task_id = Some(task_id);
+        self.materializer = Some(materializer);
+        self.current_batch_transforms = batch_transforms;
+        Ok(())
+    }
+
+    async fn load_task_context(
+        &self,
+        task_id: i64,
+    ) -> Result<TaskRuntimeContext, EvaluatorRunnerError> {
+        let task = self.load_task(task_id).await?;
+        let source_snapshot = self.resolve_source_snapshot(&task).await?;
+        let base_stage_snapshot = self
+            .store
+            .load_latest_stage_snapshot_before_sequence(self.run_id, task.sequence_nr)
+            .await
+            .map_err(EvaluatorRunnerError::Store)?;
+        let batch_transforms = self.build_task_batch_transforms(
+            &task,
+            source_snapshot.as_ref(),
+            base_stage_snapshot.as_ref(),
+        )?;
+        let sampler_config = self.resolve_effective_sampler_config(
+            &task,
+            source_snapshot.as_ref(),
+            base_stage_snapshot.as_ref(),
+        )?;
+        let handoff = self
+            .resolve_materializer_handoff(
+                &task,
+                &sampler_config,
+                source_snapshot,
+                base_stage_snapshot,
+            )
+            .await?;
+        let materializer = sampler_config
+            .build_materializer(handoff.as_ref().map(StageHandoffOwned::as_ref))
+            .map_err(|err| {
+                EvaluatorRunnerError::Store(StoreError::store(format!(
+                    "failed to build materializer for task {}: {err}",
+                    task_id
+                )))
+            })?;
+        materializer.validate_domain(&self.domain).map_err(|err| {
+            EvaluatorRunnerError::Store(StoreError::store(format!(
+                "failed to validate materializer domain for task {}: {err}",
+                task_id
+            )))
+        })?;
+        Ok(TaskRuntimeContext {
+            materializer,
+            batch_transforms,
+        })
+    }
+
+    async fn load_task(&self, task_id: i64) -> Result<RunTask, EvaluatorRunnerError> {
+        self.store
+            .load_run_task(task_id)
+            .await
+            .map_err(EvaluatorRunnerError::Store)?
+            .ok_or_else(|| {
+                EvaluatorRunnerError::Store(StoreError::store(format!(
+                    "claimed batch references missing task {}",
+                    task_id
+                )))
+            })
+    }
+
+    fn resolve_effective_sampler_config(
+        &self,
+        task: &RunTask,
+        source_snapshot: Option<&crate::core::RunStageSnapshot>,
+        base_stage_snapshot: Option<&crate::core::RunStageSnapshot>,
+    ) -> Result<crate::core::SamplerAggregatorConfig, EvaluatorRunnerError> {
+        task.task
+            .sampler_config()
+            .or_else(|| task.task.sample_sampler_config())
+            .or_else(|| source_snapshot.map(|snapshot| snapshot.sampler_aggregator.clone()))
+            .or_else(|| base_stage_snapshot.map(|snapshot| snapshot.sampler_aggregator.clone()))
+            .ok_or_else(|| {
+                EvaluatorRunnerError::Store(StoreError::store(format!(
+                    "run {} task {} has no sampler configuration",
+                    self.run_id, task.id
+                )))
+            })
+    }
+
+    fn build_task_batch_transforms(
+        &self,
+        task: &RunTask,
+        source_snapshot: Option<&crate::core::RunStageSnapshot>,
+        base_stage_snapshot: Option<&crate::core::RunStageSnapshot>,
+    ) -> Result<Vec<Box<dyn crate::evaluation::BatchTransform>>, EvaluatorRunnerError> {
+        let configs = task
+            .task
+            .batch_transforms_config()
+            .or_else(|| source_snapshot.map(|snapshot| snapshot.batch_transforms.clone()))
+            .or_else(|| base_stage_snapshot.map(|snapshot| snapshot.batch_transforms.clone()))
+            .unwrap_or_default();
+        Self::build_batch_transforms(&configs, &self.domain)
+    }
+
+    async fn resolve_source_snapshot(
+        &self,
+        task: &RunTask,
+    ) -> Result<Option<crate::core::RunStageSnapshot>, EvaluatorRunnerError> {
+        match task.task.sample_sampler_source() {
+            Some(SourceRefSpec::Latest) => self
+                .store
+                .load_latest_stage_snapshot_before_sequence(self.run_id, task.sequence_nr)
+                .await
+                .map_err(EvaluatorRunnerError::Store),
+            Some(SourceRefSpec::FromName(source_task_name)) => {
+                let source_task = self
+                    .store
+                    .list_run_tasks(self.run_id)
+                    .await
+                    .map_err(EvaluatorRunnerError::Store)?
+                    .into_iter()
+                    .find(|candidate| candidate.name == source_task_name)
+                    .ok_or_else(|| {
+                        EvaluatorRunnerError::Store(StoreError::store(format!(
+                            "task {} references source task '{}' but no such task exists in run {}",
+                            task.id, source_task_name, self.run_id
+                        )))
+                    })?;
+                if source_task.sequence_nr >= task.sequence_nr {
+                    return Err(EvaluatorRunnerError::Store(StoreError::store(format!(
+                        "task {} references source task '{}' which is not prior in sequence",
+                        task.id, source_task_name
+                    ))));
+                }
+                self.store
+                    .load_latest_stage_snapshot_before_sequence(
+                        self.run_id,
+                        source_task.sequence_nr + 1,
+                    )
+                    .await
+                    .map_err(EvaluatorRunnerError::Store)
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn resolve_materializer_handoff(
+        &self,
+        task: &RunTask,
+        sampler_config: &crate::core::SamplerAggregatorConfig,
+        source_snapshot: Option<crate::core::RunStageSnapshot>,
+        base_stage_snapshot: Option<crate::core::RunStageSnapshot>,
+    ) -> Result<Option<StageHandoffOwned>, EvaluatorRunnerError> {
+        let handoff_snapshot = if let Some(snapshot) = source_snapshot {
+            Some(snapshot)
+        } else {
+            match sampler_config {
+                crate::core::SamplerAggregatorConfig::HavanaInference { params } => {
+                    match &params.source {
+                        crate::sampling::HavanaInferenceSource::Snapshot { snapshot_id } => self
+                            .store
+                            .load_stage_snapshot(*snapshot_id)
+                            .await
+                            .map_err(EvaluatorRunnerError::Store)?,
+                        crate::sampling::HavanaInferenceSource::LatestTrainingSamplerAggregator => {
+                            self.find_latest_havana_snapshot_before_sequence(task.sequence_nr)
+                                .await?
+                        }
+                    }
+                }
+                _ => base_stage_snapshot,
+            }
+        };
+        let handoff_snapshot = match (sampler_config, handoff_snapshot) {
+            (crate::core::SamplerAggregatorConfig::HavanaInference { .. }, Some(snapshot))
+                if !snapshot.sampler_snapshot.contains_havana_grid() =>
+            {
+                self.find_latest_havana_snapshot_before_sequence(
+                    snapshot.sequence_nr.unwrap_or(task.sequence_nr),
+                )
+                .await?
+            }
+            (_, snapshot) => snapshot,
+        };
+
+        Ok(handoff_snapshot.map(|snapshot| StageHandoffOwned {
+            sampler_snapshot: Some(snapshot.sampler_snapshot),
+            observable_state: snapshot.observable_state,
+        }))
+    }
+
+    async fn find_latest_havana_snapshot_before_sequence(
+        &self,
+        sequence_nr: i32,
+    ) -> Result<Option<crate::core::RunStageSnapshot>, EvaluatorRunnerError> {
+        let mut search_seq = sequence_nr;
+        loop {
+            let Some(snapshot) = self
+                .store
+                .load_latest_stage_snapshot_before_sequence(self.run_id, search_seq)
+                .await
+                .map_err(EvaluatorRunnerError::Store)?
+            else {
+                return Ok(None);
+            };
+            if snapshot.sampler_snapshot.contains_havana_grid() {
+                return Ok(Some(snapshot));
+            }
+            let prev_seq = snapshot.sequence_nr.unwrap_or(0);
+            if prev_seq <= 0 {
+                return Ok(None);
+            }
+            search_seq = prev_seq;
         }
     }
 
@@ -121,8 +375,16 @@ where
             return Ok(());
         };
 
+        self.ensure_task_context(claimed.task_id).await?;
+
         let materialization_started = Instant::now();
-        let materialized = self.materializer.materialize_batch(&claimed.latent_batch);
+        let materializer = self.materializer.as_mut().ok_or_else(|| {
+            EvaluatorRunnerError::Store(StoreError::store(format!(
+                "evaluator task {} has no materializer",
+                claimed.task_id
+            )))
+        })?;
+        let materialized = materializer.materialize_batch(&claimed.latent_batch);
         let materialization_time_ms = materialization_started.elapsed().as_secs_f64() * 1000.0;
         let materialized_batch = match materialized {
             Ok(batch) => batch,
@@ -153,18 +415,6 @@ where
                 }
             };
         }
-        if let Err(err) = transformed_batch.validate_point_spec(&self.point_spec) {
-            let err = EngineError::engine(format!("invalid materialized batch point shape: {err}"));
-            return self
-                .fail_tick(
-                    loop_started,
-                    claimed.batch_id,
-                    materialization_time_ms,
-                    EvaluatorRunnerError::Engine(err),
-                )
-                .await;
-        }
-
         let started = Instant::now();
         match self.evaluator.eval_batch(
             &transformed_batch,

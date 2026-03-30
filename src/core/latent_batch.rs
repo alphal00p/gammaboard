@@ -1,4 +1,3 @@
-
 //! Latent batch abstraction for sampler-owned queue payloads.
 //!
 //! A latent batch deterministically materializes into one concrete [`Batch`].
@@ -6,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
-use crate::core::{Batch, BatchError};
+use crate::{Batch, BatchError};
 
 /// Serialized queue payload produced by the sampler and materialized by the parametrization.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -98,19 +97,21 @@ impl LatentBatch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::{Array2, array};
+    use crate::Point;
 
     #[test]
     fn latent_batch_roundtrips_batch_payload() {
-        let batch =
-            Batch::new(array![[0.5], [1.5]], Array2::zeros((2, 0)), None).expect("batch creation");
+        let batch = Batch::from_points([
+            Point::new(vec![0.5], Vec::new(), 1.0),
+            Point::new(vec![1.5], Vec::new(), 1.0),
+        ])
+        .expect("batch creation");
         let latent = LatentBatchSpec::from_batch(&batch).with_version(1);
         let json = latent.into_json();
         let restored = LatentBatch::from_json(&json).expect("latent batch");
         assert_eq!(restored.nr_samples, 2);
         assert_eq!(restored.parametrization_state_version, 1);
         let restored_batch = restored.payload.as_batch().expect("batch payload");
-        assert_eq!(restored_batch.point_spec(), batch.point_spec());
-        assert_eq!(restored_batch.weights(), batch.weights());
+        assert_eq!(restored_batch, batch);
     }
 }

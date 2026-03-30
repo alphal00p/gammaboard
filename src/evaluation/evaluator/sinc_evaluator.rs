@@ -1,8 +1,9 @@
 use crate::core::{EvalError, ObservableConfig};
 use crate::evaluation::{
     Batch, BatchResult, ComplexSampleEvaluator, EvalBatchOptions, Evaluator, ObservableState,
-    PointSpec, SinEvaluatorParams,
+    SinEvaluatorParams,
 };
+use crate::utils::domain::Domain;
 use num::complex::Complex64;
 use std::{
     thread,
@@ -34,11 +35,15 @@ impl ComplexSampleEvaluator for SincEvaluator {
         batch: &Batch,
         sample_idx: usize,
     ) -> Result<Complex64, EvalError> {
-        let row = batch.continuous().row(sample_idx);
-        let x = *row
-            .get(0)
+        let point = batch
+            .point(sample_idx)
+            .ok_or_else(|| EvalError::eval(format!("missing sample {sample_idx}")))?;
+        let x = *point
+            .continuous
+            .first()
             .ok_or_else(|| EvalError::eval("missing continuous[0]"))?;
-        let y = *row
+        let y = *point
+            .continuous
             .get(1)
             .ok_or_else(|| EvalError::eval("missing continuous[1]"))?;
         Ok(Complex64::new(x, y).sin())
@@ -46,11 +51,8 @@ impl ComplexSampleEvaluator for SincEvaluator {
 }
 
 impl Evaluator for SincEvaluator {
-    fn get_point_spec(&self) -> PointSpec {
-        PointSpec {
-            continuous_dims: 2,
-            discrete_dims: 0,
-        }
+    fn get_domain(&self) -> Domain {
+        Domain::continuous(2)
     }
 
     fn eval_batch(

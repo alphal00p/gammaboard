@@ -4,9 +4,9 @@ mod raster;
 
 use crate::Materializer;
 use crate::core::{BuildError, SamplerAggregatorConfig};
-use crate::evaluation::PointSpec;
 use crate::sampling::materializer::{HavanaInferenceMaterializer, IdentityMaterializer};
 use crate::sampling::{SamplerAggregator, SamplerAggregatorSnapshot, StageHandoff};
+use crate::utils::domain::Domain;
 
 pub use self::havana::HavanaInferenceSamplerParams;
 pub use self::havana::HavanaInferenceSource;
@@ -22,10 +22,7 @@ use self::raster::{
 pub use self::raster::{RasterLineSamplerParams, RasterPlaneSamplerParams};
 
 impl SamplerAggregatorSnapshot {
-    pub fn into_runtime(
-        self,
-        point_spec: &PointSpec,
-    ) -> Result<Box<dyn SamplerAggregator>, BuildError> {
+    pub fn into_runtime(self, domain: &Domain) -> Result<Box<dyn SamplerAggregator>, BuildError> {
         match self {
             Self::NaiveMonteCarlo { raw } => {
                 let snapshot: NaiveMonteCarloSamplerAggregator = serde_json::from_value(raw)
@@ -35,7 +32,7 @@ impl SamplerAggregatorSnapshot {
                         ))
                     })?;
                 Ok(Box::new(NaiveMonteCarloSamplerAggregator::from_snapshot(
-                    snapshot, point_spec,
+                    snapshot, domain,
                 )?))
             }
             Self::RasterPlane { raw } => {
@@ -46,7 +43,7 @@ impl SamplerAggregatorSnapshot {
                         ))
                     })?;
                 Ok(Box::new(RasterPlaneSampler::from_snapshot(
-                    snapshot, point_spec,
+                    snapshot, domain,
                 )?))
             }
             Self::RasterLine { raw } => {
@@ -57,7 +54,7 @@ impl SamplerAggregatorSnapshot {
                         ))
                     })?;
                 Ok(Box::new(RasterLineSampler::from_snapshot(
-                    snapshot, point_spec,
+                    snapshot, domain,
                 )?))
             }
             Self::HavanaTraining { raw } => {
@@ -67,9 +64,7 @@ impl SamplerAggregatorSnapshot {
                             "failed to decode havana sampler snapshot: {err}"
                         ))
                     })?;
-                Ok(Box::new(HavanaSampler::from_snapshot(
-                    snapshot, point_spec,
-                )?))
+                Ok(Box::new(HavanaSampler::from_snapshot(snapshot, domain)?))
             }
             Self::HavanaInference { raw } => {
                 let snapshot: HavanaInferenceSamplerSnapshot = serde_json::from_value(raw)
@@ -79,7 +74,7 @@ impl SamplerAggregatorSnapshot {
                         ))
                     })?;
                 Ok(Box::new(HavanaInferenceSampler::from_snapshot(
-                    snapshot, point_spec,
+                    snapshot, domain,
                 )?))
             }
         }
@@ -103,31 +98,29 @@ impl SamplerAggregatorConfig {
 
     pub fn build(
         &self,
-        point_spec: PointSpec,
+        domain: Domain,
         sample_budget: Option<usize>,
         handoff: Option<StageHandoff<'_>>,
     ) -> Result<Box<dyn SamplerAggregator>, BuildError> {
         match self {
             Self::NaiveMonteCarlo { params } => Ok(Box::new(
-                NaiveMonteCarloSamplerAggregator::from_params_and_point_spec(
-                    params.clone(),
-                    &point_spec,
-                )?,
+                NaiveMonteCarloSamplerAggregator::from_params_and_domain(params.clone(), &domain)?,
             )),
             Self::RasterPlane { params } => Ok(Box::new(
-                RasterPlaneSampler::from_params_and_point_spec(params.clone(), &point_spec)?,
+                RasterPlaneSampler::from_params_and_domain(params.clone(), &domain)?,
             )),
-            Self::RasterLine { params } => Ok(Box::new(
-                RasterLineSampler::from_params_and_point_spec(params.clone(), &point_spec)?,
-            )),
+            Self::RasterLine { params } => Ok(Box::new(RasterLineSampler::from_params_and_domain(
+                params.clone(),
+                &domain,
+            )?)),
             Self::HavanaTraining { params } => {
                 // Minimal in-place behavior: if no explicit sample_budget is provided,
                 // default to a small positive budget (1) so initial-stage construction can proceed.
                 // This preserves simplicity and avoids forcing callers to always supply a budget.
                 let sample_budget = sample_budget.unwrap_or(1);
-                Ok(Box::new(HavanaSampler::from_params_and_point_spec(
+                Ok(Box::new(HavanaSampler::from_params_and_domain(
                     params.clone(),
-                    &point_spec,
+                    &domain,
                     sample_budget,
                 )?))
             }
@@ -141,31 +134,15 @@ impl SamplerAggregatorConfig {
                 Ok(Box::new(HavanaInferenceSampler::from_params_and_snapshot(
                     params.clone(),
                     snapshot,
-                    &point_spec,
+                    &domain,
                 )?))
             }
         }
     }
     pub fn build_materializer(
         &self,
-        _point_spec: PointSpec,
-        _sample_budget: Option<usize>,
         handoff: Option<StageHandoff<'_>>,
     ) -> Result<Box<dyn Materializer>, BuildError> {
-        // If the provided handoff contains a Havana sampler snapshot (training or inference),
-        // prefer the HavanaInferenceMaterializer so evaluators can materialize using the grid
-        // persisted in that snapshot. This lets evaluator materializers be chosen based on
-        // the stage handoff snapshot, not only the current sampler config.
-        if let Some(snap_ref) = handoff.as_ref().and_then(|h| h.sampler_snapshot.as_ref()) {
-            if matches!(
-                snap_ref,
-                SamplerAggregatorSnapshot::HavanaTraining { .. }
-                    | SamplerAggregatorSnapshot::HavanaInference { .. }
-            ) {
-                return Ok(Box::new(HavanaInferenceMaterializer::new(handoff)?));
-            }
-        }
-
         Ok(match self {
             SamplerAggregatorConfig::NaiveMonteCarlo { params } => Box::new(
                 IdentityMaterializer::new_with_failure(params.fail_on_materialize_batch_nr),

@@ -26,7 +26,7 @@ pub use evaluation::{
     Batch, BatchError, BatchResult, BatchTransform, ComplexObservableState, ComplexSampleEvaluator,
     ComplexValue, ComplexValueEvaluator, EvalBatchOptions, Evaluator, FullComplexObservableState,
     FullObservableProgress, FullScalarObservableState, IngestComplex, IngestScalar, Materializer,
-    Observable, ObservableState, PointSpec, ScalarObservableState, ScalarSampleEvaluator,
+    Observable, ObservableState, Point, ScalarObservableState, ScalarSampleEvaluator,
     ScalarValueEvaluator, SemanticObservableKind,
 };
 pub use sampling::{

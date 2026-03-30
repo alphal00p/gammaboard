@@ -1,13 +1,14 @@
 use crate::core::{EvalError, ObservableConfig};
 use crate::evaluation::{
     Batch, BatchResult, ComplexSampleEvaluator, EvalBatchOptions, Evaluator, ObservableState,
-    PointSpec, ScalarSampleEvaluator, SemanticObservableKind,
+    ScalarSampleEvaluator, SemanticObservableKind,
 };
+use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
 
 /// Evaluator that returns 1.0 for every sample.
 pub struct UnitEvaluator {
-    point_spec: PointSpec,
+    domain: Domain,
     observable_kind: SemanticObservableKind,
     fail_on_batch_nr: Option<usize>,
     eval_batches_total: usize,
@@ -15,12 +16,12 @@ pub struct UnitEvaluator {
 
 impl UnitEvaluator {
     pub fn new(
-        point_spec: PointSpec,
+        domain: Domain,
         observable_kind: SemanticObservableKind,
         fail_on_batch_nr: Option<usize>,
     ) -> Self {
         Self {
-            point_spec,
+            domain,
             observable_kind,
             fail_on_batch_nr,
             eval_batches_total: 0,
@@ -29,10 +30,7 @@ impl UnitEvaluator {
 
     pub fn from_params(params: UnitEvaluatorParams) -> Self {
         Self::new(
-            PointSpec {
-                continuous_dims: params.continuous_dims,
-                discrete_dims: params.discrete_dims,
-            },
+            Domain::rectangular(params.continuous_dims, params.discrete_dims),
             params.observable_kind,
             params.fail_on_batch_nr,
         )
@@ -77,8 +75,8 @@ impl ComplexSampleEvaluator for UnitEvaluator {
 }
 
 impl Evaluator for UnitEvaluator {
-    fn get_point_spec(&self) -> PointSpec {
-        self.point_spec.clone()
+    fn get_domain(&self) -> Domain {
+        self.domain.clone()
     }
 
     fn eval_batch(
@@ -141,27 +139,17 @@ impl Evaluator for UnitEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::evaluation::Batch;
+    use crate::evaluation::{Batch, Point};
 
     #[test]
     fn eval_batch_returns_weighted_ones_for_scalar_observable() {
-        let batch = Batch::from_flat_data_with_weights(
-            2,
-            1,
-            0,
-            vec![0.0, 1.0],
-            vec![],
-            Some(vec![2.0, 3.0]),
-        )
+        let batch = Batch::from_points([
+            Point::new(vec![0.0], Vec::new(), 2.0),
+            Point::new(vec![1.0], Vec::new(), 3.0),
+        ])
         .expect("batch");
-        let mut evaluator = UnitEvaluator::new(
-            PointSpec {
-                continuous_dims: 1,
-                discrete_dims: 0,
-            },
-            SemanticObservableKind::Scalar,
-            None,
-        );
+        let mut evaluator =
+            UnitEvaluator::new(Domain::continuous(1), SemanticObservableKind::Scalar, None);
 
         let result = evaluator
             .eval_batch(
@@ -183,23 +171,13 @@ mod tests {
 
     #[test]
     fn eval_batch_supports_complex_observable_via_scalar_cast() {
-        let batch = Batch::from_flat_data_with_weights(
-            2,
-            1,
-            0,
-            vec![0.0, 1.0],
-            vec![],
-            Some(vec![2.0, 3.0]),
-        )
+        let batch = Batch::from_points([
+            Point::new(vec![0.0], Vec::new(), 2.0),
+            Point::new(vec![1.0], Vec::new(), 3.0),
+        ])
         .expect("batch");
-        let mut evaluator = UnitEvaluator::new(
-            PointSpec {
-                continuous_dims: 1,
-                discrete_dims: 0,
-            },
-            SemanticObservableKind::Complex,
-            None,
-        );
+        let mut evaluator =
+            UnitEvaluator::new(Domain::continuous(1), SemanticObservableKind::Complex, None);
 
         let result = evaluator
             .eval_batch(

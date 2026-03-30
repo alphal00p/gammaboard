@@ -9,9 +9,10 @@ use crate::core::{
     generated_task_name,
 };
 use crate::core::{IntegrationParams, RunSpec, RunTaskSpec};
-use crate::evaluation::{BatchResult, PointSpec};
+use crate::evaluation::BatchResult;
 use crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot;
 use crate::sampling::LatentBatch;
+use crate::utils::domain::Domain;
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -89,12 +90,12 @@ fn serialize_task(task: &RunTaskInput) -> Result<JsonValue, StoreError> {
 
 fn run_spec_from_integration_params(
     run_id: i32,
-    point_spec: PointSpec,
+    domain: Domain,
     params: IntegrationParams,
 ) -> Result<RunSpec, StoreError> {
     Ok(RunSpec {
         run_id,
-        point_spec,
+        domain,
         evaluator: params.evaluator,
         evaluator_runner_params: params.evaluator_runner_params,
         sampler_aggregator_runner_params: params.sampler_aggregator_runner_params,
@@ -104,7 +105,7 @@ fn run_spec_from_integration_params(
 fn decode_run_spec(
     run_id: i32,
     integration_params: JsonValue,
-    point_spec: JsonValue,
+    domain: JsonValue,
 ) -> Result<RunSpec, StoreError> {
     if !integration_params.is_object() {
         return Err(store_err(format!(
@@ -134,13 +135,10 @@ fn decode_run_spec(
             "invalid integration_params payload for run_id={run_id}: {err}"
         ))
     })?;
-    let point_spec: PointSpec = serde_json::from_value(point_spec).map_err(|err| {
-        store_err(format!(
-            "invalid point_spec payload for run_id={run_id}: {err}"
-        ))
-    })?;
+    let domain: Domain = serde_json::from_value(domain)
+        .map_err(|err| store_err(format!("invalid domain payload for run_id={run_id}: {err}")))?;
 
-    run_spec_from_integration_params(run_id, point_spec, params)
+    run_spec_from_integration_params(run_id, domain, params)
 }
 
 fn parse_run_create_payload(integration_params: &JsonValue) -> Result<JsonValue, StoreError> {
@@ -272,13 +270,13 @@ impl RuntimeLogStore for PgStore {
 #[async_trait::async_trait]
 impl RunSpecStore for PgStore {
     async fn load_run_spec(&self, run_id: i32) -> Result<Option<RunSpec>, StoreError> {
-        let Some((integration_params, point_spec)) =
+        let Some((integration_params, domain)) =
             queries::load_run_spec_payload(&self.pool, run_id).await?
         else {
             return Ok(None);
         };
 
-        let spec = decode_run_spec(run_id, integration_params, point_spec)?;
+        let spec = decode_run_spec(run_id, integration_params, domain)?;
         Ok(Some(spec))
     }
 }
@@ -448,7 +446,7 @@ impl ControlPlaneStore for PgStore {
         name: &str,
         integration_params: &JsonValue,
         target: Option<&JsonValue>,
-        point_spec: &PointSpec,
+        domain: &Domain,
         initial_stage_snapshot: &RunStageSnapshot,
         initial_tasks: &[RunTaskInput],
     ) -> Result<i32, StoreError> {
@@ -469,7 +467,7 @@ impl ControlPlaneStore for PgStore {
         .bind(name)
         .bind(&sanitized_params)
         .bind(target)
-        .bind(sqlx::types::Json(point_spec))
+        .bind(sqlx::types::Json(domain))
         .fetch_one(&mut *tx)
         .await
         .map_err(map_sqlx)?;
@@ -841,6 +839,12 @@ impl RunTaskStore for PgStore {
             .map_err(map_sqlx)
     }
 
+    async fn load_run_task(&self, task_id: i64) -> Result<Option<RunTask>, StoreError> {
+        queries::load_run_task(&self.pool, task_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
     async fn remove_pending_run_task(&self, run_id: i32, task_id: i64) -> Result<bool, StoreError> {
         queries::remove_pending_run_task(&self.pool, run_id, task_id)
             .await
@@ -934,8 +938,9 @@ mod tests {
             7,
             integration_params.clone(),
             json!({
-                "continuous_dims": 1,
-                "discrete_dims": 0
+                "Continuous": {
+                    "dims": 1
+                }
             }),
         )
         .expect("decode");
@@ -943,8 +948,7 @@ mod tests {
             serde_json::from_value(integration_params).expect("integration params");
 
         assert_eq!(spec.run_id, 7);
-        assert_eq!(spec.point_spec.continuous_dims, 1);
-        assert_eq!(spec.point_spec.discrete_dims, 0);
+        assert_eq!(spec.domain, Domain::continuous(1));
         assert_eq!(spec.evaluator.kind_str(), "sin_evaluator");
         assert!(matches!(
             &spec.evaluator,

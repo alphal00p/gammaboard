@@ -26,6 +26,14 @@ impl Domain {
         Self::Continuous { dims }
     }
 
+    pub fn rectangular(continuous_dims: usize, discrete_dims: usize) -> Self {
+        let mut domain = Self::continuous(continuous_dims);
+        for _ in 0..discrete_dims {
+            domain = Self::discrete(None, [DomainBranch::new(0, domain)]);
+        }
+        domain
+    }
+
     pub fn discrete(
         axis_label: impl Into<Option<String>>,
         branches: impl IntoIterator<Item = DomainBranch>,
@@ -34,6 +42,44 @@ impl Domain {
             axis_label: axis_label.into(),
             branches: branches.into_iter().collect(),
         }
+    }
+
+    pub fn fixed_continuous_dims(&self) -> Option<usize> {
+        match self {
+            Self::Continuous { dims } => Some(*dims),
+            Self::Discrete { branches, .. } => {
+                if branches.is_empty() {
+                    None
+                } else {
+                    let first = branches.first()?.domain.fixed_continuous_dims()?;
+                    branches
+                        .iter()
+                        .all(|branch| branch.domain.fixed_continuous_dims() == Some(first))
+                        .then_some(first)
+                }
+            }
+        }
+    }
+
+    pub fn fixed_discrete_depth(&self) -> Option<usize> {
+        match self {
+            Self::Continuous { .. } => Some(0),
+            Self::Discrete { branches, .. } => {
+                if branches.is_empty() {
+                    Some(1)
+                } else {
+                    let first = branches.first()?.domain.fixed_discrete_depth()?;
+                    branches
+                        .iter()
+                        .all(|branch| branch.domain.fixed_discrete_depth() == Some(first))
+                        .then_some(first + 1)
+                }
+            }
+        }
+    }
+
+    pub fn fixed_rectangular_dims(&self) -> Option<(usize, usize)> {
+        Some((self.fixed_continuous_dims()?, self.fixed_discrete_depth()?))
     }
 }
 

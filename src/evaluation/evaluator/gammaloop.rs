@@ -1,17 +1,18 @@
 use std::{any::Any, panic::AssertUnwindSafe, path::PathBuf};
 
 use gammaloop_api::state::{ProcessRef, State};
+use gammalooprs::graph::GroupId;
 use gammalooprs::initialisation::initialise;
 use gammalooprs::integrands::HasIntegrand;
 use gammalooprs::integrands::process::{MomentumSpaceEvaluationInput, ProcessIntegrand};
 use gammalooprs::model::Model;
-use gammalooprs::settings::runtime::SamplingSettings;
+use gammalooprs::settings::runtime::{DiscreteGraphSamplingType, SamplingSettings};
 use gammalooprs::utils::F;
 use serde::{Deserialize, Serialize};
 use symbolica::numerical_integration::Sample;
 
 use crate::{
-    Batch, BatchResult, BuildError, EvalError, PointSpec,
+    Batch, BatchResult, BuildError, Domain, DomainBranch, EvalError,
     core::ObservableConfig,
     evaluation::{
         ComplexValueEvaluator, EvalBatchOptions, Evaluator, ObservableState, ScalarValueEvaluator,
@@ -23,7 +24,7 @@ pub struct GammaLoopEvaluator {
     model: Model,
     momentum_space: bool,
     training_projection: TrainingProjection,
-    point_spec: PointSpec,
+    domain: Domain,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, Eq)]
@@ -72,6 +73,139 @@ impl Default for GammaLoopParams {
 }
 
 impl GammaLoopEvaluator {
+    fn build_domain(
+        integrand: &ProcessIntegrand,
+        momentum_space: bool,
+    ) -> Result<Domain, BuildError> {
+        fn continuous_leaf(
+            integrand: &ProcessIntegrand,
+            momentum_space: bool,
+            discrete_selection: &[usize],
+        ) -> Result<Domain, BuildError> {
+            let dims = if momentum_space {
+                integrand.get_n_dim()
+            } else {
+                integrand
+                    .expected_x_space_dimension(discrete_selection)
+                    .map_err(|err| {
+                        BuildError::build(format!(
+                            "failed to infer x-space dimensions for selection {:?}: {err}",
+                            discrete_selection
+                        ))
+                    })?
+            };
+            Ok(Domain::continuous(dims))
+        }
+
+        fn build_group_branch(
+            integrand: &ProcessIntegrand,
+            momentum_space: bool,
+            group_idx: usize,
+        ) -> Result<Domain, BuildError> {
+            let settings = integrand.get_settings();
+            let SamplingSettings::DiscreteGraphs(discrete_settings) = &settings.sampling else {
+                return continuous_leaf(integrand, momentum_space, &[]);
+            };
+
+            let group_id = GroupId::from(group_idx);
+            let base_selection = [group_idx];
+
+            if discrete_settings.sample_orientations {
+                let orientation_count =
+                    integrand.group_orientation_count(group_id).ok_or_else(|| {
+                        BuildError::build(format!(
+                            "failed to infer orientation count for graph group {group_idx}"
+                        ))
+                    })?;
+                let orientation_branches = (0..orientation_count)
+                    .map(|orientation_idx| {
+                        let mut selection = vec![group_idx, orientation_idx];
+                        let domain = match &discrete_settings.sampling_type {
+                            DiscreteGraphSamplingType::DiscreteMultiChanneling(_) => {
+                                let channel_count =
+                                    integrand.group_channel_count(group_id).ok_or_else(|| {
+                                        BuildError::build(format!(
+                                            "failed to infer channel count for graph group {group_idx}"
+                                        ))
+                                    })?;
+                                let channel_branches = (0..channel_count)
+                                    .map(|channel_idx| {
+                                        selection.push(channel_idx);
+                                        let leaf = continuous_leaf(
+                                            integrand,
+                                            momentum_space,
+                                            selection.as_slice(),
+                                        )?;
+                                        selection.pop();
+                                        Ok(DomainBranch::new(channel_idx, leaf))
+                                    })
+                                    .collect::<Result<Vec<_>, BuildError>>()?;
+                                Domain::discrete(Some("channel".to_string()), channel_branches)
+                            }
+                            _ => continuous_leaf(integrand, momentum_space, selection.as_slice())?,
+                        };
+                        Ok(DomainBranch::new(orientation_idx, domain))
+                    })
+                    .collect::<Result<Vec<_>, BuildError>>()?;
+                return Ok(Domain::discrete(
+                    Some("orientation".to_string()),
+                    orientation_branches,
+                ));
+            }
+
+            match &discrete_settings.sampling_type {
+                DiscreteGraphSamplingType::DiscreteMultiChanneling(_) => {
+                    let channel_count =
+                        integrand.group_channel_count(group_id).ok_or_else(|| {
+                            BuildError::build(format!(
+                                "failed to infer channel count for graph group {group_idx}"
+                            ))
+                        })?;
+                    let channel_branches = (0..channel_count)
+                        .map(|channel_idx| {
+                            let selection = [group_idx, channel_idx];
+                            let leaf =
+                                continuous_leaf(integrand, momentum_space, selection.as_slice())?;
+                            Ok(DomainBranch::new(channel_idx, leaf))
+                        })
+                        .collect::<Result<Vec<_>, BuildError>>()?;
+                    Ok(Domain::discrete(
+                        Some("channel".to_string()),
+                        channel_branches,
+                    ))
+                }
+                _ => continuous_leaf(integrand, momentum_space, &base_selection),
+            }
+        }
+
+        match integrand.get_settings().sampling.clone() {
+            SamplingSettings::Default(_) | SamplingSettings::MultiChanneling(_) => {
+                continuous_leaf(integrand, momentum_space, &[])
+            }
+            SamplingSettings::DiscreteGraphs(_) => {
+                let mut group_branches = Vec::new();
+                let mut group_idx = 0usize;
+                while integrand
+                    .group_orientation_count(GroupId::from(group_idx))
+                    .is_some()
+                {
+                    let branch = build_group_branch(integrand, momentum_space, group_idx)?;
+                    group_branches.push(DomainBranch::new(group_idx, branch));
+                    group_idx += 1;
+                }
+                if group_branches.is_empty() {
+                    return Err(BuildError::build(
+                        "failed to infer gammaloop domain: no graph groups found",
+                    ));
+                }
+                Ok(Domain::discrete(
+                    Some("graph_group".to_string()),
+                    group_branches,
+                ))
+            }
+        }
+    }
+
     fn panic_message(payload: Box<dyn Any + Send>) -> String {
         if let Some(message) = payload.downcast_ref::<&str>() {
             return (*message).to_string();
@@ -120,19 +254,7 @@ impl GammaLoopEvaluator {
                 .map_err(|err| BuildError::build(err.to_string()))?
                 .clone();
             let model = state.model.clone();
-            let discrete_dims = integrand.discrete_sampling_depth();
-            let continuous_dims = if params.momentum_space {
-                integrand.get_n_dim()
-            } else {
-                // TODO: tropical sampling can have group-dependent x-space dimensions.
-                // We currently infer a single run-global dimension from the zero discrete selection.
-                let default_discrete_selection = vec![0; discrete_dims];
-                integrand
-                    .expected_x_space_dimension(default_discrete_selection.as_slice())
-                    .map_err(|err| {
-                        BuildError::build(format!("failed to infer x-space dimensions: {err}"))
-                    })?
-            };
+            let domain = Self::build_domain(&integrand, params.momentum_space)?;
             integrand
                 .warm_up(&model)
                 .map_err(|err| BuildError::build(format!("failed to warm up integrand: {err}")))?;
@@ -142,10 +264,7 @@ impl GammaLoopEvaluator {
                 model,
                 momentum_space: params.momentum_space,
                 training_projection: params.training_projection,
-                point_spec: PointSpec {
-                    continuous_dims,
-                    discrete_dims,
-                },
+                domain,
             })
         })) {
             Ok(result) => result,
@@ -159,18 +278,17 @@ impl GammaLoopEvaluator {
     fn evaluate(&mut self, batch: &Batch) -> Result<Vec<num::complex::Complex64>, EvalError> {
         if self.momentum_space {
             let inputs = batch
-                .continuous()
-                .outer_iter()
-                .zip(batch.discrete().outer_iter())
-                .map(|(point, discrete_dim)| {
-                    let point = point.to_vec();
-                    if !point.len().is_multiple_of(3) {
+                .points()
+                .iter()
+                .map(|point| {
+                    if !point.continuous.len().is_multiple_of(3) {
                         return Err(EvalError::eval(format!(
                             "momentum-space evaluation expects point dimension divisible by 3, got {}",
-                            point.len()
+                            point.continuous.len()
                         )));
                     }
                     let loop_momenta = point
+                        .continuous
                         .chunks_exact(3)
                         .map(|coords| gammalooprs::momentum::ThreeMomentum {
                             px: F(coords[0]),
@@ -178,7 +296,8 @@ impl GammaLoopEvaluator {
                             pz: F(coords[2]),
                         })
                         .collect::<Vec<_>>();
-                    let discrete_dim = discrete_dim
+                    let discrete_dim = point
+                        .discrete
                         .iter()
                         .copied()
                         .map(|dim| {
@@ -240,12 +359,12 @@ impl GammaLoopEvaluator {
         }
 
         let samples = batch
-            .continuous()
-            .outer_iter()
-            .zip(batch.discrete().outer_iter())
-            .map(|(point, discrete_dim)| {
-                let cont = point.iter().map(|&x| F(x)).collect::<Vec<_>>();
-                let discrete_dim = discrete_dim
+            .points()
+            .iter()
+            .map(|point| {
+                let cont = point.continuous.iter().map(|&x| F(x)).collect::<Vec<_>>();
+                let discrete_dim = point
+                    .discrete
                     .iter()
                     .copied()
                     .map(|dim| {
@@ -320,8 +439,8 @@ fn set_top_level_sample_weight(sample: &mut Sample<F<f64>>, integrator_weight: F
 }
 
 impl Evaluator for GammaLoopEvaluator {
-    fn get_point_spec(&self) -> PointSpec {
-        self.point_spec.clone()
+    fn get_domain(&self) -> Domain {
+        self.domain.clone()
     }
 
     fn eval_batch(
@@ -330,10 +449,7 @@ impl Evaluator for GammaLoopEvaluator {
         observable: &ObservableConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
-        let weights = batch
-            .weights()
-            .as_slice()
-            .ok_or_else(|| EvalError::eval("Batch weights array must be standard-layout"))?;
+        let weights = batch.weights();
         let vec_res = self.evaluate(batch)?;
         let mut observable_state = ObservableState::from_config(observable);
         let weighted_values = match observable.semantic_kind() {
@@ -343,7 +459,7 @@ impl Evaluator for GammaLoopEvaluator {
                         .iter()
                         .map(|value| self.training_projection.project(*value))
                         .collect::<Vec<_>>(),
-                    weights,
+                    weights.as_slice(),
                     options.require_training_values,
                     observable,
                 ),
@@ -352,7 +468,7 @@ impl Evaluator for GammaLoopEvaluator {
                         .iter()
                         .map(|value| self.training_projection.project(*value))
                         .collect::<Vec<_>>(),
-                    weights,
+                    weights.as_slice(),
                     options.require_training_values,
                     observable,
                 ),
@@ -366,14 +482,14 @@ impl Evaluator for GammaLoopEvaluator {
             crate::evaluation::SemanticObservableKind::Complex => match &mut observable_state {
                 ObservableState::Complex(observable) => self.ingest_complex_values(
                     &vec_res,
-                    weights,
+                    weights.as_slice(),
                     options.require_training_values,
                     observable,
                     |value| self.training_projection.project(value),
                 ),
                 ObservableState::FullComplex(observable) => self.ingest_complex_values(
                     &vec_res,
-                    weights,
+                    weights.as_slice(),
                     options.require_training_values,
                     observable,
                     |value| self.training_projection.project(value),

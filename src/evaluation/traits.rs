@@ -1,7 +1,8 @@
 use crate::core::{BuildError, EngineError, EvalError, ObservableConfig};
+use crate::utils::domain::Domain;
 use num::complex::Complex64;
 
-use super::{Batch, BatchResult, IngestComplex, IngestScalar, PointSpec};
+use super::{Batch, BatchResult, IngestComplex, IngestScalar};
 use crate::sampling::LatentBatch;
 
 #[derive(Debug, Clone, Copy)]
@@ -10,7 +11,7 @@ pub struct EvalBatchOptions {
 }
 
 pub trait Evaluator: Send {
-    fn get_point_spec(&self) -> PointSpec;
+    fn get_domain(&self) -> Domain;
     fn eval_batch(
         &mut self,
         batch: &Batch,
@@ -28,14 +29,13 @@ pub trait ScalarSampleEvaluator {
         observable: &mut O,
         require_training_values: bool,
     ) -> Result<Option<Vec<f64>>, EvalError> {
-        let weights = batch
-            .weights()
-            .as_slice()
-            .ok_or_else(|| EvalError::eval("Batch weights array must be standard-layout"))?;
         let mut training_values = require_training_values.then(|| Vec::with_capacity(batch.size()));
         for sample_idx in 0..batch.size() {
             let value = self.eval_scalar_sample(batch, sample_idx)?;
-            let weight = weights[sample_idx];
+            let weight = batch
+                .point(sample_idx)
+                .map(|point| point.weight)
+                .ok_or_else(|| EvalError::eval(format!("batch is missing sample {sample_idx}")))?;
             observable.ingest_scalar(value, weight);
             if let Some(values) = training_values.as_mut() {
                 values.push(value * weight);
@@ -59,14 +59,13 @@ pub trait ComplexSampleEvaluator {
         require_training_values: bool,
         training_projection: impl Fn(Complex64) -> f64,
     ) -> Result<Option<Vec<f64>>, EvalError> {
-        let weights = batch
-            .weights()
-            .as_slice()
-            .ok_or_else(|| EvalError::eval("Batch weights array must be standard-layout"))?;
         let mut training_values = require_training_values.then(|| Vec::with_capacity(batch.size()));
         for sample_idx in 0..batch.size() {
             let value = self.eval_complex_sample(batch, sample_idx)?;
-            let weight = weights[sample_idx];
+            let weight = batch
+                .point(sample_idx)
+                .map(|point| point.weight)
+                .ok_or_else(|| EvalError::eval(format!("batch is missing sample {sample_idx}")))?;
             observable.ingest_complex(value, weight);
             if let Some(values) = training_values.as_mut() {
                 values.push(training_projection(value) * weight);
@@ -120,7 +119,7 @@ pub trait ComplexValueEvaluator {
 impl<T> ComplexValueEvaluator for T {}
 
 pub trait Materializer: Send + Sync {
-    fn validate_point_spec(&self, _point_spec: &PointSpec) -> Result<(), BuildError> {
+    fn validate_domain(&self, _domain: &Domain) -> Result<(), BuildError> {
         Ok(())
     }
 
@@ -128,7 +127,7 @@ pub trait Materializer: Send + Sync {
 }
 
 pub trait BatchTransform: Send + Sync {
-    fn validate_point_spec(&self, _point_spec: &PointSpec) -> Result<(), BuildError> {
+    fn validate_domain(&self, _domain: &Domain) -> Result<(), BuildError> {
         Ok(())
     }
 

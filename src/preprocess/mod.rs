@@ -4,9 +4,9 @@ use crate::core::{
     BatchTransformConfig, BuildError, EvaluatorConfig, IntegrationParams, RunStageSnapshot,
     RunTaskInput, SamplerAggregatorConfig,
 };
-use crate::evaluation::PointSpec;
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use crate::sampling::NaiveMonteCarloSamplerParams;
+use crate::utils::domain::Domain;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
@@ -29,7 +29,7 @@ pub struct RunAddConfig {
     pub integration_params: RunAddIntegrationParams,
     pub target: Option<JsonValue>,
     #[serde(skip)]
-    pub point_spec: Option<PointSpec>,
+    pub domain: Option<Domain>,
     #[serde(skip)]
     pub resolved_integration_params: Option<IntegrationParams>,
     #[serde(skip)]
@@ -74,8 +74,8 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
             "failed to initialize evaluator {evaluator_kind}: {err}"
         ))
     })?;
-    let point_spec = evaluator.get_point_spec();
-    config.point_spec = Some(point_spec.clone());
+    let domain = evaluator.get_domain();
+    config.domain = Some(domain.clone());
 
     // Determine an initial sample budget from the first resolved task when available.
     // This is used to construct an initial sampler for samplers that require a training
@@ -93,7 +93,7 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
     let initial_stage_snapshot = preflight::build_initial_stage_with_budget(
         &resolved_sampler_aggregator,
         &resolved_batch_transforms,
-        &point_spec,
+        &domain,
         initial_sample_budget,
     )?;
     config.resolved_integration_params = Some(resolved_integration_params);

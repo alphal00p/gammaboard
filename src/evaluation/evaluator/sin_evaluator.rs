@@ -1,8 +1,8 @@
 use crate::core::{EvalError, ObservableConfig};
 use crate::evaluation::{
-    Batch, BatchResult, EvalBatchOptions, Evaluator, ObservableState, PointSpec,
-    ScalarSampleEvaluator,
+    Batch, BatchResult, EvalBatchOptions, Evaluator, ObservableState, ScalarSampleEvaluator,
 };
+use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
 use std::{
     thread,
@@ -34,20 +34,20 @@ pub struct SinEvaluatorParams {
 
 impl ScalarSampleEvaluator for SinEvaluator {
     fn eval_scalar_sample(&mut self, batch: &Batch, sample_idx: usize) -> Result<f64, EvalError> {
-        let row = batch.continuous().row(sample_idx);
-        let x = *row
-            .get(0)
+        let point = batch
+            .point(sample_idx)
+            .ok_or_else(|| EvalError::eval(format!("missing sample {sample_idx}")))?;
+        let x = *point
+            .continuous
+            .first()
             .ok_or_else(|| EvalError::eval("missing continuous[0]"))?;
         Ok(x.sin() * (-x * x).exp())
     }
 }
 
 impl Evaluator for SinEvaluator {
-    fn get_point_spec(&self) -> PointSpec {
-        PointSpec {
-            continuous_dims: 1,
-            discrete_dims: 0,
-        }
+    fn get_domain(&self) -> Domain {
+        Domain::continuous(1)
     }
 
     fn eval_batch(

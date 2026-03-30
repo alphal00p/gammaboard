@@ -1,6 +1,7 @@
 use crate::core::{BuildError, EngineError};
-use crate::evaluation::{Batch, PointSpec};
+use crate::evaluation::{Batch, Point};
 use crate::sampling::{LatentBatchSpec, SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot};
+use crate::utils::domain::Domain;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{thread, time::Duration};
@@ -69,41 +70,46 @@ impl Default for NaiveMonteCarloSamplerParams {
 }
 
 impl NaiveMonteCarloSamplerAggregator {
-    pub(crate) fn from_params_and_point_spec(
+    pub(crate) fn from_params_and_domain(
         params: NaiveMonteCarloSamplerParams,
-        point_spec: &PointSpec,
+        domain: &Domain,
     ) -> Result<Self, BuildError> {
+        let (continuous_dims, discrete_dims) =
+            domain.fixed_rectangular_dims().ok_or_else(|| {
+                BuildError::build("naive_monte_carlo sampler requires a fixed rectangular domain")
+            })?;
         Ok(Self::new(
-            point_spec.continuous_dims,
-            point_spec.discrete_dims,
+            continuous_dims,
+            discrete_dims,
             params.training_target_samples,
             params.training_delay_per_sample_ms,
             params.fail_on_produce_batch_nr,
         ))
     }
 
-    pub(crate) fn from_snapshot(
-        snapshot: Self,
-        point_spec: &PointSpec,
-    ) -> Result<Self, BuildError> {
+    pub(crate) fn from_snapshot(snapshot: Self, domain: &Domain) -> Result<Self, BuildError> {
         let runtime = snapshot;
-        runtime.validate_point_spec(point_spec)?;
+        runtime.validate_domain(domain)?;
         Ok(runtime)
     }
 }
 
 impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
-    fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError> {
-        if point_spec.continuous_dims != self.continuous_dims {
+    fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
+        let (continuous_dims, discrete_dims) =
+            domain.fixed_rectangular_dims().ok_or_else(|| {
+                BuildError::build("naive_monte_carlo sampler requires a fixed rectangular domain")
+            })?;
+        if continuous_dims != self.continuous_dims {
             return Err(BuildError::build(format!(
                 "naive_monte_carlo sampler expects continuous_dims={}, got {}",
-                self.continuous_dims, point_spec.continuous_dims
+                self.continuous_dims, continuous_dims
             )));
         }
-        if point_spec.discrete_dims != self.discrete_dims {
+        if discrete_dims != self.discrete_dims {
             return Err(BuildError::build(format!(
                 "naive_monte_carlo sampler expects discrete_dims={}, got {}",
-                self.discrete_dims, point_spec.discrete_dims
+                self.discrete_dims, discrete_dims
             )));
         }
         Ok(())
@@ -151,21 +157,20 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
             ));
         }
         let mut rng = rand::rng();
-        let mut continuous_data = Vec::with_capacity(nr_samples * self.continuous_dims);
-        let mut discrete_data = Vec::with_capacity(nr_samples * self.discrete_dims);
+        let mut points = Vec::with_capacity(nr_samples);
         for _ in 0..nr_samples {
-            continuous_data.extend((0..self.continuous_dims).map(|_| rng.random::<f64>()));
-            discrete_data.extend((0..self.discrete_dims).map(|_| rng.random::<u32>() as i64));
+            points.push(Point::new(
+                (0..self.continuous_dims)
+                    .map(|_| rng.random::<f64>())
+                    .collect(),
+                (0..self.discrete_dims)
+                    .map(|_| rng.random::<u32>() as i64)
+                    .collect(),
+                1.0,
+            ));
         }
 
-        let batch = Batch::from_flat_data(
-            nr_samples,
-            self.continuous_dims,
-            self.discrete_dims,
-            continuous_data,
-            discrete_data,
-        )
-        .map_err(|err| EngineError::engine(err.to_string()))?;
+        let batch = Batch::new(points).map_err(|err| EngineError::engine(err.to_string()))?;
         if self.training_target_samples > 0 {
             let reserved = self
                 .training_target_samples
@@ -213,10 +218,7 @@ mod tests {
 
     #[test]
     fn snapshot_roundtrip_restores_naive_runtime_state() {
-        let point_spec = PointSpec {
-            continuous_dims: 2,
-            discrete_dims: 1,
-        };
+        let domain = Domain::rectangular(2, 1);
         let mut sampler = NaiveMonteCarloSamplerAggregator::new(2, 1, 100, 7, None);
         sampler.trained_samples = 13;
         sampler.nr_batches = 5;
@@ -224,7 +226,7 @@ mod tests {
         sampler.sum = 4.5;
 
         let snapshot = sampler.snapshot().expect("snapshot");
-        let mut restored = snapshot.into_runtime(&point_spec).expect("restore");
+        let mut restored = snapshot.into_runtime(&domain).expect("restore");
         let restored_snapshot = restored.snapshot().expect("snapshot after restore");
 
         let SamplerAggregatorSnapshot::NaiveMonteCarlo { raw } = restored_snapshot else {

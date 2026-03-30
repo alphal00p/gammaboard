@@ -1,6 +1,6 @@
 use crate::core::{BuildError, EngineError};
-use crate::evaluation::{Batch, BatchTransform, PointSpec};
-use ndarray::{Array1, Array2};
+use crate::evaluation::{Batch, BatchTransform, Point};
+use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
 
@@ -17,8 +17,11 @@ impl UnitBallBatchTransform {
 }
 
 impl BatchTransform for UnitBallBatchTransform {
-    fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError> {
-        if point_spec.continuous_dims == 0 {
+    fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
+        let continuous_dims = domain.fixed_continuous_dims().ok_or_else(|| {
+            BuildError::build("unit_ball batch transform requires a fixed continuous dimension")
+        })?;
+        if continuous_dims == 0 {
             return Err(BuildError::build(
                 "unit_ball batch transform requires continuous_dims >= 1",
             ));
@@ -27,20 +30,28 @@ impl BatchTransform for UnitBallBatchTransform {
     }
 
     fn apply(&self, batch: Batch) -> Result<Batch, EngineError> {
-        let rows = batch.size();
-        let dims = batch.continuous().ncols();
+        let dims = batch
+            .points()
+            .first()
+            .map(|point| point.continuous.len())
+            .unwrap_or(0);
         if dims == 0 {
             return Err(EngineError::engine(
                 "unit_ball batch transform requires at least one continuous dimension",
             ));
         }
 
-        let mut transformed_continuous = Array2::<f64>::zeros((rows, dims));
-        let mut transformed_weights = Array1::<f64>::zeros(rows);
-
-        for (row_idx, row) in batch.continuous().rows().into_iter().enumerate() {
+        let mut transformed_points = Vec::with_capacity(batch.size());
+        for (row_idx, point) in batch.points().iter().enumerate() {
+            if point.continuous.len() != dims {
+                return Err(EngineError::engine(format!(
+                    "unit_ball batch transform requires homogeneous continuous dimensions, got {} and {}",
+                    dims,
+                    point.continuous.len()
+                )));
+            }
             let mut unit = Vec::with_capacity(dims);
-            for (dim_idx, value) in row.iter().copied().enumerate() {
+            for (dim_idx, value) in point.continuous.iter().copied().enumerate() {
                 if !(0.0..=1.0).contains(&value) {
                     return Err(EngineError::engine(format!(
                         "unit_ball batch transform expects unit-hypercube inputs; row={row_idx} dim={dim_idx} value={value}"
@@ -50,18 +61,14 @@ impl BatchTransform for UnitBallBatchTransform {
             }
 
             let (mapped, jacobian) = unit_hypercube_to_unit_ball(&unit);
-            for (dim_idx, value) in mapped.into_iter().enumerate() {
-                transformed_continuous[(row_idx, dim_idx)] = value;
-            }
-            transformed_weights[row_idx] = batch.weights()[row_idx] * jacobian.abs();
+            transformed_points.push(Point::new(
+                mapped,
+                point.discrete.clone(),
+                point.weight * jacobian.abs(),
+            ));
         }
 
-        Batch::new(
-            transformed_continuous,
-            batch.discrete().clone(),
-            Some(transformed_weights),
-        )
-        .map_err(|err| EngineError::engine(err.to_string()))
+        Batch::new(transformed_points).map_err(|err| EngineError::engine(err.to_string()))
     }
 }
 

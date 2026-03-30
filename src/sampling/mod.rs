@@ -19,3 +19,18 @@ pub struct StageHandoff<'a> {
     pub sampler_snapshot: Option<&'a SamplerAggregatorSnapshot>,
     pub observable_state: Option<&'a ObservableState>,
 }
+
+#[derive(Debug, Clone, Default)]
+pub struct StageHandoffOwned {
+    pub sampler_snapshot: Option<SamplerAggregatorSnapshot>,
+    pub observable_state: Option<ObservableState>,
+}
+
+impl StageHandoffOwned {
+    pub fn as_ref(&self) -> StageHandoff<'_> {
+        StageHandoff {
+            sampler_snapshot: self.sampler_snapshot.as_ref(),
+            observable_state: self.observable_state.as_ref(),
+        }
+    }
+}

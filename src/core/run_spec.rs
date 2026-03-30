@@ -1,7 +1,7 @@
-use crate::evaluation::PointSpec;
 use crate::evaluation::{
     GammaLoopParams, SinEvaluatorParams, SincEvaluatorParams, SymbolicaParams, UnitEvaluatorParams,
 };
+use crate::utils::domain::Domain;
 
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use crate::sampling::HavanaInferenceSamplerParams;
@@ -26,7 +26,7 @@ pub struct IntegrationParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunSpec {
     pub run_id: i32,
-    pub point_spec: PointSpec,
+    pub domain: Domain,
     pub evaluator: EvaluatorConfig,
     pub evaluator_runner_params: EvaluatorRunnerParams,
     pub sampler_aggregator_runner_params: SamplerAggregatorRunnerParams,

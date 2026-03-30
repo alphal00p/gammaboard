@@ -1,7 +1,8 @@
 use std::{fs, path::Path};
 
+use crate::utils::domain::Domain;
 use crate::{
-    Batch, BatchResult, BuildError, EngineError, EvalError, PointSpec,
+    Batch, BatchResult, BuildError, EngineError, EvalError,
     core::ObservableConfig,
     evaluation::{EvalBatchOptions, Evaluator},
     evaluation::{IngestScalar, ObservableState},
@@ -105,11 +106,8 @@ impl SymbolicaEngine {
 }
 
 impl Evaluator for SymbolicaEngine {
-    fn get_point_spec(&self) -> PointSpec {
-        PointSpec {
-            continuous_dims: self.args.len(),
-            discrete_dims: 0,
-        }
+    fn get_domain(&self) -> Domain {
+        Domain::continuous(self.args.len())
     }
 
     fn eval_batch(
@@ -118,18 +116,33 @@ impl Evaluator for SymbolicaEngine {
         observable: &ObservableConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
-        let continuous = batch.continuous().as_slice().ok_or_else(|| {
-            EvalError::Engine("Batch continuous array must be standard-layout".to_string())
-        })?;
-        let weights = batch.weights().as_slice().ok_or_else(|| {
-            EvalError::Engine("Batch weights array must be standard-layout".to_string())
-        })?;
+        let width = self.args.len();
+        let mut continuous = Vec::with_capacity(batch.size() * width);
+        let mut weights = Vec::with_capacity(batch.size());
+        for (sample_idx, point) in batch.points().iter().enumerate() {
+            if point.continuous.len() != width {
+                return Err(EvalError::Engine(format!(
+                    "symbolica evaluator expects {} continuous coordinates, got {} for sample {}",
+                    width,
+                    point.continuous.len(),
+                    sample_idx
+                )));
+            }
+            if !point.discrete.is_empty() {
+                return Err(EvalError::Engine(format!(
+                    "symbolica evaluator does not support discrete coordinates, got {:?} for sample {}",
+                    point.discrete, sample_idx
+                )));
+            }
+            continuous.extend_from_slice(point.continuous.as_slice());
+            weights.push(point.weight);
+        }
 
         let mut observable_state = ObservableState::from_config(observable);
 
         let mut out = vec![0.0; batch.size()];
         self.eval
-            .evaluate_batch(batch.size(), continuous, &mut out)
+            .evaluate_batch(batch.size(), &continuous, &mut out)
             .map_err(|err| EngineError::Eval(err.to_string()))?;
 
         match &mut observable_state {

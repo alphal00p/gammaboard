@@ -1,5 +1,5 @@
 use crate::core::{BuildError, EngineError, SamplerAggregatorConfig};
-use crate::evaluation::PointSpec;
+use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 
@@ -37,10 +37,18 @@ impl SamplerAggregatorSnapshot {
             )
         )
     }
+
+    pub fn contains_havana_grid(&self) -> bool {
+        match self {
+            SamplerAggregatorSnapshot::HavanaTraining { raw }
+            | SamplerAggregatorSnapshot::HavanaInference { raw } => raw.get("grid").is_some(),
+            _ => false,
+        }
+    }
 }
 
 pub trait SamplerAggregator: Send {
-    fn validate_point_spec(&self, point_spec: &PointSpec) -> Result<(), BuildError>;
+    fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError>;
     fn training_samples_remaining(&self) -> Option<usize> {
         None
     }

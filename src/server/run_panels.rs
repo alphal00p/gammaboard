@@ -220,12 +220,10 @@ fn panel_states(
                         .unwrap_or_else(|| "none".to_string()),
                 ),
                 key_value(
-                    "point_spec",
-                    "Point Spec",
-                    format!(
-                        "continuous={}, discrete={}",
-                        run_spec.point_spec.continuous_dims, run_spec.point_spec.discrete_dims
-                    ),
+                    "domain",
+                    "Domain",
+                    serde_json::to_string(&run_spec.domain)
+                        .unwrap_or_else(|_| "<invalid domain>".to_string()),
                 ),
                 key_value(
                     "sampler",

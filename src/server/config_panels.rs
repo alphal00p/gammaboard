@@ -1,10 +1,10 @@
 use crate::core::{EngineError, EvaluatorConfig, SamplerAggregatorConfig};
-use crate::evaluation::PointSpec;
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelWidth, key_value,
     key_value_panel, panel_spec, replace_panel, with_panel_width,
 };
+use crate::utils::domain::Domain;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 
@@ -28,12 +28,12 @@ pub trait PanelRenderer<C> {
 }
 
 pub struct EvaluatorPanelContext<'a> {
-    pub point_spec: &'a PointSpec,
+    pub domain: &'a Domain,
     pub runner_params: &'a EvaluatorRunnerParams,
 }
 
 pub struct SamplerAggregatorPanelContext<'a> {
-    pub point_spec: &'a PointSpec,
+    pub domain: &'a Domain,
     pub runner_params: &'a SamplerAggregatorRunnerParams,
 }
 
@@ -70,16 +70,7 @@ impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
                 "Implementation",
                 implementation_kind(self),
             ),
-            key_value(
-                "continuous_dims",
-                "Continuous Dims",
-                ctx.point_spec.continuous_dims,
-            ),
-            key_value(
-                "discrete_dims",
-                "Discrete Dims",
-                ctx.point_spec.discrete_dims,
-            ),
+            key_value("domain", "Domain", summarize_domain(ctx.domain)),
             key_value(
                 "snapshot_interval_ms",
                 "Snapshot Interval (ms)",
@@ -160,16 +151,7 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
                     "Implementation",
                     implementation_kind(self),
                 ),
-                key_value(
-                    "continuous_dims",
-                    "Continuous Dims",
-                    ctx.point_spec.continuous_dims,
-                ),
-                key_value(
-                    "discrete_dims",
-                    "Discrete Dims",
-                    ctx.point_spec.discrete_dims,
-                ),
+                key_value("domain", "Domain", summarize_domain(ctx.domain)),
                 key_value(
                     "target_queue_remaining",
                     "Target Queue Remaining",
@@ -220,6 +202,19 @@ fn implementation_kind<T: Serialize>(value: &T) -> String {
                 .map(str::to_string)
         })
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn summarize_domain(domain: &Domain) -> String {
+    match domain {
+        Domain::Continuous { dims } => format!("continuous({dims})"),
+        Domain::Discrete {
+            axis_label,
+            branches,
+        } => {
+            let axis = axis_label.as_deref().unwrap_or("discrete");
+            format!("{axis}[{}]", branches.len())
+        }
+    }
 }
 
 fn has_object_fields<T: Serialize>(value: &T) -> bool {
