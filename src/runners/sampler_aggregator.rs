@@ -26,12 +26,14 @@ const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.25;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerAggregatorRunnerParams {
     pub performance_snapshot_interval_ms: u64,
+    pub aggregation_persist_interval_ms: u64,
     pub target_batch_eval_ms: f64,
     pub target_queue_remaining: f64,
     pub max_batch_size: usize,
     pub max_queue_size: usize,
     pub max_batches_per_tick: usize,
     pub completed_batch_fetch_limit: usize,
+    pub strict_batch_ordering: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -59,6 +61,7 @@ struct SamplerRuntimeState {
     produced_samples_total: i64,
     ingested_batches_total: i64,
     ingested_samples_total: i64,
+    pending_persisted_completed_batches: i32,
     batch_size_current: usize,
     observable_checkpoint_state: ObservableCheckpointState,
     rolling: RollingAveragesState,
@@ -144,7 +147,9 @@ pub struct SamplerAggregatorRunner<S> {
     nr_produced_samples: i64,
     nr_completed_samples: i64,
     performance_snapshot_interval: Duration,
+    aggregation_persist_interval: Duration,
     last_snapshot_at: Instant,
+    last_aggregation_persist_at: Instant,
     runtime_state: SamplerRuntimeState,
     last_performance_completed_samples: i64,
     last_pending_after_enqueue: Option<usize>,
@@ -193,6 +198,9 @@ where
 
         let performance_snapshot_interval =
             Duration::from_millis(params.performance_snapshot_interval_ms);
+        let aggregation_persist_interval =
+            Duration::from_millis(params.aggregation_persist_interval_ms);
+        let now = Instant::now();
 
         Self {
             run_id,
@@ -207,7 +215,9 @@ where
             nr_produced_samples,
             nr_completed_samples,
             performance_snapshot_interval,
-            last_snapshot_at: Instant::now(),
+            aggregation_persist_interval,
+            last_snapshot_at: now,
+            last_aggregation_persist_at: now,
             runtime_state,
             last_performance_completed_samples: nr_completed_samples,
             last_pending_after_enqueue,
@@ -427,7 +437,17 @@ where
         self.persist_state_with_queue_empty(queue_empty).await
     }
 
-    pub async fn complete_task(&mut self) -> Result<(), RunnerError> {
+    async fn flush_aggregation(&mut self, force: bool) -> Result<(), RunnerError> {
+        if !force && self.runtime_state.pending_persisted_completed_batches <= 0 {
+            return Ok(());
+        }
+        let due = force
+            || self.aggregation_persist_interval.is_zero()
+            || self.last_aggregation_persist_at.elapsed() >= self.aggregation_persist_interval;
+        if !due {
+            return Ok(());
+        }
+
         let current_observable = self
             .observable_state
             .to_json()
@@ -437,8 +457,21 @@ where
             .to_persistent_json()
             .map_err(RunnerError::Engine)?;
         self.store
-            .save_aggregation(self.run_id, self.task.id, &current_observable, &snapshot, 0)
+            .save_aggregation(
+                self.run_id,
+                self.task.id,
+                &current_observable,
+                &snapshot,
+                self.runtime_state.pending_persisted_completed_batches,
+            )
             .await?;
+        self.runtime_state.pending_persisted_completed_batches = 0;
+        self.last_aggregation_persist_at = Instant::now();
+        Ok(())
+    }
+
+    pub async fn complete_task(&mut self) -> Result<(), RunnerError> {
+        self.flush_aggregation(true).await?;
         self.persist_state_with_queue_empty(true).await?;
         self.sync_task_progress().await?;
         self.store.complete_run_task(self.task.id).await?;
@@ -454,7 +487,11 @@ where
     async fn process_completed(&mut self) -> Result<usize, RunnerError> {
         let completed = self
             .store
-            .fetch_completed_batches(self.run_id, self.config.completed_batch_fetch_limit)
+            .fetch_completed_batches(
+                self.run_id,
+                self.config.completed_batch_fetch_limit,
+                self.config.strict_batch_ordering,
+            )
             .await?;
         if completed.is_empty() {
             return Ok(0);
@@ -517,23 +554,13 @@ where
             self.task.nr_completed_samples += completed_samples_delta;
         }
 
-        let current_observable = self
-            .observable_state
-            .to_json()
-            .map_err(RunnerError::Engine)?;
-        let snapshot = self
-            .observable_state
-            .to_persistent_json()
-            .map_err(RunnerError::Engine)?;
-        self.store
-            .save_aggregation(
-                self.run_id,
-                self.task.id,
-                &current_observable,
-                &snapshot,
-                completed.len() as i32,
-            )
-            .await?;
+        self.runtime_state.pending_persisted_completed_batches = self
+            .runtime_state
+            .pending_persisted_completed_batches
+            .saturating_add(completed.len() as i32);
+        let force_persist =
+            self.runtime_state.observable_checkpoint_state != ObservableCheckpointState::Ready;
+        self.flush_aggregation(force_persist).await?;
         if completed_samples_delta > 0 {
             self.runtime_state.observable_checkpoint_state = ObservableCheckpointState::Ready;
         }
@@ -618,16 +645,14 @@ where
             );
         }
 
-        for batch in &produced {
-            self.store
-                .insert_batch(
-                    self.run_id,
-                    self.task.id,
-                    self.sampler_config.requires_training(),
-                    batch,
-                )
-                .await?;
-        }
+        self.store
+            .insert_batches(
+                self.run_id,
+                self.task.id,
+                self.sampler_config.requires_training(),
+                &produced,
+            )
+            .await?;
         self.last_pending_after_enqueue = Some(pending_before_tick.saturating_add(produced.len()));
         Ok(produced.len())
     }

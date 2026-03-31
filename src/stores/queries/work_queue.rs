@@ -4,7 +4,7 @@ use crate::sampling::LatentBatch;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, QueryBuilder};
 
 pub(crate) struct CompletedBatchRaw {
     pub batch_id: i64,
@@ -22,14 +22,18 @@ fn encode_json<T: Serialize>(label: &str, value: &T) -> Result<JsonValue, sqlx::
         .map_err(|err| sqlx::Error::Protocol(format!("failed to serialize {label}: {err}")))
 }
 
-pub(crate) async fn insert_batch(
+pub(crate) async fn insert_batches(
     pool: &PgPool,
     run_id: i32,
     task_id: i64,
     requires_training_values: bool,
-    batch: &LatentBatch,
-) -> Result<i64, sqlx::Error> {
-    let batch_id = sqlx::query_scalar::<_, i64>(
+    batches: &[LatentBatch],
+) -> Result<Vec<i64>, sqlx::Error> {
+    if batches.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut builder = QueryBuilder::<Postgres>::new(
         r#"
         INSERT INTO batches (
             run_id,
@@ -39,18 +43,19 @@ pub(crate) async fn insert_batch(
             batch_size,
             status
         )
-        VALUES ($1, $2, $3, $4, $5, 'pending')
-        RETURNING id
         "#,
-    )
-    .bind(run_id)
-    .bind(task_id)
-    .bind(requires_training_values)
-    .bind(batch.into_json())
-    .bind(batch.nr_samples as i32)
-    .fetch_one(pool)
-    .await?;
-    Ok(batch_id)
+    );
+    builder.push_values(batches.iter(), |mut row, batch| {
+        row.push_bind(run_id)
+            .push_bind(task_id)
+            .push_bind(requires_training_values)
+            .push_bind(batch.into_json())
+            .push_bind(batch.nr_samples as i32)
+            .push_bind("pending");
+    });
+    builder.push(" RETURNING id");
+
+    builder.build_query_scalar::<i64>().fetch_all(pool).await
 }
 
 pub(crate) async fn get_pending_batch_count(
@@ -114,7 +119,7 @@ pub(crate) async fn claim_batch(
                     AND n.active_role = 'evaluator'
                     AND n.lease_expires_at > now()
               )
-            ORDER BY created_at
+            ORDER BY created_at, id
             LIMIT 1
             FOR UPDATE SKIP LOCKED
         )
@@ -317,67 +322,106 @@ pub(crate) async fn fetch_completed_batches(
     pool: &PgPool,
     run_id: i32,
     limit: usize,
+    strict_ordering: bool,
 ) -> Result<Vec<CompletedBatchRaw>, sqlx::Error> {
-    // Return only the contiguous completed prefix by id.
-    // This keeps ingestion strictly ordered across batches and leaves out-of-order
-    // completions buffered in the DB until gaps are resolved.
-    let rows = sqlx::query_as::<
-        _,
-        (
-            i64,
-            i64,
-            bool,
-            JsonValue,
-            Option<JsonValue>,
-            JsonValue,
-            Option<DateTime<Utc>>,
-            Option<f64>,
-        ),
-    >(
-        r#"
-        WITH ordered AS (
+    let rows = if strict_ordering {
+        // Return only the contiguous completed prefix by id.
+        // This keeps ingestion strictly ordered across batches and leaves out-of-order
+        // completions buffered in the DB until gaps are resolved.
+        sqlx::query_as::<
+            _,
+            (
+                i64,
+                i64,
+                bool,
+                JsonValue,
+                Option<JsonValue>,
+                JsonValue,
+                Option<DateTime<Utc>>,
+                Option<f64>,
+            ),
+        >(
+            r#"
+            WITH ordered AS (
+                SELECT
+                    id,
+                    task_id,
+                    requires_training_values,
+                    status,
+                    latent_batch,
+                    "values",
+                    batch_observable,
+                    completed_at,
+                    total_eval_time_ms,
+                    ROW_NUMBER() OVER (ORDER BY id ASC) AS rn
+                FROM batches
+                WHERE run_id = $1
+                ORDER BY id ASC
+                LIMIT $2
+            ),
+            first_blocker AS (
+                SELECT MIN(rn) AS rn
+                FROM ordered
+                WHERE status <> 'completed'
+            )
+            SELECT
+                o.id,
+                o.task_id,
+                o.requires_training_values,
+                o.latent_batch,
+                o."values",
+                o.batch_observable,
+                o.completed_at,
+                o.total_eval_time_ms
+            FROM ordered o
+            CROSS JOIN first_blocker b
+            WHERE o.status = 'completed'
+              AND o.batch_observable IS NOT NULL
+              AND (b.rn IS NULL OR o.rn < b.rn)
+            ORDER BY o.id ASC
+            "#,
+        )
+        .bind(run_id)
+        .bind(limit as i64)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query_as::<
+            _,
+            (
+                i64,
+                i64,
+                bool,
+                JsonValue,
+                Option<JsonValue>,
+                JsonValue,
+                Option<DateTime<Utc>>,
+                Option<f64>,
+            ),
+        >(
+            r#"
             SELECT
                 id,
                 task_id,
                 requires_training_values,
-                status,
                 latent_batch,
                 "values",
                 batch_observable,
                 completed_at,
-                total_eval_time_ms,
-                ROW_NUMBER() OVER (ORDER BY id ASC) AS rn
+                total_eval_time_ms
             FROM batches
             WHERE run_id = $1
+              AND status = 'completed'
+              AND batch_observable IS NOT NULL
             ORDER BY id ASC
             LIMIT $2
-        ),
-        first_blocker AS (
-            SELECT MIN(rn) AS rn
-            FROM ordered
-            WHERE status <> 'completed'
+            "#,
         )
-        SELECT
-            o.id,
-            o.task_id,
-            o.requires_training_values,
-            o.latent_batch,
-            o."values",
-            o.batch_observable,
-            o.completed_at,
-            o.total_eval_time_ms
-        FROM ordered o
-        CROSS JOIN first_blocker b
-        WHERE o.status = 'completed'
-          AND o.batch_observable IS NOT NULL
-          AND (b.rn IS NULL OR o.rn < b.rn)
-        ORDER BY o.id ASC
-        "#,
-    )
-    .bind(run_id)
-    .bind(limit as i64)
-    .fetch_all(pool)
-    .await?;
+        .bind(run_id)
+        .bind(limit as i64)
+        .fetch_all(pool)
+        .await?
+    };
 
     Ok(rows
         .into_iter()

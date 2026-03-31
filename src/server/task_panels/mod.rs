@@ -1,7 +1,7 @@
 mod full_observable;
 mod sample;
 
-use crate::core::{EngineError, RunTask, RunTaskSpec};
+use crate::core::{EngineError, ObservableConfig, RunTask, RunTaskSpec};
 use crate::evaluation::ObservableState;
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelUpdate, PanelWidth,
@@ -134,10 +134,13 @@ fn project_history_panels(
 }
 
 impl RunTaskSpec {
-    fn panel_projectors(&self) -> Vec<TaskPanelProjector> {
+    fn panel_projectors(
+        &self,
+        effective_observable_config: Option<ObservableConfig>,
+    ) -> Vec<TaskPanelProjector> {
         let mut projectors = vec![task_summary_projector()];
         projectors.extend(match self {
-            Self::Sample { .. } => sample::projectors(self),
+            Self::Sample { .. } => sample::projectors(self, effective_observable_config),
             Self::Image {
                 geometry, display, ..
             } => full_observable::image_projectors(geometry.clone(), *display),
@@ -202,9 +205,12 @@ fn task_summary_projector() -> TaskPanelProjector {
 }
 
 impl TaskPanelSource {
-    pub fn new(task_spec: &RunTaskSpec) -> Self {
+    pub fn new(
+        task_spec: &RunTaskSpec,
+        effective_observable_config: Option<ObservableConfig>,
+    ) -> Self {
         Self {
-            projectors: task_spec.panel_projectors(),
+            projectors: task_spec.panel_projectors(effective_observable_config),
         }
     }
 
@@ -533,7 +539,9 @@ fn format_cursor(cursor: TaskPanelCursor) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{LineDisplayMode, RunTaskInput, RunTaskState, canonical_task_toml};
+    use crate::core::{
+        LineDisplayMode, ObservableConfig, RunTaskInput, RunTaskState, canonical_task_toml,
+    };
     use crate::evaluation::{ComplexValue, FullComplexObservableState};
     use crate::server::panels::{PanelUpdateMode, PlotPoint, scalar_timeseries_panel};
     use chrono::Utc;
@@ -556,6 +564,15 @@ mod tests {
             geometry: line_geometry(),
             observable: crate::core::PlotObservableKind::Complex,
             display,
+            batch_transforms: None,
+        }
+    }
+
+    fn inherited_complex_sample_task() -> RunTaskSpec {
+        RunTaskSpec::Sample {
+            nr_samples: Some(10),
+            sampler_aggregator: None,
+            observable: None,
             batch_transforms: None,
         }
     }
@@ -600,7 +617,7 @@ mod tests {
         task: &RunTask,
         observable: &ObservableState,
     ) -> Vec<PanelState> {
-        TaskPanelSource::new(task_spec)
+        TaskPanelSource::new(task_spec, None)
             .current_panels(
                 task,
                 &JsonValue::Object(Default::default()),
@@ -614,7 +631,7 @@ mod tests {
     #[test]
     fn complex_line_auto_uses_multi_timeseries_components_panel() {
         let task = plot_task(LineDisplayMode::Auto);
-        let descriptors = TaskPanelSource::new(&task).panel_specs();
+        let descriptors = TaskPanelSource::new(&task, None).panel_specs();
         assert!(
             descriptors
                 .iter()
@@ -642,7 +659,7 @@ mod tests {
     #[test]
     fn complex_line_scalar_curve_uses_single_real_panel() {
         let task = plot_task(LineDisplayMode::ScalarCurve);
-        let descriptors = TaskPanelSource::new(&task).panel_specs();
+        let descriptors = TaskPanelSource::new(&task, None).panel_specs();
         assert!(
             descriptors
                 .iter()
@@ -666,6 +683,18 @@ mod tests {
             !current
                 .iter()
                 .any(|panel| matches!(panel, PanelState::MultiTimeseries { .. }))
+        );
+    }
+
+    #[test]
+    fn inherited_complex_sample_uses_imag_panel() {
+        let task = inherited_complex_sample_task();
+        let descriptors =
+            TaskPanelSource::new(&task, Some(ObservableConfig::Complex)).panel_specs();
+        assert!(
+            descriptors
+                .iter()
+                .any(|panel| panel.panel_id == "imag_estimate_history")
         );
     }
 

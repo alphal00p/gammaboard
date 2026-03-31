@@ -7,7 +7,8 @@ mod task_panels;
 mod worker_panels;
 
 use crate::api::{
-    ApiError, db as db_api, nodes as node_api, runs as run_api, templates as template_api,
+    ApiError, db as db_api, nodes as node_api, runs as run_api, stage as stage_api,
+    templates as template_api,
 };
 use crate::core::{AggregationStore, RunReadStore, RunSpecStore, RunTask, RunTaskStore};
 use crate::evaluation::ObservableState;
@@ -596,8 +597,13 @@ async fn resolve_active_task_sampler_config(
         return Ok(config);
     }
 
-    if let Some(source_snapshot) =
-        resolve_task_source_snapshot(state, run_id, task, task.task.sample_sampler_source()).await?
+    if let Some(source_snapshot) = stage_api::resolve_task_source_snapshot(
+        &state.store,
+        run_id,
+        task,
+        task.task.sample_sampler_source(),
+    )
+    .await?
     {
         if let Some(config) = source_snapshot.sampler_aggregator {
             return Ok(config);
@@ -620,59 +626,6 @@ async fn resolve_active_task_sampler_config(
     )))
 }
 
-async fn resolve_task_source_snapshot(
-    state: &AppState,
-    run_id: i32,
-    task: &RunTask,
-    source: Option<crate::core::SourceRefSpec>,
-) -> Result<Option<crate::core::RunStageSnapshot>, ApiError> {
-    match source {
-        Some(crate::core::SourceRefSpec::Latest) => state
-            .store
-            .load_latest_stage_snapshot_before_sequence(run_id, task.sequence_nr)
-            .await
-            .map_err(Into::into),
-        Some(crate::core::SourceRefSpec::FromName(source_task_name)) => {
-            let source_task = state
-                .store
-                .list_run_tasks(run_id)
-                .await?
-                .into_iter()
-                .find(|candidate| candidate.name == source_task_name)
-                .ok_or_else(|| {
-                    ApiError::BadRequest(format!(
-                        "task {} references source task '{}' but no such task exists in run {}",
-                        task.id, source_task_name, run_id
-                    ))
-                })?;
-            if source_task.sequence_nr >= task.sequence_nr {
-                return Err(ApiError::BadRequest(format!(
-                    "task {} references source task '{}' which is not prior in sequence",
-                    task.id, source_task_name
-                )));
-            }
-            let snapshot = state
-                .store
-                .load_latest_stage_snapshot_before_sequence(run_id, source_task.sequence_nr + 1)
-                .await?
-                .ok_or_else(|| {
-                    ApiError::BadRequest(format!(
-                        "task {} source task '{}' has no queue-empty stage snapshot",
-                        task.id, source_task_name
-                    ))
-                })?;
-            if snapshot.task_id != Some(source_task.id) {
-                return Err(ApiError::BadRequest(format!(
-                    "task {} source task '{}' has no queue-empty stage snapshot",
-                    task.id, source_task_name
-                )));
-            }
-            Ok(Some(snapshot))
-        }
-        None => Ok(None),
-    }
-}
-
 async fn get_run_task_output(
     State(state): State<AppState>,
     AxumPath((run_id, task_id)): AxumPath<(i32, i64)>,
@@ -682,7 +635,9 @@ async fn get_run_task_output(
     let cursor =
         parse_task_panel_cursor(request.request.cursor.as_deref()).map_err(ApiError::BadRequest)?;
     let task = load_run_task(&state.store, run_id, task_id).await?;
-    let panel_source = TaskPanelSource::new(&task.task);
+    let effective_observable_config =
+        stage_api::resolve_effective_sample_observable_config(&state.store, run_id, &task).await?;
+    let panel_source = TaskPanelSource::new(&task.task, effective_observable_config);
     let latest_persisted_snapshot = state
         .store
         .get_task_output_snapshots(run_id, task.id, None, 1)

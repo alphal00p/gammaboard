@@ -68,6 +68,8 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Whether evaluator training values are required is a per-batch persisted contract (`batches.requires_training_values`), not inferred at ingest time from the currently active sampler config.
 - Havana training and inference samplers must support nested discrete domains and preserve the full grid topology in persisted snapshots for restore/materialization.
 - Sample tasks must force an initial small batch round-trip before normal queue ramp-up so an observable snapshot is persisted immediately at task start, and must persist the observable again when the task completes.
+- `sampler_aggregator_runner_params.aggregation_persist_interval_ms` controls how often merged observable state is persisted during sampling; the initial small-batch checkpoint and final task completion flush must still be forced immediately.
+- `sampler_aggregator_runner_params.strict_batch_ordering` controls whether completed evaluator batches are ingested strictly as a contiguous id prefix or opportunistically in completed-id order.
 
 ## Panels And Dashboard
 - Backend visualization uses the generic panel model in `src/server/panels.rs`.

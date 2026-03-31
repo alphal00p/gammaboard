@@ -9,8 +9,11 @@ use crate::server::panels::{
 };
 use serde_json::Value as JsonValue;
 
-pub(super) fn projectors(task_spec: &RunTaskSpec) -> Vec<TaskPanelProjector> {
-    let observable_config = task_observable_config(task_spec);
+pub(super) fn projectors(
+    task_spec: &RunTaskSpec,
+    effective_observable_config: Option<ObservableConfig>,
+) -> Vec<TaskPanelProjector> {
+    let observable_config = task_observable_config(task_spec).or(effective_observable_config);
     let mut projectors = vec![
         sample_progress_projector(),
         estimate_summary_projector(observable_config.as_ref()),

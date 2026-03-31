@@ -145,6 +145,11 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
                 key_value("implementation", "Implementation", self.kind_str()),
                 key_value("domain", "Domain", summarize_domain(ctx.domain)),
                 key_value(
+                    "aggregation_persist_interval_ms",
+                    "Aggregation Persist Interval (ms)",
+                    ctx.runner_params.aggregation_persist_interval_ms,
+                ),
+                key_value(
                     "target_queue_remaining",
                     "Target Queue Remaining",
                     ctx.runner_params.target_queue_remaining,
@@ -168,6 +173,11 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
                     "completed_fetch_limit",
                     "Completed Fetch Limit",
                     ctx.runner_params.completed_batch_fetch_limit,
+                ),
+                key_value(
+                    "strict_batch_ordering",
+                    "Strict Batch Ordering",
+                    ctx.runner_params.strict_batch_ordering,
                 ),
                 key_value(
                     "snapshot_interval_ms",

@@ -534,16 +534,22 @@ impl ControlPlaneStore for PgStore {
 
 #[async_trait::async_trait]
 impl WorkQueueStore for PgStore {
-    async fn insert_batch(
+    async fn insert_batches(
         &self,
         run_id: i32,
         task_id: i64,
         requires_training_values: bool,
-        batch: &LatentBatch,
-    ) -> Result<i64, StoreError> {
-        queries::insert_batch(&self.pool, run_id, task_id, requires_training_values, batch)
-            .await
-            .map_err(map_sqlx)
+        batches: &[LatentBatch],
+    ) -> Result<Vec<i64>, StoreError> {
+        queries::insert_batches(
+            &self.pool,
+            run_id,
+            task_id,
+            requires_training_values,
+            batches,
+        )
+        .await
+        .map_err(map_sqlx)
     }
 
     async fn get_pending_batch_count(&self, run_id: i32) -> Result<i64, StoreError> {
@@ -627,8 +633,9 @@ impl WorkQueueStore for PgStore {
         &self,
         run_id: i32,
         limit: usize,
+        strict_ordering: bool,
     ) -> Result<Vec<CompletedBatch>, StoreError> {
-        let rows = queries::fetch_completed_batches(&self.pool, run_id, limit)
+        let rows = queries::fetch_completed_batches(&self.pool, run_id, limit, strict_ordering)
             .await
             .map_err(map_sqlx)?;
         let mut out = Vec::with_capacity(rows.len());
@@ -899,12 +906,14 @@ mod tests {
             },
             "sampler_aggregator_runner_params": {
                 "performance_snapshot_interval_ms": 5000,
+                "aggregation_persist_interval_ms": 1000,
                 "target_batch_eval_ms": 200.0,
                 "target_queue_remaining": 0.0,
                 "max_batch_size": 64,
                 "max_queue_size": 128,
                 "max_batches_per_tick": 1,
-                "completed_batch_fetch_limit": 512
+                "completed_batch_fetch_limit": 512,
+                "strict_batch_ordering": true
             }
         });
         let spec = decode_run_spec(
@@ -936,12 +945,14 @@ mod tests {
             spec.sampler_aggregator_runner_params,
             SamplerAggregatorRunnerParams::deserialize(json!({
                 "performance_snapshot_interval_ms": 5000,
+                "aggregation_persist_interval_ms": 1000,
                 "target_batch_eval_ms": 200.0,
                 "target_queue_remaining": 0.0,
                 "max_batch_size": 64,
                 "max_queue_size": 128,
                 "max_batches_per_tick": 1,
-                "completed_batch_fetch_limit": 512
+                "completed_batch_fetch_limit": 512,
+                "strict_batch_ordering": true
             }))
             .unwrap()
         );
@@ -973,12 +984,14 @@ mod tests {
                 },
                 "sampler_aggregator_runner_params": {
                     "performance_snapshot_interval_ms": 5000,
+                    "aggregation_persist_interval_ms": 1000,
                     "target_batch_eval_ms": 200.0,
                     "target_queue_remaining": 0.0,
                     "max_batch_size": 64,
                     "max_queue_size": 128,
                     "max_batches_per_tick": 1,
-                    "completed_batch_fetch_limit": 512
+                    "completed_batch_fetch_limit": 512,
+                    "strict_batch_ordering": true
                 }
             }),
             json!({
@@ -995,12 +1008,14 @@ mod tests {
                 "evaluator": { "kind": "sin_evaluator" },
                 "sampler_aggregator_runner_params": {
                     "performance_snapshot_interval_ms": 5000,
+                    "aggregation_persist_interval_ms": 1000,
                     "target_batch_eval_ms": 200.0,
                     "target_queue_remaining": 0.0,
                     "max_batch_size": 64,
                     "max_queue_size": 128,
                     "max_batches_per_tick": 1,
-                    "completed_batch_fetch_limit": 512
+                    "completed_batch_fetch_limit": 512,
+                    "strict_batch_ordering": true
                 }
             }),
             json!({

@@ -76,7 +76,7 @@ async fn claim_batch_requires_active_assignment() {
     let batch = Batch::from_points([Point::new(vec![1.0], Vec::new(), 1.0)]).expect("batch");
     let latent_batch = LatentBatchSpec::from_batch(&batch).build();
     store
-        .insert_batch(run_id, task_id, false, &latent_batch)
+        .insert_batches(run_id, task_id, false, std::slice::from_ref(&latent_batch))
         .await
         .expect("insert batch");
 
@@ -143,7 +143,7 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
     let batch = Batch::from_points([Point::new(vec![2.0], Vec::new(), 1.0)]).expect("batch");
     let latent_batch = LatentBatchSpec::from_batch(&batch).build();
     store
-        .insert_batch(run_id, task_id, false, &latent_batch)
+        .insert_batches(run_id, task_id, false, std::slice::from_ref(&latent_batch))
         .await
         .expect("insert batch");
 

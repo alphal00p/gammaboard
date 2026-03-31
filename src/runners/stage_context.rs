@@ -1,6 +1,5 @@
-use crate::core::{
-    AggregationStore, BatchTransformConfig, RunTask, RunTaskStore, SourceRefSpec, StoreError,
-};
+use crate::api::stage::resolve_task_source_snapshot;
+use crate::core::{AggregationStore, BatchTransformConfig, RunTask, RunTaskStore, StoreError};
 use crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot;
 use crate::sampling::StageHandoffOwned;
 
@@ -18,60 +17,6 @@ fn handoff_contains_havana_grid(handoff: &StageHandoffOwned) -> bool {
         .sampler_snapshot
         .as_ref()
         .is_some_and(|snapshot| snapshot.contains_havana_grid())
-}
-
-pub(crate) async fn resolve_source_snapshot<S>(
-    store: &S,
-    run_id: i32,
-    task: &RunTask,
-    source: Option<SourceRefSpec>,
-) -> Result<Option<crate::core::RunStageSnapshot>, StoreError>
-where
-    S: AggregationStore + RunTaskStore + Send + Sync,
-{
-    match source {
-        Some(SourceRefSpec::Latest) => {
-            store
-                .load_latest_stage_snapshot_before_sequence(run_id, task.sequence_nr)
-                .await
-        }
-        Some(SourceRefSpec::FromName(source_task_name)) => {
-            let source_task = store
-                .list_run_tasks(run_id)
-                .await?
-                .into_iter()
-                .find(|candidate| candidate.name == source_task_name)
-                .ok_or_else(|| {
-                    StoreError::store(format!(
-                        "task {} references source task '{}' but no such task exists in run {}",
-                        task.id, source_task_name, run_id
-                    ))
-                })?;
-            if source_task.sequence_nr >= task.sequence_nr {
-                return Err(StoreError::store(format!(
-                    "task {} references source task '{}' which is not prior in sequence",
-                    task.id, source_task_name
-                )));
-            }
-            let snapshot = store
-                .load_latest_stage_snapshot_before_sequence(run_id, source_task.sequence_nr + 1)
-                .await?
-                .ok_or_else(|| {
-                    StoreError::store(format!(
-                        "task {} source task '{}' has no queue-empty stage snapshot",
-                        task.id, source_task_name
-                    ))
-                })?;
-            if snapshot.task_id != Some(source_task.id) {
-                return Err(StoreError::store(format!(
-                    "task {} source task '{}' has no queue-empty stage snapshot",
-                    task.id, source_task_name
-                )));
-            }
-            Ok(Some(snapshot))
-        }
-        None => Ok(None),
-    }
 }
 
 pub(crate) async fn find_latest_havana_snapshot_before_sequence<S>(
@@ -116,7 +61,8 @@ where
     S: AggregationStore + RunTaskStore + Send + Sync,
 {
     let source_snapshot =
-        resolve_source_snapshot(store, run_id, task, task.task.sample_sampler_source()).await?;
+        resolve_task_source_snapshot(store, run_id, task, task.task.sample_sampler_source())
+            .await?;
     let base_stage_snapshot = store
         .load_latest_stage_snapshot_before_sequence(run_id, fallback_sequence_nr)
         .await?;

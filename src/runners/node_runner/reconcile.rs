@@ -3,12 +3,11 @@ use super::{
     role_runner::RoleRunner,
 };
 
+use crate::api::stage::resolve_task_source_snapshot;
 use crate::core::{BatchTransformConfig, ObservableConfig, RunTask, RunTaskState, StoreError};
 use crate::runners::{
     EvaluatorRunner, SamplerAggregatorRunner,
-    stage_context::{
-        HAVANA_HANDOFF_REQUIRED_ERROR, resolve_source_snapshot, resolve_stage_context,
-    },
+    stage_context::{HAVANA_HANDOFF_REQUIRED_ERROR, resolve_stage_context},
 };
 use crate::sampling::StageHandoffOwned;
 use tracing::{error, info, warn};
@@ -284,7 +283,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             .store
             .load_latest_stage_snapshot_before_sequence(worker.run_id, i32::MAX)
             .await?;
-        let observable_source_snapshot = resolve_source_snapshot(
+        let observable_source_snapshot = resolve_task_source_snapshot(
             &worker.store,
             worker.run_id,
             &task,

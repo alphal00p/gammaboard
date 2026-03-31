@@ -42,12 +42,20 @@ CREATE TABLE IF NOT EXISTS batches (
 CREATE INDEX IF NOT EXISTS idx_batches_status_runid ON batches(run_id, status)
     WHERE status IN ('pending', 'claimed');
 
+CREATE INDEX IF NOT EXISTS idx_batches_pending_run_created
+    ON batches(run_id, created_at, id)
+    WHERE status = 'pending';
+
 CREATE INDEX IF NOT EXISTS idx_batches_task_created ON batches(task_id, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_batches_claimed ON batches(claimed_at)
     WHERE status = 'claimed';
 
 CREATE INDEX IF NOT EXISTS idx_batches_completed ON batches(run_id, completed_at)
+    WHERE status = 'completed';
+
+CREATE INDEX IF NOT EXISTS idx_batches_completed_run_id
+    ON batches(run_id, id)
     WHERE status = 'completed';
 
 -- View for monitoring work queue

@@ -212,6 +212,10 @@ observable = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 ```
 
+`sampler_aggregator_runner_params` also controls queue and persistence behavior:
+- `aggregation_persist_interval_ms` sets how often merged sample observables are flushed to PostgreSQL during training; default is `1000`.
+- `strict_batch_ordering` controls whether completed batches are ingested only as a contiguous id prefix (`true`) or in any completed id order (`false`).
+
 Deterministic scan tasks are supported:
 ```toml
 [[task_queue]]
