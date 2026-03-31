@@ -344,13 +344,23 @@ fn sampler_runtime_panel(runtime: &SamplerRuntimeMetrics) -> PanelState {
             ),
             key_value(
                 "queue_remaining_ratio",
-                "Open Queue Remaining Ratio",
+                "Runnable Queue Retained Ratio",
                 runtime.rolling.queue_remaining_ratio.mean,
             ),
             key_value(
                 "batches_consumed_per_tick",
                 "Batches Consumed Per Tick",
                 runtime.rolling.batches_consumed_per_tick.mean,
+            ),
+            key_value(
+                "batches_consumed_per_second",
+                "Batches Consumed Per Second",
+                runtime.rolling.batches_consumed_per_second.mean,
+            ),
+            key_value(
+                "sampler_tick_ms",
+                "Sampler Tick (ms)",
+                runtime.rolling.sampler_tick_ms.mean,
             ),
         ],
     )

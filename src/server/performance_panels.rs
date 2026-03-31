@@ -108,7 +108,7 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         with_panel_width(
             panel_spec(
                 "sampler_queue_remaining_ratio",
-                "Open Queue Remaining Ratio",
+                "Runnable Queue Retained Ratio",
                 PanelKind::ScalarTimeseries,
                 PanelHistoryMode::Append,
             ),

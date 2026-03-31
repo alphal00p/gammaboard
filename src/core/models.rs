@@ -184,6 +184,8 @@ pub struct SamplerRollingAverages {
     pub sampler_ingest_ms_per_sample: RollingMetricSnapshot,
     pub queue_remaining_ratio: RollingMetricSnapshot,
     pub batches_consumed_per_tick: RollingMetricSnapshot,
+    pub batches_consumed_per_second: RollingMetricSnapshot,
+    pub sampler_tick_ms: RollingMetricSnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -29,7 +29,7 @@ pub struct SamplerAggregatorRunnerParams {
     pub performance_snapshot_interval_ms: u64,
     pub aggregation_persist_interval_ms: u64,
     pub target_batch_eval_ms: f64,
-    pub target_queue_remaining: f64,
+    pub target_queue_horizon_ticks: f64,
     pub max_batch_size: usize,
     pub max_queue_size: usize,
     pub max_batches_per_tick: usize,
@@ -46,6 +46,8 @@ struct RollingAveragesState {
     completed_samples_per_second: RollingMetric,
     queue_remaining_ratio: RollingMetric,
     batches_consumed_per_tick: RollingMetric,
+    batches_consumed_per_second: RollingMetric,
+    sampler_tick_ms: RollingMetric,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -123,6 +125,10 @@ impl SamplerRuntimeState {
                 batches_consumed_per_tick: RollingMetricSnapshot::from(
                     &self.rolling.batches_consumed_per_tick,
                 ),
+                batches_consumed_per_second: RollingMetricSnapshot::from(
+                    &self.rolling.batches_consumed_per_second,
+                ),
+                sampler_tick_ms: RollingMetricSnapshot::from(&self.rolling.sampler_tick_ms),
             },
         }
     }
@@ -155,6 +161,7 @@ pub struct SamplerAggregatorRunner<S> {
     runtime_state: SamplerRuntimeState,
     last_performance_completed_samples: i64,
     last_runnable_after_enqueue: Option<usize>,
+    last_tick_started_at: Option<Instant>,
 }
 
 impl<S> SamplerAggregatorRunner<S>
@@ -223,6 +230,7 @@ where
             runtime_state,
             last_performance_completed_samples: nr_completed_samples,
             last_runnable_after_enqueue,
+            last_tick_started_at: None,
         }
     }
 
@@ -257,19 +265,32 @@ where
             return 0;
         }
 
-        let Some(consumed_per_tick) = self.runtime_state.rolling.batches_consumed_per_tick.value()
+        let Some(consumed_per_second) = self
+            .runtime_state
+            .rolling
+            .batches_consumed_per_second
+            .value()
         else {
             return self.compute_warmup_produce_limit(hard_limit, runnable_before_tick);
         };
-        if !consumed_per_tick.is_finite() || consumed_per_tick <= 0.0 {
+        let Some(avg_tick_ms) = self.runtime_state.rolling.sampler_tick_ms.value() else {
+            return self.compute_warmup_produce_limit(hard_limit, runnable_before_tick);
+        };
+        if !consumed_per_second.is_finite()
+            || consumed_per_second <= 0.0
+            || !avg_tick_ms.is_finite()
+            || avg_tick_ms <= 0.0
+            || !self.config.target_queue_horizon_ticks.is_finite()
+            || self.config.target_queue_horizon_ticks <= 0.0
+        {
             return self.compute_warmup_produce_limit(hard_limit, runnable_before_tick);
         }
-        if self.config.target_queue_remaining == 1.0 {
-            return hard_limit;
-        }
 
+        let target_horizon_secs =
+            (avg_tick_ms * self.config.target_queue_horizon_ticks).max(0.0) / 1000.0;
         let target_runnable_after_enqueue =
-            (consumed_per_tick / (1.0 - self.config.target_queue_remaining)).ceil() as usize;
+            (consumed_per_second * target_horizon_secs).ceil() as usize;
+
         let target_enqueue = target_runnable_after_enqueue.saturating_sub(runnable_before_tick);
         hard_limit.min(target_enqueue)
     }
@@ -279,9 +300,30 @@ where
         hard_limit: usize,
         runnable_before_tick: usize,
     ) -> usize {
-        let target_runnable_after_enqueue =
-            self.runtime_state.warmup_target_batches.unwrap_or(1).max(1);
+        let target_runnable_after_enqueue = self
+            .runtime_state
+            .warmup_target_batches
+            .or_else(|| self.estimated_initial_warmup_target_batches())
+            .unwrap_or(1)
+            .max(1);
         hard_limit.min(target_runnable_after_enqueue.saturating_sub(runnable_before_tick))
+    }
+
+    fn estimated_initial_warmup_target_batches(&self) -> Option<usize> {
+        let batch_eval_ms = self.runtime_state.rolling.eval_ms_per_batch.value()?;
+        let avg_tick_ms = self.runtime_state.rolling.sampler_tick_ms.value()?;
+        if !batch_eval_ms.is_finite()
+            || batch_eval_ms <= 0.0
+            || !avg_tick_ms.is_finite()
+            || avg_tick_ms <= 0.0
+            || !self.config.target_queue_horizon_ticks.is_finite()
+            || self.config.target_queue_horizon_ticks <= 0.0
+        {
+            return None;
+        }
+        let target_batches =
+            ((avg_tick_ms * self.config.target_queue_horizon_ticks) / batch_eval_ms).ceil();
+        Some((target_batches as usize).max(1))
     }
 
     fn build_batch_plan(
@@ -351,6 +393,19 @@ where
         Ok(usize::try_from(remaining).ok())
     }
 
+    fn observe_tick_timing(&mut self, tick_started_at: Instant) {
+        if let Some(previous_tick_started_at) = self.last_tick_started_at {
+            let tick_ms = tick_started_at
+                .saturating_duration_since(previous_tick_started_at)
+                .as_secs_f64()
+                * 1000.0;
+            if tick_ms.is_finite() && tick_ms > 0.0 {
+                self.runtime_state.rolling.sampler_tick_ms.observe(tick_ms);
+            }
+        }
+        self.last_tick_started_at = Some(tick_started_at);
+    }
+
     fn observe_queue_metrics(&mut self, runnable_before_tick: usize) {
         if let Some(previous_runnable_after) = self.last_runnable_after_enqueue
             && previous_runnable_after > 0
@@ -365,6 +420,15 @@ where
                 .rolling
                 .batches_consumed_per_tick
                 .observe(consumed);
+            if let Some(avg_tick_ms) = self.runtime_state.rolling.sampler_tick_ms.value()
+                && avg_tick_ms.is_finite()
+                && avg_tick_ms > 0.0
+            {
+                self.runtime_state
+                    .rolling
+                    .batches_consumed_per_second
+                    .observe(consumed * 1000.0 / avg_tick_ms);
+            }
         }
     }
 
@@ -377,6 +441,8 @@ where
     }
 
     pub async fn tick(&mut self) -> Result<bool, RunnerError> {
+        let tick_started_at = Instant::now();
+        self.observe_tick_timing(tick_started_at);
         self.store.reclaim_abandoned_batches(self.run_id).await?;
         let queue_before_tick = self.store.get_batch_queue_counts(self.run_id).await?;
         self.observe_queue_metrics(queue_before_tick.runnable().max(0) as usize);
@@ -671,7 +737,7 @@ where
             && self
                 .runtime_state
                 .rolling
-                .batches_consumed_per_tick
+                .batches_consumed_per_second
                 .value()
                 .is_none()
         {

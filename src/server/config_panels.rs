@@ -150,9 +150,9 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
                     ctx.runner_params.aggregation_persist_interval_ms,
                 ),
                 key_value(
-                    "target_queue_remaining",
-                    "Target Open Queue Remaining",
-                    ctx.runner_params.target_queue_remaining,
+                    "target_queue_horizon_ticks",
+                    "Target Queue Horizon (ticks)",
+                    ctx.runner_params.target_queue_horizon_ticks,
                 ),
                 key_value(
                     "max_batch_size",

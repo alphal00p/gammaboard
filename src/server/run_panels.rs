@@ -169,15 +169,15 @@ fn panel_states(
                 key_value("completed", "Completed Batches", run.completed_batches),
                 key_value(
                     "avg_queue_remaining",
-                    "Avg Open Queue Remaining",
+                    "Avg Runnable Queue Retained",
                     avg_queue_remaining,
                 ),
                 key_value(
-                    "target_queue_remaining",
-                    "Target Open Queue Remaining",
+                    "target_queue_horizon_ticks",
+                    "Target Queue Horizon (ticks)",
                     run_spec
                         .sampler_aggregator_runner_params
-                        .target_queue_remaining,
+                        .target_queue_horizon_ticks,
                 ),
             ],
         ),
