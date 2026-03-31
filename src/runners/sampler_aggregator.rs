@@ -16,21 +16,22 @@ use crate::evaluation::ObservableState;
 use crate::runners::rolling_metric::RollingMetric;
 use crate::sampling::{SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value as JsonValue, json};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
 const MIN_BATCH_SIZE: usize = 16;
 const MAX_BATCH_SIZE_UP_FACTOR: f64 = 4.0;
 const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.25;
-const WARMUP_BATCH_RAMP_FACTOR: usize = 2;
+const QUEUE_TARGET_RAMP_FACTOR: f64 = 2.0;
+const QUEUE_TARGET_MULTIPLIER_DECAY: f64 = 0.5;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerAggregatorRunnerParams {
     pub performance_snapshot_interval_ms: u64,
     pub aggregation_persist_interval_ms: u64,
     pub target_batch_eval_ms: f64,
-    pub target_queue_horizon_ticks: f64,
-    pub min_runnable_batches_per_evaluator: f64,
+    pub queue_buffer: f64,
     pub max_batch_size: usize,
     pub max_queue_size: usize,
     pub max_batches_per_tick: usize,
@@ -59,7 +60,7 @@ enum ObservableCheckpointState {
     Ready,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct SamplerRuntimeState {
     produced_batches_total: i64,
     produced_samples_total: i64,
@@ -67,9 +68,25 @@ struct SamplerRuntimeState {
     ingested_samples_total: i64,
     pending_persisted_completed_batches: i32,
     batch_size_current: usize,
-    warmup_target_batches: Option<usize>,
+    queue_target_multiplier: f64,
     observable_checkpoint_state: ObservableCheckpointState,
     rolling: RollingAveragesState,
+}
+
+impl Default for SamplerRuntimeState {
+    fn default() -> Self {
+        Self {
+            produced_batches_total: 0,
+            produced_samples_total: 0,
+            ingested_batches_total: 0,
+            ingested_samples_total: 0,
+            pending_persisted_completed_batches: 0,
+            batch_size_current: 0,
+            queue_target_multiplier: 1.0,
+            observable_checkpoint_state: ObservableCheckpointState::NeedsInitialRoundTrip,
+            rolling: RollingAveragesState::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -261,70 +278,58 @@ where
         remaining_capacity.min(self.config.max_batches_per_tick)
     }
 
-    fn horizon_target_runnable_batches(&self) -> Option<usize> {
-        let consumed_per_second = self
+    fn base_target_runnable_batches(&self) -> Option<usize> {
+        let consumed_per_tick = self
             .runtime_state
             .rolling
-            .batches_consumed_per_second
+            .runnable_batches_consumed_per_tick
             .value()?;
-        let avg_tick_ms = self.runtime_state.rolling.sampler_tick_ms.value()?;
-        if !consumed_per_second.is_finite()
-            || consumed_per_second <= 0.0
-            || !avg_tick_ms.is_finite()
-            || avg_tick_ms <= 0.0
-            || !self.config.target_queue_horizon_ticks.is_finite()
-            || self.config.target_queue_horizon_ticks <= 0.0
+        if !consumed_per_tick.is_finite()
+            || consumed_per_tick <= 0.0
+            || !self.config.queue_buffer.is_finite()
+            || self.config.queue_buffer < 0.0
         {
             return None;
         }
-
-        let target_horizon_secs =
-            (avg_tick_ms * self.config.target_queue_horizon_ticks).max(0.0) / 1000.0;
-        Some((consumed_per_second * target_horizon_secs).ceil() as usize)
+        Some((consumed_per_tick * (1.0 + self.config.queue_buffer)).ceil() as usize)
     }
 
-    fn evaluator_floor_target_runnable_batches(
-        &self,
-        active_evaluator_count: usize,
-    ) -> Option<usize> {
-        if active_evaluator_count == 0
-            || !self.config.min_runnable_batches_per_evaluator.is_finite()
-            || self.config.min_runnable_batches_per_evaluator <= 0.0
-        {
-            return None;
-        }
-        Some(
-            ((active_evaluator_count as f64) * self.config.min_runnable_batches_per_evaluator)
-                .ceil() as usize,
-        )
+    fn target_runnable_after_enqueue(&self) -> Option<usize> {
+        let base_target = self.base_target_runnable_batches()?;
+        let multiplier = self.runtime_state.queue_target_multiplier.max(1.0);
+        Some(((base_target as f64) * multiplier).ceil() as usize)
     }
 
-    fn target_runnable_after_enqueue(&self, active_evaluator_count: usize) -> Option<usize> {
-        match (
-            self.horizon_target_runnable_batches(),
-            self.evaluator_floor_target_runnable_batches(active_evaluator_count),
-        ) {
-            (Some(horizon), Some(floor)) => Some(horizon.max(floor)),
-            (Some(horizon), None) => Some(horizon),
-            (None, Some(floor)) => Some(floor),
-            (None, None) => None,
-        }
+    async fn current_runner_diagnostics(&self) -> Result<JsonValue, RunnerError> {
+        let queue_counts = self.store.get_batch_queue_counts(self.run_id).await?;
+        let active_evaluator_count = self.active_evaluator_count().await?;
+        Ok(json!({
+            "active_evaluator_count": active_evaluator_count,
+            "pending_batches": queue_counts.pending,
+            "claimed_batches": queue_counts.claimed,
+            "completed_batches": queue_counts.completed,
+            "runnable_batches": queue_counts.runnable(),
+            "open_batches": queue_counts.open(),
+            "queue_buffer": self.config.queue_buffer,
+            "queue_target_multiplier": self.runtime_state.queue_target_multiplier,
+            "target_runnable_batches_base": self.base_target_runnable_batches(),
+            "target_runnable_batches_final": self.target_runnable_after_enqueue(),
+            "observable_checkpoint_state": match self.runtime_state.observable_checkpoint_state {
+                ObservableCheckpointState::NeedsInitialRoundTrip => "needs_initial_round_trip",
+                ObservableCheckpointState::WaitingForInitialRoundTrip => "waiting_for_initial_round_trip",
+                ObservableCheckpointState::Ready => "ready",
+            },
+            "training_samples_remaining": self.sampler.training_samples_remaining(),
+        }))
     }
 
-    fn compute_produce_limit(
-        &self,
-        runnable_before_tick: usize,
-        open_before_tick: usize,
-        active_evaluator_count: usize,
-    ) -> usize {
+    fn compute_produce_limit(&self, runnable_before_tick: usize, open_before_tick: usize) -> usize {
         let hard_limit = self.hard_produce_limit(open_before_tick);
         if hard_limit == 0 {
             return 0;
         }
 
-        let Some(target_runnable_after_enqueue) =
-            self.target_runnable_after_enqueue(active_evaluator_count)
-        else {
+        let Some(target_runnable_after_enqueue) = self.target_runnable_after_enqueue() else {
             return self.compute_warmup_produce_limit(hard_limit, runnable_before_tick);
         };
 
@@ -336,12 +341,10 @@ where
         hard_limit: usize,
         runnable_before_tick: usize,
     ) -> usize {
-        let target_runnable_after_enqueue = self
-            .runtime_state
-            .warmup_target_batches
-            .or_else(|| self.estimated_initial_warmup_target_batches())
-            .unwrap_or(1)
-            .max(1);
+        let base_target = self.estimated_initial_warmup_target_batches().unwrap_or(1);
+        let target_runnable_after_enqueue = ((base_target as f64)
+            * self.runtime_state.queue_target_multiplier.max(1.0))
+        .ceil() as usize;
         hard_limit.min(target_runnable_after_enqueue.saturating_sub(runnable_before_tick))
     }
 
@@ -352,13 +355,13 @@ where
             || batch_eval_ms <= 0.0
             || !avg_tick_ms.is_finite()
             || avg_tick_ms <= 0.0
-            || !self.config.target_queue_horizon_ticks.is_finite()
-            || self.config.target_queue_horizon_ticks <= 0.0
+            || !self.config.queue_buffer.is_finite()
+            || self.config.queue_buffer < 0.0
         {
             return None;
         }
         let target_batches =
-            ((avg_tick_ms * self.config.target_queue_horizon_ticks) / batch_eval_ms).ceil();
+            ((avg_tick_ms / batch_eval_ms) * (1.0 + self.config.queue_buffer)).ceil();
         Some((target_batches as usize).max(1))
     }
 
@@ -465,6 +468,17 @@ where
                     .batches_consumed_per_second
                     .observe(consumed * 1000.0 / avg_tick_ms);
             }
+
+            if runnable_before_tick == 0 {
+                self.runtime_state.queue_target_multiplier =
+                    (self.runtime_state.queue_target_multiplier.max(1.0)
+                        * QUEUE_TARGET_RAMP_FACTOR)
+                        .max(1.0);
+            } else if self.runtime_state.queue_target_multiplier > 1.0 {
+                self.runtime_state.queue_target_multiplier = 1.0
+                    + (self.runtime_state.queue_target_multiplier - 1.0)
+                        * QUEUE_TARGET_MULTIPLIER_DECAY;
+            }
         }
     }
 
@@ -498,10 +512,7 @@ where
 
         let completed_batches = self.process_completed().await?;
         let queue_before_produce = self.store.get_batch_queue_counts(self.run_id).await?;
-        let active_evaluator_count = self.active_evaluator_count().await?;
-        let produced_batches = self
-            .produce(queue_before_produce, active_evaluator_count)
-            .await?;
+        let produced_batches = self.produce(queue_before_produce).await?;
         self.sync_task_progress().await?;
         self.flush_run_sample_progress().await?;
         self.flush_performance_snapshot().await?;
@@ -699,7 +710,6 @@ where
     async fn produce(
         &mut self,
         queue_before_produce: crate::core::BatchQueueCounts,
-        active_evaluator_count: usize,
     ) -> Result<usize, RunnerError> {
         let observable_config = self.observable_state.config();
         let sample_plan = self.sampler.sample_plan().map_err(RunnerError::Engine)?;
@@ -741,11 +751,8 @@ where
                         Vec::new()
                     }
                     ObservableCheckpointState::Ready => {
-                        let base_produce_limit = self.compute_produce_limit(
-                            runnable_before_produce,
-                            open_before_produce,
-                            active_evaluator_count,
-                        );
+                        let base_produce_limit = self
+                            .compute_produce_limit(runnable_before_produce, open_before_produce);
                         self.build_batch_plan(base_produce_limit, max_samples)
                     }
                 }
@@ -788,21 +795,6 @@ where
             .await?;
         self.last_runnable_after_enqueue =
             Some(runnable_before_produce.saturating_add(produced.len()));
-        if !produced.is_empty()
-            && self
-                .runtime_state
-                .rolling
-                .batches_consumed_per_second
-                .value()
-                .is_none()
-        {
-            let next = self
-                .runtime_state
-                .warmup_target_batches
-                .unwrap_or(1)
-                .saturating_mul(WARMUP_BATCH_RAMP_FACTOR);
-            self.runtime_state.warmup_target_batches = Some(next.max(1));
-        }
         Ok(produced.len())
     }
 
@@ -861,11 +853,25 @@ where
             .completed_samples_per_second
             .observe(completed_samples_per_second);
 
+        let mut engine_diagnostics = self.sampler.get_diagnostics();
+        let runner_diagnostics = self.current_runner_diagnostics().await?;
+        match &mut engine_diagnostics {
+            JsonValue::Object(object) => {
+                object.insert("runner".to_string(), runner_diagnostics);
+            }
+            other => {
+                engine_diagnostics = json!({
+                    "sampler": other.clone(),
+                    "runner": runner_diagnostics,
+                });
+            }
+        }
+
         let snapshot = SamplerAggregatorPerformanceSnapshot {
             run_id: self.run_id,
             node_name: self.node_name.clone(),
             runtime_metrics: self.runtime_state.to_runtime_metrics(),
-            engine_diagnostics: self.sampler.get_diagnostics(),
+            engine_diagnostics,
         };
         self.store
             .record_sampler_performance_snapshot(&snapshot)

@@ -1,10 +1,11 @@
 use crate::core::SamplerRuntimeMetrics;
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelWidth, PlotPoint,
-    history_x, merge_panel_state, panel_spec, replace_panel, scalar_timeseries_panel,
-    with_panel_width,
+    history_x, key_value, key_value_panel, merge_panel_state, panel_spec, replace_panel,
+    scalar_timeseries_panel, with_panel_width,
 };
 use crate::stores::{EvaluatorPerformanceHistoryEntry, SamplerPerformanceHistoryEntry};
+use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 
 pub fn build_evaluator_performance_response(
@@ -24,13 +25,19 @@ pub fn build_sampler_performance_response(
     scope_id: Option<String>,
     entries: Vec<SamplerPerformanceHistoryEntry>,
 ) -> PanelResponse {
-    build_performance_response(
+    let mut response = build_performance_response(
         scope_id.unwrap_or_else(|| "sampler".to_string()),
-        entries,
+        entries.clone(),
         sampler_panel_specs(),
         |entry| entry.id.to_string(),
         sampler_panels,
-    )
+    );
+    if let Some(latest) = entries.first() {
+        for panel in sampler_current_panels(latest) {
+            response.updates.push(replace_panel(panel));
+        }
+    }
+    response
 }
 
 fn build_performance_response<T>(
@@ -96,6 +103,24 @@ fn evaluator_panel_specs() -> Vec<PanelSpec> {
 
 fn sampler_panel_specs() -> Vec<PanelSpec> {
     vec![
+        with_panel_width(
+            panel_spec(
+                "sampler_runtime_current",
+                "Sampler Runtime",
+                PanelKind::KeyValue,
+                PanelHistoryMode::Replace,
+            ),
+            PanelWidth::Full,
+        ),
+        with_panel_width(
+            panel_spec(
+                "sampler_diagnostics_current",
+                "Sampler Diagnostics",
+                PanelKind::KeyValue,
+                PanelHistoryMode::Replace,
+            ),
+            PanelWidth::Full,
+        ),
         with_panel_width(
             panel_spec(
                 "sampler_completed_samples_per_second",
@@ -201,6 +226,84 @@ fn sampler_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelState> {
     ]
 }
 
+fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelState> {
+    let Some(runtime) = decode_sampler_runtime_metrics(entry) else {
+        return Vec::new();
+    };
+    let mut panels = vec![key_value_panel(
+        "sampler_runtime_current",
+        vec![
+            key_value(
+                "completed_samples_per_second",
+                "Completed Samples Per Second",
+                runtime.completed_samples_per_second,
+            ),
+            key_value(
+                "batch_size_current",
+                "Batch Size Current",
+                runtime.batch_size_current,
+            ),
+            key_value(
+                "eval_ms_per_sample",
+                "Eval Ms Per Sample",
+                runtime.rolling.eval_ms_per_sample.mean,
+            ),
+            key_value(
+                "eval_ms_per_batch",
+                "Eval Ms Per Batch",
+                runtime.rolling.eval_ms_per_batch.mean,
+            ),
+            key_value(
+                "sampler_produce_ms_per_sample",
+                "Sampler Produce Ms Per Sample",
+                runtime.rolling.sampler_produce_ms_per_sample.mean,
+            ),
+            key_value(
+                "sampler_ingest_ms_per_sample",
+                "Sampler Ingest Ms Per Sample",
+                runtime.rolling.sampler_ingest_ms_per_sample.mean,
+            ),
+            key_value(
+                "sampler_tick_ms",
+                "Sampler Tick Ms",
+                runtime.rolling.sampler_tick_ms.mean,
+            ),
+            key_value(
+                "batches_consumed_per_second",
+                "Batches Consumed Per Second",
+                runtime.rolling.batches_consumed_per_second.mean,
+            ),
+            key_value(
+                "runnable_batches_consumed_per_tick",
+                "Runnable Batches Consumed Per Tick",
+                runtime.rolling.runnable_batches_consumed_per_tick.mean,
+            ),
+            key_value(
+                "runnable_queue_retained_ratio",
+                "Runnable Queue Retained Per Tick",
+                runtime.rolling.runnable_queue_retained_ratio.mean,
+            ),
+        ],
+    )];
+    if let Some(diagnostics) = sampler_diagnostics_panel(&entry.engine_diagnostics) {
+        panels.push(diagnostics);
+    }
+    panels
+}
+
+fn sampler_diagnostics_panel(value: &JsonValue) -> Option<PanelState> {
+    let object = value.as_object()?;
+    let runner = object.get("runner")?.as_object()?;
+    let entries = runner
+        .iter()
+        .map(|(key, value)| key_value(key, &title_label(key), value.clone()))
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        return None;
+    }
+    Some(key_value_panel("sampler_diagnostics_current", entries))
+}
+
 fn scalar_point_panel(
     panel_id: &str,
     x: f64,
@@ -219,4 +322,18 @@ fn decode_sampler_runtime_metrics(
 
 fn ms_to_us(value_ms: f64) -> f64 {
     value_ms * 1000.0
+}
+
+fn title_label(key: &str) -> String {
+    key.split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
