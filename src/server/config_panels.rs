@@ -151,7 +151,7 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
                 ),
                 key_value(
                     "target_queue_remaining",
-                    "Target Queue Remaining",
+                    "Target Open Queue Remaining",
                     ctx.runner_params.target_queue_remaining,
                 ),
                 key_value(

@@ -344,7 +344,7 @@ fn sampler_runtime_panel(runtime: &SamplerRuntimeMetrics) -> PanelState {
             ),
             key_value(
                 "queue_remaining_ratio",
-                "Queue Remaining Ratio",
+                "Open Queue Remaining Ratio",
                 runtime.rolling.queue_remaining_ratio.mean,
             ),
             key_value(

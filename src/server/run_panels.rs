@@ -169,12 +169,12 @@ fn panel_states(
                 key_value("completed", "Completed Batches", run.completed_batches),
                 key_value(
                     "avg_queue_remaining",
-                    "Avg Queue Remaining",
+                    "Avg Open Queue Remaining",
                     avg_queue_remaining,
                 ),
                 key_value(
                     "target_queue_remaining",
-                    "Target Queue Remaining",
+                    "Target Open Queue Remaining",
                     run_spec
                         .sampler_aggregator_runner_params
                         .target_queue_remaining,
