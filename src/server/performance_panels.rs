@@ -115,7 +115,7 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         with_panel_width(
             panel_spec(
                 "sampler_queue_buffer_current",
-                "Sampler Queue Buffer",
+                "Sampler Queue",
                 PanelKind::KeyValue,
                 PanelHistoryMode::Replace,
             ),
@@ -133,7 +133,7 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         with_panel_width(
             panel_spec(
                 "sampler_runnable_queue_retained_ratio",
-                "Runnable Queue Retained Per Tick (Diagnostic)",
+                "Pending Queue Retained Per Tick (Diagnostic)",
                 PanelKind::ScalarTimeseries,
                 PanelHistoryMode::Append,
             ),
@@ -275,12 +275,12 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
             ),
             key_value(
                 "runnable_batches_consumed_per_tick",
-                "Runnable Batches Consumed Per Tick",
+                "Pending Batches Consumed Per Tick",
                 runtime.rolling.runnable_batches_consumed_per_tick.mean,
             ),
             key_value(
                 "runnable_queue_retained_ratio",
-                "Runnable Queue Retained Per Tick (Diagnostic)",
+                "Pending Queue Retained Per Tick (Diagnostic)",
                 runtime.rolling.runnable_queue_retained_ratio.mean,
             ),
         ],
@@ -295,24 +295,8 @@ fn sampler_queue_buffer_panel(value: &JsonValue) -> Option<PanelState> {
     let runner = runner_diagnostics(value)?;
     let entries = vec![
         runner_value_entry(runner, "queue_buffer", "Queue Buffer"),
-        runner_value_entry(runner, "queue_target_multiplier", "Queue Target Multiplier"),
-        runner_value_entry(
-            runner,
-            "target_runnable_batches_base",
-            "Base Target Runnable Batches",
-        ),
-        runner_value_entry(
-            runner,
-            "target_runnable_batches_floor",
-            "Floor Target Runnable Batches",
-        ),
-        runner_value_entry(
-            runner,
-            "target_runnable_batches_final",
-            "Final Target Runnable Batches",
-        ),
         runner_value_entry(runner, "active_evaluator_count", "Active Evaluators"),
-        runner_value_entry(runner, "runnable_batches", "Runnable Batches"),
+        runner_value_entry(runner, "target_pending_batches", "Target Pending Batches"),
         runner_value_entry(runner, "pending_batches", "Pending Batches"),
         runner_value_entry(runner, "claimed_batches", "Claimed Batches"),
         runner_value_entry(runner, "completed_batches", "Completed Batches"),

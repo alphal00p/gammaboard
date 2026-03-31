@@ -109,18 +109,15 @@ fn panel_states(
     let avg_queue_remaining = active_sampler
         .and_then(|worker| worker.sampler_runtime_metrics.as_ref())
         .and_then(queue_remaining_mean);
-    let queue_target_multiplier = active_sampler
+    let active_evaluator_count = active_sampler
         .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
-        .and_then(|value| runner_diagnostic_f64(value, "queue_target_multiplier"));
-    let target_runnable_batches = active_sampler
+        .and_then(|value| runner_diagnostic_i64(value, "active_evaluator_count"));
+    let target_pending_batches = active_sampler
         .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
-        .and_then(|value| runner_diagnostic_i64(value, "target_runnable_batches_final"));
-    let target_runnable_batches_floor = active_sampler
+        .and_then(|value| runner_diagnostic_i64(value, "target_pending_batches"));
+    let pending_batches = active_sampler
         .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
-        .and_then(|value| runner_diagnostic_i64(value, "target_runnable_batches_floor"));
-    let runnable_batches = active_sampler
-        .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
-        .and_then(|value| runner_diagnostic_i64(value, "runnable_batches"));
+        .and_then(|value| runner_diagnostic_i64(value, "pending_batches"));
     let current_batch_size = active_sampler
         .and_then(|worker| worker.sampler_runtime_metrics.as_ref())
         .and_then(batch_size_current);
@@ -181,7 +178,7 @@ fn panel_states(
                 key_value("completed", "Completed Batches", run.completed_batches),
                 key_value(
                     "avg_queue_remaining",
-                    "Avg Runnable Queue Retained Per Tick (Diagnostic)",
+                    "Avg Pending Queue Retained Per Tick (Diagnostic)",
                     avg_queue_remaining,
                 ),
                 key_value(
@@ -190,24 +187,19 @@ fn panel_states(
                     run_spec.sampler_aggregator_runner_params.queue_buffer,
                 ),
                 key_value(
-                    "queue_target_multiplier",
-                    "Queue Target Multiplier",
-                    queue_target_multiplier,
+                    "active_evaluator_count",
+                    "Active Evaluators",
+                    active_evaluator_count,
                 ),
                 key_value(
-                    "target_runnable_batches_floor",
-                    "Floor Target Runnable Batches",
-                    target_runnable_batches_floor,
+                    "target_pending_batches",
+                    "Target Pending Batches",
+                    target_pending_batches,
                 ),
                 key_value(
-                    "target_runnable_batches",
-                    "Target Runnable Batches",
-                    target_runnable_batches,
-                ),
-                key_value(
-                    "runnable_batches",
-                    "Current Runnable Batches",
-                    runnable_batches,
+                    "pending_batches",
+                    "Current Pending Batches",
+                    pending_batches,
                 ),
             ],
         ),
@@ -309,15 +301,6 @@ fn batch_eval_ms_mean(metrics: &JsonValue) -> Option<f64> {
         .and_then(|value| value.get("eval_ms_per_batch"))
         .and_then(JsonValue::as_object)
         .and_then(|value| value.get("mean"))
-        .and_then(JsonValue::as_f64)
-}
-
-fn runner_diagnostic_f64(metrics: &JsonValue, key: &str) -> Option<f64> {
-    metrics
-        .as_object()
-        .and_then(|value| value.get("runner"))
-        .and_then(JsonValue::as_object)
-        .and_then(|value| value.get(key))
         .and_then(JsonValue::as_f64)
 }
 

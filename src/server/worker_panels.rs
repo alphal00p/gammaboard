@@ -110,7 +110,7 @@ fn worker_panel_specs(worker: &RegisteredWorkerEntry) -> Vec<crate::server::pane
                 panels.push(with_panel_width(
                     panel_spec(
                         "sampler_diagnostics",
-                        "Sampler Queue Buffer",
+                        "Sampler Queue",
                         PanelKind::KeyValue,
                         PanelHistoryMode::None,
                     ),
@@ -120,7 +120,7 @@ fn worker_panel_specs(worker: &RegisteredWorkerEntry) -> Vec<crate::server::pane
                 panels.push(with_panel_width(
                     panel_spec(
                         "sampler_diagnostics_status",
-                        "Sampler Queue Buffer",
+                        "Sampler Queue",
                         PanelKind::Text,
                         PanelHistoryMode::None,
                     ),
@@ -344,12 +344,12 @@ fn sampler_runtime_panel(runtime: &SamplerRuntimeMetrics) -> PanelState {
             ),
             key_value(
                 "runnable_queue_retained_ratio",
-                "Runnable Queue Retained Per Tick (Diagnostic)",
+                "Pending Queue Retained Per Tick (Diagnostic)",
                 runtime.rolling.runnable_queue_retained_ratio.mean,
             ),
             key_value(
                 "runnable_batches_consumed_per_tick",
-                "Runnable Batches Consumed Per Tick",
+                "Pending Batches Consumed Per Tick",
                 runtime.rolling.runnable_batches_consumed_per_tick.mean,
             ),
             key_value(
@@ -370,21 +370,8 @@ fn diagnostics_panel(value: Option<&JsonValue>) -> Option<PanelState> {
     let runner = value?.as_object()?.get("runner")?.as_object()?;
     let entries = [
         ("queue_buffer", "Queue Buffer"),
-        ("queue_target_multiplier", "Queue Target Multiplier"),
-        (
-            "target_runnable_batches_base",
-            "Base Target Runnable Batches",
-        ),
-        (
-            "target_runnable_batches_final",
-            "Final Target Runnable Batches",
-        ),
         ("active_evaluator_count", "Active Evaluators"),
-        (
-            "target_runnable_batches_floor",
-            "Floor Target Runnable Batches",
-        ),
-        ("runnable_batches", "Runnable Batches"),
+        ("target_pending_batches", "Target Pending Batches"),
         ("pending_batches", "Pending Batches"),
         ("claimed_batches", "Claimed Batches"),
         ("completed_batches", "Completed Batches"),
