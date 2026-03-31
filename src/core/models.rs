@@ -78,6 +78,23 @@ pub struct CompletedBatch {
     pub total_eval_time_ms: Option<f64>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+pub struct BatchQueueCounts {
+    pub pending: i64,
+    pub claimed: i64,
+    pub completed: i64,
+}
+
+impl BatchQueueCounts {
+    pub fn runnable(self) -> i64 {
+        self.pending + self.claimed
+    }
+
+    pub fn open(self) -> i64 {
+        self.pending + self.claimed + self.completed
+    }
+}
+
 /// Status of a batch in the work queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

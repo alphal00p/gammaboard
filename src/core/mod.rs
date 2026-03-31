@@ -6,7 +6,7 @@ pub mod traits;
 
 pub use errors::{BuildError, EngineError, EvalError, StoreError};
 pub use models::{
-    BatchClaim, BatchRecord, BatchStatus, CompletedBatch, DesiredAssignment,
+    BatchClaim, BatchQueueCounts, BatchRecord, BatchStatus, CompletedBatch, DesiredAssignment,
     EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot,
     RegisteredNode, RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot, RuntimeLogEvent,
     SamplerAggregatorPerformanceSnapshot, SamplerPerformanceMetrics, SamplerRollingAverages,

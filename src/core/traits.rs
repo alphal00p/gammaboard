@@ -2,8 +2,9 @@
 
 use super::errors::StoreError;
 use super::models::{
-    BatchClaim, CompletedBatch, DesiredAssignment, EvaluatorPerformanceSnapshot, RegisteredNode,
-    RunSampleProgress, RunStageSnapshot, RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
+    BatchClaim, BatchQueueCounts, CompletedBatch, DesiredAssignment, EvaluatorPerformanceSnapshot,
+    RegisteredNode, RunSampleProgress, RunStageSnapshot, RuntimeLogEvent,
+    SamplerAggregatorPerformanceSnapshot,
 };
 use crate::core::RunSpec;
 use crate::core::{RunTask, RunTaskInput};
@@ -81,6 +82,7 @@ pub trait WorkQueueStore: Send + Sync {
         requires_training_values: bool,
         batches: &[LatentBatch],
     ) -> Result<Vec<i64>, StoreError>;
+    async fn get_batch_queue_counts(&self, run_id: i32) -> Result<BatchQueueCounts, StoreError>;
     async fn get_pending_batch_count(&self, run_id: i32) -> Result<i64, StoreError>;
     async fn get_open_batch_count(&self, run_id: i32) -> Result<i64, StoreError>;
     async fn claim_batch(

@@ -70,7 +70,8 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Havana training runs in deterministic lockstep windows: it emits at most one `samples_for_update` window at a time, pauses production until that window is fully ingested, then updates the grid and continues.
 - Sample tasks must force an initial small batch round-trip before normal queue ramp-up so an observable snapshot is persisted immediately at task start, and must persist the observable again when the task completes.
 - `sampler_aggregator_runner_params.aggregation_persist_interval_ms` controls how often merged observable state is persisted during sampling; the initial small-batch checkpoint and final task completion flush must still be forced immediately.
-- `sampler_aggregator_runner_params.target_queue_remaining` is defined over total open in-flight batches (`pending + claimed + completed`), not pending rows alone.
+- `sampler_aggregator_runner_params.target_queue_remaining` is defined over runnable in-flight batches (`pending + claimed`). Total open batches (`pending + claimed + completed`) are still capped separately by `max_queue_size`.
+- After the forced initial small-batch round-trip, the sampler queue controller must warm up conservatively and ramp target batch count by a factor of `2` until real drain history is available.
 - `sampler_aggregator_runner_params.strict_batch_ordering` controls whether completed evaluator batches are ingested strictly as a contiguous id prefix or opportunistically in completed-id order.
 
 ## Panels And Dashboard

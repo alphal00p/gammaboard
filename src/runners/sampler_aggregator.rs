@@ -22,6 +22,7 @@ use thiserror::Error;
 const MIN_BATCH_SIZE: usize = 16;
 const MAX_BATCH_SIZE_UP_FACTOR: f64 = 4.0;
 const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.25;
+const WARMUP_BATCH_RAMP_FACTOR: usize = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerAggregatorRunnerParams {
@@ -63,6 +64,7 @@ struct SamplerRuntimeState {
     ingested_samples_total: i64,
     pending_persisted_completed_batches: i32,
     batch_size_current: usize,
+    warmup_target_batches: Option<usize>,
     observable_checkpoint_state: ObservableCheckpointState,
     rolling: RollingAveragesState,
 }
@@ -73,7 +75,7 @@ pub struct SamplerAggregatorRunnerSnapshot {
     pub sampler_snapshot: SamplerAggregatorSnapshot,
     pub observable_state: ObservableState,
     runtime_state: SamplerRuntimeState,
-    last_open_after_enqueue: Option<usize>,
+    last_runnable_after_enqueue: Option<usize>,
 }
 
 impl From<&RollingMetric> for RollingMetricSnapshot {
@@ -152,7 +154,7 @@ pub struct SamplerAggregatorRunner<S> {
     last_aggregation_persist_at: Instant,
     runtime_state: SamplerRuntimeState,
     last_performance_completed_samples: i64,
-    last_open_after_enqueue: Option<usize>,
+    last_runnable_after_enqueue: Option<usize>,
 }
 
 impl<S> SamplerAggregatorRunner<S>
@@ -174,16 +176,16 @@ where
         run_progress: Option<RunSampleProgress>,
     ) -> Self {
         let mut runtime_state;
-        let last_open_after_enqueue;
+        let last_runnable_after_enqueue;
         if let Some(snapshot) = resume_snapshot {
             runtime_state = snapshot.runtime_state.clone();
-            last_open_after_enqueue = snapshot.last_open_after_enqueue;
+            last_runnable_after_enqueue = snapshot.last_runnable_after_enqueue;
         } else {
             runtime_state = SamplerRuntimeState {
                 batch_size_current: initial_batch_size.clamp(MIN_BATCH_SIZE, params.max_batch_size),
                 ..SamplerRuntimeState::default()
             };
-            last_open_after_enqueue = None;
+            last_runnable_after_enqueue = None;
         }
         runtime_state.batch_size_current = runtime_state
             .batch_size_current
@@ -220,7 +222,7 @@ where
             last_aggregation_persist_at: now,
             runtime_state,
             last_performance_completed_samples: nr_completed_samples,
-            last_open_after_enqueue,
+            last_runnable_after_enqueue,
         }
     }
 
@@ -245,7 +247,7 @@ where
             next.clamp(MIN_BATCH_SIZE, self.config.max_batch_size);
     }
 
-    fn compute_produce_limit(&self, open_before_tick: usize) -> usize {
+    fn compute_produce_limit(&self, runnable_before_tick: usize, open_before_tick: usize) -> usize {
         let remaining_capacity = self.config.max_queue_size.saturating_sub(open_before_tick);
         if remaining_capacity == 0 {
             return 0;
@@ -257,19 +259,29 @@ where
 
         let Some(consumed_per_tick) = self.runtime_state.rolling.batches_consumed_per_tick.value()
         else {
-            return hard_limit;
+            return self.compute_warmup_produce_limit(hard_limit, runnable_before_tick);
         };
         if !consumed_per_tick.is_finite() || consumed_per_tick <= 0.0 {
-            return hard_limit;
+            return self.compute_warmup_produce_limit(hard_limit, runnable_before_tick);
         }
         if self.config.target_queue_remaining == 1.0 {
             return hard_limit;
         }
 
-        let target_open_after_enqueue =
+        let target_runnable_after_enqueue =
             (consumed_per_tick / (1.0 - self.config.target_queue_remaining)).ceil() as usize;
-        let target_enqueue = target_open_after_enqueue.saturating_sub(open_before_tick);
+        let target_enqueue = target_runnable_after_enqueue.saturating_sub(runnable_before_tick);
         hard_limit.min(target_enqueue)
+    }
+
+    fn compute_warmup_produce_limit(
+        &self,
+        hard_limit: usize,
+        runnable_before_tick: usize,
+    ) -> usize {
+        let target_runnable_after_enqueue =
+            self.runtime_state.warmup_target_batches.unwrap_or(1).max(1);
+        hard_limit.min(target_runnable_after_enqueue.saturating_sub(runnable_before_tick))
     }
 
     fn build_batch_plan(
@@ -339,16 +351,16 @@ where
         Ok(usize::try_from(remaining).ok())
     }
 
-    fn observe_queue_metrics(&mut self, open_before_tick: usize) {
-        if let Some(previous_open_after) = self.last_open_after_enqueue
-            && previous_open_after > 0
+    fn observe_queue_metrics(&mut self, runnable_before_tick: usize) {
+        if let Some(previous_runnable_after) = self.last_runnable_after_enqueue
+            && previous_runnable_after > 0
         {
-            let observed_ratio = (open_before_tick as f64) / (previous_open_after as f64);
+            let observed_ratio = (runnable_before_tick as f64) / (previous_runnable_after as f64);
             self.runtime_state
                 .rolling
                 .queue_remaining_ratio
                 .observe(observed_ratio);
-            let consumed = previous_open_after.saturating_sub(open_before_tick) as f64;
+            let consumed = previous_runnable_after.saturating_sub(runnable_before_tick) as f64;
             self.runtime_state
                 .rolling
                 .batches_consumed_per_tick
@@ -366,14 +378,13 @@ where
 
     pub async fn tick(&mut self) -> Result<bool, RunnerError> {
         self.store.reclaim_abandoned_batches(self.run_id).await?;
-        let open_before_tick = self.store.get_open_batch_count(self.run_id).await?.max(0) as usize;
-        self.observe_queue_metrics(open_before_tick);
+        let queue_before_tick = self.store.get_batch_queue_counts(self.run_id).await?;
+        self.observe_queue_metrics(queue_before_tick.runnable().max(0) as usize);
         self.tune_batch_size();
 
         let completed_batches = self.process_completed().await?;
-        let open_before_produce =
-            self.store.get_open_batch_count(self.run_id).await?.max(0) as usize;
-        let produced_batches = self.produce(open_before_produce).await?;
+        let queue_before_produce = self.store.get_batch_queue_counts(self.run_id).await?;
+        let produced_batches = self.produce(queue_before_produce).await?;
         self.sync_task_progress().await?;
         self.flush_run_sample_progress().await?;
         self.flush_performance_snapshot().await?;
@@ -404,7 +415,7 @@ where
             sampler_snapshot: self.sampler.snapshot().map_err(RunnerError::Engine)?,
             observable_state: self.observable_state.clone(),
             runtime_state: self.runtime_state.clone(),
-            last_open_after_enqueue: self.last_open_after_enqueue,
+            last_runnable_after_enqueue: self.last_runnable_after_enqueue,
         };
         self.store
             .save_sampler_runner_snapshot(self.run_id, &snapshot)
@@ -568,10 +579,15 @@ where
         Ok(consumed_ids.len())
     }
 
-    async fn produce(&mut self, open_before_produce: usize) -> Result<usize, RunnerError> {
+    async fn produce(
+        &mut self,
+        queue_before_produce: crate::core::BatchQueueCounts,
+    ) -> Result<usize, RunnerError> {
         let observable_config = self.observable_state.config();
         let sample_plan = self.sampler.sample_plan().map_err(RunnerError::Engine)?;
         let training_samples_remaining = self.sampler.training_samples_remaining();
+        let runnable_before_produce = queue_before_produce.runnable().max(0) as usize;
+        let open_before_produce = queue_before_produce.open().max(0) as usize;
         let batch_plan = match sample_plan {
             SamplePlan::Pause => Vec::new(),
             SamplePlan::Produce { nr_samples } => {
@@ -607,7 +623,8 @@ where
                         Vec::new()
                     }
                     ObservableCheckpointState::Ready => {
-                        let base_produce_limit = self.compute_produce_limit(open_before_produce);
+                        let base_produce_limit = self
+                            .compute_produce_limit(runnable_before_produce, open_before_produce);
                         self.build_batch_plan(base_produce_limit, max_samples)
                     }
                 }
@@ -648,7 +665,23 @@ where
                 &produced,
             )
             .await?;
-        self.last_open_after_enqueue = Some(open_before_produce.saturating_add(produced.len()));
+        self.last_runnable_after_enqueue =
+            Some(runnable_before_produce.saturating_add(produced.len()));
+        if !produced.is_empty()
+            && self
+                .runtime_state
+                .rolling
+                .batches_consumed_per_tick
+                .value()
+                .is_none()
+        {
+            let next = self
+                .runtime_state
+                .warmup_target_batches
+                .unwrap_or(1)
+                .saturating_mul(WARMUP_BATCH_RAMP_FACTOR);
+            self.runtime_state.warmup_target_batches = Some(next.max(1));
+        }
         Ok(produced.len())
     }
 
@@ -796,7 +829,7 @@ mod tests {
                 batch_size_current: 128,
                 ..SamplerRuntimeState::default()
             },
-            last_open_after_enqueue: None,
+            last_runnable_after_enqueue: None,
         };
 
         assert_eq!(snapshot.reduced_carryover_batch_size(512), 32);

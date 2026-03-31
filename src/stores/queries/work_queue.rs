@@ -1,4 +1,6 @@
-use crate::core::{EvaluatorPerformanceSnapshot, SamplerAggregatorPerformanceSnapshot};
+use crate::core::{
+    BatchQueueCounts, EvaluatorPerformanceSnapshot, SamplerAggregatorPerformanceSnapshot,
+};
 use crate::evaluation::BatchResult;
 use crate::sampling::LatentBatch;
 use chrono::{DateTime, Utc};
@@ -93,6 +95,30 @@ pub(crate) async fn get_pending_batch_count(
     .fetch_one(pool)
     .await?;
     Ok(count)
+}
+
+pub(crate) async fn get_batch_queue_counts(
+    pool: &PgPool,
+    run_id: i32,
+) -> Result<BatchQueueCounts, sqlx::Error> {
+    let (pending, claimed, completed) = sqlx::query_as::<_, (i64, i64, i64)>(
+        r#"
+        SELECT
+            COUNT(*) FILTER (WHERE status = 'pending') AS pending,
+            COUNT(*) FILTER (WHERE status = 'claimed') AS claimed,
+            COUNT(*) FILTER (WHERE status = 'completed') AS completed
+        FROM batches
+        WHERE run_id = $1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(BatchQueueCounts {
+        pending,
+        claimed,
+        completed,
+    })
 }
 
 pub(crate) async fn get_open_batch_count(pool: &PgPool, run_id: i32) -> Result<i64, sqlx::Error> {

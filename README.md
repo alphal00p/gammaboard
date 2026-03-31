@@ -214,7 +214,8 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 `sampler_aggregator_runner_params` also controls queue and persistence behavior:
 - `aggregation_persist_interval_ms` sets how often merged sample observables are flushed to PostgreSQL during training; default is `1000`.
-- `target_queue_remaining` is the fraction of total open in-flight batches (`pending + claimed + completed`) the sampler tries to leave after one tick of evaluator drain; `0.5` targets about half the current runway remaining by the next tick.
+- `target_queue_remaining` is the fraction of runnable in-flight batches (`pending + claimed`) the sampler tries to leave after one tick of evaluator drain. Total open batches (`pending + claimed + completed`) are still capped by `max_queue_size`.
+- After the forced initial small batch round-trip, the sampler warms up queue depth conservatively and doubles the target batch count each tick until real drain history is available.
 - `strict_batch_ordering` controls whether completed batches are ingested only as a contiguous id prefix (`true`) or in any completed id order (`false`).
 
 Deterministic scan tasks are supported:

@@ -2,11 +2,11 @@
 
 use super::queries;
 use crate::core::{
-    AggregationStore, BatchClaim, CompletedBatch, ControlPlaneStore, DesiredAssignment,
-    EvaluatorPerformanceSnapshot, RegisteredNode, RunReadStore, RunSampleProgress, RunSpecStore,
-    RunStageSnapshot, RunTask, RunTaskInput, RunTaskStore, RuntimeLogEvent, RuntimeLogStore,
-    SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore, WorkerRole,
-    generated_task_name,
+    AggregationStore, BatchClaim, BatchQueueCounts, CompletedBatch, ControlPlaneStore,
+    DesiredAssignment, EvaluatorPerformanceSnapshot, RegisteredNode, RunReadStore,
+    RunSampleProgress, RunSpecStore, RunStageSnapshot, RunTask, RunTaskInput, RunTaskStore,
+    RuntimeLogEvent, RuntimeLogStore, SamplerAggregatorPerformanceSnapshot, StoreError,
+    WorkQueueStore, WorkerRole, generated_task_name,
 };
 use crate::core::{IntegrationParams, RunSpec, canonical_task_toml};
 use crate::evaluation::BatchResult;
@@ -550,6 +550,12 @@ impl WorkQueueStore for PgStore {
         )
         .await
         .map_err(map_sqlx)
+    }
+
+    async fn get_batch_queue_counts(&self, run_id: i32) -> Result<BatchQueueCounts, StoreError> {
+        queries::get_batch_queue_counts(&self.pool, run_id)
+            .await
+            .map_err(map_sqlx)
     }
 
     async fn get_pending_batch_count(&self, run_id: i32) -> Result<i64, StoreError> {
