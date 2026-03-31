@@ -325,6 +325,16 @@ const buildHistogramStepData = (bins) => {
   return points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
 };
 
+const buildHistogramRenderData = (bins, scale) => {
+  const stepData = buildHistogramStepData(bins);
+  if (scale !== "log") return stepData;
+  return stepData.map((point) => ({
+    ...point,
+    y: Math.max(point.y, Number.EPSILON),
+    error: Number.isFinite(point.error) ? point.error : 0,
+  }));
+};
+
 const toExponential8 = (value) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric.toExponential(8) : "0.00000000e+00";
@@ -343,34 +353,17 @@ const downloadTextFile = (filename, contents, mimeType = "text/plain;charset=utf
   URL.revokeObjectURL(url);
 };
 
-const buildHistogramJson = (state) => ({
-  name: state?.name ?? null,
-  title: state?.title ?? null,
-  type_description: state?.type_description ?? null,
-  phase: state?.phase ?? null,
-  value_transform: state?.value_transform ?? null,
-  sample_count: state?.sample_count ?? null,
-  x_min: state?.x_min ?? null,
-  x_max: state?.x_max ?? null,
-  log_x_axis: Boolean(state?.log_x_axis),
-  log_y_axis: Boolean(state?.log_y_axis),
-  bins: asArray(state?.bins).map((bin) => ({
-    start: bin?.start,
-    stop: bin?.stop,
-    value: bin?.value,
-    error: bin?.error,
-  })),
-});
-
-const buildHistogramHwU = (state) => {
-  const bins = asArray(state?.bins);
-  const title = state?.title ?? state?.name ?? "histogram";
-  const xAxisMode = state?.log_x_axis ? "LOG" : "LIN";
-  const yAxisMode = state?.log_y_axis ? "LOG" : "LIN";
-  const typeDescription = state?.type_description ?? "HwU";
-  const xMin = Number.isFinite(Number(state?.x_min)) ? Number(state?.x_min) : Number(bins[0]?.start);
-  const xMax = Number.isFinite(Number(state?.x_max)) ? Number(state?.x_max) : Number(bins[bins.length - 1]?.stop);
-  const lines = [
+const buildHistogramHwUBlock = (name, histogram) => {
+  const bins = asArray(histogram?.bins);
+  const title = histogram?.title ?? name ?? "histogram";
+  const xAxisMode = histogram?.log_x_axis ? "LOG" : "LIN";
+  const yAxisMode = histogram?.log_y_axis ? "LOG" : "LIN";
+  const typeDescription = histogram?.type_description ?? "HwU";
+  const xMin = Number.isFinite(Number(histogram?.x_min)) ? Number(histogram.x_min) : Number(bins[0]?.start);
+  const xMax = Number.isFinite(Number(histogram?.x_max))
+    ? Number(histogram.x_max)
+    : Number(bins[bins.length - 1]?.stop);
+  return [
     "##& xmin & xmax & central value & dy &",
     "",
     `<histogram> ${bins.length} "${title} |X_AXIS@${xAxisMode} |Y_AXIS@${yAxisMode} |TYPE@${typeDescription}"`,
@@ -384,16 +377,27 @@ const buildHistogramHwU = (state) => {
     ),
     "<\\histogram>",
     "",
-  ];
-  return lines.join("\n");
+  ].join("\n");
+};
+
+const buildHistogramBundleJson = (payload) => ({
+  primary_histogram_name: payload?.primary_histogram_name ?? null,
+  histograms: payload?.histograms ?? {},
+});
+
+const buildHistogramBundleHwU = (payload) => {
+  const histograms = payload?.histograms && typeof payload.histograms === "object" ? payload.histograms : {};
+  return Object.entries(histograms)
+    .map(([name, histogram]) => buildHistogramHwUBlock(name, histogram))
+    .join("\n");
 };
 
 const buildHistogramYDomain = (bins, scale) => {
   const values = asArray(bins)
     .flatMap((bin) => [
-      Number(bin?.value) - Number(bin?.error || 0),
-      Number(bin?.value) + Number(bin?.error || 0),
-      Number(bin?.value),
+      Number(bin?.y ?? bin?.value) - Number(bin?.error || 0),
+      Number(bin?.y ?? bin?.value) + Number(bin?.error || 0),
+      Number(bin?.y ?? bin?.value),
     ])
     .filter((value) => Number.isFinite(value));
   if (values.length === 0) return ["auto", "auto"];
@@ -410,29 +414,12 @@ const buildHistogramYDomain = (bins, scale) => {
 const HistogramPanel = ({ title, state }) => {
   const [scale, setScale] = useState("linear");
   const bins = useMemo(() => buildHistogramData(state?.bins), [state?.bins]);
-  const stepData = useMemo(() => buildHistogramStepData(state?.bins), [state?.bins]);
-  const canUseLogScale = bins.every(
-    (bin) => Number.isFinite(bin.value) && Number.isFinite(bin.error) && bin.value - bin.error > 0,
-  );
-  useEffect(() => {
-    if (scale === "log" && !canUseLogScale) {
-      setScale("linear");
-    }
-  }, [canUseLogScale, scale]);
+  const stepData = useMemo(() => buildHistogramRenderData(state?.bins, scale), [scale, state?.bins]);
   if (bins.length === 0) return null;
   const xDomain = fitHistogramXDomain(bins);
   const yDomain = buildHistogramYDomain(bins, scale);
   const yScale = scale === "log" && yDomain[0] !== "auto" ? "log" : "auto";
   const yTickFormatter = scale === "log" ? (value) => formatScientific(value, 2, "") : formatAxisNumber;
-  const histogramJson = useMemo(() => buildHistogramJson(state), [state]);
-  const handleDownloadJson = () => {
-    const filename = `${state?.name ?? "histogram"}.json`;
-    downloadTextFile(filename, `${JSON.stringify(histogramJson, null, 2)}\n`, "application/json;charset=utf-8");
-  };
-  const handleDownloadHwU = () => {
-    const filename = `${state?.name ?? "histogram"}.HwU`;
-    downloadTextFile(filename, buildHistogramHwU(state));
-  };
   return (
     <Card variant="outlined">
       <CardContent>
@@ -441,29 +428,19 @@ const HistogramPanel = ({ title, state }) => {
             {title}
             {state?.name ? `  (${state.name})` : ""}
           </Typography>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Button size="small" variant="outlined" onClick={handleDownloadJson}>
-              JSON
-            </Button>
-            <Button size="small" variant="outlined" onClick={handleDownloadHwU}>
-              HwU
-            </Button>
-            <FormControl size="small" sx={{ minWidth: 128 }}>
-              <Select
-                value={scale}
-                onChange={(event) => setScale(event.target.value)}
-                sx={{
-                  fontSize: "0.875rem",
-                  ".MuiSelect-select": { py: 0.75 },
-                }}
-              >
-                <MenuItem value="linear">Linear</MenuItem>
-                <MenuItem value="log" disabled={!canUseLogScale}>
-                  Log
-                </MenuItem>
-              </Select>
-            </FormControl>
-          </Stack>
+          <FormControl size="small" sx={{ minWidth: 128 }}>
+            <Select
+              value={scale}
+              onChange={(event) => setScale(event.target.value)}
+              sx={{
+                fontSize: "0.875rem",
+                ".MuiSelect-select": { py: 0.75 },
+              }}
+            >
+              <MenuItem value="linear">Linear</MenuItem>
+              <MenuItem value="log">Log</MenuItem>
+            </Select>
+          </FormControl>
         </Box>
         <ResponsiveContainer width="100%" height={280}>
           <ComposedChart data={stepData}>
@@ -472,7 +449,7 @@ const HistogramPanel = ({ title, state }) => {
             <YAxis tickFormatter={yTickFormatter} domain={yDomain} allowDataOverflow scale={yScale} width={72} />
             <Tooltip
               formatter={(value, name, props) => {
-                if (name === "value") {
+                if (name === "y") {
                   const error = Number(props?.payload?.error) || 0;
                   return [`${formatScientific(value, 6)} ± ${formatScientific(error, 6)}`, "bin average"];
                 }
@@ -482,7 +459,7 @@ const HistogramPanel = ({ title, state }) => {
             />
             <Line
               type="stepAfter"
-              dataKey="value"
+              dataKey="y"
               stroke="#005f73"
               strokeWidth={1.35}
               dot={false}
@@ -505,12 +482,31 @@ const TablePanel = ({ title, state }) => {
   const payload = state?.payload;
   const selectableRows =
     payload?.histograms && typeof payload.histograms === "object" && !Array.isArray(payload.histograms);
+  const bundleJson = selectableRows ? buildHistogramBundleJson(payload) : null;
+  const handleDownloadJson = () => {
+    const filename = `${state?.panel_id ?? "histogram_bundle"}.json`;
+    downloadTextFile(filename, `${JSON.stringify(bundleJson, null, 2)}\n`, "application/json;charset=utf-8");
+  };
+  const handleDownloadHwU = () => {
+    const filename = `${state?.panel_id ?? "histogram_bundle"}.HwU`;
+    downloadTextFile(filename, buildHistogramBundleHwU(payload));
+  };
   return (
     <Card variant="outlined">
       <CardContent>
-        <Typography variant="subtitle1" sx={{ mb: 2 }}>
-          {title}
-        </Typography>
+        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, mb: 2 }}>
+          <Typography variant="subtitle1">{title}</Typography>
+          {selectableRows ? (
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Button size="small" variant="outlined" onClick={handleDownloadJson}>
+                JSON
+              </Button>
+              <Button size="small" variant="outlined" onClick={handleDownloadHwU}>
+                HwU
+              </Button>
+            </Stack>
+          ) : null}
+        </Box>
         <TableContainer sx={{ maxHeight: 440, overflowX: "auto" }}>
           <MuiTable size="small" stickyHeader>
             <TableHead>
