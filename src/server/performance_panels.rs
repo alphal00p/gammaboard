@@ -114,8 +114,8 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         ),
         with_panel_width(
             panel_spec(
-                "sampler_diagnostics_current",
-                "Sampler Diagnostics",
+                "sampler_queue_buffer_current",
+                "Sampler Queue Buffer",
                 PanelKind::KeyValue,
                 PanelHistoryMode::Replace,
             ),
@@ -133,7 +133,7 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         with_panel_width(
             panel_spec(
                 "sampler_runnable_queue_retained_ratio",
-                "Runnable Queue Retained Per Tick",
+                "Runnable Queue Retained Per Tick (Diagnostic)",
                 PanelKind::ScalarTimeseries,
                 PanelHistoryMode::Append,
             ),
@@ -285,23 +285,47 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
             ),
         ],
     )];
-    if let Some(diagnostics) = sampler_diagnostics_panel(&entry.engine_diagnostics) {
-        panels.push(diagnostics);
+    if let Some(queue_buffer) = sampler_queue_buffer_panel(&entry.engine_diagnostics) {
+        panels.push(queue_buffer);
     }
     panels
 }
 
-fn sampler_diagnostics_panel(value: &JsonValue) -> Option<PanelState> {
-    let object = value.as_object()?;
-    let runner = object.get("runner")?.as_object()?;
-    let entries = runner
-        .iter()
-        .map(|(key, value)| key_value(key, &title_label(key), value.clone()))
-        .collect::<Vec<_>>();
+fn sampler_queue_buffer_panel(value: &JsonValue) -> Option<PanelState> {
+    let runner = runner_diagnostics(value)?;
+    let entries = vec![
+        runner_value_entry(runner, "queue_buffer", "Queue Buffer"),
+        runner_value_entry(runner, "queue_target_multiplier", "Queue Target Multiplier"),
+        runner_value_entry(
+            runner,
+            "target_runnable_batches_base",
+            "Base Target Runnable Batches",
+        ),
+        runner_value_entry(
+            runner,
+            "target_runnable_batches_final",
+            "Final Target Runnable Batches",
+        ),
+        runner_value_entry(runner, "active_evaluator_count", "Active Evaluators"),
+        runner_value_entry(runner, "runnable_batches", "Runnable Batches"),
+        runner_value_entry(runner, "pending_batches", "Pending Batches"),
+        runner_value_entry(runner, "claimed_batches", "Claimed Batches"),
+        runner_value_entry(runner, "completed_batches", "Completed Batches"),
+        runner_value_entry(runner, "open_batches", "Open Batches"),
+        runner_value_entry(runner, "observable_checkpoint_state", "Checkpoint State"),
+        runner_value_entry(
+            runner,
+            "training_samples_remaining",
+            "Training Samples Remaining",
+        ),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
     if entries.is_empty() {
         return None;
     }
-    Some(key_value_panel("sampler_diagnostics_current", entries))
+    Some(key_value_panel("sampler_queue_buffer_current", entries))
 }
 
 fn scalar_point_panel(
@@ -336,4 +360,19 @@ fn title_label(key: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn runner_diagnostics(value: &JsonValue) -> Option<&serde_json::Map<String, JsonValue>> {
+    value.as_object()?.get("runner")?.as_object()
+}
+
+fn runner_value_entry(
+    runner: &serde_json::Map<String, JsonValue>,
+    key: &str,
+    label: &str,
+) -> Option<crate::server::panels::KeyValueEntry> {
+    runner
+        .get(key)
+        .cloned()
+        .map(|value| key_value(key, label, value))
 }

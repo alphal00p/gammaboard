@@ -110,7 +110,7 @@ fn worker_panel_specs(worker: &RegisteredWorkerEntry) -> Vec<crate::server::pane
                 panels.push(with_panel_width(
                     panel_spec(
                         "sampler_diagnostics",
-                        "Sampler Diagnostics",
+                        "Sampler Queue Buffer",
                         PanelKind::KeyValue,
                         PanelHistoryMode::None,
                     ),
@@ -120,7 +120,7 @@ fn worker_panel_specs(worker: &RegisteredWorkerEntry) -> Vec<crate::server::pane
                 panels.push(with_panel_width(
                     panel_spec(
                         "sampler_diagnostics_status",
-                        "Sampler Diagnostics",
+                        "Sampler Queue Buffer",
                         PanelKind::Text,
                         PanelHistoryMode::None,
                     ),
@@ -344,7 +344,7 @@ fn sampler_runtime_panel(runtime: &SamplerRuntimeMetrics) -> PanelState {
             ),
             key_value(
                 "runnable_queue_retained_ratio",
-                "Runnable Queue Retained Per Tick",
+                "Runnable Queue Retained Per Tick (Diagnostic)",
                 runtime.rolling.runnable_queue_retained_ratio.mean,
             ),
             key_value(
@@ -367,11 +367,35 @@ fn sampler_runtime_panel(runtime: &SamplerRuntimeMetrics) -> PanelState {
 }
 
 fn diagnostics_panel(value: Option<&JsonValue>) -> Option<PanelState> {
-    let object = value?.as_object()?;
-    let entries = object
-        .iter()
-        .map(|(key, value)| key_value(key, &title_label(key), value.clone()))
-        .collect::<Vec<_>>();
+    let runner = value?.as_object()?.get("runner")?.as_object()?;
+    let entries = [
+        ("queue_buffer", "Queue Buffer"),
+        ("queue_target_multiplier", "Queue Target Multiplier"),
+        (
+            "target_runnable_batches_base",
+            "Base Target Runnable Batches",
+        ),
+        (
+            "target_runnable_batches_final",
+            "Final Target Runnable Batches",
+        ),
+        ("active_evaluator_count", "Active Evaluators"),
+        ("runnable_batches", "Runnable Batches"),
+        ("pending_batches", "Pending Batches"),
+        ("claimed_batches", "Claimed Batches"),
+        ("completed_batches", "Completed Batches"),
+        ("open_batches", "Open Batches"),
+        ("observable_checkpoint_state", "Checkpoint State"),
+        ("training_samples_remaining", "Training Samples Remaining"),
+    ]
+    .into_iter()
+    .filter_map(|(key, label)| {
+        runner
+            .get(key)
+            .cloned()
+            .map(|value| key_value(key, label, value))
+    })
+    .collect::<Vec<_>>();
     if entries.is_empty() {
         return None;
     }
