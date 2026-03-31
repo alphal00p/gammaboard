@@ -391,61 +391,46 @@ pub(crate) async fn fetch_completed_batches(
     run_id: i32,
     limit: usize,
     strict_ordering: bool,
+    after_batch_id: Option<i64>,
 ) -> Result<Vec<CompletedBatchRaw>, sqlx::Error> {
+    let after_batch_id = after_batch_id.unwrap_or(0);
     let rows = if strict_ordering {
-        // Return only the contiguous completed prefix by id.
-        // This keeps ingestion strictly ordered across batches and leaves out-of-order
-        // completions buffered in the DB until gaps are resolved.
         sqlx::query_as::<
             _,
             (
                 i64,
                 i64,
                 bool,
+                String,
                 JsonValue,
                 Option<JsonValue>,
-                JsonValue,
+                Option<JsonValue>,
                 Option<DateTime<Utc>>,
                 Option<f64>,
             ),
         >(
             r#"
-            WITH ordered AS (
-                SELECT
-                    b.id,
-                    b.task_id,
-                    b.requires_training_values,
-                    b.status,
-                    ROW_NUMBER() OVER (ORDER BY b.id ASC) AS rn
-                FROM batches b
-                WHERE b.run_id = $1
-                ORDER BY b.id ASC
-                LIMIT $2
-            ),
-            first_blocker AS (
-                SELECT MIN(rn) AS rn
-                FROM ordered
-                WHERE status <> 'completed'
-            )
             SELECT
-                o.id,
-                o.task_id,
-                o.requires_training_values,
+                b.id,
+                b.task_id,
+                b.requires_training_values,
+                b.status,
                 i.latent_batch,
                 r."values",
                 r.batch_observable,
                 r.completed_at,
                 r.total_eval_time_ms
-            FROM ordered o
-            JOIN batch_inputs i ON i.batch_id = o.id
-            JOIN batch_results r ON r.batch_id = o.id
-            CROSS JOIN first_blocker b
-            WHERE o.status = 'completed'
-              AND (b.rn IS NULL OR o.rn < b.rn)
-            ORDER BY o.id ASC
+            FROM batches b
+            JOIN batch_inputs i ON i.batch_id = b.id
+            LEFT JOIN batch_results r ON r.batch_id = b.id
+            WHERE b.run_id = $1
+              AND b.id > $2
+            ORDER BY b.id ASC
+            LIMIT $3
             "#,
         )
         .bind(run_id)
+        .bind(after_batch_id)
         .bind(limit as i64)
         .fetch_all(pool)
         .await?
@@ -456,9 +441,10 @@ pub(crate) async fn fetch_completed_batches(
                 i64,
                 i64,
                 bool,
+                String,
                 JsonValue,
                 Option<JsonValue>,
-                JsonValue,
+                Option<JsonValue>,
                 Option<DateTime<Utc>>,
                 Option<f64>,
             ),
@@ -468,6 +454,7 @@ pub(crate) async fn fetch_completed_batches(
                 b.id,
                 b.task_id,
                 b.requires_training_values,
+                b.status,
                 i.latent_batch,
                 r."values",
                 r.batch_observable,
@@ -475,45 +462,58 @@ pub(crate) async fn fetch_completed_batches(
                 r.total_eval_time_ms
             FROM batches b
             JOIN batch_inputs i ON i.batch_id = b.id
-            JOIN batch_results r ON r.batch_id = b.id
+            LEFT JOIN batch_results r ON r.batch_id = b.id
             WHERE b.run_id = $1
+              AND b.id > $2
               AND b.status = 'completed'
             ORDER BY b.id ASC
-            LIMIT $2
+            LIMIT $3
             "#,
         )
         .bind(run_id)
+        .bind(after_batch_id)
         .bind(limit as i64)
         .fetch_all(pool)
         .await?
     };
 
-    Ok(rows
-        .into_iter()
-        .map(
-            |(
-                batch_id,
-                task_id,
-                requires_training_values,
-                latent_batch,
-                values,
-                batch_observable,
-                completed_at,
-                total_eval_time_ms,
-            )| {
-                CompletedBatchRaw {
-                    batch_id,
-                    task_id,
-                    requires_training_values,
-                    latent_batch,
-                    values,
-                    batch_observable,
-                    completed_at,
-                    total_eval_time_ms,
-                }
-            },
-        )
-        .collect())
+    let mut completed = Vec::new();
+    for (
+        batch_id,
+        task_id,
+        requires_training_values,
+        batch_status,
+        latent_batch,
+        values,
+        batch_observable,
+        completed_at,
+        total_eval_time_ms,
+    ) in rows
+    {
+        if strict_ordering && batch_status != "completed" {
+            break;
+        }
+        if batch_status != "completed" {
+            continue;
+        }
+        let Some(batch_observable) = batch_observable else {
+            return Err(sqlx::Error::Protocol(format!(
+                "completed batch {batch_id} is missing persisted observable"
+            )));
+        };
+        completed.push(CompletedBatchRaw {
+            batch_id,
+            task_id,
+            requires_training_values,
+            latent_batch,
+            values,
+            batch_observable,
+            completed_at,
+            total_eval_time_ms,
+        });
+    }
+
+    Ok(completed)
 }
 
 pub(crate) async fn delete_completed_batches(

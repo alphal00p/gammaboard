@@ -373,6 +373,7 @@ fn diagnostics_panel(value: Option<&JsonValue>) -> Option<PanelState> {
         ("active_evaluator_count", "Active Evaluators"),
         ("target_pending_batches", "Target Pending Batches"),
         ("pending_batches", "Pending Batches"),
+        ("pending_shortfall", "Pending Shortfall"),
         ("claimed_batches", "Claimed Batches"),
         ("completed_batches", "Completed Batches"),
         ("open_batches", "Open Batches"),

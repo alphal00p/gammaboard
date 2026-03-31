@@ -55,6 +55,7 @@ pub trait ControlPlaneStore: Send + Sync {
         node_name: Option<&str>,
     ) -> Result<Vec<DesiredAssignment>, StoreError>;
     async fn list_nodes(&self, node_name: Option<&str>) -> Result<Vec<RegisteredNode>, StoreError>;
+    async fn count_active_evaluator_nodes(&self, run_id: i32) -> Result<i64, StoreError>;
     async fn request_node_shutdown(&self, node_name: &str) -> Result<u64, StoreError>;
     async fn request_all_nodes_shutdown(&self) -> Result<u64, StoreError>;
     async fn consume_node_shutdown_request(&self, node_uuid: &str) -> Result<bool, StoreError>;
@@ -116,6 +117,7 @@ pub trait WorkQueueStore: Send + Sync {
         run_id: i32,
         limit: usize,
         strict_ordering: bool,
+        after_batch_id: Option<i64>,
     ) -> Result<Vec<CompletedBatch>, StoreError>;
     async fn delete_completed_batches(&self, batch_ids: &[i64]) -> Result<(), StoreError>;
     async fn reclaim_abandoned_batches(&self, run_id: i32) -> Result<u64, StoreError>;

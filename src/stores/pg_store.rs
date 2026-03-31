@@ -417,6 +417,12 @@ impl ControlPlaneStore for PgStore {
         Ok(out)
     }
 
+    async fn count_active_evaluator_nodes(&self, run_id: i32) -> Result<i64, StoreError> {
+        queries::count_active_evaluator_nodes(&self.pool, run_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
     async fn request_node_shutdown(&self, node_name: &str) -> Result<u64, StoreError> {
         queries::request_node_shutdown(&self.pool, node_name)
             .await
@@ -640,10 +646,17 @@ impl WorkQueueStore for PgStore {
         run_id: i32,
         limit: usize,
         strict_ordering: bool,
+        after_batch_id: Option<i64>,
     ) -> Result<Vec<CompletedBatch>, StoreError> {
-        let rows = queries::fetch_completed_batches(&self.pool, run_id, limit, strict_ordering)
-            .await
-            .map_err(map_sqlx)?;
+        let rows = queries::fetch_completed_batches(
+            &self.pool,
+            run_id,
+            limit,
+            strict_ordering,
+            after_batch_id,
+        )
+        .await
+        .map_err(map_sqlx)?;
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             let latent_batch = LatentBatch::from_json(&row.latent_batch).map_err(|err| {

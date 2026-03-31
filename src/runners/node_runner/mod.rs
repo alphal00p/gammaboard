@@ -12,6 +12,7 @@ use crate::core::{
     ControlPlaneStore, EvaluatorWorkerStore, RunSpecStore, SamplerWorkerStore, StoreError,
     WorkerRole,
 };
+use rand::Rng;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{Instrument, info, warn};
@@ -153,7 +154,9 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         let next_secs = (current.as_secs_f64() * self.config.reconcile_backoff_factor)
             .min(self.config.reconcile_max_backoff.as_secs_f64());
         self.reconcile_backoff = Duration::from_secs_f64(next_secs);
-        current
+        let mut rng = rand::rng();
+        let jitter = rng.random_range(0.5..=1.5);
+        Duration::from_secs_f64((current.as_secs_f64() * jitter).max(0.0))
     }
 
     fn current_target(&self) -> Option<RoleTarget> {

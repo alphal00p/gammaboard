@@ -118,6 +118,9 @@ fn panel_states(
     let pending_batches = active_sampler
         .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
         .and_then(|value| runner_diagnostic_i64(value, "pending_batches"));
+    let pending_shortfall = target_pending_batches
+        .zip(pending_batches)
+        .map(|(target, pending)| target.saturating_sub(pending));
     let current_batch_size = active_sampler
         .and_then(|worker| worker.sampler_runtime_metrics.as_ref())
         .and_then(batch_size_current);
@@ -196,11 +199,7 @@ fn panel_states(
                     "Target Pending Batches",
                     target_pending_batches,
                 ),
-                key_value(
-                    "pending_batches",
-                    "Current Pending Batches",
-                    pending_batches,
-                ),
+                key_value("pending_shortfall", "Pending Shortfall", pending_shortfall),
             ],
         ),
         key_value_panel(

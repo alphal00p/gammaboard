@@ -304,6 +304,25 @@ pub(crate) async fn list_nodes(
     Ok(rows.into_iter().map(node_raw).collect())
 }
 
+pub(crate) async fn count_active_evaluator_nodes(
+    pool: &PgPool,
+    run_id: i32,
+) -> Result<i64, sqlx::Error> {
+    let count = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM nodes
+        WHERE lease_expires_at > now()
+          AND active_run_id = $1
+          AND active_role = 'evaluator'
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(count)
+}
+
 pub(crate) async fn set_current_assignment(
     pool: &PgPool,
     node_uuid: &str,

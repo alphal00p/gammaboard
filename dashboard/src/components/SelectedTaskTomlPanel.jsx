@@ -22,7 +22,7 @@ const SelectedTaskTomlPanel = ({ task }) => {
 
   const copyToml = async () => {
     try {
-      await navigator.clipboard.writeText(task.task_toml || "");
+      await copyToClipboard(task.task_toml || "");
       setCopyStatus({ severity: "success", message: "Task TOML copied." });
     } catch (error) {
       setCopyStatus({ severity: "error", message: error?.message || "Failed to copy task TOML." });
@@ -74,5 +74,29 @@ const SelectedTaskTomlPanel = ({ task }) => {
     </Accordion>
   );
 };
+
+async function copyToClipboard(text) {
+  if (navigator?.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+
+  const successful = document.execCommand("copy");
+  document.body.removeChild(textarea);
+
+  if (!successful) {
+    throw new Error("Clipboard copy is not available in this browser.");
+  }
+}
 
 export default SelectedTaskTomlPanel;

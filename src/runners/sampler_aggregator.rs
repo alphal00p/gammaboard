@@ -10,7 +10,7 @@
 use crate::core::{
     BatchTransformConfig, EngineError, RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot,
     RunTask, SamplerAggregatorConfig, SamplerAggregatorPerformanceSnapshot, SamplerRollingAverages,
-    SamplerRuntimeMetrics, SamplerWorkerStore, StoreError, WorkerRole,
+    SamplerRuntimeMetrics, SamplerWorkerStore, StoreError,
 };
 use crate::evaluation::ObservableState;
 use crate::runners::rolling_metric::RollingMetric;
@@ -65,6 +65,8 @@ struct SamplerRuntimeState {
     ingested_batches_total: i64,
     ingested_samples_total: i64,
     pending_persisted_completed_batches: i32,
+    #[serde(default)]
+    last_completed_batch_id: Option<i64>,
     batch_size_current: usize,
     observable_checkpoint_state: ObservableCheckpointState,
     rolling: RollingAveragesState,
@@ -78,6 +80,7 @@ impl Default for SamplerRuntimeState {
             ingested_batches_total: 0,
             ingested_samples_total: 0,
             pending_persisted_completed_batches: 0,
+            last_completed_batch_id: None,
             batch_size_current: 0,
             observable_checkpoint_state: ObservableCheckpointState::NeedsInitialRoundTrip,
             rolling: RollingAveragesState::default(),
@@ -288,6 +291,7 @@ where
     async fn current_runner_diagnostics(&self) -> Result<JsonValue, RunnerError> {
         let queue_counts = self.store.get_batch_queue_counts(self.run_id).await?;
         let active_evaluator_count = self.active_evaluator_count().await?;
+        let target_pending_batches = self.target_pending_batches(active_evaluator_count);
         Ok(json!({
             "active_evaluator_count": active_evaluator_count,
             "pending_batches": queue_counts.pending,
@@ -295,7 +299,10 @@ where
             "completed_batches": queue_counts.completed,
             "open_batches": queue_counts.open(),
             "queue_buffer": self.config.queue_buffer,
-            "target_pending_batches": self.target_pending_batches(active_evaluator_count),
+            "target_pending_batches": target_pending_batches,
+            "pending_shortfall": target_pending_batches
+                .map(|target| (target as i64).saturating_sub(queue_counts.pending as i64)),
+            "last_completed_batch_id": self.runtime_state.last_completed_batch_id,
             "observable_checkpoint_state": match self.runtime_state.observable_checkpoint_state {
                 ObservableCheckpointState::NeedsInitialRoundTrip => "needs_initial_round_trip",
                 ObservableCheckpointState::WaitingForInitialRoundTrip => "waiting_for_initial_round_trip",
@@ -432,15 +439,11 @@ where
     }
 
     async fn active_evaluator_count(&self) -> Result<usize, RunnerError> {
-        let nodes = self.store.list_nodes(None).await?;
-        Ok(nodes
-            .iter()
-            .filter(|node| {
-                node.current_assignment.as_ref().is_some_and(|assignment| {
-                    assignment.run_id == self.run_id && assignment.role == WorkerRole::Evaluator
-                })
-            })
-            .count())
+        Ok(self
+            .store
+            .count_active_evaluator_nodes(self.run_id)
+            .await?
+            .max(0) as usize)
     }
 
     pub fn task_id(&self) -> i64 {
@@ -459,14 +462,26 @@ where
         self.observe_queue_metrics(queue_before_tick.pending.max(0) as usize);
         self.tune_batch_size();
 
+        let active_evaluator_count = self.active_evaluator_count().await?;
         let completed_batches = self.process_completed().await?;
-        let queue_before_produce = self.store.get_batch_queue_counts(self.run_id).await?;
-        let produced_batches = self.produce(queue_before_produce).await?;
+        let queue_before_produce = crate::core::BatchQueueCounts {
+            pending: queue_before_tick.pending,
+            claimed: queue_before_tick.claimed,
+            completed: queue_before_tick
+                .completed
+                .saturating_sub(completed_batches as i64),
+        };
+        let produced_batches = self
+            .produce(queue_before_produce, active_evaluator_count)
+            .await?;
         self.sync_task_progress().await?;
         self.flush_run_sample_progress().await?;
         self.flush_performance_snapshot().await?;
 
-        let open_batch_count = self.store.get_open_batch_count(self.run_id).await?.max(0) as usize;
+        let open_batch_count = (queue_before_produce
+            .open()
+            .saturating_add(produced_batches as i64))
+        .max(0) as usize;
         if let Some(target) = self.task.task.nr_expected_samples()
             && self.task.nr_completed_samples < target
             && open_batch_count == 0
@@ -574,6 +589,7 @@ where
                 self.run_id,
                 self.config.completed_batch_fetch_limit,
                 self.config.strict_batch_ordering,
+                self.runtime_state.last_completed_batch_id,
             )
             .await?;
         if completed.is_empty() {
@@ -653,17 +669,18 @@ where
             .map(|batch| batch.batch_id)
             .collect::<Vec<_>>();
         self.store.delete_completed_batches(&consumed_ids).await?;
+        self.runtime_state.last_completed_batch_id = consumed_ids.last().copied();
         Ok(consumed_ids.len())
     }
 
     async fn produce(
         &mut self,
         queue_before_produce: crate::core::BatchQueueCounts,
+        active_evaluator_count: usize,
     ) -> Result<usize, RunnerError> {
         let observable_config = self.observable_state.config();
         let sample_plan = self.sampler.sample_plan().map_err(RunnerError::Engine)?;
         let training_samples_remaining = self.sampler.training_samples_remaining();
-        let active_evaluator_count = self.active_evaluator_count().await?;
         let pending_before_produce = queue_before_produce.pending.max(0) as usize;
         let open_before_produce = queue_before_produce.open().max(0) as usize;
         let batch_plan = match sample_plan {

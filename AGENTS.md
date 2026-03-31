@@ -31,6 +31,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Nodes use a single announce operation to register and renew their lease.
 - If announce fails for 30 seconds, the node shuts down.
 - `node run` reconcile polling should use a fast-start backoff: start at `50ms`, multiply by `2.0`, cap at `2s`, and reset on meaningful role/task changes.
+- `node run` reconcile backoff should add bounded jitter around the exponential sleep to reduce synchronized retries between workers.
 - `node run` should terminate immediately on `Ctrl-C` and `SIGTERM`.
 - Graceful shutdown should expire the lease immediately so the same node name can be reused at once.
 - Desired/current assignments live directly on `nodes`.
@@ -69,6 +70,8 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Havana training and inference samplers must support nested discrete domains and preserve the full grid topology in persisted snapshots for restore/materialization.
 - Havana training runs in deterministic lockstep windows: it emits at most one `samples_for_update` window at a time, pauses production until that window is fully ingested, then updates the grid and continues.
 - Sample tasks must force an initial small batch round-trip before normal queue ramp-up so an observable snapshot is persisted immediately at task start, and must persist the observable again when the task completes.
+- Sampler-aggregator completed-batch ingestion should advance from a persisted `batch.id` cursor, not rescan the whole run on every tick.
+- Sampler-aggregator hot-loop control should reuse queue snapshots where possible and prefer direct evaluator counts over materializing full node rows.
 - `sampler_aggregator_runner_params.aggregation_persist_interval_ms` controls how often merged observable state is persisted during sampling; the initial small-batch checkpoint and final task completion flush must still be forced immediately.
 - `sampler_aggregator_runner_params.queue_buffer` is the single public queue buffer control. The runner targets about `queue_buffer * active_evaluator_count` pending batches. `0.0` is the most aggressive setting and lets pending work drain to zero when the sampler cannot refill fast enough; larger values keep more pending work buffered. `max_queue_size` remains the hard cap.
 - `sampler_aggregator_runner_params.strict_batch_ordering` controls whether completed evaluator batches are ingested strictly as a contiguous id prefix or opportunistically in completed-id order.

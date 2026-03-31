@@ -293,11 +293,21 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
 
 fn sampler_queue_buffer_panel(value: &JsonValue) -> Option<PanelState> {
     let runner = runner_diagnostics(value)?;
+    let target_pending_batches = runner_value_as_i64(runner, "target_pending_batches");
+    let pending_batches = runner_value_as_i64(runner, "pending_batches");
+    let pending_shortfall = target_pending_batches
+        .zip(pending_batches)
+        .map(|(target, pending)| target.saturating_sub(pending));
     let entries = vec![
         runner_value_entry(runner, "queue_buffer", "Queue Buffer"),
         runner_value_entry(runner, "active_evaluator_count", "Active Evaluators"),
         runner_value_entry(runner, "target_pending_batches", "Target Pending Batches"),
         runner_value_entry(runner, "pending_batches", "Pending Batches"),
+        Some(key_value(
+            "pending_shortfall",
+            "Pending Shortfall",
+            pending_shortfall,
+        )),
         runner_value_entry(runner, "claimed_batches", "Claimed Batches"),
         runner_value_entry(runner, "completed_batches", "Completed Batches"),
         runner_value_entry(runner, "open_batches", "Open Batches"),
@@ -350,4 +360,8 @@ fn runner_value_entry(
         .get(key)
         .cloned()
         .map(|value| key_value(key, label, value))
+}
+
+fn runner_value_as_i64(runner: &serde_json::Map<String, JsonValue>, key: &str) -> Option<i64> {
+    runner.get(key)?.as_i64()
 }
