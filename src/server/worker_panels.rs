@@ -447,17 +447,3 @@ fn json_has_object_fields(value: Option<&JsonValue>) -> bool {
         .and_then(JsonValue::as_object)
         .is_some_and(|object| !object.is_empty())
 }
-
-fn title_label(key: &str) -> String {
-    key.split('_')
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}

@@ -348,20 +348,6 @@ fn ms_to_us(value_ms: f64) -> f64 {
     value_ms * 1000.0
 }
 
-fn title_label(key: &str) -> String {
-    key.split('_')
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 fn runner_diagnostics(value: &JsonValue) -> Option<&serde_json::Map<String, JsonValue>> {
     value.as_object()?.get("runner")?.as_object()
 }
