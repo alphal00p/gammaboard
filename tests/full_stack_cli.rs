@@ -398,7 +398,7 @@ name = "train-a"
 kind = "sample"
 nr_samples = 128
 observable = { config = "complex" }
-sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 8, min_samples_for_update = 4, samples_for_update = 8 } }
+sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 8, samples_for_update = 8 } }
 
 [[task_queue]]
 name = "infer-a"

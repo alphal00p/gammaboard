@@ -86,7 +86,6 @@ mod tests {
         let params = HavanaSamplerParams {
             seed: 7,
             bins: 8,
-            min_samples_for_update: 4,
             samples_for_update: 16,
             initial_training_rate: 0.1,
             final_training_rate: 0.01,

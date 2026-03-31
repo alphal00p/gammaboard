@@ -21,7 +21,7 @@ pub(crate) fn build_havana_grid(
             Ok(Grid::Continuous(ContinuousGrid::new(
                 *dims,
                 params.bins,
-                params.min_samples_for_update,
+                params.samples_for_update,
                 None,
                 false,
             )))

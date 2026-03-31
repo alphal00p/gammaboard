@@ -19,7 +19,6 @@ use crate::{
 pub struct HavanaSamplerParams {
     pub seed: u64,
     pub bins: usize,
-    pub min_samples_for_update: usize,
     pub samples_for_update: usize,
     pub initial_training_rate: f64,
     pub final_training_rate: f64,
@@ -73,7 +72,6 @@ impl Default for HavanaSamplerParams {
         Self {
             seed: 0,
             bins: 64,
-            min_samples_for_update: 1_024,
             samples_for_update: 10_240,
             initial_training_rate: 0.1,
             final_training_rate: 0.1,
@@ -96,11 +94,6 @@ fn validate_havana_sampler_params(
 ) -> Result<(), BuildError> {
     if parsed.bins == 0 {
         return Err(BuildError::build("havana sampler requires bins > 0"));
-    }
-    if parsed.min_samples_for_update == 0 {
-        return Err(BuildError::build(
-            "havana sampler requires min_samples_for_update > 0",
-        ));
     }
     if parsed.samples_for_update == 0 {
         return Err(BuildError::build(
@@ -525,7 +518,6 @@ mod tests {
         let params = HavanaSamplerParams {
             seed: 7,
             bins: 8,
-            min_samples_for_update: 4,
             samples_for_update: 16,
             initial_training_rate: 0.1,
             final_training_rate: 0.01,
@@ -566,7 +558,6 @@ mod tests {
         let params = HavanaSamplerParams {
             seed: 7,
             bins: 8,
-            min_samples_for_update: 4,
             samples_for_update: 16,
             initial_training_rate: 0.1,
             final_training_rate: 0.01,
@@ -601,7 +592,6 @@ mod tests {
         let params = HavanaSamplerParams {
             seed: 7,
             bins: 8,
-            min_samples_for_update: 4,
             samples_for_update: 16,
             initial_training_rate: 0.1,
             final_training_rate: 0.01,
@@ -670,7 +660,6 @@ mod tests {
         let params = HavanaSamplerParams {
             seed: 7,
             bins: 8,
-            min_samples_for_update: 4,
             samples_for_update: 16,
             initial_training_rate: 0.1,
             final_training_rate: 0.01,
@@ -723,7 +712,6 @@ mod tests {
         let params = HavanaSamplerParams {
             seed: 7,
             bins: 8,
-            min_samples_for_update: 4,
             samples_for_update: 16,
             initial_training_rate: 0.1,
             final_training_rate: 0.01,
@@ -755,7 +743,6 @@ mod tests {
         let params = HavanaSamplerParams {
             seed: 7,
             bins: 8,
-            min_samples_for_update: 4,
             samples_for_update: 16,
             initial_training_rate: 0.1,
             final_training_rate: 0.01,
