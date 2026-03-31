@@ -33,13 +33,13 @@ pub(crate) async fn insert_batches(
         return Ok(Vec::new());
     }
 
+    let mut tx = pool.begin().await?;
     let mut builder = QueryBuilder::<Postgres>::new(
         r#"
         INSERT INTO batches (
             run_id,
             task_id,
             requires_training_values,
-            latent_batch,
             batch_size,
             status
         )
@@ -49,13 +49,32 @@ pub(crate) async fn insert_batches(
         row.push_bind(run_id)
             .push_bind(task_id)
             .push_bind(requires_training_values)
-            .push_bind(batch.into_json())
             .push_bind(batch.nr_samples as i32)
             .push_bind("pending");
     });
     builder.push(" RETURNING id");
+    let batch_ids = builder
+        .build_query_scalar::<i64>()
+        .fetch_all(&mut *tx)
+        .await?;
 
-    builder.build_query_scalar::<i64>().fetch_all(pool).await
+    let mut input_builder = QueryBuilder::<Postgres>::new(
+        r#"
+        INSERT INTO batch_inputs (
+            batch_id,
+            latent_batch
+        )
+        "#,
+    );
+    input_builder.push_values(
+        batch_ids.iter().zip(batches.iter()),
+        |mut row, (batch_id, batch)| {
+            row.push_bind(*batch_id).push_bind(batch.into_json());
+        },
+    );
+    input_builder.build().execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(batch_ids)
 }
 
 pub(crate) async fn get_pending_batch_count(
@@ -98,32 +117,37 @@ pub(crate) async fn claim_batch(
 ) -> Result<Option<(i64, i64, bool, LatentBatch)>, sqlx::Error> {
     let row = sqlx::query_as::<_, (i64, i64, bool, JsonValue)>(
         r#"
-        UPDATE batches
-        SET status = 'claimed',
-            claimed_by_node_name = (
-                SELECT n.name
-                FROM nodes n
-                WHERE n.uuid = $1
-            ),
-            claimed_by_node_uuid = $1,
-            claimed_at = now()
-        WHERE id IN (
-            SELECT id FROM batches
-            WHERE run_id = $2
-              AND status = 'pending'
-              AND EXISTS (
-                  SELECT 1
-                  FROM nodes n
-                  WHERE n.uuid = $1
-                    AND n.active_run_id = $2
-                    AND n.active_role = 'evaluator'
-                    AND n.lease_expires_at > now()
-              )
-            ORDER BY created_at, id
-            LIMIT 1
-            FOR UPDATE SKIP LOCKED
+        WITH claimed AS (
+            UPDATE batches
+            SET status = 'claimed',
+                claimed_by_node_name = (
+                    SELECT n.name
+                    FROM nodes n
+                    WHERE n.uuid = $1
+                ),
+                claimed_by_node_uuid = $1,
+                claimed_at = now()
+            WHERE id IN (
+                SELECT id FROM batches
+                WHERE run_id = $2
+                  AND status = 'pending'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM nodes n
+                      WHERE n.uuid = $1
+                        AND n.active_run_id = $2
+                        AND n.active_role = 'evaluator'
+                        AND n.lease_expires_at > now()
+                  )
+                ORDER BY created_at, id
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING id, task_id, requires_training_values
         )
-        RETURNING id, task_id, requires_training_values, latent_batch
+        SELECT c.id, c.task_id, c.requires_training_values, i.latent_batch
+        FROM claimed c
+        JOIN batch_inputs i ON i.batch_id = c.id
         "#,
     )
     .bind(node_uuid)
@@ -175,30 +199,45 @@ pub(crate) async fn submit_batch_results(
         .validate_json_safe()
         .map_err(|err| sqlx::Error::Protocol(format!("invalid batch result payload: {err}")))?;
     let observable = encode_json("batch observable", &result.observable)?;
-    let result = sqlx::query(
+    let values = result.values_to_json();
+    let mut tx = pool.begin().await?;
+    let update_result = sqlx::query(
         r#"
         UPDATE batches
         SET status = 'completed',
-            "values" = $1,
-            batch_observable = $2,
-            total_eval_time_ms = $3,
             completed_at = now()
-        WHERE id = $4
-          AND claimed_by_node_uuid = $5
+        WHERE id = $1
+          AND claimed_by_node_uuid = $2
         "#,
     )
-    .bind(result.values_to_json())
-    .bind(observable)
-    .bind(eval_time_ms)
     .bind(batch_id)
     .bind(node_uuid)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
-    if result.rows_affected() == 0 {
+    if update_result.rows_affected() == 0 {
         return Err(sqlx::Error::Protocol(format!(
             "batch {batch_id} is no longer owned by node uuid '{node_uuid}'"
         )));
     }
+    sqlx::query(
+        r#"
+        INSERT INTO batch_results (
+            batch_id,
+            "values",
+            batch_observable,
+            total_eval_time_ms,
+            completed_at
+        )
+        VALUES ($1, $2, $3, $4, now())
+        "#,
+    )
+    .bind(batch_id)
+    .bind(values)
+    .bind(observable)
+    .bind(eval_time_ms)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -344,19 +383,14 @@ pub(crate) async fn fetch_completed_batches(
             r#"
             WITH ordered AS (
                 SELECT
-                    id,
-                    task_id,
-                    requires_training_values,
-                    status,
-                    latent_batch,
-                    "values",
-                    batch_observable,
-                    completed_at,
-                    total_eval_time_ms,
-                    ROW_NUMBER() OVER (ORDER BY id ASC) AS rn
-                FROM batches
-                WHERE run_id = $1
-                ORDER BY id ASC
+                    b.id,
+                    b.task_id,
+                    b.requires_training_values,
+                    b.status,
+                    ROW_NUMBER() OVER (ORDER BY b.id ASC) AS rn
+                FROM batches b
+                WHERE b.run_id = $1
+                ORDER BY b.id ASC
                 LIMIT $2
             ),
             first_blocker AS (
@@ -368,15 +402,16 @@ pub(crate) async fn fetch_completed_batches(
                 o.id,
                 o.task_id,
                 o.requires_training_values,
-                o.latent_batch,
-                o."values",
-                o.batch_observable,
-                o.completed_at,
-                o.total_eval_time_ms
+                i.latent_batch,
+                r."values",
+                r.batch_observable,
+                r.completed_at,
+                r.total_eval_time_ms
             FROM ordered o
+            JOIN batch_inputs i ON i.batch_id = o.id
+            JOIN batch_results r ON r.batch_id = o.id
             CROSS JOIN first_blocker b
             WHERE o.status = 'completed'
-              AND o.batch_observable IS NOT NULL
               AND (b.rn IS NULL OR o.rn < b.rn)
             ORDER BY o.id ASC
             "#,
@@ -401,19 +436,20 @@ pub(crate) async fn fetch_completed_batches(
         >(
             r#"
             SELECT
-                id,
-                task_id,
-                requires_training_values,
-                latent_batch,
-                "values",
-                batch_observable,
-                completed_at,
-                total_eval_time_ms
-            FROM batches
-            WHERE run_id = $1
-              AND status = 'completed'
-              AND batch_observable IS NOT NULL
-            ORDER BY id ASC
+                b.id,
+                b.task_id,
+                b.requires_training_values,
+                i.latent_batch,
+                r."values",
+                r.batch_observable,
+                r.completed_at,
+                r.total_eval_time_ms
+            FROM batches b
+            JOIN batch_inputs i ON i.batch_id = b.id
+            JOIN batch_results r ON r.batch_id = b.id
+            WHERE b.run_id = $1
+              AND b.status = 'completed'
+            ORDER BY b.id ASC
             LIMIT $2
             "#,
         )
@@ -462,8 +498,8 @@ pub(crate) async fn delete_completed_batches(
     sqlx::query(
         r#"
         DELETE FROM batches
-        WHERE status = 'completed'
-          AND id = ANY($1)
+        WHERE id = ANY($1)
+          AND status = 'completed'
         "#,
     )
     .bind(batch_ids)
