@@ -344,7 +344,7 @@ fn sampler_runtime_panel(runtime: &SamplerRuntimeMetrics) -> PanelState {
             ),
             key_value(
                 "runnable_queue_retained_ratio",
-                "Pending Queue Retained Per Tick (Diagnostic)",
+                "Pending Queue Carryover Ratio (Diagnostic)",
                 runtime.rolling.runnable_queue_retained_ratio.mean,
             ),
             key_value(

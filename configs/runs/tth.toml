@@ -13,22 +13,12 @@ momentum_space = false
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 1000
 
-[sampler_aggregator_runner_params]
-performance_snapshot_interval_ms = 1000
-aggregation_persist_interval_ms = 1000
-target_batch_eval_ms = 500.0
-max_batch_size = 16384
-max_queue_size = 4096
-max_batches_per_tick = 256
-completed_batch_fetch_limit = 4096
-strict_batch_ordering = true
-
 [[task_queue]]
 name = "havana-train-10m"
 kind = "sample"
-nr_samples = 10_000_000
+nr_samples = 50_000_000
 observable = { config = "gammaloop" }
-sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 128, samples_for_update = 1_000_000, initial_training_rate = 0.05, final_training_rate = 0.005 } }
+sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 128, samples_for_update = 5_000_000, initial_training_rate = 0.05, final_training_rate = 0.005 } }
 
 [[task_queue]]
 name = "havana-infer-100m"

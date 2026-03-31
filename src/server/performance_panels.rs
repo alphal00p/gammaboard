@@ -133,7 +133,7 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         with_panel_width(
             panel_spec(
                 "sampler_runnable_queue_retained_ratio",
-                "Pending Queue Retained Per Tick (Diagnostic)",
+                "Pending Queue Carryover Ratio (Diagnostic)",
                 PanelKind::ScalarTimeseries,
                 PanelHistoryMode::Append,
             ),
@@ -280,7 +280,7 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
             ),
             key_value(
                 "runnable_queue_retained_ratio",
-                "Pending Queue Retained Per Tick (Diagnostic)",
+                "Pending Queue Carryover Ratio (Diagnostic)",
                 runtime.rolling.runnable_queue_retained_ratio.mean,
             ),
         ],

@@ -11,13 +11,3 @@ use_f128 = false
 training_projection = "abs"
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 1000
-
-[sampler_aggregator_runner_params]
-performance_snapshot_interval_ms = 1000
-aggregation_persist_interval_ms = 1000
-target_batch_eval_ms = 500.0
-max_batch_size = 16384
-max_queue_size = 4096
-max_batches_per_tick = 8
-completed_batch_fetch_limit = 4096
-strict_batch_ordering = true

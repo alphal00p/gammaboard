@@ -11,13 +11,3 @@ kind = "naive_monte_carlo"
 
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 2000
-
-[sampler_aggregator_runner_params]
-performance_snapshot_interval_ms = 2000
-aggregation_persist_interval_ms = 1000
-target_batch_eval_ms = 400.0
-max_batch_size = 64
-max_batches_per_tick = 16
-max_queue_size = 128
-completed_batch_fetch_limit = 1024
-strict_batch_ordering = true

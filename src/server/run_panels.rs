@@ -178,7 +178,7 @@ fn panel_states(
                 key_value("completed", "Completed Batches", run.completed_batches),
                 key_value(
                     "avg_queue_remaining",
-                    "Avg Pending Queue Retained Per Tick (Diagnostic)",
+                    "Avg Pending Queue Carryover Ratio (Diagnostic)",
                     avg_queue_remaining,
                 ),
                 key_value(

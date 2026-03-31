@@ -10,11 +10,11 @@ performance_snapshot_interval_ms = 2000
 
 [sampler_aggregator_runner_params]
 performance_snapshot_interval_ms = 2000
-aggregation_persist_interval_ms = 1000
-target_batch_eval_ms = 100.0
-queue_buffer = 1.0
+aggregation_persist_interval_ms = 2000
+target_batch_eval_ms = 500.0
+queue_buffer = 1.5
 max_batch_size = 1024
-max_queue_size = 1024
-max_batches_per_tick = 8
-completed_batch_fetch_limit = 1024
+max_queue_size = 4096
+max_batches_per_tick = 64
+completed_batch_fetch_limit = 128
 strict_batch_ordering = true
