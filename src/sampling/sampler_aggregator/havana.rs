@@ -170,6 +170,21 @@ impl HavanaSampler {
         self.pending_training_samples.iter().map(Vec::len).sum()
     }
 
+    fn training_window_samples_remaining(&self) -> usize {
+        let remaining_training = self.remaining_training_samples_to_produce();
+        if remaining_training == 0 {
+            return 0;
+        }
+
+        let progressed_in_window = self.samples_ingested % self.samples_for_update;
+        let remaining_in_window = if progressed_in_window == 0 {
+            self.samples_for_update
+        } else {
+            self.samples_for_update - progressed_in_window
+        };
+        remaining_training.min(remaining_in_window)
+    }
+
     fn remaining_training_samples_to_produce(&self) -> usize {
         self.stop_training_after_n_samples.saturating_sub(
             self.samples_ingested
@@ -348,9 +363,16 @@ impl SamplerAggregator for HavanaSampler {
     }
 
     fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
-        Ok(SamplePlan::Produce {
-            nr_samples: usize::MAX,
-        })
+        if self.pending_training_sample_count() > 0 {
+            return Ok(SamplePlan::Pause);
+        }
+
+        let nr_samples = self.training_window_samples_remaining();
+        if nr_samples == 0 {
+            Ok(SamplePlan::Pause)
+        } else {
+            Ok(SamplePlan::Produce { nr_samples })
+        }
     }
 
     fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
@@ -443,6 +465,8 @@ impl SamplerAggregator for HavanaSampler {
             "batches_ingested": self.batches_ingested,
             "samples_ingested": self.samples_ingested,
             "pending_training_batches": self.pending_training_samples.len(),
+            "pending_training_samples": self.pending_training_sample_count(),
+            "training_window_samples_remaining": self.training_window_samples_remaining(),
             "training_rate": self.current_training_rate(),
         })
     }
@@ -569,6 +593,75 @@ mod tests {
             .ingest_training_weights(&[1.0, 2.0, 3.0])
             .expect("ingest second batch");
         assert_eq!(sampler.training_samples_remaining(), None);
+    }
+
+    #[test]
+    fn havana_training_runs_in_lockstep_windows() {
+        let domain = Domain::rectangular(2, 0);
+        let params = HavanaSamplerParams {
+            seed: 7,
+            bins: 8,
+            min_samples_for_update: 4,
+            samples_for_update: 16,
+            initial_training_rate: 0.1,
+            final_training_rate: 0.01,
+        };
+        let mut sampler = HavanaSampler::from_params_and_domain(params, &domain, 40)
+            .expect("build havana sampler");
+
+        assert_eq!(
+            sampler.sample_plan().expect("initial sample plan"),
+            SamplePlan::Produce { nr_samples: 16 }
+        );
+
+        let _ = sampler
+            .produce_latent_batch(5)
+            .expect("produce first batch");
+        assert_eq!(
+            sampler
+                .sample_plan()
+                .expect("pause while window is in flight"),
+            SamplePlan::Pause
+        );
+
+        sampler
+            .ingest_training_weights(&[1.0, 2.0, 3.0, 4.0, 5.0])
+            .expect("ingest first batch");
+        assert_eq!(
+            sampler
+                .sample_plan()
+                .expect("emit remainder of the current training window"),
+            SamplePlan::Produce { nr_samples: 11 }
+        );
+
+        let _ = sampler
+            .produce_latent_batch(11)
+            .expect("produce remainder of first window");
+        assert_eq!(
+            sampler
+                .sample_plan()
+                .expect("pause until second batch ingests"),
+            SamplePlan::Pause
+        );
+
+        sampler
+            .ingest_training_weights(&[1.0; 11])
+            .expect("ingest remainder of first window");
+        assert_eq!(
+            sampler.sample_plan().expect("next full training window"),
+            SamplePlan::Produce { nr_samples: 16 }
+        );
+
+        let _ = sampler
+            .produce_latent_batch(16)
+            .expect("produce second training window");
+        sampler
+            .ingest_training_weights(&[1.0; 16])
+            .expect("ingest second training window");
+        assert_eq!(
+            sampler.sample_plan().expect("final partial window"),
+            SamplePlan::Produce { nr_samples: 8 }
+        );
     }
 
     #[test]
