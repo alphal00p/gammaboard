@@ -25,8 +25,14 @@ completed_batch_fetch_limit = 4096
 strict_batch_ordering = true
 
 [[task_queue]]
-name = "havana-train-1m"
+name = "havana-train-10m"
 kind = "sample"
-nr_samples = 1_000_000
+nr_samples = 10_000_000
 observable = { config = "gammaloop" }
-sampler_aggregator = { config = { kind = "havana_training" } }
+sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 128, min_samples_for_update = 8192, samples_for_update = 1_048_576, initial_training_rate = 0.05, final_training_rate = 0.005 } }
+
+[[task_queue]]
+name = "havana-infer-100m"
+kind = "sample"
+nr_samples = 100_000_000
+sampler_aggregator = { config = { kind = "havana_inference", source = "latest_training_sampler_aggregator" } }
