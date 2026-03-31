@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use super::shared::with_cli_store;
 
-const SERVER_DB_POOL_SIZE: u32 = 10;
+const SERVER_DB_POOL_SIZE: u32 = 8;
 
 #[derive(Debug, Args)]
 pub struct ServerArgs {

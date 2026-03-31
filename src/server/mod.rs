@@ -987,7 +987,7 @@ async fn auto_run_nodes(
     AxumJson(payload): AxumJson<AutoRunNodesRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let max_start_failures = payload.max_start_failures.unwrap_or(3);
-    let db_pool_size = payload.db_pool_size.unwrap_or(2);
+    let db_pool_size = payload.db_pool_size.unwrap_or(1);
     let plan = node_api::plan_auto_run_nodes(&state.store, payload.count).await?;
 
     let binary = std::env::current_exe().map_err(|err| {
