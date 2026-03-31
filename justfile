@@ -145,14 +145,8 @@ stop-itphlies-deploy:
 
     mkdir -p logs
 
-    if [[ -x "{{release_bin}}" ]]; then
-        {{release_bin}} run pause -a >/dev/null 2>&1 || true
-        {{release_bin}} node stop -a >/dev/null 2>&1 || true
-    fi
-    if [[ -x "{{bin}}" ]]; then
-        {{bin}} run pause -a >/dev/null 2>&1 || true
-        {{bin}} node stop -a >/dev/null 2>&1 || true
-    fi
+    just stop
+    just stop-kill
 
     mapfile -t stale_release_worker_pids < <(pgrep -f "{{release_bin}} node run" || true)
     for pid in "${stale_release_worker_pids[@]}"; do
