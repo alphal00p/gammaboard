@@ -79,6 +79,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 ## Panels And Dashboard
 - Backend visualization uses the generic panel model in `src/server/panels.rs`.
 - The frontend should render panels generically; it should not reimplement domain projections or panel merge semantics.
+- GammaLoop sample observables should project a histogram bundle table whose payload includes the histogram bins; the frontend renders the selected-histogram chart client-side as a stepped histogram with bin error bars and a linear/log y-scale toggle, and table row selection should drive the selected histogram using the live bundle rows.
 - Panel APIs are poll-based: clients send an optional opaque `cursor`, plus `panel_state` and `panel_actions`; the backend returns `PanelResponse`.
 - `append` is only valid when the backend can safely extend existing state; otherwise it must send `replace`.
 - Panel specs may include simple width hints such as `compact`, `half`, and `full`.

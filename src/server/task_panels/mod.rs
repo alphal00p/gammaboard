@@ -25,6 +25,7 @@ pub struct TaskPanelProjector {
     history: Box<HistoryProjectorFn>,
 }
 
+#[derive(Clone, Copy)]
 pub enum TaskPanelCurrentSource<'a> {
     Runtime(&'a ObservableState),
     StageSnapshot(&'a TaskStageSnapshot),
@@ -262,14 +263,21 @@ impl TaskPanelSource {
         full_history_snapshots: &[TaskOutputSnapshot],
         delta_history_snapshots: &[TaskOutputSnapshot],
     ) -> Result<PanelResponse, EngineError> {
-        let panels = self.panel_specs();
-        let current_panels = self.current_panels(
+        let current_source = resolve_current_source(
             task,
-            panel_state,
             current_observable,
             latest_stage_snapshot,
             latest_persisted_snapshot,
+        );
+        let current_panels = project_current_panels(
+            &self.projectors,
+            &TaskPanelContext {
+                task,
+                source: current_source,
+                panel_state,
+            },
         )?;
+        let panels = self.panel_specs();
         let full_history_panels = full_history_snapshots
             .iter()
             .rev()
@@ -542,9 +550,16 @@ mod tests {
     use crate::core::{
         LineDisplayMode, ObservableConfig, RunTaskInput, RunTaskState, canonical_task_toml,
     };
-    use crate::evaluation::{ComplexValue, FullComplexObservableState};
+    use crate::evaluation::{
+        ComplexObservableState, ComplexValue, FullComplexObservableState, GammaLoopObservableState,
+        ObservableState,
+    };
     use crate::server::panels::{PanelUpdateMode, PlotPoint, scalar_timeseries_panel};
     use chrono::Utc;
+    use gammalooprs::observables::{
+        HistogramBinSnapshot, HistogramSnapshot, HistogramStatisticsSnapshot, ObservablePhase,
+        ObservableSnapshotBundle, ObservableValueTransform,
+    };
 
     fn line_geometry() -> crate::core::LineRasterGeometry {
         crate::core::LineRasterGeometry {
@@ -609,6 +624,113 @@ mod tests {
                 ComplexValue { re: 2.0, im: -2.0 },
                 ComplexValue { re: 3.0, im: -3.0 },
             ],
+        })
+    }
+
+    fn gammaloop_observable() -> ObservableState {
+        ObservableState::Gammaloop(GammaLoopObservableState {
+            bundle: ObservableSnapshotBundle {
+                histograms: std::collections::BTreeMap::from([
+                    (
+                        "pt".to_string(),
+                        HistogramSnapshot {
+                            title: "pt".to_string(),
+                            type_description: "HwU".to_string(),
+                            phase: ObservablePhase::Real,
+                            value_transform: ObservableValueTransform::Identity,
+                            supports_misbinning_mitigation: false,
+                            x_min: 0.0,
+                            x_max: 10.0,
+                            sample_count: 2,
+                            log_x_axis: false,
+                            log_y_axis: false,
+                            bins: vec![HistogramBinSnapshot {
+                                x_min: Some(0.0),
+                                x_max: Some(10.0),
+                                entry_count: 2,
+                                sum_weights: 4.0,
+                                sum_weights_squared: 10.0,
+                                mitigated_fill_count: 0,
+                            }],
+                            underflow_bin: HistogramBinSnapshot {
+                                x_min: None,
+                                x_max: None,
+                                entry_count: 0,
+                                sum_weights: 0.0,
+                                sum_weights_squared: 0.0,
+                                mitigated_fill_count: 0,
+                            },
+                            overflow_bin: HistogramBinSnapshot {
+                                x_min: None,
+                                x_max: None,
+                                entry_count: 0,
+                                sum_weights: 0.0,
+                                sum_weights_squared: 0.0,
+                                mitigated_fill_count: 0,
+                            },
+                            statistics: HistogramStatisticsSnapshot {
+                                in_range_entry_count: 2,
+                                nan_value_count: 0,
+                                mitigated_pair_count: 0,
+                            },
+                        },
+                    ),
+                    (
+                        "eta".to_string(),
+                        HistogramSnapshot {
+                            title: "eta".to_string(),
+                            type_description: "HwU".to_string(),
+                            phase: ObservablePhase::Imag,
+                            value_transform: ObservableValueTransform::Log10,
+                            supports_misbinning_mitigation: true,
+                            x_min: -1.0,
+                            x_max: 1.0,
+                            sample_count: 1,
+                            log_x_axis: true,
+                            log_y_axis: true,
+                            bins: vec![HistogramBinSnapshot {
+                                x_min: Some(-1.0),
+                                x_max: Some(1.0),
+                                entry_count: 1,
+                                sum_weights: 2.0,
+                                sum_weights_squared: 4.0,
+                                mitigated_fill_count: 1,
+                            }],
+                            underflow_bin: HistogramBinSnapshot {
+                                x_min: None,
+                                x_max: None,
+                                entry_count: 0,
+                                sum_weights: 0.0,
+                                sum_weights_squared: 0.0,
+                                mitigated_fill_count: 0,
+                            },
+                            overflow_bin: HistogramBinSnapshot {
+                                x_min: None,
+                                x_max: None,
+                                entry_count: 0,
+                                sum_weights: 0.0,
+                                sum_weights_squared: 0.0,
+                                mitigated_fill_count: 0,
+                            },
+                            statistics: HistogramStatisticsSnapshot {
+                                in_range_entry_count: 1,
+                                nan_value_count: 0,
+                                mitigated_pair_count: 0,
+                            },
+                        },
+                    ),
+                ]),
+            },
+            estimate: ComplexObservableState {
+                count: 3,
+                real_sum: 7.0,
+                imag_sum: -1.0,
+                abs_sum: 8.0,
+                abs_sq_sum: 20.0,
+                real_sq_sum: 17.0,
+                imag_sq_sum: 5.0,
+                weight_sum: 3.0,
+            },
         })
     }
 
@@ -696,6 +818,37 @@ mod tests {
                 .iter()
                 .any(|panel| panel.panel_id == "imag_estimate_history")
         );
+    }
+
+    #[test]
+    fn gammaloop_sample_exposes_histogram_bundle_panels() {
+        let task = inherited_complex_sample_task();
+        let descriptors =
+            TaskPanelSource::new(&task, Some(ObservableConfig::Gammaloop)).panel_specs();
+        assert!(
+            descriptors
+                .iter()
+                .any(|panel| panel.panel_id == "gammaloop_histogram_bundle")
+        );
+
+        let run_task = run_task(task.clone());
+        let observable = gammaloop_observable();
+        let current = TaskPanelSource::new(&task, Some(ObservableConfig::Gammaloop))
+            .current_panels(
+                &run_task,
+                &JsonValue::Object(Default::default()),
+                Some(&observable),
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(current.iter().any(|panel| matches!(
+            panel,
+            PanelState::Table { panel_id, columns, rows, .. }
+                if panel_id == "gammaloop_histogram_bundle"
+                    && columns.len() >= 5
+                    && rows.len() == 2
+        )));
     }
 
     #[test]

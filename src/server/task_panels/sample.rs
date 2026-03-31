@@ -1,13 +1,18 @@
 use super::{TaskPanelContext, TaskPanelHistoryContext, TaskPanelProjector, panel_projector};
 use crate::core::{EngineError, ObservableConfig, RunTaskSpec};
 use crate::evaluation::{
-    FullObservableProgress, Observable, ObservableState, SemanticObservableKind,
+    FullObservableProgress, GammaLoopObservableState, Observable, ObservableState,
+    SemanticObservableKind,
 };
 use crate::server::panels::{
-    PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, key_value, key_value_panel,
-    panel_spec, progress_panel, scalar_timeseries_panel, single_point_band, with_panel_width,
+    HistogramBin, PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, key_value,
+    key_value_panel, panel_spec, progress_panel, scalar_timeseries_panel, single_point_band,
+    table_panel_with_payload, with_panel_width,
 };
+use gammalooprs::observables::{ObservablePhase, ObservableValueTransform};
+use serde::Serialize;
 use serde_json::Value as JsonValue;
+use std::collections::BTreeMap;
 
 pub(super) fn projectors(
     task_spec: &RunTaskSpec,
@@ -28,6 +33,9 @@ pub(super) fn projectors(
     projectors.push(abs_signal_to_noise_history_projector(
         observable_config.as_ref(),
     ));
+    if matches!(observable_config, Some(ObservableConfig::Gammaloop)) {
+        projectors.push(gammaloop_histogram_bundle_projector());
+    }
     projectors
 }
 
@@ -153,6 +161,30 @@ fn estimate_summary_projector(observable_config: Option<&ObservableConfig>) -> T
             Ok(sample_observable(ctx, observable_config.as_ref())?.map(estimate_summary_panel))
         },
         |_ctx| Ok(None),
+    )
+}
+
+fn gammaloop_histogram_bundle_projector() -> TaskPanelProjector {
+    panel_projector(
+        with_panel_width(
+            panel_spec(
+                "gammaloop_histogram_bundle",
+                "Histogram Bundle",
+                PanelKind::Table,
+                PanelHistoryMode::None,
+            ),
+            PanelWidth::Full,
+        ),
+        |ctx| {
+            Ok(sample_observable(ctx, Some(&ObservableConfig::Gammaloop))?
+                .and_then(gammaloop_histogram_bundle_panel))
+        },
+        |ctx| {
+            Ok(
+                decode_history_observable(ctx, Some(&ObservableConfig::Gammaloop))?
+                    .and_then(gammaloop_histogram_bundle_panel),
+            )
+        },
     )
 }
 
@@ -377,6 +409,30 @@ fn estimate_summary_panel(observable: ObservableState) -> PanelState {
                     "Primary Histogram",
                     state.primary_histogram_name().unwrap_or("-"),
                 ),
+                key_value(
+                    "primary_title",
+                    "Primary Title",
+                    state
+                        .primary_histogram()
+                        .map(|histogram| histogram.title.as_str())
+                        .unwrap_or("-"),
+                ),
+                key_value(
+                    "primary_samples",
+                    "Primary Samples",
+                    state
+                        .primary_histogram()
+                        .map(|histogram| histogram.sample_count)
+                        .unwrap_or(0),
+                ),
+                key_value(
+                    "primary_bins",
+                    "Primary Bins",
+                    state
+                        .primary_histogram()
+                        .map(|histogram| histogram.bins.len())
+                        .unwrap_or(0),
+                ),
                 key_value("real_mean", "Real Mean", state.real_mean()),
                 key_value("imag_mean", "Imag Mean", state.imag_mean()),
                 key_value("real_error", "Real Error", state.real_stderr()),
@@ -426,5 +482,129 @@ fn estimate_summary_panel(observable: ObservableState) -> PanelState {
                 ),
             ],
         ),
+    }
+}
+
+fn gammaloop_histogram_bundle_panel(observable: ObservableState) -> Option<PanelState> {
+    let ObservableState::Gammaloop(state) = observable else {
+        return None;
+    };
+    let payload = gammaloop_histogram_bundle_payload(&state);
+
+    Some(table_panel_with_payload(
+        "gammaloop_histogram_bundle",
+        vec![
+            "Name".to_string(),
+            "Title".to_string(),
+            "Phase".to_string(),
+            "Transform".to_string(),
+            "Samples".to_string(),
+            "Bins".to_string(),
+            "Range".to_string(),
+            "In Range".to_string(),
+            "Underflow".to_string(),
+            "Overflow".to_string(),
+            "NaN".to_string(),
+            "Mitigated Pairs".to_string(),
+            "Misbinning".to_string(),
+            "Log X".to_string(),
+            "Log Y".to_string(),
+        ],
+        state
+            .bundle
+            .histograms
+            .iter()
+            .map(|(name, histogram)| {
+                vec![
+                    JsonValue::String(name.clone()),
+                    JsonValue::String(histogram.title.clone()),
+                    JsonValue::String(match histogram.phase {
+                        ObservablePhase::Real => "real".to_string(),
+                        ObservablePhase::Imag => "imag".to_string(),
+                    }),
+                    JsonValue::String(match histogram.value_transform {
+                        ObservableValueTransform::Identity => "identity".to_string(),
+                        ObservableValueTransform::Log10 => "log10".to_string(),
+                    }),
+                    JsonValue::from(histogram.sample_count as i64),
+                    JsonValue::from(histogram.bins.len() as i64),
+                    JsonValue::String(format!("[{}, {}]", histogram.x_min, histogram.x_max)),
+                    JsonValue::from(histogram.statistics.in_range_entry_count as i64),
+                    JsonValue::from(histogram.underflow_bin.entry_count as i64),
+                    JsonValue::from(histogram.overflow_bin.entry_count as i64),
+                    JsonValue::from(histogram.statistics.nan_value_count as i64),
+                    JsonValue::from(histogram.statistics.mitigated_pair_count as i64),
+                    JsonValue::from(histogram.supports_misbinning_mitigation),
+                    JsonValue::from(histogram.log_x_axis),
+                    JsonValue::from(histogram.log_y_axis),
+                ]
+            })
+            .collect(),
+        Some(serde_json::to_value(payload).unwrap_or(JsonValue::Null)),
+    ))
+}
+
+#[derive(Debug, Serialize)]
+struct GammaloopHistogramBundlePayload {
+    primary_histogram_name: Option<String>,
+    histograms: BTreeMap<String, GammaloopHistogramSelectionEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct GammaloopHistogramSelectionEntry {
+    title: String,
+    type_description: String,
+    phase: String,
+    value_transform: String,
+    sample_count: usize,
+    x_min: f64,
+    x_max: f64,
+    log_x_axis: bool,
+    log_y_axis: bool,
+    bins: Vec<HistogramBin>,
+}
+
+fn gammaloop_histogram_bundle_payload(
+    state: &GammaLoopObservableState,
+) -> GammaloopHistogramBundlePayload {
+    GammaloopHistogramBundlePayload {
+        primary_histogram_name: state.primary_histogram_name().map(str::to_string),
+        histograms: state
+            .bundle
+            .histograms
+            .iter()
+            .map(|(name, histogram)| {
+                (
+                    name.clone(),
+                    GammaloopHistogramSelectionEntry {
+                        title: histogram.title.clone(),
+                        type_description: histogram.type_description.clone(),
+                        phase: match histogram.phase {
+                            ObservablePhase::Real => "real".to_string(),
+                            ObservablePhase::Imag => "imag".to_string(),
+                        },
+                        value_transform: match histogram.value_transform {
+                            ObservableValueTransform::Identity => "identity".to_string(),
+                            ObservableValueTransform::Log10 => "log10".to_string(),
+                        },
+                        sample_count: histogram.sample_count,
+                        x_min: histogram.x_min,
+                        x_max: histogram.x_max,
+                        log_x_axis: histogram.log_x_axis,
+                        log_y_axis: histogram.log_y_axis,
+                        bins: histogram
+                            .bins
+                            .iter()
+                            .map(|bin| HistogramBin {
+                                start: bin.x_min.unwrap_or(histogram.x_min),
+                                stop: bin.x_max.unwrap_or(histogram.x_max),
+                                value: bin.average(histogram.sample_count),
+                                error: bin.error(histogram.sample_count),
+                            })
+                            .collect(),
+                    },
+                )
+            })
+            .collect(),
     }
 }

@@ -1,26 +1,86 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Box,
   Card,
   CardContent,
+  Button,
   FormControl,
   LinearProgress,
   MenuItem,
+  Stack,
+  Table as MuiTable,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
   Select,
   Typography,
 } from "@mui/material";
-import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import {
+  Area,
+  CartesianGrid,
+  ComposedChart,
+  ErrorBar,
+  Line,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { formatCompactNumber, formatDateTime, formatScientific } from "../../utils/formatters";
 import { asArray } from "../../utils/collections";
 
 const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
   const stateMap = new Map(asArray(panelStates).map((panel) => [panel.panel_id, panel]));
-  return asArray(panelSpecs).map((spec) => ({
+  const renderablePanels = asArray(panelSpecs).map((spec) => ({
     descriptor: spec,
     state: stateMap.get(spec.panel_id) || null,
     value: panelValues?.[spec.panel_id],
   }));
+  const bundlePanel = renderablePanels.find(({ descriptor }) => descriptor?.panel_id === "gammaloop_histogram_bundle");
+  const payload = bundlePanel?.state?.payload;
+  const histograms = payload?.histograms;
+  if (bundlePanel && histograms && typeof histograms === "object" && !Array.isArray(histograms)) {
+    const selectedName =
+      bundlePanel.value ??
+      payload?.primary_histogram_name ??
+      Object.keys(histograms).find((key) => key && typeof histograms[key] === "object") ??
+      null;
+    const selectedHistogram =
+      (selectedName && histograms[selectedName]) ||
+      (payload?.primary_histogram_name && histograms[payload.primary_histogram_name]) ||
+      Object.values(histograms).find((entry) => entry && typeof entry === "object") ||
+      null;
+    if (selectedHistogram) {
+      renderablePanels.push({
+        descriptor: {
+          panel_id: "gammaloop_selected_histogram",
+          label: "Selected Histogram",
+          kind: "histogram",
+          history: "none",
+          width: "full",
+        },
+        state: {
+          panel_id: "gammaloop_selected_histogram",
+          name: selectedName,
+          title: selectedHistogram.title,
+          type_description: selectedHistogram.type_description,
+          phase: selectedHistogram.phase,
+          value_transform: selectedHistogram.value_transform,
+          sample_count: selectedHistogram.sample_count,
+          x_min: selectedHistogram.x_min,
+          x_max: selectedHistogram.x_max,
+          log_x_axis: selectedHistogram.log_x_axis,
+          log_y_axis: selectedHistogram.log_y_axis,
+          bins: asArray(selectedHistogram.bins),
+        },
+        value: null,
+      });
+    }
+  }
+  return renderablePanels;
 };
 
 const formatAxisNumber = (value) => formatScientific(value, 2, "");
@@ -44,9 +104,15 @@ const fitXDomain = (values) => {
   const min = Math.min(...finiteValues);
   const max = Math.max(...finiteValues);
   if (min === max) {
-    return [min, max];
+    const padding = Math.abs(min) > 0 ? Math.abs(min) * 0.1 : 1;
+    return [min - padding, max + padding];
   }
   return [min, max];
+};
+
+const fitHistogramXDomain = (bins) => {
+  const edges = bins.flatMap((bin) => [bin.start, bin.stop]).filter((value) => Number.isFinite(value));
+  return fitXDomain(edges);
 };
 
 const buildMultiSeriesData = (seriesList) => {
@@ -200,6 +266,295 @@ const MultiTimeseriesPanel = ({ title, state }) => {
             ))}
           </ComposedChart>
         </ResponsiveContainer>
+      </CardContent>
+    </Card>
+  );
+};
+
+const buildHistogramData = (bins) =>
+  asArray(bins)
+    .map((bin) => {
+      const start = Number(bin?.start);
+      const stop = Number(bin?.stop);
+      const value = Number(bin?.value);
+      const error = Number(bin?.error);
+      const x = Number.isFinite(start) && Number.isFinite(stop) ? (start + stop) / 2 : Number.NaN;
+      return {
+        ...bin,
+        start,
+        stop,
+        x,
+        value,
+        error: Number.isFinite(error) ? error : 0,
+        rangeLabel:
+          Number.isFinite(start) && Number.isFinite(stop)
+            ? `${formatScientific(start, 4)} → ${formatScientific(stop, 4)}`
+            : "n/a",
+      };
+    })
+    .filter((bin) => Number.isFinite(bin.value) && Number.isFinite(bin.x));
+
+const buildHistogramStepData = (bins) => {
+  const orderedBins = asArray(bins)
+    .slice()
+    .sort((left, right) => left.start - right.start);
+  const points = [];
+  for (const [index, bin] of orderedBins.entries()) {
+    points.push({
+      x: bin.start,
+      y: bin.value,
+      error: bin.error,
+      rangeLabel: `${formatScientific(bin.start, 4)} → ${formatScientific(bin.stop, 4)}`,
+    });
+    points.push({
+      x: bin.stop,
+      y: bin.value,
+      error: bin.error,
+      rangeLabel: `${formatScientific(bin.start, 4)} → ${formatScientific(bin.stop, 4)}`,
+    });
+    const nextBin = orderedBins[index + 1];
+    if (nextBin && nextBin.start !== bin.stop) {
+      points.push({
+        x: bin.stop,
+        y: nextBin.value,
+        error: nextBin.error,
+        rangeLabel: `${formatScientific(nextBin.start, 4)} → ${formatScientific(nextBin.stop, 4)}`,
+      });
+    }
+  }
+  return points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+};
+
+const toExponential8 = (value) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric.toExponential(8) : "0.00000000e+00";
+};
+
+const downloadTextFile = (filename, contents, mimeType = "text/plain;charset=utf-8") => {
+  const blob = new Blob([contents], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.rel = "noreferrer";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+};
+
+const buildHistogramJson = (state) => ({
+  name: state?.name ?? null,
+  title: state?.title ?? null,
+  type_description: state?.type_description ?? null,
+  phase: state?.phase ?? null,
+  value_transform: state?.value_transform ?? null,
+  sample_count: state?.sample_count ?? null,
+  x_min: state?.x_min ?? null,
+  x_max: state?.x_max ?? null,
+  log_x_axis: Boolean(state?.log_x_axis),
+  log_y_axis: Boolean(state?.log_y_axis),
+  bins: asArray(state?.bins).map((bin) => ({
+    start: bin?.start,
+    stop: bin?.stop,
+    value: bin?.value,
+    error: bin?.error,
+  })),
+});
+
+const buildHistogramHwU = (state) => {
+  const bins = asArray(state?.bins);
+  const title = state?.title ?? state?.name ?? "histogram";
+  const xAxisMode = state?.log_x_axis ? "LOG" : "LIN";
+  const yAxisMode = state?.log_y_axis ? "LOG" : "LIN";
+  const typeDescription = state?.type_description ?? "HwU";
+  const xMin = Number.isFinite(Number(state?.x_min)) ? Number(state?.x_min) : Number(bins[0]?.start);
+  const xMax = Number.isFinite(Number(state?.x_max)) ? Number(state?.x_max) : Number(bins[bins.length - 1]?.stop);
+  const lines = [
+    "##& xmin & xmax & central value & dy &",
+    "",
+    `<histogram> ${bins.length} "${title} |X_AXIS@${xAxisMode} |Y_AXIS@${yAxisMode} |TYPE@${typeDescription}"`,
+    ...bins.map((bin) =>
+      [
+        `  ${toExponential8(Number(bin?.start) ?? xMin)}`,
+        `${toExponential8(Number(bin?.stop) ?? xMax)}`,
+        `${toExponential8(Number(bin?.value) ?? 0)}`,
+        `${toExponential8(Number(bin?.error) ?? 0)}`,
+      ].join("   "),
+    ),
+    "<\\histogram>",
+    "",
+  ];
+  return lines.join("\n");
+};
+
+const buildHistogramYDomain = (bins, scale) => {
+  const values = asArray(bins)
+    .flatMap((bin) => [
+      Number(bin?.value) - Number(bin?.error || 0),
+      Number(bin?.value) + Number(bin?.error || 0),
+      Number(bin?.value),
+    ])
+    .filter((value) => Number.isFinite(value));
+  if (values.length === 0) return ["auto", "auto"];
+  if (scale === "log") {
+    const positive = values.filter((value) => value > 0);
+    if (positive.length === 0) return ["auto", "auto"];
+    const min = Math.min(...positive);
+    const max = Math.max(...positive);
+    return [Math.max(min / 2, Number.EPSILON), max * 1.08];
+  }
+  return fitDomain(values);
+};
+
+const HistogramPanel = ({ title, state }) => {
+  const [scale, setScale] = useState("linear");
+  const bins = useMemo(() => buildHistogramData(state?.bins), [state?.bins]);
+  const stepData = useMemo(() => buildHistogramStepData(state?.bins), [state?.bins]);
+  const canUseLogScale = bins.every(
+    (bin) => Number.isFinite(bin.value) && Number.isFinite(bin.error) && bin.value - bin.error > 0,
+  );
+  useEffect(() => {
+    if (scale === "log" && !canUseLogScale) {
+      setScale("linear");
+    }
+  }, [canUseLogScale, scale]);
+  if (bins.length === 0) return null;
+  const xDomain = fitHistogramXDomain(bins);
+  const yDomain = buildHistogramYDomain(bins, scale);
+  const yScale = scale === "log" && yDomain[0] !== "auto" ? "log" : "auto";
+  const yTickFormatter = scale === "log" ? (value) => formatScientific(value, 2, "") : formatAxisNumber;
+  const histogramJson = useMemo(() => buildHistogramJson(state), [state]);
+  const handleDownloadJson = () => {
+    const filename = `${state?.name ?? "histogram"}.json`;
+    downloadTextFile(filename, `${JSON.stringify(histogramJson, null, 2)}\n`, "application/json;charset=utf-8");
+  };
+  const handleDownloadHwU = () => {
+    const filename = `${state?.name ?? "histogram"}.HwU`;
+    downloadTextFile(filename, buildHistogramHwU(state));
+  };
+  return (
+    <Card variant="outlined">
+      <CardContent>
+        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, mb: 2 }}>
+          <Typography variant="subtitle1">
+            {title}
+            {state?.name ? `  (${state.name})` : ""}
+          </Typography>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Button size="small" variant="outlined" onClick={handleDownloadJson}>
+              JSON
+            </Button>
+            <Button size="small" variant="outlined" onClick={handleDownloadHwU}>
+              HwU
+            </Button>
+            <FormControl size="small" sx={{ minWidth: 128 }}>
+              <Select
+                value={scale}
+                onChange={(event) => setScale(event.target.value)}
+                sx={{
+                  fontSize: "0.875rem",
+                  ".MuiSelect-select": { py: 0.75 },
+                }}
+              >
+                <MenuItem value="linear">Linear</MenuItem>
+                <MenuItem value="log" disabled={!canUseLogScale}>
+                  Log
+                </MenuItem>
+              </Select>
+            </FormControl>
+          </Stack>
+        </Box>
+        <ResponsiveContainer width="100%" height={280}>
+          <ComposedChart data={stepData}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="x" type="number" domain={xDomain} allowDataOverflow tickFormatter={formatAxisNumber} />
+            <YAxis tickFormatter={yTickFormatter} domain={yDomain} allowDataOverflow scale={yScale} width={72} />
+            <Tooltip
+              formatter={(value, name, props) => {
+                if (name === "value") {
+                  const error = Number(props?.payload?.error) || 0;
+                  return [`${formatScientific(value, 6)} ± ${formatScientific(error, 6)}`, "bin average"];
+                }
+                return [formatScientific(value, 6), name];
+              }}
+              labelFormatter={(_, payload) => payload?.[0]?.payload?.rangeLabel || ""}
+            />
+            <Line
+              type="stepAfter"
+              dataKey="value"
+              stroke="#005f73"
+              strokeWidth={1.35}
+              dot={false}
+              activeDot={{ r: 2.5, fill: "#005f73", stroke: "#f8fafc", strokeWidth: 1 }}
+              isAnimationActive={false}
+            >
+              <ErrorBar dataKey="error" direction="y" stroke="#7c8a96" strokeWidth={1.4} width={6} />
+            </Line>
+          </ComposedChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
+  );
+};
+
+const TablePanel = ({ title, state }) => {
+  const columns = asArray(state?.columns);
+  const rows = asArray(state?.rows);
+  if (columns.length === 0 || rows.length === 0) return null;
+  const payload = state?.payload;
+  const selectableRows =
+    payload?.histograms && typeof payload.histograms === "object" && !Array.isArray(payload.histograms);
+  return (
+    <Card variant="outlined">
+      <CardContent>
+        <Typography variant="subtitle1" sx={{ mb: 2 }}>
+          {title}
+        </Typography>
+        <TableContainer sx={{ maxHeight: 440, overflowX: "auto" }}>
+          <MuiTable size="small" stickyHeader>
+            <TableHead>
+              <TableRow>
+                {columns.map((column) => (
+                  <TableCell key={column} sx={{ fontWeight: 600, whiteSpace: "nowrap" }}>
+                    {column}
+                  </TableCell>
+                ))}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {rows.map((row, rowIndex) => (
+                <TableRow
+                  key={`row-${rowIndex}`}
+                  hover={selectableRows}
+                  selected={selectableRows && String(row?.[0] ?? "") === String(state?.selected_value ?? "")}
+                  sx={{
+                    cursor: selectableRows ? "pointer" : "default",
+                  }}
+                  onClick={
+                    selectableRows && typeof row?.[0] === "string"
+                      ? () => state?.onValueChange?.(state?.panel_id, row[0])
+                      : undefined
+                  }
+                >
+                  {columns.map((_, columnIndex) => (
+                    <TableCell
+                      key={`${rowIndex}-${columnIndex}`}
+                      sx={{
+                        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace",
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                        verticalAlign: "top",
+                      }}
+                    >
+                      {renderStructuredValue(row?.[columnIndex])}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </MuiTable>
+        </TableContainer>
       </CardContent>
     </Card>
   );
@@ -461,6 +816,17 @@ const PanelRenderer = ({ descriptor, state, value, onValueChange }) => {
     case "image2d":
       if (!state) return null;
       return <Image2dPanel title={descriptor.label} state={state} />;
+    case "table":
+      if (!state) return null;
+      return (
+        <TablePanel
+          title={descriptor.label}
+          state={{ ...state, panel_id: descriptor.panel_id, selected_value: value, onValueChange }}
+        />
+      );
+    case "histogram":
+      if (!state) return null;
+      return <HistogramPanel title={descriptor.label} state={state} />;
     case "text":
       if (!state) return null;
       return <TextPanel title={descriptor.label} state={state} />;

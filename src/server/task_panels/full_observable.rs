@@ -70,6 +70,7 @@ impl ImageViewMode {
         spec.state = Some(select_state_spec(
             JsonValue::String(default_mode.as_str().to_string()),
             options,
+            None,
         ));
         spec
     }

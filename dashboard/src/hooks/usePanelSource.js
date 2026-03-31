@@ -159,12 +159,9 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
           [panelId]: value,
         };
         panelValuesRef.current = panelValues;
-        cursorRef.current = null;
         return {
           ...previous,
           panelValues,
-          cursor: null,
-          panelStates: [],
         };
       });
       triggerPoll();

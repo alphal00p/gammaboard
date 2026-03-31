@@ -65,6 +65,8 @@ pub enum PanelStateSpec {
     Select {
         default_value: JsonValue,
         options: Vec<PanelStateOption>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        payload: Option<JsonValue>,
     },
 }
 
@@ -142,6 +144,7 @@ pub struct HistogramBin {
     pub start: f64,
     pub stop: f64,
     pub value: f64,
+    pub error: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -181,6 +184,8 @@ pub enum PanelState {
         panel_id: String,
         columns: Vec<String>,
         rows: Vec<Vec<JsonValue>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        payload: Option<JsonValue>,
     },
     Histogram {
         panel_id: String,
@@ -239,10 +244,12 @@ pub(crate) fn with_panel_width(mut spec: PanelSpec, width: PanelWidth) -> PanelS
 pub(crate) fn select_state_spec(
     default_value: JsonValue,
     options: Vec<PanelStateOption>,
+    payload: Option<JsonValue>,
 ) -> PanelStateSpec {
     PanelStateSpec::Select {
         default_value,
         options,
+        payload,
     }
 }
 
@@ -310,6 +317,35 @@ pub(crate) fn key_value_panel(panel_id: &str, entries: Vec<KeyValueEntry>) -> Pa
     PanelState::KeyValue {
         panel_id: panel_id.to_string(),
         entries,
+    }
+}
+
+pub(crate) fn table_panel(
+    panel_id: &str,
+    columns: Vec<String>,
+    rows: Vec<Vec<JsonValue>>,
+) -> PanelState {
+    table_panel_with_payload(panel_id, columns, rows, None)
+}
+
+pub(crate) fn table_panel_with_payload(
+    panel_id: &str,
+    columns: Vec<String>,
+    rows: Vec<Vec<JsonValue>>,
+    payload: Option<JsonValue>,
+) -> PanelState {
+    PanelState::Table {
+        panel_id: panel_id.to_string(),
+        columns,
+        rows,
+        payload,
+    }
+}
+
+pub(crate) fn histogram_panel(panel_id: &str, bins: Vec<HistogramBin>) -> PanelState {
+    PanelState::Histogram {
+        panel_id: panel_id.to_string(),
+        bins,
     }
 }
 
