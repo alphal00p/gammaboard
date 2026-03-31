@@ -56,6 +56,8 @@ deploy-itphlies-server:
     backend_pid_file="$PWD/logs/itphlies-backend.pid"
     backend_log_file="$PWD/logs/itphlies-backend.log"
     server_pattern="{{release_bin}} server"
+    release_worker_pattern="{{release_bin}} node run"
+    dev_worker_pattern="{{bin}} node run"
 
     mkdir -p logs
     if [[ -f "$backend_pid_file" ]]; then
@@ -65,6 +67,31 @@ deploy-itphlies-server:
             wait "$old_pid" >/dev/null 2>&1 || true
         fi
     fi
+
+    if [[ -x "{{release_bin}}" ]]; then
+        {{release_bin}} run pause -a >/dev/null 2>&1 || true
+        {{release_bin}} node stop -a >/dev/null 2>&1 || true
+    fi
+    if [[ -x "{{bin}}" ]]; then
+        {{bin}} run pause -a >/dev/null 2>&1 || true
+        {{bin}} node stop -a >/dev/null 2>&1 || true
+    fi
+
+    mapfile -t stale_release_worker_pids < <(pgrep -f "$release_worker_pattern" || true)
+    for pid in "${stale_release_worker_pids[@]}"; do
+        if [[ -n "$pid" ]]; then
+            kill "$pid" >/dev/null 2>&1 || true
+            wait "$pid" >/dev/null 2>&1 || true
+        fi
+    done
+
+    mapfile -t stale_dev_worker_pids < <(pgrep -f "$dev_worker_pattern" || true)
+    for pid in "${stale_dev_worker_pids[@]}"; do
+        if [[ -n "$pid" ]]; then
+            kill "$pid" >/dev/null 2>&1 || true
+            wait "$pid" >/dev/null 2>&1 || true
+        fi
+    done
 
     mapfile -t stale_pids < <(pgrep -f "$server_pattern" || true)
     for pid in "${stale_pids[@]}"; do
@@ -117,6 +144,33 @@ stop-itphlies-deploy:
     nginx_config="$PWD/configs/nginx/itphlies-tunnel.conf"
 
     mkdir -p logs
+
+    if [[ -x "{{release_bin}}" ]]; then
+        {{release_bin}} run pause -a >/dev/null 2>&1 || true
+        {{release_bin}} node stop -a >/dev/null 2>&1 || true
+    fi
+    if [[ -x "{{bin}}" ]]; then
+        {{bin}} run pause -a >/dev/null 2>&1 || true
+        {{bin}} node stop -a >/dev/null 2>&1 || true
+    fi
+
+    mapfile -t stale_release_worker_pids < <(pgrep -f "{{release_bin}} node run" || true)
+    for pid in "${stale_release_worker_pids[@]}"; do
+        if [[ -n "$pid" ]]; then
+            kill "$pid" >/dev/null 2>&1 || true
+            wait "$pid" >/dev/null 2>&1 || true
+            echo "killed stale deployed worker pid=$pid"
+        fi
+    done
+
+    mapfile -t stale_dev_worker_pids < <(pgrep -f "{{bin}} node run" || true)
+    for pid in "${stale_dev_worker_pids[@]}"; do
+        if [[ -n "$pid" ]]; then
+            kill "$pid" >/dev/null 2>&1 || true
+            wait "$pid" >/dev/null 2>&1 || true
+            echo "killed stale dev worker pid=$pid"
+        fi
+    done
 
     if [[ -f "$frontend_pid_file" ]]; then
         frontend_pid=$(cat "$frontend_pid_file")

@@ -117,8 +117,25 @@ pub(crate) async fn claim_batch(
 ) -> Result<Option<(i64, i64, bool, LatentBatch)>, sqlx::Error> {
     let row = sqlx::query_as::<_, (i64, i64, bool, JsonValue)>(
         r#"
-        WITH claimed AS (
-            UPDATE batches
+        WITH next_batch AS (
+            SELECT b.id
+            FROM batches b
+            WHERE b.run_id = $2
+              AND b.status = 'pending'
+              AND EXISTS (
+                  SELECT 1
+                  FROM nodes n
+                  WHERE n.uuid = $1
+                    AND n.active_run_id = $2
+                    AND n.active_role = 'evaluator'
+                    AND n.lease_expires_at > now()
+              )
+            ORDER BY b.created_at, b.id
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+        ),
+        claimed AS (
+            UPDATE batches b
             SET status = 'claimed',
                 claimed_by_node_name = (
                     SELECT n.name
@@ -127,23 +144,9 @@ pub(crate) async fn claim_batch(
                 ),
                 claimed_by_node_uuid = $1,
                 claimed_at = now()
-            WHERE id IN (
-                SELECT id FROM batches
-                WHERE run_id = $2
-                  AND status = 'pending'
-                  AND EXISTS (
-                      SELECT 1
-                      FROM nodes n
-                      WHERE n.uuid = $1
-                        AND n.active_run_id = $2
-                        AND n.active_role = 'evaluator'
-                        AND n.lease_expires_at > now()
-                  )
-                ORDER BY created_at, id
-                LIMIT 1
-                FOR UPDATE SKIP LOCKED
-            )
-            RETURNING id, task_id, requires_training_values
+            FROM next_batch n
+            WHERE b.id = n.id
+            RETURNING b.id, b.task_id, b.requires_training_values
         )
         SELECT c.id, c.task_id, c.requires_training_values, i.latent_batch
         FROM claimed c

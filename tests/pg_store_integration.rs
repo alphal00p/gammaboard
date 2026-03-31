@@ -183,6 +183,116 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
+async fn claim_batch_claims_exactly_one_pending_batch() {
+    let Some(store) = test_store().await else {
+        return;
+    };
+    let node_name = unique_id("node");
+    let node_uuid = unique_id("uuid");
+
+    let run_id: i32 = sqlx::query_scalar(
+        r#"
+        INSERT INTO runs (
+            name,
+            integration_params,
+            point_spec
+        ) VALUES (
+            'claim-batch-single-row',
+            '{}'::jsonb,
+            '{"Continuous":{"dims":1}}'::jsonb
+        )
+        RETURNING id
+        "#,
+    )
+    .fetch_one(store.pool())
+    .await
+    .expect("insert run");
+
+    store
+        .announce_node(&node_name, &node_uuid)
+        .await
+        .expect("announce node");
+    store
+        .set_current_assignment(&node_uuid, WorkerRole::Evaluator, run_id)
+        .await
+        .expect("set current evaluator assignment");
+
+    let task_id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO run_tasks (run_id, name, sequence_nr, task, state)
+        VALUES ($1, 'sample-0', 0, '{"kind":"pause"}'::jsonb, 'completed')
+        RETURNING id
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(store.pool())
+    .await
+    .expect("insert run task");
+
+    let batch = Batch::from_points([Point::new(vec![3.0], Vec::new(), 1.0)]).expect("batch");
+    let latent_batch = LatentBatchSpec::from_batch(&batch).build();
+    let batches = vec![
+        latent_batch.clone(),
+        latent_batch.clone(),
+        latent_batch.clone(),
+        latent_batch,
+    ];
+    store
+        .insert_batches(run_id, task_id, false, &batches)
+        .await
+        .expect("insert batches");
+
+    let claimed = store
+        .claim_batch(run_id, &node_uuid)
+        .await
+        .expect("claim batch");
+    assert!(
+        claimed.is_some(),
+        "assigned evaluator should claim one batch"
+    );
+
+    let claimed_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM batches
+        WHERE run_id = $1
+          AND status = 'claimed'
+          AND claimed_by_node_uuid = $2
+        "#,
+    )
+    .bind(run_id)
+    .bind(&node_uuid)
+    .fetch_one(store.pool())
+    .await
+    .expect("count claimed batches");
+    assert_eq!(
+        claimed_count, 1,
+        "claim_batch should claim exactly one pending batch per call"
+    );
+
+    let pending_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM batches
+        WHERE run_id = $1
+          AND status = 'pending'
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(store.pool())
+    .await
+    .expect("count pending batches");
+    assert_eq!(pending_count, 3, "remaining batches should stay pending");
+
+    sqlx::query("DELETE FROM runs WHERE id = $1")
+        .bind(run_id)
+        .execute(store.pool())
+        .await
+        .expect("cleanup run");
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
 async fn sampler_aggregator_desired_assignment_is_unique_per_run() {
     let Some(store) = test_store().await else {
         return;
