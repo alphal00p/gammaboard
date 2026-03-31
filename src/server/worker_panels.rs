@@ -380,6 +380,10 @@ fn diagnostics_panel(value: Option<&JsonValue>) -> Option<PanelState> {
             "Final Target Runnable Batches",
         ),
         ("active_evaluator_count", "Active Evaluators"),
+        (
+            "target_runnable_batches_floor",
+            "Floor Target Runnable Batches",
+        ),
         ("runnable_batches", "Runnable Batches"),
         ("pending_batches", "Pending Batches"),
         ("claimed_batches", "Claimed Batches"),

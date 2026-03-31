@@ -280,7 +280,7 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
             ),
             key_value(
                 "runnable_queue_retained_ratio",
-                "Runnable Queue Retained Per Tick",
+                "Runnable Queue Retained Per Tick (Diagnostic)",
                 runtime.rolling.runnable_queue_retained_ratio.mean,
             ),
         ],
@@ -300,6 +300,11 @@ fn sampler_queue_buffer_panel(value: &JsonValue) -> Option<PanelState> {
             runner,
             "target_runnable_batches_base",
             "Base Target Runnable Batches",
+        ),
+        runner_value_entry(
+            runner,
+            "target_runnable_batches_floor",
+            "Floor Target Runnable Batches",
         ),
         runner_value_entry(
             runner,

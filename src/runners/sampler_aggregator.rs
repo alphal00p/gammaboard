@@ -25,6 +25,7 @@ const MAX_BATCH_SIZE_UP_FACTOR: f64 = 4.0;
 const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.25;
 const QUEUE_TARGET_RAMP_FACTOR: f64 = 2.0;
 const QUEUE_TARGET_MULTIPLIER_DECAY: f64 = 0.5;
+const MIN_RUNNABLE_BATCHES_PER_EVALUATOR: usize = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerAggregatorRunnerParams {
@@ -294,10 +295,22 @@ where
         Some((consumed_per_tick * (1.0 + self.config.queue_buffer)).ceil() as usize)
     }
 
-    fn target_runnable_after_enqueue(&self) -> Option<usize> {
+    fn evaluator_floor_target_runnable_batches(
+        &self,
+        active_evaluator_count: usize,
+    ) -> Option<usize> {
+        if active_evaluator_count == 0 {
+            return None;
+        }
+        active_evaluator_count.checked_mul(MIN_RUNNABLE_BATCHES_PER_EVALUATOR)
+    }
+
+    fn target_runnable_after_enqueue(&self, active_evaluator_count: usize) -> Option<usize> {
         let base_target = self.base_target_runnable_batches()?;
+        let floor_target = self.evaluator_floor_target_runnable_batches(active_evaluator_count)?;
         let multiplier = self.runtime_state.queue_target_multiplier.max(1.0);
-        Some(((base_target as f64) * multiplier).ceil() as usize)
+        let multiplier_target = ((base_target as f64) * multiplier).ceil() as usize;
+        Some(multiplier_target.max(floor_target))
     }
 
     async fn current_runner_diagnostics(&self) -> Result<JsonValue, RunnerError> {
@@ -313,7 +326,8 @@ where
             "queue_buffer": self.config.queue_buffer,
             "queue_target_multiplier": self.runtime_state.queue_target_multiplier,
             "target_runnable_batches_base": self.base_target_runnable_batches(),
-            "target_runnable_batches_final": self.target_runnable_after_enqueue(),
+            "target_runnable_batches_floor": self.evaluator_floor_target_runnable_batches(active_evaluator_count),
+            "target_runnable_batches_final": self.target_runnable_after_enqueue(active_evaluator_count),
             "observable_checkpoint_state": match self.runtime_state.observable_checkpoint_state {
                 ObservableCheckpointState::NeedsInitialRoundTrip => "needs_initial_round_trip",
                 ObservableCheckpointState::WaitingForInitialRoundTrip => "waiting_for_initial_round_trip",
@@ -323,13 +337,20 @@ where
         }))
     }
 
-    fn compute_produce_limit(&self, runnable_before_tick: usize, open_before_tick: usize) -> usize {
+    fn compute_produce_limit(
+        &self,
+        runnable_before_tick: usize,
+        open_before_tick: usize,
+        active_evaluator_count: usize,
+    ) -> usize {
         let hard_limit = self.hard_produce_limit(open_before_tick);
         if hard_limit == 0 {
             return 0;
         }
 
-        let Some(target_runnable_after_enqueue) = self.target_runnable_after_enqueue() else {
+        let Some(target_runnable_after_enqueue) =
+            self.target_runnable_after_enqueue(active_evaluator_count)
+        else {
             return self.compute_warmup_produce_limit(hard_limit, runnable_before_tick);
         };
 
@@ -714,6 +735,7 @@ where
         let observable_config = self.observable_state.config();
         let sample_plan = self.sampler.sample_plan().map_err(RunnerError::Engine)?;
         let training_samples_remaining = self.sampler.training_samples_remaining();
+        let active_evaluator_count = self.active_evaluator_count().await?;
         let runnable_before_produce = queue_before_produce.runnable().max(0) as usize;
         let open_before_produce = queue_before_produce.open().max(0) as usize;
         let batch_plan = match sample_plan {
@@ -751,8 +773,11 @@ where
                         Vec::new()
                     }
                     ObservableCheckpointState::Ready => {
-                        let base_produce_limit = self
-                            .compute_produce_limit(runnable_before_produce, open_before_produce);
+                        let base_produce_limit = self.compute_produce_limit(
+                            runnable_before_produce,
+                            open_before_produce,
+                            active_evaluator_count,
+                        );
                         self.build_batch_plan(base_produce_limit, max_samples)
                     }
                 }

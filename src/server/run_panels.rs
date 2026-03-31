@@ -115,6 +115,9 @@ fn panel_states(
     let target_runnable_batches = active_sampler
         .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
         .and_then(|value| runner_diagnostic_i64(value, "target_runnable_batches_final"));
+    let target_runnable_batches_floor = active_sampler
+        .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
+        .and_then(|value| runner_diagnostic_i64(value, "target_runnable_batches_floor"));
     let runnable_batches = active_sampler
         .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
         .and_then(|value| runner_diagnostic_i64(value, "runnable_batches"));
@@ -190,6 +193,11 @@ fn panel_states(
                     "queue_target_multiplier",
                     "Queue Target Multiplier",
                     queue_target_multiplier,
+                ),
+                key_value(
+                    "target_runnable_batches_floor",
+                    "Floor Target Runnable Batches",
+                    target_runnable_batches_floor,
                 ),
                 key_value(
                     "target_runnable_batches",

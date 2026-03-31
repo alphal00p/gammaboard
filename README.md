@@ -214,7 +214,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 `sampler_aggregator_runner_params` also controls queue and persistence behavior:
 - `aggregation_persist_interval_ms` sets how often merged sample observables are flushed to PostgreSQL during training; default is `1000`.
-- `queue_buffer` is the single runnable-work buffer knob for the sampler queue. A value of `0.0` means "be as aggressive as possible and allow the queue to drain by the next sampler tick"; `1.0` means "try to keep about one extra next-tick's worth of runnable work buffered". If the runnable queue fully depletes, the runner automatically doubles its internal target until the queue stops starving, still capped by `max_queue_size`.
+- `queue_buffer` is the single runnable-work buffer knob for the sampler queue. A value of `0.0` means "be as aggressive as possible and allow the queue to drain by the next sampler tick"; `1.0` means "try to keep about one extra next-tick's worth of runnable work buffered". The runner also keeps an internal floor of `2` runnable batches per active evaluator so the buffer cannot collapse below actual parallelism. If the runnable queue fully depletes, the runner automatically doubles its internal target until the queue stops starving, still capped by `max_queue_size`.
 - Total open batches (`pending + claimed + completed`) are still capped by `max_queue_size`.
 - After the forced initial small batch round-trip, the sampler warms up queue depth conservatively and doubles the target batch count each tick until the time-based throughput estimate takes over.
 - `strict_batch_ordering` controls whether completed batches are ingested only as a contiguous id prefix (`true`) or in any completed id order (`false`).
