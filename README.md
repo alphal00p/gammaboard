@@ -215,6 +215,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 `sampler_aggregator_runner_params` also controls queue and persistence behavior:
 - `aggregation_persist_interval_ms` sets how often merged sample observables are flushed to PostgreSQL during training; default is `1000`.
 - `target_queue_horizon_ticks` is the runnable-work horizon the sampler tries to keep buffered, measured in rolling-average sampler ticks. A value of `2.0` means "keep about two average sampler ticks of runnable work (`pending + claimed`) buffered" when possible.
+- `min_runnable_batches_per_evaluator` sets a parallelism floor under that horizon target so the sampler still tries to leave at least this many runnable batches per active evaluator buffered. Default is `2.0`.
 - Total open batches (`pending + claimed + completed`) are still capped by `max_queue_size`.
 - After the forced initial small batch round-trip, the sampler warms up queue depth conservatively and doubles the target batch count each tick until the time-based throughput estimate takes over.
 - `strict_batch_ordering` controls whether completed batches are ingested only as a contiguous id prefix (`true`) or in any completed id order (`false`).

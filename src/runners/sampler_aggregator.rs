@@ -10,7 +10,7 @@
 use crate::core::{
     BatchTransformConfig, EngineError, RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot,
     RunTask, SamplerAggregatorConfig, SamplerAggregatorPerformanceSnapshot, SamplerRollingAverages,
-    SamplerRuntimeMetrics, SamplerWorkerStore, StoreError,
+    SamplerRuntimeMetrics, SamplerWorkerStore, StoreError, WorkerRole,
 };
 use crate::evaluation::ObservableState;
 use crate::runners::rolling_metric::RollingMetric;
@@ -30,6 +30,7 @@ pub struct SamplerAggregatorRunnerParams {
     pub aggregation_persist_interval_ms: u64,
     pub target_batch_eval_ms: f64,
     pub target_queue_horizon_ticks: f64,
+    pub min_runnable_batches_per_evaluator: f64,
     pub max_batch_size: usize,
     pub max_queue_size: usize,
     pub max_batches_per_tick: usize,
@@ -255,27 +256,18 @@ where
             next.clamp(MIN_BATCH_SIZE, self.config.max_batch_size);
     }
 
-    fn compute_produce_limit(&self, runnable_before_tick: usize, open_before_tick: usize) -> usize {
+    fn hard_produce_limit(&self, open_before_tick: usize) -> usize {
         let remaining_capacity = self.config.max_queue_size.saturating_sub(open_before_tick);
-        if remaining_capacity == 0 {
-            return 0;
-        }
-        let hard_limit = remaining_capacity.min(self.config.max_batches_per_tick);
-        if hard_limit == 0 {
-            return 0;
-        }
+        remaining_capacity.min(self.config.max_batches_per_tick)
+    }
 
-        let Some(consumed_per_second) = self
+    fn horizon_target_runnable_batches(&self) -> Option<usize> {
+        let consumed_per_second = self
             .runtime_state
             .rolling
             .batches_consumed_per_second
-            .value()
-        else {
-            return self.compute_warmup_produce_limit(hard_limit, runnable_before_tick);
-        };
-        let Some(avg_tick_ms) = self.runtime_state.rolling.sampler_tick_ms.value() else {
-            return self.compute_warmup_produce_limit(hard_limit, runnable_before_tick);
-        };
+            .value()?;
+        let avg_tick_ms = self.runtime_state.rolling.sampler_tick_ms.value()?;
         if !consumed_per_second.is_finite()
             || consumed_per_second <= 0.0
             || !avg_tick_ms.is_finite()
@@ -283,16 +275,60 @@ where
             || !self.config.target_queue_horizon_ticks.is_finite()
             || self.config.target_queue_horizon_ticks <= 0.0
         {
-            return self.compute_warmup_produce_limit(hard_limit, runnable_before_tick);
+            return None;
         }
 
         let target_horizon_secs =
             (avg_tick_ms * self.config.target_queue_horizon_ticks).max(0.0) / 1000.0;
-        let target_runnable_after_enqueue =
-            (consumed_per_second * target_horizon_secs).ceil() as usize;
+        Some((consumed_per_second * target_horizon_secs).ceil() as usize)
+    }
 
-        let target_enqueue = target_runnable_after_enqueue.saturating_sub(runnable_before_tick);
-        hard_limit.min(target_enqueue)
+    fn evaluator_floor_target_runnable_batches(
+        &self,
+        active_evaluator_count: usize,
+    ) -> Option<usize> {
+        if active_evaluator_count == 0
+            || !self.config.min_runnable_batches_per_evaluator.is_finite()
+            || self.config.min_runnable_batches_per_evaluator <= 0.0
+        {
+            return None;
+        }
+        Some(
+            ((active_evaluator_count as f64) * self.config.min_runnable_batches_per_evaluator)
+                .ceil() as usize,
+        )
+    }
+
+    fn target_runnable_after_enqueue(&self, active_evaluator_count: usize) -> Option<usize> {
+        match (
+            self.horizon_target_runnable_batches(),
+            self.evaluator_floor_target_runnable_batches(active_evaluator_count),
+        ) {
+            (Some(horizon), Some(floor)) => Some(horizon.max(floor)),
+            (Some(horizon), None) => Some(horizon),
+            (None, Some(floor)) => Some(floor),
+            (None, None) => None,
+        }
+    }
+
+    fn compute_produce_limit(
+        &self,
+        runnable_before_tick: usize,
+        open_before_tick: usize,
+        active_evaluator_count: usize,
+    ) -> usize {
+        let hard_limit = self.hard_produce_limit(open_before_tick);
+        if hard_limit == 0 {
+            return 0;
+        }
+
+        let Some(target_runnable_after_enqueue) =
+            self.target_runnable_after_enqueue(active_evaluator_count)
+        else {
+            return self.compute_warmup_produce_limit(hard_limit, runnable_before_tick);
+        };
+
+        hard_limit.min(target_runnable_after_enqueue.saturating_sub(runnable_before_tick))
     }
 
     fn compute_warmup_produce_limit(
@@ -432,6 +468,18 @@ where
         }
     }
 
+    async fn active_evaluator_count(&self) -> Result<usize, RunnerError> {
+        let nodes = self.store.list_nodes(None).await?;
+        Ok(nodes
+            .iter()
+            .filter(|node| {
+                node.current_assignment.as_ref().is_some_and(|assignment| {
+                    assignment.run_id == self.run_id && assignment.role == WorkerRole::Evaluator
+                })
+            })
+            .count())
+    }
+
     pub fn task_id(&self) -> i64 {
         self.task.id
     }
@@ -450,7 +498,10 @@ where
 
         let completed_batches = self.process_completed().await?;
         let queue_before_produce = self.store.get_batch_queue_counts(self.run_id).await?;
-        let produced_batches = self.produce(queue_before_produce).await?;
+        let active_evaluator_count = self.active_evaluator_count().await?;
+        let produced_batches = self
+            .produce(queue_before_produce, active_evaluator_count)
+            .await?;
         self.sync_task_progress().await?;
         self.flush_run_sample_progress().await?;
         self.flush_performance_snapshot().await?;
@@ -648,6 +699,7 @@ where
     async fn produce(
         &mut self,
         queue_before_produce: crate::core::BatchQueueCounts,
+        active_evaluator_count: usize,
     ) -> Result<usize, RunnerError> {
         let observable_config = self.observable_state.config();
         let sample_plan = self.sampler.sample_plan().map_err(RunnerError::Engine)?;
@@ -689,8 +741,11 @@ where
                         Vec::new()
                     }
                     ObservableCheckpointState::Ready => {
-                        let base_produce_limit = self
-                            .compute_produce_limit(runnable_before_produce, open_before_produce);
+                        let base_produce_limit = self.compute_produce_limit(
+                            runnable_before_produce,
+                            open_before_produce,
+                            active_evaluator_count,
+                        );
                         self.build_batch_plan(base_produce_limit, max_samples)
                     }
                 }

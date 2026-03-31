@@ -179,6 +179,13 @@ fn panel_states(
                         .sampler_aggregator_runner_params
                         .target_queue_horizon_ticks,
                 ),
+                key_value(
+                    "min_runnable_batches_per_evaluator",
+                    "Min Runnable Batches Per Evaluator",
+                    run_spec
+                        .sampler_aggregator_runner_params
+                        .min_runnable_batches_per_evaluator,
+                ),
             ],
         ),
         key_value_panel(

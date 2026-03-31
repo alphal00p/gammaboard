@@ -71,6 +71,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Sample tasks must force an initial small batch round-trip before normal queue ramp-up so an observable snapshot is persisted immediately at task start, and must persist the observable again when the task completes.
 - `sampler_aggregator_runner_params.aggregation_persist_interval_ms` controls how often merged observable state is persisted during sampling; the initial small-batch checkpoint and final task completion flush must still be forced immediately.
 - `sampler_aggregator_runner_params.target_queue_horizon_ticks` defines the runnable queue horizon over rolling-average sampler ticks. Total open batches (`pending + claimed + completed`) are still capped separately by `max_queue_size`.
+- `sampler_aggregator_runner_params.min_runnable_batches_per_evaluator` defines a runnable-queue floor based on active evaluator count so the queue controller can keep workers fed even when the horizon estimate is conservative.
 - After the forced initial small-batch round-trip, the sampler queue controller must warm up conservatively and ramp target batch count by a factor of `2` until real drain history is available.
 - `sampler_aggregator_runner_params.strict_batch_ordering` controls whether completed evaluator batches are ingested strictly as a contiguous id prefix or opportunistically in completed-id order.
 

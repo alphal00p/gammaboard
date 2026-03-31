@@ -13,6 +13,7 @@ performance_snapshot_interval_ms = 2000
 aggregation_persist_interval_ms = 1000
 target_batch_eval_ms = 100.0
 target_queue_horizon_ticks = 2.0
+min_runnable_batches_per_evaluator = 2.0
 max_batch_size = 1024
 max_queue_size = 1024
 max_batches_per_tick = 8
