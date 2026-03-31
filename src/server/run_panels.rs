@@ -169,7 +169,7 @@ fn panel_states(
                 key_value("completed", "Completed Batches", run.completed_batches),
                 key_value(
                     "avg_queue_remaining",
-                    "Avg Runnable Queue Retained",
+                    "Avg Runnable Queue Retained Per Tick",
                     avg_queue_remaining,
                 ),
                 key_value(
@@ -257,7 +257,7 @@ fn queue_remaining_mean(metrics: &JsonValue) -> Option<f64> {
         .as_object()
         .and_then(|value| value.get("rolling"))
         .and_then(JsonValue::as_object)
-        .and_then(|value| value.get("queue_remaining_ratio"))
+        .and_then(|value| value.get("runnable_queue_retained_ratio"))
         .and_then(JsonValue::as_object)
         .and_then(|value| value.get("mean"))
         .and_then(JsonValue::as_f64)

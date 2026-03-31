@@ -182,8 +182,8 @@ pub struct SamplerRollingAverages {
     pub eval_ms_per_batch: RollingMetricSnapshot,
     pub sampler_produce_ms_per_sample: RollingMetricSnapshot,
     pub sampler_ingest_ms_per_sample: RollingMetricSnapshot,
-    pub queue_remaining_ratio: RollingMetricSnapshot,
-    pub batches_consumed_per_tick: RollingMetricSnapshot,
+    pub runnable_queue_retained_ratio: RollingMetricSnapshot,
+    pub runnable_batches_consumed_per_tick: RollingMetricSnapshot,
     pub batches_consumed_per_second: RollingMetricSnapshot,
     pub sampler_tick_ms: RollingMetricSnapshot,
 }

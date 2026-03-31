@@ -107,8 +107,8 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         ),
         with_panel_width(
             panel_spec(
-                "sampler_queue_remaining_ratio",
-                "Runnable Queue Retained Ratio",
+                "sampler_runnable_queue_retained_ratio",
+                "Runnable Queue Retained Per Tick",
                 PanelKind::ScalarTimeseries,
                 PanelHistoryMode::Append,
             ),
@@ -174,16 +174,28 @@ fn sampler_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelState> {
             None,
         ),
         scalar_point_panel(
-            "sampler_queue_remaining_ratio",
+            "sampler_runnable_queue_retained_ratio",
             history_x(entry.created_at),
-            runtime.rolling.queue_remaining_ratio.mean.unwrap_or(0.0),
+            runtime
+                .rolling
+                .runnable_queue_retained_ratio
+                .mean
+                .unwrap_or(0.0),
             Some(
-                runtime.rolling.queue_remaining_ratio.mean.unwrap_or(0.0)
-                    - runtime.rolling.queue_remaining_ratio.std_dev,
+                runtime
+                    .rolling
+                    .runnable_queue_retained_ratio
+                    .mean
+                    .unwrap_or(0.0)
+                    - runtime.rolling.runnable_queue_retained_ratio.std_dev,
             ),
             Some(
-                runtime.rolling.queue_remaining_ratio.mean.unwrap_or(0.0)
-                    + runtime.rolling.queue_remaining_ratio.std_dev,
+                runtime
+                    .rolling
+                    .runnable_queue_retained_ratio
+                    .mean
+                    .unwrap_or(0.0)
+                    + runtime.rolling.runnable_queue_retained_ratio.std_dev,
             ),
         ),
     ]

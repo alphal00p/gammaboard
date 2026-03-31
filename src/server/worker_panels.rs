@@ -343,14 +343,14 @@ fn sampler_runtime_panel(runtime: &SamplerRuntimeMetrics) -> PanelState {
                 runtime.rolling.sampler_ingest_ms_per_sample.mean,
             ),
             key_value(
-                "queue_remaining_ratio",
-                "Runnable Queue Retained Ratio",
-                runtime.rolling.queue_remaining_ratio.mean,
+                "runnable_queue_retained_ratio",
+                "Runnable Queue Retained Per Tick",
+                runtime.rolling.runnable_queue_retained_ratio.mean,
             ),
             key_value(
-                "batches_consumed_per_tick",
-                "Batches Consumed Per Tick",
-                runtime.rolling.batches_consumed_per_tick.mean,
+                "runnable_batches_consumed_per_tick",
+                "Runnable Batches Consumed Per Tick",
+                runtime.rolling.runnable_batches_consumed_per_tick.mean,
             ),
             key_value(
                 "batches_consumed_per_second",

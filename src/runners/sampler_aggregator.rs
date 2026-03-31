@@ -44,8 +44,8 @@ struct RollingAveragesState {
     sampler_produce_ms_per_sample: RollingMetric,
     sampler_ingest_ms_per_sample: RollingMetric,
     completed_samples_per_second: RollingMetric,
-    queue_remaining_ratio: RollingMetric,
-    batches_consumed_per_tick: RollingMetric,
+    runnable_queue_retained_ratio: RollingMetric,
+    runnable_batches_consumed_per_tick: RollingMetric,
     batches_consumed_per_second: RollingMetric,
     sampler_tick_ms: RollingMetric,
 }
@@ -119,11 +119,11 @@ impl SamplerRuntimeState {
                 sampler_ingest_ms_per_sample: RollingMetricSnapshot::from(
                     &self.rolling.sampler_ingest_ms_per_sample,
                 ),
-                queue_remaining_ratio: RollingMetricSnapshot::from(
-                    &self.rolling.queue_remaining_ratio,
+                runnable_queue_retained_ratio: RollingMetricSnapshot::from(
+                    &self.rolling.runnable_queue_retained_ratio,
                 ),
-                batches_consumed_per_tick: RollingMetricSnapshot::from(
-                    &self.rolling.batches_consumed_per_tick,
+                runnable_batches_consumed_per_tick: RollingMetricSnapshot::from(
+                    &self.rolling.runnable_batches_consumed_per_tick,
                 ),
                 batches_consumed_per_second: RollingMetricSnapshot::from(
                     &self.rolling.batches_consumed_per_second,
@@ -413,12 +413,12 @@ where
             let observed_ratio = (runnable_before_tick as f64) / (previous_runnable_after as f64);
             self.runtime_state
                 .rolling
-                .queue_remaining_ratio
+                .runnable_queue_retained_ratio
                 .observe(observed_ratio);
             let consumed = previous_runnable_after.saturating_sub(runnable_before_tick) as f64;
             self.runtime_state
                 .rolling
-                .batches_consumed_per_tick
+                .runnable_batches_consumed_per_tick
                 .observe(consumed);
             if let Some(avg_tick_ms) = self.runtime_state.rolling.sampler_tick_ms.value()
                 && avg_tick_ms.is_finite()
