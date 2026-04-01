@@ -1261,10 +1261,12 @@ impl<'a> SamplerCheckpointProgram<'a> {
                         && sampler_state.1.as_deref() == Some("sampler_aggregator")
                         && sampler_state.2 == Some(run_id)
                         && sampler_state.3.as_deref() == Some("sampler_aggregator");
+                    let completed_restored = paused_completed_samples
+                        .is_none_or(|paused_completed| progress.1 >= paused_completed);
                     Ok(sampler_restored
                         && current_observable == paused_current_observable
                         && checkpoint == paused_checkpoint
-                        && Some(progress.1) == paused_completed_samples)
+                        && completed_restored)
                 },
             )
             .await

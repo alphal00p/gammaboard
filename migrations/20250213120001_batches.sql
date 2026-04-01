@@ -28,12 +28,12 @@ CREATE TABLE IF NOT EXISTS batches (
 
 CREATE TABLE IF NOT EXISTS batch_inputs (
     batch_id BIGINT PRIMARY KEY REFERENCES batches(id) ON DELETE CASCADE,
-    latent_batch JSONB NOT NULL
+    latent_batch BYTEA NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS batch_results (
     batch_id BIGINT PRIMARY KEY REFERENCES batches(id) ON DELETE CASCADE,
-    "values" JSONB,
+    "values" BYTEA,
     batch_observable JSONB NOT NULL,
     total_eval_time_ms DOUBLE PRECISION,
     completed_at TIMESTAMPTZ NOT NULL

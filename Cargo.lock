@@ -1794,6 +1794,7 @@ dependencies = [
  "assert_cmd",
  "async-trait",
  "axum",
+ "bincode",
  "chrono",
  "clap",
  "clap_complete",

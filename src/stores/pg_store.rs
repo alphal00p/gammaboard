@@ -659,25 +659,20 @@ impl WorkQueueStore for PgStore {
         .map_err(map_sqlx)?;
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
-            let latent_batch = LatentBatch::from_json(&row.latent_batch).map_err(|err| {
-                store_err(format!(
-                    "failed to deserialize latent batch payload for batch_id={}: {err}",
-                    row.batch_id
-                ))
-            })?;
-            let result = BatchResult::values_from_json(row.values.as_ref(), &row.batch_observable)
-                .map_err(|err| {
-                    store_err(format!(
-                        "failed to deserialize batch result payload for batch_id={}: {err}",
-                        row.batch_id
-                    ))
-                })?;
+            let result =
+                BatchResult::values_from_bytes(row.values.as_deref(), &row.batch_observable)
+                    .map_err(|err| {
+                        store_err(format!(
+                            "failed to deserialize batch result payload for batch_id={}: {err}",
+                            row.batch_id
+                        ))
+                    })?;
 
             out.push(CompletedBatch {
                 batch_id: row.batch_id,
                 task_id: row.task_id,
                 requires_training_values: row.requires_training_values,
-                latent_batch,
+                batch_size: row.batch_size as usize,
                 result,
                 completed_at: row.completed_at,
                 total_eval_time_ms: row.total_eval_time_ms,

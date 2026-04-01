@@ -72,7 +72,7 @@ pub struct CompletedBatch {
     pub batch_id: i64,
     pub task_id: i64,
     pub requires_training_values: bool,
-    pub latent_batch: LatentBatch,
+    pub batch_size: usize,
     pub result: BatchResult,
     pub completed_at: Option<DateTime<Utc>>,
     pub total_eval_time_ms: Option<f64>,

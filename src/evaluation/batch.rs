@@ -1,5 +1,6 @@
 //! Batch abstraction for concrete evaluator-side materialized work.
 
+use bincode::config::{Configuration, standard};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::{error::Error, fmt};
@@ -102,6 +103,10 @@ pub struct BatchResult {
 }
 
 impl BatchResult {
+    fn binary_config() -> Configuration {
+        standard()
+    }
+
     pub fn new(values: Option<Vec<f64>>, observable: ObservableState) -> Self {
         Self { values, observable }
     }
@@ -127,6 +132,17 @@ impl BatchResult {
             }
             None => JsonValue::Null,
         }
+    }
+
+    pub fn values_to_bytes(&self) -> Result<Option<Vec<u8>>, BatchError> {
+        self.values
+            .as_ref()
+            .map(|values| {
+                bincode::serde::encode_to_vec(values, Self::binary_config()).map_err(|err| {
+                    BatchError::layout(format!("invalid batch values payload: {err}"))
+                })
+            })
+            .transpose()
     }
 
     pub fn validate_json_safe(&self) -> Result<(), BatchError> {
@@ -168,6 +184,26 @@ impl BatchResult {
         })?;
         Ok(Self::new(parsed_values, parsed_observable))
     }
+
+    pub fn values_from_bytes(
+        values: Option<&[u8]>,
+        observable: &JsonValue,
+    ) -> Result<Self, BatchError> {
+        let parsed_values = match values {
+            Some(values) => {
+                let (decoded, _): (Vec<f64>, usize) =
+                    bincode::serde::decode_from_slice(values, Self::binary_config()).map_err(
+                        |err| BatchError::layout(format!("invalid batch values payload: {err}")),
+                    )?;
+                Some(decoded)
+            }
+            None => None,
+        };
+        let parsed_observable = serde_json::from_value(observable.clone()).map_err(|err| {
+            BatchError::layout(format!("invalid batch observable payload: {err}"))
+        })?;
+        Ok(Self::new(parsed_values, parsed_observable))
+    }
 }
 
 #[cfg(test)]
@@ -191,5 +227,17 @@ mod tests {
             err.to_string()
                 .contains("batch observable is not JSON-safe")
         );
+    }
+
+    #[test]
+    fn training_values_roundtrip_binary() {
+        let result = BatchResult::new(Some(vec![1.0, 2.0, 3.5]), ObservableState::empty_scalar());
+        let bytes = result.values_to_bytes().expect("encode values");
+        let restored = BatchResult::values_from_bytes(
+            bytes.as_deref(),
+            &result.observable.to_json().expect("observable json"),
+        )
+        .expect("decode values");
+        assert_eq!(restored.values, result.values);
     }
 }

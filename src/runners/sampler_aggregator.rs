@@ -604,7 +604,7 @@ where
 
         let mut completed_samples_delta = 0_i64;
         for batch in &completed {
-            let batch_samples = batch.latent_batch.nr_samples;
+            let batch_samples = batch.batch_size;
             completed_samples_delta += batch_samples as i64;
             if let Some(total_eval_time_ms) = batch.total_eval_time_ms
                 && batch_samples > 0

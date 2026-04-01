@@ -12,8 +12,8 @@ pub(crate) struct CompletedBatchRaw {
     pub batch_id: i64,
     pub task_id: i64,
     pub requires_training_values: bool,
-    pub latent_batch: JsonValue,
-    pub values: Option<JsonValue>,
+    pub batch_size: i32,
+    pub values: Option<Vec<u8>>,
     pub batch_observable: JsonValue,
     pub completed_at: Option<DateTime<Utc>>,
     pub total_eval_time_ms: Option<f64>,
@@ -71,7 +71,10 @@ pub(crate) async fn insert_batches(
     input_builder.push_values(
         batch_ids.iter().zip(batches.iter()),
         |mut row, (batch_id, batch)| {
-            row.push_bind(*batch_id).push_bind(batch.into_json());
+            let payload = batch
+                .to_bytes()
+                .expect("latent batch serialization should never fail");
+            row.push_bind(*batch_id).push_bind(payload);
         },
     );
     input_builder.build().execute(&mut *tx).await?;
@@ -141,7 +144,7 @@ pub(crate) async fn claim_batch(
     run_id: i32,
     node_uuid: &str,
 ) -> Result<Option<(i64, i64, bool, LatentBatch)>, sqlx::Error> {
-    let row = sqlx::query_as::<_, (i64, i64, bool, JsonValue)>(
+    let row = sqlx::query_as::<_, (i64, i64, bool, Vec<u8>)>(
         r#"
         WITH next_batch AS (
             SELECT b.id
@@ -184,9 +187,9 @@ pub(crate) async fn claim_batch(
     .fetch_optional(pool)
     .await?;
 
-    if let Some((batch_id, task_id, requires_training_values, latent_json)) = row {
+    if let Some((batch_id, task_id, requires_training_values, latent_bytes)) = row {
         let batch =
-            LatentBatch::from_json(&latent_json).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+            LatentBatch::from_bytes(&latent_bytes).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
         Ok(Some((batch_id, task_id, requires_training_values, batch)))
     } else {
         Ok(None)
@@ -228,7 +231,9 @@ pub(crate) async fn submit_batch_results(
         .validate_json_safe()
         .map_err(|err| sqlx::Error::Protocol(format!("invalid batch result payload: {err}")))?;
     let observable = encode_json("batch observable", &result.observable)?;
-    let values = result.values_to_json();
+    let values = result.values_to_bytes().map_err(|err| {
+        sqlx::Error::Protocol(format!("failed to serialize batch training values: {err}"))
+    })?;
     let mut tx = pool.begin().await?;
     let update_result = sqlx::query(
         r#"
@@ -401,32 +406,55 @@ pub(crate) async fn fetch_completed_batches(
                 i64,
                 i64,
                 bool,
-                String,
-                JsonValue,
-                Option<JsonValue>,
+                i32,
+                Option<Vec<u8>>,
                 Option<JsonValue>,
                 Option<DateTime<Utc>>,
                 Option<f64>,
             ),
         >(
             r#"
+            WITH candidate_batches AS (
+                SELECT
+                    b.id,
+                    b.task_id,
+                    b.requires_training_values,
+                    b.batch_size,
+                    b.status
+                FROM batches b
+                WHERE b.run_id = $1
+                  AND b.id > $2
+                ORDER BY b.id ASC
+                LIMIT $3
+            ),
+            first_incomplete AS (
+                SELECT MIN(id) AS batch_id
+                FROM candidate_batches
+                WHERE status <> 'completed'
+            ),
+            completed_prefix AS (
+                SELECT
+                    c.id,
+                    c.task_id,
+                    c.requires_training_values,
+                    c.batch_size
+                FROM candidate_batches c
+                CROSS JOIN first_incomplete f
+                WHERE c.status = 'completed'
+                  AND (f.batch_id IS NULL OR c.id < f.batch_id)
+            )
             SELECT
                 b.id,
                 b.task_id,
                 b.requires_training_values,
-                b.status,
-                i.latent_batch,
+                b.batch_size,
                 r."values",
                 r.batch_observable,
                 r.completed_at,
                 r.total_eval_time_ms
-            FROM batches b
-            JOIN batch_inputs i ON i.batch_id = b.id
-            LEFT JOIN batch_results r ON r.batch_id = b.id
-            WHERE b.run_id = $1
-              AND b.id > $2
+            FROM completed_prefix b
+            JOIN batch_results r ON r.batch_id = b.id
             ORDER BY b.id ASC
-            LIMIT $3
             "#,
         )
         .bind(run_id)
@@ -441,9 +469,8 @@ pub(crate) async fn fetch_completed_batches(
                 i64,
                 i64,
                 bool,
-                String,
-                JsonValue,
-                Option<JsonValue>,
+                i32,
+                Option<Vec<u8>>,
                 Option<JsonValue>,
                 Option<DateTime<Utc>>,
                 Option<f64>,
@@ -454,15 +481,13 @@ pub(crate) async fn fetch_completed_batches(
                 b.id,
                 b.task_id,
                 b.requires_training_values,
-                b.status,
-                i.latent_batch,
+                b.batch_size,
                 r."values",
                 r.batch_observable,
                 r.completed_at,
                 r.total_eval_time_ms
             FROM batches b
-            JOIN batch_inputs i ON i.batch_id = b.id
-            LEFT JOIN batch_results r ON r.batch_id = b.id
+            JOIN batch_results r ON r.batch_id = b.id
             WHERE b.run_id = $1
               AND b.id > $2
               AND b.status = 'completed'
@@ -482,20 +507,13 @@ pub(crate) async fn fetch_completed_batches(
         batch_id,
         task_id,
         requires_training_values,
-        batch_status,
-        latent_batch,
+        batch_size,
         values,
         batch_observable,
         completed_at,
         total_eval_time_ms,
     ) in rows
     {
-        if strict_ordering && batch_status != "completed" {
-            break;
-        }
-        if batch_status != "completed" {
-            continue;
-        }
         let Some(batch_observable) = batch_observable else {
             return Err(sqlx::Error::Protocol(format!(
                 "completed batch {batch_id} is missing persisted observable"
@@ -505,7 +523,7 @@ pub(crate) async fn fetch_completed_batches(
             batch_id,
             task_id,
             requires_training_values,
-            latent_batch,
+            batch_size,
             values,
             batch_observable,
             completed_at,

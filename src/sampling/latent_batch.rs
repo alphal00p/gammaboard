@@ -1,5 +1,6 @@
 //! Latent batch abstraction for sampler-owned queue payloads.
 
+use bincode::config::{Configuration, standard};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
@@ -32,6 +33,19 @@ pub enum LatentBatchPayload {
 pub enum SamplePlan {
     Produce { nr_samples: usize },
     Pause,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct LatentBatchBinary {
+    nr_samples: usize,
+    observable: ObservableConfig,
+    payload: LatentBatchPayloadBinary,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+enum LatentBatchPayloadBinary {
+    Batch { batch: Batch },
+    HavanaInference { seed: u64 },
 }
 
 impl LatentBatchPayload {
@@ -84,6 +98,10 @@ impl LatentBatchSpec {
 }
 
 impl LatentBatch {
+    fn binary_config() -> Configuration {
+        standard()
+    }
+
     pub fn validate_nr_samples(&self) -> Result<(), BatchError> {
         if self.nr_samples == 0 {
             return Err(BatchError::layout(
@@ -101,6 +119,46 @@ impl LatentBatch {
         let latent: Self = serde_json::from_value(value.clone())?;
         latent.validate_nr_samples()?;
         Ok(latent)
+    }
+
+    pub fn to_bytes(&self) -> Result<Vec<u8>, BatchError> {
+        let payload = match &self.payload {
+            LatentBatchPayload::Batch { batch } => LatentBatchPayloadBinary::Batch {
+                batch: Batch::from_json(batch)?,
+            },
+            LatentBatchPayload::HavanaInference { seed } => {
+                LatentBatchPayloadBinary::HavanaInference { seed: *seed }
+            }
+        };
+        bincode::serde::encode_to_vec(
+            LatentBatchBinary {
+                nr_samples: self.nr_samples,
+                observable: self.observable.clone(),
+                payload,
+            },
+            Self::binary_config(),
+        )
+        .map_err(|err| BatchError::layout(format!("invalid latent batch payload: {err}")))
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, BatchError> {
+        let (latent, _): (LatentBatchBinary, usize) =
+            bincode::serde::decode_from_slice(bytes, Self::binary_config()).map_err(|err| {
+                BatchError::layout(format!("invalid latent batch payload: {err}"))
+            })?;
+        let payload = match latent.payload {
+            LatentBatchPayloadBinary::Batch { batch } => LatentBatchPayload::from_batch(&batch),
+            LatentBatchPayloadBinary::HavanaInference { seed } => {
+                LatentBatchPayload::HavanaInference { seed }
+            }
+        };
+        let restored = Self {
+            nr_samples: latent.nr_samples,
+            observable: latent.observable,
+            payload,
+        };
+        restored.validate_nr_samples()?;
+        Ok(restored)
     }
 }
 
@@ -122,5 +180,18 @@ mod tests {
         assert_eq!(restored.nr_samples, 2);
         let restored_batch = restored.payload.as_batch().expect("batch payload");
         assert_eq!(restored_batch, batch);
+    }
+
+    #[test]
+    fn latent_batch_roundtrips_binary_payload() {
+        let batch = Batch::from_points([
+            Point::new(vec![0.5], Vec::new(), 1.0),
+            Point::new(vec![1.5], Vec::new(), 1.0),
+        ])
+        .expect("batch creation");
+        let latent = LatentBatchSpec::from_batch(&batch).build();
+        let bytes = latent.to_bytes().expect("latent batch bytes");
+        let restored = LatentBatch::from_bytes(&bytes).expect("latent batch");
+        assert_eq!(restored, latent);
     }
 }

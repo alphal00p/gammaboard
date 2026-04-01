@@ -67,6 +67,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Fresh sampler tasks may inherit a reduced initial batch size from the previous sampler task, but should not carry over the full rolling metrics state.
 - Claimed batches are fenced by live node ownership. Do not add a second independent batch lease.
 - Whether evaluator training values are required is a per-batch persisted contract (`batches.requires_training_values`), not inferred at ingest time from the currently active sampler config.
+- Queue payloads are transient and may use compact binary storage; do not optimize them for ad hoc SQL readability at the expense of runtime throughput.
 - Havana training and inference samplers must support nested discrete domains and preserve the full grid topology in persisted snapshots for restore/materialization.
 - Havana training runs in deterministic lockstep windows: it emits at most one `samples_for_update` window at a time, pauses production until that window is fully ingested, then updates the grid and continues.
 - Sample tasks must force an initial small batch round-trip before normal queue ramp-up so an observable snapshot is persisted immediately at task start, and must persist the observable again when the task completes.
