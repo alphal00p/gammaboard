@@ -363,17 +363,6 @@ where
         }
     }
 
-    // Finite engine sample plans must be produced atomically so resume preserves
-    // the exact remaining plan. Task-level finite budgets should still use normal
-    // queue-aware batching.
-    fn atomic_finite_sample_plan_batch(max_samples: Option<usize>) -> Option<Vec<usize>> {
-        let nr_samples = max_samples?;
-        if nr_samples == 0 {
-            return Some(Vec::new());
-        }
-        Some(vec![nr_samples])
-    }
-
     fn max_samples_to_produce_this_tick(
         &self,
         engine_max_samples: Option<usize>,
@@ -738,19 +727,19 @@ where
                             open_before_produce,
                             active_evaluator_count,
                         );
-                        if requested.is_some() {
-                            Self::atomic_finite_sample_plan_batch(max_samples).unwrap_or_else(
-                                || self.build_batch_plan(base_produce_limit, max_samples),
-                            )
-                        } else {
-                            self.build_batch_plan(base_produce_limit, max_samples)
-                        }
+                        self.build_batch_plan(base_produce_limit, max_samples)
                     }
                 }
             }
         };
         let mut produced = Vec::with_capacity(batch_plan.len());
         for nr_samples in batch_plan {
+            if nr_samples > self.config.max_batch_size {
+                return Err(RunnerError::Engine(EngineError::engine(format!(
+                    "batch plan exceeded max_batch_size: planned={} max_batch_size={}",
+                    nr_samples, self.config.max_batch_size
+                ))));
+            }
             let started = Instant::now();
             let batch = self
                 .sampler
@@ -946,27 +935,5 @@ mod tests {
 
         assert_eq!(snapshot.reduced_carryover_batch_size(512), 32);
         assert_eq!(snapshot.reduced_carryover_batch_size(24), 24);
-    }
-
-    #[test]
-    fn finite_sample_plan_batching_is_atomic_for_finite_plans() {
-        assert_eq!(
-            super::SamplerAggregatorRunner::<crate::stores::PgStore>::atomic_finite_sample_plan_batch(
-                Some(37),
-            ),
-            Some(vec![37])
-        );
-        assert_eq!(
-            super::SamplerAggregatorRunner::<crate::stores::PgStore>::atomic_finite_sample_plan_batch(
-                Some(0),
-            ),
-            Some(Vec::new())
-        );
-        assert_eq!(
-            super::SamplerAggregatorRunner::<crate::stores::PgStore>::atomic_finite_sample_plan_batch(
-                None,
-            ),
-            None
-        );
     }
 }
