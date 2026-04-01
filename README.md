@@ -56,6 +56,7 @@ The CLI reads its shared database and tracing settings from `configs/cli/default
   data_dir = ".postgres"
   socket_dir = ".postgres-socket"
   log_file = ".postgres/logfile"
+  max_connections = 512
   ```
 
 ## Local Postgres Commands
@@ -71,6 +72,7 @@ gammaboard db dump-sql
 
 These commands use `database.url` and `local_postgres` from `configs/cli/default.toml`.
 To reset local state, use `just db-reset` or run `gammaboard db delete --yes` then `gammaboard db start`.
+`local_postgres.max_connections` controls the local Postgres server connection ceiling used by `gammaboard db start`.
 
 Sampler runs keep the frontend current through periodic lightweight writes to `runs.current_observable`, `persisted_observable_snapshots`, and performance history. The full sampler-aggregator resume checkpoint is stored separately and only refreshed when the sampler is unassigned or paused.
 

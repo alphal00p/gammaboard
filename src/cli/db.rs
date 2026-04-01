@@ -98,9 +98,10 @@ fn start_postgres(local: &LocalPostgresConfig, database_url: &str) -> Result<()>
             .arg(&local.log_file)
             .arg("-o")
             .arg(format!(
-                "-k {} -p {}",
+                "-k {} -p {} -c max_connections={}",
                 socket_dir.display(),
-                connection.port
+                connection.port,
+                local.max_connections
             ))
             .arg("start"),
         "pg_ctl start",

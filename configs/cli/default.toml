@@ -10,3 +10,4 @@ db_external_level = "warn"
 data_dir = ".postgres"
 socket_dir = ".postgres-socket"
 log_file = ".postgres/logfile"
+max_connections = 512

@@ -29,6 +29,7 @@ pub struct LocalPostgresConfig {
     pub data_dir: String,
     pub socket_dir: String,
     pub log_file: String,
+    pub max_connections: u32,
 }
 
 impl CliConfig {

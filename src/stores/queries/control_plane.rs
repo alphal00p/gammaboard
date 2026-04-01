@@ -401,6 +401,7 @@ pub(crate) async fn request_all_nodes_shutdown(pool: &PgPool) -> Result<u64, sql
         SET
             shutdown_requested_at = now(),
             updated_at = now()
+        WHERE lease_expires_at > now()
         "#,
     )
     .execute(pool)
