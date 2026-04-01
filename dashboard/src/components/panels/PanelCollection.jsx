@@ -466,7 +466,15 @@ const HistogramPanel = ({ title, state }) => {
               activeDot={{ r: 2.5, fill: "#005f73", stroke: "#f8fafc", strokeWidth: 1 }}
               isAnimationActive={false}
             >
-              <ErrorBar dataKey="error" direction="y" stroke="#7c8a96" strokeWidth={1.4} width={6} />
+              <ErrorBar
+                dataKey="error"
+                direction="y"
+                stroke="#7c8a96"
+                strokeWidth={1.4}
+                width={6}
+                isAnimationActive={false}
+                animationDuration={0}
+              />
             </Line>
           </ComposedChart>
         </ResponsiveContainer>

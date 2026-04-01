@@ -89,7 +89,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Dashboard auth is intended for small trusted deployments behind HTTPS.
 - Run and task templates should be simple `.toml` files served from server-configured directories; the frontend should treat them as editable starting points, not as a second schema.
 - Shared CLI database and tracing settings should come from `configs/cli/default.toml` by default, with an optional global `--cli-config <PATH>` override.
-- Local Postgres lifecycle commands should live under `gammaboard db ...` and use the shared CLI config instead of separate env-driven just recipes.
+- Local Postgres lifecycle commands should live under `gammaboard db ...` and use the shared CLI config instead of separate env-driven just recipes; `just db-reset` may wrap `gammaboard db stop`, `gammaboard db delete --yes`, and `gammaboard db start` for convenience.
 - Server host, port, allowed origins, secure cookie policy, `allow_db_admin` policy, dashboard auth secrets, and template directories should come from `configs/server/default.toml` by default, with an optional `gammaboard server --server-config <PATH>` override.
 - Server TOML should be explicit; do not rely on implicit defaults for required server settings.
 - `gammaboard server` should terminate immediately on `Ctrl-C` (no graceful-drain wait path).

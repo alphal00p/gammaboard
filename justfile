@@ -334,3 +334,12 @@ stop-kill:
     -pkill -f "{{bin}} node run"
     -pkill -f "{{bin}} server"
     -@stty sane
+
+db-reset:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    just stop-kill
+    {{bin}} db stop
+    {{bin}} db delete --yes
+    {{bin}} db start

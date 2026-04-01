@@ -70,7 +70,7 @@ gammaboard db dump-sql
 ```
 
 These commands use `database.url` and `local_postgres` from `configs/cli/default.toml`.
-To reset local state: run `gammaboard db delete --yes` then `gammaboard db start`.
+To reset local state, use `just db-reset` or run `gammaboard db delete --yes` then `gammaboard db start`.
 
 ## Server Config
 - The server is configured from a single TOML file. By default:
