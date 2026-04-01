@@ -9,7 +9,7 @@ use super::models::{
 use crate::core::RunSpec;
 use crate::core::{RunTask, RunTaskInput};
 use crate::evaluation::BatchResult;
-use crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot;
+use crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint;
 use crate::sampling::LatentBatch;
 use crate::stores::read_models::{
     EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress,
@@ -127,10 +127,10 @@ pub trait WorkQueueStore: Send + Sync {
 #[async_trait]
 pub trait AggregationStore: Send + Sync {
     async fn load_current_observable(&self, run_id: i32) -> Result<Option<JsonValue>, StoreError>;
-    async fn load_sampler_runner_snapshot(
+    async fn load_sampler_checkpoint(
         &self,
         run_id: i32,
-    ) -> Result<Option<SamplerAggregatorRunnerSnapshot>, StoreError>;
+    ) -> Result<Option<SamplerAggregatorCheckpoint>, StoreError>;
     async fn load_stage_snapshot(
         &self,
         snapshot_id: i64,
@@ -157,10 +157,10 @@ pub trait AggregationStore: Send + Sync {
         persisted_observable: &JsonValue,
         delta_batches_completed: i32,
     ) -> Result<(), StoreError>;
-    async fn save_sampler_runner_snapshot(
+    async fn save_sampler_checkpoint(
         &self,
         run_id: i32,
-        snapshot: &SamplerAggregatorRunnerSnapshot,
+        checkpoint: &SamplerAggregatorCheckpoint,
     ) -> Result<(), StoreError>;
     async fn save_run_sample_progress(
         &self,

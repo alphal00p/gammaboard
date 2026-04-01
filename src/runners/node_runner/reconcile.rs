@@ -4,7 +4,7 @@ use super::{
 };
 
 use crate::api::stage::resolve_task_source_snapshot;
-use crate::core::{BatchTransformConfig, ObservableConfig, RunTask, RunTaskState, StoreError};
+use crate::core::{BatchTransformConfig, ObservableConfig, RunTask, StoreError};
 use crate::runners::{
     EvaluatorRunner, SamplerAggregatorRunner,
     stage_context::{HAVANA_HANDOFF_REQUIRED_ERROR, resolve_stage_context},
@@ -25,10 +25,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         ),
         StoreError,
     > {
-        let latest_snapshot = worker
-            .store
-            .load_sampler_runner_snapshot(worker.run_id)
-            .await?;
+        let latest_snapshot = worker.store.load_sampler_checkpoint(worker.run_id).await?;
         let restored_snapshot = latest_snapshot
             .as_ref()
             .filter(|snapshot| snapshot.task_id == task.id)
@@ -37,7 +34,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             &worker.store,
             worker.run_id,
             task,
-            i32::MAX,
+            task.sequence_nr,
             restored_snapshot,
         )
         .await
@@ -259,10 +256,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             return Ok(None);
         };
 
-        let latest_snapshot = worker
-            .store
-            .load_sampler_runner_snapshot(worker.run_id)
-            .await?;
+        let latest_snapshot = worker.store.load_sampler_checkpoint(worker.run_id).await?;
         let initial_batch_size_hint = latest_snapshot
             .as_ref()
             .filter(|snapshot| snapshot.task_id != task.id)
@@ -281,7 +275,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             .await?;
         let base_stage_snapshot = worker
             .store
-            .load_latest_stage_snapshot_before_sequence(worker.run_id, i32::MAX)
+            .load_latest_stage_snapshot_before_sequence(worker.run_id, task.sequence_nr)
             .await?;
         let observable_source_snapshot = resolve_task_source_snapshot(
             &worker.store,
@@ -375,7 +369,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         let restored_snapshot_for_runner = restored_snapshot.clone();
         let task_for_runner = task.clone();
 
-        let mut runner = SamplerAggregatorRunner::new(
+        let runner = SamplerAggregatorRunner::new(
             worker.store.clone(),
             worker.run_id,
             self.node_name.clone(),
@@ -390,12 +384,6 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             run_progress,
         );
 
-        if runner.task_state().state == RunTaskState::Active {
-            runner
-                .persist_state()
-                .await
-                .map_err(|err| StoreError::store(err.to_string()))?;
-        }
         info!("sampler-aggregator worker started");
         Ok(Some(Box::new(runner)))
     }

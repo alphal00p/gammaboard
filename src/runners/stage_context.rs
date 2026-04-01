@@ -1,6 +1,6 @@
 use crate::api::stage::resolve_task_source_snapshot;
 use crate::core::{AggregationStore, BatchTransformConfig, RunTask, RunTaskStore, StoreError};
-use crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot;
+use crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint;
 use crate::sampling::StageHandoffOwned;
 
 pub(crate) const HAVANA_HANDOFF_REQUIRED_ERROR: &str =
@@ -55,7 +55,7 @@ pub(crate) async fn resolve_stage_context<S>(
     run_id: i32,
     task: &RunTask,
     fallback_sequence_nr: i32,
-    restored_snapshot: Option<SamplerAggregatorRunnerSnapshot>,
+    restored_snapshot: Option<SamplerAggregatorCheckpoint>,
 ) -> Result<ResolvedStageContext, StoreError>
 where
     S: AggregationStore + RunTaskStore + Send + Sync,

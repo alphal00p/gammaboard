@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::core::{BatchTransformConfig, RunStageSnapshot, SamplerAggregatorConfig};
 use crate::evaluation::ObservableState;
-use crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot;
+use crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint;
 use crate::sampling::SamplerAggregatorSnapshot;
 
 #[derive(sqlx::FromRow)]
@@ -19,6 +19,12 @@ struct RunStageSnapshotRow {
     observable_state: Option<JsonValue>,
     sampler_aggregator: Option<JsonValue>,
     batch_transforms: JsonValue,
+}
+
+#[derive(sqlx::FromRow)]
+struct SamplerCheckpointRow {
+    task_id: i64,
+    sampler_checkpoint: JsonValue,
 }
 
 impl TryFrom<RunStageSnapshotRow> for RunStageSnapshot {
@@ -86,25 +92,39 @@ pub(crate) async fn get_run_current_observable(
     .map(|row| row.flatten())
 }
 
-pub(crate) async fn get_run_sampler_runner_snapshot(
+pub(crate) async fn get_run_sampler_checkpoint(
     pool: &PgPool,
     run_id: i32,
-) -> Result<Option<SamplerAggregatorRunnerSnapshot>, sqlx::Error> {
-    let row: Option<JsonValue> = sqlx::query_scalar(
+) -> Result<Option<SamplerAggregatorCheckpoint>, sqlx::Error> {
+    let row = sqlx::query_as::<_, SamplerCheckpointRow>(
         r#"
-        SELECT sampler_runner_snapshot
-        FROM runs
-        WHERE id = $1
+        SELECT
+            run_id,
+            task_id,
+            sampler_checkpoint
+        FROM run_sampler_checkpoints
+        WHERE run_id = $1
+        LIMIT 1
         "#,
     )
     .bind(run_id)
     .fetch_optional(pool)
-    .await?
-    .flatten();
-    row.map(|payload| {
-        serde_json::from_value(payload).map_err(|err| {
-            sqlx::Error::Protocol(format!("failed to decode sampler_runner_snapshot: {err}"))
-        })
+    .await?;
+    row.map(|row| {
+        let SamplerCheckpointRow {
+            task_id,
+            sampler_checkpoint,
+        } = row;
+        serde_json::from_value::<SamplerAggregatorCheckpoint>(sampler_checkpoint)
+            .map_err(|err| {
+                sqlx::Error::Protocol(format!("failed to decode sampler_checkpoint: {err}"))
+            })
+            .and_then(|mut checkpoint| {
+                if checkpoint.task_id != task_id {
+                    checkpoint.task_id = task_id;
+                }
+                Ok(checkpoint)
+            })
     })
     .transpose()
 }
@@ -303,23 +323,28 @@ pub(crate) async fn update_run_current_observable(
     Ok(())
 }
 
-pub(crate) async fn update_run_sampler_runner_snapshot(
+pub(crate) async fn upsert_run_sampler_checkpoint(
     pool: &PgPool,
     run_id: i32,
-    snapshot: &SamplerAggregatorRunnerSnapshot,
+    checkpoint: &SamplerAggregatorCheckpoint,
 ) -> Result<(), sqlx::Error> {
-    let payload = serde_json::to_value(snapshot).map_err(|err| {
-        sqlx::Error::Protocol(format!("failed to encode sampler_runner_snapshot: {err}"))
+    let payload = serde_json::to_value(checkpoint).map_err(|err| {
+        sqlx::Error::Protocol(format!("failed to encode sampler_checkpoint: {err}"))
     })?;
     sqlx::query(
         r#"
-        UPDATE runs
-        SET sampler_runner_snapshot = $1
-        WHERE id = $2
+        INSERT INTO run_sampler_checkpoints (run_id, task_id, sampler_checkpoint)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (run_id)
+        DO UPDATE SET
+            task_id = EXCLUDED.task_id,
+            sampler_checkpoint = EXCLUDED.sampler_checkpoint,
+            updated_at = now()
         "#,
     )
-    .bind(payload)
     .bind(run_id)
+    .bind(checkpoint.task_id)
+    .bind(payload)
     .execute(pool)
     .await?;
     Ok(())

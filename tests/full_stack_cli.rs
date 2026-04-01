@@ -3,15 +3,21 @@ use argon2::{
     password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
 };
 use assert_cmd::Command;
+use gammaboard::Domain;
 use gammaboard::config::CliConfig;
+use gammaboard::sampling::{HavanaSamplerParams, SamplerAggregatorSnapshot};
+use num::complex::Complex64;
 use predicates::prelude::*;
-use serde_json::json;
+use rand::SeedableRng;
+use rand_xoshiro::Xoshiro256StarStar;
+use serde_json::{Value as JsonValue, json};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use symbolica::numerical_integration::{ContinuousGrid, DiscreteGrid, Grid, Sample};
 use tempfile::NamedTempFile;
 use tokio::process::{Child, Command as TokioCommand};
 use tokio::time::{Instant, sleep};
@@ -312,6 +318,97 @@ impl FullStackHarness {
         ))
     }
 
+    async fn run_current_observable(&self, run_id: i32) -> anyhow::Result<Option<JsonValue>> {
+        let observable: Option<JsonValue> = sqlx::query_scalar(
+            r#"
+            SELECT current_observable
+            FROM runs
+            WHERE id = $1
+            "#,
+        )
+        .bind(run_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(observable)
+    }
+
+    async fn run_sampler_checkpoint(&self, run_id: i32) -> anyhow::Result<Option<JsonValue>> {
+        let checkpoint: Option<JsonValue> = sqlx::query_scalar(
+            r#"
+            SELECT sampler_checkpoint
+            FROM run_sampler_checkpoints
+            WHERE run_id = $1
+            "#,
+        )
+        .bind(run_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(checkpoint)
+    }
+
+    async fn run_sample_progress(&self, run_id: i32) -> anyhow::Result<(i64, i64)> {
+        let row = sqlx::query(
+            r#"
+            SELECT nr_produced_samples, nr_completed_samples
+            FROM runs
+            WHERE id = $1
+            "#,
+        )
+        .bind(run_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok((
+            row.try_get("nr_produced_samples")?,
+            row.try_get("nr_completed_samples")?,
+        ))
+    }
+
+    async fn latest_task_sampler_grid(
+        &self,
+        run_id: i32,
+        task_name: &str,
+    ) -> anyhow::Result<JsonValue> {
+        let task_id: i64 = sqlx::query_scalar(
+            r#"
+            SELECT id
+            FROM run_tasks
+            WHERE run_id = $1 AND name = $2
+            "#,
+        )
+        .bind(run_id)
+        .bind(task_name)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let sampler_snapshot: JsonValue = sqlx::query_scalar(
+            r#"
+            SELECT sampler_snapshot
+            FROM run_stage_snapshots
+            WHERE run_id = $1
+              AND task_id = $2
+              AND queue_empty = TRUE
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(run_id)
+        .bind(task_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let snapshot: SamplerAggregatorSnapshot = serde_json::from_value(sampler_snapshot)?;
+        match snapshot {
+            SamplerAggregatorSnapshot::HavanaTraining { raw }
+            | SamplerAggregatorSnapshot::HavanaInference { raw } => raw
+                .get("grid")
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("missing havana grid in persisted snapshot")),
+            other => Err(anyhow::anyhow!(
+                "expected havana sampler snapshot, got {other:?}"
+            )),
+        }
+    }
+
     async fn stop_children(&mut self) {
         for managed in &mut self.children {
             let _ = managed.child.start_kill();
@@ -374,6 +471,249 @@ fn temp_run_config(contents: &str) -> NamedTempFile {
     let file = NamedTempFile::new().expect("create temp config");
     std::fs::write(file.path(), contents).expect("write temp config");
     file
+}
+
+async fn run_havana_training_then_inference(
+    harness: &mut FullStackHarness,
+    run_name: &str,
+    pause_mid_training: bool,
+) -> anyhow::Result<(JsonValue, JsonValue)> {
+    let training_samples = 256usize;
+    let inference_samples = 64usize;
+    let config = temp_run_config(&format!(
+        r#"
+name = "{run_name}"
+
+[evaluator]
+kind = "sinc_evaluator"
+min_eval_time_per_sample_ms = 2
+
+[[task_queue]]
+name = "train-a"
+kind = "sample"
+nr_samples = {training_samples}
+observable = {{ config = "complex" }}
+sampler_aggregator = {{ config = {{ kind = "havana_training", seed = 0, bins = 8, samples_for_update = 8, initial_training_rate = 0.1, final_training_rate = 0.01 }} }}
+"#,
+    ));
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = $1")
+        .bind(run_name)
+        .fetch_one(&harness.pool)
+        .await?;
+
+    harness
+        .cli()
+        .args(["node", "assign", "w-2", "evaluator", run_name])
+        .assert()
+        .success();
+    harness
+        .wait_for(
+            format!("training evaluator becomes active for {run_name}"),
+            Duration::from_secs(15),
+            || async {
+                let w2 = harness.node_state("w-2").await?;
+                Ok(w2.0 == Some(run_id)
+                    && w2.1.as_deref() == Some("evaluator")
+                    && w2.2 == Some(run_id)
+                    && w2.3.as_deref() == Some("evaluator"))
+            },
+        )
+        .await?;
+
+    harness
+        .cli()
+        .args(["node", "assign", "w-1", "sampler-aggregator", run_name])
+        .assert()
+        .success();
+
+    if pause_mid_training {
+        harness
+            .wait_for(
+                format!("havana training progresses before pause for {run_name}"),
+                Duration::from_secs(30),
+                || async {
+                    let (nr_produced_samples, nr_completed_samples) =
+                        harness.run_sample_progress(run_id).await?;
+                    Ok(nr_produced_samples > 0
+                        && nr_completed_samples >= 32
+                        && nr_completed_samples < training_samples as i64)
+                },
+            )
+            .await?;
+
+        harness
+            .cli()
+            .args(["run", "pause", run_name])
+            .assert()
+            .success();
+
+        harness
+            .wait_for(
+                format!("paused run reconciles nodes down for {run_name}"),
+                Duration::from_secs(15),
+                || async {
+                    let w1 = harness.node_state("w-1").await?;
+                    let w2 = harness.node_state("w-2").await?;
+                    Ok(w1.0.is_none()
+                        && w1.1.is_none()
+                        && w1.2.is_none()
+                        && w1.3.is_none()
+                        && w2.0.is_none()
+                        && w2.1.is_none()
+                        && w2.2.is_none()
+                        && w2.3.is_none())
+                },
+            )
+            .await?;
+
+        let paused_progress = harness.run_sample_progress(run_id).await?;
+
+        harness
+            .cli()
+            .args(["node", "assign", "w-2", "evaluator", run_name])
+            .assert()
+            .success();
+        harness
+            .wait_for(
+                format!("resumed training evaluator becomes active for {run_name}"),
+                Duration::from_secs(15),
+                || async {
+                    let w2 = harness.node_state("w-2").await?;
+                    Ok(w2.0 == Some(run_id)
+                        && w2.1.as_deref() == Some("evaluator")
+                        && w2.2 == Some(run_id)
+                        && w2.3.as_deref() == Some("evaluator"))
+                },
+            )
+            .await?;
+        harness
+            .cli()
+            .args(["node", "assign", "w-1", "sampler-aggregator", run_name])
+            .assert()
+            .success();
+
+        harness
+            .wait_for(
+                format!("training progress advances after resume for {run_name}"),
+                Duration::from_secs(30),
+                || async {
+                    let progress = harness.run_sample_progress(run_id).await?;
+                    Ok(progress.0 > paused_progress.0 || progress.1 > paused_progress.1)
+                },
+            )
+            .await?;
+    }
+
+    harness
+        .wait_for(
+            format!("havana training completes for {run_name}"),
+            Duration::from_secs(60),
+            || async {
+                let state: String = sqlx::query_scalar(
+                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'train-a'",
+                )
+                .bind(run_id)
+                .fetch_one(&harness.pool)
+                .await?;
+                Ok(state == "completed")
+            },
+        )
+        .await?;
+
+    let inference_task = temp_run_config(&format!(
+        r#"
+[[task_queue]]
+name = "infer-a"
+kind = "sample"
+nr_samples = {inference_samples}
+sampler_aggregator = {{ config = {{ kind = "havana_inference" }} }}
+"#,
+    ));
+
+    harness
+        .cli()
+        .args([
+            "run",
+            "task",
+            "add",
+            &run_id.to_string(),
+            inference_task.path().to_str().expect("task file path"),
+        ])
+        .assert()
+        .success();
+
+    harness
+        .cli()
+        .args(["node", "assign", "w-2", "evaluator", run_name])
+        .assert()
+        .success();
+    harness
+        .wait_for(
+            format!("inference evaluator becomes active for {run_name}"),
+            Duration::from_secs(15),
+            || async {
+                let w2 = harness.node_state("w-2").await?;
+                Ok(w2.0 == Some(run_id)
+                    && w2.1.as_deref() == Some("evaluator")
+                    && w2.2 == Some(run_id)
+                    && w2.3.as_deref() == Some("evaluator"))
+            },
+        )
+        .await?;
+    harness
+        .cli()
+        .args(["node", "assign", "w-1", "sampler-aggregator", run_name])
+        .assert()
+        .success();
+
+    harness
+        .wait_for(
+            format!("havana inference completes for {run_name}"),
+            Duration::from_secs(60),
+            || async {
+                let state: String = sqlx::query_scalar(
+                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'infer-a'",
+                )
+                .bind(run_id)
+                .fetch_one(&harness.pool)
+                .await?;
+                Ok(state == "completed")
+            },
+        )
+        .await?;
+
+    harness
+        .wait_for(
+            format!("nodes reconcile down after completion for {run_name}"),
+            Duration::from_secs(15),
+            || async {
+                let w1 = harness.node_state("w-1").await?;
+                let w2 = harness.node_state("w-2").await?;
+                Ok(w1.0.is_none()
+                    && w1.1.is_none()
+                    && w1.2.is_none()
+                    && w1.3.is_none()
+                    && w2.0.is_none()
+                    && w2.1.is_none()
+                    && w2.2.is_none()
+                    && w2.3.is_none())
+            },
+        )
+        .await?;
+
+    let training_grid = harness.latest_task_sampler_grid(run_id, "train-a").await?;
+    let inference_grid = harness.latest_task_sampler_grid(run_id, "infer-a").await?;
+    assert_eq!(inference_samples, 64);
+    Ok((training_grid, inference_grid))
 }
 
 #[tokio::test]
@@ -550,6 +890,50 @@ sampler_aggregator = { config = { kind = "havana_inference" } }
     Ok(())
 }
 
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_havana_pause_resume_matches_direct_baseline() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    let training_samples = 256usize;
+    let havana_params = HavanaSamplerParams {
+        seed: 0,
+        bins: 8,
+        samples_for_update: 8,
+        initial_training_rate: 0.1,
+        final_training_rate: 0.01,
+    };
+    harness.start_node("w-1").await?;
+    harness.start_node("w-2").await?;
+
+    let (uninterrupted_training_grid, uninterrupted_inference_grid) =
+        run_havana_training_then_inference(
+            &mut harness,
+            "havana-uninterrupted-determinism-e2e",
+            false,
+        )
+        .await?;
+    let (paused_training_grid, paused_inference_grid) =
+        run_havana_training_then_inference(&mut harness, "havana-paused-determinism-e2e", true)
+            .await?;
+    let direct_grid = serde_json::to_value(direct_train_havana_grid(
+        &Domain::continuous(2),
+        &havana_params,
+        training_samples,
+    ))?;
+
+    assert_eq!(uninterrupted_training_grid, direct_grid);
+    assert_eq!(paused_training_grid, direct_grid);
+    assert_eq!(uninterrupted_inference_grid, uninterrupted_training_grid);
+    assert_eq!(paused_inference_grid, paused_training_grid);
+    assert_eq!(paused_training_grid, uninterrupted_training_grid);
+    assert_eq!(paused_inference_grid, uninterrupted_inference_grid);
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
 fn temp_server_config(
     host: &str,
     port: u16,
@@ -611,6 +995,95 @@ fn hash_password_for_tests(password: &str) -> String {
         .to_string()
 }
 
+fn build_direct_havana_grid(domain: &Domain, params: &HavanaSamplerParams) -> Grid<f64> {
+    const DEFAULT_DISCRETE_MAX_PROB_RATIO: f64 = 30.0;
+
+    match domain {
+        Domain::Continuous { dims } => Grid::Continuous(ContinuousGrid::new(
+            *dims,
+            params.bins,
+            params.samples_for_update,
+            None,
+            false,
+        )),
+        Domain::Discrete { branches, .. } => {
+            let bins = branches
+                .iter()
+                .map(|branch| Some(build_direct_havana_grid(branch.domain.as_ref(), params)))
+                .collect();
+            Grid::Discrete(DiscreteGrid::new(
+                bins,
+                DEFAULT_DISCRETE_MAX_PROB_RATIO,
+                false,
+            ))
+        }
+    }
+}
+
+fn sample_continuous_coords(sample: &Sample<f64>) -> Vec<f64> {
+    match sample {
+        Sample::Continuous(_, continuous) => continuous.clone(),
+        Sample::Discrete(_, _, maybe_child) => sample_continuous_coords(
+            maybe_child
+                .as_ref()
+                .expect("havana discrete sample should contain nested child"),
+        ),
+        Sample::Uniform(_, _, continuous) => continuous.clone(),
+    }
+}
+
+fn direct_sinc_training_value(sample: &Sample<f64>) -> f64 {
+    let continuous = sample_continuous_coords(sample);
+    let x = continuous[0];
+    let y = continuous[1];
+    Complex64::new(x, y).sin().norm()
+}
+
+fn direct_havana_training_rate(
+    params: &HavanaSamplerParams,
+    samples_ingested: usize,
+    stop_training_after_n_samples: usize,
+) -> f64 {
+    let progress = (samples_ingested.min(stop_training_after_n_samples) as f64)
+        / (stop_training_after_n_samples as f64);
+    if params.initial_training_rate <= 0.0 || params.final_training_rate <= 0.0 {
+        return params.initial_training_rate
+            + (params.final_training_rate - params.initial_training_rate) * progress;
+    }
+
+    params.initial_training_rate
+        * (params.final_training_rate / params.initial_training_rate).powf(progress)
+}
+
+fn direct_train_havana_grid(
+    domain: &Domain,
+    params: &HavanaSamplerParams,
+    stop_training_after_n_samples: usize,
+) -> Grid<f64> {
+    let mut grid = build_direct_havana_grid(domain, params);
+    let mut rng = Xoshiro256StarStar::seed_from_u64(params.seed);
+    let mut samples_ingested = 0usize;
+
+    while samples_ingested < stop_training_after_n_samples {
+        let nr_samples = params
+            .samples_for_update
+            .min(stop_training_after_n_samples - samples_ingested);
+        for _ in 0..nr_samples {
+            let mut sample = Sample::new();
+            grid.sample(&mut rng, &mut sample);
+            let eval = direct_sinc_training_value(&sample);
+            grid.add_training_sample(&sample, eval)
+                .expect("direct havana training sample should be valid");
+        }
+        samples_ingested += nr_samples;
+        let training_rate =
+            direct_havana_training_rate(params, samples_ingested, stop_training_after_n_samples);
+        grid.update(training_rate, training_rate);
+    }
+
+    grid
+}
+
 async fn wait_for_task_failed_and_run_unassigned(
     harness: &FullStackHarness,
     run_id: i32,
@@ -641,6 +1114,178 @@ async fn wait_for_task_failed_and_run_unassigned(
                 && w2.3.is_none())
         })
         .await
+}
+
+struct SamplerCheckpointProgram<'a> {
+    harness: &'a mut FullStackHarness,
+    run_id: i32,
+    run_name: &'a str,
+    paused_current_observable: Option<JsonValue>,
+    paused_checkpoint: Option<JsonValue>,
+    paused_progress: Option<(i64, i64)>,
+}
+
+impl<'a> SamplerCheckpointProgram<'a> {
+    fn new(harness: &'a mut FullStackHarness, run_id: i32, run_name: &'a str) -> Self {
+        Self {
+            harness,
+            run_id,
+            run_name,
+            paused_current_observable: None,
+            paused_checkpoint: None,
+            paused_progress: None,
+        }
+    }
+
+    async fn assign_sampler(&mut self, node_name: &str) -> anyhow::Result<()> {
+        self.harness
+            .cli()
+            .args([
+                "node",
+                "assign",
+                node_name,
+                "sampler-aggregator",
+                self.run_name,
+            ])
+            .assert()
+            .success();
+        Ok(())
+    }
+
+    async fn assign_evaluator(&mut self, node_name: &str) -> anyhow::Result<()> {
+        self.harness
+            .cli()
+            .args(["node", "assign", node_name, "evaluator", self.run_name])
+            .assert()
+            .success();
+        Ok(())
+    }
+
+    async fn pause_run(&mut self) -> anyhow::Result<()> {
+        self.harness
+            .cli()
+            .args(["run", "pause", self.run_name])
+            .assert()
+            .success();
+        Ok(())
+    }
+
+    async fn wait_sampler_active(
+        &mut self,
+        node_name: &str,
+        timeout: Duration,
+    ) -> anyhow::Result<()> {
+        let run_id = self.run_id;
+        self.harness
+            .wait_for(
+                format!("sampler node {node_name} becomes active"),
+                timeout,
+                || async {
+                    let state = self.harness.node_state(node_name).await?;
+                    Ok(state.0 == Some(run_id)
+                        && state.1.as_deref() == Some("sampler_aggregator")
+                        && state.2 == Some(run_id)
+                        && state.3.as_deref() == Some("sampler_aggregator"))
+                },
+            )
+            .await
+    }
+
+    async fn wait_nodes_down(
+        &mut self,
+        node_names: &[&str],
+        timeout: Duration,
+    ) -> anyhow::Result<()> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let mut states = Vec::new();
+            let mut all_down = true;
+            for node_name in node_names {
+                let state = self.harness.node_state(node_name).await?;
+                if state.0.is_some() || state.1.is_some() || state.2.is_some() || state.3.is_some()
+                {
+                    all_down = false;
+                }
+                states.push(((*node_name).to_string(), state));
+            }
+            if all_down {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                anyhow::bail!(
+                    "timed out waiting for all scripted nodes reconcile down: {states:?}"
+                );
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn capture_paused_state(&mut self, timeout: Duration) -> anyhow::Result<()> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let current_observable = self.harness.run_current_observable(self.run_id).await?;
+            let checkpoint = self.harness.run_sampler_checkpoint(self.run_id).await?;
+            let progress = self.harness.run_sample_progress(self.run_id).await?;
+            if current_observable.is_some() && checkpoint.is_some() {
+                self.paused_current_observable = current_observable;
+                self.paused_checkpoint = checkpoint;
+                self.paused_progress = Some(progress);
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                anyhow::bail!("timed out waiting for paused sampler state is persisted");
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn wait_restored_state(
+        &mut self,
+        sampler_node_name: &str,
+        timeout: Duration,
+    ) -> anyhow::Result<()> {
+        let paused_current_observable = self.paused_current_observable.clone();
+        let paused_checkpoint = self.paused_checkpoint.clone();
+        let paused_completed_samples = self.paused_progress.map(|(_, completed)| completed);
+        let run_id = self.run_id;
+        self.harness
+            .wait_for(
+                "sampler checkpoint restores paused observable and completed progress",
+                timeout,
+                || async {
+                    let sampler_state = self.harness.node_state(sampler_node_name).await?;
+                    let current_observable = self.harness.run_current_observable(run_id).await?;
+                    let checkpoint = self.harness.run_sampler_checkpoint(run_id).await?;
+                    let progress = self.harness.run_sample_progress(run_id).await?;
+                    let sampler_restored = sampler_state.0 == Some(run_id)
+                        && sampler_state.1.as_deref() == Some("sampler_aggregator")
+                        && sampler_state.2 == Some(run_id)
+                        && sampler_state.3.as_deref() == Some("sampler_aggregator");
+                    Ok(sampler_restored
+                        && current_observable == paused_current_observable
+                        && checkpoint == paused_checkpoint
+                        && Some(progress.1) == paused_completed_samples)
+                },
+            )
+            .await
+    }
+
+    async fn wait_progress_advances(&mut self, timeout: Duration) -> anyhow::Result<()> {
+        let Some((paused_produced, paused_completed)) = self.paused_progress else {
+            anyhow::bail!("paused progress not captured before resume");
+        };
+        let run_id = self.run_id;
+        self.harness
+            .wait_for("resumed run makes forward progress", timeout, || async {
+                let (nr_produced_samples, nr_completed_samples) =
+                    self.harness.run_sample_progress(run_id).await?;
+                Ok(
+                    nr_produced_samples > paused_produced
+                        || nr_completed_samples > paused_completed,
+                )
+            })
+            .await
+    }
 }
 
 #[tokio::test]
@@ -895,6 +1540,87 @@ name = "full-stack-e2e"
         .fetch_one(&harness.pool)
         .await?;
     assert_eq!(remaining_runs, 0);
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_pause_resume_restores_sampler_checkpoint() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+
+    let config = temp_run_config(
+        r#"
+name = "sampler-checkpoint-e2e"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+observable_kind = "scalar"
+
+[[task_queue]]
+name = "train-a"
+kind = "sample"
+nr_samples = 100000000
+observable = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 =
+        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'sampler-checkpoint-e2e'")
+            .fetch_one(&harness.pool)
+            .await?;
+
+    {
+        let mut program =
+            SamplerCheckpointProgram::new(&mut harness, run_id, "sampler-checkpoint-e2e");
+
+        program.harness.start_node("w-1").await?;
+        program.harness.start_node("w-2").await?;
+        program.harness.start_node("w-3").await?;
+
+        program.assign_sampler("w-1").await?;
+        program.assign_evaluator("w-2").await?;
+        program.assign_evaluator("w-3").await?;
+
+        program
+            .wait_sampler_active("w-1", Duration::from_secs(15))
+            .await?;
+
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        program.pause_run().await?;
+        program
+            .wait_nodes_down(&["w-1", "w-2", "w-3"], Duration::from_secs(15))
+            .await?;
+        program
+            .capture_paused_state(Duration::from_secs(15))
+            .await?;
+
+        program.assign_sampler("w-1").await?;
+        program
+            .wait_restored_state("w-1", Duration::from_secs(15))
+            .await?;
+
+        program.assign_evaluator("w-2").await?;
+        program.assign_evaluator("w-3").await?;
+        program
+            .wait_progress_advances(Duration::from_secs(15))
+            .await?;
+    }
 
     harness.stop_children().await;
     harness.pool.close().await;

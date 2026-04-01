@@ -403,8 +403,10 @@ impl SamplerAggregator for HavanaSampler {
 
     fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError> {
         let Some(samples) = self.pending_training_samples.pop_front() else {
-            // Training is disabled for this batch or context is unavailable.
-            return Ok(());
+            return Err(EngineError::engine(format!(
+                "havana sampler received {} training weights with no pending training batch",
+                training_weights.len()
+            )));
         };
 
         if training_weights.len() != samples.len() {

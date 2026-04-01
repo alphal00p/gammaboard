@@ -12,7 +12,6 @@ CREATE TABLE IF NOT EXISTS runs (
     target JSONB,
     point_spec JSONB NOT NULL,
     current_observable JSONB,
-    sampler_runner_snapshot JSONB,
 
     -- Summary statistics (updated periodically)
     batches_completed INT DEFAULT 0,

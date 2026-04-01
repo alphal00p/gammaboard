@@ -10,7 +10,7 @@ use crate::core::{
 };
 use crate::core::{IntegrationParams, RunSpec, canonical_task_toml};
 use crate::evaluation::BatchResult;
-use crate::runners::sampler_aggregator::SamplerAggregatorRunnerSnapshot;
+use crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint;
 use crate::sampling::LatentBatch;
 use crate::utils::domain::Domain;
 use serde_json::Value as JsonValue;
@@ -707,11 +707,11 @@ impl AggregationStore for PgStore {
             .map_err(map_sqlx)
     }
 
-    async fn load_sampler_runner_snapshot(
+    async fn load_sampler_checkpoint(
         &self,
         run_id: i32,
-    ) -> Result<Option<SamplerAggregatorRunnerSnapshot>, StoreError> {
-        queries::get_run_sampler_runner_snapshot(&self.pool, run_id)
+    ) -> Result<Option<SamplerAggregatorCheckpoint>, StoreError> {
+        queries::get_run_sampler_checkpoint(&self.pool, run_id)
             .await
             .map_err(map_sqlx)
     }
@@ -792,12 +792,12 @@ impl AggregationStore for PgStore {
         Ok(())
     }
 
-    async fn save_sampler_runner_snapshot(
+    async fn save_sampler_checkpoint(
         &self,
         run_id: i32,
-        snapshot: &SamplerAggregatorRunnerSnapshot,
+        checkpoint: &SamplerAggregatorCheckpoint,
     ) -> Result<(), StoreError> {
-        queries::update_run_sampler_runner_snapshot(&self.pool, run_id, snapshot)
+        queries::upsert_run_sampler_checkpoint(&self.pool, run_id, checkpoint)
             .await
             .map_err(map_sqlx)
     }

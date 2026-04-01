@@ -72,6 +72,8 @@ gammaboard db dump-sql
 These commands use `database.url` and `local_postgres` from `configs/cli/default.toml`.
 To reset local state, use `just db-reset` or run `gammaboard db delete --yes` then `gammaboard db start`.
 
+Sampler runs keep the frontend current through periodic lightweight writes to `runs.current_observable`, `persisted_observable_snapshots`, and performance history. The full sampler-aggregator resume checkpoint is stored separately and only refreshed when the sampler is unassigned or paused.
+
 ## Server Config
 - The server is configured from a single TOML file. By default:
   ```bash

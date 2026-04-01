@@ -5,7 +5,7 @@
 //! - enqueue latent batches
 //! - fetch completed batches and pass training weights back into the sampler
 //! - merge completed batch observables into the current observable state
-//! - persist snapshots for resume and task handoff
+//! - persist lightweight UI sync snapshots and full resume checkpoints
 
 use crate::core::{
     BatchTransformConfig, EngineError, RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot,
@@ -89,7 +89,7 @@ impl Default for SamplerRuntimeState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SamplerAggregatorRunnerSnapshot {
+pub struct SamplerAggregatorCheckpoint {
     pub task_id: i64,
     pub sampler_snapshot: SamplerAggregatorSnapshot,
     pub observable_state: ObservableState,
@@ -106,7 +106,7 @@ impl From<&RollingMetric> for RollingMetricSnapshot {
     }
 }
 
-impl SamplerAggregatorRunnerSnapshot {
+impl SamplerAggregatorCheckpoint {
     pub fn reduced_carryover_batch_size(&self, max_batch_size: usize) -> usize {
         let reduced = ((self.runtime_state.batch_size_current as f64) * MAX_BATCH_SIZE_DOWN_FACTOR)
             .round() as usize;
@@ -196,7 +196,7 @@ where
         batch_transforms: Vec<BatchTransformConfig>,
         params: SamplerAggregatorRunnerParams,
         initial_batch_size: usize,
-        resume_snapshot: Option<SamplerAggregatorRunnerSnapshot>,
+        resume_snapshot: Option<SamplerAggregatorCheckpoint>,
         run_progress: Option<RunSampleProgress>,
     ) -> Self {
         let mut runtime_state;
@@ -364,6 +364,17 @@ where
         }
     }
 
+    // Finite engine sample plans must be produced atomically so resume preserves
+    // the exact remaining plan. Task-level finite budgets should still use normal
+    // queue-aware batching.
+    fn atomic_finite_sample_plan_batch(max_samples: Option<usize>) -> Option<Vec<usize>> {
+        let nr_samples = max_samples?;
+        if nr_samples == 0 {
+            return Some(Vec::new());
+        }
+        Some(vec![nr_samples])
+    }
+
     fn max_samples_to_produce_this_tick(
         &self,
         engine_max_samples: Option<usize>,
@@ -476,7 +487,7 @@ where
             .await?;
         self.sync_task_progress().await?;
         self.flush_run_sample_progress().await?;
-        self.flush_performance_snapshot().await?;
+        self.flush_performance_snapshot(false).await?;
 
         let open_batch_count = (queue_before_produce
             .open()
@@ -498,21 +509,10 @@ where
         }))
     }
 
-    async fn persist_state_with_queue_empty(
+    async fn persist_stage_state_with_queue_empty(
         &mut self,
         queue_empty: bool,
     ) -> Result<(), RunnerError> {
-        let snapshot = SamplerAggregatorRunnerSnapshot {
-            task_id: self.task.id,
-            sampler_snapshot: self.sampler.snapshot().map_err(RunnerError::Engine)?,
-            observable_state: self.observable_state.clone(),
-            runtime_state: self.runtime_state.clone(),
-            last_runnable_after_enqueue: self.last_runnable_after_enqueue,
-        };
-        self.store
-            .save_sampler_runner_snapshot(self.run_id, &snapshot)
-            .await?;
-
         self.store
             .save_run_stage_snapshot(&RunStageSnapshot {
                 id: None,
@@ -521,7 +521,7 @@ where
                 name: self.task.name.clone(),
                 sequence_nr: Some(self.task.sequence_nr),
                 queue_empty,
-                sampler_snapshot: Some(snapshot.sampler_snapshot.clone()),
+                sampler_snapshot: Some(self.sampler.snapshot().map_err(RunnerError::Engine)?),
                 observable_state: Some(self.observable_state.clone()),
                 sampler_aggregator: Some(self.sampler_config.clone()),
                 batch_transforms: self.batch_transforms.clone(),
@@ -530,15 +530,32 @@ where
         Ok(())
     }
 
+    async fn persist_sampler_checkpoint(&mut self) -> Result<(), RunnerError> {
+        let checkpoint = SamplerAggregatorCheckpoint {
+            task_id: self.task.id,
+            sampler_snapshot: self.sampler.snapshot().map_err(RunnerError::Engine)?,
+            observable_state: self.observable_state.clone(),
+            runtime_state: self.runtime_state.clone(),
+            last_runnable_after_enqueue: self.last_runnable_after_enqueue,
+        };
+        self.store
+            .save_sampler_checkpoint(self.run_id, &checkpoint)
+            .await?;
+        Ok(())
+    }
+
     pub async fn persist_state(&mut self) -> Result<(), RunnerError> {
+        self.flush_aggregation(true).await?;
+        self.flush_performance_snapshot(true).await?;
+        self.sync_task_progress().await?;
+        self.flush_run_sample_progress().await?;
         let queue_empty = self.store.get_open_batch_count(self.run_id).await? <= 0;
-        self.persist_state_with_queue_empty(queue_empty).await
+        self.persist_stage_state_with_queue_empty(queue_empty)
+            .await?;
+        self.persist_sampler_checkpoint().await
     }
 
     async fn flush_aggregation(&mut self, force: bool) -> Result<(), RunnerError> {
-        if !force && self.runtime_state.pending_persisted_completed_batches <= 0 {
-            return Ok(());
-        }
         let due = force
             || self.aggregation_persist_interval.is_zero()
             || self.last_aggregation_persist_at.elapsed() >= self.aggregation_persist_interval;
@@ -570,14 +587,15 @@ where
 
     pub async fn complete_task(&mut self) -> Result<(), RunnerError> {
         self.flush_aggregation(true).await?;
-        self.persist_state_with_queue_empty(true).await?;
+        self.flush_performance_snapshot(true).await?;
         self.sync_task_progress().await?;
+        self.flush_run_sample_progress().await?;
+        self.persist_stage_state_with_queue_empty(true).await?;
         self.store.complete_run_task(self.task.id).await?;
         Ok(())
     }
 
     pub async fn fail_task(&mut self, reason: &str) -> Result<(), RunnerError> {
-        self.persist_state().await?;
         self.store.fail_run_task(self.task.id, reason).await?;
         Ok(())
     }
@@ -723,12 +741,17 @@ where
                             open_before_produce,
                             active_evaluator_count,
                         );
-                        self.build_batch_plan(base_produce_limit, max_samples)
+                        if requested.is_some() {
+                            Self::atomic_finite_sample_plan_batch(max_samples).unwrap_or_else(
+                                || self.build_batch_plan(base_produce_limit, max_samples),
+                            )
+                        } else {
+                            self.build_batch_plan(base_produce_limit, max_samples)
+                        }
                     }
                 }
             }
         };
-
         let mut produced = Vec::with_capacity(batch_plan.len());
         for nr_samples in batch_plan {
             let started = Instant::now();
@@ -793,18 +816,13 @@ where
         Ok(())
     }
 
-    async fn flush_performance_snapshot(&mut self) -> Result<(), RunnerError> {
-        if self.runtime_state.produced_batches_total <= 0
-            && self.runtime_state.ingested_batches_total <= 0
-        {
-            return Ok(());
-        }
-
-        let due = if self.performance_snapshot_interval.is_zero() {
-            true
-        } else {
-            self.last_snapshot_at.elapsed() >= self.performance_snapshot_interval
-        };
+    async fn flush_performance_snapshot(&mut self, force: bool) -> Result<(), RunnerError> {
+        let due = force
+            || if self.performance_snapshot_interval.is_zero() {
+                true
+            } else {
+                self.last_snapshot_at.elapsed() >= self.performance_snapshot_interval
+            };
         if !due {
             return Ok(());
         }
@@ -854,7 +872,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{SamplerAggregatorRunnerSnapshot, SamplerRuntimeState};
+    use super::{SamplerAggregatorCheckpoint, SamplerRuntimeState};
     use crate::core::{LineRasterGeometry, Linspace, PlaneRasterGeometry, SamplerAggregatorConfig};
     use crate::sampling::{
         NaiveMonteCarloSamplerParams, RasterLineSamplerParams, RasterPlaneSamplerParams,
@@ -918,7 +936,7 @@ mod tests {
 
     #[test]
     fn carryover_batch_size_is_reduced_and_clamped() {
-        let snapshot = SamplerAggregatorRunnerSnapshot {
+        let snapshot = SamplerAggregatorCheckpoint {
             task_id: 1,
             sampler_snapshot: SamplerAggregatorSnapshot::NaiveMonteCarlo { raw: json!({}) },
             observable_state: crate::evaluation::ObservableState::empty_scalar(),
@@ -931,5 +949,27 @@ mod tests {
 
         assert_eq!(snapshot.reduced_carryover_batch_size(512), 32);
         assert_eq!(snapshot.reduced_carryover_batch_size(24), 24);
+    }
+
+    #[test]
+    fn finite_sample_plan_batching_is_atomic_for_finite_plans() {
+        assert_eq!(
+            super::SamplerAggregatorRunner::<crate::stores::PgStore>::atomic_finite_sample_plan_batch(
+                Some(37),
+            ),
+            Some(vec![37])
+        );
+        assert_eq!(
+            super::SamplerAggregatorRunner::<crate::stores::PgStore>::atomic_finite_sample_plan_batch(
+                Some(0),
+            ),
+            Some(Vec::new())
+        );
+        assert_eq!(
+            super::SamplerAggregatorRunner::<crate::stores::PgStore>::atomic_finite_sample_plan_batch(
+                None,
+            ),
+            None
+        );
     }
 }

@@ -102,6 +102,13 @@ impl SamplerAggregatorConfig {
         sample_budget: Option<usize>,
         handoff: Option<StageHandoff<'_>>,
     ) -> Result<Box<dyn SamplerAggregator>, BuildError> {
+        if let Some(snapshot) = handoff
+            .and_then(|handoff| handoff.sampler_snapshot.cloned())
+            .filter(|snapshot| snapshot.matches_config(self))
+        {
+            return snapshot.into_runtime(&domain);
+        }
+
         match self {
             Self::NaiveMonteCarlo { params } => Ok(Box::new(
                 NaiveMonteCarloSamplerAggregator::from_params_and_domain(params.clone(), &domain)?,
