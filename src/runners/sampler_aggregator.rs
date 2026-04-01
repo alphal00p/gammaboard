@@ -27,7 +27,7 @@ const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.25;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerAggregatorRunnerParams {
     pub performance_snapshot_interval_ms: u64,
-    pub aggregation_persist_interval_ms: u64,
+    pub frontend_sync_interval_ms: u64,
     pub target_batch_eval_ms: f64,
     pub queue_buffer: f64,
     pub max_batch_size: usize,
@@ -172,9 +172,9 @@ pub struct SamplerAggregatorRunner<S> {
     nr_produced_samples: i64,
     nr_completed_samples: i64,
     performance_snapshot_interval: Duration,
-    aggregation_persist_interval: Duration,
+    frontend_sync_interval: Duration,
     last_snapshot_at: Instant,
-    last_aggregation_persist_at: Instant,
+    last_frontend_sync_at: Instant,
     runtime_state: SamplerRuntimeState,
     last_performance_completed_samples: i64,
     last_runnable_after_enqueue: Option<usize>,
@@ -224,8 +224,7 @@ where
 
         let performance_snapshot_interval =
             Duration::from_millis(params.performance_snapshot_interval_ms);
-        let aggregation_persist_interval =
-            Duration::from_millis(params.aggregation_persist_interval_ms);
+        let frontend_sync_interval = Duration::from_millis(params.frontend_sync_interval_ms);
         let now = Instant::now();
 
         Self {
@@ -241,9 +240,9 @@ where
             nr_produced_samples,
             nr_completed_samples,
             performance_snapshot_interval,
-            aggregation_persist_interval,
+            frontend_sync_interval,
             last_snapshot_at: now,
-            last_aggregation_persist_at: now,
+            last_frontend_sync_at: now,
             runtime_state,
             last_performance_completed_samples: nr_completed_samples,
             last_runnable_after_enqueue,
@@ -557,8 +556,8 @@ where
 
     async fn flush_aggregation(&mut self, force: bool) -> Result<(), RunnerError> {
         let due = force
-            || self.aggregation_persist_interval.is_zero()
-            || self.last_aggregation_persist_at.elapsed() >= self.aggregation_persist_interval;
+            || self.frontend_sync_interval.is_zero()
+            || self.last_frontend_sync_at.elapsed() >= self.frontend_sync_interval;
         if !due {
             return Ok(());
         }
@@ -581,7 +580,7 @@ where
             )
             .await?;
         self.runtime_state.pending_persisted_completed_batches = 0;
-        self.last_aggregation_persist_at = Instant::now();
+        self.last_frontend_sync_at = Instant::now();
         Ok(())
     }
 
@@ -675,12 +674,10 @@ where
             .runtime_state
             .pending_persisted_completed_batches
             .saturating_add(completed.len() as i32);
-        let force_persist =
-            self.runtime_state.observable_checkpoint_state != ObservableCheckpointState::Ready;
-        self.flush_aggregation(force_persist).await?;
         if completed_samples_delta > 0 {
             self.runtime_state.observable_checkpoint_state = ObservableCheckpointState::Ready;
         }
+        self.flush_aggregation(false).await?;
 
         let consumed_ids = completed
             .iter()

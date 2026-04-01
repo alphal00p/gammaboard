@@ -925,7 +925,7 @@ mod tests {
             },
             "sampler_aggregator_runner_params": {
                 "performance_snapshot_interval_ms": 5000,
-                "aggregation_persist_interval_ms": 1000,
+                "frontend_sync_interval_ms": 1000,
                 "target_batch_eval_ms": 200.0,
                 "queue_buffer": 1.0,
                 "max_batch_size": 64,
@@ -964,7 +964,7 @@ mod tests {
             spec.sampler_aggregator_runner_params,
             SamplerAggregatorRunnerParams::deserialize(json!({
                 "performance_snapshot_interval_ms": 5000,
-                "aggregation_persist_interval_ms": 1000,
+                "frontend_sync_interval_ms": 1000,
                 "target_batch_eval_ms": 200.0,
                 "queue_buffer": 1.0,
                 "max_batch_size": 64,
@@ -1003,7 +1003,7 @@ mod tests {
                 },
                 "sampler_aggregator_runner_params": {
                     "performance_snapshot_interval_ms": 5000,
-                    "aggregation_persist_interval_ms": 1000,
+                    "frontend_sync_interval_ms": 1000,
                     "target_batch_eval_ms": 200.0,
                     "queue_buffer": 1.0,
                     "max_batch_size": 64,
@@ -1027,7 +1027,7 @@ mod tests {
                 "evaluator": { "kind": "sin_evaluator" },
                 "sampler_aggregator_runner_params": {
                     "performance_snapshot_interval_ms": 5000,
-                    "aggregation_persist_interval_ms": 1000,
+                    "frontend_sync_interval_ms": 1000,
                     "target_batch_eval_ms": 200.0,
                     "queue_buffer": 1.0,
                     "max_batch_size": 64,

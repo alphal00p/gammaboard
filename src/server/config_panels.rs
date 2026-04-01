@@ -145,9 +145,9 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
                 key_value("implementation", "Implementation", self.kind_str()),
                 key_value("domain", "Domain", summarize_domain(ctx.domain)),
                 key_value(
-                    "aggregation_persist_interval_ms",
-                    "Aggregation Persist Interval (ms)",
-                    ctx.runner_params.aggregation_persist_interval_ms,
+                    "frontend_sync_interval_ms",
+                    "Frontend Sync Interval (ms)",
+                    ctx.runner_params.frontend_sync_interval_ms,
                 ),
                 key_value(
                     "queue_buffer",

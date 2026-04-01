@@ -215,7 +215,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 ```
 
 `sampler_aggregator_runner_params` also controls queue and persistence behavior:
-- `aggregation_persist_interval_ms` sets how often merged sample observables are flushed to PostgreSQL during training; default is `1000`.
+- `frontend_sync_interval_ms` sets how often the sampler runner refreshes the frontend-facing observable state and persisted observable snapshots during sampling; the shared run default is `2000`.
 - `queue_buffer` is the single queue buffer knob for the sampler queue. The runner targets about `queue_buffer * active_evaluator_count` pending batches. A value of `0.0` is the most aggressive and lets the queue drain to zero pending batches when the sampler cannot refill it faster than evaluators consume work. Larger values keep more pending work buffered. `max_queue_size` remains the hard cap.
 - Total open batches (`pending + claimed + completed`) are still capped by `max_queue_size`.
 - `strict_batch_ordering` controls whether completed batches are ingested only as a contiguous id prefix (`true`) or in any completed id order (`false`).

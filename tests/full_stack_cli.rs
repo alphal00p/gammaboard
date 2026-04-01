@@ -1970,7 +1970,7 @@ performance_snapshot_interval_ms = 200
 
 [sampler_aggregator_runner_params]
 performance_snapshot_interval_ms = 200
-aggregation_persist_interval_ms = 1000
+frontend_sync_interval_ms = 1000
 target_batch_eval_ms = 250.0
 queue_buffer = 1.0
 max_batch_size = 16

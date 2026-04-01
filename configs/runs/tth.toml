@@ -13,6 +13,9 @@ momentum_space = false
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 1000
 
+[sampler_aggregator_runner_params]
+frontend_sync_interval_ms = 2000
+
 [[task_queue]]
 name = "havana-train-10m"
 kind = "sample"
