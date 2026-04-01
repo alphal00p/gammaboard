@@ -1829,6 +1829,7 @@ dependencies = [
 [[package]]
 name = "gammaloop-api"
 version = "0.1.0"
+source = "git+https://github.com/alphal00p/gammaloop.git?tag=epemttxhlo#559268c70051cdb68196f4e4ab313c01d2333862"
 dependencies = [
  "ahash",
  "bincode",
@@ -1884,6 +1885,7 @@ dependencies = [
 [[package]]
 name = "gammalooprs"
 version = "0.3.3"
+source = "git+https://github.com/alphal00p/gammaloop.git?tag=epemttxhlo#559268c70051cdb68196f4e4ab313c01d2333862"
 dependencies = [
  "ahash",
  "base62",
@@ -2497,6 +2499,7 @@ checksum = "25a2bc672d1148e28034f176e01fffebb08b35768468cc954630da77a1449005"
 [[package]]
 name = "idenso"
 version = "0.3.0"
+source = "git+https://github.com/alphal00p/gammaloop.git?tag=epemttxhlo#559268c70051cdb68196f4e4ab313c01d2333862"
 dependencies = [
  "bincode",
  "bincode-trait-derive",
@@ -2922,6 +2925,7 @@ dependencies = [
 [[package]]
 name = "linnet"
 version = "0.17.0"
+source = "git+https://github.com/alphal00p/gammaloop.git?tag=epemttxhlo#559268c70051cdb68196f4e4ab313c01d2333862"
 dependencies = [
  "ahash",
  "bincode",
@@ -5060,6 +5064,7 @@ dependencies = [
 [[package]]
 name = "spenso"
 version = "0.6.0"
+source = "git+https://github.com/alphal00p/gammaloop.git?tag=epemttxhlo#559268c70051cdb68196f4e4ab313c01d2333862"
 dependencies = [
  "ahash",
  "append-only-vec",
@@ -5099,6 +5104,7 @@ dependencies = [
 [[package]]
 name = "spenso-hep-lib"
 version = "0.1.7"
+source = "git+https://github.com/alphal00p/gammaloop.git?tag=epemttxhlo#559268c70051cdb68196f4e4ab313c01d2333862"
 dependencies = [
  "ahash",
  "idenso",
@@ -5111,6 +5117,7 @@ dependencies = [
 [[package]]
 name = "spenso-macros"
 version = "0.3.2"
+source = "git+https://github.com/alphal00p/gammaloop.git?tag=epemttxhlo#559268c70051cdb68196f4e4ab313c01d2333862"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6348,6 +6355,7 @@ dependencies = [
 [[package]]
 name = "vakint"
 version = "0.1.2"
+source = "git+https://github.com/alphal00p/gammaloop.git?tag=epemttxhlo#559268c70051cdb68196f4e4ab313c01d2333862"
 dependencies = [
  "ahash",
  "arrayvec",

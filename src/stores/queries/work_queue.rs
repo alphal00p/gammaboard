@@ -1,5 +1,6 @@
 use crate::core::{
     BatchQueueCounts, EvaluatorPerformanceSnapshot, SamplerAggregatorPerformanceSnapshot,
+    StoreError,
 };
 use crate::evaluation::BatchResult;
 use crate::sampling::LatentBatch;
@@ -226,15 +227,16 @@ pub(crate) async fn submit_batch_results(
     node_uuid: &str,
     result: &BatchResult,
     eval_time_ms: f64,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), StoreError> {
     result
         .validate_json_safe()
-        .map_err(|err| sqlx::Error::Protocol(format!("invalid batch result payload: {err}")))?;
-    let observable = encode_json("batch observable", &result.observable)?;
+        .map_err(|err| StoreError::store(format!("invalid batch result payload: {err}")))?;
+    let observable =
+        encode_json("batch observable", &result.observable).map_err(StoreError::from)?;
     let values = result.values_to_bytes().map_err(|err| {
-        sqlx::Error::Protocol(format!("failed to serialize batch training values: {err}"))
+        StoreError::store(format!("failed to serialize batch training values: {err}"))
     })?;
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin().await.map_err(StoreError::from)?;
     let update_result = sqlx::query(
         r#"
         UPDATE batches
@@ -247,11 +249,10 @@ pub(crate) async fn submit_batch_results(
     .bind(batch_id)
     .bind(node_uuid)
     .execute(&mut *tx)
-    .await?;
+    .await
+    .map_err(StoreError::from)?;
     if update_result.rows_affected() == 0 {
-        return Err(sqlx::Error::Protocol(format!(
-            "batch {batch_id} is no longer owned by node uuid '{node_uuid}'"
-        )));
+        return Err(StoreError::batch_ownership_lost(batch_id, node_uuid));
     }
     sqlx::query(
         r#"
@@ -270,8 +271,9 @@ pub(crate) async fn submit_batch_results(
     .bind(observable)
     .bind(eval_time_ms)
     .execute(&mut *tx)
-    .await?;
-    tx.commit().await?;
+    .await
+    .map_err(StoreError::from)?;
+    tx.commit().await.map_err(StoreError::from)?;
     Ok(())
 }
 

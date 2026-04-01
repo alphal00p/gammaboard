@@ -11,6 +11,7 @@ use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
 use std::{time::Duration, time::Instant};
 use thiserror::Error;
+use tracing::info;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvaluatorRunnerParams {
     pub performance_snapshot_interval_ms: u64,
@@ -315,10 +316,26 @@ where
             return Err(EvaluatorRunnerError::Engine(err));
         }
 
-        self.store
+        match self
+            .store
             .submit_batch_results(batch_id, &self.node_uuid, &result, total_time_ms)
             .await
-            .map_err(EvaluatorRunnerError::Store)?;
+        {
+            Ok(()) => {}
+            Err(err) if err.is_batch_ownership_lost() => {
+                info!(
+                    run_id = self.run_id,
+                    batch_id,
+                    node_name = %self.node_name,
+                    node_uuid = %self.node_uuid,
+                    error = %err,
+                    "dropping stale evaluator result after batch ownership was lost"
+                );
+                self.flush_performance_snapshot_if_due(false).await?;
+                return Ok(());
+            }
+            Err(err) => return Err(EvaluatorRunnerError::Store(err)),
+        }
 
         let processed_samples = batch.size();
         self.observe_eval_batch(

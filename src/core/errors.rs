@@ -12,6 +12,8 @@ pub enum StoreError {
     Database(String),
     #[error("serialization error: {0}")]
     Serialization(String),
+    #[error("batch {batch_id} is no longer owned by node uuid '{node_uuid}'")]
+    BatchOwnershipLost { batch_id: i64, node_uuid: String },
 }
 
 impl StoreError {
@@ -29,6 +31,17 @@ impl StoreError {
 
     pub fn is_invalid_input(&self) -> bool {
         matches!(self, Self::InvalidInput(_))
+    }
+
+    pub fn batch_ownership_lost(batch_id: i64, node_uuid: impl Into<String>) -> Self {
+        Self::BatchOwnershipLost {
+            batch_id,
+            node_uuid: node_uuid.into(),
+        }
+    }
+
+    pub fn is_batch_ownership_lost(&self) -> bool {
+        matches!(self, Self::BatchOwnershipLost { .. })
     }
 }
 

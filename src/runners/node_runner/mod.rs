@@ -14,7 +14,11 @@ use crate::core::{
 };
 use rand::Rng;
 use std::time::{Duration, Instant};
-use tokio::time::sleep;
+use tokio::{
+    sync::{mpsc, watch},
+    task::JoinHandle,
+    time::sleep,
+};
 use tracing::{Instrument, info, warn};
 use uuid::Uuid;
 
@@ -28,6 +32,9 @@ pub struct NodeRunnerConfig {
     pub reconcile_initial_backoff: Duration,
     pub reconcile_backoff_factor: f64,
     pub reconcile_max_backoff: Duration,
+    pub announce_interval: Duration,
+    pub announce_retry_interval: Duration,
+    pub announce_failure_timeout: Duration,
 }
 
 pub trait NodeRunnerStore:
@@ -62,8 +69,27 @@ impl Default for NodeRunnerConfig {
             reconcile_initial_backoff: Duration::from_millis(50),
             reconcile_backoff_factor: 2.0,
             reconcile_max_backoff: Duration::from_millis(2_000),
+            announce_interval: Duration::from_secs(2),
+            announce_retry_interval: Duration::from_millis(500),
+            announce_failure_timeout: Duration::from_secs(30),
         }
     }
+}
+
+#[derive(Debug)]
+enum LeaseEvent {
+    Ready,
+    Fatal {
+        startup: bool,
+        retries: u32,
+        last_error: String,
+    },
+}
+
+struct LeaseRenewalHandle {
+    shutdown: watch::Sender<bool>,
+    events: mpsc::UnboundedReceiver<LeaseEvent>,
+    join_handle: JoinHandle<()>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,6 +189,186 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         self.active_runner.as_ref().map(|runner| runner.target)
     }
 
+    fn spawn_lease_renewal_task(&self) -> LeaseRenewalHandle {
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let store = self.store.clone();
+        let node_name = self.node_name.clone();
+        let node_uuid = self.node_uuid.clone();
+        let announce_interval = self.config.announce_interval;
+        let announce_retry_interval = self.config.announce_retry_interval;
+        let announce_failure_timeout = self.config.announce_failure_timeout;
+        let join_handle = tokio::spawn(async move {
+            let mut startup = true;
+            let mut announce_failures = 0u32;
+            let mut announce_failed_at: Option<Instant> = None;
+            loop {
+                match store.announce_node(&node_name, &node_uuid).await {
+                    Ok(()) => {
+                        if announce_failures > 0 {
+                            info!(
+                                startup,
+                                retries = announce_failures,
+                                downtime_ms = announce_failed_at
+                                    .map(|failed_at| failed_at.elapsed().as_millis() as u64)
+                                    .unwrap_or(0),
+                                "node announce recovered after retries"
+                            );
+                        }
+                        if startup {
+                            let _ = event_tx.send(LeaseEvent::Ready);
+                            info!("node startup announce succeeded");
+                            startup = false;
+                        }
+                        announce_failures = 0;
+                        announce_failed_at = None;
+                        tokio::select! {
+                            _ = shutdown_rx.changed() => {
+                                if *shutdown_rx.borrow() {
+                                    break;
+                                }
+                            }
+                            _ = sleep(announce_interval) => {}
+                        }
+                    }
+                    Err(err) => {
+                        announce_failures = announce_failures.saturating_add(1);
+                        let failed_at = *announce_failed_at.get_or_insert_with(Instant::now);
+                        let elapsed = failed_at.elapsed();
+                        let should_log = announce_failures == 1 || announce_failures % 10 == 0;
+                        if should_log {
+                            warn!(
+                                startup,
+                                retries = announce_failures,
+                                elapsed_ms = elapsed.as_millis() as u64,
+                                last_error = %err,
+                                "node announce failed; retrying"
+                            );
+                        }
+                        if elapsed >= announce_failure_timeout {
+                            let _ = event_tx.send(LeaseEvent::Fatal {
+                                startup,
+                                retries: announce_failures,
+                                last_error: err.to_string(),
+                            });
+                            return;
+                        }
+                        tokio::select! {
+                            _ = shutdown_rx.changed() => {
+                                if *shutdown_rx.borrow() {
+                                    break;
+                                }
+                            }
+                            _ = sleep(announce_retry_interval) => {}
+                        }
+                    }
+                }
+            }
+        });
+
+        LeaseRenewalHandle {
+            shutdown: shutdown_tx,
+            events: event_rx,
+            join_handle,
+        }
+    }
+
+    async fn stop_lease_renewal_task(handle: LeaseRenewalHandle) {
+        let LeaseRenewalHandle {
+            shutdown,
+            join_handle,
+            ..
+        } = handle;
+        let _ = shutdown.send(true);
+        if let Err(err) = join_handle.await {
+            warn!("lease renewal task failed to join cleanly: {err}");
+        }
+    }
+
+    async fn wait_for_initial_lease(
+        lease_events: &mut mpsc::UnboundedReceiver<LeaseEvent>,
+        shutdown: &mut std::pin::Pin<
+            &mut impl std::future::Future<Output = Result<(), std::io::Error>>,
+        >,
+        #[cfg(unix)] sigterm: &mut tokio::signal::unix::Signal,
+    ) -> Result<bool, StoreError> {
+        loop {
+            #[cfg(unix)]
+            tokio::select! {
+                _ = shutdown.as_mut() => {
+                    info!("stopping node-runner");
+                    return Ok(false);
+                }
+                _ = sigterm.recv() => {
+                    info!("stopping node-runner (SIGTERM)");
+                    return Ok(false);
+                }
+                event = lease_events.recv() => {
+                    match event {
+                        Some(LeaseEvent::Ready) => return Ok(true),
+                        Some(LeaseEvent::Fatal { startup, retries, last_error }) => {
+                            warn!(
+                                startup,
+                                retries,
+                                last_error = %last_error,
+                                "node announce failed for too long; shutting down node-runner"
+                            );
+                            return Ok(false);
+                        }
+                        None => return Err(StoreError::store("lease renewal task exited before startup completed")),
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            tokio::select! {
+                _ = shutdown.as_mut() => {
+                    info!("stopping node-runner");
+                    return Ok(false);
+                }
+                event = lease_events.recv() => {
+                    match event {
+                        Some(LeaseEvent::Ready) => return Ok(true),
+                        Some(LeaseEvent::Fatal { startup, retries, last_error }) => {
+                            warn!(
+                                startup,
+                                retries,
+                                last_error = %last_error,
+                                "node announce failed for too long; shutting down node-runner"
+                            );
+                            return Ok(false);
+                        }
+                        None => return Err(StoreError::store("lease renewal task exited before startup completed")),
+                    }
+                }
+            }
+        }
+    }
+
+    async fn poll_lease_failure(
+        lease_events: &mut mpsc::UnboundedReceiver<LeaseEvent>,
+    ) -> Result<bool, StoreError> {
+        match lease_events.try_recv() {
+            Ok(LeaseEvent::Ready) => Ok(false),
+            Ok(LeaseEvent::Fatal {
+                startup,
+                retries,
+                last_error,
+            }) => {
+                warn!(
+                    startup,
+                    retries,
+                    last_error = %last_error,
+                    "node announce failed for too long; shutting down node-runner"
+                );
+                Ok(true)
+            }
+            Err(mpsc::error::TryRecvError::Empty) => Ok(false),
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                Err(StoreError::store("lease renewal task exited unexpectedly"))
+            }
+        }
+    }
+
     pub async fn run(mut self) -> Result<(), StoreError> {
         let span = tracing::span!(
             tracing::Level::TRACE,
@@ -178,56 +384,32 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).map_err(
                     |err| StoreError::store(format!("failed to install SIGTERM handler: {err}")),
                 )?;
-            let mut announce_failed_at: Option<Instant> = None;
-            let mut announce_failures: u32 = 0;
+            let mut lease_renewal = self.spawn_lease_renewal_task();
+
+            #[cfg(unix)]
+            let startup_announced = Self::wait_for_initial_lease(
+                &mut lease_renewal.events,
+                &mut shutdown,
+                &mut sigterm,
+            )
+            .await?;
+            #[cfg(not(unix))]
+            let startup_announced =
+                Self::wait_for_initial_lease(&mut lease_renewal.events, &mut shutdown).await?;
+
+            if !startup_announced {
+                Self::stop_lease_renewal_task(lease_renewal).await;
+                if let Err(err) = self.store.expire_node_lease(&self.node_uuid).await {
+                    warn!("failed to expire node lease on shutdown: {err}");
+                }
+                return Ok(());
+            }
 
             loop {
                 let tick_started = Instant::now();
-                if let Err(err) = self
-                    .store
-                    .announce_node(&self.node_name, &self.node_uuid)
-                    .await
-                {
-                    announce_failures = announce_failures.saturating_add(1);
-                    let failed_at = *announce_failed_at.get_or_insert_with(Instant::now);
-                    if failed_at.elapsed() >= Duration::from_secs(30) {
-                        warn!(
-                            retries = announce_failures,
-                            last_error = %err,
-                            "node announce failed for 30 seconds; shutting down node-runner"
-                        );
-                        break;
-                    }
-                    #[cfg(unix)]
-                    tokio::select! {
-                        _ = &mut shutdown => {
-                            info!("stopping node-runner");
-                            break;
-                        }
-                        _ = sigterm.recv() => {
-                            info!("stopping node-runner (SIGTERM)");
-                            break;
-                        }
-                        _ = sleep(self.next_reconcile_sleep()) => {}
-                    }
-                    #[cfg(not(unix))]
-                    tokio::select! {
-                        _ = &mut shutdown => {
-                            info!("stopping node-runner");
-                            break;
-                        }
-                        _ = sleep(self.next_reconcile_sleep()) => {}
-                    }
-                    continue;
+                if Self::poll_lease_failure(&mut lease_renewal.events).await? {
+                    break;
                 }
-                if announce_failures > 0 {
-                    info!(
-                        retries = announce_failures,
-                        "node announce recovered after retries"
-                    );
-                }
-                announce_failed_at = None;
-                announce_failures = 0;
 
                 if self
                     .store
@@ -321,6 +503,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             }
 
             self.stop_current().await;
+            Self::stop_lease_renewal_task(lease_renewal).await;
             if let Err(err) = self.store.expire_node_lease(&self.node_uuid).await {
                 warn!("failed to expire node lease on shutdown: {err}");
             }

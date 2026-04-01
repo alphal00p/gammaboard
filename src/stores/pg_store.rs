@@ -612,9 +612,7 @@ impl WorkQueueStore for PgStore {
         result: &BatchResult,
         eval_time_ms: f64,
     ) -> Result<(), StoreError> {
-        queries::submit_batch_results(&self.pool, batch_id, node_uuid, result, eval_time_ms)
-            .await
-            .map_err(map_sqlx)
+        queries::submit_batch_results(&self.pool, batch_id, node_uuid, result, eval_time_ms).await
     }
 
     async fn record_evaluator_performance_snapshot(

@@ -20,6 +20,12 @@ impl From<StoreError> for ApiError {
             StoreError::Internal(message)
             | StoreError::Database(message)
             | StoreError::Serialization(message) => Self::Internal(message),
+            StoreError::BatchOwnershipLost {
+                batch_id,
+                node_uuid,
+            } => Self::Internal(format!(
+                "batch {batch_id} is no longer owned by node uuid '{node_uuid}'"
+            )),
         }
     }
 }

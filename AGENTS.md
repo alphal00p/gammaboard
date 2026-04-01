@@ -29,6 +29,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - `name` is the unique operator-facing handle.
 - `uuid` is the live `node run` process incarnation.
 - Nodes use a single announce operation to register and renew their lease.
+- Node lease renewal must run independently from the main reconcile/tick loop so long role ticks cannot starve announces.
 - If announce fails for 30 seconds, the node shuts down.
 - `node run` reconcile polling should use a fast-start backoff: start at `50ms`, multiply by `2.0`, cap at `2s`, and reset on meaningful role/task changes.
 - `node run` reconcile backoff should add bounded jitter around the exponential sleep to reduce synchronized retries between workers.
