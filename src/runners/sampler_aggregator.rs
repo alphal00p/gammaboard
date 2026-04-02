@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use std::time::{Duration, Instant};
 use thiserror::Error;
+use tokio::time::sleep;
 
 const MIN_BATCH_SIZE: usize = 16;
 const MAX_BATCH_SIZE_UP_FACTOR: f64 = 4.0;
@@ -532,7 +533,28 @@ where
         Ok(())
     }
 
+    async fn drain_evaluator_work_on_stop(&mut self) -> Result<(), RunnerError> {
+        loop {
+            self.process_completed().await?;
+
+            let claimed_batches = self
+                .store
+                .get_batch_queue_counts(self.run_id)
+                .await?
+                .claimed;
+            if claimed_batches <= 0 {
+                break;
+            }
+
+            sleep(Duration::from_millis(25)).await;
+        }
+
+        self.process_completed().await?;
+        Ok(())
+    }
+
     pub async fn persist_state(&mut self) -> Result<(), RunnerError> {
+        self.drain_evaluator_work_on_stop().await?;
         self.flush_aggregation(true).await?;
         self.flush_performance_snapshot(true).await?;
         self.sync_task_progress().await?;

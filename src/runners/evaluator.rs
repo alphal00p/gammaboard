@@ -83,8 +83,8 @@ where
         }
     }
 
-    fn is_empty(&self) -> bool {
-        self.ready_batch.is_none()
+    fn has_pending_work(&self) -> bool {
+        self.ready_batch.is_some() || self.pending_prefetch.is_some()
     }
 
     async fn pop(
@@ -101,12 +101,6 @@ where
         let claimed = self.ready_batch.take();
         self.maybe_start_prefetch(store, draining);
         Ok(claimed)
-    }
-
-    fn abort_prefetch(&mut self) {
-        if let Some(handle) = self.pending_prefetch.take() {
-            handle.abort();
-        }
     }
 
     async fn fill(&mut self, store: &S, draining: bool) -> Result<(), EvaluatorRunnerError> {
@@ -494,6 +488,7 @@ where
                 self.submit_result(
                     claimed.batch_id,
                     claimed.requires_training_values,
+                    &transformed_batch,
                     result,
                     total_time_ms,
                     materialization_time_ms,
@@ -522,6 +517,7 @@ where
         &mut self,
         batch_id: i64,
         requires_training_values: bool,
+        batch: &crate::evaluation::Batch,
         result: BatchResult,
         total_time_ms: f64,
         materialization_time_ms: f64,
@@ -536,7 +532,7 @@ where
             self.fail_claimed_batch(batch_id, &err.to_string()).await?;
             return Err(EvaluatorRunnerError::Engine(err));
         }
-        if result.len() != processed_samples {
+        if !result.matches_batch(batch) {
             let err = EngineError::engine(format!(
                 "result length mismatch for batch {}: expected {}, got {}",
                 batch_id,
@@ -689,8 +685,7 @@ where
 
     pub async fn stop(&mut self) -> Result<(), EvaluatorRunnerError> {
         self.draining = true;
-        self.prefetch_buffer.abort_prefetch();
-        while !self.prefetch_buffer.is_empty() {
+        while self.prefetch_buffer.has_pending_work() {
             self.tick().await?;
         }
         let outcome = self
