@@ -19,7 +19,7 @@ pub fn build_evaluator_performance_response(
     if include_summary && !entries.is_empty() {
         updates.push(replace_panel(evaluator_summary_panel(&entries)));
     }
-    if let Some(entry) = entries.first() {
+    if !include_summary && let Some(entry) = entries.first() {
         updates.push(replace_panel(evaluator_current_panel(entry)));
     }
     PanelResponse {
@@ -80,8 +80,8 @@ fn build_performance_response<T>(
 }
 
 fn evaluator_panel_specs(include_summary: bool) -> Vec<PanelSpec> {
-    let summary_panel = include_summary.then(|| {
-        with_panel_width(
+    if include_summary {
+        return vec![with_panel_width(
             panel_spec(
                 "evaluator_summary",
                 "Run Evaluator Summary",
@@ -89,20 +89,18 @@ fn evaluator_panel_specs(include_summary: bool) -> Vec<PanelSpec> {
                 PanelHistoryMode::Replace,
             ),
             PanelWidth::Full,
-        )
-    });
-    summary_panel
-        .into_iter()
-        .chain(std::iter::once(with_panel_width(
-            panel_spec(
-                "evaluator_current",
-                "Evaluator Performance",
-                PanelKind::KeyValue,
-                PanelHistoryMode::Replace,
-            ),
-            PanelWidth::Full,
-        )))
-        .collect()
+        )];
+    }
+
+    vec![with_panel_width(
+        panel_spec(
+            "evaluator_current",
+            "Evaluator Performance",
+            PanelKind::KeyValue,
+            PanelHistoryMode::Replace,
+        ),
+        PanelWidth::Full,
+    )]
 }
 
 fn sampler_panel_specs() -> Vec<PanelSpec> {
@@ -442,6 +440,41 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
                 "runnable_queue_retained_ratio",
                 "Pending Queue Carryover Ratio (Diagnostic)",
                 runtime.rolling.runnable_queue_retained_ratio.mean,
+            ),
+            key_value(
+                "reclaim_ms",
+                "Reclaim (ms)",
+                runtime.rolling.reclaim_ms.mean,
+            ),
+            key_value(
+                "queue_snapshot_ms",
+                "Queue Snapshot (ms)",
+                runtime.rolling.queue_snapshot_ms.mean,
+            ),
+            key_value(
+                "active_evaluator_count_ms",
+                "Active Evaluator Count (ms)",
+                runtime.rolling.active_evaluator_count_ms.mean,
+            ),
+            key_value(
+                "completed_fetch_ingest_ms",
+                "Completed Fetch+Ingest (ms)",
+                runtime.rolling.completed_fetch_ingest_ms.mean,
+            ),
+            key_value(
+                "produce_enqueue_ms",
+                "Produce+Enqueue (ms)",
+                runtime.rolling.produce_enqueue_ms.mean,
+            ),
+            key_value(
+                "progress_sync_ms",
+                "Progress Sync (ms)",
+                runtime.rolling.progress_sync_ms.mean,
+            ),
+            key_value(
+                "performance_sync_ms",
+                "Performance Sync (ms)",
+                runtime.rolling.performance_sync_ms.mean,
             ),
         ],
     )];
