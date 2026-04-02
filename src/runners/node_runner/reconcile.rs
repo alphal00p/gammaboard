@@ -483,8 +483,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         };
         let _role_scope = active_runner.context_span.enter();
         info!("stopping role runner");
-        if let Err(err) = active_runner.runner.persist_state().await {
-            warn!("failed to persist role runner state on stop: {err}");
+        if let Err(err) = active_runner.runner.stop().await {
+            warn!("failed to stop role runner cleanly: {err}");
         }
         active_runner.worker.mark_inactive_with_log().await;
     }

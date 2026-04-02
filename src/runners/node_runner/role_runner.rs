@@ -7,7 +7,7 @@ use super::NodeRunnerStore;
 #[async_trait(?Send)]
 pub(super) trait RoleRunner {
     async fn tick(&mut self) -> Result<bool, StoreError>;
-    async fn persist_state(&mut self) -> Result<(), StoreError>;
+    async fn stop(&mut self) -> Result<(), StoreError>;
 }
 
 #[async_trait(?Send)]
@@ -19,8 +19,10 @@ impl<S: NodeRunnerStore> RoleRunner for EvaluatorRunner<S> {
             .map_err(|err| StoreError::store(err.to_string()))
     }
 
-    async fn persist_state(&mut self) -> Result<(), StoreError> {
-        Ok(())
+    async fn stop(&mut self) -> Result<(), StoreError> {
+        EvaluatorRunner::stop(self)
+            .await
+            .map_err(|err| StoreError::store(err.to_string()))
     }
 }
 
@@ -46,7 +48,7 @@ impl<S: NodeRunnerStore> RoleRunner for SamplerAggregatorRunner<S> {
         }
     }
 
-    async fn persist_state(&mut self) -> Result<(), StoreError> {
+    async fn stop(&mut self) -> Result<(), StoreError> {
         SamplerAggregatorRunner::persist_state(self)
             .await
             .map_err(|err| StoreError::store(err.to_string()))

@@ -1,17 +1,19 @@
 //! Evaluator worker runner orchestration.
 
 use crate::core::{
-    BatchTransformConfig, EngineError, EvalError, EvaluatorIdleProfileMetrics,
+    BatchClaim, BatchTransformConfig, EngineError, EvalError, EvaluatorIdleProfileMetrics,
     EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot, EvaluatorWorkerStore, StoreError,
 };
-use crate::evaluation::{Batch, BatchResult, EvalBatchOptions, Evaluator, Materializer};
+use crate::evaluation::{BatchResult, EvalBatchOptions, Evaluator, Materializer};
 use crate::runners::rolling_metric::RollingMetric;
 use crate::runners::stage_context::resolve_stage_context;
 use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
-use std::{time::Duration, time::Instant};
+use std::time::{Duration, Instant};
 use thiserror::Error;
+use tokio::task::JoinHandle;
 use tracing::info;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvaluatorRunnerParams {
     pub performance_snapshot_interval_ms: u64,
@@ -30,11 +32,13 @@ pub enum EvaluatorRunnerError {
 pub struct EvaluatorRunner<S> {
     run_id: i32,
     node_name: String,
-    node_uuid: String,
     evaluator: Box<dyn Evaluator>,
     domain: Domain,
     current_task_id: Option<i64>,
     materializer: Option<Box<dyn Materializer>>,
+    prefetch_buffer: LatentPrefetchBuffer<S>,
+    submit_buffer: ResultSubmitBuffer<S>,
+    draining: bool,
     performance_snapshot_interval: Duration,
     last_snapshot_at: Instant,
     batches_completed_total: i64,
@@ -57,9 +61,236 @@ struct EvaluatorRollingAverages {
     idle_ratio: RollingMetric,
 }
 
+struct LatentPrefetchBuffer<S> {
+    run_id: i32,
+    node_uuid: String,
+    ready_batch: Option<BatchClaim>,
+    pending_prefetch: Option<JoinHandle<Result<Option<BatchClaim>, StoreError>>>,
+    _marker: std::marker::PhantomData<S>,
+}
+
+impl<S> LatentPrefetchBuffer<S>
+where
+    S: EvaluatorWorkerStore + Clone + Send + Sync + 'static,
+{
+    fn new(run_id: i32, node_uuid: String) -> Self {
+        Self {
+            run_id,
+            node_uuid,
+            ready_batch: None,
+            pending_prefetch: None,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.ready_batch.is_none()
+    }
+
+    async fn pop(
+        &mut self,
+        store: &S,
+        draining: bool,
+    ) -> Result<Option<BatchClaim>, EvaluatorRunnerError> {
+        self.fill(store, draining).await?;
+
+        if self.ready_batch.is_none() && self.pending_prefetch.is_some() {
+            self.await_pending_prefetch().await?;
+        }
+
+        let claimed = self.ready_batch.take();
+        self.maybe_start_prefetch(store, draining);
+        Ok(claimed)
+    }
+
+    fn abort_prefetch(&mut self) {
+        if let Some(handle) = self.pending_prefetch.take() {
+            handle.abort();
+        }
+    }
+
+    async fn fill(&mut self, store: &S, draining: bool) -> Result<(), EvaluatorRunnerError> {
+        self.drain_finished_prefetch().await?;
+
+        if draining || self.ready_batch.is_some() {
+            return Ok(());
+        }
+
+        if self.pending_prefetch.is_none() {
+            self.ready_batch = store
+                .claim_batch(self.run_id, &self.node_uuid)
+                .await
+                .map_err(EvaluatorRunnerError::Store)?;
+        }
+
+        self.maybe_start_prefetch(store, draining);
+        Ok(())
+    }
+
+    fn maybe_start_prefetch(&mut self, store: &S, draining: bool) {
+        if draining || self.ready_batch.is_some() || self.pending_prefetch.is_some() {
+            return;
+        }
+
+        let store = store.clone();
+        let run_id = self.run_id;
+        let node_uuid = self.node_uuid.clone();
+        self.pending_prefetch = Some(tokio::spawn(async move {
+            store.claim_batch(run_id, &node_uuid).await
+        }));
+    }
+
+    async fn drain_finished_prefetch(&mut self) -> Result<(), EvaluatorRunnerError> {
+        let Some(handle) = self.pending_prefetch.as_ref() else {
+            return Ok(());
+        };
+        if !handle.is_finished() {
+            return Ok(());
+        }
+
+        let handle = self
+            .pending_prefetch
+            .take()
+            .expect("checked pending prefetch");
+        self.consume_prefetch_handle(handle).await
+    }
+
+    async fn await_pending_prefetch(&mut self) -> Result<(), EvaluatorRunnerError> {
+        let Some(handle) = self.pending_prefetch.take() else {
+            return Ok(());
+        };
+        self.consume_prefetch_handle(handle).await
+    }
+
+    async fn consume_prefetch_handle(
+        &mut self,
+        handle: JoinHandle<Result<Option<BatchClaim>, StoreError>>,
+    ) -> Result<(), EvaluatorRunnerError> {
+        match handle.await {
+            Ok(Ok(claimed)) => self.ready_batch = claimed,
+            Ok(Err(err)) => return Err(EvaluatorRunnerError::Store(err)),
+            Err(err) => {
+                return Err(EvaluatorRunnerError::Store(StoreError::store(format!(
+                    "evaluator prefetch task failed: {err}"
+                ))));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+struct SubmitOutcome {
+    processed_samples: usize,
+    total_time_ms: f64,
+    materialization_time_ms: f64,
+    eval_time_ms: f64,
+}
+
+struct ResultSubmitBuffer<S> {
+    node_uuid: String,
+    pending_submit: Option<JoinHandle<Result<SubmitOutcome, StoreError>>>,
+    _marker: std::marker::PhantomData<S>,
+}
+
+impl<S> ResultSubmitBuffer<S>
+where
+    S: EvaluatorWorkerStore + Clone + Send + Sync + 'static,
+{
+    fn new(node_uuid: String) -> Self {
+        Self {
+            node_uuid,
+            pending_submit: None,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    fn is_idle(&self) -> bool {
+        self.pending_submit.is_none()
+    }
+
+    async fn drain_finished(
+        &mut self,
+        run_id: i32,
+        node_name: &str,
+    ) -> Result<Option<SubmitOutcome>, EvaluatorRunnerError> {
+        let Some(handle) = self.pending_submit.as_ref() else {
+            return Ok(None);
+        };
+        if !handle.is_finished() {
+            return Ok(None);
+        }
+
+        let handle = self.pending_submit.take().expect("checked pending submit");
+        self.consume_submit_handle(handle, run_id, node_name).await
+    }
+
+    async fn wait_for_slot(
+        &mut self,
+        run_id: i32,
+        node_name: &str,
+    ) -> Result<Option<SubmitOutcome>, EvaluatorRunnerError> {
+        let Some(handle) = self.pending_submit.take() else {
+            return Ok(None);
+        };
+        self.consume_submit_handle(handle, run_id, node_name).await
+    }
+
+    fn start_submit(
+        &mut self,
+        store: &S,
+        batch_id: i64,
+        result: BatchResult,
+        total_time_ms: f64,
+        materialization_time_ms: f64,
+        eval_time_ms: f64,
+        processed_samples: usize,
+    ) {
+        debug_assert!(self.pending_submit.is_none());
+        let store = store.clone();
+        let node_uuid = self.node_uuid.clone();
+        self.pending_submit = Some(tokio::spawn(async move {
+            store
+                .submit_batch_results(batch_id, &node_uuid, &result, total_time_ms)
+                .await?;
+            Ok(SubmitOutcome {
+                processed_samples,
+                total_time_ms,
+                materialization_time_ms,
+                eval_time_ms,
+            })
+        }));
+    }
+
+    async fn consume_submit_handle(
+        &mut self,
+        handle: JoinHandle<Result<SubmitOutcome, StoreError>>,
+        run_id: i32,
+        node_name: &str,
+    ) -> Result<Option<SubmitOutcome>, EvaluatorRunnerError> {
+        match handle.await {
+            Ok(Ok(outcome)) => Ok(Some(outcome)),
+            Ok(Err(err)) if err.is_batch_ownership_lost() => {
+                info!(
+                    run_id,
+                    node_name = %node_name,
+                    node_uuid = %self.node_uuid,
+                    error = %err,
+                    "dropping stale evaluator result after batch ownership was lost"
+                );
+                Ok(None)
+            }
+            Ok(Err(err)) => Err(EvaluatorRunnerError::Store(err)),
+            Err(err) => Err(EvaluatorRunnerError::Store(StoreError::store(format!(
+                "evaluator submit task failed: {err}"
+            )))),
+        }
+    }
+}
+
 impl<S> EvaluatorRunner<S>
 where
-    S: EvaluatorWorkerStore,
+    S: EvaluatorWorkerStore + Clone + Send + Sync + 'static,
 {
     pub fn new(
         store: S,
@@ -70,14 +301,18 @@ where
         domain: Domain,
         params: EvaluatorRunnerParams,
     ) -> Self {
+        let node_name = node_name.into();
+        let node_uuid = node_uuid.into();
         Self {
             run_id,
-            node_name: node_name.into(),
-            node_uuid: node_uuid.into(),
+            node_name,
             evaluator,
             domain,
             current_task_id: None,
             materializer: None,
+            prefetch_buffer: LatentPrefetchBuffer::new(run_id, node_uuid.clone()),
+            submit_buffer: ResultSubmitBuffer::new(node_uuid),
+            draining: false,
             performance_snapshot_interval: Duration::from_millis(
                 params.performance_snapshot_interval_ms,
             ),
@@ -197,13 +432,9 @@ where
 
     pub async fn tick(&mut self) -> Result<(), EvaluatorRunnerError> {
         let loop_started = Instant::now();
-        let claimed = self
-            .store
-            .claim_batch(self.run_id, &self.node_uuid)
-            .await
-            .map_err(EvaluatorRunnerError::Store)?;
+        self.consume_finished_submit().await?;
 
-        let Some(claimed) = claimed else {
+        let Some(claimed) = self.prefetch_buffer.pop(&self.store, self.draining).await? else {
             self.observe_idle_ratio(loop_started, 0.0);
             self.flush_performance_snapshot_if_due(false).await?;
             return Ok(());
@@ -263,11 +494,11 @@ where
                 self.submit_result(
                     claimed.batch_id,
                     claimed.requires_training_values,
-                    &transformed_batch,
                     result,
                     total_time_ms,
                     materialization_time_ms,
                     eval_time_ms,
+                    transformed_batch.size(),
                 )
                 .await?;
                 self.observe_idle_ratio(loop_started, total_time_ms);
@@ -291,11 +522,11 @@ where
         &mut self,
         batch_id: i64,
         requires_training_values: bool,
-        batch: &Batch,
         result: BatchResult,
         total_time_ms: f64,
         materialization_time_ms: f64,
         eval_time_ms: f64,
+        processed_samples: usize,
     ) -> Result<(), EvaluatorRunnerError> {
         if requires_training_values && result.values.is_none() {
             let err = EngineError::engine(format!(
@@ -305,47 +536,60 @@ where
             self.fail_claimed_batch(batch_id, &err.to_string()).await?;
             return Err(EvaluatorRunnerError::Engine(err));
         }
-        if !result.matches_batch(batch) {
+        if result.len() != processed_samples {
             let err = EngineError::engine(format!(
                 "result length mismatch for batch {}: expected {}, got {}",
                 batch_id,
-                batch.size(),
+                processed_samples,
                 result.len()
             ));
             self.fail_claimed_batch(batch_id, &err.to_string()).await?;
             return Err(EvaluatorRunnerError::Engine(err));
         }
 
-        match self
-            .store
-            .submit_batch_results(batch_id, &self.node_uuid, &result, total_time_ms)
-            .await
-        {
-            Ok(()) => {}
-            Err(err) if err.is_batch_ownership_lost() => {
-                info!(
-                    run_id = self.run_id,
-                    batch_id,
-                    node_name = %self.node_name,
-                    node_uuid = %self.node_uuid,
-                    error = %err,
-                    "dropping stale evaluator result after batch ownership was lost"
-                );
-                self.flush_performance_snapshot_if_due(false).await?;
-                return Ok(());
-            }
-            Err(err) => return Err(EvaluatorRunnerError::Store(err)),
+        if !self.submit_buffer.is_idle() {
+            let outcome = self
+                .submit_buffer
+                .wait_for_slot(self.run_id, &self.node_name)
+                .await?;
+            self.consume_submitted_result(outcome).await?;
         }
 
-        let processed_samples = batch.size();
-        self.observe_eval_batch(
-            processed_samples,
+        self.submit_buffer.start_submit(
+            &self.store,
+            batch_id,
+            result,
             total_time_ms,
             materialization_time_ms,
             eval_time_ms,
+            processed_samples,
+        );
+        Ok(())
+    }
+
+    async fn consume_finished_submit(&mut self) -> Result<(), EvaluatorRunnerError> {
+        let outcome = self
+            .submit_buffer
+            .drain_finished(self.run_id, &self.node_name)
+            .await?;
+        self.consume_submitted_result(outcome).await
+    }
+
+    async fn consume_submitted_result(
+        &mut self,
+        outcome: Option<SubmitOutcome>,
+    ) -> Result<(), EvaluatorRunnerError> {
+        let Some(outcome) = outcome else {
+            return Ok(());
+        };
+
+        self.observe_eval_batch(
+            outcome.processed_samples,
+            outcome.total_time_ms,
+            outcome.materialization_time_ms,
+            outcome.eval_time_ms,
         );
         self.flush_performance_snapshot_if_due(false).await?;
-
         Ok(())
     }
 
@@ -432,7 +676,6 @@ where
                     idle_ratio: self.rolling.idle_ratio.value().unwrap_or(0.0),
                 }),
             },
-            //engine_diagnostics: self.evaluator.get_diagnostics(),
         };
 
         self.store
@@ -441,6 +684,21 @@ where
             .map_err(EvaluatorRunnerError::Store)?;
 
         self.last_snapshot_at = Instant::now();
+        Ok(())
+    }
+
+    pub async fn stop(&mut self) -> Result<(), EvaluatorRunnerError> {
+        self.draining = true;
+        self.prefetch_buffer.abort_prefetch();
+        while !self.prefetch_buffer.is_empty() {
+            self.tick().await?;
+        }
+        let outcome = self
+            .submit_buffer
+            .wait_for_slot(self.run_id, &self.node_name)
+            .await?;
+        self.consume_submitted_result(outcome).await?;
+        self.flush_performance_snapshot_if_due(true).await?;
         Ok(())
     }
 }
