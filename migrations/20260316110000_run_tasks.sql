@@ -31,7 +31,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_run_tasks_active_one_per_run
     WHERE state = 'active';
 
 CREATE INDEX IF NOT EXISTS idx_run_tasks_run_sequence
-    ON run_tasks(run_id, sequence_nr);
+    ON run_tasks(run_id, sequence_nr, id);
 
 CREATE INDEX IF NOT EXISTS idx_run_tasks_run_name
     ON run_tasks(run_id, name);

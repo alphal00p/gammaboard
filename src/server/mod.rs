@@ -409,7 +409,10 @@ async fn get_nodes(
     State(state): State<AppState>,
     Query(params): Query<WorkersQuery>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let workers = state.store.get_registered_workers(params.run_id).await?;
+    let workers = state
+        .store
+        .get_registered_worker_summaries(params.run_id)
+        .await?;
     json_response(workers)
 }
 

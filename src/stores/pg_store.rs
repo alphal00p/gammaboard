@@ -45,6 +45,13 @@ impl PgStore {
             .await
             .map_err(map_sqlx)
     }
+
+    pub async fn get_registered_worker_summaries(
+        &self,
+        run_id: Option<i32>,
+    ) -> Result<Vec<crate::stores::RegisteredWorkerEntry>, StoreError> {
+        Ok(queries::get_registered_worker_summaries(&self.pool, run_id).await?)
+    }
 }
 
 fn store_err(message: impl Into<String>) -> StoreError {

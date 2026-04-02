@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
-use std::{fmt::Display, io};
+use std::{collections::HashMap, fmt::Display, io};
 
 fn invalid_data_error(context: &str, err: impl Display) -> sqlx::Error {
     sqlx::Error::Decode(Box::new(io::Error::new(
@@ -44,11 +44,10 @@ fn id_text(value: impl Display) -> String {
 }
 
 #[derive(sqlx::FromRow)]
-struct RunProgressRow {
+struct RunProgressBaseRow {
     run_id: i32,
     run_name: String,
     root_stage_snapshot_id: Option<i64>,
-    lifecycle_state: String,
     desired_assignment_count: i64,
     active_worker_count: i64,
     integration_params: Option<JsonValue>,
@@ -60,43 +59,57 @@ struct RunProgressRow {
     started_at: Option<DateTime<Utc>>,
     completed_at: Option<DateTime<Utc>>,
     batches_completed: i32,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct BatchStats {
     total_batches: i64,
     total_samples: i64,
     pending_batches: i64,
     claimed_batches: i64,
     completed_batches: i64,
     failed_batches: i64,
-    completion_rate: f64,
 }
 
-impl TryFrom<RunProgressRow> for RunProgress {
-    type Error = sqlx::Error;
-
-    fn try_from(value: RunProgressRow) -> Result<Self, Self::Error> {
-        Ok(RunProgress {
-            run_id: value.run_id,
-            run_name: value.run_name,
-            root_stage_snapshot_id: value.root_stage_snapshot_id.map(id_text),
-            lifecycle_state: value.lifecycle_state,
-            desired_assignment_count: value.desired_assignment_count,
-            active_worker_count: value.active_worker_count,
-            integration_params: value.integration_params,
-            domain: decode_optional_json(value.domain),
-            active_task_id: value.active_task_id.map(id_text),
-            target: value.target,
-            nr_produced_samples: value.nr_produced_samples,
-            nr_completed_samples: value.nr_completed_samples,
-            started_at: value.started_at,
-            completed_at: value.completed_at,
-            batches_completed: value.batches_completed,
-            total_batches: value.total_batches,
-            total_samples: value.total_samples,
-            pending_batches: value.pending_batches,
-            claimed_batches: value.claimed_batches,
-            completed_batches: value.completed_batches,
-            failed_batches: value.failed_batches,
-            completion_rate: value.completion_rate,
-        })
+impl RunProgressBaseRow {
+    fn into_run_progress(self, batch_stats: BatchStats) -> RunProgress {
+        let completion_rate = if batch_stats.total_batches > 0 {
+            batch_stats.completed_batches as f64 / batch_stats.total_batches as f64
+        } else {
+            0.0
+        };
+        let lifecycle_state = if self.desired_assignment_count > 0 {
+            "running"
+        } else if batch_stats.claimed_batches > 0 || self.active_worker_count > 0 {
+            "pausing"
+        } else {
+            "paused"
+        }
+        .to_string();
+        RunProgress {
+            run_id: self.run_id,
+            run_name: self.run_name,
+            root_stage_snapshot_id: self.root_stage_snapshot_id.map(id_text),
+            lifecycle_state,
+            desired_assignment_count: self.desired_assignment_count,
+            active_worker_count: self.active_worker_count,
+            integration_params: self.integration_params,
+            domain: decode_optional_json(self.domain),
+            active_task_id: self.active_task_id.map(id_text),
+            target: self.target,
+            nr_produced_samples: self.nr_produced_samples,
+            nr_completed_samples: self.nr_completed_samples,
+            started_at: self.started_at,
+            completed_at: self.completed_at,
+            batches_completed: self.batches_completed,
+            total_batches: batch_stats.total_batches,
+            total_samples: batch_stats.total_samples,
+            pending_batches: batch_stats.pending_batches,
+            claimed_batches: batch_stats.claimed_batches,
+            completed_batches: batch_stats.completed_batches,
+            failed_batches: batch_stats.failed_batches,
+            completion_rate,
+        }
     }
 }
 
@@ -305,34 +318,7 @@ const RUN_ROOT_STAGE_SNAPSHOT_SUBQUERY: &str = r#"
       AND sequence_nr = 0
 "#;
 
-const RUN_BATCH_STATS_SUBQUERY_ALL_RUNS: &str = r#"
-    SELECT
-        run_id,
-        COUNT(*) as total_batches,
-        SUM(batch_size) as total_samples,
-        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_batches,
-        SUM(CASE WHEN status = 'claimed' THEN 1 ELSE 0 END) as claimed_batches,
-        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_batches,
-        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_batches
-    FROM batches
-    GROUP BY run_id
-"#;
-
-const RUN_BATCH_STATS_SUBQUERY_FOR_ONE_RUN: &str = r#"
-    SELECT
-        run_id,
-        COUNT(*) as total_batches,
-        SUM(batch_size) as total_samples,
-        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_batches,
-        SUM(CASE WHEN status = 'claimed' THEN 1 ELSE 0 END) as claimed_batches,
-        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_batches,
-        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_batches
-    FROM batches
-    WHERE run_id = $1
-    GROUP BY run_id
-"#;
-
-fn run_progress_sql(batch_stats_subquery: &str, run_where_clause: &str) -> String {
+fn run_progress_sql(run_where_clause: &str) -> String {
     format!(
         r#"
         WITH assignment_stats AS (
@@ -342,11 +328,6 @@ fn run_progress_sql(batch_stats_subquery: &str, run_where_clause: &str) -> Strin
             r.id as run_id,
             r.name as run_name,
             root.root_stage_snapshot_id,
-            CASE
-                WHEN COALESCE(a.desired_assignment_count, 0) > 0 THEN 'running'
-                WHEN COALESCE(b.claimed_batches, 0) > 0 OR COALESCE(a.active_worker_count, 0) > 0 THEN 'pausing'
-                ELSE 'paused'
-            END as lifecycle_state,
             COALESCE(a.desired_assignment_count, 0) as desired_assignment_count,
             COALESCE(a.active_worker_count, 0) as active_worker_count,
             COALESCE(r.integration_params, '{{}}'::jsonb) as integration_params,
@@ -357,22 +338,8 @@ fn run_progress_sql(batch_stats_subquery: &str, run_where_clause: &str) -> Strin
             r.nr_completed_samples,
             r.started_at,
             r.completed_at,
-            r.batches_completed,
-            COALESCE(b.total_batches, 0) as total_batches,
-            COALESCE(b.total_samples, 0) as total_samples,
-            COALESCE(b.pending_batches, 0) as pending_batches,
-            COALESCE(b.claimed_batches, 0) as claimed_batches,
-            COALESCE(b.completed_batches, 0) as completed_batches,
-            COALESCE(b.failed_batches, 0) as failed_batches,
-            CASE
-                WHEN COALESCE(b.total_batches, 0) > 0
-                THEN CAST(COALESCE(b.completed_batches, 0) AS FLOAT) / b.total_batches
-                ELSE 0.0
-            END as completion_rate
+            r.batches_completed
         FROM runs r
-        LEFT JOIN (
-            {batch_stats_subquery}
-        ) b ON r.id = b.run_id
         LEFT JOIN assignment_stats a ON r.id = a.run_id
         LEFT JOIN (
             {root_stage_snapshot_subquery}
@@ -383,35 +350,103 @@ fn run_progress_sql(batch_stats_subquery: &str, run_where_clause: &str) -> Strin
         {run_where_clause}
         "#,
         assignment_stats_subquery = RUN_ASSIGNMENT_STATS_SUBQUERY,
-        batch_stats_subquery = batch_stats_subquery,
         root_stage_snapshot_subquery = RUN_ROOT_STAGE_SNAPSHOT_SUBQUERY,
         run_where_clause = run_where_clause
     )
 }
 
+async fn load_batch_stats_for_runs(
+    pool: &PgPool,
+    run_ids: &[i32],
+) -> Result<HashMap<i32, BatchStats>, sqlx::Error> {
+    if run_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let rows = sqlx::query_as::<_, (i32, i64, i64, i64, i64, i64, i64)>(
+        r#"
+        SELECT
+            run_id,
+            COUNT(*) AS total_batches,
+            COALESCE(SUM(batch_size), 0) AS total_samples,
+            COUNT(*) FILTER (WHERE status = 'pending') AS pending_batches,
+            COUNT(*) FILTER (WHERE status = 'claimed') AS claimed_batches,
+            COUNT(*) FILTER (WHERE status = 'completed') AS completed_batches,
+            COUNT(*) FILTER (WHERE status = 'failed') AS failed_batches
+        FROM batches
+        WHERE run_id = ANY($1)
+        GROUP BY run_id
+        "#,
+    )
+    .bind(run_ids)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(
+                run_id,
+                total_batches,
+                total_samples,
+                pending_batches,
+                claimed_batches,
+                completed_batches,
+                failed_batches,
+            )| {
+                (
+                    run_id,
+                    BatchStats {
+                        total_batches,
+                        total_samples,
+                        pending_batches,
+                        claimed_batches,
+                        completed_batches,
+                        failed_batches,
+                    },
+                )
+            },
+        )
+        .collect())
+}
+
 pub(crate) async fn get_all_runs(pool: &PgPool) -> Result<Vec<RunProgress>, sqlx::Error> {
-    let mut sql = run_progress_sql(RUN_BATCH_STATS_SUBQUERY_ALL_RUNS, "");
+    let mut sql = run_progress_sql("");
     sql.push_str("\nORDER BY started_at DESC");
 
-    let rows = sqlx::query_as::<_, RunProgressRow>(&sql)
+    let rows = sqlx::query_as::<_, RunProgressBaseRow>(&sql)
         .fetch_all(pool)
         .await?;
+    let run_ids = rows.iter().map(|row| row.run_id).collect::<Vec<_>>();
+    let batch_stats = load_batch_stats_for_runs(pool, &run_ids).await?;
 
-    rows.into_iter().map(TryInto::try_into).collect()
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let stats = batch_stats.get(&row.run_id).copied().unwrap_or_default();
+            row.into_run_progress(stats)
+        })
+        .collect())
 }
 
 pub(crate) async fn get_run_progress(
     pool: &PgPool,
     run_id: i32,
 ) -> Result<Option<RunProgress>, sqlx::Error> {
-    let sql = run_progress_sql(RUN_BATCH_STATS_SUBQUERY_FOR_ONE_RUN, "WHERE r.id = $1");
+    let sql = run_progress_sql("WHERE r.id = $1");
 
-    let row = sqlx::query_as::<_, RunProgressRow>(&sql)
+    let row = sqlx::query_as::<_, RunProgressBaseRow>(&sql)
         .bind(run_id)
         .fetch_optional(pool)
         .await?;
 
-    row.map(TryInto::try_into).transpose()
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let batch_stats = load_batch_stats_for_runs(pool, &[run_id]).await?;
+    Ok(Some(row.into_run_progress(
+        batch_stats.get(&run_id).copied().unwrap_or_default(),
+    )))
 }
 
 pub(crate) async fn get_work_queue_stats(
@@ -667,6 +702,98 @@ pub(crate) async fn get_registered_workers(
                 LEFT JOIN evaluator_performance_latest e
                     ON e.run_id = COALESCE(n.active_run_id, n.desired_run_id)
                    AND e.worker_id = n.name
+                LEFT JOIN runs dr ON dr.id = n.desired_run_id
+                LEFT JOIN runs cr ON cr.id = n.active_run_id
+                WHERE n.lease_expires_at > now()
+                ORDER BY
+                    CASE
+                        WHEN n.active_role IS NOT NULL THEN 0
+                        ELSE 1
+                    END,
+                    n.last_seen DESC NULLS LAST,
+                    n.name ASC
+                "#,
+            )
+            .fetch_all(pool)
+            .await?
+        }
+    };
+
+    Ok(rows.into_iter().map(Into::into).collect())
+}
+
+pub(crate) async fn get_registered_worker_summaries(
+    pool: &PgPool,
+    run_id: Option<i32>,
+) -> Result<Vec<RegisteredWorkerEntry>, sqlx::Error> {
+    let rows = match run_id {
+        Some(run_id) => {
+            sqlx::query_as::<_, RegisteredWorkerRow>(
+                r#"
+                SELECT
+                    n.name AS node_name,
+                    n.uuid AS node_uuid,
+                    n.desired_run_id,
+                    dr.name AS desired_run_name,
+                    n.desired_role,
+                    n.active_run_id AS current_run_id,
+                    cr.name AS current_run_name,
+                    n.active_role AS current_role,
+                    COALESCE(n.active_role, n.desired_role, 'none') AS role,
+                    'run_node' AS implementation,
+                    'node' AS version,
+                    CASE
+                        WHEN n.active_role IS NOT NULL THEN 'active'
+                        ELSE 'inactive'
+                    END AS status,
+                    n.last_seen,
+                    NULL::jsonb AS evaluator_metrics,
+                    NULL::jsonb AS sampler_metrics,
+                    NULL::jsonb AS sampler_runtime_metrics,
+                    NULL::jsonb AS sampler_engine_diagnostics
+                FROM nodes n
+                LEFT JOIN runs dr ON dr.id = n.desired_run_id
+                LEFT JOIN runs cr ON cr.id = n.active_run_id
+                WHERE n.lease_expires_at > now()
+                  AND (n.desired_run_id = $1 OR n.active_run_id = $1)
+                ORDER BY
+                    CASE
+                        WHEN n.active_role IS NOT NULL THEN 0
+                        ELSE 1
+                    END,
+                    n.last_seen DESC NULLS LAST,
+                    n.name ASC
+                "#,
+            )
+            .bind(run_id)
+            .fetch_all(pool)
+            .await?
+        }
+        None => {
+            sqlx::query_as::<_, RegisteredWorkerRow>(
+                r#"
+                SELECT
+                    n.name AS node_name,
+                    n.uuid AS node_uuid,
+                    n.desired_run_id,
+                    dr.name AS desired_run_name,
+                    n.desired_role,
+                    n.active_run_id AS current_run_id,
+                    cr.name AS current_run_name,
+                    n.active_role AS current_role,
+                    COALESCE(n.active_role, n.desired_role, 'none') AS role,
+                    'run_node' AS implementation,
+                    'node' AS version,
+                    CASE
+                        WHEN n.active_role IS NOT NULL THEN 'active'
+                        ELSE 'inactive'
+                    END AS status,
+                    n.last_seen,
+                    NULL::jsonb AS evaluator_metrics,
+                    NULL::jsonb AS sampler_metrics,
+                    NULL::jsonb AS sampler_runtime_metrics,
+                    NULL::jsonb AS sampler_engine_diagnostics
+                FROM nodes n
                 LEFT JOIN runs dr ON dr.id = n.desired_run_id
                 LEFT JOIN runs cr ON cr.id = n.active_run_id
                 WHERE n.lease_expires_at > now()

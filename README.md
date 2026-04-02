@@ -65,6 +65,7 @@ Use the CLI for local database lifecycle:
 ```bash
 gammaboard db status
 gammaboard db start
+gammaboard db start --pg-stat-statements
 gammaboard db stop
 gammaboard db delete
 gammaboard db dump-sql
@@ -73,6 +74,7 @@ gammaboard db dump-sql
 These commands use `database.url` and `local_postgres` from `configs/cli/default.toml`.
 To reset local state, use `just db-reset` or run `gammaboard db delete --yes` then `gammaboard db start`.
 `local_postgres.max_connections` controls the local Postgres server connection ceiling used by `gammaboard db start`.
+Pass `--pg-stat-statements` to `gammaboard db start` when you want local query statistics. That flag adds `shared_preload_libraries=pg_stat_statements` at server startup and then runs `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` for the configured database.
 
 Sampler runs keep the frontend current through periodic lightweight writes to `runs.current_observable`, `persisted_observable_snapshots`, and performance history. The full sampler-aggregator resume checkpoint is stored separately and only refreshed when the sampler is unassigned or paused.
 
@@ -112,7 +114,7 @@ Deploy is now split along two orthogonal axes:
 Use:
 ```bash
 just deploy <host> <mode>
-just stop-deploy <host>
+just stop-deploy
 ```
 
 Examples:
@@ -135,7 +137,8 @@ All deploy variants:
 - start the local DB with the matching binary
 - launch backend, nginx, and frontend detached with PID/log files under `logs/`
 
-`stop-deploy <host>` stops the detached stack for that host.
+`stop-deploy` stops the single detached deploy stack for the machine.
+Deploy targets are alternatives, not concurrent stacks on one machine: all deploy variants share the same PID/log namespace and bind the same local service ports, so `just deploy ...` always replaces the current detached deploy stack.
 
 ## ITPhlies Deployment
 Use this flow when you want both direct LAN access and the SSH tunnel option.
@@ -156,7 +159,7 @@ Use this flow when you want both direct LAN access and the SSH tunnel option.
    or `http://itphlies:8080` if your local network resolves that hostname. If you access the server by LAN IP instead, add that origin to `allowed_origins` in the server config first.
 4. To stop all deployed ITPhlies processes:
    ```bash
-   just stop-deploy itphlies
+   just stop-deploy
    ```
 5. The SSH tunnel remains optional; direct LAN access works because nginx listens on `0.0.0.0:8080`, while the backend still stays private on `127.0.0.1:4000`.
 
@@ -181,7 +184,7 @@ Important:
   - nginx config: [configs/nginx/local-prod.conf](/home/cedricsigrist/Workspace/repos/gammaboard/configs/nginx/local-prod.conf)
   - server config: [configs/server/local-prod.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server/local-prod.toml)
   - run with: `just deploy local dev` or `just deploy local release`
-  - stop with: `just stop-deploy local`
+  - stop with: `just stop-deploy`
 
 ## Dashboard Auth
 - Read-only dashboard endpoints stay open.
