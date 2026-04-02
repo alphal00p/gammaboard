@@ -151,10 +151,23 @@ pub struct EvaluatorPerformanceMetrics {
     pub samples_evaluated: i64,
     pub avg_time_per_sample_ms: f64,
     pub std_time_per_sample_ms: f64,
+    pub avg_fetch_time_per_sample_ms: f64,
+    pub std_fetch_time_per_sample_ms: f64,
+    pub avg_fetch_stall_time_per_sample_ms: f64,
+    pub std_fetch_stall_time_per_sample_ms: f64,
+    pub prefetch_hit_ratio: f64,
+    pub fetch_stall_ratio: f64,
+    pub queue_starvation_ratio: f64,
     pub avg_evaluate_time_per_sample_ms: f64,
     pub std_evaluate_time_per_sample_ms: f64,
     pub avg_materialization_time_per_sample_ms: f64,
     pub std_materialization_time_per_sample_ms: f64,
+    pub avg_submit_time_per_sample_ms: f64,
+    pub std_submit_time_per_sample_ms: f64,
+    pub avg_submit_stall_time_per_sample_ms: f64,
+    pub std_submit_stall_time_per_sample_ms: f64,
+    pub submit_slot_hit_ratio: f64,
+    pub submit_stall_ratio: f64,
     pub idle_profile: Option<EvaluatorIdleProfileMetrics>,
 }
 
@@ -186,6 +199,13 @@ pub struct SamplerRollingAverages {
     pub runnable_batches_consumed_per_tick: RollingMetricSnapshot,
     pub batches_consumed_per_second: RollingMetricSnapshot,
     pub sampler_tick_ms: RollingMetricSnapshot,
+    pub reclaim_ms: RollingMetricSnapshot,
+    pub queue_snapshot_ms: RollingMetricSnapshot,
+    pub active_evaluator_count_ms: RollingMetricSnapshot,
+    pub completed_fetch_ingest_ms: RollingMetricSnapshot,
+    pub produce_enqueue_ms: RollingMetricSnapshot,
+    pub progress_sync_ms: RollingMetricSnapshot,
+    pub performance_sync_ms: RollingMetricSnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

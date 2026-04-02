@@ -49,6 +49,13 @@ struct RollingAveragesState {
     runnable_batches_consumed_per_tick: RollingMetric,
     batches_consumed_per_second: RollingMetric,
     sampler_tick_ms: RollingMetric,
+    reclaim_ms: RollingMetric,
+    queue_snapshot_ms: RollingMetric,
+    active_evaluator_count_ms: RollingMetric,
+    completed_fetch_ingest_ms: RollingMetric,
+    produce_enqueue_ms: RollingMetric,
+    progress_sync_ms: RollingMetric,
+    performance_sync_ms: RollingMetric,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -147,6 +154,17 @@ impl SamplerRuntimeState {
                     &self.rolling.batches_consumed_per_second,
                 ),
                 sampler_tick_ms: RollingMetricSnapshot::from(&self.rolling.sampler_tick_ms),
+                reclaim_ms: RollingMetricSnapshot::from(&self.rolling.reclaim_ms),
+                queue_snapshot_ms: RollingMetricSnapshot::from(&self.rolling.queue_snapshot_ms),
+                active_evaluator_count_ms: RollingMetricSnapshot::from(
+                    &self.rolling.active_evaluator_count_ms,
+                ),
+                completed_fetch_ingest_ms: RollingMetricSnapshot::from(
+                    &self.rolling.completed_fetch_ingest_ms,
+                ),
+                produce_enqueue_ms: RollingMetricSnapshot::from(&self.rolling.produce_enqueue_ms),
+                progress_sync_ms: RollingMetricSnapshot::from(&self.rolling.progress_sync_ms),
+                performance_sync_ms: RollingMetricSnapshot::from(&self.rolling.performance_sync_ms),
             },
         }
     }
@@ -457,13 +475,35 @@ where
     pub async fn tick(&mut self) -> Result<bool, RunnerError> {
         let tick_started_at = Instant::now();
         self.observe_tick_timing(tick_started_at);
+        let reclaim_started = Instant::now();
         self.store.reclaim_abandoned_batches(self.run_id).await?;
+        observe_duration_ms(
+            &mut self.runtime_state.rolling.reclaim_ms,
+            reclaim_started.elapsed(),
+        );
+
+        let queue_snapshot_started = Instant::now();
         let queue_before_tick = self.store.get_batch_queue_counts(self.run_id).await?;
+        observe_duration_ms(
+            &mut self.runtime_state.rolling.queue_snapshot_ms,
+            queue_snapshot_started.elapsed(),
+        );
         self.observe_queue_metrics(queue_before_tick.pending.max(0) as usize);
         self.tune_batch_size();
 
+        let active_evaluator_started = Instant::now();
         let active_evaluator_count = self.active_evaluator_count().await?;
+        observe_duration_ms(
+            &mut self.runtime_state.rolling.active_evaluator_count_ms,
+            active_evaluator_started.elapsed(),
+        );
+
+        let completed_started = Instant::now();
         let completed_batches = self.process_completed().await?;
+        observe_duration_ms(
+            &mut self.runtime_state.rolling.completed_fetch_ingest_ms,
+            completed_started.elapsed(),
+        );
         let queue_before_produce = crate::core::BatchQueueCounts {
             pending: queue_before_tick.pending,
             claimed: queue_before_tick.claimed,
@@ -471,12 +511,30 @@ where
                 .completed
                 .saturating_sub(completed_batches as i64),
         };
+
+        let produce_started = Instant::now();
         let produced_batches = self
             .produce(queue_before_produce, active_evaluator_count)
             .await?;
+        observe_duration_ms(
+            &mut self.runtime_state.rolling.produce_enqueue_ms,
+            produce_started.elapsed(),
+        );
+
+        let progress_sync_started = Instant::now();
         self.sync_task_progress().await?;
         self.flush_run_sample_progress().await?;
+        observe_duration_ms(
+            &mut self.runtime_state.rolling.progress_sync_ms,
+            progress_sync_started.elapsed(),
+        );
+
+        let performance_sync_started = Instant::now();
         self.flush_performance_snapshot(false).await?;
+        observe_duration_ms(
+            &mut self.runtime_state.rolling.performance_sync_ms,
+            performance_sync_started.elapsed(),
+        );
 
         let open_batch_count = (queue_before_produce
             .open()
@@ -875,6 +933,13 @@ where
         self.last_performance_completed_samples = self.nr_completed_samples;
         self.last_snapshot_at = Instant::now();
         Ok(())
+    }
+}
+
+fn observe_duration_ms(metric: &mut RollingMetric, duration: Duration) {
+    let ms = duration.as_secs_f64() * 1000.0;
+    if ms.is_finite() && ms >= 0.0 {
+        metric.observe(ms);
     }
 }
 

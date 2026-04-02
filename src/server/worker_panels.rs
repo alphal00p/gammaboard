@@ -244,6 +244,61 @@ fn evaluator_metrics_panel(metrics: &EvaluatorPerformanceMetrics) -> PanelState 
                 metrics.avg_time_per_sample_ms,
             ),
             key_value(
+                "avg_fetch_time_per_sample_ms",
+                "Avg Fetch+Decode Time Per Sample (ms)",
+                metrics.avg_fetch_time_per_sample_ms,
+            ),
+            key_value(
+                "avg_fetch_stall_time_per_sample_ms",
+                "Avg Fetch Stall Time Per Sample (ms)",
+                metrics.avg_fetch_stall_time_per_sample_ms,
+            ),
+            key_value(
+                "prefetch_hit_ratio",
+                "Prefetch Hit Ratio",
+                metrics.prefetch_hit_ratio,
+            ),
+            key_value(
+                "fetch_stall_ratio",
+                "Fetch Stall Ratio",
+                metrics.fetch_stall_ratio,
+            ),
+            key_value(
+                "queue_starvation_ratio",
+                "Queue Starvation Ratio",
+                metrics.queue_starvation_ratio,
+            ),
+            key_value(
+                "avg_materialization_time_per_sample_ms",
+                "Avg Materialization Time Per Sample (ms)",
+                metrics.avg_materialization_time_per_sample_ms,
+            ),
+            key_value(
+                "avg_evaluate_time_per_sample_ms",
+                "Avg Evaluate Time Per Sample (ms)",
+                metrics.avg_evaluate_time_per_sample_ms,
+            ),
+            key_value(
+                "avg_submit_time_per_sample_ms",
+                "Avg Submit Time Per Sample (ms)",
+                metrics.avg_submit_time_per_sample_ms,
+            ),
+            key_value(
+                "avg_submit_stall_time_per_sample_ms",
+                "Avg Submit Stall Time Per Sample (ms)",
+                metrics.avg_submit_stall_time_per_sample_ms,
+            ),
+            key_value(
+                "submit_slot_hit_ratio",
+                "Submit Slot Hit Ratio",
+                metrics.submit_slot_hit_ratio,
+            ),
+            key_value(
+                "submit_stall_ratio",
+                "Submit Stall Ratio",
+                metrics.submit_stall_ratio,
+            ),
+            key_value(
                 "std_time_per_sample_ms",
                 "Std Time Per Sample (ms)",
                 metrics.std_time_per_sample_ms,
@@ -361,6 +416,41 @@ fn sampler_runtime_panel(runtime: &SamplerRuntimeMetrics) -> PanelState {
                 "sampler_tick_ms",
                 "Sampler Tick (ms)",
                 runtime.rolling.sampler_tick_ms.mean,
+            ),
+            key_value(
+                "reclaim_ms",
+                "Reclaim (ms)",
+                runtime.rolling.reclaim_ms.mean,
+            ),
+            key_value(
+                "queue_snapshot_ms",
+                "Queue Snapshot (ms)",
+                runtime.rolling.queue_snapshot_ms.mean,
+            ),
+            key_value(
+                "active_evaluator_count_ms",
+                "Active Evaluator Count (ms)",
+                runtime.rolling.active_evaluator_count_ms.mean,
+            ),
+            key_value(
+                "completed_fetch_ingest_ms",
+                "Completed Fetch+Ingest (ms)",
+                runtime.rolling.completed_fetch_ingest_ms.mean,
+            ),
+            key_value(
+                "produce_enqueue_ms",
+                "Produce+Enqueue (ms)",
+                runtime.rolling.produce_enqueue_ms.mean,
+            ),
+            key_value(
+                "progress_sync_ms",
+                "Progress Sync (ms)",
+                runtime.rolling.progress_sync_ms.mean,
+            ),
+            key_value(
+                "performance_sync_ms",
+                "Performance Sync (ms)",
+                runtime.rolling.performance_sync_ms.mean,
             ),
         ],
     )

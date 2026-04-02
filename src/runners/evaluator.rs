@@ -44,6 +44,7 @@ pub struct EvaluatorRunner<S> {
     batches_completed_total: i64,
     samples_evaluated_total: i64,
     rolling: EvaluatorRollingAverages,
+    counters: EvaluatorPipelineCounters,
     store: S,
     current_batch_transforms: Vec<Box<dyn crate::evaluation::BatchTransform>>,
 }
@@ -56,9 +57,31 @@ struct TaskRuntimeContext {
 #[derive(Debug, Clone, Serialize, Default)]
 struct EvaluatorRollingAverages {
     total_ms_per_sample: RollingMetric,
+    fetch_ms_per_sample: RollingMetric,
+    fetch_stall_ms_per_sample: RollingMetric,
     evaluate_ms_per_sample: RollingMetric,
     materialization_ms_per_sample: RollingMetric,
+    submit_ms_per_sample: RollingMetric,
+    submit_stall_ms_per_sample: RollingMetric,
     idle_ratio: RollingMetric,
+}
+
+#[derive(Debug, Clone, Default)]
+struct EvaluatorPipelineCounters {
+    fetch_attempts: i64,
+    fetch_hits: i64,
+    fetch_stalls: i64,
+    queue_starved_attempts: i64,
+    submit_attempts: i64,
+    submit_slot_hits: i64,
+    submit_stalls: i64,
+}
+
+struct PopOutcome {
+    claimed: Option<BatchClaim>,
+    hit: bool,
+    stalled: bool,
+    wait_time_ms: f64,
 }
 
 struct LatentPrefetchBuffer<S> {
@@ -87,12 +110,18 @@ where
         self.ready_batch.is_some() || self.pending_prefetch.is_some()
     }
 
-    async fn pop(
-        &mut self,
-        store: &S,
-        draining: bool,
-    ) -> Result<Option<BatchClaim>, EvaluatorRunnerError> {
-        self.fill(store, draining).await?;
+    async fn pop(&mut self, store: &S, draining: bool) -> Result<PopOutcome, EvaluatorRunnerError> {
+        self.drain_finished_prefetch().await?;
+
+        let hit = self.ready_batch.is_some();
+        let wait_started = (!hit).then(Instant::now);
+
+        if !draining && self.ready_batch.is_none() && self.pending_prefetch.is_none() {
+            self.ready_batch = store
+                .claim_batch(self.run_id, &self.node_uuid)
+                .await
+                .map_err(EvaluatorRunnerError::Store)?;
+        }
 
         if self.ready_batch.is_none() && self.pending_prefetch.is_some() {
             self.await_pending_prefetch().await?;
@@ -100,25 +129,15 @@ where
 
         let claimed = self.ready_batch.take();
         self.maybe_start_prefetch(store, draining);
-        Ok(claimed)
-    }
-
-    async fn fill(&mut self, store: &S, draining: bool) -> Result<(), EvaluatorRunnerError> {
-        self.drain_finished_prefetch().await?;
-
-        if draining || self.ready_batch.is_some() {
-            return Ok(());
-        }
-
-        if self.pending_prefetch.is_none() {
-            self.ready_batch = store
-                .claim_batch(self.run_id, &self.node_uuid)
-                .await
-                .map_err(EvaluatorRunnerError::Store)?;
-        }
-
-        self.maybe_start_prefetch(store, draining);
-        Ok(())
+        let wait_time_ms = wait_started
+            .map(|started| started.elapsed().as_secs_f64() * 1000.0)
+            .unwrap_or(0.0);
+        Ok(PopOutcome {
+            claimed,
+            hit: hit && wait_time_ms == 0.0,
+            stalled: wait_started.is_some(),
+            wait_time_ms,
+        })
     }
 
     fn maybe_start_prefetch(&mut self, store: &S, draining: bool) {
@@ -177,8 +196,12 @@ where
 struct SubmitOutcome {
     processed_samples: usize,
     total_time_ms: f64,
+    fetch_time_ms: f64,
+    fetch_stall_time_ms: f64,
     materialization_time_ms: f64,
     eval_time_ms: f64,
+    submit_time_ms: f64,
+    submit_stall_time_ms: f64,
 }
 
 struct ResultSubmitBuffer<S> {
@@ -236,22 +259,30 @@ where
         batch_id: i64,
         result: BatchResult,
         total_time_ms: f64,
+        fetch_time_ms: f64,
+        fetch_stall_time_ms: f64,
         materialization_time_ms: f64,
         eval_time_ms: f64,
         processed_samples: usize,
+        submit_stall_time_ms: f64,
     ) {
         debug_assert!(self.pending_submit.is_none());
         let store = store.clone();
         let node_uuid = self.node_uuid.clone();
         self.pending_submit = Some(tokio::spawn(async move {
+            let submit_started = Instant::now();
             store
                 .submit_batch_results(batch_id, &node_uuid, &result, total_time_ms)
                 .await?;
             Ok(SubmitOutcome {
                 processed_samples,
                 total_time_ms,
+                fetch_time_ms,
+                fetch_stall_time_ms,
                 materialization_time_ms,
                 eval_time_ms,
+                submit_time_ms: submit_started.elapsed().as_secs_f64() * 1000.0,
+                submit_stall_time_ms,
             })
         }));
     }
@@ -314,6 +345,7 @@ where
             batches_completed_total: 0,
             samples_evaluated_total: 0,
             rolling: EvaluatorRollingAverages::default(),
+            counters: EvaluatorPipelineCounters::default(),
             store,
             current_batch_transforms: Vec::new(),
         }
@@ -428,11 +460,22 @@ where
         let loop_started = Instant::now();
         self.consume_finished_submit().await?;
 
-        let Some(claimed) = self.prefetch_buffer.pop(&self.store, self.draining).await? else {
+        self.counters.fetch_attempts += 1;
+        let fetch_started = Instant::now();
+        let pop = self.prefetch_buffer.pop(&self.store, self.draining).await?;
+        let Some(claimed) = pop.claimed else {
+            self.counters.queue_starved_attempts += 1;
             self.observe_idle_ratio(loop_started, 0.0);
             self.flush_performance_snapshot_if_due(false).await?;
             return Ok(());
         };
+        let fetch_time_ms = fetch_started.elapsed().as_secs_f64() * 1000.0;
+        if pop.hit {
+            self.counters.fetch_hits += 1;
+        }
+        if pop.stalled {
+            self.counters.fetch_stalls += 1;
+        }
 
         self.ensure_task_context(claimed.task_id).await?;
 
@@ -491,6 +534,8 @@ where
                     &transformed_batch,
                     result,
                     total_time_ms,
+                    fetch_time_ms,
+                    pop.wait_time_ms,
                     materialization_time_ms,
                     eval_time_ms,
                     transformed_batch.size(),
@@ -520,6 +565,8 @@ where
         batch: &crate::evaluation::Batch,
         result: BatchResult,
         total_time_ms: f64,
+        fetch_time_ms: f64,
+        fetch_stall_time_ms: f64,
         materialization_time_ms: f64,
         eval_time_ms: f64,
         processed_samples: usize,
@@ -543,12 +590,19 @@ where
             return Err(EvaluatorRunnerError::Engine(err));
         }
 
+        self.counters.submit_attempts += 1;
+        let mut submit_stall_time_ms = 0.0;
         if !self.submit_buffer.is_idle() {
+            self.counters.submit_stalls += 1;
+            let wait_started = Instant::now();
             let outcome = self
                 .submit_buffer
                 .wait_for_slot(self.run_id, &self.node_name)
                 .await?;
+            submit_stall_time_ms = wait_started.elapsed().as_secs_f64() * 1000.0;
             self.consume_submitted_result(outcome).await?;
+        } else {
+            self.counters.submit_slot_hits += 1;
         }
 
         self.submit_buffer.start_submit(
@@ -556,9 +610,12 @@ where
             batch_id,
             result,
             total_time_ms,
+            fetch_time_ms,
+            fetch_stall_time_ms,
             materialization_time_ms,
             eval_time_ms,
             processed_samples,
+            submit_stall_time_ms,
         );
         Ok(())
     }
@@ -582,8 +639,12 @@ where
         self.observe_eval_batch(
             outcome.processed_samples,
             outcome.total_time_ms,
+            outcome.fetch_time_ms,
+            outcome.fetch_stall_time_ms,
             outcome.materialization_time_ms,
             outcome.eval_time_ms,
+            outcome.submit_time_ms,
+            outcome.submit_stall_time_ms,
         );
         self.flush_performance_snapshot_if_due(false).await?;
         Ok(())
@@ -593,8 +654,12 @@ where
         &mut self,
         samples: usize,
         total_time_ms: f64,
+        fetch_time_ms: f64,
+        fetch_stall_time_ms: f64,
         materialization_time_ms: f64,
         eval_time_ms: f64,
+        submit_time_ms: f64,
+        submit_stall_time_ms: f64,
     ) {
         self.batches_completed_total += 1;
         self.samples_evaluated_total += samples as i64;
@@ -605,6 +670,16 @@ where
                     .total_ms_per_sample
                     .observe(total_time_ms / samples);
             }
+            if fetch_time_ms.is_finite() && fetch_time_ms >= 0.0 {
+                self.rolling
+                    .fetch_ms_per_sample
+                    .observe(fetch_time_ms / samples);
+            }
+            if fetch_stall_time_ms.is_finite() && fetch_stall_time_ms >= 0.0 {
+                self.rolling
+                    .fetch_stall_ms_per_sample
+                    .observe(fetch_stall_time_ms / samples);
+            }
             if materialization_time_ms.is_finite() && materialization_time_ms >= 0.0 {
                 self.rolling
                     .materialization_ms_per_sample
@@ -614,6 +689,16 @@ where
                 self.rolling
                     .evaluate_ms_per_sample
                     .observe(eval_time_ms / samples);
+            }
+            if submit_time_ms.is_finite() && submit_time_ms >= 0.0 {
+                self.rolling
+                    .submit_ms_per_sample
+                    .observe(submit_time_ms / samples);
+            }
+            if submit_stall_time_ms.is_finite() && submit_stall_time_ms >= 0.0 {
+                self.rolling
+                    .submit_stall_ms_per_sample
+                    .observe(submit_stall_time_ms / samples);
             }
         }
     }
@@ -653,6 +738,27 @@ where
                 samples_evaluated: self.samples_evaluated_total,
                 avg_time_per_sample_ms: self.rolling.total_ms_per_sample.value().unwrap_or(0.0),
                 std_time_per_sample_ms: self.rolling.total_ms_per_sample.std_dev(),
+                avg_fetch_time_per_sample_ms: self
+                    .rolling
+                    .fetch_ms_per_sample
+                    .value()
+                    .unwrap_or(0.0),
+                std_fetch_time_per_sample_ms: self.rolling.fetch_ms_per_sample.std_dev(),
+                avg_fetch_stall_time_per_sample_ms: self
+                    .rolling
+                    .fetch_stall_ms_per_sample
+                    .value()
+                    .unwrap_or(0.0),
+                std_fetch_stall_time_per_sample_ms: self
+                    .rolling
+                    .fetch_stall_ms_per_sample
+                    .std_dev(),
+                prefetch_hit_ratio: ratio(self.counters.fetch_hits, self.counters.fetch_attempts),
+                fetch_stall_ratio: ratio(self.counters.fetch_stalls, self.counters.fetch_attempts),
+                queue_starvation_ratio: ratio(
+                    self.counters.queue_starved_attempts,
+                    self.counters.fetch_attempts,
+                ),
                 avg_evaluate_time_per_sample_ms: self
                     .rolling
                     .evaluate_ms_per_sample
@@ -668,6 +774,29 @@ where
                     .rolling
                     .materialization_ms_per_sample
                     .std_dev(),
+                avg_submit_time_per_sample_ms: self
+                    .rolling
+                    .submit_ms_per_sample
+                    .value()
+                    .unwrap_or(0.0),
+                std_submit_time_per_sample_ms: self.rolling.submit_ms_per_sample.std_dev(),
+                avg_submit_stall_time_per_sample_ms: self
+                    .rolling
+                    .submit_stall_ms_per_sample
+                    .value()
+                    .unwrap_or(0.0),
+                std_submit_stall_time_per_sample_ms: self
+                    .rolling
+                    .submit_stall_ms_per_sample
+                    .std_dev(),
+                submit_slot_hit_ratio: ratio(
+                    self.counters.submit_slot_hits,
+                    self.counters.submit_attempts,
+                ),
+                submit_stall_ratio: ratio(
+                    self.counters.submit_stalls,
+                    self.counters.submit_attempts,
+                ),
                 idle_profile: Some(EvaluatorIdleProfileMetrics {
                     idle_ratio: self.rolling.idle_ratio.value().unwrap_or(0.0),
                 }),
@@ -695,5 +824,13 @@ where
         self.consume_submitted_result(outcome).await?;
         self.flush_performance_snapshot_if_due(true).await?;
         Ok(())
+    }
+}
+
+fn ratio(numerator: i64, denominator: i64) -> f64 {
+    if denominator <= 0 {
+        0.0
+    } else {
+        numerator as f64 / denominator as f64
     }
 }

@@ -12,13 +12,21 @@ pub fn build_evaluator_performance_response(
     scope_id: Option<String>,
     entries: Vec<EvaluatorPerformanceHistoryEntry>,
 ) -> PanelResponse {
-    build_performance_response(
-        scope_id.unwrap_or_else(|| "evaluator".to_string()),
-        entries,
-        evaluator_panel_specs(),
-        |entry| entry.id.to_string(),
-        evaluator_panels,
-    )
+    let source_id = scope_id.unwrap_or_else(|| "evaluator".to_string());
+    let panels = evaluator_panel_specs();
+    let updates = entries
+        .first()
+        .map(evaluator_current_panel)
+        .into_iter()
+        .map(replace_panel)
+        .collect();
+    PanelResponse {
+        source_id,
+        cursor: entries.first().map(|entry| entry.id.to_string()),
+        reset_required: false,
+        panels,
+        updates,
+    }
 }
 
 pub fn build_sampler_performance_response(
@@ -70,35 +78,15 @@ fn build_performance_response<T>(
 }
 
 fn evaluator_panel_specs() -> Vec<PanelSpec> {
-    vec![
-        with_panel_width(
-            panel_spec(
-                "evaluator_idle_ratio",
-                "Idle Ratio",
-                PanelKind::ScalarTimeseries,
-                PanelHistoryMode::Append,
-            ),
-            PanelWidth::Full,
+    vec![with_panel_width(
+        panel_spec(
+            "evaluator_current",
+            "Evaluator Performance",
+            PanelKind::KeyValue,
+            PanelHistoryMode::Replace,
         ),
-        with_panel_width(
-            panel_spec(
-                "evaluator_evaluate_time_us",
-                "Evaluate Time Per Sample (us)",
-                PanelKind::ScalarTimeseries,
-                PanelHistoryMode::Append,
-            ),
-            PanelWidth::Full,
-        ),
-        with_panel_width(
-            panel_spec(
-                "evaluator_materialization_time_us",
-                "Materialization Time Per Sample (us)",
-                PanelKind::ScalarTimeseries,
-                PanelHistoryMode::Append,
-            ),
-            PanelWidth::Full,
-        ),
-    ]
+        PanelWidth::Full,
+    )]
 }
 
 fn sampler_panel_specs() -> Vec<PanelSpec> {
@@ -142,48 +130,82 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
     ]
 }
 
-fn evaluator_panels(entry: &EvaluatorPerformanceHistoryEntry) -> Vec<PanelState> {
-    let mut panels = vec![
-        scalar_point_panel(
-            "evaluator_evaluate_time_us",
-            history_x(entry.created_at),
-            ms_to_us(entry.metrics.avg_evaluate_time_per_sample_ms),
-            Some(ms_to_us(
-                entry.metrics.avg_evaluate_time_per_sample_ms
-                    - entry.metrics.std_evaluate_time_per_sample_ms,
-            )),
-            Some(ms_to_us(
-                entry.metrics.avg_evaluate_time_per_sample_ms
-                    + entry.metrics.std_evaluate_time_per_sample_ms,
-            )),
-        ),
-        scalar_point_panel(
-            "evaluator_materialization_time_us",
-            history_x(entry.created_at),
-            ms_to_us(entry.metrics.avg_materialization_time_per_sample_ms),
-            Some(ms_to_us(
-                entry.metrics.avg_materialization_time_per_sample_ms
-                    - entry.metrics.std_materialization_time_per_sample_ms,
-            )),
-            Some(ms_to_us(
-                entry.metrics.avg_materialization_time_per_sample_ms
-                    + entry.metrics.std_materialization_time_per_sample_ms,
-            )),
-        ),
-    ];
-    if let Some(idle_profile) = entry.metrics.idle_profile.as_ref() {
-        panels.insert(
-            0,
-            scalar_point_panel(
-                "evaluator_idle_ratio",
-                history_x(entry.created_at),
-                idle_profile.idle_ratio,
-                None,
-                None,
+fn evaluator_current_panel(entry: &EvaluatorPerformanceHistoryEntry) -> PanelState {
+    key_value_panel(
+        "evaluator_current",
+        vec![
+            key_value("worker_id", "Worker", entry.worker_id.as_str()),
+            key_value(
+                "samples_evaluated",
+                "Samples Evaluated",
+                entry.metrics.samples_evaluated,
             ),
-        );
-    }
-    panels
+            key_value(
+                "avg_fetch_time_us",
+                "Avg Fetch+Decode Per Sample (us)",
+                ms_to_us(entry.metrics.avg_fetch_time_per_sample_ms),
+            ),
+            key_value(
+                "avg_fetch_stall_time_us",
+                "Avg Fetch Stall Per Sample (us)",
+                ms_to_us(entry.metrics.avg_fetch_stall_time_per_sample_ms),
+            ),
+            key_value(
+                "prefetch_hit_ratio",
+                "Prefetch Hit Ratio",
+                entry.metrics.prefetch_hit_ratio,
+            ),
+            key_value(
+                "fetch_stall_ratio",
+                "Fetch Stall Ratio",
+                entry.metrics.fetch_stall_ratio,
+            ),
+            key_value(
+                "queue_starvation_ratio",
+                "Queue Starvation Ratio",
+                entry.metrics.queue_starvation_ratio,
+            ),
+            key_value(
+                "avg_materialization_time_us",
+                "Avg Materialization Per Sample (us)",
+                ms_to_us(entry.metrics.avg_materialization_time_per_sample_ms),
+            ),
+            key_value(
+                "avg_evaluate_time_us",
+                "Avg Evaluate Per Sample (us)",
+                ms_to_us(entry.metrics.avg_evaluate_time_per_sample_ms),
+            ),
+            key_value(
+                "avg_submit_time_us",
+                "Avg Submit Per Sample (us)",
+                ms_to_us(entry.metrics.avg_submit_time_per_sample_ms),
+            ),
+            key_value(
+                "avg_submit_stall_time_us",
+                "Avg Submit Stall Per Sample (us)",
+                ms_to_us(entry.metrics.avg_submit_stall_time_per_sample_ms),
+            ),
+            key_value(
+                "submit_slot_hit_ratio",
+                "Submit Slot Hit Ratio",
+                entry.metrics.submit_slot_hit_ratio,
+            ),
+            key_value(
+                "submit_stall_ratio",
+                "Submit Stall Ratio",
+                entry.metrics.submit_stall_ratio,
+            ),
+            key_value(
+                "idle_ratio",
+                "Idle Ratio",
+                entry
+                    .metrics
+                    .idle_profile
+                    .as_ref()
+                    .map(|profile| profile.idle_ratio),
+            ),
+        ],
+    )
 }
 
 fn sampler_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelState> {
