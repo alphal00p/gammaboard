@@ -457,9 +457,19 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
                 runtime.rolling.active_evaluator_count_ms.mean,
             ),
             key_value(
+                "completed_fetch_wait_ms",
+                "Completed Fetch Wait (ms)",
+                runtime.rolling.completed_fetch_wait_ms.mean,
+            ),
+            key_value(
                 "completed_fetch_ingest_ms",
                 "Completed Fetch+Ingest (ms)",
                 runtime.rolling.completed_fetch_ingest_ms.mean,
+            ),
+            key_value(
+                "enqueue_drain_wait_ms",
+                "Enqueue Drain Wait (ms)",
+                runtime.rolling.enqueue_drain_wait_ms.mean,
             ),
             key_value(
                 "produce_enqueue_ms",

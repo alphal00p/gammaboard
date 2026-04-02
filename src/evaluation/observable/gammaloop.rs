@@ -209,6 +209,7 @@ mod tests {
                 real_sq_sum: estimate_real_sq_sum,
                 imag_sq_sum: 0.0,
                 weight_sum: estimate_count as f64,
+                nan_count: 0,
             },
         }
     }

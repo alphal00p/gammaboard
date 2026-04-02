@@ -165,6 +165,8 @@ pub enum PanelState {
         values: Vec<f32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         imag_values: Option<Vec<f32>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        invalid_indices: Option<Vec<usize>>,
         x_range: [f64; 2],
         y_range: [f64; 2],
         color_mode: ImageColorMode,

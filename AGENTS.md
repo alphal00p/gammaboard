@@ -62,6 +62,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - `sample` with `nr_samples = 0` is the only supported no-work stage update task shape, including pure configuration updates.
 - GammaLoop evaluator point dimensions are inferred from the selected integrand. Do not configure `continuous_dims` or `discrete_dims` for `evaluator.kind = "gammaloop"`.
 - `observable = { config = "gammaloop" }` is supported only with `evaluator.kind = "gammaloop"` and persists GammaLoop's native histogram snapshot bundle directly.
+- Persisted and API-facing observable payloads must remain JSON-safe. Observable implementations must not emit raw `NaN` or infinite `f64` values into serialized state; they must sanitize, summarize, count, or reject such values explicitly inside the observable implementation instead of relying on storage-layer serialization failures. Full observables must preserve positional cardinality when non-finite values occur and persist which entry positions were invalid instead of dropping them.
 - Task files used for `run task add` may contain either `task = { ... }`, `[[task_queue]]`, or both. Normalize them as `task` first, then `task_queue`. Missing both should resolve to an empty task list.
 - There is no run-level observable default. A first executable task that needs a fresh observable must declare it explicitly.
 - `image` and `plot_line` tasks must declare their observable family explicitly and start with a fresh full observable.

@@ -694,8 +694,10 @@ const Image2dPanel = ({ title, state }) => {
     const next = asArray(state?.imag_values);
     return next.length > 0 ? next : null;
   }, [state?.imag_values]);
+  const invalidIndices = useMemo(() => new Set(asArray(state?.invalid_indices)), [state?.invalid_indices]);
   const colorMode = state?.color_mode || "scalar_heatmap";
   const normalizationMode = state?.normalization_mode || "min_max";
+  const invalidColor = [255, 0, 255];
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -710,17 +712,23 @@ const Image2dPanel = ({ title, state }) => {
       const magnitudes = values.map((re, index) => Math.hypot(re, imagValues[index] || 0));
       const maxMagnitude = Math.max(...magnitudes, 1e-12);
       for (let index = 0; index < values.length; index += 1) {
+        const offset = index * 4;
+        if (invalidIndices.has(index)) {
+          image.data[offset] = invalidColor[0];
+          image.data[offset + 1] = invalidColor[1];
+          image.data[offset + 2] = invalidColor[2];
+          image.data[offset + 3] = 255;
+          continue;
+        }
         const re = values[index];
         const im = imagValues[index] || 0;
         if (!Number.isFinite(re) || !Number.isFinite(im)) {
-          const offset = index * 4;
           image.data[offset + 3] = 0;
           continue;
         }
         const phase = (Math.atan2(im, re) / Math.PI) * 180 + 180;
         const magnitude = Math.hypot(re, im) / maxMagnitude;
         const [r, g, b] = hsvToRgb(phase, 1, Math.min(1, Math.sqrt(magnitude)));
-        const offset = index * 4;
         image.data[offset] = r;
         image.data[offset + 1] = g;
         image.data[offset + 2] = b;
@@ -744,9 +752,16 @@ const Image2dPanel = ({ title, state }) => {
             : 1;
       const span = max - min || 1;
       for (let index = 0; index < values.length; index += 1) {
+        const offset = index * 4;
+        if (invalidIndices.has(index)) {
+          image.data[offset] = invalidColor[0];
+          image.data[offset + 1] = invalidColor[1];
+          image.data[offset + 2] = invalidColor[2];
+          image.data[offset + 3] = 255;
+          continue;
+        }
         const value = values[index];
         if (!Number.isFinite(value)) {
-          const offset = index * 4;
           image.data[offset + 3] = 0;
           continue;
         }
@@ -754,7 +769,6 @@ const Image2dPanel = ({ title, state }) => {
         const r = Math.round(255 * t);
         const g = Math.round(200 * (1 - Math.abs(t - 0.5) * 2));
         const b = Math.round(255 * (1 - t));
-        const offset = index * 4;
         image.data[offset] = r;
         image.data[offset + 1] = g;
         image.data[offset + 2] = b;
@@ -763,7 +777,7 @@ const Image2dPanel = ({ title, state }) => {
     }
 
     ctx.putImageData(image, 0, 0);
-  }, [colorMode, height, imagValues, normalizationMode, values, width]);
+  }, [colorMode, height, imagValues, invalidIndices, normalizationMode, values, width]);
 
   if (width <= 0 || height <= 0 || values.length === 0) return null;
 

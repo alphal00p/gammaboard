@@ -7,16 +7,23 @@ pub struct ScalarObservableState {
     pub sum_weighted_value: f64,
     pub sum_abs: f64,
     pub sum_sq: f64,
+    #[serde(default)]
+    pub nan_count: usize,
 }
 
 impl ScalarObservableState {
     pub fn add_sample(&mut self, value: f64, weight: f64) {
         let weight = weight.abs();
         let weighted_value = value * weight;
+        let weighted_sq = weighted_value * weighted_value;
+        if !weighted_value.is_finite() || !weighted_sq.is_finite() {
+            self.nan_count += 1;
+            return;
+        }
         self.count += 1;
         self.sum_weighted_value += weighted_value;
         self.sum_abs += weighted_value.abs();
-        self.sum_sq += weighted_value * weighted_value;
+        self.sum_sq += weighted_sq;
     }
 
     pub fn mean(&self) -> f64 {
@@ -63,6 +70,7 @@ impl Observable for ScalarObservableState {
         self.sum_weighted_value += other.sum_weighted_value;
         self.sum_abs += other.sum_abs;
         self.sum_sq += other.sum_sq;
+        self.nan_count += other.nan_count;
     }
 
     fn get_persistent(&self) -> Self::Persistent {
@@ -105,5 +113,37 @@ fn relative_squared_dispersion(variance: f64, mean_abs: f64) -> f64 {
         0.0
     } else {
         variance / (mean_abs * mean_abs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ScalarObservableState;
+
+    #[test]
+    fn add_sample_accepts_finite_weighted_contributions() {
+        let mut observable = ScalarObservableState::default();
+
+        observable.add_sample(2.0, -3.0);
+
+        assert_eq!(observable.count, 1);
+        assert_eq!(observable.sum_weighted_value, 6.0);
+        assert_eq!(observable.sum_abs, 6.0);
+        assert_eq!(observable.sum_sq, 36.0);
+        assert_eq!(observable.nan_count, 0);
+    }
+
+    #[test]
+    fn add_sample_skips_non_finite_weighted_contributions() {
+        let mut observable = ScalarObservableState::default();
+
+        observable.add_sample(f64::NAN, 1.0);
+        observable.add_sample(1.0, f64::INFINITY);
+
+        assert_eq!(observable.count, 0);
+        assert_eq!(observable.sum_weighted_value, 0.0);
+        assert_eq!(observable.sum_abs, 0.0);
+        assert_eq!(observable.sum_sq, 0.0);
+        assert_eq!(observable.nan_count, 2);
     }
 }

@@ -240,6 +240,7 @@ fn image_view_panel(
             height,
             values: reorder_scalar_values(&state.values, total),
             imag_values: None,
+            invalid_indices: reordered_invalid_indices(&state.nan_entries, total),
             x_range: [geometry.u_linspace.start, geometry.u_linspace.stop],
             y_range: [geometry.v_linspace.start, geometry.v_linspace.stop],
             color_mode: image_color_mode(mode),
@@ -255,6 +256,7 @@ fn image_view_panel(
                 total,
                 |value| value.im,
             )),
+            invalid_indices: reordered_invalid_indices(&state.nan_entries, total),
             x_range: [geometry.u_linspace.start, geometry.u_linspace.stop],
             y_range: [geometry.v_linspace.start, geometry.v_linspace.stop],
             color_mode: image_color_mode(mode),
@@ -438,6 +440,20 @@ fn reorder_complex_component_values<T>(
         }
     }
     reordered
+}
+
+fn reordered_invalid_indices(invalid_entries: &[usize], total: usize) -> Option<Vec<usize>> {
+    if invalid_entries.is_empty() {
+        return None;
+    }
+    let stride = coprime_stride(total);
+    Some(
+        invalid_entries
+            .iter()
+            .copied()
+            .map(|shuffled_index| permuted_raster_index(shuffled_index, total, stride))
+            .collect(),
+    )
 }
 
 fn permuted_raster_index(index: usize, total_samples: usize, stride: usize) -> usize {

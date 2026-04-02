@@ -53,7 +53,9 @@ struct RollingAveragesState {
     reclaim_ms: RollingMetric,
     queue_snapshot_ms: RollingMetric,
     active_evaluator_count_ms: RollingMetric,
+    completed_fetch_wait_ms: RollingMetric,
     completed_fetch_ingest_ms: RollingMetric,
+    enqueue_drain_wait_ms: RollingMetric,
     produce_enqueue_ms: RollingMetric,
     progress_sync_ms: RollingMetric,
     performance_sync_ms: RollingMetric,
@@ -160,8 +162,14 @@ impl SamplerRuntimeState {
                 active_evaluator_count_ms: RollingMetricSnapshot::from(
                     &self.rolling.active_evaluator_count_ms,
                 ),
+                completed_fetch_wait_ms: RollingMetricSnapshot::from(
+                    &self.rolling.completed_fetch_wait_ms,
+                ),
                 completed_fetch_ingest_ms: RollingMetricSnapshot::from(
                     &self.rolling.completed_fetch_ingest_ms,
+                ),
+                enqueue_drain_wait_ms: RollingMetricSnapshot::from(
+                    &self.rolling.enqueue_drain_wait_ms,
                 ),
                 produce_enqueue_ms: RollingMetricSnapshot::from(&self.rolling.produce_enqueue_ms),
                 progress_sync_ms: RollingMetricSnapshot::from(&self.rolling.progress_sync_ms),
@@ -473,7 +481,13 @@ where
     }
 
     async fn flush_enqueue_drain(&mut self) -> Result<(), RunnerError> {
-        if let Some(outcome) = self.enqueue_drain.wait_for_slot().await? {
+        let drain_wait_started = Instant::now();
+        let outcome = self.enqueue_drain.wait_for_slot().await?;
+        observe_duration_ms(
+            &mut self.runtime_state.rolling.enqueue_drain_wait_ms,
+            drain_wait_started.elapsed(),
+        );
+        if let Some(outcome) = outcome {
             self.apply_enqueue_outcome(outcome);
         }
         Ok(())
@@ -886,10 +900,15 @@ where
     }
 
     async fn process_completed(&mut self) -> Result<usize, RunnerError> {
+        let completed_fetch_started = Instant::now();
         let completed = self
             .completed_source
             .take(&self.store, self.runtime_state.last_completed_batch_id)
             .await?;
+        observe_duration_ms(
+            &mut self.runtime_state.rolling.completed_fetch_wait_ms,
+            completed_fetch_started.elapsed(),
+        );
         if completed.is_empty() {
             return Ok(0);
         }

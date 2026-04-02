@@ -15,6 +15,10 @@ pub use self::full::{
 pub use self::gammaloop::{GammaLoopObservableDigest, GammaLoopObservableState};
 pub use self::scalar::ScalarObservableState;
 
+/// Observable payloads are persisted and served through JSON-facing APIs.
+/// Implementations must therefore keep their serialized state JSON-safe and
+/// handle non-finite floating-point contributions explicitly instead of
+/// letting serialization degrade them into `null`.
 pub trait IngestScalar {
     fn ingest_scalar(&mut self, value: f64, weight: f64);
 }
@@ -262,6 +266,7 @@ mod tests {
             sum_weighted_value: 3.0,
             sum_abs: 4.0,
             sum_sq: 5.0,
+            nan_count: 0,
         })
         .to_persistent_json()
         .expect("persistent snapshot");

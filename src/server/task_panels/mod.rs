@@ -624,6 +624,7 @@ mod tests {
                 ComplexValue { re: 2.0, im: -2.0 },
                 ComplexValue { re: 3.0, im: -3.0 },
             ],
+            nan_entries: vec![],
         })
     }
 
@@ -730,6 +731,7 @@ mod tests {
                 real_sq_sum: 17.0,
                 imag_sq_sum: 5.0,
                 weight_sum: 3.0,
+                nan_count: 0,
             },
         })
     }

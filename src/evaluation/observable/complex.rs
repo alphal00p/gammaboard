@@ -12,6 +12,8 @@ pub struct ComplexObservableState {
     pub real_sq_sum: f64,
     pub imag_sq_sum: f64,
     pub weight_sum: f64,
+    #[serde(default)]
+    pub nan_count: usize,
 }
 
 impl ComplexObservableState {
@@ -20,13 +22,27 @@ impl ComplexObservableState {
         let weighted_real = value.re * weight;
         let weighted_imag = value.im * weight;
         let weighted_abs = value.norm() * weight;
+        let weighted_abs_sq = weighted_abs * weighted_abs;
+        let weighted_real_sq = weighted_real * weighted_real;
+        let weighted_imag_sq = weighted_imag * weighted_imag;
+        if !weighted_real.is_finite()
+            || !weighted_imag.is_finite()
+            || !weighted_abs.is_finite()
+            || !weighted_abs_sq.is_finite()
+            || !weighted_real_sq.is_finite()
+            || !weighted_imag_sq.is_finite()
+            || !weight.is_finite()
+        {
+            self.nan_count += 1;
+            return;
+        }
         self.count += 1;
         self.real_sum += weighted_real;
         self.imag_sum += weighted_imag;
         self.abs_sum += weighted_abs;
-        self.abs_sq_sum += weighted_abs * weighted_abs;
-        self.real_sq_sum += weighted_real * weighted_real;
-        self.imag_sq_sum += weighted_imag * weighted_imag;
+        self.abs_sq_sum += weighted_abs_sq;
+        self.real_sq_sum += weighted_real_sq;
+        self.imag_sq_sum += weighted_imag_sq;
         self.weight_sum += weight;
     }
 
@@ -90,6 +106,7 @@ impl Observable for ComplexObservableState {
         self.real_sq_sum += other.real_sq_sum;
         self.imag_sq_sum += other.imag_sq_sum;
         self.weight_sum += other.weight_sum;
+        self.nan_count += other.nan_count;
     }
 
     fn get_persistent(&self) -> Self::Persistent {
@@ -154,6 +171,7 @@ mod tests {
         assert_eq!(observable.imag_sq_sum, 64.0);
         assert_eq!(observable.abs_sq_sum, 100.0);
         assert_eq!(observable.weight_sum, 2.0);
+        assert_eq!(observable.nan_count, 0);
     }
 
     #[test]
@@ -165,5 +183,24 @@ mod tests {
         assert_eq!(observable.real_sum, 4.5);
         assert_eq!(observable.imag_sum, -6.0);
         assert_eq!(observable.weight_sum, 3.0);
+        assert_eq!(observable.nan_count, 0);
+    }
+
+    #[test]
+    fn add_sample_skips_non_finite_weighted_contributions() {
+        let mut observable = ComplexObservableState::default();
+
+        observable.add_sample(Complex64::new(f64::NAN, 1.0), 1.0);
+        observable.add_sample(Complex64::new(1.0, 0.0), f64::INFINITY);
+
+        assert_eq!(observable.count, 0);
+        assert_eq!(observable.real_sum, 0.0);
+        assert_eq!(observable.imag_sum, 0.0);
+        assert_eq!(observable.abs_sum, 0.0);
+        assert_eq!(observable.real_sq_sum, 0.0);
+        assert_eq!(observable.imag_sq_sum, 0.0);
+        assert_eq!(observable.abs_sq_sum, 0.0);
+        assert_eq!(observable.weight_sum, 0.0);
+        assert_eq!(observable.nan_count, 2);
     }
 }

@@ -183,13 +183,14 @@ pub struct SamplerPerformanceMetrics {
     pub std_ingest_time_per_sample_ms: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RollingMetricSnapshot {
     pub mean: Option<f64>,
     pub std_dev: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct SamplerRollingAverages {
     pub eval_ms_per_sample: RollingMetricSnapshot,
     pub eval_ms_per_batch: RollingMetricSnapshot,
@@ -202,7 +203,9 @@ pub struct SamplerRollingAverages {
     pub reclaim_ms: RollingMetricSnapshot,
     pub queue_snapshot_ms: RollingMetricSnapshot,
     pub active_evaluator_count_ms: RollingMetricSnapshot,
+    pub completed_fetch_wait_ms: RollingMetricSnapshot,
     pub completed_fetch_ingest_ms: RollingMetricSnapshot,
+    pub enqueue_drain_wait_ms: RollingMetricSnapshot,
     pub produce_enqueue_ms: RollingMetricSnapshot,
     pub progress_sync_ms: RollingMetricSnapshot,
     pub performance_sync_ms: RollingMetricSnapshot,

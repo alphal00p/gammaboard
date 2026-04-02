@@ -217,6 +217,7 @@ mod tests {
             None,
             ObservableState::FullScalar(FullScalarObservableState {
                 values: vec![1.0, f64::NAN],
+                nan_entries: vec![],
             }),
         );
 
