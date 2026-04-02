@@ -44,7 +44,7 @@ pub struct NodeRunArgs {
     name: String,
     #[arg(long, default_value_t = 3)]
     max_start_failures: u32,
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = 2)]
     db_pool_size: u32,
 }
 
@@ -53,7 +53,7 @@ pub struct AutoRunArgs {
     count: usize,
     #[arg(long, default_value_t = 3)]
     max_start_failures: u32,
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = 2)]
     db_pool_size: u32,
 }
 

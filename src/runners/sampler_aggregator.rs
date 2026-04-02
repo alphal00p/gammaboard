@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use std::time::{Duration, Instant};
 use thiserror::Error;
+use tokio::task::JoinHandle;
 use tokio::time::sleep;
 
 const MIN_BATCH_SIZE: usize = 16;
@@ -178,6 +179,188 @@ pub enum RunnerError {
     Store(#[from] StoreError),
 }
 
+struct CompletedBatchSource<S> {
+    run_id: i32,
+    fetch_limit: usize,
+    strict_batch_ordering: bool,
+    ready_workload: Option<Vec<crate::core::CompletedBatch>>,
+    pending_fetch: Option<JoinHandle<Result<Vec<crate::core::CompletedBatch>, StoreError>>>,
+    _marker: std::marker::PhantomData<S>,
+}
+
+impl<S> CompletedBatchSource<S>
+where
+    S: SamplerWorkerStore + Clone + Send + Sync + 'static,
+{
+    fn new(run_id: i32, fetch_limit: usize, strict_batch_ordering: bool) -> Self {
+        Self {
+            run_id,
+            fetch_limit,
+            strict_batch_ordering,
+            ready_workload: None,
+            pending_fetch: None,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    async fn take(
+        &mut self,
+        store: &S,
+        after_batch_id: Option<i64>,
+    ) -> Result<Vec<crate::core::CompletedBatch>, RunnerError> {
+        self.drain_finished().await?;
+        if self.ready_workload.is_none() && self.pending_fetch.is_none() {
+            self.start_prefetch(store, after_batch_id);
+        }
+        if self.ready_workload.is_none() {
+            self.await_pending().await?;
+        }
+        Ok(self.ready_workload.take().unwrap_or_default())
+    }
+
+    fn start_prefetch(&mut self, store: &S, after_batch_id: Option<i64>) {
+        if self.ready_workload.is_some() || self.pending_fetch.is_some() {
+            return;
+        }
+
+        let store = store.clone();
+        let run_id = self.run_id;
+        let fetch_limit = self.fetch_limit;
+        let strict_batch_ordering = self.strict_batch_ordering;
+        self.pending_fetch = Some(tokio::spawn(async move {
+            store
+                .fetch_completed_batches(run_id, fetch_limit, strict_batch_ordering, after_batch_id)
+                .await
+        }));
+    }
+
+    async fn drain_finished(&mut self) -> Result<(), RunnerError> {
+        let Some(handle) = self.pending_fetch.as_ref() else {
+            return Ok(());
+        };
+        if !handle.is_finished() {
+            return Ok(());
+        }
+
+        let handle = self.pending_fetch.take().expect("checked pending fetch");
+        self.consume_fetch_handle(handle).await
+    }
+
+    async fn await_pending(&mut self) -> Result<(), RunnerError> {
+        let Some(handle) = self.pending_fetch.take() else {
+            return Ok(());
+        };
+        self.consume_fetch_handle(handle).await
+    }
+
+    async fn consume_fetch_handle(
+        &mut self,
+        handle: JoinHandle<Result<Vec<crate::core::CompletedBatch>, StoreError>>,
+    ) -> Result<(), RunnerError> {
+        match handle.await {
+            Ok(Ok(completed)) => self.ready_workload = Some(completed),
+            Ok(Err(err)) => return Err(RunnerError::Store(err)),
+            Err(err) => {
+                return Err(RunnerError::Store(StoreError::store(format!(
+                    "sampler completed-batch fetch task failed: {err}"
+                ))));
+            }
+        }
+        Ok(())
+    }
+}
+
+struct ProducedBatchWorkload {
+    pending_before_produce: usize,
+    produced_samples: i64,
+    batches: Vec<crate::sampling::LatentBatch>,
+}
+
+struct EnqueueOutcome {
+    produced_batches: usize,
+    produced_samples: i64,
+    pending_after_enqueue: usize,
+}
+
+struct LatentBatchDrain<S> {
+    run_id: i32,
+    task_id: i64,
+    requires_training_values: bool,
+    pending_enqueue: Option<JoinHandle<Result<EnqueueOutcome, StoreError>>>,
+    _marker: std::marker::PhantomData<S>,
+}
+
+impl<S> LatentBatchDrain<S>
+where
+    S: SamplerWorkerStore + Clone + Send + Sync + 'static,
+{
+    fn new(run_id: i32, task_id: i64, requires_training_values: bool) -> Self {
+        Self {
+            run_id,
+            task_id,
+            requires_training_values,
+            pending_enqueue: None,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    async fn wait_for_slot(&mut self) -> Result<Option<EnqueueOutcome>, RunnerError> {
+        let Some(handle) = self.pending_enqueue.take() else {
+            return Ok(None);
+        };
+        self.consume_enqueue_handle(handle).await
+    }
+
+    async fn drain_finished(&mut self) -> Result<Option<EnqueueOutcome>, RunnerError> {
+        let Some(handle) = self.pending_enqueue.as_ref() else {
+            return Ok(None);
+        };
+        if !handle.is_finished() {
+            return Ok(None);
+        }
+
+        let handle = self
+            .pending_enqueue
+            .take()
+            .expect("checked pending enqueue");
+        self.consume_enqueue_handle(handle).await
+    }
+
+    fn start_drain(&mut self, store: &S, workload: ProducedBatchWorkload) {
+        debug_assert!(self.pending_enqueue.is_none());
+        let store = store.clone();
+        let run_id = self.run_id;
+        let task_id = self.task_id;
+        let requires_training_values = self.requires_training_values;
+        self.pending_enqueue = Some(tokio::spawn(async move {
+            let produced_batches = workload.batches.len();
+            store
+                .insert_batches(run_id, task_id, requires_training_values, &workload.batches)
+                .await?;
+            Ok(EnqueueOutcome {
+                produced_batches,
+                produced_samples: workload.produced_samples,
+                pending_after_enqueue: workload
+                    .pending_before_produce
+                    .saturating_add(produced_batches),
+            })
+        }));
+    }
+
+    async fn consume_enqueue_handle(
+        &mut self,
+        handle: JoinHandle<Result<EnqueueOutcome, StoreError>>,
+    ) -> Result<Option<EnqueueOutcome>, RunnerError> {
+        match handle.await {
+            Ok(Ok(outcome)) => Ok(Some(outcome)),
+            Ok(Err(err)) => Err(RunnerError::Store(err)),
+            Err(err) => Err(RunnerError::Store(StoreError::store(format!(
+                "sampler latent-batch enqueue task failed: {err}"
+            )))),
+        }
+    }
+}
+
 pub struct SamplerAggregatorRunner<S> {
     run_id: i32,
     node_name: String,
@@ -198,11 +381,13 @@ pub struct SamplerAggregatorRunner<S> {
     last_performance_completed_samples: i64,
     last_runnable_after_enqueue: Option<usize>,
     last_tick_started_at: Option<Instant>,
+    completed_source: CompletedBatchSource<S>,
+    enqueue_drain: LatentBatchDrain<S>,
 }
 
 impl<S> SamplerAggregatorRunner<S>
 where
-    S: SamplerWorkerStore,
+    S: SamplerWorkerStore + Clone + Send + Sync + 'static,
 {
     pub fn new(
         store: S,
@@ -245,6 +430,10 @@ where
             Duration::from_millis(params.performance_snapshot_interval_ms);
         let frontend_sync_interval = Duration::from_millis(params.frontend_sync_interval_ms);
         let now = Instant::now();
+        let completed_batch_fetch_limit = params.completed_batch_fetch_limit;
+        let strict_batch_ordering = params.strict_batch_ordering;
+        let task_id = task.id;
+        let requires_training_values = sampler_config.requires_training();
 
         Self {
             run_id,
@@ -266,7 +455,28 @@ where
             last_performance_completed_samples: nr_completed_samples,
             last_runnable_after_enqueue,
             last_tick_started_at: None,
+            completed_source: CompletedBatchSource::new(
+                run_id,
+                completed_batch_fetch_limit,
+                strict_batch_ordering,
+            ),
+            enqueue_drain: LatentBatchDrain::new(run_id, task_id, requires_training_values),
         }
+    }
+
+    fn apply_enqueue_outcome(&mut self, outcome: EnqueueOutcome) {
+        self.runtime_state.produced_batches_total += outcome.produced_batches as i64;
+        self.runtime_state.produced_samples_total += outcome.produced_samples;
+        self.nr_produced_samples += outcome.produced_samples;
+        self.task.nr_produced_samples += outcome.produced_samples;
+        self.last_runnable_after_enqueue = Some(outcome.pending_after_enqueue);
+    }
+
+    async fn flush_enqueue_drain(&mut self) -> Result<(), RunnerError> {
+        if let Some(outcome) = self.enqueue_drain.wait_for_slot().await? {
+            self.apply_enqueue_outcome(outcome);
+        }
+        Ok(())
     }
 
     fn tune_batch_size(&mut self) {
@@ -475,6 +685,10 @@ where
     pub async fn tick(&mut self) -> Result<bool, RunnerError> {
         let tick_started_at = Instant::now();
         self.observe_tick_timing(tick_started_at);
+        if let Some(outcome) = self.enqueue_drain.drain_finished().await? {
+            self.apply_enqueue_outcome(outcome);
+        }
+        self.flush_enqueue_drain().await?;
         let reclaim_started = Instant::now();
         self.store.reclaim_abandoned_batches(self.run_id).await?;
         observe_duration_ms(
@@ -592,6 +806,7 @@ where
     }
 
     async fn drain_evaluator_work_on_stop(&mut self) -> Result<(), RunnerError> {
+        self.flush_enqueue_drain().await?;
         loop {
             self.process_completed().await?;
 
@@ -612,6 +827,7 @@ where
     }
 
     pub async fn persist_state(&mut self) -> Result<(), RunnerError> {
+        self.flush_enqueue_drain().await?;
         self.drain_evaluator_work_on_stop().await?;
         self.flush_aggregation(true).await?;
         self.flush_performance_snapshot(true).await?;
@@ -654,6 +870,7 @@ where
     }
 
     pub async fn complete_task(&mut self) -> Result<(), RunnerError> {
+        self.flush_enqueue_drain().await?;
         self.flush_aggregation(true).await?;
         self.flush_performance_snapshot(true).await?;
         self.sync_task_progress().await?;
@@ -670,13 +887,8 @@ where
 
     async fn process_completed(&mut self) -> Result<usize, RunnerError> {
         let completed = self
-            .store
-            .fetch_completed_batches(
-                self.run_id,
-                self.config.completed_batch_fetch_limit,
-                self.config.strict_batch_ordering,
-                self.runtime_state.last_completed_batch_id,
-            )
+            .completed_source
+            .take(&self.store, self.runtime_state.last_completed_batch_id)
             .await?;
         if completed.is_empty() {
             return Ok(0);
@@ -754,6 +966,8 @@ where
             .collect::<Vec<_>>();
         self.store.delete_completed_batches(&consumed_ids).await?;
         self.runtime_state.last_completed_batch_id = consumed_ids.last().copied();
+        self.completed_source
+            .start_prefetch(&self.store, self.runtime_state.last_completed_batch_id);
         Ok(consumed_ids.len())
     }
 
@@ -813,6 +1027,7 @@ where
             }
         };
         let mut produced = Vec::with_capacity(batch_plan.len());
+        let mut produced_samples_total = 0_i64;
         for nr_samples in batch_plan {
             if nr_samples > self.config.max_batch_size {
                 return Err(RunnerError::Engine(EngineError::engine(format!(
@@ -827,10 +1042,7 @@ where
                 .map_err(RunnerError::Engine)?;
             let produce_time_ms = started.elapsed().as_secs_f64() * 1000.0;
             let produced_samples = batch.nr_samples;
-            self.runtime_state.produced_batches_total += 1;
-            self.runtime_state.produced_samples_total += produced_samples as i64;
-            self.nr_produced_samples += produced_samples as i64;
-            self.task.nr_produced_samples += produced_samples as i64;
+            produced_samples_total += produced_samples as i64;
             if produced_samples > 0 {
                 self.runtime_state
                     .rolling
@@ -843,18 +1055,18 @@ where
                     .build(),
             );
         }
+        let produced_batches = produced.len();
+        if produced_batches == 0 {
+            return Ok(0);
+        }
 
-        self.store
-            .insert_batches(
-                self.run_id,
-                self.task.id,
-                self.sampler_config.requires_training(),
-                &produced,
-            )
-            .await?;
-        self.last_runnable_after_enqueue =
-            Some(pending_before_produce.saturating_add(produced.len()));
-        Ok(produced.len())
+        let workload = ProducedBatchWorkload {
+            pending_before_produce,
+            produced_samples: produced_samples_total,
+            batches: produced,
+        };
+        self.enqueue_drain.start_drain(&self.store, workload);
+        Ok(produced_batches)
     }
 
     async fn sync_task_progress(&mut self) -> Result<(), RunnerError> {
