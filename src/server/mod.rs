@@ -1145,7 +1145,11 @@ async fn get_run_evaluator_performance_history(
         .store
         .get_evaluator_performance_history(id, limit, params.node_name.as_deref())
         .await?;
-    json_response(build_evaluator_performance_response(Some(scope_id), rows))
+    json_response(build_evaluator_performance_response(
+        Some(scope_id),
+        rows,
+        params.node_name.is_none(),
+    ))
 }
 
 async fn get_run_sampler_performance_history(
@@ -1175,6 +1179,7 @@ async fn get_node_evaluator_performance_history(
     json_response(build_evaluator_performance_response(
         Some(node_name),
         payload,
+        false,
     ))
 }
 

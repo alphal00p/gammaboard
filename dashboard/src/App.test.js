@@ -22,6 +22,7 @@ jest.mock("./services/api", () => ({
   fetchRunTaskPanels: jest.fn(async () => ({ source_id: "task", panels: [], updates: [] })),
   fetchTemplateList: jest.fn(async () => []),
   fetchTemplateFile: jest.fn(async () => ({ name: "template.toml", toml: "" })),
+  fetchEvaluatorPerformanceHistory: jest.fn(async () => ({ source_id: "perf:run:evaluator", panels: [], updates: [] })),
   fetchSamplerPerformanceHistory: jest.fn(async () => ({ source_id: "perf:sampler", panels: [], updates: [] })),
   fetchNodeEvaluatorPerformanceHistory: jest.fn(async () => ({ source_id: "perf:evaluator", panels: [], updates: [] })),
   fetchNodeSamplerPerformanceHistory: jest.fn(async () => ({
@@ -58,6 +59,11 @@ describe("App Component", () => {
     api.fetchRunTaskPanels.mockResolvedValue({ source_id: "task", panels: [], updates: [] });
     api.fetchTemplateList.mockResolvedValue([]);
     api.fetchTemplateFile.mockResolvedValue({ name: "template.toml", toml: "" });
+    api.fetchEvaluatorPerformanceHistory.mockResolvedValue({
+      source_id: "perf:run:evaluator",
+      panels: [],
+      updates: [],
+    });
     api.fetchSamplerPerformanceHistory.mockResolvedValue({ source_id: "perf:sampler", panels: [], updates: [] });
     api.fetchNodeEvaluatorPerformanceHistory.mockResolvedValue({
       source_id: "perf:evaluator",

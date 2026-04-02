@@ -36,7 +36,7 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
     setSelectedEvaluatorNodeName(evaluatorNodeNameFor(runWorkers[0]));
   }, [runWorkers, selectedEvaluatorNodeName]);
 
-  const { evaluator, sampler } = useRunPerformancePanels({
+  const { evaluator, runEvaluator, sampler } = useRunPerformancePanels({
     runId: selectedRun,
     evaluatorNodeName: selectedEvaluatorNodeName,
     limit: 500,
@@ -63,6 +63,13 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
               message="Run throughput panels will appear once the sampler records snapshots."
             />
           )}
+          {runEvaluator?.sourceId ? (
+            <PanelCollection
+              title="Run Evaluator Summary"
+              panelSpecs={runEvaluator.panelSpecs}
+              panelStates={runEvaluator.panelStates}
+            />
+          ) : null}
           <FormControl size="small" sx={{ maxWidth: 320 }}>
             <InputLabel id="performance-evaluator-label">Evaluator</InputLabel>
             <Select
@@ -96,7 +103,8 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
             />
           )}
           <Typography variant="body2" color="text.secondary">
-            Run view shows total completed samples per second and queue remaining ratio. Evaluator view is per worker.
+            Run throughput and evaluator summary are aggregated at run level. The selector below shows one evaluator
+            worker at a time.
           </Typography>
         </Stack>
       )}

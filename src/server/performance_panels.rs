@@ -1,4 +1,4 @@
-use crate::core::SamplerRuntimeMetrics;
+use crate::core::{EvaluatorPerformanceMetrics, SamplerRuntimeMetrics};
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelWidth, PlotPoint,
     history_x, key_value, key_value_panel, merge_panel_state, panel_spec, replace_panel,
@@ -11,15 +11,17 @@ use std::collections::BTreeMap;
 pub fn build_evaluator_performance_response(
     scope_id: Option<String>,
     entries: Vec<EvaluatorPerformanceHistoryEntry>,
+    include_summary: bool,
 ) -> PanelResponse {
     let source_id = scope_id.unwrap_or_else(|| "evaluator".to_string());
-    let panels = evaluator_panel_specs();
-    let updates = entries
-        .first()
-        .map(evaluator_current_panel)
-        .into_iter()
-        .map(replace_panel)
-        .collect();
+    let panels = evaluator_panel_specs(include_summary);
+    let mut updates = Vec::new();
+    if include_summary && !entries.is_empty() {
+        updates.push(replace_panel(evaluator_summary_panel(&entries)));
+    }
+    if let Some(entry) = entries.first() {
+        updates.push(replace_panel(evaluator_current_panel(entry)));
+    }
     PanelResponse {
         source_id,
         cursor: entries.first().map(|entry| entry.id.to_string()),
@@ -77,16 +79,30 @@ fn build_performance_response<T>(
     }
 }
 
-fn evaluator_panel_specs() -> Vec<PanelSpec> {
-    vec![with_panel_width(
-        panel_spec(
-            "evaluator_current",
-            "Evaluator Performance",
-            PanelKind::KeyValue,
-            PanelHistoryMode::Replace,
-        ),
-        PanelWidth::Full,
-    )]
+fn evaluator_panel_specs(include_summary: bool) -> Vec<PanelSpec> {
+    let summary_panel = include_summary.then(|| {
+        with_panel_width(
+            panel_spec(
+                "evaluator_summary",
+                "Run Evaluator Summary",
+                PanelKind::KeyValue,
+                PanelHistoryMode::Replace,
+            ),
+            PanelWidth::Full,
+        )
+    });
+    summary_panel
+        .into_iter()
+        .chain(std::iter::once(with_panel_width(
+            panel_spec(
+                "evaluator_current",
+                "Evaluator Performance",
+                PanelKind::KeyValue,
+                PanelHistoryMode::Replace,
+            ),
+            PanelWidth::Full,
+        )))
+        .collect()
 }
 
 fn sampler_panel_specs() -> Vec<PanelSpec> {
@@ -206,6 +222,128 @@ fn evaluator_current_panel(entry: &EvaluatorPerformanceHistoryEntry) -> PanelSta
             ),
         ],
     )
+}
+
+fn evaluator_summary_panel(entries: &[EvaluatorPerformanceHistoryEntry]) -> PanelState {
+    let summary = summarize_evaluator_metrics(entries);
+    key_value_panel(
+        "evaluator_summary",
+        vec![
+            key_value(
+                "active_evaluators_with_metrics",
+                "Active Evaluators With Metrics",
+                summary.evaluator_count,
+            ),
+            key_value(
+                "avg_fetch_stall_time_us",
+                "Avg Fetch Stall Per Sample (us)",
+                summary.avg_fetch_stall_time_per_sample_ms.map(ms_to_us),
+            ),
+            key_value(
+                "avg_prefetch_hit_ratio",
+                "Avg Prefetch Hit Ratio",
+                summary.avg_prefetch_hit_ratio,
+            ),
+            key_value(
+                "avg_queue_starvation_ratio",
+                "Avg Queue Starvation Ratio",
+                summary.avg_queue_starvation_ratio,
+            ),
+            key_value(
+                "avg_materialization_time_us",
+                "Avg Materialization Per Sample (us)",
+                summary.avg_materialization_time_per_sample_ms.map(ms_to_us),
+            ),
+            key_value(
+                "avg_evaluate_time_us",
+                "Avg Evaluate Per Sample (us)",
+                summary.avg_evaluate_time_per_sample_ms.map(ms_to_us),
+            ),
+            key_value(
+                "avg_submit_time_us",
+                "Avg Submit Per Sample (us)",
+                summary.avg_submit_time_per_sample_ms.map(ms_to_us),
+            ),
+            key_value(
+                "avg_submit_stall_time_us",
+                "Avg Submit Stall Per Sample (us)",
+                summary.avg_submit_stall_time_per_sample_ms.map(ms_to_us),
+            ),
+            key_value("avg_idle_ratio", "Avg Idle Ratio", summary.avg_idle_ratio),
+        ],
+    )
+}
+
+struct EvaluatorSummary {
+    evaluator_count: usize,
+    avg_fetch_stall_time_per_sample_ms: Option<f64>,
+    avg_prefetch_hit_ratio: Option<f64>,
+    avg_queue_starvation_ratio: Option<f64>,
+    avg_materialization_time_per_sample_ms: Option<f64>,
+    avg_evaluate_time_per_sample_ms: Option<f64>,
+    avg_submit_time_per_sample_ms: Option<f64>,
+    avg_submit_stall_time_per_sample_ms: Option<f64>,
+    avg_idle_ratio: Option<f64>,
+}
+
+fn summarize_evaluator_metrics(entries: &[EvaluatorPerformanceHistoryEntry]) -> EvaluatorSummary {
+    let mut latest_by_worker = BTreeMap::<&str, &EvaluatorPerformanceMetrics>::new();
+    for entry in entries {
+        latest_by_worker
+            .entry(entry.worker_id.as_str())
+            .or_insert(&entry.metrics);
+    }
+
+    let count = latest_by_worker.len();
+    if count == 0 {
+        return EvaluatorSummary {
+            evaluator_count: 0,
+            avg_fetch_stall_time_per_sample_ms: None,
+            avg_prefetch_hit_ratio: None,
+            avg_queue_starvation_ratio: None,
+            avg_materialization_time_per_sample_ms: None,
+            avg_evaluate_time_per_sample_ms: None,
+            avg_submit_time_per_sample_ms: None,
+            avg_submit_stall_time_per_sample_ms: None,
+            avg_idle_ratio: None,
+        };
+    }
+
+    let mut fetch_stall_sum = 0.0;
+    let mut prefetch_hit_sum = 0.0;
+    let mut queue_starvation_ratio_sum = 0.0;
+    let mut materialization_sum = 0.0;
+    let mut evaluate_sum = 0.0;
+    let mut submit_sum = 0.0;
+    let mut submit_stall_sum = 0.0;
+    let mut idle_sum = 0.0;
+    for metrics in latest_by_worker.values() {
+        fetch_stall_sum += metrics.avg_fetch_stall_time_per_sample_ms;
+        prefetch_hit_sum += metrics.prefetch_hit_ratio;
+        queue_starvation_ratio_sum += metrics.queue_starvation_ratio;
+        materialization_sum += metrics.avg_materialization_time_per_sample_ms;
+        evaluate_sum += metrics.avg_evaluate_time_per_sample_ms;
+        submit_sum += metrics.avg_submit_time_per_sample_ms;
+        submit_stall_sum += metrics.avg_submit_stall_time_per_sample_ms;
+        idle_sum += metrics
+            .idle_profile
+            .as_ref()
+            .map(|profile| profile.idle_ratio)
+            .unwrap_or(0.0);
+    }
+
+    let count_f64 = count as f64;
+    EvaluatorSummary {
+        evaluator_count: count,
+        avg_fetch_stall_time_per_sample_ms: Some(fetch_stall_sum / count_f64),
+        avg_prefetch_hit_ratio: Some(prefetch_hit_sum / count_f64),
+        avg_queue_starvation_ratio: Some(queue_starvation_ratio_sum / count_f64),
+        avg_materialization_time_per_sample_ms: Some(materialization_sum / count_f64),
+        avg_evaluate_time_per_sample_ms: Some(evaluate_sum / count_f64),
+        avg_submit_time_per_sample_ms: Some(submit_sum / count_f64),
+        avg_submit_stall_time_per_sample_ms: Some(submit_stall_sum / count_f64),
+        avg_idle_ratio: Some(idle_sum / count_f64),
+    }
 }
 
 fn sampler_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelState> {

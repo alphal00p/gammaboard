@@ -85,15 +85,6 @@ fn panel_specs() -> Vec<PanelSpec> {
         ),
         with_panel_width(
             panel_spec(
-                "run_evaluator",
-                "Evaluator Performance",
-                PanelKind::KeyValue,
-                PanelHistoryMode::None,
-            ),
-            PanelWidth::Half,
-        ),
-        with_panel_width(
-            panel_spec(
                 "run_target",
                 "Target",
                 PanelKind::Text,
@@ -136,8 +127,6 @@ fn panel_states(
     let current_batch_eval_ms = active_sampler
         .and_then(|worker| worker.sampler_runtime_metrics.as_ref())
         .and_then(batch_eval_ms_mean);
-    let evaluator_summary = summarize_evaluator_metrics(workers, run.run_id);
-
     Ok(vec![
         key_value_panel(
             "run_identity",
@@ -266,181 +255,8 @@ fn panel_states(
                 ),
             ],
         ),
-        key_value_panel(
-            "run_evaluator",
-            vec![
-                key_value(
-                    "active_evaluators_with_metrics",
-                    "Active Evaluators With Metrics",
-                    evaluator_summary.evaluator_count,
-                ),
-                key_value(
-                    "avg_fetch_time_us",
-                    "Avg Fetch+Decode Per Sample (us)",
-                    evaluator_summary
-                        .avg_fetch_time_per_sample_ms
-                        .map(|value| value * 1000.0),
-                ),
-                key_value(
-                    "avg_fetch_stall_time_us",
-                    "Avg Fetch Stall Per Sample (us)",
-                    evaluator_summary
-                        .avg_fetch_stall_time_per_sample_ms
-                        .map(|value| value * 1000.0),
-                ),
-                key_value(
-                    "avg_prefetch_hit_ratio",
-                    "Avg Prefetch Hit Ratio",
-                    evaluator_summary.avg_prefetch_hit_ratio,
-                ),
-                key_value(
-                    "avg_fetch_stall_ratio",
-                    "Avg Fetch Stall Ratio",
-                    evaluator_summary.avg_fetch_stall_ratio,
-                ),
-                key_value(
-                    "avg_queue_starvation_ratio",
-                    "Avg Queue Starvation Ratio",
-                    evaluator_summary.avg_queue_starvation_ratio,
-                ),
-                key_value(
-                    "avg_materialization_time_us",
-                    "Avg Materialization Per Sample (us)",
-                    evaluator_summary
-                        .avg_materialization_time_per_sample_ms
-                        .map(|value| value * 1000.0),
-                ),
-                key_value(
-                    "avg_evaluate_time_us",
-                    "Avg Evaluate Per Sample (us)",
-                    evaluator_summary
-                        .avg_evaluate_time_per_sample_ms
-                        .map(|value| value * 1000.0),
-                ),
-                key_value(
-                    "avg_submit_time_us",
-                    "Avg Submit Per Sample (us)",
-                    evaluator_summary
-                        .avg_submit_time_per_sample_ms
-                        .map(|value| value * 1000.0),
-                ),
-                key_value(
-                    "avg_submit_stall_time_us",
-                    "Avg Submit Stall Per Sample (us)",
-                    evaluator_summary
-                        .avg_submit_stall_time_per_sample_ms
-                        .map(|value| value * 1000.0),
-                ),
-                key_value(
-                    "avg_submit_slot_hit_ratio",
-                    "Avg Submit Slot Hit Ratio",
-                    evaluator_summary.avg_submit_slot_hit_ratio,
-                ),
-                key_value(
-                    "avg_submit_stall_ratio",
-                    "Avg Submit Stall Ratio",
-                    evaluator_summary.avg_submit_stall_ratio,
-                ),
-                key_value("idle_ratio", "Idle Ratio", evaluator_summary.avg_idle_ratio),
-            ],
-        ),
         text_panel("run_target", &target_summary(run.target.as_ref())),
     ])
-}
-
-struct EvaluatorSummary {
-    evaluator_count: usize,
-    avg_fetch_time_per_sample_ms: Option<f64>,
-    avg_fetch_stall_time_per_sample_ms: Option<f64>,
-    avg_prefetch_hit_ratio: Option<f64>,
-    avg_fetch_stall_ratio: Option<f64>,
-    avg_queue_starvation_ratio: Option<f64>,
-    avg_materialization_time_per_sample_ms: Option<f64>,
-    avg_evaluate_time_per_sample_ms: Option<f64>,
-    avg_submit_time_per_sample_ms: Option<f64>,
-    avg_submit_stall_time_per_sample_ms: Option<f64>,
-    avg_submit_slot_hit_ratio: Option<f64>,
-    avg_submit_stall_ratio: Option<f64>,
-    avg_idle_ratio: Option<f64>,
-}
-
-fn summarize_evaluator_metrics(workers: &[RegisteredWorkerEntry], run_id: i32) -> EvaluatorSummary {
-    let mut count = 0usize;
-    let mut fetch_sum = 0.0;
-    let mut fetch_stall_sum = 0.0;
-    let mut prefetch_hit_sum = 0.0;
-    let mut fetch_stall_ratio_sum = 0.0;
-    let mut queue_starvation_ratio_sum = 0.0;
-    let mut materialization_sum = 0.0;
-    let mut evaluate_sum = 0.0;
-    let mut submit_sum = 0.0;
-    let mut submit_stall_sum = 0.0;
-    let mut submit_slot_hit_sum = 0.0;
-    let mut submit_stall_ratio_sum = 0.0;
-    let mut idle_sum = 0.0;
-
-    for worker in workers.iter().filter(|worker| {
-        worker.current_run_id == Some(run_id)
-            && worker.current_role.as_deref() == Some("evaluator")
-            && worker.evaluator_metrics.is_some()
-    }) {
-        let metrics = worker
-            .evaluator_metrics
-            .as_ref()
-            .expect("checked evaluator metrics");
-        count += 1;
-        fetch_sum += metrics.avg_fetch_time_per_sample_ms;
-        fetch_stall_sum += metrics.avg_fetch_stall_time_per_sample_ms;
-        prefetch_hit_sum += metrics.prefetch_hit_ratio;
-        fetch_stall_ratio_sum += metrics.fetch_stall_ratio;
-        queue_starvation_ratio_sum += metrics.queue_starvation_ratio;
-        materialization_sum += metrics.avg_materialization_time_per_sample_ms;
-        evaluate_sum += metrics.avg_evaluate_time_per_sample_ms;
-        submit_sum += metrics.avg_submit_time_per_sample_ms;
-        submit_stall_sum += metrics.avg_submit_stall_time_per_sample_ms;
-        submit_slot_hit_sum += metrics.submit_slot_hit_ratio;
-        submit_stall_ratio_sum += metrics.submit_stall_ratio;
-        idle_sum += metrics
-            .idle_profile
-            .as_ref()
-            .map(|profile| profile.idle_ratio)
-            .unwrap_or(0.0);
-    }
-
-    if count == 0 {
-        return EvaluatorSummary {
-            evaluator_count: 0,
-            avg_fetch_time_per_sample_ms: None,
-            avg_fetch_stall_time_per_sample_ms: None,
-            avg_prefetch_hit_ratio: None,
-            avg_fetch_stall_ratio: None,
-            avg_queue_starvation_ratio: None,
-            avg_materialization_time_per_sample_ms: None,
-            avg_evaluate_time_per_sample_ms: None,
-            avg_submit_time_per_sample_ms: None,
-            avg_submit_stall_time_per_sample_ms: None,
-            avg_submit_slot_hit_ratio: None,
-            avg_submit_stall_ratio: None,
-            avg_idle_ratio: None,
-        };
-    }
-
-    let count_f64 = count as f64;
-    EvaluatorSummary {
-        evaluator_count: count,
-        avg_fetch_time_per_sample_ms: Some(fetch_sum / count_f64),
-        avg_fetch_stall_time_per_sample_ms: Some(fetch_stall_sum / count_f64),
-        avg_prefetch_hit_ratio: Some(prefetch_hit_sum / count_f64),
-        avg_fetch_stall_ratio: Some(fetch_stall_ratio_sum / count_f64),
-        avg_queue_starvation_ratio: Some(queue_starvation_ratio_sum / count_f64),
-        avg_materialization_time_per_sample_ms: Some(materialization_sum / count_f64),
-        avg_evaluate_time_per_sample_ms: Some(evaluate_sum / count_f64),
-        avg_submit_time_per_sample_ms: Some(submit_sum / count_f64),
-        avg_submit_stall_time_per_sample_ms: Some(submit_stall_sum / count_f64),
-        avg_submit_slot_hit_ratio: Some(submit_slot_hit_sum / count_f64),
-        avg_submit_stall_ratio: Some(submit_stall_ratio_sum / count_f64),
-        avg_idle_ratio: Some(idle_sum / count_f64),
-    }
 }
 
 fn observable_label(task: &crate::core::RunTaskSpec) -> String {
