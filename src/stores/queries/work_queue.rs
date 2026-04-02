@@ -315,7 +315,7 @@ pub(crate) async fn insert_evaluator_performance_snapshot(
     snapshot: &EvaluatorPerformanceSnapshot,
 ) -> Result<(), sqlx::Error> {
     let metrics = encode_json("evaluator performance metrics", &snapshot.metrics)?;
-    sqlx::query(
+    let row = sqlx::query_scalar::<_, i64>(
         r#"
         INSERT INTO evaluator_performance_history (
             run_id,
@@ -323,10 +323,34 @@ pub(crate) async fn insert_evaluator_performance_snapshot(
             metrics
         )
         VALUES ($1, $2, $3)
+        RETURNING id
         "#,
     )
     .bind(snapshot.run_id)
     .bind(&snapshot.node_name)
+    .bind(&metrics)
+    .fetch_one(pool)
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO evaluator_performance_latest (
+            run_id,
+            worker_id,
+            id,
+            metrics,
+            created_at
+        )
+        VALUES ($1, $2, $3, $4, now())
+        ON CONFLICT (run_id, worker_id) DO UPDATE
+        SET
+            id = EXCLUDED.id,
+            metrics = EXCLUDED.metrics,
+            created_at = EXCLUDED.created_at
+        "#,
+    )
+    .bind(snapshot.run_id)
+    .bind(&snapshot.node_name)
+    .bind(row)
     .bind(&metrics)
     .execute(pool)
     .await?;
@@ -342,7 +366,7 @@ pub(crate) async fn insert_sampler_aggregator_performance_snapshot(
         &snapshot.runtime_metrics.to_performance_metrics(),
     )?;
     let runtime_metrics = encode_json("sampler runtime metrics", &snapshot.runtime_metrics)?;
-    sqlx::query(
+    let row = sqlx::query_scalar::<_, i64>(
         r#"
         INSERT INTO sampler_aggregator_performance_history (
             run_id,
@@ -358,10 +382,40 @@ pub(crate) async fn insert_sampler_aggregator_performance_snapshot(
             $4,
             $5
         )
+        RETURNING id
         "#,
     )
     .bind(snapshot.run_id)
     .bind(&snapshot.node_name)
+    .bind(&metrics)
+    .bind(&runtime_metrics)
+    .bind(&snapshot.engine_diagnostics)
+    .fetch_one(pool)
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO sampler_aggregator_performance_latest (
+            run_id,
+            worker_id,
+            id,
+            metrics,
+            runtime_metrics,
+            engine_diagnostics,
+            created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, now())
+        ON CONFLICT (run_id, worker_id) DO UPDATE
+        SET
+            id = EXCLUDED.id,
+            metrics = EXCLUDED.metrics,
+            runtime_metrics = EXCLUDED.runtime_metrics,
+            engine_diagnostics = EXCLUDED.engine_diagnostics,
+            created_at = EXCLUDED.created_at
+        "#,
+    )
+    .bind(snapshot.run_id)
+    .bind(&snapshot.node_name)
+    .bind(row)
     .bind(&metrics)
     .bind(&runtime_metrics)
     .bind(&snapshot.engine_diagnostics)

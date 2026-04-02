@@ -27,101 +27,94 @@ serve-backend:
 serve-frontend:
     cd dashboard && npx serve build
 
-deploy-local-prod:
+_deploy-backend host mode:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    just build
-    mkdir -p logs tmp/nginx/client_body tmp/nginx/proxy tmp/nginx/fastcgi tmp/nginx/uwsgi tmp/nginx/scgi
+    host="{{host}}"
+    mode="{{mode}}"
 
-    {{bin}} server --server-config configs/server/local-prod.toml &
-    backend_pid=$!
-    echo "$backend_pid" > "$PWD/logs/local-prod-backend.pid"
+    case "$host" in
+        local)
+            server_config="configs/server/local-prod.toml"
+            backend_pid_file="$PWD/logs/deploy-local-backend.pid"
+            backend_log_file="$PWD/logs/deploy-local-backend.log"
+            ;;
+        itphlies)
+            server_config="configs/server/itphlies-prod.toml"
+            backend_pid_file="$PWD/logs/deploy-itphlies-backend.pid"
+            backend_log_file="$PWD/logs/deploy-itphlies-backend.log"
+            ;;
+        *)
+            echo "unsupported deploy host: $host" >&2
+            exit 1
+            ;;
+    esac
 
-    cleanup() {
-        kill "$backend_pid" >/dev/null 2>&1 || true
-        wait "$backend_pid" >/dev/null 2>&1 || true
-        rm -f "$PWD/logs/local-prod-backend.pid"
-    }
-    trap cleanup EXIT INT TERM
-
-    echo "Local prod stack is up"
-    echo "Open: http://localhost:8080"
-    nginx -e "$PWD/logs/nginx-local-prod-error.log" -p "$PWD" -c "$PWD/configs/nginx/local-prod.conf" -g 'daemon off;'
-
-deploy-itphlies-server:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    backend_pid_file="$PWD/logs/itphlies-backend.pid"
-    backend_log_file="$PWD/logs/itphlies-backend.log"
-    server_pattern="{{release_bin}} server"
-    release_worker_pattern="{{release_bin}} node run"
-    dev_worker_pattern="{{bin}} node run"
+    case "$mode" in
+        dev)
+            backend_bin="{{bin}}"
+            ;;
+        release)
+            backend_bin="{{release_bin}}"
+            ;;
+        *)
+            echo "unsupported deploy mode: $mode" >&2
+            exit 1
+            ;;
+    esac
 
     mkdir -p logs
+
     if [[ -f "$backend_pid_file" ]]; then
         old_pid=$(cat "$backend_pid_file")
         if kill -0 "$old_pid" >/dev/null 2>&1; then
-            kill "$old_pid"
+            kill "$old_pid" >/dev/null 2>&1 || true
             wait "$old_pid" >/dev/null 2>&1 || true
         fi
     fi
 
-    if [[ -x "{{release_bin}}" ]]; then
-        {{release_bin}} run pause -a >/dev/null 2>&1 || true
-        {{release_bin}} node stop -a >/dev/null 2>&1 || true
-    fi
-    if [[ -x "{{bin}}" ]]; then
-        {{bin}} run pause -a >/dev/null 2>&1 || true
-        {{bin}} node stop -a >/dev/null 2>&1 || true
-    fi
-
-    mapfile -t stale_release_worker_pids < <(pgrep -f "$release_worker_pattern" || true)
-    for pid in "${stale_release_worker_pids[@]}"; do
-        if [[ -n "$pid" ]]; then
-            kill "$pid" >/dev/null 2>&1 || true
-            wait "$pid" >/dev/null 2>&1 || true
-        fi
-    done
-
-    mapfile -t stale_dev_worker_pids < <(pgrep -f "$dev_worker_pattern" || true)
-    for pid in "${stale_dev_worker_pids[@]}"; do
-        if [[ -n "$pid" ]]; then
-            kill "$pid" >/dev/null 2>&1 || true
-            wait "$pid" >/dev/null 2>&1 || true
-        fi
-    done
-
-    mapfile -t stale_pids < <(pgrep -f "$server_pattern" || true)
-    for pid in "${stale_pids[@]}"; do
-        if [[ -n "$pid" ]]; then
-            kill "$pid" >/dev/null 2>&1 || true
-            wait "$pid" >/dev/null 2>&1 || true
-        fi
-    done
-
-    {{release_bin}} server --server-config configs/server/itphlies-prod.toml >"$backend_log_file" 2>&1 &
+    "$backend_bin" server --server-config "$server_config" >"$backend_log_file" 2>&1 &
     new_pid=$!
     echo "$new_pid" > "$backend_pid_file"
 
-    echo "Deployed on $(hostname)"
+    echo "Deployed backend on $(hostname)"
     echo "Backend PID: $new_pid"
     echo "Backend log: $backend_log_file"
+    echo "Server config: $server_config"
+    echo "Mode: $mode"
 
-deploy-itphlies-nginx:
+_deploy-nginx host:
     #!/usr/bin/env bash
     set -euo pipefail
 
+    host="{{host}}"
+
     mkdir -p logs tmp/nginx/client_body tmp/nginx/proxy tmp/nginx/fastcgi tmp/nginx/uwsgi tmp/nginx/scgi
 
-    nginx_pid_file="$PWD/logs/nginx-itphlies.pid"
-    nginx_config="$PWD/configs/nginx/itphlies-tunnel.conf"
+    case "$host" in
+        local)
+            nginx_pid_file="$PWD/logs/nginx-deploy-local.pid"
+            nginx_error_log="$PWD/logs/nginx-deploy-local-error.log"
+            nginx_config="$PWD/configs/nginx/local-prod.conf"
+            open_message="Open: http://localhost:8080"
+            ;;
+        itphlies)
+            nginx_pid_file="$PWD/logs/nginx-deploy-itphlies.pid"
+            nginx_error_log="$PWD/logs/nginx-deploy-itphlies-error.log"
+            nginx_config="$PWD/configs/nginx/itphlies-tunnel.conf"
+            open_message="Open via tunnel: http://localhost:8080"$'\n'"Open on LAN: http://itphlies:8080"
+            ;;
+        *)
+            echo "unsupported deploy host: $host" >&2
+            exit 1
+            ;;
+    esac
 
     if [[ -f "$nginx_pid_file" ]]; then
         old_pid=$(cat "$nginx_pid_file")
         if kill -0 "$old_pid" >/dev/null 2>&1; then
-            nginx -e "$PWD/logs/nginx-itphlies-error.log" -p "$PWD" -c "$nginx_config" -s quit || true
+            nginx -e "$nginx_error_log" -p "$PWD" -c "$nginx_config" -s quit || true
             sleep 1
             if kill -0 "$old_pid" >/dev/null 2>&1; then
                 kill "$old_pid" || true
@@ -129,65 +122,126 @@ deploy-itphlies-nginx:
         fi
     fi
 
-    nginx -e "$PWD/logs/nginx-itphlies-error.log" -p "$PWD" -c "$nginx_config"
+    nginx -e "$nginx_error_log" -p "$PWD" -c "$nginx_config"
 
-    echo "ITPhlies nginx is up on http://localhost:8080 and http://itphlies:8080"
+    echo "Deploy nginx is up"
     echo "Nginx PID file: $nginx_pid_file"
+    printf '%s\n' "$open_message"
 
-stop-itphlies-deploy:
+_deploy-frontend host:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    backend_pid_file="$PWD/logs/itphlies-backend.pid"
-    frontend_pid_file="$PWD/logs/itphlies-frontend.pid"
-    nginx_pid_file="$PWD/logs/nginx-itphlies.pid"
-    nginx_config="$PWD/configs/nginx/itphlies-tunnel.conf"
+    host="{{host}}"
+
+    mkdir -p logs
+
+    case "$host" in
+        local)
+            frontend_pid_file="$PWD/logs/deploy-local-frontend.pid"
+            frontend_log_file="$PWD/logs/deploy-local-frontend.log"
+            ;;
+        itphlies)
+            frontend_pid_file="$PWD/logs/deploy-itphlies-frontend.pid"
+            frontend_log_file="$PWD/logs/deploy-itphlies-frontend.log"
+            ;;
+        *)
+            echo "unsupported deploy host: $host" >&2
+            exit 1
+            ;;
+    esac
+
+    cd dashboard
+    if [[ -f "$frontend_pid_file" ]]; then
+        old_pid=$(cat "$frontend_pid_file")
+        if kill -0 "$old_pid" >/dev/null 2>&1; then
+            kill "$old_pid" >/dev/null 2>&1 || true
+            wait "$old_pid" >/dev/null 2>&1 || true
+        fi
+    fi
+    npx serve build >"$frontend_log_file" 2>&1 &
+    frontend_pid=$!
+    cd ..
+    echo "$frontend_pid" > "$frontend_pid_file"
+
+    echo "Deploy frontend is up"
+    echo "Frontend PID: $frontend_pid"
+    echo "Frontend log: $frontend_log_file"
+
+stop-deploy host:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    host="{{host}}"
+
+    case "$host" in
+        local)
+            backend_pid_file="$PWD/logs/deploy-local-backend.pid"
+            frontend_pid_file="$PWD/logs/deploy-local-frontend.pid"
+            nginx_pid_file="$PWD/logs/nginx-deploy-local.pid"
+            nginx_error_log="$PWD/logs/nginx-deploy-local-error.log"
+            nginx_config="$PWD/configs/nginx/local-prod.conf"
+            ;;
+        itphlies)
+            backend_pid_file="$PWD/logs/deploy-itphlies-backend.pid"
+            frontend_pid_file="$PWD/logs/deploy-itphlies-frontend.pid"
+            nginx_pid_file="$PWD/logs/nginx-deploy-itphlies.pid"
+            nginx_error_log="$PWD/logs/nginx-deploy-itphlies-error.log"
+            nginx_config="$PWD/configs/nginx/itphlies-tunnel.conf"
+            ;;
+        *)
+            echo "unsupported deploy host: $host" >&2
+            exit 1
+            ;;
+    esac
 
     mkdir -p logs
 
     just stop
     just stop-kill
 
-    mapfile -t stale_release_worker_pids < <(pgrep -f "{{release_bin}} node run" || true)
-    for pid in "${stale_release_worker_pids[@]}"; do
-        if [[ -n "$pid" ]]; then
-            kill "$pid" >/dev/null 2>&1 || true
-            wait "$pid" >/dev/null 2>&1 || true
-            echo "killed stale deployed worker pid=$pid"
-        fi
-    done
+    if [[ "$host" == "itphlies" ]]; then
+        mapfile -t stale_release_worker_pids < <(pgrep -f "{{release_bin}} node run" || true)
+        for pid in "${stale_release_worker_pids[@]}"; do
+            if [[ -n "$pid" ]]; then
+                kill "$pid" >/dev/null 2>&1 || true
+                wait "$pid" >/dev/null 2>&1 || true
+                echo "killed stale deployed worker pid=$pid"
+            fi
+        done
 
-    mapfile -t stale_dev_worker_pids < <(pgrep -f "{{bin}} node run" || true)
-    for pid in "${stale_dev_worker_pids[@]}"; do
-        if [[ -n "$pid" ]]; then
-            kill "$pid" >/dev/null 2>&1 || true
-            wait "$pid" >/dev/null 2>&1 || true
-            echo "killed stale dev worker pid=$pid"
-        fi
-    done
+        mapfile -t stale_dev_worker_pids < <(pgrep -f "{{bin}} node run" || true)
+        for pid in "${stale_dev_worker_pids[@]}"; do
+            if [[ -n "$pid" ]]; then
+                kill "$pid" >/dev/null 2>&1 || true
+                wait "$pid" >/dev/null 2>&1 || true
+                echo "killed stale dev worker pid=$pid"
+            fi
+        done
+    fi
 
     if [[ -f "$frontend_pid_file" ]]; then
         frontend_pid=$(cat "$frontend_pid_file")
         if kill -0 "$frontend_pid" >/dev/null 2>&1; then
-            kill "$frontend_pid" || true
+            kill "$frontend_pid" >/dev/null 2>&1 || true
             wait "$frontend_pid" >/dev/null 2>&1 || true
-            echo "stopped itphlies frontend (pid=$frontend_pid)"
+            echo "stopped $host frontend (pid=$frontend_pid)"
         fi
         rm -f "$frontend_pid_file"
     else
-        echo "itphlies frontend already stopped"
+        echo "$host frontend already stopped"
     fi
 
     if [[ -f "$backend_pid_file" ]]; then
         backend_pid=$(cat "$backend_pid_file")
         if kill -0 "$backend_pid" >/dev/null 2>&1; then
-            kill "$backend_pid" || true
+            kill "$backend_pid" >/dev/null 2>&1 || true
             wait "$backend_pid" >/dev/null 2>&1 || true
-            echo "stopped itphlies backend (pid=$backend_pid)"
+            echo "stopped $host backend (pid=$backend_pid)"
         fi
         rm -f "$backend_pid_file"
     else
-        echo "itphlies backend already stopped"
+        echo "$host backend already stopped"
     fi
 
     mapfile -t stale_backend_pids < <(pgrep -f "{{release_bin}} server" || true)
@@ -195,7 +249,7 @@ stop-itphlies-deploy:
         if [[ -n "$pid" ]]; then
             kill "$pid" >/dev/null 2>&1 || true
             wait "$pid" >/dev/null 2>&1 || true
-            echo "killed stale backend pid=$pid"
+            echo "killed stale release backend pid=$pid"
         fi
     done
 
@@ -210,71 +264,64 @@ stop-itphlies-deploy:
 
     if [[ -f "$nginx_pid_file" ]]; then
         nginx_pid="$(cat "$nginx_pid_file" 2>/dev/null || true)"
-        nginx -e "$PWD/logs/nginx-itphlies-error.log" -p "$PWD" -c "$nginx_config" -s quit || true
+        nginx -e "$nginx_error_log" -p "$PWD" -c "$nginx_config" -s quit || true
         sleep 1
         if [[ -n "$nginx_pid" ]] && kill -0 "$nginx_pid" >/dev/null 2>&1; then
             kill "$nginx_pid" || true
         fi
         rm -f "$nginx_pid_file"
-        echo "stopped itphlies nginx"
+        echo "stopped $host nginx"
     else
-        echo "itphlies nginx already stopped"
+        echo "$host nginx already stopped"
     fi
 
-deploy-itphlies:
+deploy host mode="dev":
     #!/usr/bin/env bash
     set -euo pipefail
 
-    frontend_pid_file="$PWD/logs/itphlies-frontend.pid"
-    frontend_log_file="$PWD/logs/itphlies-frontend.log"
+    host="{{host}}"
+    mode="{{mode}}"
 
-    just stop-itphlies-deploy
+    case "$mode" in
+        dev)
+            backend_bin="{{bin}}"
+            build_recipe="build-backend"
+            ;;
+        release)
+            backend_bin="{{release_bin}}"
+            build_recipe="build-backend-release"
+            ;;
+        *)
+            echo "unsupported deploy mode: $mode" >&2
+            exit 1
+            ;;
+    esac
+
+    case "$host" in
+        local)
+            open_message="Open: http://localhost:8080"
+            ;;
+        itphlies)
+            open_message="Open via tunnel: http://localhost:8080"$'\n'"Open on LAN: http://itphlies:8080"
+            ;;
+        *)
+            echo "unsupported deploy host: $host" >&2
+            exit 1
+            ;;
+    esac
+
+    just stop-deploy "$host"
     just build-frontend
-    just build-backend-release
-    {{release_bin}} db start
-    just deploy-itphlies-server
-    just deploy-itphlies-nginx
+    just "$build_recipe"
+    "$backend_bin" db start
+    just _deploy-backend "$host" "$mode"
+    just _deploy-nginx "$host"
+    just _deploy-frontend "$host"
 
-    cd dashboard
-    npx serve build >"$frontend_log_file" 2>&1 &
-    frontend_pid=$!
-    cd ..
-    echo "$frontend_pid" > "$frontend_pid_file"
-
-    echo "ITPhlies full deploy is up"
-    echo "Frontend PID: $frontend_pid"
-    echo "Frontend log: $frontend_log_file"
-    echo "Open via tunnel: http://localhost:8080"
-    echo "Open on LAN: http://itphlies:8080"
-
-stop-local-prod:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    backend_pid_file="$PWD/logs/local-prod-backend.pid"
-    nginx_pid_file="$PWD/logs/nginx-local-prod.pid"
-
-    if [[ -f "$nginx_pid_file" ]]; then
-        nginx_pid=$(cat "$nginx_pid_file")
-        if kill -0 "$nginx_pid" >/dev/null 2>&1; then
-            kill "$nginx_pid"
-            echo "stopped local nginx (pid=$nginx_pid)"
-        fi
-        rm -f "$nginx_pid_file"
-    else
-        echo "local nginx already stopped"
-    fi
-
-    if [[ -f "$backend_pid_file" ]]; then
-        backend_pid=$(cat "$backend_pid_file")
-        if kill -0 "$backend_pid" >/dev/null 2>&1; then
-            kill "$backend_pid"
-            echo "stopped local backend (pid=$backend_pid)"
-        fi
-        rm -f "$backend_pid_file"
-    else
-        echo "local backend already stopped"
-    fi
+    echo "Deploy is up"
+    echo "Host: $host"
+    echo "Mode: $mode"
+    printf '%s\n' "$open_message"
 
 test-e2e:
     just stop-kill
@@ -325,8 +372,8 @@ live-test-basic:
     {{bin}} auto-assign "$run_symbolica_sin" 5
 
 stop:
-    -{{bin}} run pause -a
-    -{{bin}} node stop -a
+    -timeout 5s {{bin}} run pause -a
+    -timeout 5s {{bin}} node stop -a
     -@stty sane
 
 stop-kill:

@@ -587,52 +587,102 @@ pub(crate) async fn get_registered_workers(
     pool: &PgPool,
     run_id: Option<i32>,
 ) -> Result<Vec<RegisteredWorkerEntry>, sqlx::Error> {
-    let rows = sqlx::query_as::<_, RegisteredWorkerRow>(
-        r#"
-        SELECT
-            n.name AS node_name,
-            n.uuid AS node_uuid,
-            n.desired_run_id,
-            dr.name AS desired_run_name,
-            n.desired_role,
-            n.active_run_id AS current_run_id,
-            cr.name AS current_run_name,
-            n.active_role AS current_role,
-            COALESCE(n.active_role, n.desired_role, 'none') AS role,
-            'run_node' AS implementation,
-            'node' AS version,
-            CASE
-                WHEN n.active_role IS NOT NULL THEN 'active'
-                ELSE 'inactive'
-            END AS status,
-            n.last_seen,
-            e.metrics AS evaluator_metrics,
-            p.metrics AS sampler_metrics,
-            p.runtime_metrics AS sampler_runtime_metrics,
-            p.engine_diagnostics AS sampler_engine_diagnostics
-        FROM nodes n
-        LEFT JOIN sampler_aggregator_performance_latest p
-            ON p.run_id = COALESCE($1, n.active_run_id, n.desired_run_id)
-           AND p.worker_id = n.name
-        LEFT JOIN evaluator_performance_latest e
-            ON e.run_id = COALESCE($1, n.active_run_id, n.desired_run_id)
-           AND e.worker_id = n.name
-        LEFT JOIN runs dr ON dr.id = n.desired_run_id
-        LEFT JOIN runs cr ON cr.id = n.active_run_id
-        WHERE n.lease_expires_at > now()
-          AND ($1::int IS NULL OR n.desired_run_id = $1 OR n.active_run_id = $1)
-        ORDER BY
-            CASE
-                WHEN n.active_role IS NOT NULL THEN 0
-                ELSE 1
-            END,
-            n.last_seen DESC NULLS LAST,
-            n.name ASC
-        "#,
-    )
-    .bind(run_id)
-    .fetch_all(pool)
-    .await?;
+    let rows = match run_id {
+        Some(run_id) => {
+            sqlx::query_as::<_, RegisteredWorkerRow>(
+                r#"
+                SELECT
+                    n.name AS node_name,
+                    n.uuid AS node_uuid,
+                    n.desired_run_id,
+                    dr.name AS desired_run_name,
+                    n.desired_role,
+                    n.active_run_id AS current_run_id,
+                    cr.name AS current_run_name,
+                    n.active_role AS current_role,
+                    COALESCE(n.active_role, n.desired_role, 'none') AS role,
+                    'run_node' AS implementation,
+                    'node' AS version,
+                    CASE
+                        WHEN n.active_role IS NOT NULL THEN 'active'
+                        ELSE 'inactive'
+                    END AS status,
+                    n.last_seen,
+                    e.metrics AS evaluator_metrics,
+                    p.metrics AS sampler_metrics,
+                    p.runtime_metrics AS sampler_runtime_metrics,
+                    p.engine_diagnostics AS sampler_engine_diagnostics
+                FROM nodes n
+                LEFT JOIN sampler_aggregator_performance_latest p
+                    ON p.run_id = $1
+                   AND p.worker_id = n.name
+                LEFT JOIN evaluator_performance_latest e
+                    ON e.run_id = $1
+                   AND e.worker_id = n.name
+                LEFT JOIN runs dr ON dr.id = n.desired_run_id
+                LEFT JOIN runs cr ON cr.id = n.active_run_id
+                WHERE n.lease_expires_at > now()
+                  AND (n.desired_run_id = $1 OR n.active_run_id = $1)
+                ORDER BY
+                    CASE
+                        WHEN n.active_role IS NOT NULL THEN 0
+                        ELSE 1
+                    END,
+                    n.last_seen DESC NULLS LAST,
+                    n.name ASC
+                "#,
+            )
+            .bind(run_id)
+            .fetch_all(pool)
+            .await?
+        }
+        None => {
+            sqlx::query_as::<_, RegisteredWorkerRow>(
+                r#"
+                SELECT
+                    n.name AS node_name,
+                    n.uuid AS node_uuid,
+                    n.desired_run_id,
+                    dr.name AS desired_run_name,
+                    n.desired_role,
+                    n.active_run_id AS current_run_id,
+                    cr.name AS current_run_name,
+                    n.active_role AS current_role,
+                    COALESCE(n.active_role, n.desired_role, 'none') AS role,
+                    'run_node' AS implementation,
+                    'node' AS version,
+                    CASE
+                        WHEN n.active_role IS NOT NULL THEN 'active'
+                        ELSE 'inactive'
+                    END AS status,
+                    n.last_seen,
+                    e.metrics AS evaluator_metrics,
+                    p.metrics AS sampler_metrics,
+                    p.runtime_metrics AS sampler_runtime_metrics,
+                    p.engine_diagnostics AS sampler_engine_diagnostics
+                FROM nodes n
+                LEFT JOIN sampler_aggregator_performance_latest p
+                    ON p.run_id = COALESCE(n.active_run_id, n.desired_run_id)
+                   AND p.worker_id = n.name
+                LEFT JOIN evaluator_performance_latest e
+                    ON e.run_id = COALESCE(n.active_run_id, n.desired_run_id)
+                   AND e.worker_id = n.name
+                LEFT JOIN runs dr ON dr.id = n.desired_run_id
+                LEFT JOIN runs cr ON cr.id = n.active_run_id
+                WHERE n.lease_expires_at > now()
+                ORDER BY
+                    CASE
+                        WHEN n.active_role IS NOT NULL THEN 0
+                        ELSE 1
+                    END,
+                    n.last_seen DESC NULLS LAST,
+                    n.name ASC
+                "#,
+            )
+            .fetch_all(pool)
+            .await?
+        }
+    };
 
     Ok(rows.into_iter().map(Into::into).collect())
 }

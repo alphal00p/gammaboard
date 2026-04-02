@@ -104,12 +104,45 @@ Sampler runs keep the frontend current through periodic lightweight writes to `r
 - All server config fields are explicit; the server does not fill in defaults.
 - Set `allow_db_admin = true` only for trusted local/operator setups; it enables dashboard-triggered `db stop && db start`.
 
+## Deploy Recipes
+Deploy is now split along two orthogonal axes:
+- `host = local | itphlies`
+- `mode = dev | release`
+
+Use:
+```bash
+just deploy <host> <mode>
+just stop-deploy <host>
+```
+
+Examples:
+- local detached dev-profile deploy:
+  ```bash
+  just deploy local dev
+  ```
+- local detached release-profile deploy:
+  ```bash
+  just deploy local release
+  ```
+- ITPhlies release deploy:
+  ```bash
+  just deploy itphlies release
+  ```
+
+All deploy variants:
+- build the frontend
+- build the backend for the selected mode
+- start the local DB with the matching binary
+- launch backend, nginx, and frontend detached with PID/log files under `logs/`
+
+`stop-deploy <host>` stops the detached stack for that host.
+
 ## ITPhlies Deployment
 Use this flow when you want both direct LAN access and the SSH tunnel option.
 
 1. On ITPhlies, from the repo root, run:
    ```bash
-   just deploy-itphlies
+   just deploy itphlies release
    ```
    This builds the backend in release mode and launches `target/release/gammaboard`.
 2. On your laptop, open an SSH tunnel:
@@ -123,7 +156,7 @@ Use this flow when you want both direct LAN access and the SSH tunnel option.
    or `http://itphlies:8080` if your local network resolves that hostname. If you access the server by LAN IP instead, add that origin to `allowed_origins` in the server config first.
 4. To stop all deployed ITPhlies processes:
    ```bash
-   just stop-itphlies-deploy
+   just stop-deploy itphlies
    ```
 5. The SSH tunnel remains optional; direct LAN access works because nginx listens on `0.0.0.0:8080`, while the backend still stays private on `127.0.0.1:4000`.
 
@@ -135,8 +168,7 @@ Important:
 - `configs/server/itphlies-prod.toml` currently allows `http://localhost:8080` and `http://itphlies:8080`.
 - If you want to access the UI via a raw LAN IP or another hostname, add that exact origin to `allowed_origins`.
 - Backend listens on `127.0.0.1:4000`; nginx listens on `0.0.0.0:8080`.
-- `just deploy-itphlies-server` writes backend PID/log to `logs/itphlies-backend.pid` and `logs/itphlies-backend.log`.
-- ITPhlies deployment uses the release backend binary; local dev/local-prod flows still use the `dev-optim` profile.
+- ITPhlies deployment uses the release backend binary by default.
 
 ## Frontend API Routing
 - The dashboard frontend always calls relative `/api` endpoints.
@@ -145,11 +177,11 @@ Important:
 - Example nginx layout:
   - `location / { root <dashboard-build-dir>; try_files $uri /index.html; }`
   - `location /api/ { proxy_pass http://127.0.0.1:4000/api/; }`
-- Local production-like test setup:
+- Local detached deploy setup:
   - nginx config: [configs/nginx/local-prod.conf](/home/cedricsigrist/Workspace/repos/gammaboard/configs/nginx/local-prod.conf)
   - server config: [configs/server/local-prod.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server/local-prod.toml)
-  - run with: `just deploy-local-prod` (serves at `http://localhost:8080`)
-  - stop with: `just stop-local-prod`
+  - run with: `just deploy local dev` or `just deploy local release`
+  - stop with: `just stop-deploy local`
 
 ## Dashboard Auth
 - Read-only dashboard endpoints stay open.

@@ -99,6 +99,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 
 ## Logging And Read APIs
 - Runtime logs are persisted through the tracing pipeline into PostgreSQL.
+- Worker performance history is append-only, and dashboard "latest" performance reads should come from dedicated latest tables maintained on write, not recomputed latest-per-worker views over history.
 - Log read APIs should expose `node_name` and `node_uuid` even if SQL columns still use older names.
 - Read APIs should serialize `BIGINT` ids as strings.
 
