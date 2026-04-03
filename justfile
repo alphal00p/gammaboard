@@ -36,6 +36,12 @@ deploy-status:
 deploy host mode="dev":
     {{bin}} deploy up --deploy-config "configs/deploy/{{host}}.toml" --mode "{{mode}}"
 
+deploy-itphlies-dev:
+    {{bin}} deploy up --deploy-config "configs/deploy/itphlies.toml" --mode "dev"
+
+deploy-itphlies-release:
+    {{bin}} deploy up --deploy-config "configs/deploy/itphlies.toml" --mode "release"
+
 test-e2e:
     just build-backend
     just stop-kill
