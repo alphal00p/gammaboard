@@ -19,6 +19,20 @@ import {
   Typography,
 } from "@mui/material";
 import Plot from "react-plotly.js";
+import {
+  Area,
+  CartesianGrid,
+  ComposedChart,
+  ErrorBar,
+  Line,
+  LineChart,
+  ReferenceLine,
+  ResponsiveContainer,
+  Scatter,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { formatCompactNumber, formatDateTime, formatScientific } from "../../utils/formatters";
 import { asArray } from "../../utils/collections";
 
@@ -195,17 +209,57 @@ const panelColumnSpan = (descriptor) => {
   }
 };
 
-const basePlotLayout = {
-  autosize: true,
-  margin: { l: 56, r: 24, t: 8, b: 48 },
-  paper_bgcolor: "rgba(0,0,0,0)",
-  plot_bgcolor: "rgba(0,0,0,0)",
-  showlegend: false,
+const chartMargin = { top: 8, right: 16, left: 8, bottom: 8 };
+const gridColor = "rgba(148,163,184,0.18)";
+const axisTickStyle = { fontSize: 12, fill: "#64748b" };
+
+const formatAxisValue = (value) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? formatScientific(numeric, 3) : "";
 };
 
-const basePlotConfig = {
-  displayModeBar: false,
-  responsive: true,
+const SimpleChartTooltip = ({ active, payload, label, labelPrefix = "x" }) => {
+  if (!active || !payload?.length) return null;
+  return (
+    <Card variant="outlined" sx={{ pointerEvents: "none" }}>
+      <CardContent sx={{ py: 1, px: 1.25, "&:last-child": { pb: 1 } }}>
+        <Typography variant="caption" sx={{ display: "block", color: "text.secondary", mb: 0.5 }}>
+          {labelPrefix}={formatScientific(Number(label), 5)}
+        </Typography>
+        {payload
+          .filter((entry) => entry?.value != null && Number.isFinite(Number(entry.value)) && !entry?.hide)
+          .map((entry) => (
+            <Typography key={entry.dataKey} variant="body2">
+              {entry.name || entry.dataKey}: {formatScientific(Number(entry.value), 6)}
+            </Typography>
+          ))}
+      </CardContent>
+    </Card>
+  );
+};
+
+const HistogramTooltip = ({ active, payload }) => {
+  if (!active || !payload?.length) return null;
+  const row = payload.find((entry) => entry?.payload)?.payload;
+  if (!row) return null;
+  return (
+    <Card variant="outlined" sx={{ pointerEvents: "none" }}>
+      <CardContent sx={{ py: 1, px: 1.25, "&:last-child": { pb: 1 } }}>
+        <Typography variant="caption" sx={{ display: "block", color: "text.secondary", mb: 0.5 }}>
+          {row.rangeLabel}
+        </Typography>
+        {Number.isFinite(row.value) ? (
+          <Typography variant="body2">value: {formatScientific(row.value, 6)}</Typography>
+        ) : null}
+        {Number.isFinite(row.error) ? (
+          <Typography variant="body2">error: {formatScientific(row.error, 6)}</Typography>
+        ) : null}
+        {Number.isFinite(row.relative_error) ? (
+          <Typography variant="body2">rel err: {formatScientific(row.relative_error, 6)}</Typography>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
 };
 
 const ScalarTimeseriesPanel = ({ title, state }) => {
@@ -216,66 +270,42 @@ const ScalarTimeseriesPanel = ({ title, state }) => {
   const domain = fitDomain(points.flatMap((point) => [point.y, point.y_min, point.y_max]));
   const xDomain = fitXDomain(points.map((point) => point.x));
   const hasBand = points.some((point) => Number.isFinite(point.y_min) && Number.isFinite(point.y_max));
-  const traces = [];
-  if (hasBand) {
-    traces.push({
-      type: "scatter",
-      mode: "lines",
-      x: points.map((point) => point.x),
-      y: points.map((point) => (Number.isFinite(point.y_min) ? point.y_min : null)),
-      line: { width: 0 },
-      hoverinfo: "skip",
-      showlegend: false,
-    });
-    traces.push({
-      type: "scatter",
-      mode: "lines",
-      x: points.map((point) => point.x),
-      y: points.map((point) => (Number.isFinite(point.y_max) ? point.y_max : null)),
-      line: { width: 0 },
-      fill: "tonexty",
-      fillcolor: bandColor,
-      hoverinfo: "skip",
-      showlegend: false,
-    });
-  }
-  traces.push({
-    type: "scatter",
-    mode: "lines",
-    x: points.map((point) => point.x),
-    y: points.map((point) => point.y),
-    line: { color: "#005f73", width: 1.8 },
-    hovertemplate: "x=%{x:.6g}<br>y=%{y:.6g}<extra></extra>",
-    showlegend: false,
-  });
   return (
     <Card variant="outlined">
       <CardContent>
         <Typography variant="subtitle1" sx={{ mb: 2 }}>
           {title}
         </Typography>
-        <Box sx={{ width: "100%", minHeight: 280 }}>
-          <Plot
-            data={traces}
-            layout={{
-              ...basePlotLayout,
-              xaxis: {
-                range: xDomain,
-                tickformat: ".3g",
-                gridcolor: "rgba(148,163,184,0.18)",
-                zeroline: false,
-              },
-              yaxis: {
-                range: domain,
-                tickformat: ".3g",
-                gridcolor: "rgba(148,163,184,0.18)",
-                zeroline: false,
-              },
-            }}
-            config={basePlotConfig}
-            style={{ width: "100%", height: "280px" }}
-            useResizeHandler
-          />
+        <Box sx={{ width: "100%", height: 280 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={points} margin={chartMargin}>
+              <CartesianGrid stroke={gridColor} vertical={false} />
+              <XAxis dataKey="x" type="number" domain={xDomain} tickFormatter={formatAxisValue} tick={axisTickStyle} />
+              <YAxis domain={domain} tickFormatter={formatAxisValue} tick={axisTickStyle} width={72} />
+              <Tooltip content={<SimpleChartTooltip />} />
+              {hasBand ? (
+                <>
+                  <Area dataKey="y_min" stroke="none" fillOpacity={0} isAnimationActive={false} />
+                  <Area
+                    dataKey="y_max"
+                    stroke="none"
+                    fill={bandColor}
+                    fillOpacity={1}
+                    baseLine={(x) => x?.y_min}
+                    isAnimationActive={false}
+                  />
+                </>
+              ) : null}
+              <Line
+                type="monotone"
+                dataKey="y"
+                stroke="#005f73"
+                strokeWidth={1.8}
+                dot={false}
+                isAnimationActive={false}
+              />
+            </ComposedChart>
+          </ResponsiveContainer>
         </Box>
       </CardContent>
     </Card>
@@ -294,46 +324,34 @@ const MultiTimeseriesPanel = ({ title, state }) => {
     ),
   );
   const xDomain = fitXDomain(data.map((row) => row.x));
-  const traces = series.map((item, index) => ({
-    type: "scatter",
-    mode: "lines",
-    x: data.map((row) => row.x),
-    y: data.map((row) => row[item.id] ?? null),
-    name: item.label,
-    line: { color: lineColors[index % lineColors.length], width: 1.8 },
-    hovertemplate: `${item.label}: %{y:.6g}<br>x=%{x:.6g}<extra></extra>`,
-    connectgaps: false,
-  }));
   return (
     <Card variant="outlined">
       <CardContent>
         <Typography variant="subtitle1" sx={{ mb: 2 }}>
           {title}
         </Typography>
-        <Box sx={{ width: "100%", minHeight: 280 }}>
-          <Plot
-            data={traces}
-            layout={{
-              ...basePlotLayout,
-              showlegend: true,
-              legend: { orientation: "h", x: 0, y: 1.14 },
-              xaxis: {
-                range: xDomain,
-                tickformat: ".3g",
-                gridcolor: "rgba(148,163,184,0.18)",
-                zeroline: false,
-              },
-              yaxis: {
-                range: domain,
-                tickformat: ".3g",
-                gridcolor: "rgba(148,163,184,0.18)",
-                zeroline: false,
-              },
-            }}
-            config={basePlotConfig}
-            style={{ width: "100%", height: "280px" }}
-            useResizeHandler
-          />
+        <Box sx={{ width: "100%", height: 280 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={data} margin={chartMargin}>
+              <CartesianGrid stroke={gridColor} vertical={false} />
+              <XAxis dataKey="x" type="number" domain={xDomain} tickFormatter={formatAxisValue} tick={axisTickStyle} />
+              <YAxis domain={domain} tickFormatter={formatAxisValue} tick={axisTickStyle} width={72} />
+              <Tooltip content={<SimpleChartTooltip />} />
+              {series.map((item, index) => (
+                <Line
+                  key={item.id}
+                  type="monotone"
+                  dataKey={item.id}
+                  name={item.label}
+                  stroke={lineColors[index % lineColors.length]}
+                  strokeWidth={1.8}
+                  dot={false}
+                  connectNulls={false}
+                  isAnimationActive={false}
+                />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
         </Box>
       </CardContent>
     </Card>
@@ -695,93 +713,6 @@ const HistogramPanel = ({ title, state }) => {
   const xDomain = fitHistogramXDomain(bins);
   const yDomain = buildHistogramYDomain(bins, scale);
   const relativeErrorYDomain = buildRelativeErrorYDomain(relativeErrorData);
-  const stepX = stepData.map((point) => point.x);
-  const stepY = stepData.map((point) => point.y);
-  const relX = relativeErrorData.map((point) => point.x);
-  const relPositive = relativeErrorData.map((point) => point.positive_relative_error);
-  const relNegative = relativeErrorData.map((point) => point.negative_relative_error);
-  const relAbs = relativeErrorData.map((point) => point.relative_error);
-  const plotData = [
-    {
-      type: "scatter",
-      mode: "lines",
-      x: stepX,
-      y: stepY,
-      line: { color: "#005f73", width: 1.35, shape: "hv" },
-      customdata: stepData.map((point) => point.rangeLabel),
-      hovertemplate: "%{customdata}<br>bin average: %{y:.6g}<extra></extra>",
-      xaxis: "x",
-      yaxis: "y",
-      showlegend: false,
-    },
-    {
-      type: "scatter",
-      mode: "markers",
-      x: errorBarData.map((point) => point.x),
-      y: errorBarData.map((point) => point.y),
-      marker: { color: "rgba(0,0,0,0)", size: 6 },
-      error_y: {
-        type: "data",
-        array: errorBarData.map((point) => point.error),
-        visible: true,
-        color: "#7c8a96",
-        thickness: 1.4,
-        width: 6,
-      },
-      customdata: errorBarData.map((point) => [point.rangeLabel, point.error]),
-      hovertemplate: "%{customdata[0]}<br>%{y:.6g} ± %{customdata[1]:.6g}<extra></extra>",
-      xaxis: "x",
-      yaxis: "y",
-      showlegend: false,
-    },
-    {
-      type: "scatter",
-      mode: "lines",
-      x: relX,
-      y: relPositive,
-      line: { color: "#bb3e03", width: 1, shape: "hv" },
-      hoverinfo: "skip",
-      xaxis: "x2",
-      yaxis: "y2",
-      showlegend: false,
-    },
-    {
-      type: "scatter",
-      mode: "lines",
-      x: relX,
-      y: relNegative,
-      line: { color: "#bb3e03", width: 1, shape: "hv" },
-      fill: "tonexty",
-      fillcolor: "rgba(187, 62, 3, 0.22)",
-      hoverinfo: "skip",
-      xaxis: "x2",
-      yaxis: "y2",
-      showlegend: false,
-    },
-    {
-      type: "scatter",
-      mode: "lines",
-      x: relX,
-      y: relAbs,
-      line: { color: "#bb3e03", width: 1.2, shape: "hv" },
-      customdata: relativeErrorData.map((point) => point.rangeLabel),
-      hovertemplate: "%{customdata}<br>relative error: %{y:.6g}<extra></extra>",
-      xaxis: "x2",
-      yaxis: "y2",
-      showlegend: false,
-    },
-    {
-      type: "scatter",
-      mode: "lines",
-      x: relX,
-      y: relAbs.map((value) => (Number.isFinite(value) ? -Math.abs(value) : null)),
-      line: { color: "#bb3e03", width: 1.2, shape: "hv" },
-      hoverinfo: "skip",
-      xaxis: "x2",
-      yaxis: "y2",
-      showlegend: false,
-    },
-  ];
   return (
     <Card variant="outlined">
       <CardContent>
@@ -804,61 +735,83 @@ const HistogramPanel = ({ title, state }) => {
             </Select>
           </FormControl>
         </Box>
-        <Box sx={{ width: "100%", minHeight: 448 }}>
-          <Plot
-            data={plotData}
-            layout={{
-              ...basePlotLayout,
-              margin: { l: 64, r: 20, t: 8, b: 48 },
-              grid: { rows: 2, columns: 1, pattern: "independent", roworder: "top to bottom" },
-              xaxis: {
-                range: xDomain,
-                tickformat: ".3g",
-                gridcolor: "rgba(148,163,184,0.18)",
-                zeroline: false,
-                showticklabels: false,
-              },
-              yaxis: {
-                range: scale === "log" ? undefined : yDomain,
-                autorange: scale === "log",
-                tickformat: ".3g",
-                type: scale === "log" && yDomain[0] !== "auto" ? "log" : "linear",
-                gridcolor: "rgba(148,163,184,0.18)",
-                zeroline: false,
-              },
-              xaxis2: {
-                range: xDomain,
-                tickformat: ".3g",
-                gridcolor: "rgba(148,163,184,0.18)",
-                zeroline: false,
-              },
-              yaxis2: {
-                range: relativeErrorYDomain,
-                tickformat: ".3g",
-                type: "linear",
-                gridcolor: "rgba(148,163,184,0.18)",
-                zeroline: true,
-                zerolinecolor: "#6b7280",
-                zerolinewidth: 1,
-              },
-              annotations: [
-                {
-                  xref: "paper",
-                  yref: "paper",
-                  x: 0,
-                  y: 0.34,
-                  xanchor: "left",
-                  yanchor: "bottom",
-                  text: "Relative Error Shape",
-                  showarrow: false,
-                  font: { size: 12, color: "#64748b" },
-                },
-              ],
-            }}
-            config={basePlotConfig}
-            style={{ width: "100%", height: "448px" }}
-            useResizeHandler
-          />
+        <Box sx={{ width: "100%", display: "grid", gap: 2 }}>
+          <Box sx={{ width: "100%", height: 280 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={stepData} margin={chartMargin}>
+                <CartesianGrid stroke={gridColor} vertical={false} />
+                <XAxis
+                  dataKey="x"
+                  type="number"
+                  domain={xDomain}
+                  tickFormatter={formatAxisValue}
+                  tick={axisTickStyle}
+                  hide
+                />
+                <YAxis
+                  domain={scale === "log" ? ["auto", "auto"] : yDomain}
+                  scale={scale === "log" ? "log" : "linear"}
+                  allowDataOverflow={scale === "log"}
+                  tickFormatter={formatAxisValue}
+                  tick={axisTickStyle}
+                  width={72}
+                />
+                <Tooltip content={<HistogramTooltip />} />
+                <Line
+                  type="stepAfter"
+                  dataKey="y"
+                  stroke="#005f73"
+                  strokeWidth={1.35}
+                  dot={false}
+                  isAnimationActive={false}
+                />
+                <Scatter data={errorBarData} fill="rgba(0,0,0,0)" isAnimationActive={false}>
+                  <ErrorBar dataKey="error" width={6} strokeWidth={1.4} stroke="#7c8a96" />
+                </Scatter>
+              </ComposedChart>
+            </ResponsiveContainer>
+          </Box>
+          <Box>
+            <Typography variant="caption" color="text.secondary">
+              Relative Error Shape
+            </Typography>
+            <Box sx={{ width: "100%", height: 168 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={relativeErrorData} margin={chartMargin}>
+                  <CartesianGrid stroke={gridColor} vertical={false} />
+                  <XAxis
+                    dataKey="x"
+                    type="number"
+                    domain={xDomain}
+                    tickFormatter={formatAxisValue}
+                    tick={axisTickStyle}
+                  />
+                  <YAxis
+                    domain={relativeErrorYDomain}
+                    tickFormatter={formatAxisValue}
+                    tick={axisTickStyle}
+                    width={72}
+                  />
+                  <Tooltip content={<HistogramTooltip />} />
+                  <ReferenceLine y={0} stroke="#6b7280" strokeWidth={1} />
+                  <Area
+                    type="stepAfter"
+                    dataKey="positive_relative_error"
+                    stroke="#bb3e03"
+                    fill="rgba(187, 62, 3, 0.22)"
+                    isAnimationActive={false}
+                  />
+                  <Area
+                    type="stepAfter"
+                    dataKey="negative_relative_error"
+                    stroke="#bb3e03"
+                    fill="rgba(187, 62, 3, 0.22)"
+                    isAnimationActive={false}
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </Box>
+          </Box>
         </Box>
       </CardContent>
     </Card>
