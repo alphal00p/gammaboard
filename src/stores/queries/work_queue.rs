@@ -5,9 +5,12 @@ use crate::core::{
 use crate::evaluation::BatchResult;
 use crate::sampling::LatentBatch;
 use chrono::{DateTime, Utc};
+use rand::random;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use sqlx::{PgPool, Postgres, QueryBuilder};
+use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) struct CompletedBatchRaw {
     pub batch_id: i64,
@@ -25,6 +28,61 @@ fn encode_json<T: Serialize>(label: &str, value: &T) -> Result<JsonValue, sqlx::
         .map_err(|err| sqlx::Error::Protocol(format!("failed to serialize {label}: {err}")))
 }
 
+const BATCH_ID_COUNTER_BITS: u32 = 6;
+const BATCH_ID_PROCESS_ENTROPY_BITS: u32 = 16;
+const BATCH_ID_SUFFIX_BITS: u32 = BATCH_ID_COUNTER_BITS + BATCH_ID_PROCESS_ENTROPY_BITS;
+const BATCH_ID_COUNTER_MASK: u16 = (1u16 << BATCH_ID_COUNTER_BITS) - 1;
+
+#[derive(Debug)]
+struct BatchIdGenerator {
+    last_millis: u64,
+    counter: u16,
+    process_entropy: u16,
+}
+
+impl BatchIdGenerator {
+    fn new() -> Self {
+        Self {
+            last_millis: 0,
+            counter: 0,
+            process_entropy: random::<u16>(),
+        }
+    }
+
+    fn next_ids(&mut self, count: usize) -> Vec<i64> {
+        let mut ids = Vec::with_capacity(count);
+        for _ in 0..count {
+            let now_millis = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time before unix epoch")
+                .as_millis() as u64;
+            if now_millis > self.last_millis {
+                self.last_millis = now_millis;
+                self.counter = 0;
+            } else if self.counter >= BATCH_ID_COUNTER_MASK {
+                self.last_millis = self.last_millis.saturating_add(1);
+                self.counter = 0;
+            }
+
+            let id = ((self.last_millis as i64) << BATCH_ID_SUFFIX_BITS)
+                | ((self.process_entropy as i64) << BATCH_ID_COUNTER_BITS)
+                | (self.counter as i64);
+            self.counter = self.counter.saturating_add(1);
+            ids.push(id);
+        }
+        ids
+    }
+}
+
+fn next_batch_ids(count: usize) -> Vec<i64> {
+    static GENERATOR: OnceLock<Mutex<BatchIdGenerator>> = OnceLock::new();
+    let generator = GENERATOR.get_or_init(|| Mutex::new(BatchIdGenerator::new()));
+    generator
+        .lock()
+        .expect("batch id generator lock poisoned")
+        .next_ids(count)
+}
+
 pub(crate) async fn insert_batches(
     pool: &PgPool,
     run_id: i32,
@@ -36,10 +94,12 @@ pub(crate) async fn insert_batches(
         return Ok(Vec::new());
     }
 
+    let batch_ids = next_batch_ids(batches.len());
     let mut tx = pool.begin().await?;
     let mut builder = QueryBuilder::<Postgres>::new(
         r#"
         INSERT INTO batches (
+            id,
             run_id,
             task_id,
             requires_training_values,
@@ -48,18 +108,18 @@ pub(crate) async fn insert_batches(
         )
         "#,
     );
-    builder.push_values(batches.iter(), |mut row, batch| {
-        row.push_bind(run_id)
-            .push_bind(task_id)
-            .push_bind(requires_training_values)
-            .push_bind(batch.nr_samples as i32)
-            .push_bind("pending");
-    });
-    builder.push(" RETURNING id");
-    let batch_ids = builder
-        .build_query_scalar::<i64>()
-        .fetch_all(&mut *tx)
-        .await?;
+    builder.push_values(
+        batch_ids.iter().zip(batches.iter()),
+        |mut row, (batch_id, batch)| {
+            row.push_bind(*batch_id)
+                .push_bind(run_id)
+                .push_bind(task_id)
+                .push_bind(requires_training_values)
+                .push_bind(batch.nr_samples as i32)
+                .push_bind("pending");
+        },
+    );
+    builder.build().execute(&mut *tx).await?;
 
     let mut input_builder = QueryBuilder::<Postgres>::new(
         r#"
