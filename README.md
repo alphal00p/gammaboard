@@ -5,7 +5,8 @@ Gammaboard runs distributed numerical integration jobs with PostgreSQL as the sh
 ## Main Commands
 - `gammaboard run`: create, list, pause, clone, and remove runs.
 - `gammaboard node`: list, assign, unassign, and stop nodes.
-- `gammaboard server`: start the dashboard backend.
+- `gammaboard server`: run the backend directly in the foreground.
+- `gammaboard deploy`: launch the detached full-stack deploy flow.
 - `gammaboard db`: manage the local PostgreSQL instance used for development.
 
 The dashboard shows runs, task output, nodes, performance, and logs.
@@ -25,7 +26,7 @@ The dashboard shows runs, task output, nodes, performance, and logs.
    ```bash
    just build
    ```
-3. Start the backend:
+3. Start the backend API:
    ```bash
    gammaboard server
    ```
@@ -34,7 +35,12 @@ The dashboard shows runs, task output, nodes, performance, and logs.
    just serve-frontend
    ```
 
-The CLI reads its shared database and tracing settings from `configs/runtime/default.toml`, and the backend reads its API bind, auth, cookie, and template settings from `configs/server/default.toml`. The frontend uses relative `/api` calls and does not require `.env`. If you prefer the old shell wrappers, the `just` recipes remain available, but the CLI flow above is the primary local workflow.
+Default config split:
+- `configs/runtime/default.toml`: shared database, tracing, and local Postgres settings
+- `configs/server/default.toml`: direct `gammaboard server` settings
+- `configs/deploy/*.toml`: detached deploy profiles
+
+The frontend uses relative `/api` calls and does not require `.env`. The `just` recipes remain as thin wrappers, but the CLI flow above is the primary local workflow.
 
 ## Runtime Config
 - All commands load shared runtime config from [configs/runtime/default.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/runtime/default.toml) by default.
@@ -76,8 +82,6 @@ To reset local state, use `just db-reset` or run `gammaboard db delete --yes` th
 `local_postgres.max_connections` controls the local Postgres server connection ceiling used by `gammaboard db start`.
 Pass `--pg-stat-statements` to `gammaboard db start` when you want local query statistics. That flag adds `shared_preload_libraries=pg_stat_statements` at server startup and then runs `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` for the configured database.
 
-Sampler runs keep the frontend current through periodic lightweight writes to `runs.current_observable`, `persisted_observable_snapshots`, and performance history. The full sampler-aggregator resume checkpoint is stored separately and only refreshed when the sampler is unassigned or paused.
-
 ## Server Config
 - The server is configured from a single TOML file. By default:
   ```bash
@@ -105,6 +109,7 @@ Sampler runs keep the frontend current through periodic lightweight writes to `r
   ```
 - All server config fields are explicit; the server does not fill in defaults.
 - Set `allow_db_admin = true` only for trusted local/operator setups; it enables dashboard-triggered `db stop && db start`.
+- `gammaboard server` is the direct local/manual backend path. Use `gammaboard deploy ...` when you want detached nginx-backed serving.
 
 ## Deploy Config
 Detached deploy is now owned by `gammaboard deploy ...` plus a deploy TOML profile.
@@ -112,7 +117,7 @@ Detached deploy is now owned by `gammaboard deploy ...` plus a deploy TOML profi
 Config split:
 - `configs/runtime/*.toml`: shared DB, tracing, and local Postgres settings for all commands
 - `configs/server/*.toml`: backend API/dashboard settings for `gammaboard server`, including backend bind address and `allowed_origins`
-- `configs/deploy/*.toml`: detached deploy orchestration, including which server config to run, public HTTP exposure, static frontend serving, and cleanup policy
+- `configs/deploy/*.toml`: detached deploy orchestration, including which server config to run, frontend HTTP exposure, static frontend serving, and cleanup policy
 
 The checked-in profiles are:
 - [configs/deploy/local.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/deploy/local.toml)
@@ -144,7 +149,7 @@ Detached deploy:
 - builds the frontend and backend unless `--skip-build` is used
 - optionally starts local Postgres via `gammaboard db start`
 - starts `gammaboard server` detached
-- generates an nginx config from the deploy profile and serves `dashboard/build` directly from nginx
+- generates an nginx config from the deploy profile and serves the frontend build directly from nginx
 
 Deploy targets are alternatives, not concurrent stacks on one machine: all profiles currently share the same PID/log namespace under `logs/`, so `deploy up` replaces the current detached deploy stack.
 
@@ -199,12 +204,12 @@ Important:
 - Read-only dashboard endpoints stay open.
 - Steering actions currently require admin login and are backed by a signed session cookie.
 - The dashboard currently supports creating runs from raw TOML, cloning runs from a stored stage snapshot, appending tasks from raw TOML, deleting pending tasks, pausing runs, removing runs, auto-assigning free nodes, assigning and unassigning nodes, requesting node shutdown (single or all), starting new local nodes, and restarting the local database when `allow_db_admin = true`.
-- The create-run and add-task dialogs can also load `.toml` templates from `run_templates_dir` and `task_templates_dir` in `server/default.toml`.
+- The create-run and add-task dialogs can also load `.toml` templates from `run_templates_dir` and `task_templates_dir` in the selected server config.
 - Node shutdown from the dashboard is guarded by a confirmation dialog.
-- Put `auth.admin_password_hash` in `server/default.toml` to enable dashboard auth.
-- Put `auth.session_secret` in `server/default.toml` when auth is enabled.
-- Set `allowed_origins` in `server/default.toml` if the frontend is served from origins other than `http://localhost:3000`.
-- Deploy this behind HTTPS for real use and set `secure_cookie = true` in `server/default.toml`.
+- Put `auth.admin_password_hash` in your server config to enable dashboard auth.
+- Put `auth.session_secret` in your server config when auth is enabled.
+- Set `allowed_origins` in your server config if the frontend is served from origins other than `http://localhost:3000`.
+- Deploy this behind HTTPS for real use and set `secure_cookie = true` in your server config.
 - Generate the password hash with:
   ```bash
   gammaboard auth --password 'your-password'
