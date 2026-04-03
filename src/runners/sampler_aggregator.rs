@@ -13,6 +13,7 @@ use crate::core::{
     SamplerRuntimeMetrics, SamplerWorkerStore, StoreError,
 };
 use crate::evaluation::ObservableState;
+use crate::runners::process_memory::current_rss_bytes;
 use crate::runners::rolling_metric::RollingMetric;
 use crate::sampling::{SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot};
 use serde::{Deserialize, Serialize};
@@ -1157,6 +1158,7 @@ where
             node_name: self.node_name.clone(),
             runtime_metrics: self.runtime_state.to_runtime_metrics(),
             engine_diagnostics,
+            rss_bytes: current_rss_bytes(),
         };
         self.store
             .record_sampler_performance_snapshot(&snapshot)

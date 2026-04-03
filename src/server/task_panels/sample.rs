@@ -370,8 +370,11 @@ fn estimate_summary_panel(observable: ObservableState) -> PanelState {
             "estimate_summary",
             vec![
                 key_value("count", "Count", state.count),
-                key_value("mean", "Mean", state.mean()),
-                key_value("error", "Error", state.stderr()),
+                key_value(
+                    "mean",
+                    "Mean",
+                    format_estimate_with_error(state.mean(), state.stderr()),
+                ),
                 key_value("mean_abs", "Mean Abs", state.mean_abs()),
                 key_value(
                     "signal_to_noise",
@@ -385,12 +388,21 @@ fn estimate_summary_panel(observable: ObservableState) -> PanelState {
             "estimate_summary",
             vec![
                 key_value("count", "Count", state.count),
-                key_value("real_mean", "Real Mean", state.real_mean()),
-                key_value("imag_mean", "Imag Mean", state.imag_mean()),
-                key_value("real_error", "Real Error", state.real_stderr()),
-                key_value("imag_error", "Imag Error", state.imag_stderr()),
-                key_value("abs_mean", "Abs Mean", state.abs_mean()),
-                key_value("abs_error", "Abs Error", state.abs_stderr()),
+                key_value(
+                    "real_mean",
+                    "Real Mean",
+                    format_estimate_with_error(state.real_mean(), state.real_stderr()),
+                ),
+                key_value(
+                    "imag_mean",
+                    "Imag Mean",
+                    format_estimate_with_error(state.imag_mean(), state.imag_stderr()),
+                ),
+                key_value(
+                    "abs_mean",
+                    "Abs Mean",
+                    format_estimate_with_error(state.abs_mean(), state.abs_stderr()),
+                ),
                 key_value(
                     "signal_to_noise",
                     "Mean(|x|)^2 / abs_err^2",
@@ -433,12 +445,21 @@ fn estimate_summary_panel(observable: ObservableState) -> PanelState {
                         .map(|histogram| histogram.bins.len())
                         .unwrap_or(0),
                 ),
-                key_value("real_mean", "Real Mean", state.real_mean()),
-                key_value("imag_mean", "Imag Mean", state.imag_mean()),
-                key_value("real_error", "Real Error", state.real_stderr()),
-                key_value("imag_error", "Imag Error", state.imag_stderr()),
-                key_value("abs_mean", "Abs Mean", state.abs_mean()),
-                key_value("abs_error", "Abs Error", state.abs_stderr()),
+                key_value(
+                    "real_mean",
+                    "Real Mean",
+                    format_estimate_with_error(state.real_mean(), state.real_stderr()),
+                ),
+                key_value(
+                    "imag_mean",
+                    "Imag Mean",
+                    format_estimate_with_error(state.imag_mean(), state.imag_stderr()),
+                ),
+                key_value(
+                    "abs_mean",
+                    "Abs Mean",
+                    format_estimate_with_error(state.abs_mean(), state.abs_stderr()),
+                ),
                 key_value(
                     "signal_to_noise",
                     "Mean(|x|)^2 / abs_err^2",
@@ -483,6 +504,36 @@ fn estimate_summary_panel(observable: ObservableState) -> PanelState {
             ],
         ),
     }
+}
+
+fn format_estimate_with_error(mean: f64, error: f64) -> String {
+    if !mean.is_finite() || !error.is_finite() || error < 0.0 {
+        return format!("{mean} +- {error}");
+    }
+    let scale_source = mean.abs().max(error.abs());
+    if scale_source == 0.0 {
+        return "(0 +- 0) x 10^0".to_string();
+    }
+
+    let exponent = scale_source.log10().floor() as i32;
+    let scale = 10_f64.powi(exponent);
+    let scaled_mean = mean / scale;
+    let scaled_error = error / scale;
+    let decimals = decimals_for_two_sig_figs(scaled_error);
+
+    format!(
+        "({mean} +- {error}) x 10^{exponent}",
+        mean = format!("{scaled_mean:.decimals$}"),
+        error = format!("{scaled_error:.decimals$}"),
+    )
+}
+
+fn decimals_for_two_sig_figs(error: f64) -> usize {
+    if error == 0.0 {
+        return 0;
+    }
+    let exponent = error.abs().log10().floor() as i32;
+    (1 - exponent).max(0) as usize
 }
 
 fn gammaloop_histogram_bundle_panel(observable: ObservableState) -> Option<PanelState> {
@@ -606,5 +657,31 @@ fn gammaloop_histogram_bundle_payload(
                 )
             })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_estimate_with_error;
+
+    #[test]
+    fn formats_estimate_with_matching_error_precision() {
+        assert_eq!(
+            format_estimate_with_error(1234.56, 12.34),
+            "(1.235 +- 0.012) x 10^3"
+        );
+    }
+
+    #[test]
+    fn formats_zero_estimate_without_crashing() {
+        assert_eq!(format_estimate_with_error(0.0, 0.0), "(0 +- 0) x 10^0");
+    }
+
+    #[test]
+    fn preserves_two_significant_figures_for_integer_error() {
+        assert_eq!(
+            format_estimate_with_error(-9876.0, 100.0),
+            "(-9.88 +- 0.10) x 10^3"
+        );
     }
 }

@@ -5,6 +5,7 @@ use crate::core::{
     EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot, EvaluatorWorkerStore, StoreError,
 };
 use crate::evaluation::{BatchResult, EvalBatchOptions, Evaluator, Materializer};
+use crate::runners::process_memory::current_rss_bytes;
 use crate::runners::rolling_metric::RollingMetric;
 use crate::runners::stage_context::resolve_stage_context;
 use crate::utils::domain::Domain;
@@ -801,6 +802,7 @@ where
                     idle_ratio: self.rolling.idle_ratio.value().unwrap_or(0.0),
                 }),
             },
+            rss_bytes: current_rss_bytes(),
         };
 
         self.store

@@ -24,7 +24,9 @@ import {
   ComposedChart,
   ErrorBar,
   Line,
+  ReferenceLine,
   ResponsiveContainer,
+  Scatter,
   Tooltip,
   XAxis,
   YAxis,
@@ -130,6 +132,7 @@ const buildMultiSeriesData = (seriesList) => {
 const lineColors = ["#005f73", "#bb3e03", "#0a9396", "#ae2012", "#ca6702"];
 
 const bandColor = "rgba(10, 147, 150, 0.18)";
+const invalidImageColor = [255, 0, 255];
 
 const isIsoDateTime = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value);
 
@@ -335,6 +338,45 @@ const buildHistogramRenderData = (bins, scale) => {
   }));
 };
 
+const buildHistogramErrorBarData = (bins, scale) =>
+  asArray(bins)
+    .map((bin) => {
+      const x = Number(bin?.x);
+      const value = Number(bin?.value);
+      const error = Number(bin?.error);
+      if (!Number.isFinite(x) || !Number.isFinite(value)) return null;
+      return {
+        x,
+        y: scale === "log" ? Math.max(value, Number.EPSILON) : value,
+        error: Number.isFinite(error) ? error : 0,
+        rangeLabel: bin?.rangeLabel || "n/a",
+      };
+    })
+    .filter(Boolean);
+
+const buildRelativeErrorStepData = (bins) =>
+  buildHistogramStepData(bins)
+    .map((point) => {
+      const value = Number(point?.y);
+      const error = Number(point?.error);
+      if (!Number.isFinite(value) || !Number.isFinite(error) || value === 0) {
+        return {
+          ...point,
+          relative_error: null,
+          positive_relative_error: null,
+          negative_relative_error: null,
+        };
+      }
+      const relativeError = Math.abs(error / value);
+      return {
+        ...point,
+        relative_error: relativeError,
+        positive_relative_error: relativeError,
+        negative_relative_error: -relativeError,
+      };
+    })
+    .filter((point) => Number.isFinite(point.x));
+
 const toExponential8 = (value) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric.toExponential(8) : "0.00000000e+00";
@@ -411,13 +453,28 @@ const buildHistogramYDomain = (bins, scale) => {
   return fitDomain(values);
 };
 
+const buildRelativeErrorYDomain = (points) => {
+  const maxRelativeError = Math.max(
+    0,
+    ...asArray(points)
+      .map((point) => Number(point?.relative_error))
+      .filter((value) => Number.isFinite(value)),
+  );
+  if (maxRelativeError <= 0) return [-1, 1];
+  const padded = maxRelativeError * 1.08;
+  return [-padded, padded];
+};
+
 const HistogramPanel = ({ title, state }) => {
   const [scale, setScale] = useState("linear");
   const bins = useMemo(() => buildHistogramData(state?.bins), [state?.bins]);
   const stepData = useMemo(() => buildHistogramRenderData(state?.bins, scale), [scale, state?.bins]);
+  const errorBarData = useMemo(() => buildHistogramErrorBarData(bins, scale), [bins, scale]);
+  const relativeErrorData = useMemo(() => buildRelativeErrorStepData(state?.bins), [state?.bins]);
   if (bins.length === 0) return null;
   const xDomain = fitHistogramXDomain(bins);
   const yDomain = buildHistogramYDomain(bins, scale);
+  const relativeErrorYDomain = buildRelativeErrorYDomain(relativeErrorData);
   const yScale = scale === "log" && yDomain[0] !== "auto" ? "log" : "auto";
   const yTickFormatter = scale === "log" ? (value) => formatScientific(value, 2, "") : formatAxisNumber;
   return (
@@ -465,7 +522,8 @@ const HistogramPanel = ({ title, state }) => {
               dot={false}
               activeDot={{ r: 2.5, fill: "#005f73", stroke: "#f8fafc", strokeWidth: 1 }}
               isAnimationActive={false}
-            >
+            />
+            <Scatter data={errorBarData} fill="transparent" shape={() => null} isAnimationActive={false}>
               <ErrorBar
                 dataKey="error"
                 direction="y"
@@ -475,9 +533,76 @@ const HistogramPanel = ({ title, state }) => {
                 isAnimationActive={false}
                 animationDuration={0}
               />
-            </Line>
+            </Scatter>
           </ComposedChart>
         </ResponsiveContainer>
+        <Box sx={{ mt: 2.5 }}>
+          <Typography variant="body2" sx={{ mb: 1, color: "text.secondary" }}>
+            Relative Error Shape
+          </Typography>
+          <ResponsiveContainer width="100%" height={168}>
+            <ComposedChart data={relativeErrorData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="x" type="number" domain={xDomain} allowDataOverflow tickFormatter={formatAxisNumber} />
+              <YAxis
+                tickFormatter={formatAxisNumber}
+                domain={relativeErrorYDomain}
+                allowDataOverflow
+                scale="linear"
+                width={72}
+              />
+              <Tooltip
+                formatter={(value, name, props) => {
+                  if (name === "positive_relative_error" || name === "negative_relative_error") {
+                    const relativeError = Number(props?.payload?.relative_error);
+                    return [formatScientific(relativeError, 6), "relative error"];
+                  }
+                  return [formatScientific(value, 6), name];
+                }}
+                labelFormatter={(_, payload) => payload?.[0]?.payload?.rangeLabel || ""}
+              />
+              <ReferenceLine y={0} stroke="#6b7280" strokeDasharray="4 4" ifOverflow="extendDomain" />
+              <Area
+                type="stepAfter"
+                dataKey="positive_relative_error"
+                stroke="#bb3e03"
+                strokeWidth={1}
+                fill="rgba(187, 62, 3, 0.22)"
+                isAnimationActive={false}
+                activeDot={false}
+                connectNulls={false}
+              />
+              <Area
+                type="stepAfter"
+                dataKey="negative_relative_error"
+                stroke="#bb3e03"
+                strokeWidth={1}
+                fill="rgba(187, 62, 3, 0.22)"
+                isAnimationActive={false}
+                activeDot={false}
+                connectNulls={false}
+              />
+              <Line
+                type="stepAfter"
+                dataKey="relative_error"
+                stroke="#bb3e03"
+                strokeWidth={1.25}
+                dot={false}
+                isAnimationActive={false}
+                connectNulls={false}
+              />
+              <Line
+                type="stepAfter"
+                dataKey={(point) => (Number.isFinite(point?.relative_error) ? -Math.abs(point.relative_error) : null)}
+                stroke="#bb3e03"
+                strokeWidth={1.25}
+                dot={false}
+                isAnimationActive={false}
+                connectNulls={false}
+              />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </Box>
       </CardContent>
     </Card>
   );
@@ -697,7 +822,6 @@ const Image2dPanel = ({ title, state }) => {
   const invalidIndices = useMemo(() => new Set(asArray(state?.invalid_indices)), [state?.invalid_indices]);
   const colorMode = state?.color_mode || "scalar_heatmap";
   const normalizationMode = state?.normalization_mode || "min_max";
-  const invalidColor = [255, 0, 255];
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -714,9 +838,9 @@ const Image2dPanel = ({ title, state }) => {
       for (let index = 0; index < values.length; index += 1) {
         const offset = index * 4;
         if (invalidIndices.has(index)) {
-          image.data[offset] = invalidColor[0];
-          image.data[offset + 1] = invalidColor[1];
-          image.data[offset + 2] = invalidColor[2];
+          image.data[offset] = invalidImageColor[0];
+          image.data[offset + 1] = invalidImageColor[1];
+          image.data[offset + 2] = invalidImageColor[2];
           image.data[offset + 3] = 255;
           continue;
         }
@@ -754,9 +878,9 @@ const Image2dPanel = ({ title, state }) => {
       for (let index = 0; index < values.length; index += 1) {
         const offset = index * 4;
         if (invalidIndices.has(index)) {
-          image.data[offset] = invalidColor[0];
-          image.data[offset + 1] = invalidColor[1];
-          image.data[offset + 2] = invalidColor[2];
+          image.data[offset] = invalidImageColor[0];
+          image.data[offset + 1] = invalidImageColor[1];
+          image.data[offset + 2] = invalidImageColor[2];
           image.data[offset + 3] = 255;
           continue;
         }

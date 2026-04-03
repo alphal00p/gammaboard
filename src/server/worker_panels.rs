@@ -74,6 +74,11 @@ fn worker_panel_specs(worker: &RegisteredWorkerEntry) -> Vec<crate::server::pane
 }
 
 fn worker_panel_states(worker: &RegisteredWorkerEntry) -> Vec<PanelState> {
+    let memory_usage = match worker.current_role.as_deref() {
+        Some("evaluator") => worker.evaluator_rss_bytes,
+        Some("sampler_aggregator") => worker.sampler_rss_bytes,
+        _ => None,
+    };
     let mut panels = vec![key_value_panel(
         "worker_overview",
         vec![
@@ -99,6 +104,11 @@ fn worker_panel_states(worker: &RegisteredWorkerEntry) -> Vec<PanelState> {
             ),
             key_value("version", "Version", worker.version.as_str()),
             key_value("last_seen", "Last Seen", worker.last_seen),
+            key_value(
+                "memory_usage",
+                "Memory Usage",
+                memory_usage.map(format_bytes_human),
+            ),
         ],
     )];
 
@@ -124,6 +134,23 @@ fn worker_panel_states(worker: &RegisteredWorkerEntry) -> Vec<PanelState> {
     }
 
     panels
+}
+
+fn format_bytes_human(bytes: i64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = 1024.0 * KIB;
+    const GIB: f64 = 1024.0 * MIB;
+
+    let bytes_f64 = bytes as f64;
+    if bytes_f64 >= GIB {
+        format!("{:.2} GiB", bytes_f64 / GIB)
+    } else if bytes_f64 >= MIB {
+        format!("{:.1} MiB", bytes_f64 / MIB)
+    } else if bytes_f64 >= KIB {
+        format!("{:.1} KiB", bytes_f64 / KIB)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 fn diagnostics_panel(value: Option<&JsonValue>) -> Option<PanelState> {

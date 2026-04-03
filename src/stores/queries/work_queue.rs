@@ -320,15 +320,17 @@ pub(crate) async fn insert_evaluator_performance_snapshot(
         INSERT INTO evaluator_performance_history (
             run_id,
             worker_id,
-            metrics
+            metrics,
+            rss_bytes
         )
-        VALUES ($1, $2, $3)
+        VALUES ($1, $2, $3, $4)
         RETURNING id
         "#,
     )
     .bind(snapshot.run_id)
     .bind(&snapshot.node_name)
     .bind(&metrics)
+    .bind(snapshot.rss_bytes)
     .fetch_one(pool)
     .await?;
     sqlx::query(
@@ -338,13 +340,15 @@ pub(crate) async fn insert_evaluator_performance_snapshot(
             worker_id,
             id,
             metrics,
+            rss_bytes,
             created_at
         )
-        VALUES ($1, $2, $3, $4, now())
+        VALUES ($1, $2, $3, $4, $5, now())
         ON CONFLICT (run_id, worker_id) DO UPDATE
         SET
             id = EXCLUDED.id,
             metrics = EXCLUDED.metrics,
+            rss_bytes = EXCLUDED.rss_bytes,
             created_at = EXCLUDED.created_at
         "#,
     )
@@ -352,6 +356,7 @@ pub(crate) async fn insert_evaluator_performance_snapshot(
     .bind(&snapshot.node_name)
     .bind(row)
     .bind(&metrics)
+    .bind(snapshot.rss_bytes)
     .execute(pool)
     .await?;
     Ok(())
@@ -373,14 +378,16 @@ pub(crate) async fn insert_sampler_aggregator_performance_snapshot(
             worker_id,
             metrics,
             runtime_metrics,
-            engine_diagnostics
+            engine_diagnostics,
+            rss_bytes
         )
         VALUES (
             $1,
             $2,
             $3,
             $4,
-            $5
+            $5,
+            $6
         )
         RETURNING id
         "#,
@@ -390,6 +397,7 @@ pub(crate) async fn insert_sampler_aggregator_performance_snapshot(
     .bind(&metrics)
     .bind(&runtime_metrics)
     .bind(&snapshot.engine_diagnostics)
+    .bind(snapshot.rss_bytes)
     .fetch_one(pool)
     .await?;
     sqlx::query(
@@ -401,15 +409,17 @@ pub(crate) async fn insert_sampler_aggregator_performance_snapshot(
             metrics,
             runtime_metrics,
             engine_diagnostics,
+            rss_bytes,
             created_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, now())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, now())
         ON CONFLICT (run_id, worker_id) DO UPDATE
         SET
             id = EXCLUDED.id,
             metrics = EXCLUDED.metrics,
             runtime_metrics = EXCLUDED.runtime_metrics,
             engine_diagnostics = EXCLUDED.engine_diagnostics,
+            rss_bytes = EXCLUDED.rss_bytes,
             created_at = EXCLUDED.created_at
         "#,
     )
@@ -419,6 +429,7 @@ pub(crate) async fn insert_sampler_aggregator_performance_snapshot(
     .bind(&metrics)
     .bind(&runtime_metrics)
     .bind(&snapshot.engine_diagnostics)
+    .bind(snapshot.rss_bytes)
     .execute(pool)
     .await?;
     Ok(())

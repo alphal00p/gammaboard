@@ -207,9 +207,11 @@ struct RegisteredWorkerRow {
     status: String,
     last_seen: Option<DateTime<Utc>>,
     evaluator_metrics: Option<JsonValue>,
+    evaluator_rss_bytes: Option<i64>,
     sampler_metrics: Option<JsonValue>,
     sampler_runtime_metrics: Option<JsonValue>,
     sampler_engine_diagnostics: Option<JsonValue>,
+    sampler_rss_bytes: Option<i64>,
 }
 
 impl From<RegisteredWorkerRow> for RegisteredWorkerEntry {
@@ -229,9 +231,11 @@ impl From<RegisteredWorkerRow> for RegisteredWorkerEntry {
             status: value.status,
             last_seen: value.last_seen,
             evaluator_metrics: decode_optional_json(value.evaluator_metrics),
+            evaluator_rss_bytes: value.evaluator_rss_bytes,
             sampler_metrics: decode_optional_json(value.sampler_metrics),
             sampler_runtime_metrics: value.sampler_runtime_metrics,
             sampler_engine_diagnostics: value.sampler_engine_diagnostics,
+            sampler_rss_bytes: value.sampler_rss_bytes,
         }
     }
 }
@@ -242,6 +246,7 @@ struct EvaluatorPerformanceHistoryRow {
     run_id: i32,
     worker_id: String,
     metrics: JsonValue,
+    rss_bytes: Option<i64>,
     created_at: DateTime<Utc>,
 }
 
@@ -252,6 +257,7 @@ impl From<EvaluatorPerformanceHistoryRow> for EvaluatorPerformanceHistoryEntry {
             run_id: value.run_id,
             worker_id: value.worker_id,
             metrics: decode_json_or_default(value.metrics),
+            rss_bytes: value.rss_bytes,
             created_at: value.created_at,
         }
     }
@@ -265,6 +271,7 @@ struct SamplerPerformanceHistoryRow {
     metrics: JsonValue,
     runtime_metrics: JsonValue,
     engine_diagnostics: JsonValue,
+    rss_bytes: Option<i64>,
     created_at: DateTime<Utc>,
 }
 
@@ -278,6 +285,7 @@ impl From<SamplerPerformanceHistoryRow> for SamplerPerformanceHistoryEntry {
                 .unwrap_or_else(|_| default_sampler_performance_metrics()),
             runtime_metrics: value.runtime_metrics,
             engine_diagnostics: value.engine_diagnostics,
+            rss_bytes: value.rss_bytes,
             created_at: value.created_at,
         }
     }
@@ -644,9 +652,11 @@ pub(crate) async fn get_registered_workers(
                     END AS status,
                     n.last_seen,
                     e.metrics AS evaluator_metrics,
+                    e.rss_bytes AS evaluator_rss_bytes,
                     p.metrics AS sampler_metrics,
                     p.runtime_metrics AS sampler_runtime_metrics,
-                    p.engine_diagnostics AS sampler_engine_diagnostics
+                    p.engine_diagnostics AS sampler_engine_diagnostics,
+                    p.rss_bytes AS sampler_rss_bytes
                 FROM nodes n
                 LEFT JOIN sampler_aggregator_performance_latest p
                     ON p.run_id = $1
@@ -692,9 +702,11 @@ pub(crate) async fn get_registered_workers(
                     END AS status,
                     n.last_seen,
                     e.metrics AS evaluator_metrics,
+                    e.rss_bytes AS evaluator_rss_bytes,
                     p.metrics AS sampler_metrics,
                     p.runtime_metrics AS sampler_runtime_metrics,
-                    p.engine_diagnostics AS sampler_engine_diagnostics
+                    p.engine_diagnostics AS sampler_engine_diagnostics,
+                    p.rss_bytes AS sampler_rss_bytes
                 FROM nodes n
                 LEFT JOIN sampler_aggregator_performance_latest p
                     ON p.run_id = COALESCE(n.active_run_id, n.desired_run_id)
@@ -748,9 +760,11 @@ pub(crate) async fn get_registered_worker_summaries(
                     END AS status,
                     n.last_seen,
                     NULL::jsonb AS evaluator_metrics,
+                    NULL::bigint AS evaluator_rss_bytes,
                     NULL::jsonb AS sampler_metrics,
                     NULL::jsonb AS sampler_runtime_metrics,
-                    NULL::jsonb AS sampler_engine_diagnostics
+                    NULL::jsonb AS sampler_engine_diagnostics,
+                    NULL::bigint AS sampler_rss_bytes
                 FROM nodes n
                 LEFT JOIN runs dr ON dr.id = n.desired_run_id
                 LEFT JOIN runs cr ON cr.id = n.active_run_id
@@ -790,9 +804,11 @@ pub(crate) async fn get_registered_worker_summaries(
                     END AS status,
                     n.last_seen,
                     NULL::jsonb AS evaluator_metrics,
+                    NULL::bigint AS evaluator_rss_bytes,
                     NULL::jsonb AS sampler_metrics,
                     NULL::jsonb AS sampler_runtime_metrics,
-                    NULL::jsonb AS sampler_engine_diagnostics
+                    NULL::jsonb AS sampler_engine_diagnostics,
+                    NULL::bigint AS sampler_rss_bytes
                 FROM nodes n
                 LEFT JOIN runs dr ON dr.id = n.desired_run_id
                 LEFT JOIN runs cr ON cr.id = n.active_run_id
@@ -827,6 +843,7 @@ pub(crate) async fn get_evaluator_performance_history(
             run_id,
             worker_id,
             metrics,
+            rss_bytes,
             created_at
         FROM evaluator_performance_history
         WHERE run_id = $1
@@ -859,6 +876,7 @@ pub(crate) async fn get_sampler_performance_history(
             metrics,
             runtime_metrics,
             engine_diagnostics,
+            rss_bytes,
             created_at
         FROM sampler_aggregator_performance_history
         WHERE run_id = $1
@@ -888,6 +906,7 @@ pub(crate) async fn get_worker_evaluator_performance_history(
             run_id,
             worker_id,
             metrics,
+            rss_bytes,
             created_at
         FROM evaluator_performance_history
         WHERE worker_id = $1
@@ -917,6 +936,7 @@ pub(crate) async fn get_worker_sampler_performance_history(
             metrics,
             runtime_metrics,
             engine_diagnostics,
+            rss_bytes,
             created_at
         FROM sampler_aggregator_performance_history
         WHERE worker_id = $1

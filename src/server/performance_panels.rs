@@ -150,6 +150,11 @@ fn evaluator_current_panel(entry: &EvaluatorPerformanceHistoryEntry) -> PanelSta
         vec![
             key_value("worker_id", "Worker", entry.worker_id.as_str()),
             key_value(
+                "memory_usage",
+                "Memory Usage",
+                entry.rss_bytes.map(format_bytes_human),
+            ),
+            key_value(
                 "samples_evaluated",
                 "Samples Evaluated",
                 entry.metrics.samples_evaluated,
@@ -392,6 +397,11 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
         "sampler_runtime_current",
         vec![
             key_value(
+                "memory_usage",
+                "Memory Usage",
+                entry.rss_bytes.map(format_bytes_human),
+            ),
+            key_value(
                 "completed_samples_per_second",
                 "Completed Samples Per Second",
                 runtime.completed_samples_per_second,
@@ -548,6 +558,23 @@ fn decode_sampler_runtime_metrics(
 
 fn ms_to_us(value_ms: f64) -> f64 {
     value_ms * 1000.0
+}
+
+fn format_bytes_human(bytes: i64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = 1024.0 * KIB;
+    const GIB: f64 = 1024.0 * MIB;
+
+    let bytes_f64 = bytes as f64;
+    if bytes_f64 >= GIB {
+        format!("{:.2} GiB", bytes_f64 / GIB)
+    } else if bytes_f64 >= MIB {
+        format!("{:.1} MiB", bytes_f64 / MIB)
+    } else if bytes_f64 >= KIB {
+        format!("{:.1} KiB", bytes_f64 / KIB)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 fn runner_diagnostics(value: &JsonValue) -> Option<&serde_json::Map<String, JsonValue>> {

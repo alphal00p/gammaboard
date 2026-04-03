@@ -1,5 +1,6 @@
 pub mod evaluator;
 pub mod node_runner;
+pub(crate) mod process_memory;
 pub(crate) mod rolling_metric;
 pub mod sampler_aggregator;
 pub(crate) mod stage_context;

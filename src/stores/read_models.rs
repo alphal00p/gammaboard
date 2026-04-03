@@ -99,9 +99,11 @@ pub struct RegisteredWorkerEntry {
     pub status: String,
     pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
     pub evaluator_metrics: Option<EvaluatorPerformanceMetrics>,
+    pub evaluator_rss_bytes: Option<i64>,
     pub sampler_metrics: Option<SamplerPerformanceMetrics>,
     pub sampler_runtime_metrics: Option<serde_json::Value>,
     pub sampler_engine_diagnostics: Option<serde_json::Value>,
+    pub sampler_rss_bytes: Option<i64>,
 }
 
 /// Evaluator performance history row.
@@ -111,6 +113,7 @@ pub struct EvaluatorPerformanceHistoryEntry {
     pub run_id: i32,
     pub worker_id: String,
     pub metrics: EvaluatorPerformanceMetrics,
+    pub rss_bytes: Option<i64>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -123,6 +126,7 @@ pub struct SamplerPerformanceHistoryEntry {
     pub metrics: SamplerPerformanceMetrics,
     pub runtime_metrics: serde_json::Value,
     pub engine_diagnostics: serde_json::Value,
+    pub rss_bytes: Option<i64>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 use crate::evaluation::ObservableState;

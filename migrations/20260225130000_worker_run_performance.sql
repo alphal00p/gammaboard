@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS evaluator_performance_history (
     run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     worker_id TEXT NOT NULL REFERENCES nodes(name) ON DELETE CASCADE,
     metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+    rss_bytes BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -20,6 +21,7 @@ CREATE TABLE IF NOT EXISTS evaluator_performance_latest (
     worker_id TEXT NOT NULL REFERENCES nodes(name) ON DELETE CASCADE,
     id BIGINT NOT NULL,
     metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+    rss_bytes BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (run_id, worker_id)
 );
@@ -31,6 +33,7 @@ CREATE TABLE IF NOT EXISTS sampler_aggregator_performance_history (
     metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
     runtime_metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
     engine_diagnostics JSONB NOT NULL DEFAULT '{}'::jsonb,
+    rss_bytes BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -47,6 +50,7 @@ CREATE TABLE IF NOT EXISTS sampler_aggregator_performance_latest (
     metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
     runtime_metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
     engine_diagnostics JSONB NOT NULL DEFAULT '{}'::jsonb,
+    rss_bytes BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (run_id, worker_id)
 );

@@ -12,14 +12,14 @@ The dashboard shows runs, task output, nodes, performance, and logs.
 
 ## Prerequisites
 - Rust
-- PostgreSQL 16
+- PostgreSQL 16 tools (`initdb`, `pg_ctl`, `postgres`, `psql`) available locally for `gammaboard db ...`
 - `sqlx` CLI: `cargo install sqlx-cli --no-default-features --features postgres`
 - Node.js + npm for the frontend
 
 ## Local Setup
 1. Start PostgreSQL:
    ```bash
-   just start-db
+   gammaboard db start
    ```
 2. Build:
    ```bash
@@ -27,14 +27,14 @@ The dashboard shows runs, task output, nodes, performance, and logs.
    ```
 3. Start the backend:
    ```bash
-   just serve-backend
+   gammaboard server
    ```
 4. Start the frontend:
    ```bash
    just serve-frontend
    ```
 
-The CLI reads its shared database and tracing settings from `configs/cli/default.toml`, and the backend reads its host, port, auth, cookie, and template settings from `configs/server/default.toml`. The frontend uses relative `/api` calls and does not require `.env`.
+The CLI reads its shared database and tracing settings from `configs/cli/default.toml`, and the backend reads its host, port, auth, cookie, and template settings from `configs/server/default.toml`. The frontend uses relative `/api` calls and does not require `.env`. If you prefer the old shell wrappers, the `just` recipes remain available, but the CLI flow above is the primary local workflow.
 
 ## CLI Config
 - All commands load shared runtime config from [configs/cli/default.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/cli/default.toml) by default.
@@ -189,8 +189,7 @@ Important:
 ## Dashboard Auth
 - Read-only dashboard endpoints stay open.
 - Steering actions currently require admin login and are backed by a signed session cookie.
-- The dashboard currently supports creating runs from raw TOML, cloning runs from a stored stage snapshot, appending tasks from raw TOML, deleting pending tasks, pausing runs, removing runs, auto-assigning free nodes, assigning and unassigning nodes, requesting node shutdown (single or all), and starting new local nodes.
-- The dashboard currently supports creating runs from raw TOML, cloning runs from a stored stage snapshot, appending tasks from raw TOML, deleting pending tasks, pausing runs, removing runs, auto-assigning free nodes, assigning and unassigning nodes, requesting node shutdown (single or all), starting new local nodes, and restarting the local database when enabled.
+- The dashboard currently supports creating runs from raw TOML, cloning runs from a stored stage snapshot, appending tasks from raw TOML, deleting pending tasks, pausing runs, removing runs, auto-assigning free nodes, assigning and unassigning nodes, requesting node shutdown (single or all), starting new local nodes, and restarting the local database when `allow_db_admin = true`.
 - The create-run and add-task dialogs can also load `.toml` templates from `run_templates_dir` and `task_templates_dir` in `server/default.toml`.
 - Node shutdown from the dashboard is guarded by a confirmation dialog.
 - Put `auth.admin_password_hash` in `server/default.toml` to enable dashboard auth.

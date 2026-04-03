@@ -250,6 +250,7 @@ pub struct EvaluatorPerformanceSnapshot {
     pub run_id: i32,
     pub node_name: String,
     pub metrics: EvaluatorPerformanceMetrics,
+    pub rss_bytes: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -258,6 +259,7 @@ pub struct SamplerAggregatorPerformanceSnapshot {
     pub node_name: String,
     pub runtime_metrics: SamplerRuntimeMetrics,
     pub engine_diagnostics: JsonValue,
+    pub rss_bytes: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
