@@ -34,6 +34,13 @@ pub struct LocalPostgresConfig {
     pub socket_dir: String,
     pub log_file: String,
     pub max_connections: u32,
+    pub shared_buffers: String,
+    pub effective_cache_size: String,
+    pub work_mem: String,
+    pub checkpoint_timeout: String,
+    pub max_wal_size: String,
+    pub wal_compression: bool,
+    pub synchronous_commit: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -99,21 +99,26 @@ fn start_postgres(
     let connection = LocalDbConnection::from_url(database_url)?;
     ensure_parent_dir(&local.log_file)?;
     let socket_dir = ensure_absolute_dir(&local.socket_dir)?;
-    let startup_options = if enable_pg_stat_statements {
-        format!(
-            "-k {} -p {} -c max_connections={} -c shared_preload_libraries=pg_stat_statements",
-            socket_dir.display(),
-            connection.port,
-            local.max_connections
-        )
-    } else {
-        format!(
-            "-k {} -p {} -c max_connections={}",
-            socket_dir.display(),
-            connection.port,
-            local.max_connections
-        )
-    };
+    let mut startup_options = format!(
+        "-k {} -p {} -c max_connections={} -c shared_buffers={} -c effective_cache_size={} -c work_mem={} -c checkpoint_timeout={} -c max_wal_size={} -c wal_compression={} -c synchronous_commit={}",
+        socket_dir.display(),
+        connection.port,
+        local.max_connections,
+        local.shared_buffers,
+        local.effective_cache_size,
+        local.work_mem,
+        local.checkpoint_timeout,
+        local.max_wal_size,
+        if local.wal_compression { "on" } else { "off" },
+        if local.synchronous_commit {
+            "on"
+        } else {
+            "off"
+        },
+    );
+    if enable_pg_stat_statements {
+        startup_options.push_str(" -c shared_preload_libraries=pg_stat_statements");
+    }
     run_command(
         Command::new("pg_ctl")
             .arg("-D")
