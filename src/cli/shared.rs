@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Args, ValueEnum};
-use gammaboard::config::CliConfig;
+use gammaboard::config::RuntimeConfig;
 use gammaboard::core::{RunReadStore, WorkerRole};
 use gammaboard::stores::RunProgress;
 use gammaboard::tracing::init_tracing;
@@ -39,7 +39,7 @@ pub struct NodeSelection {
     pub node_names: Vec<String>,
 }
 
-pub fn init_cli_tracing(store: &PgStore, config: &CliConfig, quiet: bool) -> Result<()> {
+pub fn init_cli_tracing(store: &PgStore, config: &RuntimeConfig, quiet: bool) -> Result<()> {
     let runtime_log_store = if config.tracing.persist_runtime_logs {
         Some(store.clone())
     } else {
@@ -50,7 +50,11 @@ pub fn init_cli_tracing(store: &PgStore, config: &CliConfig, quiet: bool) -> Res
     Ok(())
 }
 
-pub async fn init_cli_store(config: &CliConfig, db_pool_size: u32, quiet: bool) -> Result<PgStore> {
+pub async fn init_cli_store(
+    config: &RuntimeConfig,
+    db_pool_size: u32,
+    quiet: bool,
+) -> Result<PgStore> {
     let store = init_pg_store(&config.database.url, db_pool_size)
         .await
         .context("failed to initialize postgres store")?;
@@ -59,7 +63,7 @@ pub async fn init_cli_store(config: &CliConfig, db_pool_size: u32, quiet: bool) 
 }
 
 pub async fn with_cli_store<T, F, Fut>(
-    config: &CliConfig,
+    config: &RuntimeConfig,
     db_pool_size: u32,
     quiet: bool,
     span: tracing::Span,
@@ -83,7 +87,7 @@ pub fn control_command_span(name: &'static str) -> tracing::Span {
 }
 
 pub async fn with_control_store<T, F, Fut>(
-    config: &CliConfig,
+    config: &RuntimeConfig,
     db_pool_size: u32,
     quiet: bool,
     command_name: &'static str,

@@ -1,7 +1,7 @@
 use super::shared::{resolve_run_ref, with_cli_store};
 use anyhow::Result;
 use clap::Args;
-use gammaboard::config::CliConfig;
+use gammaboard::config::RuntimeConfig;
 use gammaboard::core::{ControlPlaneStore, WorkerRole};
 
 #[derive(Debug, Args)]
@@ -12,7 +12,7 @@ pub struct AutoAssignArgs {
 
 pub async fn run_auto_assign_command(
     args: AutoAssignArgs,
-    config: &CliConfig,
+    config: &RuntimeConfig,
     quiet: bool,
 ) -> Result<()> {
     let span = tracing::span!(

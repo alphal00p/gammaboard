@@ -1,0 +1,20 @@
+# Detached deploy orchestration for local use.
+# This owns public HTTP exposure, static site serving, and cleanup policy.
+[api_server]
+api_server_config = "../server/local.toml"
+
+[static_site]
+frontend_build_dir = "../../dashboard/build"
+
+[frontend_http]
+frontend_host = "127.0.0.1"
+frontend_port = 8080
+frontend_server_name = "localhost"
+frontend_advertise_hosts = ["localhost"]
+
+[database]
+ensure_started = true
+
+[cleanup]
+pause_runs = true
+stop_nodes = true

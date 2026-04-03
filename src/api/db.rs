@@ -11,10 +11,10 @@ pub struct RestartDbResult {
 /// Restarts the local database by invoking existing CLI lifecycle commands.
 pub fn restart_local_database(
     binary_path: &Path,
-    cli_config_path: &Path,
+    runtime_config_path: &Path,
 ) -> Result<RestartDbResult, ApiError> {
-    run_db_command(binary_path, cli_config_path, "delete", &["--yes"])?;
-    run_db_command(binary_path, cli_config_path, "start", &[])?;
+    run_db_command(binary_path, runtime_config_path, "delete", &["--yes"])?;
+    run_db_command(binary_path, runtime_config_path, "start", &[])?;
     Ok(RestartDbResult {
         deleted: true,
         started: true,
@@ -23,13 +23,13 @@ pub fn restart_local_database(
 
 fn run_db_command(
     binary_path: &Path,
-    cli_config_path: &Path,
+    runtime_config_path: &Path,
     command: &str,
     extra_args: &[&str],
 ) -> Result<(), ApiError> {
     let status = Command::new(binary_path)
-        .arg("--cli-config")
-        .arg(cli_config_path)
+        .arg("--runtime-config")
+        .arg(runtime_config_path)
         .arg("db")
         .arg(command)
         .args(extra_args)

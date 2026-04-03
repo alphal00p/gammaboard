@@ -4,7 +4,7 @@ use argon2::{
 };
 use assert_cmd::Command;
 use gammaboard::Domain;
-use gammaboard::config::CliConfig;
+use gammaboard::config::RuntimeConfig;
 use gammaboard::sampling::{HavanaSamplerParams, SamplerAggregatorSnapshot};
 use num::complex::Complex64;
 use predicates::prelude::*;
@@ -71,7 +71,9 @@ struct TestDatabase {
 
 impl TestDatabase {
     async fn create() -> anyhow::Result<Self> {
-        let base_url = CliConfig::load("configs/cli/default.toml")?.database.url;
+        let base_url = RuntimeConfig::load("configs/runtime/default.toml")?
+            .database
+            .url;
 
         let mut admin_url = Url::parse(&base_url)?;
         admin_url.set_path("/postgres");
@@ -139,7 +141,7 @@ struct FullStackHarness {
     pool: PgPool,
     bin_path: PathBuf,
     children: Vec<ManagedChild>,
-    cli_config_path: PathBuf,
+    runtime_config_path: PathBuf,
     temp_files: Vec<NamedTempFile>,
 }
 
@@ -157,7 +159,7 @@ impl FullStackHarness {
             .await?;
         let bin_path = resolve_bin_path()?;
         let cli_config = temp_cli_config(&db.database_url, false);
-        let cli_config_path = cli_config.path().to_path_buf();
+        let runtime_config_path = cli_config.path().to_path_buf();
 
         let mut temp_files = Vec::new();
         temp_files.push(cli_config);
@@ -167,22 +169,22 @@ impl FullStackHarness {
             pool,
             bin_path,
             children: Vec::new(),
-            cli_config_path,
+            runtime_config_path,
             temp_files,
         })
     }
 
     fn cli(&self) -> Command {
         let mut cmd = Command::new(&self.bin_path);
-        cmd.arg("--cli-config").arg(&self.cli_config_path);
+        cmd.arg("--runtime-config").arg(&self.runtime_config_path);
         cmd
     }
 
     async fn start_node(&mut self, node_name: &str) -> anyhow::Result<()> {
         let mut child = TokioCommand::new(&self.bin_path);
         child
-            .arg("--cli-config")
-            .arg(&self.cli_config_path)
+            .arg("--runtime-config")
+            .arg(&self.runtime_config_path)
             .arg("node")
             .arg("run")
             .arg("--name")
@@ -237,8 +239,8 @@ impl FullStackHarness {
 
         let mut child = TokioCommand::new(&self.bin_path);
         child
-            .arg("--cli-config")
-            .arg(&self.cli_config_path)
+            .arg("--runtime-config")
+            .arg(&self.runtime_config_path)
             .arg("server")
             .arg("--server-config")
             .arg(server_config.path())
@@ -946,7 +948,7 @@ fn temp_server_config(
     let run_templates_dir = manifest_dir.join("configs/runs");
     let task_templates_dir = manifest_dir.join("configs/tasks");
     let contents = format!(
-        "host = {host:?}\nport = {port}\nallowed_origins = [{allowed_origin:?}]\nsecure_cookie = {secure_cookie}\nallow_db_admin = true\nrun_templates_dir = {run_templates_dir:?}\ntask_templates_dir = {task_templates_dir:?}\n\n[auth]\nadmin_password_hash = {admin_password_hash:?}\nsession_secret = {session_secret:?}\n"
+        "api_host = {host:?}\napi_port = {port}\nallowed_origins = [{allowed_origin:?}]\nsecure_cookie = {secure_cookie}\nallow_db_admin = true\nrun_templates_dir = {run_templates_dir:?}\ntask_templates_dir = {task_templates_dir:?}\n\n[auth]\nadmin_password_hash = {admin_password_hash:?}\nsession_secret = {session_secret:?}\n"
     );
     let file = NamedTempFile::new().expect("create temp server config");
     std::fs::write(file.path(), contents).expect("write temp server config");

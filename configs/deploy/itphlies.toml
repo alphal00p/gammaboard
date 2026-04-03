@@ -1,0 +1,20 @@
+# Detached deploy orchestration for ITPhlies.
+# This owns public HTTP exposure, static site serving, and cleanup policy.
+[api_server]
+api_server_config = "../server/itphlies.toml"
+
+[static_site]
+frontend_build_dir = "../../dashboard/build"
+
+[frontend_http]
+frontend_host = "0.0.0.0"
+frontend_port = 8080
+frontend_server_name = "_"
+frontend_advertise_hosts = ["localhost", "itphlies"]
+
+[database]
+ensure_started = true
+
+[cleanup]
+pause_runs = true
+stop_nodes = true

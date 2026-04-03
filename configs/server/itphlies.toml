@@ -1,5 +1,7 @@
-host = "127.0.0.1"
-port = 4000
+# Backend API/dashboard settings for the ITPhlies detached deploy profile.
+# Public HTTP exposure, generated nginx config, and deploy cleanup live in `configs/deploy/itphlies.toml`.
+api_host = "127.0.0.1"
+api_port = 4000
 allowed_origins = [
     "http://localhost:8080",
     "http://itphlies:8080",

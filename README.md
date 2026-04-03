@@ -34,13 +34,13 @@ The dashboard shows runs, task output, nodes, performance, and logs.
    just serve-frontend
    ```
 
-The CLI reads its shared database and tracing settings from `configs/cli/default.toml`, and the backend reads its host, port, auth, cookie, and template settings from `configs/server/default.toml`. The frontend uses relative `/api` calls and does not require `.env`. If you prefer the old shell wrappers, the `just` recipes remain available, but the CLI flow above is the primary local workflow.
+The CLI reads its shared database and tracing settings from `configs/runtime/default.toml`, and the backend reads its API bind, auth, cookie, and template settings from `configs/server/default.toml`. The frontend uses relative `/api` calls and does not require `.env`. If you prefer the old shell wrappers, the `just` recipes remain available, but the CLI flow above is the primary local workflow.
 
-## CLI Config
-- All commands load shared runtime config from [configs/cli/default.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/cli/default.toml) by default.
+## Runtime Config
+- All commands load shared runtime config from [configs/runtime/default.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/runtime/default.toml) by default.
 - Override it when needed with:
   ```bash
-  gammaboard --cli-config path/to/cli/default.toml <COMMAND>
+  gammaboard --runtime-config path/to/runtime/default.toml <COMMAND>
   ```
 - Required shape:
   ```toml
@@ -71,7 +71,7 @@ gammaboard db delete
 gammaboard db dump-sql
 ```
 
-These commands use `database.url` and `local_postgres` from `configs/cli/default.toml`.
+These commands use `database.url` and `local_postgres` from `configs/runtime/default.toml`.
 To reset local state, use `just db-reset` or run `gammaboard db delete --yes` then `gammaboard db start`.
 `local_postgres.max_connections` controls the local Postgres server connection ceiling used by `gammaboard db start`.
 Pass `--pg-stat-statements` to `gammaboard db start` when you want local query statistics. That flag adds `shared_preload_libraries=pg_stat_statements` at server startup and then runs `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` for the configured database.
@@ -91,8 +91,8 @@ Sampler runs keep the frontend current through periodic lightweight writes to `r
 - `Ctrl-C` terminates the server process immediately.
 - Required shape:
   ```toml
-  host = "0.0.0.0"
-  port = 4000
+  api_host = "0.0.0.0"
+  api_port = 4000
   allowed_origins = ["http://localhost:3000"]
   secure_cookie = false
   allow_db_admin = true
@@ -106,48 +106,56 @@ Sampler runs keep the frontend current through periodic lightweight writes to `r
 - All server config fields are explicit; the server does not fill in defaults.
 - Set `allow_db_admin = true` only for trusted local/operator setups; it enables dashboard-triggered `db stop && db start`.
 
-## Deploy Recipes
-Deploy is now split along two orthogonal axes:
-- `host = local | itphlies`
-- `mode = dev | release`
+## Deploy Config
+Detached deploy is now owned by `gammaboard deploy ...` plus a deploy TOML profile.
+
+Config split:
+- `configs/runtime/*.toml`: shared DB, tracing, and local Postgres settings for all commands
+- `configs/server/*.toml`: backend API/dashboard settings for `gammaboard server`, including backend bind address and `allowed_origins`
+- `configs/deploy/*.toml`: detached deploy orchestration, including which server config to run, public HTTP exposure, static frontend serving, and cleanup policy
+
+The checked-in profiles are:
+- [configs/deploy/local.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/deploy/local.toml)
+- [configs/deploy/itphlies.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/deploy/itphlies.toml)
 
 Use:
 ```bash
-just deploy <host> <mode>
+gammaboard deploy up --deploy-config configs/deploy/local.toml --mode dev
+gammaboard deploy up --deploy-config configs/deploy/local.toml --mode release
+gammaboard deploy status
+gammaboard deploy down
+```
+
+Useful options:
+- `--frontend-port <PORT>` overrides the deploy profile's frontend/nginx listen port for that launch
+- `--skip-build` reuses the existing frontend build and backend binary
+
+Deploy profiles now derive the printed/open URLs from `frontend_http.frontend_port` plus `frontend_http.frontend_advertise_hosts`, instead of duplicating full URL strings in the config.
+
+The `just` wrappers now just forward to the CLI:
+```bash
+just deploy local dev
+just deploy itphlies release
+just deploy-status
 just stop-deploy
 ```
 
-Examples:
-- local detached dev-profile deploy:
-  ```bash
-  just deploy local dev
-  ```
-- local detached release-profile deploy:
-  ```bash
-  just deploy local release
-  ```
-- ITPhlies release deploy:
-  ```bash
-  just deploy itphlies release
-  ```
+Detached deploy:
+- builds the frontend and backend unless `--skip-build` is used
+- optionally starts local Postgres via `gammaboard db start`
+- starts `gammaboard server` detached
+- generates an nginx config from the deploy profile and serves `dashboard/build` directly from nginx
 
-All deploy variants:
-- build the frontend
-- build the backend for the selected mode
-- start the local DB with the matching binary
-- launch backend, nginx, and frontend detached with PID/log files under `logs/`
-
-`stop-deploy` stops the single detached deploy stack for the machine.
-Deploy targets are alternatives, not concurrent stacks on one machine: all deploy variants share the same PID/log namespace and bind the same local service ports, so `just deploy ...` always replaces the current detached deploy stack.
+Deploy targets are alternatives, not concurrent stacks on one machine: all profiles currently share the same PID/log namespace under `logs/`, so `deploy up` replaces the current detached deploy stack.
 
 ## ITPhlies Deployment
 Use this flow when you want both direct LAN access and the SSH tunnel option.
 
 1. On ITPhlies, from the repo root, run:
    ```bash
-   just deploy itphlies release
+   gammaboard deploy up --deploy-config configs/deploy/itphlies.toml --mode release
    ```
-   This builds the backend in release mode and launches `target/release/gammaboard`.
+   This builds the frontend and release backend, launches `target/release/gammaboard server`, and generates the nginx config from the deploy profile.
 2. On your laptop, open an SSH tunnel:
    ```bash
    ssh -N -L 8080:127.0.0.1:8080 ITPhliesTails
@@ -159,16 +167,17 @@ Use this flow when you want both direct LAN access and the SSH tunnel option.
    or `http://itphlies:8080` if your local network resolves that hostname. If you access the server by LAN IP instead, add that origin to `allowed_origins` in the server config first.
 4. To stop all deployed ITPhlies processes:
    ```bash
-   just stop-deploy
+   gammaboard deploy down --deploy-config configs/deploy/itphlies.toml
    ```
 5. The SSH tunnel remains optional; direct LAN access works because nginx listens on `0.0.0.0:8080`, while the backend still stays private on `127.0.0.1:4000`.
 
 Config files used:
-- backend: [configs/server/itphlies-prod.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server/itphlies-prod.toml)
-- nginx: [configs/nginx/itphlies-tunnel.conf](/home/cedricsigrist/Workspace/repos/gammaboard/configs/nginx/itphlies-tunnel.conf)
+- backend: [configs/server/itphlies.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server/itphlies.toml)
+- deploy: [configs/deploy/itphlies.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/deploy/itphlies.toml)
 
 Important:
-- `configs/server/itphlies-prod.toml` currently allows `http://localhost:8080` and `http://itphlies:8080`.
+- `configs/server/itphlies.toml` currently allows `http://localhost:8080` and `http://itphlies:8080`.
+- `configs/deploy/itphlies.toml` advertises `localhost` and `itphlies` as the operator-facing URLs for that deploy profile.
 - If you want to access the UI via a raw LAN IP or another hostname, add that exact origin to `allowed_origins`.
 - Backend listens on `127.0.0.1:4000`; nginx listens on `0.0.0.0:8080`.
 - ITPhlies deployment uses the release backend binary by default.
@@ -181,10 +190,10 @@ Important:
   - `location / { root <dashboard-build-dir>; try_files $uri /index.html; }`
   - `location /api/ { proxy_pass http://127.0.0.1:4000/api/; }`
 - Local detached deploy setup:
-  - nginx config: [configs/nginx/local-prod.conf](/home/cedricsigrist/Workspace/repos/gammaboard/configs/nginx/local-prod.conf)
-  - server config: [configs/server/local-prod.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server/local-prod.toml)
-  - run with: `just deploy local dev` or `just deploy local release`
-  - stop with: `just stop-deploy`
+  - server config: [configs/server/local.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server/local.toml)
+  - deploy config: [configs/deploy/local.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/deploy/local.toml)
+  - run with: `gammaboard deploy up --deploy-config configs/deploy/local.toml --mode dev`
+  - stop with: `gammaboard deploy down --deploy-config configs/deploy/local.toml`
 
 ## Dashboard Auth
 - Read-only dashboard endpoints stay open.

@@ -1,3 +1,5 @@
+# Shared CLI/runtime settings used by all commands.
+# Keep deploy and server host/auth settings out of this file.
 [database]
 url = "postgresql://postgres:NqVj2yt5WsCE5nYCOx01MkeFD8n8awoZ@127.0.0.1:5433/gammaboard_db"
 

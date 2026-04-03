@@ -1,5 +1,5 @@
 use clap::Args;
-use gammaboard::config::{CliConfig, DEFAULT_SERVER_CONFIG_PATH};
+use gammaboard::config::{DEFAULT_SERVER_CONFIG_PATH, RuntimeConfig};
 use gammaboard::server::{ServerConfig, serve};
 use std::path::PathBuf;
 
@@ -15,8 +15,8 @@ pub struct ServerArgs {
 
 pub async fn run_server(
     args: ServerArgs,
-    cli_config: &CliConfig,
-    cli_config_path: &std::path::Path,
+    runtime_config: &RuntimeConfig,
+    runtime_config_path: &std::path::Path,
     quiet: bool,
 ) -> anyhow::Result<()> {
     let config = ServerConfig::load(&args.server_config)?;
@@ -28,11 +28,11 @@ pub async fn run_server(
         bind = %bind
     );
     with_cli_store(
-        cli_config,
+        runtime_config,
         SERVER_DB_POOL_SIZE,
         quiet,
         span,
-        |store| async move { serve(store, config, cli_config_path.to_path_buf()).await },
+        |store| async move { serve(store, config, runtime_config_path.to_path_buf()).await },
     )
     .await
 }

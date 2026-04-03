@@ -45,11 +45,12 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::Instrument;
 
 use self::auth::{AuthConfig, SessionStatus, login, logout, require_admin_session};
+use crate::config::normalize_config_path;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerConfig {
-    pub host: IpAddr,
-    pub port: u16,
+    pub api_host: IpAddr,
+    pub api_port: u16,
     pub allowed_origins: Vec<String>,
     pub secure_cookie: bool,
     pub allow_db_admin: bool,
@@ -86,14 +87,14 @@ impl ServerConfig {
     }
 
     pub fn bind_addr(&self) -> SocketAddr {
-        SocketAddr::new(self.host, self.port)
+        SocketAddr::new(self.api_host, self.api_port)
     }
 }
 
 pub async fn serve(
     store: PgStore,
     config: ServerConfig,
-    cli_config_path: PathBuf,
+    runtime_config_path: PathBuf,
 ) -> anyhow::Result<()> {
     let bind = config.bind_addr();
     let allowed_origins = config
@@ -115,7 +116,7 @@ pub async fn serve(
         allow_db_admin: config.allow_db_admin,
         run_templates_dir: PathBuf::from(&config.run_templates_dir),
         task_templates_dir: PathBuf::from(&config.task_templates_dir),
-        cli_config_path,
+        runtime_config_path,
     };
 
     let app = build_app(state);
@@ -142,7 +143,7 @@ pub(crate) struct AppState {
     allow_db_admin: bool,
     run_templates_dir: PathBuf,
     task_templates_dir: PathBuf,
-    cli_config_path: PathBuf,
+    runtime_config_path: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -346,15 +347,6 @@ fn build_cors_layer(allowed_origins: Vec<axum::http::HeaderValue>) -> CorsLayer 
         ])
         .allow_headers([axum::http::header::CONTENT_TYPE])
         .allow_origin(AllowOrigin::list(allowed_origins))
-}
-
-fn normalize_config_path(base_dir: &Path, path: &str) -> PathBuf {
-    let candidate = PathBuf::from(path.trim());
-    if candidate.is_absolute() {
-        candidate
-    } else {
-        base_dir.join(candidate)
-    }
 }
 
 async fn request_context_middleware(request: Request<axum::body::Body>, next: Next) -> Response {
@@ -1000,7 +992,7 @@ async fn auto_run_nodes(
     for node_name in &plan.node_names {
         spawn_node_process(
             &binary,
-            &state.cli_config_path,
+            &state.runtime_config_path,
             node_name,
             max_start_failures,
             db_pool_size,
@@ -1036,7 +1028,7 @@ async fn restart_db(State(state): State<AppState>) -> Result<Json<serde_json::Va
     let binary = std::env::current_exe().map_err(|err| {
         ApiError::Internal(format!("failed to resolve current executable: {err}"))
     })?;
-    let result = db_api::restart_local_database(&binary, &state.cli_config_path)?;
+    let result = db_api::restart_local_database(&binary, &state.runtime_config_path)?;
 
     tracing::info!(
         source = "control",
@@ -1055,7 +1047,7 @@ async fn restart_db(State(state): State<AppState>) -> Result<Json<serde_json::Va
 
 fn spawn_node_process(
     binary: &Path,
-    cli_config_path: &Path,
+    runtime_config_path: &Path,
     node_name: &str,
     max_start_failures: u32,
     db_pool_size: u32,
@@ -1079,8 +1071,8 @@ fn spawn_node_process(
 
     let mut command = Command::new(binary);
     command
-        .arg("--cli-config")
-        .arg(cli_config_path)
+        .arg("--runtime-config")
+        .arg(runtime_config_path)
         .args(node_api::node_run_cli_args(
             node_name,
             max_start_failures,

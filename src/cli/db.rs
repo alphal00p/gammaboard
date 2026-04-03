@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Subcommand};
-use gammaboard::config::{CliConfig, LocalPostgresConfig};
+use gammaboard::config::{LocalPostgresConfig, RuntimeConfig};
 use std::{
     fs::{self, File},
     io::{self, IsTerminal, Write},
@@ -31,7 +31,7 @@ pub enum DbCommand {
     DumpSql,
 }
 
-pub fn run_db_command(args: DbArgs, config: &CliConfig) -> Result<()> {
+pub fn run_db_command(args: DbArgs, config: &RuntimeConfig) -> Result<()> {
     let local = &config.local_postgres;
     match args.command {
         DbCommand::Status => status_db(local, &config.database.url),

@@ -6,7 +6,7 @@ use clap::{Args, Subcommand};
 use comfy_table::{Cell, CellAlignment, ContentArrangement, Table};
 use gammaboard::PgStore;
 use gammaboard::api::runs as run_api;
-use gammaboard::config::CliConfig;
+use gammaboard::config::RuntimeConfig;
 use gammaboard::core::{ControlPlaneStore, RunReadStore, RunTaskSpec, RunTaskStore, SourceRefSpec};
 use std::path::PathBuf;
 
@@ -47,7 +47,11 @@ pub enum TaskCommand {
     Remove { run: String, task_id: i64 },
 }
 
-pub async fn run_run_commands(command: RunCommand, config: &CliConfig, quiet: bool) -> Result<()> {
+pub async fn run_run_commands(
+    command: RunCommand,
+    config: &RuntimeConfig,
+    quiet: bool,
+) -> Result<()> {
     with_control_store(
         config,
         10,

@@ -1,4 +1,4 @@
-use gammaboard::config::CliConfig;
+use gammaboard::config::RuntimeConfig;
 use gammaboard::core::{ControlPlaneStore, StoreError, WorkQueueStore, WorkerRole};
 use gammaboard::{Batch, LatentBatchSpec, PgStore, Point};
 use sqlx::postgres::PgPoolOptions;
@@ -13,7 +13,7 @@ fn unique_id(prefix: &str) -> String {
 }
 
 async fn test_store() -> Option<PgStore> {
-    let db_url = CliConfig::load("configs/cli/default.toml")
+    let db_url = RuntimeConfig::load("configs/runtime/default.toml")
         .ok()?
         .database
         .url;

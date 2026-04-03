@@ -31,6 +31,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import Plot from "react-plotly.js";
 import { formatCompactNumber, formatDateTime, formatScientific } from "../../utils/formatters";
 import { asArray } from "../../utils/collections";
 
@@ -146,6 +147,57 @@ const renderStructuredValue = (value) => {
     return value;
   }
   return JSON.stringify(value);
+};
+
+const RelativeErrorTooltip = ({ active, payload, label }) => {
+  if (!active) return null;
+  const point = asArray(payload).find((entry) => entry?.dataKey === "relative_error");
+  const relativeError = Number(point?.payload?.relative_error);
+  if (!Number.isFinite(relativeError)) return null;
+  return (
+    <Card variant="outlined" sx={{ pointerEvents: "none" }}>
+      <CardContent sx={{ py: 1, px: 1.25, "&:last-child": { pb: 1 } }}>
+        <Typography variant="caption" sx={{ display: "block", color: "text.secondary", mb: 0.5 }}>
+          {label || point?.payload?.rangeLabel || ""}
+        </Typography>
+        <Typography variant="body2">relative error: {formatScientific(relativeError, 6)}</Typography>
+      </CardContent>
+    </Card>
+  );
+};
+
+const scalarHeatmapColorscale = [
+  [0, "rgb(0,0,255)"],
+  [0.5, "rgb(128,200,128)"],
+  [1, "rgb(255,0,0)"],
+];
+
+const ComplexImageTooltip = ({ hover }) => {
+  if (!hover) return null;
+  return (
+    <Card
+      variant="outlined"
+      sx={{
+        position: "absolute",
+        left: hover.left,
+        top: hover.top,
+        transform: "translate(12px, 12px)",
+        pointerEvents: "none",
+        zIndex: 2,
+        minWidth: 180,
+      }}
+    >
+      <CardContent sx={{ py: 1, px: 1.25, "&:last-child": { pb: 1 } }}>
+        <Typography variant="caption" sx={{ display: "block", color: "text.secondary", mb: 0.5 }}>
+          x={formatScientific(hover.x, 4)} y={formatScientific(hover.y, 4)}
+        </Typography>
+        <Typography variant="body2">re: {formatScientific(hover.re, 6)}</Typography>
+        <Typography variant="body2">im: {formatScientific(hover.im, 6)}</Typography>
+        <Typography variant="body2">|z|: {formatScientific(hover.magnitude, 6)}</Typography>
+        <Typography variant="body2">phase: {formatScientific(hover.phase, 5)} rad</Typography>
+      </CardContent>
+    </Card>
+  );
 };
 
 const panelColumnSpan = (descriptor) => {
@@ -465,6 +517,160 @@ const buildRelativeErrorYDomain = (points) => {
   return [-padded, padded];
 };
 
+const buildImageRows = (values, width, height, invalidIndices = null) => {
+  const rows = [];
+  for (let row = 0; row < height; row += 1) {
+    const current = [];
+    for (let col = 0; col < width; col += 1) {
+      const index = row * width + col;
+      const value = values[index];
+      current.push(invalidIndices?.has(index) || !Number.isFinite(value) ? null : value);
+    }
+    rows.push(current);
+  }
+  return rows;
+};
+
+const buildCellCenters = (range, count) => {
+  const [min, max] = asArray(range);
+  if (!Number.isFinite(min) || !Number.isFinite(max) || count <= 0) {
+    return Array.from({ length: count }, (_, index) => index);
+  }
+  const step = (max - min) / count;
+  return Array.from({ length: count }, (_, index) => min + step * (index + 0.5));
+};
+
+const buildScalarHeatmapScale = (values, normalizationMode) => {
+  const finite = values.filter((value) => Number.isFinite(value));
+  if (finite.length === 0) {
+    return { zmin: 0, zmax: 1 };
+  }
+  if (normalizationMode === "symmetric") {
+    const maxAbs = Math.max(...finite.map((value) => Math.abs(value)), 1e-12);
+    return { zmin: -maxAbs, zmax: maxAbs };
+  }
+  const zmin = Math.min(...finite);
+  const zmax = Math.max(...finite);
+  if (zmin === zmax) {
+    const padding = Math.abs(zmin) > 0 ? Math.abs(zmin) * 0.1 : 1;
+    return { zmin: zmin - padding, zmax: zmax + padding };
+  }
+  return { zmin, zmax };
+};
+
+const buildInvalidCellOverlay = (invalidIndices, width, xCenters, yCenters) => {
+  const points = Array.from(invalidIndices)
+    .map((index) => {
+      const row = Math.floor(index / width);
+      const col = index % width;
+      return {
+        x: xCenters[col],
+        y: yCenters[row],
+      };
+    })
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+
+  if (points.length === 0) return null;
+
+  return {
+    type: "scatter",
+    mode: "markers",
+    x: points.map((point) => point.x),
+    y: points.map((point) => point.y),
+    marker: {
+      color: "#ff00ff",
+      symbol: "square",
+      size: 8,
+      line: { width: 0 },
+    },
+    hovertemplate: "invalid value<extra></extra>",
+    showlegend: false,
+  };
+};
+
+const ScalarImageHeatmapPanel = ({
+  title,
+  width,
+  height,
+  values,
+  invalidIndices,
+  normalizationMode,
+  xRange,
+  yRange,
+}) => {
+  const z = useMemo(
+    () => buildImageRows(values, width, height, invalidIndices),
+    [height, invalidIndices, values, width],
+  );
+  const xCenters = useMemo(() => buildCellCenters(xRange, width), [width, xRange]);
+  const yCenters = useMemo(() => buildCellCenters(yRange, height), [height, yRange]);
+  const { zmin, zmax } = useMemo(() => buildScalarHeatmapScale(values, normalizationMode), [normalizationMode, values]);
+  const invalidOverlay = useMemo(
+    () => buildInvalidCellOverlay(invalidIndices, width, xCenters, yCenters),
+    [invalidIndices, width, xCenters, yCenters],
+  );
+
+  const data = [
+    {
+      type: "heatmap",
+      z,
+      x: xCenters,
+      y: yCenters,
+      zmin,
+      zmax,
+      colorscale: scalarHeatmapColorscale,
+      colorbar: {
+        title: { text: "Value", side: "right" },
+        thickness: 14,
+        len: 0.88,
+      },
+      hovertemplate: "value: %{z:.6g}<extra></extra>",
+      showscale: true,
+    },
+    ...(invalidOverlay ? [invalidOverlay] : []),
+  ];
+
+  return (
+    <Card variant="outlined">
+      <CardContent>
+        <Typography variant="subtitle1" sx={{ mb: 2 }}>
+          {title}
+        </Typography>
+        <Box sx={{ width: "100%", minHeight: 360 }}>
+          <Plot
+            data={data}
+            layout={{
+              autosize: true,
+              margin: { l: 12, r: 56, t: 8, b: 8 },
+              paper_bgcolor: "rgba(0,0,0,0)",
+              plot_bgcolor: "rgba(0,0,0,0)",
+              xaxis: {
+                visible: false,
+                showgrid: false,
+                zeroline: false,
+                constrain: "domain",
+              },
+              yaxis: {
+                visible: false,
+                showgrid: false,
+                zeroline: false,
+                scaleanchor: "x",
+                autorange: "reversed",
+              },
+            }}
+            config={{
+              displayModeBar: false,
+              responsive: true,
+            }}
+            style={{ width: "100%", height: "360px" }}
+            useResizeHandler
+          />
+        </Box>
+      </CardContent>
+    </Card>
+  );
+};
+
 const HistogramPanel = ({ title, state }) => {
   const [scale, setScale] = useState("linear");
   const bins = useMemo(() => buildHistogramData(state?.bins), [state?.bins]);
@@ -523,7 +729,17 @@ const HistogramPanel = ({ title, state }) => {
               activeDot={{ r: 2.5, fill: "#005f73", stroke: "#f8fafc", strokeWidth: 1 }}
               isAnimationActive={false}
             />
-            <Scatter data={errorBarData} fill="transparent" shape={() => null} isAnimationActive={false}>
+            <Scatter
+              data={errorBarData}
+              dataKey="y"
+              fill="transparent"
+              fillOpacity={0}
+              stroke="transparent"
+              strokeOpacity={0}
+              line={false}
+              shape="circle"
+              isAnimationActive={false}
+            >
               <ErrorBar
                 dataKey="error"
                 direction="y"
@@ -552,13 +768,7 @@ const HistogramPanel = ({ title, state }) => {
                 width={72}
               />
               <Tooltip
-                formatter={(value, name, props) => {
-                  if (name === "positive_relative_error" || name === "negative_relative_error") {
-                    const relativeError = Number(props?.payload?.relative_error);
-                    return [formatScientific(relativeError, 6), "relative error"];
-                  }
-                  return [formatScientific(value, 6), name];
-                }}
+                content={<RelativeErrorTooltip />}
                 labelFormatter={(_, payload) => payload?.[0]?.payload?.rangeLabel || ""}
               />
               <ReferenceLine y={0} stroke="#6b7280" strokeDasharray="4 4" ifOverflow="extendDomain" />
@@ -822,10 +1032,20 @@ const Image2dPanel = ({ title, state }) => {
   const invalidIndices = useMemo(() => new Set(asArray(state?.invalid_indices)), [state?.invalid_indices]);
   const colorMode = state?.color_mode || "scalar_heatmap";
   const normalizationMode = state?.normalization_mode || "min_max";
+  const xRange = useMemo(() => asArray(state?.x_range), [state?.x_range]);
+  const yRange = useMemo(() => asArray(state?.y_range), [state?.y_range]);
+  const [hover, setHover] = useState(null);
+
+  const useScalarHeatmap = !imagValues && colorMode === "scalar_heatmap";
+  const complexMagnitudes = useMemo(
+    () => (imagValues ? values.map((re, index) => Math.hypot(re, imagValues[index] || 0)) : []),
+    [imagValues, values],
+  );
+  const complexMaxMagnitude = useMemo(() => Math.max(...complexMagnitudes, 1e-12), [complexMagnitudes]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || width <= 0 || height <= 0 || values.length === 0) return;
+    if (!canvas || useScalarHeatmap || width <= 0 || height <= 0 || values.length === 0) return;
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext("2d");
@@ -833,8 +1053,6 @@ const Image2dPanel = ({ title, state }) => {
     const image = ctx.createImageData(width, height);
 
     if (imagValues && colorMode === "complex_hue_intensity") {
-      const magnitudes = values.map((re, index) => Math.hypot(re, imagValues[index] || 0));
-      const maxMagnitude = Math.max(...magnitudes, 1e-12);
       for (let index = 0; index < values.length; index += 1) {
         const offset = index * 4;
         if (invalidIndices.has(index)) {
@@ -851,7 +1069,7 @@ const Image2dPanel = ({ title, state }) => {
           continue;
         }
         const phase = (Math.atan2(im, re) / Math.PI) * 180 + 180;
-        const magnitude = Math.hypot(re, im) / maxMagnitude;
+        const magnitude = Math.hypot(re, im) / complexMaxMagnitude;
         const [r, g, b] = hsvToRgb(phase, 1, Math.min(1, Math.sqrt(magnitude)));
         image.data[offset] = r;
         image.data[offset + 1] = g;
@@ -901,9 +1119,69 @@ const Image2dPanel = ({ title, state }) => {
     }
 
     ctx.putImageData(image, 0, 0);
-  }, [colorMode, height, imagValues, invalidIndices, normalizationMode, values, width]);
+  }, [
+    colorMode,
+    complexMaxMagnitude,
+    height,
+    imagValues,
+    invalidIndices,
+    normalizationMode,
+    useScalarHeatmap,
+    values,
+    width,
+  ]);
 
   if (width <= 0 || height <= 0 || values.length === 0) return null;
+
+  if (useScalarHeatmap) {
+    return (
+      <ScalarImageHeatmapPanel
+        title={title}
+        width={width}
+        height={height}
+        values={values}
+        invalidIndices={invalidIndices}
+        normalizationMode={normalizationMode}
+        xRange={xRange}
+        yRange={yRange}
+      />
+    );
+  }
+
+  const [xMin, xMax] = xRange;
+  const [yMin, yMax] = yRange;
+  const xStep = width > 0 && Number.isFinite(xMin) && Number.isFinite(xMax) ? (xMax - xMin) / width : 1;
+  const yStep = height > 0 && Number.isFinite(yMin) && Number.isFinite(yMax) ? (yMax - yMin) / height : 1;
+
+  const handleCanvasHover = (event) => {
+    const canvas = canvasRef.current;
+    if (!canvas || !imagValues) return;
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const col = Math.min(width - 1, Math.max(0, Math.floor(((event.clientX - rect.left) / rect.width) * width)));
+    const row = Math.min(height - 1, Math.max(0, Math.floor(((event.clientY - rect.top) / rect.height) * height)));
+    const index = row * width + col;
+    if (invalidIndices.has(index)) {
+      setHover(null);
+      return;
+    }
+    const re = values[index];
+    const im = imagValues[index] || 0;
+    if (!Number.isFinite(re) || !Number.isFinite(im)) {
+      setHover(null);
+      return;
+    }
+    setHover({
+      left: event.clientX - rect.left,
+      top: event.clientY - rect.top,
+      x: Number.isFinite(xMin) && Number.isFinite(xMax) ? xMin + xStep * (col + 0.5) : col,
+      y: Number.isFinite(yMin) && Number.isFinite(yMax) ? yMin + yStep * (row + 0.5) : row,
+      re,
+      im,
+      magnitude: Math.hypot(re, im),
+      phase: Math.atan2(im, re),
+    });
+  };
 
   return (
     <Card variant="outlined">
@@ -916,20 +1194,64 @@ const Image2dPanel = ({ title, state }) => {
             width: "100%",
             display: "flex",
             justifyContent: "center",
+            alignItems: "stretch",
+            gap: 2,
             overflow: "auto",
           }}
         >
           <Box
-            component="canvas"
-            ref={canvasRef}
             sx={{
+              position: "relative",
               width: "100%",
               maxWidth: 640,
-              imageRendering: "pixelated",
-              border: "1px solid",
-              borderColor: "divider",
             }}
-          />
+            onMouseMove={handleCanvasHover}
+            onMouseLeave={() => setHover(null)}
+          >
+            <Box
+              component="canvas"
+              ref={canvasRef}
+              sx={{
+                width: "100%",
+                display: "block",
+                imageRendering: "pixelated",
+                border: "1px solid",
+                borderColor: "divider",
+              }}
+            />
+            <ComplexImageTooltip hover={hover} />
+          </Box>
+          {imagValues && colorMode === "complex_hue_intensity" ? (
+            <Box
+              sx={{
+                width: 80,
+                minWidth: 80,
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "center",
+                gap: 1,
+              }}
+            >
+              <Typography variant="body2" color="text.secondary">
+                Magnitude
+              </Typography>
+              <Box
+                sx={{
+                  height: 240,
+                  borderRadius: 1,
+                  border: "1px solid",
+                  borderColor: "divider",
+                  background: "linear-gradient(to top, rgb(0,0,0), rgb(255,255,255))",
+                }}
+              />
+              <Typography variant="caption" sx={{ fontFamily: "monospace" }}>
+                {formatScientific(complexMaxMagnitude, 4)}
+              </Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ fontFamily: "monospace" }}>
+                0
+              </Typography>
+            </Box>
+          ) : null}
         </Box>
       </CardContent>
     </Card>

@@ -10,7 +10,7 @@
 
 ## Dashboard
 - [ ] adjustable ranges for all plots
-- [ ] better heatmap with plotly, asjustable colorscale (log / lin, sym / minmax)
+- [ ] extend image plots: complex Plotly image trace with phase-hue / magnitude-intensity legend
 - [ ] export svn/json/whatever of all plots buttons
 - [ ] Reorder plots, e.g. progress more at top, tasks also at top, then right below that the live averages.
 - [ ] import json of histograms and compare them to current.

@@ -1,5 +1,7 @@
-host = "0.0.0.0"
-port = 4000
+# Backend API/dashboard settings for direct `gammaboard server` runs.
+# Keep detached deploy public HTTP and static-site settings in `configs/deploy/*.toml`.
+api_host = "0.0.0.0"
+api_port = 4000
 allowed_origins = ["http://localhost:3000"]
 secure_cookie = false
 allow_db_admin = true

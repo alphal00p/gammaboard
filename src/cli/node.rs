@@ -4,7 +4,7 @@ use clap::{Args, Subcommand};
 use comfy_table::{Cell, CellAlignment, ContentArrangement, Table};
 use gammaboard::PgStore;
 use gammaboard::api::nodes as node_api;
-use gammaboard::config::CliConfig;
+use gammaboard::config::RuntimeConfig;
 use gammaboard::core::{ControlPlaneStore, RegisteredNode, WorkerRole};
 use gammaboard::runners::{NodeRunner, NodeRunnerConfig};
 use std::{
@@ -59,8 +59,8 @@ pub struct AutoRunArgs {
 
 pub async fn run_node_commands(
     command: NodeCommand,
-    config: &CliConfig,
-    cli_config_path: &Path,
+    config: &RuntimeConfig,
+    runtime_config_path: &Path,
     quiet: bool,
 ) -> Result<()> {
     if let NodeCommand::Run(args) = command {
@@ -68,7 +68,7 @@ pub async fn run_node_commands(
     }
 
     if let NodeCommand::AutoRun(args) = command {
-        return run_auto_run_command(args, config, cli_config_path, quiet).await;
+        return run_auto_run_command(args, config, runtime_config_path, quiet).await;
     }
 
     with_control_store(
@@ -122,7 +122,7 @@ fn node_command_name(command: &NodeCommand) -> &'static str {
     }
 }
 
-async fn run_node(args: NodeRunArgs, config: &CliConfig, quiet: bool) -> Result<()> {
+async fn run_node(args: NodeRunArgs, config: &RuntimeConfig, quiet: bool) -> Result<()> {
     let node_name = args.name.clone();
     let span = tracing::span!(
         tracing::Level::TRACE,
@@ -147,8 +147,8 @@ async fn run_node(args: NodeRunArgs, config: &CliConfig, quiet: bool) -> Result<
 
 async fn run_auto_run_command(
     args: AutoRunArgs,
-    config: &CliConfig,
-    cli_config_path: &Path,
+    config: &RuntimeConfig,
+    runtime_config_path: &Path,
     quiet: bool,
 ) -> Result<()> {
     let planned = with_control_store(config, 10, quiet, "node_auto_run", |store| async move {
@@ -163,8 +163,8 @@ async fn run_auto_run_command(
         let stderr_log = File::create(&stderr_log_path)?;
         let mut command = std::process::Command::new(&binary);
         command
-            .arg("--cli-config")
-            .arg(cli_config_path)
+            .arg("--runtime-config")
+            .arg(runtime_config_path)
             .args(node_api::node_run_cli_args(
                 node_name,
                 args.max_start_failures,
