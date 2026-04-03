@@ -84,6 +84,15 @@ pub async fn run_deploy_command(
 
 async fn deploy_up(args: DeployUpArgs, runtime_config: &RuntimeConfig) -> Result<()> {
     let deploy_config = DeployConfig::load(&args.deploy_config)?;
+
+    if deploy_config.database.ensure_started {
+        db::start_db(
+            &runtime_config.local_postgres,
+            &runtime_config.database.url,
+            false,
+        )?;
+    }
+
     deploy_down_internal(&deploy_config, runtime_config).await?;
 
     fs::create_dir_all("logs")?;
@@ -93,14 +102,6 @@ async fn deploy_up(args: DeployUpArgs, runtime_config: &RuntimeConfig) -> Result
     fs::create_dir_all("tmp/nginx/fastcgi")?;
     fs::create_dir_all("tmp/nginx/uwsgi")?;
     fs::create_dir_all("tmp/nginx/scgi")?;
-
-    if deploy_config.database.ensure_started {
-        db::start_db(
-            &runtime_config.local_postgres,
-            &runtime_config.database.url,
-            false,
-        )?;
-    }
 
     let server_config = ServerConfig::load(&deploy_config.api_server.api_server_config)?;
     let frontend_port = args
@@ -245,9 +246,17 @@ async fn deploy_down_internal(
         .await;
     }
 
-    stop_backend(deploy_config)?;
-    stop_nginx(deploy_config)?;
+    let backend_stopped = stop_backend(deploy_config)?;
+    let nginx_stopped = stop_nginx(deploy_config)?;
     let _ = fs::remove_file(deploy_config.deploy_state_file());
+    match backend_stopped {
+        Some(pid) => println!("stopped backend pid={pid}"),
+        None => println!("backend already stopped"),
+    }
+    match nginx_stopped {
+        Some(pid) => println!("stopped nginx pid={pid}"),
+        None => println!("nginx already stopped"),
+    }
     Ok(())
 }
 
@@ -280,12 +289,13 @@ fn start_backend(deploy_config: &DeployConfig, mode: DeployMode) -> Result<()> {
     Ok(())
 }
 
-fn stop_backend(deploy_config: &DeployConfig) -> Result<()> {
+fn stop_backend(deploy_config: &DeployConfig) -> Result<Option<u32>> {
     if let Some(pid) = read_pid(&deploy_config.backend_pid_file()) {
         terminate_pid(pid)?;
         let _ = fs::remove_file(deploy_config.backend_pid_file());
+        return Ok(Some(pid));
     }
-    Ok(())
+    Ok(None)
 }
 
 fn start_nginx(deploy_config: &DeployConfig) -> Result<()> {
@@ -309,7 +319,7 @@ fn start_nginx(deploy_config: &DeployConfig) -> Result<()> {
     Ok(())
 }
 
-fn stop_nginx(deploy_config: &DeployConfig) -> Result<()> {
+fn stop_nginx(deploy_config: &DeployConfig) -> Result<Option<u32>> {
     if deploy_config.nginx_pid_file().exists() {
         let _ = Command::new("nginx")
             .arg("-e")
@@ -325,10 +335,12 @@ fn stop_nginx(deploy_config: &DeployConfig) -> Result<()> {
             if process_is_running(pid) {
                 terminate_pid(pid)?;
             }
+            let _ = fs::remove_file(deploy_config.nginx_pid_file());
+            return Ok(Some(pid));
         }
         let _ = fs::remove_file(deploy_config.nginx_pid_file());
     }
-    Ok(())
+    Ok(None)
 }
 
 fn write_nginx_config(
