@@ -80,6 +80,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Evaluators use a fixed single-slot latent prefetch and single-slot async submit pipeline to hide DB latency. Materialization and evaluation remain strictly one batch at a time.
 - Evaluators are stateless across reconcile-down. On stop they should drain already-claimed local latent batches without claiming new work, not persist evaluator state.
 - `sampler_aggregator_runner_params.queue_buffer` is the single public queue buffer control. The runner targets about `queue_buffer * active_evaluator_count` pending batches. `0.0` is the most aggressive setting and lets pending work drain to zero when the sampler cannot refill fast enough; larger values keep more pending work buffered. `max_queue_size` remains the hard cap.
+- `sampler_aggregator_runner_params.max_batches_per_tick` is a hard per-tick production cap and must apply to every sampler production path, including the forced initial round-trip batch.
 - `sampler_aggregator_runner_params.strict_batch_ordering` controls whether completed evaluator batches are ingested strictly as a contiguous id prefix or opportunistically in completed-id order.
 - Sampler frontend sync is lightweight and periodic: it updates `runs.current_observable`, appends `persisted_observable_snapshots`, and records performance snapshots. Full sampler resume state belongs in `run_sampler_checkpoints`, which is overwritten on unassignment/pause and contains the full sampler-aggregator checkpoint blob.
 

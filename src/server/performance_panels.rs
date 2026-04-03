@@ -490,13 +490,18 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
                     runtime.rolling.eval_ms_per_sample.mean,
                 ),
                 key_value(
+                    "produced_batches_per_tick",
+                    "Produced Batches Per Tick",
+                    runtime.rolling.produced_batches_per_tick.mean,
+                ),
+                key_value(
                     "batches_consumed_per_second",
                     "Batches Consumed Per Second",
                     runtime.rolling.batches_consumed_per_second.mean,
                 ),
                 key_value(
                     "runnable_batches_consumed_per_tick",
-                    "Pending Batches Consumed Per Tick",
+                    "Pending Batches Drained Per Tick",
                     runtime.rolling.runnable_batches_consumed_per_tick.mean,
                 ),
                 key_value(

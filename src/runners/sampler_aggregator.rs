@@ -50,6 +50,7 @@ struct RollingAveragesState {
     eval_ms_per_batch: RollingMetric,
     sampler_produce_ms_per_sample: RollingMetric,
     sampler_ingest_ms_per_sample: RollingMetric,
+    produced_batches_per_tick: RollingMetric,
     completed_samples_per_second: RollingMetric,
     runnable_queue_retained_ratio: RollingMetric,
     runnable_batches_consumed_per_tick: RollingMetric,
@@ -154,6 +155,9 @@ impl SamplerRuntimeState {
                 ),
                 sampler_ingest_ms_per_sample: RollingMetricSnapshot::from(
                     &self.rolling.sampler_ingest_ms_per_sample,
+                ),
+                produced_batches_per_tick: RollingMetricSnapshot::from(
+                    &self.rolling.produced_batches_per_tick,
                 ),
                 runnable_queue_retained_ratio: RollingMetricSnapshot::from(
                     &self.rolling.runnable_queue_retained_ratio,
@@ -1101,13 +1105,17 @@ where
                 let max_samples = self.max_samples_to_produce_this_tick(engine_max_samples)?;
                 match self.runtime_state.observable_checkpoint_state {
                     ObservableCheckpointState::NeedsInitialRoundTrip => {
-                        let nr_samples = max_samples.unwrap_or(MIN_BATCH_SIZE);
-                        if nr_samples == 0 {
+                        if self.hard_produce_limit(open_before_produce) == 0 {
                             Vec::new()
                         } else {
-                            self.runtime_state.observable_checkpoint_state =
-                                ObservableCheckpointState::WaitingForInitialRoundTrip;
-                            vec![nr_samples.min(MIN_BATCH_SIZE)]
+                            let nr_samples = max_samples.unwrap_or(MIN_BATCH_SIZE);
+                            if nr_samples == 0 {
+                                Vec::new()
+                            } else {
+                                self.runtime_state.observable_checkpoint_state =
+                                    ObservableCheckpointState::WaitingForInitialRoundTrip;
+                                vec![nr_samples.min(MIN_BATCH_SIZE)]
+                            }
                         }
                     }
                     ObservableCheckpointState::WaitingForInitialRoundTrip => {
@@ -1128,6 +1136,13 @@ where
                 }
             }
         };
+        if batch_plan.len() > self.params.max_batches_per_tick {
+            return Err(RunnerError::Engine(EngineError::engine(format!(
+                "batch plan exceeded max_batches_per_tick: planned={} max_batches_per_tick={}",
+                batch_plan.len(),
+                self.params.max_batches_per_tick
+            ))));
+        }
         let mut produced = Vec::with_capacity(batch_plan.len());
         let mut produced_samples_total = 0_i64;
         for nr_samples in batch_plan {
@@ -1161,6 +1176,10 @@ where
         if produced_batches == 0 {
             return Ok(0);
         }
+        self.runtime_state
+            .rolling
+            .produced_batches_per_tick
+            .observe(produced_batches as f64);
 
         let workload = ProducedBatchWorkload {
             pending_before_produce,

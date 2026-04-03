@@ -34,12 +34,19 @@ pub struct LocalPostgresConfig {
     pub socket_dir: String,
     pub log_file: String,
     pub max_connections: u32,
+    #[serde(default = "default_shared_buffers")]
     pub shared_buffers: String,
+    #[serde(default = "default_effective_cache_size")]
     pub effective_cache_size: String,
+    #[serde(default = "default_work_mem")]
     pub work_mem: String,
+    #[serde(default = "default_checkpoint_timeout")]
     pub checkpoint_timeout: String,
+    #[serde(default = "default_max_wal_size")]
     pub max_wal_size: String,
+    #[serde(default = "default_wal_compression")]
     pub wal_compression: bool,
+    #[serde(default = "default_synchronous_commit")]
     pub synchronous_commit: bool,
 }
 
@@ -180,4 +187,32 @@ fn default_advertise_host(host: &str, server_name: &str) -> String {
     } else {
         host.to_string()
     }
+}
+
+fn default_shared_buffers() -> String {
+    "4GB".to_string()
+}
+
+fn default_effective_cache_size() -> String {
+    "32GB".to_string()
+}
+
+fn default_work_mem() -> String {
+    "64MB".to_string()
+}
+
+fn default_checkpoint_timeout() -> String {
+    "30min".to_string()
+}
+
+fn default_max_wal_size() -> String {
+    "8GB".to_string()
+}
+
+fn default_wal_compression() -> bool {
+    true
+}
+
+fn default_synchronous_commit() -> bool {
+    false
 }
