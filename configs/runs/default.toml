@@ -11,9 +11,9 @@ performance_snapshot_interval_ms = 2000
 [sampler_aggregator_runner_params]
 performance_snapshot_interval_ms = 2000
 frontend_sync_interval_ms = 2000
-target_batch_eval_ms = 500.0
+target_batch_eval_ms = 1500.0
 queue_buffer = 2.0
-max_batch_size = 16384
+max_batch_size = 65536
 max_queue_size = 1024
 max_batches_per_tick = 512
 completed_batch_fetch_limit = 512

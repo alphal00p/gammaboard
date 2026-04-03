@@ -12,6 +12,7 @@ use crate::stores::{TaskOutputSnapshot, TaskStageSnapshot};
 use serde_json::Value as JsonValue;
 
 const DEFAULT_HISTORY_POINT_BUDGET: usize = 256;
+const EMPTY_HISTORY_CURSOR_SNAPSHOT_ID: i64 = 0;
 
 type CurrentProjectorFn =
     dyn for<'a> Fn(&TaskPanelContext<'a>) -> Result<Option<PanelState>, EngineError> + Send + Sync;
@@ -290,7 +291,11 @@ impl TaskPanelSource {
         let target_level = target_downsample_level(&panels, &compacted_full_updates);
         let cursor_snapshot_id = latest_persisted_snapshot
             .and_then(|snapshot| snapshot.id.parse::<i64>().ok())
-            .or(requested_cursor.snapshot_id);
+            .or(requested_cursor.snapshot_id)
+            .or_else(|| {
+                self.needs_history()
+                    .then_some(EMPTY_HISTORY_CURSOR_SNAPSHOT_ID)
+            });
         let cursor = format_cursor(TaskPanelCursor {
             snapshot_id: cursor_snapshot_id,
             downsample_level: target_level,
@@ -909,5 +914,29 @@ mod tests {
         };
         assert!(points.len() <= DEFAULT_HISTORY_POINT_BUDGET);
         assert_eq!(points.last().map(|point| point.x), Some(299.0));
+    }
+
+    #[test]
+    fn build_response_emits_non_null_cursor_for_append_history_without_persisted_snapshots() {
+        let task = inherited_complex_sample_task();
+        let run_task = run_task(task.clone());
+        let observable = complex_observable();
+        let source = TaskPanelSource::new(&task, Some(ObservableConfig::Complex));
+
+        let response = source
+            .build_response(
+                "run:1:task:1".to_string(),
+                TaskPanelCursor::default(),
+                &run_task,
+                &JsonValue::Object(Default::default()),
+                Some(&observable),
+                None,
+                None,
+                &[],
+                &[],
+            )
+            .expect("build response");
+
+        assert_eq!(response.cursor.as_deref(), Some("0:0"));
     }
 }
