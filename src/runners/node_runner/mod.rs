@@ -27,7 +27,8 @@ use self::role_runner::RoleRunner;
 
 #[derive(Debug, Clone)]
 pub struct NodeRunnerConfig {
-    pub min_tick_time: Duration,
+    pub evaluator_min_tick_time: Duration,
+    pub sampler_min_tick_time: Duration,
     pub max_consecutive_start_failures: u32,
     pub reconcile_initial_backoff: Duration,
     pub reconcile_backoff_factor: f64,
@@ -64,7 +65,8 @@ impl<T> NodeRunnerStore for T where
 impl Default for NodeRunnerConfig {
     fn default() -> Self {
         Self {
-            min_tick_time: Duration::from_millis(50),
+            evaluator_min_tick_time: Duration::from_millis(50),
+            sampler_min_tick_time: Duration::from_millis(10),
             max_consecutive_start_failures: 3,
             reconcile_initial_backoff: Duration::from_millis(50),
             reconcile_backoff_factor: 2.0,
@@ -187,6 +189,13 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
     fn current_target(&self) -> Option<RoleTarget> {
         self.active_runner.as_ref().map(|runner| runner.target)
+    }
+
+    fn min_tick_time_for_role(&self, role: WorkerRole) -> Duration {
+        match role {
+            WorkerRole::Evaluator => self.config.evaluator_min_tick_time,
+            WorkerRole::SamplerAggregator => self.config.sampler_min_tick_time,
+        }
     }
 
     fn spawn_lease_renewal_task(&self) -> LeaseRenewalHandle {
@@ -454,7 +463,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                         continue;
                     }
                     let elapsed = tick_started.elapsed();
-                    if elapsed < self.config.min_tick_time {
+                    let min_tick_time = self.min_tick_time_for_role(target.role);
+                    if elapsed < min_tick_time {
                         #[cfg(unix)]
                         tokio::select! {
                             _ = &mut shutdown => {
@@ -465,7 +475,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                                 info!("stopping node-runner (SIGTERM)");
                                 break;
                             }
-                            _ = sleep(self.config.min_tick_time - elapsed) => {}
+                            _ = sleep(min_tick_time - elapsed) => {}
                         }
                         #[cfg(not(unix))]
                         tokio::select! {
@@ -473,7 +483,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                                 info!("stopping node-runner");
                                 break;
                             }
-                            _ = sleep(self.config.min_tick_time - elapsed) => {}
+                            _ = sleep(min_tick_time - elapsed) => {}
                         }
                         continue;
                     }
