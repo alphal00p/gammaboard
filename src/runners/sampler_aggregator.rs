@@ -57,6 +57,8 @@ struct RollingAveragesState {
     active_evaluator_count_ms: RollingMetric,
     completed_fetch_wait_ms: RollingMetric,
     completed_fetch_ingest_ms: RollingMetric,
+    aggregation_flush_ms: RollingMetric,
+    completed_delete_ms: RollingMetric,
     enqueue_drain_wait_ms: RollingMetric,
     produce_enqueue_ms: RollingMetric,
     progress_sync_ms: RollingMetric,
@@ -170,6 +172,10 @@ impl SamplerRuntimeState {
                 completed_fetch_ingest_ms: RollingMetricSnapshot::from(
                     &self.rolling.completed_fetch_ingest_ms,
                 ),
+                aggregation_flush_ms: RollingMetricSnapshot::from(
+                    &self.rolling.aggregation_flush_ms,
+                ),
+                completed_delete_ms: RollingMetricSnapshot::from(&self.rolling.completed_delete_ms),
                 enqueue_drain_wait_ms: RollingMetricSnapshot::from(
                     &self.rolling.enqueue_drain_wait_ms,
                 ),
@@ -863,23 +869,34 @@ where
             return Ok(());
         }
 
+        let persist_snapshot = force;
         let current_observable = self
             .observable_state
             .to_json()
             .map_err(RunnerError::Engine)?;
-        let snapshot = self
-            .observable_state
-            .to_persistent_json()
-            .map_err(RunnerError::Engine)?;
+        let snapshot = if persist_snapshot {
+            Some(
+                self.observable_state
+                    .to_persistent_json()
+                    .map_err(RunnerError::Engine)?,
+            )
+        } else {
+            None
+        };
+        let aggregation_flush_started = Instant::now();
         self.store
             .save_aggregation(
                 self.run_id,
                 self.task.id,
                 &current_observable,
-                &snapshot,
+                snapshot.as_ref(),
                 self.runtime_state.pending_persisted_completed_batches,
             )
             .await?;
+        observe_duration_ms(
+            &mut self.runtime_state.rolling.aggregation_flush_ms,
+            aggregation_flush_started.elapsed(),
+        );
         self.runtime_state.pending_persisted_completed_batches = 0;
         self.last_frontend_sync_at = Instant::now();
         Ok(())
@@ -985,7 +1002,12 @@ where
             .iter()
             .map(|batch| batch.batch_id)
             .collect::<Vec<_>>();
+        let completed_delete_started = Instant::now();
         self.store.delete_completed_batches(&consumed_ids).await?;
+        observe_duration_ms(
+            &mut self.runtime_state.rolling.completed_delete_ms,
+            completed_delete_started.elapsed(),
+        );
         self.runtime_state.last_completed_batch_id = consumed_ids.last().copied();
         self.completed_source
             .start_prefetch(&self.store, self.runtime_state.last_completed_batch_id);

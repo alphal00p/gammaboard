@@ -154,7 +154,7 @@ pub trait AggregationStore: Send + Sync {
         run_id: i32,
         task_id: i64,
         current_observable: &JsonValue,
-        persisted_observable: &JsonValue,
+        persisted_observable: Option<&JsonValue>,
         delta_batches_completed: i32,
     ) -> Result<(), StoreError>;
     async fn save_sampler_checkpoint(

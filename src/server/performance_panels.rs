@@ -525,6 +525,16 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
                     runtime.rolling.sampler_ingest_ms_per_sample.mean,
                 ),
                 key_value(
+                    "aggregation_flush_ms",
+                    "Aggregation Flush (ms)",
+                    runtime.rolling.aggregation_flush_ms.mean,
+                ),
+                key_value(
+                    "completed_delete_ms",
+                    "Completed Delete (ms)",
+                    runtime.rolling.completed_delete_ms.mean,
+                ),
+                key_value(
                     "runnable_queue_retained_ratio",
                     "Pending Queue Carryover Ratio",
                     runtime.rolling.runnable_queue_retained_ratio.mean,
@@ -708,6 +718,18 @@ fn sampler_tick_segments(runtime: &SamplerRuntimeMetrics) -> Vec<TickBreakdownSe
                 .mean
                 .unwrap_or(0.0),
             "#ca6702",
+        ),
+        (
+            "aggregation_flush",
+            "Aggregation Flush",
+            runtime.rolling.aggregation_flush_ms.mean.unwrap_or(0.0),
+            "#b56576",
+        ),
+        (
+            "completed_delete",
+            "Completed Delete",
+            runtime.rolling.completed_delete_ms.mean.unwrap_or(0.0),
+            "#6d597a",
         ),
         (
             "enqueue_drain_wait",

@@ -765,21 +765,23 @@ impl AggregationStore for PgStore {
         run_id: i32,
         task_id: i64,
         current_observable: &JsonValue,
-        persisted_observable: &JsonValue,
+        persisted_observable: Option<&JsonValue>,
         delta_batches_completed: i32,
     ) -> Result<(), StoreError> {
         if delta_batches_completed < 0 {
             return Ok(());
         }
 
-        queries::insert_persisted_observable_snapshot(
-            &self.pool,
-            run_id,
-            task_id,
-            persisted_observable,
-        )
-        .await
-        .map_err(map_sqlx)?;
+        if let Some(persisted_observable) = persisted_observable {
+            queries::insert_persisted_observable_snapshot(
+                &self.pool,
+                run_id,
+                task_id,
+                persisted_observable,
+            )
+            .await
+            .map_err(map_sqlx)?;
+        }
         queries::update_run_current_observable(
             &self.pool,
             run_id,
