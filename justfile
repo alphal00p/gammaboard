@@ -34,13 +34,17 @@ deploy-status:
     {{bin}} deploy status
 
 deploy host mode="dev":
-    {{bin}} deploy up --deploy-config "configs/deploy/{{host}}.toml" --mode "{{mode}}"
+    #!/usr/bin/env bash
+    set -euo pipefail
 
-deploy-itphlies-dev:
-    {{bin}} deploy up --deploy-config "configs/deploy/itphlies.toml" --mode "dev"
-
-deploy-itphlies-release:
-    {{bin}} deploy up --deploy-config "configs/deploy/itphlies.toml" --mode "release"
+    just build-frontend
+    if [[ "{{mode}}" == "release" ]]; then
+        just build-backend-release
+        {{release_bin}} deploy up --deploy-config "configs/deploy/{{host}}.toml" --mode "{{mode}}"
+    else
+        just build-backend
+        {{bin}} deploy up --deploy-config "configs/deploy/{{host}}.toml" --mode "{{mode}}"
+    fi
 
 test-e2e:
     just build-backend

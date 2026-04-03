@@ -133,11 +133,10 @@ gammaboard deploy down
 
 Useful options:
 - `--frontend-port <PORT>` overrides the deploy profile's frontend/nginx listen port for that launch
-- `--skip-build` reuses the existing frontend build and backend binary
 
 Deploy profiles now derive the printed/open URLs from `frontend_http.frontend_port` plus `frontend_http.frontend_advertise_hosts`, instead of duplicating full URL strings in the config.
 
-The `just` wrappers now just forward to the CLI:
+The `just` wrappers build first, then invoke the CLI:
 ```bash
 just deploy local dev
 just deploy itphlies release
@@ -146,10 +145,11 @@ just stop-deploy
 ```
 
 Detached deploy:
-- builds the frontend and backend unless `--skip-build` is used
 - optionally starts local Postgres via `gammaboard db start`
 - starts `gammaboard server` detached
 - generates an nginx config from the deploy profile and serves the frontend build directly from nginx
+
+`gammaboard deploy ...` itself does not build. Use the `just deploy ...` wrapper when you want the frontend and the requested backend mode built first.
 
 Deploy targets are alternatives, not concurrent stacks on one machine: all profiles currently share the same PID/log namespace under `logs/`, so `deploy up` replaces the current detached deploy stack.
 
@@ -158,9 +158,9 @@ Use this flow when you want both direct LAN access and the SSH tunnel option.
 
 1. On ITPhlies, from the repo root, run:
    ```bash
-   gammaboard deploy up --deploy-config configs/deploy/itphlies.toml --mode release
+   just deploy itphlies release
    ```
-   This builds the frontend and release backend, launches `target/release/gammaboard server`, and generates the nginx config from the deploy profile.
+   This builds the frontend and release backend, then launches `target/release/gammaboard server` and generates the nginx config from the deploy profile.
 2. On your laptop, open an SSH tunnel:
    ```bash
    ssh -N -L 8080:127.0.0.1:8080 ITPhliesTails
@@ -197,7 +197,7 @@ Important:
 - Local detached deploy setup:
   - server config: [configs/server/local.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server/local.toml)
   - deploy config: [configs/deploy/local.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/deploy/local.toml)
-  - run with: `gammaboard deploy up --deploy-config configs/deploy/local.toml --mode dev`
+  - run with: `just deploy local dev`
   - stop with: `gammaboard deploy down --deploy-config configs/deploy/local.toml`
 
 ## Dashboard Auth

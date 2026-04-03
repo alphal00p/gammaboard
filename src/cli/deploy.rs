@@ -40,13 +40,6 @@ impl DeployMode {
         }
     }
 
-    fn cargo_args(self) -> [&'static str; 3] {
-        match self {
-            Self::Dev => ["build", "--profile", "dev-optim"],
-            Self::Release => ["build", "--release", ""],
-        }
-    }
-
     fn binary_path(self) -> PathBuf {
         match self {
             Self::Dev => PathBuf::from("./target/dev-optim/gammaboard"),
@@ -63,8 +56,6 @@ pub struct DeployUpArgs {
     mode: DeployMode,
     #[arg(long)]
     frontend_port: Option<u16>,
-    #[arg(long, action = clap::ArgAction::SetTrue)]
-    skip_build: bool,
 }
 
 #[derive(Debug, Args)]
@@ -102,11 +93,6 @@ async fn deploy_up(args: DeployUpArgs, runtime_config: &RuntimeConfig) -> Result
     fs::create_dir_all("tmp/nginx/fastcgi")?;
     fs::create_dir_all("tmp/nginx/uwsgi")?;
     fs::create_dir_all("tmp/nginx/scgi")?;
-
-    if !args.skip_build {
-        build_frontend()?;
-        build_backend(args.mode)?;
-    }
 
     if deploy_config.database.ensure_started {
         db::start_db(
@@ -274,26 +260,6 @@ fn load_deploy_config_for_management(path: Option<&Path>) -> Result<DeployConfig
         Ok(state) => DeployConfig::load(&state.deploy_config),
         Err(_) => Ok(default),
     }
-}
-
-fn build_frontend() -> Result<()> {
-    run_command(
-        Command::new("npm")
-            .arg("run")
-            .arg("build")
-            .current_dir("dashboard"),
-        "npm run build",
-    )
-}
-
-fn build_backend(mode: DeployMode) -> Result<()> {
-    let mut command = Command::new("cargo");
-    let cargo_args = mode.cargo_args();
-    command.arg(cargo_args[0]).arg(cargo_args[1]);
-    if !cargo_args[2].is_empty() {
-        command.arg(cargo_args[2]);
-    }
-    run_command(&mut command, "cargo build")
 }
 
 fn start_backend(deploy_config: &DeployConfig, mode: DeployMode) -> Result<()> {
