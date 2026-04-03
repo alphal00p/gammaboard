@@ -18,19 +18,6 @@ import {
   Select,
   Typography,
 } from "@mui/material";
-import {
-  Area,
-  CartesianGrid,
-  ComposedChart,
-  ErrorBar,
-  Line,
-  ReferenceLine,
-  ResponsiveContainer,
-  Scatter,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 import Plot from "react-plotly.js";
 import { formatCompactNumber, formatDateTime, formatScientific } from "../../utils/formatters";
 import { asArray } from "../../utils/collections";
@@ -85,8 +72,6 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
   }
   return renderablePanels;
 };
-
-const formatAxisNumber = (value) => formatScientific(value, 2, "");
 
 const fitDomain = (values) => {
   const finiteValues = values.filter((value) => Number.isFinite(value));
@@ -149,23 +134,6 @@ const renderStructuredValue = (value) => {
   return JSON.stringify(value);
 };
 
-const RelativeErrorTooltip = ({ active, payload, label }) => {
-  if (!active) return null;
-  const point = asArray(payload).find((entry) => entry?.dataKey === "relative_error");
-  const relativeError = Number(point?.payload?.relative_error);
-  if (!Number.isFinite(relativeError)) return null;
-  return (
-    <Card variant="outlined" sx={{ pointerEvents: "none" }}>
-      <CardContent sx={{ py: 1, px: 1.25, "&:last-child": { pb: 1 } }}>
-        <Typography variant="caption" sx={{ display: "block", color: "text.secondary", mb: 0.5 }}>
-          {label || point?.payload?.rangeLabel || ""}
-        </Typography>
-        <Typography variant="body2">relative error: {formatScientific(relativeError, 6)}</Typography>
-      </CardContent>
-    </Card>
-  );
-};
-
 const scalarHeatmapColorscale = [
   [0, "rgb(0,0,255)"],
   [0.5, "rgb(128,200,128)"],
@@ -226,59 +194,88 @@ const panelColumnSpan = (descriptor) => {
   }
 };
 
-const buildScalarBandData = (points) =>
-  points.map((point) => ({
-    ...point,
-    band_lower: Number.isFinite(point?.y_min) ? point.y_min : null,
-    band_upper_delta: Number.isFinite(point?.y_min) && Number.isFinite(point?.y_max) ? point.y_max - point.y_min : null,
-  }));
+const basePlotLayout = {
+  autosize: true,
+  margin: { l: 56, r: 24, t: 8, b: 48 },
+  paper_bgcolor: "rgba(0,0,0,0)",
+  plot_bgcolor: "rgba(0,0,0,0)",
+  showlegend: false,
+};
+
+const basePlotConfig = {
+  displayModeBar: false,
+  responsive: true,
+};
 
 const ScalarTimeseriesPanel = ({ title, state }) => {
   const points = asArray(state?.points)
     .slice()
     .sort((a, b) => a.x - b.x);
   if (points.length === 0) return null;
-  const data = buildScalarBandData(points);
-  const domain = fitDomain(data.flatMap((point) => [point.y, point.y_min, point.y_max]));
-  const xDomain = fitXDomain(data.map((point) => point.x));
-  const hasBand = data.some((point) => Number.isFinite(point.y_min) && Number.isFinite(point.y_max));
+  const domain = fitDomain(points.flatMap((point) => [point.y, point.y_min, point.y_max]));
+  const xDomain = fitXDomain(points.map((point) => point.x));
+  const hasBand = points.some((point) => Number.isFinite(point.y_min) && Number.isFinite(point.y_max));
+  const traces = [];
+  if (hasBand) {
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x: points.map((point) => point.x),
+      y: points.map((point) => (Number.isFinite(point.y_min) ? point.y_min : null)),
+      line: { width: 0 },
+      hoverinfo: "skip",
+      showlegend: false,
+    });
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x: points.map((point) => point.x),
+      y: points.map((point) => (Number.isFinite(point.y_max) ? point.y_max : null)),
+      line: { width: 0 },
+      fill: "tonexty",
+      fillcolor: bandColor,
+      hoverinfo: "skip",
+      showlegend: false,
+    });
+  }
+  traces.push({
+    type: "scatter",
+    mode: "lines",
+    x: points.map((point) => point.x),
+    y: points.map((point) => point.y),
+    line: { color: "#005f73", width: 1.8 },
+    hovertemplate: "x=%{x:.6g}<br>y=%{y:.6g}<extra></extra>",
+    showlegend: false,
+  });
   return (
     <Card variant="outlined">
       <CardContent>
         <Typography variant="subtitle1" sx={{ mb: 2 }}>
           {title}
         </Typography>
-        <ResponsiveContainer width="100%" height={280}>
-          <ComposedChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="x" type="number" domain={xDomain} allowDataOverflow />
-            <YAxis tickFormatter={formatAxisNumber} domain={domain} allowDataOverflow />
-            <Tooltip formatter={(value) => formatScientific(value, 6)} />
-            {hasBand ? (
-              <>
-                <Area
-                  type="monotone"
-                  dataKey="band_lower"
-                  stackId="band"
-                  stroke="none"
-                  fill="transparent"
-                  isAnimationActive={false}
-                  activeDot={false}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="band_upper_delta"
-                  stackId="band"
-                  stroke="none"
-                  fill={bandColor}
-                  isAnimationActive={false}
-                  activeDot={false}
-                />
-              </>
-            ) : null}
-            <Line type="monotone" dataKey="y" stroke="#005f73" dot={false} isAnimationActive={false} />
-          </ComposedChart>
-        </ResponsiveContainer>
+        <Box sx={{ width: "100%", minHeight: 280 }}>
+          <Plot
+            data={traces}
+            layout={{
+              ...basePlotLayout,
+              xaxis: {
+                range: xDomain,
+                tickformat: ".3g",
+                gridcolor: "rgba(148,163,184,0.18)",
+                zeroline: false,
+              },
+              yaxis: {
+                range: domain,
+                tickformat: ".3g",
+                gridcolor: "rgba(148,163,184,0.18)",
+                zeroline: false,
+              },
+            }}
+            config={basePlotConfig}
+            style={{ width: "100%", height: "280px" }}
+            useResizeHandler
+          />
+        </Box>
       </CardContent>
     </Card>
   );
@@ -296,31 +293,47 @@ const MultiTimeseriesPanel = ({ title, state }) => {
     ),
   );
   const xDomain = fitXDomain(data.map((row) => row.x));
+  const traces = series.map((item, index) => ({
+    type: "scatter",
+    mode: "lines",
+    x: data.map((row) => row.x),
+    y: data.map((row) => row[item.id] ?? null),
+    name: item.label,
+    line: { color: lineColors[index % lineColors.length], width: 1.8 },
+    hovertemplate: `${item.label}: %{y:.6g}<br>x=%{x:.6g}<extra></extra>`,
+    connectgaps: false,
+  }));
   return (
     <Card variant="outlined">
       <CardContent>
         <Typography variant="subtitle1" sx={{ mb: 2 }}>
           {title}
         </Typography>
-        <ResponsiveContainer width="100%" height={280}>
-          <ComposedChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="x" type="number" domain={xDomain} allowDataOverflow />
-            <YAxis tickFormatter={formatAxisNumber} domain={domain} allowDataOverflow />
-            <Tooltip formatter={(value) => formatScientific(value, 6)} />
-            {series.map((item, index) => (
-              <Line
-                key={item.id}
-                type="monotone"
-                dataKey={item.id}
-                name={item.label}
-                stroke={lineColors[index % lineColors.length]}
-                dot={false}
-                isAnimationActive={false}
-              />
-            ))}
-          </ComposedChart>
-        </ResponsiveContainer>
+        <Box sx={{ width: "100%", minHeight: 280 }}>
+          <Plot
+            data={traces}
+            layout={{
+              ...basePlotLayout,
+              showlegend: true,
+              legend: { orientation: "h", x: 0, y: 1.14 },
+              xaxis: {
+                range: xDomain,
+                tickformat: ".3g",
+                gridcolor: "rgba(148,163,184,0.18)",
+                zeroline: false,
+              },
+              yaxis: {
+                range: domain,
+                tickformat: ".3g",
+                gridcolor: "rgba(148,163,184,0.18)",
+                zeroline: false,
+              },
+            }}
+            config={basePlotConfig}
+            style={{ width: "100%", height: "280px" }}
+            useResizeHandler
+          />
+        </Box>
       </CardContent>
     </Card>
   );
@@ -681,8 +694,93 @@ const HistogramPanel = ({ title, state }) => {
   const xDomain = fitHistogramXDomain(bins);
   const yDomain = buildHistogramYDomain(bins, scale);
   const relativeErrorYDomain = buildRelativeErrorYDomain(relativeErrorData);
-  const yScale = scale === "log" && yDomain[0] !== "auto" ? "log" : "auto";
-  const yTickFormatter = scale === "log" ? (value) => formatScientific(value, 2, "") : formatAxisNumber;
+  const stepX = stepData.map((point) => point.x);
+  const stepY = stepData.map((point) => point.y);
+  const relX = relativeErrorData.map((point) => point.x);
+  const relPositive = relativeErrorData.map((point) => point.positive_relative_error);
+  const relNegative = relativeErrorData.map((point) => point.negative_relative_error);
+  const relAbs = relativeErrorData.map((point) => point.relative_error);
+  const plotData = [
+    {
+      type: "scatter",
+      mode: "lines",
+      x: stepX,
+      y: stepY,
+      line: { color: "#005f73", width: 1.35, shape: "hv" },
+      customdata: stepData.map((point) => point.rangeLabel),
+      hovertemplate: "%{customdata}<br>bin average: %{y:.6g}<extra></extra>",
+      xaxis: "x",
+      yaxis: "y",
+      showlegend: false,
+    },
+    {
+      type: "scatter",
+      mode: "markers",
+      x: errorBarData.map((point) => point.x),
+      y: errorBarData.map((point) => point.y),
+      marker: { color: "rgba(0,0,0,0)", size: 6 },
+      error_y: {
+        type: "data",
+        array: errorBarData.map((point) => point.error),
+        visible: true,
+        color: "#7c8a96",
+        thickness: 1.4,
+        width: 6,
+      },
+      customdata: errorBarData.map((point) => [point.rangeLabel, point.error]),
+      hovertemplate: "%{customdata[0]}<br>%{y:.6g} ± %{customdata[1]:.6g}<extra></extra>",
+      xaxis: "x",
+      yaxis: "y",
+      showlegend: false,
+    },
+    {
+      type: "scatter",
+      mode: "lines",
+      x: relX,
+      y: relPositive,
+      line: { color: "#bb3e03", width: 1, shape: "hv" },
+      hoverinfo: "skip",
+      xaxis: "x2",
+      yaxis: "y2",
+      showlegend: false,
+    },
+    {
+      type: "scatter",
+      mode: "lines",
+      x: relX,
+      y: relNegative,
+      line: { color: "#bb3e03", width: 1, shape: "hv" },
+      fill: "tonexty",
+      fillcolor: "rgba(187, 62, 3, 0.22)",
+      hoverinfo: "skip",
+      xaxis: "x2",
+      yaxis: "y2",
+      showlegend: false,
+    },
+    {
+      type: "scatter",
+      mode: "lines",
+      x: relX,
+      y: relAbs,
+      line: { color: "#bb3e03", width: 1.2, shape: "hv" },
+      customdata: relativeErrorData.map((point) => point.rangeLabel),
+      hovertemplate: "%{customdata}<br>relative error: %{y:.6g}<extra></extra>",
+      xaxis: "x2",
+      yaxis: "y2",
+      showlegend: false,
+    },
+    {
+      type: "scatter",
+      mode: "lines",
+      x: relX,
+      y: relAbs.map((value) => (Number.isFinite(value) ? -Math.abs(value) : null)),
+      line: { color: "#bb3e03", width: 1.2, shape: "hv" },
+      hoverinfo: "skip",
+      xaxis: "x2",
+      yaxis: "y2",
+      showlegend: false,
+    },
+  ];
   return (
     <Card variant="outlined">
       <CardContent>
@@ -705,113 +803,61 @@ const HistogramPanel = ({ title, state }) => {
             </Select>
           </FormControl>
         </Box>
-        <ResponsiveContainer width="100%" height={280}>
-          <ComposedChart data={stepData}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="x" type="number" domain={xDomain} allowDataOverflow tickFormatter={formatAxisNumber} />
-            <YAxis tickFormatter={yTickFormatter} domain={yDomain} allowDataOverflow scale={yScale} width={72} />
-            <Tooltip
-              formatter={(value, name, props) => {
-                if (name === "y") {
-                  const error = Number(props?.payload?.error) || 0;
-                  return [`${formatScientific(value, 6)} ± ${formatScientific(error, 6)}`, "bin average"];
-                }
-                return [formatScientific(value, 6), name];
-              }}
-              labelFormatter={(_, payload) => payload?.[0]?.payload?.rangeLabel || ""}
-            />
-            <Line
-              type="stepAfter"
-              dataKey="y"
-              stroke="#005f73"
-              strokeWidth={1.35}
-              dot={false}
-              activeDot={{ r: 2.5, fill: "#005f73", stroke: "#f8fafc", strokeWidth: 1 }}
-              isAnimationActive={false}
-            />
-            <Scatter
-              data={errorBarData}
-              dataKey="y"
-              fill="transparent"
-              fillOpacity={0}
-              stroke="transparent"
-              strokeOpacity={0}
-              line={false}
-              shape="circle"
-              isAnimationActive={false}
-            >
-              <ErrorBar
-                dataKey="error"
-                direction="y"
-                stroke="#7c8a96"
-                strokeWidth={1.4}
-                width={6}
-                isAnimationActive={false}
-                animationDuration={0}
-              />
-            </Scatter>
-          </ComposedChart>
-        </ResponsiveContainer>
-        <Box sx={{ mt: 2.5 }}>
-          <Typography variant="body2" sx={{ mb: 1, color: "text.secondary" }}>
-            Relative Error Shape
-          </Typography>
-          <ResponsiveContainer width="100%" height={168}>
-            <ComposedChart data={relativeErrorData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="x" type="number" domain={xDomain} allowDataOverflow tickFormatter={formatAxisNumber} />
-              <YAxis
-                tickFormatter={formatAxisNumber}
-                domain={relativeErrorYDomain}
-                allowDataOverflow
-                scale="linear"
-                width={72}
-              />
-              <Tooltip
-                content={<RelativeErrorTooltip />}
-                labelFormatter={(_, payload) => payload?.[0]?.payload?.rangeLabel || ""}
-              />
-              <ReferenceLine y={0} stroke="#6b7280" strokeDasharray="4 4" ifOverflow="extendDomain" />
-              <Area
-                type="stepAfter"
-                dataKey="positive_relative_error"
-                stroke="#bb3e03"
-                strokeWidth={1}
-                fill="rgba(187, 62, 3, 0.22)"
-                isAnimationActive={false}
-                activeDot={false}
-                connectNulls={false}
-              />
-              <Area
-                type="stepAfter"
-                dataKey="negative_relative_error"
-                stroke="#bb3e03"
-                strokeWidth={1}
-                fill="rgba(187, 62, 3, 0.22)"
-                isAnimationActive={false}
-                activeDot={false}
-                connectNulls={false}
-              />
-              <Line
-                type="stepAfter"
-                dataKey="relative_error"
-                stroke="#bb3e03"
-                strokeWidth={1.25}
-                dot={false}
-                isAnimationActive={false}
-                connectNulls={false}
-              />
-              <Line
-                type="stepAfter"
-                dataKey={(point) => (Number.isFinite(point?.relative_error) ? -Math.abs(point.relative_error) : null)}
-                stroke="#bb3e03"
-                strokeWidth={1.25}
-                dot={false}
-                isAnimationActive={false}
-                connectNulls={false}
-              />
-            </ComposedChart>
-          </ResponsiveContainer>
+        <Box sx={{ width: "100%", minHeight: 448 }}>
+          <Plot
+            data={plotData}
+            layout={{
+              ...basePlotLayout,
+              margin: { l: 64, r: 20, t: 8, b: 48 },
+              grid: { rows: 2, columns: 1, pattern: "independent", roworder: "top to bottom" },
+              xaxis: {
+                range: xDomain,
+                tickformat: ".3g",
+                gridcolor: "rgba(148,163,184,0.18)",
+                zeroline: false,
+                showticklabels: false,
+              },
+              yaxis: {
+                range: scale === "log" ? undefined : yDomain,
+                autorange: scale === "log",
+                tickformat: ".3g",
+                type: scale === "log" && yDomain[0] !== "auto" ? "log" : "linear",
+                gridcolor: "rgba(148,163,184,0.18)",
+                zeroline: false,
+              },
+              xaxis2: {
+                range: xDomain,
+                tickformat: ".3g",
+                gridcolor: "rgba(148,163,184,0.18)",
+                zeroline: false,
+              },
+              yaxis2: {
+                range: relativeErrorYDomain,
+                tickformat: ".3g",
+                type: "linear",
+                gridcolor: "rgba(148,163,184,0.18)",
+                zeroline: true,
+                zerolinecolor: "#6b7280",
+                zerolinewidth: 1,
+              },
+              annotations: [
+                {
+                  xref: "paper",
+                  yref: "paper",
+                  x: 0,
+                  y: 0.34,
+                  xanchor: "left",
+                  yanchor: "bottom",
+                  text: "Relative Error Shape",
+                  showarrow: false,
+                  font: { size: 12, color: "#64748b" },
+                },
+              ],
+            }}
+            config={basePlotConfig}
+            style={{ width: "100%", height: "448px" }}
+            useResizeHandler
+          />
         </Box>
       </CardContent>
     </Card>
@@ -998,6 +1044,51 @@ const hsvToRgb = (h, s, v) => {
   return rgb.map((value) => Math.round((value + m) * 255));
 };
 
+const scalarImageLegendGradient = "linear-gradient(to top, rgb(0,0,255), rgb(128,200,128), rgb(255,0,0))";
+
+const ComplexImageColorbar = ({ colorMode, normalizationMode, complexMaxMagnitude, scalarMin, scalarMax }) => {
+  const isHueIntensity = colorMode === "complex_hue_intensity";
+
+  return (
+    <Box
+      sx={{
+        width: 80,
+        minWidth: 80,
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "center",
+        gap: 1,
+      }}
+    >
+      <Typography variant="body2" color="text.secondary">
+        {isHueIntensity ? "Magnitude" : "Value"}
+      </Typography>
+      <Box
+        sx={{
+          height: 240,
+          borderRadius: 1,
+          border: "1px solid",
+          borderColor: "divider",
+          background: isHueIntensity
+            ? "linear-gradient(to top, rgb(0,0,0), rgb(255,255,255))"
+            : scalarImageLegendGradient,
+        }}
+      />
+      <Typography variant="caption" sx={{ fontFamily: "monospace" }}>
+        {formatScientific(isHueIntensity ? complexMaxMagnitude : scalarMax, 4)}
+      </Typography>
+      {isHueIntensity ? null : normalizationMode === "symmetric" ? (
+        <Typography variant="caption" color="text.secondary" sx={{ fontFamily: "monospace" }}>
+          0
+        </Typography>
+      ) : null}
+      <Typography variant="caption" color="text.secondary" sx={{ fontFamily: "monospace" }}>
+        {formatScientific(isHueIntensity ? 0 : scalarMin, 4)}
+      </Typography>
+    </Box>
+  );
+};
+
 const SelectPanel = ({ title, descriptor, value, onValueChange }) => {
   const options = asArray(descriptor?.state?.options);
   return (
@@ -1037,6 +1128,10 @@ const Image2dPanel = ({ title, state }) => {
   const [hover, setHover] = useState(null);
 
   const useScalarHeatmap = !imagValues && colorMode === "scalar_heatmap";
+  const { zmin: scalarMin, zmax: scalarMax } = useMemo(
+    () => buildScalarHeatmapScale(values, normalizationMode),
+    [normalizationMode, values],
+  );
   const complexMagnitudes = useMemo(
     () => (imagValues ? values.map((re, index) => Math.hypot(re, imagValues[index] || 0)) : []),
     [imagValues, values],
@@ -1221,36 +1316,14 @@ const Image2dPanel = ({ title, state }) => {
             />
             <ComplexImageTooltip hover={hover} />
           </Box>
-          {imagValues && colorMode === "complex_hue_intensity" ? (
-            <Box
-              sx={{
-                width: 80,
-                minWidth: 80,
-                display: "flex",
-                flexDirection: "column",
-                justifyContent: "center",
-                gap: 1,
-              }}
-            >
-              <Typography variant="body2" color="text.secondary">
-                Magnitude
-              </Typography>
-              <Box
-                sx={{
-                  height: 240,
-                  borderRadius: 1,
-                  border: "1px solid",
-                  borderColor: "divider",
-                  background: "linear-gradient(to top, rgb(0,0,0), rgb(255,255,255))",
-                }}
-              />
-              <Typography variant="caption" sx={{ fontFamily: "monospace" }}>
-                {formatScientific(complexMaxMagnitude, 4)}
-              </Typography>
-              <Typography variant="caption" color="text.secondary" sx={{ fontFamily: "monospace" }}>
-                0
-              </Typography>
-            </Box>
+          {imagValues ? (
+            <ComplexImageColorbar
+              colorMode={colorMode}
+              normalizationMode={normalizationMode}
+              complexMaxMagnitude={complexMaxMagnitude}
+              scalarMin={scalarMin}
+              scalarMax={scalarMax}
+            />
           ) : null}
         </Box>
       </CardContent>
