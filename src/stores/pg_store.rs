@@ -565,8 +565,12 @@ impl WorkQueueStore for PgStore {
         .map_err(map_sqlx)
     }
 
-    async fn get_batch_queue_counts(&self, run_id: i32) -> Result<BatchQueueCounts, StoreError> {
-        queries::get_batch_queue_counts(&self.pool, run_id)
+    async fn get_batch_queue_counts(
+        &self,
+        run_id: i32,
+        completed_after_batch_id: Option<i64>,
+    ) -> Result<BatchQueueCounts, StoreError> {
+        queries::get_batch_queue_counts(&self.pool, run_id, completed_after_batch_id)
             .await
             .map_err(map_sqlx)
     }
@@ -686,8 +690,13 @@ impl WorkQueueStore for PgStore {
 
         Ok(out)
     }
-    async fn delete_completed_batches(&self, batch_ids: &[i64]) -> Result<(), StoreError> {
-        queries::delete_completed_batches(&self.pool, batch_ids)
+    async fn cleanup_consumed_completed_batches(
+        &self,
+        run_id: i32,
+        up_to_batch_id: i64,
+        limit: usize,
+    ) -> Result<u64, StoreError> {
+        queries::cleanup_consumed_completed_batches(&self.pool, run_id, up_to_batch_id, limit)
             .await
             .map_err(map_sqlx)
     }

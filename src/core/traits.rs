@@ -83,7 +83,11 @@ pub trait WorkQueueStore: Send + Sync {
         requires_training_values: bool,
         batches: &[LatentBatch],
     ) -> Result<Vec<i64>, StoreError>;
-    async fn get_batch_queue_counts(&self, run_id: i32) -> Result<BatchQueueCounts, StoreError>;
+    async fn get_batch_queue_counts(
+        &self,
+        run_id: i32,
+        completed_after_batch_id: Option<i64>,
+    ) -> Result<BatchQueueCounts, StoreError>;
     async fn get_pending_batch_count(&self, run_id: i32) -> Result<i64, StoreError>;
     async fn get_open_batch_count(&self, run_id: i32) -> Result<i64, StoreError>;
     async fn claim_batch(
@@ -119,7 +123,12 @@ pub trait WorkQueueStore: Send + Sync {
         strict_ordering: bool,
         after_batch_id: Option<i64>,
     ) -> Result<Vec<CompletedBatch>, StoreError>;
-    async fn delete_completed_batches(&self, batch_ids: &[i64]) -> Result<(), StoreError>;
+    async fn cleanup_consumed_completed_batches(
+        &self,
+        run_id: i32,
+        up_to_batch_id: i64,
+        limit: usize,
+    ) -> Result<u64, StoreError>;
     async fn reclaim_abandoned_batches(&self, run_id: i32) -> Result<u64, StoreError>;
 }
 

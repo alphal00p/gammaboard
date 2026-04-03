@@ -394,12 +394,24 @@ fn incremental_updates(
     history_panels: Vec<Vec<PanelState>>,
 ) -> Vec<PanelUpdate> {
     let mut updates = current_panels
-        .into_iter()
+        .iter()
         .filter(|panel| history_mode_for(specs, panel.panel_id()) == PanelHistoryMode::None)
+        .cloned()
         .map(replace_panel)
         .collect::<Vec<_>>();
 
     let mut delta_by_id = std::collections::BTreeMap::new();
+    for panel in current_panels {
+        let panel_id = panel.panel_id().to_string();
+        if history_mode_for(specs, &panel_id) != PanelHistoryMode::Append {
+            continue;
+        }
+        if let Some(existing) = delta_by_id.get_mut(&panel_id) {
+            merge_panel_state(existing, panel);
+        } else {
+            delta_by_id.insert(panel_id, panel);
+        }
+    }
     for panels in history_panels {
         for panel in panels {
             let panel_id = panel.panel_id().to_string();

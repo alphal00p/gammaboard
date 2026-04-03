@@ -526,22 +526,22 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
                 ),
                 key_value(
                     "completed_fetch_wait_ms",
-                    "Completed Fetch+Decode (ms)",
+                    "Fetch Completed Batches (ms)",
                     runtime.rolling.completed_fetch_wait_ms.mean,
                 ),
                 key_value(
                     "completed_merge_ingest_ms",
-                    "Completed Merge+Ingest (ms)",
+                    "Merge Results / Ingest Training (ms)",
                     runtime.rolling.completed_merge_ingest_ms.mean,
                 ),
                 key_value(
                     "aggregation_flush_ms",
-                    "Aggregation Flush (ms)",
+                    "Write Observable (ms)",
                     runtime.rolling.aggregation_flush_ms.mean,
                 ),
                 key_value(
                     "completed_delete_ms",
-                    "Completed Delete (ms)",
+                    "Cleanup Consumed Batches (ms)",
                     runtime.rolling.completed_delete_ms.mean,
                 ),
                 key_value(
@@ -551,17 +551,17 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
                 ),
                 key_value(
                     "reclaim_ms",
-                    "Reclaim (ms)",
+                    "Reclaim Abandoned Batches (ms)",
                     runtime.rolling.reclaim_ms.mean,
                 ),
                 key_value(
                     "queue_snapshot_ms",
-                    "Queue Snapshot (ms)",
+                    "Read Queue Counts (ms)",
                     runtime.rolling.queue_snapshot_ms.mean,
                 ),
                 key_value(
                     "active_evaluator_count_ms",
-                    "Active Evaluator Count (ms)",
+                    "Count Active Evaluators (ms)",
                     runtime.rolling.active_evaluator_count_ms.mean,
                 ),
             ],
@@ -693,19 +693,19 @@ fn sampler_tick_segments(runtime: &SamplerRuntimeMetrics) -> Vec<TickBreakdownSe
     [
         (
             "reclaim",
-            "Reclaim",
+            "Reclaim Abandoned Batches",
             runtime.rolling.reclaim_ms.mean.unwrap_or(0.0),
             "#0a9396",
         ),
         (
             "queue_snapshot",
-            "Queue Snapshot",
+            "Read Queue Counts",
             runtime.rolling.queue_snapshot_ms.mean.unwrap_or(0.0),
             "#94d2bd",
         ),
         (
             "active_evaluators",
-            "Active Evaluators",
+            "Count Active Evaluators",
             runtime
                 .rolling
                 .active_evaluator_count_ms
@@ -715,13 +715,13 @@ fn sampler_tick_segments(runtime: &SamplerRuntimeMetrics) -> Vec<TickBreakdownSe
         ),
         (
             "completed_fetch_wait",
-            "Completed Fetch+Decode",
+            "Fetch Completed Batches",
             runtime.rolling.completed_fetch_wait_ms.mean.unwrap_or(0.0),
             "#ee9b00",
         ),
         (
             "completed_merge_ingest",
-            "Completed Merge+Ingest",
+            "Merge Results / Ingest Training",
             runtime
                 .rolling
                 .completed_merge_ingest_ms
@@ -730,48 +730,38 @@ fn sampler_tick_segments(runtime: &SamplerRuntimeMetrics) -> Vec<TickBreakdownSe
             "#d16d4b",
         ),
         (
-            "completed_fetch_ingest",
-            "Completed Process",
-            runtime
-                .rolling
-                .completed_fetch_ingest_ms
-                .mean
-                .unwrap_or(0.0),
-            "#ca6702",
-        ),
-        (
             "aggregation_flush",
-            "Aggregation Flush",
+            "Write Observable",
             runtime.rolling.aggregation_flush_ms.mean.unwrap_or(0.0),
             "#b56576",
         ),
         (
             "completed_delete",
-            "Completed Delete",
+            "Cleanup Consumed Batches",
             runtime.rolling.completed_delete_ms.mean.unwrap_or(0.0),
             "#6d597a",
         ),
         (
             "enqueue_drain_wait",
-            "Enqueue Drain Wait",
+            "Wait For Batch Insert",
             runtime.rolling.enqueue_drain_wait_ms.mean.unwrap_or(0.0),
             "#bb3e03",
         ),
         (
             "produce_enqueue",
-            "Produce+Enqueue",
+            "Produce And Queue Batches",
             runtime.rolling.produce_enqueue_ms.mean.unwrap_or(0.0),
             "#ae2012",
         ),
         (
             "progress_sync",
-            "Progress Sync",
+            "Write Progress",
             runtime.rolling.progress_sync_ms.mean.unwrap_or(0.0),
             "#9b2226",
         ),
         (
             "performance_sync",
-            "Performance Sync",
+            "Write Performance Snapshot",
             runtime.rolling.performance_sync_ms.mean.unwrap_or(0.0),
             "#6a040f",
         ),

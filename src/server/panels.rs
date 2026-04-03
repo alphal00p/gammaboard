@@ -415,7 +415,7 @@ pub(crate) fn merge_panel_state(target: &mut PanelState, delta: PanelState) {
                 points: delta_points,
                 ..
             },
-        ) => points.extend(delta_points),
+        ) => merge_plot_points(points, delta_points),
         (
             PanelState::MultiTimeseries { series, .. },
             PanelState::MultiTimeseries {
@@ -425,7 +425,7 @@ pub(crate) fn merge_panel_state(target: &mut PanelState, delta: PanelState) {
         ) => {
             for delta in delta_series {
                 if let Some(existing) = series.iter_mut().find(|item| item.id == delta.id) {
-                    existing.points.extend(delta.points);
+                    merge_plot_points(&mut existing.points, delta.points);
                 } else {
                     series.push(delta);
                 }
@@ -433,6 +433,17 @@ pub(crate) fn merge_panel_state(target: &mut PanelState, delta: PanelState) {
         }
         (target, delta) => *target = delta,
     }
+}
+
+fn merge_plot_points(points: &mut Vec<PlotPoint>, delta_points: Vec<PlotPoint>) {
+    for delta in delta_points {
+        if let Some(existing) = points.iter_mut().find(|point| point.x == delta.x) {
+            *existing = delta;
+        } else {
+            points.push(delta);
+        }
+    }
+    points.sort_by(|left, right| left.x.total_cmp(&right.x));
 }
 
 pub(crate) fn history_x(created_at: chrono::DateTime<chrono::Utc>) -> f64 {

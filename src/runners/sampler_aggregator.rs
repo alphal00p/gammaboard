@@ -27,6 +27,8 @@ const MIN_BATCH_SIZE: usize = 16;
 const MAX_BATCH_SIZE_UP_FACTOR: f64 = 4.0;
 const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.25;
 const RECLAIM_INTERVAL: Duration = Duration::from_secs(1);
+const COMPLETED_CLEANUP_INTERVAL: Duration = Duration::from_secs(1);
+const COMPLETED_CLEANUP_BATCH_LIMIT: usize = 2048;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerAggregatorRunnerParams {
@@ -399,6 +401,7 @@ pub struct SamplerAggregatorRunner<S> {
     last_frontend_sync_at: Instant,
     last_progress_sync_at: Instant,
     last_reclaim_at: Instant,
+    last_completed_cleanup_at: Instant,
     runtime_state: SamplerRuntimeState,
     last_performance_completed_samples: i64,
     last_runnable_after_enqueue: Option<usize>,
@@ -475,6 +478,7 @@ where
             last_frontend_sync_at: now,
             last_progress_sync_at: now,
             last_reclaim_at: now.checked_sub(RECLAIM_INTERVAL).unwrap_or(now),
+            last_completed_cleanup_at: now.checked_sub(COMPLETED_CLEANUP_INTERVAL).unwrap_or(now),
             runtime_state,
             last_performance_completed_samples: nr_completed_samples,
             last_runnable_after_enqueue,
@@ -547,7 +551,10 @@ where
     }
 
     async fn current_runner_diagnostics(&self) -> Result<JsonValue, RunnerError> {
-        let queue_counts = self.store.get_batch_queue_counts(self.run_id).await?;
+        let queue_counts = self
+            .store
+            .get_batch_queue_counts(self.run_id, self.runtime_state.last_completed_batch_id)
+            .await?;
         let active_evaluator_count = self.active_evaluator_count().await?;
         let target_pending_batches = self.target_pending_batches(active_evaluator_count);
         Ok(json!({
@@ -719,6 +726,7 @@ where
             self.apply_enqueue_outcome(outcome);
         }
         self.flush_enqueue_drain().await?;
+        self.cleanup_consumed_completed_batches(false).await?;
         if self.last_reclaim_at.elapsed() >= RECLAIM_INTERVAL {
             let reclaim_started = Instant::now();
             self.store.reclaim_abandoned_batches(self.run_id).await?;
@@ -730,7 +738,10 @@ where
         }
 
         let queue_snapshot_started = Instant::now();
-        let queue_before_tick = self.store.get_batch_queue_counts(self.run_id).await?;
+        let queue_before_tick = self
+            .store
+            .get_batch_queue_counts(self.run_id, self.runtime_state.last_completed_batch_id)
+            .await?;
         observe_duration_ms(
             &mut self.runtime_state.rolling.queue_snapshot_ms,
             queue_snapshot_started.elapsed(),
@@ -839,7 +850,7 @@ where
 
             let claimed_batches = self
                 .store
-                .get_batch_queue_counts(self.run_id)
+                .get_batch_queue_counts(self.run_id, self.runtime_state.last_completed_batch_id)
                 .await?
                 .claimed;
             if claimed_batches <= 0 {
@@ -856,6 +867,7 @@ where
     pub async fn persist_state(&mut self) -> Result<(), RunnerError> {
         self.flush_enqueue_drain().await?;
         self.drain_evaluator_work_on_stop().await?;
+        self.cleanup_consumed_completed_batches(true).await?;
         self.flush_aggregation(true).await?;
         self.flush_performance_snapshot(true).await?;
         self.flush_progress_sync(true).await?;
@@ -906,8 +918,47 @@ where
         Ok(())
     }
 
+    async fn cleanup_consumed_completed_batches(&mut self, force: bool) -> Result<(), RunnerError> {
+        let Some(up_to_batch_id) = self.runtime_state.last_completed_batch_id else {
+            return Ok(());
+        };
+
+        let due = force || self.last_completed_cleanup_at.elapsed() >= COMPLETED_CLEANUP_INTERVAL;
+        if !due {
+            return Ok(());
+        }
+
+        let cleanup_started = Instant::now();
+        let mut deleted_any = false;
+        loop {
+            let deleted = self
+                .store
+                .cleanup_consumed_completed_batches(
+                    self.run_id,
+                    up_to_batch_id,
+                    COMPLETED_CLEANUP_BATCH_LIMIT,
+                )
+                .await?;
+            if deleted > 0 {
+                deleted_any = true;
+            }
+            if !force || deleted < COMPLETED_CLEANUP_BATCH_LIMIT as u64 {
+                break;
+            }
+        }
+        if deleted_any {
+            observe_duration_ms(
+                &mut self.runtime_state.rolling.completed_delete_ms,
+                cleanup_started.elapsed(),
+            );
+        }
+        self.last_completed_cleanup_at = Instant::now();
+        Ok(())
+    }
+
     pub async fn complete_task(&mut self) -> Result<(), RunnerError> {
         self.flush_enqueue_drain().await?;
+        self.cleanup_consumed_completed_batches(true).await?;
         self.flush_aggregation(true).await?;
         self.flush_performance_snapshot(true).await?;
         self.flush_progress_sync(true).await?;
@@ -1007,24 +1058,14 @@ where
         );
         self.flush_aggregation(false).await?;
 
-        let consumed_ids = completed
-            .iter()
-            .map(|batch| batch.batch_id)
-            .collect::<Vec<_>>();
-        let completed_delete_started = Instant::now();
-        self.store.delete_completed_batches(&consumed_ids).await?;
-        observe_duration_ms(
-            &mut self.runtime_state.rolling.completed_delete_ms,
-            completed_delete_started.elapsed(),
-        );
-        self.runtime_state.last_completed_batch_id = consumed_ids.last().copied();
+        self.runtime_state.last_completed_batch_id = completed.last().map(|batch| batch.batch_id);
         self.completed_source
             .start_prefetch(&self.store, self.runtime_state.last_completed_batch_id);
         observe_duration_ms(
             &mut self.runtime_state.rolling.completed_fetch_ingest_ms,
             completed_process_started.elapsed(),
         );
-        Ok(consumed_ids.len())
+        Ok(completed.len())
     }
 
     async fn produce(

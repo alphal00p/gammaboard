@@ -104,18 +104,21 @@ pub(crate) async fn get_pending_batch_count(
 pub(crate) async fn get_batch_queue_counts(
     pool: &PgPool,
     run_id: i32,
+    completed_after_batch_id: Option<i64>,
 ) -> Result<BatchQueueCounts, sqlx::Error> {
+    let completed_after_batch_id = completed_after_batch_id.unwrap_or(0);
     let (pending, claimed, completed) = sqlx::query_as::<_, (i64, i64, i64)>(
         r#"
         SELECT
             COUNT(*) FILTER (WHERE status = 'pending') AS pending,
             COUNT(*) FILTER (WHERE status = 'claimed') AS claimed,
-            COUNT(*) FILTER (WHERE status = 'completed') AS completed
+            COUNT(*) FILTER (WHERE status = 'completed' AND id > $2) AS completed
         FROM batches
         WHERE run_id = $1
         "#,
     )
     .bind(run_id)
+    .bind(completed_after_batch_id)
     .fetch_one(pool)
     .await?;
     Ok(BatchQueueCounts {
@@ -601,24 +604,37 @@ pub(crate) async fn fetch_completed_batches(
     Ok(completed)
 }
 
-pub(crate) async fn delete_completed_batches(
+pub(crate) async fn cleanup_consumed_completed_batches(
     pool: &PgPool,
-    batch_ids: &[i64],
-) -> Result<(), sqlx::Error> {
-    if batch_ids.is_empty() {
-        return Ok(());
+    run_id: i32,
+    up_to_batch_id: i64,
+    limit: usize,
+) -> Result<u64, sqlx::Error> {
+    if up_to_batch_id <= 0 || limit == 0 {
+        return Ok(0);
     }
 
-    sqlx::query(
+    let result = sqlx::query(
         r#"
-        DELETE FROM batches
-        WHERE id = ANY($1)
-          AND status = 'completed'
+        WITH cleanup_candidates AS (
+            SELECT id
+            FROM batches
+            WHERE run_id = $1
+              AND status = 'completed'
+              AND id <= $2
+            ORDER BY id ASC
+            LIMIT $3
+        )
+        DELETE FROM batches b
+        USING cleanup_candidates c
+        WHERE b.id = c.id
         "#,
     )
-    .bind(batch_ids)
+    .bind(run_id)
+    .bind(up_to_batch_id)
+    .bind(limit as i64)
     .execute(pool)
     .await?;
 
-    Ok(())
+    Ok(result.rows_affected())
 }
