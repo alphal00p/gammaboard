@@ -7,6 +7,7 @@ pub enum PanelKind {
     Select,
     ScalarTimeseries,
     MultiTimeseries,
+    TickBreakdown,
     Image2d,
     Progress,
     KeyValue,
@@ -148,6 +149,14 @@ pub struct HistogramBin {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TickBreakdownSegment {
+    pub key: String,
+    pub label: String,
+    pub value_ms: f64,
+    pub color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PanelState {
     ScalarTimeseries {
@@ -157,6 +166,11 @@ pub enum PanelState {
     MultiTimeseries {
         panel_id: String,
         series: Vec<PlotSeries>,
+    },
+    TickBreakdown {
+        panel_id: String,
+        total_ms: f64,
+        segments: Vec<TickBreakdownSegment>,
     },
     Image2d {
         panel_id: String,
@@ -322,6 +336,18 @@ pub(crate) fn key_value_panel(panel_id: &str, entries: Vec<KeyValueEntry>) -> Pa
     }
 }
 
+pub(crate) fn tick_breakdown_panel(
+    panel_id: &str,
+    total_ms: f64,
+    segments: Vec<TickBreakdownSegment>,
+) -> PanelState {
+    PanelState::TickBreakdown {
+        panel_id: panel_id.to_string(),
+        total_ms,
+        segments,
+    }
+}
+
 pub(crate) fn table_panel(
     panel_id: &str,
     columns: Vec<String>,
@@ -370,6 +396,7 @@ impl PanelState {
         match self {
             Self::ScalarTimeseries { panel_id, .. }
             | Self::MultiTimeseries { panel_id, .. }
+            | Self::TickBreakdown { panel_id, .. }
             | Self::Image2d { panel_id, .. }
             | Self::Progress { panel_id, .. }
             | Self::KeyValue { panel_id, .. }

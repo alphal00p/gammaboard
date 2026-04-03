@@ -180,6 +180,7 @@ const panelColumnSpan = (descriptor) => {
       switch (descriptor?.kind) {
         case "scalar_timeseries":
         case "multi_timeseries":
+        case "tick_breakdown":
         case "image2d":
         case "table":
         case "histogram":
@@ -1029,6 +1030,113 @@ const TextPanel = ({ title, state }) => (
   </Card>
 );
 
+const TickBreakdownPanel = ({ title, state }) => {
+  const totalMs = Number(state?.total_ms);
+  const segments = asArray(state?.segments)
+    .map((segment) => ({
+      ...segment,
+      valueMs: Number(segment?.value_ms),
+    }))
+    .filter((segment) => Number.isFinite(segment.valueMs) && segment.valueMs > 0);
+  const normalizedTotal =
+    Number.isFinite(totalMs) && totalMs > 0 ? totalMs : segments.reduce((sum, segment) => sum + segment.valueMs, 0);
+
+  if (segments.length === 0 || !Number.isFinite(normalizedTotal) || normalizedTotal <= 0) return null;
+
+  return (
+    <Card variant="outlined">
+      <CardContent>
+        <Box sx={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 2, mb: 2 }}>
+          <Typography variant="subtitle1">{title}</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace" }}>
+            total {formatScientific(normalizedTotal, 4)} ms
+          </Typography>
+        </Box>
+        <Box
+          sx={{
+            display: "flex",
+            width: "100%",
+            minHeight: 44,
+            borderRadius: 1.5,
+            overflow: "hidden",
+            border: "1px solid",
+            borderColor: "divider",
+            backgroundColor: "rgba(15,23,42,0.04)",
+          }}
+        >
+          {segments.map((segment) => {
+            const percent = (segment.valueMs / normalizedTotal) * 100;
+            const showInlineLabel = percent >= 10;
+            return (
+              <Box
+                key={segment.key}
+                title={`${segment.label}: ${formatScientific(segment.valueMs, 4)} ms (${formatScientific(percent, 3)}%)`}
+                sx={{
+                  width: `${Math.max(percent, 1.5)}%`,
+                  minWidth: 0,
+                  px: showInlineLabel ? 1 : 0,
+                  py: 0.75,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: showInlineLabel ? "space-between" : "center",
+                  gap: 1,
+                  color: "#fff",
+                  backgroundColor: segment.color || "#0f766e",
+                }}
+              >
+                {showInlineLabel ? (
+                  <>
+                    <Typography variant="caption" sx={{ fontWeight: 600, color: "inherit", lineHeight: 1.15 }}>
+                      {segment.label}
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: "inherit", opacity: 0.95, lineHeight: 1.15 }}>
+                      {formatScientific(segment.valueMs, 3)} ms
+                    </Typography>
+                  </>
+                ) : null}
+              </Box>
+            );
+          })}
+        </Box>
+        <Box
+          sx={{
+            mt: 1.25,
+            display: "grid",
+            gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
+            gap: 0.75,
+          }}
+        >
+          {segments.map((segment) => {
+            const percent = (segment.valueMs / normalizedTotal) * 100;
+            return (
+              <Box key={`${segment.key}-legend`} sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                <Box
+                  sx={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: 0.5,
+                    backgroundColor: segment.color || "#0f766e",
+                    flexShrink: 0,
+                  }}
+                />
+                <Typography variant="caption" color="text.secondary" sx={{ minWidth: 0 }}>
+                  {segment.label}
+                </Typography>
+                <Typography
+                  variant="caption"
+                  sx={{ ml: "auto", fontFamily: "monospace", color: "text.secondary", whiteSpace: "nowrap" }}
+                >
+                  {formatScientific(segment.valueMs, 4)} ms ({formatScientific(percent, 3)}%)
+                </Typography>
+              </Box>
+            );
+          })}
+        </Box>
+      </CardContent>
+    </Card>
+  );
+};
+
 const hsvToRgb = (h, s, v) => {
   const c = v * s;
   const hh = (((h % 360) + 360) % 360) / 60;
@@ -1344,6 +1452,9 @@ const PanelRenderer = ({ descriptor, state, value, onValueChange }) => {
     case "multi_timeseries":
       if (!state) return null;
       return <MultiTimeseriesPanel title={descriptor.label} state={state} />;
+    case "tick_breakdown":
+      if (!state) return null;
+      return <TickBreakdownPanel title={descriptor.label} state={state} />;
     case "progress":
       if (!state) return null;
       return <ProgressPanel title={descriptor.label} state={state} />;

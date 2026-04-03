@@ -1,12 +1,17 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand, ValueEnum};
 use gammaboard::config::{DEFAULT_DEPLOY_CONFIG_PATH, DeployConfig, DeployState, RuntimeConfig};
+use gammaboard::core::ControlPlaneStore;
 use gammaboard::server::ServerConfig;
 use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
+
+use super::db;
+use super::shared::with_control_store;
+use gammaboard::api::nodes as node_api;
 
 #[derive(Debug, Args)]
 pub struct DeployArgs {
@@ -74,21 +79,21 @@ pub struct DeployStatusArgs {
     deploy_config: Option<PathBuf>,
 }
 
-pub fn run_deploy_command(
+pub async fn run_deploy_command(
     args: DeployArgs,
-    _runtime_config: &RuntimeConfig,
-    runtime_config_path: &Path,
+    runtime_config: &RuntimeConfig,
+    _runtime_config_path: &Path,
 ) -> Result<()> {
     match args.command {
-        DeployCommand::Up(args) => deploy_up(args, runtime_config_path),
-        DeployCommand::Down(args) => deploy_down(args, runtime_config_path),
+        DeployCommand::Up(args) => deploy_up(args, runtime_config).await,
+        DeployCommand::Down(args) => deploy_down(args, runtime_config).await,
         DeployCommand::Status(args) => deploy_status(args),
     }
 }
 
-fn deploy_up(args: DeployUpArgs, runtime_config_path: &Path) -> Result<()> {
+async fn deploy_up(args: DeployUpArgs, runtime_config: &RuntimeConfig) -> Result<()> {
     let deploy_config = DeployConfig::load(&args.deploy_config)?;
-    deploy_down_internal(&deploy_config, runtime_config_path)?;
+    deploy_down_internal(&deploy_config, runtime_config).await?;
 
     fs::create_dir_all("logs")?;
     fs::create_dir_all("tmp/deploy")?;
@@ -104,7 +109,11 @@ fn deploy_up(args: DeployUpArgs, runtime_config_path: &Path) -> Result<()> {
     }
 
     if deploy_config.database.ensure_started {
-        run_self_command(runtime_config_path, &["db", "start"], "gammaboard db start")?;
+        db::start_db(
+            &runtime_config.local_postgres,
+            &runtime_config.database.url,
+            false,
+        )?;
     }
 
     let server_config = ServerConfig::load(&deploy_config.api_server.api_server_config)?;
@@ -143,9 +152,9 @@ fn deploy_up(args: DeployUpArgs, runtime_config_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn deploy_down(args: DeployDownArgs, runtime_config_path: &Path) -> Result<()> {
+async fn deploy_down(args: DeployDownArgs, runtime_config: &RuntimeConfig) -> Result<()> {
     let deploy_config = load_deploy_config_for_management(args.deploy_config.as_deref())?;
-    deploy_down_internal(&deploy_config, runtime_config_path)
+    deploy_down_internal(&deploy_config, runtime_config).await
 }
 
 fn deploy_status(args: DeployStatusArgs) -> Result<()> {
@@ -214,20 +223,40 @@ fn deploy_status(args: DeployStatusArgs) -> Result<()> {
     Ok(())
 }
 
-fn deploy_down_internal(deploy_config: &DeployConfig, runtime_config_path: &Path) -> Result<()> {
+async fn deploy_down_internal(
+    deploy_config: &DeployConfig,
+    runtime_config: &RuntimeConfig,
+) -> Result<()> {
     if deploy_config.cleanup.pause_runs {
-        let _ = run_self_command(
-            runtime_config_path,
-            &["run", "pause", "-a"],
-            "gammaboard run pause -a",
-        );
+        let _ = with_control_store(
+            runtime_config,
+            10,
+            true,
+            "deploy_pause_all_runs",
+            |store| async move {
+                let assignments_cleared = store.clear_all_desired_assignments().await?;
+                tracing::info!("paused all runs: assignments_cleared={assignments_cleared}");
+                Ok(())
+            },
+        )
+        .await;
     }
     if deploy_config.cleanup.stop_nodes {
-        let _ = run_self_command(
-            runtime_config_path,
-            &["node", "stop", "-a"],
-            "gammaboard node stop -a",
-        );
+        let _ = with_control_store(
+            runtime_config,
+            10,
+            true,
+            "deploy_stop_all_nodes",
+            |store| async move {
+                let stopped = node_api::stop_all_nodes(&store).await?;
+                tracing::info!(
+                    "requested shutdown for all nodes: rows_updated={}",
+                    stopped.rows_updated
+                );
+                Ok(())
+            },
+        )
+        .await;
     }
 
     stop_backend(deploy_config)?;
@@ -450,16 +479,6 @@ fn process_is_running(pid: u32) -> bool {
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
-}
-
-fn run_self_command(runtime_config_path: &Path, args: &[&str], label: &str) -> Result<()> {
-    let binary = std::env::current_exe().context("failed to resolve current executable")?;
-    let mut command = Command::new(binary);
-    command.arg("--runtime-config").arg(runtime_config_path);
-    for arg in args {
-        command.arg(arg);
-    }
-    run_command(&mut command, label)
 }
 
 fn run_command(command: &mut Command, label: &str) -> Result<()> {

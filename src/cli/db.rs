@@ -182,7 +182,7 @@ fn ensure_database_and_migrations(
     Ok(())
 }
 
-fn start_db(
+pub(crate) fn start_db(
     local: &LocalPostgresConfig,
     database_url: &str,
     enable_pg_stat_statements: bool,

@@ -26,6 +26,7 @@ use tokio::time::sleep;
 const MIN_BATCH_SIZE: usize = 16;
 const MAX_BATCH_SIZE_UP_FACTOR: f64 = 4.0;
 const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.25;
+const RECLAIM_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerAggregatorRunnerParams {
@@ -386,6 +387,8 @@ pub struct SamplerAggregatorRunner<S> {
     frontend_sync_interval: Duration,
     last_snapshot_at: Instant,
     last_frontend_sync_at: Instant,
+    last_progress_sync_at: Instant,
+    last_reclaim_at: Instant,
     runtime_state: SamplerRuntimeState,
     last_performance_completed_samples: i64,
     last_runnable_after_enqueue: Option<usize>,
@@ -460,6 +463,8 @@ where
             frontend_sync_interval,
             last_snapshot_at: now,
             last_frontend_sync_at: now,
+            last_progress_sync_at: now,
+            last_reclaim_at: now.checked_sub(RECLAIM_INTERVAL).unwrap_or(now),
             runtime_state,
             last_performance_completed_samples: nr_completed_samples,
             last_runnable_after_enqueue,
@@ -704,12 +709,15 @@ where
             self.apply_enqueue_outcome(outcome);
         }
         self.flush_enqueue_drain().await?;
-        let reclaim_started = Instant::now();
-        self.store.reclaim_abandoned_batches(self.run_id).await?;
-        observe_duration_ms(
-            &mut self.runtime_state.rolling.reclaim_ms,
-            reclaim_started.elapsed(),
-        );
+        if self.last_reclaim_at.elapsed() >= RECLAIM_INTERVAL {
+            let reclaim_started = Instant::now();
+            self.store.reclaim_abandoned_batches(self.run_id).await?;
+            observe_duration_ms(
+                &mut self.runtime_state.rolling.reclaim_ms,
+                reclaim_started.elapsed(),
+            );
+            self.last_reclaim_at = Instant::now();
+        }
 
         let queue_snapshot_started = Instant::now();
         let queue_before_tick = self.store.get_batch_queue_counts(self.run_id).await?;
@@ -727,12 +735,7 @@ where
             active_evaluator_started.elapsed(),
         );
 
-        let completed_started = Instant::now();
         let completed_batches = self.process_completed().await?;
-        observe_duration_ms(
-            &mut self.runtime_state.rolling.completed_fetch_ingest_ms,
-            completed_started.elapsed(),
-        );
         let queue_before_produce = crate::core::BatchQueueCounts {
             pending: queue_before_tick.pending,
             claimed: queue_before_tick.claimed,
@@ -751,8 +754,7 @@ where
         );
 
         let progress_sync_started = Instant::now();
-        self.sync_task_progress().await?;
-        self.flush_run_sample_progress().await?;
+        self.flush_progress_sync(false).await?;
         observe_duration_ms(
             &mut self.runtime_state.rolling.progress_sync_ms,
             progress_sync_started.elapsed(),
@@ -846,8 +848,7 @@ where
         self.drain_evaluator_work_on_stop().await?;
         self.flush_aggregation(true).await?;
         self.flush_performance_snapshot(true).await?;
-        self.sync_task_progress().await?;
-        self.flush_run_sample_progress().await?;
+        self.flush_progress_sync(true).await?;
         let queue_empty = self.store.get_open_batch_count(self.run_id).await? <= 0;
         self.persist_stage_state_with_queue_empty(queue_empty)
             .await?;
@@ -888,8 +889,7 @@ where
         self.flush_enqueue_drain().await?;
         self.flush_aggregation(true).await?;
         self.flush_performance_snapshot(true).await?;
-        self.sync_task_progress().await?;
-        self.flush_run_sample_progress().await?;
+        self.flush_progress_sync(true).await?;
         self.persist_stage_state_with_queue_empty(true).await?;
         self.store.complete_run_task(self.task.id).await?;
         Ok(())
@@ -914,6 +914,7 @@ where
             return Ok(0);
         }
 
+        let completed_process_started = Instant::now();
         let mut completed_samples_delta = 0_i64;
         for batch in &completed {
             let batch_samples = batch.batch_size;
@@ -988,6 +989,10 @@ where
         self.runtime_state.last_completed_batch_id = consumed_ids.last().copied();
         self.completed_source
             .start_prefetch(&self.store, self.runtime_state.last_completed_batch_id);
+        observe_duration_ms(
+            &mut self.runtime_state.rolling.completed_fetch_ingest_ms,
+            completed_process_started.elapsed(),
+        );
         Ok(consumed_ids.len())
     }
 
@@ -1087,6 +1092,22 @@ where
         };
         self.enqueue_drain.start_drain(&self.store, workload);
         Ok(produced_batches)
+    }
+
+    fn progress_sync_due(&self, force: bool) -> bool {
+        force
+            || self.frontend_sync_interval.is_zero()
+            || self.last_progress_sync_at.elapsed() >= self.frontend_sync_interval
+    }
+
+    async fn flush_progress_sync(&mut self, force: bool) -> Result<(), RunnerError> {
+        if !self.progress_sync_due(force) {
+            return Ok(());
+        }
+        self.sync_task_progress().await?;
+        self.flush_run_sample_progress().await?;
+        self.last_progress_sync_at = Instant::now();
+        Ok(())
     }
 
     async fn sync_task_progress(&mut self) -> Result<(), RunnerError> {

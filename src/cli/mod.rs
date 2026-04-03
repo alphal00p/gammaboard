@@ -69,6 +69,8 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Command::Auth(args) => run_auth_hash_command(args),
         Command::Completion(args) => run_completion(args),
         Command::Db(args) => run_db_command(args, &config),
-        Command::Deploy(args) => run_deploy_command(args, &config, runtime_config_path.as_path()),
+        Command::Deploy(args) => {
+            run_deploy_command(args, &config, runtime_config_path.as_path()).await
+        }
     }
 }
