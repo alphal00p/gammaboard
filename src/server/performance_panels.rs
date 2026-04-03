@@ -525,6 +525,16 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
                     runtime.rolling.sampler_ingest_ms_per_sample.mean,
                 ),
                 key_value(
+                    "completed_fetch_wait_ms",
+                    "Completed Fetch+Decode (ms)",
+                    runtime.rolling.completed_fetch_wait_ms.mean,
+                ),
+                key_value(
+                    "completed_merge_ingest_ms",
+                    "Completed Merge+Ingest (ms)",
+                    runtime.rolling.completed_merge_ingest_ms.mean,
+                ),
+                key_value(
                     "aggregation_flush_ms",
                     "Aggregation Flush (ms)",
                     runtime.rolling.aggregation_flush_ms.mean,
@@ -705,9 +715,19 @@ fn sampler_tick_segments(runtime: &SamplerRuntimeMetrics) -> Vec<TickBreakdownSe
         ),
         (
             "completed_fetch_wait",
-            "Completed Fetch Wait",
+            "Completed Fetch+Decode",
             runtime.rolling.completed_fetch_wait_ms.mean.unwrap_or(0.0),
             "#ee9b00",
+        ),
+        (
+            "completed_merge_ingest",
+            "Completed Merge+Ingest",
+            runtime
+                .rolling
+                .completed_merge_ingest_ms
+                .mean
+                .unwrap_or(0.0),
+            "#d16d4b",
         ),
         (
             "completed_fetch_ingest",

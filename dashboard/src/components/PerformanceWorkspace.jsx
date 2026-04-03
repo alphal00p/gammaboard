@@ -1,4 +1,4 @@
-import { Alert, FormControl, InputLabel, MenuItem, Select, Stack, Typography } from "@mui/material";
+import { Alert, FormControl, InputLabel, MenuItem, Select, Stack } from "@mui/material";
 import { useEffect, useMemo, useState } from "react";
 import ConnectionStatus from "./ConnectionStatus";
 import EmptyStateCard from "./common/EmptyStateCard";
@@ -65,7 +65,7 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
           )}
           {runEvaluator?.sourceId ? (
             <PanelCollection
-              title="Run Evaluator Summary"
+              title="Evaluator Summary"
               panelSpecs={runEvaluator.panelSpecs}
               panelStates={runEvaluator.panelStates}
             />
@@ -102,10 +102,6 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
               message="Evaluator panels will appear once the selected evaluator records snapshots."
             />
           )}
-          <Typography variant="body2" color="text.secondary">
-            Run throughput and evaluator summary are aggregated at run level. The selector below shows one evaluator
-            worker at a time.
-          </Typography>
         </Stack>
       )}
     </RunScopedWorkspace>

@@ -204,6 +204,7 @@ pub struct SamplerRollingAverages {
     pub queue_snapshot_ms: RollingMetricSnapshot,
     pub active_evaluator_count_ms: RollingMetricSnapshot,
     pub completed_fetch_wait_ms: RollingMetricSnapshot,
+    pub completed_merge_ingest_ms: RollingMetricSnapshot,
     pub completed_fetch_ingest_ms: RollingMetricSnapshot,
     pub aggregation_flush_ms: RollingMetricSnapshot,
     pub completed_delete_ms: RollingMetricSnapshot,

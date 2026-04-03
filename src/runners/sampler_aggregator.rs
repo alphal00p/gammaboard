@@ -56,6 +56,7 @@ struct RollingAveragesState {
     queue_snapshot_ms: RollingMetric,
     active_evaluator_count_ms: RollingMetric,
     completed_fetch_wait_ms: RollingMetric,
+    completed_merge_ingest_ms: RollingMetric,
     completed_fetch_ingest_ms: RollingMetric,
     aggregation_flush_ms: RollingMetric,
     completed_delete_ms: RollingMetric,
@@ -168,6 +169,9 @@ impl SamplerRuntimeState {
                 ),
                 completed_fetch_wait_ms: RollingMetricSnapshot::from(
                     &self.rolling.completed_fetch_wait_ms,
+                ),
+                completed_merge_ingest_ms: RollingMetricSnapshot::from(
+                    &self.rolling.completed_merge_ingest_ms,
                 ),
                 completed_fetch_ingest_ms: RollingMetricSnapshot::from(
                     &self.rolling.completed_fetch_ingest_ms,
@@ -932,6 +936,7 @@ where
         }
 
         let completed_process_started = Instant::now();
+        let completed_merge_ingest_started = Instant::now();
         let mut completed_samples_delta = 0_i64;
         for batch in &completed {
             let batch_samples = batch.batch_size;
@@ -996,6 +1001,10 @@ where
         if completed_samples_delta > 0 {
             self.runtime_state.observable_checkpoint_state = ObservableCheckpointState::Ready;
         }
+        observe_duration_ms(
+            &mut self.runtime_state.rolling.completed_merge_ingest_ms,
+            completed_merge_ingest_started.elapsed(),
+        );
         self.flush_aggregation(false).await?;
 
         let consumed_ids = completed
