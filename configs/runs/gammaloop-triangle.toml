@@ -11,6 +11,8 @@ use_f128 = false
 training_projection = "abs"
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 1000
+min_tick_time_ms = 50
 
 [sampler_aggregator_runner_params]
+min_tick_time_ms = 10
 frontend_sync_interval_ms = 2000

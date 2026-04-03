@@ -10,3 +10,4 @@ kind = "naive_monte_carlo"
 
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 2000
+min_tick_time_ms = 50

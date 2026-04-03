@@ -932,10 +932,12 @@ mod tests {
                 "min_eval_time_per_sample_ms": 1
             },
             "evaluator_runner_params": {
-                "performance_snapshot_interval_ms": 5000
+                "performance_snapshot_interval_ms": 5000,
+                "min_tick_time_ms": 50
             },
             "sampler_aggregator_runner_params": {
                 "performance_snapshot_interval_ms": 5000,
+                "min_tick_time_ms": 10,
                 "frontend_sync_interval_ms": 1000,
                 "target_batch_eval_ms": 200.0,
                 "queue_buffer": 1.0,
@@ -967,7 +969,8 @@ mod tests {
         assert_eq!(
             spec.evaluator_runner_params,
             EvaluatorRunnerParams::deserialize(json!({
-                "performance_snapshot_interval_ms": 5000
+                "performance_snapshot_interval_ms": 5000,
+                "min_tick_time_ms": 50
             }))
             .unwrap()
         );
@@ -975,6 +978,7 @@ mod tests {
             spec.sampler_aggregator_runner_params,
             SamplerAggregatorRunnerParams::deserialize(json!({
                 "performance_snapshot_interval_ms": 5000,
+                "min_tick_time_ms": 10,
                 "frontend_sync_interval_ms": 1000,
                 "target_batch_eval_ms": 200.0,
                 "queue_buffer": 1.0,
@@ -1010,10 +1014,12 @@ mod tests {
             9,
             json!({
                 "evaluator_runner_params": {
-                    "performance_snapshot_interval_ms": 5000
+                    "performance_snapshot_interval_ms": 5000,
+                    "min_tick_time_ms": 50
                 },
                 "sampler_aggregator_runner_params": {
                     "performance_snapshot_interval_ms": 5000,
+                    "min_tick_time_ms": 10,
                     "frontend_sync_interval_ms": 1000,
                     "target_batch_eval_ms": 200.0,
                     "queue_buffer": 1.0,
@@ -1038,6 +1044,7 @@ mod tests {
                 "evaluator": { "kind": "sin_evaluator" },
                 "sampler_aggregator_runner_params": {
                     "performance_snapshot_interval_ms": 5000,
+                    "min_tick_time_ms": 10,
                     "frontend_sync_interval_ms": 1000,
                     "target_batch_eval_ms": 200.0,
                     "queue_buffer": 1.0,

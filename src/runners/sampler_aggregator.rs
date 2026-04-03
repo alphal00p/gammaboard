@@ -33,6 +33,7 @@ const COMPLETED_CLEANUP_BATCH_LIMIT: usize = 2048;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerAggregatorRunnerParams {
     pub performance_snapshot_interval_ms: u64,
+    pub min_tick_time_ms: u64,
     pub frontend_sync_interval_ms: u64,
     pub target_batch_eval_ms: f64,
     pub queue_buffer: f64,
@@ -392,7 +393,7 @@ pub struct SamplerAggregatorRunner<S> {
     sampler_config: SamplerAggregatorConfig,
     batch_transforms: Vec<BatchTransformConfig>,
     store: S,
-    config: SamplerAggregatorRunnerParams,
+    params: SamplerAggregatorRunnerParams,
     nr_produced_samples: i64,
     nr_completed_samples: i64,
     performance_snapshot_interval: Duration,
@@ -469,7 +470,7 @@ where
             sampler_config,
             batch_transforms,
             store,
-            config: params,
+            params,
             nr_produced_samples,
             nr_completed_samples,
             performance_snapshot_interval,
@@ -490,6 +491,10 @@ where
             ),
             enqueue_drain: LatentBatchDrain::new(run_id, task_id, requires_training_values),
         }
+    }
+
+    pub fn params(&self) -> &SamplerAggregatorRunnerParams {
+        &self.params
     }
 
     fn apply_enqueue_outcome(&mut self, outcome: EnqueueOutcome) {
@@ -517,7 +522,7 @@ where
         let Some(eval_ms_per_sample) = self.runtime_state.rolling.eval_ms_per_sample.value() else {
             return;
         };
-        if self.config.target_batch_eval_ms <= 0.0 || !self.config.target_batch_eval_ms.is_finite()
+        if self.params.target_batch_eval_ms <= 0.0 || !self.params.target_batch_eval_ms.is_finite()
         {
             return;
         }
@@ -526,25 +531,25 @@ where
         }
         let current_eval_batch_ms =
             eval_ms_per_sample * self.runtime_state.batch_size_current as f64;
-        let raw_ratio = self.config.target_batch_eval_ms / current_eval_batch_ms;
+        let raw_ratio = self.params.target_batch_eval_ms / current_eval_batch_ms;
         let ratio = raw_ratio.clamp(MAX_BATCH_SIZE_DOWN_FACTOR, MAX_BATCH_SIZE_UP_FACTOR);
 
         let next = ((self.runtime_state.batch_size_current as f64) * ratio).round() as usize;
         self.runtime_state.batch_size_current =
-            next.clamp(MIN_BATCH_SIZE, self.config.max_batch_size);
+            next.clamp(MIN_BATCH_SIZE, self.params.max_batch_size);
     }
 
     fn hard_produce_limit(&self, open_before_tick: usize) -> usize {
-        let remaining_capacity = self.config.max_queue_size.saturating_sub(open_before_tick);
-        remaining_capacity.min(self.config.max_batches_per_tick)
+        let remaining_capacity = self.params.max_queue_size.saturating_sub(open_before_tick);
+        remaining_capacity.min(self.params.max_batches_per_tick)
     }
 
     fn target_pending_batches(&self, active_evaluator_count: usize) -> Option<usize> {
-        if !self.config.queue_buffer.is_finite() || self.config.queue_buffer < 0.0 {
+        if !self.params.queue_buffer.is_finite() || self.params.queue_buffer < 0.0 {
             return None;
         }
         Some(
-            ((active_evaluator_count as f64) * self.config.queue_buffer)
+            ((active_evaluator_count as f64) * self.params.queue_buffer)
                 .ceil()
                 .max(0.0) as usize,
         )
@@ -563,7 +568,7 @@ where
             "claimed_batches": queue_counts.claimed,
             "completed_batches": queue_counts.completed,
             "open_batches": queue_counts.open(),
-            "queue_buffer": self.config.queue_buffer,
+            "queue_buffer": self.params.queue_buffer,
             "target_pending_batches": target_pending_batches,
             "pending_shortfall": target_pending_batches
                 .map(|target| (target as i64).saturating_sub(queue_counts.pending as i64)),
@@ -1126,10 +1131,10 @@ where
         let mut produced = Vec::with_capacity(batch_plan.len());
         let mut produced_samples_total = 0_i64;
         for nr_samples in batch_plan {
-            if nr_samples > self.config.max_batch_size {
+            if nr_samples > self.params.max_batch_size {
                 return Err(RunnerError::Engine(EngineError::engine(format!(
                     "batch plan exceeded max_batch_size: planned={} max_batch_size={}",
-                    nr_samples, self.config.max_batch_size
+                    nr_samples, self.params.max_batch_size
                 ))));
             }
             let started = Instant::now();

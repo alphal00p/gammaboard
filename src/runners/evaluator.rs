@@ -18,6 +18,7 @@ use tracing::info;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvaluatorRunnerParams {
     pub performance_snapshot_interval_ms: u64,
+    pub min_tick_time_ms: u64,
 }
 
 #[derive(Debug, Error)]
@@ -35,6 +36,7 @@ pub struct EvaluatorRunner<S> {
     node_name: String,
     evaluator: Box<dyn Evaluator>,
     domain: Domain,
+    params: EvaluatorRunnerParams,
     current_task_id: Option<i64>,
     materializer: Option<Box<dyn Materializer>>,
     prefetch_buffer: LatentPrefetchBuffer<S>,
@@ -329,19 +331,20 @@ where
     ) -> Self {
         let node_name = node_name.into();
         let node_uuid = node_uuid.into();
+        let performance_snapshot_interval =
+            Duration::from_millis(params.performance_snapshot_interval_ms);
         Self {
             run_id,
             node_name,
             evaluator,
             domain,
+            params,
             current_task_id: None,
             materializer: None,
             prefetch_buffer: LatentPrefetchBuffer::new(run_id, node_uuid.clone()),
             submit_buffer: ResultSubmitBuffer::new(node_uuid),
             draining: false,
-            performance_snapshot_interval: Duration::from_millis(
-                params.performance_snapshot_interval_ms,
-            ),
+            performance_snapshot_interval,
             last_snapshot_at: Instant::now(),
             batches_completed_total: 0,
             samples_evaluated_total: 0,
@@ -350,6 +353,10 @@ where
             store,
             current_batch_transforms: Vec::new(),
         }
+    }
+
+    pub fn params(&self) -> &EvaluatorRunnerParams {
+        &self.params
     }
 
     fn build_batch_transforms(

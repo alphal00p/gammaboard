@@ -72,6 +72,11 @@ impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
                 "Snapshot Interval (ms)",
                 ctx.runner_params.performance_snapshot_interval_ms,
             ),
+            key_value(
+                "min_tick_time_ms",
+                "Min Tick Time (ms)",
+                ctx.runner_params.min_tick_time_ms,
+            ),
         ];
         if let Some(observable_kind) = evaluator_observable_kind(self) {
             summary.insert(
@@ -144,6 +149,11 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
             vec![
                 key_value("implementation", "Implementation", self.kind_str()),
                 key_value("domain", "Domain", summarize_domain(ctx.domain)),
+                key_value(
+                    "min_tick_time_ms",
+                    "Min Tick Time (ms)",
+                    ctx.runner_params.min_tick_time_ms,
+                ),
                 key_value(
                     "frontend_sync_interval_ms",
                     "Frontend Sync Interval (ms)",

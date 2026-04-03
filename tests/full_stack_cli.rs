@@ -1971,9 +1971,11 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 200
+min_tick_time_ms = 50
 
 [sampler_aggregator_runner_params]
 performance_snapshot_interval_ms = 200
+min_tick_time_ms = 10
 frontend_sync_interval_ms = 1000
 target_batch_eval_ms = 250.0
 queue_buffer = 1.0

@@ -1,6 +1,7 @@
 use crate::core::StoreError;
 use crate::runners::{EvaluatorRunner, SamplerAggregatorRunner};
 use async_trait::async_trait;
+use std::time::Duration;
 
 use super::NodeRunnerStore;
 
@@ -8,6 +9,7 @@ use super::NodeRunnerStore;
 pub(super) trait RoleRunner {
     async fn tick(&mut self) -> Result<bool, StoreError>;
     async fn stop(&mut self) -> Result<(), StoreError>;
+    fn min_tick_time(&self) -> Duration;
 }
 
 #[async_trait(?Send)]
@@ -23,6 +25,10 @@ impl<S: NodeRunnerStore> RoleRunner for EvaluatorRunner<S> {
         EvaluatorRunner::stop(self)
             .await
             .map_err(|err| StoreError::store(err.to_string()))
+    }
+
+    fn min_tick_time(&self) -> Duration {
+        Duration::from_millis(self.params().min_tick_time_ms)
     }
 }
 
@@ -52,5 +58,9 @@ impl<S: NodeRunnerStore> RoleRunner for SamplerAggregatorRunner<S> {
         SamplerAggregatorRunner::persist_state(self)
             .await
             .map_err(|err| StoreError::store(err.to_string()))
+    }
+
+    fn min_tick_time(&self) -> Duration {
+        Duration::from_millis(self.params().min_tick_time_ms)
     }
 }
