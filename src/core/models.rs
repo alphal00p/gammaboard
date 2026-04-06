@@ -253,12 +253,8 @@ impl SamplerRuntimeMetrics {
         SamplerPerformanceMetrics {
             produced_batches: self.produced_batches_total,
             produced_samples: self.produced_samples_total,
-            avg_produce_time_per_sample_ms: self
-                .sampler
-                .sampler_produce_ms_per_sample
-                .mean
-                .unwrap_or(0.0),
-            std_produce_time_per_sample_ms: self.sampler.sampler_produce_ms_per_sample.std_dev,
+            avg_produce_time_per_sample_ms: self.sampler.produce_ms.mean.unwrap_or(0.0),
+            std_produce_time_per_sample_ms: self.sampler.produce_ms.std_dev,
             ingested_batches: self.ingested_batches_total,
             ingested_samples: self.ingested_samples_total,
             avg_ingest_time_per_sample_ms: self

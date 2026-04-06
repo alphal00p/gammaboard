@@ -522,9 +522,22 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
                     queue_buffer_value(&entry.engine_diagnostics, "queue_buffer"),
                 ),
                 key_value(
+                    "local_pending_buffer_multiplier",
+                    "Local Pending Buffer Multiplier",
+                    queue_buffer_value(
+                        &entry.engine_diagnostics,
+                        "local_pending_buffer_multiplier",
+                    ),
+                ),
+                key_value(
                     "target_pending_batches",
                     "Target Pending Batches",
                     queue_buffer_value(&entry.engine_diagnostics, "target_pending_batches"),
+                ),
+                key_value(
+                    "target_local_pending_batches",
+                    "Target Local Pending Batches",
+                    queue_buffer_value(&entry.engine_diagnostics, "target_local_pending_batches"),
                 ),
                 key_value(
                     "pending_batches",
@@ -562,11 +575,6 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
                     runtime.queue.rolling.fetch_completed_ms.mean,
                 ),
                 key_value(
-                    "local_processed_queue_poll_ms",
-                    "Local Processed Queue Poll",
-                    runtime.queue.rolling.get_processed_ms.mean,
-                ),
-                key_value(
                     "insert_bundle_ms",
                     "Insert Bundle",
                     runtime.queue.rolling.insert_bundle_ms.mean,
@@ -575,26 +583,6 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
                     "insert_bundle_ms_per_batch",
                     "Insert / Batch",
                     runtime.queue.rolling.insert_bundle_ms_per_batch.mean,
-                ),
-                key_value(
-                    "local_pending_batches",
-                    "Local Pending Batches",
-                    runtime.queue.local_pending_batches,
-                ),
-                key_value(
-                    "local_inflight_insert_batches",
-                    "Local In-Flight Insert Batches",
-                    runtime.queue.local_inflight_insert_batches,
-                ),
-                key_value(
-                    "local_ready_processed_batches",
-                    "Local Ready Processed Batches",
-                    runtime.queue.local_ready_processed_batches,
-                ),
-                key_value(
-                    "queue_counts_ms",
-                    "Read Queue Counts",
-                    runtime.sampler.queue_counts_ms.mean,
                 ),
             ],
         ),
@@ -694,12 +682,6 @@ fn sampler_tick_segments(runtime: &SamplerRuntimeMetrics) -> Vec<TickBreakdownSe
             "#94d2bd",
         ),
         (
-            "local_processed_poll",
-            "Local Processed Queue Poll",
-            runtime.queue.rolling.get_processed_ms.mean.unwrap_or(0.0),
-            "#ee9b00",
-        ),
-        (
             "completed_merge",
             "Merge Completed Batches",
             runtime
@@ -726,17 +708,6 @@ fn sampler_tick_segments(runtime: &SamplerRuntimeMetrics) -> Vec<TickBreakdownSe
             "Insert Bundle",
             runtime.queue.rolling.insert_bundle_ms.mean.unwrap_or(0.0),
             "#bb3e03",
-        ),
-        (
-            "insert_bundle_per_batch",
-            "Insert / Batch",
-            runtime
-                .queue
-                .rolling
-                .insert_bundle_ms_per_batch
-                .mean
-                .unwrap_or(0.0),
-            "#ca6702",
         ),
         (
             "produce",

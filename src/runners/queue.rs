@@ -14,9 +14,9 @@ pub struct SamplerQueueConfig {
     pub queue_buffer: f64,
     pub local_pending_buffer_multiplier: f64,
     pub max_queue_size: usize,
-    pub max_batches_per_tick: usize,
-    pub max_insert_bundle_size: usize,
-    pub completed_batch_fetch_limit: usize,
+    max_batches_per_tick: usize,
+    max_insert_bundle_size: usize,
+    completed_batch_fetch_limit: usize,
     pub strict_batch_ordering: bool,
 }
 
