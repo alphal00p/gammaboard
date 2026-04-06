@@ -557,6 +557,11 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
                     runtime.queue.rolling.insert_batches_ms.mean,
                 ),
                 key_value(
+                    "insert_batches_ms_per_batch",
+                    "Insert Batches / Batch (ms)",
+                    runtime.queue.rolling.insert_batches_ms_per_batch.mean,
+                ),
+                key_value(
                     "flush_ms",
                     "Flush Local Queue (ms)",
                     runtime.queue.rolling.flush_ms.mean,
@@ -765,6 +770,17 @@ fn sampler_tick_segments(runtime: &SamplerRuntimeMetrics) -> Vec<TickBreakdownSe
             "Insert Batches",
             runtime.queue.rolling.insert_batches_ms.mean.unwrap_or(0.0),
             "#bb3e03",
+        ),
+        (
+            "queue_insert_per_batch",
+            "Insert Batches / Batch",
+            runtime
+                .queue
+                .rolling
+                .insert_batches_ms_per_batch
+                .mean
+                .unwrap_or(0.0),
+            "#ca6702",
         ),
         (
             "produce",

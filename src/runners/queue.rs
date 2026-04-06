@@ -14,6 +14,7 @@ pub struct SamplerQueueConfig {
     pub queue_buffer: f64,
     pub max_queue_size: usize,
     pub max_batches_per_tick: usize,
+    pub max_insert_bundle_size: usize,
     pub completed_batch_fetch_limit: usize,
     pub strict_batch_ordering: bool,
 }
@@ -34,6 +35,7 @@ pub struct SamplerQueue<S> {
     pending_insert: VecDeque<LatentBatch>,
     ready_processed: VecDeque<CompletedBatch>,
     pending_insert_task: Option<PendingInsertTask>,
+    pending_insert_drain_active: bool,
     pending_processed_fetch: Option<PendingProcessedFetchTask>,
     metrics: QueueMetricsState,
 }
@@ -54,6 +56,7 @@ struct QueueMetricsState {
     get_processed_ms: RollingMetric,
     fetch_completed_ms: RollingMetric,
     insert_batches_ms: RollingMetric,
+    insert_batches_ms_per_batch: RollingMetric,
     flush_ms: RollingMetric,
 }
 
@@ -79,6 +82,7 @@ where
             pending_insert: VecDeque::new(),
             ready_processed: VecDeque::new(),
             pending_insert_task: None,
+            pending_insert_drain_active: false,
             pending_processed_fetch: None,
             metrics: QueueMetricsState::default(),
         }
@@ -105,6 +109,9 @@ where
                 get_processed_ms: RollingMetricSnapshot::from(&self.metrics.get_processed_ms),
                 fetch_completed_ms: RollingMetricSnapshot::from(&self.metrics.fetch_completed_ms),
                 insert_batches_ms: RollingMetricSnapshot::from(&self.metrics.insert_batches_ms),
+                insert_batches_ms_per_batch: RollingMetricSnapshot::from(
+                    &self.metrics.insert_batches_ms_per_batch,
+                ),
                 flush_ms: RollingMetricSnapshot::from(&self.metrics.flush_ms),
             },
         }
@@ -290,12 +297,26 @@ where
     }
 
     fn start_insert_if_idle(&mut self) {
-        if self.pending_insert_task.is_some() || self.pending_insert.is_empty() {
+        if self.pending_insert_task.is_some()
+            || self.pending_insert.is_empty()
+            || self.pending_insert_drain_active
+        {
             return;
         }
 
-        let batches = self.pending_insert.drain(..).collect::<Vec<_>>();
-        let batch_count = batches.len();
+        self.pending_insert_drain_active = true;
+        self.spawn_next_insert_bundle();
+    }
+
+    fn spawn_next_insert_bundle(&mut self) {
+        if self.pending_insert_task.is_some() || self.pending_insert.is_empty() {
+            self.pending_insert_drain_active = false;
+            return;
+        }
+
+        let bundle_size = self.config.max_insert_bundle_size.max(1);
+        let batch_count = self.pending_insert.len().min(bundle_size);
+        let batches = self.pending_insert.drain(..batch_count).collect::<Vec<_>>();
         let store = self.store.clone();
         let run_id = self.run_id;
         let task_id = self.task_id;
@@ -338,7 +359,13 @@ where
         };
         if result.is_ok() {
             observe_duration_ms(&mut self.metrics.insert_batches_ms, duration);
-            self.start_insert_if_idle();
+            if task.batch_count > 0 {
+                observe_duration_ms(
+                    &mut self.metrics.insert_batches_ms_per_batch,
+                    duration / task.batch_count as u32,
+                );
+            }
+            self.spawn_next_insert_bundle();
         }
         result
     }

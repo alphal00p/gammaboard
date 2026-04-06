@@ -20,5 +20,6 @@ max_batch_size = 65536
 queue_buffer = 10.0
 max_queue_size = 1024
 max_batches_per_tick = 16
+max_insert_bundle_size = 16
 completed_batch_fetch_limit = 16
 strict_batch_ordering = true
