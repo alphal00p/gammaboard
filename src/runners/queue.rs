@@ -58,6 +58,7 @@ struct QueueMetricsState {
     fetch_completed_ms: RollingMetric,
     insert_bundle_ms: RollingMetric,
     insert_bundle_ms_per_batch: RollingMetric,
+    insert_bundle_local_pending_at_start: RollingMetric,
     flush_ms: RollingMetric,
 }
 
@@ -112,6 +113,9 @@ where
                 insert_bundle_ms: RollingMetricSnapshot::from(&self.metrics.insert_bundle_ms),
                 insert_bundle_ms_per_batch: RollingMetricSnapshot::from(
                     &self.metrics.insert_bundle_ms_per_batch,
+                ),
+                insert_bundle_local_pending_at_start: RollingMetricSnapshot::from(
+                    &self.metrics.insert_bundle_local_pending_at_start,
                 ),
                 flush_ms: RollingMetricSnapshot::from(&self.metrics.flush_ms),
             },
@@ -171,6 +175,12 @@ where
             && self.pending_insert_task.is_none()
             && self.pending_processed_fetch.is_none()
             && !self.insert_pump_running
+    }
+
+    fn observe_insert_bundle_local_pending_at_start(&mut self) {
+        self.metrics
+            .insert_bundle_local_pending_at_start
+            .observe(self.pending_insert.len() as f64);
     }
 
     pub async fn get_processed(&mut self) -> Result<Vec<CompletedBatch>, StoreError> {
@@ -339,6 +349,8 @@ where
             }
             return;
         }
+
+        self.observe_insert_bundle_local_pending_at_start();
 
         let bundle_size = self.config.max_insert_bundle_size.max(1);
         let batch_count = self.pending_insert.len().min(bundle_size);

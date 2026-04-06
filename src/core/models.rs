@@ -212,6 +212,7 @@ pub struct SamplerQueueRollingAverages {
     pub fetch_completed_ms: RollingMetricSnapshot,
     pub insert_bundle_ms: RollingMetricSnapshot,
     pub insert_bundle_ms_per_batch: RollingMetricSnapshot,
+    pub insert_bundle_local_pending_at_start: RollingMetricSnapshot,
     pub flush_ms: RollingMetricSnapshot,
 }
 
@@ -222,6 +223,7 @@ impl Default for SamplerQueueRollingAverages {
             fetch_completed_ms: RollingMetricSnapshot::default(),
             insert_bundle_ms: RollingMetricSnapshot::default(),
             insert_bundle_ms_per_batch: RollingMetricSnapshot::default(),
+            insert_bundle_local_pending_at_start: RollingMetricSnapshot::default(),
             flush_ms: RollingMetricSnapshot::default(),
         }
     }

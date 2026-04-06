@@ -374,6 +374,7 @@ where
     }
 
     pub async fn tick(&mut self) -> Result<bool, RunnerError> {
+        let tick_started = Instant::now();
         let completed = self.queue.get_processed().await?;
         self.cleanup_consumed_completed_batches(false).await?;
         if self.last_reclaim_at.elapsed() >= RECLAIM_INTERVAL {
@@ -410,6 +411,8 @@ where
                 .completed
                 .saturating_sub(completed_batches as i64),
         };
+
+        self.update_completed_samples_per_second(tick_started.elapsed());
 
         let produce_started = Instant::now();
         let produced_batches = self
@@ -867,17 +870,6 @@ where
             return Ok(());
         }
 
-        let elapsed_secs = self.last_snapshot_at.elapsed().as_secs_f64();
-        let completed_delta = self
-            .nr_completed_samples
-            .saturating_sub(self.last_performance_completed_samples);
-        let completed_samples_per_second = if elapsed_secs > 0.0 {
-            (completed_delta as f64 / elapsed_secs).max(0.0)
-        } else {
-            0.0
-        };
-        self.runtime_state.completed_samples_per_second = completed_samples_per_second;
-
         let mut engine_diagnostics = self.sampler.get_diagnostics();
         let runner_diagnostics = self.current_runner_diagnostics().await?;
         match &mut engine_diagnostics {
@@ -907,6 +899,17 @@ where
         self.last_performance_completed_samples = self.nr_completed_samples;
         self.last_snapshot_at = Instant::now();
         Ok(())
+    }
+
+    fn update_completed_samples_per_second(&mut self, elapsed: Duration) {
+        let elapsed_secs = elapsed.as_secs_f64();
+        if elapsed_secs > 0.0 {
+            let completed_delta = self
+                .nr_completed_samples
+                .saturating_sub(self.last_performance_completed_samples);
+            self.runtime_state.completed_samples_per_second =
+                (completed_delta as f64 / elapsed_secs).max(0.0);
+        }
     }
 }
 

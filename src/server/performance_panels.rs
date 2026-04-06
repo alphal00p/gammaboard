@@ -578,6 +578,15 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
                     "Insert / Batch",
                     runtime.queue.rolling.insert_bundle_ms_per_batch.mean,
                 ),
+                key_value(
+                    "insert_bundle_local_pending_at_start",
+                    "Local Pending at Insert Start",
+                    runtime
+                        .queue
+                        .rolling
+                        .insert_bundle_local_pending_at_start
+                        .mean,
+                ),
             ],
         ),
     ]
