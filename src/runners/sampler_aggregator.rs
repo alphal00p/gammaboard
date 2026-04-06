@@ -44,7 +44,7 @@ pub struct SamplerAggregatorRunnerParams {
 struct SamplerRollingState {
     eval_ms_per_sample: RollingMetric,
     eval_ms_per_batch: RollingMetric,
-    sampler_ingest_ms_per_sample: RollingMetric,
+    training_ingest_ms_per_sample: RollingMetric,
     reclaim_ms: RollingMetric,
     queue_counts_ms: RollingMetric,
     completed_merge_ingest_ms: RollingMetric,
@@ -124,8 +124,8 @@ impl SamplerRuntimeState {
             sampler: SamplerWorkRollingAverages {
                 eval_ms_per_sample: RollingMetricSnapshot::from(&self.rolling.eval_ms_per_sample),
                 eval_ms_per_batch: RollingMetricSnapshot::from(&self.rolling.eval_ms_per_batch),
-                sampler_ingest_ms_per_sample: RollingMetricSnapshot::from(
-                    &self.rolling.sampler_ingest_ms_per_sample,
+                training_ingest_ms_per_sample: RollingMetricSnapshot::from(
+                    &self.rolling.training_ingest_ms_per_sample,
                 ),
                 reclaim_ms: RollingMetricSnapshot::from(&self.rolling.reclaim_ms),
                 queue_counts_ms: RollingMetricSnapshot::from(&self.rolling.queue_counts_ms),
@@ -304,7 +304,9 @@ where
             "completed_batches": queue_counts.completed,
             "open_batches": queue_counts.open(),
             "queue_buffer": self.params.queue.queue_buffer,
+            "local_pending_buffer_multiplier": self.params.queue.local_pending_buffer_multiplier,
             "target_pending_batches": target_pending_batches,
+            "target_local_pending_batches": self.queue.target_local_pending_batches(active_evaluator_count),
             "pending_shortfall": target_pending_batches
                 .map(|target| (target as i64).saturating_sub(queue_counts.pending as i64)),
             "last_completed_batch_id": self.queue.last_completed_batch_id(),
@@ -673,7 +675,7 @@ where
                 if batch_samples > 0 {
                     self.runtime_state
                         .rolling
-                        .sampler_ingest_ms_per_sample
+                        .training_ingest_ms_per_sample
                         .observe(ingest_time_ms / batch_samples as f64);
                 }
             }
@@ -787,7 +789,7 @@ where
             if produced_samples > 0 {
                 self.runtime_state
                     .rolling
-                    .sampler_ingest_ms_per_sample
+                    .training_ingest_ms_per_sample
                     .observe(produce_time_ms / produced_samples as f64);
             }
             produced.push(
@@ -803,7 +805,7 @@ where
 
         self.runtime_state
             .rolling
-            .sampler_ingest_ms_per_sample
+            .training_ingest_ms_per_sample
             .observe(produced_batches as f64);
         self.runtime_state.produced_batches_total += produced_batches as i64;
         self.runtime_state.produced_samples_total += produced_samples_total;

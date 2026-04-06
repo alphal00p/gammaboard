@@ -194,7 +194,7 @@ pub struct RollingMetricSnapshot {
 pub struct SamplerWorkRollingAverages {
     pub eval_ms_per_sample: RollingMetricSnapshot,
     pub eval_ms_per_batch: RollingMetricSnapshot,
-    pub sampler_ingest_ms_per_sample: RollingMetricSnapshot,
+    pub training_ingest_ms_per_sample: RollingMetricSnapshot,
     pub reclaim_ms: RollingMetricSnapshot,
     pub queue_counts_ms: RollingMetricSnapshot,
     pub completed_merge_ingest_ms: RollingMetricSnapshot,
@@ -259,10 +259,10 @@ impl SamplerRuntimeMetrics {
             ingested_samples: self.ingested_samples_total,
             avg_ingest_time_per_sample_ms: self
                 .sampler
-                .sampler_ingest_ms_per_sample
+                .training_ingest_ms_per_sample
                 .mean
                 .unwrap_or(0.0),
-            std_ingest_time_per_sample_ms: self.sampler.sampler_ingest_ms_per_sample.std_dev,
+            std_ingest_time_per_sample_ms: self.sampler.training_ingest_ms_per_sample.std_dev,
         }
     }
 }
