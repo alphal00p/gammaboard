@@ -940,12 +940,14 @@ mod tests {
                 "min_tick_time_ms": 10,
                 "frontend_sync_interval_ms": 1000,
                 "target_batch_eval_ms": 200.0,
-                "queue_buffer": 1.0,
                 "max_batch_size": 64,
-                "max_queue_size": 128,
-                "max_batches_per_tick": 1,
-                "completed_batch_fetch_limit": 512,
-                "strict_batch_ordering": true
+                "queue": {
+                    "queue_buffer": 1.0,
+                    "max_queue_size": 128,
+                    "max_batches_per_tick": 1,
+                    "completed_batch_fetch_limit": 512,
+                    "strict_batch_ordering": true
+                }
             }
         });
         let spec = decode_run_spec(
@@ -981,12 +983,14 @@ mod tests {
                 "min_tick_time_ms": 10,
                 "frontend_sync_interval_ms": 1000,
                 "target_batch_eval_ms": 200.0,
-                "queue_buffer": 1.0,
                 "max_batch_size": 64,
-                "max_queue_size": 128,
-                "max_batches_per_tick": 1,
-                "completed_batch_fetch_limit": 512,
-                "strict_batch_ordering": true
+                "queue": {
+                    "queue_buffer": 1.0,
+                    "max_queue_size": 128,
+                    "max_batches_per_tick": 1,
+                    "completed_batch_fetch_limit": 512,
+                    "strict_batch_ordering": true
+                }
             }))
             .unwrap()
         );
@@ -1022,12 +1026,14 @@ mod tests {
                     "min_tick_time_ms": 10,
                     "frontend_sync_interval_ms": 1000,
                     "target_batch_eval_ms": 200.0,
-                    "queue_buffer": 1.0,
                     "max_batch_size": 64,
-                    "max_queue_size": 128,
-                    "max_batches_per_tick": 1,
-                    "completed_batch_fetch_limit": 512,
-                    "strict_batch_ordering": true
+                    "queue": {
+                        "queue_buffer": 1.0,
+                        "max_queue_size": 128,
+                        "max_batches_per_tick": 1,
+                        "completed_batch_fetch_limit": 512,
+                        "strict_batch_ordering": true
+                    }
                 }
             }),
             json!({
@@ -1047,12 +1053,14 @@ mod tests {
                     "min_tick_time_ms": 10,
                     "frontend_sync_interval_ms": 1000,
                     "target_batch_eval_ms": 200.0,
-                    "queue_buffer": 1.0,
                     "max_batch_size": 64,
-                    "max_queue_size": 128,
-                    "max_batches_per_tick": 1,
-                    "completed_batch_fetch_limit": 512,
-                    "strict_batch_ordering": true
+                    "queue": {
+                        "queue_buffer": 1.0,
+                        "max_queue_size": 128,
+                        "max_batches_per_tick": 1,
+                        "completed_batch_fetch_limit": 512,
+                        "strict_batch_ordering": true
+                    }
                 }
             }),
             json!({

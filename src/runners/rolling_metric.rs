@@ -1,3 +1,4 @@
+use crate::core::RollingMetricSnapshot;
 use serde::{Deserialize, Serialize};
 
 /// Lightweight EWMA helper for non-negative timing/capacity metrics.
@@ -49,5 +50,14 @@ impl RollingMetric {
 
     pub(crate) fn std_dev(&self) -> f64 {
         self.variance.max(0.0).sqrt()
+    }
+}
+
+impl From<&RollingMetric> for RollingMetricSnapshot {
+    fn from(metric: &RollingMetric) -> Self {
+        Self {
+            mean: metric.value(),
+            std_dev: metric.std_dev(),
+        }
     }
 }

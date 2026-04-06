@@ -9,8 +9,8 @@ pub use models::{
     BatchClaim, BatchQueueCounts, BatchRecord, BatchStatus, CompletedBatch, DesiredAssignment,
     EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot,
     RegisteredNode, RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot, RuntimeLogEvent,
-    SamplerAggregatorPerformanceSnapshot, SamplerPerformanceMetrics, SamplerRollingAverages,
-    SamplerRuntimeMetrics, WorkerRole,
+    SamplerAggregatorPerformanceSnapshot, SamplerPerformanceMetrics, SamplerQueueRollingAverages,
+    SamplerQueueRuntimeMetrics, SamplerRuntimeMetrics, SamplerWorkRollingAverages, WorkerRole,
 };
 pub use run_spec::{
     BatchTransformConfig, EvaluatorConfig, IntegrationParams, ObservableConfig, RunSpec,

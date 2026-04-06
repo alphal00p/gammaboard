@@ -191,28 +191,51 @@ pub struct RollingMetricSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
-pub struct SamplerRollingAverages {
+pub struct SamplerWorkRollingAverages {
     pub eval_ms_per_sample: RollingMetricSnapshot,
     pub eval_ms_per_batch: RollingMetricSnapshot,
     pub sampler_produce_ms_per_sample: RollingMetricSnapshot,
     pub sampler_ingest_ms_per_sample: RollingMetricSnapshot,
     pub produced_batches_per_tick: RollingMetricSnapshot,
-    pub runnable_queue_retained_ratio: RollingMetricSnapshot,
-    pub runnable_batches_consumed_per_tick: RollingMetricSnapshot,
-    pub batches_consumed_per_second: RollingMetricSnapshot,
     pub sampler_tick_ms: RollingMetricSnapshot,
     pub reclaim_ms: RollingMetricSnapshot,
-    pub queue_snapshot_ms: RollingMetricSnapshot,
+    pub queue_counts_ms: RollingMetricSnapshot,
     pub active_evaluator_count_ms: RollingMetricSnapshot,
-    pub completed_fetch_wait_ms: RollingMetricSnapshot,
     pub completed_merge_ingest_ms: RollingMetricSnapshot,
-    pub completed_fetch_ingest_ms: RollingMetricSnapshot,
     pub aggregation_flush_ms: RollingMetricSnapshot,
     pub completed_delete_ms: RollingMetricSnapshot,
-    pub enqueue_drain_wait_ms: RollingMetricSnapshot,
-    pub produce_enqueue_ms: RollingMetricSnapshot,
+    pub produce_ms: RollingMetricSnapshot,
     pub progress_sync_ms: RollingMetricSnapshot,
     pub performance_sync_ms: RollingMetricSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SamplerQueueRollingAverages {
+    pub get_processed_ms: RollingMetricSnapshot,
+    pub fetch_completed_ms: RollingMetricSnapshot,
+    pub insert_batches_ms: RollingMetricSnapshot,
+    pub flush_ms: RollingMetricSnapshot,
+}
+
+impl Default for SamplerQueueRollingAverages {
+    fn default() -> Self {
+        Self {
+            get_processed_ms: RollingMetricSnapshot::default(),
+            fetch_completed_ms: RollingMetricSnapshot::default(),
+            insert_batches_ms: RollingMetricSnapshot::default(),
+            flush_ms: RollingMetricSnapshot::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SamplerQueueRuntimeMetrics {
+    pub local_pending_batches: usize,
+    pub local_inflight_insert_batches: usize,
+    pub local_ready_processed_batches: usize,
+    pub rolling: SamplerQueueRollingAverages,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -223,7 +246,8 @@ pub struct SamplerRuntimeMetrics {
     pub ingested_samples_total: i64,
     pub completed_samples_per_second: f64,
     pub batch_size_current: usize,
-    pub rolling: SamplerRollingAverages,
+    pub sampler: SamplerWorkRollingAverages,
+    pub queue: SamplerQueueRuntimeMetrics,
 }
 
 impl SamplerRuntimeMetrics {
@@ -232,19 +256,19 @@ impl SamplerRuntimeMetrics {
             produced_batches: self.produced_batches_total,
             produced_samples: self.produced_samples_total,
             avg_produce_time_per_sample_ms: self
-                .rolling
+                .sampler
                 .sampler_produce_ms_per_sample
                 .mean
                 .unwrap_or(0.0),
-            std_produce_time_per_sample_ms: self.rolling.sampler_produce_ms_per_sample.std_dev,
+            std_produce_time_per_sample_ms: self.sampler.sampler_produce_ms_per_sample.std_dev,
             ingested_batches: self.ingested_batches_total,
             ingested_samples: self.ingested_samples_total,
             avg_ingest_time_per_sample_ms: self
-                .rolling
+                .sampler
                 .sampler_ingest_ms_per_sample
                 .mean
                 .unwrap_or(0.0),
-            std_ingest_time_per_sample_ms: self.rolling.sampler_ingest_ms_per_sample.std_dev,
+            std_ingest_time_per_sample_ms: self.sampler.sampler_ingest_ms_per_sample.std_dev,
         }
     }
 }

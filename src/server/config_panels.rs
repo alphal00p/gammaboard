@@ -162,7 +162,7 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
                 key_value(
                     "queue_buffer",
                     "Queue Buffer",
-                    ctx.runner_params.queue_buffer,
+                    ctx.runner_params.queue.queue_buffer,
                 ),
                 key_value(
                     "max_batch_size",
@@ -172,22 +172,22 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
                 key_value(
                     "max_queue_size",
                     "Max Queue Size",
-                    ctx.runner_params.max_queue_size,
+                    ctx.runner_params.queue.max_queue_size,
                 ),
                 key_value(
                     "max_batches_per_tick",
                     "Max Batches Per Tick",
-                    ctx.runner_params.max_batches_per_tick,
+                    ctx.runner_params.queue.max_batches_per_tick,
                 ),
                 key_value(
                     "completed_fetch_limit",
                     "Completed Fetch Limit",
-                    ctx.runner_params.completed_batch_fetch_limit,
+                    ctx.runner_params.queue.completed_batch_fetch_limit,
                 ),
                 key_value(
                     "strict_batch_ordering",
                     "Strict Batch Ordering",
-                    ctx.runner_params.strict_batch_ordering,
+                    ctx.runner_params.queue.strict_batch_ordering,
                 ),
                 key_value(
                     "snapshot_interval_ms",

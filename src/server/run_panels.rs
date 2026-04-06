@@ -106,9 +106,6 @@ fn panel_states(
         worker.current_run_id == Some(run.run_id)
             && worker.current_role.as_deref() == Some("sampler_aggregator")
     });
-    let avg_queue_remaining = active_sampler
-        .and_then(|worker| worker.sampler_runtime_metrics.as_ref())
-        .and_then(queue_remaining_mean);
     let active_evaluator_count = active_sampler
         .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
         .and_then(|value| runner_diagnostic_i64(value, "active_evaluator_count"));
@@ -121,6 +118,15 @@ fn panel_states(
     let pending_shortfall = target_pending_batches
         .zip(pending_batches)
         .map(|(target, pending)| target.saturating_sub(pending));
+    let local_pending_batches = active_sampler
+        .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
+        .and_then(|value| runner_diagnostic_i64(value, "local_pending_batches"));
+    let local_inflight_insert_batches = active_sampler
+        .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
+        .and_then(|value| runner_diagnostic_i64(value, "local_inflight_insert_batches"));
+    let local_ready_processed_batches = active_sampler
+        .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
+        .and_then(|value| runner_diagnostic_i64(value, "local_ready_processed_batches"));
     let current_batch_size = active_sampler
         .and_then(|worker| worker.sampler_runtime_metrics.as_ref())
         .and_then(batch_size_current);
@@ -179,14 +185,9 @@ fn panel_states(
                 key_value("failed", "Failed Batches", run.failed_batches),
                 key_value("completed", "Completed Batches", run.completed_batches),
                 key_value(
-                    "avg_queue_remaining",
-                    "Avg Pending Queue Carryover Ratio (Diagnostic)",
-                    avg_queue_remaining,
-                ),
-                key_value(
                     "queue_buffer",
                     "Queue Buffer",
-                    run_spec.sampler_aggregator_runner_params.queue_buffer,
+                    run_spec.sampler_aggregator_runner_params.queue.queue_buffer,
                 ),
                 key_value(
                     "active_evaluator_count",
@@ -199,6 +200,21 @@ fn panel_states(
                     target_pending_batches,
                 ),
                 key_value("pending_shortfall", "Pending Shortfall", pending_shortfall),
+                key_value(
+                    "local_pending_batches",
+                    "Local Pending Batches",
+                    local_pending_batches,
+                ),
+                key_value(
+                    "local_inflight_insert_batches",
+                    "Local In-Flight Insert Batches",
+                    local_inflight_insert_batches,
+                ),
+                key_value(
+                    "local_ready_processed_batches",
+                    "Local Ready Processed Batches",
+                    local_ready_processed_batches,
+                ),
             ],
         ),
         key_value_panel(
@@ -272,17 +288,6 @@ fn current_task_label(task: Option<&RunTask>) -> String {
         .unwrap_or_else(|| "none".to_string())
 }
 
-fn queue_remaining_mean(metrics: &JsonValue) -> Option<f64> {
-    metrics
-        .as_object()
-        .and_then(|value| value.get("rolling"))
-        .and_then(JsonValue::as_object)
-        .and_then(|value| value.get("runnable_queue_retained_ratio"))
-        .and_then(JsonValue::as_object)
-        .and_then(|value| value.get("mean"))
-        .and_then(JsonValue::as_f64)
-}
-
 fn batch_size_current(metrics: &JsonValue) -> Option<usize> {
     metrics
         .as_object()
@@ -294,7 +299,7 @@ fn batch_size_current(metrics: &JsonValue) -> Option<usize> {
 fn batch_eval_ms_mean(metrics: &JsonValue) -> Option<f64> {
     metrics
         .as_object()
-        .and_then(|value| value.get("rolling"))
+        .and_then(|value| value.get("sampler"))
         .and_then(JsonValue::as_object)
         .and_then(|value| value.get("eval_ms_per_batch"))
         .and_then(JsonValue::as_object)

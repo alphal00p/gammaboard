@@ -9,18 +9,18 @@
 
 use crate::core::{
     BatchTransformConfig, EngineError, RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot,
-    RunTask, SamplerAggregatorConfig, SamplerAggregatorPerformanceSnapshot, SamplerRollingAverages,
-    SamplerRuntimeMetrics, SamplerWorkerStore, StoreError,
+    RunTask, SamplerAggregatorConfig, SamplerAggregatorPerformanceSnapshot, SamplerRuntimeMetrics,
+    SamplerWorkRollingAverages, SamplerWorkerStore, StoreError,
 };
 use crate::evaluation::ObservableState;
 use crate::runners::process_memory::current_rss_bytes;
 use crate::runners::rolling_metric::RollingMetric;
+use crate::runners::{SamplerQueue, SamplerQueueCheckpoint, SamplerQueueConfig};
 use crate::sampling::{SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use std::time::{Duration, Instant};
 use thiserror::Error;
-use tokio::task::JoinHandle;
 use tokio::time::sleep;
 
 const MIN_BATCH_SIZE: usize = 16;
@@ -36,36 +36,25 @@ pub struct SamplerAggregatorRunnerParams {
     pub min_tick_time_ms: u64,
     pub frontend_sync_interval_ms: u64,
     pub target_batch_eval_ms: f64,
-    pub queue_buffer: f64,
     pub max_batch_size: usize,
-    pub max_queue_size: usize,
-    pub max_batches_per_tick: usize,
-    pub completed_batch_fetch_limit: usize,
-    pub strict_batch_ordering: bool,
+    pub queue: SamplerQueueConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct RollingAveragesState {
+struct SamplerRollingState {
     eval_ms_per_sample: RollingMetric,
     eval_ms_per_batch: RollingMetric,
     sampler_produce_ms_per_sample: RollingMetric,
     sampler_ingest_ms_per_sample: RollingMetric,
     produced_batches_per_tick: RollingMetric,
-    completed_samples_per_second: RollingMetric,
-    runnable_queue_retained_ratio: RollingMetric,
-    runnable_batches_consumed_per_tick: RollingMetric,
-    batches_consumed_per_second: RollingMetric,
     sampler_tick_ms: RollingMetric,
     reclaim_ms: RollingMetric,
-    queue_snapshot_ms: RollingMetric,
+    queue_counts_ms: RollingMetric,
     active_evaluator_count_ms: RollingMetric,
-    completed_fetch_wait_ms: RollingMetric,
     completed_merge_ingest_ms: RollingMetric,
-    completed_fetch_ingest_ms: RollingMetric,
     aggregation_flush_ms: RollingMetric,
     completed_delete_ms: RollingMetric,
-    enqueue_drain_wait_ms: RollingMetric,
-    produce_enqueue_ms: RollingMetric,
+    produce_ms: RollingMetric,
     progress_sync_ms: RollingMetric,
     performance_sync_ms: RollingMetric,
 }
@@ -84,12 +73,11 @@ struct SamplerRuntimeState {
     produced_samples_total: i64,
     ingested_batches_total: i64,
     ingested_samples_total: i64,
+    completed_samples_per_second: f64,
     pending_persisted_completed_batches: i32,
-    #[serde(default)]
-    last_completed_batch_id: Option<i64>,
     batch_size_current: usize,
     observable_checkpoint_state: ObservableCheckpointState,
-    rolling: RollingAveragesState,
+    rolling: SamplerRollingState,
 }
 
 impl Default for SamplerRuntimeState {
@@ -99,11 +87,11 @@ impl Default for SamplerRuntimeState {
             produced_samples_total: 0,
             ingested_batches_total: 0,
             ingested_samples_total: 0,
+            completed_samples_per_second: 0.0,
             pending_persisted_completed_batches: 0,
-            last_completed_batch_id: None,
             batch_size_current: 0,
             observable_checkpoint_state: ObservableCheckpointState::NeedsInitialRoundTrip,
-            rolling: RollingAveragesState::default(),
+            rolling: SamplerRollingState::default(),
         }
     }
 }
@@ -114,16 +102,7 @@ pub struct SamplerAggregatorCheckpoint {
     pub sampler_snapshot: SamplerAggregatorSnapshot,
     pub observable_state: ObservableState,
     runtime_state: SamplerRuntimeState,
-    last_runnable_after_enqueue: Option<usize>,
-}
-
-impl From<&RollingMetric> for RollingMetricSnapshot {
-    fn from(metric: &RollingMetric) -> Self {
-        Self {
-            mean: metric.value(),
-            std_dev: metric.std_dev(),
-        }
-    }
+    queue: SamplerQueueCheckpoint,
 }
 
 impl SamplerAggregatorCheckpoint {
@@ -135,19 +114,18 @@ impl SamplerAggregatorCheckpoint {
 }
 
 impl SamplerRuntimeState {
-    fn to_runtime_metrics(&self) -> SamplerRuntimeMetrics {
+    fn to_runtime_metrics(
+        &self,
+        queue: crate::core::SamplerQueueRuntimeMetrics,
+    ) -> SamplerRuntimeMetrics {
         SamplerRuntimeMetrics {
             produced_batches_total: self.produced_batches_total,
             produced_samples_total: self.produced_samples_total,
             ingested_batches_total: self.ingested_batches_total,
             ingested_samples_total: self.ingested_samples_total,
-            completed_samples_per_second: self
-                .rolling
-                .completed_samples_per_second
-                .value()
-                .unwrap_or(0.0),
+            completed_samples_per_second: self.completed_samples_per_second,
             batch_size_current: self.batch_size_current,
-            rolling: SamplerRollingAverages {
+            sampler: SamplerWorkRollingAverages {
                 eval_ms_per_sample: RollingMetricSnapshot::from(&self.rolling.eval_ms_per_sample),
                 eval_ms_per_batch: RollingMetricSnapshot::from(&self.rolling.eval_ms_per_batch),
                 sampler_produce_ms_per_sample: RollingMetricSnapshot::from(
@@ -159,41 +137,24 @@ impl SamplerRuntimeState {
                 produced_batches_per_tick: RollingMetricSnapshot::from(
                     &self.rolling.produced_batches_per_tick,
                 ),
-                runnable_queue_retained_ratio: RollingMetricSnapshot::from(
-                    &self.rolling.runnable_queue_retained_ratio,
-                ),
-                runnable_batches_consumed_per_tick: RollingMetricSnapshot::from(
-                    &self.rolling.runnable_batches_consumed_per_tick,
-                ),
-                batches_consumed_per_second: RollingMetricSnapshot::from(
-                    &self.rolling.batches_consumed_per_second,
-                ),
                 sampler_tick_ms: RollingMetricSnapshot::from(&self.rolling.sampler_tick_ms),
                 reclaim_ms: RollingMetricSnapshot::from(&self.rolling.reclaim_ms),
-                queue_snapshot_ms: RollingMetricSnapshot::from(&self.rolling.queue_snapshot_ms),
+                queue_counts_ms: RollingMetricSnapshot::from(&self.rolling.queue_counts_ms),
                 active_evaluator_count_ms: RollingMetricSnapshot::from(
                     &self.rolling.active_evaluator_count_ms,
                 ),
-                completed_fetch_wait_ms: RollingMetricSnapshot::from(
-                    &self.rolling.completed_fetch_wait_ms,
-                ),
                 completed_merge_ingest_ms: RollingMetricSnapshot::from(
                     &self.rolling.completed_merge_ingest_ms,
-                ),
-                completed_fetch_ingest_ms: RollingMetricSnapshot::from(
-                    &self.rolling.completed_fetch_ingest_ms,
                 ),
                 aggregation_flush_ms: RollingMetricSnapshot::from(
                     &self.rolling.aggregation_flush_ms,
                 ),
                 completed_delete_ms: RollingMetricSnapshot::from(&self.rolling.completed_delete_ms),
-                enqueue_drain_wait_ms: RollingMetricSnapshot::from(
-                    &self.rolling.enqueue_drain_wait_ms,
-                ),
-                produce_enqueue_ms: RollingMetricSnapshot::from(&self.rolling.produce_enqueue_ms),
+                produce_ms: RollingMetricSnapshot::from(&self.rolling.produce_ms),
                 progress_sync_ms: RollingMetricSnapshot::from(&self.rolling.progress_sync_ms),
                 performance_sync_ms: RollingMetricSnapshot::from(&self.rolling.performance_sync_ms),
             },
+            queue,
         }
     }
 }
@@ -204,188 +165,6 @@ pub enum RunnerError {
     Engine(#[from] EngineError),
     #[error(transparent)]
     Store(#[from] StoreError),
-}
-
-struct CompletedBatchSource<S> {
-    run_id: i32,
-    fetch_limit: usize,
-    strict_batch_ordering: bool,
-    ready_workload: Option<Vec<crate::core::CompletedBatch>>,
-    pending_fetch: Option<JoinHandle<Result<Vec<crate::core::CompletedBatch>, StoreError>>>,
-    _marker: std::marker::PhantomData<S>,
-}
-
-impl<S> CompletedBatchSource<S>
-where
-    S: SamplerWorkerStore + Clone + Send + Sync + 'static,
-{
-    fn new(run_id: i32, fetch_limit: usize, strict_batch_ordering: bool) -> Self {
-        Self {
-            run_id,
-            fetch_limit,
-            strict_batch_ordering,
-            ready_workload: None,
-            pending_fetch: None,
-            _marker: std::marker::PhantomData,
-        }
-    }
-
-    async fn take(
-        &mut self,
-        store: &S,
-        after_batch_id: Option<i64>,
-    ) -> Result<Vec<crate::core::CompletedBatch>, RunnerError> {
-        self.drain_finished().await?;
-        if self.ready_workload.is_none() && self.pending_fetch.is_none() {
-            self.start_prefetch(store, after_batch_id);
-        }
-        if self.ready_workload.is_none() {
-            self.await_pending().await?;
-        }
-        Ok(self.ready_workload.take().unwrap_or_default())
-    }
-
-    fn start_prefetch(&mut self, store: &S, after_batch_id: Option<i64>) {
-        if self.ready_workload.is_some() || self.pending_fetch.is_some() {
-            return;
-        }
-
-        let store = store.clone();
-        let run_id = self.run_id;
-        let fetch_limit = self.fetch_limit;
-        let strict_batch_ordering = self.strict_batch_ordering;
-        self.pending_fetch = Some(tokio::spawn(async move {
-            store
-                .fetch_completed_batches(run_id, fetch_limit, strict_batch_ordering, after_batch_id)
-                .await
-        }));
-    }
-
-    async fn drain_finished(&mut self) -> Result<(), RunnerError> {
-        let Some(handle) = self.pending_fetch.as_ref() else {
-            return Ok(());
-        };
-        if !handle.is_finished() {
-            return Ok(());
-        }
-
-        let handle = self.pending_fetch.take().expect("checked pending fetch");
-        self.consume_fetch_handle(handle).await
-    }
-
-    async fn await_pending(&mut self) -> Result<(), RunnerError> {
-        let Some(handle) = self.pending_fetch.take() else {
-            return Ok(());
-        };
-        self.consume_fetch_handle(handle).await
-    }
-
-    async fn consume_fetch_handle(
-        &mut self,
-        handle: JoinHandle<Result<Vec<crate::core::CompletedBatch>, StoreError>>,
-    ) -> Result<(), RunnerError> {
-        match handle.await {
-            Ok(Ok(completed)) => self.ready_workload = Some(completed),
-            Ok(Err(err)) => return Err(RunnerError::Store(err)),
-            Err(err) => {
-                return Err(RunnerError::Store(StoreError::store(format!(
-                    "sampler completed-batch fetch task failed: {err}"
-                ))));
-            }
-        }
-        Ok(())
-    }
-}
-
-struct ProducedBatchWorkload {
-    pending_before_produce: usize,
-    produced_samples: i64,
-    batches: Vec<crate::sampling::LatentBatch>,
-}
-
-struct EnqueueOutcome {
-    produced_batches: usize,
-    produced_samples: i64,
-    pending_after_enqueue: usize,
-}
-
-struct LatentBatchDrain<S> {
-    run_id: i32,
-    task_id: i64,
-    requires_training_values: bool,
-    pending_enqueue: Option<JoinHandle<Result<EnqueueOutcome, StoreError>>>,
-    _marker: std::marker::PhantomData<S>,
-}
-
-impl<S> LatentBatchDrain<S>
-where
-    S: SamplerWorkerStore + Clone + Send + Sync + 'static,
-{
-    fn new(run_id: i32, task_id: i64, requires_training_values: bool) -> Self {
-        Self {
-            run_id,
-            task_id,
-            requires_training_values,
-            pending_enqueue: None,
-            _marker: std::marker::PhantomData,
-        }
-    }
-
-    async fn wait_for_slot(&mut self) -> Result<Option<EnqueueOutcome>, RunnerError> {
-        let Some(handle) = self.pending_enqueue.take() else {
-            return Ok(None);
-        };
-        self.consume_enqueue_handle(handle).await
-    }
-
-    async fn drain_finished(&mut self) -> Result<Option<EnqueueOutcome>, RunnerError> {
-        let Some(handle) = self.pending_enqueue.as_ref() else {
-            return Ok(None);
-        };
-        if !handle.is_finished() {
-            return Ok(None);
-        }
-
-        let handle = self
-            .pending_enqueue
-            .take()
-            .expect("checked pending enqueue");
-        self.consume_enqueue_handle(handle).await
-    }
-
-    fn start_drain(&mut self, store: &S, workload: ProducedBatchWorkload) {
-        debug_assert!(self.pending_enqueue.is_none());
-        let store = store.clone();
-        let run_id = self.run_id;
-        let task_id = self.task_id;
-        let requires_training_values = self.requires_training_values;
-        self.pending_enqueue = Some(tokio::spawn(async move {
-            let produced_batches = workload.batches.len();
-            store
-                .insert_batches(run_id, task_id, requires_training_values, &workload.batches)
-                .await?;
-            Ok(EnqueueOutcome {
-                produced_batches,
-                produced_samples: workload.produced_samples,
-                pending_after_enqueue: workload
-                    .pending_before_produce
-                    .saturating_add(produced_batches),
-            })
-        }));
-    }
-
-    async fn consume_enqueue_handle(
-        &mut self,
-        handle: JoinHandle<Result<EnqueueOutcome, StoreError>>,
-    ) -> Result<Option<EnqueueOutcome>, RunnerError> {
-        match handle.await {
-            Ok(Ok(outcome)) => Ok(Some(outcome)),
-            Ok(Err(err)) => Err(RunnerError::Store(err)),
-            Err(err) => Err(RunnerError::Store(StoreError::store(format!(
-                "sampler latent-batch enqueue task failed: {err}"
-            )))),
-        }
-    }
 }
 
 pub struct SamplerAggregatorRunner<S> {
@@ -409,10 +188,7 @@ pub struct SamplerAggregatorRunner<S> {
     last_completed_cleanup_at: Instant,
     runtime_state: SamplerRuntimeState,
     last_performance_completed_samples: i64,
-    last_runnable_after_enqueue: Option<usize>,
-    last_tick_started_at: Option<Instant>,
-    completed_source: CompletedBatchSource<S>,
-    enqueue_drain: LatentBatchDrain<S>,
+    queue: SamplerQueue<S>,
 }
 
 impl<S> SamplerAggregatorRunner<S>
@@ -434,16 +210,16 @@ where
         run_progress: Option<RunSampleProgress>,
     ) -> Self {
         let mut runtime_state;
-        let last_runnable_after_enqueue;
+        let queue_checkpoint;
         if let Some(snapshot) = resume_snapshot {
             runtime_state = snapshot.runtime_state.clone();
-            last_runnable_after_enqueue = snapshot.last_runnable_after_enqueue;
+            queue_checkpoint = snapshot.queue.clone();
         } else {
             runtime_state = SamplerRuntimeState {
                 batch_size_current: initial_batch_size.clamp(MIN_BATCH_SIZE, params.max_batch_size),
                 ..SamplerRuntimeState::default()
             };
-            last_runnable_after_enqueue = None;
+            queue_checkpoint = SamplerQueueCheckpoint::default();
         }
         runtime_state.batch_size_current = runtime_state
             .batch_size_current
@@ -460,10 +236,16 @@ where
             Duration::from_millis(params.performance_snapshot_interval_ms);
         let frontend_sync_interval = Duration::from_millis(params.frontend_sync_interval_ms);
         let now = Instant::now();
-        let completed_batch_fetch_limit = params.completed_batch_fetch_limit;
-        let strict_batch_ordering = params.strict_batch_ordering;
         let task_id = task.id;
         let requires_training_values = sampler_config.requires_training();
+        let queue = SamplerQueue::new(
+            store.clone(),
+            run_id,
+            task_id,
+            requires_training_values,
+            params.queue.clone(),
+            queue_checkpoint,
+        );
 
         Self {
             run_id,
@@ -486,14 +268,7 @@ where
             last_completed_cleanup_at: now.checked_sub(COMPLETED_CLEANUP_INTERVAL).unwrap_or(now),
             runtime_state,
             last_performance_completed_samples: nr_completed_samples,
-            last_runnable_after_enqueue,
-            last_tick_started_at: None,
-            completed_source: CompletedBatchSource::new(
-                run_id,
-                completed_batch_fetch_limit,
-                strict_batch_ordering,
-            ),
-            enqueue_drain: LatentBatchDrain::new(run_id, task_id, requires_training_values),
+            queue,
         }
     }
 
@@ -501,24 +276,8 @@ where
         &self.params
     }
 
-    fn apply_enqueue_outcome(&mut self, outcome: EnqueueOutcome) {
-        self.runtime_state.produced_batches_total += outcome.produced_batches as i64;
-        self.runtime_state.produced_samples_total += outcome.produced_samples;
-        self.nr_produced_samples += outcome.produced_samples;
-        self.task.nr_produced_samples += outcome.produced_samples;
-        self.last_runnable_after_enqueue = Some(outcome.pending_after_enqueue);
-    }
-
-    async fn flush_enqueue_drain(&mut self) -> Result<(), RunnerError> {
-        let drain_wait_started = Instant::now();
-        let outcome = self.enqueue_drain.wait_for_slot().await?;
-        observe_duration_ms(
-            &mut self.runtime_state.rolling.enqueue_drain_wait_ms,
-            drain_wait_started.elapsed(),
-        );
-        if let Some(outcome) = outcome {
-            self.apply_enqueue_outcome(outcome);
-        }
+    async fn flush_queue(&mut self) -> Result<(), RunnerError> {
+        self.queue.flush().await?;
         Ok(())
     }
 
@@ -543,40 +302,29 @@ where
             next.clamp(MIN_BATCH_SIZE, self.params.max_batch_size);
     }
 
-    fn hard_produce_limit(&self, open_before_tick: usize) -> usize {
-        let remaining_capacity = self.params.max_queue_size.saturating_sub(open_before_tick);
-        remaining_capacity.min(self.params.max_batches_per_tick)
-    }
-
-    fn target_pending_batches(&self, active_evaluator_count: usize) -> Option<usize> {
-        if !self.params.queue_buffer.is_finite() || self.params.queue_buffer < 0.0 {
-            return None;
-        }
-        Some(
-            ((active_evaluator_count as f64) * self.params.queue_buffer)
-                .ceil()
-                .max(0.0) as usize,
-        )
-    }
-
     async fn current_runner_diagnostics(&self) -> Result<JsonValue, RunnerError> {
-        let queue_counts = self
-            .store
-            .get_batch_queue_counts(self.run_id, self.runtime_state.last_completed_batch_id)
-            .await?;
+        let queue_counts = self.queue.queue_counts_with_local_buffer(
+            self.store
+                .get_batch_queue_counts(self.run_id, self.queue.last_completed_batch_id())
+                .await?,
+        );
         let active_evaluator_count = self.active_evaluator_count().await?;
-        let target_pending_batches = self.target_pending_batches(active_evaluator_count);
+        let target_pending_batches = self.queue.target_pending_batches(active_evaluator_count);
+        let queue_runtime = self.queue.runtime_metrics();
         Ok(json!({
             "active_evaluator_count": active_evaluator_count,
             "pending_batches": queue_counts.pending,
             "claimed_batches": queue_counts.claimed,
             "completed_batches": queue_counts.completed,
             "open_batches": queue_counts.open(),
-            "queue_buffer": self.params.queue_buffer,
+            "queue_buffer": self.params.queue.queue_buffer,
             "target_pending_batches": target_pending_batches,
             "pending_shortfall": target_pending_batches
                 .map(|target| (target as i64).saturating_sub(queue_counts.pending as i64)),
-            "last_completed_batch_id": self.runtime_state.last_completed_batch_id,
+            "last_completed_batch_id": self.queue.last_completed_batch_id(),
+            "local_pending_batches": queue_runtime.local_pending_batches,
+            "local_inflight_insert_batches": queue_runtime.local_inflight_insert_batches,
+            "local_ready_processed_batches": queue_runtime.local_ready_processed_batches,
             "observable_checkpoint_state": match self.runtime_state.observable_checkpoint_state {
                 ObservableCheckpointState::NeedsInitialRoundTrip => "needs_initial_round_trip",
                 ObservableCheckpointState::WaitingForInitialRoundTrip => "waiting_for_initial_round_trip",
@@ -584,58 +332,6 @@ where
             },
             "training_samples_remaining": self.sampler.training_samples_remaining(),
         }))
-    }
-
-    fn compute_produce_limit(
-        &self,
-        pending_before_tick: usize,
-        open_before_tick: usize,
-        active_evaluator_count: usize,
-    ) -> usize {
-        let hard_limit = self.hard_produce_limit(open_before_tick);
-        if hard_limit == 0 {
-            return 0;
-        }
-
-        let Some(target_pending_after_enqueue) =
-            self.target_pending_batches(active_evaluator_count)
-        else {
-            return 0;
-        };
-
-        hard_limit.min(target_pending_after_enqueue.saturating_sub(pending_before_tick))
-    }
-
-    fn build_batch_plan(
-        &self,
-        base_produce_limit: usize,
-        max_samples: Option<usize>,
-    ) -> Vec<usize> {
-        match max_samples {
-            None => vec![self.runtime_state.batch_size_current; base_produce_limit],
-            Some(max_samples) => {
-                let base_total_samples =
-                    base_produce_limit.saturating_mul(self.runtime_state.batch_size_current);
-                if base_total_samples <= max_samples {
-                    vec![self.runtime_state.batch_size_current; base_produce_limit]
-                } else if max_samples == 0 || self.runtime_state.batch_size_current == 0 {
-                    Vec::new()
-                } else {
-                    let nr_batches = max_samples.div_ceil(self.runtime_state.batch_size_current);
-                    let base_size = max_samples / nr_batches;
-                    let remainder = max_samples % nr_batches;
-                    let mut plan = Vec::with_capacity(nr_batches);
-                    for i in 0..nr_batches {
-                        plan.push(if i < remainder {
-                            base_size + 1
-                        } else {
-                            base_size
-                        });
-                    }
-                    plan
-                }
-            }
-        }
     }
 
     fn max_samples_to_produce_this_tick(
@@ -673,45 +369,6 @@ where
         Ok(usize::try_from(remaining).ok())
     }
 
-    fn observe_tick_timing(&mut self, tick_started_at: Instant) {
-        if let Some(previous_tick_started_at) = self.last_tick_started_at {
-            let tick_ms = tick_started_at
-                .saturating_duration_since(previous_tick_started_at)
-                .as_secs_f64()
-                * 1000.0;
-            if tick_ms.is_finite() && tick_ms > 0.0 {
-                self.runtime_state.rolling.sampler_tick_ms.observe(tick_ms);
-            }
-        }
-        self.last_tick_started_at = Some(tick_started_at);
-    }
-
-    fn observe_queue_metrics(&mut self, pending_before_tick: usize) {
-        if let Some(previous_runnable_after) = self.last_runnable_after_enqueue
-            && previous_runnable_after > 0
-        {
-            let observed_ratio = (pending_before_tick as f64) / (previous_runnable_after as f64);
-            self.runtime_state
-                .rolling
-                .runnable_queue_retained_ratio
-                .observe(observed_ratio);
-            let consumed = previous_runnable_after.saturating_sub(pending_before_tick) as f64;
-            self.runtime_state
-                .rolling
-                .runnable_batches_consumed_per_tick
-                .observe(consumed);
-            if let Some(avg_tick_ms) = self.runtime_state.rolling.sampler_tick_ms.value()
-                && avg_tick_ms.is_finite()
-                && avg_tick_ms > 0.0
-            {
-                self.runtime_state
-                    .rolling
-                    .batches_consumed_per_second
-                    .observe(consumed * 1000.0 / avg_tick_ms);
-            }
-        }
-    }
-
     async fn active_evaluator_count(&self) -> Result<usize, RunnerError> {
         Ok(self
             .store
@@ -729,12 +386,8 @@ where
     }
 
     pub async fn tick(&mut self) -> Result<bool, RunnerError> {
-        let tick_started_at = Instant::now();
-        self.observe_tick_timing(tick_started_at);
-        if let Some(outcome) = self.enqueue_drain.drain_finished().await? {
-            self.apply_enqueue_outcome(outcome);
-        }
-        self.flush_enqueue_drain().await?;
+        let tick_started = Instant::now();
+        let completed = self.queue.get_processed().await?;
         self.cleanup_consumed_completed_batches(false).await?;
         if self.last_reclaim_at.elapsed() >= RECLAIM_INTERVAL {
             let reclaim_started = Instant::now();
@@ -747,15 +400,15 @@ where
         }
 
         let queue_snapshot_started = Instant::now();
-        let queue_before_tick = self
-            .store
-            .get_batch_queue_counts(self.run_id, self.runtime_state.last_completed_batch_id)
-            .await?;
+        let queue_before_tick = self.queue.queue_counts_with_local_buffer(
+            self.store
+                .get_batch_queue_counts(self.run_id, self.queue.last_completed_batch_id())
+                .await?,
+        );
         observe_duration_ms(
-            &mut self.runtime_state.rolling.queue_snapshot_ms,
+            &mut self.runtime_state.rolling.queue_counts_ms,
             queue_snapshot_started.elapsed(),
         );
-        self.observe_queue_metrics(queue_before_tick.pending.max(0) as usize);
         self.tune_batch_size();
 
         let active_evaluator_started = Instant::now();
@@ -765,7 +418,7 @@ where
             active_evaluator_started.elapsed(),
         );
 
-        let completed_batches = self.process_completed().await?;
+        let completed_batches = self.process_completed_batches(completed).await?;
         let queue_before_produce = crate::core::BatchQueueCounts {
             pending: queue_before_tick.pending,
             claimed: queue_before_tick.claimed,
@@ -779,7 +432,7 @@ where
             .produce(queue_before_produce, active_evaluator_count)
             .await?;
         observe_duration_ms(
-            &mut self.runtime_state.rolling.produce_enqueue_ms,
+            &mut self.runtime_state.rolling.produce_ms,
             produce_started.elapsed(),
         );
 
@@ -812,6 +465,10 @@ where
                 self.run_id, self.task.id, self.task.nr_completed_samples, target
             ))));
         }
+        observe_duration_ms(
+            &mut self.runtime_state.rolling.sampler_tick_ms,
+            tick_started.elapsed(),
+        );
         Ok(self.task.task.nr_expected_samples().is_some_and(|target| {
             self.task.nr_completed_samples >= target && open_batch_count == 0
         }))
@@ -844,7 +501,7 @@ where
             sampler_snapshot: self.sampler.snapshot().map_err(RunnerError::Engine)?,
             observable_state: self.observable_state.clone(),
             runtime_state: self.runtime_state.clone(),
-            last_runnable_after_enqueue: self.last_runnable_after_enqueue,
+            queue: self.queue.checkpoint(),
         };
         self.store
             .save_sampler_checkpoint(self.run_id, &checkpoint)
@@ -853,28 +510,33 @@ where
     }
 
     async fn drain_evaluator_work_on_stop(&mut self) -> Result<(), RunnerError> {
-        self.flush_enqueue_drain().await?;
+        self.flush_queue().await?;
         loop {
-            self.process_completed().await?;
+            let completed = self.queue.get_processed_blocking().await?;
+            self.process_completed_batches(completed).await?;
 
-            let claimed_batches = self
-                .store
-                .get_batch_queue_counts(self.run_id, self.runtime_state.last_completed_batch_id)
-                .await?
-                .claimed;
-            if claimed_batches <= 0 {
+            let queue_counts = self.queue.queue_counts_with_local_buffer(
+                self.store
+                    .get_batch_queue_counts(self.run_id, self.queue.last_completed_batch_id())
+                    .await?,
+            );
+            if queue_counts.claimed <= 0
+                && queue_counts.completed <= 0
+                && self.queue.local_work_drained()
+            {
                 break;
             }
 
             sleep(Duration::from_millis(25)).await;
         }
 
-        self.process_completed().await?;
+        let completed = self.queue.get_processed_blocking().await?;
+        self.process_completed_batches(completed).await?;
         Ok(())
     }
 
     pub async fn persist_state(&mut self) -> Result<(), RunnerError> {
-        self.flush_enqueue_drain().await?;
+        self.flush_queue().await?;
         self.drain_evaluator_work_on_stop().await?;
         self.cleanup_consumed_completed_batches(true).await?;
         self.flush_aggregation(true).await?;
@@ -928,7 +590,7 @@ where
     }
 
     async fn cleanup_consumed_completed_batches(&mut self, force: bool) -> Result<(), RunnerError> {
-        let Some(up_to_batch_id) = self.runtime_state.last_completed_batch_id else {
+        let Some(up_to_batch_id) = self.queue.last_completed_batch_id() else {
             return Ok(());
         };
 
@@ -966,7 +628,7 @@ where
     }
 
     pub async fn complete_task(&mut self) -> Result<(), RunnerError> {
-        self.flush_enqueue_drain().await?;
+        self.flush_queue().await?;
         self.cleanup_consumed_completed_batches(true).await?;
         self.flush_aggregation(true).await?;
         self.flush_performance_snapshot(true).await?;
@@ -981,21 +643,14 @@ where
         Ok(())
     }
 
-    async fn process_completed(&mut self) -> Result<usize, RunnerError> {
-        let completed_fetch_started = Instant::now();
-        let completed = self
-            .completed_source
-            .take(&self.store, self.runtime_state.last_completed_batch_id)
-            .await?;
-        observe_duration_ms(
-            &mut self.runtime_state.rolling.completed_fetch_wait_ms,
-            completed_fetch_started.elapsed(),
-        );
+    async fn process_completed_batches(
+        &mut self,
+        completed: Vec<crate::core::CompletedBatch>,
+    ) -> Result<usize, RunnerError> {
         if completed.is_empty() {
             return Ok(0);
         }
 
-        let completed_process_started = Instant::now();
         let completed_merge_ingest_started = Instant::now();
         let mut completed_samples_delta = 0_i64;
         for batch in &completed {
@@ -1066,14 +721,7 @@ where
             completed_merge_ingest_started.elapsed(),
         );
         self.flush_aggregation(false).await?;
-
-        self.runtime_state.last_completed_batch_id = completed.last().map(|batch| batch.batch_id);
-        self.completed_source
-            .start_prefetch(&self.store, self.runtime_state.last_completed_batch_id);
-        observe_duration_ms(
-            &mut self.runtime_state.rolling.completed_fetch_ingest_ms,
-            completed_process_started.elapsed(),
-        );
+        self.queue.mark_processed(&completed);
         Ok(completed.len())
     }
 
@@ -1085,7 +733,6 @@ where
         let observable_config = self.observable_state.config();
         let sample_plan = self.sampler.sample_plan().map_err(RunnerError::Engine)?;
         let training_samples_remaining = self.sampler.training_samples_remaining();
-        let pending_before_produce = queue_before_produce.pending.max(0) as usize;
         let open_before_produce = queue_before_produce.open().max(0) as usize;
         let batch_plan = match sample_plan {
             SamplePlan::Pause => Vec::new(),
@@ -1105,7 +752,7 @@ where
                 let max_samples = self.max_samples_to_produce_this_tick(engine_max_samples)?;
                 match self.runtime_state.observable_checkpoint_state {
                     ObservableCheckpointState::NeedsInitialRoundTrip => {
-                        if self.hard_produce_limit(open_before_produce) == 0 {
+                        if self.params.queue.max_queue_size <= open_before_produce {
                             Vec::new()
                         } else {
                             let nr_samples = max_samples.unwrap_or(MIN_BATCH_SIZE);
@@ -1125,22 +772,20 @@ where
                         }
                         Vec::new()
                     }
-                    ObservableCheckpointState::Ready => {
-                        let base_produce_limit = self.compute_produce_limit(
-                            pending_before_produce,
-                            open_before_produce,
-                            active_evaluator_count,
-                        );
-                        self.build_batch_plan(base_produce_limit, max_samples)
-                    }
+                    ObservableCheckpointState::Ready => self.queue.get_sample(
+                        max_samples,
+                        queue_before_produce,
+                        active_evaluator_count,
+                        self.runtime_state.batch_size_current,
+                    ),
                 }
             }
         };
-        if batch_plan.len() > self.params.max_batches_per_tick {
+        if batch_plan.len() > self.params.queue.max_batches_per_tick {
             return Err(RunnerError::Engine(EngineError::engine(format!(
                 "batch plan exceeded max_batches_per_tick: planned={} max_batches_per_tick={}",
                 batch_plan.len(),
-                self.params.max_batches_per_tick
+                self.params.queue.max_batches_per_tick
             ))));
         }
         let mut produced = Vec::with_capacity(batch_plan.len());
@@ -1180,13 +825,11 @@ where
             .rolling
             .produced_batches_per_tick
             .observe(produced_batches as f64);
-
-        let workload = ProducedBatchWorkload {
-            pending_before_produce,
-            produced_samples: produced_samples_total,
-            batches: produced,
-        };
-        self.enqueue_drain.start_drain(&self.store, workload);
+        self.runtime_state.produced_batches_total += produced_batches as i64;
+        self.runtime_state.produced_samples_total += produced_samples_total;
+        self.nr_produced_samples += produced_samples_total;
+        self.task.nr_produced_samples += produced_samples_total;
+        self.queue.ingest(produced);
         Ok(produced_batches)
     }
 
@@ -1251,10 +894,7 @@ where
         } else {
             0.0
         };
-        self.runtime_state
-            .rolling
-            .completed_samples_per_second
-            .observe(completed_samples_per_second);
+        self.runtime_state.completed_samples_per_second = completed_samples_per_second;
 
         let mut engine_diagnostics = self.sampler.get_diagnostics();
         let runner_diagnostics = self.current_runner_diagnostics().await?;
@@ -1273,7 +913,9 @@ where
         let snapshot = SamplerAggregatorPerformanceSnapshot {
             run_id: self.run_id,
             node_name: self.node_name.clone(),
-            runtime_metrics: self.runtime_state.to_runtime_metrics(),
+            runtime_metrics: self
+                .runtime_state
+                .to_runtime_metrics(self.queue.runtime_metrics()),
             engine_diagnostics,
             rss_bytes: current_rss_bytes(),
         };
@@ -1297,6 +939,7 @@ fn observe_duration_ms(metric: &mut RollingMetric, duration: Duration) {
 mod tests {
     use super::{SamplerAggregatorCheckpoint, SamplerRuntimeState};
     use crate::core::{LineRasterGeometry, Linspace, PlaneRasterGeometry, SamplerAggregatorConfig};
+    use crate::runners::SamplerQueueCheckpoint;
     use crate::sampling::{
         NaiveMonteCarloSamplerParams, RasterLineSamplerParams, RasterPlaneSamplerParams,
         SamplerAggregatorSnapshot,
@@ -1367,7 +1010,7 @@ mod tests {
                 batch_size_current: 128,
                 ..SamplerRuntimeState::default()
             },
-            last_runnable_after_enqueue: None,
+            queue: SamplerQueueCheckpoint::default(),
         };
 
         assert_eq!(snapshot.reduced_carryover_batch_size(512), 32);
