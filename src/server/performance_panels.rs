@@ -183,15 +183,6 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
             ),
             PanelWidth::Full,
         ),
-        with_panel_width(
-            panel_spec(
-                "sampler_local_pending_batches",
-                "Local Pending Batches",
-                PanelKind::ScalarTimeseries,
-                PanelHistoryMode::Append,
-            ),
-            PanelWidth::Full,
-        ),
     ]
 }
 
@@ -679,12 +670,6 @@ fn evaluator_tick_total_ms(metrics: &EvaluatorPerformanceMetrics) -> f64 {
 fn sampler_tick_segments(runtime: &SamplerRuntimeMetrics) -> Vec<TickBreakdownSegment> {
     [
         (
-            "completed_batch_fetch",
-            "Completed Batch Fetch",
-            runtime.queue.rolling.fetch_completed_ms.mean.unwrap_or(0.0),
-            "#94d2bd",
-        ),
-        (
             "completed_merge",
             "Merge Completed Batches",
             runtime
@@ -705,12 +690,6 @@ fn sampler_tick_segments(runtime: &SamplerRuntimeMetrics) -> Vec<TickBreakdownSe
             "Cleanup Consumed Batches",
             runtime.sampler.completed_delete_ms.mean.unwrap_or(0.0),
             "#6d597a",
-        ),
-        (
-            "insert_bundle",
-            "Insert Bundle",
-            runtime.queue.rolling.insert_bundle_ms.mean.unwrap_or(0.0),
-            "#bb3e03",
         ),
         (
             "produce",
