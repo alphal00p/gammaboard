@@ -803,7 +803,7 @@ where
 
         self.runtime_state
             .rolling
-            .queue_counts_ms
+            .sampler_ingest_ms_per_sample
             .observe(produced_batches as f64);
         self.runtime_state.produced_batches_total += produced_batches as i64;
         self.runtime_state.produced_samples_total += produced_samples_total;
