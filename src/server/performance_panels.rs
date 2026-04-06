@@ -39,13 +39,19 @@ pub fn build_sampler_performance_response(
     scope_id: Option<String>,
     entries: Vec<SamplerPerformanceHistoryEntry>,
 ) -> PanelResponse {
-    build_performance_response(
+    let mut response = build_performance_response(
         scope_id.unwrap_or_else(|| "sampler".to_string()),
-        entries,
+        entries.clone(),
         sampler_panel_specs(),
         |entry| entry.id.to_string(),
         sampler_panels,
-    )
+    );
+    if let Some(latest) = entries.first() {
+        for panel in sampler_current_panels(latest) {
+            response.updates.push(replace_panel(panel));
+        }
+    }
+    response
 }
 
 fn build_performance_response<T>(
@@ -437,6 +443,23 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
     let Some(runtime) = decode_sampler_runtime_metrics(entry) else {
         return Vec::new();
     };
+
+    let target_pending_batches =
+        queue_buffer_value(&entry.engine_diagnostics, "target_pending_batches");
+    let target_local_pending_batches =
+        queue_buffer_value(&entry.engine_diagnostics, "target_local_pending_batches");
+    let pending_batches = queue_buffer_value(&entry.engine_diagnostics, "pending_batches");
+    let claimed_batches = queue_buffer_value(&entry.engine_diagnostics, "claimed_batches");
+    let completed_batches = queue_buffer_value(&entry.engine_diagnostics, "completed_batches");
+    let open_batches = queue_buffer_value(&entry.engine_diagnostics, "open_batches");
+    let pending_shortfall = match (target_pending_batches.as_ref(), pending_batches.as_ref()) {
+        (Some(target), Some(pending)) => target
+            .as_i64()
+            .zip(pending.as_i64())
+            .map(|(t, p)| t.saturating_sub(p)),
+        _ => None,
+    };
+
     vec![
         tick_breakdown_panel(
             "sampler_tick_breakdown",
@@ -532,38 +555,18 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
                 key_value(
                     "target_pending_batches",
                     "Target Pending Batches",
-                    queue_buffer_value(&entry.engine_diagnostics, "target_pending_batches"),
+                    target_pending_batches,
                 ),
                 key_value(
                     "target_local_pending_batches",
                     "Target Local Pending Batches",
-                    queue_buffer_value(&entry.engine_diagnostics, "target_local_pending_batches"),
+                    target_local_pending_batches,
                 ),
-                key_value(
-                    "pending_batches",
-                    "Pending Batches",
-                    queue_buffer_value(&entry.engine_diagnostics, "pending_batches"),
-                ),
-                key_value(
-                    "claimed_batches",
-                    "Claimed Batches",
-                    queue_buffer_value(&entry.engine_diagnostics, "claimed_batches"),
-                ),
-                key_value(
-                    "completed_batches",
-                    "Completed Batches",
-                    queue_buffer_value(&entry.engine_diagnostics, "completed_batches"),
-                ),
-                key_value(
-                    "open_batches",
-                    "Open Batches",
-                    queue_buffer_value(&entry.engine_diagnostics, "open_batches"),
-                ),
-                key_value(
-                    "pending_shortfall",
-                    "Pending Shortfall",
-                    queue_buffer_value(&entry.engine_diagnostics, "pending_shortfall"),
-                ),
+                key_value("pending_batches", "Pending Batches", pending_batches),
+                key_value("claimed_batches", "Claimed Batches", claimed_batches),
+                key_value("completed_batches", "Completed Batches", completed_batches),
+                key_value("open_batches", "Open Batches", open_batches),
+                key_value("pending_shortfall", "Pending Shortfall", pending_shortfall),
             ],
         ),
         key_value_panel(
