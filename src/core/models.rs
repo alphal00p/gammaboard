@@ -194,15 +194,11 @@ pub struct RollingMetricSnapshot {
 pub struct SamplerWorkRollingAverages {
     pub eval_ms_per_sample: RollingMetricSnapshot,
     pub eval_ms_per_batch: RollingMetricSnapshot,
-    pub sampler_produce_ms_per_sample: RollingMetricSnapshot,
     pub sampler_ingest_ms_per_sample: RollingMetricSnapshot,
-    pub produced_batches_per_tick: RollingMetricSnapshot,
-    pub sampler_tick_ms: RollingMetricSnapshot,
     pub reclaim_ms: RollingMetricSnapshot,
     pub queue_counts_ms: RollingMetricSnapshot,
-    pub active_evaluator_count_ms: RollingMetricSnapshot,
     pub completed_merge_ingest_ms: RollingMetricSnapshot,
-    pub aggregation_flush_ms: RollingMetricSnapshot,
+    pub persist_observable_ms: RollingMetricSnapshot,
     pub completed_delete_ms: RollingMetricSnapshot,
     pub produce_ms: RollingMetricSnapshot,
     pub progress_sync_ms: RollingMetricSnapshot,
@@ -214,8 +210,8 @@ pub struct SamplerWorkRollingAverages {
 pub struct SamplerQueueRollingAverages {
     pub get_processed_ms: RollingMetricSnapshot,
     pub fetch_completed_ms: RollingMetricSnapshot,
-    pub insert_batches_ms: RollingMetricSnapshot,
-    pub insert_batches_ms_per_batch: RollingMetricSnapshot,
+    pub insert_bundle_ms: RollingMetricSnapshot,
+    pub insert_bundle_ms_per_batch: RollingMetricSnapshot,
     pub flush_ms: RollingMetricSnapshot,
 }
 
@@ -224,8 +220,8 @@ impl Default for SamplerQueueRollingAverages {
         Self {
             get_processed_ms: RollingMetricSnapshot::default(),
             fetch_completed_ms: RollingMetricSnapshot::default(),
-            insert_batches_ms: RollingMetricSnapshot::default(),
-            insert_batches_ms_per_batch: RollingMetricSnapshot::default(),
+            insert_bundle_ms: RollingMetricSnapshot::default(),
+            insert_bundle_ms_per_batch: RollingMetricSnapshot::default(),
             flush_ms: RollingMetricSnapshot::default(),
         }
     }

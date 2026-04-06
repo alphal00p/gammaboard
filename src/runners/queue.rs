@@ -35,7 +35,7 @@ pub struct SamplerQueue<S> {
     pending_insert: VecDeque<LatentBatch>,
     ready_processed: VecDeque<CompletedBatch>,
     pending_insert_task: Option<PendingInsertTask>,
-    pending_insert_drain_active: bool,
+    insert_pump_running: bool,
     pending_processed_fetch: Option<PendingProcessedFetchTask>,
     metrics: QueueMetricsState,
 }
@@ -55,8 +55,8 @@ struct PendingProcessedFetchTask {
 struct QueueMetricsState {
     get_processed_ms: RollingMetric,
     fetch_completed_ms: RollingMetric,
-    insert_batches_ms: RollingMetric,
-    insert_batches_ms_per_batch: RollingMetric,
+    insert_bundle_ms: RollingMetric,
+    insert_bundle_ms_per_batch: RollingMetric,
     flush_ms: RollingMetric,
 }
 
@@ -82,7 +82,7 @@ where
             pending_insert: VecDeque::new(),
             ready_processed: VecDeque::new(),
             pending_insert_task: None,
-            pending_insert_drain_active: false,
+            insert_pump_running: false,
             pending_processed_fetch: None,
             metrics: QueueMetricsState::default(),
         }
@@ -108,9 +108,9 @@ where
             rolling: crate::core::SamplerQueueRollingAverages {
                 get_processed_ms: RollingMetricSnapshot::from(&self.metrics.get_processed_ms),
                 fetch_completed_ms: RollingMetricSnapshot::from(&self.metrics.fetch_completed_ms),
-                insert_batches_ms: RollingMetricSnapshot::from(&self.metrics.insert_batches_ms),
-                insert_batches_ms_per_batch: RollingMetricSnapshot::from(
-                    &self.metrics.insert_batches_ms_per_batch,
+                insert_bundle_ms: RollingMetricSnapshot::from(&self.metrics.insert_bundle_ms),
+                insert_bundle_ms_per_batch: RollingMetricSnapshot::from(
+                    &self.metrics.insert_bundle_ms_per_batch,
                 ),
                 flush_ms: RollingMetricSnapshot::from(&self.metrics.flush_ms),
             },
@@ -133,8 +133,12 @@ where
     }
 
     pub fn ingest(&mut self, batches: Vec<LatentBatch>) {
+        if batches.is_empty() {
+            return;
+        }
+
         self.pending_insert.extend(batches);
-        self.start_insert_if_idle();
+        self.start_insert_pump_if_idle();
     }
 
     fn local_unpersisted_batches(&self) -> usize {
@@ -151,13 +155,13 @@ where
             && self.ready_processed.is_empty()
             && self.pending_insert_task.is_none()
             && self.pending_processed_fetch.is_none()
+            && !self.insert_pump_running
     }
 
     pub async fn get_processed(&mut self) -> Result<Vec<CompletedBatch>, StoreError> {
         let started = Instant::now();
         self.drain_finished_insert().await?;
         self.drain_finished_processed_fetch().await?;
-        self.start_insert_if_idle();
         self.ensure_processed_prefetch();
 
         let ready = self.ready_processed.drain(..).collect::<Vec<_>>();
@@ -240,12 +244,14 @@ where
         let started = Instant::now();
         loop {
             self.drain_finished_insert().await?;
-            self.start_insert_if_idle();
             if self.pending_insert_task.is_none() && self.pending_insert.is_empty() {
                 break;
             }
+            self.ensure_insert_pump();
             if let Some(task) = self.pending_insert_task.take() {
                 self.consume_insert_task(task).await?;
+            } else {
+                break;
             }
         }
         observe_duration_ms(&mut self.metrics.flush_ms, started.elapsed());
@@ -296,21 +302,20 @@ where
         });
     }
 
-    fn start_insert_if_idle(&mut self) {
-        if self.pending_insert_task.is_some()
-            || self.pending_insert.is_empty()
-            || self.pending_insert_drain_active
-        {
+    fn start_insert_pump_if_idle(&mut self) {
+        if self.insert_pump_running || self.pending_insert.is_empty() {
             return;
         }
 
-        self.pending_insert_drain_active = true;
-        self.spawn_next_insert_bundle();
+        self.insert_pump_running = true;
+        self.ensure_insert_pump();
     }
 
-    fn spawn_next_insert_bundle(&mut self) {
+    fn ensure_insert_pump(&mut self) {
         if self.pending_insert_task.is_some() || self.pending_insert.is_empty() {
-            self.pending_insert_drain_active = false;
+            if self.pending_insert.is_empty() {
+                self.insert_pump_running = false;
+            }
             return;
         }
 
@@ -335,6 +340,7 @@ where
 
     async fn drain_finished_insert(&mut self) -> Result<(), StoreError> {
         let Some(task) = self.pending_insert_task.as_ref() else {
+            self.insert_pump_running = false;
             return Ok(());
         };
         if !task.handle.is_finished() {
@@ -358,14 +364,16 @@ where
             ))),
         };
         if result.is_ok() {
-            observe_duration_ms(&mut self.metrics.insert_batches_ms, duration);
+            observe_duration_ms(&mut self.metrics.insert_bundle_ms, duration);
             if task.batch_count > 0 {
                 observe_duration_ms(
-                    &mut self.metrics.insert_batches_ms_per_batch,
+                    &mut self.metrics.insert_bundle_ms_per_batch,
                     duration / task.batch_count as u32,
                 );
             }
-            self.spawn_next_insert_bundle();
+            self.ensure_insert_pump();
+        } else {
+            self.insert_pump_running = false;
         }
         result
     }

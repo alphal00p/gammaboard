@@ -44,15 +44,11 @@ pub struct SamplerAggregatorRunnerParams {
 struct SamplerRollingState {
     eval_ms_per_sample: RollingMetric,
     eval_ms_per_batch: RollingMetric,
-    sampler_produce_ms_per_sample: RollingMetric,
     sampler_ingest_ms_per_sample: RollingMetric,
-    produced_batches_per_tick: RollingMetric,
-    sampler_tick_ms: RollingMetric,
     reclaim_ms: RollingMetric,
     queue_counts_ms: RollingMetric,
-    active_evaluator_count_ms: RollingMetric,
     completed_merge_ingest_ms: RollingMetric,
-    aggregation_flush_ms: RollingMetric,
+    persist_observable_ms: RollingMetric,
     completed_delete_ms: RollingMetric,
     produce_ms: RollingMetric,
     progress_sync_ms: RollingMetric,
@@ -128,26 +124,16 @@ impl SamplerRuntimeState {
             sampler: SamplerWorkRollingAverages {
                 eval_ms_per_sample: RollingMetricSnapshot::from(&self.rolling.eval_ms_per_sample),
                 eval_ms_per_batch: RollingMetricSnapshot::from(&self.rolling.eval_ms_per_batch),
-                sampler_produce_ms_per_sample: RollingMetricSnapshot::from(
-                    &self.rolling.sampler_produce_ms_per_sample,
-                ),
                 sampler_ingest_ms_per_sample: RollingMetricSnapshot::from(
                     &self.rolling.sampler_ingest_ms_per_sample,
                 ),
-                produced_batches_per_tick: RollingMetricSnapshot::from(
-                    &self.rolling.produced_batches_per_tick,
-                ),
-                sampler_tick_ms: RollingMetricSnapshot::from(&self.rolling.sampler_tick_ms),
                 reclaim_ms: RollingMetricSnapshot::from(&self.rolling.reclaim_ms),
                 queue_counts_ms: RollingMetricSnapshot::from(&self.rolling.queue_counts_ms),
-                active_evaluator_count_ms: RollingMetricSnapshot::from(
-                    &self.rolling.active_evaluator_count_ms,
-                ),
                 completed_merge_ingest_ms: RollingMetricSnapshot::from(
                     &self.rolling.completed_merge_ingest_ms,
                 ),
-                aggregation_flush_ms: RollingMetricSnapshot::from(
-                    &self.rolling.aggregation_flush_ms,
+                persist_observable_ms: RollingMetricSnapshot::from(
+                    &self.rolling.persist_observable_ms,
                 ),
                 completed_delete_ms: RollingMetricSnapshot::from(&self.rolling.completed_delete_ms),
                 produce_ms: RollingMetricSnapshot::from(&self.rolling.produce_ms),
@@ -386,7 +372,6 @@ where
     }
 
     pub async fn tick(&mut self) -> Result<bool, RunnerError> {
-        let tick_started = Instant::now();
         let completed = self.queue.get_processed().await?;
         self.cleanup_consumed_completed_batches(false).await?;
         if self.last_reclaim_at.elapsed() >= RECLAIM_INTERVAL {
@@ -413,10 +398,7 @@ where
 
         let active_evaluator_started = Instant::now();
         let active_evaluator_count = self.active_evaluator_count().await?;
-        observe_duration_ms(
-            &mut self.runtime_state.rolling.active_evaluator_count_ms,
-            active_evaluator_started.elapsed(),
-        );
+        let _ = active_evaluator_started.elapsed();
 
         let completed_batches = self.process_completed_batches(completed).await?;
         let queue_before_produce = crate::core::BatchQueueCounts {
@@ -465,10 +447,7 @@ where
                 self.run_id, self.task.id, self.task.nr_completed_samples, target
             ))));
         }
-        observe_duration_ms(
-            &mut self.runtime_state.rolling.sampler_tick_ms,
-            tick_started.elapsed(),
-        );
+
         Ok(self.task.task.nr_expected_samples().is_some_and(|target| {
             self.task.nr_completed_samples >= target && open_batch_count == 0
         }))
@@ -581,7 +560,7 @@ where
             )
             .await?;
         observe_duration_ms(
-            &mut self.runtime_state.rolling.aggregation_flush_ms,
+            &mut self.runtime_state.rolling.persist_observable_ms,
             aggregation_flush_started.elapsed(),
         );
         self.runtime_state.pending_persisted_completed_batches = 0;
@@ -808,7 +787,7 @@ where
             if produced_samples > 0 {
                 self.runtime_state
                     .rolling
-                    .sampler_produce_ms_per_sample
+                    .sampler_ingest_ms_per_sample
                     .observe(produce_time_ms / produced_samples as f64);
             }
             produced.push(
@@ -821,9 +800,10 @@ where
         if produced_batches == 0 {
             return Ok(0);
         }
+
         self.runtime_state
             .rolling
-            .produced_batches_per_tick
+            .queue_counts_ms
             .observe(produced_batches as f64);
         self.runtime_state.produced_batches_total += produced_batches as i64;
         self.runtime_state.produced_samples_total += produced_samples_total;

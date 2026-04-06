@@ -37,19 +37,13 @@ pub fn build_sampler_performance_response(
     scope_id: Option<String>,
     entries: Vec<SamplerPerformanceHistoryEntry>,
 ) -> PanelResponse {
-    let mut response = build_performance_response(
+    build_performance_response(
         scope_id.unwrap_or_else(|| "sampler".to_string()),
-        entries.clone(),
+        entries,
         sampler_panel_specs(),
         |entry| entry.id.to_string(),
         sampler_panels,
-    );
-    if let Some(latest) = entries.first() {
-        for panel in sampler_current_panels(latest) {
-            response.updates.push(replace_panel(panel));
-        }
-    }
-    response
+    )
 }
 
 fn build_performance_response<T>(
@@ -157,7 +151,7 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         with_panel_width(
             panel_spec(
                 "sampler_queue_buffer_current",
-                "Sampler Queue",
+                "Queue State",
                 PanelKind::KeyValue,
                 PanelHistoryMode::Replace,
             ),
@@ -166,7 +160,7 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         with_panel_width(
             panel_spec(
                 "sampler_completed_samples_per_second",
-                "Completed Samples Per Second",
+                "Completed Samples / Sec",
                 PanelKind::ScalarTimeseries,
                 PanelHistoryMode::Append,
             ),
@@ -432,7 +426,7 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
     let Some(runtime) = decode_sampler_runtime_metrics(entry) else {
         return Vec::new();
     };
-    let mut panels = vec![
+    vec![
         tick_breakdown_panel(
             "sampler_tick_breakdown",
             sampler_tick_total_ms(&runtime),
@@ -448,7 +442,7 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
                 ),
                 key_value(
                     "completed_samples_per_second",
-                    "Completed Samples Per Second",
+                    "Completed Samples / Sec",
                     runtime.completed_samples_per_second,
                 ),
                 key_value(
@@ -468,33 +462,8 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
                 ),
                 key_value(
                     "eval_ms_per_sample",
-                    "Eval Ms Per Sample",
+                    "Eval Ms / Sample",
                     runtime.sampler.eval_ms_per_sample.mean,
-                ),
-                key_value(
-                    "produced_batches_per_tick",
-                    "Produced Batches Per Tick",
-                    runtime.sampler.produced_batches_per_tick.mean,
-                ),
-                key_value(
-                    "local_pending_batches",
-                    "Local Pending Batches",
-                    runtime.queue.local_pending_batches,
-                ),
-                key_value(
-                    "local_inflight_insert_batches",
-                    "Local In-Flight Insert Batches",
-                    runtime.queue.local_inflight_insert_batches,
-                ),
-                key_value(
-                    "local_ready_processed_batches",
-                    "Local Ready Processed Batches",
-                    runtime.queue.local_ready_processed_batches,
-                ),
-                key_value(
-                    "sampler_tick_ms",
-                    "Sampler Tick Ms",
-                    runtime.sampler.sampler_tick_ms.mean,
                 ),
             ],
         ),
@@ -503,81 +472,87 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
             vec![
                 key_value(
                     "eval_ms_per_batch",
-                    "Eval Ms Per Batch",
+                    "Eval Ms / Batch",
                     runtime.sampler.eval_ms_per_batch.mean,
                 ),
                 key_value(
-                    "sampler_produce_ms_per_sample",
-                    "Sampler Produce Ms Per Sample",
-                    runtime.sampler.sampler_produce_ms_per_sample.mean,
-                ),
-                key_value(
                     "sampler_ingest_ms_per_sample",
-                    "Sampler Ingest Ms Per Sample",
+                    "Sampler Ingest Ms / Sample",
                     runtime.sampler.sampler_ingest_ms_per_sample.mean,
                 ),
                 key_value(
-                    "fetch_completed_ms",
-                    "Fetch Completed Batches (ms)",
-                    runtime.queue.rolling.fetch_completed_ms.mean,
-                ),
-                key_value(
-                    "completed_merge_ingest_ms",
-                    "Merge Results / Ingest Training (ms)",
+                    "merge_completed_batches_ms",
+                    "Merge Completed Batches",
                     runtime.sampler.completed_merge_ingest_ms.mean,
                 ),
                 key_value(
-                    "aggregation_flush_ms",
-                    "Write Observable (ms)",
-                    runtime.sampler.aggregation_flush_ms.mean,
+                    "persist_observable_ms",
+                    "Persist Observable",
+                    runtime.sampler.persist_observable_ms.mean,
                 ),
                 key_value(
                     "completed_delete_ms",
-                    "Cleanup Consumed Batches (ms)",
+                    "Cleanup Consumed Batches",
                     runtime.sampler.completed_delete_ms.mean,
                 ),
                 key_value(
-                    "queue_counts_ms",
-                    "Read Queue Counts (ms)",
-                    runtime.sampler.queue_counts_ms.mean,
-                ),
-                key_value(
                     "reclaim_ms",
-                    "Reclaim Abandoned Batches (ms)",
+                    "Reclaim Abandoned Batches",
                     runtime.sampler.reclaim_ms.mean,
-                ),
-                key_value(
-                    "get_processed_ms",
-                    "Poll Local Processed Queue (ms)",
-                    runtime.queue.rolling.get_processed_ms.mean,
-                ),
-                key_value(
-                    "insert_batches_ms",
-                    "Insert Batches (ms)",
-                    runtime.queue.rolling.insert_batches_ms.mean,
-                ),
-                key_value(
-                    "insert_batches_ms_per_batch",
-                    "Insert Batches / Batch (ms)",
-                    runtime.queue.rolling.insert_batches_ms_per_batch.mean,
-                ),
-                key_value(
-                    "flush_ms",
-                    "Flush Local Queue (ms)",
-                    runtime.queue.rolling.flush_ms.mean,
-                ),
-                key_value(
-                    "active_evaluator_count_ms",
-                    "Count Active Evaluators (ms)",
-                    runtime.sampler.active_evaluator_count_ms.mean,
                 ),
             ],
         ),
-    ];
-    if let Some(queue_buffer) = sampler_queue_buffer_panel(&entry.engine_diagnostics) {
-        panels.push(queue_buffer);
-    }
-    panels
+        key_value_panel(
+            "sampler_queue_buffer_current",
+            vec![
+                key_value(
+                    "queue_buffer",
+                    "Queue Buffer",
+                    runtime.queue.local_pending_batches,
+                ),
+                key_value(
+                    "target_pending_batches",
+                    "Target Pending Batches",
+                    runtime.queue.local_inflight_insert_batches,
+                ),
+                key_value(
+                    "pending_batches",
+                    "Pending Batches",
+                    runtime.queue.local_ready_processed_batches,
+                ),
+            ],
+        ),
+        key_value_panel(
+            "sampler_queue_efficiency",
+            vec![
+                key_value(
+                    "completed_batch_fetch_ms",
+                    "Completed Batch Fetch",
+                    runtime.queue.rolling.fetch_completed_ms.mean,
+                ),
+                key_value(
+                    "local_processed_queue_poll_ms",
+                    "Local Processed Queue Poll",
+                    runtime.queue.rolling.get_processed_ms.mean,
+                ),
+                key_value(
+                    "insert_bundle_ms",
+                    "Insert Bundle",
+                    runtime.queue.rolling.insert_bundle_ms.mean,
+                ),
+                key_value(
+                    "insert_bundle_ms_per_batch",
+                    "Insert / Batch",
+                    runtime.queue.rolling.insert_bundle_ms_per_batch.mean,
+                ),
+                key_value(
+                    "queue_counts_ms",
+                    "Read Queue Counts",
+                    runtime.sampler.queue_counts_ms.mean,
+                ),
+            ],
+        ),
+    ]
 }
 
 fn sampler_queue_buffer_panel(value: &JsonValue) -> Option<PanelState> {
@@ -589,34 +564,16 @@ fn sampler_queue_buffer_panel(value: &JsonValue) -> Option<PanelState> {
         .map(|(target, pending)| target.saturating_sub(pending));
     let entries = vec![
         runner_value_entry(runner, "queue_buffer", "Queue Buffer"),
-        runner_value_entry(runner, "active_evaluator_count", "Active Evaluators"),
         runner_value_entry(runner, "target_pending_batches", "Target Pending Batches"),
         runner_value_entry(runner, "pending_batches", "Pending Batches"),
-        runner_value_entry(runner, "local_pending_batches", "Local Pending Batches"),
-        runner_value_entry(
-            runner,
-            "local_inflight_insert_batches",
-            "Local In-Flight Insert Batches",
-        ),
-        runner_value_entry(
-            runner,
-            "local_ready_processed_batches",
-            "Local Ready Processed Batches",
-        ),
+        runner_value_entry(runner, "claimed_batches", "Claimed Batches"),
+        runner_value_entry(runner, "completed_batches", "Completed Batches"),
+        runner_value_entry(runner, "open_batches", "Open Batches"),
         Some(key_value(
             "pending_shortfall",
             "Pending Shortfall",
             pending_shortfall,
         )),
-        runner_value_entry(runner, "claimed_batches", "Claimed Batches"),
-        runner_value_entry(runner, "completed_batches", "Completed Batches"),
-        runner_value_entry(runner, "open_batches", "Open Batches"),
-        runner_value_entry(runner, "observable_checkpoint_state", "Checkpoint State"),
-        runner_value_entry(
-            runner,
-            "training_samples_remaining",
-            "Training Samples Remaining",
-        ),
     ]
     .into_iter()
     .flatten()
@@ -710,42 +667,20 @@ fn evaluator_tick_total_ms(metrics: &EvaluatorPerformanceMetrics) -> f64 {
 fn sampler_tick_segments(runtime: &SamplerRuntimeMetrics) -> Vec<TickBreakdownSegment> {
     [
         (
-            "reclaim",
-            "Reclaim Abandoned Batches",
-            runtime.sampler.reclaim_ms.mean.unwrap_or(0.0),
-            "#0a9396",
-        ),
-        (
-            "queue_counts",
-            "Read Queue Counts",
-            runtime.sampler.queue_counts_ms.mean.unwrap_or(0.0),
+            "completed_batch_fetch",
+            "Completed Batch Fetch",
+            runtime.queue.rolling.fetch_completed_ms.mean.unwrap_or(0.0),
             "#94d2bd",
         ),
         (
-            "active_evaluators",
-            "Count Active Evaluators",
-            runtime
-                .sampler
-                .active_evaluator_count_ms
-                .mean
-                .unwrap_or(0.0),
-            "#e9d8a6",
-        ),
-        (
-            "queue_poll",
-            "Poll Local Processed Queue",
+            "local_processed_poll",
+            "Local Processed Queue Poll",
             runtime.queue.rolling.get_processed_ms.mean.unwrap_or(0.0),
             "#ee9b00",
         ),
         (
-            "queue_fetch_completed",
-            "Fetch Completed Batches",
-            runtime.queue.rolling.fetch_completed_ms.mean.unwrap_or(0.0),
-            "#d16d4b",
-        ),
-        (
-            "completed_merge_ingest",
-            "Merge Results / Ingest Training",
+            "completed_merge",
+            "Merge Completed Batches",
             runtime
                 .sampler
                 .completed_merge_ingest_ms
@@ -754,9 +689,9 @@ fn sampler_tick_segments(runtime: &SamplerRuntimeMetrics) -> Vec<TickBreakdownSe
             "#ca6702",
         ),
         (
-            "aggregation_flush",
-            "Write Observable",
-            runtime.sampler.aggregation_flush_ms.mean.unwrap_or(0.0),
+            "persist_observable",
+            "Persist Observable",
+            runtime.sampler.persist_observable_ms.mean.unwrap_or(0.0),
             "#b56576",
         ),
         (
@@ -766,18 +701,18 @@ fn sampler_tick_segments(runtime: &SamplerRuntimeMetrics) -> Vec<TickBreakdownSe
             "#6d597a",
         ),
         (
-            "queue_insert",
-            "Insert Batches",
-            runtime.queue.rolling.insert_batches_ms.mean.unwrap_or(0.0),
+            "insert_bundle",
+            "Insert Bundle",
+            runtime.queue.rolling.insert_bundle_ms.mean.unwrap_or(0.0),
             "#bb3e03",
         ),
         (
-            "queue_insert_per_batch",
-            "Insert Batches / Batch",
+            "insert_bundle_per_batch",
+            "Insert / Batch",
             runtime
                 .queue
                 .rolling
-                .insert_batches_ms_per_batch
+                .insert_bundle_ms_per_batch
                 .mean
                 .unwrap_or(0.0),
             "#ca6702",
