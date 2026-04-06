@@ -12,6 +12,7 @@ use tokio::task::JoinHandle;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerQueueConfig {
     pub queue_buffer: f64,
+    pub local_pending_buffer_multiplier: f64,
     pub max_queue_size: usize,
     pub max_batches_per_tick: usize,
     pub max_insert_bundle_size: usize,
@@ -132,6 +133,20 @@ where
         )
     }
 
+    pub fn target_local_pending_batches(&self, active_evaluator_count: usize) -> Option<usize> {
+        if !self.config.local_pending_buffer_multiplier.is_finite()
+            || self.config.local_pending_buffer_multiplier < 0.0
+        {
+            return None;
+        }
+        let target_pending_batches = self.target_pending_batches(active_evaluator_count)?;
+        Some(
+            ((target_pending_batches as f64) * self.config.local_pending_buffer_multiplier)
+                .ceil()
+                .max(0.0) as usize,
+        )
+    }
+
     pub fn ingest(&mut self, batches: Vec<LatentBatch>) {
         if batches.is_empty() {
             return;
@@ -207,9 +222,15 @@ where
         else {
             return Vec::new();
         };
+        let local_target_pending_after_enqueue = self
+            .target_local_pending_batches(active_evaluator_count)
+            .unwrap_or(target_pending_after_enqueue);
 
-        let batch_limit =
-            hard_limit.min(target_pending_after_enqueue.saturating_sub(pending_before));
+        let batch_limit = hard_limit
+            .min(target_pending_after_enqueue.saturating_sub(pending_before))
+            .min(
+                local_target_pending_after_enqueue.saturating_sub(self.local_unpersisted_batches()),
+            );
         if batch_limit == 0 {
             return Vec::new();
         }

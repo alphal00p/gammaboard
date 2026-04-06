@@ -16,6 +16,7 @@ pub fn build_evaluator_performance_response(
     let source_id = scope_id.unwrap_or_else(|| "evaluator".to_string());
     let panels = evaluator_panel_specs(include_summary);
     let mut updates = Vec::new();
+
     if include_summary && !entries.is_empty() {
         updates.push(replace_panel(evaluator_summary_panel(&entries)));
     }
@@ -24,6 +25,7 @@ pub fn build_evaluator_performance_response(
             updates.push(replace_panel(panel));
         }
     }
+
     PanelResponse {
         source_id,
         cursor: entries.first().map(|entry| entry.id.to_string()),
@@ -150,12 +152,21 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         ),
         with_panel_width(
             panel_spec(
-                "sampler_queue_buffer_current",
+                "sampler_queue_state",
                 "Queue State",
                 PanelKind::KeyValue,
                 PanelHistoryMode::Replace,
             ),
-            PanelWidth::Full,
+            PanelWidth::Half,
+        ),
+        with_panel_width(
+            panel_spec(
+                "sampler_queue_efficiency",
+                "Queue Efficiency",
+                PanelKind::KeyValue,
+                PanelHistoryMode::Replace,
+            ),
+            PanelWidth::Half,
         ),
         with_panel_width(
             panel_spec(
@@ -503,22 +514,42 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
             ],
         ),
         key_value_panel(
-            "sampler_queue_buffer_current",
+            "sampler_queue_state",
             vec![
                 key_value(
                     "queue_buffer",
                     "Queue Buffer",
-                    runtime.queue.local_pending_batches,
+                    queue_buffer_value(&entry.engine_diagnostics, "queue_buffer"),
                 ),
                 key_value(
                     "target_pending_batches",
                     "Target Pending Batches",
-                    runtime.queue.local_inflight_insert_batches,
+                    queue_buffer_value(&entry.engine_diagnostics, "target_pending_batches"),
                 ),
                 key_value(
                     "pending_batches",
                     "Pending Batches",
-                    runtime.queue.local_ready_processed_batches,
+                    queue_buffer_value(&entry.engine_diagnostics, "pending_batches"),
+                ),
+                key_value(
+                    "claimed_batches",
+                    "Claimed Batches",
+                    queue_buffer_value(&entry.engine_diagnostics, "claimed_batches"),
+                ),
+                key_value(
+                    "completed_batches",
+                    "Completed Batches",
+                    queue_buffer_value(&entry.engine_diagnostics, "completed_batches"),
+                ),
+                key_value(
+                    "open_batches",
+                    "Open Batches",
+                    queue_buffer_value(&entry.engine_diagnostics, "open_batches"),
+                ),
+                key_value(
+                    "pending_shortfall",
+                    "Pending Shortfall",
+                    queue_buffer_value(&entry.engine_diagnostics, "pending_shortfall"),
                 ),
             ],
         ),
@@ -546,6 +577,21 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
                     runtime.queue.rolling.insert_bundle_ms_per_batch.mean,
                 ),
                 key_value(
+                    "local_pending_batches",
+                    "Local Pending Batches",
+                    runtime.queue.local_pending_batches,
+                ),
+                key_value(
+                    "local_inflight_insert_batches",
+                    "Local In-Flight Insert Batches",
+                    runtime.queue.local_inflight_insert_batches,
+                ),
+                key_value(
+                    "local_ready_processed_batches",
+                    "Local Ready Processed Batches",
+                    runtime.queue.local_ready_processed_batches,
+                ),
+                key_value(
                     "queue_counts_ms",
                     "Read Queue Counts",
                     runtime.sampler.queue_counts_ms.mean,
@@ -555,33 +601,8 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
     ]
 }
 
-fn sampler_queue_buffer_panel(value: &JsonValue) -> Option<PanelState> {
-    let runner = runner_diagnostics(value)?;
-    let target_pending_batches = runner_value_as_i64(runner, "target_pending_batches");
-    let pending_batches = runner_value_as_i64(runner, "pending_batches");
-    let pending_shortfall = target_pending_batches
-        .zip(pending_batches)
-        .map(|(target, pending)| target.saturating_sub(pending));
-    let entries = vec![
-        runner_value_entry(runner, "queue_buffer", "Queue Buffer"),
-        runner_value_entry(runner, "target_pending_batches", "Target Pending Batches"),
-        runner_value_entry(runner, "pending_batches", "Pending Batches"),
-        runner_value_entry(runner, "claimed_batches", "Claimed Batches"),
-        runner_value_entry(runner, "completed_batches", "Completed Batches"),
-        runner_value_entry(runner, "open_batches", "Open Batches"),
-        Some(key_value(
-            "pending_shortfall",
-            "Pending Shortfall",
-            pending_shortfall,
-        )),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>();
-    if entries.is_empty() {
-        return None;
-    }
-    Some(key_value_panel("sampler_queue_buffer_current", entries))
+fn queue_buffer_value(value: &JsonValue, key: &str) -> Option<JsonValue> {
+    value.get("runner")?.get(key).cloned()
 }
 
 fn scalar_point_panel(
@@ -764,23 +785,4 @@ fn format_bytes_human(bytes: i64) -> String {
     } else {
         format!("{bytes} B")
     }
-}
-
-fn runner_diagnostics(value: &JsonValue) -> Option<&serde_json::Map<String, JsonValue>> {
-    value.as_object()?.get("runner")?.as_object()
-}
-
-fn runner_value_entry(
-    runner: &serde_json::Map<String, JsonValue>,
-    key: &str,
-    label: &str,
-) -> Option<crate::server::panels::KeyValueEntry> {
-    runner
-        .get(key)
-        .cloned()
-        .map(|value| key_value(key, label, value))
-}
-
-fn runner_value_as_i64(runner: &serde_json::Map<String, JsonValue>, key: &str) -> Option<i64> {
-    runner.get(key)?.as_i64()
 }
