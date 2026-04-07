@@ -272,21 +272,28 @@ const ScalarTimeseriesPanel = ({ title, state }) => {
     .slice()
     .sort((a, b) => a.x - b.x);
   if (points.length === 0) return null;
-  const meanWithErrors = points
+  const pointsWithBand = points
     .map((point) => {
       const y = Number(point?.y);
       const yMin = Number(point?.y_min);
       const yMax = Number(point?.y_max);
-      if (!Number.isFinite(y)) return null;
-      if (!Number.isFinite(yMin) || !Number.isFinite(yMax)) return null;
-      const symmetricError = Math.max(Math.abs(y - yMin), Math.abs(yMax - y));
-      if (!Number.isFinite(symmetricError) || symmetricError <= 0) return null;
-      return { ...point, y, y_error: symmetricError };
+      if (!Number.isFinite(y)) return { ...point, band_base: null, band_span: null };
+      if (!Number.isFinite(yMin) || !Number.isFinite(yMax) || yMax < yMin) {
+        return { ...point, y, band_base: null, band_span: null };
+      }
+      return {
+        ...point,
+        y,
+        band_base: yMin,
+        band_span: yMax - yMin,
+      };
     })
     .filter(Boolean);
   const domain = fitDomain(points.flatMap((point) => [point.y, point.y_min, point.y_max]));
   const xDomain = fitXDomain(points.map((point) => point.x));
-  const hasErrors = meanWithErrors.length > 0;
+  const hasBand = pointsWithBand.some(
+    (point) => Number.isFinite(point.band_base) && Number.isFinite(point.band_span) && point.band_span > 0,
+  );
   return (
     <Card variant="outlined">
       <CardContent>
@@ -300,11 +307,33 @@ const ScalarTimeseriesPanel = ({ title, state }) => {
         </Box>
         <Box ref={figureRef} sx={{ width: "100%", height: 280 }}>
           <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={points} margin={chartMargin}>
+            <ComposedChart data={pointsWithBand} margin={chartMargin}>
               <CartesianGrid stroke={gridColor} vertical={false} />
               <XAxis dataKey="x" type="number" domain={xDomain} tickFormatter={formatAxisValue} tick={axisTickStyle} />
               <YAxis domain={domain} tickFormatter={formatAxisValue} tick={axisTickStyle} width={72} />
               <Tooltip content={<SimpleChartTooltip />} />
+              {hasBand ? (
+                <>
+                  <Area
+                    type="monotone"
+                    dataKey="band_base"
+                    stackId="uncertainty_band"
+                    stroke="none"
+                    fill="rgba(0,0,0,0)"
+                    isAnimationActive={false}
+                    connectNulls={false}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="band_span"
+                    stackId="uncertainty_band"
+                    stroke="none"
+                    fill="rgba(124,138,150,0.22)"
+                    isAnimationActive={false}
+                    connectNulls={false}
+                  />
+                </>
+              ) : null}
               <Line
                 type="monotone"
                 dataKey="y"
@@ -313,11 +342,6 @@ const ScalarTimeseriesPanel = ({ title, state }) => {
                 dot={false}
                 isAnimationActive={false}
               />
-              {hasErrors ? (
-                <Scatter data={meanWithErrors} fill="rgba(0,0,0,0)" isAnimationActive={false}>
-                  <ErrorBar dataKey="y_error" width={5} strokeWidth={1.25} stroke="#7c8a96" />
-                </Scatter>
-              ) : null}
             </ComposedChart>
           </ResponsiveContainer>
         </Box>

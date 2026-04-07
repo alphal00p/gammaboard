@@ -8,6 +8,8 @@ use crate::stores::{EvaluatorPerformanceHistoryEntry, SamplerPerformanceHistoryE
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 
+const COMPLETED_THROUGHPUT_WINDOW_SECS: f64 = 5.0;
+
 pub fn build_evaluator_performance_response(
     scope_id: Option<String>,
     entries: Vec<EvaluatorPerformanceHistoryEntry>,
@@ -44,10 +46,21 @@ pub fn build_sampler_performance_response(
         entries.clone(),
         sampler_panel_specs(),
         |entry| entry.id.to_string(),
-        sampler_panels,
+        |_entry| Vec::new(),
     );
+    let throughput_panel = sampler_completed_throughput_panel(&entries);
+    let latest_completed_samples_per_second = throughput_panel
+        .as_ref()
+        .and_then(|panel| match panel {
+            PanelState::ScalarTimeseries { points, .. } => points.last().map(|point| point.y),
+            _ => None,
+        })
+        .unwrap_or(0.0);
+    if let Some(panel) = throughput_panel {
+        response.updates.push(replace_panel(panel));
+    }
     if let Some(latest) = entries.first() {
-        for panel in sampler_current_panels(latest) {
+        for panel in sampler_current_panels(latest, latest_completed_samples_per_second) {
             response.updates.push(replace_panel(panel));
         }
     }
@@ -408,29 +421,10 @@ fn summarize_evaluator_metrics(entries: &[EvaluatorPerformanceHistoryEntry]) -> 
     }
 }
 
-fn sampler_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelState> {
-    let Some(runtime) = decode_sampler_runtime_metrics(entry) else {
-        return Vec::new();
-    };
-    vec![
-        scalar_point_panel(
-            "sampler_completed_samples_per_second",
-            history_x(entry.created_at),
-            runtime.completed_samples_per_second,
-            None,
-            None,
-        ),
-        scalar_point_panel(
-            "sampler_local_pending_batches",
-            history_x(entry.created_at),
-            runtime.queue.local_pending_batches as f64,
-            None,
-            None,
-        ),
-    ]
-}
-
-fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelState> {
+fn sampler_current_panels(
+    entry: &SamplerPerformanceHistoryEntry,
+    completed_samples_per_second: f64,
+) -> Vec<PanelState> {
     let Some(runtime) = decode_sampler_runtime_metrics(entry) else {
         return Vec::new();
     };
@@ -468,7 +462,7 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
                 key_value(
                     "completed_samples_per_second",
                     "Completed Samples / Sec",
-                    runtime.completed_samples_per_second,
+                    completed_samples_per_second,
                 ),
                 key_value(
                     "produced_samples_total",
@@ -597,18 +591,60 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
     ]
 }
 
-fn queue_buffer_value(value: &JsonValue, key: &str) -> Option<JsonValue> {
-    value.get("runner")?.get(key).cloned()
+fn sampler_completed_throughput_panel(entries: &[SamplerPerformanceHistoryEntry]) -> Option<PanelState> {
+    let mut samples = entries
+        .iter()
+        .filter_map(|entry| {
+            let runtime = decode_sampler_runtime_metrics(entry)?;
+            Some((history_x(entry.created_at), runtime.ingested_samples_total))
+        })
+        .collect::<Vec<_>>();
+    if samples.is_empty() {
+        return None;
+    }
+    samples.sort_by(|left, right| left.0.total_cmp(&right.0));
+    let points = throughput_points_from_cumulative(&samples, COMPLETED_THROUGHPUT_WINDOW_SECS);
+    Some(scalar_timeseries_panel(
+        "sampler_completed_samples_per_second",
+        points,
+    ))
 }
 
-fn scalar_point_panel(
-    panel_id: &str,
-    x: f64,
-    y: f64,
-    y_min: Option<f64>,
-    y_max: Option<f64>,
-) -> PanelState {
-    scalar_timeseries_panel(panel_id, vec![PlotPoint { x, y, y_min, y_max }])
+fn throughput_points_from_cumulative(samples: &[(f64, i64)], window_secs: f64) -> Vec<PlotPoint> {
+    if samples.is_empty() {
+        return Vec::new();
+    }
+    let mut baseline_idx = 0usize;
+    let mut points = Vec::with_capacity(samples.len());
+    for (index, (x, cumulative)) in samples.iter().copied().enumerate() {
+        let target_x = x - window_secs;
+        while baseline_idx + 1 < index && samples[baseline_idx + 1].0 <= target_x {
+            baseline_idx += 1;
+        }
+        let (baseline_x, baseline_cumulative) = if target_x <= samples[0].0 {
+            samples[0]
+        } else {
+            samples[baseline_idx]
+        };
+        let elapsed = x - baseline_x;
+        let delta = cumulative.saturating_sub(baseline_cumulative);
+        let y = if elapsed > 0.0 {
+            (delta as f64 / elapsed).max(0.0)
+        } else {
+            0.0
+        };
+        points.push(PlotPoint {
+            x,
+            y,
+            y_min: None,
+            y_max: None,
+        });
+    }
+    points
+}
+
+fn queue_buffer_value(value: &JsonValue, key: &str) -> Option<JsonValue> {
+    value.get("runner")?.get(key).cloned()
 }
 
 fn decode_sampler_runtime_metrics(
