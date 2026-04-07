@@ -9,6 +9,10 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 
+const RECLAIM_INTERVAL: Duration = Duration::from_secs(1);
+const COMPLETED_CLEANUP_INTERVAL: Duration = Duration::from_secs(1);
+const COMPLETED_CLEANUP_BATCH_LIMIT: usize = 2048;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerQueueConfig {
     pub queue_buffer: f64,
@@ -38,6 +42,10 @@ pub struct SamplerQueue<S> {
     pending_insert_task: Option<PendingInsertTask>,
     insert_pump_running: bool,
     pending_processed_fetch: Option<PendingProcessedFetchTask>,
+    cached_tick_queue_counts: Option<BatchQueueCounts>,
+    cached_active_evaluator_count: Option<usize>,
+    last_reclaim_at: Instant,
+    last_completed_cleanup_at: Instant,
     metrics: QueueMetricsState,
 }
 
@@ -50,6 +58,20 @@ struct PendingInsertTask {
 struct PendingProcessedFetchTask {
     started_at: Instant,
     handle: JoinHandle<Result<Vec<CompletedBatch>, StoreError>>,
+}
+
+pub struct QueueTickResult {
+    pub completed: Vec<CompletedBatch>,
+    pub queue_counts: BatchQueueCounts,
+    pub queue_snapshot_duration: Duration,
+    pub reclaim_duration: Option<Duration>,
+    pub completed_cleanup_duration: Option<Duration>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct QueueDiagnosticsSnapshot {
+    pub queue_counts: BatchQueueCounts,
+    pub active_evaluator_count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -74,6 +96,7 @@ where
         config: SamplerQueueConfig,
         checkpoint: SamplerQueueCheckpoint,
     ) -> Self {
+        let now = Instant::now();
         Self {
             run_id,
             task_id,
@@ -86,6 +109,12 @@ where
             pending_insert_task: None,
             insert_pump_running: false,
             pending_processed_fetch: None,
+            cached_tick_queue_counts: None,
+            cached_active_evaluator_count: None,
+            last_reclaim_at: now.checked_sub(RECLAIM_INTERVAL).unwrap_or(now),
+            last_completed_cleanup_at: now
+                .checked_sub(COMPLETED_CLEANUP_INTERVAL)
+                .unwrap_or(now),
             metrics: QueueMetricsState::default(),
         }
     }
@@ -138,11 +167,11 @@ where
         self.store.get_open_batch_count(self.run_id).await
     }
 
-    pub async fn reclaim_abandoned_batches(&self) -> Result<u64, StoreError> {
+    async fn reclaim_abandoned_batches(&self) -> Result<u64, StoreError> {
         self.store.reclaim_abandoned_batches(self.run_id).await
     }
 
-    pub async fn cleanup_consumed_completed_batches(
+    async fn cleanup_consumed_completed_batches(
         &self,
         limit: usize,
     ) -> Result<u64, StoreError> {
@@ -152,6 +181,92 @@ where
         self.store
             .cleanup_consumed_completed_batches(self.run_id, up_to_batch_id, limit)
             .await
+    }
+
+    pub async fn tick(&mut self) -> Result<QueueTickResult, StoreError> {
+        let completed = self.get_processed().await?;
+        let completed_cleanup_duration = self.cleanup_consumed_completed_batches_if_due().await?;
+        let reclaim_duration = self.reclaim_abandoned_batches_if_due().await?;
+        let queue_snapshot_started = Instant::now();
+        let queue_counts = self.queue_counts().await?;
+        let queue_snapshot_duration = queue_snapshot_started.elapsed();
+        self.cached_tick_queue_counts = Some(queue_counts);
+        Ok(QueueTickResult {
+            completed,
+            queue_counts,
+            queue_snapshot_duration,
+            reclaim_duration,
+            completed_cleanup_duration,
+        })
+    }
+
+    pub async fn force_cleanup_consumed_completed_batches(&mut self) -> Result<Option<Duration>, StoreError> {
+        let Some(_) = self.last_completed_batch_id() else {
+            return Ok(None);
+        };
+        let cleanup_started = Instant::now();
+        loop {
+            let deleted = self
+                .cleanup_consumed_completed_batches(COMPLETED_CLEANUP_BATCH_LIMIT)
+                .await?;
+            if deleted < COMPLETED_CLEANUP_BATCH_LIMIT as u64 {
+                break;
+            }
+        }
+        self.last_completed_cleanup_at = Instant::now();
+        Ok(Some(cleanup_started.elapsed()))
+    }
+
+    pub async fn plan_production(
+        &mut self,
+        max_producable: Option<usize>,
+        queue_counts: BatchQueueCounts,
+        batch_size_current: usize,
+    ) -> Result<Vec<usize>, StoreError> {
+        let active_evaluator_count = self
+            .store
+            .count_active_evaluator_nodes(self.run_id)
+            .await?
+            .max(0) as usize;
+        self.cached_active_evaluator_count = Some(active_evaluator_count);
+        self.cached_tick_queue_counts = Some(queue_counts);
+        Ok(self.get_sample(
+            max_producable,
+            queue_counts,
+            active_evaluator_count,
+            batch_size_current,
+        ))
+    }
+
+    pub fn validate_batch_plan(
+        &self,
+        batch_plan: &[usize],
+        max_batch_size: usize,
+    ) -> Result<(), StoreError> {
+        if batch_plan.len() > self.config.max_batches_per_tick {
+            return Err(StoreError::store(format!(
+                "batch plan exceeded max_batches_per_tick: planned={} max_batches_per_tick={}",
+                batch_plan.len(),
+                self.config.max_batches_per_tick
+            )));
+        }
+        if let Some(max_planned_batch_size) = batch_plan.iter().copied().max()
+            && max_planned_batch_size > max_batch_size
+        {
+            return Err(StoreError::store(format!(
+                "batch plan exceeded max_batch_size: planned={} max_batch_size={}",
+                max_planned_batch_size, max_batch_size
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn diagnostics_snapshot(&self) -> Option<QueueDiagnosticsSnapshot> {
+        self.cached_tick_queue_counts
+            .map(|queue_counts| QueueDiagnosticsSnapshot {
+                queue_counts,
+                active_evaluator_count: self.cached_active_evaluator_count,
+            })
     }
 
     pub fn target_pending_batches(&self, active_evaluator_count: usize) -> Option<usize> {
@@ -334,6 +449,33 @@ where
             claimed: queue_counts.claimed,
             completed: queue_counts.completed,
         }
+    }
+
+    async fn reclaim_abandoned_batches_if_due(&mut self) -> Result<Option<Duration>, StoreError> {
+        if self.last_reclaim_at.elapsed() < RECLAIM_INTERVAL {
+            return Ok(None);
+        }
+        let reclaim_started = Instant::now();
+        self.reclaim_abandoned_batches().await?;
+        self.last_reclaim_at = Instant::now();
+        Ok(Some(reclaim_started.elapsed()))
+    }
+
+    async fn cleanup_consumed_completed_batches_if_due(
+        &mut self,
+    ) -> Result<Option<Duration>, StoreError> {
+        let Some(_) = self.last_completed_batch_id() else {
+            return Ok(None);
+        };
+        if self.last_completed_cleanup_at.elapsed() < COMPLETED_CLEANUP_INTERVAL {
+            return Ok(None);
+        }
+        let cleanup_started = Instant::now();
+        let _ = self
+            .cleanup_consumed_completed_batches(COMPLETED_CLEANUP_BATCH_LIMIT)
+            .await?;
+        self.last_completed_cleanup_at = Instant::now();
+        Ok(Some(cleanup_started.elapsed()))
     }
 
     fn ensure_processed_prefetch(&mut self) {

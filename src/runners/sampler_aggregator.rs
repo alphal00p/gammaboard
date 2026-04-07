@@ -15,7 +15,9 @@ use crate::core::{
 use crate::evaluation::ObservableState;
 use crate::runners::process_memory::current_rss_bytes;
 use crate::runners::rolling_metric::RollingMetric;
-use crate::runners::{SamplerQueue, SamplerQueueCheckpoint, SamplerQueueConfig};
+use crate::runners::{
+    QueueTickResult, SamplerQueue, SamplerQueueCheckpoint, SamplerQueueConfig,
+};
 use crate::sampling::{SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
@@ -26,10 +28,6 @@ use tokio::time::sleep;
 const MIN_BATCH_SIZE: usize = 16;
 const MAX_BATCH_SIZE_UP_FACTOR: f64 = 4.0;
 const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.25;
-const RECLAIM_INTERVAL: Duration = Duration::from_secs(1);
-const COMPLETED_CLEANUP_INTERVAL: Duration = Duration::from_secs(1);
-const COMPLETED_CLEANUP_BATCH_LIMIT: usize = 2048;
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerAggregatorRunnerParams {
     pub performance_snapshot_interval_ms: u64,
@@ -45,6 +43,7 @@ struct SamplerRollingState {
     eval_ms_per_sample: RollingMetric,
     eval_ms_per_batch: RollingMetric,
     training_ingest_ms_per_sample: RollingMetric,
+    produce_ms_per_sample: RollingMetric,
     reclaim_ms: RollingMetric,
     queue_counts_ms: RollingMetric,
     completed_merge_ingest_ms: RollingMetric,
@@ -61,6 +60,18 @@ enum ObservableCheckpointState {
     NeedsInitialRoundTrip,
     WaitingForInitialRoundTrip,
     Ready,
+}
+
+enum ProduceDecision {
+    None,
+    InitialRoundTrip(usize),
+    PlannedByQueue(Option<usize>),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FinalizeMode {
+    PersistState,
+    CompleteTask,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,6 +138,9 @@ impl SamplerRuntimeState {
                 training_ingest_ms_per_sample: RollingMetricSnapshot::from(
                     &self.rolling.training_ingest_ms_per_sample,
                 ),
+                produce_ms_per_sample: RollingMetricSnapshot::from(
+                    &self.rolling.produce_ms_per_sample,
+                ),
                 reclaim_ms: RollingMetricSnapshot::from(&self.rolling.reclaim_ms),
                 queue_counts_ms: RollingMetricSnapshot::from(&self.rolling.queue_counts_ms),
                 completed_merge_ingest_ms: RollingMetricSnapshot::from(
@@ -170,8 +184,6 @@ pub struct SamplerAggregatorRunner<S> {
     last_snapshot_at: Instant,
     last_frontend_sync_at: Instant,
     last_progress_sync_at: Instant,
-    last_reclaim_at: Instant,
-    last_completed_cleanup_at: Instant,
     runtime_state: SamplerRuntimeState,
     last_performance_completed_samples: i64,
     queue: SamplerQueue<S>,
@@ -250,8 +262,6 @@ where
             last_snapshot_at: now,
             last_frontend_sync_at: now,
             last_progress_sync_at: now,
-            last_reclaim_at: now.checked_sub(RECLAIM_INTERVAL).unwrap_or(now),
-            last_completed_cleanup_at: now.checked_sub(COMPLETED_CLEANUP_INTERVAL).unwrap_or(now),
             runtime_state,
             last_performance_completed_samples: nr_completed_samples,
             queue,
@@ -260,11 +270,6 @@ where
 
     pub fn params(&self) -> &SamplerAggregatorRunnerParams {
         &self.params
-    }
-
-    async fn flush_queue(&mut self) -> Result<(), RunnerError> {
-        self.queue.flush().await?;
-        Ok(())
     }
 
     fn tune_batch_size(&mut self) {
@@ -288,23 +293,28 @@ where
             next.clamp(MIN_BATCH_SIZE, self.params.max_batch_size);
     }
 
-    async fn current_runner_diagnostics(&self) -> Result<JsonValue, RunnerError> {
-        let queue_counts = self.queue.queue_counts().await?;
-        let active_evaluator_count = self.active_evaluator_count().await?;
-        let target_pending_batches = self.queue.target_pending_batches(active_evaluator_count);
+    fn current_runner_diagnostics(&self) -> JsonValue {
+        let diagnostics_snapshot = self.queue.diagnostics_snapshot();
+        let queue_counts = diagnostics_snapshot.map(|snapshot| snapshot.queue_counts);
+        let active_evaluator_count = diagnostics_snapshot.and_then(|snapshot| snapshot.active_evaluator_count);
+        let target_pending_batches =
+            active_evaluator_count.and_then(|count| self.queue.target_pending_batches(count));
+        let target_local_pending_batches =
+            active_evaluator_count.and_then(|count| self.queue.target_local_pending_batches(count));
         let queue_runtime = self.queue.runtime_metrics();
-        Ok(json!({
+        json!({
             "active_evaluator_count": active_evaluator_count,
-            "pending_batches": queue_counts.pending,
-            "claimed_batches": queue_counts.claimed,
-            "completed_batches": queue_counts.completed,
-            "open_batches": queue_counts.open(),
+            "pending_batches": queue_counts.map(|counts| counts.pending),
+            "claimed_batches": queue_counts.map(|counts| counts.claimed),
+            "completed_batches": queue_counts.map(|counts| counts.completed),
+            "open_batches": queue_counts.map(|counts| counts.open()),
             "queue_buffer": self.params.queue.queue_buffer,
             "local_pending_buffer_multiplier": self.params.queue.local_pending_buffer_multiplier,
             "target_pending_batches": target_pending_batches,
-            "target_local_pending_batches": self.queue.target_local_pending_batches(active_evaluator_count),
+            "target_local_pending_batches": target_local_pending_batches,
             "pending_shortfall": target_pending_batches
-                .map(|target| (target as i64).saturating_sub(queue_counts.pending as i64)),
+                .zip(queue_counts)
+                .map(|(target, counts)| (target as i64).saturating_sub(counts.pending as i64)),
             "last_completed_batch_id": self.queue.last_completed_batch_id(),
             "local_pending_batches": queue_runtime.local_pending_batches,
             "local_inflight_insert_batches": queue_runtime.local_inflight_insert_batches,
@@ -315,7 +325,7 @@ where
                 ObservableCheckpointState::Ready => "ready",
             },
             "training_samples_remaining": self.sampler.training_samples_remaining(),
-        }))
+        })
     }
 
     fn max_samples_to_produce_this_tick(
@@ -353,14 +363,6 @@ where
         Ok(usize::try_from(remaining).ok())
     }
 
-    async fn active_evaluator_count(&self) -> Result<usize, RunnerError> {
-        Ok(self
-            .store
-            .count_active_evaluator_nodes(self.run_id)
-            .await?
-            .max(0) as usize)
-    }
-
     pub fn task_id(&self) -> i64 {
         self.task.id
     }
@@ -371,50 +373,71 @@ where
 
     pub async fn tick(&mut self) -> Result<bool, RunnerError> {
         let tick_started = Instant::now();
-        let completed = self.queue.get_processed().await?;
-        self.cleanup_consumed_completed_batches(false).await?;
-        if self.last_reclaim_at.elapsed() >= RECLAIM_INTERVAL {
-            let reclaim_started = Instant::now();
-            self.queue.reclaim_abandoned_batches().await?;
-            observe_duration_ms(
-                &mut self.runtime_state.rolling.reclaim_ms,
-                reclaim_started.elapsed(),
-            );
-            self.last_reclaim_at = Instant::now();
-        }
+        let (completed, queue_before_tick) = self.poll_queue().await?;
+        self.tune_batch_size();
+        let (queue_before_produce, completed_batches) =
+            self.ingest_completed(completed, queue_before_tick).await?;
+        self.update_completed_samples_per_second(tick_started.elapsed());
+        let produced_batches = self.produce_work(queue_before_produce).await?;
+        self.flush_tick_syncs().await?;
+        self.check_tick_terminal_state(queue_before_produce, completed_batches, produced_batches)
+    }
 
-        let queue_snapshot_started = Instant::now();
-        let queue_before_tick = self.queue.queue_counts().await?;
+    async fn poll_queue(
+        &mut self,
+    ) -> Result<(Vec<crate::core::CompletedBatch>, crate::core::BatchQueueCounts), RunnerError> {
+        let QueueTickResult {
+            completed,
+            queue_counts,
+            queue_snapshot_duration,
+            reclaim_duration,
+            completed_cleanup_duration,
+        } = self.queue.tick().await?;
+        if let Some(duration) = reclaim_duration {
+            observe_duration_ms(&mut self.runtime_state.rolling.reclaim_ms, duration);
+        }
+        if let Some(duration) = completed_cleanup_duration {
+            observe_duration_ms(&mut self.runtime_state.rolling.completed_delete_ms, duration);
+        }
         observe_duration_ms(
             &mut self.runtime_state.rolling.queue_counts_ms,
-            queue_snapshot_started.elapsed(),
+            queue_snapshot_duration,
         );
-        self.tune_batch_size();
+        Ok((completed, queue_counts))
+    }
 
-        let active_evaluator_started = Instant::now();
-        let active_evaluator_count = self.active_evaluator_count().await?;
-        let _ = active_evaluator_started.elapsed();
-
+    async fn ingest_completed(
+        &mut self,
+        completed: Vec<crate::core::CompletedBatch>,
+        queue_before_tick: crate::core::BatchQueueCounts,
+    ) -> Result<(crate::core::BatchQueueCounts, usize), RunnerError> {
         let completed_batches = self.process_completed_batches(completed).await?;
-        let queue_before_produce = crate::core::BatchQueueCounts {
-            pending: queue_before_tick.pending,
-            claimed: queue_before_tick.claimed,
-            completed: queue_before_tick
-                .completed
-                .saturating_sub(completed_batches as i64),
-        };
+        Ok((
+            crate::core::BatchQueueCounts {
+                pending: queue_before_tick.pending,
+                claimed: queue_before_tick.claimed,
+                completed: queue_before_tick
+                    .completed
+                    .saturating_sub(completed_batches as i64),
+            },
+            completed_batches,
+        ))
+    }
 
-        self.update_completed_samples_per_second(tick_started.elapsed());
-
+    async fn produce_work(
+        &mut self,
+        queue_before_produce: crate::core::BatchQueueCounts,
+    ) -> Result<usize, RunnerError> {
         let produce_started = Instant::now();
-        let produced_batches = self
-            .produce(queue_before_produce, active_evaluator_count)
-            .await?;
+        let produced_batches = self.produce(queue_before_produce).await?;
         observe_duration_ms(
             &mut self.runtime_state.rolling.produce_ms,
             produce_started.elapsed(),
         );
+        Ok(produced_batches)
+    }
 
+    async fn flush_tick_syncs(&mut self) -> Result<(), RunnerError> {
         let progress_sync_started = Instant::now();
         self.flush_progress_sync(false).await?;
         observe_duration_ms(
@@ -428,7 +451,15 @@ where
             &mut self.runtime_state.rolling.performance_sync_ms,
             performance_sync_started.elapsed(),
         );
+        Ok(())
+    }
 
+    fn check_tick_terminal_state(
+        &self,
+        queue_before_produce: crate::core::BatchQueueCounts,
+        completed_batches: usize,
+        produced_batches: usize,
+    ) -> Result<bool, RunnerError> {
         let open_batch_count = (queue_before_produce
             .open()
             .saturating_add(produced_batches as i64))
@@ -486,7 +517,6 @@ where
     }
 
     async fn drain_evaluator_work_on_stop(&mut self) -> Result<(), RunnerError> {
-        self.flush_queue().await?;
         loop {
             let completed = self.queue.get_processed_blocking().await?;
             self.process_completed_batches(completed).await?;
@@ -508,15 +538,7 @@ where
     }
 
     pub async fn persist_state(&mut self) -> Result<(), RunnerError> {
-        self.flush_queue().await?;
-        self.drain_evaluator_work_on_stop().await?;
-        self.cleanup_consumed_completed_batches(true).await?;
-        self.flush_aggregation(true).await?;
-        self.flush_performance_snapshot(true).await?;
-        self.flush_progress_sync(true).await?;
-        let queue_empty = self.queue.open_batch_count().await? <= 0;
-        self.persist_stage_state_with_queue_empty(queue_empty)
-            .await?;
+        self.finalize_task_state(FinalizeMode::PersistState).await?;
         self.persist_sampler_checkpoint().await
     }
 
@@ -561,43 +583,15 @@ where
         Ok(())
     }
 
-    async fn cleanup_consumed_completed_batches(&mut self, force: bool) -> Result<(), RunnerError> {
-        let due = force || self.last_completed_cleanup_at.elapsed() >= COMPLETED_CLEANUP_INTERVAL;
-        if !due {
-            return Ok(());
+    async fn force_cleanup_consumed_completed_batches(&mut self) -> Result<(), RunnerError> {
+        if let Some(duration) = self.queue.force_cleanup_consumed_completed_batches().await? {
+            observe_duration_ms(&mut self.runtime_state.rolling.completed_delete_ms, duration);
         }
-
-        let cleanup_started = Instant::now();
-        let mut deleted_any = false;
-        loop {
-            let deleted = self
-                .queue
-                .cleanup_consumed_completed_batches(COMPLETED_CLEANUP_BATCH_LIMIT)
-                .await?;
-            if deleted > 0 {
-                deleted_any = true;
-            }
-            if !force || deleted < COMPLETED_CLEANUP_BATCH_LIMIT as u64 {
-                break;
-            }
-        }
-        if deleted_any {
-            observe_duration_ms(
-                &mut self.runtime_state.rolling.completed_delete_ms,
-                cleanup_started.elapsed(),
-            );
-        }
-        self.last_completed_cleanup_at = Instant::now();
         Ok(())
     }
 
     pub async fn complete_task(&mut self) -> Result<(), RunnerError> {
-        self.flush_queue().await?;
-        self.cleanup_consumed_completed_batches(true).await?;
-        self.flush_aggregation(true).await?;
-        self.flush_performance_snapshot(true).await?;
-        self.flush_progress_sync(true).await?;
-        self.persist_stage_state_with_queue_empty(true).await?;
+        self.finalize_task_state(FinalizeMode::CompleteTask).await?;
         self.store.complete_run_task(self.task.id).await?;
         Ok(())
     }
@@ -605,6 +599,22 @@ where
     pub async fn fail_task(&mut self, reason: &str) -> Result<(), RunnerError> {
         self.store.fail_run_task(self.task.id, reason).await?;
         Ok(())
+    }
+
+    async fn finalize_task_state(&mut self, mode: FinalizeMode) -> Result<(), RunnerError> {
+        self.queue.flush().await?;
+        let queue_empty = match mode {
+            FinalizeMode::PersistState => {
+                self.drain_evaluator_work_on_stop().await?;
+                self.queue.open_batch_count().await? <= 0
+            }
+            FinalizeMode::CompleteTask => true,
+        };
+        self.force_cleanup_consumed_completed_batches().await?;
+        self.flush_aggregation(true).await?;
+        self.flush_performance_snapshot(true).await?;
+        self.flush_progress_sync(true).await?;
+        self.persist_stage_state_with_queue_empty(queue_empty).await
     }
 
     async fn process_completed_batches(
@@ -692,75 +702,16 @@ where
     async fn produce(
         &mut self,
         queue_before_produce: crate::core::BatchQueueCounts,
-        active_evaluator_count: usize,
     ) -> Result<usize, RunnerError> {
         let observable_config = self.observable_state.config();
         let sample_plan = self.sampler.sample_plan().map_err(RunnerError::Engine)?;
-        let training_samples_remaining = self.sampler.training_samples_remaining();
         let open_before_produce = queue_before_produce.open().max(0) as usize;
-        let batch_plan = match sample_plan {
-            SamplePlan::Pause => Vec::new(),
-            SamplePlan::Produce { nr_samples } => {
-                let requested = if nr_samples == usize::MAX {
-                    None
-                } else {
-                    Some(nr_samples)
-                };
-                let engine_max_samples = match requested {
-                    Some(requested) => Some(
-                        training_samples_remaining
-                            .map_or(requested, |remaining| remaining.min(requested)),
-                    ),
-                    None => training_samples_remaining,
-                };
-                let max_samples = self.max_samples_to_produce_this_tick(engine_max_samples)?;
-                match self.runtime_state.observable_checkpoint_state {
-                    ObservableCheckpointState::NeedsInitialRoundTrip => {
-                        if self.params.queue.max_queue_size <= open_before_produce {
-                            Vec::new()
-                        } else {
-                            let nr_samples = max_samples.unwrap_or(MIN_BATCH_SIZE);
-                            if nr_samples == 0 {
-                                Vec::new()
-                            } else {
-                                self.runtime_state.observable_checkpoint_state =
-                                    ObservableCheckpointState::WaitingForInitialRoundTrip;
-                                vec![nr_samples.min(MIN_BATCH_SIZE)]
-                            }
-                        }
-                    }
-                    ObservableCheckpointState::WaitingForInitialRoundTrip => {
-                        if open_before_produce == 0 {
-                            self.runtime_state.observable_checkpoint_state =
-                                ObservableCheckpointState::NeedsInitialRoundTrip;
-                        }
-                        Vec::new()
-                    }
-                    ObservableCheckpointState::Ready => self.queue.get_sample(
-                        max_samples,
-                        queue_before_produce,
-                        active_evaluator_count,
-                        self.runtime_state.batch_size_current,
-                    ),
-                }
-            }
-        };
-        if batch_plan.len() > self.params.queue.max_batches_per_tick {
-            return Err(RunnerError::Engine(EngineError::engine(format!(
-                "batch plan exceeded max_batches_per_tick: planned={} max_batches_per_tick={}",
-                batch_plan.len(),
-                self.params.queue.max_batches_per_tick
-            ))));
-        }
+        let batch_plan = self
+            .resolve_batch_plan(sample_plan, queue_before_produce, open_before_produce)
+            .await?;
         let mut produced = Vec::with_capacity(batch_plan.len());
         let mut produced_samples_total = 0_i64;
         for nr_samples in batch_plan {
-            if nr_samples > self.params.max_batch_size {
-                return Err(RunnerError::Engine(EngineError::engine(format!(
-                    "batch plan exceeded max_batch_size: planned={} max_batch_size={}",
-                    nr_samples, self.params.max_batch_size
-                ))));
-            }
             let started = Instant::now();
             let batch = self
                 .sampler
@@ -772,7 +723,7 @@ where
             if produced_samples > 0 {
                 self.runtime_state
                     .rolling
-                    .training_ingest_ms_per_sample
+                    .produce_ms_per_sample
                     .observe(produce_time_ms / produced_samples as f64);
             }
             produced.push(
@@ -786,16 +737,84 @@ where
             return Ok(0);
         }
 
-        self.runtime_state
-            .rolling
-            .training_ingest_ms_per_sample
-            .observe(produced_batches as f64);
         self.runtime_state.produced_batches_total += produced_batches as i64;
         self.runtime_state.produced_samples_total += produced_samples_total;
         self.nr_produced_samples += produced_samples_total;
         self.task.nr_produced_samples += produced_samples_total;
         self.queue.ingest(produced);
         Ok(produced_batches)
+    }
+
+    async fn resolve_batch_plan(
+        &mut self,
+        sample_plan: SamplePlan,
+        queue_before_produce: crate::core::BatchQueueCounts,
+        open_before_produce: usize,
+    ) -> Result<Vec<usize>, RunnerError> {
+        let decision = self.decide_produce(sample_plan, open_before_produce)?;
+        let batch_plan = match decision {
+            ProduceDecision::None => Vec::new(),
+            ProduceDecision::InitialRoundTrip(nr_samples) => vec![nr_samples],
+            ProduceDecision::PlannedByQueue(max_samples) => self
+                .queue
+                .plan_production(
+                    max_samples,
+                    queue_before_produce,
+                    self.runtime_state.batch_size_current,
+                )
+                .await
+                .map_err(RunnerError::from)?,
+        };
+        self.queue
+            .validate_batch_plan(&batch_plan, self.params.max_batch_size)?;
+        Ok(batch_plan)
+    }
+
+    fn decide_produce(
+        &mut self,
+        sample_plan: SamplePlan,
+        open_before_produce: usize,
+    ) -> Result<ProduceDecision, RunnerError> {
+        let SamplePlan::Produce { nr_samples } = sample_plan else {
+            return Ok(ProduceDecision::None);
+        };
+        let requested = if nr_samples == usize::MAX {
+            None
+        } else {
+            Some(nr_samples)
+        };
+        let training_samples_remaining = self.sampler.training_samples_remaining();
+        let engine_max_samples = match requested {
+            Some(requested) => Some(
+                training_samples_remaining.map_or(requested, |remaining| remaining.min(requested)),
+            ),
+            None => training_samples_remaining,
+        };
+        let max_samples = self.max_samples_to_produce_this_tick(engine_max_samples)?;
+        Ok(match self.runtime_state.observable_checkpoint_state {
+            ObservableCheckpointState::NeedsInitialRoundTrip => {
+                if self.params.queue.max_queue_size <= open_before_produce {
+                    ProduceDecision::None
+                } else {
+                    let nr_samples = max_samples.unwrap_or(MIN_BATCH_SIZE);
+                    if nr_samples == 0 {
+                        ProduceDecision::None
+                    } else {
+                        self.runtime_state.observable_checkpoint_state =
+                            ObservableCheckpointState::WaitingForInitialRoundTrip;
+                        ProduceDecision::InitialRoundTrip(nr_samples.min(MIN_BATCH_SIZE))
+                    }
+                }
+            }
+            ObservableCheckpointState::WaitingForInitialRoundTrip => {
+                if open_before_produce == 0 {
+                    self.runtime_state.observable_checkpoint_state =
+                        ObservableCheckpointState::NeedsInitialRoundTrip;
+                }
+                ProduceDecision::None
+            }
+            ObservableCheckpointState::Ready => ProduceDecision::PlannedByQueue(max_samples),
+        })
     }
 
     fn progress_sync_due(&self, force: bool) -> bool {
@@ -851,7 +870,7 @@ where
         }
 
         let mut engine_diagnostics = self.sampler.get_diagnostics();
-        let runner_diagnostics = self.current_runner_diagnostics().await?;
+        let runner_diagnostics = self.current_runner_diagnostics();
         match &mut engine_diagnostics {
             JsonValue::Object(object) => {
                 object.insert("runner".to_string(), runner_diagnostics);

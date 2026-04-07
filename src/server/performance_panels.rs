@@ -506,6 +506,11 @@ fn sampler_current_panels(entry: &SamplerPerformanceHistoryEntry) -> Vec<PanelSt
                     runtime.sampler.training_ingest_ms_per_sample.mean,
                 ),
                 key_value(
+                    "produce_ms_per_sample",
+                    "Produce Ms / Sample",
+                    runtime.sampler.produce_ms_per_sample.mean,
+                ),
+                key_value(
                     "merge_completed_batches_ms",
                     "Merge Completed Batches",
                     runtime.sampler.completed_merge_ingest_ms.mean,

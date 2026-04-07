@@ -8,5 +8,5 @@ pub(crate) mod stage_context;
 
 pub use evaluator::{EvaluatorRunner, EvaluatorRunnerError, EvaluatorRunnerParams};
 pub use node_runner::{NodeRunner, NodeRunnerConfig, NodeRunnerStore};
-pub use queue::{SamplerQueue, SamplerQueueCheckpoint, SamplerQueueConfig};
+pub use queue::{QueueTickResult, SamplerQueue, SamplerQueueCheckpoint, SamplerQueueConfig};
 pub use sampler_aggregator::{RunnerError, SamplerAggregatorRunner, SamplerAggregatorRunnerParams};
