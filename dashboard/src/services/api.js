@@ -298,6 +298,12 @@ export const fetchTemplateFile = async (kind, name, signal) => {
   return apiGet(`/templates/${kind}/${encodeURIComponent(name)}`, `Failed to fetch template ${name}`, signal);
 };
 
+export const saveTemplateFile = async (kind, { name, toml }, signal) =>
+  apiPost(`/templates/${kind}`, { name, toml }, `Failed to save template ${name}`, signal);
+
+export const deleteTemplateFile = async (kind, name, signal) =>
+  apiDelete(`/templates/${kind}/${encodeURIComponent(name)}`, `Failed to delete template ${name}`, signal);
+
 export const fetchRunLogPage = async (
   runId,
   { limit = 100, nodeName = null, level = null, search = "", beforeId = null } = {},

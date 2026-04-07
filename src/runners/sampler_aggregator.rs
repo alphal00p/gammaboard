@@ -28,6 +28,7 @@ use tokio::time::sleep;
 const MIN_BATCH_SIZE: usize = 16;
 const MAX_BATCH_SIZE_UP_FACTOR: f64 = 4.0;
 const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.25;
+const COMPLETED_SAMPLES_PER_SECOND_EWMA_ALPHA: f64 = 0.2;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerAggregatorRunnerParams {
     pub performance_snapshot_interval_ms: u64,
@@ -81,6 +82,8 @@ struct SamplerRuntimeState {
     ingested_batches_total: i64,
     ingested_samples_total: i64,
     completed_samples_per_second: f64,
+    #[serde(default)]
+    initial_round_trip_snapshot_pending: bool,
     pending_persisted_completed_batches: i32,
     batch_size_current: usize,
     observable_checkpoint_state: ObservableCheckpointState,
@@ -95,6 +98,7 @@ impl Default for SamplerRuntimeState {
             ingested_batches_total: 0,
             ingested_samples_total: 0,
             completed_samples_per_second: 0.0,
+            initial_round_trip_snapshot_pending: false,
             pending_persisted_completed_batches: 0,
             batch_size_current: 0,
             observable_checkpoint_state: ObservableCheckpointState::NeedsInitialRoundTrip,
@@ -185,8 +189,12 @@ pub struct SamplerAggregatorRunner<S> {
     last_frontend_sync_at: Instant,
     last_progress_sync_at: Instant,
     runtime_state: SamplerRuntimeState,
-    last_performance_completed_samples: i64,
     queue: SamplerQueue<S>,
+}
+
+struct CompletedIngestStats {
+    completed_batches: usize,
+    completed_samples_delta: i64,
 }
 
 impl<S> SamplerAggregatorRunner<S>
@@ -263,7 +271,6 @@ where
             last_frontend_sync_at: now,
             last_progress_sync_at: now,
             runtime_state,
-            last_performance_completed_samples: nr_completed_samples,
             queue,
         }
     }
@@ -375,12 +382,19 @@ where
         let tick_started = Instant::now();
         let (completed, queue_before_tick) = self.poll_queue().await?;
         self.tune_batch_size();
-        let (queue_before_produce, completed_batches) =
+        let (queue_before_produce, ingest_stats) =
             self.ingest_completed(completed, queue_before_tick).await?;
-        self.update_completed_samples_per_second(tick_started.elapsed());
+        self.update_completed_samples_per_second(
+            tick_started.elapsed(),
+            ingest_stats.completed_samples_delta,
+        );
         let produced_batches = self.produce_work(queue_before_produce).await?;
         self.flush_tick_syncs().await?;
-        self.check_tick_terminal_state(queue_before_produce, completed_batches, produced_batches)
+        self.check_tick_terminal_state(
+            queue_before_produce,
+            ingest_stats.completed_batches,
+            produced_batches,
+        )
     }
 
     async fn poll_queue(
@@ -410,17 +424,17 @@ where
         &mut self,
         completed: Vec<crate::core::CompletedBatch>,
         queue_before_tick: crate::core::BatchQueueCounts,
-    ) -> Result<(crate::core::BatchQueueCounts, usize), RunnerError> {
-        let completed_batches = self.process_completed_batches(completed).await?;
+    ) -> Result<(crate::core::BatchQueueCounts, CompletedIngestStats), RunnerError> {
+        let ingest_stats = self.process_completed_batches(completed).await?;
         Ok((
             crate::core::BatchQueueCounts {
                 pending: queue_before_tick.pending,
                 claimed: queue_before_tick.claimed,
                 completed: queue_before_tick
                     .completed
-                    .saturating_sub(completed_batches as i64),
+                    .saturating_sub(ingest_stats.completed_batches as i64),
             },
-            completed_batches,
+            ingest_stats,
         ))
     }
 
@@ -544,13 +558,14 @@ where
 
     async fn flush_aggregation(&mut self, force: bool) -> Result<(), RunnerError> {
         let due = force
+            || self.runtime_state.initial_round_trip_snapshot_pending
             || self.frontend_sync_interval.is_zero()
             || self.last_frontend_sync_at.elapsed() >= self.frontend_sync_interval;
         if !due {
             return Ok(());
         }
 
-        let persist_snapshot = force;
+        let persist_snapshot = force || self.runtime_state.initial_round_trip_snapshot_pending;
         let current_observable = self
             .observable_state
             .to_json()
@@ -578,6 +593,9 @@ where
             &mut self.runtime_state.rolling.persist_observable_ms,
             aggregation_flush_started.elapsed(),
         );
+        if persist_snapshot {
+            self.runtime_state.initial_round_trip_snapshot_pending = false;
+        }
         self.runtime_state.pending_persisted_completed_batches = 0;
         self.last_frontend_sync_at = Instant::now();
         Ok(())
@@ -620,13 +638,20 @@ where
     async fn process_completed_batches(
         &mut self,
         completed: Vec<crate::core::CompletedBatch>,
-    ) -> Result<usize, RunnerError> {
+    ) -> Result<CompletedIngestStats, RunnerError> {
         if completed.is_empty() {
-            return Ok(0);
+            return Ok(CompletedIngestStats {
+                completed_batches: 0,
+                completed_samples_delta: 0,
+            });
         }
 
         let completed_merge_ingest_started = Instant::now();
         let mut completed_samples_delta = 0_i64;
+        let was_waiting_initial_round_trip = matches!(
+            self.runtime_state.observable_checkpoint_state,
+            ObservableCheckpointState::WaitingForInitialRoundTrip
+        );
         for batch in &completed {
             let batch_samples = batch.batch_size;
             completed_samples_delta += batch_samples as i64;
@@ -689,6 +714,9 @@ where
             .saturating_add(completed.len() as i32);
         if completed_samples_delta > 0 {
             self.runtime_state.observable_checkpoint_state = ObservableCheckpointState::Ready;
+            if was_waiting_initial_round_trip {
+                self.runtime_state.initial_round_trip_snapshot_pending = true;
+            }
         }
         observe_duration_ms(
             &mut self.runtime_state.rolling.completed_merge_ingest_ms,
@@ -696,7 +724,10 @@ where
         );
         self.flush_aggregation(false).await?;
         self.queue.mark_processed(&completed);
-        Ok(completed.len())
+        Ok(CompletedIngestStats {
+            completed_batches: completed.len(),
+            completed_samples_delta,
+        })
     }
 
     async fn produce(
@@ -895,19 +926,26 @@ where
         self.store
             .record_sampler_performance_snapshot(&snapshot)
             .await?;
-        self.last_performance_completed_samples = self.nr_completed_samples;
         self.last_snapshot_at = Instant::now();
         Ok(())
     }
 
-    fn update_completed_samples_per_second(&mut self, elapsed: Duration) {
+    fn update_completed_samples_per_second(
+        &mut self,
+        elapsed: Duration,
+        completed_samples_delta: i64,
+    ) {
         let elapsed_secs = elapsed.as_secs_f64();
         if elapsed_secs > 0.0 {
-            let completed_delta = self
-                .nr_completed_samples
-                .saturating_sub(self.last_performance_completed_samples);
-            self.runtime_state.completed_samples_per_second =
-                (completed_delta as f64 / elapsed_secs).max(0.0);
+            let instantaneous_rate = (completed_samples_delta.max(0) as f64 / elapsed_secs).max(0.0);
+            let previous = self.runtime_state.completed_samples_per_second;
+            if !previous.is_finite() || previous <= 0.0 {
+                self.runtime_state.completed_samples_per_second = instantaneous_rate;
+            } else {
+                self.runtime_state.completed_samples_per_second = previous
+                    * (1.0 - COMPLETED_SAMPLES_PER_SECOND_EWMA_ALPHA)
+                    + instantaneous_rate * COMPLETED_SAMPLES_PER_SECOND_EWMA_ALPHA;
+            }
         }
     }
 }

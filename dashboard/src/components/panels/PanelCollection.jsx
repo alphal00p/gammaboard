@@ -33,7 +33,12 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { formatCompactNumber, formatDateTime, formatScientific } from "../../utils/formatters";
+import {
+  formatCentralValueWithError,
+  formatCompactNumber,
+  formatDateTime,
+  formatScientific,
+} from "../../utils/formatters";
 import { asArray } from "../../utils/collections";
 
 const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
@@ -131,7 +136,6 @@ const buildMultiSeriesData = (seriesList) => {
 
 const lineColors = ["#005f73", "#bb3e03", "#0a9396", "#ae2012", "#ca6702"];
 
-const bandColor = "rgba(10, 147, 150, 0.18)";
 const invalidImageColor = [255, 0, 255];
 
 const isIsoDateTime = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value);
@@ -263,39 +267,44 @@ const HistogramTooltip = ({ active, payload }) => {
 };
 
 const ScalarTimeseriesPanel = ({ title, state }) => {
+  const figureRef = useRef(null);
   const points = asArray(state?.points)
     .slice()
     .sort((a, b) => a.x - b.x);
   if (points.length === 0) return null;
+  const meanWithErrors = points
+    .map((point) => {
+      const y = Number(point?.y);
+      const yMin = Number(point?.y_min);
+      const yMax = Number(point?.y_max);
+      if (!Number.isFinite(y)) return null;
+      if (!Number.isFinite(yMin) || !Number.isFinite(yMax)) return null;
+      const symmetricError = Math.max(Math.abs(y - yMin), Math.abs(yMax - y));
+      if (!Number.isFinite(symmetricError) || symmetricError <= 0) return null;
+      return { ...point, y, y_error: symmetricError };
+    })
+    .filter(Boolean);
   const domain = fitDomain(points.flatMap((point) => [point.y, point.y_min, point.y_max]));
   const xDomain = fitXDomain(points.map((point) => point.x));
-  const hasBand = points.some((point) => Number.isFinite(point.y_min) && Number.isFinite(point.y_max));
+  const hasErrors = meanWithErrors.length > 0;
   return (
     <Card variant="outlined">
       <CardContent>
-        <Typography variant="subtitle1" sx={{ mb: 2 }}>
-          {title}
-        </Typography>
-        <Box sx={{ width: "100%", height: 280 }}>
+        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, mb: 2 }}>
+          <Typography variant="subtitle1">{title}</Typography>
+          <FigureExportActions
+            baseName={state?.panel_id || title || "scalar_timeseries"}
+            payload={{ panel_id: state?.panel_id ?? null, kind: "scalar_timeseries", state }}
+            elementRef={figureRef}
+          />
+        </Box>
+        <Box ref={figureRef} sx={{ width: "100%", height: 280 }}>
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={points} margin={chartMargin}>
               <CartesianGrid stroke={gridColor} vertical={false} />
               <XAxis dataKey="x" type="number" domain={xDomain} tickFormatter={formatAxisValue} tick={axisTickStyle} />
               <YAxis domain={domain} tickFormatter={formatAxisValue} tick={axisTickStyle} width={72} />
               <Tooltip content={<SimpleChartTooltip />} />
-              {hasBand ? (
-                <>
-                  <Area dataKey="y_min" stroke="none" fillOpacity={0} isAnimationActive={false} />
-                  <Area
-                    dataKey="y_max"
-                    stroke="none"
-                    fill={bandColor}
-                    fillOpacity={1}
-                    baseLine={(x) => x?.y_min}
-                    isAnimationActive={false}
-                  />
-                </>
-              ) : null}
               <Line
                 type="monotone"
                 dataKey="y"
@@ -304,6 +313,11 @@ const ScalarTimeseriesPanel = ({ title, state }) => {
                 dot={false}
                 isAnimationActive={false}
               />
+              {hasErrors ? (
+                <Scatter data={meanWithErrors} fill="rgba(0,0,0,0)" isAnimationActive={false}>
+                  <ErrorBar dataKey="y_error" width={5} strokeWidth={1.25} stroke="#7c8a96" />
+                </Scatter>
+              ) : null}
             </ComposedChart>
           </ResponsiveContainer>
         </Box>
@@ -313,6 +327,7 @@ const ScalarTimeseriesPanel = ({ title, state }) => {
 };
 
 const MultiTimeseriesPanel = ({ title, state }) => {
+  const figureRef = useRef(null);
   const series = asArray(state?.series);
   const data = buildMultiSeriesData(series);
   if (data.length === 0) return null;
@@ -327,10 +342,15 @@ const MultiTimeseriesPanel = ({ title, state }) => {
   return (
     <Card variant="outlined">
       <CardContent>
-        <Typography variant="subtitle1" sx={{ mb: 2 }}>
-          {title}
-        </Typography>
-        <Box sx={{ width: "100%", height: 280 }}>
+        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, mb: 2 }}>
+          <Typography variant="subtitle1">{title}</Typography>
+          <FigureExportActions
+            baseName={state?.panel_id || title || "multi_timeseries"}
+            payload={{ panel_id: state?.panel_id ?? null, kind: "multi_timeseries", state }}
+            elementRef={figureRef}
+          />
+        </Box>
+        <Box ref={figureRef} sx={{ width: "100%", height: 280 }}>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={data} margin={chartMargin}>
               <CartesianGrid stroke={gridColor} vertical={false} />
@@ -479,6 +499,80 @@ const downloadTextFile = (filename, contents, mimeType = "text/plain;charset=utf
   URL.revokeObjectURL(url);
 };
 
+const sanitizeFigureFilename = (value, fallback = "figure") => {
+  const text = String(value ?? "").trim();
+  const normalized = text
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return normalized || fallback;
+};
+
+const escapeXml = (value) =>
+  String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+
+const downloadJsonFile = (baseName, payload) => {
+  downloadTextFile(
+    `${sanitizeFigureFilename(baseName)}.json`,
+    `${JSON.stringify(payload, null, 2)}\n`,
+    "application/json;charset=utf-8",
+  );
+};
+
+const downloadSvgFromElement = (baseName, element) => {
+  const svg = element?.querySelector?.("svg");
+  if (!svg) return false;
+  const serializer = new XMLSerializer();
+  const cloned = svg.cloneNode(true);
+  cloned.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  const markup = serializer.serializeToString(cloned);
+  downloadTextFile(`${sanitizeFigureFilename(baseName)}.svg`, markup, "image/svg+xml;charset=utf-8");
+  return true;
+};
+
+const downloadCanvasAsSvg = (baseName, canvas) => {
+  if (!canvas?.toDataURL) return false;
+  const width = Number(canvas.width) || 1;
+  const height = Number(canvas.height) || 1;
+  const pngDataUri = canvas.toDataURL("image/png");
+  const svg = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+    `<image href="${pngDataUri}" x="0" y="0" width="${width}" height="${height}" />`,
+    "</svg>",
+  ].join("");
+  downloadTextFile(`${sanitizeFigureFilename(baseName)}.svg`, svg, "image/svg+xml;charset=utf-8");
+  return true;
+};
+
+const FigureExportActions = ({ baseName, payload, elementRef = null, canvasRef = null, svgBuilder = null }) => {
+  const handleDownloadSvg = () => {
+    if (downloadSvgFromElement(baseName, elementRef?.current)) return;
+    if (downloadCanvasAsSvg(baseName, canvasRef?.current)) return;
+    if (typeof svgBuilder === "function") {
+      const markup = svgBuilder();
+      if (typeof markup === "string" && markup.trim()) {
+        downloadTextFile(`${sanitizeFigureFilename(baseName)}.svg`, markup, "image/svg+xml;charset=utf-8");
+      }
+    }
+  };
+
+  return (
+    <Stack direction="row" spacing={1} alignItems="center">
+      <Button size="small" variant="outlined" onClick={() => downloadJsonFile(baseName, payload)}>
+        JSON
+      </Button>
+      <Button size="small" variant="outlined" onClick={handleDownloadSvg}>
+        SVG
+      </Button>
+    </Stack>
+  );
+};
+
 const buildHistogramHwUBlock = (name, histogram) => {
   const bins = asArray(histogram?.bins);
   const title = histogram?.title ?? name ?? "histogram";
@@ -622,6 +716,7 @@ const buildInvalidCellOverlay = (invalidIndices, width, xCenters, yCenters) => {
 
 const ScalarImageHeatmapPanel = ({
   title,
+  panelId = null,
   width,
   height,
   values,
@@ -630,6 +725,7 @@ const ScalarImageHeatmapPanel = ({
   xRange,
   yRange,
 }) => {
+  const figureRef = useRef(null);
   const z = useMemo(
     () => buildImageRows(values, width, height, invalidIndices),
     [height, invalidIndices, values, width],
@@ -665,10 +761,19 @@ const ScalarImageHeatmapPanel = ({
   return (
     <Card variant="outlined">
       <CardContent>
-        <Typography variant="subtitle1" sx={{ mb: 2 }}>
-          {title}
-        </Typography>
-        <Box sx={{ width: "100%", minHeight: 360 }}>
+        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, mb: 2 }}>
+          <Typography variant="subtitle1">{title}</Typography>
+          <FigureExportActions
+            baseName={panelId || title || "image2d"}
+            payload={{
+              panel_id: panelId,
+              kind: "image2d",
+              state: { width, height, x_range: xRange, y_range: yRange, values, invalid_indices: Array.from(invalidIndices || []) },
+            }}
+            elementRef={figureRef}
+          />
+        </Box>
+        <Box ref={figureRef} sx={{ width: "100%", minHeight: 360 }}>
           <Plot
             data={data}
             layout={{
@@ -704,6 +809,7 @@ const ScalarImageHeatmapPanel = ({
 };
 
 const HistogramPanel = ({ title, state }) => {
+  const figureRef = useRef(null);
   const [scale, setScale] = useState("linear");
   const bins = useMemo(() => buildHistogramData(state?.bins), [state?.bins]);
   const stepData = useMemo(() => buildHistogramRenderData(state?.bins, scale), [scale, state?.bins]);
@@ -721,21 +827,28 @@ const HistogramPanel = ({ title, state }) => {
             {title}
             {state?.name ? `  (${state.name})` : ""}
           </Typography>
-          <FormControl size="small" sx={{ minWidth: 128 }}>
-            <Select
-              value={scale}
-              onChange={(event) => setScale(event.target.value)}
-              sx={{
-                fontSize: "0.875rem",
-                ".MuiSelect-select": { py: 0.75 },
-              }}
-            >
-              <MenuItem value="linear">Linear</MenuItem>
-              <MenuItem value="log">Log</MenuItem>
-            </Select>
-          </FormControl>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <FigureExportActions
+              baseName={state?.panel_id || state?.name || title || "histogram"}
+              payload={{ panel_id: state?.panel_id ?? null, kind: "histogram", state, scale }}
+              elementRef={figureRef}
+            />
+            <FormControl size="small" sx={{ minWidth: 128 }}>
+              <Select
+                value={scale}
+                onChange={(event) => setScale(event.target.value)}
+                sx={{
+                  fontSize: "0.875rem",
+                  ".MuiSelect-select": { py: 0.75 },
+                }}
+              >
+                <MenuItem value="linear">Linear</MenuItem>
+                <MenuItem value="log">Log</MenuItem>
+              </Select>
+            </FormControl>
+          </Stack>
         </Box>
-        <Box sx={{ width: "100%", display: "grid", gap: 2 }}>
+        <Box ref={figureRef} sx={{ width: "100%", display: "grid", gap: 2 }}>
           <Box sx={{ width: "100%", height: 280 }}>
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={stepData} margin={chartMargin}>
@@ -822,6 +935,9 @@ const TablePanel = ({ title, state }) => {
   const columns = asArray(state?.columns);
   const rows = asArray(state?.rows);
   if (columns.length === 0 || rows.length === 0) return null;
+  const columnKeys = columns.map((column) => String(column || "").trim().toLowerCase());
+  const centralValueIndex = columnKeys.findIndex((column) => column === "central value");
+  const errorIndex = columnKeys.findIndex((column) => column === "dy" || column === "error");
   const payload = state?.payload;
   const selectableRows =
     payload?.histograms && typeof payload.histograms === "object" && !Array.isArray(payload.histograms);
@@ -833,6 +949,12 @@ const TablePanel = ({ title, state }) => {
   const handleDownloadHwU = () => {
     const filename = `${state?.panel_id ?? "histogram_bundle"}.HwU`;
     downloadTextFile(filename, buildHistogramBundleHwU(payload));
+  };
+  const renderTableCell = (row, columnIndex) => {
+    if (columnIndex === centralValueIndex && errorIndex >= 0) {
+      return formatCentralValueWithError(row?.[columnIndex], row?.[errorIndex], "n/a");
+    }
+    return renderStructuredValue(row?.[columnIndex]);
   };
   return (
     <Card variant="outlined">
@@ -886,7 +1008,7 @@ const TablePanel = ({ title, state }) => {
                         verticalAlign: "top",
                       }}
                     >
-                      {renderStructuredValue(row?.[columnIndex])}
+                      {renderTableCell(row, columnIndex)}
                     </TableCell>
                   ))}
                 </TableRow>
@@ -995,15 +1117,57 @@ const TickBreakdownPanel = ({ title, state }) => {
     Number.isFinite(totalMs) && totalMs > 0 ? totalMs : segments.reduce((sum, segment) => sum + segment.valueMs, 0);
 
   if (segments.length === 0 || !Number.isFinite(normalizedTotal) || normalizedTotal <= 0) return null;
+  const buildTickBreakdownSvg = () => {
+    const width = 960;
+    const barHeight = 36;
+    const rowHeight = 22;
+    const legendTop = 64;
+    const height = legendTop + segments.length * rowHeight + 8;
+    let offsetX = 0;
+    const bars = segments
+      .map((segment) => {
+        const percent = (segment.valueMs / normalizedTotal) * 100;
+        const segmentWidth = Math.max((width * percent) / 100, 2);
+        const rect = `<rect x="${offsetX}" y="8" width="${segmentWidth}" height="${barHeight}" fill="${escapeXml(segment.color || "#0f766e")}" />`;
+        offsetX += segmentWidth;
+        return rect;
+      })
+      .join("");
+    const legend = segments
+      .map((segment, index) => {
+        const percent = (segment.valueMs / normalizedTotal) * 100;
+        const y = legendTop + index * rowHeight;
+        return [
+          `<rect x="0" y="${y - 10}" width="10" height="10" fill="${escapeXml(segment.color || "#0f766e")}" />`,
+          `<text x="16" y="${y - 1}" font-size="12" font-family="monospace" fill="#334155">${escapeXml(segment.label || segment.key)}</text>`,
+          `<text x="${width}" y="${y - 1}" text-anchor="end" font-size="12" font-family="monospace" fill="#475569">${escapeXml(`${formatScientific(segment.valueMs, 4)} ms (${formatScientific(percent, 3)}%)`)}</text>`,
+        ].join("");
+      })
+      .join("");
+    return [
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+      `<text x="0" y="60" font-size="12" font-family="monospace" fill="#64748b">total ${escapeXml(formatScientific(normalizedTotal, 4))} ms</text>`,
+      bars,
+      legend,
+      "</svg>",
+    ].join("");
+  };
 
   return (
     <Card variant="outlined">
       <CardContent>
         <Box sx={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 2, mb: 2 }}>
           <Typography variant="subtitle1">{title}</Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace" }}>
-            total {formatScientific(normalizedTotal, 4)} ms
-          </Typography>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <FigureExportActions
+              baseName={state?.panel_id || title || "tick_breakdown"}
+              payload={{ panel_id: state?.panel_id ?? null, kind: "tick_breakdown", state }}
+              svgBuilder={buildTickBreakdownSvg}
+            />
+            <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace" }}>
+              total {formatScientific(normalizedTotal, 4)} ms
+            </Typography>
+          </Stack>
         </Box>
         <Box
           sx={{
@@ -1173,6 +1337,7 @@ const SelectPanel = ({ title, descriptor, value, onValueChange }) => {
 };
 
 const Image2dPanel = ({ title, state }) => {
+  const figureRef = useRef(null);
   const canvasRef = useRef(null);
   const width = Number(state?.width) || 0;
   const height = Number(state?.height) || 0;
@@ -1293,6 +1458,7 @@ const Image2dPanel = ({ title, state }) => {
     return (
       <ScalarImageHeatmapPanel
         title={title}
+        panelId={state?.panel_id ?? null}
         width={width}
         height={height}
         values={values}
@@ -1342,10 +1508,17 @@ const Image2dPanel = ({ title, state }) => {
   return (
     <Card variant="outlined">
       <CardContent>
-        <Typography variant="subtitle1" sx={{ mb: 2 }}>
-          {title}
-        </Typography>
+        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, mb: 2 }}>
+          <Typography variant="subtitle1">{title}</Typography>
+          <FigureExportActions
+            baseName={state?.panel_id || title || "image2d"}
+            payload={{ panel_id: state?.panel_id ?? null, kind: "image2d", state }}
+            elementRef={figureRef}
+            canvasRef={canvasRef}
+          />
+        </Box>
         <Box
+          ref={figureRef}
           sx={{
             width: "100%",
             display: "flex",
@@ -1401,13 +1574,13 @@ const PanelRenderer = ({ descriptor, state, value, onValueChange }) => {
       );
     case "scalar_timeseries":
       if (!state) return null;
-      return <ScalarTimeseriesPanel title={descriptor.label} state={state} />;
+      return <ScalarTimeseriesPanel title={descriptor.label} state={{ ...state, panel_id: descriptor.panel_id }} />;
     case "multi_timeseries":
       if (!state) return null;
-      return <MultiTimeseriesPanel title={descriptor.label} state={state} />;
+      return <MultiTimeseriesPanel title={descriptor.label} state={{ ...state, panel_id: descriptor.panel_id }} />;
     case "tick_breakdown":
       if (!state) return null;
-      return <TickBreakdownPanel title={descriptor.label} state={state} />;
+      return <TickBreakdownPanel title={descriptor.label} state={{ ...state, panel_id: descriptor.panel_id }} />;
     case "progress":
       if (!state) return null;
       return <ProgressPanel title={descriptor.label} state={state} />;
@@ -1416,7 +1589,7 @@ const PanelRenderer = ({ descriptor, state, value, onValueChange }) => {
       return <KeyValuePanel title={descriptor.label} state={state} />;
     case "image2d":
       if (!state) return null;
-      return <Image2dPanel title={descriptor.label} state={state} />;
+      return <Image2dPanel title={descriptor.label} state={{ ...state, panel_id: descriptor.panel_id }} />;
     case "table":
       if (!state) return null;
       return (
@@ -1427,7 +1600,7 @@ const PanelRenderer = ({ descriptor, state, value, onValueChange }) => {
       );
     case "histogram":
       if (!state) return null;
-      return <HistogramPanel title={descriptor.label} state={state} />;
+      return <HistogramPanel title={descriptor.label} state={{ ...state, panel_id: descriptor.panel_id }} />;
     case "text":
       if (!state) return null;
       return <TextPanel title={descriptor.label} state={state} />;

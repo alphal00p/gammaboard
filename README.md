@@ -212,7 +212,7 @@ Important:
 - Read-only dashboard endpoints stay open.
 - Steering actions currently require admin login and are backed by a signed session cookie.
 - The dashboard currently supports creating runs from raw TOML, cloning runs from a stored stage snapshot, appending tasks from raw TOML, deleting pending tasks, pausing runs, removing runs, auto-assigning free nodes, assigning and unassigning nodes, requesting node shutdown (single or all), starting new local nodes, and restarting the local database when `allow_db_admin = true`.
-- The create-run and add-task dialogs can also load `.toml` templates from `run_templates_dir` and `task_templates_dir` in the selected server config.
+- The create-run and add-task dialogs can load `.toml` templates from `run_templates_dir` and `task_templates_dir`; admin users can also save edited TOML back as templates, and task templates can be deleted from the dashboard.
 - Node shutdown from the dashboard is guarded by a confirmation dialog.
 - Put `auth.admin_password_hash` in your server config to enable dashboard auth.
 - Put `auth.session_secret` in your server config when auth is enabled.

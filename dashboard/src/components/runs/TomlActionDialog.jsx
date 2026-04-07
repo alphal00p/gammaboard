@@ -21,6 +21,8 @@ const TomlActionDialog = ({
   helperText = null,
   templates = [],
   loadTemplate = null,
+  onSaveTemplate = null,
+  onDeleteTemplate = null,
   busy = false,
   error = null,
   onClose,
@@ -29,6 +31,7 @@ const TomlActionDialog = ({
   const [value, setValue] = useState(initialValue);
   const [selectedTemplate, setSelectedTemplate] = useState("");
   const [templateBusy, setTemplateBusy] = useState(false);
+  const [templateActionBusy, setTemplateActionBusy] = useState(false);
   const [templateError, setTemplateError] = useState(null);
 
   useEffect(() => {
@@ -40,7 +43,7 @@ const TomlActionDialog = ({
   }, [initialValue, open]);
 
   const handleClose = () => {
-    if (busy) return;
+    if (busy || templateActionBusy) return;
     onClose();
   };
 
@@ -69,6 +72,41 @@ const TomlActionDialog = ({
     }
   };
 
+  const handleSaveTemplate = async () => {
+    if (!onSaveTemplate) return;
+    const suggested = selectedTemplate || "new-template.toml";
+    const name = window.prompt("Template file name (.toml)", suggested);
+    if (!name) return;
+    setTemplateError(null);
+    setTemplateActionBusy(true);
+    try {
+      const saved = await onSaveTemplate(name, value);
+      const savedName = String(saved?.name || name).trim();
+      if (savedName) {
+        setSelectedTemplate(savedName);
+      }
+    } catch (err) {
+      setTemplateError(err?.message || "Failed to save template.");
+    } finally {
+      setTemplateActionBusy(false);
+    }
+  };
+
+  const handleDeleteTemplate = async () => {
+    if (!onDeleteTemplate || !selectedTemplate) return;
+    if (!window.confirm(`Delete template "${selectedTemplate}"?`)) return;
+    setTemplateError(null);
+    setTemplateActionBusy(true);
+    try {
+      await onDeleteTemplate(selectedTemplate);
+      setSelectedTemplate("");
+    } catch (err) {
+      setTemplateError(err?.message || "Failed to delete template.");
+    } finally {
+      setTemplateActionBusy(false);
+    }
+  };
+
   return (
     <Dialog open={open} onClose={handleClose} fullWidth maxWidth="md">
       <form onSubmit={handleSubmit}>
@@ -81,14 +119,38 @@ const TomlActionDialog = ({
               </Typography>
             ) : null}
             {templates.length > 0 ? (
-              <TextField select fullWidth label="Template" value={selectedTemplate} onChange={handleTemplateChange}>
-                <MenuItem value="">Custom</MenuItem>
-                {templates.map((template) => (
-                  <MenuItem key={template} value={template}>
-                    {template}
-                  </MenuItem>
-                ))}
-              </TextField>
+              <Stack direction={{ xs: "column", md: "row" }} spacing={1} alignItems={{ md: "center" }}>
+                <TextField
+                  select
+                  fullWidth
+                  label="Template"
+                  value={selectedTemplate}
+                  onChange={handleTemplateChange}
+                  disabled={templateActionBusy}
+                >
+                  <MenuItem value="">Custom</MenuItem>
+                  {templates.map((template) => (
+                    <MenuItem key={template} value={template}>
+                      {template}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                {onSaveTemplate ? (
+                  <Button variant="outlined" onClick={handleSaveTemplate} disabled={templateActionBusy || templateBusy}>
+                    Save as Template
+                  </Button>
+                ) : null}
+                {onDeleteTemplate ? (
+                  <Button
+                    variant="outlined"
+                    color="error"
+                    onClick={handleDeleteTemplate}
+                    disabled={templateActionBusy || templateBusy || !selectedTemplate}
+                  >
+                    Delete Template
+                  </Button>
+                ) : null}
+              </Stack>
             ) : null}
             <TextField
               autoFocus
@@ -98,7 +160,7 @@ const TomlActionDialog = ({
               label={label}
               value={value}
               onChange={(event) => setValue(event.target.value)}
-              disabled={templateBusy}
+              disabled={templateBusy || templateActionBusy}
               InputLabelProps={{ shrink: true }}
             />
             {templateError ? <Alert severity="error">{templateError}</Alert> : null}
@@ -106,10 +168,10 @@ const TomlActionDialog = ({
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleClose} disabled={busy}>
+          <Button onClick={handleClose} disabled={busy || templateActionBusy}>
             Cancel
           </Button>
-          <Button type="submit" variant="contained" disabled={busy || templateBusy || !value.trim()}>
+          <Button type="submit" variant="contained" disabled={busy || templateBusy || templateActionBusy || !value.trim()}>
             {submitLabel}
           </Button>
         </DialogActions>

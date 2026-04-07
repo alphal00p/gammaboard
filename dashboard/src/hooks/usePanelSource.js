@@ -15,19 +15,36 @@ const asObject = (value) => (value && typeof value === "object" && !Array.isArra
 
 const panelIdOf = (panel) => panel?.panel_id ?? null;
 
+const mergePlotPoints = (previousPoints, incomingPoints) => {
+  const byX = new Map();
+  for (const point of asArray(previousPoints)) {
+    const x = Number(point?.x);
+    if (!Number.isFinite(x)) continue;
+    byX.set(x, point);
+  }
+  for (const point of asArray(incomingPoints)) {
+    const x = Number(point?.x);
+    if (!Number.isFinite(x)) continue;
+    byX.set(x, point);
+  }
+  return Array.from(byX.entries())
+    .sort((left, right) => left[0] - right[0])
+    .map(([, point]) => point);
+};
+
 const mergePanelState = (previous, incoming) => {
   if (!previous) return incoming;
   if (previous.kind === "scalar_timeseries" && incoming.kind === "scalar_timeseries") {
     return {
       ...previous,
-      points: [...asArray(previous.points), ...asArray(incoming.points)],
+      points: mergePlotPoints(previous.points, incoming.points),
     };
   }
   if (previous.kind === "multi_timeseries" && incoming.kind === "multi_timeseries") {
     const seriesMap = new Map(asArray(previous.series).map((series) => [series.id, { ...series }]));
     for (const series of asArray(incoming.series)) {
       const existing = seriesMap.get(series.id) || { ...series, points: [] };
-      existing.points = [...asArray(existing.points), ...asArray(series.points)];
+      existing.points = mergePlotPoints(existing.points, series.points);
       seriesMap.set(series.id, existing);
     }
     return {

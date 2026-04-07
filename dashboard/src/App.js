@@ -1,5 +1,5 @@
 import { Alert, Box, Button, Chip, Container, Snackbar, Stack, Tab, Tabs, TextField, Typography } from "@mui/material";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import gammaboardLogo from "./assets/gammalooplogo.svg";
 import { AuthProvider, useAuth } from "./auth/AuthProvider";
 import EvaluatorPanel from "./components/EvaluatorPanel";
@@ -26,9 +26,11 @@ import {
   createRun,
   deleteRun,
   deleteRunTask,
+  deleteTemplateFile,
   fetchTemplateFile,
   fetchTemplateList,
   pauseRun,
+  saveTemplateFile,
 } from "./services/api";
 import { asArray } from "./utils/collections";
 import { asTaskList, getCurrentTask } from "./utils/tasks";
@@ -95,6 +97,15 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
   const [taskTemplates, setTaskTemplates] = useState([]);
   const [maxEvaluators, setMaxEvaluators] = useState("");
   const { authenticated } = useAuth();
+
+  const reloadTaskTemplates = useCallback(async () => {
+    try {
+      const items = await fetchTemplateList("tasks");
+      setTaskTemplates(items);
+    } catch (err) {
+      console.error("Failed to fetch task templates:", err);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -227,14 +238,6 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
           </Stack>
         </Box>
       ) : null}
-      <RunInfo runId={selectedRun} />
-      <TaskOutputPanel
-        key={`progress-${selectedTask?.id ?? "no-task"}`}
-        runId={selectedRun}
-        task={selectedTask}
-        includePanelIds={["sample_progress"]}
-        title="Task Progress"
-      />
       <TaskQueuePanel
         tasks={taskList}
         selectedTaskId={selectedTask?.id ?? null}
@@ -297,11 +300,19 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
       />
       <SelectedTaskTomlPanel task={selectedTask} />
       <TaskOutputPanel
+        key={`progress-${selectedTask?.id ?? "no-task"}`}
+        runId={selectedRun}
+        task={selectedTask}
+        includePanelIds={["sample_progress"]}
+        title="Task Progress"
+      />
+      <TaskOutputPanel
         key={selectedTask?.id ?? "no-task"}
         runId={selectedRun}
         task={selectedTask}
         excludePanelIds={["sample_progress"]}
       />
+      <RunInfo runId={selectedRun} />
       <EvaluatorPanel run={currentRun} panelResponse={evaluator} />
       <SamplerAggregatorPanel run={currentRun} panelResponse={sampler} />
       <CloneRunDialog
@@ -347,6 +358,17 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
           const response = await fetchTemplateFile("tasks", name);
           return response?.toml || "";
         }}
+        onSaveTemplate={async (name, toml) => {
+          const response = await saveTemplateFile("tasks", { name, toml });
+          await reloadTaskTemplates();
+          setSnackbar({ message: `Saved task template "${response?.name || name}".`, severity: "success" });
+          return response;
+        }}
+        onDeleteTemplate={async (name) => {
+          await deleteTemplateFile("tasks", name);
+          await reloadTaskTemplates();
+          setSnackbar({ message: `Deleted task template "${name}".`, severity: "success" });
+        }}
         busy={addTasksBusy}
         error={addTasksError}
         onClose={closeAddTasks}
@@ -384,6 +406,15 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, onRunCr
   const [createRunError, setCreateRunError] = useState(null);
   const [snackbar, setSnackbar] = useState(null);
   const [runTemplates, setRunTemplates] = useState([]);
+
+  const reloadRunTemplates = useCallback(async () => {
+    try {
+      const items = await fetchTemplateList("runs");
+      setRunTemplates(items);
+    } catch (err) {
+      console.error("Failed to fetch run templates:", err);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -447,6 +478,12 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, onRunCr
         loadTemplate={async (name) => {
           const response = await fetchTemplateFile("runs", name);
           return response?.toml || "";
+        }}
+        onSaveTemplate={async (name, toml) => {
+          const response = await saveTemplateFile("runs", { name, toml });
+          await reloadRunTemplates();
+          setSnackbar({ message: `Saved run template "${response?.name || name}".`, severity: "success" });
+          return response;
         }}
         busy={createRunBusy}
         error={createRunError}

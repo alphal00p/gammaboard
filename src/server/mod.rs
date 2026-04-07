@@ -248,6 +248,12 @@ struct AddTasksRequest {
     toml: String,
 }
 
+#[derive(Deserialize)]
+struct TemplateSaveRequest {
+    name: String,
+    toml: String,
+}
+
 #[derive(Serialize)]
 struct TemplateListResponse {
     items: Vec<String>,
@@ -323,6 +329,10 @@ fn build_app(state: AppState) -> Router {
         .route("/nodes/:id/stop", post(stop_node))
         .route("/nodes/stop-all", post(stop_all_nodes))
         .route("/nodes/auto-run", post(auto_run_nodes))
+        .route("/templates/runs", post(save_run_template))
+        .route("/templates/tasks", post(save_task_template))
+        .route("/templates/runs/:name", delete(delete_run_template))
+        .route("/templates/tasks/:name", delete(delete_task_template))
         .route("/admin/db/restart", post(restart_db))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -513,6 +523,44 @@ async fn get_task_template(
         name: template.name,
         toml: template.toml,
     })
+}
+
+async fn save_run_template(
+    State(state): State<AppState>,
+    AxumJson(payload): AxumJson<TemplateSaveRequest>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    let template = template_api::save_template(&state.run_templates_dir, &payload.name, &payload.toml)?;
+    json_response(TemplateFileResponse {
+        name: template.name,
+        toml: template.toml,
+    })
+}
+
+async fn save_task_template(
+    State(state): State<AppState>,
+    AxumJson(payload): AxumJson<TemplateSaveRequest>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    let template = template_api::save_template(&state.task_templates_dir, &payload.name, &payload.toml)?;
+    json_response(TemplateFileResponse {
+        name: template.name,
+        toml: template.toml,
+    })
+}
+
+async fn delete_run_template(
+    State(state): State<AppState>,
+    AxumPath(name): AxumPath<String>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    template_api::delete_template(&state.run_templates_dir, &name)?;
+    json_response(serde_json::json!({ "deleted": true, "name": name }))
+}
+
+async fn delete_task_template(
+    State(state): State<AppState>,
+    AxumPath(name): AxumPath<String>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    template_api::delete_template(&state.task_templates_dir, &name)?;
+    json_response(serde_json::json!({ "deleted": true, "name": name }))
 }
 
 async fn get_run_evaluator_config(
