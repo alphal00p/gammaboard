@@ -8,7 +8,7 @@ use crate::stores::{EvaluatorPerformanceHistoryEntry, SamplerPerformanceHistoryE
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 
-const COMPLETED_THROUGHPUT_WINDOW_SECS: f64 = 10.0;
+const COMPLETED_THROUGHPUT_WINDOW_MS: f64 = 5_000.0;
 
 pub fn build_evaluator_performance_response(
     scope_id: Option<String>,
@@ -605,38 +605,39 @@ fn sampler_completed_throughput_panel(
         return None;
     }
     samples.sort_by(|left, right| left.0.total_cmp(&right.0));
-    let points = throughput_points_from_cumulative(&samples, COMPLETED_THROUGHPUT_WINDOW_SECS);
+    let points = throughput_points_from_cumulative(&samples, COMPLETED_THROUGHPUT_WINDOW_MS);
     Some(scalar_timeseries_panel(
         "sampler_completed_samples_per_second",
         points,
     ))
 }
 
-fn throughput_points_from_cumulative(samples: &[(f64, i64)], window_secs: f64) -> Vec<PlotPoint> {
+fn throughput_points_from_cumulative(samples: &[(f64, i64)], window_ms: f64) -> Vec<PlotPoint> {
     if samples.is_empty() {
         return Vec::new();
     }
     let mut baseline_idx = 0usize;
     let mut points = Vec::with_capacity(samples.len());
-    for (index, (x, cumulative)) in samples.iter().copied().enumerate() {
-        let target_x = x - window_secs;
-        while baseline_idx + 1 < index && samples[baseline_idx + 1].0 <= target_x {
+    for (index, (x_ms, cumulative_samples)) in samples.iter().copied().enumerate() {
+        let target_x_ms = x_ms - window_ms;
+        while baseline_idx + 1 < index && samples[baseline_idx + 1].0 <= target_x_ms {
             baseline_idx += 1;
         }
-        let (baseline_x, baseline_cumulative) = if target_x <= samples[0].0 {
+        let (baseline_x_ms, baseline_cumulative_samples) = if target_x_ms <= samples[0].0 {
             samples[0]
         } else {
             samples[baseline_idx]
         };
-        let elapsed = x - baseline_x;
-        let delta = cumulative.saturating_sub(baseline_cumulative);
-        let y = if elapsed > 0.0 {
-            (delta as f64 / elapsed).max(0.0)
+        let elapsed_ms = x_ms - baseline_x_ms;
+        let delta_samples = cumulative_samples.saturating_sub(baseline_cumulative_samples);
+        let elapsed_secs = elapsed_ms / 1000.0;
+        let y = if elapsed_secs > 0.0 {
+            (delta_samples as f64 / elapsed_secs).max(0.0)
         } else {
             0.0
         };
         points.push(PlotPoint {
-            x,
+            x: x_ms,
             y,
             y_min: None,
             y_max: None,

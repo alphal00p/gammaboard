@@ -19,7 +19,7 @@ import {
   Typography,
 } from "@mui/material";
 import ReactECharts from "echarts-for-react";
-import { echarts } from "../../lib/echarts";
+import "../../lib/echarts";
 import {
   formatCentralValueWithError,
   formatCompactNumber,
@@ -111,6 +111,8 @@ const fitHistogramXDomain = (bins) => {
 
 const FULL_ZOOM = Object.freeze({ start: 0, end: 100 });
 const inferXAxisLabel = (panelId) => (String(panelId || "").includes("_history") ? "Nr samples" : null);
+const inferNumericXAxisLabel = (panelId) => inferXAxisLabel(panelId) || "x";
+const isObject = (value) => value && typeof value === "object" && !Array.isArray(value);
 
 const buildMultiSeriesData = (seriesList) => {
   const rows = new Map();
@@ -187,6 +189,17 @@ const normalizeZoomRange = (candidate) => {
   return { start: normalizedStart, end: normalizedEnd };
 };
 
+const readZoomFromPanelValue = (value, fallback = FULL_ZOOM) =>
+  normalizeZoomRange(isObject(value) ? value.zoom : null) || fallback;
+const readTailPinnedFromPanelValue = (value, fallback = true) =>
+  typeof value?.tailPinned === "boolean" ? value.tailPinned : fallback;
+const writeZoomPanelValue = (current, zoom, tailPinned = null) => {
+  const next = isObject(current) ? { ...current } : {};
+  next.zoom = normalizeZoomRange(zoom) || FULL_ZOOM;
+  if (tailPinned != null) next.tailPinned = Boolean(tailPinned);
+  return next;
+};
+
 const zoomRangeChanged = (left, right) =>
   Math.abs((left?.start ?? 0) - (right?.start ?? 0)) > 0.01 ||
   Math.abs((left?.end ?? 100) - (right?.end ?? 100)) > 0.01;
@@ -207,6 +220,28 @@ const visibleXRangeFromZoom = (xDomain, zoomRange) => {
     min: xMin + (span * normalizedZoom.start) / 100,
     max: xMin + (span * normalizedZoom.end) / 100,
   };
+};
+
+const visibleXRangeFromZoomWithScale = (xDomain, zoomRange, scale = "linear") => {
+  const normalizedZoom = normalizeZoomRange(zoomRange);
+  const xMin = Number(xDomain?.[0]);
+  const xMax = Number(xDomain?.[1]);
+  if (!normalizedZoom || !Number.isFinite(xMin) || !Number.isFinite(xMax)) return null;
+  if (scale === "log") {
+    const minPositive = Math.max(xMin, Number.EPSILON);
+    const maxPositive = Math.max(xMax, minPositive * (1 + Number.EPSILON));
+    const logMin = Math.log(minPositive);
+    const logMax = Math.log(maxPositive);
+    const logSpan = logMax - logMin;
+    if (!Number.isFinite(logSpan) || logSpan <= 0) return null;
+    const visibleLogMin = logMin + (logSpan * normalizedZoom.start) / 100;
+    const visibleLogMax = logMin + (logSpan * normalizedZoom.end) / 100;
+    return {
+      min: Math.exp(visibleLogMin),
+      max: Math.exp(visibleLogMax),
+    };
+  }
+  return visibleXRangeFromZoom(xDomain, normalizedZoom);
 };
 
 const buildDataZoom = (zoomRange = FULL_ZOOM, includeSlider = true) => {
@@ -288,11 +323,9 @@ const buildErrorBarSeries = ({ name = "error", data, color = "#7c8a96", capPx = 
   },
 });
 
-const ScalarTimeseriesPanel = ({ title, state }) => {
+const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange = null }) => {
   const figureRef = useRef(null);
   const echartsRef = useRef(null);
-  const [zoomRange, setZoomRange] = useState(FULL_ZOOM);
-  const [tailPinned, setTailPinned] = useState(true);
   const points = asArray(state?.points)
     .slice()
     .sort((a, b) => a.x - b.x);
@@ -310,6 +343,10 @@ const ScalarTimeseriesPanel = ({ title, state }) => {
     .filter(Boolean);
   const domain = fitDomain(points.flatMap((point) => [point.y, point.y_min, point.y_max]));
   const xDomain = fitXDomain(points.map((point) => point.x));
+  const panelId = state?.panel_id || null;
+  const zoomRange = readZoomFromPanelValue(value, FULL_ZOOM);
+  const isHistoryPanel = useMemo(() => String(panelId || "").includes("_history"), [panelId]);
+  const tailPinned = readTailPinnedFromPanelValue(value, isHistoryPanel);
   const visibleXRange = useMemo(() => visibleXRangeFromZoom(xDomain, zoomRange), [xDomain, zoomRange]);
   const visibleDomain = useMemo(() => {
     if (!visibleXRange) return domain;
@@ -322,7 +359,6 @@ const ScalarTimeseriesPanel = ({ title, state }) => {
     const fitted = fitDomain(inRangeValues);
     return inRangeValues.length > 0 ? fitted : domain;
   }, [domain, points, visibleXRange]);
-  const isHistoryPanel = useMemo(() => String(state?.panel_id || "").includes("_history"), [state?.panel_id]);
   const bandSegments = useMemo(() => {
     const segments = [];
     for (let index = 1; index < points.length; index += 1) {
@@ -351,24 +387,23 @@ const ScalarTimeseriesPanel = ({ title, state }) => {
     return segments;
   }, [points]);
   useEffect(() => {
-    if (!tailPinned) return;
-    setZoomRange((current) => {
-      const normalized = normalizeZoomRange(current) || FULL_ZOOM;
-      const width = Math.max(0, normalized.end - normalized.start);
-      const next = { start: Math.max(0, 100 - width), end: 100 };
-      return zoomRangeChanged(normalized, next) ? next : normalized;
-    });
-  }, [points.length, tailPinned]);
+    if (!isHistoryPanel || !tailPinned || typeof onValueChange !== "function" || !panelId) return;
+    const normalized = normalizeZoomRange(zoomRange) || FULL_ZOOM;
+    const width = Math.max(0, normalized.end - normalized.start);
+    const next = { start: Math.max(0, 100 - width), end: 100 };
+    if (!zoomRangeChanged(normalized, next)) return;
+    onValueChange(panelId, writeZoomPanelValue(value, next, true), false);
+  }, [isHistoryPanel, onValueChange, panelId, points.length, tailPinned, value, zoomRange]);
   const onDataZoom = useMemo(
     () => ({
       datazoom: (event) => {
         const next = readDataZoomRange(event);
-        if (!next) return;
-        setZoomRange((current) => (zoomRangeChanged(current, next) ? next : current));
-        setTailPinned(next.end >= 99.5);
+        if (!next || typeof onValueChange !== "function" || !panelId) return;
+        if (!zoomRangeChanged(zoomRange, next) && (!isHistoryPanel || tailPinned === (next.end >= 99.5))) return;
+        onValueChange(panelId, writeZoomPanelValue(value, next, isHistoryPanel ? next.end >= 99.5 : null), false);
       },
     }),
-    [],
+    [isHistoryPanel, onValueChange, panelId, tailPinned, value, zoomRange],
   );
   const option = useMemo(
     () => ({
@@ -378,7 +413,7 @@ const ScalarTimeseriesPanel = ({ title, state }) => {
         type: "value",
         min: xDomain[0],
         max: xDomain[1],
-        name: inferXAxisLabel(state?.panel_id),
+        name: inferNumericXAxisLabel(panelId),
         axisLabel: baseAxisLabel,
         splitLine: { show: false },
         nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
@@ -460,6 +495,11 @@ const ScalarTimeseriesPanel = ({ title, state }) => {
             payload={{ panel_id: state?.panel_id ?? null, kind: "scalar_timeseries", state }}
             elementRef={figureRef}
             echartsRef={echartsRef}
+            onResetView={
+              panelId && typeof onValueChange === "function"
+                ? () => onValueChange(panelId, writeZoomPanelValue(value, FULL_ZOOM, isHistoryPanel ? true : null), false)
+                : null
+            }
           />
         </Box>
         <Box ref={figureRef} sx={{ width: "100%", height: 280 }}>
@@ -478,7 +518,7 @@ const ScalarTimeseriesPanel = ({ title, state }) => {
   );
 };
 
-const MultiTimeseriesPanel = ({ title, state }) => {
+const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange = null }) => {
   const figureRef = useRef(null);
   const echartsRef = useRef(null);
   const series = asArray(state?.series);
@@ -491,6 +531,19 @@ const MultiTimeseriesPanel = ({ title, state }) => {
     ),
   );
   const xDomain = fitXDomain(data.map((row) => row.x));
+  const panelId = state?.panel_id || null;
+  const zoomRange = readZoomFromPanelValue(value, FULL_ZOOM);
+  const onDataZoom = useMemo(
+    () => ({
+      datazoom: (event) => {
+        const next = readDataZoomRange(event);
+        if (!next || typeof onValueChange !== "function" || !panelId) return;
+        if (!zoomRangeChanged(zoomRange, next)) return;
+        onValueChange(panelId, writeZoomPanelValue(value, next), false);
+      },
+    }),
+    [onValueChange, panelId, value, zoomRange],
+  );
   const option = useMemo(
     () => ({
       animation: false,
@@ -499,7 +552,7 @@ const MultiTimeseriesPanel = ({ title, state }) => {
         type: "value",
         min: xDomain[0],
         max: xDomain[1],
-        name: inferXAxisLabel(state?.panel_id),
+        name: inferNumericXAxisLabel(panelId),
         axisLabel: baseAxisLabel,
         splitLine: { show: false },
         nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
@@ -515,7 +568,7 @@ const MultiTimeseriesPanel = ({ title, state }) => {
         trigger: "axis",
         valueFormatter: (value) => (Number.isFinite(Number(value)) ? formatScientific(Number(value), 6) : "n/a"),
       },
-      dataZoom: buildDataZoom(),
+      dataZoom: buildDataZoom(zoomRange),
       series: series.map((item, index) => ({
         type: "line",
         name: item.label,
@@ -528,7 +581,7 @@ const MultiTimeseriesPanel = ({ title, state }) => {
         },
       })),
     }),
-    [domain, series, xDomain],
+    [domain, panelId, series, xDomain, zoomRange],
   );
   if (data.length === 0) return null;
   return (
@@ -541,13 +594,19 @@ const MultiTimeseriesPanel = ({ title, state }) => {
             payload={{ panel_id: state?.panel_id ?? null, kind: "multi_timeseries", state }}
             elementRef={figureRef}
             echartsRef={echartsRef}
+            onResetView={
+              panelId && typeof onValueChange === "function"
+                ? () => onValueChange(panelId, writeZoomPanelValue(value, FULL_ZOOM), false)
+                : null
+            }
           />
         </Box>
         <Box ref={figureRef} sx={{ width: "100%", height: 280 }}>
           <ReactECharts
             ref={echartsRef}
             option={option}
-            notMerge
+            notMerge={false}
+            onEvents={onDataZoom}
             lazyUpdate
             opts={{ renderer: "canvas" }}
             style={{ width: "100%", height: "100%" }}
@@ -761,14 +820,13 @@ const FigureExportActions = ({
   baseName,
   payload,
   elementRef = null,
-  canvasRef = null,
   echartsRef = null,
   svgBuilder = null,
+  onResetView = null,
 }) => {
   const handleDownloadSvg = () => {
     if (downloadSvgFromEcharts(baseName, echartsRef)) return;
     if (downloadSvgFromElement(baseName, elementRef?.current)) return;
-    if (downloadCanvasAsSvg(baseName, canvasRef?.current)) return;
     if (downloadCanvasCollectionAsSvg(baseName, elementRef?.current?.querySelectorAll?.("canvas"))) return;
     if (downloadCanvasAsSvg(baseName, elementRef?.current?.querySelector?.("canvas"))) return;
     if (typeof svgBuilder === "function") {
@@ -781,6 +839,11 @@ const FigureExportActions = ({
 
   return (
     <Stack direction="row" spacing={1} alignItems="center">
+      {typeof onResetView === "function" ? (
+        <Button size="small" variant="outlined" onClick={onResetView}>
+          Reset
+        </Button>
+      ) : null}
       <Button size="small" variant="outlined" onClick={() => downloadJsonFile(baseName, payload)}>
         JSON
       </Button>
@@ -906,14 +969,15 @@ const buildScalarHeatmapScale = (values, normalizationMode) => {
   return { zmin, zmax };
 };
 
-const buildInvalidCellOverlay = (invalidIndices, width, xCenters, yCenters) => {
+const buildInvalidCellOverlay = (invalidIndices, width, height) => {
   const points = Array.from(invalidIndices || [])
     .map((index) => {
       const row = Math.floor(index / width);
       const col = index % width;
-      return [xCenters[col], yCenters[row]];
+      if (row < 0 || row >= height || col < 0 || col >= width) return null;
+      return [col, row];
     })
-    .filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]));
+    .filter(Boolean);
 
   return points;
 };
@@ -928,54 +992,85 @@ const ScalarImageHeatmapPanel = ({
   normalizationMode,
   xRange,
   yRange,
+  value = undefined,
+  onValueChange = null,
 }) => {
   const figureRef = useRef(null);
   const echartsRef = useRef(null);
+  const [panelWidth, setPanelWidth] = useState(0);
   const xCenters = useMemo(() => buildCellCenters(xRange, width), [width, xRange]);
   const yCenters = useMemo(() => buildCellCenters(yRange, height), [height, yRange]);
-  const { zmin, zmax } = useMemo(() => buildScalarHeatmapScale(values, normalizationMode), [normalizationMode, values]);
+  const totalCells = Math.max(0, width * height);
+  const boundedValues = useMemo(() => values.slice(0, totalCells), [totalCells, values]);
+  const { zmin, zmax } = useMemo(
+    () => buildScalarHeatmapScale(boundedValues, normalizationMode),
+    [boundedValues, normalizationMode],
+  );
   const invalidOverlay = useMemo(
-    () => buildInvalidCellOverlay(invalidIndices, width, xCenters, yCenters),
-    [invalidIndices, width, xCenters, yCenters],
+    () => buildInvalidCellOverlay(invalidIndices, width, height),
+    [height, invalidIndices, width],
   );
   const heatmapData = useMemo(() => {
     const points = [];
     for (let row = 0; row < height; row += 1) {
       for (let col = 0; col < width; col += 1) {
         const index = row * width + col;
+        if (index >= boundedValues.length) continue;
         if (invalidIndices?.has(index)) continue;
-        const value = Number(values[index]);
+        const value = Number(boundedValues[index]);
         if (!Number.isFinite(value)) continue;
-        points.push([xCenters[col], yCenters[row], value]);
+        points.push([col, row, value]);
       }
     }
     return points;
-  }, [height, invalidIndices, values, width, xCenters, yCenters]);
+  }, [boundedValues, height, invalidIndices, width]);
 
-  const [xMinRaw, xMaxRaw] = asArray(xRange);
-  const [yMinRaw, yMaxRaw] = asArray(yRange);
-  const xMin = Number.isFinite(Number(xMinRaw)) ? Number(xMinRaw) : 0;
-  const xMax = Number.isFinite(Number(xMaxRaw)) ? Number(xMaxRaw) : width;
-  const yMin = Number.isFinite(Number(yMinRaw)) ? Number(yMinRaw) : 0;
-  const yMax = Number.isFinite(Number(yMaxRaw)) ? Number(yMaxRaw) : height;
+  const heatmapMargins = useMemo(() => ({ left: 56, right: 154, top: 16, bottom: 44 }), []);
+  const zoomRange = readZoomFromPanelValue(value, FULL_ZOOM);
+  const chartHeight = useMemo(() => {
+    if (width <= 0 || height <= 0 || panelWidth <= 0) return 360;
+    const innerWidth = Math.max(1, panelWidth - heatmapMargins.left - heatmapMargins.right);
+    const innerHeight = (innerWidth * height) / width;
+    return Math.max(220, Math.round(innerHeight + heatmapMargins.top + heatmapMargins.bottom));
+  }, [heatmapMargins.bottom, heatmapMargins.left, heatmapMargins.right, heatmapMargins.top, height, panelWidth, width]);
 
   const option = useMemo(
     () => ({
       animation: false,
-      grid: { left: 12, right: 108, top: 8, bottom: 28 },
+      grid: heatmapMargins,
       xAxis: {
-        type: "value",
-        min: xMin,
-        max: xMax,
-        show: false,
-        scale: true,
+        type: "category",
+        data: Array.from({ length: width }, (_, index) => index),
+        name: "x",
+        axisLine: { show: true, lineStyle: { color: "#94a3b8" } },
+        axisTick: { show: true },
+        axisLabel: {
+          color: "#64748b",
+          fontSize: 11,
+          formatter: (value) => {
+            const index = Number(value);
+            const x = Number.isFinite(index) ? xCenters[Math.max(0, Math.min(width - 1, index))] : Number.NaN;
+            return Number.isFinite(x) ? formatScientific(x, 2) : "";
+          },
+          interval: Math.max(0, Math.ceil(width / 12) - 1),
+        },
       },
       yAxis: {
-        type: "value",
-        min: yMin,
-        max: yMax,
-        show: false,
-        scale: true,
+        type: "category",
+        data: Array.from({ length: height }, (_, index) => index),
+        name: "y",
+        axisLine: { show: true, lineStyle: { color: "#94a3b8" } },
+        axisTick: { show: true },
+        axisLabel: {
+          color: "#64748b",
+          fontSize: 11,
+          formatter: (value) => {
+            const index = Number(value);
+            const y = Number.isFinite(index) ? yCenters[Math.max(0, Math.min(height - 1, index))] : Number.NaN;
+            return Number.isFinite(y) ? formatScientific(y, 2) : "";
+          },
+          interval: Math.max(0, Math.ceil(height / 12) - 1),
+        },
         inverse: true,
       },
       tooltip: {
@@ -983,7 +1078,9 @@ const ScalarImageHeatmapPanel = ({
         formatter: (params) => {
           if (params?.seriesName === "invalid") return "invalid value";
           const data = Array.isArray(params?.data) ? params.data : [];
-          const [x, y, value] = data;
+          const [col, row, value] = data;
+          const x = Number.isFinite(Number(col)) ? xCenters[Math.max(0, Math.min(width - 1, Number(col)))] : Number.NaN;
+          const y = Number.isFinite(Number(row)) ? yCenters[Math.max(0, Math.min(height - 1, Number(row)))] : Number.NaN;
           return [
             `x: ${formatScientific(Number(x), 4)}`,
             `y: ${formatScientific(Number(y), 4)}`,
@@ -992,24 +1089,19 @@ const ScalarImageHeatmapPanel = ({
         },
       },
       visualMap: {
+        show: true,
         min: zmin,
         max: zmax,
+        dimension: 2,
         orient: "vertical",
-        right: 44,
+        right: 20,
         top: "middle",
+        itemWidth: 22,
+        itemHeight: 220,
         calculable: false,
         text: ["Value", ""],
         textStyle: { color: "#64748b", fontSize: 12 },
         inRange: { color: scalarHeatmapColors },
-      },
-      toolbox: {
-        right: 4,
-        top: 4,
-        itemSize: 14,
-        feature: {
-          dataZoom: {},
-          restore: {},
-        },
       },
       dataZoom: [
         {
@@ -1018,6 +1110,8 @@ const ScalarImageHeatmapPanel = ({
           yAxisIndex: [0],
           filterMode: "none",
           throttle: 50,
+          start: zoomRange.start,
+          end: zoomRange.end,
           zoomOnMouseWheel: true,
           moveOnMouseMove: true,
           moveOnMouseWheel: true,
@@ -1025,19 +1119,13 @@ const ScalarImageHeatmapPanel = ({
         {
           type: "slider",
           xAxisIndex: [0],
-          filterMode: "none",
-          height: 14,
-          bottom: 4,
-        },
-        {
-          type: "slider",
           yAxisIndex: [0],
           filterMode: "none",
-          orient: "vertical",
-          width: 14,
-          right: 4,
-          top: 40,
-          bottom: 28,
+          start: zoomRange.start,
+          end: zoomRange.end,
+          height: 12,
+          bottom: 4,
+          showDetail: false,
         },
       ],
       series: [
@@ -1058,9 +1146,52 @@ const ScalarImageHeatmapPanel = ({
         },
       ],
     }),
-    [heatmapData, invalidOverlay, xMax, xMin, yMax, yMin, zmax, zmin],
+    [
+      heatmapData,
+      heatmapMargins,
+      height,
+      invalidOverlay,
+      width,
+      xCenters,
+      zoomRange.end,
+      zoomRange.start,
+      yCenters,
+      zmax,
+      zmin,
+    ],
   );
-
+  const onDataZoom = useMemo(
+    () => ({
+      datazoom: (event) => {
+        if (typeof onValueChange !== "function" || !panelId) return;
+        const next = readDataZoomRange(event) || zoomRange;
+        if (!zoomRangeChanged(zoomRange, next)) return;
+        onValueChange(panelId, writeZoomPanelValue(value, next), false);
+      },
+    }),
+    [onValueChange, panelId, value, zoomRange],
+  );
+  useEffect(() => {
+    const element = figureRef.current;
+    if (!element || typeof ResizeObserver === "undefined") return undefined;
+    const updateWidth = () => {
+      const measured = Math.max(0, Math.floor(element.getBoundingClientRect().width));
+      setPanelWidth((current) => (current !== measured ? measured : current));
+    };
+    updateWidth();
+    const rafId = requestAnimationFrame(updateWidth);
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const nextWidth = Math.max(0, Math.floor(entry.contentRect.width));
+      setPanelWidth((current) => (current !== nextWidth ? nextWidth : current));
+    });
+    observer.observe(element);
+    return () => {
+      cancelAnimationFrame(rafId);
+      observer.disconnect();
+    };
+  }, []);
   return (
     <Card variant="outlined">
       <CardContent>
@@ -1075,16 +1206,29 @@ const ScalarImageHeatmapPanel = ({
             }}
             elementRef={figureRef}
             echartsRef={echartsRef}
+            onResetView={
+              panelId && typeof onValueChange === "function"
+                ? () => onValueChange(panelId, writeZoomPanelValue(value, FULL_ZOOM), false)
+                : null
+            }
           />
         </Box>
-        <Box ref={figureRef} sx={{ width: "100%", minHeight: 360 }}>
+        <Box
+          ref={figureRef}
+          sx={{
+            width: "min(100%, 920px)",
+            mx: "auto",
+            height: `${chartHeight}px`,
+          }}
+        >
           <ReactECharts
             ref={echartsRef}
             option={option}
             notMerge={false}
+            onEvents={onDataZoom}
             lazyUpdate
             opts={{ renderer: "canvas" }}
-            style={{ width: "100%", height: "360px" }}
+            style={{ width: "100%", height: "100%" }}
           />
         </Box>
       </CardContent>
@@ -1092,18 +1236,34 @@ const ScalarImageHeatmapPanel = ({
   );
 };
 
-const HistogramPanel = ({ title, state }) => {
+const HistogramPanel = ({ title, state, value = undefined, onValueChange = null }) => {
   const figureRef = useRef(null);
   const echartsRef = useRef(null);
-  const relativeEchartsRef = useRef(null);
-  const [zoomRange, setZoomRange] = useState(FULL_ZOOM);
-  const [scale, setScale] = useState("linear");
+  const [yScale, setYScale] = useState("linear");
+  const [xScale, setXScale] = useState("linear");
+  const panelId = state?.panel_id || null;
+  const zoomRange = readZoomFromPanelValue(value, FULL_ZOOM);
   const bins = useMemo(() => buildHistogramData(state?.bins), [state?.bins]);
-  const stepData = useMemo(() => buildHistogramRenderData(state?.bins, scale), [scale, state?.bins]);
+  const stepData = useMemo(() => buildHistogramRenderData(state?.bins, yScale), [state?.bins, yScale]);
   const relativeErrorData = useMemo(() => buildRelativeErrorStepData(state?.bins), [state?.bins]);
-  const xDomain = fitHistogramXDomain(bins);
-  const visibleXRange = useMemo(() => visibleXRangeFromZoom(xDomain, zoomRange), [xDomain, zoomRange]);
-  const yDomain = useMemo(() => buildHistogramYDomain(bins, scale, visibleXRange), [bins, scale, visibleXRange]);
+  const xDomain = useMemo(() => {
+    if (xScale !== "log") return fitHistogramXDomain(bins);
+    const positiveEdges = bins
+      .flatMap((bin) => [Number(bin?.start), Number(bin?.stop)])
+      .filter((value) => Number.isFinite(value) && value > 0);
+    if (positiveEdges.length === 0) return [Number.EPSILON, 1];
+    const min = Math.min(...positiveEdges);
+    const max = Math.max(...positiveEdges);
+    return [Math.max(min, Number.EPSILON), Math.max(max, min * (1 + Number.EPSILON))];
+  }, [bins, xScale]);
+  const visibleXRange = useMemo(
+    () => visibleXRangeFromZoomWithScale(xDomain, zoomRange, xScale),
+    [xDomain, xScale, zoomRange],
+  );
+  const yDomain = useMemo(
+    () => buildHistogramYDomain(bins, yScale, visibleXRange),
+    [bins, yScale, visibleXRange],
+  );
   const relativeErrorYDomain = useMemo(
     () => buildRelativeErrorYDomain(relativeErrorData, visibleXRange),
     [relativeErrorData, visibleXRange],
@@ -1120,17 +1280,21 @@ const HistogramPanel = ({ title, state }) => {
           }
           const yLow = y - Math.abs(err);
           const yHigh = y + Math.abs(err);
-          if (scale === "log" && yLow <= 0) return null;
+          if (xScale === "log" && x <= 0) return null;
+          if (yScale === "log" && yLow <= 0) return null;
           return [x, yLow, yHigh];
         })
         .filter(Boolean),
-    [bins, scale],
+    [bins, xScale, yScale],
   );
   const histogramOption = useMemo(() => {
+    const valueSeriesData = stepData
+      .map((point) => [Number(point?.x), Number(point?.y)])
+      .filter(([x]) => Number.isFinite(x) && (xScale !== "log" || x > 0));
     const baseSeries = {
       type: "line",
       name: "value",
-      data: stepData.map((point) => [Number(point?.x), Number(point?.y)]),
+      data: valueSeriesData,
       step: "end",
       showSymbol: false,
       lineStyle: { width: 1.35, color: "#005f73" },
@@ -1140,16 +1304,18 @@ const HistogramPanel = ({ title, state }) => {
       animation: false,
       grid: baseCartesianGrid,
       xAxis: {
-        type: "value",
+        type: xScale === "log" ? "log" : "value",
         min: xDomain[0],
         max: xDomain[1],
+        name: inferNumericXAxisLabel(panelId),
         axisLabel: baseAxisLabel,
         splitLine: { show: false },
+        nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
       },
       yAxis: {
-        type: scale === "log" ? "log" : "value",
-        min: scale === "log" ? null : yDomain[0],
-        max: scale === "log" ? null : yDomain[1],
+        type: yScale === "log" ? "log" : "value",
+        min: yScale === "log" ? null : yDomain[0],
+        max: yScale === "log" ? null : yDomain[1],
         axisLabel: baseAxisLabel,
         splitLine: { lineStyle: { color: gridColor } },
       },
@@ -1160,17 +1326,17 @@ const HistogramPanel = ({ title, state }) => {
       dataZoom: buildDataZoom(zoomRange, false),
       series: [buildErrorBarSeries({ name: "error", data: binErrorData }), baseSeries],
     };
-  }, [binErrorData, scale, stepData, xDomain, yDomain, zoomRange]);
+  }, [binErrorData, panelId, stepData, xDomain, xScale, yDomain, yScale, zoomRange]);
 
   const relativeOption = useMemo(
     () => ({
       animation: false,
       grid: baseCartesianGrid,
       xAxis: {
-        type: "value",
+        type: xScale === "log" ? "log" : "value",
         min: xDomain[0],
         max: xDomain[1],
-        name: "x",
+        name: inferNumericXAxisLabel(panelId),
         axisLabel: baseAxisLabel,
         splitLine: { show: false },
         nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
@@ -1191,7 +1357,9 @@ const HistogramPanel = ({ title, state }) => {
         {
           type: "line",
           name: "positive_relative_error",
-          data: relativeErrorData.map((point) => [Number(point?.x), Number(point?.positive_relative_error)]),
+          data: relativeErrorData
+            .map((point) => [Number(point?.x), Number(point?.positive_relative_error)])
+            .filter(([x]) => Number.isFinite(x) && (xScale !== "log" || x > 0)),
           step: "end",
           showSymbol: false,
           lineStyle: { width: 1.2, color: "#bb3e03" },
@@ -1201,7 +1369,9 @@ const HistogramPanel = ({ title, state }) => {
         {
           type: "line",
           name: "negative_relative_error",
-          data: relativeErrorData.map((point) => [Number(point?.x), Number(point?.negative_relative_error)]),
+          data: relativeErrorData
+            .map((point) => [Number(point?.x), Number(point?.negative_relative_error)])
+            .filter(([x]) => Number.isFinite(x) && (xScale !== "log" || x > 0)),
           step: "end",
           showSymbol: false,
           lineStyle: { width: 1.2, color: "#bb3e03" },
@@ -1210,30 +1380,19 @@ const HistogramPanel = ({ title, state }) => {
         },
       ],
     }),
-    [relativeErrorData, relativeErrorYDomain, xDomain, zoomRange],
+    [panelId, relativeErrorData, relativeErrorYDomain, xDomain, xScale, zoomRange],
   );
   const onDataZoom = useMemo(
     () => ({
       datazoom: (event) => {
         const next = readDataZoomRange(event);
-        if (!next) return;
-        setZoomRange((current) => (zoomRangeChanged(current, next) ? next : current));
+        if (!next || typeof onValueChange !== "function" || !panelId) return;
+        if (!zoomRangeChanged(zoomRange, next)) return;
+        onValueChange(panelId, writeZoomPanelValue(value, next), false);
       },
     }),
-    [],
+    [onValueChange, panelId, value, zoomRange],
   );
-  useEffect(() => {
-    const histogram = echartsRef.current?.getEchartsInstance?.();
-    const relative = relativeEchartsRef.current?.getEchartsInstance?.();
-    if (!histogram || !relative) return undefined;
-    const groupId = `histogram-${state?.panel_id || state?.name || "panel"}`;
-    histogram.group = groupId;
-    relative.group = groupId;
-    echarts.connect(groupId);
-    return () => {
-      echarts.disconnect(groupId);
-    };
-  }, [state?.name, state?.panel_id]);
 
   if (bins.length === 0) return null;
   return (
@@ -1247,20 +1406,38 @@ const HistogramPanel = ({ title, state }) => {
           <Stack direction="row" spacing={1} alignItems="center">
             <FigureExportActions
               baseName={state?.panel_id || state?.name || title || "histogram"}
-              payload={{ panel_id: state?.panel_id ?? null, kind: "histogram", state, scale }}
+              payload={{ panel_id: state?.panel_id ?? null, kind: "histogram", state, xScale, yScale }}
               elementRef={figureRef}
+              onResetView={
+                panelId && typeof onValueChange === "function"
+                  ? () => onValueChange(panelId, writeZoomPanelValue(value, FULL_ZOOM), false)
+                  : null
+              }
             />
             <FormControl size="small" sx={{ minWidth: 128 }}>
               <Select
-                value={scale}
-                onChange={(event) => setScale(event.target.value)}
+                value={yScale}
+                onChange={(event) => setYScale(event.target.value)}
                 sx={{
                   fontSize: "0.875rem",
                   ".MuiSelect-select": { py: 0.75 },
                 }}
               >
-                <MenuItem value="linear">Linear</MenuItem>
-                <MenuItem value="log">Log</MenuItem>
+                <MenuItem value="linear">Y Linear</MenuItem>
+                <MenuItem value="log">Y Log</MenuItem>
+              </Select>
+            </FormControl>
+            <FormControl size="small" sx={{ minWidth: 128 }}>
+              <Select
+                value={xScale}
+                onChange={(event) => setXScale(event.target.value)}
+                sx={{
+                  fontSize: "0.875rem",
+                  ".MuiSelect-select": { py: 0.75 },
+                }}
+              >
+                <MenuItem value="linear">X Linear</MenuItem>
+                <MenuItem value="log">X Log</MenuItem>
               </Select>
             </FormControl>
           </Stack>
@@ -1283,7 +1460,6 @@ const HistogramPanel = ({ title, state }) => {
             </Typography>
             <Box sx={{ width: "100%", height: 168 }}>
               <ReactECharts
-                ref={relativeEchartsRef}
                 option={relativeOption}
                 notMerge={false}
                 onEvents={onDataZoom}
@@ -1644,7 +1820,7 @@ const SelectPanel = ({ title, descriptor, value, onValueChange }) => {
   );
 };
 
-const Image2dPanel = ({ title, state }) => {
+const Image2dPanel = ({ title, state, value = undefined, onValueChange = null }) => {
   const width = Number(state?.width) || 0;
   const height = Number(state?.height) || 0;
   const values = useMemo(() => asArray(state?.values), [state?.values]);
@@ -1676,6 +1852,8 @@ const Image2dPanel = ({ title, state }) => {
       normalizationMode={normalizationMode}
       xRange={xRange}
       yRange={yRange}
+      value={value}
+      onValueChange={onValueChange}
     />
   );
 };
@@ -1689,10 +1867,24 @@ const PanelRenderer = ({ descriptor, state, value, onValueChange }) => {
       );
     case "scalar_timeseries":
       if (!state) return null;
-      return <ScalarTimeseriesPanel title={descriptor.label} state={{ ...state, panel_id: descriptor.panel_id }} />;
+      return (
+        <ScalarTimeseriesPanel
+          title={descriptor.label}
+          state={{ ...state, panel_id: descriptor.panel_id }}
+          value={value}
+          onValueChange={onValueChange}
+        />
+      );
     case "multi_timeseries":
       if (!state) return null;
-      return <MultiTimeseriesPanel title={descriptor.label} state={{ ...state, panel_id: descriptor.panel_id }} />;
+      return (
+        <MultiTimeseriesPanel
+          title={descriptor.label}
+          state={{ ...state, panel_id: descriptor.panel_id }}
+          value={value}
+          onValueChange={onValueChange}
+        />
+      );
     case "tick_breakdown":
       if (!state) return null;
       return <TickBreakdownPanel title={descriptor.label} state={{ ...state, panel_id: descriptor.panel_id }} />;
@@ -1704,7 +1896,14 @@ const PanelRenderer = ({ descriptor, state, value, onValueChange }) => {
       return <KeyValuePanel title={descriptor.label} state={state} />;
     case "image2d":
       if (!state) return null;
-      return <Image2dPanel title={descriptor.label} state={{ ...state, panel_id: descriptor.panel_id }} />;
+      return (
+        <Image2dPanel
+          title={descriptor.label}
+          state={{ ...state, panel_id: descriptor.panel_id }}
+          value={value}
+          onValueChange={onValueChange}
+        />
+      );
     case "table":
       if (!state) return null;
       return (
@@ -1715,7 +1914,14 @@ const PanelRenderer = ({ descriptor, state, value, onValueChange }) => {
       );
     case "histogram":
       if (!state) return null;
-      return <HistogramPanel title={descriptor.label} state={{ ...state, panel_id: descriptor.panel_id }} />;
+      return (
+        <HistogramPanel
+          title={descriptor.label}
+          state={{ ...state, panel_id: descriptor.panel_id }}
+          value={value}
+          onValueChange={onValueChange}
+        />
+      );
     case "text":
       if (!state) return null;
       return <TextPanel title={descriptor.label} state={state} />;

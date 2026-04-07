@@ -12,6 +12,28 @@ const emptyState = Object.freeze({
 });
 
 const asObject = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : {});
+const PANEL_VALUES_STORAGE_PREFIX = "gammaboard.panel-values.";
+const canUseStorage = () => typeof window !== "undefined" && typeof window.localStorage !== "undefined";
+const storageKeyForSource = (sourceId) => `${PANEL_VALUES_STORAGE_PREFIX}${sourceId}`;
+const readStoredPanelValues = (sourceId) => {
+  if (!sourceId || !canUseStorage()) return {};
+  try {
+    const raw = window.localStorage.getItem(storageKeyForSource(sourceId));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return asObject(parsed);
+  } catch {
+    return {};
+  }
+};
+const writeStoredPanelValues = (sourceId, panelValues) => {
+  if (!sourceId || !canUseStorage()) return;
+  try {
+    window.localStorage.setItem(storageKeyForSource(sourceId), JSON.stringify(asObject(panelValues)));
+  } catch {
+    // Ignore storage write errors to avoid breaking panel rendering in constrained browsers.
+  }
+};
 
 const panelIdOf = (panel) => panel?.panel_id ?? null;
 
@@ -119,6 +141,10 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
     panelValuesRef.current = state.panelValues;
   }, [state.panelValues]);
 
+  useEffect(() => {
+    writeStoredPanelValues(state.sourceId, state.panelValues);
+  }, [state.panelValues, state.sourceId]);
+
   const poll = useCallback(
     async (signal) => {
       if (!enabled || typeof fetchPanels !== "function") return;
@@ -134,13 +160,17 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
         pendingActionsRef.current = [];
 
         setState((previous) => {
-          const resetRequired =
-            response?.reset_required === true ||
-            (previous.sourceId != null && response?.source_id != null && previous.sourceId !== response.source_id);
+          const nextSourceId = response?.source_id ?? previous.sourceId;
+          const sourceChanged =
+            previous.sourceId != null && response?.source_id != null && previous.sourceId !== response.source_id;
+          const shouldSeedFromStorage = sourceChanged || (previous.sourceId == null && nextSourceId != null);
+          const resetRequired = response?.reset_required === true || sourceChanged;
           const panelSpecs = asArray(response?.panels);
-          const panelValues = reconcilePanelValues(previous.panelValues, panelSpecs, resetRequired);
+          const seededPanelValues = shouldSeedFromStorage ? readStoredPanelValues(nextSourceId) : previous.panelValues;
+          const panelValues = reconcilePanelValues(seededPanelValues, panelSpecs, resetRequired && !sourceChanged);
+          panelValuesRef.current = panelValues;
           return {
-            sourceId: response?.source_id ?? previous.sourceId,
+            sourceId: nextSourceId,
             panelSpecs,
             panelStates: applyUpdates(previous.panelStates, response?.updates, resetRequired),
             panelValues,
@@ -169,7 +199,7 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
   const triggerPoll = usePolling({ enabled, intervalMs: pollMs, poll, reset });
 
   const setPanelValue = useCallback(
-    (panelId, value) => {
+    (panelId, value, shouldTriggerPoll = true) => {
       setState((previous) => {
         const panelValues = {
           ...asObject(previous.panelValues),
@@ -181,7 +211,7 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
           panelValues,
         };
       });
-      triggerPoll();
+      if (shouldTriggerPoll) triggerPoll();
     },
     [triggerPoll],
   );
