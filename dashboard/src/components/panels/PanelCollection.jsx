@@ -18,21 +18,8 @@ import {
   Select,
   Typography,
 } from "@mui/material";
-import Plot from "react-plotly.js";
-import {
-  Area,
-  CartesianGrid,
-  ComposedChart,
-  ErrorBar,
-  Line,
-  LineChart,
-  ReferenceLine,
-  ResponsiveContainer,
-  Scatter,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+import ReactECharts from "echarts-for-react";
+import { echarts } from "../../lib/echarts";
 import {
   formatCentralValueWithError,
   formatCompactNumber,
@@ -122,6 +109,9 @@ const fitHistogramXDomain = (bins) => {
   return fitXDomain(edges);
 };
 
+const FULL_ZOOM = Object.freeze({ start: 0, end: 100 });
+const inferXAxisLabel = (panelId) => (String(panelId || "").includes("_history") ? "Nr samples" : null);
+
 const buildMultiSeriesData = (seriesList) => {
   const rows = new Map();
   for (const series of asArray(seriesList)) {
@@ -135,8 +125,6 @@ const buildMultiSeriesData = (seriesList) => {
 };
 
 const lineColors = ["#005f73", "#bb3e03", "#0a9396", "#ae2012", "#ca6702"];
-
-const invalidImageColor = [255, 0, 255];
 
 const isIsoDateTime = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value);
 
@@ -152,39 +140,8 @@ const renderStructuredValue = (value) => {
   return JSON.stringify(value);
 };
 
-const scalarHeatmapColorscale = [
-  [0, "rgb(0,0,255)"],
-  [0.5, "rgb(128,200,128)"],
-  [1, "rgb(255,0,0)"],
-];
+const scalarHeatmapColors = ["rgb(0,0,255)", "rgb(128,200,128)", "rgb(255,0,0)"];
 
-const ComplexImageTooltip = ({ hover }) => {
-  if (!hover) return null;
-  return (
-    <Card
-      variant="outlined"
-      sx={{
-        position: "absolute",
-        left: hover.left,
-        top: hover.top,
-        transform: "translate(12px, 12px)",
-        pointerEvents: "none",
-        zIndex: 2,
-        minWidth: 180,
-      }}
-    >
-      <CardContent sx={{ py: 1, px: 1.25, "&:last-child": { pb: 1 } }}>
-        <Typography variant="caption" sx={{ display: "block", color: "text.secondary", mb: 0.5 }}>
-          x={formatScientific(hover.x, 4)} y={formatScientific(hover.y, 4)}
-        </Typography>
-        <Typography variant="body2">re: {formatScientific(hover.re, 6)}</Typography>
-        <Typography variant="body2">im: {formatScientific(hover.im, 6)}</Typography>
-        <Typography variant="body2">|z|: {formatScientific(hover.magnitude, 6)}</Typography>
-        <Typography variant="body2">phase: {formatScientific(hover.phase, 5)} rad</Typography>
-      </CardContent>
-    </Card>
-  );
-};
 
 const panelColumnSpan = (descriptor) => {
   switch (descriptor?.width) {
@@ -213,87 +170,286 @@ const panelColumnSpan = (descriptor) => {
   }
 };
 
-const chartMargin = { top: 8, right: 16, left: 8, bottom: 8 };
 const gridColor = "rgba(148,163,184,0.18)";
-const axisTickStyle = { fontSize: 12, fill: "#64748b" };
 
 const formatAxisValue = (value) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? formatScientific(numeric, 3) : "";
 };
 
-const SimpleChartTooltip = ({ active, payload, label, labelPrefix = "x" }) => {
-  if (!active || !payload?.length) return null;
-  return (
-    <Card variant="outlined" sx={{ pointerEvents: "none" }}>
-      <CardContent sx={{ py: 1, px: 1.25, "&:last-child": { pb: 1 } }}>
-        <Typography variant="caption" sx={{ display: "block", color: "text.secondary", mb: 0.5 }}>
-          {labelPrefix}={formatScientific(Number(label), 5)}
-        </Typography>
-        {payload
-          .filter((entry) => entry?.value != null && Number.isFinite(Number(entry.value)) && !entry?.hide)
-          .map((entry) => (
-            <Typography key={entry.dataKey} variant="body2">
-              {entry.name || entry.dataKey}: {formatScientific(Number(entry.value), 6)}
-            </Typography>
-          ))}
-      </CardContent>
-    </Card>
-  );
+const normalizeZoomRange = (candidate) => {
+  const start = Number(candidate?.start);
+  const end = Number(candidate?.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  const normalizedStart = Math.max(0, Math.min(100, start));
+  const normalizedEnd = Math.max(0, Math.min(100, end));
+  if (normalizedEnd < normalizedStart) return { start: normalizedEnd, end: normalizedStart };
+  return { start: normalizedStart, end: normalizedEnd };
 };
 
-const HistogramTooltip = ({ active, payload }) => {
-  if (!active || !payload?.length) return null;
-  const row = payload.find((entry) => entry?.payload)?.payload;
-  if (!row) return null;
-  return (
-    <Card variant="outlined" sx={{ pointerEvents: "none" }}>
-      <CardContent sx={{ py: 1, px: 1.25, "&:last-child": { pb: 1 } }}>
-        <Typography variant="caption" sx={{ display: "block", color: "text.secondary", mb: 0.5 }}>
-          {row.rangeLabel}
-        </Typography>
-        {Number.isFinite(row.value) ? (
-          <Typography variant="body2">value: {formatScientific(row.value, 6)}</Typography>
-        ) : null}
-        {Number.isFinite(row.error) ? (
-          <Typography variant="body2">error: {formatScientific(row.error, 6)}</Typography>
-        ) : null}
-        {Number.isFinite(row.relative_error) ? (
-          <Typography variant="body2">rel err: {formatScientific(row.relative_error, 6)}</Typography>
-        ) : null}
-      </CardContent>
-    </Card>
-  );
+const zoomRangeChanged = (left, right) =>
+  Math.abs((left?.start ?? 0) - (right?.start ?? 0)) > 0.01 ||
+  Math.abs((left?.end ?? 100) - (right?.end ?? 100)) > 0.01;
+
+const readDataZoomRange = (event) => {
+  const payload = Array.isArray(event?.batch) && event.batch.length > 0 ? event.batch[0] : event;
+  return normalizeZoomRange(payload);
 };
+
+const visibleXRangeFromZoom = (xDomain, zoomRange) => {
+  const xMin = Number(xDomain?.[0]);
+  const xMax = Number(xDomain?.[1]);
+  const normalizedZoom = normalizeZoomRange(zoomRange);
+  if (!Number.isFinite(xMin) || !Number.isFinite(xMax) || !normalizedZoom) return null;
+  const span = xMax - xMin;
+  if (!Number.isFinite(span) || span <= 0) return null;
+  return {
+    min: xMin + (span * normalizedZoom.start) / 100,
+    max: xMin + (span * normalizedZoom.end) / 100,
+  };
+};
+
+const buildDataZoom = (zoomRange = FULL_ZOOM, includeSlider = true) => {
+  const normalizedZoom = normalizeZoomRange(zoomRange) || FULL_ZOOM;
+  const zoom = [
+    {
+      type: "inside",
+      filterMode: "none",
+      throttle: 50,
+      start: normalizedZoom.start,
+      end: normalizedZoom.end,
+    },
+  ];
+  if (includeSlider) {
+    zoom.push({
+      type: "slider",
+      filterMode: "none",
+      height: 18,
+      bottom: 4,
+      start: normalizedZoom.start,
+      end: normalizedZoom.end,
+    });
+  }
+  return zoom;
+};
+
+const baseCartesianGrid = {
+  left: 56,
+  right: 20,
+  top: 12,
+  bottom: 48,
+};
+
+const baseAxisLabel = {
+  color: "#64748b",
+  fontSize: 12,
+  formatter: (value) => formatAxisValue(value),
+};
+
+const buildErrorBarSeries = ({ name = "error", data, color = "#7c8a96", capPx = 4 }) => ({
+  type: "custom",
+  name,
+  data,
+  silent: true,
+  z: 5,
+  tooltip: { show: false },
+  renderItem: (params, api) => {
+    const xValue = Number(api.value(0));
+    const yLowValue = Number(api.value(1));
+    const yHighValue = Number(api.value(2));
+    if (!Number.isFinite(xValue) || !Number.isFinite(yLowValue) || !Number.isFinite(yHighValue)) {
+      return null;
+    }
+    const [xPx, yLowPx] = api.coord([xValue, yLowValue]);
+    const [, yHighPx] = api.coord([xValue, yHighValue]);
+    if (!Number.isFinite(xPx) || !Number.isFinite(yLowPx) || !Number.isFinite(yHighPx)) {
+      return null;
+    }
+    return {
+      type: "group",
+      children: [
+        {
+          type: "line",
+          shape: { x1: xPx, y1: yLowPx, x2: xPx, y2: yHighPx },
+          style: { stroke: color, lineWidth: 1.2 },
+        },
+        {
+          type: "line",
+          shape: { x1: xPx - capPx, y1: yLowPx, x2: xPx + capPx, y2: yLowPx },
+          style: { stroke: color, lineWidth: 1.2 },
+        },
+        {
+          type: "line",
+          shape: { x1: xPx - capPx, y1: yHighPx, x2: xPx + capPx, y2: yHighPx },
+          style: { stroke: color, lineWidth: 1.2 },
+        },
+      ],
+    };
+  },
+});
 
 const ScalarTimeseriesPanel = ({ title, state }) => {
   const figureRef = useRef(null);
+  const echartsRef = useRef(null);
+  const [zoomRange, setZoomRange] = useState(FULL_ZOOM);
+  const [tailPinned, setTailPinned] = useState(true);
   const points = asArray(state?.points)
     .slice()
     .sort((a, b) => a.x - b.x);
-  if (points.length === 0) return null;
-  const pointsWithBand = points
+  const meanData = points.map((point) => [Number(point?.x), Number(point?.y)]);
+  const errorBarData = points
     .map((point) => {
-      const y = Number(point?.y);
+      const x = Number(point?.x);
       const yMin = Number(point?.y_min);
       const yMax = Number(point?.y_max);
-      if (!Number.isFinite(y)) return { ...point, band_base: null, band_span: null };
-      if (!Number.isFinite(yMin) || !Number.isFinite(yMax) || yMax < yMin) {
-        return { ...point, y, band_base: null, band_span: null };
+      if (!Number.isFinite(x) || !Number.isFinite(yMin) || !Number.isFinite(yMax) || yMax < yMin || yMax === yMin) {
+        return null;
       }
-      return {
-        ...point,
-        y,
-        band_base: yMin,
-        band_span: yMax - yMin,
-      };
+      return [x, yMin, yMax];
     })
     .filter(Boolean);
   const domain = fitDomain(points.flatMap((point) => [point.y, point.y_min, point.y_max]));
   const xDomain = fitXDomain(points.map((point) => point.x));
-  const hasBand = pointsWithBand.some(
-    (point) => Number.isFinite(point.band_base) && Number.isFinite(point.band_span) && point.band_span > 0,
+  const visibleXRange = useMemo(() => visibleXRangeFromZoom(xDomain, zoomRange), [xDomain, zoomRange]);
+  const visibleDomain = useMemo(() => {
+    if (!visibleXRange) return domain;
+    const inRangeValues = points
+      .filter((point) => {
+        const x = Number(point?.x);
+        return Number.isFinite(x) && x >= visibleXRange.min && x <= visibleXRange.max;
+      })
+      .flatMap((point) => [point.y, point.y_min, point.y_max]);
+    const fitted = fitDomain(inRangeValues);
+    return inRangeValues.length > 0 ? fitted : domain;
+  }, [domain, points, visibleXRange]);
+  const isHistoryPanel = useMemo(() => String(state?.panel_id || "").includes("_history"), [state?.panel_id]);
+  const bandSegments = useMemo(() => {
+    const segments = [];
+    for (let index = 1; index < points.length; index += 1) {
+      const left = points[index - 1];
+      const right = points[index];
+      const x1 = Number(left?.x);
+      const x2 = Number(right?.x);
+      const yMin1 = Number(left?.y_min);
+      const yMin2 = Number(right?.y_min);
+      const yMax1 = Number(left?.y_max);
+      const yMax2 = Number(right?.y_max);
+      if (
+        !Number.isFinite(x1) ||
+        !Number.isFinite(x2) ||
+        !Number.isFinite(yMin1) ||
+        !Number.isFinite(yMin2) ||
+        !Number.isFinite(yMax1) ||
+        !Number.isFinite(yMax2) ||
+        yMax1 < yMin1 ||
+        yMax2 < yMin2
+      ) {
+        continue;
+      }
+      segments.push([x1, yMin1, yMax1, x2, yMin2, yMax2]);
+    }
+    return segments;
+  }, [points]);
+  useEffect(() => {
+    if (!tailPinned) return;
+    setZoomRange((current) => {
+      const normalized = normalizeZoomRange(current) || FULL_ZOOM;
+      const width = Math.max(0, normalized.end - normalized.start);
+      const next = { start: Math.max(0, 100 - width), end: 100 };
+      return zoomRangeChanged(normalized, next) ? next : normalized;
+    });
+  }, [points.length, tailPinned]);
+  const onDataZoom = useMemo(
+    () => ({
+      datazoom: (event) => {
+        const next = readDataZoomRange(event);
+        if (!next) return;
+        setZoomRange((current) => (zoomRangeChanged(current, next) ? next : current));
+        setTailPinned(next.end >= 99.5);
+      },
+    }),
+    [],
   );
+  const option = useMemo(
+    () => ({
+      animation: false,
+      grid: baseCartesianGrid,
+      xAxis: {
+        type: "value",
+        min: xDomain[0],
+        max: xDomain[1],
+        name: inferXAxisLabel(state?.panel_id),
+        axisLabel: baseAxisLabel,
+        splitLine: { show: false },
+        nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
+      },
+      yAxis: {
+        type: "value",
+        min: visibleDomain[0],
+        max: visibleDomain[1],
+        axisLabel: baseAxisLabel,
+        splitLine: { lineStyle: { color: gridColor } },
+      },
+      tooltip: {
+        trigger: "axis",
+        valueFormatter: (value) => (Number.isFinite(Number(value)) ? formatScientific(Number(value), 6) : "n/a"),
+      },
+      dataZoom: buildDataZoom(zoomRange),
+      series: [
+        ...(isHistoryPanel
+          ? [
+              {
+                name: "uncertainty",
+                type: "custom",
+                data: bandSegments,
+                silent: true,
+                z: 1,
+                tooltip: { show: false },
+                renderItem: (params, api) => {
+                  const x1 = Number(api.value(0));
+                  const yMin1 = Number(api.value(1));
+                  const yMax1 = Number(api.value(2));
+                  const x2 = Number(api.value(3));
+                  const yMin2 = Number(api.value(4));
+                  const yMax2 = Number(api.value(5));
+                  const p1 = api.coord([x1, yMin1]);
+                  const p2 = api.coord([x1, yMax1]);
+                  const p3 = api.coord([x2, yMax2]);
+                  const p4 = api.coord([x2, yMin2]);
+                  if ([p1, p2, p3, p4].some((point) => !Number.isFinite(point?.[0]) || !Number.isFinite(point?.[1]))) {
+                    return null;
+                  }
+                  return {
+                    type: "polygon",
+                    shape: { points: [p1, p2, p3, p4] },
+                    style: api.style({ fill: "rgba(124,138,150,0.22)", stroke: "none" }),
+                  };
+                },
+              },
+            ]
+          : [buildErrorBarSeries({ name: "error", data: errorBarData })]),
+        {
+          type: "line",
+          name: "y",
+          data: meanData,
+          showSymbol: false,
+          lineStyle: { width: 1.8, color: "#005f73" },
+          connectNulls: false,
+        },
+      ],
+    }),
+    [
+      errorBarData,
+      isHistoryPanel,
+      bandSegments,
+      meanData,
+      state?.panel_id,
+      visibleDomain,
+      xDomain,
+      zoomRange,
+    ],
+  );
+  if (points.length === 0) return null;
   return (
     <Card variant="outlined">
       <CardContent>
@@ -303,47 +459,19 @@ const ScalarTimeseriesPanel = ({ title, state }) => {
             baseName={state?.panel_id || title || "scalar_timeseries"}
             payload={{ panel_id: state?.panel_id ?? null, kind: "scalar_timeseries", state }}
             elementRef={figureRef}
+            echartsRef={echartsRef}
           />
         </Box>
         <Box ref={figureRef} sx={{ width: "100%", height: 280 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={pointsWithBand} margin={chartMargin}>
-              <CartesianGrid stroke={gridColor} vertical={false} />
-              <XAxis dataKey="x" type="number" domain={xDomain} tickFormatter={formatAxisValue} tick={axisTickStyle} />
-              <YAxis domain={domain} tickFormatter={formatAxisValue} tick={axisTickStyle} width={72} />
-              <Tooltip content={<SimpleChartTooltip />} />
-              {hasBand ? (
-                <>
-                  <Area
-                    type="monotone"
-                    dataKey="band_base"
-                    stackId="uncertainty_band"
-                    stroke="none"
-                    fill="rgba(0,0,0,0)"
-                    isAnimationActive={false}
-                    connectNulls={false}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="band_span"
-                    stackId="uncertainty_band"
-                    stroke="none"
-                    fill="rgba(124,138,150,0.22)"
-                    isAnimationActive={false}
-                    connectNulls={false}
-                  />
-                </>
-              ) : null}
-              <Line
-                type="monotone"
-                dataKey="y"
-                stroke="#005f73"
-                strokeWidth={1.8}
-                dot={false}
-                isAnimationActive={false}
-              />
-            </ComposedChart>
-          </ResponsiveContainer>
+          <ReactECharts
+            ref={echartsRef}
+            option={option}
+            notMerge={false}
+            onEvents={onDataZoom}
+            lazyUpdate
+            opts={{ renderer: "canvas" }}
+            style={{ width: "100%", height: "100%" }}
+          />
         </Box>
       </CardContent>
     </Card>
@@ -352,9 +480,9 @@ const ScalarTimeseriesPanel = ({ title, state }) => {
 
 const MultiTimeseriesPanel = ({ title, state }) => {
   const figureRef = useRef(null);
+  const echartsRef = useRef(null);
   const series = asArray(state?.series);
   const data = buildMultiSeriesData(series);
-  if (data.length === 0) return null;
   const domain = fitDomain(
     data.flatMap((row) =>
       Object.entries(row)
@@ -363,6 +491,46 @@ const MultiTimeseriesPanel = ({ title, state }) => {
     ),
   );
   const xDomain = fitXDomain(data.map((row) => row.x));
+  const option = useMemo(
+    () => ({
+      animation: false,
+      grid: baseCartesianGrid,
+      xAxis: {
+        type: "value",
+        min: xDomain[0],
+        max: xDomain[1],
+        name: inferXAxisLabel(state?.panel_id),
+        axisLabel: baseAxisLabel,
+        splitLine: { show: false },
+        nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
+      },
+      yAxis: {
+        type: "value",
+        min: domain[0],
+        max: domain[1],
+        axisLabel: baseAxisLabel,
+        splitLine: { lineStyle: { color: gridColor } },
+      },
+      tooltip: {
+        trigger: "axis",
+        valueFormatter: (value) => (Number.isFinite(Number(value)) ? formatScientific(Number(value), 6) : "n/a"),
+      },
+      dataZoom: buildDataZoom(),
+      series: series.map((item, index) => ({
+        type: "line",
+        name: item.label,
+        data: asArray(item.points).map((point) => [Number(point?.x), Number(point?.y)]),
+        showSymbol: false,
+        connectNulls: false,
+        lineStyle: {
+          width: 1.8,
+          color: lineColors[index % lineColors.length],
+        },
+      })),
+    }),
+    [domain, series, xDomain],
+  );
+  if (data.length === 0) return null;
   return (
     <Card variant="outlined">
       <CardContent>
@@ -372,30 +540,18 @@ const MultiTimeseriesPanel = ({ title, state }) => {
             baseName={state?.panel_id || title || "multi_timeseries"}
             payload={{ panel_id: state?.panel_id ?? null, kind: "multi_timeseries", state }}
             elementRef={figureRef}
+            echartsRef={echartsRef}
           />
         </Box>
         <Box ref={figureRef} sx={{ width: "100%", height: 280 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={data} margin={chartMargin}>
-              <CartesianGrid stroke={gridColor} vertical={false} />
-              <XAxis dataKey="x" type="number" domain={xDomain} tickFormatter={formatAxisValue} tick={axisTickStyle} />
-              <YAxis domain={domain} tickFormatter={formatAxisValue} tick={axisTickStyle} width={72} />
-              <Tooltip content={<SimpleChartTooltip />} />
-              {series.map((item, index) => (
-                <Line
-                  key={item.id}
-                  type="monotone"
-                  dataKey={item.id}
-                  name={item.label}
-                  stroke={lineColors[index % lineColors.length]}
-                  strokeWidth={1.8}
-                  dot={false}
-                  connectNulls={false}
-                  isAnimationActive={false}
-                />
-              ))}
-            </LineChart>
-          </ResponsiveContainer>
+          <ReactECharts
+            ref={echartsRef}
+            option={option}
+            notMerge
+            lazyUpdate
+            opts={{ renderer: "canvas" }}
+            style={{ width: "100%", height: "100%" }}
+          />
         </Box>
       </CardContent>
     </Card>
@@ -465,22 +621,6 @@ const buildHistogramRenderData = (bins, scale) => {
     error: Number.isFinite(point.error) ? point.error : 0,
   }));
 };
-
-const buildHistogramErrorBarData = (bins, scale) =>
-  asArray(bins)
-    .map((bin) => {
-      const x = Number(bin?.x);
-      const value = Number(bin?.value);
-      const error = Number(bin?.error);
-      if (!Number.isFinite(x) || !Number.isFinite(value)) return null;
-      return {
-        x,
-        y: scale === "log" ? Math.max(value, Number.EPSILON) : value,
-        error: Number.isFinite(error) ? error : 0,
-        rangeLabel: bin?.rangeLabel || "n/a",
-      };
-    })
-    .filter(Boolean);
 
 const buildRelativeErrorStepData = (bins) =>
   buildHistogramStepData(bins)
@@ -559,6 +699,25 @@ const downloadSvgFromElement = (baseName, element) => {
   return true;
 };
 
+const downloadSvgFromEcharts = (baseName, echartsRef) => {
+  const instance = echartsRef?.current?.getEchartsInstance?.();
+  if (!instance) return false;
+  try {
+    const dataUrl = instance.getDataURL({
+      type: "svg",
+      pixelRatio: 2,
+      backgroundColor: "#ffffff",
+    });
+    if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/svg+xml")) return false;
+    const encoded = dataUrl.slice(dataUrl.indexOf(",") + 1);
+    const markup = decodeURIComponent(encoded);
+    downloadTextFile(`${sanitizeFigureFilename(baseName)}.svg`, markup, "image/svg+xml;charset=utf-8");
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const downloadCanvasAsSvg = (baseName, canvas) => {
   if (!canvas?.toDataURL) return false;
   const width = Number(canvas.width) || 1;
@@ -573,10 +732,45 @@ const downloadCanvasAsSvg = (baseName, canvas) => {
   return true;
 };
 
-const FigureExportActions = ({ baseName, payload, elementRef = null, canvasRef = null, svgBuilder = null }) => {
+const downloadCanvasCollectionAsSvg = (baseName, canvases) => {
+  const list = Array.from(canvases || []).filter((canvas) => canvas?.toDataURL);
+  if (list.length === 0) return false;
+  const width = Math.max(...list.map((canvas) => Number(canvas.width) || 1), 1);
+  const heights = list.map((canvas) => Number(canvas.height) || 1);
+  const totalHeight = heights.reduce((sum, height) => sum + height, 0);
+  let yOffset = 0;
+  const images = list
+    .map((canvas, index) => {
+      const height = heights[index];
+      const pngDataUri = canvas.toDataURL("image/png");
+      const imageTag = `<image href="${pngDataUri}" x="0" y="${yOffset}" width="${width}" height="${height}" />`;
+      yOffset += height;
+      return imageTag;
+    })
+    .join("");
+  const svg = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${totalHeight}" viewBox="0 0 ${width} ${totalHeight}">`,
+    images,
+    "</svg>",
+  ].join("");
+  downloadTextFile(`${sanitizeFigureFilename(baseName)}.svg`, svg, "image/svg+xml;charset=utf-8");
+  return true;
+};
+
+const FigureExportActions = ({
+  baseName,
+  payload,
+  elementRef = null,
+  canvasRef = null,
+  echartsRef = null,
+  svgBuilder = null,
+}) => {
   const handleDownloadSvg = () => {
+    if (downloadSvgFromEcharts(baseName, echartsRef)) return;
     if (downloadSvgFromElement(baseName, elementRef?.current)) return;
     if (downloadCanvasAsSvg(baseName, canvasRef?.current)) return;
+    if (downloadCanvasCollectionAsSvg(baseName, elementRef?.current?.querySelectorAll?.("canvas"))) return;
+    if (downloadCanvasAsSvg(baseName, elementRef?.current?.querySelector?.("canvas"))) return;
     if (typeof svgBuilder === "function") {
       const markup = svgBuilder();
       if (typeof markup === "string" && markup.trim()) {
@@ -636,8 +830,20 @@ const buildHistogramBundleHwU = (payload) => {
     .join("\n");
 };
 
-const buildHistogramYDomain = (bins, scale) => {
-  const values = asArray(bins)
+const buildHistogramYDomain = (bins, scale, visibleXRange = null) => {
+  const valuesInRange = asArray(bins)
+    .filter((bin) => {
+      if (!visibleXRange) return true;
+      const x = Number(bin?.x);
+      return Number.isFinite(x) && x >= visibleXRange.min && x <= visibleXRange.max;
+    })
+    .flatMap((bin) => [
+      Number(bin?.y ?? bin?.value) - Number(bin?.error || 0),
+      Number(bin?.y ?? bin?.value) + Number(bin?.error || 0),
+      Number(bin?.y ?? bin?.value),
+    ])
+    .filter((value) => Number.isFinite(value));
+  const values = valuesInRange.length > 0 ? valuesInRange : asArray(bins)
     .flatMap((bin) => [
       Number(bin?.y ?? bin?.value) - Number(bin?.error || 0),
       Number(bin?.y ?? bin?.value) + Number(bin?.error || 0),
@@ -655,30 +861,22 @@ const buildHistogramYDomain = (bins, scale) => {
   return fitDomain(values);
 };
 
-const buildRelativeErrorYDomain = (points) => {
+const buildRelativeErrorYDomain = (points, visibleXRange = null) => {
+  const selectedPoints = asArray(points).filter((point) => {
+    if (!visibleXRange) return true;
+    const x = Number(point?.x);
+    return Number.isFinite(x) && x >= visibleXRange.min && x <= visibleXRange.max;
+  });
+  const sourcePoints = selectedPoints.length > 0 ? selectedPoints : asArray(points);
   const maxRelativeError = Math.max(
     0,
-    ...asArray(points)
+    ...sourcePoints
       .map((point) => Number(point?.relative_error))
       .filter((value) => Number.isFinite(value)),
   );
   if (maxRelativeError <= 0) return [-1, 1];
   const padded = maxRelativeError * 1.08;
   return [-padded, padded];
-};
-
-const buildImageRows = (values, width, height, invalidIndices = null) => {
-  const rows = [];
-  for (let row = 0; row < height; row += 1) {
-    const current = [];
-    for (let col = 0; col < width; col += 1) {
-      const index = row * width + col;
-      const value = values[index];
-      current.push(invalidIndices?.has(index) || !Number.isFinite(value) ? null : value);
-    }
-    rows.push(current);
-  }
-  return rows;
 };
 
 const buildCellCenters = (range, count) => {
@@ -709,33 +907,15 @@ const buildScalarHeatmapScale = (values, normalizationMode) => {
 };
 
 const buildInvalidCellOverlay = (invalidIndices, width, xCenters, yCenters) => {
-  const points = Array.from(invalidIndices)
+  const points = Array.from(invalidIndices || [])
     .map((index) => {
       const row = Math.floor(index / width);
       const col = index % width;
-      return {
-        x: xCenters[col],
-        y: yCenters[row],
-      };
+      return [xCenters[col], yCenters[row]];
     })
-    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+    .filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]));
 
-  if (points.length === 0) return null;
-
-  return {
-    type: "scatter",
-    mode: "markers",
-    x: points.map((point) => point.x),
-    y: points.map((point) => point.y),
-    marker: {
-      color: "#ff00ff",
-      symbol: "square",
-      size: 8,
-      line: { width: 0 },
-    },
-    hovertemplate: "invalid value<extra></extra>",
-    showlegend: false,
-  };
+  return points;
 };
 
 const ScalarImageHeatmapPanel = ({
@@ -750,10 +930,7 @@ const ScalarImageHeatmapPanel = ({
   yRange,
 }) => {
   const figureRef = useRef(null);
-  const z = useMemo(
-    () => buildImageRows(values, width, height, invalidIndices),
-    [height, invalidIndices, values, width],
-  );
+  const echartsRef = useRef(null);
   const xCenters = useMemo(() => buildCellCenters(xRange, width), [width, xRange]);
   const yCenters = useMemo(() => buildCellCenters(yRange, height), [height, yRange]);
   const { zmin, zmax } = useMemo(() => buildScalarHeatmapScale(values, normalizationMode), [normalizationMode, values]);
@@ -761,26 +938,128 @@ const ScalarImageHeatmapPanel = ({
     () => buildInvalidCellOverlay(invalidIndices, width, xCenters, yCenters),
     [invalidIndices, width, xCenters, yCenters],
   );
+  const heatmapData = useMemo(() => {
+    const points = [];
+    for (let row = 0; row < height; row += 1) {
+      for (let col = 0; col < width; col += 1) {
+        const index = row * width + col;
+        if (invalidIndices?.has(index)) continue;
+        const value = Number(values[index]);
+        if (!Number.isFinite(value)) continue;
+        points.push([xCenters[col], yCenters[row], value]);
+      }
+    }
+    return points;
+  }, [height, invalidIndices, values, width, xCenters, yCenters]);
 
-  const data = [
-    {
-      type: "heatmap",
-      z,
-      x: xCenters,
-      y: yCenters,
-      zmin,
-      zmax,
-      colorscale: scalarHeatmapColorscale,
-      colorbar: {
-        title: { text: "Value", side: "right" },
-        thickness: 14,
-        len: 0.88,
+  const [xMinRaw, xMaxRaw] = asArray(xRange);
+  const [yMinRaw, yMaxRaw] = asArray(yRange);
+  const xMin = Number.isFinite(Number(xMinRaw)) ? Number(xMinRaw) : 0;
+  const xMax = Number.isFinite(Number(xMaxRaw)) ? Number(xMaxRaw) : width;
+  const yMin = Number.isFinite(Number(yMinRaw)) ? Number(yMinRaw) : 0;
+  const yMax = Number.isFinite(Number(yMaxRaw)) ? Number(yMaxRaw) : height;
+
+  const option = useMemo(
+    () => ({
+      animation: false,
+      grid: { left: 12, right: 108, top: 8, bottom: 28 },
+      xAxis: {
+        type: "value",
+        min: xMin,
+        max: xMax,
+        show: false,
+        scale: true,
       },
-      hovertemplate: "value: %{z:.6g}<extra></extra>",
-      showscale: true,
-    },
-    ...(invalidOverlay ? [invalidOverlay] : []),
-  ];
+      yAxis: {
+        type: "value",
+        min: yMin,
+        max: yMax,
+        show: false,
+        scale: true,
+        inverse: true,
+      },
+      tooltip: {
+        trigger: "item",
+        formatter: (params) => {
+          if (params?.seriesName === "invalid") return "invalid value";
+          const data = Array.isArray(params?.data) ? params.data : [];
+          const [x, y, value] = data;
+          return [
+            `x: ${formatScientific(Number(x), 4)}`,
+            `y: ${formatScientific(Number(y), 4)}`,
+            `value: ${formatScientific(Number(value), 6)}`,
+          ].join("<br/>");
+        },
+      },
+      visualMap: {
+        min: zmin,
+        max: zmax,
+        orient: "vertical",
+        right: 44,
+        top: "middle",
+        calculable: false,
+        text: ["Value", ""],
+        textStyle: { color: "#64748b", fontSize: 12 },
+        inRange: { color: scalarHeatmapColors },
+      },
+      toolbox: {
+        right: 4,
+        top: 4,
+        itemSize: 14,
+        feature: {
+          dataZoom: {},
+          restore: {},
+        },
+      },
+      dataZoom: [
+        {
+          type: "inside",
+          xAxisIndex: [0],
+          yAxisIndex: [0],
+          filterMode: "none",
+          throttle: 50,
+          zoomOnMouseWheel: true,
+          moveOnMouseMove: true,
+          moveOnMouseWheel: true,
+        },
+        {
+          type: "slider",
+          xAxisIndex: [0],
+          filterMode: "none",
+          height: 14,
+          bottom: 4,
+        },
+        {
+          type: "slider",
+          yAxisIndex: [0],
+          filterMode: "none",
+          orient: "vertical",
+          width: 14,
+          right: 4,
+          top: 40,
+          bottom: 28,
+        },
+      ],
+      series: [
+        {
+          type: "heatmap",
+          name: "value",
+          data: heatmapData,
+          progressive: 0,
+        },
+        {
+          type: "scatter",
+          name: "invalid",
+          data: invalidOverlay,
+          symbol: "rect",
+          symbolSize: 8,
+          itemStyle: { color: "#ff00ff" },
+          emphasis: { disabled: true },
+        },
+      ],
+    }),
+    [heatmapData, invalidOverlay, xMax, xMin, yMax, yMin, zmax, zmin],
+  );
 
   return (
     <Card variant="outlined">
@@ -795,36 +1074,17 @@ const ScalarImageHeatmapPanel = ({
               state: { width, height, x_range: xRange, y_range: yRange, values, invalid_indices: Array.from(invalidIndices || []) },
             }}
             elementRef={figureRef}
+            echartsRef={echartsRef}
           />
         </Box>
         <Box ref={figureRef} sx={{ width: "100%", minHeight: 360 }}>
-          <Plot
-            data={data}
-            layout={{
-              autosize: true,
-              margin: { l: 12, r: 56, t: 8, b: 8 },
-              paper_bgcolor: "rgba(0,0,0,0)",
-              plot_bgcolor: "rgba(0,0,0,0)",
-              xaxis: {
-                visible: false,
-                showgrid: false,
-                zeroline: false,
-                constrain: "domain",
-              },
-              yaxis: {
-                visible: false,
-                showgrid: false,
-                zeroline: false,
-                scaleanchor: "x",
-                autorange: "reversed",
-              },
-            }}
-            config={{
-              displayModeBar: false,
-              responsive: true,
-            }}
+          <ReactECharts
+            ref={echartsRef}
+            option={option}
+            notMerge={false}
+            lazyUpdate
+            opts={{ renderer: "canvas" }}
             style={{ width: "100%", height: "360px" }}
-            useResizeHandler
           />
         </Box>
       </CardContent>
@@ -834,15 +1094,148 @@ const ScalarImageHeatmapPanel = ({
 
 const HistogramPanel = ({ title, state }) => {
   const figureRef = useRef(null);
+  const echartsRef = useRef(null);
+  const relativeEchartsRef = useRef(null);
+  const [zoomRange, setZoomRange] = useState(FULL_ZOOM);
   const [scale, setScale] = useState("linear");
   const bins = useMemo(() => buildHistogramData(state?.bins), [state?.bins]);
   const stepData = useMemo(() => buildHistogramRenderData(state?.bins, scale), [scale, state?.bins]);
-  const errorBarData = useMemo(() => buildHistogramErrorBarData(bins, scale), [bins, scale]);
   const relativeErrorData = useMemo(() => buildRelativeErrorStepData(state?.bins), [state?.bins]);
-  if (bins.length === 0) return null;
   const xDomain = fitHistogramXDomain(bins);
-  const yDomain = buildHistogramYDomain(bins, scale);
-  const relativeErrorYDomain = buildRelativeErrorYDomain(relativeErrorData);
+  const visibleXRange = useMemo(() => visibleXRangeFromZoom(xDomain, zoomRange), [xDomain, zoomRange]);
+  const yDomain = useMemo(() => buildHistogramYDomain(bins, scale, visibleXRange), [bins, scale, visibleXRange]);
+  const relativeErrorYDomain = useMemo(
+    () => buildRelativeErrorYDomain(relativeErrorData, visibleXRange),
+    [relativeErrorData, visibleXRange],
+  );
+  const binErrorData = useMemo(
+    () =>
+      bins
+        .map((bin) => {
+          const x = Number(bin?.x);
+          const y = Number(bin?.value);
+          const err = Number(bin?.error);
+          if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(err) || err <= 0) {
+            return null;
+          }
+          const yLow = y - Math.abs(err);
+          const yHigh = y + Math.abs(err);
+          if (scale === "log" && yLow <= 0) return null;
+          return [x, yLow, yHigh];
+        })
+        .filter(Boolean),
+    [bins, scale],
+  );
+  const histogramOption = useMemo(() => {
+    const baseSeries = {
+      type: "line",
+      name: "value",
+      data: stepData.map((point) => [Number(point?.x), Number(point?.y)]),
+      step: "end",
+      showSymbol: false,
+      lineStyle: { width: 1.35, color: "#005f73" },
+      connectNulls: false,
+    };
+    return {
+      animation: false,
+      grid: baseCartesianGrid,
+      xAxis: {
+        type: "value",
+        min: xDomain[0],
+        max: xDomain[1],
+        axisLabel: baseAxisLabel,
+        splitLine: { show: false },
+      },
+      yAxis: {
+        type: scale === "log" ? "log" : "value",
+        min: scale === "log" ? null : yDomain[0],
+        max: scale === "log" ? null : yDomain[1],
+        axisLabel: baseAxisLabel,
+        splitLine: { lineStyle: { color: gridColor } },
+      },
+      tooltip: {
+        trigger: "axis",
+        valueFormatter: (value) => (Number.isFinite(Number(value)) ? formatScientific(Number(value), 6) : "n/a"),
+      },
+      dataZoom: buildDataZoom(zoomRange, false),
+      series: [buildErrorBarSeries({ name: "error", data: binErrorData }), baseSeries],
+    };
+  }, [binErrorData, scale, stepData, xDomain, yDomain, zoomRange]);
+
+  const relativeOption = useMemo(
+    () => ({
+      animation: false,
+      grid: baseCartesianGrid,
+      xAxis: {
+        type: "value",
+        min: xDomain[0],
+        max: xDomain[1],
+        name: "x",
+        axisLabel: baseAxisLabel,
+        splitLine: { show: false },
+        nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
+      },
+      yAxis: {
+        type: "value",
+        min: relativeErrorYDomain[0],
+        max: relativeErrorYDomain[1],
+        axisLabel: baseAxisLabel,
+        splitLine: { lineStyle: { color: gridColor } },
+      },
+      tooltip: {
+        trigger: "axis",
+        valueFormatter: (value) => (Number.isFinite(Number(value)) ? formatScientific(Number(value), 6) : "n/a"),
+      },
+      dataZoom: buildDataZoom(zoomRange, true),
+      series: [
+        {
+          type: "line",
+          name: "positive_relative_error",
+          data: relativeErrorData.map((point) => [Number(point?.x), Number(point?.positive_relative_error)]),
+          step: "end",
+          showSymbol: false,
+          lineStyle: { width: 1.2, color: "#bb3e03" },
+          areaStyle: { color: "rgba(187, 62, 3, 0.22)" },
+          connectNulls: false,
+        },
+        {
+          type: "line",
+          name: "negative_relative_error",
+          data: relativeErrorData.map((point) => [Number(point?.x), Number(point?.negative_relative_error)]),
+          step: "end",
+          showSymbol: false,
+          lineStyle: { width: 1.2, color: "#bb3e03" },
+          areaStyle: { color: "rgba(187, 62, 3, 0.22)" },
+          connectNulls: false,
+        },
+      ],
+    }),
+    [relativeErrorData, relativeErrorYDomain, xDomain, zoomRange],
+  );
+  const onDataZoom = useMemo(
+    () => ({
+      datazoom: (event) => {
+        const next = readDataZoomRange(event);
+        if (!next) return;
+        setZoomRange((current) => (zoomRangeChanged(current, next) ? next : current));
+      },
+    }),
+    [],
+  );
+  useEffect(() => {
+    const histogram = echartsRef.current?.getEchartsInstance?.();
+    const relative = relativeEchartsRef.current?.getEchartsInstance?.();
+    if (!histogram || !relative) return undefined;
+    const groupId = `histogram-${state?.panel_id || state?.name || "panel"}`;
+    histogram.group = groupId;
+    relative.group = groupId;
+    echarts.connect(groupId);
+    return () => {
+      echarts.disconnect(groupId);
+    };
+  }, [state?.name, state?.panel_id]);
+
+  if (bins.length === 0) return null;
   return (
     <Card variant="outlined">
       <CardContent>
@@ -874,79 +1267,30 @@ const HistogramPanel = ({ title, state }) => {
         </Box>
         <Box ref={figureRef} sx={{ width: "100%", display: "grid", gap: 2 }}>
           <Box sx={{ width: "100%", height: 280 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={stepData} margin={chartMargin}>
-                <CartesianGrid stroke={gridColor} vertical={false} />
-                <XAxis
-                  dataKey="x"
-                  type="number"
-                  domain={xDomain}
-                  tickFormatter={formatAxisValue}
-                  tick={axisTickStyle}
-                  hide
-                />
-                <YAxis
-                  domain={scale === "log" ? ["auto", "auto"] : yDomain}
-                  scale={scale === "log" ? "log" : "linear"}
-                  allowDataOverflow={scale === "log"}
-                  tickFormatter={formatAxisValue}
-                  tick={axisTickStyle}
-                  width={72}
-                />
-                <Tooltip content={<HistogramTooltip />} />
-                <Line
-                  type="stepAfter"
-                  dataKey="y"
-                  stroke="#005f73"
-                  strokeWidth={1.35}
-                  dot={false}
-                  isAnimationActive={false}
-                />
-                <Scatter data={errorBarData} fill="rgba(0,0,0,0)" isAnimationActive={false}>
-                  <ErrorBar dataKey="error" width={6} strokeWidth={1.4} stroke="#7c8a96" />
-                </Scatter>
-              </ComposedChart>
-            </ResponsiveContainer>
+            <ReactECharts
+              ref={echartsRef}
+              option={histogramOption}
+              notMerge={false}
+              onEvents={onDataZoom}
+              lazyUpdate
+              opts={{ renderer: "canvas" }}
+              style={{ width: "100%", height: "100%" }}
+            />
           </Box>
           <Box>
             <Typography variant="caption" color="text.secondary">
               Relative Error Shape
             </Typography>
             <Box sx={{ width: "100%", height: 168 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={relativeErrorData} margin={chartMargin}>
-                  <CartesianGrid stroke={gridColor} vertical={false} />
-                  <XAxis
-                    dataKey="x"
-                    type="number"
-                    domain={xDomain}
-                    tickFormatter={formatAxisValue}
-                    tick={axisTickStyle}
-                  />
-                  <YAxis
-                    domain={relativeErrorYDomain}
-                    tickFormatter={formatAxisValue}
-                    tick={axisTickStyle}
-                    width={72}
-                  />
-                  <Tooltip content={<HistogramTooltip />} />
-                  <ReferenceLine y={0} stroke="#6b7280" strokeWidth={1} />
-                  <Area
-                    type="stepAfter"
-                    dataKey="positive_relative_error"
-                    stroke="#bb3e03"
-                    fill="rgba(187, 62, 3, 0.22)"
-                    isAnimationActive={false}
-                  />
-                  <Area
-                    type="stepAfter"
-                    dataKey="negative_relative_error"
-                    stroke="#bb3e03"
-                    fill="rgba(187, 62, 3, 0.22)"
-                    isAnimationActive={false}
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
+              <ReactECharts
+                ref={relativeEchartsRef}
+                option={relativeOption}
+                notMerge={false}
+                onEvents={onDataZoom}
+                lazyUpdate
+                opts={{ renderer: "canvas" }}
+                style={{ width: "100%", height: "100%" }}
+              />
             </Box>
           </Box>
         </Box>
@@ -1278,66 +1622,6 @@ const TickBreakdownPanel = ({ title, state }) => {
   );
 };
 
-const hsvToRgb = (h, s, v) => {
-  const c = v * s;
-  const hh = (((h % 360) + 360) % 360) / 60;
-  const x = c * (1 - Math.abs((hh % 2) - 1));
-  let rgb = [0, 0, 0];
-  if (hh < 1) rgb = [c, x, 0];
-  else if (hh < 2) rgb = [x, c, 0];
-  else if (hh < 3) rgb = [0, c, x];
-  else if (hh < 4) rgb = [0, x, c];
-  else if (hh < 5) rgb = [x, 0, c];
-  else rgb = [c, 0, x];
-  const m = v - c;
-  return rgb.map((value) => Math.round((value + m) * 255));
-};
-
-const scalarImageLegendGradient = "linear-gradient(to top, rgb(0,0,255), rgb(128,200,128), rgb(255,0,0))";
-
-const ComplexImageColorbar = ({ colorMode, normalizationMode, complexMaxMagnitude, scalarMin, scalarMax }) => {
-  const isHueIntensity = colorMode === "complex_hue_intensity";
-
-  return (
-    <Box
-      sx={{
-        width: 80,
-        minWidth: 80,
-        display: "flex",
-        flexDirection: "column",
-        justifyContent: "center",
-        gap: 1,
-      }}
-    >
-      <Typography variant="body2" color="text.secondary">
-        {isHueIntensity ? "Magnitude" : "Value"}
-      </Typography>
-      <Box
-        sx={{
-          height: 240,
-          borderRadius: 1,
-          border: "1px solid",
-          borderColor: "divider",
-          background: isHueIntensity
-            ? "linear-gradient(to top, rgb(0,0,0), rgb(255,255,255))"
-            : scalarImageLegendGradient,
-        }}
-      />
-      <Typography variant="caption" sx={{ fontFamily: "monospace" }}>
-        {formatScientific(isHueIntensity ? complexMaxMagnitude : scalarMax, 4)}
-      </Typography>
-      {isHueIntensity ? null : normalizationMode === "symmetric" ? (
-        <Typography variant="caption" color="text.secondary" sx={{ fontFamily: "monospace" }}>
-          0
-        </Typography>
-      ) : null}
-      <Typography variant="caption" color="text.secondary" sx={{ fontFamily: "monospace" }}>
-        {formatScientific(isHueIntensity ? 0 : scalarMin, 4)}
-      </Typography>
-    </Box>
-  );
-};
-
 const SelectPanel = ({ title, descriptor, value, onValueChange }) => {
   const options = asArray(descriptor?.state?.options);
   return (
@@ -1361,8 +1645,6 @@ const SelectPanel = ({ title, descriptor, value, onValueChange }) => {
 };
 
 const Image2dPanel = ({ title, state }) => {
-  const figureRef = useRef(null);
-  const canvasRef = useRef(null);
   const width = Number(state?.width) || 0;
   const height = Number(state?.height) || 0;
   const values = useMemo(() => asArray(state?.values), [state?.values]);
@@ -1371,221 +1653,30 @@ const Image2dPanel = ({ title, state }) => {
     return next.length > 0 ? next : null;
   }, [state?.imag_values]);
   const invalidIndices = useMemo(() => new Set(asArray(state?.invalid_indices)), [state?.invalid_indices]);
-  const colorMode = state?.color_mode || "scalar_heatmap";
   const normalizationMode = state?.normalization_mode || "min_max";
   const xRange = useMemo(() => asArray(state?.x_range), [state?.x_range]);
   const yRange = useMemo(() => asArray(state?.y_range), [state?.y_range]);
-  const [hover, setHover] = useState(null);
-
-  const useScalarHeatmap = !imagValues && colorMode === "scalar_heatmap";
-  const { zmin: scalarMin, zmax: scalarMax } = useMemo(
-    () => buildScalarHeatmapScale(values, normalizationMode),
-    [normalizationMode, values],
-  );
-  const complexMagnitudes = useMemo(
-    () => (imagValues ? values.map((re, index) => Math.hypot(re, imagValues[index] || 0)) : []),
-    [imagValues, values],
-  );
-  const complexMaxMagnitude = useMemo(() => Math.max(...complexMagnitudes, 1e-12), [complexMagnitudes]);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || useScalarHeatmap || width <= 0 || height <= 0 || values.length === 0) return;
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const image = ctx.createImageData(width, height);
-
-    if (imagValues && colorMode === "complex_hue_intensity") {
-      for (let index = 0; index < values.length; index += 1) {
-        const offset = index * 4;
-        if (invalidIndices.has(index)) {
-          image.data[offset] = invalidImageColor[0];
-          image.data[offset + 1] = invalidImageColor[1];
-          image.data[offset + 2] = invalidImageColor[2];
-          image.data[offset + 3] = 255;
-          continue;
-        }
-        const re = values[index];
-        const im = imagValues[index] || 0;
-        if (!Number.isFinite(re) || !Number.isFinite(im)) {
-          image.data[offset + 3] = 0;
-          continue;
-        }
-        const phase = (Math.atan2(im, re) / Math.PI) * 180 + 180;
-        const magnitude = Math.hypot(re, im) / complexMaxMagnitude;
-        const [r, g, b] = hsvToRgb(phase, 1, Math.min(1, Math.sqrt(magnitude)));
-        image.data[offset] = r;
-        image.data[offset + 1] = g;
-        image.data[offset + 2] = b;
-        image.data[offset + 3] = 255;
-      }
-    } else {
-      const finite = values.filter((value) => Number.isFinite(value));
-      const min =
-        normalizationMode === "symmetric"
-          ? -(finite.length > 0 ? Math.max(...finite.map((value) => Math.abs(value))) : 1)
-          : finite.length > 0
-            ? Math.min(...finite)
-            : 0;
-      const max =
-        normalizationMode === "symmetric"
-          ? finite.length > 0
-            ? Math.max(...finite.map((value) => Math.abs(value)))
-            : 1
-          : finite.length > 0
-            ? Math.max(...finite)
-            : 1;
-      const span = max - min || 1;
-      for (let index = 0; index < values.length; index += 1) {
-        const offset = index * 4;
-        if (invalidIndices.has(index)) {
-          image.data[offset] = invalidImageColor[0];
-          image.data[offset + 1] = invalidImageColor[1];
-          image.data[offset + 2] = invalidImageColor[2];
-          image.data[offset + 3] = 255;
-          continue;
-        }
-        const value = values[index];
-        if (!Number.isFinite(value)) {
-          image.data[offset + 3] = 0;
-          continue;
-        }
-        const t = Number.isFinite(value) ? (value - min) / span : 0;
-        const r = Math.round(255 * t);
-        const g = Math.round(200 * (1 - Math.abs(t - 0.5) * 2));
-        const b = Math.round(255 * (1 - t));
-        image.data[offset] = r;
-        image.data[offset + 1] = g;
-        image.data[offset + 2] = b;
-        image.data[offset + 3] = 255;
-      }
-    }
-
-    ctx.putImageData(image, 0, 0);
-  }, [
-    colorMode,
-    complexMaxMagnitude,
-    height,
-    imagValues,
-    invalidIndices,
-    normalizationMode,
-    useScalarHeatmap,
-    values,
-    width,
-  ]);
-
-  if (width <= 0 || height <= 0 || values.length === 0) return null;
-
-  if (useScalarHeatmap) {
-    return (
-      <ScalarImageHeatmapPanel
-        title={title}
-        panelId={state?.panel_id ?? null}
-        width={width}
-        height={height}
-        values={values}
-        invalidIndices={invalidIndices}
-        normalizationMode={normalizationMode}
-        xRange={xRange}
-        yRange={yRange}
-      />
-    );
-  }
-
-  const [xMin, xMax] = xRange;
-  const [yMin, yMax] = yRange;
-  const xStep = width > 0 && Number.isFinite(xMin) && Number.isFinite(xMax) ? (xMax - xMin) / width : 1;
-  const yStep = height > 0 && Number.isFinite(yMin) && Number.isFinite(yMax) ? (yMax - yMin) / height : 1;
-
-  const handleCanvasHover = (event) => {
-    const canvas = canvasRef.current;
-    if (!canvas || !imagValues) return;
-    const rect = canvas.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
-    const col = Math.min(width - 1, Math.max(0, Math.floor(((event.clientX - rect.left) / rect.width) * width)));
-    const row = Math.min(height - 1, Math.max(0, Math.floor(((event.clientY - rect.top) / rect.height) * height)));
-    const index = row * width + col;
-    if (invalidIndices.has(index)) {
-      setHover(null);
-      return;
-    }
-    const re = values[index];
-    const im = imagValues[index] || 0;
-    if (!Number.isFinite(re) || !Number.isFinite(im)) {
-      setHover(null);
-      return;
-    }
-    setHover({
-      left: event.clientX - rect.left,
-      top: event.clientY - rect.top,
-      x: Number.isFinite(xMin) && Number.isFinite(xMax) ? xMin + xStep * (col + 0.5) : col,
-      y: Number.isFinite(yMin) && Number.isFinite(yMax) ? yMin + yStep * (row + 0.5) : row,
-      re,
-      im,
-      magnitude: Math.hypot(re, im),
-      phase: Math.atan2(im, re),
+  const scalarValues = useMemo(() => {
+    if (!imagValues) return values;
+    return values.map((re, index) => {
+      const im = imagValues[index] || 0;
+      if (!Number.isFinite(re) || !Number.isFinite(im)) return Number.NaN;
+      return Math.hypot(re, im);
     });
-  };
-
+  }, [imagValues, values]);
+  if (width <= 0 || height <= 0 || values.length === 0) return null;
   return (
-    <Card variant="outlined">
-      <CardContent>
-        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, mb: 2 }}>
-          <Typography variant="subtitle1">{title}</Typography>
-          <FigureExportActions
-            baseName={state?.panel_id || title || "image2d"}
-            payload={{ panel_id: state?.panel_id ?? null, kind: "image2d", state }}
-            elementRef={figureRef}
-            canvasRef={canvasRef}
-          />
-        </Box>
-        <Box
-          ref={figureRef}
-          sx={{
-            width: "100%",
-            display: "flex",
-            justifyContent: "center",
-            alignItems: "stretch",
-            gap: 2,
-            overflow: "auto",
-          }}
-        >
-          <Box
-            sx={{
-              position: "relative",
-              width: "100%",
-              maxWidth: 640,
-            }}
-            onMouseMove={handleCanvasHover}
-            onMouseLeave={() => setHover(null)}
-          >
-            <Box
-              component="canvas"
-              ref={canvasRef}
-              sx={{
-                width: "100%",
-                display: "block",
-                imageRendering: "pixelated",
-                border: "1px solid",
-                borderColor: "divider",
-              }}
-            />
-            <ComplexImageTooltip hover={hover} />
-          </Box>
-          {imagValues ? (
-            <ComplexImageColorbar
-              colorMode={colorMode}
-              normalizationMode={normalizationMode}
-              complexMaxMagnitude={complexMaxMagnitude}
-              scalarMin={scalarMin}
-              scalarMax={scalarMax}
-            />
-          ) : null}
-        </Box>
-      </CardContent>
-    </Card>
+    <ScalarImageHeatmapPanel
+      title={title}
+      panelId={state?.panel_id ?? null}
+      width={width}
+      height={height}
+      values={scalarValues}
+      invalidIndices={invalidIndices}
+      normalizationMode={normalizationMode}
+      xRange={xRange}
+      yRange={yRange}
+    />
   );
 };
 

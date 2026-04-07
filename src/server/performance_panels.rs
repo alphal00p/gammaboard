@@ -8,7 +8,7 @@ use crate::stores::{EvaluatorPerformanceHistoryEntry, SamplerPerformanceHistoryE
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 
-const COMPLETED_THROUGHPUT_WINDOW_SECS: f64 = 5.0;
+const COMPLETED_THROUGHPUT_WINDOW_SECS: f64 = 10.0;
 
 pub fn build_evaluator_performance_response(
     scope_id: Option<String>,
@@ -591,7 +591,9 @@ fn sampler_current_panels(
     ]
 }
 
-fn sampler_completed_throughput_panel(entries: &[SamplerPerformanceHistoryEntry]) -> Option<PanelState> {
+fn sampler_completed_throughput_panel(
+    entries: &[SamplerPerformanceHistoryEntry],
+) -> Option<PanelState> {
     let mut samples = entries
         .iter()
         .filter_map(|entry| {
