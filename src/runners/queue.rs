@@ -126,6 +126,34 @@ where
         self.checkpoint.last_completed_batch_id
     }
 
+    pub async fn queue_counts(&self) -> Result<BatchQueueCounts, StoreError> {
+        let counts = self
+            .store
+            .get_batch_queue_counts(self.run_id, self.last_completed_batch_id())
+            .await?;
+        Ok(self.queue_counts_with_local_buffer(counts))
+    }
+
+    pub async fn open_batch_count(&self) -> Result<i64, StoreError> {
+        self.store.get_open_batch_count(self.run_id).await
+    }
+
+    pub async fn reclaim_abandoned_batches(&self) -> Result<u64, StoreError> {
+        self.store.reclaim_abandoned_batches(self.run_id).await
+    }
+
+    pub async fn cleanup_consumed_completed_batches(
+        &self,
+        limit: usize,
+    ) -> Result<u64, StoreError> {
+        let Some(up_to_batch_id) = self.last_completed_batch_id() else {
+            return Ok(0);
+        };
+        self.store
+            .cleanup_consumed_completed_batches(self.run_id, up_to_batch_id, limit)
+            .await
+    }
+
     pub fn target_pending_batches(&self, active_evaluator_count: usize) -> Option<usize> {
         if !self.config.queue_buffer.is_finite() || self.config.queue_buffer < 0.0 {
             return None;
