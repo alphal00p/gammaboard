@@ -22,8 +22,16 @@ type HistoryProjectorFn = dyn for<'a> Fn(&TaskPanelHistoryContext<'a>) -> Result
 
 pub struct TaskPanelProjector {
     spec: PanelSpec,
+    current_source_policy: TaskPanelCurrentSourcePolicy,
     current: Box<CurrentProjectorFn>,
     history: Box<HistoryProjectorFn>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TaskPanelCurrentSourcePolicy {
+    #[default]
+    StageFirst,
+    PersistedFirst,
 }
 
 #[derive(Clone, Copy)]
@@ -89,6 +97,10 @@ impl TaskPanelProjector {
         (self.current)(ctx)
     }
 
+    fn current_source_policy(&self) -> TaskPanelCurrentSourcePolicy {
+        self.current_source_policy
+    }
+
     pub fn history(
         &self,
         ctx: &TaskPanelHistoryContext<'_>,
@@ -108,8 +120,29 @@ pub fn panel_projector(
     + Sync
     + 'static,
 ) -> TaskPanelProjector {
+    panel_projector_with_source(
+        spec,
+        TaskPanelCurrentSourcePolicy::StageFirst,
+        current,
+        history,
+    )
+}
+
+pub fn panel_projector_with_source(
+    spec: PanelSpec,
+    current_source_policy: TaskPanelCurrentSourcePolicy,
+    current: impl for<'a> Fn(&TaskPanelContext<'a>) -> Result<Option<PanelState>, EngineError>
+    + Send
+    + Sync
+    + 'static,
+    history: impl for<'a> Fn(&TaskPanelHistoryContext<'a>) -> Result<Option<PanelState>, EngineError>
+    + Send
+    + Sync
+    + 'static,
+) -> TaskPanelProjector {
     TaskPanelProjector {
         spec,
+        current_source_policy,
         current: Box::new(current),
         history: Box::new(history),
     }
@@ -117,11 +150,30 @@ pub fn panel_projector(
 
 fn project_current_panels(
     projectors: &[TaskPanelProjector],
-    ctx: &TaskPanelContext<'_>,
+    task: &RunTask,
+    panel_state: &JsonValue,
+    current_observable: Option<&ObservableState>,
+    latest_stage_snapshot: Option<&TaskStageSnapshot>,
+    latest_persisted_snapshot: Option<&TaskOutputSnapshot>,
 ) -> Result<Vec<PanelState>, EngineError> {
     projectors
         .iter()
-        .filter_map(|projector| projector.current(ctx).transpose())
+        .filter_map(|projector| {
+            let source = resolve_current_source(
+                task,
+                current_observable,
+                latest_stage_snapshot,
+                latest_persisted_snapshot,
+                projector.current_source_policy(),
+            );
+            projector
+                .current(&TaskPanelContext {
+                    task,
+                    source,
+                    panel_state,
+                })
+                .transpose()
+        })
         .collect()
 }
 
@@ -132,6 +184,17 @@ fn project_history_panels(
     projectors
         .iter()
         .filter_map(|projector| projector.history(ctx).transpose())
+        .collect()
+}
+
+fn project_snapshot_history_panels(
+    projectors: &[TaskPanelProjector],
+    snapshots: &[TaskOutputSnapshot],
+) -> Result<Vec<Vec<PanelState>>, EngineError> {
+    snapshots
+        .iter()
+        .rev()
+        .map(|snapshot| project_history_panels(projectors, &TaskPanelHistoryContext { snapshot }))
         .collect()
 }
 
@@ -239,16 +302,11 @@ impl TaskPanelSource {
     ) -> Result<Vec<PanelState>, EngineError> {
         project_current_panels(
             &self.projectors,
-            &TaskPanelContext {
-                task,
-                source: resolve_current_source(
-                    task,
-                    current_observable,
-                    latest_stage_snapshot,
-                    latest_persisted_snapshot,
-                ),
-                panel_state,
-            },
+            task,
+            panel_state,
+            current_observable,
+            latest_stage_snapshot,
+            latest_persisted_snapshot,
         )
     }
 
@@ -264,31 +322,26 @@ impl TaskPanelSource {
         full_history_snapshots: &[TaskOutputSnapshot],
         delta_history_snapshots: &[TaskOutputSnapshot],
     ) -> Result<PanelResponse, EngineError> {
-        let current_source = resolve_current_source(
+        let current_panels = project_current_panels(
+            &self.projectors,
             task,
+            panel_state,
             current_observable,
             latest_stage_snapshot,
             latest_persisted_snapshot,
-        );
-        let current_panels = project_current_panels(
-            &self.projectors,
-            &TaskPanelContext {
-                task,
-                source: current_source,
-                panel_state,
-            },
         )?;
         let panels = self.panel_specs();
-        let full_history_panels = full_history_snapshots
-            .iter()
-            .rev()
-            .map(|snapshot| {
-                project_history_panels(&self.projectors, &TaskPanelHistoryContext { snapshot })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let compacted_full_updates =
-            compacted_full_updates(&panels, current_panels.clone(), full_history_panels);
-        let target_level = target_downsample_level(&panels, &compacted_full_updates);
+        let (updates, target_level) = if requested_cursor.snapshot_id.is_some() {
+            let delta_history_panels =
+                project_snapshot_history_panels(&self.projectors, delta_history_snapshots)?;
+            let mut updates = incremental_updates(&panels, current_panels, delta_history_panels);
+            downsample_append_updates(&panels, &mut updates, requested_cursor.downsample_level);
+            (updates, requested_cursor.downsample_level)
+        } else {
+            let full_history_panels =
+                project_snapshot_history_panels(&self.projectors, full_history_snapshots)?;
+            compacted_full_updates(&panels, current_panels, full_history_panels)
+        };
         let cursor_snapshot_id = latest_persisted_snapshot
             .and_then(|snapshot| snapshot.id.parse::<i64>().ok())
             .or(requested_cursor.snapshot_id)
@@ -300,20 +353,6 @@ impl TaskPanelSource {
             snapshot_id: cursor_snapshot_id,
             downsample_level: target_level,
         });
-        let updates = if requested_cursor.snapshot_id.is_some()
-            && requested_cursor.downsample_level == target_level
-        {
-            let delta_history_panels = delta_history_snapshots
-                .iter()
-                .rev()
-                .map(|snapshot| {
-                    project_history_panels(&self.projectors, &TaskPanelHistoryContext { snapshot })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            incremental_updates(&panels, current_panels, delta_history_panels)
-        } else {
-            compacted_full_updates
-        };
 
         Ok(PanelResponse {
             source_id,
@@ -330,16 +369,30 @@ fn resolve_current_source<'a>(
     current_observable: Option<&'a ObservableState>,
     latest_stage_snapshot: Option<&'a TaskStageSnapshot>,
     latest_persisted_snapshot: Option<&'a TaskOutputSnapshot>,
+    policy: TaskPanelCurrentSourcePolicy,
 ) -> TaskPanelCurrentSource<'a> {
     if matches!(task.state, crate::core::RunTaskState::Active) {
         if let Some(observable) = current_observable {
             return TaskPanelCurrentSource::Runtime(observable);
         }
-    } else if let Some(snapshot) = latest_stage_snapshot {
-        return TaskPanelCurrentSource::StageSnapshot(snapshot);
     }
-    if let Some(snapshot) = latest_persisted_snapshot {
-        return TaskPanelCurrentSource::Persisted(&snapshot.persisted_output);
+    match policy {
+        TaskPanelCurrentSourcePolicy::StageFirst => {
+            if let Some(snapshot) = latest_stage_snapshot {
+                return TaskPanelCurrentSource::StageSnapshot(snapshot);
+            }
+            if let Some(snapshot) = latest_persisted_snapshot {
+                return TaskPanelCurrentSource::Persisted(&snapshot.persisted_output);
+            }
+        }
+        TaskPanelCurrentSourcePolicy::PersistedFirst => {
+            if let Some(snapshot) = latest_persisted_snapshot {
+                return TaskPanelCurrentSource::Persisted(&snapshot.persisted_output);
+            }
+            if let Some(snapshot) = latest_stage_snapshot {
+                return TaskPanelCurrentSource::StageSnapshot(snapshot);
+            }
+        }
     }
     TaskPanelCurrentSource::Empty
 }
@@ -378,19 +431,11 @@ fn compacted_full_updates(
     specs: &[PanelSpec],
     current_panels: Vec<PanelState>,
     history_panels: Vec<Vec<PanelState>>,
-) -> Vec<PanelUpdate> {
+) -> (Vec<PanelUpdate>, u8) {
     let mut updates = full_updates(specs, current_panels, history_panels);
     let level = target_downsample_level(specs, &updates);
-    if level == 0 {
-        return updates;
-    }
-
-    for update in &mut updates {
-        if history_mode_for(specs, update.panel.panel_id()) == PanelHistoryMode::Append {
-            downsample_panel_state(&mut update.panel, level);
-        }
-    }
-    updates
+    downsample_append_updates(specs, &mut updates, level);
+    (updates, level)
 }
 
 fn incremental_updates(
@@ -432,6 +477,17 @@ fn incremental_updates(
     }
     updates.extend(delta_by_id.into_values().map(append_panel));
     updates
+}
+
+fn downsample_append_updates(specs: &[PanelSpec], updates: &mut [PanelUpdate], level: u8) {
+    if level == 0 {
+        return;
+    }
+    for update in updates {
+        if history_mode_for(specs, update.panel.panel_id()) == PanelHistoryMode::Append {
+            downsample_panel_state(&mut update.panel, level);
+        }
+    }
 }
 
 fn panel_state_map(panels: Vec<PanelState>) -> std::collections::BTreeMap<String, PanelState> {
@@ -904,10 +960,11 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let updates = compacted_full_updates(&specs, Vec::new(), history);
+        let (updates, level) = compacted_full_updates(&specs, Vec::new(), history);
         let [update] = updates.as_slice() else {
             panic!("expected one update");
         };
+        assert!(level > 0);
         assert!(matches!(update.mode, PanelUpdateMode::Replace));
         let PanelState::ScalarTimeseries { points, .. } = &update.panel else {
             panic!("expected scalar history panel");

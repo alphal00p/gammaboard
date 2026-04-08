@@ -1,4 +1,7 @@
-use super::{TaskPanelContext, TaskPanelHistoryContext, TaskPanelProjector, panel_projector};
+use super::{
+    TaskPanelContext, TaskPanelCurrentSourcePolicy, TaskPanelHistoryContext, TaskPanelProjector,
+    panel_projector, panel_projector_with_source,
+};
 use crate::core::{EngineError, ObservableConfig, RunTaskSpec};
 use crate::evaluation::{
     FullObservableProgress, GammaLoopObservableState, Observable, ObservableState,
@@ -40,7 +43,7 @@ pub(super) fn projectors(
 }
 
 fn sample_progress_projector() -> TaskPanelProjector {
-    panel_projector(
+    panel_projector_with_source(
         with_panel_width(
             panel_spec(
                 "sample_progress",
@@ -50,6 +53,7 @@ fn sample_progress_projector() -> TaskPanelProjector {
             ),
             PanelWidth::Full,
         ),
+        TaskPanelCurrentSourcePolicy::PersistedFirst,
         |ctx| {
             let current = sample_progress_value(ctx)?;
             Ok(Some(progress_panel(
@@ -69,85 +73,66 @@ fn sample_progress_projector() -> TaskPanelProjector {
 fn real_estimate_history_projector(
     observable_config: Option<&ObservableConfig>,
 ) -> TaskPanelProjector {
-    let observable_config = observable_config.cloned();
-    let current_config = observable_config.clone();
-    let history_config = observable_config.clone();
-    panel_projector(
-        with_panel_width(
-            panel_spec(
-                "real_estimate_history",
-                estimate_label(observable_config.as_ref()),
-                PanelKind::ScalarTimeseries,
-                PanelHistoryMode::Append,
-            ),
-            PanelWidth::Full,
-        ),
-        move |ctx| {
-            Ok(sample_observable(ctx, current_config.as_ref())?.map(real_estimate_history_panel))
-        },
-        move |ctx| {
-            Ok(decode_history_observable(ctx, history_config.as_ref())?
-                .map(real_estimate_history_panel))
-        },
+    persisted_first_history_projector(
+        "real_estimate_history",
+        estimate_label(observable_config),
+        observable_config.cloned(),
+        |observable| Some(real_estimate_history_panel(observable)),
     )
 }
 
 fn imag_estimate_history_projector(
     observable_config: Option<&ObservableConfig>,
 ) -> TaskPanelProjector {
-    let observable_config = observable_config.cloned();
-    let current_config = observable_config.clone();
-    let history_config = observable_config.clone();
-    panel_projector(
-        with_panel_width(
-            panel_spec(
-                "imag_estimate_history",
-                "Imaginary Mean",
-                PanelKind::ScalarTimeseries,
-                PanelHistoryMode::Append,
-            ),
-            PanelWidth::Full,
-        ),
-        move |ctx| {
-            Ok(sample_observable(ctx, current_config.as_ref())?
-                .and_then(imag_estimate_history_panel))
-        },
-        move |ctx| {
-            Ok(decode_history_observable(ctx, history_config.as_ref())?
-                .and_then(imag_estimate_history_panel))
-        },
+    persisted_first_history_projector(
+        "imag_estimate_history",
+        "Imaginary Mean",
+        observable_config.cloned(),
+        imag_estimate_history_panel,
     )
 }
 
 fn abs_signal_to_noise_history_projector(
     observable_config: Option<&ObservableConfig>,
 ) -> TaskPanelProjector {
-    let observable_config = observable_config.cloned();
+    persisted_first_history_projector(
+        "abs_signal_to_noise_history",
+        "Mean(|x|)^2 / abs_err^2",
+        observable_config.cloned(),
+        |observable| Some(abs_signal_to_noise_panel(observable)),
+    )
+}
+
+fn persisted_first_history_projector<F>(
+    panel_id: &'static str,
+    label: &'static str,
+    observable_config: Option<ObservableConfig>,
+    map_panel: F,
+) -> TaskPanelProjector
+where
+    F: Fn(ObservableState) -> Option<PanelState> + Copy + Send + Sync + 'static,
+{
     let current_config = observable_config.clone();
-    let history_config = observable_config.clone();
-    panel_projector(
+    let history_config = observable_config;
+    panel_projector_with_source(
         with_panel_width(
             panel_spec(
-                "abs_signal_to_noise_history",
-                "Mean(|x|)^2 / abs_err^2",
+                panel_id,
+                label,
                 PanelKind::ScalarTimeseries,
                 PanelHistoryMode::Append,
             ),
             PanelWidth::Full,
         ),
-        move |ctx| {
-            Ok(sample_observable(ctx, current_config.as_ref())?.map(abs_signal_to_noise_panel))
-        },
-        move |ctx| {
-            Ok(decode_history_observable(ctx, history_config.as_ref())?
-                .map(abs_signal_to_noise_panel))
-        },
+        TaskPanelCurrentSourcePolicy::PersistedFirst,
+        move |ctx| Ok(sample_observable(ctx, current_config.as_ref())?.and_then(map_panel)),
+        move |ctx| Ok(decode_history_observable(ctx, history_config.as_ref())?.and_then(map_panel)),
     )
 }
 
 fn estimate_summary_projector(observable_config: Option<&ObservableConfig>) -> TaskPanelProjector {
     let observable_config = observable_config.cloned();
-    panel_projector(
+    panel_projector_with_source(
         with_panel_width(
             panel_spec(
                 "estimate_summary",
@@ -157,6 +142,7 @@ fn estimate_summary_projector(observable_config: Option<&ObservableConfig>) -> T
             ),
             PanelWidth::Half,
         ),
+        TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
             Ok(sample_observable(ctx, observable_config.as_ref())?.map(estimate_summary_panel))
         },

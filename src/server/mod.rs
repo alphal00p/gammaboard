@@ -704,7 +704,7 @@ async fn get_run_task_output(
     } else {
         None
     };
-    let delta_history_snapshots = if panel_source.needs_history() {
+    let delta_history_snapshots = if panel_source.needs_history() && cursor.snapshot_id.is_some() {
         state
             .store
             .get_task_output_snapshots(run_id, task.id, cursor.snapshot_id, limit)
@@ -712,7 +712,7 @@ async fn get_run_task_output(
     } else {
         Vec::new()
     };
-    let full_history_snapshots = if panel_source.needs_history() {
+    let full_history_snapshots = if panel_source.needs_history() && cursor.snapshot_id.is_none() {
         state
             .store
             .get_task_output_snapshots(run_id, task.id, None, i64::MAX)
