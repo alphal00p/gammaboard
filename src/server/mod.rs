@@ -678,9 +678,8 @@ async fn get_run_task_output(
     let cursor =
         parse_task_panel_cursor(request.request.cursor.as_deref()).map_err(ApiError::BadRequest)?;
     let task = load_run_task(&state.store, run_id, task_id).await?;
-    let effective_observable_config =
+    let mut effective_observable_config =
         stage_api::resolve_effective_sample_observable_config(&state.store, run_id, &task).await?;
-    let panel_source = TaskPanelSource::new(&task.task, effective_observable_config);
     let latest_persisted_snapshot = state
         .store
         .get_task_output_snapshots(run_id, task.id, None, 1)
@@ -704,6 +703,22 @@ async fn get_run_task_output(
     } else {
         None
     };
+    let has_gammaloop_observable = matches!(current_observable, Some(ObservableState::Gammaloop(_)))
+        || latest_stage_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| matches!(&snapshot.observable_state, ObservableState::Gammaloop(_)))
+        || latest_persisted_snapshot.as_ref().is_some_and(|snapshot| {
+            ObservableState::from_gammaloop_persistent_json(&snapshot.persisted_output).is_ok()
+        });
+    if has_gammaloop_observable
+        && !matches!(
+            effective_observable_config,
+            Some(crate::core::ObservableConfig::Gammaloop)
+        )
+    {
+        effective_observable_config = Some(crate::core::ObservableConfig::Gammaloop);
+    }
+    let panel_source = TaskPanelSource::new(&task.task, effective_observable_config);
     let delta_history_snapshots = if panel_source.needs_history() && cursor.snapshot_id.is_some() {
         state
             .store

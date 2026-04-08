@@ -194,7 +194,12 @@ fn sample_observable(
     observable_config: Option<&ObservableConfig>,
 ) -> Result<Option<ObservableState>, EngineError> {
     if let Some(observable) = ctx.source.observable() {
-        return Ok(Some(observable.clone()));
+        let source_matches_requested = observable_config
+            .map(|config| observable.config() == *config)
+            .unwrap_or(true);
+        if source_matches_requested {
+            return Ok(Some(observable.clone()));
+        }
     }
     match ctx.source.persisted() {
         Some(persisted) => {
