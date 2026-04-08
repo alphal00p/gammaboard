@@ -197,9 +197,10 @@ fn sample_observable(
     observable_config: Option<&ObservableConfig>,
 ) -> Result<Option<ObservableState>, EngineError> {
     if let Some(observable) = ctx.source.observable() {
-        let requested_config = observable_config.copied();
+        let requested_config = observable_config.cloned();
         if requested_config
-            .map(|config| observable.config() == config)
+            .as_ref()
+            .map(|config| observable.config() == *config)
             .unwrap_or(true)
         {
             return Ok(Some(observable.clone()));
