@@ -7,11 +7,11 @@ discrete_dims = 0
 
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 2000
-min_tick_time_ms = 50
+min_tick_time_ms = 100
 
 [sampler_aggregator_runner_params]
 performance_snapshot_interval_ms = 2000
-min_tick_time_ms = 10
+min_tick_time_ms = 100
 frontend_sync_interval_ms = 2000
 target_batch_eval_ms = 1500.0
 max_batch_size = 65536
@@ -21,6 +21,6 @@ queue_buffer = 10.0
 local_pending_buffer_multiplier = 1.0
 max_queue_size = 1024
 max_batches_per_tick = 16
-max_insert_bundle_size = 4
+max_insert_bundle_size = 16
 completed_batch_fetch_limit = 16
 strict_batch_ordering = true

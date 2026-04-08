@@ -113,7 +113,7 @@ fn evaluator_panel_specs(include_summary: bool) -> Vec<PanelSpec> {
         with_panel_width(
             panel_spec(
                 "evaluator_tick_breakdown",
-                "Evaluator Time Breakdown",
+                "Evaluator Tick (Synchronous)",
                 PanelKind::TickBreakdown,
                 PanelHistoryMode::Replace,
             ),
@@ -145,7 +145,7 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         with_panel_width(
             panel_spec(
                 "sampler_tick_breakdown",
-                "Sampler Tick Breakdown",
+                "Sampler Tick (Synchronous)",
                 PanelKind::TickBreakdown,
                 PanelHistoryMode::Replace,
             ),
@@ -181,7 +181,7 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         with_panel_width(
             panel_spec(
                 "sampler_queue_efficiency",
-                "Queue Efficiency",
+                "Queue Concurrent Work",
                 PanelKind::KeyValue,
                 PanelHistoryMode::Replace,
             ),
@@ -266,7 +266,7 @@ fn evaluator_current_panels(entry: &EvaluatorPerformanceHistoryEntry) -> Vec<Pan
                 ),
                 key_value(
                     "avg_fetch_stall_time_us",
-                    "Fetch Stall Per Sample (us)",
+                    "Concurrent Fetch Wait Per Sample (us)",
                     ms_to_us(entry.metrics.avg_fetch_stall_time_per_sample_ms),
                 ),
                 key_value(
@@ -286,7 +286,7 @@ fn evaluator_current_panels(entry: &EvaluatorPerformanceHistoryEntry) -> Vec<Pan
                 ),
                 key_value(
                     "avg_submit_stall_time_us",
-                    "Submit Stall Per Sample (us)",
+                    "Concurrent Submit Wait Per Sample (us)",
                     ms_to_us(entry.metrics.avg_submit_stall_time_per_sample_ms),
                 ),
                 key_value(
@@ -564,17 +564,17 @@ fn sampler_current_panels(
             vec![
                 key_value(
                     "completed_batch_fetch_ms",
-                    "Completed Batch Fetch",
+                    "Completed Batch Fetch (concurrent)",
                     runtime.queue.rolling.fetch_completed_ms.mean,
                 ),
                 key_value(
                     "insert_bundle_ms",
-                    "Insert Bundle",
+                    "Insert Bundle (concurrent)",
                     runtime.queue.rolling.insert_bundle_ms.mean,
                 ),
                 key_value(
                     "insert_bundle_ms_per_batch",
-                    "Insert / Batch",
+                    "Insert / Batch (concurrent)",
                     runtime.queue.rolling.insert_bundle_ms_per_batch.mean,
                 ),
                 key_value(
@@ -670,18 +670,14 @@ fn segment(key: &str, label: &str, value_ms: f64, color: &str) -> TickBreakdownS
 }
 
 fn evaluator_tick_segments(metrics: &EvaluatorPerformanceMetrics) -> Vec<TickBreakdownSegment> {
+    let fetch_sync_ms =
+        (metrics.avg_fetch_time_per_sample_ms - metrics.avg_fetch_stall_time_per_sample_ms).max(0.0);
     [
         segment(
             "fetch_decode",
-            "Fetch+Decode",
-            metrics.avg_fetch_time_per_sample_ms,
+            "Fetch+Decode (sync)",
+            fetch_sync_ms,
             "#0a9396",
-        ),
-        segment(
-            "fetch_stall",
-            "Fetch Stall",
-            metrics.avg_fetch_stall_time_per_sample_ms,
-            "#94d2bd",
         ),
         segment(
             "materialize",
@@ -697,15 +693,9 @@ fn evaluator_tick_segments(metrics: &EvaluatorPerformanceMetrics) -> Vec<TickBre
         ),
         segment(
             "submit",
-            "Submit",
+            "Submit (sync)",
             metrics.avg_submit_time_per_sample_ms,
             "#bb3e03",
-        ),
-        segment(
-            "submit_stall",
-            "Submit Stall",
-            metrics.avg_submit_stall_time_per_sample_ms,
-            "#ae2012",
         ),
     ]
     .into_iter()
@@ -724,7 +714,7 @@ fn sampler_tick_segments(runtime: &SamplerRuntimeMetrics) -> Vec<TickBreakdownSe
     [
         (
             "completed_merge",
-            "Merge Completed Batches",
+            "Merge Completed Batches (sync)",
             runtime
                 .sampler
                 .completed_merge_ingest_ms
@@ -734,31 +724,31 @@ fn sampler_tick_segments(runtime: &SamplerRuntimeMetrics) -> Vec<TickBreakdownSe
         ),
         (
             "persist_observable",
-            "Persist Observable",
+            "Persist Observable (sync)",
             runtime.sampler.persist_observable_ms.mean.unwrap_or(0.0),
             "#b56576",
         ),
         (
             "completed_delete",
-            "Cleanup Consumed Batches",
+            "Cleanup Consumed Batches (sync)",
             runtime.sampler.completed_delete_ms.mean.unwrap_or(0.0),
             "#6d597a",
         ),
         (
             "produce",
-            "Produce Batches",
+            "Produce Batches (sync)",
             runtime.sampler.produce_ms.mean.unwrap_or(0.0),
             "#ae2012",
         ),
         (
             "progress_sync",
-            "Write Progress",
+            "Write Progress (sync)",
             runtime.sampler.progress_sync_ms.mean.unwrap_or(0.0),
             "#9b2226",
         ),
         (
             "performance_sync",
-            "Write Performance Snapshot",
+            "Write Performance Snapshot (sync)",
             runtime.sampler.performance_sync_ms.mean.unwrap_or(0.0),
             "#6a040f",
         ),

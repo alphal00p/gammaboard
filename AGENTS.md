@@ -94,6 +94,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - `append` is only valid when the backend can safely extend existing state; otherwise it must send `replace`.
 - Panel specs may include simple width hints such as `compact`, `half`, and `full`.
 - Run info, task output, worker details, performance, and engine config should stay backend-owned.
+- Tick breakdown bar panels must visualize only synchronous runner-tick work. Concurrent pipeline/queue work and wait/stall time must be surfaced in separate metrics panels, not stacked into the tick bar.
 - Dashboard auth is operator-oriented: read-only endpoints may stay open, while explicit steering endpoints require admin auth.
 - Dashboard steering should use explicit endpoints such as `pause`, `assign`, `unassign`, `append task`, `remove pending task`, `create run`, `clone run`, and `remove run`, not generic patch endpoints.
 - Dashboard auth is intended for small trusted deployments behind HTTPS.
