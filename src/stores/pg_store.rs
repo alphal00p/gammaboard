@@ -943,8 +943,10 @@ mod tests {
                 "max_batch_size": 64,
                 "queue": {
                     "queue_buffer": 1.0,
+                    "local_pending_buffer_multiplier": 1.0,
                     "max_queue_size": 128,
                     "max_batches_per_tick": 1,
+                    "max_insert_bundle_size": 4,
                     "completed_batch_fetch_limit": 512,
                     "strict_batch_ordering": true
                 }
@@ -986,8 +988,10 @@ mod tests {
                 "max_batch_size": 64,
                 "queue": {
                     "queue_buffer": 1.0,
+                    "local_pending_buffer_multiplier": 1.0,
                     "max_queue_size": 128,
                     "max_batches_per_tick": 1,
+                    "max_insert_bundle_size": 4,
                     "completed_batch_fetch_limit": 512,
                     "strict_batch_ordering": true
                 }
@@ -1029,8 +1033,10 @@ mod tests {
                     "max_batch_size": 64,
                     "queue": {
                         "queue_buffer": 1.0,
+                        "local_pending_buffer_multiplier": 1.0,
                         "max_queue_size": 128,
                         "max_batches_per_tick": 1,
+                        "max_insert_bundle_size": 4,
                         "completed_batch_fetch_limit": 512,
                         "strict_batch_ordering": true
                     }
@@ -1056,8 +1062,10 @@ mod tests {
                     "max_batch_size": 64,
                     "queue": {
                         "queue_buffer": 1.0,
+                        "local_pending_buffer_multiplier": 1.0,
                         "max_queue_size": 128,
                         "max_batches_per_tick": 1,
+                        "max_insert_bundle_size": 4,
                         "completed_batch_fetch_limit": 512,
                         "strict_batch_ordering": true
                     }

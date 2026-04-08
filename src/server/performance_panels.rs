@@ -475,6 +475,11 @@ fn sampler_current_panels(
                     runtime.ingested_samples_total,
                 ),
                 key_value(
+                    "completed_samples_total",
+                    "Completed Samples Total",
+                    runtime.completed_samples_total,
+                ),
+                key_value(
                     "batch_size_current",
                     "Batch Size Current",
                     runtime.batch_size_current,
@@ -598,7 +603,12 @@ fn sampler_completed_throughput_panel(
         .iter()
         .filter_map(|entry| {
             let runtime = decode_sampler_runtime_metrics(entry)?;
-            Some((history_x(entry.created_at), runtime.ingested_samples_total))
+            let cumulative_samples = if runtime.completed_samples_total > 0 {
+                runtime.completed_samples_total
+            } else {
+                runtime.ingested_samples_total
+            };
+            Some((history_x(entry.created_at), cumulative_samples))
         })
         .collect::<Vec<_>>();
     if samples.is_empty() {

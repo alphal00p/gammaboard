@@ -335,11 +335,10 @@ fn resolve_current_source<'a>(
         if let Some(observable) = current_observable {
             return TaskPanelCurrentSource::Runtime(observable);
         }
+    } else if let Some(snapshot) = latest_persisted_snapshot {
+        return TaskPanelCurrentSource::Persisted(&snapshot.persisted_output);
     } else if let Some(snapshot) = latest_stage_snapshot {
         return TaskPanelCurrentSource::StageSnapshot(snapshot);
-    }
-    if let Some(snapshot) = latest_persisted_snapshot {
-        return TaskPanelCurrentSource::Persisted(&snapshot.persisted_output);
     }
     TaskPanelCurrentSource::Empty
 }

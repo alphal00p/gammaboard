@@ -128,12 +128,14 @@ impl SamplerRuntimeState {
     fn to_runtime_metrics(
         &self,
         queue: crate::core::SamplerQueueRuntimeMetrics,
+        completed_samples_total: i64,
     ) -> SamplerRuntimeMetrics {
         SamplerRuntimeMetrics {
             produced_batches_total: self.produced_batches_total,
             produced_samples_total: self.produced_samples_total,
             ingested_batches_total: self.ingested_batches_total,
             ingested_samples_total: self.ingested_samples_total,
+            completed_samples_total,
             completed_samples_per_second: self.completed_samples_per_second,
             batch_size_current: self.batch_size_current,
             sampler: SamplerWorkRollingAverages {
@@ -565,7 +567,9 @@ where
             return Ok(());
         }
 
-        let persist_snapshot = force || self.runtime_state.initial_round_trip_snapshot_pending;
+        let persist_snapshot = force
+            || self.runtime_state.initial_round_trip_snapshot_pending
+            || self.runtime_state.pending_persisted_completed_batches > 0;
         let current_observable = self
             .observable_state
             .to_json()
@@ -919,7 +923,7 @@ where
             node_name: self.node_name.clone(),
             runtime_metrics: self
                 .runtime_state
-                .to_runtime_metrics(self.queue.runtime_metrics()),
+                .to_runtime_metrics(self.queue.runtime_metrics(), self.nr_completed_samples),
             engine_diagnostics,
             rss_bytes: current_rss_bytes(),
         };

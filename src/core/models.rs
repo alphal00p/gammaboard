@@ -245,6 +245,8 @@ pub struct SamplerRuntimeMetrics {
     pub produced_samples_total: i64,
     pub ingested_batches_total: i64,
     pub ingested_samples_total: i64,
+    #[serde(default)]
+    pub completed_samples_total: i64,
     pub completed_samples_per_second: f64,
     pub batch_size_current: usize,
     pub sampler: SamplerWorkRollingAverages,

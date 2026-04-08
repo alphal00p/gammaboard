@@ -475,6 +475,21 @@ fn temp_run_config(contents: &str) -> NamedTempFile {
     file
 }
 
+fn temp_run_add_config(contents: &str) -> NamedTempFile {
+    let mut merged = contents.trim_end().to_string();
+    if !contents.contains("evaluator_runner_params.min_tick_time_ms")
+        && !contents.contains("[evaluator_runner_params]")
+    {
+        merged.push_str("\n\nevaluator_runner_params.min_tick_time_ms = 50\n");
+    }
+    if !contents.contains("sampler_aggregator_runner_params.min_tick_time_ms")
+        && !contents.contains("[sampler_aggregator_runner_params]")
+    {
+        merged.push_str("\nsampler_aggregator_runner_params.min_tick_time_ms = 10\n");
+    }
+    temp_run_config(&merged)
+}
+
 async fn run_havana_training_then_inference(
     harness: &mut FullStackHarness,
     run_name: &str,
@@ -482,7 +497,7 @@ async fn run_havana_training_then_inference(
 ) -> anyhow::Result<(JsonValue, JsonValue)> {
     let training_samples = 256usize;
     let inference_samples = 64usize;
-    let config = temp_run_config(&format!(
+    let config = temp_run_add_config(&format!(
         r#"
 name = "{run_name}"
 
@@ -728,7 +743,7 @@ async fn full_stack_cli_alternating_havana_e2e() -> anyhow::Result<()> {
     // 2: havana_inference
     // 3: naive_monte_carlo
     // 4: image
-    let config = temp_run_config(
+    let config = temp_run_add_config(
         r#"
 name = "havana-alt-e2e"
 
@@ -1297,7 +1312,7 @@ impl<'a> SamplerCheckpointProgram<'a> {
 async fn full_stack_cli_flow_exercises_run_and_node_lifecycle() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let invalid_config = temp_run_config(
+    let invalid_config = temp_run_add_config(
         r#"
 name = "invalid-run"
 
@@ -1318,7 +1333,7 @@ discrete_dims = 0
             "top-level [point_spec] or [domain] is no longer supported",
         ));
 
-    let valid_config = temp_run_config(
+    let valid_config = temp_run_add_config(
         r#"
 name = "full-stack-e2e"
 "#,
@@ -1556,7 +1571,7 @@ name = "full-stack-e2e"
 async fn full_stack_cli_pause_resume_restores_sampler_checkpoint() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_config(
+    let config = temp_run_add_config(
         r#"
 name = "sampler-checkpoint-e2e"
 
@@ -1726,7 +1741,7 @@ async fn full_stack_cli_run_node_exits_on_sigterm_and_releases_name() -> anyhow:
 async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_config("name = \"auth-e2e\"\n");
+    let config = temp_run_add_config("name = \"auth-e2e\"\n");
     harness
         .cli()
         .arg("run")
@@ -1895,8 +1910,8 @@ async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> 
 async fn full_stack_cli_lists_duplicate_run_names_and_reports_ambiguity() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config_a = temp_run_config("name = \"duplicate-run\"\n");
-    let config_b = temp_run_config("name = \"duplicate-run\"\n");
+    let config_a = temp_run_add_config("name = \"duplicate-run\"\n");
+    let config_b = temp_run_add_config("name = \"duplicate-run\"\n");
 
     harness
         .cli()
@@ -1955,7 +1970,7 @@ async fn full_stack_cli_lists_duplicate_run_names_and_reports_ambiguity() -> any
 async fn full_stack_cli_reclaims_claimed_batches_after_worker_death() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_config(
+    let config = temp_run_add_config(
         r#"
 name = "worker-death-e2e"
 
@@ -2108,7 +2123,7 @@ strict_batch_ordering = true
 async fn full_stack_cli_fails_task_gracefully_on_sampler_error() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_config(
+    let config = temp_run_add_config(
         r#"
 name = "sampler-error-e2e"
 
@@ -2171,7 +2186,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_produce_ba
 async fn full_stack_cli_fails_task_gracefully_on_materializer_error() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_config(
+    let config = temp_run_add_config(
         r#"
 name = "materializer-error-e2e"
 
@@ -2251,7 +2266,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
 async fn full_stack_cli_fails_task_gracefully_on_evaluator_error() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_config(
+    let config = temp_run_add_config(
         r#"
 name = "evaluator-error-e2e"
 
@@ -2325,7 +2340,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 async fn full_stack_cli_can_clone_run_from_task_snapshot() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_config(
+    let config = temp_run_add_config(
         r#"
 name = "clone-source-e2e"
 
