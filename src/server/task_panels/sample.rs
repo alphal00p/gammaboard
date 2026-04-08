@@ -36,7 +36,10 @@ pub(super) fn projectors(
     projectors.push(abs_signal_to_noise_history_projector(
         observable_config.as_ref(),
     ));
-    if matches!(observable_config, Some(ObservableConfig::Gammaloop)) {
+    if matches!(
+        observable_config,
+        Some(ObservableConfig::Gammaloop) | None
+    ) {
         projectors.push(gammaloop_histogram_bundle_projector());
     }
     projectors
@@ -194,11 +197,19 @@ fn sample_observable(
     observable_config: Option<&ObservableConfig>,
 ) -> Result<Option<ObservableState>, EngineError> {
     if let Some(observable) = ctx.source.observable() {
-        let source_matches_requested = observable_config
-            .map(|config| observable.config() == *config)
-            .unwrap_or(true);
-        if source_matches_requested {
+        let requested_config = observable_config.copied();
+        if requested_config
+            .map(|config| observable.config() == config)
+            .unwrap_or(true)
+        {
             return Ok(Some(observable.clone()));
+        }
+        if ctx.source.persisted().is_none() {
+            return Err(EngineError::build(format!(
+                "observable type mismatch: expected {}, got {} and no persisted snapshot was available for fallback decoding",
+                config_label(requested_config.expect("checked is_some above")),
+                observable.kind_str()
+            )));
         }
     }
     match ctx.source.persisted() {

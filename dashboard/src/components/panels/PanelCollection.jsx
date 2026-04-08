@@ -1478,7 +1478,25 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
 const TablePanel = ({ title, state }) => {
   const columns = asArray(state?.columns);
   const rows = asArray(state?.rows);
-  if (columns.length === 0 || rows.length === 0) return null;
+  const isGammaLoopBundle = state?.panel_id === "gammaloop_histogram_bundle";
+  if (columns.length === 0 || rows.length === 0) {
+    if (isGammaLoopBundle) {
+      return (
+        <Card variant="outlined">
+          <CardContent>
+            <Typography variant="subtitle1" sx={{ mb: 1 }}>
+              {title}
+            </Typography>
+            <Alert severity="warning">
+              GammaLoop histogram bundle is empty or incompatible with the current payload shape.
+              Check backend task-output errors for observable decode details.
+            </Alert>
+          </CardContent>
+        </Card>
+      );
+    }
+    return null;
+  }
   const columnKeys = columns.map((column) => String(column || "").trim().toLowerCase());
   const centralValueIndex = columnKeys.findIndex((column) => column === "central value");
   const errorIndex = columnKeys.findIndex((column) => column === "dy" || column === "error");
