@@ -207,7 +207,7 @@ fn sample_observable(
         if ctx.source.persisted().is_none() {
             return Err(EngineError::build(format!(
                 "observable type mismatch: expected {}, got {} and no persisted snapshot was available for fallback decoding",
-                config_label(requested_config.expect("checked is_some above")),
+                config_label(&requested_config.expect("checked is_some above")),
                 observable.kind_str()
             )));
         }
