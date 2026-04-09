@@ -993,9 +993,10 @@ sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo", seed = 0 }} }}
         .assert()
         .success();
 
-    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = 'python-scalar-flake-e2e'")
-        .fetch_one(&harness.pool)
-        .await?;
+    let run_id: i32 =
+        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'python-scalar-flake-e2e'")
+            .fetch_one(&harness.pool)
+            .await?;
 
     harness
         .cli()
@@ -1010,7 +1011,13 @@ sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo", seed = 0 }} }}
         .success();
     harness
         .cli()
-        .args(["node", "assign", "w-2", "evaluator", "python-scalar-flake-e2e"])
+        .args([
+            "node",
+            "assign",
+            "w-2",
+            "evaluator",
+            "python-scalar-flake-e2e",
+        ])
         .assert()
         .success();
 

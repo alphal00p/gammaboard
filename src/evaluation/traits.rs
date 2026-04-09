@@ -281,7 +281,9 @@ mod tests {
     fn scalar_batch_helper_rejects_discrete_points() {
         let batch = Batch::from_points([Point::new(vec![1.0], vec![0], 1.0)]).expect("batch");
         let mut evaluator = EchoScalarBatch { input_dim: 1 };
-        let err = evaluator.eval_scalar_batch(&batch).expect_err("expected error");
+        let err = evaluator
+            .eval_scalar_batch(&batch)
+            .expect_err("expected error");
         assert!(
             err.to_string().contains("continuous inputs"),
             "unexpected error: {err}"
@@ -292,7 +294,9 @@ mod tests {
     fn scalar_batch_helper_rejects_ragged_points() {
         let batch = Batch::from_points([Point::new(vec![1.0, 2.0], vec![], 1.0)]).expect("batch");
         let mut evaluator = EchoScalarBatch { input_dim: 1 };
-        let err = evaluator.eval_scalar_batch(&batch).expect_err("expected error");
+        let err = evaluator
+            .eval_scalar_batch(&batch)
+            .expect_err("expected error");
         assert!(
             err.to_string().contains("expected 1 continuous dimensions"),
             "unexpected error: {err}"

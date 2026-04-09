@@ -48,9 +48,9 @@ impl EvaluatorConfig {
             Self::Symbolica { params } => {
                 Ok(Box::new(SymbolicaEngine::from_params(params.clone())?))
             }
-            Self::PythonScalar { params } => {
-                Ok(Box::new(ScalarPythonEvaluator::from_params(params.clone())?))
-            }
+            Self::PythonScalar { params } => Ok(Box::new(ScalarPythonEvaluator::from_params(
+                params.clone(),
+            )?)),
         }
     }
 
