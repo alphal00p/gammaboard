@@ -1,8 +1,9 @@
 use crate::core::{EvaluatorPerformanceMetrics, SamplerRuntimeMetrics};
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelWidth, PlotPoint,
-    TickBreakdownSegment, history_x, key_value, key_value_panel, merge_panel_state, panel_spec,
-    replace_panel, scalar_timeseries_panel, tick_breakdown_panel, with_panel_width,
+    PlotSeries, TickBreakdownSegment, history_x, key_value, key_value_panel, merge_panel_state,
+    multi_timeseries_panel, panel_spec, replace_panel, scalar_timeseries_panel,
+    tick_breakdown_panel, with_panel_width,
 };
 use crate::stores::{EvaluatorPerformanceHistoryEntry, SamplerPerformanceHistoryEntry};
 use serde_json::Value as JsonValue;
@@ -57,6 +58,9 @@ pub fn build_sampler_performance_response(
         })
         .unwrap_or(0.0);
     if let Some(panel) = throughput_panel {
+        response.updates.push(replace_panel(panel));
+    }
+    if let Some(panel) = sampler_utilization_history_panel(&entries) {
         response.updates.push(replace_panel(panel));
     }
     if let Some(latest) = entries.first() {
@@ -144,21 +148,39 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
     vec![
         with_panel_width(
             panel_spec(
-                "sampler_tick_breakdown",
-                "Sampler Tick (Synchronous)",
-                PanelKind::TickBreakdown,
+                "sampler_runtime_overview",
+                "Sampler Overview",
+                PanelKind::KeyValue,
                 PanelHistoryMode::Replace,
             ),
             PanelWidth::Full,
         ),
         with_panel_width(
             panel_spec(
-                "sampler_runtime_overview",
-                "Sampler Overview",
-                PanelKind::KeyValue,
+                "sampler_utilization_history",
+                "Sampler Utilization History",
+                PanelKind::MultiTimeseries,
                 PanelHistoryMode::Replace,
             ),
-            PanelWidth::Half,
+            PanelWidth::Full,
+        ),
+        with_panel_width(
+            panel_spec(
+                "sampler_completed_samples_per_second",
+                "Completed Samples / Sec",
+                PanelKind::ScalarTimeseries,
+                PanelHistoryMode::Append,
+            ),
+            PanelWidth::Full,
+        ),
+        with_panel_width(
+            panel_spec(
+                "sampler_tick_breakdown",
+                "Sampler Tick (Synchronous)",
+                PanelKind::TickBreakdown,
+                PanelHistoryMode::Replace,
+            ),
+            PanelWidth::Full,
         ),
         with_panel_width(
             panel_spec(
@@ -186,15 +208,6 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
                 PanelHistoryMode::Replace,
             ),
             PanelWidth::Half,
-        ),
-        with_panel_width(
-            panel_spec(
-                "sampler_completed_samples_per_second",
-                "Completed Samples / Sec",
-                PanelKind::ScalarTimeseries,
-                PanelHistoryMode::Append,
-            ),
-            PanelWidth::Full,
         ),
     ]
 }
@@ -465,6 +478,31 @@ fn sampler_current_panels(
                     completed_samples_per_second,
                 ),
                 key_value(
+                    "sampler_tick_busy_ratio",
+                    "Sampler Tick Busy Ratio",
+                    busy_ratio(runtime.sampler.tick_idle_ratio.mean),
+                ),
+                key_value(
+                    "insert_task_utilization",
+                    "Insert Task Utilization",
+                    busy_ratio(runtime.queue.rolling.insert_task_idle_ratio.mean),
+                ),
+                key_value(
+                    "completed_fetch_utilization",
+                    "Completed Fetch Utilization",
+                    busy_ratio(runtime.queue.rolling.fetch_completed_idle_ratio.mean),
+                ),
+                key_value(
+                    "eval_ms_per_batch",
+                    "Eval Ms / Batch",
+                    runtime.sampler.eval_ms_per_batch.mean,
+                ),
+                key_value(
+                    "target_batch_eval_ms",
+                    "Target Eval Ms / Batch",
+                    queue_buffer_value(&entry.engine_diagnostics, "target_batch_eval_ms"),
+                ),
+                key_value(
                     "produced_samples_total",
                     "Produced Samples Total",
                     runtime.produced_samples_total,
@@ -495,11 +533,6 @@ fn sampler_current_panels(
             "sampler_runtime_efficiency",
             vec![
                 key_value(
-                    "eval_ms_per_batch",
-                    "Eval Ms / Batch",
-                    runtime.sampler.eval_ms_per_batch.mean,
-                ),
-                key_value(
                     "training_ingest_ms_per_sample",
                     "Training Ingest Ms / Sample",
                     runtime.sampler.training_ingest_ms_per_sample.mean,
@@ -508,11 +541,6 @@ fn sampler_current_panels(
                     "produce_ms_per_sample",
                     "Produce Ms / Sample",
                     runtime.sampler.produce_ms_per_sample.mean,
-                ),
-                key_value(
-                    "tick_idle_ratio",
-                    "Sampler Tick Idle Ratio",
-                    runtime.sampler.tick_idle_ratio.mean,
                 ),
                 key_value(
                     "merge_completed_batches_ms",
@@ -691,6 +719,58 @@ fn sampler_completed_throughput_panel(
     ))
 }
 
+fn sampler_utilization_history_panel(
+    entries: &[SamplerPerformanceHistoryEntry],
+) -> Option<PanelState> {
+    let mut sampler_tick_points = Vec::new();
+    let mut insert_task_points = Vec::new();
+    let mut completed_fetch_points = Vec::new();
+
+    for entry in entries.iter().rev() {
+        let runtime = decode_sampler_runtime_metrics(entry)?;
+        let x = history_x(entry.created_at);
+        sampler_tick_points.push(PlotPoint {
+            x,
+            y: busy_ratio(runtime.sampler.tick_idle_ratio.mean).unwrap_or(0.0),
+            y_min: None,
+            y_max: None,
+        });
+        insert_task_points.push(PlotPoint {
+            x,
+            y: busy_ratio(runtime.queue.rolling.insert_task_idle_ratio.mean).unwrap_or(0.0),
+            y_min: None,
+            y_max: None,
+        });
+        completed_fetch_points.push(PlotPoint {
+            x,
+            y: busy_ratio(runtime.queue.rolling.fetch_completed_idle_ratio.mean).unwrap_or(0.0),
+            y_min: None,
+            y_max: None,
+        });
+    }
+
+    Some(multi_timeseries_panel(
+        "sampler_utilization_history",
+        vec![
+            PlotSeries {
+                id: "sampler_tick_busy_ratio".to_string(),
+                label: "Sampler Tick Busy Ratio".to_string(),
+                points: sampler_tick_points,
+            },
+            PlotSeries {
+                id: "insert_task_utilization".to_string(),
+                label: "Insert Task Utilization".to_string(),
+                points: insert_task_points,
+            },
+            PlotSeries {
+                id: "completed_fetch_utilization".to_string(),
+                label: "Completed Fetch Utilization".to_string(),
+                points: completed_fetch_points,
+            },
+        ],
+    ))
+}
+
 fn throughput_points_from_cumulative(samples: &[(f64, i64)], window_ms: f64) -> Vec<PlotPoint> {
     if samples.is_empty() {
         return Vec::new();
@@ -727,6 +807,10 @@ fn throughput_points_from_cumulative(samples: &[(f64, i64)], window_ms: f64) -> 
 
 fn queue_buffer_value(value: &JsonValue, key: &str) -> Option<JsonValue> {
     value.get("runner")?.get(key).cloned()
+}
+
+fn busy_ratio(idle_ratio: Option<f64>) -> Option<f64> {
+    idle_ratio.map(|value| (1.0 - value).clamp(0.0, 1.0))
 }
 
 fn decode_sampler_runtime_metrics(

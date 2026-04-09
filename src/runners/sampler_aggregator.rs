@@ -329,6 +329,7 @@ where
         let queue_runtime = self.queue.runtime_metrics();
         json!({
             "active_evaluator_count": active_evaluator_count,
+            "target_batch_eval_ms": self.params.target_batch_eval_ms,
             "pending_batches": queue_counts.map(|counts| counts.pending),
             "claimed_batches": queue_counts.map(|counts| counts.claimed),
             "completed_batches": queue_counts.map(|counts| counts.completed),
