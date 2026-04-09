@@ -124,6 +124,9 @@ fn panel_states(
     let local_inflight_insert_batches = active_sampler
         .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
         .and_then(|value| runner_diagnostic_i64(value, "local_inflight_insert_batches"));
+    let local_inflight_insert_tasks = active_sampler
+        .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
+        .and_then(|value| runner_diagnostic_i64(value, "local_inflight_insert_tasks"));
     let local_ready_processed_batches = active_sampler
         .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
         .and_then(|value| runner_diagnostic_i64(value, "local_ready_processed_batches"));
@@ -204,6 +207,11 @@ fn panel_states(
                     "local_pending_batches",
                     "Local Pending Batches",
                     local_pending_batches,
+                ),
+                key_value(
+                    "local_inflight_insert_tasks",
+                    "Local In-Flight Insert Tasks",
+                    local_inflight_insert_tasks,
                 ),
                 key_value(
                     "local_inflight_insert_batches",

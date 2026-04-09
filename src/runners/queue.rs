@@ -20,6 +20,7 @@ pub struct SamplerQueueConfig {
     pub max_queue_size: usize,
     pub max_batches_per_tick: usize,
     pub max_insert_bundle_size: usize,
+    pub max_concurrent_insert_tasks: usize,
     pub completed_batch_fetch_limit: usize,
     pub strict_batch_ordering: bool,
 }
@@ -39,7 +40,7 @@ pub struct SamplerQueue<S> {
     checkpoint: SamplerQueueCheckpoint,
     pending_insert: VecDeque<LatentBatch>,
     ready_processed: VecDeque<CompletedBatch>,
-    pending_insert_task: Option<PendingInsertTask>,
+    pending_insert_tasks: Vec<PendingInsertTask>,
     insert_pump_running: bool,
     pending_processed_fetch: Option<PendingProcessedFetchTask>,
     cached_tick_queue_counts: Option<BatchQueueCounts>,
@@ -112,7 +113,7 @@ where
             checkpoint,
             pending_insert: VecDeque::new(),
             ready_processed: VecDeque::new(),
-            pending_insert_task: None,
+            pending_insert_tasks: Vec::new(),
             insert_pump_running: false,
             pending_processed_fetch: None,
             cached_tick_queue_counts: None,
@@ -134,11 +135,12 @@ where
     pub fn runtime_metrics(&self) -> SamplerQueueRuntimeMetrics {
         SamplerQueueRuntimeMetrics {
             local_pending_batches: self.pending_insert.len(),
+            local_inflight_insert_tasks: self.pending_insert_tasks.len(),
             local_inflight_insert_batches: self
-                .pending_insert_task
-                .as_ref()
+                .pending_insert_tasks
+                .iter()
                 .map(|task| task.batch_count)
-                .unwrap_or(0),
+                .sum(),
             local_ready_processed_batches: self.ready_processed.len(),
             rolling: crate::core::SamplerQueueRollingAverages {
                 get_processed_ms: RollingMetricSnapshot::from(&self.metrics.get_processed_ms),
@@ -327,16 +329,16 @@ where
     fn local_unpersisted_batches(&self) -> usize {
         self.pending_insert.len()
             + self
-                .pending_insert_task
-                .as_ref()
+                .pending_insert_tasks
+                .iter()
                 .map(|task| task.batch_count)
-                .unwrap_or(0)
+                .sum::<usize>()
     }
 
     pub(crate) fn local_work_drained(&self) -> bool {
         self.pending_insert.is_empty()
             && self.ready_processed.is_empty()
-            && self.pending_insert_task.is_none()
+            && self.pending_insert_tasks.is_empty()
             && self.pending_processed_fetch.is_none()
             && !self.insert_pump_running
     }
@@ -439,15 +441,15 @@ where
         let started = Instant::now();
         loop {
             self.drain_finished_insert().await?;
-            if self.pending_insert_task.is_none() && self.pending_insert.is_empty() {
+            if self.pending_insert_tasks.is_empty() && self.pending_insert.is_empty() {
                 break;
             }
             self.ensure_insert_pump();
-            if let Some(task) = self.pending_insert_task.take() {
-                self.consume_insert_task(task).await?;
-            } else {
+            if self.pending_insert_tasks.is_empty() {
                 break;
             }
+            let task = self.pending_insert_tasks.swap_remove(0);
+            self.consume_insert_task(task).await?;
         }
         observe_duration_ms(&mut self.metrics.flush_ms, started.elapsed());
         Ok(())
@@ -534,48 +536,54 @@ where
     }
 
     fn ensure_insert_pump(&mut self) {
-        if self.pending_insert_task.is_some() || self.pending_insert.is_empty() {
-            if self.pending_insert.is_empty() {
-                self.insert_pump_running = false;
-            }
-            return;
+        let max_concurrent_insert_tasks = self.config.max_concurrent_insert_tasks.max(1);
+        while self.pending_insert_tasks.len() < max_concurrent_insert_tasks
+            && !self.pending_insert.is_empty()
+        {
+            self.observe_insert_bundle_local_pending_at_start();
+
+            let bundle_size = self.config.max_insert_bundle_size.max(1);
+            let batch_count = self.pending_insert.len().min(bundle_size);
+            let batches = self.pending_insert.drain(..batch_count).collect::<Vec<_>>();
+            let store = self.store.clone();
+            let run_id = self.run_id;
+            let task_id = self.task_id;
+            let requires_training_values = self.requires_training_values;
+            self.pending_insert_tasks.push(PendingInsertTask {
+                batch_count,
+                started_at: Instant::now(),
+                handle: tokio::spawn(async move {
+                    let outcome = store
+                        .insert_batches(run_id, task_id, requires_training_values, &batches)
+                        .await?;
+                    Ok(outcome.metrics)
+                }),
+            });
         }
 
-        self.observe_insert_bundle_local_pending_at_start();
-
-        let bundle_size = self.config.max_insert_bundle_size.max(1);
-        let batch_count = self.pending_insert.len().min(bundle_size);
-        let batches = self.pending_insert.drain(..batch_count).collect::<Vec<_>>();
-        let store = self.store.clone();
-        let run_id = self.run_id;
-        let task_id = self.task_id;
-        let requires_training_values = self.requires_training_values;
-        self.pending_insert_task = Some(PendingInsertTask {
-            batch_count,
-            started_at: Instant::now(),
-            handle: tokio::spawn(async move {
-                let outcome = store
-                    .insert_batches(run_id, task_id, requires_training_values, &batches)
-                    .await?;
-                Ok(outcome.metrics)
-            }),
-        });
+        if self.pending_insert.is_empty() && self.pending_insert_tasks.is_empty() {
+            self.insert_pump_running = false;
+        } else if !self.pending_insert.is_empty() {
+            self.insert_pump_running = true;
+        }
     }
 
     async fn drain_finished_insert(&mut self) -> Result<(), StoreError> {
-        let Some(task) = self.pending_insert_task.as_ref() else {
-            self.insert_pump_running = false;
-            return Ok(());
-        };
-        if !task.handle.is_finished() {
-            return Ok(());
+        let mut index = 0;
+        while index < self.pending_insert_tasks.len() {
+            if !self.pending_insert_tasks[index].handle.is_finished() {
+                index += 1;
+                continue;
+            }
+
+            let task = self.pending_insert_tasks.swap_remove(index);
+            self.consume_insert_task(task).await?;
         }
 
-        let task = self
-            .pending_insert_task
-            .take()
-            .expect("checked pending insert task");
-        self.consume_insert_task(task).await
+        if self.pending_insert.is_empty() && self.pending_insert_tasks.is_empty() {
+            self.insert_pump_running = false;
+        }
+        Ok(())
     }
 
     async fn consume_insert_task(&mut self, task: PendingInsertTask) -> Result<(), StoreError> {

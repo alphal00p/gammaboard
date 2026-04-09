@@ -262,6 +262,7 @@ impl Default for SamplerQueueRollingAverages {
 #[serde(default)]
 pub struct SamplerQueueRuntimeMetrics {
     pub local_pending_batches: usize,
+    pub local_inflight_insert_tasks: usize,
     pub local_inflight_insert_batches: usize,
     pub local_ready_processed_batches: usize,
     pub rolling: SamplerQueueRollingAverages,

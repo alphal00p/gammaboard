@@ -568,6 +568,11 @@ fn sampler_current_panels(
                     queue_buffer_value(&entry.engine_diagnostics, "local_pending_batches"),
                 ),
                 key_value(
+                    "local_inflight_insert_tasks",
+                    "Local Inflight Insert Tasks",
+                    queue_buffer_value(&entry.engine_diagnostics, "local_inflight_insert_tasks"),
+                ),
+                key_value(
                     "local_inflight_insert_batches",
                     "Local Inflight Insert Batches",
                     queue_buffer_value(&entry.engine_diagnostics, "local_inflight_insert_batches"),

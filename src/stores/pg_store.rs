@@ -947,6 +947,7 @@ mod tests {
                     "max_queue_size": 128,
                     "max_batches_per_tick": 1,
                     "max_insert_bundle_size": 4,
+                    "max_concurrent_insert_tasks": 1,
                     "completed_batch_fetch_limit": 512,
                     "strict_batch_ordering": true
                 }
@@ -992,6 +993,7 @@ mod tests {
                     "max_queue_size": 128,
                     "max_batches_per_tick": 1,
                     "max_insert_bundle_size": 4,
+                    "max_concurrent_insert_tasks": 1,
                     "completed_batch_fetch_limit": 512,
                     "strict_batch_ordering": true
                 }
@@ -1037,6 +1039,7 @@ mod tests {
                         "max_queue_size": 128,
                         "max_batches_per_tick": 1,
                         "max_insert_bundle_size": 4,
+                        "max_concurrent_insert_tasks": 1,
                         "completed_batch_fetch_limit": 512,
                         "strict_batch_ordering": true
                     }
@@ -1066,6 +1069,7 @@ mod tests {
                         "max_queue_size": 128,
                         "max_batches_per_tick": 1,
                         "max_insert_bundle_size": 4,
+                        "max_concurrent_insert_tasks": 1,
                         "completed_batch_fetch_limit": 512,
                         "strict_batch_ordering": true
                     }

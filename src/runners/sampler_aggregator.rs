@@ -325,6 +325,7 @@ where
                 .map(|(target, counts)| (target as i64).saturating_sub(counts.pending as i64)),
             "last_completed_batch_id": self.queue.last_completed_batch_id(),
             "local_pending_batches": queue_runtime.local_pending_batches,
+            "local_inflight_insert_tasks": queue_runtime.local_inflight_insert_tasks,
             "local_inflight_insert_batches": queue_runtime.local_inflight_insert_batches,
             "local_ready_processed_batches": queue_runtime.local_ready_processed_batches,
             "observable_checkpoint_state": match self.runtime_state.observable_checkpoint_state {

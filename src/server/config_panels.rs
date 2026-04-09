@@ -183,6 +183,11 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
                     ctx.runner_params.queue.max_batches_per_tick,
                 ),
                 key_value(
+                    "max_concurrent_insert_tasks",
+                    "Max Concurrent Insert Tasks",
+                    ctx.runner_params.queue.max_concurrent_insert_tasks,
+                ),
+                key_value(
                     "completed_fetch_limit",
                     "Completed Fetch Limit",
                     ctx.runner_params.queue.completed_batch_fetch_limit,
