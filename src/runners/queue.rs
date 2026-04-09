@@ -48,6 +48,7 @@ pub struct SamplerQueue<S> {
     last_reclaim_at: Instant,
     last_completed_cleanup_at: Instant,
     metrics: QueueMetricsState,
+    utilization: QueueUtilizationState,
 }
 
 struct PendingInsertTask {
@@ -59,6 +60,12 @@ struct PendingInsertTask {
 struct PendingProcessedFetchTask {
     started_at: Instant,
     handle: JoinHandle<Result<Vec<CompletedBatch>, StoreError>>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct QueueUtilizationSnapshot {
+    pub insert_task_utilization: Option<f64>,
+    pub completed_fetch_utilization: Option<f64>,
 }
 
 pub struct QueueTickResult {
@@ -79,10 +86,8 @@ pub struct QueueDiagnosticsSnapshot {
 struct QueueMetricsState {
     get_processed_ms: RollingMetric,
     fetch_completed_ms: RollingMetric,
-    fetch_completed_idle_ratio: RollingMetric,
     insert_bundle_ms: RollingMetric,
     insert_bundle_ms_per_batch: RollingMetric,
-    insert_task_idle_ratio: RollingMetric,
     insert_bundle_serialize_ms: RollingMetric,
     insert_bundle_payload_bytes: RollingMetric,
     insert_bundle_payload_bytes_per_batch: RollingMetric,
@@ -91,6 +96,25 @@ struct QueueMetricsState {
     insert_bundle_commit_ms: RollingMetric,
     insert_bundle_local_pending_at_start: RollingMetric,
     flush_ms: RollingMetric,
+}
+
+#[derive(Debug, Clone)]
+struct QueueUtilizationState {
+    window_started_at: Instant,
+    last_accounted_at: Instant,
+    insert_busy_slot_secs: f64,
+    completed_fetch_busy_secs: f64,
+}
+
+impl QueueUtilizationState {
+    fn new(now: Instant) -> Self {
+        Self {
+            window_started_at: now,
+            last_accounted_at: now,
+            insert_busy_slot_secs: 0.0,
+            completed_fetch_busy_secs: 0.0,
+        }
+    }
 }
 
 impl<S> SamplerQueue<S>
@@ -123,6 +147,7 @@ where
             last_reclaim_at: now.checked_sub(RECLAIM_INTERVAL).unwrap_or(now),
             last_completed_cleanup_at: now.checked_sub(COMPLETED_CLEANUP_INTERVAL).unwrap_or(now),
             metrics: QueueMetricsState::default(),
+            utilization: QueueUtilizationState::new(now),
         }
     }
 
@@ -144,18 +169,14 @@ where
                 .map(|task| task.batch_count)
                 .sum(),
             local_ready_processed_batches: self.ready_processed.len(),
+            insert_task_utilization: None,
+            completed_fetch_utilization: None,
             rolling: crate::core::SamplerQueueRollingAverages {
                 get_processed_ms: RollingMetricSnapshot::from(&self.metrics.get_processed_ms),
                 fetch_completed_ms: RollingMetricSnapshot::from(&self.metrics.fetch_completed_ms),
-                fetch_completed_idle_ratio: RollingMetricSnapshot::from(
-                    &self.metrics.fetch_completed_idle_ratio,
-                ),
                 insert_bundle_ms: RollingMetricSnapshot::from(&self.metrics.insert_bundle_ms),
                 insert_bundle_ms_per_batch: RollingMetricSnapshot::from(
                     &self.metrics.insert_bundle_ms_per_batch,
-                ),
-                insert_task_idle_ratio: RollingMetricSnapshot::from(
-                    &self.metrics.insert_task_idle_ratio,
                 ),
                 insert_bundle_serialize_ms: RollingMetricSnapshot::from(
                     &self.metrics.insert_bundle_serialize_ms,
@@ -181,6 +202,33 @@ where
                 flush_ms: RollingMetricSnapshot::from(&self.metrics.flush_ms),
             },
         }
+    }
+
+    pub fn take_utilization_snapshot(&mut self) -> QueueUtilizationSnapshot {
+        let now = Instant::now();
+        self.account_utilization(now);
+        let elapsed_secs = now
+            .saturating_duration_since(self.utilization.window_started_at)
+            .as_secs_f64();
+        let insert_capacity = self.config.max_concurrent_insert_tasks.max(1) as f64;
+        let snapshot = if elapsed_secs <= 0.0 {
+            QueueUtilizationSnapshot::default()
+        } else {
+            QueueUtilizationSnapshot {
+                insert_task_utilization: Some(
+                    (self.utilization.insert_busy_slot_secs / (elapsed_secs * insert_capacity))
+                        .clamp(0.0, 1.0),
+                ),
+                completed_fetch_utilization: Some(
+                    (self.utilization.completed_fetch_busy_secs / elapsed_secs).clamp(0.0, 1.0),
+                ),
+            }
+        };
+        self.utilization.window_started_at = now;
+        self.utilization.last_accounted_at = now;
+        self.utilization.insert_busy_slot_secs = 0.0;
+        self.utilization.completed_fetch_busy_secs = 0.0;
+        snapshot
     }
 
     pub fn last_completed_batch_id(&self) -> Option<i64> {
@@ -511,10 +559,10 @@ where
 
     fn ensure_processed_prefetch(&mut self) {
         if !self.ready_processed.is_empty() || self.pending_processed_fetch.is_some() {
-            self.observe_async_worker_idle_ratios();
             return;
         }
 
+        self.account_utilization(Instant::now());
         let store = self.store.clone();
         let run_id = self.run_id;
         let fetch_limit = self.config.completed_batch_fetch_limit;
@@ -533,12 +581,10 @@ where
                     .await
             }),
         });
-        self.observe_async_worker_idle_ratios();
     }
 
     fn start_insert_pump_if_idle(&mut self) {
         if self.insert_pump_running || self.pending_insert.is_empty() {
-            self.observe_async_worker_idle_ratios();
             return;
         }
 
@@ -551,6 +597,7 @@ where
         while self.pending_insert_tasks.len() < max_concurrent_insert_tasks
             && !self.pending_insert.is_empty()
         {
+            self.account_utilization(Instant::now());
             self.observe_insert_bundle_local_pending_at_start();
 
             let bundle_size = self.config.max_insert_bundle_size.max(1);
@@ -584,7 +631,6 @@ where
         } else if !self.pending_insert.is_empty() {
             self.insert_pump_running = true;
         }
-        self.observe_async_worker_idle_ratios();
     }
 
     async fn drain_finished_insert(&mut self) -> Result<(), StoreError> {
@@ -595,6 +641,7 @@ where
                 continue;
             }
 
+            self.account_utilization(Instant::now());
             let task = self.pending_insert_tasks.swap_remove(index);
             self.consume_insert_task(task).await?;
         }
@@ -602,7 +649,6 @@ where
         if self.pending_insert.is_empty() && self.pending_insert_tasks.is_empty() {
             self.insert_pump_running = false;
         }
-        self.observe_async_worker_idle_ratios();
         Ok(())
     }
 
@@ -633,7 +679,6 @@ where
             }
             Err(err) => {
                 self.insert_pump_running = false;
-                self.observe_async_worker_idle_ratios();
                 Err(err)
             }
         }
@@ -669,7 +714,7 @@ where
             .pending_processed_fetch
             .take()
             .expect("checked pending processed fetch");
-        self.observe_async_worker_idle_ratios();
+        self.account_utilization(Instant::now());
         self.consume_processed_fetch_task(task).await
     }
 
@@ -689,26 +734,21 @@ where
         };
         observe_duration_ms(&mut self.metrics.fetch_completed_ms, duration);
         self.ready_processed.extend(completed);
-        self.observe_async_worker_idle_ratios();
         Ok(())
     }
 
-    fn observe_async_worker_idle_ratios(&mut self) {
-        let insert_capacity = self.config.max_concurrent_insert_tasks.max(1) as f64;
-        let insert_busy_ratio =
-            (self.pending_insert_tasks.len() as f64 / insert_capacity).clamp(0.0, 1.0);
-        self.metrics
-            .insert_task_idle_ratio
-            .observe((1.0 - insert_busy_ratio).clamp(0.0, 1.0));
-
-        let fetch_busy_ratio = if self.pending_processed_fetch.is_some() {
-            1.0_f64
-        } else {
-            0.0_f64
-        };
-        self.metrics
-            .fetch_completed_idle_ratio
-            .observe((1.0_f64 - fetch_busy_ratio).clamp(0.0, 1.0));
+    fn account_utilization(&mut self, now: Instant) {
+        let elapsed_secs = now
+            .saturating_duration_since(self.utilization.last_accounted_at)
+            .as_secs_f64();
+        if elapsed_secs > 0.0 {
+            self.utilization.insert_busy_slot_secs +=
+                elapsed_secs * self.pending_insert_tasks.len() as f64;
+            if self.pending_processed_fetch.is_some() {
+                self.utilization.completed_fetch_busy_secs += elapsed_secs;
+            }
+        }
+        self.utilization.last_accounted_at = now;
     }
 }
 

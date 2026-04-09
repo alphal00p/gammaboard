@@ -481,17 +481,17 @@ fn sampler_current_panels(
                 key_value(
                     "sampler_tick_busy_ratio",
                     "Sampler Tick Busy Ratio",
-                    busy_ratio(runtime.sampler.tick_idle_ratio.mean),
+                    runtime.sampler_tick_busy_ratio,
                 ),
                 key_value(
                     "insert_task_utilization",
                     "Insert Task Utilization",
-                    busy_ratio(runtime.queue.rolling.insert_task_idle_ratio.mean),
+                    runtime.queue.insert_task_utilization,
                 ),
                 key_value(
                     "completed_fetch_utilization",
                     "Completed Fetch Utilization",
-                    busy_ratio(runtime.queue.rolling.fetch_completed_idle_ratio.mean),
+                    runtime.queue.completed_fetch_utilization,
                 ),
                 key_value(
                     "eval_ms_per_batch",
@@ -627,9 +627,9 @@ fn sampler_current_panels(
                     runtime.queue.rolling.fetch_completed_ms.mean,
                 ),
                 key_value(
-                    "completed_batch_fetch_idle_ratio",
-                    "Completed Batch Fetch Idle Ratio",
-                    runtime.queue.rolling.fetch_completed_idle_ratio.mean,
+                    "completed_fetch_utilization",
+                    "Completed Fetch Utilization",
+                    runtime.queue.completed_fetch_utilization,
                 ),
                 key_value(
                     "insert_bundle_ms",
@@ -642,9 +642,9 @@ fn sampler_current_panels(
                     runtime.queue.rolling.insert_bundle_ms_per_batch.mean,
                 ),
                 key_value(
-                    "insert_task_idle_ratio",
-                    "Insert Task Idle Ratio",
-                    runtime.queue.rolling.insert_task_idle_ratio.mean,
+                    "insert_task_utilization",
+                    "Insert Task Utilization",
+                    runtime.queue.insert_task_utilization,
                 ),
                 key_value(
                     "insert_bundle_serialize_ms",
@@ -733,19 +733,19 @@ fn sampler_utilization_history_panel(
         let x = history_x(entry.created_at);
         sampler_tick_points.push(PlotPoint {
             x,
-            y: busy_ratio(runtime.sampler.tick_idle_ratio.mean).unwrap_or(0.0),
+            y: runtime.sampler_tick_busy_ratio.unwrap_or(0.0),
             y_min: None,
             y_max: None,
         });
         insert_task_points.push(PlotPoint {
             x,
-            y: busy_ratio(runtime.queue.rolling.insert_task_idle_ratio.mean).unwrap_or(0.0),
+            y: runtime.queue.insert_task_utilization.unwrap_or(0.0),
             y_min: None,
             y_max: None,
         });
         completed_fetch_points.push(PlotPoint {
             x,
-            y: busy_ratio(runtime.queue.rolling.fetch_completed_idle_ratio.mean).unwrap_or(0.0),
+            y: runtime.queue.completed_fetch_utilization.unwrap_or(0.0),
             y_min: None,
             y_max: None,
         });
@@ -856,10 +856,6 @@ fn throughput_points_from_cumulative(samples: &[(f64, i64)], window_ms: f64) -> 
 
 fn queue_buffer_value(value: &JsonValue, key: &str) -> Option<JsonValue> {
     value.get("runner")?.get(key).cloned()
-}
-
-fn busy_ratio(idle_ratio: Option<f64>) -> Option<f64> {
-    idle_ratio.map(|value| (1.0 - value).clamp(0.0, 1.0))
 }
 
 fn decode_sampler_runtime_metrics(

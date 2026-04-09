@@ -212,7 +212,6 @@ pub struct SamplerWorkRollingAverages {
     pub eval_ms_per_batch: RollingMetricSnapshot,
     pub training_ingest_ms_per_sample: RollingMetricSnapshot,
     pub produce_ms_per_sample: RollingMetricSnapshot,
-    pub tick_idle_ratio: RollingMetricSnapshot,
     pub reclaim_ms: RollingMetricSnapshot,
     pub queue_counts_ms: RollingMetricSnapshot,
     pub completed_merge_ingest_ms: RollingMetricSnapshot,
@@ -228,10 +227,8 @@ pub struct SamplerWorkRollingAverages {
 pub struct SamplerQueueRollingAverages {
     pub get_processed_ms: RollingMetricSnapshot,
     pub fetch_completed_ms: RollingMetricSnapshot,
-    pub fetch_completed_idle_ratio: RollingMetricSnapshot,
     pub insert_bundle_ms: RollingMetricSnapshot,
     pub insert_bundle_ms_per_batch: RollingMetricSnapshot,
-    pub insert_task_idle_ratio: RollingMetricSnapshot,
     pub insert_bundle_serialize_ms: RollingMetricSnapshot,
     pub insert_bundle_payload_bytes: RollingMetricSnapshot,
     pub insert_bundle_payload_bytes_per_batch: RollingMetricSnapshot,
@@ -247,10 +244,8 @@ impl Default for SamplerQueueRollingAverages {
         Self {
             get_processed_ms: RollingMetricSnapshot::default(),
             fetch_completed_ms: RollingMetricSnapshot::default(),
-            fetch_completed_idle_ratio: RollingMetricSnapshot::default(),
             insert_bundle_ms: RollingMetricSnapshot::default(),
             insert_bundle_ms_per_batch: RollingMetricSnapshot::default(),
-            insert_task_idle_ratio: RollingMetricSnapshot::default(),
             insert_bundle_serialize_ms: RollingMetricSnapshot::default(),
             insert_bundle_payload_bytes: RollingMetricSnapshot::default(),
             insert_bundle_payload_bytes_per_batch: RollingMetricSnapshot::default(),
@@ -270,6 +265,8 @@ pub struct SamplerQueueRuntimeMetrics {
     pub local_inflight_insert_tasks: usize,
     pub local_inflight_insert_batches: usize,
     pub local_ready_processed_batches: usize,
+    pub insert_task_utilization: Option<f64>,
+    pub completed_fetch_utilization: Option<f64>,
     pub rolling: SamplerQueueRollingAverages,
 }
 
@@ -283,6 +280,7 @@ pub struct SamplerRuntimeMetrics {
     pub completed_samples_total: i64,
     pub completed_samples_per_second: f64,
     pub batch_size_current: usize,
+    pub sampler_tick_busy_ratio: Option<f64>,
     pub sampler: SamplerWorkRollingAverages,
     pub queue: SamplerQueueRuntimeMetrics,
 }

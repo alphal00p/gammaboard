@@ -14,6 +14,7 @@ use crate::core::{
 };
 use crate::evaluation::ObservableState;
 use crate::runners::process_memory::current_rss_bytes;
+use crate::runners::queue::QueueUtilizationSnapshot;
 use crate::runners::rolling_metric::RollingMetric;
 use crate::runners::{QueueTickResult, SamplerQueue, SamplerQueueCheckpoint, SamplerQueueConfig};
 use crate::sampling::{SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot};
@@ -49,7 +50,6 @@ struct SamplerRollingState {
     eval_ms_per_batch: RollingMetric,
     training_ingest_ms_per_sample: RollingMetric,
     produce_ms_per_sample: RollingMetric,
-    tick_idle_ratio: RollingMetric,
     reclaim_ms: RollingMetric,
     queue_counts_ms: RollingMetric,
     completed_merge_ingest_ms: RollingMetric,
@@ -91,6 +91,8 @@ struct SamplerRuntimeState {
     initial_round_trip_snapshot_pending: bool,
     pending_persisted_completed_batches: i32,
     batch_size_current: usize,
+    #[serde(default)]
+    sampler_tick_busy_ratio: Option<f64>,
     observable_checkpoint_state: ObservableCheckpointState,
     rolling: SamplerRollingState,
 }
@@ -106,6 +108,7 @@ impl Default for SamplerRuntimeState {
             initial_round_trip_snapshot_pending: false,
             pending_persisted_completed_batches: 0,
             batch_size_current: 0,
+            sampler_tick_busy_ratio: None,
             observable_checkpoint_state: ObservableCheckpointState::NeedsInitialRoundTrip,
             rolling: SamplerRollingState::default(),
         }
@@ -143,6 +146,7 @@ impl SamplerRuntimeState {
             completed_samples_total,
             completed_samples_per_second: self.completed_samples_per_second,
             batch_size_current: self.batch_size_current,
+            sampler_tick_busy_ratio: self.sampler_tick_busy_ratio,
             sampler: SamplerWorkRollingAverages {
                 eval_ms_per_sample: RollingMetricSnapshot::from(&self.rolling.eval_ms_per_sample),
                 eval_ms_per_batch: RollingMetricSnapshot::from(&self.rolling.eval_ms_per_batch),
@@ -152,7 +156,6 @@ impl SamplerRuntimeState {
                 produce_ms_per_sample: RollingMetricSnapshot::from(
                     &self.rolling.produce_ms_per_sample,
                 ),
-                tick_idle_ratio: RollingMetricSnapshot::from(&self.rolling.tick_idle_ratio),
                 reclaim_ms: RollingMetricSnapshot::from(&self.rolling.reclaim_ms),
                 queue_counts_ms: RollingMetricSnapshot::from(&self.rolling.queue_counts_ms),
                 completed_merge_ingest_ms: RollingMetricSnapshot::from(
@@ -199,6 +202,8 @@ pub struct SamplerAggregatorRunner<S> {
     pending_aggregation_flush: Option<PendingAggregationFlushTask>,
     runtime_state: SamplerRuntimeState,
     queue: SamplerQueue<S>,
+    utilization_window_started_at: Instant,
+    sync_tick_busy_time: Duration,
 }
 
 struct CompletedIngestStats {
@@ -289,6 +294,8 @@ where
             pending_aggregation_flush: None,
             runtime_state,
             queue,
+            utilization_window_started_at: now,
+            sync_tick_busy_time: Duration::ZERO,
         }
     }
 
@@ -317,7 +324,7 @@ where
             next.clamp(MIN_BATCH_SIZE, self.params.max_batch_size);
     }
 
-    fn current_runner_diagnostics(&self) -> JsonValue {
+    fn current_runner_diagnostics(&mut self) -> JsonValue {
         let diagnostics_snapshot = self.queue.diagnostics_snapshot();
         let queue_counts = diagnostics_snapshot.map(|snapshot| snapshot.queue_counts);
         let active_evaluator_count =
@@ -410,7 +417,7 @@ where
         );
         let produced_batches = self.produce_work(queue_before_produce).await?;
         self.flush_tick_syncs().await?;
-        self.observe_tick_idle_ratio(tick_started.elapsed());
+        self.sync_tick_busy_time += tick_started.elapsed();
         self.check_tick_terminal_state(
             queue_before_produce,
             ingest_stats.completed_batches,
@@ -500,19 +507,19 @@ where
         Ok(())
     }
 
-    fn observe_tick_idle_ratio(&mut self, tick_elapsed: Duration) {
-        let min_tick = Duration::from_millis(self.params.min_tick_time_ms);
-        let denominator = min_tick.max(tick_elapsed);
-        let idle_ratio = if denominator.is_zero() {
-            0.0
+    fn take_sampler_tick_busy_ratio_snapshot(&mut self) -> Option<f64> {
+        let now = Instant::now();
+        let elapsed_secs = now
+            .saturating_duration_since(self.utilization_window_started_at)
+            .as_secs_f64();
+        let ratio = if elapsed_secs <= 0.0 {
+            None
         } else {
-            ((denominator.as_secs_f64() - tick_elapsed.as_secs_f64()) / denominator.as_secs_f64())
-                .clamp(0.0, 1.0)
+            Some((self.sync_tick_busy_time.as_secs_f64() / elapsed_secs).clamp(0.0, 1.0))
         };
-        self.runtime_state
-            .rolling
-            .tick_idle_ratio
-            .observe(idle_ratio);
+        self.utilization_window_started_at = now;
+        self.sync_tick_busy_time = Duration::ZERO;
+        ratio
     }
 
     fn check_tick_terminal_state(
@@ -1017,6 +1024,12 @@ where
             return Ok(());
         }
 
+        let sampler_tick_busy_ratio = self.take_sampler_tick_busy_ratio_snapshot();
+        self.runtime_state.sampler_tick_busy_ratio = sampler_tick_busy_ratio;
+        let QueueUtilizationSnapshot {
+            insert_task_utilization,
+            completed_fetch_utilization,
+        } = self.queue.take_utilization_snapshot();
         let mut engine_diagnostics = self.sampler.get_diagnostics();
         let runner_diagnostics = self.current_runner_diagnostics();
         match &mut engine_diagnostics {
@@ -1031,12 +1044,16 @@ where
             }
         }
 
+        let mut queue_runtime = self.queue.runtime_metrics();
+        queue_runtime.insert_task_utilization = insert_task_utilization;
+        queue_runtime.completed_fetch_utilization = completed_fetch_utilization;
+
         let snapshot = SamplerAggregatorPerformanceSnapshot {
             run_id: self.run_id,
             node_name: self.node_name.clone(),
             runtime_metrics: self
                 .runtime_state
-                .to_runtime_metrics(self.queue.runtime_metrics(), self.nr_completed_samples),
+                .to_runtime_metrics(queue_runtime, self.nr_completed_samples),
             engine_diagnostics,
             rss_bytes: current_rss_bytes(),
         };
