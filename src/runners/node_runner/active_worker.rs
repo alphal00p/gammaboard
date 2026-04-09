@@ -1,10 +1,8 @@
-use crate::core::{StoreError, WorkerRole};
+use crate::core::{ControlPlaneStore, StoreError, WorkerRole};
 use tracing::warn;
 
-use super::NodeRunnerStore;
-
 #[derive(Clone)]
-pub(super) struct ActiveWorker<S: NodeRunnerStore> {
+pub(super) struct ActiveWorker<S: ControlPlaneStore + Clone + Send + Sync + 'static> {
     pub(super) store: S,
     pub(super) node_name: String,
     pub(super) node_uuid: String,
@@ -12,7 +10,7 @@ pub(super) struct ActiveWorker<S: NodeRunnerStore> {
     pub(super) run_id: i32,
 }
 
-impl<S: NodeRunnerStore> ActiveWorker<S> {
+impl<S: ControlPlaneStore + Clone + Send + Sync + 'static> ActiveWorker<S> {
     pub(super) fn new(
         store: S,
         node_name: impl Into<String>,

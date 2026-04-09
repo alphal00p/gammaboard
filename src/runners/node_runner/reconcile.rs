@@ -4,7 +4,10 @@ use super::{
 };
 
 use crate::api::stage::resolve_task_source_snapshot;
-use crate::core::{BatchTransformConfig, ObservableConfig, RunTask, StoreError};
+use crate::core::{
+    AggregationStore, BatchTransformConfig, ObservableConfig, RunTask, RunTaskStore, StoreError,
+    WorkQueueStore,
+};
 use crate::runners::{
     EvaluatorRunner, SamplerAggregatorRunner,
     stage_context::{HAVANA_HANDOFF_REQUIRED_ERROR, resolve_stage_context},
@@ -13,9 +16,10 @@ use crate::sampling::StageHandoffOwned;
 use tracing::{error, info, warn};
 
 impl<S: NodeRunnerStore> NodeRunner<S> {
-    async fn resolve_effective_sampler_context(
+    async fn resolve_effective_sampler_context_with_store(
         &self,
-        worker: &ActiveWorker<S>,
+        store: &crate::PgStore,
+        run_id: i32,
         task: &RunTask,
     ) -> Result<
         (
@@ -25,19 +29,12 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         ),
         StoreError,
     > {
-        let latest_snapshot = worker.store.load_sampler_checkpoint(worker.run_id).await?;
+        let latest_snapshot = store.load_sampler_checkpoint(run_id).await?;
         let restored_snapshot = latest_snapshot
             .as_ref()
             .filter(|snapshot| snapshot.task_id == task.id)
             .cloned();
-        match resolve_stage_context(
-            &worker.store,
-            worker.run_id,
-            task,
-            task.sequence_nr,
-            restored_snapshot,
-        )
-        .await
+        match resolve_stage_context(store, run_id, task, task.sequence_nr, restored_snapshot).await
         {
             Ok(resolved) => Ok((
                 resolved.sampler_config,
@@ -46,27 +43,23 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             )),
             Err(err) if err.to_string() == HAVANA_HANDOFF_REQUIRED_ERROR => {
                 let reason = err.to_string();
-                if let Err(e) = worker.store.fail_run_task(task.id, &reason).await {
+                if let Err(e) = store.fail_run_task(task.id, &reason).await {
                     warn!(
-                        run_id = worker.run_id,
+                        run_id,
                         task_id = task.id,
                         error = %e,
                         "failed to persist task failure for activation error"
                     );
                 }
-                if let Err(e) = self
-                    .store
-                    .clear_desired_assignments_for_run(worker.run_id)
-                    .await
-                {
+                if let Err(e) = self.store.clear_desired_assignments_for_run(run_id).await {
                     warn!(
-                        run_id = worker.run_id,
+                        run_id,
                         error = %e,
                         "failed to clear desired assignments for run after task activation failure"
                     );
                 } else {
                     warn!(
-                        run_id = worker.run_id,
+                        run_id,
                         task_id = task.id,
                         reason,
                         "task activation failed (missing havana snapshot); desired assignments cleared"
@@ -170,27 +163,23 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         &self,
         target: RoleTarget,
     ) -> Result<Option<Box<dyn RoleRunner>>, StoreError> {
-        let worker = ActiveWorker::new(
-            self.store.clone(),
-            self.node_name.clone(),
-            self.node_uuid.clone(),
-            target.role,
-            target.run_id,
-        );
         match target.role {
-            crate::core::WorkerRole::Evaluator => self.build_evaluator_runner(&worker).await,
-            crate::core::WorkerRole::SamplerAggregator => self.build_sampler_runner(&worker).await,
+            crate::core::WorkerRole::Evaluator => self.build_evaluator_runner(target).await,
+            crate::core::WorkerRole::SamplerAggregator => self.build_sampler_runner(target).await,
         }
     }
 
     async fn build_evaluator_runner(
         &self,
-        worker: &ActiveWorker<S>,
+        target: RoleTarget,
     ) -> Result<Option<Box<dyn RoleRunner>>, StoreError> {
-        let Some(spec) = worker.store.load_run_spec(worker.run_id).await? else {
+        let Some(spec) = self.store.load_run_spec(target.run_id).await? else {
             warn!("run has no RunSpec; evaluator not started");
             return Ok(None);
         };
+        let role_store = self
+            .init_role_store(spec.evaluator_runner_params.db_pool_size)
+            .await?;
         let evaluator = spec
             .evaluator
             .build()
@@ -198,8 +187,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         info!("evaluator worker started");
 
         let runner = EvaluatorRunner::new(
-            worker.store.clone(),
-            worker.run_id,
+            role_store,
+            target.run_id,
             self.node_name.clone(),
             self.node_uuid.clone(),
             evaluator,
@@ -212,34 +201,42 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
     async fn load_or_activate_sampler_task(
         &self,
-        worker: &ActiveWorker<S>,
+        store: &crate::PgStore,
+        run_id: i32,
         open_batch_count: usize,
     ) -> Result<Option<RunTask>, StoreError> {
-        if let Some(task) = worker.store.load_active_run_task(worker.run_id).await? {
+        if let Some(task) = store.load_active_run_task(run_id).await? {
             return Ok(Some(task));
         }
         if open_batch_count > 0 {
             return Ok(None);
         }
-        worker.store.activate_next_run_task(worker.run_id).await
+        store.activate_next_run_task(run_id).await
     }
 
     async fn build_sampler_runner(
         &self,
-        worker: &ActiveWorker<S>,
+        target: RoleTarget,
     ) -> Result<Option<Box<dyn RoleRunner>>, StoreError> {
-        let Some(spec) = worker.store.load_run_spec(worker.run_id).await? else {
+        let Some(spec) = self.store.load_run_spec(target.run_id).await? else {
             warn!("run has no RunSpec; sampler-aggregator not started");
             return Ok(None);
         };
+        let role_store = self
+            .init_role_store(spec.sampler_aggregator_runner_params.db_pool_size)
+            .await?;
+        let worker = ActiveWorker::new(
+            self.store.clone(),
+            self.node_name.clone(),
+            self.node_uuid.clone(),
+            target.role,
+            target.run_id,
+        );
 
-        let open_batch_count = worker
-            .store
-            .get_open_batch_count(worker.run_id)
-            .await?
-            .max(0) as usize;
+        let open_batch_count =
+            role_store.get_open_batch_count(worker.run_id).await?.max(0) as usize;
         let Some(task) = self
-            .load_or_activate_sampler_task(worker, open_batch_count)
+            .load_or_activate_sampler_task(&role_store, worker.run_id, open_batch_count)
             .await?
         else {
             if open_batch_count == 0 {
@@ -256,7 +253,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             return Ok(None);
         };
 
-        let latest_snapshot = worker.store.load_sampler_checkpoint(worker.run_id).await?;
+        let latest_snapshot = role_store.load_sampler_checkpoint(worker.run_id).await?;
         let initial_batch_size_hint = latest_snapshot
             .as_ref()
             .filter(|snapshot| snapshot.task_id != task.id)
@@ -271,14 +268,13 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             .cloned();
 
         let (sampler_config, batch_transforms, handoff) = self
-            .resolve_effective_sampler_context(worker, &task)
+            .resolve_effective_sampler_context_with_store(&role_store, worker.run_id, &task)
             .await?;
-        let base_stage_snapshot = worker
-            .store
+        let base_stage_snapshot = role_store
             .load_latest_stage_snapshot_before_sequence(worker.run_id, task.sequence_nr)
             .await?;
         let observable_source_snapshot = resolve_task_source_snapshot(
-            &worker.store,
+            &role_store,
             worker.run_id,
             &task,
             task.task.sample_observable_source(),
@@ -300,7 +296,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                 // Sampler build failed at activation time. Persist a task failure and pause the run
                 // (clear desired assignments) so an operator can inspect and add a replacement.
                 let reason = format!("failed to build sampler: {err}");
-                if let Err(e) = worker.store.fail_run_task(task.id, &reason).await {
+                if let Err(e) = role_store.fail_run_task(task.id, &reason).await {
                     warn!(
                         run_id = worker.run_id,
                         task_id = task.id,
@@ -361,7 +357,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             )));
         };
 
-        let run_progress = worker.store.load_run_sample_progress(worker.run_id).await?;
+        let run_progress = role_store.load_run_sample_progress(worker.run_id).await?;
 
         let initial_batch_size =
             initial_batch_size_hint.unwrap_or(spec.sampler_aggregator_runner_params.max_batch_size);
@@ -370,7 +366,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         let task_for_runner = task.clone();
 
         let runner = SamplerAggregatorRunner::new(
-            worker.store.clone(),
+            role_store,
             worker.run_id,
             self.node_name.clone(),
             task_for_runner,

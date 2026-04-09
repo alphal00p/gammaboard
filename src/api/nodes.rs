@@ -172,11 +172,7 @@ pub async fn plan_auto_run_nodes(
 }
 
 /// Builds CLI arguments for launching one node process.
-pub fn node_run_cli_args(
-    node_name: &str,
-    max_start_failures: u32,
-    db_pool_size: u32,
-) -> Vec<String> {
+pub fn node_run_cli_args(node_name: &str, max_start_failures: u32) -> Vec<String> {
     vec![
         "node".to_string(),
         "run".to_string(),
@@ -184,7 +180,5 @@ pub fn node_run_cli_args(
         node_name.to_string(),
         "--max-start-failures".to_string(),
         max_start_failures.to_string(),
-        "--db-pool-size".to_string(),
-        db_pool_size.to_string(),
     ]
 }

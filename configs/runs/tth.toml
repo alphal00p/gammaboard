@@ -12,6 +12,7 @@ momentum_space = false
 
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 2000
+db_pool_size = 2
 
 [sampler_aggregator_runner_params]
 performance_snapshot_interval_ms = 2000
@@ -19,6 +20,7 @@ min_tick_time_ms = 10
 frontend_sync_interval_ms = 2000
 target_batch_eval_ms = 5000.0
 max_batch_size = 131072
+db_pool_size = 16
 
 [sampler_aggregator_runner_params.queue]
 queue_buffer = 2.0
@@ -26,7 +28,7 @@ local_pending_buffer_multiplier = 1.0
 max_queue_size = 192
 max_batches_per_tick = 64
 max_insert_bundle_size = 1
-max_concurrent_insert_tasks = 4
+max_concurrent_insert_tasks = 12
 completed_batch_fetch_limit = 64
 strict_batch_ordering = true
 

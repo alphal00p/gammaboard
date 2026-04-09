@@ -933,7 +933,8 @@ mod tests {
             },
             "evaluator_runner_params": {
                 "performance_snapshot_interval_ms": 5000,
-                "min_tick_time_ms": 50
+                "min_tick_time_ms": 50,
+                "db_pool_size": 2
             },
             "sampler_aggregator_runner_params": {
                 "performance_snapshot_interval_ms": 5000,
@@ -941,6 +942,7 @@ mod tests {
                 "frontend_sync_interval_ms": 1000,
                 "target_batch_eval_ms": 200.0,
                 "max_batch_size": 64,
+                "db_pool_size": 4,
                 "queue": {
                     "queue_buffer": 1.0,
                     "local_pending_buffer_multiplier": 1.0,
@@ -975,7 +977,8 @@ mod tests {
             spec.evaluator_runner_params,
             EvaluatorRunnerParams::deserialize(json!({
                 "performance_snapshot_interval_ms": 5000,
-                "min_tick_time_ms": 50
+                "min_tick_time_ms": 50,
+                "db_pool_size": 2
             }))
             .unwrap()
         );
@@ -987,6 +990,7 @@ mod tests {
                 "frontend_sync_interval_ms": 1000,
                 "target_batch_eval_ms": 200.0,
                 "max_batch_size": 64,
+                "db_pool_size": 4,
                 "queue": {
                     "queue_buffer": 1.0,
                     "local_pending_buffer_multiplier": 1.0,
@@ -1025,7 +1029,8 @@ mod tests {
             json!({
                 "evaluator_runner_params": {
                     "performance_snapshot_interval_ms": 5000,
-                    "min_tick_time_ms": 50
+                    "min_tick_time_ms": 50,
+                    "db_pool_size": 2
                 },
                 "sampler_aggregator_runner_params": {
                     "performance_snapshot_interval_ms": 5000,
@@ -1033,6 +1038,7 @@ mod tests {
                     "frontend_sync_interval_ms": 1000,
                     "target_batch_eval_ms": 200.0,
                     "max_batch_size": 64,
+                    "db_pool_size": 4,
                     "queue": {
                         "queue_buffer": 1.0,
                         "local_pending_buffer_multiplier": 1.0,
@@ -1063,6 +1069,7 @@ mod tests {
                     "frontend_sync_interval_ms": 1000,
                     "target_batch_eval_ms": 200.0,
                     "max_batch_size": 64,
+                    "db_pool_size": 4,
                     "queue": {
                         "queue_buffer": 1.0,
                         "local_pending_buffer_multiplier": 1.0,

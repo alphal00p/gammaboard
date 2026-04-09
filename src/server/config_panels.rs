@@ -77,6 +77,11 @@ impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
                 "Min Tick Time (ms)",
                 ctx.runner_params.min_tick_time_ms,
             ),
+            key_value(
+                "db_pool_size",
+                "DB Pool Size",
+                ctx.runner_params.db_pool_size,
+            ),
         ];
         if let Some(observable_kind) = evaluator_observable_kind(self) {
             summary.insert(
@@ -161,6 +166,11 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
                     "frontend_sync_interval_ms",
                     "Frontend Sync Interval (ms)",
                     ctx.runner_params.frontend_sync_interval_ms,
+                ),
+                key_value(
+                    "db_pool_size",
+                    "DB Pool Size",
+                    ctx.runner_params.db_pool_size,
                 ),
                 key_value(
                     "queue_buffer",

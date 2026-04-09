@@ -3,8 +3,6 @@ use crate::runners::{EvaluatorRunner, SamplerAggregatorRunner};
 use async_trait::async_trait;
 use std::time::Duration;
 
-use super::NodeRunnerStore;
-
 #[async_trait(?Send)]
 pub(super) trait RoleRunner {
     async fn tick(&mut self) -> Result<bool, StoreError>;
@@ -13,7 +11,9 @@ pub(super) trait RoleRunner {
 }
 
 #[async_trait(?Send)]
-impl<S: NodeRunnerStore> RoleRunner for EvaluatorRunner<S> {
+impl<S: crate::core::EvaluatorWorkerStore + Clone + Send + Sync + 'static> RoleRunner
+    for EvaluatorRunner<S>
+{
     async fn tick(&mut self) -> Result<bool, StoreError> {
         EvaluatorRunner::tick(self)
             .await
@@ -33,7 +33,9 @@ impl<S: NodeRunnerStore> RoleRunner for EvaluatorRunner<S> {
 }
 
 #[async_trait(?Send)]
-impl<S: NodeRunnerStore> RoleRunner for SamplerAggregatorRunner<S> {
+impl<S: crate::core::SamplerWorkerStore + Clone + Send + Sync + 'static> RoleRunner
+    for SamplerAggregatorRunner<S>
+{
     async fn tick(&mut self) -> Result<bool, StoreError> {
         match SamplerAggregatorRunner::tick(self).await {
             Ok(done) => {

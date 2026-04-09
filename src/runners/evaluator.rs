@@ -19,6 +19,12 @@ use tracing::info;
 pub struct EvaluatorRunnerParams {
     pub performance_snapshot_interval_ms: u64,
     pub min_tick_time_ms: u64,
+    #[serde(default = "default_evaluator_db_pool_size")]
+    pub db_pool_size: u32,
+}
+
+fn default_evaluator_db_pool_size() -> u32 {
+    2
 }
 
 #[derive(Debug, Error)]

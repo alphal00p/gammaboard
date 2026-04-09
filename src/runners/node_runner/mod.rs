@@ -8,10 +8,8 @@ mod active_worker;
 mod reconcile;
 mod role_runner;
 
-use crate::core::{
-    ControlPlaneStore, EvaluatorWorkerStore, RunSpecStore, SamplerWorkerStore, StoreError,
-    WorkerRole,
-};
+use crate::core::{ControlPlaneStore, RunSpecStore, RunTaskStore, StoreError, WorkerRole};
+use crate::stores::init_pg_store;
 use rand::Rng;
 use std::time::{Duration, Instant};
 use tokio::{
@@ -37,26 +35,12 @@ pub struct NodeRunnerConfig {
 }
 
 pub trait NodeRunnerStore:
-    RunSpecStore
-    + ControlPlaneStore
-    + EvaluatorWorkerStore
-    + SamplerWorkerStore
-    + Clone
-    + Send
-    + Sync
-    + 'static
+    RunSpecStore + RunTaskStore + ControlPlaneStore + Clone + Send + Sync + 'static
 {
 }
 
 impl<T> NodeRunnerStore for T where
-    T: RunSpecStore
-        + ControlPlaneStore
-        + EvaluatorWorkerStore
-        + SamplerWorkerStore
-        + Clone
-        + Send
-        + Sync
-        + 'static
+    T: RunSpecStore + RunTaskStore + ControlPlaneStore + Clone + Send + Sync + 'static
 {
 }
 
@@ -148,6 +132,7 @@ impl RetryState {
 
 pub struct NodeRunner<S: NodeRunnerStore> {
     store: S,
+    database_url: String,
     node_name: String,
     node_uuid: String,
     config: NodeRunnerConfig,
@@ -157,9 +142,15 @@ pub struct NodeRunner<S: NodeRunnerStore> {
 }
 
 impl<S: NodeRunnerStore> NodeRunner<S> {
-    pub fn new(store: S, node_name: impl Into<String>, config: NodeRunnerConfig) -> Self {
+    pub fn new(
+        store: S,
+        database_url: impl Into<String>,
+        node_name: impl Into<String>,
+        config: NodeRunnerConfig,
+    ) -> Self {
         Self {
             store,
+            database_url: database_url.into(),
             node_name: node_name.into(),
             node_uuid: Uuid::new_v4().to_string(),
             reconcile_backoff: config.reconcile_initial_backoff,
@@ -185,6 +176,12 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
     fn current_target(&self) -> Option<RoleTarget> {
         self.active_runner.as_ref().map(|runner| runner.target)
+    }
+
+    async fn init_role_store(&self, max_connections: u32) -> Result<crate::PgStore, StoreError> {
+        init_pg_store(&self.database_url, max_connections)
+            .await
+            .map_err(StoreError::from)
     }
 
     fn spawn_lease_renewal_task(&self) -> LeaseRenewalHandle {

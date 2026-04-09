@@ -225,7 +225,6 @@ struct AutoAssignRequest {
 struct AutoRunNodesRequest {
     count: usize,
     max_start_failures: Option<u32>,
-    db_pool_size: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -1048,7 +1047,6 @@ async fn auto_run_nodes(
     AxumJson(payload): AxumJson<AutoRunNodesRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let max_start_failures = payload.max_start_failures.unwrap_or(3);
-    let db_pool_size = payload.db_pool_size.unwrap_or(4);
     let plan = node_api::plan_auto_run_nodes(&state.store, payload.count).await?;
 
     let binary = std::env::current_exe().map_err(|err| {
@@ -1061,7 +1059,6 @@ async fn auto_run_nodes(
             &state.runtime_config_path,
             node_name,
             max_start_failures,
-            db_pool_size,
         )?;
     }
 
@@ -1073,7 +1070,6 @@ async fn auto_run_nodes(
         started = plan.node_names.len(),
         node_names = ?plan.node_names,
         max_start_failures,
-        db_pool_size,
         "dashboard action completed"
     );
 
@@ -1116,7 +1112,6 @@ fn spawn_node_process(
     runtime_config_path: &Path,
     node_name: &str,
     max_start_failures: u32,
-    db_pool_size: u32,
 ) -> Result<(), ApiError> {
     use std::process::Stdio;
     use tokio::process::Command;
@@ -1139,11 +1134,7 @@ fn spawn_node_process(
     command
         .arg("--runtime-config")
         .arg(runtime_config_path)
-        .args(node_api::node_run_cli_args(
-            node_name,
-            max_start_failures,
-            db_pool_size,
-        ))
+        .args(node_api::node_run_cli_args(node_name, max_start_failures))
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_log))
         .stderr(Stdio::from(stderr_log));

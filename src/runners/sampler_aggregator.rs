@@ -34,7 +34,13 @@ pub struct SamplerAggregatorRunnerParams {
     pub frontend_sync_interval_ms: u64,
     pub target_batch_eval_ms: f64,
     pub max_batch_size: usize,
+    #[serde(default = "default_sampler_db_pool_size")]
+    pub db_pool_size: u32,
     pub queue: SamplerQueueConfig,
+}
+
+fn default_sampler_db_pool_size() -> u32 {
+    4
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

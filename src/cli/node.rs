@@ -44,8 +44,6 @@ pub struct NodeRunArgs {
     name: String,
     #[arg(long, default_value_t = 3)]
     max_start_failures: u32,
-    #[arg(long, default_value_t = 4)]
-    db_pool_size: u32,
 }
 
 #[derive(Debug, Args)]
@@ -53,8 +51,6 @@ pub struct AutoRunArgs {
     count: usize,
     #[arg(long, default_value_t = 3)]
     max_start_failures: u32,
-    #[arg(long, default_value_t = 4)]
-    db_pool_size: u32,
 }
 
 pub async fn run_node_commands(
@@ -130,9 +126,10 @@ async fn run_node(args: NodeRunArgs, config: &RuntimeConfig, quiet: bool) -> Res
         source = "worker",
         node_name = %node_name
     );
-    with_cli_store(config, args.db_pool_size, quiet, span, |store| async move {
+    with_cli_store(config, 1, quiet, span, |store| async move {
         let node_runner = NodeRunner::new(
             store,
+            config.database.url.clone(),
             node_name,
             NodeRunnerConfig {
                 max_consecutive_start_failures: args.max_start_failures,
@@ -168,7 +165,6 @@ async fn run_auto_run_command(
             .args(node_api::node_run_cli_args(
                 node_name,
                 args.max_start_failures,
-                args.db_pool_size,
             ))
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout_log))
