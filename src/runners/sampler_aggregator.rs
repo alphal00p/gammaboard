@@ -15,9 +15,7 @@ use crate::core::{
 use crate::evaluation::ObservableState;
 use crate::runners::process_memory::current_rss_bytes;
 use crate::runners::rolling_metric::RollingMetric;
-use crate::runners::{
-    QueueTickResult, SamplerQueue, SamplerQueueCheckpoint, SamplerQueueConfig,
-};
+use crate::runners::{QueueTickResult, SamplerQueue, SamplerQueueCheckpoint, SamplerQueueConfig};
 use crate::sampling::{SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
@@ -305,7 +303,8 @@ where
     fn current_runner_diagnostics(&self) -> JsonValue {
         let diagnostics_snapshot = self.queue.diagnostics_snapshot();
         let queue_counts = diagnostics_snapshot.map(|snapshot| snapshot.queue_counts);
-        let active_evaluator_count = diagnostics_snapshot.and_then(|snapshot| snapshot.active_evaluator_count);
+        let active_evaluator_count =
+            diagnostics_snapshot.and_then(|snapshot| snapshot.active_evaluator_count);
         let target_pending_batches =
             active_evaluator_count.and_then(|count| self.queue.target_pending_batches(count));
         let target_local_pending_batches =
@@ -401,7 +400,13 @@ where
 
     async fn poll_queue(
         &mut self,
-    ) -> Result<(Vec<crate::core::CompletedBatch>, crate::core::BatchQueueCounts), RunnerError> {
+    ) -> Result<
+        (
+            Vec<crate::core::CompletedBatch>,
+            crate::core::BatchQueueCounts,
+        ),
+        RunnerError,
+    > {
         let QueueTickResult {
             completed,
             queue_counts,
@@ -413,7 +418,10 @@ where
             observe_duration_ms(&mut self.runtime_state.rolling.reclaim_ms, duration);
         }
         if let Some(duration) = completed_cleanup_duration {
-            observe_duration_ms(&mut self.runtime_state.rolling.completed_delete_ms, duration);
+            observe_duration_ms(
+                &mut self.runtime_state.rolling.completed_delete_ms,
+                duration,
+            );
         }
         observe_duration_ms(
             &mut self.runtime_state.rolling.queue_counts_ms,
@@ -606,8 +614,15 @@ where
     }
 
     async fn force_cleanup_consumed_completed_batches(&mut self) -> Result<(), RunnerError> {
-        if let Some(duration) = self.queue.force_cleanup_consumed_completed_batches().await? {
-            observe_duration_ms(&mut self.runtime_state.rolling.completed_delete_ms, duration);
+        if let Some(duration) = self
+            .queue
+            .force_cleanup_consumed_completed_batches()
+            .await?
+        {
+            observe_duration_ms(
+                &mut self.runtime_state.rolling.completed_delete_ms,
+                duration,
+            );
         }
         Ok(())
     }
@@ -941,7 +956,8 @@ where
     ) {
         let elapsed_secs = elapsed.as_secs_f64();
         if elapsed_secs > 0.0 {
-            let instantaneous_rate = (completed_samples_delta.max(0) as f64 / elapsed_secs).max(0.0);
+            let instantaneous_rate =
+                (completed_samples_delta.max(0) as f64 / elapsed_secs).max(0.0);
             let previous = self.runtime_state.completed_samples_per_second;
             if !previous.is_finite() || previous <= 0.0 {
                 self.runtime_state.completed_samples_per_second = instantaneous_rate;

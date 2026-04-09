@@ -348,14 +348,6 @@ pub(crate) fn tick_breakdown_panel(
     }
 }
 
-pub(crate) fn table_panel(
-    panel_id: &str,
-    columns: Vec<String>,
-    rows: Vec<Vec<JsonValue>>,
-) -> PanelState {
-    table_panel_with_payload(panel_id, columns, rows, None)
-}
-
 pub(crate) fn table_panel_with_payload(
     panel_id: &str,
     columns: Vec<String>,
@@ -367,13 +359,6 @@ pub(crate) fn table_panel_with_payload(
         columns,
         rows,
         payload,
-    }
-}
-
-pub(crate) fn histogram_panel(panel_id: &str, bins: Vec<HistogramBin>) -> PanelState {
-    PanelState::Histogram {
-        panel_id: panel_id.to_string(),
-        bins,
     }
 }
 

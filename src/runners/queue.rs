@@ -112,9 +112,7 @@ where
             cached_tick_queue_counts: None,
             cached_active_evaluator_count: None,
             last_reclaim_at: now.checked_sub(RECLAIM_INTERVAL).unwrap_or(now),
-            last_completed_cleanup_at: now
-                .checked_sub(COMPLETED_CLEANUP_INTERVAL)
-                .unwrap_or(now),
+            last_completed_cleanup_at: now.checked_sub(COMPLETED_CLEANUP_INTERVAL).unwrap_or(now),
             metrics: QueueMetricsState::default(),
         }
     }
@@ -171,10 +169,7 @@ where
         self.store.reclaim_abandoned_batches(self.run_id).await
     }
 
-    async fn cleanup_consumed_completed_batches(
-        &self,
-        limit: usize,
-    ) -> Result<u64, StoreError> {
+    async fn cleanup_consumed_completed_batches(&self, limit: usize) -> Result<u64, StoreError> {
         let Some(up_to_batch_id) = self.last_completed_batch_id() else {
             return Ok(0);
         };
@@ -200,7 +195,9 @@ where
         })
     }
 
-    pub async fn force_cleanup_consumed_completed_batches(&mut self) -> Result<Option<Duration>, StoreError> {
+    pub async fn force_cleanup_consumed_completed_batches(
+        &mut self,
+    ) -> Result<Option<Duration>, StoreError> {
         let Some(_) = self.last_completed_batch_id() else {
             return Ok(None);
         };

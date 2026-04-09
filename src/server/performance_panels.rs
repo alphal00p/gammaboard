@@ -680,8 +680,9 @@ fn segment(key: &str, label: &str, value_ms: f64, color: &str) -> TickBreakdownS
 }
 
 fn evaluator_tick_segments(metrics: &EvaluatorPerformanceMetrics) -> Vec<TickBreakdownSegment> {
-    let fetch_sync_ms =
-        (metrics.avg_fetch_time_per_sample_ms - metrics.avg_fetch_stall_time_per_sample_ms).max(0.0);
+    let fetch_sync_ms = (metrics.avg_fetch_time_per_sample_ms
+        - metrics.avg_fetch_stall_time_per_sample_ms)
+        .max(0.0);
     [
         segment(
             "fetch_decode",

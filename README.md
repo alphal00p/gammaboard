@@ -154,7 +154,7 @@ just stop-deploy
 
 Detached deploy:
 - optionally starts local Postgres via `gammaboard db start`
-- starts `gammaboard server` detached
+- starts `gammaboard server` detached (using the same active `--runtime-config` path as the deploy command)
 - generates an nginx config from the deploy profile and serves the frontend build directly from nginx
 
 `gammaboard deploy ...` itself does not build. Use the `just deploy ...` wrapper when you want the frontend and the requested backend mode built first.

@@ -4,8 +4,7 @@ use super::{
 };
 use crate::core::{EngineError, ObservableConfig, RunTaskSpec};
 use crate::evaluation::{
-    FullObservableProgress, GammaLoopObservableState, Observable, ObservableState,
-    SemanticObservableKind,
+    GammaLoopObservableState, Observable, ObservableState, SemanticObservableKind,
 };
 use crate::server::panels::{
     HistogramBin, PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, key_value,
@@ -36,10 +35,7 @@ pub(super) fn projectors(
     projectors.push(abs_signal_to_noise_history_projector(
         observable_config.as_ref(),
     ));
-    if matches!(
-        observable_config,
-        Some(ObservableConfig::Gammaloop) | None
-    ) {
+    if matches!(observable_config, Some(ObservableConfig::Gammaloop) | None) {
         projectors.push(gammaloop_histogram_bundle_projector());
     }
     projectors
@@ -58,7 +54,7 @@ fn sample_progress_projector() -> TaskPanelProjector {
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         |ctx| {
-            let current = sample_progress_value(ctx)?;
+            let current = sample_progress_value(ctx);
             Ok(Some(progress_panel(
                 "sample_progress",
                 current,
@@ -177,19 +173,8 @@ fn gammaloop_histogram_bundle_projector() -> TaskPanelProjector {
     )
 }
 
-fn sample_progress_value(ctx: &TaskPanelContext<'_>) -> Result<f64, EngineError> {
-    if let Some(persisted) = ctx.source.persisted() {
-        if let Some(observable) = decode_aggregate_persisted_observable_with_fallback(
-            task_observable_config(&ctx.task.task).as_ref(),
-            persisted,
-        )? {
-            return Ok(observable.sample_count() as f64);
-        }
-        if let Ok(progress) = decode_full_progress(persisted) {
-            return Ok(progress.processed as f64);
-        }
-    }
-    Ok(ctx.task.nr_completed_samples.max(0) as f64)
+fn sample_progress_value(ctx: &TaskPanelContext<'_>) -> f64 {
+    ctx.task.nr_completed_samples.max(0) as f64
 }
 
 fn sample_observable(
@@ -252,11 +237,6 @@ fn decode_aggregate_persisted_observable(
             )))
         }
     }
-}
-
-fn decode_full_progress(persisted: &JsonValue) -> Result<FullObservableProgress, EngineError> {
-    serde_json::from_value(persisted.clone())
-        .map_err(|err| EngineError::build(format!("invalid full observable progress: {err}")))
 }
 
 fn decode_aggregate_persisted_observable_with_fallback(
@@ -373,11 +353,7 @@ fn estimate_summary_panel(observable: ObservableState) -> PanelState {
             "estimate_summary",
             vec![
                 key_value("count", "Count", state.count),
-                key_value(
-                    "mean",
-                    "Mean",
-                    format_estimate_with_error(state.mean(), state.stderr()),
-                ),
+                key_value("mean", "Mean", estimate_value(state.mean(), state.stderr())),
                 key_value("mean_abs", "Mean Abs", state.mean_abs()),
                 key_value(
                     "signal_to_noise",
@@ -394,17 +370,17 @@ fn estimate_summary_panel(observable: ObservableState) -> PanelState {
                 key_value(
                     "real_mean",
                     "Real Mean",
-                    format_estimate_with_error(state.real_mean(), state.real_stderr()),
+                    estimate_value(state.real_mean(), state.real_stderr()),
                 ),
                 key_value(
                     "imag_mean",
                     "Imag Mean",
-                    format_estimate_with_error(state.imag_mean(), state.imag_stderr()),
+                    estimate_value(state.imag_mean(), state.imag_stderr()),
                 ),
                 key_value(
                     "abs_mean",
                     "Abs Mean",
-                    format_estimate_with_error(state.abs_mean(), state.abs_stderr()),
+                    estimate_value(state.abs_mean(), state.abs_stderr()),
                 ),
                 key_value(
                     "signal_to_noise",
@@ -451,17 +427,17 @@ fn estimate_summary_panel(observable: ObservableState) -> PanelState {
                 key_value(
                     "real_mean",
                     "Real Mean",
-                    format_estimate_with_error(state.real_mean(), state.real_stderr()),
+                    estimate_value(state.real_mean(), state.real_stderr()),
                 ),
                 key_value(
                     "imag_mean",
                     "Imag Mean",
-                    format_estimate_with_error(state.imag_mean(), state.imag_stderr()),
+                    estimate_value(state.imag_mean(), state.imag_stderr()),
                 ),
                 key_value(
                     "abs_mean",
                     "Abs Mean",
-                    format_estimate_with_error(state.abs_mean(), state.abs_stderr()),
+                    estimate_value(state.abs_mean(), state.abs_stderr()),
                 ),
                 key_value(
                     "signal_to_noise",
@@ -509,34 +485,19 @@ fn estimate_summary_panel(observable: ObservableState) -> PanelState {
     }
 }
 
-fn format_estimate_with_error(mean: f64, error: f64) -> String {
-    if !mean.is_finite() || !error.is_finite() || error < 0.0 {
-        return format!("{mean} +- {error}");
-    }
-    let scale_source = mean.abs().max(error.abs());
-    if scale_source == 0.0 {
-        return "(0 +- 0) x 10^0".to_string();
-    }
-
-    let exponent = scale_source.log10().floor() as i32;
-    let scale = 10_f64.powi(exponent);
-    let scaled_mean = mean / scale;
-    let scaled_error = error / scale;
-    let decimals = decimals_for_two_sig_figs(scaled_error);
-
-    format!(
-        "({mean} +- {error}) x 10^{exponent}",
-        mean = format!("{scaled_mean:.decimals$}"),
-        error = format!("{scaled_error:.decimals$}"),
-    )
+#[derive(Debug, Serialize)]
+struct EstimateValuePayload {
+    kind: &'static str,
+    value: f64,
+    error: f64,
 }
 
-fn decimals_for_two_sig_figs(error: f64) -> usize {
-    if error == 0.0 {
-        return 0;
+fn estimate_value(value: f64, error: f64) -> EstimateValuePayload {
+    EstimateValuePayload {
+        kind: "estimate",
+        value,
+        error,
     }
-    let exponent = error.abs().log10().floor() as i32;
-    (1 - exponent).max(0) as usize
 }
 
 fn gammaloop_histogram_bundle_panel(observable: ObservableState) -> Option<PanelState> {
@@ -660,31 +621,5 @@ fn gammaloop_histogram_bundle_payload(
                 )
             })
             .collect(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::format_estimate_with_error;
-
-    #[test]
-    fn formats_estimate_with_matching_error_precision() {
-        assert_eq!(
-            format_estimate_with_error(1234.56, 12.34),
-            "(1.235 +- 0.012) x 10^3"
-        );
-    }
-
-    #[test]
-    fn formats_zero_estimate_without_crashing() {
-        assert_eq!(format_estimate_with_error(0.0, 0.0), "(0 +- 0) x 10^0");
-    }
-
-    #[test]
-    fn preserves_two_significant_figures_for_integer_error() {
-        assert_eq!(
-            format_estimate_with_error(-9876.0, 100.0),
-            "(-9.88 +- 0.10) x 10^3"
-        );
     }
 }

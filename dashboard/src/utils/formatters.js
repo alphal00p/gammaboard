@@ -50,3 +50,49 @@ export const formatCentralValueWithError = (value, error, fallback = "n/a") => {
     maximumFractionDigits: decimals,
   });
 };
+
+export const formatF64Full = (value, fallback = "n/a") => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return numeric.toExponential(16);
+};
+
+export const formatEstimateDisplay = (value, error, fallback = "n/a") => {
+  const central = Number(value);
+  const uncertainty = Number(error);
+  if (!Number.isFinite(central) || !Number.isFinite(uncertainty) || uncertainty < 0) {
+    return {
+      text: fallback,
+      latex: fallback,
+    };
+  }
+
+  if (uncertainty === 0) {
+    const text = formatScientific(central, 6, fallback);
+    return {
+      text,
+      latex: text,
+    };
+  }
+
+  const scaleSource = Math.max(Math.abs(central), Math.abs(uncertainty));
+  if (!Number.isFinite(scaleSource) || scaleSource === 0) {
+    return {
+      text: "(0 ± 0) × 10^0",
+      latex: "\\left(0 \\pm 0\\right)\\times 10^{0}",
+    };
+  }
+
+  const exponent = Math.floor(Math.log10(scaleSource));
+  const scale = 10 ** exponent;
+  const scaledValue = central / scale;
+  const scaledError = Math.abs(uncertainty) / scale;
+  const scaledErrorOrder = Math.floor(Math.log10(scaledError));
+  const decimals = Math.max(0, Math.min(12, 1 - scaledErrorOrder));
+  const valueText = scaledValue.toFixed(decimals);
+  const errorText = scaledError.toFixed(decimals);
+  return {
+    text: `(${valueText} ± ${errorText}) × 10^${exponent}`,
+    latex: `\\left(${valueText} \\pm ${errorText}\\right)\\times 10^{${exponent}}`,
+  };
+};

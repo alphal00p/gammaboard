@@ -529,7 +529,8 @@ async fn save_run_template(
     State(state): State<AppState>,
     AxumJson(payload): AxumJson<TemplateSaveRequest>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let template = template_api::save_template(&state.run_templates_dir, &payload.name, &payload.toml)?;
+    let template =
+        template_api::save_template(&state.run_templates_dir, &payload.name, &payload.toml)?;
     json_response(TemplateFileResponse {
         name: template.name,
         toml: template.toml,
@@ -540,7 +541,8 @@ async fn save_task_template(
     State(state): State<AppState>,
     AxumJson(payload): AxumJson<TemplateSaveRequest>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let template = template_api::save_template(&state.task_templates_dir, &payload.name, &payload.toml)?;
+    let template =
+        template_api::save_template(&state.task_templates_dir, &payload.name, &payload.toml)?;
     json_response(TemplateFileResponse {
         name: template.name,
         toml: template.toml,
@@ -703,13 +705,14 @@ async fn get_run_task_output(
     } else {
         None
     };
-    let has_gammaloop_observable = matches!(current_observable, Some(ObservableState::Gammaloop(_)))
-        || latest_stage_snapshot
-            .as_ref()
-            .is_some_and(|snapshot| matches!(&snapshot.observable_state, ObservableState::Gammaloop(_)))
-        || latest_persisted_snapshot.as_ref().is_some_and(|snapshot| {
-            ObservableState::from_gammaloop_persistent_json(&snapshot.persisted_output).is_ok()
-        });
+    let has_gammaloop_observable =
+        matches!(current_observable, Some(ObservableState::Gammaloop(_)))
+            || latest_stage_snapshot.as_ref().is_some_and(|snapshot| {
+                matches!(&snapshot.observable_state, ObservableState::Gammaloop(_))
+            })
+            || latest_persisted_snapshot.as_ref().is_some_and(|snapshot| {
+                ObservableState::from_gammaloop_persistent_json(&snapshot.persisted_output).is_ok()
+            });
     if has_gammaloop_observable
         && !matches!(
             effective_observable_config,

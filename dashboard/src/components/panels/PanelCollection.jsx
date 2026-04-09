@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Box,
@@ -20,10 +20,13 @@ import {
 } from "@mui/material";
 import ReactECharts from "echarts-for-react";
 import "../../lib/echarts";
+import LatexFormula from "../LatexFormula";
 import {
   formatCentralValueWithError,
   formatCompactNumber,
   formatDateTime,
+  formatEstimateDisplay,
+  formatF64Full,
   formatScientific,
 } from "../../utils/formatters";
 import { asArray } from "../../utils/collections";
@@ -39,8 +42,10 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
   const payload = bundlePanel?.state?.payload;
   const histograms = payload?.histograms;
   if (bundlePanel && histograms && typeof histograms === "object" && !Array.isArray(histograms)) {
+    const sourcePanelId = bundlePanel?.descriptor?.panel_id || "gammaloop_histogram_bundle";
+    const selectedFromValue = readHistogramBundleSelectedValue(bundlePanel.value);
     const selectedName =
-      bundlePanel.value ??
+      selectedFromValue ??
       payload?.primary_histogram_name ??
       Object.keys(histograms).find((key) => key && typeof histograms[key] === "object") ??
       null;
@@ -60,6 +65,7 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
         },
         state: {
           panel_id: "gammaloop_selected_histogram",
+          source_panel_id: sourcePanelId,
           name: selectedName,
           title: selectedHistogram.title,
           type_description: selectedHistogram.type_description,
@@ -72,7 +78,7 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
           log_y_axis: selectedHistogram.log_y_axis,
           bins: asArray(selectedHistogram.bins),
         },
-        value: null,
+        value: bundlePanel.value ?? null,
       });
     }
   }
@@ -110,6 +116,11 @@ const fitHistogramXDomain = (bins) => {
 };
 
 const FULL_ZOOM = Object.freeze({ start: 0, end: 100 });
+const SHARED_HISTORY_X_VIEW_PANEL_IDS = new Set([
+  "real_estimate_history",
+  "imag_estimate_history",
+  "abs_signal_to_noise_history",
+]);
 const inferXAxisLabel = (panelId) => (String(panelId || "").includes("_history") ? "Nr samples" : null);
 const inferNumericXAxisLabel = (panelId) => inferXAxisLabel(panelId) || "x";
 const isObject = (value) => value && typeof value === "object" && !Array.isArray(value);
@@ -129,6 +140,11 @@ const buildMultiSeriesData = (seriesList) => {
 const lineColors = ["#005f73", "#bb3e03", "#0a9396", "#ae2012", "#ca6702"];
 
 const isIsoDateTime = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value);
+const isEstimateValue = (value) =>
+  isObject(value) &&
+  value.kind === "estimate" &&
+  Number.isFinite(Number(value.value)) &&
+  Number.isFinite(Number(value.error));
 
 const renderStructuredValue = (value) => {
   if (value == null) return "none";
@@ -197,6 +213,70 @@ const writeZoomPanelValue = (current, zoom, tailPinned = null) => {
   const next = isObject(current) ? { ...current } : {};
   next.zoom = normalizeZoomRange(zoom) || FULL_ZOOM;
   if (tailPinned != null) next.tailPinned = Boolean(tailPinned);
+  return next;
+};
+
+const readHistogramBundleSelectedValue = (value) => {
+  if (typeof value === "string") return value;
+  if (isObject(value) && typeof value.selected_histogram === "string") return value.selected_histogram;
+  return null;
+};
+
+const readHistogramBundleView = (value) => {
+  if (!isObject(value)) return {};
+  return isObject(value.histogram_view) ? value.histogram_view : {};
+};
+
+const readHistogramZoomFromPanelValue = (value, fallback = FULL_ZOOM) => {
+  const view = readHistogramBundleView(value);
+  return normalizeZoomRange(view.zoom) || readZoomFromPanelValue(value, fallback);
+};
+
+const readHistogramScaleFromPanelValue = (value, axis) => {
+  const view = readHistogramBundleView(value);
+  const scale = view?.[`${axis}_scale`];
+  return scale === "log" ? "log" : "linear";
+};
+
+const writeHistogramBundlePanelValue = (
+  current,
+  { selectedHistogram = undefined, zoom = undefined, xScale = undefined, yScale = undefined } = {},
+) => {
+  const next = isObject(current) ? { ...current } : {};
+  const nextView = isObject(next.histogram_view) ? { ...next.histogram_view } : {};
+  if (selectedHistogram !== undefined) {
+    next.selected_histogram = selectedHistogram;
+  }
+  if (zoom !== undefined) {
+    nextView.zoom = normalizeZoomRange(zoom) || FULL_ZOOM;
+  }
+  if (xScale !== undefined) {
+    nextView.x_scale = xScale === "log" ? "log" : "linear";
+  }
+  if (yScale !== undefined) {
+    nextView.y_scale = yScale === "log" ? "log" : "linear";
+  }
+  if (Object.keys(nextView).length > 0) {
+    next.histogram_view = nextView;
+  }
+  return next;
+};
+
+const extractSharedHistoryView = (value) => {
+  if (!isObject(value)) return null;
+  const zoom = normalizeZoomRange(value.zoom);
+  const hasTailPinned = typeof value.tailPinned === "boolean";
+  if (!zoom && !hasTailPinned) return null;
+  const shared = {};
+  if (zoom) shared.zoom = zoom;
+  if (hasTailPinned) shared.tailPinned = value.tailPinned;
+  return shared;
+};
+
+const mergeSharedHistoryView = (current, sharedView) => {
+  const next = isObject(current) ? { ...current } : {};
+  if (sharedView.zoom) next.zoom = sharedView.zoom;
+  if ("tailPinned" in sharedView) next.tailPinned = sharedView.tailPinned;
   return next;
 };
 
@@ -1239,10 +1319,16 @@ const ScalarImageHeatmapPanel = ({
 const HistogramPanel = ({ title, state, value = undefined, onValueChange = null }) => {
   const figureRef = useRef(null);
   const echartsRef = useRef(null);
-  const [yScale, setYScale] = useState("linear");
-  const [xScale, setXScale] = useState("linear");
   const panelId = state?.panel_id || null;
-  const zoomRange = readZoomFromPanelValue(value, FULL_ZOOM);
+  const sourcePanelId = state?.source_panel_id || panelId;
+  const isBundleControlled = sourcePanelId === "gammaloop_histogram_bundle";
+  const [localYScale, setLocalYScale] = useState("linear");
+  const [localXScale, setLocalXScale] = useState("linear");
+  const yScale = isBundleControlled ? readHistogramScaleFromPanelValue(value, "y") : localYScale;
+  const xScale = isBundleControlled ? readHistogramScaleFromPanelValue(value, "x") : localXScale;
+  const zoomRange = isBundleControlled
+    ? readHistogramZoomFromPanelValue(value, FULL_ZOOM)
+    : readZoomFromPanelValue(value, FULL_ZOOM);
   const bins = useMemo(() => buildHistogramData(state?.bins), [state?.bins]);
   const stepData = useMemo(() => buildHistogramRenderData(state?.bins, yScale), [state?.bins, yScale]);
   const relativeErrorData = useMemo(() => buildRelativeErrorStepData(state?.bins), [state?.bins]);
@@ -1386,12 +1472,18 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
     () => ({
       datazoom: (event) => {
         const next = readDataZoomRange(event);
-        if (!next || typeof onValueChange !== "function" || !panelId) return;
+        if (!next || typeof onValueChange !== "function" || !sourcePanelId) return;
         if (!zoomRangeChanged(zoomRange, next)) return;
-        onValueChange(panelId, writeZoomPanelValue(value, next), false);
+        onValueChange(
+          sourcePanelId,
+          isBundleControlled
+            ? writeHistogramBundlePanelValue(value, { zoom: next })
+            : writeZoomPanelValue(value, next),
+          false,
+        );
       },
     }),
-    [onValueChange, panelId, value, zoomRange],
+    [isBundleControlled, onValueChange, sourcePanelId, value, zoomRange],
   );
 
   if (bins.length === 0) return null;
@@ -1409,15 +1501,29 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
               payload={{ panel_id: state?.panel_id ?? null, kind: "histogram", state, xScale, yScale }}
               elementRef={figureRef}
               onResetView={
-                panelId && typeof onValueChange === "function"
-                  ? () => onValueChange(panelId, writeZoomPanelValue(value, FULL_ZOOM), false)
+                sourcePanelId && typeof onValueChange === "function"
+                  ? () =>
+                      onValueChange(
+                        sourcePanelId,
+                        isBundleControlled
+                          ? writeHistogramBundlePanelValue(value, { zoom: FULL_ZOOM })
+                          : writeZoomPanelValue(value, FULL_ZOOM),
+                        false,
+                      )
                   : null
               }
             />
             <FormControl size="small" sx={{ minWidth: 128 }}>
               <Select
                 value={yScale}
-                onChange={(event) => setYScale(event.target.value)}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
+                    onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { yScale: next }), false);
+                    return;
+                  }
+                  setLocalYScale(next);
+                }}
                 sx={{
                   fontSize: "0.875rem",
                   ".MuiSelect-select": { py: 0.75 },
@@ -1430,7 +1536,14 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
             <FormControl size="small" sx={{ minWidth: 128 }}>
               <Select
                 value={xScale}
-                onChange={(event) => setXScale(event.target.value)}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
+                    onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { xScale: next }), false);
+                    return;
+                  }
+                  setLocalXScale(next);
+                }}
                 sx={{
                   fontSize: "0.875rem",
                   ".MuiSelect-select": { py: 0.75 },
@@ -1550,13 +1663,29 @@ const TablePanel = ({ title, state }) => {
                 <TableRow
                   key={`row-${rowIndex}`}
                   hover={selectableRows}
-                  selected={selectableRows && String(row?.[0] ?? "") === String(state?.selected_value ?? "")}
+                  selected={
+                    selectableRows &&
+                    String(row?.[0] ?? "") ===
+                      String(
+                        isGammaLoopBundle
+                          ? readHistogramBundleSelectedValue(state?.selected_value)
+                          : state?.selected_value,
+                      )
+                  }
                   sx={{
                     cursor: selectableRows ? "pointer" : "default",
                   }}
                   onClick={
                     selectableRows && typeof row?.[0] === "string"
-                      ? () => state?.onValueChange?.(state?.panel_id, row[0])
+                      ? () =>
+                          state?.onValueChange?.(
+                            state?.panel_id,
+                            isGammaLoopBundle
+                              ? writeHistogramBundlePanelValue(state?.selected_value, {
+                                  selectedHistogram: row[0],
+                                })
+                              : row[0],
+                          )
                       : undefined
                   }
                 >
@@ -1637,22 +1766,64 @@ const KeyValuePanel = ({ title, state }) => (
             <Typography variant="body2" color="text.secondary">
               {entry.label}
             </Typography>
-            <Typography
-              variant="body2"
-              sx={{
-                fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace",
-                wordBreak: "break-word",
-                whiteSpace: "pre-wrap",
-              }}
-            >
-              {renderStructuredValue(entry.value)}
-            </Typography>
+            {isEstimateValue(entry.value) ? (
+              <EstimateValueBlock value={entry.value} />
+            ) : (
+              <Typography
+                variant="body2"
+                sx={{
+                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace",
+                  wordBreak: "break-word",
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {renderStructuredValue(entry.value)}
+              </Typography>
+            )}
           </Box>
         ))}
       </Box>
     </CardContent>
   </Card>
 );
+
+const EstimateValueBlock = ({ value }) => {
+  const central = Number(value?.value);
+  const error = Number(value?.error);
+  const estimate = formatEstimateDisplay(central, error, "n/a");
+  return (
+    <Box sx={{ minWidth: 0 }}>
+      <Box
+        sx={{
+          fontSize: "1.05rem",
+          fontWeight: 700,
+          lineHeight: 1.35,
+          whiteSpace: "nowrap",
+          overflowX: "auto",
+          pb: 0.25,
+        }}
+      >
+        <LatexFormula latex={estimate.latex} display={false} fallbackPrefix="Estimate" />
+      </Box>
+      <Box component="details" sx={{ mt: 0.5 }}>
+        <Box component="summary" sx={{ cursor: "pointer", fontSize: "0.8rem", color: "text.secondary" }}>
+          Full precision (f64)
+        </Box>
+        <Typography
+          variant="caption"
+          sx={{
+            mt: 0.5,
+            display: "block",
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace",
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          {`value = ${formatF64Full(central, "n/a")}\nerror = ${formatF64Full(error, "n/a")}`}
+        </Typography>
+      </Box>
+    </Box>
+  );
+};
 
 const TextPanel = ({ title, state }) => (
   <Card variant="outlined">
@@ -1953,6 +2124,34 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
     () => buildRenderablePanels(panelSpecs, panelStates, panelValues),
     [panelSpecs, panelStates, panelValues],
   );
+  const handlePanelValueChange = useCallback(
+    (panelId, nextValue, shouldTriggerPoll = true) => {
+      if (typeof onPanelValueChange !== "function") return;
+      if (!SHARED_HISTORY_X_VIEW_PANEL_IDS.has(panelId)) {
+        onPanelValueChange(panelId, nextValue, shouldTriggerPoll);
+        return;
+      }
+      const sharedView = extractSharedHistoryView(nextValue);
+      if (!sharedView) {
+        onPanelValueChange(panelId, nextValue, shouldTriggerPoll);
+        return;
+      }
+      const targetIds = asArray(panelSpecs)
+        .map((spec) => spec?.panel_id)
+        .filter((id) => typeof id === "string" && SHARED_HISTORY_X_VIEW_PANEL_IDS.has(id));
+      if (targetIds.length <= 1) {
+        onPanelValueChange(panelId, nextValue, shouldTriggerPoll);
+        return;
+      }
+      targetIds.forEach((targetId, index) => {
+        const sourceValue = targetId === panelId ? nextValue : panelValues?.[targetId];
+        const mergedValue = mergeSharedHistoryView(sourceValue, sharedView);
+        const trigger = shouldTriggerPoll && index === targetIds.length - 1;
+        onPanelValueChange(targetId, mergedValue, trigger);
+      });
+    },
+    [onPanelValueChange, panelSpecs, panelValues],
+  );
 
   return (
     <Box sx={{ mb: 3 }}>
@@ -1981,7 +2180,7 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
               gridColumn: panelColumnSpan(descriptor),
             }}
           >
-            <PanelRenderer descriptor={descriptor} state={state} value={value} onValueChange={onPanelValueChange} />
+            <PanelRenderer descriptor={descriptor} state={state} value={value} onValueChange={handlePanelValueChange} />
           </Box>
         ))}
       </Box>

@@ -73,16 +73,20 @@ pub struct DeployStatusArgs {
 pub async fn run_deploy_command(
     args: DeployArgs,
     runtime_config: &RuntimeConfig,
-    _runtime_config_path: &Path,
+    runtime_config_path: &Path,
 ) -> Result<()> {
     match args.command {
-        DeployCommand::Up(args) => deploy_up(args, runtime_config).await,
+        DeployCommand::Up(args) => deploy_up(args, runtime_config, runtime_config_path).await,
         DeployCommand::Down(args) => deploy_down(args, runtime_config).await,
         DeployCommand::Status(args) => deploy_status(args),
     }
 }
 
-async fn deploy_up(args: DeployUpArgs, runtime_config: &RuntimeConfig) -> Result<()> {
+async fn deploy_up(
+    args: DeployUpArgs,
+    runtime_config: &RuntimeConfig,
+    runtime_config_path: &Path,
+) -> Result<()> {
     let deploy_config = DeployConfig::load(&args.deploy_config)?;
 
     if deploy_config.database.ensure_started {
@@ -108,7 +112,7 @@ async fn deploy_up(args: DeployUpArgs, runtime_config: &RuntimeConfig) -> Result
         .frontend_port
         .unwrap_or(deploy_config.frontend_http.frontend_port);
     write_nginx_config(&deploy_config, &server_config, frontend_port)?;
-    start_backend(&deploy_config, args.mode)?;
+    start_backend(&deploy_config, runtime_config_path, args.mode)?;
     start_nginx(&deploy_config)?;
     write_deploy_state(
         &deploy_config,
@@ -271,12 +275,18 @@ fn load_deploy_config_for_management(path: Option<&Path>) -> Result<DeployConfig
     }
 }
 
-fn start_backend(deploy_config: &DeployConfig, mode: DeployMode) -> Result<()> {
+fn start_backend(
+    deploy_config: &DeployConfig,
+    runtime_config_path: &Path,
+    mode: DeployMode,
+) -> Result<()> {
     let binary = mode.binary_path();
     ensure_parent_dir(&deploy_config.backend_log_file())?;
     stop_backend(deploy_config)?;
     let log = fs::File::create(deploy_config.backend_log_file())?;
     let child = Command::new(&binary)
+        .arg("--runtime-config")
+        .arg(runtime_config_path)
         .arg("server")
         .arg("--server-config")
         .arg(&deploy_config.api_server.api_server_config)

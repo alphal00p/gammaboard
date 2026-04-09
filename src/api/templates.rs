@@ -40,10 +40,7 @@ pub fn load_template(dir: &Path, name: &str) -> Result<TemplateFile, ApiError> {
     let path = resolve_template_path(dir, &name)?;
     let toml = fs::read_to_string(&path)
         .map_err(|err| ApiError::Internal(format!("failed reading {}: {err}", path.display())))?;
-    Ok(TemplateFile {
-        name,
-        toml,
-    })
+    Ok(TemplateFile { name, toml })
 }
 
 /// Saves a named template file in a template directory.
