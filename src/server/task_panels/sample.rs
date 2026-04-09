@@ -185,7 +185,7 @@ fn sample_observable(
         let requested_config = observable_config.cloned();
         if requested_config
             .as_ref()
-            .map(|config| observable.config() == *config)
+            .map(|config| observable_matches_requested_config(observable, config))
             .unwrap_or(true)
         {
             return Ok(Some(observable.clone()));
@@ -203,6 +203,25 @@ fn sample_observable(
             decode_aggregate_persisted_observable_with_fallback(observable_config, persisted)
         }
         None => Ok(None),
+    }
+}
+
+fn observable_matches_requested_config(
+    observable: &ObservableState,
+    requested: &ObservableConfig,
+) -> bool {
+    match requested {
+        ObservableConfig::Scalar => matches!(
+            observable,
+            ObservableState::Scalar(_) | ObservableState::FullScalar(_)
+        ),
+        ObservableConfig::Complex => matches!(
+            observable,
+            ObservableState::Complex(_) | ObservableState::FullComplex(_)
+        ),
+        ObservableConfig::Gammaloop => matches!(observable, ObservableState::Gammaloop(_)),
+        ObservableConfig::FullScalar => matches!(observable, ObservableState::FullScalar(_)),
+        ObservableConfig::FullComplex => matches!(observable, ObservableState::FullComplex(_)),
     }
 }
 
