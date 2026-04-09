@@ -83,6 +83,36 @@ fn next_batch_ids(count: usize) -> Vec<i64> {
         .next_ids(count)
 }
 
+const PG_COPY_BINARY_HEADER: &[u8] = b"PGCOPY\n\xff\r\n\0";
+
+fn encode_batch_inputs_copy_binary(serialized_inputs: &[(i64, Vec<u8>)]) -> Vec<u8> {
+    let estimated_capacity = PG_COPY_BINARY_HEADER.len()
+        + 4
+        + 4
+        + serialized_inputs
+            .iter()
+            .map(|(_, payload)| 2 + 4 + 8 + 4 + payload.len())
+            .sum::<usize>()
+        + 2;
+    let mut out = Vec::with_capacity(estimated_capacity);
+    out.extend_from_slice(PG_COPY_BINARY_HEADER);
+    out.extend_from_slice(&0_i32.to_be_bytes());
+    out.extend_from_slice(&0_i32.to_be_bytes());
+
+    for (batch_id, payload) in serialized_inputs {
+        out.extend_from_slice(&2_i16.to_be_bytes());
+
+        out.extend_from_slice(&8_i32.to_be_bytes());
+        out.extend_from_slice(&batch_id.to_be_bytes());
+
+        out.extend_from_slice(&(payload.len() as i32).to_be_bytes());
+        out.extend_from_slice(payload);
+    }
+
+    out.extend_from_slice(&(-1_i16).to_be_bytes());
+    out
+}
+
 pub(crate) async fn insert_batches(
     pool: &PgPool,
     run_id: i32,
@@ -141,19 +171,26 @@ pub(crate) async fn insert_batches(
         .map(|(_, payload)| payload.len())
         .sum::<usize>();
 
-    let mut input_builder = QueryBuilder::<Postgres>::new(
-        r#"
-        INSERT INTO batch_inputs (
-            batch_id,
-            latent_batch
-        )
-        "#,
-    );
-    input_builder.push_values(serialized_inputs.iter(), |mut row, (batch_id, payload)| {
-        row.push_bind(*batch_id).push_bind(payload);
-    });
+    let copy_payload = encode_batch_inputs_copy_binary(&serialized_inputs);
     let insert_inputs_started = Instant::now();
-    input_builder.build().execute(&mut *tx).await?;
+    let mut copy_in = tx
+        .copy_in_raw(
+            r#"
+            COPY batch_inputs (
+                batch_id,
+                latent_batch
+            ) FROM STDIN WITH (FORMAT binary)
+            "#,
+        )
+        .await?;
+    copy_in.send(copy_payload).await?;
+    let copied_rows = copy_in.finish().await?;
+    if copied_rows != serialized_inputs.len() as u64 {
+        return Err(sqlx::Error::Protocol(format!(
+            "COPY batch_inputs inserted {copied_rows} rows, expected {}",
+            serialized_inputs.len()
+        )));
+    }
     let insert_inputs_exec_ms = insert_inputs_started.elapsed().as_secs_f64() * 1000.0;
 
     let commit_started = Instant::now();
