@@ -14,7 +14,20 @@ momentum_space = false
 performance_snapshot_interval_ms = 2000
 
 [sampler_aggregator_runner_params]
+performance_snapshot_interval_ms = 2000
+min_tick_time_ms = 10
 frontend_sync_interval_ms = 2000
+target_batch_eval_ms = 5000.0
+max_batch_size = 131072
+
+[sampler_aggregator_runner_params.queue]
+queue_buffer = 2.0
+local_pending_buffer_multiplier = 1.0
+max_queue_size = 192
+max_batches_per_tick = 64
+max_insert_bundle_size = 16
+completed_batch_fetch_limit = 64
+strict_batch_ordering = false
 
 [[task_queue]]
 name = "havana-train-10m"

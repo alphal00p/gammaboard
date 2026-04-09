@@ -562,6 +562,21 @@ fn sampler_current_panels(
                 key_value("completed_batches", "Completed Batches", completed_batches),
                 key_value("open_batches", "Open Batches", open_batches),
                 key_value("pending_shortfall", "Pending Shortfall", pending_shortfall),
+                key_value(
+                    "local_pending_batches",
+                    "Local Pending Batches",
+                    queue_buffer_value(&entry.engine_diagnostics, "local_pending_batches"),
+                ),
+                key_value(
+                    "local_inflight_insert_batches",
+                    "Local Inflight Insert Batches",
+                    queue_buffer_value(&entry.engine_diagnostics, "local_inflight_insert_batches"),
+                ),
+                key_value(
+                    "local_ready_processed_batches",
+                    "Local Ready Processed Batches",
+                    queue_buffer_value(&entry.engine_diagnostics, "local_ready_processed_batches"),
+                ),
             ],
         ),
         key_value_panel(
