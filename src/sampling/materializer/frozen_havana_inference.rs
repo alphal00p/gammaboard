@@ -66,9 +66,12 @@ impl Materializer for HavanaInferenceMaterializer {
 
                 Batch::new(points).map_err(|err| EngineError::engine(err.to_string()))
             }
-            LatentBatchPayload::Batch { batch } => {
-                // If the latent payload is already a concrete batch, accept it directly.
-                Ok(batch.clone())
+            LatentBatchPayload::IndexedBatch { .. } => {
+                // If the latent payload already encodes a concrete batch, accept it directly.
+                latent_batch
+                    .payload
+                    .as_batch()
+                    .map_err(|err| EngineError::engine(err.to_string()))
             }
         }
     }

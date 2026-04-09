@@ -3,9 +3,10 @@
 use bincode::config::{Configuration, standard};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::collections::HashMap;
 
 use crate::core::ObservableConfig;
-use crate::evaluation::{Batch, BatchError};
+use crate::evaluation::{Batch, BatchError, Point};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LatentBatch {
@@ -24,8 +25,16 @@ pub struct LatentBatchSpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LatentBatchPayload {
-    Batch { batch: Batch },
-    HavanaInference { seed: u64 },
+    IndexedBatch {
+        discrete_signatures: Vec<Vec<i64>>,
+        discrete_map: Vec<usize>,
+        continuous_layouts: Vec<usize>,
+        continuous_values: Vec<f64>,
+        weights: Vec<f64>,
+    },
+    HavanaInference {
+        seed: u64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -44,20 +53,67 @@ struct LatentBatchBinary {
 
 #[derive(Debug, Serialize, Deserialize)]
 enum LatentBatchPayloadBinary {
-    Batch { batch: Batch },
-    HavanaInference { seed: u64 },
+    IndexedBatch {
+        discrete_signatures: Vec<Vec<i64>>,
+        discrete_map: Vec<usize>,
+        continuous_layouts: Vec<usize>,
+        continuous_values: Vec<f64>,
+        weights: Vec<f64>,
+    },
+    HavanaInference {
+        seed: u64,
+    },
 }
 
 impl LatentBatchPayload {
     pub fn from_batch(batch: &Batch) -> Self {
-        Self::Batch {
-            batch: batch.clone(),
+        let mut discrete_signatures = Vec::<Vec<i64>>::new();
+        let mut discrete_index = HashMap::<Vec<i64>, usize>::new();
+        let mut discrete_map = Vec::with_capacity(batch.size());
+        let mut continuous_layouts = Vec::with_capacity(batch.size());
+        let mut continuous_values = Vec::new();
+        let mut weights = Vec::with_capacity(batch.size());
+
+        for point in batch.points() {
+            let signature_idx = if let Some(&idx) = discrete_index.get(&point.discrete) {
+                idx
+            } else {
+                let idx = discrete_signatures.len();
+                let signature = point.discrete.clone();
+                discrete_index.insert(signature.clone(), idx);
+                discrete_signatures.push(signature);
+                idx
+            };
+            discrete_map.push(signature_idx);
+            continuous_layouts.push(point.continuous.len());
+            continuous_values.extend_from_slice(&point.continuous);
+            weights.push(point.weight);
+        }
+
+        Self::IndexedBatch {
+            discrete_signatures,
+            discrete_map,
+            continuous_layouts,
+            continuous_values,
+            weights,
         }
     }
 
     pub fn into_batch(self) -> Result<Batch, BatchError> {
         match self {
-            Self::Batch { batch } => Ok(batch),
+            Self::IndexedBatch {
+                discrete_signatures,
+                discrete_map,
+                continuous_layouts,
+                continuous_values,
+                weights,
+            } => decode_indexed_batch(
+                &discrete_signatures,
+                &discrete_map,
+                &continuous_layouts,
+                &continuous_values,
+                &weights,
+            ),
             Self::HavanaInference { .. } => Err(BatchError::layout(
                 "havana_inference latent payload must be materialized by a materializer",
             )),
@@ -66,7 +122,19 @@ impl LatentBatchPayload {
 
     pub fn as_batch(&self) -> Result<Batch, BatchError> {
         match self {
-            Self::Batch { batch } => Ok(batch.clone()),
+            Self::IndexedBatch {
+                discrete_signatures,
+                discrete_map,
+                continuous_layouts,
+                continuous_values,
+                weights,
+            } => decode_indexed_batch(
+                discrete_signatures,
+                discrete_map,
+                continuous_layouts,
+                continuous_values,
+                weights,
+            ),
             Self::HavanaInference { .. } => Err(BatchError::layout(
                 "havana_inference latent payload must be materialized by a materializer",
             )),
@@ -123,8 +191,18 @@ impl LatentBatch {
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, BatchError> {
         let payload = match &self.payload {
-            LatentBatchPayload::Batch { batch } => LatentBatchPayloadBinary::Batch {
-                batch: batch.clone(),
+            LatentBatchPayload::IndexedBatch {
+                discrete_signatures,
+                discrete_map,
+                continuous_layouts,
+                continuous_values,
+                weights,
+            } => LatentBatchPayloadBinary::IndexedBatch {
+                discrete_signatures: discrete_signatures.clone(),
+                discrete_map: discrete_map.clone(),
+                continuous_layouts: continuous_layouts.clone(),
+                continuous_values: continuous_values.clone(),
+                weights: weights.clone(),
             },
             LatentBatchPayload::HavanaInference { seed } => {
                 LatentBatchPayloadBinary::HavanaInference { seed: *seed }
@@ -147,7 +225,19 @@ impl LatentBatch {
                 BatchError::layout(format!("invalid latent batch payload: {err}"))
             })?;
         let payload = match latent.payload {
-            LatentBatchPayloadBinary::Batch { batch } => LatentBatchPayload::from_batch(&batch),
+            LatentBatchPayloadBinary::IndexedBatch {
+                discrete_signatures,
+                discrete_map,
+                continuous_layouts,
+                continuous_values,
+                weights,
+            } => LatentBatchPayload::IndexedBatch {
+                discrete_signatures,
+                discrete_map,
+                continuous_layouts,
+                continuous_values,
+                weights,
+            },
             LatentBatchPayloadBinary::HavanaInference { seed } => {
                 LatentBatchPayload::HavanaInference { seed }
             }
@@ -160,6 +250,60 @@ impl LatentBatch {
         restored.validate_nr_samples()?;
         Ok(restored)
     }
+}
+
+fn decode_indexed_batch(
+    discrete_signatures: &[Vec<i64>],
+    discrete_map: &[usize],
+    continuous_layouts: &[usize],
+    continuous_values: &[f64],
+    weights: &[f64],
+) -> Result<Batch, BatchError> {
+    let nr_samples = weights.len();
+    if discrete_map.len() != nr_samples || continuous_layouts.len() != nr_samples {
+        return Err(BatchError::layout(format!(
+            "indexed latent batch shape mismatch: discrete_map={}, continuous_layouts={}, weights={nr_samples}",
+            discrete_map.len(),
+            continuous_layouts.len(),
+        )));
+    }
+
+    let mut continuous_offset = 0usize;
+    let mut points = Vec::with_capacity(nr_samples);
+    for sample_idx in 0..nr_samples {
+        let signature_idx = discrete_map[sample_idx];
+        let discrete = discrete_signatures.get(signature_idx).ok_or_else(|| {
+            BatchError::layout(format!(
+                "indexed latent batch discrete_map[{sample_idx}] points to missing signature {signature_idx}"
+            ))
+        })?;
+        let continuous_len = continuous_layouts[sample_idx];
+        let next_continuous_offset = continuous_offset
+            .checked_add(continuous_len)
+            .ok_or_else(|| BatchError::layout("indexed latent batch continuous offset overflow"))?;
+        let continuous = continuous_values
+            .get(continuous_offset..next_continuous_offset)
+            .ok_or_else(|| {
+                BatchError::layout(format!(
+                    "indexed latent batch continuous values too short for sample {sample_idx}"
+                ))
+            })?;
+        points.push(Point::new(
+            continuous.to_vec(),
+            discrete.clone(),
+            weights[sample_idx],
+        ));
+        continuous_offset = next_continuous_offset;
+    }
+
+    if continuous_offset != continuous_values.len() {
+        return Err(BatchError::layout(format!(
+            "indexed latent batch continuous values have trailing data: consumed={continuous_offset} total={}",
+            continuous_values.len()
+        )));
+    }
+
+    Batch::new(points)
 }
 
 #[cfg(test)]
@@ -193,5 +337,52 @@ mod tests {
         let bytes = latent.to_bytes().expect("latent batch bytes");
         let restored = LatentBatch::from_bytes(&bytes).expect("latent batch");
         assert_eq!(restored, latent);
+    }
+
+    #[test]
+    fn latent_batch_roundtrips_heterogeneous_batch_payload() {
+        let batch = Batch::from_points([
+            Point::new(vec![0.5, 1.5], vec![1, 2], 1.0),
+            Point::new(vec![2.5], vec![1, 2], 2.0),
+            Point::new(Vec::new(), vec![9], 3.0),
+            Point::new(vec![4.5, 5.5, 6.5], Vec::new(), 4.0),
+        ])
+        .expect("batch creation");
+        let latent = LatentBatchSpec::from_batch(&batch).build();
+
+        let json = latent.into_json();
+        let restored = LatentBatch::from_json(&json).expect("latent from json");
+        let restored_batch = restored.payload.into_batch().expect("batch payload");
+
+        assert_eq!(restored_batch, batch);
+    }
+
+    #[test]
+    fn latent_batch_deduplicates_discrete_signatures() {
+        let batch = Batch::from_points([
+            Point::new(vec![0.5], vec![1, 2], 1.0),
+            Point::new(vec![1.5, 2.5], vec![1, 2], 2.0),
+            Point::new(vec![3.5], vec![7], 3.0),
+            Point::new(vec![4.5], vec![1, 2], 4.0),
+        ])
+        .expect("batch creation");
+        let latent = LatentBatchSpec::from_batch(&batch).build();
+
+        let LatentBatchPayload::IndexedBatch {
+            discrete_signatures,
+            discrete_map,
+            continuous_layouts,
+            continuous_values,
+            weights,
+        } = &latent.payload
+        else {
+            panic!("expected indexed batch payload");
+        };
+
+        assert_eq!(discrete_signatures, &vec![vec![1, 2], vec![7]]);
+        assert_eq!(discrete_map, &vec![0, 0, 1, 0]);
+        assert_eq!(continuous_layouts, &vec![1, 2, 1, 1]);
+        assert_eq!(continuous_values, &vec![0.5, 1.5, 2.5, 3.5, 4.5]);
+        assert_eq!(weights, &vec![1.0, 2.0, 3.0, 4.0]);
     }
 }
