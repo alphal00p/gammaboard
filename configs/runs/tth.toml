@@ -25,7 +25,7 @@ queue_buffer = 2.0
 local_pending_buffer_multiplier = 1.0
 max_queue_size = 192
 max_batches_per_tick = 64
-max_insert_bundle_size = 16
+max_insert_bundle_size = 1
 completed_batch_fetch_limit = 64
 strict_batch_ordering = true
 
