@@ -68,7 +68,7 @@ impl Materializer for HavanaInferenceMaterializer {
             }
             LatentBatchPayload::Batch { batch } => {
                 // If the latent payload is already a concrete batch, accept it directly.
-                Batch::from_json(batch).map_err(|err| EngineError::engine(err.to_string()))
+                Ok(batch.clone())
             }
         }
     }

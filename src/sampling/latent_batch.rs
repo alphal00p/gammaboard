@@ -24,7 +24,7 @@ pub struct LatentBatchSpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LatentBatchPayload {
-    Batch { batch: JsonValue },
+    Batch { batch: Batch },
     HavanaInference { seed: u64 },
 }
 
@@ -51,13 +51,13 @@ enum LatentBatchPayloadBinary {
 impl LatentBatchPayload {
     pub fn from_batch(batch: &Batch) -> Self {
         Self::Batch {
-            batch: batch.to_json(),
+            batch: batch.clone(),
         }
     }
 
     pub fn into_batch(self) -> Result<Batch, BatchError> {
         match self {
-            Self::Batch { batch } => Batch::from_json(&batch),
+            Self::Batch { batch } => Ok(batch),
             Self::HavanaInference { .. } => Err(BatchError::layout(
                 "havana_inference latent payload must be materialized by a materializer",
             )),
@@ -66,7 +66,7 @@ impl LatentBatchPayload {
 
     pub fn as_batch(&self) -> Result<Batch, BatchError> {
         match self {
-            Self::Batch { batch } => Batch::from_json(batch),
+            Self::Batch { batch } => Ok(batch.clone()),
             Self::HavanaInference { .. } => Err(BatchError::layout(
                 "havana_inference latent payload must be materialized by a materializer",
             )),
@@ -124,7 +124,7 @@ impl LatentBatch {
     pub fn to_bytes(&self) -> Result<Vec<u8>, BatchError> {
         let payload = match &self.payload {
             LatentBatchPayload::Batch { batch } => LatentBatchPayloadBinary::Batch {
-                batch: Batch::from_json(batch)?,
+                batch: batch.clone(),
             },
             LatentBatchPayload::HavanaInference { seed } => {
                 LatentBatchPayloadBinary::HavanaInference { seed: *seed }
