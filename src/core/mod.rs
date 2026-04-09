@@ -8,9 +8,10 @@ pub use errors::{BuildError, EngineError, EvalError, StoreError};
 pub use models::{
     BatchClaim, BatchQueueCounts, BatchRecord, BatchStatus, CompletedBatch, DesiredAssignment,
     EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot,
-    RegisteredNode, RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot, RuntimeLogEvent,
-    SamplerAggregatorPerformanceSnapshot, SamplerPerformanceMetrics, SamplerQueueRollingAverages,
-    SamplerQueueRuntimeMetrics, SamplerRuntimeMetrics, SamplerWorkRollingAverages, WorkerRole,
+    InsertBatchesMetrics, InsertBatchesOutcome, RegisteredNode, RollingMetricSnapshot,
+    RunSampleProgress, RunStageSnapshot, RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
+    SamplerPerformanceMetrics, SamplerQueueRollingAverages, SamplerQueueRuntimeMetrics,
+    SamplerRuntimeMetrics, SamplerWorkRollingAverages, WorkerRole,
 };
 pub use run_spec::{
     BatchTransformConfig, EvaluatorConfig, IntegrationParams, ObservableConfig, RunSpec,

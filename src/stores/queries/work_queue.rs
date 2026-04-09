@@ -1,6 +1,6 @@
 use crate::core::{
-    BatchQueueCounts, EvaluatorPerformanceSnapshot, SamplerAggregatorPerformanceSnapshot,
-    StoreError,
+    BatchQueueCounts, EvaluatorPerformanceSnapshot, InsertBatchesMetrics, InsertBatchesOutcome,
+    SamplerAggregatorPerformanceSnapshot, StoreError,
 };
 use crate::evaluation::BatchResult;
 use crate::sampling::LatentBatch;
@@ -10,7 +10,7 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use sqlx::{PgPool, Postgres, QueryBuilder};
 use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 pub(crate) struct CompletedBatchRaw {
     pub batch_id: i64,
@@ -89,11 +89,12 @@ pub(crate) async fn insert_batches(
     task_id: i64,
     requires_training_values: bool,
     batches: &[LatentBatch],
-) -> Result<Vec<i64>, sqlx::Error> {
+) -> Result<InsertBatchesOutcome, sqlx::Error> {
     if batches.is_empty() {
-        return Ok(Vec::new());
+        return Ok(InsertBatchesOutcome::default());
     }
 
+    let started = Instant::now();
     let batch_ids = next_batch_ids(batches.len());
     let mut tx = pool.begin().await?;
     let mut builder = QueryBuilder::<Postgres>::new(
@@ -119,7 +120,26 @@ pub(crate) async fn insert_batches(
                 .push_bind("pending");
         },
     );
+    let insert_batches_started = Instant::now();
     builder.build().execute(&mut *tx).await?;
+    let insert_batches_exec_ms = insert_batches_started.elapsed().as_secs_f64() * 1000.0;
+
+    let serialize_started = Instant::now();
+    let serialized_inputs = batch_ids
+        .iter()
+        .zip(batches.iter())
+        .map(|(batch_id, batch)| {
+            batch
+                .to_bytes()
+                .map(|payload| (*batch_id, payload))
+                .expect("latent batch serialization should never fail")
+        })
+        .collect::<Vec<_>>();
+    let serialize_ms = serialize_started.elapsed().as_secs_f64() * 1000.0;
+    let payload_bytes = serialized_inputs
+        .iter()
+        .map(|(_, payload)| payload.len())
+        .sum::<usize>();
 
     let mut input_builder = QueryBuilder::<Postgres>::new(
         r#"
@@ -129,18 +149,28 @@ pub(crate) async fn insert_batches(
         )
         "#,
     );
-    input_builder.push_values(
-        batch_ids.iter().zip(batches.iter()),
-        |mut row, (batch_id, batch)| {
-            let payload = batch
-                .to_bytes()
-                .expect("latent batch serialization should never fail");
-            row.push_bind(*batch_id).push_bind(payload);
-        },
-    );
+    input_builder.push_values(serialized_inputs.iter(), |mut row, (batch_id, payload)| {
+        row.push_bind(*batch_id).push_bind(payload);
+    });
+    let insert_inputs_started = Instant::now();
     input_builder.build().execute(&mut *tx).await?;
+    let insert_inputs_exec_ms = insert_inputs_started.elapsed().as_secs_f64() * 1000.0;
+
+    let commit_started = Instant::now();
     tx.commit().await?;
-    Ok(batch_ids)
+    let commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
+
+    Ok(InsertBatchesOutcome {
+        batch_ids,
+        metrics: InsertBatchesMetrics {
+            serialize_ms,
+            payload_bytes,
+            insert_batches_exec_ms,
+            insert_inputs_exec_ms,
+            commit_ms,
+            end_to_end_ms: started.elapsed().as_secs_f64() * 1000.0,
+        },
+    })
 }
 
 pub(crate) async fn get_pending_batch_count(

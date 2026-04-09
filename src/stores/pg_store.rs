@@ -553,7 +553,7 @@ impl WorkQueueStore for PgStore {
         task_id: i64,
         requires_training_values: bool,
         batches: &[LatentBatch],
-    ) -> Result<Vec<i64>, StoreError> {
+    ) -> Result<crate::core::InsertBatchesOutcome, StoreError> {
         queries::insert_batches(
             &self.pool,
             run_id,

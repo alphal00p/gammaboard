@@ -134,14 +134,12 @@ impl PythonWorker {
             command.env("PYTHONPATH", pythonpath);
         }
 
-        let mut child = command
-            .spawn()
-            .map_err(|error| {
-                BuildError::build(format!(
-                    "failed to start python worker '{}': {error}",
-                    python_executable.display()
-                ))
-            })?;
+        let mut child = command.spawn().map_err(|error| {
+            BuildError::build(format!(
+                "failed to start python worker '{}': {error}",
+                python_executable.display()
+            ))
+        })?;
 
         let stdin = child
             .stdin
@@ -187,7 +185,11 @@ impl PythonWorker {
         Self::expect_ok(response).map_err(BuildError::build)
     }
 
-    fn eval_scalar(&mut self, xs_row_major: &[f64], nr_samples: usize) -> Result<Vec<f64>, EvalError> {
+    fn eval_scalar(
+        &mut self,
+        xs_row_major: &[f64],
+        nr_samples: usize,
+    ) -> Result<Vec<f64>, EvalError> {
         let request = serde_json::json!({
             "id": self.allocate_request_id(),
             "op": "eval_scalar",
@@ -213,7 +215,9 @@ impl PythonWorker {
             .enumerate()
             .map(|(index, value)| {
                 value.as_f64().ok_or_else(|| {
-                    EvalError::eval(format!("python worker returned non-f64 at output index {index}"))
+                    EvalError::eval(format!(
+                        "python worker returned non-f64 at output index {index}"
+                    ))
                 })
             })
             .collect()
@@ -238,7 +242,9 @@ impl PythonWorker {
             .read_line(&mut response_line)
             .map_err(|error| format!("failed reading python worker response: {error}"))?;
         if read == 0 {
-            return Err(self.worker_terminated_message("python worker terminated before responding"));
+            return Err(
+                self.worker_terminated_message("python worker terminated before responding")
+            );
         }
         let response = serde_json::from_str::<Value>(response_line.trim()).map_err(|error| {
             format!(
@@ -274,7 +280,10 @@ impl PythonWorker {
             .get("error")
             .and_then(Value::as_str)
             .unwrap_or("unknown python worker error");
-        let traceback = response.get("traceback").and_then(Value::as_str).unwrap_or("");
+        let traceback = response
+            .get("traceback")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         if traceback.is_empty() {
             Err(format!("python worker error: {error}"))
         } else {
@@ -331,12 +340,15 @@ fn build_nix_output_path(flake_ref: &str) -> Result<PathBuf, BuildError> {
         )));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let output_path = stdout.lines().find(|line| !line.trim().is_empty()).ok_or_else(|| {
-        BuildError::build(format!(
-            "nix build did not return an output path for '{}'",
-            flake_ref
-        ))
-    })?;
+    let output_path = stdout
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .ok_or_else(|| {
+            BuildError::build(format!(
+                "nix build did not return an output path for '{}'",
+                flake_ref
+            ))
+        })?;
     Ok(PathBuf::from(output_path.trim()))
 }
 
@@ -437,8 +449,14 @@ mod tests {
 
     #[test]
     fn normalize_flake_ref_prefixes_local_paths() {
-        assert_eq!(normalize_flake_ref("./myflake#runtime"), "path:./myflake#runtime");
-        assert_eq!(normalize_flake_ref("../myflake#runtime"), "path:../myflake#runtime");
+        assert_eq!(
+            normalize_flake_ref("./myflake#runtime"),
+            "path:./myflake#runtime"
+        );
+        assert_eq!(
+            normalize_flake_ref("../myflake#runtime"),
+            "path:../myflake#runtime"
+        );
         assert_eq!(
             normalize_flake_ref("/abs/path/to/flake#runtime"),
             "path:/abs/path/to/flake#runtime"

@@ -189,6 +189,22 @@ pub struct RollingMetricSnapshot {
     pub std_dev: f64,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct InsertBatchesMetrics {
+    pub serialize_ms: f64,
+    pub payload_bytes: usize,
+    pub insert_batches_exec_ms: f64,
+    pub insert_inputs_exec_ms: f64,
+    pub commit_ms: f64,
+    pub end_to_end_ms: f64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct InsertBatchesOutcome {
+    pub batch_ids: Vec<i64>,
+    pub metrics: InsertBatchesMetrics,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct SamplerWorkRollingAverages {
@@ -213,6 +229,12 @@ pub struct SamplerQueueRollingAverages {
     pub fetch_completed_ms: RollingMetricSnapshot,
     pub insert_bundle_ms: RollingMetricSnapshot,
     pub insert_bundle_ms_per_batch: RollingMetricSnapshot,
+    pub insert_bundle_serialize_ms: RollingMetricSnapshot,
+    pub insert_bundle_payload_bytes: RollingMetricSnapshot,
+    pub insert_bundle_payload_bytes_per_batch: RollingMetricSnapshot,
+    pub insert_bundle_db_batches_ms: RollingMetricSnapshot,
+    pub insert_bundle_db_inputs_ms: RollingMetricSnapshot,
+    pub insert_bundle_commit_ms: RollingMetricSnapshot,
     pub insert_bundle_local_pending_at_start: RollingMetricSnapshot,
     pub flush_ms: RollingMetricSnapshot,
 }
@@ -224,6 +246,12 @@ impl Default for SamplerQueueRollingAverages {
             fetch_completed_ms: RollingMetricSnapshot::default(),
             insert_bundle_ms: RollingMetricSnapshot::default(),
             insert_bundle_ms_per_batch: RollingMetricSnapshot::default(),
+            insert_bundle_serialize_ms: RollingMetricSnapshot::default(),
+            insert_bundle_payload_bytes: RollingMetricSnapshot::default(),
+            insert_bundle_payload_bytes_per_batch: RollingMetricSnapshot::default(),
+            insert_bundle_db_batches_ms: RollingMetricSnapshot::default(),
+            insert_bundle_db_inputs_ms: RollingMetricSnapshot::default(),
+            insert_bundle_commit_ms: RollingMetricSnapshot::default(),
             insert_bundle_local_pending_at_start: RollingMetricSnapshot::default(),
             flush_ms: RollingMetricSnapshot::default(),
         }

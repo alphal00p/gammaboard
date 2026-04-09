@@ -1,6 +1,6 @@
 use crate::core::{
-    BatchQueueCounts, CompletedBatch, RollingMetricSnapshot, SamplerQueueRuntimeMetrics,
-    SamplerWorkerStore, StoreError,
+    BatchQueueCounts, CompletedBatch, InsertBatchesMetrics, RollingMetricSnapshot,
+    SamplerQueueRuntimeMetrics, SamplerWorkerStore, StoreError,
 };
 use crate::runners::rolling_metric::RollingMetric;
 use crate::sampling::LatentBatch;
@@ -52,7 +52,7 @@ pub struct SamplerQueue<S> {
 struct PendingInsertTask {
     batch_count: usize,
     started_at: Instant,
-    handle: JoinHandle<Result<(), StoreError>>,
+    handle: JoinHandle<Result<InsertBatchesMetrics, StoreError>>,
 }
 
 struct PendingProcessedFetchTask {
@@ -80,6 +80,12 @@ struct QueueMetricsState {
     fetch_completed_ms: RollingMetric,
     insert_bundle_ms: RollingMetric,
     insert_bundle_ms_per_batch: RollingMetric,
+    insert_bundle_serialize_ms: RollingMetric,
+    insert_bundle_payload_bytes: RollingMetric,
+    insert_bundle_payload_bytes_per_batch: RollingMetric,
+    insert_bundle_db_batches_ms: RollingMetric,
+    insert_bundle_db_inputs_ms: RollingMetric,
+    insert_bundle_commit_ms: RollingMetric,
     insert_bundle_local_pending_at_start: RollingMetric,
     flush_ms: RollingMetric,
 }
@@ -140,6 +146,24 @@ where
                 insert_bundle_ms: RollingMetricSnapshot::from(&self.metrics.insert_bundle_ms),
                 insert_bundle_ms_per_batch: RollingMetricSnapshot::from(
                     &self.metrics.insert_bundle_ms_per_batch,
+                ),
+                insert_bundle_serialize_ms: RollingMetricSnapshot::from(
+                    &self.metrics.insert_bundle_serialize_ms,
+                ),
+                insert_bundle_payload_bytes: RollingMetricSnapshot::from(
+                    &self.metrics.insert_bundle_payload_bytes,
+                ),
+                insert_bundle_payload_bytes_per_batch: RollingMetricSnapshot::from(
+                    &self.metrics.insert_bundle_payload_bytes_per_batch,
+                ),
+                insert_bundle_db_batches_ms: RollingMetricSnapshot::from(
+                    &self.metrics.insert_bundle_db_batches_ms,
+                ),
+                insert_bundle_db_inputs_ms: RollingMetricSnapshot::from(
+                    &self.metrics.insert_bundle_db_inputs_ms,
+                ),
+                insert_bundle_commit_ms: RollingMetricSnapshot::from(
+                    &self.metrics.insert_bundle_commit_ms,
                 ),
                 insert_bundle_local_pending_at_start: RollingMetricSnapshot::from(
                     &self.metrics.insert_bundle_local_pending_at_start,
@@ -530,10 +554,10 @@ where
             batch_count,
             started_at: Instant::now(),
             handle: tokio::spawn(async move {
-                store
+                let outcome = store
                     .insert_batches(run_id, task_id, requires_training_values, &batches)
                     .await?;
-                Ok(())
+                Ok(outcome.metrics)
             }),
         });
     }
@@ -557,25 +581,51 @@ where
     async fn consume_insert_task(&mut self, task: PendingInsertTask) -> Result<(), StoreError> {
         let duration = task.started_at.elapsed();
         let result = match task.handle.await {
-            Ok(Ok(())) => Ok(()),
+            Ok(Ok(metrics)) => Ok(metrics),
             Ok(Err(err)) => Err(err),
             Err(err) => Err(StoreError::store(format!(
                 "sampler queue insert task failed: {err}"
             ))),
         };
-        if result.is_ok() {
-            observe_duration_ms(&mut self.metrics.insert_bundle_ms, duration);
-            if task.batch_count > 0 {
-                observe_duration_ms(
-                    &mut self.metrics.insert_bundle_ms_per_batch,
-                    duration / task.batch_count as u32,
-                );
+        match result {
+            Ok(metrics) => {
+                observe_duration_ms(&mut self.metrics.insert_bundle_ms, duration);
+                if task.batch_count > 0 {
+                    observe_duration_ms(
+                        &mut self.metrics.insert_bundle_ms_per_batch,
+                        duration / task.batch_count as u32,
+                    );
+                    self.metrics
+                        .insert_bundle_payload_bytes_per_batch
+                        .observe(metrics.payload_bytes as f64 / task.batch_count as f64);
+                }
+                self.observe_insert_bundle_store_metrics(&metrics);
+                self.ensure_insert_pump();
+                Ok(())
             }
-            self.ensure_insert_pump();
-        } else {
-            self.insert_pump_running = false;
+            Err(err) => {
+                self.insert_pump_running = false;
+                Err(err)
+            }
         }
-        result
+    }
+
+    fn observe_insert_bundle_store_metrics(&mut self, metrics: &InsertBatchesMetrics) {
+        self.metrics
+            .insert_bundle_serialize_ms
+            .observe(metrics.serialize_ms);
+        self.metrics
+            .insert_bundle_payload_bytes
+            .observe(metrics.payload_bytes as f64);
+        self.metrics
+            .insert_bundle_db_batches_ms
+            .observe(metrics.insert_batches_exec_ms);
+        self.metrics
+            .insert_bundle_db_inputs_ms
+            .observe(metrics.insert_inputs_exec_ms);
+        self.metrics
+            .insert_bundle_commit_ms
+            .observe(metrics.commit_ms);
     }
 
     async fn drain_finished_processed_fetch(&mut self) -> Result<(), StoreError> {

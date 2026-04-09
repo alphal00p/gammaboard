@@ -17,8 +17,8 @@ use self::havana::{
 };
 use self::naive_monte_carlo::NaiveMonteCarloSamplerAggregator;
 pub use self::naive_monte_carlo::NaiveMonteCarloSamplerParams;
-use self::python::{PythonHomogeneousMonteCarloSampler, PythonHomogeneousMonteCarloSnapshot};
 pub use self::python::PythonHomogeneousMonteCarloSamplerParams;
+use self::python::{PythonHomogeneousMonteCarloSampler, PythonHomogeneousMonteCarloSnapshot};
 use self::raster::{
     RasterLineSampler, RasterLineSamplerSnapshot, RasterPlaneSampler, RasterPlaneSamplerSnapshot,
 };
@@ -159,12 +159,12 @@ impl SamplerAggregatorConfig {
                     &domain,
                 )?))
             }
-            Self::PythonHomogeneousMonteCarlo { params } => {
-                Ok(Box::new(PythonHomogeneousMonteCarloSampler::from_params_and_domain(
+            Self::PythonHomogeneousMonteCarlo { params } => Ok(Box::new(
+                PythonHomogeneousMonteCarloSampler::from_params_and_domain(
                     params.clone(),
                     &domain,
-                )?))
-            }
+                )?,
+            )),
         }
     }
     pub fn build_materializer(

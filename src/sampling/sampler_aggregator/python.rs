@@ -89,7 +89,11 @@ impl SamplerAggregator for PythonHomogeneousMonteCarloSampler {
         for sample_idx in 0..nr_samples {
             let start = sample_idx * self.params.input_dim;
             let end = start + self.params.input_dim;
-            points.push(Point::new(xs_row_major[start..end].to_vec(), Vec::new(), 1.0));
+            points.push(Point::new(
+                xs_row_major[start..end].to_vec(),
+                Vec::new(),
+                1.0,
+            ));
         }
         let batch = Batch::new(points).map_err(|err| EngineError::engine(err.to_string()))?;
         Ok(LatentBatchSpec::from_batch(&batch))
@@ -254,13 +258,9 @@ impl PythonSamplerWorker {
         Self::expect_ok(response.clone()).map_err(EngineError::engine)?;
         let remaining = match response.get("remaining") {
             Some(Value::Null) | None => None,
-            Some(value) => Some(
-                value
-                    .as_u64()
-                    .ok_or_else(|| {
-                        EngineError::engine("python sampler response field 'remaining' must be u64 or null")
-                    })? as usize,
-            ),
+            Some(value) => Some(value.as_u64().ok_or_else(|| {
+                EngineError::engine("python sampler response field 'remaining' must be u64 or null")
+            })? as usize),
         };
         Ok(remaining)
     }
@@ -276,8 +276,9 @@ impl PythonSamplerWorker {
             .get("plan")
             .cloned()
             .ok_or_else(|| EngineError::engine("python sampler response missing 'plan'"))?;
-        serde_json::from_value(plan_value)
-            .map_err(|err| EngineError::engine(format!("invalid python sample_plan payload: {err}")))
+        serde_json::from_value(plan_value).map_err(|err| {
+            EngineError::engine(format!("invalid python sample_plan payload: {err}"))
+        })
     }
 
     fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<Vec<f64>, EngineError> {
@@ -359,9 +360,9 @@ impl PythonSamplerWorker {
         self.stdin
             .write_all(b"\n")
             .map_err(|error| format!("failed writing newline to python sampler worker: {error}"))?;
-        self.stdin
-            .flush()
-            .map_err(|error| format!("failed flushing request to python sampler worker: {error}"))?;
+        self.stdin.flush().map_err(|error| {
+            format!("failed flushing request to python sampler worker: {error}")
+        })?;
 
         let mut response_line = String::new();
         let read = self
@@ -369,9 +370,8 @@ impl PythonSamplerWorker {
             .read_line(&mut response_line)
             .map_err(|error| format!("failed reading python sampler worker response: {error}"))?;
         if read == 0 {
-            return Err(
-                self.worker_terminated_message("python sampler worker terminated before responding")
-            );
+            return Err(self
+                .worker_terminated_message("python sampler worker terminated before responding"));
         }
         let response = serde_json::from_str::<Value>(response_line.trim()).map_err(|error| {
             format!(
@@ -407,7 +407,10 @@ impl PythonSamplerWorker {
             .get("error")
             .and_then(Value::as_str)
             .unwrap_or("unknown python sampler worker error");
-        let traceback = response.get("traceback").and_then(Value::as_str).unwrap_or("");
+        let traceback = response
+            .get("traceback")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         if traceback.is_empty() {
             Err(format!("python sampler worker error: {error}"))
         } else {
@@ -437,7 +440,6 @@ impl PythonSamplerWorker {
             format!("{context}; status={status}; stderr='{}'", stderr.trim())
         }
     }
-
 }
 
 impl Drop for PythonSamplerWorker {
@@ -465,12 +467,15 @@ fn build_nix_output_path(flake_ref: &str) -> Result<PathBuf, BuildError> {
         )));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let output_path = stdout.lines().find(|line| !line.trim().is_empty()).ok_or_else(|| {
-        BuildError::build(format!(
-            "nix build did not return an output path for '{}'",
-            flake_ref
-        ))
-    })?;
+    let output_path = stdout
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .ok_or_else(|| {
+            BuildError::build(format!(
+                "nix build did not return an output path for '{}'",
+                flake_ref
+            ))
+        })?;
     Ok(PathBuf::from(output_path.trim()))
 }
 

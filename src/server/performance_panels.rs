@@ -583,6 +583,40 @@ fn sampler_current_panels(
                     runtime.queue.rolling.insert_bundle_ms_per_batch.mean,
                 ),
                 key_value(
+                    "insert_bundle_serialize_ms",
+                    "Insert Serialize",
+                    runtime.queue.rolling.insert_bundle_serialize_ms.mean,
+                ),
+                key_value(
+                    "insert_bundle_payload_bytes",
+                    "Insert Payload Bytes",
+                    runtime.queue.rolling.insert_bundle_payload_bytes.mean,
+                ),
+                key_value(
+                    "insert_bundle_payload_bytes_per_batch",
+                    "Insert Payload Bytes / Batch",
+                    runtime
+                        .queue
+                        .rolling
+                        .insert_bundle_payload_bytes_per_batch
+                        .mean,
+                ),
+                key_value(
+                    "insert_bundle_db_batches_ms",
+                    "Insert Batches SQL",
+                    runtime.queue.rolling.insert_bundle_db_batches_ms.mean,
+                ),
+                key_value(
+                    "insert_bundle_db_inputs_ms",
+                    "Insert Inputs SQL",
+                    runtime.queue.rolling.insert_bundle_db_inputs_ms.mean,
+                ),
+                key_value(
+                    "insert_bundle_commit_ms",
+                    "Insert Commit",
+                    runtime.queue.rolling.insert_bundle_commit_ms.mean,
+                ),
+                key_value(
                     "insert_bundle_local_pending_at_start",
                     "Local Pending at Insert Start",
                     runtime

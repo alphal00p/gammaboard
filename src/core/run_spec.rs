@@ -7,9 +7,9 @@ use crate::utils::domain::Domain;
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use crate::sampling::HavanaInferenceSamplerParams;
 use crate::sampling::{
-    HavanaSamplerParams, NaiveMonteCarloSamplerParams, RasterLineSamplerParams,
-    RasterPlaneSamplerParams, SphericalBatchTransformParams, UnitBallBatchTransformParams,
-    PythonHomogeneousMonteCarloSamplerParams,
+    HavanaSamplerParams, NaiveMonteCarloSamplerParams, PythonHomogeneousMonteCarloSamplerParams,
+    RasterLineSamplerParams, RasterPlaneSamplerParams, SphericalBatchTransformParams,
+    UnitBallBatchTransformParams,
 };
 use serde::{Deserialize, Serialize};
 
