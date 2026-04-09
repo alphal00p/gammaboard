@@ -530,7 +530,12 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
   const option = useMemo(
     () => ({
       animation: false,
-      grid: baseCartesianGrid,
+      legend: {
+        top: 0,
+        left: "center",
+        textStyle: { color: "#475569", fontSize: 12 },
+      },
+      grid: { ...baseCartesianGrid, top: 52 },
       xAxis: {
         type: "value",
         min: xDomain[0],
@@ -700,7 +705,10 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
         connectNulls: false,
         lineStyle: {
           width: 1.8,
-          color: lineColors[index % lineColors.length],
+          color: item.color || lineColors[index % lineColors.length],
+        },
+        itemStyle: {
+          color: item.color || lineColors[index % lineColors.length],
         },
       })),
     }),

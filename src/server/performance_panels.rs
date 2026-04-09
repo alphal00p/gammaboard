@@ -41,6 +41,7 @@ pub fn build_evaluator_performance_response(
 pub fn build_sampler_performance_response(
     scope_id: Option<String>,
     entries: Vec<SamplerPerformanceHistoryEntry>,
+    evaluator_entries: Option<Vec<EvaluatorPerformanceHistoryEntry>>,
 ) -> PanelResponse {
     let mut response = build_performance_response(
         scope_id.unwrap_or_else(|| "sampler".to_string()),
@@ -60,7 +61,7 @@ pub fn build_sampler_performance_response(
     if let Some(panel) = throughput_panel {
         response.updates.push(replace_panel(panel));
     }
-    if let Some(panel) = sampler_utilization_history_panel(&entries) {
+    if let Some(panel) = sampler_utilization_history_panel(&entries, evaluator_entries.as_deref()) {
         response.updates.push(replace_panel(panel));
     }
     if let Some(latest) = entries.first() {
@@ -721,6 +722,7 @@ fn sampler_completed_throughput_panel(
 
 fn sampler_utilization_history_panel(
     entries: &[SamplerPerformanceHistoryEntry],
+    evaluator_entries: Option<&[EvaluatorPerformanceHistoryEntry]>,
 ) -> Option<PanelState> {
     let mut sampler_tick_points = Vec::new();
     let mut insert_task_points = Vec::new();
@@ -749,26 +751,73 @@ fn sampler_utilization_history_panel(
         });
     }
 
+    let evaluator_busy_points = evaluator_entries
+        .map(aggregate_evaluator_busy_points)
+        .unwrap_or_default();
+
     Some(multi_timeseries_panel(
         "sampler_utilization_history",
         vec![
             PlotSeries {
                 id: "sampler_tick_busy_ratio".to_string(),
                 label: "Sampler Tick Busy Ratio".to_string(),
+                color: Some("#2563eb".to_string()),
                 points: sampler_tick_points,
             },
             PlotSeries {
                 id: "insert_task_utilization".to_string(),
                 label: "Insert Task Utilization".to_string(),
+                color: Some("#ea580c".to_string()),
                 points: insert_task_points,
             },
             PlotSeries {
                 id: "completed_fetch_utilization".to_string(),
                 label: "Completed Fetch Utilization".to_string(),
+                color: Some("#16a34a".to_string()),
                 points: completed_fetch_points,
+            },
+            PlotSeries {
+                id: "avg_evaluator_utilization".to_string(),
+                label: "Avg Evaluator Utilization".to_string(),
+                color: Some("#7c3aed".to_string()),
+                points: evaluator_busy_points,
             },
         ],
     ))
+}
+
+fn aggregate_evaluator_busy_points(entries: &[EvaluatorPerformanceHistoryEntry]) -> Vec<PlotPoint> {
+    const BUCKET_MS: f64 = 1000.0;
+
+    let mut by_bucket = BTreeMap::<i64, (f64, usize)>::new();
+    for entry in entries {
+        let Some(idle_ratio) = entry
+            .metrics
+            .idle_profile
+            .as_ref()
+            .map(|profile| profile.idle_ratio)
+        else {
+            continue;
+        };
+        let x = history_x(entry.created_at);
+        let bucket = (x / BUCKET_MS).round() as i64;
+        let busy = (1.0 - idle_ratio).clamp(0.0, 1.0);
+        let aggregate = by_bucket.entry(bucket).or_insert((0.0, 0));
+        aggregate.0 += busy;
+        aggregate.1 += 1;
+    }
+
+    by_bucket
+        .into_iter()
+        .filter_map(|(bucket, (sum, count))| {
+            (count > 0).then_some(PlotPoint {
+                x: bucket as f64 * BUCKET_MS,
+                y: sum / count as f64,
+                y_min: None,
+                y_max: None,
+            })
+        })
+        .collect()
 }
 
 fn throughput_points_from_cumulative(samples: &[(f64, i64)], window_ms: f64) -> Vec<PlotPoint> {

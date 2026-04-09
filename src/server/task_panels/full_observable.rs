@@ -320,11 +320,13 @@ fn line_components_panel(
                 PlotSeries {
                     id: "real".to_string(),
                     label: "Real Part".to_string(),
+                    color: None,
                     points: reordered_line_points(&xs, &state.values, |value| value.re),
                 },
                 PlotSeries {
                     id: "imag".to_string(),
                     label: "Imaginary Part".to_string(),
+                    color: None,
                     points: reordered_line_points(&xs, &state.values, |value| value.im),
                 },
             ],

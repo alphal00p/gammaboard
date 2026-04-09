@@ -1212,7 +1212,21 @@ async fn get_run_sampler_performance_history(
         .store
         .get_sampler_performance_history(id, limit, params.node_name.as_deref())
         .await?;
-    json_response(build_sampler_performance_response(Some(scope_id), rows))
+    let evaluator_rows = if params.node_name.is_none() {
+        Some(
+            state
+                .store
+                .get_evaluator_performance_history(id, limit, None)
+                .await?,
+        )
+    } else {
+        None
+    };
+    json_response(build_sampler_performance_response(
+        Some(scope_id),
+        rows,
+        evaluator_rows,
+    ))
 }
 
 async fn get_node_evaluator_performance_history(
@@ -1242,5 +1256,9 @@ async fn get_node_sampler_performance_history(
         .store
         .get_worker_sampler_performance_history(&node_name, limit)
         .await?;
-    json_response(build_sampler_performance_response(Some(node_name), payload))
+    json_response(build_sampler_performance_response(
+        Some(node_name),
+        payload,
+        None,
+    ))
 }
