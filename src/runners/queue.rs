@@ -79,8 +79,10 @@ pub struct QueueDiagnosticsSnapshot {
 struct QueueMetricsState {
     get_processed_ms: RollingMetric,
     fetch_completed_ms: RollingMetric,
+    fetch_completed_idle_ratio: RollingMetric,
     insert_bundle_ms: RollingMetric,
     insert_bundle_ms_per_batch: RollingMetric,
+    insert_task_idle_ratio: RollingMetric,
     insert_bundle_serialize_ms: RollingMetric,
     insert_bundle_payload_bytes: RollingMetric,
     insert_bundle_payload_bytes_per_batch: RollingMetric,
@@ -145,9 +147,15 @@ where
             rolling: crate::core::SamplerQueueRollingAverages {
                 get_processed_ms: RollingMetricSnapshot::from(&self.metrics.get_processed_ms),
                 fetch_completed_ms: RollingMetricSnapshot::from(&self.metrics.fetch_completed_ms),
+                fetch_completed_idle_ratio: RollingMetricSnapshot::from(
+                    &self.metrics.fetch_completed_idle_ratio,
+                ),
                 insert_bundle_ms: RollingMetricSnapshot::from(&self.metrics.insert_bundle_ms),
                 insert_bundle_ms_per_batch: RollingMetricSnapshot::from(
                     &self.metrics.insert_bundle_ms_per_batch,
+                ),
+                insert_task_idle_ratio: RollingMetricSnapshot::from(
+                    &self.metrics.insert_task_idle_ratio,
                 ),
                 insert_bundle_serialize_ms: RollingMetricSnapshot::from(
                     &self.metrics.insert_bundle_serialize_ms,
@@ -503,6 +511,7 @@ where
 
     fn ensure_processed_prefetch(&mut self) {
         if !self.ready_processed.is_empty() || self.pending_processed_fetch.is_some() {
+            self.observe_async_worker_idle_ratios();
             return;
         }
 
@@ -524,10 +533,12 @@ where
                     .await
             }),
         });
+        self.observe_async_worker_idle_ratios();
     }
 
     fn start_insert_pump_if_idle(&mut self) {
         if self.insert_pump_running || self.pending_insert.is_empty() {
+            self.observe_async_worker_idle_ratios();
             return;
         }
 
@@ -573,6 +584,7 @@ where
         } else if !self.pending_insert.is_empty() {
             self.insert_pump_running = true;
         }
+        self.observe_async_worker_idle_ratios();
     }
 
     async fn drain_finished_insert(&mut self) -> Result<(), StoreError> {
@@ -590,6 +602,7 @@ where
         if self.pending_insert.is_empty() && self.pending_insert_tasks.is_empty() {
             self.insert_pump_running = false;
         }
+        self.observe_async_worker_idle_ratios();
         Ok(())
     }
 
@@ -620,6 +633,7 @@ where
             }
             Err(err) => {
                 self.insert_pump_running = false;
+                self.observe_async_worker_idle_ratios();
                 Err(err)
             }
         }
@@ -655,6 +669,7 @@ where
             .pending_processed_fetch
             .take()
             .expect("checked pending processed fetch");
+        self.observe_async_worker_idle_ratios();
         self.consume_processed_fetch_task(task).await
     }
 
@@ -674,7 +689,26 @@ where
         };
         observe_duration_ms(&mut self.metrics.fetch_completed_ms, duration);
         self.ready_processed.extend(completed);
+        self.observe_async_worker_idle_ratios();
         Ok(())
+    }
+
+    fn observe_async_worker_idle_ratios(&mut self) {
+        let insert_capacity = self.config.max_concurrent_insert_tasks.max(1) as f64;
+        let insert_busy_ratio =
+            (self.pending_insert_tasks.len() as f64 / insert_capacity).clamp(0.0, 1.0);
+        self.metrics
+            .insert_task_idle_ratio
+            .observe((1.0 - insert_busy_ratio).clamp(0.0, 1.0));
+
+        let fetch_busy_ratio = if self.pending_processed_fetch.is_some() {
+            1.0_f64
+        } else {
+            0.0_f64
+        };
+        self.metrics
+            .fetch_completed_idle_ratio
+            .observe((1.0_f64 - fetch_busy_ratio).clamp(0.0, 1.0));
     }
 }
 

@@ -510,13 +510,18 @@ fn sampler_current_panels(
                     runtime.sampler.produce_ms_per_sample.mean,
                 ),
                 key_value(
+                    "tick_idle_ratio",
+                    "Sampler Tick Idle Ratio",
+                    runtime.sampler.tick_idle_ratio.mean,
+                ),
+                key_value(
                     "merge_completed_batches_ms",
                     "Merge Completed Batches",
                     runtime.sampler.completed_merge_ingest_ms.mean,
                 ),
                 key_value(
                     "persist_observable_ms",
-                    "Persist Observable",
+                    "Persist Observable (frontend sync)",
                     runtime.sampler.persist_observable_ms.mean,
                 ),
                 key_value(
@@ -593,6 +598,11 @@ fn sampler_current_panels(
                     runtime.queue.rolling.fetch_completed_ms.mean,
                 ),
                 key_value(
+                    "completed_batch_fetch_idle_ratio",
+                    "Completed Batch Fetch Idle Ratio",
+                    runtime.queue.rolling.fetch_completed_idle_ratio.mean,
+                ),
+                key_value(
                     "insert_bundle_ms",
                     "Insert Bundle (concurrent)",
                     runtime.queue.rolling.insert_bundle_ms.mean,
@@ -601,6 +611,11 @@ fn sampler_current_panels(
                     "insert_bundle_ms_per_batch",
                     "Insert / Batch (concurrent)",
                     runtime.queue.rolling.insert_bundle_ms_per_batch.mean,
+                ),
+                key_value(
+                    "insert_task_idle_ratio",
+                    "Insert Task Idle Ratio",
+                    runtime.queue.rolling.insert_task_idle_ratio.mean,
                 ),
                 key_value(
                     "insert_bundle_serialize_ms",
@@ -786,12 +801,6 @@ fn sampler_tick_segments(runtime: &SamplerRuntimeMetrics) -> Vec<TickBreakdownSe
                 .mean
                 .unwrap_or(0.0),
             "#ca6702",
-        ),
-        (
-            "persist_observable",
-            "Persist Observable (sync)",
-            runtime.sampler.persist_observable_ms.mean.unwrap_or(0.0),
-            "#b56576",
         ),
         (
             "completed_delete",

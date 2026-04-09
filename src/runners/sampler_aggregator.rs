@@ -49,6 +49,7 @@ struct SamplerRollingState {
     eval_ms_per_batch: RollingMetric,
     training_ingest_ms_per_sample: RollingMetric,
     produce_ms_per_sample: RollingMetric,
+    tick_idle_ratio: RollingMetric,
     reclaim_ms: RollingMetric,
     queue_counts_ms: RollingMetric,
     completed_merge_ingest_ms: RollingMetric,
@@ -151,6 +152,7 @@ impl SamplerRuntimeState {
                 produce_ms_per_sample: RollingMetricSnapshot::from(
                     &self.rolling.produce_ms_per_sample,
                 ),
+                tick_idle_ratio: RollingMetricSnapshot::from(&self.rolling.tick_idle_ratio),
                 reclaim_ms: RollingMetricSnapshot::from(&self.rolling.reclaim_ms),
                 queue_counts_ms: RollingMetricSnapshot::from(&self.rolling.queue_counts_ms),
                 completed_merge_ingest_ms: RollingMetricSnapshot::from(
@@ -194,6 +196,7 @@ pub struct SamplerAggregatorRunner<S> {
     last_snapshot_at: Instant,
     last_frontend_sync_at: Instant,
     last_progress_sync_at: Instant,
+    pending_aggregation_flush: Option<PendingAggregationFlushTask>,
     runtime_state: SamplerRuntimeState,
     queue: SamplerQueue<S>,
 }
@@ -201,6 +204,13 @@ pub struct SamplerAggregatorRunner<S> {
 struct CompletedIngestStats {
     completed_batches: usize,
     completed_samples_delta: i64,
+}
+
+struct PendingAggregationFlushTask {
+    started_at: Instant,
+    flushed_completed_batches: i32,
+    cleared_initial_round_trip: bool,
+    handle: tokio::task::JoinHandle<Result<(), StoreError>>,
 }
 
 impl<S> SamplerAggregatorRunner<S>
@@ -276,6 +286,7 @@ where
             last_snapshot_at: now,
             last_frontend_sync_at: now,
             last_progress_sync_at: now,
+            pending_aggregation_flush: None,
             runtime_state,
             queue,
         }
@@ -398,6 +409,7 @@ where
         );
         let produced_batches = self.produce_work(queue_before_produce).await?;
         self.flush_tick_syncs().await?;
+        self.observe_tick_idle_ratio(tick_started.elapsed());
         self.check_tick_terminal_state(
             queue_before_produce,
             ingest_stats.completed_batches,
@@ -469,6 +481,8 @@ where
     }
 
     async fn flush_tick_syncs(&mut self) -> Result<(), RunnerError> {
+        self.flush_aggregation(false).await?;
+
         let progress_sync_started = Instant::now();
         self.flush_progress_sync(false).await?;
         observe_duration_ms(
@@ -483,6 +497,21 @@ where
             performance_sync_started.elapsed(),
         );
         Ok(())
+    }
+
+    fn observe_tick_idle_ratio(&mut self, tick_elapsed: Duration) {
+        let min_tick = Duration::from_millis(self.params.min_tick_time_ms);
+        let denominator = min_tick.max(tick_elapsed);
+        let idle_ratio = if denominator.is_zero() {
+            0.0
+        } else {
+            ((denominator.as_secs_f64() - tick_elapsed.as_secs_f64()) / denominator.as_secs_f64())
+                .clamp(0.0, 1.0)
+        };
+        self.runtime_state
+            .rolling
+            .tick_idle_ratio
+            .observe(idle_ratio);
     }
 
     fn check_tick_terminal_state(
@@ -574,11 +603,16 @@ where
     }
 
     async fn flush_aggregation(&mut self, force: bool) -> Result<(), RunnerError> {
+        self.drain_finished_aggregation_flush().await?;
+
         let due = force
             || self.runtime_state.initial_round_trip_snapshot_pending
             || self.frontend_sync_interval.is_zero()
             || self.last_frontend_sync_at.elapsed() >= self.frontend_sync_interval;
         if !due {
+            return Ok(());
+        }
+        if !force && self.pending_aggregation_flush.is_some() {
             return Ok(());
         }
 
@@ -598,26 +632,83 @@ where
         } else {
             None
         };
-        let aggregation_flush_started = Instant::now();
-        self.store
-            .save_aggregation(
-                self.run_id,
-                self.task.id,
-                &current_observable,
-                snapshot.as_ref(),
-                self.runtime_state.pending_persisted_completed_batches,
-            )
-            .await?;
-        observe_duration_ms(
-            &mut self.runtime_state.rolling.persist_observable_ms,
-            aggregation_flush_started.elapsed(),
-        );
-        if persist_snapshot {
-            self.runtime_state.initial_round_trip_snapshot_pending = false;
-        }
-        self.runtime_state.pending_persisted_completed_batches = 0;
+        let flushed_completed_batches = self.runtime_state.pending_persisted_completed_batches;
+        let cleared_initial_round_trip = persist_snapshot;
+        let started_at = Instant::now();
+        let store = self.store.clone();
+        let run_id = self.run_id;
+        let task_id = self.task.id;
+        let snapshot_ref = snapshot.clone();
+        let handle = tokio::spawn(async move {
+            store
+                .save_aggregation(
+                    run_id,
+                    task_id,
+                    &current_observable,
+                    snapshot_ref.as_ref(),
+                    flushed_completed_batches,
+                )
+                .await
+        });
+
         self.last_frontend_sync_at = Instant::now();
+        if force {
+            let task = PendingAggregationFlushTask {
+                started_at,
+                flushed_completed_batches,
+                cleared_initial_round_trip,
+                handle,
+            };
+            self.consume_aggregation_flush_task(task).await?;
+        } else {
+            self.pending_aggregation_flush = Some(PendingAggregationFlushTask {
+                started_at,
+                flushed_completed_batches,
+                cleared_initial_round_trip,
+                handle,
+            });
+        }
         Ok(())
+    }
+
+    async fn drain_finished_aggregation_flush(&mut self) -> Result<(), RunnerError> {
+        let Some(task) = self.pending_aggregation_flush.as_ref() else {
+            return Ok(());
+        };
+        if !task.handle.is_finished() {
+            return Ok(());
+        }
+        let task = self
+            .pending_aggregation_flush
+            .take()
+            .expect("checked pending aggregation flush");
+        self.consume_aggregation_flush_task(task).await
+    }
+
+    async fn consume_aggregation_flush_task(
+        &mut self,
+        task: PendingAggregationFlushTask,
+    ) -> Result<(), RunnerError> {
+        match task.handle.await {
+            Ok(Ok(())) => {
+                observe_duration_ms(
+                    &mut self.runtime_state.rolling.persist_observable_ms,
+                    task.started_at.elapsed(),
+                );
+                if task.cleared_initial_round_trip {
+                    self.runtime_state.initial_round_trip_snapshot_pending = false;
+                }
+                self.runtime_state.pending_persisted_completed_batches = self
+                    .runtime_state
+                    .pending_persisted_completed_batches
+                    .saturating_sub(task.flushed_completed_batches);
+                Ok(())
+            }
+            Ok(Err(err)) => Err(RunnerError::Store(err)),
+            Err(err) => Err(RunnerError::Store(StoreError::store(format!(
+                "sampler aggregation flush task failed: {err}"
+            )))),
+        }
     }
 
     async fn force_cleanup_consumed_completed_batches(&mut self) -> Result<(), RunnerError> {
@@ -748,7 +839,6 @@ where
             &mut self.runtime_state.rolling.completed_merge_ingest_ms,
             completed_merge_ingest_started.elapsed(),
         );
-        self.flush_aggregation(false).await?;
         self.queue.mark_processed(&completed);
         Ok(CompletedIngestStats {
             completed_batches: completed.len(),
