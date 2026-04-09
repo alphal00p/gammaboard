@@ -39,6 +39,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 argon2 = "0.5"
 jsonwebtoken = "9"
 url = "2"
+pyo3 = "0.28.3"
 
 [dev-dependencies]
 assert_cmd = "2"

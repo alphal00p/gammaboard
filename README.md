@@ -78,7 +78,6 @@ Use the CLI for local database lifecycle:
 ```bash
 gammaboard db status
 gammaboard db start
-gammaboard db start --pg-stat-statements
 gammaboard db stop
 gammaboard db delete
 gammaboard db dump-sql
@@ -88,7 +87,7 @@ These commands use `database.url` and `local_postgres` from `configs/runtime/def
 To reset local state, use `just db-reset` or run `gammaboard db delete --yes` then `gammaboard db start`.
 `local_postgres.max_connections` controls the local Postgres server connection ceiling used by `gammaboard db start`.
 The checked-in local defaults also bias Postgres toward queue throughput: larger buffers/WAL limits, `wal_compression = true`, and `synchronous_commit = false`. That last setting trades crash durability of the most recent transactions for lower write latency, which is a good fit for the transient local batch queue but should be revisited for stricter durability needs.
-Pass `--pg-stat-statements` to `gammaboard db start` when you want local query statistics. That flag adds `shared_preload_libraries=pg_stat_statements` at server startup and then runs `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` for the configured database.
+`gammaboard db start` always enables local query statistics by starting Postgres with `shared_preload_libraries=pg_stat_statements` and running `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` for the configured database.
 
 ## Server Config
 - The server is configured from a single TOML file. By default:

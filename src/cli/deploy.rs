@@ -90,11 +90,7 @@ async fn deploy_up(
     let deploy_config = DeployConfig::load(&args.deploy_config)?;
 
     if deploy_config.database.ensure_started {
-        db::start_db(
-            &runtime_config.local_postgres,
-            &runtime_config.database.url,
-            false,
-        )?;
+        db::start_db(&runtime_config.local_postgres, &runtime_config.database.url)?;
     }
 
     deploy_down_internal(&deploy_config, runtime_config).await?;

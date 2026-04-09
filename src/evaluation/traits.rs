@@ -80,17 +80,24 @@ pub trait ScalarValueEvaluator {
         &self,
         values: &[f64],
         weights: &[f64],
-        capture_training_values: bool,
+        require_training_values: bool,
         observable: &mut O,
-    ) -> Option<Vec<f64>> {
-        let mut training_values = capture_training_values.then(|| Vec::with_capacity(values.len()));
+    ) -> Result<Option<Vec<f64>>, EvalError> {
+        if values.len() != weights.len() {
+            return Err(EvalError::eval(format!(
+                "cannot ingest scalar values: values length {} does not match weights length {}",
+                values.len(),
+                weights.len()
+            )));
+        }
+        let mut training_values = require_training_values.then(|| Vec::with_capacity(values.len()));
         for (sample_idx, value) in values.iter().enumerate() {
             observable.ingest_scalar(*value, weights[sample_idx]);
             if let Some(training_values) = training_values.as_mut() {
                 training_values.push(*value * weights[sample_idx]);
             }
         }
-        training_values
+        Ok(training_values)
     }
 }
 
@@ -101,24 +108,39 @@ pub trait ComplexValueEvaluator {
         &self,
         values: &[Complex64],
         weights: &[f64],
-        capture_training_values: bool,
+        require_training_values: bool,
         observable: &mut O,
         training_projection: impl Fn(Complex64) -> f64,
-    ) -> Option<Vec<f64>> {
-        let mut training_values = capture_training_values.then(|| Vec::with_capacity(values.len()));
+    ) -> Result<Option<Vec<f64>>, EvalError> {
+        if values.len() != weights.len() {
+            return Err(EvalError::eval(format!(
+                "cannot ingest complex values: values length {} does not match weights length {}",
+                values.len(),
+                weights.len()
+            )));
+        }
+        let mut training_values = require_training_values.then(|| Vec::with_capacity(values.len()));
         for (sample_idx, value) in values.iter().enumerate() {
             observable.ingest_complex(*value, weights[sample_idx]);
             if let Some(training_values) = training_values.as_mut() {
                 training_values.push(training_projection(*value) * weights[sample_idx]);
             }
         }
-        training_values
+        Ok(training_values)
     }
+}
+
+pub trait ScalarBatchEvaluator {
+    fn eval_scalar_batch(&mut self, batch: &Batch) -> Result<Vec<f64>, EvalError>;
+}
+
+pub trait ComplexBatchEvaluator {
+    fn eval_complex_batch(&mut self, batch: &Batch) -> Result<Vec<Complex64>, EvalError>;
 }
 
 impl<T> ComplexValueEvaluator for T {}
 
-pub trait Materializer: Send + Sync {
+pub trait Materializer: Send {
     fn validate_domain(&self, _domain: &Domain) -> Result<(), BuildError> {
         Ok(())
     }

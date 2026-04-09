@@ -525,7 +525,7 @@ impl Evaluator for GammaLoopEvaluator {
                         weights.as_slice(),
                         options.require_training_values,
                         observable,
-                    ),
+                    )?,
                     ObservableState::FullScalar(observable) => self.ingest_scalar_values(
                         &evaluation_results
                             .iter()
@@ -537,7 +537,7 @@ impl Evaluator for GammaLoopEvaluator {
                         weights.as_slice(),
                         options.require_training_values,
                         observable,
-                    ),
+                    )?,
                     other => {
                         return Err(EvalError::eval(format!(
                             "gammaloop scalar mode does not support observable kind {}",
@@ -555,7 +555,7 @@ impl Evaluator for GammaLoopEvaluator {
                         options.require_training_values,
                         observable,
                         |value| self.training_projection.project(value),
-                    ),
+                    )?,
                     ObservableState::FullComplex(observable) => self.ingest_complex_values(
                         &evaluation_results
                             .iter()
@@ -565,7 +565,7 @@ impl Evaluator for GammaLoopEvaluator {
                         options.require_training_values,
                         observable,
                         |value| self.training_projection.project(value),
-                    ),
+                    )?,
                     other => {
                         return Err(EvalError::eval(format!(
                             "gammaloop complex mode does not support observable kind {}",

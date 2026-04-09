@@ -19,10 +19,7 @@ pub struct DbArgs {
 #[derive(Debug, Subcommand)]
 pub enum DbCommand {
     Status,
-    Start {
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        pg_stat_statements: bool,
-    },
+    Start,
     Stop,
     Delete {
         #[arg(short = 'y', long, action = clap::ArgAction::SetTrue)]
@@ -35,9 +32,7 @@ pub fn run_db_command(args: DbArgs, config: &RuntimeConfig) -> Result<()> {
     let local = &config.local_postgres;
     match args.command {
         DbCommand::Status => status_db(local, &config.database.url),
-        DbCommand::Start { pg_stat_statements } => {
-            start_db(local, &config.database.url, pg_stat_statements)
-        }
+        DbCommand::Start => start_db(local, &config.database.url),
         DbCommand::Stop => stop_db(local),
         DbCommand::Delete { yes } => delete_db(local, yes),
         DbCommand::DumpSql => dump_db_sql(local, &config.database.url),
@@ -91,11 +86,7 @@ fn init_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
     Ok(())
 }
 
-fn start_postgres(
-    local: &LocalPostgresConfig,
-    database_url: &str,
-    enable_pg_stat_statements: bool,
-) -> Result<()> {
+fn start_postgres(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
     let connection = LocalDbConnection::from_url(database_url)?;
     ensure_parent_dir(&local.log_file)?;
     let socket_dir = ensure_absolute_dir(&local.socket_dir)?;
@@ -116,9 +107,7 @@ fn start_postgres(
             "off"
         },
     );
-    if enable_pg_stat_statements {
-        startup_options.push_str(" -c shared_preload_libraries=pg_stat_statements");
-    }
+    startup_options.push_str(" -c shared_preload_libraries=pg_stat_statements");
     run_command(
         Command::new("pg_ctl")
             .arg("-D")
@@ -132,11 +121,7 @@ fn start_postgres(
     )
 }
 
-fn ensure_database_and_migrations(
-    local: &LocalPostgresConfig,
-    database_url: &str,
-    enable_pg_stat_statements: bool,
-) -> Result<()> {
+fn ensure_database_and_migrations(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
     let connection = LocalDbConnection::from_url(database_url)?;
     if !database_exists(local, database_url)? {
         let socket_dir = ensure_absolute_dir(&local.socket_dir)?;
@@ -165,33 +150,27 @@ fn ensure_database_and_migrations(
         "sqlx migrate run",
     )?;
 
-    if enable_pg_stat_statements {
-        println!("enabling pg_stat_statements extension");
-        let socket_dir = ensure_absolute_dir(&local.socket_dir)?;
-        run_command(
-            Command::new("psql")
-                .arg("-h")
-                .arg(&socket_dir)
-                .arg("-p")
-                .arg(connection.port.to_string())
-                .arg("-U")
-                .arg(&connection.user)
-                .arg("-d")
-                .arg(&connection.database)
-                .arg("-c")
-                .arg("CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"),
-            "psql create extension pg_stat_statements",
-        )?;
-    }
+    println!("enabling pg_stat_statements extension");
+    let socket_dir = ensure_absolute_dir(&local.socket_dir)?;
+    run_command(
+        Command::new("psql")
+            .arg("-h")
+            .arg(&socket_dir)
+            .arg("-p")
+            .arg(connection.port.to_string())
+            .arg("-U")
+            .arg(&connection.user)
+            .arg("-d")
+            .arg(&connection.database)
+            .arg("-c")
+            .arg("CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"),
+        "psql create extension pg_stat_statements",
+    )?;
 
     Ok(())
 }
 
-pub(crate) fn start_db(
-    local: &LocalPostgresConfig,
-    database_url: &str,
-    enable_pg_stat_statements: bool,
-) -> Result<()> {
+pub(crate) fn start_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
     if !is_cluster_initialized(local) {
         println!("postgres cluster not initialized; creating new cluster");
         init_db(local, database_url)?;
@@ -201,12 +180,12 @@ pub(crate) fn start_db(
 
     if !is_db_running(local)? {
         println!("postgres is stopped; starting");
-        start_postgres(local, database_url, enable_pg_stat_statements)?;
+        start_postgres(local, database_url)?;
     } else {
         println!("postgres already running");
     }
 
-    ensure_database_and_migrations(local, database_url, enable_pg_stat_statements)
+    ensure_database_and_migrations(local, database_url)
 }
 
 fn stop_db(local: &LocalPostgresConfig) -> Result<()> {

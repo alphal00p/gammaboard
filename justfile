@@ -106,15 +106,11 @@ stop-kill:
     -pkill -f "{{bin}} server"
     -@stty sane
 
-db-reset pg_stat_statements="false":
+db-reset:
     #!/usr/bin/env bash
     set -euo pipefail
 
     just stop-kill
     {{bin}} db stop
     {{bin}} db delete --yes
-    if [[ "{{pg_stat_statements}}" == "true" ]]; then
-        {{bin}} db start --pg-stat-statements
-    else
-        {{bin}} db start
-    fi
+    {{bin}} db start

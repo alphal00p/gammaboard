@@ -102,6 +102,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Shared runtime database and tracing settings should come from `configs/runtime/default.toml` by default, with an optional global `--runtime-config <PATH>` override.
 - Local Postgres lifecycle commands should live under `gammaboard db ...` and use the shared runtime config instead of separate env-driven just recipes; `just db-reset` may wrap `gammaboard db stop`, `gammaboard db delete --yes`, and `gammaboard db start` for convenience.
 - Local Postgres tuning lives under `runtime.local_postgres`; keep latency-sensitive queue defaults explicit there, including WAL/checkpoint settings and whether `synchronous_commit` is relaxed for local throughput.
+- Local `gammaboard db start` should always enable `pg_stat_statements` preload and extension creation for the configured database.
 - Server API bind, allowed origins, secure cookie policy, `allow_db_admin` policy, dashboard auth secrets, and template directories should come from `configs/server/default.toml` by default, with an optional `gammaboard server --server-config <PATH>` override.
 - Detached deploy lifecycle should live under `gammaboard deploy ...`, with `configs/deploy/*.toml` owning frontend HTTP exposure, static-site serving, and cleanup policy, while selecting which `configs/server/*.toml` backend profile to run.
 - `gammaboard deploy up` must launch the backend with the same active `--runtime-config` path so detached server-managed node auto-run workers inherit the intended database and tracing settings.

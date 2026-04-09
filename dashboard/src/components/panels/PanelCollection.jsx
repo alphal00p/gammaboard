@@ -31,6 +31,29 @@ import {
 } from "../../utils/formatters";
 import { asArray } from "../../utils/collections";
 
+const PANEL_ORDER_RANK = new Map([
+  ["sample_progress", 0],
+  ["estimate_summary", 1],
+  ["real_estimate_history", 2],
+  ["imag_estimate_history", 3],
+  ["abs_signal_to_noise_history", 4],
+  ["gammaloop_histogram_bundle", 20],
+  ["gammaloop_selected_histogram", 21],
+]);
+
+const sortRenderablePanels = (panels) =>
+  asArray(panels)
+    .map((panel, index) => ({ panel, index }))
+    .sort((left, right) => {
+      const leftId = left.panel?.descriptor?.panel_id;
+      const rightId = right.panel?.descriptor?.panel_id;
+      const leftRank = PANEL_ORDER_RANK.get(leftId) ?? Number.MAX_SAFE_INTEGER;
+      const rightRank = PANEL_ORDER_RANK.get(rightId) ?? Number.MAX_SAFE_INTEGER;
+      if (leftRank !== rightRank) return leftRank - rightRank;
+      return left.index - right.index;
+    })
+    .map(({ panel }) => panel);
+
 const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
   const stateMap = new Map(asArray(panelStates).map((panel) => [panel.panel_id, panel]));
   const renderablePanels = asArray(panelSpecs).map((spec) => ({
@@ -82,7 +105,7 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
       });
     }
   }
-  return renderablePanels;
+  return sortRenderablePanels(renderablePanels);
 };
 
 const fitDomain = (values) => {
@@ -162,6 +185,9 @@ const scalarHeatmapColors = ["rgb(0,0,255)", "rgb(128,200,128)", "rgb(255,0,0)"]
 
 
 const panelColumnSpan = (descriptor) => {
+  if (descriptor?.panel_id === "estimate_summary") {
+    return { xs: "1 / -1", md: "1 / -1" };
+  }
   switch (descriptor?.width) {
     case "compact":
       return { xs: "1 / -1", md: "span 4" };
@@ -365,6 +391,7 @@ const buildErrorBarSeries = ({ name = "error", data, color = "#7c8a96", capPx = 
   type: "custom",
   name,
   data,
+  clip: true,
   silent: true,
   z: 5,
   tooltip: { show: false },
@@ -380,22 +407,37 @@ const buildErrorBarSeries = ({ name = "error", data, color = "#7c8a96", capPx = 
     if (!Number.isFinite(xPx) || !Number.isFinite(yLowPx) || !Number.isFinite(yHighPx)) {
       return null;
     }
+    const coordSys = params?.coordSys;
+    if (!coordSys) return null;
+    const left = Number(coordSys.x);
+    const right = Number(coordSys.x) + Number(coordSys.width);
+    const top = Number(coordSys.y);
+    const bottom = Number(coordSys.y) + Number(coordSys.height);
+    if (!Number.isFinite(left) || !Number.isFinite(right) || !Number.isFinite(top) || !Number.isFinite(bottom)) {
+      return null;
+    }
+    if (xPx < left || xPx > right) return null;
+    if ((yLowPx < top && yHighPx < top) || (yLowPx > bottom && yHighPx > bottom)) return null;
+    const y1 = Math.max(top, Math.min(bottom, yLowPx));
+    const y2 = Math.max(top, Math.min(bottom, yHighPx));
+    const capLeft = Math.max(left, xPx - capPx);
+    const capRight = Math.min(right, xPx + capPx);
     return {
       type: "group",
       children: [
         {
           type: "line",
-          shape: { x1: xPx, y1: yLowPx, x2: xPx, y2: yHighPx },
+          shape: { x1: xPx, y1, x2: xPx, y2 },
           style: { stroke: color, lineWidth: 1.2 },
         },
         {
           type: "line",
-          shape: { x1: xPx - capPx, y1: yLowPx, x2: xPx + capPx, y2: yLowPx },
+          shape: { x1: capLeft, y1, x2: capRight, y2: y1 },
           style: { stroke: color, lineWidth: 1.2 },
         },
         {
           type: "line",
-          shape: { x1: xPx - capPx, y1: yHighPx, x2: xPx + capPx, y2: yHighPx },
+          shape: { x1: capLeft, y1: y2, x2: capRight, y2 },
           style: { stroke: color, lineWidth: 1.2 },
         },
       ],
@@ -517,6 +559,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
                 name: "uncertainty",
                 type: "custom",
                 data: bandSegments,
+                clip: true,
                 silent: true,
                 z: 1,
                 tooltip: { show: false },
