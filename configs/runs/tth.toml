@@ -27,7 +27,7 @@ max_queue_size = 192
 max_batches_per_tick = 64
 max_insert_bundle_size = 16
 completed_batch_fetch_limit = 64
-strict_batch_ordering = false
+strict_batch_ordering = true
 
 [[task_queue]]
 name = "havana-train-10m"
