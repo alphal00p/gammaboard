@@ -1,9 +1,11 @@
+pub mod batch_ids;
 pub mod errors;
 pub mod models;
 pub mod run_spec;
 pub mod tasks;
 pub mod traits;
 
+pub use batch_ids::next_batch_ids;
 pub use errors::{BuildError, EngineError, EvalError, StoreError};
 pub use models::{
     BatchClaim, BatchQueueCounts, BatchRecord, BatchStatus, CompletedBatch, DesiredAssignment,

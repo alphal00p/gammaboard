@@ -176,6 +176,42 @@ impl LatentBatch {
                 "latent batch nr_samples must be greater than zero",
             ));
         }
+        match &self.payload {
+            LatentBatchPayload::IndexedBatch {
+                discrete_map,
+                continuous_layouts,
+                continuous_values,
+                weights,
+                ..
+            } => {
+                if weights.len() != self.nr_samples {
+                    return Err(BatchError::layout(format!(
+                        "latent batch nr_samples mismatch: nr_samples={}, weights={}",
+                        self.nr_samples,
+                        weights.len()
+                    )));
+                }
+                if discrete_map.len() != self.nr_samples
+                    || continuous_layouts.len() != self.nr_samples
+                {
+                    return Err(BatchError::layout(format!(
+                        "latent batch indexed shape mismatch: nr_samples={}, discrete_map={}, continuous_layouts={}",
+                        self.nr_samples,
+                        discrete_map.len(),
+                        continuous_layouts.len()
+                    )));
+                }
+                let expected_continuous_values = continuous_layouts.iter().copied().sum::<usize>();
+                if continuous_values.len() != expected_continuous_values {
+                    return Err(BatchError::layout(format!(
+                        "latent batch continuous payload mismatch: expected={}, actual={}",
+                        expected_continuous_values,
+                        continuous_values.len()
+                    )));
+                }
+            }
+            LatentBatchPayload::HavanaInference { .. } => {}
+        }
         Ok(())
     }
 
@@ -384,5 +420,23 @@ mod tests {
         assert_eq!(continuous_layouts, &vec![1, 2, 1, 1]);
         assert_eq!(continuous_values, &vec![0.5, 1.5, 2.5, 3.5, 4.5]);
         assert_eq!(weights, &vec![1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn latent_batch_rejects_mismatched_nr_samples() {
+        let latent = LatentBatch {
+            nr_samples: 2,
+            observable: ObservableConfig::Scalar,
+            payload: LatentBatchPayload::IndexedBatch {
+                discrete_signatures: vec![vec![1]],
+                discrete_map: vec![0],
+                continuous_layouts: vec![1],
+                continuous_values: vec![0.5],
+                weights: vec![1.0],
+            },
+        };
+
+        let err = latent.validate_nr_samples().expect_err("expected mismatch");
+        assert!(err.to_string().contains("nr_samples mismatch"));
     }
 }

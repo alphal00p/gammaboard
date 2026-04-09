@@ -35,9 +35,9 @@ strict_batch_ordering = true
 [[task_queue]]
 name = "havana-train-10m"
 kind = "sample"
-nr_samples = 50_000_000
+nr_samples = 100_000_000
 observable = { config = "gammaloop" }
-sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 128, samples_for_update = 5_000_000, initial_training_rate = 0.05, final_training_rate = 0.005 } }
+sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 128, samples_for_update = 10_000_000, initial_training_rate = 0.05, final_training_rate = 0.005 } }
 
 [[task_queue]]
 name = "havana-infer-100m"

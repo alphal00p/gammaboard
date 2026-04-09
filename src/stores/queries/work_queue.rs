@@ -5,12 +5,10 @@ use crate::core::{
 use crate::evaluation::BatchResult;
 use crate::sampling::LatentBatch;
 use chrono::{DateTime, Utc};
-use rand::random;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use sqlx::{PgPool, Postgres, QueryBuilder};
-use std::sync::{Mutex, OnceLock};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 pub(crate) struct CompletedBatchRaw {
     pub batch_id: i64,
@@ -26,61 +24,6 @@ pub(crate) struct CompletedBatchRaw {
 fn encode_json<T: Serialize>(label: &str, value: &T) -> Result<JsonValue, sqlx::Error> {
     serde_json::to_value(value)
         .map_err(|err| sqlx::Error::Protocol(format!("failed to serialize {label}: {err}")))
-}
-
-const BATCH_ID_COUNTER_BITS: u32 = 6;
-const BATCH_ID_PROCESS_ENTROPY_BITS: u32 = 16;
-const BATCH_ID_SUFFIX_BITS: u32 = BATCH_ID_COUNTER_BITS + BATCH_ID_PROCESS_ENTROPY_BITS;
-const BATCH_ID_COUNTER_MASK: u16 = (1u16 << BATCH_ID_COUNTER_BITS) - 1;
-
-#[derive(Debug)]
-struct BatchIdGenerator {
-    last_millis: u64,
-    counter: u16,
-    process_entropy: u16,
-}
-
-impl BatchIdGenerator {
-    fn new() -> Self {
-        Self {
-            last_millis: 0,
-            counter: 0,
-            process_entropy: random::<u16>(),
-        }
-    }
-
-    fn next_ids(&mut self, count: usize) -> Vec<i64> {
-        let mut ids = Vec::with_capacity(count);
-        for _ in 0..count {
-            let now_millis = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("system time before unix epoch")
-                .as_millis() as u64;
-            if now_millis > self.last_millis {
-                self.last_millis = now_millis;
-                self.counter = 0;
-            } else if self.counter >= BATCH_ID_COUNTER_MASK {
-                self.last_millis = self.last_millis.saturating_add(1);
-                self.counter = 0;
-            }
-
-            let id = ((self.last_millis as i64) << BATCH_ID_SUFFIX_BITS)
-                | ((self.process_entropy as i64) << BATCH_ID_COUNTER_BITS)
-                | (self.counter as i64);
-            self.counter = self.counter.saturating_add(1);
-            ids.push(id);
-        }
-        ids
-    }
-}
-
-fn next_batch_ids(count: usize) -> Vec<i64> {
-    static GENERATOR: OnceLock<Mutex<BatchIdGenerator>> = OnceLock::new();
-    let generator = GENERATOR.get_or_init(|| Mutex::new(BatchIdGenerator::new()));
-    generator
-        .lock()
-        .expect("batch id generator lock poisoned")
-        .next_ids(count)
 }
 
 const PG_COPY_BINARY_HEADER: &[u8] = b"PGCOPY\n\xff\r\n\0";
@@ -118,14 +61,21 @@ pub(crate) async fn insert_batches(
     run_id: i32,
     task_id: i64,
     requires_training_values: bool,
+    batch_ids: &[i64],
     batches: &[LatentBatch],
 ) -> Result<InsertBatchesOutcome, sqlx::Error> {
     if batches.is_empty() {
         return Ok(InsertBatchesOutcome::default());
     }
+    if batch_ids.len() != batches.len() {
+        return Err(sqlx::Error::Protocol(format!(
+            "batch id count mismatch: ids={}, batches={}",
+            batch_ids.len(),
+            batches.len()
+        )));
+    }
 
     let started = Instant::now();
-    let batch_ids = next_batch_ids(batches.len());
     let mut tx = pool.begin().await?;
     let mut builder = QueryBuilder::<Postgres>::new(
         r#"
@@ -198,7 +148,7 @@ pub(crate) async fn insert_batches(
     let commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
 
     Ok(InsertBatchesOutcome {
-        batch_ids,
+        batch_ids: batch_ids.to_vec(),
         metrics: InsertBatchesMetrics {
             serialize_ms,
             payload_bytes,

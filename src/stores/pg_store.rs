@@ -552,6 +552,7 @@ impl WorkQueueStore for PgStore {
         run_id: i32,
         task_id: i64,
         requires_training_values: bool,
+        batch_ids: &[i64],
         batches: &[LatentBatch],
     ) -> Result<crate::core::InsertBatchesOutcome, StoreError> {
         queries::insert_batches(
@@ -559,6 +560,7 @@ impl WorkQueueStore for PgStore {
             run_id,
             task_id,
             requires_training_values,
+            batch_ids,
             batches,
         )
         .await

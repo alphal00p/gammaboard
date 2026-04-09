@@ -1,5 +1,5 @@
 use gammaboard::config::RuntimeConfig;
-use gammaboard::core::{ControlPlaneStore, StoreError, WorkQueueStore, WorkerRole};
+use gammaboard::core::{ControlPlaneStore, StoreError, WorkQueueStore, WorkerRole, next_batch_ids};
 use gammaboard::{Batch, LatentBatchSpec, PgStore, Point};
 use sqlx::postgres::PgPoolOptions;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -75,8 +75,15 @@ async fn claim_batch_requires_active_assignment() {
 
     let batch = Batch::from_points([Point::new(vec![1.0], Vec::new(), 1.0)]).expect("batch");
     let latent_batch = LatentBatchSpec::from_batch(&batch).build();
+    let batch_ids = next_batch_ids(1);
     store
-        .insert_batches(run_id, task_id, false, std::slice::from_ref(&latent_batch))
+        .insert_batches(
+            run_id,
+            task_id,
+            false,
+            &batch_ids,
+            std::slice::from_ref(&latent_batch),
+        )
         .await
         .expect("insert batch");
 
@@ -142,8 +149,15 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
 
     let batch = Batch::from_points([Point::new(vec![2.0], Vec::new(), 1.0)]).expect("batch");
     let latent_batch = LatentBatchSpec::from_batch(&batch).build();
+    let batch_ids = next_batch_ids(1);
     store
-        .insert_batches(run_id, task_id, false, std::slice::from_ref(&latent_batch))
+        .insert_batches(
+            run_id,
+            task_id,
+            false,
+            &batch_ids,
+            std::slice::from_ref(&latent_batch),
+        )
         .await
         .expect("insert batch");
 
@@ -237,8 +251,9 @@ async fn claim_batch_claims_exactly_one_pending_batch() {
         latent_batch.clone(),
         latent_batch,
     ];
+    let batch_ids = next_batch_ids(batches.len());
     store
-        .insert_batches(run_id, task_id, false, &batches)
+        .insert_batches(run_id, task_id, false, &batch_ids, &batches)
         .await
         .expect("insert batches");
 
