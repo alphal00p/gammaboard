@@ -13,62 +13,6 @@ use crate::evaluation::{
 };
 use crate::utils::domain::Domain;
 
-const PYTHON_WORKER_SCRIPT: &str = r#"
-import importlib
-import json
-import traceback
-import numpy as np
-import sys
-
-integrand = None
-input_dim = None
-
-def send(payload):
-    sys.stdout.write(json.dumps(payload) + "\n")
-    sys.stdout.flush()
-
-for raw in sys.stdin:
-    line = raw.strip()
-    if not line:
-        continue
-    req = json.loads(line)
-    req_id = req.get("id")
-    try:
-        op = req["op"]
-        if op == "init":
-            module = importlib.import_module(req["module"])
-            cls = getattr(module, req["class"])
-            integrand = cls()
-            input_dim = int(req["input_dim"])
-            maybe_dim = getattr(integrand, "input_dim", None)
-            if maybe_dim is not None and int(maybe_dim) != input_dim:
-                raise ValueError(
-                    f"integrand input_dim mismatch: expected {input_dim}, got {int(maybe_dim)}"
-                )
-            send({"id": req_id, "ok": True})
-        elif op == "eval_scalar":
-            if integrand is None or input_dim is None:
-                raise RuntimeError("worker not initialized")
-            nr_samples = int(req["nr_samples"])
-            req_dim = int(req["input_dim"])
-            if req_dim != input_dim:
-                raise ValueError(f"input_dim mismatch: worker={input_dim} request={req_dim}")
-            xs = np.asarray(req["xs_row_major"], dtype=np.float64).reshape((nr_samples, req_dim))
-            ys = np.asarray(integrand.eval(xs), dtype=np.float64).reshape((nr_samples,))
-            send({"id": req_id, "ok": True, "values": ys.tolist()})
-        else:
-            raise ValueError(f"unknown op: {op}")
-    except Exception as exc:
-        send(
-            {
-                "id": req_id,
-                "ok": False,
-                "error": f"{type(exc).__name__}: {exc}",
-                "traceback": traceback.format_exc(limit=8),
-            }
-        )
-"#;
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PythonScalarParams {
@@ -76,6 +20,8 @@ pub struct PythonScalarParams {
     pub module: String,
     pub class: String,
     pub input_dim: usize,
+    #[serde(default = "default_init_args")]
+    pub init_args: Value,
 }
 
 pub struct ScalarPythonEvaluator {
@@ -85,6 +31,11 @@ pub struct ScalarPythonEvaluator {
 
 impl ScalarPythonEvaluator {
     pub fn from_params(params: PythonScalarParams) -> Result<Self, BuildError> {
+        if !params.init_args.is_object() {
+            return Err(BuildError::build(
+                "python_scalar init_args must be a TOML table / JSON object",
+            ));
+        }
         let flake_ref = normalize_flake_ref(&params.flake_ref);
         let output_path = build_nix_output_path(&flake_ref)?;
         let python_executable = resolve_python_executable(&output_path).ok_or_else(|| {
@@ -99,6 +50,7 @@ impl ScalarPythonEvaluator {
             &params.module,
             &params.class,
             params.input_dim,
+            params.init_args,
         )?;
         Ok(Self {
             input_dim: params.input_dim,
@@ -167,12 +119,13 @@ impl PythonWorker {
         module: &str,
         class: &str,
         input_dim: usize,
+        init_args: Value,
     ) -> Result<Self, BuildError> {
         let mut command = Command::new(python_executable);
+        let worker_script = evaluator_worker_script_path()?;
         command
             .arg("-u")
-            .arg("-c")
-            .arg(PYTHON_WORKER_SCRIPT)
+            .arg(worker_script)
             .current_dir(runtime_root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -211,17 +164,24 @@ impl PythonWorker {
             next_id: 1,
             input_dim,
         };
-        worker.send_init(module, class, input_dim)?;
+        worker.send_init(module, class, input_dim, init_args)?;
         Ok(worker)
     }
 
-    fn send_init(&mut self, module: &str, class: &str, input_dim: usize) -> Result<(), BuildError> {
+    fn send_init(
+        &mut self,
+        module: &str,
+        class: &str,
+        input_dim: usize,
+        init_args: Value,
+    ) -> Result<(), BuildError> {
         let request = serde_json::json!({
             "id": self.allocate_request_id(),
             "op": "init",
             "module": module,
             "class": class,
             "input_dim": input_dim,
+            "init_args": init_args,
         });
         let response = self.send_request(&request).map_err(BuildError::build)?;
         Self::expect_ok(response).map_err(BuildError::build)
@@ -380,6 +340,10 @@ fn build_nix_output_path(flake_ref: &str) -> Result<PathBuf, BuildError> {
     Ok(PathBuf::from(output_path.trim()))
 }
 
+fn default_init_args() -> Value {
+    Value::Object(serde_json::Map::new())
+}
+
 fn normalize_flake_ref(reference: &str) -> String {
     if reference.contains("://")
         || reference.starts_with("flake:")
@@ -433,6 +397,20 @@ fn build_worker_pythonpath(runtime_root: &Path) -> Option<OsString> {
     } else {
         env::join_paths(entries).ok()
     }
+}
+
+fn evaluator_worker_script_path() -> Result<PathBuf, BuildError> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("integrand_api")
+        .join("python_workers")
+        .join("evaluator_worker.py");
+    if !path.is_file() {
+        return Err(BuildError::build(format!(
+            "python evaluator worker script not found at '{}'",
+            path.display()
+        )));
+    }
+    Ok(path)
 }
 
 fn is_executable(path: &Path) -> bool {

@@ -310,9 +310,7 @@ impl HavanaInferenceSampler {
                     })?;
                 Self::from_snapshot(snapshot, domain)
             }
-            SamplerAggregatorSnapshot::NaiveMonteCarlo { .. }
-            | SamplerAggregatorSnapshot::RasterPlane { .. }
-            | SamplerAggregatorSnapshot::RasterLine { .. } => Err(BuildError::build(
+            _ => Err(BuildError::build(
                 "havana_inference sampler requires a havana snapshot for handoff",
             )),
         }

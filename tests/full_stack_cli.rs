@@ -959,10 +959,16 @@ async fn full_stack_cli_python_scalar_flake_e2e() -> anyhow::Result<()> {
     harness.start_node("w-2").await?;
 
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let flake_ref = format!(
+    let evaluator_flake_ref = format!(
         "path:{}#runtime",
         manifest_dir
             .join("integrand_api/examples/python_scalar_sin")
+            .display()
+    );
+    let sampler_flake_ref = format!(
+        "path:{}#runtime",
+        manifest_dir
+            .join("integrand_api/examples/python_sampler_monte_carlo")
             .display()
     );
     let config = temp_run_add_config(&format!(
@@ -971,17 +977,18 @@ name = "python-scalar-flake-e2e"
 
 [evaluator]
 kind = "python_scalar"
-flake_ref = "{flake_ref}"
+flake_ref = "{evaluator_flake_ref}"
 module = "demo_integrand"
 class = "SinIntegrand"
 input_dim = 1
+init_args = {{ scale = 1.0, bias = 0.0 }}
 
 [[task_queue]]
 name = "sample-a"
 kind = "sample"
 nr_samples = 64
 observable = {{ config = "scalar" }}
-sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo", seed = 0 }} }}
+sampler_aggregator = {{ config = {{ kind = "python_homogeneous_monte_carlo", flake_ref = "{sampler_flake_ref}", module = "demo_sampler", class = "BasicMonteCarloSampler", input_dim = 1, init_args = {{ seed = 0, training_target_samples = 0 }} }} }}
 "#
     ));
 

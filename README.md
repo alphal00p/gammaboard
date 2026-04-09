@@ -237,6 +237,11 @@ Flake-backed Python scalar example:
 gammaboard run add configs/runs/python-scalar-flake-demo.toml
 ```
 
+Flake-backed Python scalar + Python Monte Carlo sampler example:
+```bash
+gammaboard run add configs/runs/python-scalar-python-sampler-flake-demo.toml
+```
+
 Minimal shape:
 ```toml
 name = "example"
@@ -255,6 +260,24 @@ For `evaluator.kind = "python_scalar"`, configure:
 - `module`: python module name to import
 - `class`: class name to instantiate (must expose `eval(xs)` and `input_dim`)
 - `input_dim`: expected continuous dimension for homogeneous batches
+- optional `init_args = { ... }`: constructor/config payload forwarded to python init
+
+Python construction semantics:
+- if the class defines `from_config(input_dim=..., init_args=...)`, that is called
+- otherwise the worker calls `ClassName(**init_args)` (or `ClassName()` when `init_args` is empty)
+
+For `sampler_aggregator.kind = "python_homogeneous_monte_carlo"`, configure:
+- `flake_ref`: nix flake reference that resolves to a runtime package
+- `module`: python module name to import
+- `class`: python class implementing sampler methods (`sample_plan`, `produce_latent_batch`, `ingest_training_weights`, `snapshot`)
+- `input_dim`: expected homogeneous continuous dimension (domain must be `continuous(input_dim)` with no discrete axes)
+- optional `init_args = { ... }`: constructor/config payload forwarded to python init
+
+Python sampler construction semantics:
+- restore path: `from_snapshot(snapshot=..., input_dim=..., init_args=...)` when present
+- fresh path: `from_config(input_dim=..., init_args=...)` when present
+- fallback: `ClassName(**init_args)` / `ClassName()`
+- Worker protocol entrypoints are checked in under `integrand_api/python_workers/` and launched with the flake runtime python executable.
 
 If `task_queue` is omitted, the run is created idle.
 Every run stores an initial root stage snapshot (`sequence_nr = 0`) immediately at creation.

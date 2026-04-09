@@ -9,6 +9,7 @@ use crate::sampling::HavanaInferenceSamplerParams;
 use crate::sampling::{
     HavanaSamplerParams, NaiveMonteCarloSamplerParams, RasterLineSamplerParams,
     RasterPlaneSamplerParams, SphericalBatchTransformParams, UnitBallBatchTransformParams,
+    PythonHomogeneousMonteCarloSamplerParams,
 };
 use serde::{Deserialize, Serialize};
 
@@ -103,6 +104,10 @@ pub enum SamplerAggregatorConfig {
     HavanaInference {
         #[serde(flatten)]
         params: HavanaInferenceSamplerParams,
+    },
+    PythonHomogeneousMonteCarlo {
+        #[serde(flatten)]
+        params: PythonHomogeneousMonteCarloSamplerParams,
     },
 }
 

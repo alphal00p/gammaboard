@@ -1,5 +1,6 @@
 mod havana;
 mod naive_monte_carlo;
+mod python;
 mod raster;
 
 use crate::Materializer;
@@ -16,6 +17,8 @@ use self::havana::{
 };
 use self::naive_monte_carlo::NaiveMonteCarloSamplerAggregator;
 pub use self::naive_monte_carlo::NaiveMonteCarloSamplerParams;
+use self::python::{PythonHomogeneousMonteCarloSampler, PythonHomogeneousMonteCarloSnapshot};
+pub use self::python::PythonHomogeneousMonteCarloSamplerParams;
 use self::raster::{
     RasterLineSampler, RasterLineSamplerSnapshot, RasterPlaneSampler, RasterPlaneSamplerSnapshot,
 };
@@ -77,6 +80,17 @@ impl SamplerAggregatorSnapshot {
                     snapshot, domain,
                 )?))
             }
+            Self::PythonHomogeneousMonteCarlo { raw } => {
+                let snapshot: PythonHomogeneousMonteCarloSnapshot = serde_json::from_value(raw)
+                    .map_err(|err| {
+                        BuildError::build(format!(
+                            "failed to decode python_homogeneous_monte_carlo sampler snapshot: {err}"
+                        ))
+                    })?;
+                Ok(Box::new(PythonHomogeneousMonteCarloSampler::from_snapshot(
+                    snapshot, domain,
+                )?))
+            }
         }
     }
 }
@@ -93,6 +107,7 @@ impl SamplerAggregatorConfig {
             Self::RasterLine { .. } => "raster_line",
             Self::HavanaTraining { .. } => "havana_training",
             Self::HavanaInference { .. } => "havana_inference",
+            Self::PythonHomogeneousMonteCarlo { .. } => "python_homogeneous_monte_carlo",
         }
     }
 
@@ -141,6 +156,12 @@ impl SamplerAggregatorConfig {
                 Ok(Box::new(HavanaInferenceSampler::from_params_and_snapshot(
                     params.clone(),
                     snapshot,
+                    &domain,
+                )?))
+            }
+            Self::PythonHomogeneousMonteCarlo { params } => {
+                Ok(Box::new(PythonHomogeneousMonteCarloSampler::from_params_and_domain(
+                    params.clone(),
                     &domain,
                 )?))
             }

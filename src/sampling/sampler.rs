@@ -13,6 +13,7 @@ pub enum SamplerAggregatorSnapshot {
     RasterLine { raw: JsonValue },
     HavanaTraining { raw: JsonValue },
     HavanaInference { raw: JsonValue },
+    PythonHomogeneousMonteCarlo { raw: JsonValue },
 }
 
 impl SamplerAggregatorSnapshot {
@@ -34,6 +35,9 @@ impl SamplerAggregatorSnapshot {
             ) | (
                 SamplerAggregatorSnapshot::HavanaInference { .. },
                 SamplerAggregatorConfig::HavanaInference { .. }
+            ) | (
+                SamplerAggregatorSnapshot::PythonHomogeneousMonteCarlo { .. },
+                SamplerAggregatorConfig::PythonHomogeneousMonteCarlo { .. }
             )
         )
     }

@@ -13,7 +13,8 @@ pub use latent_batch::{LatentBatch, LatentBatchPayload, LatentBatchSpec, SampleP
 pub use sampler::{SamplerAggregator, SamplerAggregatorSnapshot};
 pub use sampler_aggregator::{
     HavanaInferenceSamplerParams, HavanaInferenceSource, HavanaSamplerParams,
-    NaiveMonteCarloSamplerParams, RasterLineSamplerParams, RasterPlaneSamplerParams,
+    NaiveMonteCarloSamplerParams, PythonHomogeneousMonteCarloSamplerParams,
+    RasterLineSamplerParams, RasterPlaneSamplerParams,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
