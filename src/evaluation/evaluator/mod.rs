@@ -1,4 +1,5 @@
 pub(crate) mod gammaloop;
+pub(crate) mod python;
 mod sin_evaluator;
 mod sinc_evaluator;
 mod symbolica;
@@ -8,11 +9,13 @@ use crate::core::{BuildError, EvaluatorConfig, ObservableConfig};
 use crate::evaluation::{Evaluator, ObservableState};
 
 use self::gammaloop::GammaLoopEvaluator;
+use self::python::ScalarPythonEvaluator;
 use self::sin_evaluator::SinEvaluator;
 use self::sinc_evaluator::SincEvaluator;
 use self::symbolica::SymbolicaEngine;
 use self::unit::UnitEvaluator;
 pub use gammaloop::GammaLoopParams;
+pub use python::PythonScalarParams;
 pub use sin_evaluator::SinEvaluatorParams;
 pub use sinc_evaluator::SincEvaluatorParams;
 pub use symbolica::SymbolicaParams;
@@ -26,6 +29,7 @@ impl EvaluatorConfig {
             Self::SincEvaluator { .. } => "sinc_evaluator",
             Self::Unit { .. } => "unit",
             Self::Symbolica { .. } => "symbolica",
+            Self::PythonScalar { .. } => "python_scalar",
         }
     }
 
@@ -43,6 +47,9 @@ impl EvaluatorConfig {
             Self::Unit { params } => Ok(Box::new(UnitEvaluator::from_params(params.clone()))),
             Self::Symbolica { params } => {
                 Ok(Box::new(SymbolicaEngine::from_params(params.clone())?))
+            }
+            Self::PythonScalar { params } => {
+                Ok(Box::new(ScalarPythonEvaluator::from_params(params.clone())?))
             }
         }
     }

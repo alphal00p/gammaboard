@@ -1,0 +1,11 @@
+name = "python-scalar-flake-demo"
+
+[evaluator]
+kind = "python_scalar"
+flake_ref = "path:./integrand_api/examples/python_scalar_sin#runtime"
+module = "demo_integrand"
+class = "SinIntegrand"
+input_dim = 1
+
+[sampler_aggregator]
+kind = "naive_monte_carlo"

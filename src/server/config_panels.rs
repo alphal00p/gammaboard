@@ -114,6 +114,9 @@ fn evaluator_observable_kind(
         EvaluatorConfig::Symbolica { .. } => {
             Some(crate::evaluation::SemanticObservableKind::Scalar)
         }
+        EvaluatorConfig::PythonScalar { .. } => {
+            Some(crate::evaluation::SemanticObservableKind::Scalar)
+        }
     }
 }
 

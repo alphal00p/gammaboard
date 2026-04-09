@@ -1,5 +1,6 @@
 use crate::evaluation::{
-    GammaLoopParams, SinEvaluatorParams, SincEvaluatorParams, SymbolicaParams, UnitEvaluatorParams,
+    GammaLoopParams, PythonScalarParams, SinEvaluatorParams, SincEvaluatorParams, SymbolicaParams,
+    UnitEvaluatorParams,
 };
 use crate::utils::domain::Domain;
 
@@ -71,6 +72,10 @@ pub enum EvaluatorConfig {
     Symbolica {
         #[serde(flatten)]
         params: SymbolicaParams,
+    },
+    PythonScalar {
+        #[serde(flatten)]
+        params: PythonScalarParams,
     },
 }
 

@@ -11,6 +11,13 @@ ComplexOut = npt.NDArray[np.complex128]
 
 
 class ScalarBatchIntegrand(ABC):
+    """Vectorized scalar integrand.
+
+    Contract:
+    - xs is a float64 array with shape (nr_samples, input_dim)
+    - eval(xs) returns float64 array with shape (nr_samples,)
+    """
+
     input_dim: int
 
     @abstractmethod
@@ -18,6 +25,13 @@ class ScalarBatchIntegrand(ABC):
 
 
 class ComplexBatchIntegrand(ABC):
+    """Vectorized complex integrand.
+
+    Contract:
+    - xs is a float64 array with shape (nr_samples, input_dim)
+    - eval(xs) returns complex128 array with shape (nr_samples,)
+    """
+
     input_dim: int
 
     @abstractmethod

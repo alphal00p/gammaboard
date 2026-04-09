@@ -232,6 +232,11 @@ Add a run with:
 gammaboard run add configs/runs/live-test-unit-naive-scalar.toml
 ```
 
+Flake-backed Python scalar example:
+```bash
+gammaboard run add configs/runs/python-scalar-flake-demo.toml
+```
+
 Minimal shape:
 ```toml
 name = "example"
@@ -244,6 +249,12 @@ discrete_dims = 0
 ```
 
 For `evaluator.kind = "gammaloop"`, `continuous_dims` and `discrete_dims` are inferred from the selected integrand and should be omitted.
+
+For `evaluator.kind = "python_scalar"`, configure:
+- `flake_ref`: nix flake reference that resolves to a runtime package (for example `path:./integrand_api/examples/python_scalar_sin#runtime`)
+- `module`: python module name to import
+- `class`: class name to instantiate (must expose `eval(xs)` and `input_dim`)
+- `input_dim`: expected continuous dimension for homogeneous batches
 
 If `task_queue` is omitted, the run is created idle.
 Every run stores an initial root stage snapshot (`sequence_nr = 0`) immediately at creation.

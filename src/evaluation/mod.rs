@@ -5,7 +5,8 @@ pub mod traits;
 
 pub use batch::{Batch, BatchError, BatchResult, Point};
 pub use evaluator::{
-    GammaLoopParams, SinEvaluatorParams, SincEvaluatorParams, SymbolicaParams, UnitEvaluatorParams,
+    GammaLoopParams, PythonScalarParams, SinEvaluatorParams, SincEvaluatorParams, SymbolicaParams,
+    UnitEvaluatorParams,
 };
 pub use observable::{
     ComplexObservableState, ComplexValue, FullComplexObservableState, FullObservableProgress,
@@ -13,6 +14,7 @@ pub use observable::{
     IngestScalar, Observable, ObservableState, ScalarObservableState, SemanticObservableKind,
 };
 pub use traits::{
-    BatchTransform, ComplexSampleEvaluator, ComplexValueEvaluator, EvalBatchOptions, Evaluator,
-    Materializer, ScalarSampleEvaluator, ScalarValueEvaluator,
+    BatchTransform, ComplexBatchEvaluator, ComplexSampleEvaluator, ComplexValueEvaluator,
+    EvalBatchOptions, Evaluator, Materializer, ScalarBatchEvaluator, ScalarSampleEvaluator,
+    ScalarValueEvaluator,
 };

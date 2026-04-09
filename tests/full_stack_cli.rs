@@ -951,6 +951,98 @@ async fn full_stack_cli_havana_pause_resume_matches_direct_baseline() -> anyhow:
     Ok(())
 }
 
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege, nix, and python+numpy"]
+async fn full_stack_cli_python_scalar_flake_e2e() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    harness.start_node("w-1").await?;
+    harness.start_node("w-2").await?;
+
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let flake_ref = format!(
+        "path:{}#runtime",
+        manifest_dir
+            .join("integrand_api/examples/python_scalar_sin")
+            .display()
+    );
+    let config = temp_run_add_config(&format!(
+        r#"
+name = "python-scalar-flake-e2e"
+
+[evaluator]
+kind = "python_scalar"
+flake_ref = "{flake_ref}"
+module = "demo_integrand"
+class = "SinIntegrand"
+input_dim = 1
+
+[[task_queue]]
+name = "sample-a"
+kind = "sample"
+nr_samples = 64
+observable = {{ config = "scalar" }}
+sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo", seed = 0 }} }}
+"#
+    ));
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = 'python-scalar-flake-e2e'")
+        .fetch_one(&harness.pool)
+        .await?;
+
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-1",
+            "sampler-aggregator",
+            "python-scalar-flake-e2e",
+        ])
+        .assert()
+        .success();
+    harness
+        .cli()
+        .args(["node", "assign", "w-2", "evaluator", "python-scalar-flake-e2e"])
+        .assert()
+        .success();
+
+    harness
+        .wait_for(
+            "python scalar flake task completes",
+            Duration::from_secs(120),
+            || async {
+                let state: String = sqlx::query_scalar(
+                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'sample-a'",
+                )
+                .bind(run_id)
+                .fetch_one(&harness.pool)
+                .await?;
+                Ok(state == "completed")
+            },
+        )
+        .await?;
+
+    let completed_samples: i64 =
+        sqlx::query_scalar("SELECT nr_completed_samples FROM runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_one(&harness.pool)
+            .await?;
+    assert!(completed_samples >= 64);
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
 fn temp_server_config(
     host: &str,
     port: u16,
