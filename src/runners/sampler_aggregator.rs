@@ -26,7 +26,6 @@ use thiserror::Error;
 use tokio::time::sleep;
 
 const MIN_BATCH_SIZE: usize = 16;
-const MAX_BATCH_SIZE_UP_FACTOR: f64 = 4.0;
 const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.25;
 const COMPLETED_SAMPLES_PER_SECOND_EWMA_ALPHA: f64 = 0.2;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -34,8 +33,6 @@ pub struct SamplerAggregatorRunnerParams {
     pub performance_snapshot_interval_ms: u64,
     pub min_tick_time_ms: u64,
     pub frontend_sync_interval_ms: u64,
-    pub target_batch_eval_ms: f64,
-    pub max_batch_size: usize,
     #[serde(default = "default_sampler_db_pool_size")]
     pub db_pool_size: u32,
     pub queue: SamplerQueueConfig,
@@ -155,7 +152,7 @@ impl SamplerRuntimeState {
         sampler: SamplerWorkRollingAverages,
         queue: crate::core::SamplerQueueRuntimeMetrics,
         completed_samples_total: i64,
-        avg_evaluator_utilization: Option<f64>,
+        evaluator_fleet: EvaluatorFleetSnapshot,
     ) -> SamplerRuntimeMetrics {
         SamplerRuntimeMetrics {
             produced_batches_total: self.produced_batches_total,
@@ -166,7 +163,10 @@ impl SamplerRuntimeState {
             completed_samples_per_second: self.completed_samples_per_second,
             batch_size_current: self.batch_size_current,
             sampler_tick_busy_ratio: self.sampler_tick_busy_ratio,
-            avg_evaluator_utilization,
+            avg_evaluator_utilization: evaluator_fleet.avg_utilization,
+            active_evaluator_count: Some(evaluator_fleet.active_count),
+            avg_evaluator_rss_bytes: evaluator_fleet.avg_rss_bytes,
+            total_evaluator_rss_bytes: evaluator_fleet.total_rss_bytes,
             sampler,
             queue,
         }
@@ -218,6 +218,14 @@ struct PendingAggregationFlushTask {
     handle: tokio::task::JoinHandle<Result<(), StoreError>>,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct EvaluatorFleetSnapshot {
+    active_count: usize,
+    avg_utilization: Option<f64>,
+    avg_rss_bytes: Option<i64>,
+    total_rss_bytes: Option<i64>,
+}
+
 impl<S> SamplerAggregatorRunner<S>
 where
     S: SamplerWorkerStore + Clone + Send + Sync + 'static,
@@ -238,19 +246,20 @@ where
     ) -> Self {
         let mut runtime_state;
         let queue_checkpoint;
+        let max_batch_size = params.queue.max_batch_size.max(MIN_BATCH_SIZE);
         if let Some(snapshot) = resume_snapshot {
             runtime_state = snapshot.runtime_state.clone();
             queue_checkpoint = snapshot.queue.clone();
         } else {
             runtime_state = SamplerRuntimeState {
-                batch_size_current: initial_batch_size.clamp(MIN_BATCH_SIZE, params.max_batch_size),
+                batch_size_current: initial_batch_size.clamp(MIN_BATCH_SIZE, max_batch_size),
                 ..SamplerRuntimeState::default()
             };
             queue_checkpoint = SamplerQueueCheckpoint::default();
         }
         runtime_state.batch_size_current = runtime_state
             .batch_size_current
-            .clamp(MIN_BATCH_SIZE, params.max_batch_size);
+            .clamp(MIN_BATCH_SIZE, max_batch_size);
 
         let (nr_produced_samples, nr_completed_samples) = run_progress
             .map(|progress| (progress.nr_produced_samples, progress.nr_completed_samples))
@@ -272,7 +281,9 @@ where
             requires_training_values,
             params.queue.clone(),
             queue_checkpoint,
+            runtime_state.batch_size_current,
         );
+        runtime_state.batch_size_current = queue.current_batch_size();
 
         Self {
             run_id,
@@ -304,27 +315,6 @@ where
         &self.params
     }
 
-    fn tune_batch_size(&mut self) {
-        let Some(eval_ms_per_sample) = self.runtime_state.rolling.eval_ms_per_sample.value() else {
-            return;
-        };
-        if self.params.target_batch_eval_ms <= 0.0 || !self.params.target_batch_eval_ms.is_finite()
-        {
-            return;
-        }
-        if eval_ms_per_sample <= 0.0 {
-            return;
-        }
-        let current_eval_batch_ms =
-            eval_ms_per_sample * self.runtime_state.batch_size_current as f64;
-        let raw_ratio = self.params.target_batch_eval_ms / current_eval_batch_ms;
-        let ratio = raw_ratio.clamp(MAX_BATCH_SIZE_DOWN_FACTOR, MAX_BATCH_SIZE_UP_FACTOR);
-
-        let next = ((self.runtime_state.batch_size_current as f64) * ratio).round() as usize;
-        self.runtime_state.batch_size_current =
-            next.clamp(MIN_BATCH_SIZE, self.params.max_batch_size);
-    }
-
     fn current_runner_diagnostics(&mut self) -> JsonValue {
         let diagnostics_snapshot = self.queue.diagnostics_snapshot();
         let queue_counts = diagnostics_snapshot.map(|snapshot| snapshot.queue_counts);
@@ -340,7 +330,7 @@ where
             .map(|(target, pending)| (target as i64).saturating_sub(pending.max(0)));
         json!({
             "active_evaluator_count": active_evaluator_count,
-            "target_batch_eval_ms": self.params.target_batch_eval_ms,
+            "target_batch_eval_ms": self.params.queue.target_batch_eval_ms,
             "pending_batches": queue_counts.map(|counts| counts.pending),
             "claimed_batches": queue_counts.map(|counts| counts.claimed),
             "completed_batches": queue_counts.map(|counts| counts.completed),
@@ -461,7 +451,6 @@ where
             &mut self.window_state.queue_counts_ms,
             queue_snapshot_duration,
         );
-        self.tune_batch_size();
         let ingest_stats = self.process_completed_batches(completed).await?;
         let queue_before_produce = crate::core::BatchQueueCounts {
             pending: queue_before_tick.pending,
@@ -784,6 +773,9 @@ where
                     &mut self.window_state.eval_ms_per_sample,
                     total_eval_time_ms / batch_samples as f64,
                 );
+                self.queue
+                    .observe_completed_eval_batch(batch_samples, total_eval_time_ms);
+                self.runtime_state.batch_size_current = self.queue.current_batch_size();
             }
 
             if batch.requires_training_values {
@@ -908,16 +900,11 @@ where
             ProduceDecision::InitialRoundTrip(nr_samples) => vec![nr_samples],
             ProduceDecision::PlannedByQueue(max_samples) => self
                 .queue
-                .plan_production(
-                    max_samples,
-                    queue_before_produce,
-                    self.runtime_state.batch_size_current,
-                )
+                .plan_production(max_samples, queue_before_produce)
                 .await
                 .map_err(RunnerError::from)?,
         };
-        self.queue
-            .validate_batch_plan(&batch_plan, self.params.max_batch_size)?;
+        self.queue.validate_batch_plan(&batch_plan)?;
         Ok(batch_plan)
     }
 
@@ -1040,7 +1027,7 @@ where
         queue_runtime.insert_task_utilization = insert_task_utilization;
         queue_runtime.completed_fetch_utilization = completed_fetch_utilization;
         let sampler_runtime = self.take_sampler_window_snapshot();
-        let avg_evaluator_utilization = self.avg_active_evaluator_utilization().await?;
+        let evaluator_fleet = self.evaluator_fleet_snapshot().await?;
 
         let snapshot = SamplerAggregatorPerformanceSnapshot {
             run_id: self.run_id,
@@ -1049,7 +1036,7 @@ where
                 sampler_runtime,
                 queue_runtime,
                 self.nr_completed_samples,
-                avg_evaluator_utilization,
+                evaluator_fleet,
             ),
             engine_diagnostics,
             rss_bytes: current_rss_bytes(),
@@ -1061,26 +1048,54 @@ where
         Ok(())
     }
 
-    async fn avg_active_evaluator_utilization(&self) -> Result<Option<f64>, RunnerError> {
+    async fn evaluator_fleet_snapshot(&self) -> Result<EvaluatorFleetSnapshot, RunnerError> {
         let workers = self.store.get_registered_workers(Some(self.run_id)).await?;
-        let mut sum = 0.0;
-        let mut count = 0usize;
+        let mut utilization_sum = 0.0;
+        let mut utilization_count = 0usize;
+        let mut active_count = 0usize;
+        let mut rss_sum = 0_i64;
+        let mut rss_count = 0usize;
         for worker in workers {
             if worker.current_run_id != Some(self.run_id)
                 || worker.current_role.as_deref() != Some("evaluator")
             {
                 continue;
             }
-            let Some(metrics) = worker.evaluator_metrics else {
-                continue;
-            };
-            let Some(idle_ratio) = metrics.idle_profile.map(|profile| profile.idle_ratio) else {
-                continue;
-            };
-            sum += (1.0 - idle_ratio).clamp(0.0, 1.0);
-            count += 1;
+            active_count += 1;
+            if let Some(metrics) = worker.evaluator_metrics
+                && let Some(idle_ratio) = metrics.idle_profile.map(|profile| profile.idle_ratio)
+            {
+                utilization_sum += (1.0 - idle_ratio).clamp(0.0, 1.0);
+                utilization_count += 1;
+            }
+            if let Some(rss_bytes) = worker.evaluator_rss_bytes
+                && rss_bytes > 0
+            {
+                rss_sum = rss_sum.saturating_add(rss_bytes);
+                rss_count += 1;
+            }
         }
-        Ok((count > 0).then_some(sum / count as f64))
+        let avg_rss_bytes = if rss_count > 0 {
+            Some((rss_sum / rss_count as i64).max(0))
+        } else {
+            None
+        };
+        let total_rss_bytes = if rss_count > 0 {
+            Some(rss_sum.max(0))
+        } else {
+            None
+        };
+        let avg_utilization = if utilization_count > 0 {
+            Some(utilization_sum / utilization_count as f64)
+        } else {
+            None
+        };
+        Ok(EvaluatorFleetSnapshot {
+            active_count,
+            avg_utilization,
+            avg_rss_bytes,
+            total_rss_bytes,
+        })
     }
 
     fn update_completed_samples_per_second(

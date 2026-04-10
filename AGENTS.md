@@ -89,7 +89,8 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - `sampler_aggregator_runner_params.queue.max_batches_per_tick` is a hard per-tick production cap and must apply to every sampler production path, including the forced initial round-trip batch.
 - `sampler_aggregator_runner_params.queue.max_concurrent_insert_tasks` bounds how many sampler queue insert tasks may write batches concurrently on the shared process DB pool.
 - `sampler_aggregator_runner_params.queue.strict_batch_ordering` controls whether completed evaluator batches are ingested strictly as a contiguous id prefix or opportunistically in completed-id order.
-- The sampler queue owns the local pending-insert buffer and local processed buffer. Normal ticks must poll these buffers without blocking on database latency, while pause/unassign must drain the local queue fully before persisting the sampler checkpoint.
+- Batch-size control belongs to the sampler queue (`sampler_aggregator_runner_params.queue.target_batch_eval_ms`, `max_batch_size`, and queue-maintained `batch_size_current` tuning from completed-batch eval timings), not to sampler runner orchestration.
+- The sampler queue owns the local pending-insert buffer, local processed buffer, and completed-batch cleanup scheduling. Normal ticks must poll these buffers and drain finished background tasks without blocking on database latency, while pause/unassign must drain the local queue fully before persisting the sampler checkpoint.
 - Sampler frontend sync is lightweight and periodic: it updates `runs.current_observable`, appends `persisted_observable_snapshots`, and records performance snapshots. Full sampler resume state belongs in `run_sampler_checkpoints`, which is overwritten on unassignment/pause and contains the full sampler-aggregator checkpoint blob.
 
 ## Panels And Dashboard

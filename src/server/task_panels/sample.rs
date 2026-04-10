@@ -8,7 +8,7 @@ use crate::evaluation::{
 };
 use crate::server::panels::{
     HistogramBin, PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, key_value,
-    key_value_panel, panel_spec, progress_panel, scalar_timeseries_panel, single_point_band,
+    key_value_panel, panel_spec, progress_panel, scalar_timeseries_panel_with_smoothing,
     table_panel_with_payload, with_panel_width,
 };
 use gammalooprs::observables::{ObservablePhase, ObservableValueTransform};
@@ -308,54 +308,71 @@ fn config_label(config: &ObservableConfig) -> &'static str {
 }
 
 fn real_estimate_history_panel(observable: ObservableState) -> PanelState {
+    let smooth = Some(true);
     match observable {
-        ObservableState::Scalar(state) => single_point_band(
+        ObservableState::Scalar(state) => scalar_timeseries_panel_with_smoothing(
             "real_estimate_history",
-            state.count as f64,
-            state.mean(),
-            Some(state.mean() - state.stderr()),
-            Some(state.mean() + state.stderr()),
+            vec![PlotPoint {
+                x: state.count as f64,
+                y: state.mean(),
+                y_min: Some(state.mean() - state.stderr()),
+                y_max: Some(state.mean() + state.stderr()),
+            }],
+            smooth,
         ),
-        ObservableState::Complex(state) => single_point_band(
+        ObservableState::Complex(state) => scalar_timeseries_panel_with_smoothing(
             "real_estimate_history",
-            state.count as f64,
-            state.real_mean(),
-            Some(state.real_mean() - state.real_stderr()),
-            Some(state.real_mean() + state.real_stderr()),
+            vec![PlotPoint {
+                x: state.count as f64,
+                y: state.real_mean(),
+                y_min: Some(state.real_mean() - state.real_stderr()),
+                y_max: Some(state.real_mean() + state.real_stderr()),
+            }],
+            smooth,
         ),
-        ObservableState::Gammaloop(state) => single_point_band(
+        ObservableState::Gammaloop(state) => scalar_timeseries_panel_with_smoothing(
             "real_estimate_history",
-            state.sample_count() as f64,
-            state.real_mean(),
-            Some(state.real_mean() - state.real_stderr()),
-            Some(state.real_mean() + state.real_stderr()),
+            vec![PlotPoint {
+                x: state.sample_count() as f64,
+                y: state.real_mean(),
+                y_min: Some(state.real_mean() - state.real_stderr()),
+                y_max: Some(state.real_mean() + state.real_stderr()),
+            }],
+            smooth,
         ),
-        _ => scalar_timeseries_panel("real_estimate_history", Vec::new()),
+        _ => scalar_timeseries_panel_with_smoothing("real_estimate_history", Vec::new(), smooth),
     }
 }
 
 fn imag_estimate_history_panel(observable: ObservableState) -> Option<PanelState> {
+    let smooth = Some(true);
     match observable {
-        ObservableState::Complex(state) => Some(single_point_band(
+        ObservableState::Complex(state) => Some(scalar_timeseries_panel_with_smoothing(
             "imag_estimate_history",
-            state.count as f64,
-            state.imag_mean(),
-            Some(state.imag_mean() - state.imag_stderr()),
-            Some(state.imag_mean() + state.imag_stderr()),
+            vec![PlotPoint {
+                x: state.count as f64,
+                y: state.imag_mean(),
+                y_min: Some(state.imag_mean() - state.imag_stderr()),
+                y_max: Some(state.imag_mean() + state.imag_stderr()),
+            }],
+            smooth,
         )),
-        ObservableState::Gammaloop(state) => Some(single_point_band(
+        ObservableState::Gammaloop(state) => Some(scalar_timeseries_panel_with_smoothing(
             "imag_estimate_history",
-            state.sample_count() as f64,
-            state.imag_mean(),
-            Some(state.imag_mean() - state.imag_stderr()),
-            Some(state.imag_mean() + state.imag_stderr()),
+            vec![PlotPoint {
+                x: state.sample_count() as f64,
+                y: state.imag_mean(),
+                y_min: Some(state.imag_mean() - state.imag_stderr()),
+                y_max: Some(state.imag_mean() + state.imag_stderr()),
+            }],
+            smooth,
         )),
         _ => None,
     }
 }
 
 fn abs_signal_to_noise_panel(observable: ObservableState) -> PanelState {
-    scalar_timeseries_panel(
+    scalar_timeseries_panel_with_smoothing(
         "abs_signal_to_noise_history",
         vec![PlotPoint {
             x: observable.sample_count() as f64,
@@ -363,6 +380,7 @@ fn abs_signal_to_noise_panel(observable: ObservableState) -> PanelState {
             y_min: None,
             y_max: None,
         }],
+        Some(true),
     )
 }
 

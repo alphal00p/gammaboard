@@ -14,17 +14,17 @@ db_pool_size = 2
 performance_snapshot_interval_ms = 2000
 min_tick_time_ms = 50
 frontend_sync_interval_ms = 2000
-target_batch_eval_ms = 500.0
-max_batch_size = 100_000
-db_pool_size = 20
+db_pool_size = 10
 
 
 [sampler_aggregator_runner_params.queue]
-queue_buffer = 1.5
-local_pending_buffer_multiplier = 1.5
-max_queue_size = 1000
-max_batches_per_tick = 250
+queue_buffer = 1
+target_batch_eval_ms = 500.0
+max_batch_size = 100_000
+local_pending_buffer_multiplier = 0.5
+max_queue_size = 200
+max_batches_per_tick = 100
 max_insert_bundle_size = 5
-max_concurrent_insert_tasks = 15
+max_concurrent_insert_tasks = 8
 completed_batch_fetch_limit = 100
 strict_batch_ordering = true

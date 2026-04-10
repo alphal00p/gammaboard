@@ -296,6 +296,12 @@ pub struct SamplerRuntimeMetrics {
     pub sampler_tick_busy_ratio: Option<f64>,
     #[serde(default)]
     pub avg_evaluator_utilization: Option<f64>,
+    #[serde(default)]
+    pub active_evaluator_count: Option<usize>,
+    #[serde(default)]
+    pub avg_evaluator_rss_bytes: Option<i64>,
+    #[serde(default)]
+    pub total_evaluator_rss_bytes: Option<i64>,
     pub sampler: SamplerWorkRollingAverages,
     pub queue: SamplerQueueRuntimeMetrics,
 }

@@ -1,14 +1,13 @@
 use crate::core::{EvaluatorPerformanceMetrics, SamplerRuntimeMetrics};
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelWidth, PlotPoint,
-    PlotSeries, TickBreakdownSegment, history_x, key_value, key_value_panel, merge_panel_state,
-    multi_timeseries_panel, panel_spec, replace_panel, tick_breakdown_panel, with_panel_width,
+    PlotSeries, TickBreakdownSegment, history_x, key_value, key_value_panel, key_value_with_tone,
+    merge_panel_state, multi_timeseries_panel, panel_spec, replace_panel, tick_breakdown_panel,
+    with_panel_width,
 };
 use crate::stores::{EvaluatorPerformanceHistoryEntry, SamplerPerformanceHistoryEntry};
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
-
-const DEFAULT_COMPLETED_THROUGHPUT_WINDOW_MS: f64 = 5_000.0;
 
 pub fn build_evaluator_performance_response(
     scope_id: Option<String>,
@@ -141,8 +140,8 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
     vec![
         with_panel_width(
             panel_spec(
-                "sampler_runtime_overview",
-                "Sampler Overview",
+                "sampler_priority_overview",
+                "Sampler Priority Metrics",
                 PanelKind::KeyValue,
                 PanelHistoryMode::Replace,
             ),
@@ -178,7 +177,16 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         with_panel_width(
             panel_spec(
                 "sampler_runtime_efficiency",
-                "Sampler Efficiency",
+                "Sampler Work Metrics",
+                PanelKind::KeyValue,
+                PanelHistoryMode::Replace,
+            ),
+            PanelWidth::Half,
+        ),
+        with_panel_width(
+            panel_spec(
+                "sampler_runtime_details",
+                "Sampler Runner State",
                 PanelKind::KeyValue,
                 PanelHistoryMode::Replace,
             ),
@@ -446,6 +454,8 @@ fn sampler_current_panels(
 
     let target_pending_batches =
         queue_buffer_value(&entry.engine_diagnostics, "target_pending_batches");
+    let target_batch_eval_ms =
+        queue_buffer_value(&entry.engine_diagnostics, "target_batch_eval_ms");
     let pending_shortfall = match (
         target_pending_batches.as_ref(),
         runtime.queue.db_pending_batches,
@@ -455,26 +465,77 @@ fn sampler_current_panels(
         }
         _ => None,
     };
+    let total_memory_bytes = match (entry.rss_bytes, runtime.total_evaluator_rss_bytes) {
+        (Some(sampler), Some(evaluator)) => Some(sampler.saturating_add(evaluator)),
+        (Some(sampler), None) => Some(sampler),
+        (None, Some(evaluator)) => Some(evaluator),
+        (None, None) => None,
+    };
+    let evaluator_busy_ratio = runtime
+        .avg_evaluator_utilization
+        .map(|value| value.clamp(0.0, 1.0));
+    let evaluator_busy_tone = evaluator_busy_ratio.and_then(evaluator_busy_ratio_tone);
 
     vec![
+        key_value_panel(
+            "sampler_priority_overview",
+            vec![
+                key_value(
+                    "completed_samples_per_second",
+                    "Completed Samples / Sec",
+                    completed_samples_per_second,
+                ),
+                key_value(
+                    "total_memory_usage",
+                    "Total Memory Usage (Sampler + Evaluators)",
+                    total_memory_bytes.map(format_bytes_human),
+                ),
+                key_value(
+                    "sampler_memory_usage",
+                    "Sampler Memory Usage",
+                    entry.rss_bytes.map(format_bytes_human),
+                ),
+                key_value(
+                    "avg_evaluator_memory",
+                    "Avg Evaluator Memory Usage",
+                    runtime.avg_evaluator_rss_bytes.map(format_bytes_human),
+                ),
+                key_value(
+                    "active_evaluators",
+                    "Active Evaluators",
+                    runtime.active_evaluator_count,
+                ),
+                key_value_with_tone(
+                    "evaluator_busy_ratio",
+                    "Evaluator Busy Ratio",
+                    evaluator_busy_ratio.map(|value| format!("{:.1}%", value * 100.0)),
+                    evaluator_busy_tone,
+                ),
+                key_value(
+                    "eval_ms_per_batch",
+                    "Eval Ms / Batch",
+                    runtime.sampler.eval_ms_per_batch.mean,
+                ),
+                key_value(
+                    "target_batch_eval_ms",
+                    "Target Eval Ms / Batch",
+                    target_batch_eval_ms,
+                ),
+                key_value(
+                    "eval_us_per_sample",
+                    "Eval Us / Sample",
+                    runtime.sampler.eval_ms_per_sample.mean.map(ms_to_us),
+                ),
+            ],
+        ),
         tick_breakdown_panel(
             "sampler_tick_breakdown",
             sampler_tick_total_ms(&runtime),
             sampler_tick_segments(&runtime),
         ),
         key_value_panel(
-            "sampler_runtime_overview",
+            "sampler_runtime_details",
             vec![
-                key_value(
-                    "memory_usage",
-                    "Memory Usage",
-                    entry.rss_bytes.map(format_bytes_human),
-                ),
-                key_value(
-                    "completed_samples_per_second",
-                    "Completed Samples / Sec",
-                    completed_samples_per_second,
-                ),
                 key_value(
                     "sampler_tick_busy_ratio",
                     "Sampler Tick Busy Ratio",
@@ -489,21 +550,6 @@ fn sampler_current_panels(
                     "completed_fetch_utilization",
                     "Completed Fetch Utilization",
                     runtime.queue.completed_fetch_utilization,
-                ),
-                key_value(
-                    "avg_evaluator_utilization",
-                    "Avg Evaluator Utilization",
-                    runtime.avg_evaluator_utilization,
-                ),
-                key_value(
-                    "eval_ms_per_batch",
-                    "Eval Ms / Batch",
-                    runtime.sampler.eval_ms_per_batch.mean,
-                ),
-                key_value(
-                    "target_batch_eval_ms",
-                    "Target Eval Ms / Batch",
-                    queue_buffer_value(&entry.engine_diagnostics, "target_batch_eval_ms"),
                 ),
                 key_value(
                     "produced_samples_total",
@@ -524,11 +570,6 @@ fn sampler_current_panels(
                     "batch_size_current",
                     "Batch Size Current",
                     runtime.batch_size_current,
-                ),
-                key_value(
-                    "eval_ms_per_sample",
-                    "Eval Ms / Sample",
-                    runtime.sampler.eval_ms_per_sample.mean,
                 ),
             ],
         ),
@@ -777,8 +818,7 @@ fn sampler_completed_throughput_panel(
             } else {
                 runtime.ingested_samples_total
             };
-            let window_ms = throughput_window_ms(&entry.engine_diagnostics);
-            Some((history_x(entry.created_at), cumulative_samples, window_ms))
+            Some((history_x(entry.created_at), cumulative_samples))
         })
         .collect::<Vec<_>>();
     if samples.is_empty() {
@@ -786,27 +826,19 @@ fn sampler_completed_throughput_panel(
     }
     samples.sort_by(|left, right| left.0.total_cmp(&right.0));
     let instant_points = instant_throughput_points_from_cumulative(&samples);
-    let smoothed_points = smoothed_throughput_points_from_cumulative(&samples);
-    let latest_smoothed = smoothed_points.last().map(|point| point.y).unwrap_or(0.0);
+    let latest_instant = instant_points.last().map(|point| point.y).unwrap_or(0.0);
     (
         Some(multi_timeseries_panel(
             "sampler_completed_samples_per_second",
-            vec![
-                PlotSeries {
-                    id: "completed_samples_per_second_instant".to_string(),
-                    label: "Instant Throughput".to_string(),
-                    color: Some("#ea580c".to_string()),
-                    points: instant_points,
-                },
-                PlotSeries {
-                    id: "completed_samples_per_second_smoothed".to_string(),
-                    label: "Smoothed Throughput".to_string(),
-                    color: Some("#2563eb".to_string()),
-                    points: smoothed_points,
-                },
-            ],
+            vec![PlotSeries {
+                id: "completed_samples_per_second".to_string(),
+                label: "Completed Samples / Sec".to_string(),
+                color: Some("#2563eb".to_string()),
+                smooth: Some(true),
+                points: instant_points,
+            }],
         )),
-        latest_smoothed,
+        latest_instant,
     )
 }
 
@@ -856,40 +888,44 @@ fn sampler_utilization_history_panel(
                 id: "sampler_tick_busy_ratio".to_string(),
                 label: "Sampler Tick Busy Ratio".to_string(),
                 color: Some("#2563eb".to_string()),
+                smooth: Some(true),
                 points: sampler_tick_points,
             },
             PlotSeries {
                 id: "insert_task_utilization".to_string(),
                 label: "Insert Task Utilization".to_string(),
                 color: Some("#ea580c".to_string()),
+                smooth: Some(true),
                 points: insert_task_points,
             },
             PlotSeries {
                 id: "completed_fetch_utilization".to_string(),
                 label: "Completed Fetch Utilization".to_string(),
                 color: Some("#16a34a".to_string()),
+                smooth: Some(true),
                 points: completed_fetch_points,
             },
             PlotSeries {
                 id: "avg_evaluator_utilization".to_string(),
                 label: "Avg Evaluator Utilization".to_string(),
                 color: Some("#7c3aed".to_string()),
+                smooth: Some(true),
                 points: evaluator_utilization_points,
             },
         ],
     ))
 }
 
-fn instant_throughput_points_from_cumulative(samples: &[(f64, i64, f64)]) -> Vec<PlotPoint> {
+fn instant_throughput_points_from_cumulative(samples: &[(f64, i64)]) -> Vec<PlotPoint> {
     if samples.is_empty() {
         return Vec::new();
     }
     let mut points = Vec::with_capacity(samples.len());
-    for (index, (x_ms, cumulative_samples, _)) in samples.iter().copied().enumerate() {
+    for (index, (x_ms, cumulative_samples)) in samples.iter().copied().enumerate() {
         let y = if index == 0 {
             0.0
         } else {
-            let (prev_x_ms, prev_cumulative_samples, _) = samples[index - 1];
+            let (prev_x_ms, prev_cumulative_samples) = samples[index - 1];
             let elapsed_secs = (x_ms - prev_x_ms) / 1000.0;
             let delta_samples = cumulative_samples.saturating_sub(prev_cumulative_samples);
             if elapsed_secs > 0.0 {
@@ -908,50 +944,21 @@ fn instant_throughput_points_from_cumulative(samples: &[(f64, i64, f64)]) -> Vec
     points
 }
 
-fn smoothed_throughput_points_from_cumulative(samples: &[(f64, i64, f64)]) -> Vec<PlotPoint> {
-    if samples.is_empty() {
-        return Vec::new();
-    }
-    let mut baseline_idx = 0usize;
-    let mut points = Vec::with_capacity(samples.len());
-    for (index, (x_ms, cumulative_samples, window_ms)) in samples.iter().copied().enumerate() {
-        let target_x_ms = x_ms - window_ms;
-        while baseline_idx + 1 < index && samples[baseline_idx + 1].0 <= target_x_ms {
-            baseline_idx += 1;
-        }
-        let (baseline_x_ms, baseline_cumulative_samples, _) = if target_x_ms <= samples[0].0 {
-            samples[0]
-        } else {
-            samples[baseline_idx]
-        };
-        let elapsed_ms = x_ms - baseline_x_ms;
-        let delta_samples = cumulative_samples.saturating_sub(baseline_cumulative_samples);
-        let elapsed_secs = elapsed_ms / 1000.0;
-        let y = if elapsed_secs > 0.0 {
-            (delta_samples as f64 / elapsed_secs).max(0.0)
-        } else {
-            0.0
-        };
-        points.push(PlotPoint {
-            x: x_ms,
-            y,
-            y_min: None,
-            y_max: None,
-        });
-    }
-    points
-}
-
-fn throughput_window_ms(engine_diagnostics: &JsonValue) -> f64 {
-    queue_buffer_value(engine_diagnostics, "target_batch_eval_ms")
-        .and_then(|value| value.as_f64())
-        .filter(|value| value.is_finite() && *value > 0.0)
-        .map(|value| value * 3.0)
-        .unwrap_or(DEFAULT_COMPLETED_THROUGHPUT_WINDOW_MS)
-}
-
 fn queue_buffer_value(value: &JsonValue, key: &str) -> Option<JsonValue> {
     value.get("runner")?.get(key).cloned()
+}
+
+fn evaluator_busy_ratio_tone(utilization: f64) -> Option<&'static str> {
+    if !utilization.is_finite() {
+        return None;
+    }
+    if utilization < 0.5 {
+        Some("critical")
+    } else if utilization < 0.75 {
+        Some("warning")
+    } else {
+        Some("good")
+    }
 }
 
 fn decode_sampler_runtime_metrics(

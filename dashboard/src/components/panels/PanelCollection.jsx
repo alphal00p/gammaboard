@@ -594,6 +594,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
           type: "line",
           name: "y",
           data: meanData,
+          smooth: Boolean(state?.smooth),
           showSymbol: false,
           lineStyle: { width: 1.8, color: "#005f73" },
           connectNulls: false,
@@ -692,6 +693,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
         type: "line",
         name: item.label,
         data: asArray(item.points).map((point) => [Number(point?.x), Number(point?.y)]),
+        smooth: Boolean(item?.smooth),
         showSymbol: false,
         connectNulls: false,
         lineStyle: {
@@ -1826,6 +1828,14 @@ const KeyValuePanel = ({ title, state }) => (
                   fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace",
                   wordBreak: "break-word",
                   whiteSpace: "pre-wrap",
+                  color:
+                    entry.tone === "good"
+                      ? "success.main"
+                      : entry.tone === "warning"
+                        ? "warning.main"
+                        : entry.tone === "critical"
+                          ? "error.main"
+                          : "text.primary",
                 }}
               >
                 {renderStructuredValue(entry.value)}

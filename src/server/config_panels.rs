@@ -185,7 +185,12 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
                 key_value(
                     "max_batch_size",
                     "Max Batch Size",
-                    ctx.runner_params.max_batch_size,
+                    ctx.runner_params.queue.max_batch_size,
+                ),
+                key_value(
+                    "target_batch_eval_ms",
+                    "Target Batch Eval (ms)",
+                    ctx.runner_params.queue.target_batch_eval_ms,
                 ),
                 key_value(
                     "max_queue_size",

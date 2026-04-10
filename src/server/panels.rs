@@ -132,6 +132,8 @@ pub struct PlotSeries {
     pub label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smooth: Option<bool>,
     pub points: Vec<PlotPoint>,
 }
 
@@ -140,6 +142,8 @@ pub struct KeyValueEntry {
     pub key: String,
     pub label: String,
     pub value: JsonValue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,6 +168,8 @@ pub enum PanelState {
     ScalarTimeseries {
         panel_id: String,
         points: Vec<PlotPoint>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        smooth: Option<bool>,
     },
     MultiTimeseries {
         panel_id: String,
@@ -278,28 +284,42 @@ pub(crate) fn state_option<T: Serialize>(value: T, label: &str) -> PanelStateOpt
     }
 }
 
-pub(crate) fn single_point_band(
-    panel_id: &str,
-    x: f64,
-    y: f64,
-    y_min: Option<f64>,
-    y_max: Option<f64>,
-) -> PanelState {
-    scalar_timeseries_panel(panel_id, vec![PlotPoint { x, y, y_min, y_max }])
-}
-
 pub(crate) fn key_value<T: Serialize>(key: &str, label: &str, value: T) -> KeyValueEntry {
     KeyValueEntry {
         key: key.to_string(),
         label: label.to_string(),
         value: serde_json::to_value(value).unwrap_or(JsonValue::Null),
+        tone: None,
+    }
+}
+
+pub(crate) fn key_value_with_tone<T: Serialize>(
+    key: &str,
+    label: &str,
+    value: T,
+    tone: Option<&str>,
+) -> KeyValueEntry {
+    KeyValueEntry {
+        key: key.to_string(),
+        label: label.to_string(),
+        value: serde_json::to_value(value).unwrap_or(JsonValue::Null),
+        tone: tone.map(str::to_string),
     }
 }
 
 pub(crate) fn scalar_timeseries_panel(panel_id: &str, points: Vec<PlotPoint>) -> PanelState {
+    scalar_timeseries_panel_with_smoothing(panel_id, points, None)
+}
+
+pub(crate) fn scalar_timeseries_panel_with_smoothing(
+    panel_id: &str,
+    points: Vec<PlotPoint>,
+    smooth: Option<bool>,
+) -> PanelState {
     PanelState::ScalarTimeseries {
         panel_id: panel_id.to_string(),
         points,
+        smooth,
     }
 }
 

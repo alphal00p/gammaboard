@@ -2,6 +2,7 @@ use crate::core::{
     BatchQueueCounts, CompletedBatch, InsertBatchesMetrics, SamplerQueueRollingAverages,
     SamplerQueueRuntimeMetrics, SamplerWorkerStore, StoreError, next_batch_ids,
 };
+use crate::runners::rolling_metric::RollingMetric;
 use crate::runners::window_metric::WindowMetric;
 use crate::sampling::LatentBatch;
 use serde::{Deserialize, Serialize};
@@ -12,10 +13,15 @@ use tokio::task::JoinHandle;
 const RECLAIM_INTERVAL: Duration = Duration::from_secs(1);
 const COMPLETED_CLEANUP_INTERVAL: Duration = Duration::from_secs(1);
 const COMPLETED_CLEANUP_BATCH_LIMIT: usize = 2048;
+const MIN_BATCH_SIZE: usize = 16;
+const MAX_BATCH_SIZE_UP_FACTOR: f64 = 4.0;
+const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.25;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerQueueConfig {
     pub queue_buffer: f64,
+    pub target_batch_eval_ms: f64,
+    pub max_batch_size: usize,
     pub local_pending_buffer_multiplier: f64,
     pub max_queue_size: usize,
     pub max_batches_per_tick: usize,
@@ -29,6 +35,8 @@ pub struct SamplerQueueConfig {
 pub struct SamplerQueueCheckpoint {
     #[serde(default)]
     pub last_completed_batch_id: Option<i64>,
+    #[serde(default)]
+    pub batch_size_current: Option<usize>,
 }
 
 pub struct SamplerQueue<S> {
@@ -43,11 +51,14 @@ pub struct SamplerQueue<S> {
     pending_insert_tasks: Vec<PendingInsertTask>,
     insert_pump_running: bool,
     pending_processed_fetch: Option<PendingProcessedFetchTask>,
+    pending_completed_cleanup: Option<PendingCompletedCleanupTask>,
     cached_db_queue_counts: Option<BatchQueueCounts>,
     cached_tick_queue_counts: Option<BatchQueueCounts>,
     cached_active_evaluator_count: Option<usize>,
     last_reclaim_at: Instant,
     last_completed_cleanup_at: Instant,
+    batch_size_current: usize,
+    eval_ms_per_sample: RollingMetric,
     metrics: QueueMetricsState,
     utilization: QueueUtilizationState,
 }
@@ -63,6 +74,11 @@ struct PendingInsertTask {
 struct PendingProcessedFetchTask {
     started_at: Instant,
     handle: JoinHandle<Result<Vec<CompletedBatch>, StoreError>>,
+}
+
+struct PendingCompletedCleanupTask {
+    started_at: Instant,
+    handle: JoinHandle<Result<u64, StoreError>>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -133,8 +149,14 @@ where
         requires_training_values: bool,
         config: SamplerQueueConfig,
         checkpoint: SamplerQueueCheckpoint,
+        initial_batch_size: usize,
     ) -> Self {
         let now = Instant::now();
+        let max_batch_size = config.max_batch_size.max(MIN_BATCH_SIZE);
+        let batch_size_current = checkpoint
+            .batch_size_current
+            .unwrap_or(initial_batch_size)
+            .clamp(MIN_BATCH_SIZE, max_batch_size);
         Self {
             run_id,
             task_id,
@@ -147,11 +169,14 @@ where
             pending_insert_tasks: Vec::new(),
             insert_pump_running: false,
             pending_processed_fetch: None,
+            pending_completed_cleanup: None,
             cached_db_queue_counts: None,
             cached_tick_queue_counts: None,
             cached_active_evaluator_count: None,
             last_reclaim_at: now.checked_sub(RECLAIM_INTERVAL).unwrap_or(now),
             last_completed_cleanup_at: now.checked_sub(COMPLETED_CLEANUP_INTERVAL).unwrap_or(now),
+            batch_size_current,
+            eval_ms_per_sample: RollingMetric::default(),
             metrics: QueueMetricsState::default(),
             utilization: QueueUtilizationState::new(now),
         }
@@ -162,7 +187,23 @@ where
     }
 
     pub fn checkpoint(&self) -> SamplerQueueCheckpoint {
-        self.checkpoint.clone()
+        SamplerQueueCheckpoint {
+            last_completed_batch_id: self.checkpoint.last_completed_batch_id,
+            batch_size_current: Some(self.batch_size_current),
+        }
+    }
+
+    pub fn current_batch_size(&self) -> usize {
+        self.batch_size_current
+    }
+
+    pub fn observe_completed_eval_batch(&mut self, batch_size: usize, total_eval_time_ms: f64) {
+        if batch_size == 0 || !total_eval_time_ms.is_finite() || total_eval_time_ms <= 0.0 {
+            return;
+        }
+        self.eval_ms_per_sample
+            .observe(total_eval_time_ms / batch_size as f64);
+        self.tune_batch_size();
     }
 
     pub fn runtime_metrics(&self) -> SamplerQueueRuntimeMetrics {
@@ -294,7 +335,8 @@ where
 
     pub async fn tick(&mut self) -> Result<QueueTickResult, StoreError> {
         let completed = self.get_processed().await?;
-        let completed_cleanup_duration = self.cleanup_consumed_completed_batches_if_due().await?;
+        let completed_cleanup_duration = self.drain_finished_completed_cleanup().await?;
+        self.ensure_completed_cleanup_if_due();
         let reclaim_duration = self.reclaim_abandoned_batches_if_due().await?;
         let queue_snapshot_started = Instant::now();
         let queue_counts = self.queue_counts().await?;
@@ -312,6 +354,9 @@ where
     pub async fn force_cleanup_consumed_completed_batches(
         &mut self,
     ) -> Result<Option<Duration>, StoreError> {
+        if let Some(task) = self.pending_completed_cleanup.take() {
+            let _ = self.consume_completed_cleanup_task(task).await?;
+        }
         let Some(_) = self.last_completed_batch_id() else {
             return Ok(None);
         };
@@ -332,7 +377,6 @@ where
         &mut self,
         max_producable: Option<usize>,
         queue_counts: BatchQueueCounts,
-        batch_size_current: usize,
     ) -> Result<Vec<usize>, StoreError> {
         let active_evaluator_count = self
             .store
@@ -345,15 +389,11 @@ where
             max_producable,
             queue_counts,
             active_evaluator_count,
-            batch_size_current,
+            self.batch_size_current,
         ))
     }
 
-    pub fn validate_batch_plan(
-        &self,
-        batch_plan: &[usize],
-        max_batch_size: usize,
-    ) -> Result<(), StoreError> {
+    pub fn validate_batch_plan(&self, batch_plan: &[usize]) -> Result<(), StoreError> {
         if batch_plan.len() > self.config.max_batches_per_tick {
             return Err(StoreError::store(format!(
                 "batch plan exceeded max_batches_per_tick: planned={} max_batches_per_tick={}",
@@ -362,11 +402,12 @@ where
             )));
         }
         if let Some(max_planned_batch_size) = batch_plan.iter().copied().max()
-            && max_planned_batch_size > max_batch_size
+            && max_planned_batch_size > self.effective_max_batch_size()
         {
             return Err(StoreError::store(format!(
                 "batch plan exceeded max_batch_size: planned={} max_batch_size={}",
-                max_planned_batch_size, max_batch_size
+                max_planned_batch_size,
+                self.effective_max_batch_size()
             )));
         }
         Ok(())
@@ -424,10 +465,10 @@ where
     }
 
     pub(crate) fn local_work_drained(&self) -> bool {
-        self.pending_insert.is_empty()
+        self.local_insert_work_drained()
             && self.ready_processed.is_empty()
-            && self.pending_insert_tasks.is_empty()
             && self.pending_processed_fetch.is_none()
+            && self.pending_completed_cleanup.is_none()
             && !self.insert_pump_running
     }
 
@@ -459,7 +500,7 @@ where
         self.drain_finished_processed_fetch().await?;
         self.ensure_processed_prefetch();
 
-        Ok(self.ready_processed.drain(..).collect::<Vec<_>>())
+        Ok(self.take_ready_processed())
     }
 
     pub(crate) async fn get_processed_blocking(
@@ -477,7 +518,7 @@ where
             return Ok(Vec::new());
         };
         self.consume_processed_fetch_task(task).await?;
-        Ok(self.ready_processed.drain(..).collect::<Vec<_>>())
+        Ok(self.take_ready_processed())
     }
 
     pub fn get_sample(
@@ -559,6 +600,7 @@ where
         if let Some(last) = processed.last() {
             self.checkpoint.last_completed_batch_id = Some(last.batch_id);
         }
+        self.ensure_completed_cleanup_if_due();
     }
 
     pub(crate) fn queue_counts_with_local_buffer(
@@ -584,21 +626,61 @@ where
         Ok(Some(reclaim_started.elapsed()))
     }
 
-    async fn cleanup_consumed_completed_batches_if_due(
-        &mut self,
-    ) -> Result<Option<Duration>, StoreError> {
-        let Some(_) = self.last_completed_batch_id() else {
-            return Ok(None);
+    fn ensure_completed_cleanup_if_due(&mut self) {
+        if self.pending_completed_cleanup.is_some() {
+            return;
+        }
+        let Some(up_to_batch_id) = self.last_completed_batch_id() else {
+            return;
         };
         if self.last_completed_cleanup_at.elapsed() < COMPLETED_CLEANUP_INTERVAL {
+            return;
+        }
+        let store = self.store.clone();
+        let run_id = self.run_id;
+        self.pending_completed_cleanup = Some(PendingCompletedCleanupTask {
+            started_at: Instant::now(),
+            handle: tokio::spawn(async move {
+                store
+                    .cleanup_consumed_completed_batches(
+                        run_id,
+                        up_to_batch_id,
+                        COMPLETED_CLEANUP_BATCH_LIMIT,
+                    )
+                    .await
+            }),
+        });
+    }
+
+    async fn drain_finished_completed_cleanup(&mut self) -> Result<Option<Duration>, StoreError> {
+        let Some(task) = self.pending_completed_cleanup.as_ref() else {
+            return Ok(None);
+        };
+        if !task.handle.is_finished() {
             return Ok(None);
         }
-        let cleanup_started = Instant::now();
-        let _ = self
-            .cleanup_consumed_completed_batches(COMPLETED_CLEANUP_BATCH_LIMIT)
-            .await?;
-        self.last_completed_cleanup_at = Instant::now();
-        Ok(Some(cleanup_started.elapsed()))
+        let task = self
+            .pending_completed_cleanup
+            .take()
+            .expect("checked pending completed cleanup");
+        self.consume_completed_cleanup_task(task).await.map(Some)
+    }
+
+    async fn consume_completed_cleanup_task(
+        &mut self,
+        task: PendingCompletedCleanupTask,
+    ) -> Result<Duration, StoreError> {
+        let duration = task.started_at.elapsed();
+        match task.handle.await {
+            Ok(Ok(_deleted_rows)) => {
+                self.last_completed_cleanup_at = Instant::now();
+                Ok(duration)
+            }
+            Ok(Err(err)) => Err(err),
+            Err(err) => Err(StoreError::store(format!(
+                "sampler queue completed cleanup task failed: {err}"
+            ))),
+        }
     }
 
     fn ensure_processed_prefetch(&mut self) {
@@ -609,7 +691,7 @@ where
         self.account_utilization(Instant::now());
         let store = self.store.clone();
         let run_id = self.run_id;
-        let fetch_limit = self.config.completed_batch_fetch_limit;
+        let fetch_limit = self.config.completed_batch_fetch_limit.max(1);
         let strict_batch_ordering = self.config.strict_batch_ordering;
         let after_batch_id = self.checkpoint.last_completed_batch_id;
         self.pending_processed_fetch = Some(PendingProcessedFetchTask {
@@ -673,11 +755,7 @@ where
             });
         }
 
-        if self.pending_insert.is_empty() && self.pending_insert_tasks.is_empty() {
-            self.insert_pump_running = false;
-        } else if !self.pending_insert.is_empty() {
-            self.insert_pump_running = true;
-        }
+        self.refresh_insert_pump_state();
     }
 
     async fn drain_finished_insert(&mut self) -> Result<(), StoreError> {
@@ -693,9 +771,7 @@ where
             self.consume_insert_task(task).await?;
         }
 
-        if self.pending_insert.is_empty() && self.pending_insert_tasks.is_empty() {
-            self.insert_pump_running = false;
-        }
+        self.refresh_insert_pump_state();
         Ok(())
     }
 
@@ -810,6 +886,40 @@ where
             }
         }
         self.utilization.last_accounted_at = now;
+    }
+
+    fn tune_batch_size(&mut self) {
+        let Some(eval_ms_per_sample) = self.eval_ms_per_sample.value() else {
+            return;
+        };
+        if self.config.target_batch_eval_ms <= 0.0 || !self.config.target_batch_eval_ms.is_finite()
+        {
+            return;
+        }
+        let current_eval_batch_ms = eval_ms_per_sample * self.batch_size_current as f64;
+        if current_eval_batch_ms <= 0.0 || !current_eval_batch_ms.is_finite() {
+            return;
+        }
+        let raw_ratio = self.config.target_batch_eval_ms / current_eval_batch_ms;
+        let ratio = raw_ratio.clamp(MAX_BATCH_SIZE_DOWN_FACTOR, MAX_BATCH_SIZE_UP_FACTOR);
+        let next = ((self.batch_size_current as f64) * ratio).round() as usize;
+        self.batch_size_current = next.clamp(MIN_BATCH_SIZE, self.effective_max_batch_size());
+    }
+
+    fn local_insert_work_drained(&self) -> bool {
+        self.pending_insert.is_empty() && self.pending_insert_tasks.is_empty()
+    }
+
+    fn refresh_insert_pump_state(&mut self) {
+        self.insert_pump_running = !self.local_insert_work_drained();
+    }
+
+    fn take_ready_processed(&mut self) -> Vec<CompletedBatch> {
+        self.ready_processed.drain(..).collect::<Vec<_>>()
+    }
+
+    fn effective_max_batch_size(&self) -> usize {
+        self.config.max_batch_size.max(MIN_BATCH_SIZE)
     }
 }
 
@@ -1324,6 +1434,8 @@ mod tests {
             true,
             SamplerQueueConfig {
                 queue_buffer: 1.0,
+                target_batch_eval_ms: 500.0,
+                max_batch_size: 4096,
                 local_pending_buffer_multiplier: 1.0,
                 max_queue_size: 16,
                 max_batches_per_tick: 16,
@@ -1333,6 +1445,7 @@ mod tests {
                 strict_batch_ordering: true,
             },
             SamplerQueueCheckpoint::default(),
+            128,
         );
 
         queue.ingest(vec![

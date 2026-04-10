@@ -242,7 +242,10 @@ fn panel_states(
                 key_value(
                     "max_batch_size",
                     "Max Batch Size",
-                    run_spec.sampler_aggregator_runner_params.max_batch_size,
+                    run_spec
+                        .sampler_aggregator_runner_params
+                        .queue
+                        .max_batch_size,
                 ),
                 key_value(
                     "current_batch_eval_ms",
@@ -254,6 +257,7 @@ fn panel_states(
                     "Target Batch Eval (ms)",
                     run_spec
                         .sampler_aggregator_runner_params
+                        .queue
                         .target_batch_eval_ms,
                 ),
             ],
