@@ -7,11 +7,12 @@ discrete_dims = 0
 
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 2000
+min_tick_time_ms = 50
 db_pool_size = 2
 
 [sampler_aggregator_runner_params]
 performance_snapshot_interval_ms = 2000
-min_tick_time_ms = 10
+min_tick_time_ms = 50
 frontend_sync_interval_ms = 2000
 target_batch_eval_ms = 500.0
 max_batch_size = 100_000
