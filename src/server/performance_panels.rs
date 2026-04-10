@@ -920,7 +920,7 @@ fn throughput_window_ms(engine_diagnostics: &JsonValue) -> f64 {
     queue_buffer_value(engine_diagnostics, "target_batch_eval_ms")
         .and_then(|value| value.as_f64())
         .filter(|value| value.is_finite() && *value > 0.0)
-        .map(|value| value * 2.0)
+        .map(|value| value * 3.0)
         .unwrap_or(DEFAULT_COMPLETED_THROUGHPUT_WINDOW_MS)
 }
 

@@ -54,6 +54,8 @@ pub struct SamplerQueue<S> {
 
 struct PendingInsertTask {
     batch_count: usize,
+    local_pending_at_start: usize,
+    db_pending_at_start: Option<i64>,
     started_at: Instant,
     handle: JoinHandle<Result<InsertBatchesMetrics, StoreError>>,
 }
@@ -427,14 +429,26 @@ where
             && !self.insert_pump_running
     }
 
-    fn observe_insert_bundle_start_state(&mut self) {
+    fn snapshot_insert_bundle_start_state(&self) -> (usize, Option<i64>) {
+        (
+            self.pending_insert.len(),
+            self.cached_db_queue_counts
+                .map(|db_counts| db_counts.pending.max(0)),
+        )
+    }
+
+    fn observe_insert_bundle_start_state(
+        &mut self,
+        local_pending_at_start: usize,
+        db_pending_at_start: Option<i64>,
+    ) {
         self.metrics
             .insert_bundle_local_pending_at_start
-            .observe(self.pending_insert.len() as f64);
-        if let Some(db_counts) = self.cached_db_queue_counts {
+            .observe(local_pending_at_start as f64);
+        if let Some(db_pending) = db_pending_at_start {
             self.metrics
                 .insert_bundle_db_pending_at_start
-                .observe(db_counts.pending.max(0) as f64);
+                .observe(db_pending as f64);
         }
     }
 
@@ -626,7 +640,8 @@ where
             && !self.pending_insert.is_empty()
         {
             self.account_utilization(Instant::now());
-            self.observe_insert_bundle_start_state();
+            let (local_pending_at_start, db_pending_at_start) =
+                self.snapshot_insert_bundle_start_state();
 
             let bundle_size = self.config.max_insert_bundle_size.max(1);
             let batch_count = self.pending_insert.len().min(bundle_size);
@@ -638,6 +653,8 @@ where
             let requires_training_values = self.requires_training_values;
             self.pending_insert_tasks.push(PendingInsertTask {
                 batch_count,
+                local_pending_at_start,
+                db_pending_at_start,
                 started_at: Instant::now(),
                 handle: tokio::spawn(async move {
                     let outcome = store
@@ -691,6 +708,10 @@ where
         };
         match result {
             Ok(metrics) => {
+                self.observe_insert_bundle_start_state(
+                    task.local_pending_at_start,
+                    task.db_pending_at_start,
+                );
                 observe_duration_ms(&mut self.metrics.insert_bundle_ms, duration);
                 if task.batch_count > 0 {
                     observe_duration_ms(
