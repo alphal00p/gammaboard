@@ -56,7 +56,10 @@ impl RollingMetric {
 impl From<&RollingMetric> for RollingMetricSnapshot {
     fn from(metric: &RollingMetric) -> Self {
         Self {
+            count: metric.observations,
             mean: metric.value(),
+            total: None,
+            max: None,
             std_dev: metric.std_dev(),
         }
     }

@@ -91,6 +91,7 @@ struct QueueMetricsState {
     fetch_completed_batches: WindowMetric,
     fetch_completed_prefetch_fill_ratio: WindowMetric,
     insert_bundle_ms: WindowMetric,
+    insert_bundle_batches: WindowMetric,
     insert_bundle_ms_per_batch: WindowMetric,
     insert_bundle_serialize_ms: WindowMetric,
     insert_bundle_payload_bytes: WindowMetric,
@@ -192,6 +193,7 @@ where
                 .fetch_completed_prefetch_fill_ratio
                 .snapshot_and_reset(),
             insert_bundle_ms: self.metrics.insert_bundle_ms.snapshot_and_reset(),
+            insert_bundle_batches: self.metrics.insert_bundle_batches.snapshot_and_reset(),
             insert_bundle_ms_per_batch: self
                 .metrics
                 .insert_bundle_ms_per_batch
@@ -713,6 +715,9 @@ where
                     task.db_pending_at_start,
                 );
                 observe_duration_ms(&mut self.metrics.insert_bundle_ms, duration);
+                self.metrics
+                    .insert_bundle_batches
+                    .observe(task.batch_count as f64);
                 if task.batch_count > 0 {
                     observe_duration_ms(
                         &mut self.metrics.insert_bundle_ms_per_batch,

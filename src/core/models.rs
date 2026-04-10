@@ -185,7 +185,13 @@ pub struct SamplerPerformanceMetrics {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RollingMetricSnapshot {
+    #[serde(default)]
+    pub count: u64,
     pub mean: Option<f64>,
+    #[serde(default)]
+    pub total: Option<f64>,
+    #[serde(default)]
+    pub max: Option<f64>,
     pub std_dev: f64,
 }
 
@@ -229,6 +235,7 @@ pub struct SamplerQueueRollingAverages {
     pub fetch_completed_batches: RollingMetricSnapshot,
     pub fetch_completed_prefetch_fill_ratio: RollingMetricSnapshot,
     pub insert_bundle_ms: RollingMetricSnapshot,
+    pub insert_bundle_batches: RollingMetricSnapshot,
     pub insert_bundle_ms_per_batch: RollingMetricSnapshot,
     pub insert_bundle_serialize_ms: RollingMetricSnapshot,
     pub insert_bundle_payload_bytes: RollingMetricSnapshot,
@@ -247,6 +254,7 @@ impl Default for SamplerQueueRollingAverages {
             fetch_completed_batches: RollingMetricSnapshot::default(),
             fetch_completed_prefetch_fill_ratio: RollingMetricSnapshot::default(),
             insert_bundle_ms: RollingMetricSnapshot::default(),
+            insert_bundle_batches: RollingMetricSnapshot::default(),
             insert_bundle_ms_per_batch: RollingMetricSnapshot::default(),
             insert_bundle_serialize_ms: RollingMetricSnapshot::default(),
             insert_bundle_payload_bytes: RollingMetricSnapshot::default(),

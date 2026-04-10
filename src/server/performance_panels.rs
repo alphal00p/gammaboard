@@ -536,43 +536,70 @@ fn sampler_current_panels(
             "sampler_runtime_efficiency",
             vec![
                 key_value(
+                    "produce_events",
+                    "Produce Events",
+                    runtime.sampler.produce_ms_per_sample.count,
+                ),
+                key_value(
+                    "training_ingest_batches",
+                    "Training Ingest Batches",
+                    runtime.sampler.training_ingest_ms_per_sample.count,
+                ),
+                key_value(
+                    "merge_passes",
+                    "Merge Passes",
+                    runtime.sampler.completed_merge_ingest_ms.count,
+                ),
+                key_value(
+                    "frontend_sync_flushes",
+                    "Frontend Sync Flushes",
+                    runtime.sampler.persist_observable_ms.count,
+                ),
+                key_value(
+                    "cleanup_passes",
+                    "Cleanup Passes",
+                    runtime.sampler.completed_delete_ms.count,
+                ),
+                key_value(
+                    "reclaim_passes",
+                    "Reclaim Passes",
+                    runtime.sampler.reclaim_ms.count,
+                ),
+                key_value(
                     "training_ingest_ms_per_sample",
-                    "Training Ingest Ms / Sample",
-                    event_metric_value(
-                        runtime.sampler.training_ingest_ms_per_sample.mean,
+                    "Avg Training Ingest Ms / Sample",
+                    window_mean_value(
+                        &runtime.sampler.training_ingest_ms_per_sample,
                         "no training ingest",
                     ),
                 ),
                 key_value(
                     "produce_ms_per_sample",
-                    "Produce Ms / Sample",
-                    event_metric_value(runtime.sampler.produce_ms_per_sample.mean, "no batches"),
+                    "Avg Produce Ms / Sample",
+                    window_mean_value(&runtime.sampler.produce_ms_per_sample, "no batches"),
                 ),
                 key_value(
                     "merge_completed_batches_ms",
-                    "Merge Completed Batches",
-                    event_metric_value(
-                        runtime.sampler.completed_merge_ingest_ms.mean,
+                    "Avg Merge Completed Batches Ms",
+                    window_mean_value(
+                        &runtime.sampler.completed_merge_ingest_ms,
                         "no completed merges",
                     ),
                 ),
                 key_value(
                     "persist_observable_ms",
-                    "Persist Observable (frontend sync)",
-                    event_metric_value(
-                        runtime.sampler.persist_observable_ms.mean,
-                        "no frontend sync",
-                    ),
+                    "Avg Persist Observable Ms",
+                    window_mean_value(&runtime.sampler.persist_observable_ms, "no frontend sync"),
                 ),
                 key_value(
                     "completed_delete_ms",
-                    "Cleanup Consumed Batches",
-                    event_metric_value(runtime.sampler.completed_delete_ms.mean, "no cleanup"),
+                    "Avg Cleanup Consumed Batches Ms",
+                    window_mean_value(&runtime.sampler.completed_delete_ms, "no cleanup"),
                 ),
                 key_value(
                     "reclaim_ms",
-                    "Reclaim Abandoned Batches",
-                    event_metric_value(runtime.sampler.reclaim_ms.mean, "no reclaim"),
+                    "Avg Reclaim Abandoned Batches Ms",
+                    window_mean_value(&runtime.sampler.reclaim_ms, "no reclaim"),
                 ),
             ],
         ),
@@ -625,114 +652,113 @@ fn sampler_current_panels(
             "sampler_queue_efficiency",
             vec![
                 key_value(
+                    "completed_fetches",
+                    "Completed Fetches",
+                    runtime.queue.rolling.fetch_completed_ms.count,
+                ),
+                key_value(
+                    "completed_batches_fetched",
+                    "Completed Batches Fetched",
+                    window_total_value(&runtime.queue.rolling.fetch_completed_batches),
+                ),
+                key_value(
                     "completed_batch_fetch_ms",
-                    "Completed Batch Fetch",
-                    event_metric_value(runtime.queue.rolling.fetch_completed_ms.mean, "no fetches"),
+                    "Avg Completed Batch Fetch Ms",
+                    window_mean_value(&runtime.queue.rolling.fetch_completed_ms, "no fetches"),
                 ),
                 key_value(
                     "fetch_completed_batches",
-                    "Completed Batches / Fetch",
-                    event_metric_value(
-                        runtime.queue.rolling.fetch_completed_batches.mean,
-                        "no fetches",
-                    ),
+                    "Avg Completed Batches / Fetch",
+                    window_mean_value(&runtime.queue.rolling.fetch_completed_batches, "no fetches"),
                 ),
                 key_value(
                     "fetch_completed_prefetch_fill_ratio",
-                    "Completed Prefetch Fill Ratio",
-                    event_metric_value(
-                        runtime
-                            .queue
-                            .rolling
-                            .fetch_completed_prefetch_fill_ratio
-                            .mean,
+                    "Avg Completed Prefetch Fill Ratio",
+                    window_mean_value(
+                        &runtime.queue.rolling.fetch_completed_prefetch_fill_ratio,
                         "no fetches",
                     ),
                 ),
                 key_value(
+                    "inserted_bundles",
+                    "Inserted Bundles",
+                    runtime.queue.rolling.insert_bundle_ms.count,
+                ),
+                key_value(
+                    "inserted_batches",
+                    "Inserted Batches",
+                    window_total_value(&runtime.queue.rolling.insert_bundle_batches),
+                ),
+                key_value(
+                    "inserted_payload_bytes",
+                    "Inserted Payload Bytes",
+                    window_total_value(&runtime.queue.rolling.insert_bundle_payload_bytes),
+                ),
+                key_value(
                     "insert_bundle_ms",
-                    "Insert Bundle",
-                    event_metric_value(runtime.queue.rolling.insert_bundle_ms.mean, "no inserts"),
+                    "Avg Insert Bundle Ms",
+                    window_mean_value(&runtime.queue.rolling.insert_bundle_ms, "no inserts"),
                 ),
                 key_value(
                     "insert_bundle_ms_per_batch",
-                    "Insert / Batch",
-                    event_metric_value(
-                        runtime.queue.rolling.insert_bundle_ms_per_batch.mean,
+                    "Avg Insert Ms / Batch",
+                    window_mean_value(
+                        &runtime.queue.rolling.insert_bundle_ms_per_batch,
                         "no inserts",
                     ),
                 ),
                 key_value(
                     "insert_bundle_local_pending_at_start",
-                    "Local Pending At Insert Start",
-                    event_metric_value(
-                        runtime
-                            .queue
-                            .rolling
-                            .insert_bundle_local_pending_at_start
-                            .mean,
+                    "Avg Local Pending At Insert Start",
+                    window_mean_value(
+                        &runtime.queue.rolling.insert_bundle_local_pending_at_start,
                         "no inserts",
                     ),
                 ),
                 key_value(
                     "insert_bundle_db_pending_at_start",
-                    "DB Pending At Insert Start",
-                    event_metric_value(
-                        runtime.queue.rolling.insert_bundle_db_pending_at_start.mean,
+                    "Avg DB Pending At Insert Start",
+                    window_mean_value(
+                        &runtime.queue.rolling.insert_bundle_db_pending_at_start,
                         "no inserts",
                     ),
                 ),
                 key_value(
                     "insert_bundle_serialize_ms",
-                    "Insert Serialize",
-                    event_metric_value(
-                        runtime.queue.rolling.insert_bundle_serialize_ms.mean,
-                        "no inserts",
-                    ),
-                ),
-                key_value(
-                    "insert_bundle_payload_bytes",
-                    "Insert Payload Bytes",
-                    event_metric_value(
-                        runtime.queue.rolling.insert_bundle_payload_bytes.mean,
+                    "Avg Insert Serialize Ms",
+                    window_mean_value(
+                        &runtime.queue.rolling.insert_bundle_serialize_ms,
                         "no inserts",
                     ),
                 ),
                 key_value(
                     "insert_bundle_payload_bytes_per_batch",
-                    "Insert Payload Bytes / Batch",
-                    event_metric_value(
-                        runtime
-                            .queue
-                            .rolling
-                            .insert_bundle_payload_bytes_per_batch
-                            .mean,
+                    "Avg Insert Payload Bytes / Batch",
+                    window_mean_value(
+                        &runtime.queue.rolling.insert_bundle_payload_bytes_per_batch,
                         "no inserts",
                     ),
                 ),
                 key_value(
                     "insert_bundle_db_batches_ms",
-                    "Insert Batches SQL",
-                    event_metric_value(
-                        runtime.queue.rolling.insert_bundle_db_batches_ms.mean,
+                    "Avg Insert Batches SQL Ms",
+                    window_mean_value(
+                        &runtime.queue.rolling.insert_bundle_db_batches_ms,
                         "no inserts",
                     ),
                 ),
                 key_value(
                     "insert_bundle_db_inputs_ms",
-                    "Insert Inputs SQL",
-                    event_metric_value(
-                        runtime.queue.rolling.insert_bundle_db_inputs_ms.mean,
+                    "Avg Insert Inputs SQL Ms",
+                    window_mean_value(
+                        &runtime.queue.rolling.insert_bundle_db_inputs_ms,
                         "no inserts",
                     ),
                 ),
                 key_value(
                     "insert_bundle_commit_ms",
-                    "Insert Commit",
-                    event_metric_value(
-                        runtime.queue.rolling.insert_bundle_commit_ms.mean,
-                        "no inserts",
-                    ),
+                    "Avg Insert Commit Ms",
+                    window_mean_value(&runtime.queue.rolling.insert_bundle_commit_ms, "no inserts"),
                 ),
             ],
         ),
@@ -934,11 +960,19 @@ fn decode_sampler_runtime_metrics(
     serde_json::from_value(entry.runtime_metrics.clone()).ok()
 }
 
-fn event_metric_value(value: Option<f64>, empty_label: &str) -> JsonValue {
-    match value {
-        Some(value) => JsonValue::from(value),
-        None => JsonValue::String(empty_label.to_string()),
+fn window_mean_value(
+    snapshot: &crate::core::RollingMetricSnapshot,
+    empty_label: &str,
+) -> JsonValue {
+    if snapshot.count == 0 {
+        JsonValue::String(empty_label.to_string())
+    } else {
+        serde_json::to_value(snapshot.mean).unwrap_or(JsonValue::Null)
     }
+}
+
+fn window_total_value(snapshot: &crate::core::RollingMetricSnapshot) -> JsonValue {
+    JsonValue::from(snapshot.total.unwrap_or(0.0))
 }
 
 fn ms_to_us(value_ms: f64) -> f64 {
