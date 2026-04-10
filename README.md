@@ -261,6 +261,7 @@ For `evaluator.kind = "python_scalar"`, configure:
 - `class`: class name to instantiate (must expose `eval(xs)` and `input_dim`)
 - `input_dim`: expected continuous dimension for homogeneous batches
 - optional `init_args = { ... }`: constructor/config payload forwarded to python init
+- Optional ABCs are provided in `python_api.abc` (`ScalarBatchIntegrand`, `ComplexBatchIntegrand`) for type-checkable interfaces.
 
 Python construction semantics:
 - if the class defines `from_config(input_dim=..., init_args=...)`, that is called
@@ -269,9 +270,10 @@ Python construction semantics:
 For `sampler_aggregator.kind = "python_homogeneous_monte_carlo"`, configure:
 - `flake_ref`: nix flake reference that resolves to a runtime package
 - `module`: python module name to import
-- `class`: python class implementing sampler methods (`sample_plan`, `produce_latent_batch`, `ingest_training_weights`, `snapshot`)
+- `class`: python class implementing sampler methods (`sample_plan`, `training_samples_remaining`, `produce_latent_batch`, `ingest_training_weights`, `snapshot`)
 - `input_dim`: expected homogeneous continuous dimension (domain must be `continuous(input_dim)` with no discrete axes)
 - optional `init_args = { ... }`: constructor/config payload forwarded to python init
+- Optional sampler ABC is provided in `python_api.abc` (`SamplerAggregator`) for a typed contract.
 
 Python sampler construction semantics:
 - restore path: `from_snapshot(snapshot=..., input_dim=..., init_args=...)` when present

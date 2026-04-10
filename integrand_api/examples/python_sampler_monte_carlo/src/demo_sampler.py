@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+if TYPE_CHECKING:
+    from python_api.abc import SamplerAggregator as _SamplerAggregator
+else:
+    class _SamplerAggregator:
+        pass
 
 @dataclass
-class BasicMonteCarloSampler:
+class BasicMonteCarloSampler(_SamplerAggregator):
     input_dim: int
     training_target_samples: int = 0
     trained_samples: int = 0

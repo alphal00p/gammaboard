@@ -217,6 +217,7 @@ pub struct SamplerWorkRollingAverages {
     pub eval_ms_per_sample: RollingMetricSnapshot,
     pub eval_ms_per_batch: RollingMetricSnapshot,
     pub training_ingest_ms_per_sample: RollingMetricSnapshot,
+    pub completed_training_ingest_ms: RollingMetricSnapshot,
     pub produce_ms_per_sample: RollingMetricSnapshot,
     pub reclaim_ms: RollingMetricSnapshot,
     pub queue_counts_ms: RollingMetricSnapshot,

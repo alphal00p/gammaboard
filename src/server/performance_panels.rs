@@ -587,6 +587,11 @@ fn sampler_current_panels(
                     runtime.sampler.training_ingest_ms_per_sample.count,
                 ),
                 key_value(
+                    "training_ingest_passes",
+                    "Training Ingest Passes",
+                    runtime.sampler.completed_training_ingest_ms.count,
+                ),
+                key_value(
                     "merge_passes",
                     "Merge Passes",
                     runtime.sampler.completed_merge_ingest_ms.count,
@@ -620,8 +625,16 @@ fn sampler_current_panels(
                     window_mean_value(&runtime.sampler.produce_ms_per_sample, "no batches"),
                 ),
                 key_value(
+                    "completed_training_ingest_ms",
+                    "Avg Ingest Training Weights Ms",
+                    window_mean_value(
+                        &runtime.sampler.completed_training_ingest_ms,
+                        "no training ingest",
+                    ),
+                ),
+                key_value(
                     "merge_completed_batches_ms",
-                    "Avg Merge Completed Batches Ms",
+                    "Avg Merge Completed Observables Ms",
                     window_mean_value(
                         &runtime.sampler.completed_merge_ingest_ms,
                         "no completed merges",
@@ -1040,8 +1053,18 @@ fn evaluator_tick_total_ms(metrics: &EvaluatorPerformanceMetrics) -> f64 {
 fn sampler_tick_segments(runtime: &SamplerRuntimeMetrics) -> Vec<TickBreakdownSegment> {
     [
         (
+            "completed_training_ingest",
+            "Ingest Training Weights (sync)",
+            runtime
+                .sampler
+                .completed_training_ingest_ms
+                .mean
+                .unwrap_or(0.0),
+            "#6d597a",
+        ),
+        (
             "completed_merge",
-            "Merge Completed Batches (sync)",
+            "Merge Completed Observables (sync)",
             runtime
                 .sampler
                 .completed_merge_ingest_ms

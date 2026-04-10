@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
+if TYPE_CHECKING:
+    from python_api.abc import ScalarBatchIntegrand as _ScalarBatchIntegrand
+else:
+    class _ScalarBatchIntegrand:
+        pass
 
-class SinIntegrand:
+
+class SinIntegrand(_ScalarBatchIntegrand):
     input_dim = 1
 
     def __init__(self, scale: float = 1.0, bias: float = 0.0) -> None:

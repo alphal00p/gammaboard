@@ -43,10 +43,12 @@ fn default_sampler_db_pool_size() -> u32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 struct SamplerRollingState {
     eval_ms_per_sample: RollingMetric,
     eval_ms_per_batch: RollingMetric,
     training_ingest_ms_per_sample: RollingMetric,
+    completed_training_ingest_ms: RollingMetric,
     produce_ms_per_sample: RollingMetric,
     reclaim_ms: RollingMetric,
     queue_counts_ms: RollingMetric,
@@ -59,10 +61,12 @@ struct SamplerRollingState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 struct SamplerWindowState {
     eval_ms_per_sample: WindowMetric,
     eval_ms_per_batch: WindowMetric,
     training_ingest_ms_per_sample: WindowMetric,
+    completed_training_ingest_ms: WindowMetric,
     produce_ms_per_sample: WindowMetric,
     reclaim_ms: WindowMetric,
     queue_counts_ms: WindowMetric,
@@ -364,6 +368,10 @@ where
             training_ingest_ms_per_sample: self
                 .window_state
                 .training_ingest_ms_per_sample
+                .snapshot_and_reset(),
+            completed_training_ingest_ms: self
+                .window_state
+                .completed_training_ingest_ms
                 .snapshot_and_reset(),
             produce_ms_per_sample: self.window_state.produce_ms_per_sample.snapshot_and_reset(),
             reclaim_ms: self.window_state.reclaim_ms.snapshot_and_reset(),
@@ -751,8 +759,10 @@ where
             });
         }
 
-        let completed_merge_ingest_started = Instant::now();
         let mut completed_samples_delta = 0_i64;
+        let mut completed_training_ingest_ms = 0.0_f64;
+        let mut completed_merge_ms = 0.0_f64;
+        let mut completed_training_ingest_batches = 0_usize;
         let was_waiting_initial_round_trip = matches!(
             self.runtime_state.observable_checkpoint_state,
             ObservableCheckpointState::WaitingForInitialRoundTrip
@@ -798,6 +808,8 @@ where
                     .ingest_training_weights(training_weights)
                     .map_err(RunnerError::Engine)?;
                 let ingest_time_ms = ingest_started.elapsed().as_secs_f64() * 1000.0;
+                completed_training_ingest_ms += ingest_time_ms;
+                completed_training_ingest_batches += 1;
                 self.runtime_state.ingested_batches_total += 1;
                 self.runtime_state.ingested_samples_total += batch_samples as i64;
                 if batch_samples > 0 {
@@ -809,9 +821,11 @@ where
                 }
             }
 
+            let merge_started = Instant::now();
             self.observable_state
                 .merge(batch.result.observable.clone())
                 .map_err(RunnerError::Engine)?;
+            completed_merge_ms += merge_started.elapsed().as_secs_f64() * 1000.0;
         }
 
         self.nr_completed_samples += completed_samples_delta;
@@ -829,10 +843,17 @@ where
                 self.runtime_state.initial_round_trip_snapshot_pending = true;
             }
         }
-        observe_duration_pair(
+        if completed_training_ingest_batches > 0 {
+            observe_value_pair(
+                &mut self.runtime_state.rolling.completed_training_ingest_ms,
+                &mut self.window_state.completed_training_ingest_ms,
+                completed_training_ingest_ms,
+            );
+        }
+        observe_value_pair(
             &mut self.runtime_state.rolling.completed_merge_ingest_ms,
             &mut self.window_state.completed_merge_ingest_ms,
-            completed_merge_ingest_started.elapsed(),
+            completed_merge_ms,
         );
         self.queue.mark_processed(&completed);
         Ok(CompletedIngestStats {
