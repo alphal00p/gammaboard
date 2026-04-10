@@ -49,7 +49,7 @@ deploy host mode="dev":
 test-e2e:
     just build-backend
     just stop-kill
-    cargo test -q --test full_stack_cli -- --ignored --nocapture
+    cargo test -q --test full_stack_cli -- --ignored --nocapture --test-threads=1
 
 live-test-basic:
     #!/usr/bin/env bash

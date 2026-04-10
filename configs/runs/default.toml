@@ -19,7 +19,7 @@ max_batch_size = 65536
 db_pool_size = 4
 
 [sampler_aggregator_runner_params.queue]
-queue_buffer = 10.0
+queue_buffer = 1.0
 local_pending_buffer_multiplier = 1.0
 max_queue_size = 1024
 max_batches_per_tick = 16

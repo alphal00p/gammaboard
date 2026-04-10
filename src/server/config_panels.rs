@@ -174,8 +174,13 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
                 ),
                 key_value(
                     "queue_buffer",
-                    "Queue Buffer",
+                    "Target Pending Batches / Evaluator",
                     ctx.runner_params.queue.queue_buffer,
+                ),
+                key_value(
+                    "local_pending_buffer_multiplier",
+                    "Target Local Pending Multiplier",
+                    ctx.runner_params.queue.local_pending_buffer_multiplier,
                 ),
                 key_value(
                     "max_batch_size",
@@ -184,13 +189,18 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
                 ),
                 key_value(
                     "max_queue_size",
-                    "Max Queue Size",
+                    "Max Open Batches",
                     ctx.runner_params.queue.max_queue_size,
                 ),
                 key_value(
                     "max_batches_per_tick",
-                    "Max Batches Per Tick",
+                    "Max Produced Batches / Tick",
                     ctx.runner_params.queue.max_batches_per_tick,
+                ),
+                key_value(
+                    "max_insert_bundle_size",
+                    "Max Insert Bundle Size",
+                    ctx.runner_params.queue.max_insert_bundle_size,
                 ),
                 key_value(
                     "max_concurrent_insert_tasks",
@@ -199,7 +209,7 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
                 ),
                 key_value(
                     "completed_fetch_limit",
-                    "Completed Fetch Limit",
+                    "Completed Prefetch Fetch Limit",
                     ctx.runner_params.queue.completed_batch_fetch_limit,
                 ),
                 key_value(

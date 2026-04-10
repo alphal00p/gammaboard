@@ -156,14 +156,21 @@ fn format_bytes_human(bytes: i64) -> String {
 fn diagnostics_panel(value: Option<&JsonValue>) -> Option<PanelState> {
     let runner = value?.as_object()?.get("runner")?.as_object()?;
     let entries = [
-        ("queue_buffer", "Queue Buffer"),
+        ("queue_buffer", "Target Pending Batches / Evaluator"),
         ("active_evaluator_count", "Active Evaluators"),
-        ("target_pending_batches", "Target Pending Batches"),
-        ("pending_batches", "Pending Batches"),
-        ("pending_shortfall", "Pending Shortfall"),
-        ("claimed_batches", "Claimed Batches"),
-        ("completed_batches", "Completed Batches"),
-        ("open_batches", "Open Batches"),
+        ("target_pending_batches", "Target DB Pending Batches"),
+        ("db_pending_batches", "DB Pending Batches"),
+        ("pending_shortfall", "DB Pending Shortfall"),
+        ("local_pending_batches", "Local Pending Batches"),
+        (
+            "local_inflight_insert_tasks",
+            "Local In-Flight Insert Tasks",
+        ),
+        (
+            "local_inflight_insert_batches",
+            "Local In-Flight Insert Batches",
+        ),
+        ("local_ready_processed_batches", "Completed Prefetch Buffer"),
         ("observable_checkpoint_state", "Checkpoint State"),
         ("training_samples_remaining", "Training Samples Remaining"),
     ]

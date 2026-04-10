@@ -1,8 +1,8 @@
 use crate::core::{
-    BatchQueueCounts, CompletedBatch, InsertBatchesMetrics, RollingMetricSnapshot,
+    BatchQueueCounts, CompletedBatch, InsertBatchesMetrics, SamplerQueueRollingAverages,
     SamplerQueueRuntimeMetrics, SamplerWorkerStore, StoreError, next_batch_ids,
 };
-use crate::runners::rolling_metric::RollingMetric;
+use crate::runners::window_metric::WindowMetric;
 use crate::sampling::LatentBatch;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -43,6 +43,7 @@ pub struct SamplerQueue<S> {
     pending_insert_tasks: Vec<PendingInsertTask>,
     insert_pump_running: bool,
     pending_processed_fetch: Option<PendingProcessedFetchTask>,
+    cached_db_queue_counts: Option<BatchQueueCounts>,
     cached_tick_queue_counts: Option<BatchQueueCounts>,
     cached_active_evaluator_count: Option<usize>,
     last_reclaim_at: Instant,
@@ -84,18 +85,19 @@ pub struct QueueDiagnosticsSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct QueueMetricsState {
-    get_processed_ms: RollingMetric,
-    fetch_completed_ms: RollingMetric,
-    insert_bundle_ms: RollingMetric,
-    insert_bundle_ms_per_batch: RollingMetric,
-    insert_bundle_serialize_ms: RollingMetric,
-    insert_bundle_payload_bytes: RollingMetric,
-    insert_bundle_payload_bytes_per_batch: RollingMetric,
-    insert_bundle_db_batches_ms: RollingMetric,
-    insert_bundle_db_inputs_ms: RollingMetric,
-    insert_bundle_commit_ms: RollingMetric,
-    insert_bundle_local_pending_at_start: RollingMetric,
-    flush_ms: RollingMetric,
+    fetch_completed_ms: WindowMetric,
+    fetch_completed_batches: WindowMetric,
+    fetch_completed_prefetch_fill_ratio: WindowMetric,
+    insert_bundle_ms: WindowMetric,
+    insert_bundle_ms_per_batch: WindowMetric,
+    insert_bundle_serialize_ms: WindowMetric,
+    insert_bundle_payload_bytes: WindowMetric,
+    insert_bundle_payload_bytes_per_batch: WindowMetric,
+    insert_bundle_db_batches_ms: WindowMetric,
+    insert_bundle_db_inputs_ms: WindowMetric,
+    insert_bundle_commit_ms: WindowMetric,
+    insert_bundle_local_pending_at_start: WindowMetric,
+    insert_bundle_db_pending_at_start: WindowMetric,
 }
 
 #[derive(Debug, Clone)]
@@ -142,6 +144,7 @@ where
             pending_insert_tasks: Vec::new(),
             insert_pump_running: false,
             pending_processed_fetch: None,
+            cached_db_queue_counts: None,
             cached_tick_queue_counts: None,
             cached_active_evaluator_count: None,
             last_reclaim_at: now.checked_sub(RECLAIM_INTERVAL).unwrap_or(now),
@@ -161,6 +164,9 @@ where
 
     pub fn runtime_metrics(&self) -> SamplerQueueRuntimeMetrics {
         SamplerQueueRuntimeMetrics {
+            db_pending_batches: self.cached_db_queue_counts.map(|counts| counts.pending),
+            db_claimed_batches: self.cached_db_queue_counts.map(|counts| counts.claimed),
+            db_completed_batches: self.cached_db_queue_counts.map(|counts| counts.completed),
             local_pending_batches: self.pending_insert.len(),
             local_inflight_insert_tasks: self.pending_insert_tasks.len(),
             local_inflight_insert_batches: self
@@ -171,36 +177,52 @@ where
             local_ready_processed_batches: self.ready_processed.len(),
             insert_task_utilization: None,
             completed_fetch_utilization: None,
-            rolling: crate::core::SamplerQueueRollingAverages {
-                get_processed_ms: RollingMetricSnapshot::from(&self.metrics.get_processed_ms),
-                fetch_completed_ms: RollingMetricSnapshot::from(&self.metrics.fetch_completed_ms),
-                insert_bundle_ms: RollingMetricSnapshot::from(&self.metrics.insert_bundle_ms),
-                insert_bundle_ms_per_batch: RollingMetricSnapshot::from(
-                    &self.metrics.insert_bundle_ms_per_batch,
-                ),
-                insert_bundle_serialize_ms: RollingMetricSnapshot::from(
-                    &self.metrics.insert_bundle_serialize_ms,
-                ),
-                insert_bundle_payload_bytes: RollingMetricSnapshot::from(
-                    &self.metrics.insert_bundle_payload_bytes,
-                ),
-                insert_bundle_payload_bytes_per_batch: RollingMetricSnapshot::from(
-                    &self.metrics.insert_bundle_payload_bytes_per_batch,
-                ),
-                insert_bundle_db_batches_ms: RollingMetricSnapshot::from(
-                    &self.metrics.insert_bundle_db_batches_ms,
-                ),
-                insert_bundle_db_inputs_ms: RollingMetricSnapshot::from(
-                    &self.metrics.insert_bundle_db_inputs_ms,
-                ),
-                insert_bundle_commit_ms: RollingMetricSnapshot::from(
-                    &self.metrics.insert_bundle_commit_ms,
-                ),
-                insert_bundle_local_pending_at_start: RollingMetricSnapshot::from(
-                    &self.metrics.insert_bundle_local_pending_at_start,
-                ),
-                flush_ms: RollingMetricSnapshot::from(&self.metrics.flush_ms),
-            },
+            rolling: SamplerQueueRollingAverages::default(),
+        }
+    }
+
+    pub fn take_metrics_snapshot(&mut self) -> SamplerQueueRollingAverages {
+        SamplerQueueRollingAverages {
+            fetch_completed_ms: self.metrics.fetch_completed_ms.snapshot_and_reset(),
+            fetch_completed_batches: self.metrics.fetch_completed_batches.snapshot_and_reset(),
+            fetch_completed_prefetch_fill_ratio: self
+                .metrics
+                .fetch_completed_prefetch_fill_ratio
+                .snapshot_and_reset(),
+            insert_bundle_ms: self.metrics.insert_bundle_ms.snapshot_and_reset(),
+            insert_bundle_ms_per_batch: self
+                .metrics
+                .insert_bundle_ms_per_batch
+                .snapshot_and_reset(),
+            insert_bundle_serialize_ms: self
+                .metrics
+                .insert_bundle_serialize_ms
+                .snapshot_and_reset(),
+            insert_bundle_payload_bytes: self
+                .metrics
+                .insert_bundle_payload_bytes
+                .snapshot_and_reset(),
+            insert_bundle_payload_bytes_per_batch: self
+                .metrics
+                .insert_bundle_payload_bytes_per_batch
+                .snapshot_and_reset(),
+            insert_bundle_db_batches_ms: self
+                .metrics
+                .insert_bundle_db_batches_ms
+                .snapshot_and_reset(),
+            insert_bundle_db_inputs_ms: self
+                .metrics
+                .insert_bundle_db_inputs_ms
+                .snapshot_and_reset(),
+            insert_bundle_commit_ms: self.metrics.insert_bundle_commit_ms.snapshot_and_reset(),
+            insert_bundle_local_pending_at_start: self
+                .metrics
+                .insert_bundle_local_pending_at_start
+                .snapshot_and_reset(),
+            insert_bundle_db_pending_at_start: self
+                .metrics
+                .insert_bundle_db_pending_at_start
+                .snapshot_and_reset(),
         }
     }
 
@@ -235,12 +257,18 @@ where
         self.checkpoint.last_completed_batch_id
     }
 
-    pub async fn queue_counts(&self) -> Result<BatchQueueCounts, StoreError> {
+    pub async fn queue_counts(&mut self) -> Result<BatchQueueCounts, StoreError> {
+        let counts = self.db_queue_counts().await?;
+        Ok(self.queue_counts_with_local_buffer(counts))
+    }
+
+    async fn db_queue_counts(&mut self) -> Result<BatchQueueCounts, StoreError> {
         let counts = self
             .store
             .get_batch_queue_counts(self.run_id, self.last_completed_batch_id())
             .await?;
-        Ok(self.queue_counts_with_local_buffer(counts))
+        self.cached_db_queue_counts = Some(counts);
+        Ok(counts)
     }
 
     pub async fn open_batch_count(&self) -> Result<i64, StoreError> {
@@ -399,21 +427,23 @@ where
             && !self.insert_pump_running
     }
 
-    fn observe_insert_bundle_local_pending_at_start(&mut self) {
+    fn observe_insert_bundle_start_state(&mut self) {
         self.metrics
             .insert_bundle_local_pending_at_start
             .observe(self.pending_insert.len() as f64);
+        if let Some(db_counts) = self.cached_db_queue_counts {
+            self.metrics
+                .insert_bundle_db_pending_at_start
+                .observe(db_counts.pending.max(0) as f64);
+        }
     }
 
     pub async fn get_processed(&mut self) -> Result<Vec<CompletedBatch>, StoreError> {
-        let started = Instant::now();
         self.drain_finished_insert().await?;
         self.drain_finished_processed_fetch().await?;
         self.ensure_processed_prefetch();
 
-        let ready = self.ready_processed.drain(..).collect::<Vec<_>>();
-        observe_duration_ms(&mut self.metrics.get_processed_ms, started.elapsed());
-        Ok(ready)
+        Ok(self.ready_processed.drain(..).collect::<Vec<_>>())
     }
 
     pub(crate) async fn get_processed_blocking(
@@ -494,7 +524,6 @@ where
     }
 
     pub async fn flush(&mut self) -> Result<(), StoreError> {
-        let started = Instant::now();
         loop {
             self.drain_finished_insert().await?;
             if self.pending_insert_tasks.is_empty() && self.pending_insert.is_empty() {
@@ -507,7 +536,6 @@ where
             let task = self.pending_insert_tasks.swap_remove(0);
             self.consume_insert_task(task).await?;
         }
-        observe_duration_ms(&mut self.metrics.flush_ms, started.elapsed());
         Ok(())
     }
 
@@ -598,7 +626,7 @@ where
             && !self.pending_insert.is_empty()
         {
             self.account_utilization(Instant::now());
-            self.observe_insert_bundle_local_pending_at_start();
+            self.observe_insert_bundle_start_state();
 
             let bundle_size = self.config.max_insert_bundle_size.max(1);
             let batch_count = self.pending_insert.len().min(bundle_size);
@@ -733,6 +761,13 @@ where
             }
         };
         observe_duration_ms(&mut self.metrics.fetch_completed_ms, duration);
+        self.metrics
+            .fetch_completed_batches
+            .observe(completed.len() as f64);
+        let fetch_limit = self.config.completed_batch_fetch_limit.max(1) as f64;
+        self.metrics
+            .fetch_completed_prefetch_fill_ratio
+            .observe((completed.len() as f64 / fetch_limit).clamp(0.0, 1.0));
         self.ready_processed.extend(completed);
         Ok(())
     }
@@ -752,7 +787,7 @@ where
     }
 }
 
-fn observe_duration_ms(metric: &mut RollingMetric, duration: Duration) {
+fn observe_duration_ms(metric: &mut WindowMetric, duration: Duration) {
     let ms = duration.as_secs_f64() * 1000.0;
     if ms.is_finite() && ms >= 0.0 {
         metric.observe(ms);

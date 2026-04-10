@@ -3,6 +3,7 @@
 ## Platform
 - [ ] implement `madnis` sampler-aggregator as a parametrization
 - [ ] instrument and optimize `insert_batches` end to end, especially the `batch_inputs` write path
+- [ ] slow down sampler batch-size adaptation and add more hysteresis/smoothing to the `eval_ms_per_sample -> batch_size_current` controller
 - [ ] add pdf to sampler, use it to plot integrand vs pdf in dashboard
 - [ ] COPY BINARY` is PostgreSQL’s **bulk-load protocol**: instead of sending a huge SQL statement like `INSERT ... VALUES (...), (...), ...`, you stream rows in a compact binary format directly to Postgres.
 

@@ -183,7 +183,6 @@ const renderStructuredValue = (value) => {
 
 const scalarHeatmapColors = ["rgb(0,0,255)", "rgb(128,200,128)", "rgb(255,0,0)"];
 
-
 const panelColumnSpan = (descriptor) => {
   if (descriptor?.panel_id === "estimate_summary") {
     return { xs: "1 / -1", md: "1 / -1" };
@@ -521,7 +520,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
       datazoom: (event) => {
         const next = readDataZoomRange(event);
         if (!next || typeof onValueChange !== "function" || !panelId) return;
-        if (!zoomRangeChanged(zoomRange, next) && (!isHistoryPanel || tailPinned === (next.end >= 99.5))) return;
+        if (!zoomRangeChanged(zoomRange, next) && (!isHistoryPanel || tailPinned === next.end >= 99.5)) return;
         onValueChange(panelId, writeZoomPanelValue(value, next, isHistoryPanel ? next.end >= 99.5 : null), false);
       },
     }),
@@ -601,16 +600,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
         },
       ],
     }),
-    [
-      errorBarData,
-      isHistoryPanel,
-      bandSegments,
-      meanData,
-      state?.panel_id,
-      visibleDomain,
-      xDomain,
-      zoomRange,
-    ],
+    [errorBarData, isHistoryPanel, bandSegments, meanData, state?.panel_id, visibleDomain, xDomain, zoomRange],
   );
   if (points.length === 0) return null;
   return (
@@ -625,7 +615,8 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
             echartsRef={echartsRef}
             onResetView={
               panelId && typeof onValueChange === "function"
-                ? () => onValueChange(panelId, writeZoomPanelValue(value, FULL_ZOOM, isHistoryPanel ? true : null), false)
+                ? () =>
+                    onValueChange(panelId, writeZoomPanelValue(value, FULL_ZOOM, isHistoryPanel ? true : null), false)
                 : null
             }
           />
@@ -1037,13 +1028,16 @@ const buildHistogramYDomain = (bins, scale, visibleXRange = null) => {
       Number(bin?.y ?? bin?.value),
     ])
     .filter((value) => Number.isFinite(value));
-  const values = valuesInRange.length > 0 ? valuesInRange : asArray(bins)
-    .flatMap((bin) => [
-      Number(bin?.y ?? bin?.value) - Number(bin?.error || 0),
-      Number(bin?.y ?? bin?.value) + Number(bin?.error || 0),
-      Number(bin?.y ?? bin?.value),
-    ])
-    .filter((value) => Number.isFinite(value));
+  const values =
+    valuesInRange.length > 0
+      ? valuesInRange
+      : asArray(bins)
+          .flatMap((bin) => [
+            Number(bin?.y ?? bin?.value) - Number(bin?.error || 0),
+            Number(bin?.y ?? bin?.value) + Number(bin?.error || 0),
+            Number(bin?.y ?? bin?.value),
+          ])
+          .filter((value) => Number.isFinite(value));
   if (values.length === 0) return ["auto", "auto"];
   if (scale === "log") {
     const positive = values.filter((value) => value > 0);
@@ -1064,9 +1058,7 @@ const buildRelativeErrorYDomain = (points, visibleXRange = null) => {
   const sourcePoints = selectedPoints.length > 0 ? selectedPoints : asArray(points);
   const maxRelativeError = Math.max(
     0,
-    ...sourcePoints
-      .map((point) => Number(point?.relative_error))
-      .filter((value) => Number.isFinite(value)),
+    ...sourcePoints.map((point) => Number(point?.relative_error)).filter((value) => Number.isFinite(value)),
   );
   if (maxRelativeError <= 0) return [-1, 1];
   const padded = maxRelativeError * 1.08;
@@ -1211,7 +1203,9 @@ const ScalarImageHeatmapPanel = ({
           const data = Array.isArray(params?.data) ? params.data : [];
           const [col, row, value] = data;
           const x = Number.isFinite(Number(col)) ? xCenters[Math.max(0, Math.min(width - 1, Number(col)))] : Number.NaN;
-          const y = Number.isFinite(Number(row)) ? yCenters[Math.max(0, Math.min(height - 1, Number(row)))] : Number.NaN;
+          const y = Number.isFinite(Number(row))
+            ? yCenters[Math.max(0, Math.min(height - 1, Number(row)))]
+            : Number.NaN;
           return [
             `x: ${formatScientific(Number(x), 4)}`,
             `y: ${formatScientific(Number(y), 4)}`,
@@ -1333,7 +1327,14 @@ const ScalarImageHeatmapPanel = ({
             payload={{
               panel_id: panelId,
               kind: "image2d",
-              state: { width, height, x_range: xRange, y_range: yRange, values, invalid_indices: Array.from(invalidIndices || []) },
+              state: {
+                width,
+                height,
+                x_range: xRange,
+                y_range: yRange,
+                values,
+                invalid_indices: Array.from(invalidIndices || []),
+              },
             }}
             elementRef={figureRef}
             echartsRef={echartsRef}
@@ -1397,10 +1398,7 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
     () => visibleXRangeFromZoomWithScale(xDomain, zoomRange, xScale),
     [xDomain, xScale, zoomRange],
   );
-  const yDomain = useMemo(
-    () => buildHistogramYDomain(bins, yScale, visibleXRange),
-    [bins, yScale, visibleXRange],
-  );
+  const yDomain = useMemo(() => buildHistogramYDomain(bins, yScale, visibleXRange), [bins, yScale, visibleXRange]);
   const relativeErrorYDomain = useMemo(
     () => buildRelativeErrorYDomain(relativeErrorData, visibleXRange),
     [relativeErrorData, visibleXRange],
@@ -1527,9 +1525,7 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
         if (!zoomRangeChanged(zoomRange, next)) return;
         onValueChange(
           sourcePanelId,
-          isBundleControlled
-            ? writeHistogramBundlePanelValue(value, { zoom: next })
-            : writeZoomPanelValue(value, next),
+          isBundleControlled ? writeHistogramBundlePanelValue(value, { zoom: next }) : writeZoomPanelValue(value, next),
           false,
         );
       },
@@ -1652,8 +1648,8 @@ const TablePanel = ({ title, state }) => {
               {title}
             </Typography>
             <Alert severity="warning">
-              GammaLoop histogram bundle is empty or incompatible with the current payload shape.
-              Check backend task-output errors for observable decode details.
+              GammaLoop histogram bundle is empty or incompatible with the current payload shape. Check backend
+              task-output errors for observable decode details.
             </Alert>
           </CardContent>
         </Card>
@@ -1661,7 +1657,11 @@ const TablePanel = ({ title, state }) => {
     }
     return null;
   }
-  const columnKeys = columns.map((column) => String(column || "").trim().toLowerCase());
+  const columnKeys = columns.map((column) =>
+    String(column || "")
+      .trim()
+      .toLowerCase(),
+  );
   const centralValueIndex = columnKeys.findIndex((column) => column === "central value");
   const errorIndex = columnKeys.findIndex((column) => column === "dy" || column === "error");
   const payload = state?.payload;

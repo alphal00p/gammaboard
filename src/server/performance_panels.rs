@@ -2,14 +2,13 @@ use crate::core::{EvaluatorPerformanceMetrics, SamplerRuntimeMetrics};
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelWidth, PlotPoint,
     PlotSeries, TickBreakdownSegment, history_x, key_value, key_value_panel, merge_panel_state,
-    multi_timeseries_panel, panel_spec, replace_panel, scalar_timeseries_panel,
-    tick_breakdown_panel, with_panel_width,
+    multi_timeseries_panel, panel_spec, replace_panel, tick_breakdown_panel, with_panel_width,
 };
 use crate::stores::{EvaluatorPerformanceHistoryEntry, SamplerPerformanceHistoryEntry};
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 
-const COMPLETED_THROUGHPUT_WINDOW_MS: f64 = 5_000.0;
+const DEFAULT_COMPLETED_THROUGHPUT_WINDOW_MS: f64 = 5_000.0;
 
 pub fn build_evaluator_performance_response(
     scope_id: Option<String>,
@@ -50,14 +49,8 @@ pub fn build_sampler_performance_response(
         |entry| entry.id.to_string(),
         |_entry| Vec::new(),
     );
-    let throughput_panel = sampler_completed_throughput_panel(&entries);
-    let latest_completed_samples_per_second = throughput_panel
-        .as_ref()
-        .and_then(|panel| match panel {
-            PanelState::ScalarTimeseries { points, .. } => points.last().map(|point| point.y),
-            _ => None,
-        })
-        .unwrap_or(0.0);
+    let (throughput_panel, latest_completed_samples_per_second) =
+        sampler_completed_throughput_panel(&entries);
     if let Some(panel) = throughput_panel {
         response.updates.push(replace_panel(panel));
     }
@@ -169,8 +162,8 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
             panel_spec(
                 "sampler_completed_samples_per_second",
                 "Completed Samples / Sec",
-                PanelKind::ScalarTimeseries,
-                PanelHistoryMode::Append,
+                PanelKind::MultiTimeseries,
+                PanelHistoryMode::Replace,
             ),
             PanelWidth::Full,
         ),
@@ -195,7 +188,7 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         with_panel_width(
             panel_spec(
                 "sampler_queue_state",
-                "Queue State",
+                "Queue Buffers",
                 PanelKind::KeyValue,
                 PanelHistoryMode::Replace,
             ),
@@ -204,7 +197,7 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         with_panel_width(
             panel_spec(
                 "sampler_queue_efficiency",
-                "Queue Concurrent Work",
+                "Queue Hand-Off And DB",
                 PanelKind::KeyValue,
                 PanelHistoryMode::Replace,
             ),
@@ -445,17 +438,13 @@ fn sampler_current_panels(
 
     let target_pending_batches =
         queue_buffer_value(&entry.engine_diagnostics, "target_pending_batches");
-    let target_local_pending_batches =
-        queue_buffer_value(&entry.engine_diagnostics, "target_local_pending_batches");
-    let pending_batches = queue_buffer_value(&entry.engine_diagnostics, "pending_batches");
-    let claimed_batches = queue_buffer_value(&entry.engine_diagnostics, "claimed_batches");
-    let completed_batches = queue_buffer_value(&entry.engine_diagnostics, "completed_batches");
-    let open_batches = queue_buffer_value(&entry.engine_diagnostics, "open_batches");
-    let pending_shortfall = match (target_pending_batches.as_ref(), pending_batches.as_ref()) {
-        (Some(target), Some(pending)) => target
-            .as_i64()
-            .zip(pending.as_i64())
-            .map(|(t, p)| t.saturating_sub(p)),
+    let pending_shortfall = match (
+        target_pending_batches.as_ref(),
+        runtime.queue.db_pending_batches,
+    ) {
+        (Some(target), Some(pending)) => {
+            target.as_i64().map(|target| target.saturating_sub(pending))
+        }
         _ => None,
     };
 
@@ -569,52 +558,44 @@ fn sampler_current_panels(
             "sampler_queue_state",
             vec![
                 key_value(
-                    "queue_buffer",
-                    "Queue Buffer",
-                    queue_buffer_value(&entry.engine_diagnostics, "queue_buffer"),
+                    "db_pending_batches",
+                    "DB Pending Batches",
+                    runtime.queue.db_pending_batches,
                 ),
-                key_value(
-                    "local_pending_buffer_multiplier",
-                    "Local Pending Buffer Multiplier",
-                    queue_buffer_value(
-                        &entry.engine_diagnostics,
-                        "local_pending_buffer_multiplier",
-                    ),
-                ),
-                key_value(
-                    "target_pending_batches",
-                    "Target Pending Batches",
-                    target_pending_batches,
-                ),
-                key_value(
-                    "target_local_pending_batches",
-                    "Target Local Pending Batches",
-                    target_local_pending_batches,
-                ),
-                key_value("pending_batches", "Pending Batches", pending_batches),
-                key_value("claimed_batches", "Claimed Batches", claimed_batches),
-                key_value("completed_batches", "Completed Batches", completed_batches),
-                key_value("open_batches", "Open Batches", open_batches),
-                key_value("pending_shortfall", "Pending Shortfall", pending_shortfall),
                 key_value(
                     "local_pending_batches",
                     "Local Pending Batches",
-                    queue_buffer_value(&entry.engine_diagnostics, "local_pending_batches"),
-                ),
-                key_value(
-                    "local_inflight_insert_tasks",
-                    "Local Inflight Insert Tasks",
-                    queue_buffer_value(&entry.engine_diagnostics, "local_inflight_insert_tasks"),
+                    runtime.queue.local_pending_batches,
                 ),
                 key_value(
                     "local_inflight_insert_batches",
-                    "Local Inflight Insert Batches",
-                    queue_buffer_value(&entry.engine_diagnostics, "local_inflight_insert_batches"),
+                    "Local In-Flight Insert Batches",
+                    runtime.queue.local_inflight_insert_batches,
                 ),
                 key_value(
-                    "local_ready_processed_batches",
-                    "Local Ready Processed Batches",
-                    queue_buffer_value(&entry.engine_diagnostics, "local_ready_processed_batches"),
+                    "local_inflight_insert_tasks",
+                    "Local In-Flight Insert Tasks",
+                    runtime.queue.local_inflight_insert_tasks,
+                ),
+                key_value(
+                    "completed_prefetch_buffer",
+                    "Completed Prefetch Buffer",
+                    runtime.queue.local_ready_processed_batches,
+                ),
+                key_value(
+                    "target_pending_batches",
+                    "Target DB Pending Batches",
+                    target_pending_batches,
+                ),
+                key_value(
+                    "pending_shortfall",
+                    "DB Pending Shortfall",
+                    pending_shortfall,
+                ),
+                key_value(
+                    "queue_buffer",
+                    "Target Pending Batches / Evaluator",
+                    queue_buffer_value(&entry.engine_diagnostics, "queue_buffer"),
                 ),
             ],
         ),
@@ -623,28 +604,46 @@ fn sampler_current_panels(
             vec![
                 key_value(
                     "completed_batch_fetch_ms",
-                    "Completed Batch Fetch (concurrent)",
+                    "Completed Batch Fetch",
                     runtime.queue.rolling.fetch_completed_ms.mean,
                 ),
                 key_value(
-                    "completed_fetch_utilization",
-                    "Completed Fetch Utilization",
-                    runtime.queue.completed_fetch_utilization,
+                    "fetch_completed_batches",
+                    "Completed Batches / Fetch",
+                    runtime.queue.rolling.fetch_completed_batches.mean,
+                ),
+                key_value(
+                    "fetch_completed_prefetch_fill_ratio",
+                    "Completed Prefetch Fill Ratio",
+                    runtime
+                        .queue
+                        .rolling
+                        .fetch_completed_prefetch_fill_ratio
+                        .mean,
                 ),
                 key_value(
                     "insert_bundle_ms",
-                    "Insert Bundle (concurrent)",
+                    "Insert Bundle",
                     runtime.queue.rolling.insert_bundle_ms.mean,
                 ),
                 key_value(
                     "insert_bundle_ms_per_batch",
-                    "Insert / Batch (concurrent)",
+                    "Insert / Batch",
                     runtime.queue.rolling.insert_bundle_ms_per_batch.mean,
                 ),
                 key_value(
-                    "insert_task_utilization",
-                    "Insert Task Utilization",
-                    runtime.queue.insert_task_utilization,
+                    "insert_bundle_local_pending_at_start",
+                    "Local Pending At Insert Start",
+                    runtime
+                        .queue
+                        .rolling
+                        .insert_bundle_local_pending_at_start
+                        .mean,
+                ),
+                key_value(
+                    "insert_bundle_db_pending_at_start",
+                    "DB Pending At Insert Start",
+                    runtime.queue.rolling.insert_bundle_db_pending_at_start.mean,
                 ),
                 key_value(
                     "insert_bundle_serialize_ms",
@@ -680,15 +679,6 @@ fn sampler_current_panels(
                     "Insert Commit",
                     runtime.queue.rolling.insert_bundle_commit_ms.mean,
                 ),
-                key_value(
-                    "insert_bundle_local_pending_at_start",
-                    "Local Pending at Insert Start",
-                    runtime
-                        .queue
-                        .rolling
-                        .insert_bundle_local_pending_at_start
-                        .mean,
-                ),
             ],
         ),
     ]
@@ -696,7 +686,7 @@ fn sampler_current_panels(
 
 fn sampler_completed_throughput_panel(
     entries: &[SamplerPerformanceHistoryEntry],
-) -> Option<PanelState> {
+) -> (Option<PanelState>, f64) {
     let mut samples = entries
         .iter()
         .filter_map(|entry| {
@@ -706,18 +696,37 @@ fn sampler_completed_throughput_panel(
             } else {
                 runtime.ingested_samples_total
             };
-            Some((history_x(entry.created_at), cumulative_samples))
+            let window_ms = throughput_window_ms(&entry.engine_diagnostics);
+            Some((history_x(entry.created_at), cumulative_samples, window_ms))
         })
         .collect::<Vec<_>>();
     if samples.is_empty() {
-        return None;
+        return (None, 0.0);
     }
     samples.sort_by(|left, right| left.0.total_cmp(&right.0));
-    let points = throughput_points_from_cumulative(&samples, COMPLETED_THROUGHPUT_WINDOW_MS);
-    Some(scalar_timeseries_panel(
-        "sampler_completed_samples_per_second",
-        points,
-    ))
+    let instant_points = instant_throughput_points_from_cumulative(&samples);
+    let smoothed_points = smoothed_throughput_points_from_cumulative(&samples);
+    let latest_smoothed = smoothed_points.last().map(|point| point.y).unwrap_or(0.0);
+    (
+        Some(multi_timeseries_panel(
+            "sampler_completed_samples_per_second",
+            vec![
+                PlotSeries {
+                    id: "completed_samples_per_second_instant".to_string(),
+                    label: "Instant Throughput".to_string(),
+                    color: Some("#ea580c".to_string()),
+                    points: instant_points,
+                },
+                PlotSeries {
+                    id: "completed_samples_per_second_smoothed".to_string(),
+                    label: "Smoothed Throughput".to_string(),
+                    color: Some("#2563eb".to_string()),
+                    points: smoothed_points,
+                },
+            ],
+        )),
+        latest_smoothed,
+    )
 }
 
 fn sampler_utilization_history_panel(
@@ -820,18 +829,46 @@ fn aggregate_evaluator_busy_points(entries: &[EvaluatorPerformanceHistoryEntry])
         .collect()
 }
 
-fn throughput_points_from_cumulative(samples: &[(f64, i64)], window_ms: f64) -> Vec<PlotPoint> {
+fn instant_throughput_points_from_cumulative(samples: &[(f64, i64, f64)]) -> Vec<PlotPoint> {
+    if samples.is_empty() {
+        return Vec::new();
+    }
+    let mut points = Vec::with_capacity(samples.len());
+    for (index, (x_ms, cumulative_samples, _)) in samples.iter().copied().enumerate() {
+        let y = if index == 0 {
+            0.0
+        } else {
+            let (prev_x_ms, prev_cumulative_samples, _) = samples[index - 1];
+            let elapsed_secs = (x_ms - prev_x_ms) / 1000.0;
+            let delta_samples = cumulative_samples.saturating_sub(prev_cumulative_samples);
+            if elapsed_secs > 0.0 {
+                (delta_samples as f64 / elapsed_secs).max(0.0)
+            } else {
+                0.0
+            }
+        };
+        points.push(PlotPoint {
+            x: x_ms,
+            y,
+            y_min: None,
+            y_max: None,
+        });
+    }
+    points
+}
+
+fn smoothed_throughput_points_from_cumulative(samples: &[(f64, i64, f64)]) -> Vec<PlotPoint> {
     if samples.is_empty() {
         return Vec::new();
     }
     let mut baseline_idx = 0usize;
     let mut points = Vec::with_capacity(samples.len());
-    for (index, (x_ms, cumulative_samples)) in samples.iter().copied().enumerate() {
+    for (index, (x_ms, cumulative_samples, window_ms)) in samples.iter().copied().enumerate() {
         let target_x_ms = x_ms - window_ms;
         while baseline_idx + 1 < index && samples[baseline_idx + 1].0 <= target_x_ms {
             baseline_idx += 1;
         }
-        let (baseline_x_ms, baseline_cumulative_samples) = if target_x_ms <= samples[0].0 {
+        let (baseline_x_ms, baseline_cumulative_samples, _) = if target_x_ms <= samples[0].0 {
             samples[0]
         } else {
             samples[baseline_idx]
@@ -852,6 +889,14 @@ fn throughput_points_from_cumulative(samples: &[(f64, i64)], window_ms: f64) -> 
         });
     }
     points
+}
+
+fn throughput_window_ms(engine_diagnostics: &JsonValue) -> f64 {
+    queue_buffer_value(engine_diagnostics, "target_batch_eval_ms")
+        .and_then(|value| value.as_f64())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .map(|value| value * 2.0)
+        .unwrap_or(DEFAULT_COMPLETED_THROUGHPUT_WINDOW_MS)
 }
 
 fn queue_buffer_value(value: &JsonValue, key: &str) -> Option<JsonValue> {

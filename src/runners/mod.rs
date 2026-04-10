@@ -5,6 +5,7 @@ pub mod queue;
 pub(crate) mod rolling_metric;
 pub mod sampler_aggregator;
 pub(crate) mod stage_context;
+pub(crate) mod window_metric;
 
 pub use evaluator::{EvaluatorRunner, EvaluatorRunnerError, EvaluatorRunnerParams};
 pub use node_runner::{NodeRunner, NodeRunnerConfig, NodeRunnerStore};

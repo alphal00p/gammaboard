@@ -112,11 +112,11 @@ fn panel_states(
     let target_pending_batches = active_sampler
         .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
         .and_then(|value| runner_diagnostic_i64(value, "target_pending_batches"));
-    let pending_batches = active_sampler
+    let db_pending_batches = active_sampler
         .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
-        .and_then(|value| runner_diagnostic_i64(value, "pending_batches"));
+        .and_then(|value| runner_diagnostic_i64(value, "db_pending_batches"));
     let pending_shortfall = target_pending_batches
-        .zip(pending_batches)
+        .zip(db_pending_batches)
         .map(|(target, pending)| target.saturating_sub(pending));
     let local_pending_batches = active_sampler
         .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
@@ -183,13 +183,10 @@ fn panel_states(
         key_value_panel(
             "run_queue",
             vec![
-                key_value("pending", "Pending Batches", run.pending_batches),
-                key_value("claimed", "Claimed Batches", run.claimed_batches),
                 key_value("failed", "Failed Batches", run.failed_batches),
-                key_value("completed", "Completed Batches", run.completed_batches),
                 key_value(
                     "queue_buffer",
-                    "Queue Buffer",
+                    "Target Pending Batches / Evaluator",
                     run_spec.sampler_aggregator_runner_params.queue.queue_buffer,
                 ),
                 key_value(
@@ -198,11 +195,20 @@ fn panel_states(
                     active_evaluator_count,
                 ),
                 key_value(
+                    "db_pending_batches",
+                    "DB Pending Batches",
+                    db_pending_batches,
+                ),
+                key_value(
                     "target_pending_batches",
-                    "Target Pending Batches",
+                    "Target DB Pending Batches",
                     target_pending_batches,
                 ),
-                key_value("pending_shortfall", "Pending Shortfall", pending_shortfall),
+                key_value(
+                    "pending_shortfall",
+                    "DB Pending Shortfall",
+                    pending_shortfall,
+                ),
                 key_value(
                     "local_pending_batches",
                     "Local Pending Batches",
@@ -220,7 +226,7 @@ fn panel_states(
                 ),
                 key_value(
                     "local_ready_processed_batches",
-                    "Local Ready Processed Batches",
+                    "Completed Prefetch Buffer",
                     local_ready_processed_batches,
                 ),
             ],
