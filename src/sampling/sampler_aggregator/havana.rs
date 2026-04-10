@@ -169,12 +169,13 @@ impl HavanaSampler {
             return 0;
         }
 
-        let progressed_in_window = self.samples_ingested % self.samples_for_update;
-        let remaining_in_window = if progressed_in_window == 0 {
-            self.samples_for_update
-        } else {
-            self.samples_for_update - progressed_in_window
-        };
+        let inflight_or_ingested = self
+            .samples_ingested
+            .saturating_add(self.pending_training_sample_count());
+        let completed_windows = self.samples_ingested / self.samples_for_update;
+        let current_window_end =
+            (completed_windows.saturating_add(1)).saturating_mul(self.samples_for_update);
+        let remaining_in_window = current_window_end.saturating_sub(inflight_or_ingested);
         remaining_training.min(remaining_in_window)
     }
 
@@ -354,10 +355,6 @@ impl SamplerAggregator for HavanaSampler {
     }
 
     fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
-        if self.pending_training_sample_count() > 0 {
-            return Ok(SamplePlan::Pause);
-        }
-
         let nr_samples = self.training_window_samples_remaining();
         if nr_samples == 0 {
             Ok(SamplePlan::Pause)
@@ -610,8 +607,8 @@ mod tests {
         assert_eq!(
             sampler
                 .sample_plan()
-                .expect("pause while window is in flight"),
-            SamplePlan::Pause
+                .expect("emit remaining capacity in the current training window"),
+            SamplePlan::Produce { nr_samples: 11 }
         );
 
         sampler
@@ -620,7 +617,7 @@ mod tests {
         assert_eq!(
             sampler
                 .sample_plan()
-                .expect("emit remainder of the current training window"),
+                .expect("emit remainder of the current training window after partial ingest"),
             SamplePlan::Produce { nr_samples: 11 }
         );
 
@@ -630,7 +627,7 @@ mod tests {
         assert_eq!(
             sampler
                 .sample_plan()
-                .expect("pause until second batch ingests"),
+                .expect("pause after filling one full training window"),
             SamplePlan::Pause
         );
 

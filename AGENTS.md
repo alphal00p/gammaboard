@@ -76,7 +76,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Whether evaluator training values are required is a per-batch persisted contract (`batches.requires_training_values`), not inferred at ingest time from the currently active sampler config.
 - Queue payloads are transient and may use compact binary storage; do not optimize them for ad hoc SQL readability at the expense of runtime throughput.
 - Havana training and inference samplers must support nested discrete domains and preserve the full grid topology in persisted snapshots for restore/materialization.
-- Havana training runs in deterministic lockstep windows: it emits at most one `samples_for_update` window at a time, pauses production until that window is fully ingested, then updates the grid and continues.
+- Havana training runs in deterministic lockstep windows: it may keep producing while earlier batches from the same window are still in flight, but must cap in-flight+ingested production to at most one `samples_for_update` window at a time, then pause until that window is fully ingested before updating the grid and continuing.
 - Sample tasks must force an initial small batch round-trip before normal queue ramp-up so an observable snapshot is persisted immediately at task start, and must persist the observable again when the task completes.
 - Sampler-aggregator completed-batch ingestion should advance from a persisted `batch.id` cursor, not rescan the whole run on every tick.
 - Sampler-aggregator hot-loop control should reuse queue snapshots where possible and prefer direct evaluator counts over materializing full node rows.
