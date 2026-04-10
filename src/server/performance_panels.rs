@@ -598,7 +598,7 @@ fn sampler_current_panels(
                 ),
                 key_value(
                     "cleanup_passes",
-                    "Cleanup Passes",
+                    "Queue Cleanup Passes",
                     runtime.sampler.completed_delete_ms.count,
                 ),
                 key_value(
@@ -634,7 +634,7 @@ fn sampler_current_panels(
                 ),
                 key_value(
                     "completed_delete_ms",
-                    "Avg Cleanup Consumed Batches Ms",
+                    "Avg Queue Cleanup Ms",
                     window_mean_value(&runtime.sampler.completed_delete_ms, "no cleanup"),
                 ),
                 key_value(
@@ -1048,12 +1048,6 @@ fn sampler_tick_segments(runtime: &SamplerRuntimeMetrics) -> Vec<TickBreakdownSe
                 .mean
                 .unwrap_or(0.0),
             "#ca6702",
-        ),
-        (
-            "completed_delete",
-            "Cleanup Consumed Batches (sync)",
-            runtime.sampler.completed_delete_ms.mean.unwrap_or(0.0),
-            "#6d597a",
         ),
         (
             "produce",
