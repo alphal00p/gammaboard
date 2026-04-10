@@ -221,12 +221,18 @@ impl<T> EvaluatorWorkerStore for T where
 
 #[async_trait]
 pub trait SamplerWorkerStore:
-    WorkQueueStore + AggregationStore + RunTaskStore + ControlPlaneStore + Send + Sync
+    WorkQueueStore + AggregationStore + RunTaskStore + ControlPlaneStore + RunReadStore + Send + Sync
 {
 }
 
 impl<T> SamplerWorkerStore for T where
-    T: WorkQueueStore + AggregationStore + RunTaskStore + ControlPlaneStore + Send + Sync
+    T: WorkQueueStore
+        + AggregationStore
+        + RunTaskStore
+        + ControlPlaneStore
+        + RunReadStore
+        + Send
+        + Sync
 {
 }
 

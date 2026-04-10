@@ -155,6 +155,7 @@ impl SamplerRuntimeState {
         sampler: SamplerWorkRollingAverages,
         queue: crate::core::SamplerQueueRuntimeMetrics,
         completed_samples_total: i64,
+        avg_evaluator_utilization: Option<f64>,
     ) -> SamplerRuntimeMetrics {
         SamplerRuntimeMetrics {
             produced_batches_total: self.produced_batches_total,
@@ -165,6 +166,7 @@ impl SamplerRuntimeState {
             completed_samples_per_second: self.completed_samples_per_second,
             batch_size_current: self.batch_size_current,
             sampler_tick_busy_ratio: self.sampler_tick_busy_ratio,
+            avg_evaluator_utilization,
             sampler,
             queue,
         }
@@ -1038,6 +1040,7 @@ where
         queue_runtime.insert_task_utilization = insert_task_utilization;
         queue_runtime.completed_fetch_utilization = completed_fetch_utilization;
         let sampler_runtime = self.take_sampler_window_snapshot();
+        let avg_evaluator_utilization = self.avg_active_evaluator_utilization().await?;
 
         let snapshot = SamplerAggregatorPerformanceSnapshot {
             run_id: self.run_id,
@@ -1046,6 +1049,7 @@ where
                 sampler_runtime,
                 queue_runtime,
                 self.nr_completed_samples,
+                avg_evaluator_utilization,
             ),
             engine_diagnostics,
             rss_bytes: current_rss_bytes(),
@@ -1055,6 +1059,28 @@ where
             .await?;
         self.last_snapshot_at = Instant::now();
         Ok(())
+    }
+
+    async fn avg_active_evaluator_utilization(&self) -> Result<Option<f64>, RunnerError> {
+        let workers = self.store.get_registered_workers(Some(self.run_id)).await?;
+        let mut sum = 0.0;
+        let mut count = 0usize;
+        for worker in workers {
+            if worker.current_run_id != Some(self.run_id)
+                || worker.current_role.as_deref() != Some("evaluator")
+            {
+                continue;
+            }
+            let Some(metrics) = worker.evaluator_metrics else {
+                continue;
+            };
+            let Some(idle_ratio) = metrics.idle_profile.map(|profile| profile.idle_ratio) else {
+                continue;
+            };
+            sum += (1.0 - idle_ratio).clamp(0.0, 1.0);
+            count += 1;
+        }
+        Ok((count > 0).then_some(sum / count as f64))
     }
 
     fn update_completed_samples_per_second(

@@ -40,7 +40,6 @@ pub fn build_evaluator_performance_response(
 pub fn build_sampler_performance_response(
     scope_id: Option<String>,
     entries: Vec<SamplerPerformanceHistoryEntry>,
-    evaluator_entries: Option<Vec<EvaluatorPerformanceHistoryEntry>>,
 ) -> PanelResponse {
     let mut response = build_performance_response(
         scope_id.unwrap_or_else(|| "sampler".to_string()),
@@ -54,7 +53,7 @@ pub fn build_sampler_performance_response(
     if let Some(panel) = throughput_panel {
         response.updates.push(replace_panel(panel));
     }
-    if let Some(panel) = sampler_utilization_history_panel(&entries, evaluator_entries.as_deref()) {
+    if let Some(panel) = sampler_utilization_history_panel(&entries) {
         response.updates.push(replace_panel(panel));
     }
     if let Some(latest) = entries.first() {
@@ -351,7 +350,11 @@ fn evaluator_summary_panel(entries: &[EvaluatorPerformanceHistoryEntry]) -> Pane
                 "Avg Queue Starvation Ratio",
                 summary.avg_queue_starvation_ratio,
             ),
-            key_value("avg_idle_ratio", "Avg Idle Ratio", summary.avg_idle_ratio),
+            key_value(
+                "avg_evaluator_utilization",
+                "Avg Evaluator Utilization",
+                summary.avg_evaluator_utilization,
+            ),
         ],
     )
 }
@@ -365,7 +368,7 @@ struct EvaluatorSummary {
     avg_materialization_time_per_sample_ms: Option<f64>,
     avg_evaluate_time_per_sample_ms: Option<f64>,
     avg_submit_time_per_sample_ms: Option<f64>,
-    avg_idle_ratio: Option<f64>,
+    avg_evaluator_utilization: Option<f64>,
 }
 
 fn summarize_evaluator_metrics(entries: &[EvaluatorPerformanceHistoryEntry]) -> EvaluatorSummary {
@@ -387,7 +390,7 @@ fn summarize_evaluator_metrics(entries: &[EvaluatorPerformanceHistoryEntry]) -> 
             avg_materialization_time_per_sample_ms: None,
             avg_evaluate_time_per_sample_ms: None,
             avg_submit_time_per_sample_ms: None,
-            avg_idle_ratio: None,
+            avg_evaluator_utilization: None,
         };
     }
 
@@ -398,7 +401,8 @@ fn summarize_evaluator_metrics(entries: &[EvaluatorPerformanceHistoryEntry]) -> 
     let mut materialization_sum = 0.0;
     let mut evaluate_sum = 0.0;
     let mut submit_sum = 0.0;
-    let mut idle_sum = 0.0;
+    let mut utilization_sum = 0.0;
+    let mut utilization_count = 0usize;
     for metrics in latest_by_worker.values() {
         total_sum += metrics.avg_time_per_sample_ms;
         fetch_stall_sum += metrics.avg_fetch_stall_time_per_sample_ms;
@@ -407,11 +411,14 @@ fn summarize_evaluator_metrics(entries: &[EvaluatorPerformanceHistoryEntry]) -> 
         materialization_sum += metrics.avg_materialization_time_per_sample_ms;
         evaluate_sum += metrics.avg_evaluate_time_per_sample_ms;
         submit_sum += metrics.avg_submit_time_per_sample_ms;
-        idle_sum += metrics
+        if let Some(idle_ratio) = metrics
             .idle_profile
             .as_ref()
             .map(|profile| profile.idle_ratio)
-            .unwrap_or(0.0);
+        {
+            utilization_sum += (1.0 - idle_ratio).clamp(0.0, 1.0);
+            utilization_count += 1;
+        }
     }
 
     let count_f64 = count as f64;
@@ -424,7 +431,8 @@ fn summarize_evaluator_metrics(entries: &[EvaluatorPerformanceHistoryEntry]) -> 
         avg_materialization_time_per_sample_ms: Some(materialization_sum / count_f64),
         avg_evaluate_time_per_sample_ms: Some(evaluate_sum / count_f64),
         avg_submit_time_per_sample_ms: Some(submit_sum / count_f64),
-        avg_idle_ratio: Some(idle_sum / count_f64),
+        avg_evaluator_utilization: (utilization_count > 0)
+            .then_some(utilization_sum / utilization_count as f64),
     }
 }
 
@@ -483,6 +491,11 @@ fn sampler_current_panels(
                     runtime.queue.completed_fetch_utilization,
                 ),
                 key_value(
+                    "avg_evaluator_utilization",
+                    "Avg Evaluator Utilization",
+                    runtime.avg_evaluator_utilization,
+                ),
+                key_value(
                     "eval_ms_per_batch",
                     "Eval Ms / Batch",
                     runtime.sampler.eval_ms_per_batch.mean,
@@ -525,32 +538,41 @@ fn sampler_current_panels(
                 key_value(
                     "training_ingest_ms_per_sample",
                     "Training Ingest Ms / Sample",
-                    runtime.sampler.training_ingest_ms_per_sample.mean,
+                    event_metric_value(
+                        runtime.sampler.training_ingest_ms_per_sample.mean,
+                        "no training ingest",
+                    ),
                 ),
                 key_value(
                     "produce_ms_per_sample",
                     "Produce Ms / Sample",
-                    runtime.sampler.produce_ms_per_sample.mean,
+                    event_metric_value(runtime.sampler.produce_ms_per_sample.mean, "no batches"),
                 ),
                 key_value(
                     "merge_completed_batches_ms",
                     "Merge Completed Batches",
-                    runtime.sampler.completed_merge_ingest_ms.mean,
+                    event_metric_value(
+                        runtime.sampler.completed_merge_ingest_ms.mean,
+                        "no completed merges",
+                    ),
                 ),
                 key_value(
                     "persist_observable_ms",
                     "Persist Observable (frontend sync)",
-                    runtime.sampler.persist_observable_ms.mean,
+                    event_metric_value(
+                        runtime.sampler.persist_observable_ms.mean,
+                        "no frontend sync",
+                    ),
                 ),
                 key_value(
                     "completed_delete_ms",
                     "Cleanup Consumed Batches",
-                    runtime.sampler.completed_delete_ms.mean,
+                    event_metric_value(runtime.sampler.completed_delete_ms.mean, "no cleanup"),
                 ),
                 key_value(
                     "reclaim_ms",
                     "Reclaim Abandoned Batches",
-                    runtime.sampler.reclaim_ms.mean,
+                    event_metric_value(runtime.sampler.reclaim_ms.mean, "no reclaim"),
                 ),
             ],
         ),
@@ -605,79 +627,112 @@ fn sampler_current_panels(
                 key_value(
                     "completed_batch_fetch_ms",
                     "Completed Batch Fetch",
-                    runtime.queue.rolling.fetch_completed_ms.mean,
+                    event_metric_value(runtime.queue.rolling.fetch_completed_ms.mean, "no fetches"),
                 ),
                 key_value(
                     "fetch_completed_batches",
                     "Completed Batches / Fetch",
-                    runtime.queue.rolling.fetch_completed_batches.mean,
+                    event_metric_value(
+                        runtime.queue.rolling.fetch_completed_batches.mean,
+                        "no fetches",
+                    ),
                 ),
                 key_value(
                     "fetch_completed_prefetch_fill_ratio",
                     "Completed Prefetch Fill Ratio",
-                    runtime
-                        .queue
-                        .rolling
-                        .fetch_completed_prefetch_fill_ratio
-                        .mean,
+                    event_metric_value(
+                        runtime
+                            .queue
+                            .rolling
+                            .fetch_completed_prefetch_fill_ratio
+                            .mean,
+                        "no fetches",
+                    ),
                 ),
                 key_value(
                     "insert_bundle_ms",
                     "Insert Bundle",
-                    runtime.queue.rolling.insert_bundle_ms.mean,
+                    event_metric_value(runtime.queue.rolling.insert_bundle_ms.mean, "no inserts"),
                 ),
                 key_value(
                     "insert_bundle_ms_per_batch",
                     "Insert / Batch",
-                    runtime.queue.rolling.insert_bundle_ms_per_batch.mean,
+                    event_metric_value(
+                        runtime.queue.rolling.insert_bundle_ms_per_batch.mean,
+                        "no inserts",
+                    ),
                 ),
                 key_value(
                     "insert_bundle_local_pending_at_start",
                     "Local Pending At Insert Start",
-                    runtime
-                        .queue
-                        .rolling
-                        .insert_bundle_local_pending_at_start
-                        .mean,
+                    event_metric_value(
+                        runtime
+                            .queue
+                            .rolling
+                            .insert_bundle_local_pending_at_start
+                            .mean,
+                        "no inserts",
+                    ),
                 ),
                 key_value(
                     "insert_bundle_db_pending_at_start",
                     "DB Pending At Insert Start",
-                    runtime.queue.rolling.insert_bundle_db_pending_at_start.mean,
+                    event_metric_value(
+                        runtime.queue.rolling.insert_bundle_db_pending_at_start.mean,
+                        "no inserts",
+                    ),
                 ),
                 key_value(
                     "insert_bundle_serialize_ms",
                     "Insert Serialize",
-                    runtime.queue.rolling.insert_bundle_serialize_ms.mean,
+                    event_metric_value(
+                        runtime.queue.rolling.insert_bundle_serialize_ms.mean,
+                        "no inserts",
+                    ),
                 ),
                 key_value(
                     "insert_bundle_payload_bytes",
                     "Insert Payload Bytes",
-                    runtime.queue.rolling.insert_bundle_payload_bytes.mean,
+                    event_metric_value(
+                        runtime.queue.rolling.insert_bundle_payload_bytes.mean,
+                        "no inserts",
+                    ),
                 ),
                 key_value(
                     "insert_bundle_payload_bytes_per_batch",
                     "Insert Payload Bytes / Batch",
-                    runtime
-                        .queue
-                        .rolling
-                        .insert_bundle_payload_bytes_per_batch
-                        .mean,
+                    event_metric_value(
+                        runtime
+                            .queue
+                            .rolling
+                            .insert_bundle_payload_bytes_per_batch
+                            .mean,
+                        "no inserts",
+                    ),
                 ),
                 key_value(
                     "insert_bundle_db_batches_ms",
                     "Insert Batches SQL",
-                    runtime.queue.rolling.insert_bundle_db_batches_ms.mean,
+                    event_metric_value(
+                        runtime.queue.rolling.insert_bundle_db_batches_ms.mean,
+                        "no inserts",
+                    ),
                 ),
                 key_value(
                     "insert_bundle_db_inputs_ms",
                     "Insert Inputs SQL",
-                    runtime.queue.rolling.insert_bundle_db_inputs_ms.mean,
+                    event_metric_value(
+                        runtime.queue.rolling.insert_bundle_db_inputs_ms.mean,
+                        "no inserts",
+                    ),
                 ),
                 key_value(
                     "insert_bundle_commit_ms",
                     "Insert Commit",
-                    runtime.queue.rolling.insert_bundle_commit_ms.mean,
+                    event_metric_value(
+                        runtime.queue.rolling.insert_bundle_commit_ms.mean,
+                        "no inserts",
+                    ),
                 ),
             ],
         ),
@@ -731,11 +786,11 @@ fn sampler_completed_throughput_panel(
 
 fn sampler_utilization_history_panel(
     entries: &[SamplerPerformanceHistoryEntry],
-    evaluator_entries: Option<&[EvaluatorPerformanceHistoryEntry]>,
 ) -> Option<PanelState> {
     let mut sampler_tick_points = Vec::new();
     let mut insert_task_points = Vec::new();
     let mut completed_fetch_points = Vec::new();
+    let mut evaluator_utilization_points = Vec::new();
 
     for entry in entries.iter().rev() {
         let runtime = decode_sampler_runtime_metrics(entry)?;
@@ -758,11 +813,15 @@ fn sampler_utilization_history_panel(
             y_min: None,
             y_max: None,
         });
+        if let Some(utilization) = runtime.avg_evaluator_utilization {
+            evaluator_utilization_points.push(PlotPoint {
+                x,
+                y: utilization.clamp(0.0, 1.0),
+                y_min: None,
+                y_max: None,
+            });
+        }
     }
-
-    let evaluator_busy_points = evaluator_entries
-        .map(aggregate_evaluator_busy_points)
-        .unwrap_or_default();
 
     Some(multi_timeseries_panel(
         "sampler_utilization_history",
@@ -789,44 +848,10 @@ fn sampler_utilization_history_panel(
                 id: "avg_evaluator_utilization".to_string(),
                 label: "Avg Evaluator Utilization".to_string(),
                 color: Some("#7c3aed".to_string()),
-                points: evaluator_busy_points,
+                points: evaluator_utilization_points,
             },
         ],
     ))
-}
-
-fn aggregate_evaluator_busy_points(entries: &[EvaluatorPerformanceHistoryEntry]) -> Vec<PlotPoint> {
-    const BUCKET_MS: f64 = 1000.0;
-
-    let mut by_bucket = BTreeMap::<i64, (f64, usize)>::new();
-    for entry in entries {
-        let Some(idle_ratio) = entry
-            .metrics
-            .idle_profile
-            .as_ref()
-            .map(|profile| profile.idle_ratio)
-        else {
-            continue;
-        };
-        let x = history_x(entry.created_at);
-        let bucket = (x / BUCKET_MS).round() as i64;
-        let busy = (1.0 - idle_ratio).clamp(0.0, 1.0);
-        let aggregate = by_bucket.entry(bucket).or_insert((0.0, 0));
-        aggregate.0 += busy;
-        aggregate.1 += 1;
-    }
-
-    by_bucket
-        .into_iter()
-        .filter_map(|(bucket, (sum, count))| {
-            (count > 0).then_some(PlotPoint {
-                x: bucket as f64 * BUCKET_MS,
-                y: sum / count as f64,
-                y_min: None,
-                y_max: None,
-            })
-        })
-        .collect()
 }
 
 fn instant_throughput_points_from_cumulative(samples: &[(f64, i64, f64)]) -> Vec<PlotPoint> {
@@ -907,6 +932,13 @@ fn decode_sampler_runtime_metrics(
     entry: &SamplerPerformanceHistoryEntry,
 ) -> Option<SamplerRuntimeMetrics> {
     serde_json::from_value(entry.runtime_metrics.clone()).ok()
+}
+
+fn event_metric_value(value: Option<f64>, empty_label: &str) -> JsonValue {
+    match value {
+        Some(value) => JsonValue::from(value),
+        None => JsonValue::String(empty_label.to_string()),
+    }
 }
 
 fn ms_to_us(value_ms: f64) -> f64 {

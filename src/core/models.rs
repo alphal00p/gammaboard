@@ -286,6 +286,8 @@ pub struct SamplerRuntimeMetrics {
     pub completed_samples_per_second: f64,
     pub batch_size_current: usize,
     pub sampler_tick_busy_ratio: Option<f64>,
+    #[serde(default)]
+    pub avg_evaluator_utilization: Option<f64>,
     pub sampler: SamplerWorkRollingAverages,
     pub queue: SamplerQueueRuntimeMetrics,
 }

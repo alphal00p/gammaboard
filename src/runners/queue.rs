@@ -799,12 +799,17 @@ mod tests {
     use super::*;
     use crate::core::{
         AggregationStore, BatchClaim, ControlPlaneStore, DesiredAssignment,
-        EvaluatorPerformanceSnapshot, InsertBatchesOutcome, RegisteredNode, RunSampleProgress,
-        RunStageSnapshot, RunTask, RunTaskInput, RunTaskStore,
+        EvaluatorPerformanceSnapshot, InsertBatchesOutcome, RegisteredNode, RunReadStore,
+        RunSampleProgress, RunStageSnapshot, RunTask, RunTaskInput, RunTaskStore,
         SamplerAggregatorPerformanceSnapshot, WorkQueueStore,
     };
     use crate::evaluation::{Batch, Point};
     use crate::sampling::{LatentBatchPayload, LatentBatchSpec};
+    use crate::stores::{
+        EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress,
+        SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot, WorkQueueStats,
+        WorkerLogPage,
+    };
     use crate::utils::domain::Domain;
     use async_trait::async_trait;
     use serde_json::Value as JsonValue;
@@ -1181,6 +1186,99 @@ mod tests {
         }
 
         async fn remove_run(&self, _run_id: i32) -> Result<(), StoreError> {
+            unreachable!("unused in test")
+        }
+    }
+
+    #[async_trait]
+    impl RunReadStore for RecordingStore {
+        async fn health_check(&self) -> Result<(), StoreError> {
+            unreachable!("unused in test")
+        }
+
+        async fn get_all_runs(&self) -> Result<Vec<RunProgress>, StoreError> {
+            unreachable!("unused in test")
+        }
+
+        async fn get_run_progress(&self, _run_id: i32) -> Result<Option<RunProgress>, StoreError> {
+            unreachable!("unused in test")
+        }
+
+        async fn get_work_queue_stats(
+            &self,
+            _run_id: i32,
+        ) -> Result<Vec<WorkQueueStats>, StoreError> {
+            unreachable!("unused in test")
+        }
+
+        async fn get_task_output_snapshots(
+            &self,
+            _run_id: i32,
+            _task_id: i64,
+            _after_snapshot_id: Option<i64>,
+            _limit: i64,
+        ) -> Result<Vec<TaskOutputSnapshot>, StoreError> {
+            unreachable!("unused in test")
+        }
+
+        async fn get_latest_task_stage_snapshot(
+            &self,
+            _run_id: i32,
+            _task_id: i64,
+        ) -> Result<Option<TaskStageSnapshot>, StoreError> {
+            unreachable!("unused in test")
+        }
+
+        async fn get_worker_logs(
+            &self,
+            _run_id: i32,
+            _limit: i64,
+            _node_name: Option<&str>,
+            _level: Option<&str>,
+            _query: Option<&str>,
+            _before_id: Option<i64>,
+        ) -> Result<WorkerLogPage, StoreError> {
+            unreachable!("unused in test")
+        }
+
+        async fn get_registered_workers(
+            &self,
+            _run_id: Option<i32>,
+        ) -> Result<Vec<RegisteredWorkerEntry>, StoreError> {
+            Ok(Vec::new())
+        }
+
+        async fn get_evaluator_performance_history(
+            &self,
+            _run_id: i32,
+            _limit: i64,
+            _worker_id: Option<&str>,
+        ) -> Result<Vec<EvaluatorPerformanceHistoryEntry>, StoreError> {
+            unreachable!("unused in test")
+        }
+
+        async fn get_sampler_performance_history(
+            &self,
+            _run_id: i32,
+            _limit: i64,
+            _worker_id: Option<&str>,
+        ) -> Result<Vec<SamplerPerformanceHistoryEntry>, StoreError> {
+            unreachable!("unused in test")
+        }
+
+        async fn get_worker_evaluator_performance_history(
+            &self,
+            _worker_id: &str,
+            _limit: i64,
+        ) -> Result<Vec<EvaluatorPerformanceHistoryEntry>, StoreError> {
+            unreachable!("unused in test")
+        }
+
+        async fn get_worker_sampler_performance_history(
+            &self,
+            _worker_id: &str,
+            _limit: i64,
+        ) -> Result<Vec<SamplerPerformanceHistoryEntry>, StoreError> {
             unreachable!("unused in test")
         }
     }
