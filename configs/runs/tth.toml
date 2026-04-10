@@ -18,7 +18,7 @@ db_pool_size = 2
 performance_snapshot_interval_ms = 2000
 min_tick_time_ms = 10
 frontend_sync_interval_ms = 2000
-target_batch_eval_ms = 5000.0
+target_batch_eval_ms = 500.0
 max_batch_size = 131072
 db_pool_size = 16
 
