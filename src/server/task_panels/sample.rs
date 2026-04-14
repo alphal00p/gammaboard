@@ -550,7 +550,7 @@ fn gammaloop_histogram_bundle_panel(observable: ObservableState) -> Option<Panel
     let ObservableState::Gammaloop(state) = observable else {
         return None;
     };
-    let payload = gammaloop_histogram_bundle_payload(&state);
+    let payload = serde_json::to_value(&state.bundle).unwrap_or(JsonValue::Null);
 
     Some(table_panel_with_payload(
         "gammaloop_histogram_bundle",
@@ -605,71 +605,6 @@ fn gammaloop_histogram_bundle_panel(observable: ObservableState) -> Option<Panel
                 ]
             })
             .collect(),
-        Some(serde_json::to_value(payload).unwrap_or(JsonValue::Null)),
+        Some(payload),
     ))
-}
-
-#[derive(Debug, Serialize)]
-struct GammaloopHistogramBundlePayload {
-    primary_histogram_name: Option<String>,
-    histograms: BTreeMap<String, GammaloopHistogramSelectionEntry>,
-}
-
-#[derive(Debug, Serialize)]
-struct GammaloopHistogramSelectionEntry {
-    title: String,
-    type_description: String,
-    phase: String,
-    value_transform: String,
-    sample_count: usize,
-    x_min: Option<f64>,
-    x_max: Option<f64>,
-    log_x_axis: bool,
-    log_y_axis: bool,
-    bins: Vec<HistogramBin>,
-}
-
-fn gammaloop_histogram_bundle_payload(
-    state: &GammaLoopObservableState,
-) -> GammaloopHistogramBundlePayload {
-    GammaloopHistogramBundlePayload {
-        primary_histogram_name: state.primary_histogram_name().map(str::to_string),
-        histograms: state
-            .bundle
-            .histograms
-            .iter()
-            .map(|(name, histogram)| {
-                (
-                    name.clone(),
-                    GammaloopHistogramSelectionEntry {
-                        title: histogram.title.clone(),
-                        type_description: histogram.type_description.clone(),
-                        phase: match histogram.phase {
-                            ObservablePhase::Real => "real".to_string(),
-                            ObservablePhase::Imag => "imag".to_string(),
-                        },
-                        value_transform: match histogram.value_transform {
-                            ObservableValueTransform::Identity => "identity".to_string(),
-                            ObservableValueTransform::Log10 => "log10".to_string(),
-                        },
-                        sample_count: histogram.sample_count,
-                        x_min: histogram.x_min,
-                        x_max: histogram.x_max,
-                        log_x_axis: histogram.log_x_axis,
-                        log_y_axis: histogram.log_y_axis,
-                        bins: histogram
-                            .bins
-                            .iter()
-                            .map(|bin| HistogramBin {
-                                start: bin.x_min.unwrap_or(histogram.x_min.unwrap()),
-                                stop: bin.x_max.unwrap_or(histogram.x_max.unwrap()),
-                                value: bin.average(histogram.sample_count),
-                                error: bin.error(histogram.sample_count),
-                            })
-                            .collect(),
-                    },
-                )
-            })
-            .collect(),
-    }
 }

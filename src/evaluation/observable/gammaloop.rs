@@ -41,14 +41,35 @@ impl GammaLoopObservableState {
     }
 
     pub fn primary_histogram_name(&self) -> Option<&str> {
-        self.bundle
+        // Prefer an explicitly ordered or tagged histogram if present, otherwise
+        // fall back to the histogram with the largest sample_count, then to the
+        // first map entry.
+        if let Some((name, _)) = self
+            .bundle
             .histograms
             .iter()
-            .next()
-            .map(|(name, _)| name.as_str())
+            .find(|(_, h)| h.discrete_ordering.is_some())
+        {
+            return Some(name.as_str());
+        }
+        if let Some((name, _)) = self
+            .bundle
+            .histograms
+            .iter()
+            .max_by_key(|(_, h)| h.sample_count)
+        {
+            return Some(name.as_str());
+        }
+        self.bundle.histograms.iter().next().map(|(name, _)| name.as_str())
     }
 
     pub fn primary_histogram(&self) -> Option<&HistogramSnapshot> {
+        if let Some((_, hist)) = self.bundle.histograms.iter().find(|(_, h)| h.discrete_ordering.is_some()) {
+            return Some(hist);
+        }
+        if let Some((_, hist)) = self.bundle.histograms.iter().max_by_key(|(_, h)| h.sample_count) {
+            return Some(hist);
+        }
         self.bundle.histograms.values().next()
     }
 
