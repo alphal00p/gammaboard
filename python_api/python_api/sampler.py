@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 from .types import Diagnostics, DiscreteBatch, RealBatch, RealOut, SamplePlan, Snapshot
 
@@ -24,58 +25,106 @@ class SamplerAggregator(ABC):
     continuous_dims: int
 
     @abstractmethod
-    def sample_plan(self) -> SamplePlan: ...
+    def sample_plan(self) -> SamplePlan:
+        """Return a JSON-serializable description of what the sampler will produce.
 
-    # JSON-serializable description of what the sampler will produce; safe to persist.
-    # Example:
-    #     {
-    #         "kind": "monte_carlo",
-    #         "discrete_dims": 2,
-    #         "continuous_dims": 1,
-    #         "batch_hint": 256,         # advisory preferred batch size
-    #         "meta": {"seed": 42}     # sampler-specific params
-    #     }
-    # Fields are advisory; callers should not assume strict validation beyond the documented keys.
-    # these are used for the frontend display
+        Example:
+            {
+                "kind": "monte_carlo",
+                "discrete_dims": 2,
+                "continuous_dims": 1,
+                "batch_hint": 256,         # advisory preferred batch size
+                "meta": {"seed": 42}     # sampler-specific params
+            }
 
-    @abstractmethod
-    def training_samples_remaining(self) -> int | None: ...
-
-    # Returns remaining training samples; None means "no fixed training phase" or unknown/unbounded.
+        Fields are advisory and primarily for frontend/display use. Callers should not
+        assume strict validation beyond documented keys.
+        """
+        raise NotImplementedError
 
     @abstractmethod
-    def produce_latent_batch(
-        self, nr_samples: int
-    ) -> tuple[DiscreteBatch, RealBatch]: ...
+    def training_samples_remaining(self) -> int | None:
+        """Return remaining training samples.
 
-    # Returns two arrays with first dimension == nr_samples. Caller is responsible for matching batch sizes.
-
-    @abstractmethod
-    def ingest_training_weights(self, training_weights: RealOut) -> None: ...
-
-    # Per-sample weights for the most recently produced batch. Must be called after produce_latent_batch
-    # with a matching length; implementations may assume this ordering.
+        None means there is no fixed training phase or the remaining count is
+        unknown/unbounded.
+        """
+        raise NotImplementedError
 
     @abstractmethod
-    def snapshot(self) -> Snapshot: ...
+    def produce_latent_batch(self, nr_samples: int) -> tuple[DiscreteBatch, RealBatch]:
+        """Produce a latent batch.
 
-    # JSON-serializable state sufficient to restore the sampler.
+        Returns two arrays (discrete, continuous) where the first dimension == nr_samples.
+        The caller is responsible for requesting an appropriate nr_samples and for
+        matching batch sizes when ingesting training weights.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def ingest_training_weights(self, training_weights: RealOut) -> None:
+        """Provide per-sample training weights for the most recently produced batch.
+
+        Must be called after produce_latent_batch with a matching length. Implementations
+        may assume this ordering and may update internal training progress/state.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def snapshot(self) -> Snapshot:
+        """Return a JSON-serializable snapshot suitable for persistence.
+
+        The snapshot must contain enough information for from_snapshot to restore
+        an equivalent sampler instance.
+        """
+        raise NotImplementedError
 
     @classmethod
     @abstractmethod
-    def from_snapshot(cls, snapshot: Snapshot) -> "SamplerAggregator": ...
-    # Factory to restore an instance from a snapshot produced by snapshot().
-    # Implementations should accept only JSON-serializable snapshots and may raise
-    # an exception for incompatible or corrupted snapshots.
+    def from_snapshot(
+        cls,
+        *,
+        snapshot: Snapshot,
+        discrete_dims: int,
+        continuous_dims: int,
+        init_args: dict | None = None,
+    ) -> "SamplerAggregator":
+        """Factory to restore an instance from a snapshot produced by snapshot().
+
+        Args:
+            snapshot: JSON-serializable state from snapshot().
+            discrete_dims, continuous_dims: expected dimensionality (may be used for validation).
+            init_args: optional initialization args that were passed via from_config.
+
+        Implementations should accept only JSON-serializable snapshots and may raise
+        on incompatible or corrupted snapshots.
+        """
+        raise NotImplementedError
+
+    @classmethod
+    @abstractmethod
+    def from_config(
+        cls,
+        *,
+        discrete_dims: int,
+        continuous_dims: int,
+        init_args: dict | None = None,
+    ) -> "SamplerAggregator":
+        """Factory to construct a fresh sampler from configuration.
+
+        This mirrors example samplers' from_config signature. init_args is the
+        framework-provided module init dict and may be empty.
+        """
+        raise NotImplementedError
 
     def get_diagnostics(self) -> Diagnostics:
+        """Optional runtime diagnostics. Empty dict means no diagnostics available."""
         return {}
 
-    # Optional runtime diagnostics; empty dict means no diagnostics available.
+    def pdf(self, xs_discrete: DiscreteBatch, xs_continuous: RealBatch) -> RealOut | None:
+        """Return per-sample PDF values if supported.
 
-    def pdf(
-        self, xs_discrete: DiscreteBatch, xs_continuous: RealBatch
-    ) -> RealOut | None:
+        Return a float64 array with shape (nr_samples,) or None to signal that
+        the sampler does not support/doesn't provide a PDF for the given batch.
+        """
         return None
-
-    # Return per-sample pdf values if supported. Returning None signals that PDF is unsupported or not available.
