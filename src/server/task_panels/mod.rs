@@ -1,4 +1,5 @@
 mod full_observable;
+mod pdf_adaptation;
 mod sample;
 
 use crate::core::{EngineError, ObservableConfig, RunTask, RunTaskSpec};
@@ -209,6 +210,9 @@ impl RunTaskSpec {
             Self::Image {
                 geometry, display, ..
             } => full_observable::image_projectors(geometry.clone(), *display),
+            Self::PdfAdaptationImage { geometry, .. } => {
+                pdf_adaptation::projectors(geometry.clone(), crate::core::ImageDisplayMode::Auto)
+            }
             Self::PlotLine {
                 geometry,
                 display,
@@ -630,8 +634,9 @@ mod tests {
     use crate::server::panels::{PanelUpdateMode, PlotPoint, scalar_timeseries_panel};
     use chrono::Utc;
     use gammalooprs::observables::{
-        HistogramBinSnapshot, HistogramSnapshot, HistogramStatisticsSnapshot, ObservablePhase,
-        ObservableSnapshotBundle, ObservableValueTransform,
+        HistogramBinSnapshot, HistogramSnapshot, HistogramSnapshotKind,
+        HistogramStatisticsSnapshot, ObservablePhase, ObservableSnapshotBundle,
+        ObservableValueTransform,
     };
 
     fn line_geometry() -> crate::core::LineRasterGeometry {
@@ -708,19 +713,24 @@ mod tests {
                     (
                         "pt".to_string(),
                         HistogramSnapshot {
+                            kind: HistogramSnapshotKind::Continuous,
                             title: "pt".to_string(),
                             type_description: "HwU".to_string(),
                             phase: ObservablePhase::Real,
                             value_transform: ObservableValueTransform::Identity,
                             supports_misbinning_mitigation: false,
-                            x_min: 0.0,
-                            x_max: 10.0,
+                            discrete_min_bin_id: None,
+                            discrete_ordering: None,
+                            x_min: Some(0.0),
+                            x_max: Some(10.0),
                             sample_count: 2,
                             log_x_axis: false,
                             log_y_axis: false,
                             bins: vec![HistogramBinSnapshot {
                                 x_min: Some(0.0),
                                 x_max: Some(10.0),
+                                bin_id: None,
+                                label: None,
                                 entry_count: 2,
                                 sum_weights: 4.0,
                                 sum_weights_squared: 10.0,
@@ -729,6 +739,8 @@ mod tests {
                             underflow_bin: HistogramBinSnapshot {
                                 x_min: None,
                                 x_max: None,
+                                bin_id: None,
+                                label: None,
                                 entry_count: 0,
                                 sum_weights: 0.0,
                                 sum_weights_squared: 0.0,
@@ -737,6 +749,8 @@ mod tests {
                             overflow_bin: HistogramBinSnapshot {
                                 x_min: None,
                                 x_max: None,
+                                bin_id: None,
+                                label: None,
                                 entry_count: 0,
                                 sum_weights: 0.0,
                                 sum_weights_squared: 0.0,
@@ -752,19 +766,24 @@ mod tests {
                     (
                         "eta".to_string(),
                         HistogramSnapshot {
+                            kind: HistogramSnapshotKind::Continuous,
+                            discrete_min_bin_id: None,
+                            discrete_ordering: None,
                             title: "eta".to_string(),
                             type_description: "HwU".to_string(),
                             phase: ObservablePhase::Imag,
                             value_transform: ObservableValueTransform::Log10,
                             supports_misbinning_mitigation: true,
-                            x_min: -1.0,
-                            x_max: 1.0,
+                            x_min: Some(-1.0),
+                            x_max: Some(1.0),
                             sample_count: 1,
                             log_x_axis: true,
                             log_y_axis: true,
                             bins: vec![HistogramBinSnapshot {
                                 x_min: Some(-1.0),
                                 x_max: Some(1.0),
+                                bin_id: None,
+                                label: None,
                                 entry_count: 1,
                                 sum_weights: 2.0,
                                 sum_weights_squared: 4.0,
@@ -773,6 +792,8 @@ mod tests {
                             underflow_bin: HistogramBinSnapshot {
                                 x_min: None,
                                 x_max: None,
+                                bin_id: None,
+                                label: None,
                                 entry_count: 0,
                                 sum_weights: 0.0,
                                 sum_weights_squared: 0.0,
@@ -781,6 +802,8 @@ mod tests {
                             overflow_bin: HistogramBinSnapshot {
                                 x_min: None,
                                 x_max: None,
+                                bin_id: None,
+                                label: None,
                                 entry_count: 0,
                                 sum_weights: 0.0,
                                 sum_weights_squared: 0.0,

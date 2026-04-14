@@ -6,14 +6,15 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 if TYPE_CHECKING:
-    from python_api.abc import SamplerAggregator as _SamplerAggregator
+    from python_api.sampler import SamplerAggregator as _SamplerAggregator
 else:
     class _SamplerAggregator:
         pass
 
 @dataclass
 class BasicMonteCarloSampler(_SamplerAggregator):
-    input_dim: int
+    discrete_dims: int
+    continuous_dims: int
     training_target_samples: int = 0
     trained_samples: int = 0
     produced_batches: int = 0
@@ -21,24 +22,44 @@ class BasicMonteCarloSampler(_SamplerAggregator):
     _rng: np.random.Generator | None = None
 
     def __post_init__(self) -> None:
-        if self.input_dim <= 0:
-            raise ValueError("input_dim must be > 0")
+        if self.discrete_dims != 0:
+            raise ValueError("demo sampler supports only discrete_dims = 0")
+        if self.continuous_dims <= 0:
+            raise ValueError("continuous_dims must be > 0")
         if self._rng is None:
             self._rng = np.random.default_rng(0)
 
     @classmethod
-    def from_config(cls, *, input_dim: int, init_args: dict[str, Any]):
+    def from_config(
+        cls,
+        *,
+        discrete_dims: int,
+        continuous_dims: int,
+        init_args: dict[str, Any],
+    ):
         args = dict(init_args or {})
         seed = int(args.pop("seed", 0))
-        sampler = cls(input_dim=int(input_dim), **args)
+        sampler = cls(
+            discrete_dims=int(discrete_dims),
+            continuous_dims=int(continuous_dims),
+            **args,
+        )
         sampler._rng = np.random.default_rng(seed)
         return sampler
 
     @classmethod
-    def from_snapshot(cls, *, snapshot: dict[str, Any], input_dim: int, init_args: dict[str, Any]):
+    def from_snapshot(
+        cls,
+        *,
+        snapshot: dict[str, Any],
+        discrete_dims: int,
+        continuous_dims: int,
+        init_args: dict[str, Any],
+    ):
         args = dict(init_args or {})
         sampler = cls(
-            input_dim=int(input_dim),
+            discrete_dims=int(discrete_dims),
+            continuous_dims=int(continuous_dims),
             training_target_samples=int(snapshot.get("training_target_samples", args.get("training_target_samples", 0))),
             trained_samples=int(snapshot.get("trained_samples", 0)),
             produced_batches=int(snapshot.get("produced_batches", 0)),
@@ -62,12 +83,15 @@ class BasicMonteCarloSampler(_SamplerAggregator):
     def sample_plan(self) -> dict[str, Any]:
         return {"kind": "produce", "nr_samples": 1_000_000_000}
 
-    def produce_latent_batch(self, nr_samples: int) -> np.ndarray:
+    def produce_latent_batch(self, nr_samples: int) -> tuple[np.ndarray, np.ndarray]:
         if nr_samples <= 0:
             raise ValueError("nr_samples must be > 0")
         self.produced_batches += 1
         self.produced_samples += nr_samples
-        return self._rng.random((nr_samples, self.input_dim), dtype=np.float64)
+        return (
+            np.zeros((nr_samples, self.discrete_dims), dtype=np.int64),
+            self._rng.random((nr_samples, self.continuous_dims), dtype=np.float64),
+        )
 
     def ingest_training_weights(self, training_weights: np.ndarray) -> None:
         self.trained_samples += int(np.asarray(training_weights).shape[0])
@@ -88,3 +112,16 @@ class BasicMonteCarloSampler(_SamplerAggregator):
             "trained_samples": self.trained_samples,
             "training_samples_remaining": self.training_samples_remaining(),
         }
+
+    def pdf(self, xs_discrete: np.ndarray, xs_continuous: np.ndarray) -> np.ndarray:
+        xs_discrete = np.asarray(xs_discrete, dtype=np.int64)
+        xs_continuous = np.asarray(xs_continuous, dtype=np.float64)
+        if xs_discrete.ndim != 2 or xs_discrete.shape[1] != self.discrete_dims:
+            raise ValueError(
+                f"expected discrete xs with shape (nr_samples, {self.discrete_dims}), got {xs_discrete.shape}"
+            )
+        if xs_continuous.ndim != 2 or xs_continuous.shape[1] != self.continuous_dims:
+            raise ValueError(
+                f"expected continuous xs with shape (nr_samples, {self.continuous_dims}), got {xs_continuous.shape}"
+            )
+        return np.ones((xs_continuous.shape[0],), dtype=np.float64)

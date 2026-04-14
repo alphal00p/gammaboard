@@ -64,6 +64,11 @@ impl Evaluator for SincEvaluator {
         let started = Instant::now();
         let mut observable_state = ObservableState::from_config(observable);
         let weighted_values = match &mut observable_state {
+            ObservableState::Empty(observable) => {
+                self.eval_complex_into(batch, observable, options.require_training_values, |v| {
+                    v.norm()
+                })?
+            }
             ObservableState::Complex(observable) => {
                 self.eval_complex_into(batch, observable, options.require_training_values, |v| {
                     v.norm()

@@ -625,9 +625,14 @@ where
             .map_err(RunnerError::Engine)?;
         let snapshot = if persist_snapshot {
             Some(
-                self.observable_state
-                    .to_persistent_json()
-                    .map_err(RunnerError::Engine)?,
+                self.sampler
+                    .persisted_output()
+                    .map_err(RunnerError::Engine)?
+                    .unwrap_or(
+                        self.observable_state
+                            .to_persistent_json()
+                            .map_err(RunnerError::Engine)?,
+                    ),
             )
         } else {
             None

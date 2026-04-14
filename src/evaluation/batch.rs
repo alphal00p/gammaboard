@@ -146,16 +146,6 @@ impl BatchResult {
     }
 
     pub fn validate_json_safe(&self) -> Result<(), BatchError> {
-        if let Some(values) = &self.values {
-            for (idx, value) in values.iter().enumerate() {
-                if !value.is_finite() {
-                    return Err(BatchError::layout(format!(
-                        "batch values contain non-finite f64 at index {idx}: {value}"
-                    )));
-                }
-            }
-        }
-
         let observable_json = self.observable.to_json().map_err(|err| {
             BatchError::layout(format!(
                 "failed to serialize batch observable payload: {err}"
@@ -240,5 +230,17 @@ mod tests {
         )
         .expect("decode values");
         assert_eq!(restored.values, result.values);
+    }
+
+    #[test]
+    fn validate_json_safe_allows_non_finite_training_values() {
+        let result = BatchResult::new(
+            Some(vec![1.0, f64::NAN, f64::INFINITY]),
+            ObservableState::empty_scalar(),
+        );
+
+        result
+            .validate_json_safe()
+            .expect("training values are stored as binary, not json");
     }
 }

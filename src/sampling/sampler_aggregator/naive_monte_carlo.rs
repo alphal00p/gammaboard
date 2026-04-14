@@ -1,6 +1,8 @@
 use crate::core::{BuildError, EngineError};
 use crate::evaluation::{Batch, Point};
-use crate::sampling::{LatentBatchSpec, SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot};
+use crate::sampling::{
+    LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot,
+};
 use crate::utils::domain::Domain;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -209,6 +211,21 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
             .pending_training_samples
             .saturating_sub(training_weights.len());
         Ok(())
+    }
+
+    fn pdf(&mut self, point: &PdfPoint) -> Result<Option<f64>, EngineError> {
+        let (discrete, continuous) = point;
+        if self.discrete_dims > 0 || !discrete.is_empty() {
+            return Ok(None);
+        }
+        if continuous.len() != self.continuous_dims {
+            return Ok(None);
+        }
+        if continuous.iter().all(|value| (0.0..=1.0).contains(value)) {
+            Ok(Some(1.0))
+        } else {
+            Ok(Some(0.0))
+        }
     }
 }
 

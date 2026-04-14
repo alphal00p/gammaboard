@@ -1,4 +1,5 @@
 mod complex;
+mod empty;
 mod full;
 mod gammaloop;
 mod scalar;
@@ -9,6 +10,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value as JsonValue;
 
 pub use self::complex::ComplexObservableState;
+pub use self::empty::EmptyObservableState;
 pub use self::full::{
     ComplexValue, FullComplexObservableState, FullObservableProgress, FullScalarObservableState,
 };
@@ -64,6 +66,7 @@ pub trait Observable: Clone + Serialize + DeserializeOwned {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ObservableState {
+    Empty(EmptyObservableState),
     Scalar(ScalarObservableState),
     Complex(ComplexObservableState),
     Gammaloop(GammaLoopObservableState),
@@ -130,12 +133,17 @@ impl ObservableState {
 
     pub fn from_config(config: &ObservableConfig) -> Self {
         match config {
+            ObservableConfig::Empty => Self::empty(),
             ObservableConfig::Scalar => Self::empty_scalar(),
             ObservableConfig::Complex => Self::empty_complex(),
             ObservableConfig::Gammaloop => Self::empty_gammaloop(),
             ObservableConfig::FullScalar => Self::empty_full_scalar(),
             ObservableConfig::FullComplex => Self::empty_full_complex(),
         }
+    }
+
+    pub fn empty() -> Self {
+        Self::Empty(EmptyObservableState::default())
     }
 
     pub fn empty_scalar() -> Self {
@@ -160,6 +168,7 @@ impl ObservableState {
 
     pub fn kind_str(&self) -> &'static str {
         match self {
+            Self::Empty(_) => "empty",
             Self::Scalar(_) => "scalar",
             Self::Complex(_) => "complex",
             Self::Gammaloop(_) => "gammaloop",
@@ -170,6 +179,7 @@ impl ObservableState {
 
     pub fn config(&self) -> ObservableConfig {
         match self {
+            Self::Empty(_) => ObservableConfig::Empty,
             Self::Scalar(_) => ObservableConfig::Scalar,
             Self::Complex(_) => ObservableConfig::Complex,
             Self::Gammaloop(_) => ObservableConfig::Gammaloop,
@@ -180,6 +190,10 @@ impl ObservableState {
 
     pub fn merge(&mut self, other: Self) -> Result<(), EngineError> {
         match (self, other) {
+            (Self::Empty(left), Self::Empty(right)) => {
+                Observable::merge(left, right);
+                Ok(())
+            }
             (Self::Scalar(left), Self::Scalar(right)) => {
                 Observable::merge(left, right);
                 Ok(())
@@ -207,6 +221,7 @@ impl ObservableState {
 
     pub fn sample_count(&self) -> i64 {
         match self {
+            Self::Empty(observable) => observable.sample_count(),
             Self::Scalar(observable) => observable.sample_count(),
             Self::Complex(observable) => observable.sample_count(),
             Self::Gammaloop(observable) => observable.sample_count(),
@@ -217,6 +232,7 @@ impl ObservableState {
 
     pub fn abs_signal_to_noise(&self) -> f64 {
         match self {
+            Self::Empty(_) => 0.0,
             Self::Scalar(observable) => observable.signal_to_noise(),
             Self::Complex(observable) => observable.signal_to_noise(),
             Self::Gammaloop(observable) => observable.signal_to_noise(),
@@ -236,6 +252,7 @@ impl ObservableState {
 
     pub fn to_persistent_json(&self) -> Result<JsonValue, EngineError> {
         match self {
+            Self::Empty(observable) => observable.to_persistent_json(),
             Self::Scalar(observable) => observable.to_persistent_json(),
             Self::Complex(observable) => observable.to_persistent_json(),
             Self::Gammaloop(observable) => observable.to_persistent_json(),
@@ -246,6 +263,7 @@ impl ObservableState {
 
     pub fn to_digest_json(&self, run_spec: &RunSpec) -> Result<JsonValue, EngineError> {
         match self {
+            Self::Empty(observable) => observable.to_digest_json(run_spec),
             Self::Scalar(observable) => observable.to_digest_json(run_spec),
             Self::Complex(observable) => observable.to_digest_json(run_spec),
             Self::Gammaloop(observable) => observable.to_digest_json(run_spec),

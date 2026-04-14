@@ -24,14 +24,14 @@ pub use core::{
 };
 pub use evaluation::{
     Batch, BatchError, BatchResult, BatchTransform, ComplexObservableState, ComplexSampleEvaluator,
-    ComplexValue, ComplexValueEvaluator, EvalBatchOptions, Evaluator, FullComplexObservableState,
-    FullObservableProgress, FullScalarObservableState, GammaLoopObservableDigest,
-    GammaLoopObservableState, IngestComplex, IngestScalar, Materializer, Observable,
-    ObservableState, Point, ScalarObservableState, ScalarSampleEvaluator, ScalarValueEvaluator,
-    SemanticObservableKind,
+    ComplexValue, ComplexValueEvaluator, EmptyObservableState, EvalBatchOptions, Evaluator,
+    FullComplexObservableState, FullObservableProgress, FullScalarObservableState,
+    GammaLoopObservableDigest, GammaLoopObservableState, IngestComplex, IngestScalar, Materializer,
+    Observable, ObservableState, Point, ScalarObservableState, ScalarSampleEvaluator,
+    ScalarValueEvaluator, SemanticObservableKind,
 };
 pub use sampling::{
-    LatentBatch, LatentBatchPayload, LatentBatchSpec, SamplePlan, SamplerAggregator,
+    LatentBatch, LatentBatchPayload, LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator,
     SamplerAggregatorSnapshot, StageHandoff,
 };
 pub use stores::PgStore;

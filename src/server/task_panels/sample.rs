@@ -211,6 +211,7 @@ fn observable_matches_requested_config(
     requested: &ObservableConfig,
 ) -> bool {
     match requested {
+        ObservableConfig::Empty => matches!(observable, ObservableState::Empty(_)),
         ObservableConfig::Scalar => matches!(
             observable,
             ObservableState::Scalar(_) | ObservableState::FullScalar(_)
@@ -240,6 +241,9 @@ fn decode_aggregate_persisted_observable(
     persisted: &JsonValue,
 ) -> Result<ObservableState, EngineError> {
     match config {
+        ObservableConfig::Empty => Err(EngineError::build(
+            "sample task expected aggregate observable, got empty".to_string(),
+        )),
         ObservableConfig::Scalar => ObservableState::from_aggregate_persistent_json(
             SemanticObservableKind::Scalar,
             persisted,
@@ -285,6 +289,7 @@ fn decode_aggregate_persisted_observable_with_fallback(
 
 fn estimate_label(observable_config: Option<&ObservableConfig>) -> &'static str {
     match observable_config {
+        Some(ObservableConfig::Empty) => "Estimate",
         Some(ObservableConfig::Scalar) => "Mean",
         Some(ObservableConfig::Complex) => "Real Mean",
         Some(ObservableConfig::Gammaloop) => "Real Mean",
@@ -299,6 +304,7 @@ fn task_observable_config(task: &RunTaskSpec) -> Option<ObservableConfig> {
 
 fn config_label(config: &ObservableConfig) -> &'static str {
     match config {
+        ObservableConfig::Empty => "empty",
         ObservableConfig::Scalar => "scalar",
         ObservableConfig::Complex => "complex",
         ObservableConfig::Gammaloop => "gammaloop",
@@ -386,6 +392,9 @@ fn abs_signal_to_noise_panel(observable: ObservableState) -> PanelState {
 
 fn estimate_summary_panel(observable: ObservableState) -> PanelState {
     match observable {
+        ObservableState::Empty(_) => {
+            key_value_panel("estimate_summary", vec![key_value("count", "Count", 0)])
+        }
         ObservableState::Scalar(state) => key_value_panel(
             "estimate_summary",
             vec![
@@ -580,7 +589,11 @@ fn gammaloop_histogram_bundle_panel(observable: ObservableState) -> Option<Panel
                     }),
                     JsonValue::from(histogram.sample_count as i64),
                     JsonValue::from(histogram.bins.len() as i64),
-                    JsonValue::String(format!("[{}, {}]", histogram.x_min, histogram.x_max)),
+                    JsonValue::String(format!(
+                        "[{}, {}]",
+                        histogram.x_min.unwrap(),
+                        histogram.x_max.unwrap()
+                    )),
                     JsonValue::from(histogram.statistics.in_range_entry_count as i64),
                     JsonValue::from(histogram.underflow_bin.entry_count as i64),
                     JsonValue::from(histogram.overflow_bin.entry_count as i64),
@@ -609,8 +622,8 @@ struct GammaloopHistogramSelectionEntry {
     phase: String,
     value_transform: String,
     sample_count: usize,
-    x_min: f64,
-    x_max: f64,
+    x_min: Option<f64>,
+    x_max: Option<f64>,
     log_x_axis: bool,
     log_y_axis: bool,
     bins: Vec<HistogramBin>,
@@ -648,8 +661,8 @@ fn gammaloop_histogram_bundle_payload(
                             .bins
                             .iter()
                             .map(|bin| HistogramBin {
-                                start: bin.x_min.unwrap_or(histogram.x_min),
-                                stop: bin.x_max.unwrap_or(histogram.x_max),
+                                start: bin.x_min.unwrap_or(histogram.x_min.unwrap()),
+                                stop: bin.x_max.unwrap_or(histogram.x_max.unwrap()),
                                 value: bin.average(histogram.sample_count),
                                 error: bin.error(histogram.sample_count),
                             })

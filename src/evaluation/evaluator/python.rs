@@ -19,13 +19,16 @@ pub struct PythonScalarParams {
     pub flake_ref: String,
     pub module: String,
     pub class: String,
-    pub input_dim: usize,
+    pub continuous_dims: usize,
+    #[serde(default)]
+    pub discrete_dims: usize,
     #[serde(default = "default_init_args")]
     pub init_args: Value,
 }
 
 pub struct ScalarPythonEvaluator {
-    input_dim: usize,
+    continuous_dims: usize,
+    discrete_dims: usize,
     worker: PythonWorker,
 }
 
@@ -49,33 +52,41 @@ impl ScalarPythonEvaluator {
             &output_path,
             &params.module,
             &params.class,
-            params.input_dim,
+            params.discrete_dims,
+            params.continuous_dims,
             params.init_args,
         )?;
         Ok(Self {
-            input_dim: params.input_dim,
+            continuous_dims: params.continuous_dims,
+            discrete_dims: params.discrete_dims,
             worker,
         })
     }
 }
 
 impl ScalarBatchEvaluator for ScalarPythonEvaluator {
-    fn input_dim(&self) -> usize {
-        self.input_dim
+    fn discrete_dims(&self) -> usize {
+        self.discrete_dims
     }
 
-    fn eval_scalar_dense_batch(
+    fn continuous_dims(&self) -> usize {
+        self.continuous_dims
+    }
+
+    fn eval_scalar_rectangular_batch(
         &mut self,
-        xs_row_major: &[f64],
+        xs_discrete_row_major: &[i64],
+        xs_continuous_row_major: &[f64],
         nr_samples: usize,
     ) -> Result<Vec<f64>, EvalError> {
-        self.worker.eval_scalar(xs_row_major, nr_samples)
+        self.worker
+            .eval_scalar(xs_discrete_row_major, xs_continuous_row_major, nr_samples)
     }
 }
 
 impl Evaluator for ScalarPythonEvaluator {
     fn get_domain(&self) -> Domain {
-        Domain::continuous(self.input_dim)
+        Domain::rectangular(self.continuous_dims, self.discrete_dims)
     }
 
     fn eval_batch(
@@ -86,6 +97,9 @@ impl Evaluator for ScalarPythonEvaluator {
     ) -> Result<BatchResult, EvalError> {
         let mut observable_state = ObservableState::from_config(observable);
         let weighted_values = match &mut observable_state {
+            ObservableState::Empty(observable) => {
+                self.eval_scalar_batch_into(batch, observable, options.require_training_values)?
+            }
             ObservableState::Scalar(observable) => {
                 self.eval_scalar_batch_into(batch, observable, options.require_training_values)?
             }
@@ -109,7 +123,8 @@ struct PythonWorker {
     stdout: BufReader<ChildStdout>,
     stderr: ChildStderr,
     next_id: u64,
-    input_dim: usize,
+    discrete_dims: usize,
+    continuous_dims: usize,
 }
 
 impl PythonWorker {
@@ -118,7 +133,8 @@ impl PythonWorker {
         runtime_root: &Path,
         module: &str,
         class: &str,
-        input_dim: usize,
+        discrete_dims: usize,
+        continuous_dims: usize,
         init_args: Value,
     ) -> Result<Self, BuildError> {
         let mut command = Command::new(python_executable);
@@ -160,9 +176,10 @@ impl PythonWorker {
             stdout: BufReader::new(stdout),
             stderr,
             next_id: 1,
-            input_dim,
+            discrete_dims,
+            continuous_dims,
         };
-        worker.send_init(module, class, input_dim, init_args)?;
+        worker.send_init(module, class, discrete_dims, continuous_dims, init_args)?;
         Ok(worker)
     }
 
@@ -170,7 +187,8 @@ impl PythonWorker {
         &mut self,
         module: &str,
         class: &str,
-        input_dim: usize,
+        discrete_dims: usize,
+        continuous_dims: usize,
         init_args: Value,
     ) -> Result<(), BuildError> {
         let request = serde_json::json!({
@@ -178,7 +196,8 @@ impl PythonWorker {
             "op": "init",
             "module": module,
             "class": class,
-            "input_dim": input_dim,
+            "discrete_dims": discrete_dims,
+            "continuous_dims": continuous_dims,
             "init_args": init_args,
         });
         let response = self.send_request(&request).map_err(BuildError::build)?;
@@ -187,15 +206,18 @@ impl PythonWorker {
 
     fn eval_scalar(
         &mut self,
-        xs_row_major: &[f64],
+        xs_discrete_row_major: &[i64],
+        xs_continuous_row_major: &[f64],
         nr_samples: usize,
     ) -> Result<Vec<f64>, EvalError> {
         let request = serde_json::json!({
             "id": self.allocate_request_id(),
             "op": "eval_scalar",
             "nr_samples": nr_samples,
-            "input_dim": self.input_dim,
-            "xs_row_major": xs_row_major,
+            "discrete_dims": self.discrete_dims,
+            "continuous_dims": self.continuous_dims,
+            "xs_discrete_row_major": xs_discrete_row_major,
+            "xs_continuous_row_major": xs_continuous_row_major,
         });
         let response = self.send_request(&request).map_err(EvalError::eval)?;
         Self::expect_ok(response.clone()).map_err(EvalError::eval)?;
@@ -413,7 +435,7 @@ fn build_worker_pythonpath(runtime_root: &Path) -> Option<OsString> {
 
 fn evaluator_worker_script_path() -> Result<PathBuf, BuildError> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("integrand_api")
+        .join("python_api")
         .join("python_workers")
         .join("evaluator_worker.py");
     if !path.is_file() {

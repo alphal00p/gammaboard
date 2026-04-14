@@ -10,7 +10,7 @@ use crate::{
     Batch, EngineError, LatentBatchSpec, Point, SamplePlan,
     core::BuildError,
     sampling::havana_grid::{build_havana_grid, sample_to_point, validate_havana_grid_domain},
-    sampling::{LatentBatchPayload, SamplerAggregator, SamplerAggregatorSnapshot},
+    sampling::{LatentBatchPayload, PdfPoint, SamplerAggregator, SamplerAggregatorSnapshot},
     utils::rng::SerializableMonteCarloRng,
 };
 
@@ -340,6 +340,123 @@ impl HavanaInferenceSampler {
     }
 }
 
+fn continuous_grid_pdf(
+    grid: &symbolica::numerical_integration::ContinuousGrid<f64>,
+    continuous: &[f64],
+) -> Result<f64, EngineError> {
+    if grid.continuous_dimensions.len() != continuous.len() {
+        return Err(EngineError::engine(format!(
+            "continuous point dimension mismatch: expected {}, got {}",
+            grid.continuous_dimensions.len(),
+            continuous.len()
+        )));
+    }
+
+    let mut pdf = 1.0_f64;
+    for (dimension, &sample) in grid.continuous_dimensions.iter().zip(continuous.iter()) {
+        if !(0.0..=1.0).contains(&sample) {
+            return Ok(0.0);
+        }
+        let partitioning = &dimension.partitioning;
+        let bin_index = if sample >= 1.0 {
+            partitioning.len().saturating_sub(2)
+        } else {
+            partitioning
+                .binary_search_by(|value| value.partial_cmp(&sample).unwrap())
+                .unwrap_or_else(|index| index)
+                .saturating_sub(1)
+        };
+        let left = partitioning
+            .get(bin_index)
+            .copied()
+            .ok_or_else(|| EngineError::engine("continuous grid partitioning is empty"))?;
+        let right = partitioning.get(bin_index + 1).copied().ok_or_else(|| {
+            EngineError::engine("continuous grid partitioning is missing the upper edge")
+        })?;
+        let width = right - left;
+        if width <= 0.0 {
+            return Err(EngineError::engine(format!(
+                "continuous grid has non-positive bin width at index {bin_index}"
+            )));
+        }
+        pdf *= 1.0 / (((partitioning.len() - 1) as f64) * width);
+    }
+    Ok(pdf)
+}
+
+fn grid_pdf(grid: &Grid<f64>, point: &PdfPoint) -> Result<Option<f64>, EngineError> {
+    fn recurse(
+        grid: &Grid<f64>,
+        discrete: &[i64],
+        continuous: &[f64],
+        discrete_index: &mut usize,
+    ) -> Result<f64, EngineError> {
+        match grid {
+            Grid::Continuous(grid) => continuous_grid_pdf(grid, continuous),
+            Grid::Discrete(grid) => {
+                let Some(&branch_idx) = discrete.get(*discrete_index) else {
+                    return Err(EngineError::engine(
+                        "discrete point dimension mismatch for havana pdf query",
+                    ));
+                };
+                let branch_idx = usize::try_from(branch_idx).map_err(|_| {
+                    EngineError::engine(format!(
+                        "negative discrete index {branch_idx} in havana pdf query"
+                    ))
+                })?;
+                let Some(bin) = grid.bins.get(branch_idx) else {
+                    return Ok(0.0);
+                };
+                *discrete_index += 1;
+                let child_pdf = match bin.sub_grid.as_ref() {
+                    Some(sub_grid) => recurse(sub_grid, discrete, continuous, discrete_index)?,
+                    None => {
+                        if !continuous.is_empty() {
+                            return Err(EngineError::engine(
+                                "continuous coordinates provided for discrete-only havana grid",
+                            ));
+                        }
+                        1.0
+                    }
+                };
+                Ok(bin.pdf * child_pdf)
+            }
+            Grid::Uniform(discrete_bins, continuous_grid) => {
+                if discrete.len() != discrete_bins.len() {
+                    return Err(EngineError::engine(
+                        "uniform-grid discrete dimension mismatch in havana pdf query",
+                    ));
+                }
+                for (index, nr_bins) in discrete.iter().zip(discrete_bins.iter()) {
+                    let index = usize::try_from(*index).map_err(|_| {
+                        EngineError::engine(format!(
+                            "negative discrete index {} in uniform-grid pdf query",
+                            index
+                        ))
+                    })?;
+                    if index >= *nr_bins {
+                        return Ok(0.0);
+                    }
+                }
+                let discrete_pdf = discrete_bins
+                    .iter()
+                    .fold(1.0, |acc, bins| acc / (*bins as f64));
+                Ok(discrete_pdf * continuous_grid_pdf(continuous_grid, continuous)?)
+            }
+        }
+    }
+
+    let (discrete, continuous) = point;
+    let mut discrete_index = 0_usize;
+    let pdf = recurse(grid, discrete, continuous, &mut discrete_index)?;
+    if discrete_index != discrete.len() {
+        return Err(EngineError::engine(
+            "extra discrete coordinates remained after havana pdf traversal",
+        ));
+    }
+    Ok(Some(pdf))
+}
+
 impl SamplerAggregator for HavanaSampler {
     fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
         validate_havana_grid_domain(&self.grid, domain, "havana sampler")
@@ -460,6 +577,10 @@ impl SamplerAggregator for HavanaSampler {
             "training_rate": self.current_training_rate(),
         })
     }
+
+    fn pdf(&mut self, point: &PdfPoint) -> Result<Option<f64>, EngineError> {
+        grid_pdf(&self.grid, point)
+    }
 }
 
 impl SamplerAggregator for HavanaInferenceSampler {
@@ -501,6 +622,10 @@ impl SamplerAggregator for HavanaInferenceSampler {
             "batches_produced": self.batches_produced,
             "samples_produced": self.samples_produced,
         })
+    }
+
+    fn pdf(&mut self, point: &PdfPoint) -> Result<Option<f64>, EngineError> {
+        grid_pdf(&self.grid, point)
     }
 }
 

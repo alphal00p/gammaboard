@@ -146,6 +146,11 @@ impl Evaluator for SymbolicaEngine {
             .map_err(|err| EngineError::Eval(err.to_string()))?;
 
         match &mut observable_state {
+            ObservableState::Empty(observable) => {
+                for (value, weight) in out.iter().zip(weights.iter()) {
+                    observable.ingest_scalar(*value, *weight);
+                }
+            }
             ObservableState::Scalar(observable) => {
                 for (value, weight) in out.iter().zip(weights.iter()) {
                     observable.ingest_scalar(*value, *weight);

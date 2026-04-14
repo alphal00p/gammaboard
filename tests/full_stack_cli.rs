@@ -962,13 +962,13 @@ async fn full_stack_cli_python_scalar_flake_e2e() -> anyhow::Result<()> {
     let evaluator_flake_ref = format!(
         "path:{}#runtime",
         manifest_dir
-            .join("integrand_api/examples/python_scalar_sin")
+            .join("python_api/examples/python_scalar_sin")
             .display()
     );
     let sampler_flake_ref = format!(
         "path:{}#runtime",
         manifest_dir
-            .join("integrand_api/examples/python_sampler_monte_carlo")
+            .join("python_api/examples/python_sampler_monte_carlo")
             .display()
     );
     let config = temp_run_add_config(&format!(
@@ -980,7 +980,8 @@ kind = "python_scalar"
 flake_ref = "{evaluator_flake_ref}"
 module = "demo_integrand"
 class = "SinIntegrand"
-input_dim = 1
+continuous_dims = 1
+discrete_dims = 0
 init_args = {{ scale = 1.0, bias = 0.0 }}
 
 [[task_queue]]
@@ -988,7 +989,7 @@ name = "sample-a"
 kind = "sample"
 nr_samples = 64
 observable = {{ config = "scalar" }}
-sampler_aggregator = {{ config = {{ kind = "python_homogeneous_monte_carlo", flake_ref = "{sampler_flake_ref}", module = "demo_sampler", class = "BasicMonteCarloSampler", input_dim = 1, init_args = {{ seed = 0, training_target_samples = 0 }} }} }}
+sampler_aggregator = {{ config = {{ kind = "python_homogeneous_monte_carlo", flake_ref = "{sampler_flake_ref}", module = "demo_sampler", class = "BasicMonteCarloSampler", continuous_dims = 1, discrete_dims = 0, init_args = {{ seed = 0, training_target_samples = 0 }} }} }}
 "#
     ));
 

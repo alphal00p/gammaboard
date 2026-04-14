@@ -98,6 +98,9 @@ impl Evaluator for UnitEvaluator {
         let mut observable_state = ObservableState::from_config(observable);
         let weighted_values = match self.observable_kind {
             SemanticObservableKind::Scalar => match &mut observable_state {
+                ObservableState::Empty(observable) => {
+                    self.eval_scalar_into(batch, observable, options.require_training_values)?
+                }
                 ObservableState::Scalar(observable) => {
                     self.eval_scalar_into(batch, observable, options.require_training_values)?
                 }
@@ -112,6 +115,12 @@ impl Evaluator for UnitEvaluator {
                 }
             },
             SemanticObservableKind::Complex => match &mut observable_state {
+                ObservableState::Empty(observable) => self.eval_complex_into(
+                    batch,
+                    observable,
+                    options.require_training_values,
+                    |v| v.re,
+                )?,
                 ObservableState::Complex(observable) => self.eval_complex_into(
                     batch,
                     observable,

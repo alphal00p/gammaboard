@@ -2,10 +2,11 @@ name = "python-scalar-flake-demo"
 
 [evaluator]
 kind = "python_scalar"
-flake_ref = "path:./integrand_api/examples/python_scalar_sin#runtime"
+flake_ref = "path:./python_api/examples/python_scalar_sin#runtime"
 module = "demo_integrand"
 class = "SinIntegrand"
-input_dim = 1
+continuous_dims = 1
+discrete_dims = 0
 init_args = { scale = 1.0, bias = 0.0 }
 
 [sampler_aggregator]

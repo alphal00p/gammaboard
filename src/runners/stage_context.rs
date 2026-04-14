@@ -5,6 +5,8 @@ use crate::sampling::StageHandoffOwned;
 
 pub(crate) const HAVANA_HANDOFF_REQUIRED_ERROR: &str =
     "havana_inference sampler requires a havana training or inference snapshot handoff";
+pub(crate) const PDF_ADAPTATION_HANDOFF_REQUIRED_ERROR: &str =
+    "pdf_adaptation_raster_plane sampler requires a persisted sampler snapshot handoff";
 
 pub(crate) struct ResolvedStageContext {
     pub(crate) sampler_config: crate::core::SamplerAggregatorConfig,
@@ -60,6 +62,9 @@ pub(crate) async fn resolve_stage_context<S>(
 where
     S: AggregationStore + RunTaskStore + Send + Sync,
 {
+    let explicit_sampler_config =
+        task.task.sampler_config().is_some() || task.task.sample_sampler_config().is_some();
+    let restoring_active_task = restored_snapshot.is_some();
     let source_snapshot =
         resolve_task_source_snapshot(store, run_id, task, task.task.sample_sampler_source())
             .await?;
@@ -130,6 +135,13 @@ where
                     }
                 }
             }
+            crate::core::SamplerAggregatorConfig::PdfAdaptationRasterPlane { .. } => {
+                if let Some(snapshot) = base_stage_snapshot.clone() {
+                    Some(snapshot.into())
+                } else {
+                    return Err(StoreError::store(PDF_ADAPTATION_HANDOFF_REQUIRED_ERROR));
+                }
+            }
             _ => base_stage_snapshot.map(Into::into),
         }
     };
@@ -143,6 +155,17 @@ where
                 .map(Into::into)
         }
         (_, handoff) => handoff,
+    };
+    let handoff = if explicit_sampler_config
+        && !restoring_active_task
+        && !matches!(
+            sampler_config,
+            crate::core::SamplerAggregatorConfig::HavanaInference { .. }
+                | crate::core::SamplerAggregatorConfig::PdfAdaptationRasterPlane { .. }
+        ) {
+        None
+    } else {
+        handoff
     };
 
     Ok(ResolvedStageContext {

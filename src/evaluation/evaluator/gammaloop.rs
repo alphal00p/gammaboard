@@ -493,6 +493,24 @@ impl Evaluator for GammaLoopEvaluator {
         let evaluation_results = self.evaluate(batch)?;
         let mut observable_state = ObservableState::from_config(observable);
         let weighted_values = match observable {
+            ObservableConfig::Empty => {
+                observable_state = ObservableState::empty();
+                if options.require_training_values {
+                    Some(
+                        evaluation_results
+                            .iter()
+                            .map(|result| {
+                                self.training_projection
+                                    .project(Self::project_result_value(result))
+                            })
+                            .zip(weights.iter())
+                            .map(|(value, weight)| value * weight)
+                            .collect(),
+                    )
+                } else {
+                    None
+                }
+            }
             ObservableConfig::Gammaloop => {
                 observable_state = ObservableState::Gammaloop(
                     self.batch_gammaloop_observable(&evaluation_results, weights.as_slice()),

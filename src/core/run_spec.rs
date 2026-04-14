@@ -34,6 +34,7 @@ pub struct RunSpec {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ObservableConfig {
+    Empty,
     Scalar,
     Complex,
     Gammaloop,
@@ -44,7 +45,9 @@ pub enum ObservableConfig {
 impl ObservableConfig {
     pub const fn semantic_kind(&self) -> crate::evaluation::SemanticObservableKind {
         match self {
-            Self::Scalar | Self::FullScalar => crate::evaluation::SemanticObservableKind::Scalar,
+            Self::Empty | Self::Scalar | Self::FullScalar => {
+                crate::evaluation::SemanticObservableKind::Scalar
+            }
             Self::Complex | Self::FullComplex => crate::evaluation::SemanticObservableKind::Complex,
             Self::Gammaloop => crate::evaluation::SemanticObservableKind::Scalar,
         }
@@ -96,6 +99,10 @@ pub enum SamplerAggregatorConfig {
     RasterLine {
         #[serde(flatten)]
         params: RasterLineSamplerParams,
+    },
+    PdfAdaptationRasterPlane {
+        #[serde(flatten)]
+        params: RasterPlaneSamplerParams,
     },
     HavanaTraining {
         #[serde(flatten)]

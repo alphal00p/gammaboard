@@ -59,6 +59,9 @@ impl Evaluator for SinEvaluator {
         let started = Instant::now();
         let mut observable_state = ObservableState::from_config(observable);
         let weighted_values = match &mut observable_state {
+            ObservableState::Empty(observable) => {
+                self.eval_scalar_into(batch, observable, options.require_training_values)?
+            }
             ObservableState::Scalar(observable) => {
                 self.eval_scalar_into(batch, observable, options.require_training_values)?
             }

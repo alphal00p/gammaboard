@@ -273,7 +273,10 @@ fn format_task_source_ref(
     source: Option<SourceRefSpec>,
     has_inline_config: bool,
 ) -> String {
-    if !matches!(task, RunTaskSpec::Sample { .. }) {
+    if !matches!(
+        task,
+        RunTaskSpec::Sample { .. } | RunTaskSpec::PdfAdaptationImage { .. }
+    ) {
         return String::new();
     }
     if has_inline_config {

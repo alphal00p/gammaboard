@@ -256,30 +256,36 @@ discrete_dims = 0
 For `evaluator.kind = "gammaloop"`, `continuous_dims` and `discrete_dims` are inferred from the selected integrand and should be omitted.
 
 For `evaluator.kind = "python_scalar"`, configure:
-- `flake_ref`: nix flake reference that resolves to a runtime package (for example `path:./integrand_api/examples/python_scalar_sin#runtime`)
+- `flake_ref`: nix flake reference that resolves to a runtime package (for example `path:./python_api/examples/python_scalar_sin#runtime`)
 - `module`: python module name to import
-- `class`: class name to instantiate (must expose `eval(xs)` and `input_dim`)
-- `input_dim`: expected continuous dimension for homogeneous batches
+- `class`: class name to instantiate (must expose `eval(xs_discrete, xs_continuous)`)
+- `continuous_dims`: expected continuous dimension for homogeneous rectangular batches
+- `discrete_dims`: expected discrete dimension for homogeneous rectangular batches
 - optional `init_args = { ... }`: constructor/config payload forwarded to python init
-- Optional ABCs are provided in `python_api.abc` (`ScalarBatchIntegrand`, `ComplexBatchIntegrand`) for type-checkable interfaces.
+- Optional evaluator ABCs are provided in `python_api.evaluator` (`ScalarBatchIntegrand`, `ComplexBatchIntegrand`) for type-checkable interfaces.
 
 Python construction semantics:
-- if the class defines `from_config(input_dim=..., init_args=...)`, that is called
+- if the class defines `from_config(discrete_dims=..., continuous_dims=..., init_args=...)`, that is called
 - otherwise the worker calls `ClassName(**init_args)` (or `ClassName()` when `init_args` is empty)
 
 For `sampler_aggregator.kind = "python_homogeneous_monte_carlo"`, configure:
 - `flake_ref`: nix flake reference that resolves to a runtime package
 - `module`: python module name to import
-- `class`: python class implementing sampler methods (`sample_plan`, `training_samples_remaining`, `produce_latent_batch`, `ingest_training_weights`, `snapshot`)
-- `input_dim`: expected homogeneous continuous dimension (domain must be `continuous(input_dim)` with no discrete axes)
+- `class`: python class implementing sampler methods (`sample_plan`, `training_samples_remaining`, `produce_latent_batch`, `ingest_training_weights`, `snapshot`, optional `pdf`)
+- `continuous_dims`: expected homogeneous continuous dimension
+- `discrete_dims`: expected homogeneous discrete dimension
 - optional `init_args = { ... }`: constructor/config payload forwarded to python init
-- Optional sampler ABC is provided in `python_api.abc` (`SamplerAggregator`) for a typed contract.
+- Optional sampler ABC is provided in `python_api.sampler` (`SamplerAggregator`) for a typed contract.
+- Python evaluator and sampler methods are vectorized over fixed rectangular batches:
+  `xs_discrete` has shape `(nr_samples, discrete_dims)` and `xs_continuous` has shape `(nr_samples, continuous_dims)`.
+- `produce_latent_batch(nr_samples)` returns `(xs_discrete, xs_continuous)`.
+- optional `pdf(xs_discrete, xs_continuous)` returns `(nr_samples,)`.
 
 Python sampler construction semantics:
-- restore path: `from_snapshot(snapshot=..., input_dim=..., init_args=...)` when present
-- fresh path: `from_config(input_dim=..., init_args=...)` when present
+- restore path: `from_snapshot(snapshot=..., discrete_dims=..., continuous_dims=..., init_args=...)` when present
+- fresh path: `from_config(discrete_dims=..., continuous_dims=..., init_args=...)` when present
 - fallback: `ClassName(**init_args)` / `ClassName()`
-- Worker protocol entrypoints are checked in under `integrand_api/python_workers/` and launched with the flake runtime python executable.
+- Worker protocol entrypoints are checked in under `python_api/python_workers/` and launched with the flake runtime python executable.
 
 If `task_queue` is omitted, the run is created idle.
 Every run stores an initial root stage snapshot (`sequence_nr = 0`) immediately at creation.

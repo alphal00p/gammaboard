@@ -388,6 +388,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         config: ObservableConfig,
     ) -> crate::evaluation::ObservableState {
         match config {
+            crate::core::ObservableConfig::Empty => crate::evaluation::ObservableState::empty(),
             crate::core::ObservableConfig::Scalar => {
                 crate::evaluation::ObservableState::empty_scalar()
             }

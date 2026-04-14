@@ -130,40 +130,48 @@ pub trait ComplexValueEvaluator {
     }
 }
 
-fn dense_continuous_inputs(batch: &Batch, input_dim: usize) -> Result<Vec<f64>, EvalError> {
-    let mut xs = Vec::with_capacity(batch.size().saturating_mul(input_dim));
+fn dense_rectangular_inputs(
+    batch: &Batch,
+    discrete_dims: usize,
+    continuous_dims: usize,
+) -> Result<(Vec<i64>, Vec<f64>), EvalError> {
+    let mut xs_discrete = Vec::with_capacity(batch.size().saturating_mul(discrete_dims));
+    let mut xs_continuous = Vec::with_capacity(batch.size().saturating_mul(continuous_dims));
     for (sample_idx, point) in batch.points().iter().enumerate() {
-        if !point.discrete.is_empty() {
+        if point.discrete.len() != discrete_dims {
             return Err(EvalError::eval(format!(
-                "homogeneous batch evaluator expects only continuous inputs; sample {sample_idx} has {} discrete coordinates",
-                point.discrete.len()
+                "homogeneous batch evaluator expected {discrete_dims} discrete dimensions, sample {sample_idx} has {}",
+                point.discrete.len(),
             )));
         }
-        if point.continuous.len() != input_dim {
+        if point.continuous.len() != continuous_dims {
             return Err(EvalError::eval(format!(
-                "homogeneous batch evaluator expected {input_dim} continuous dimensions, sample {sample_idx} has {}",
-                point.continuous.len()
+                "homogeneous batch evaluator expected {continuous_dims} continuous dimensions, sample {sample_idx} has {}",
+                point.continuous.len(),
             )));
         }
-        xs.extend_from_slice(&point.continuous);
+        xs_discrete.extend_from_slice(&point.discrete);
+        xs_continuous.extend_from_slice(&point.continuous);
     }
-    Ok(xs)
+    Ok((xs_discrete, xs_continuous))
 }
 
 pub trait ScalarBatchEvaluator: ScalarValueEvaluator {
-    fn input_dim(&self) -> usize;
-    fn eval_scalar_dense_batch(
+    fn discrete_dims(&self) -> usize;
+    fn continuous_dims(&self) -> usize;
+    fn eval_scalar_rectangular_batch(
         &mut self,
-        xs_row_major: &[f64],
+        xs_discrete_row_major: &[i64],
+        xs_continuous_row_major: &[f64],
         nr_samples: usize,
     ) -> Result<Vec<f64>, EvalError>;
 
     fn eval_scalar_batch(&mut self, batch: &Batch) -> Result<Vec<f64>, EvalError> {
         let nr_samples = batch.size();
-        let values = self.eval_scalar_dense_batch(
-            &dense_continuous_inputs(batch, self.input_dim())?,
-            nr_samples,
-        )?;
+        let (xs_discrete, xs_continuous) =
+            dense_rectangular_inputs(batch, self.discrete_dims(), self.continuous_dims())?;
+        let values =
+            self.eval_scalar_rectangular_batch(&xs_discrete, &xs_continuous, nr_samples)?;
         if values.len() != nr_samples {
             return Err(EvalError::eval(format!(
                 "scalar batch evaluator produced {} values for {} samples",
@@ -191,19 +199,21 @@ pub trait ScalarBatchEvaluator: ScalarValueEvaluator {
 }
 
 pub trait ComplexBatchEvaluator: ComplexValueEvaluator {
-    fn input_dim(&self) -> usize;
-    fn eval_complex_dense_batch(
+    fn discrete_dims(&self) -> usize;
+    fn continuous_dims(&self) -> usize;
+    fn eval_complex_rectangular_batch(
         &mut self,
-        xs_row_major: &[f64],
+        xs_discrete_row_major: &[i64],
+        xs_continuous_row_major: &[f64],
         nr_samples: usize,
     ) -> Result<Vec<Complex64>, EvalError>;
 
     fn eval_complex_batch(&mut self, batch: &Batch) -> Result<Vec<Complex64>, EvalError> {
         let nr_samples = batch.size();
-        let values = self.eval_complex_dense_batch(
-            &dense_continuous_inputs(batch, self.input_dim())?,
-            nr_samples,
-        )?;
+        let (xs_discrete, xs_continuous) =
+            dense_rectangular_inputs(batch, self.discrete_dims(), self.continuous_dims())?;
+        let values =
+            self.eval_complex_rectangular_batch(&xs_discrete, &xs_continuous, nr_samples)?;
         if values.len() != nr_samples {
             return Err(EvalError::eval(format!(
                 "complex batch evaluator produced {} values for {} samples",
@@ -256,36 +266,51 @@ mod tests {
     use crate::evaluation::Point;
 
     struct EchoScalarBatch {
-        input_dim: usize,
+        discrete_dims: usize,
+        continuous_dims: usize,
     }
 
     impl ScalarBatchEvaluator for EchoScalarBatch {
-        fn input_dim(&self) -> usize {
-            self.input_dim
+        fn discrete_dims(&self) -> usize {
+            self.discrete_dims
         }
 
-        fn eval_scalar_dense_batch(
+        fn continuous_dims(&self) -> usize {
+            self.continuous_dims
+        }
+
+        fn eval_scalar_rectangular_batch(
             &mut self,
-            xs_row_major: &[f64],
+            xs_discrete_row_major: &[i64],
+            xs_continuous_row_major: &[f64],
             nr_samples: usize,
         ) -> Result<Vec<f64>, EvalError> {
             let mut out = Vec::with_capacity(nr_samples);
             for sample_idx in 0..nr_samples {
-                out.push(xs_row_major[sample_idx * self.input_dim]);
+                out.push(
+                    xs_discrete_row_major
+                        .get(sample_idx * self.discrete_dims)
+                        .copied()
+                        .unwrap_or_default() as f64
+                        + xs_continuous_row_major[sample_idx * self.continuous_dims],
+                );
             }
             Ok(out)
         }
     }
 
     #[test]
-    fn scalar_batch_helper_rejects_discrete_points() {
+    fn scalar_batch_helper_rejects_wrong_discrete_dims() {
         let batch = Batch::from_points([Point::new(vec![1.0], vec![0], 1.0)]).expect("batch");
-        let mut evaluator = EchoScalarBatch { input_dim: 1 };
+        let mut evaluator = EchoScalarBatch {
+            discrete_dims: 0,
+            continuous_dims: 1,
+        };
         let err = evaluator
             .eval_scalar_batch(&batch)
             .expect_err("expected error");
         assert!(
-            err.to_string().contains("continuous inputs"),
+            err.to_string().contains("expected 0 discrete dimensions"),
             "unexpected error: {err}"
         );
     }
@@ -293,7 +318,10 @@ mod tests {
     #[test]
     fn scalar_batch_helper_rejects_ragged_points() {
         let batch = Batch::from_points([Point::new(vec![1.0, 2.0], vec![], 1.0)]).expect("batch");
-        let mut evaluator = EchoScalarBatch { input_dim: 1 };
+        let mut evaluator = EchoScalarBatch {
+            discrete_dims: 0,
+            continuous_dims: 1,
+        };
         let err = evaluator
             .eval_scalar_batch(&batch)
             .expect_err("expected error");
@@ -301,5 +329,20 @@ mod tests {
             err.to_string().contains("expected 1 continuous dimensions"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn scalar_batch_helper_accepts_mixed_rectangular_points() {
+        let batch = Batch::from_points([
+            Point::new(vec![1.5], vec![2], 1.0),
+            Point::new(vec![3.5], vec![4], 1.0),
+        ])
+        .expect("batch");
+        let mut evaluator = EchoScalarBatch {
+            discrete_dims: 1,
+            continuous_dims: 1,
+        };
+        let values = evaluator.eval_scalar_batch(&batch).expect("values");
+        assert_eq!(values, vec![3.5, 7.5]);
     }
 }

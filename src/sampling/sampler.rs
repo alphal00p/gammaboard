@@ -5,12 +5,15 @@ use serde_json::{Value as JsonValue, json};
 
 use super::{LatentBatchSpec, SamplePlan};
 
+pub type PdfPoint = (Vec<i64>, Vec<f64>);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SamplerAggregatorSnapshot {
     NaiveMonteCarlo { raw: JsonValue },
     RasterPlane { raw: JsonValue },
     RasterLine { raw: JsonValue },
+    PdfAdaptationRasterPlane { raw: JsonValue },
     HavanaTraining { raw: JsonValue },
     HavanaInference { raw: JsonValue },
     PythonHomogeneousMonteCarlo { raw: JsonValue },
@@ -29,6 +32,9 @@ impl SamplerAggregatorSnapshot {
             ) | (
                 SamplerAggregatorSnapshot::RasterLine { .. },
                 SamplerAggregatorConfig::RasterLine { .. }
+            ) | (
+                SamplerAggregatorSnapshot::PdfAdaptationRasterPlane { .. },
+                SamplerAggregatorConfig::PdfAdaptationRasterPlane { .. }
             ) | (
                 SamplerAggregatorSnapshot::HavanaTraining { .. },
                 SamplerAggregatorConfig::HavanaTraining { .. }
@@ -63,6 +69,12 @@ pub trait SamplerAggregator: Send {
     }
     fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError>;
     fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError>;
+    fn pdf(&mut self, _point: &PdfPoint) -> Result<Option<f64>, EngineError> {
+        Ok(None)
+    }
+    fn persisted_output(&mut self) -> Result<Option<JsonValue>, EngineError> {
+        Ok(None)
+    }
     fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError>;
     fn get_diagnostics(&mut self) -> JsonValue {
         json!("{}")

@@ -26,7 +26,7 @@ clap_complete = "4.5"
 toml = "0.8"
 async-trait = "0.1"
 thiserror = "2.0"
-symbolica = { version = "1.4", features = ["serde"] }
+symbolica = { version = "1.5", features = ["serde"] }
 ndarray = "0.16"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -53,12 +53,3 @@ opt-level = 2
 [lib]
 name = "gammaboard"
 crate-type = ["rlib"]
-
-
-[patch.crates-io]
-#graphica = { git = "https://github.com/benruijl/symbolica", branch = "dev" }
-#numerica = { git = "https://github.com/benruijl/symbolica", branch = "dev" }
-#symbolica = { git = "https://github.com/benruijl/symbolica", branch = "dev" }
-graphica = { git = "https://github.com/benruijl/symbolica", rev = "650ba97bf3da7cf2ff5ada92875f92d5f71e7a31" }
-numerica = { git = "https://github.com/benruijl/symbolica", rev = "650ba97bf3da7cf2ff5ada92875f92d5f71e7a31" }
-symbolica = { git = "https://github.com/benruijl/symbolica", rev = "650ba97bf3da7cf2ff5ada92875f92d5f71e7a31" }

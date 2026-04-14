@@ -10,7 +10,9 @@ use serde_json::Value;
 
 use crate::core::{BuildError, EngineError};
 use crate::evaluation::{Batch, Point};
-use crate::sampling::{LatentBatchSpec, SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot};
+use crate::sampling::{
+    LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot,
+};
 use crate::utils::domain::Domain;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -19,7 +21,9 @@ pub struct PythonHomogeneousMonteCarloSamplerParams {
     pub flake_ref: String,
     pub module: String,
     pub class: String,
-    pub input_dim: usize,
+    pub continuous_dims: usize,
+    #[serde(default)]
+    pub discrete_dims: usize,
     #[serde(default = "default_init_args")]
     pub init_args: Value,
 }
@@ -40,7 +44,7 @@ impl PythonHomogeneousMonteCarloSampler {
         params: PythonHomogeneousMonteCarloSamplerParams,
         domain: &Domain,
     ) -> Result<Self, BuildError> {
-        validate_homogeneous_domain(domain, params.input_dim)?;
+        validate_homogeneous_domain(domain, params.discrete_dims, params.continuous_dims)?;
         let worker = PythonSamplerWorker::spawn(&params, None)?;
         Ok(Self {
             params,
@@ -52,7 +56,11 @@ impl PythonHomogeneousMonteCarloSampler {
         snapshot: PythonHomogeneousMonteCarloSnapshot,
         domain: &Domain,
     ) -> Result<Self, BuildError> {
-        validate_homogeneous_domain(domain, snapshot.params.input_dim)?;
+        validate_homogeneous_domain(
+            domain,
+            snapshot.params.discrete_dims,
+            snapshot.params.continuous_dims,
+        )?;
         let worker = PythonSamplerWorker::spawn(&snapshot.params, Some(snapshot.sampler_state))?;
         Ok(Self {
             params: snapshot.params,
@@ -63,7 +71,11 @@ impl PythonHomogeneousMonteCarloSampler {
 
 impl SamplerAggregator for PythonHomogeneousMonteCarloSampler {
     fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
-        validate_homogeneous_domain(domain, self.params.input_dim)
+        validate_homogeneous_domain(
+            domain,
+            self.params.discrete_dims,
+            self.params.continuous_dims,
+        )
     }
 
     fn training_samples_remaining(&self) -> Option<usize> {
@@ -85,13 +97,16 @@ impl SamplerAggregator for PythonHomogeneousMonteCarloSampler {
             ));
         }
         let xs_row_major = self.worker_mut()?.produce_latent_batch(nr_samples)?;
+        let (xs_discrete_row_major, xs_continuous_row_major) = xs_row_major;
         let mut points = Vec::with_capacity(nr_samples);
         for sample_idx in 0..nr_samples {
-            let start = sample_idx * self.params.input_dim;
-            let end = start + self.params.input_dim;
+            let discrete_start = sample_idx * self.params.discrete_dims;
+            let discrete_end = discrete_start + self.params.discrete_dims;
+            let continuous_start = sample_idx * self.params.continuous_dims;
+            let continuous_end = continuous_start + self.params.continuous_dims;
             points.push(Point::new(
-                xs_row_major[start..end].to_vec(),
-                Vec::new(),
+                xs_continuous_row_major[continuous_start..continuous_end].to_vec(),
+                xs_discrete_row_major[discrete_start..discrete_end].to_vec(),
                 1.0,
             ));
         }
@@ -101,6 +116,10 @@ impl SamplerAggregator for PythonHomogeneousMonteCarloSampler {
 
     fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError> {
         self.worker_mut()?.ingest_training_weights(training_weights)
+    }
+
+    fn pdf(&mut self, point: &PdfPoint) -> Result<Option<f64>, EngineError> {
+        self.worker_mut()?.pdf(point)
     }
 
     fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
@@ -128,22 +147,27 @@ impl PythonHomogeneousMonteCarloSampler {
     }
 }
 
-fn validate_homogeneous_domain(domain: &Domain, input_dim: usize) -> Result<(), BuildError> {
-    let (continuous_dims, discrete_dims) = domain.fixed_rectangular_dims().ok_or_else(|| {
-        BuildError::build(
-            "python_homogeneous_monte_carlo sampler requires a fixed rectangular domain",
-        )
-    })?;
-    if discrete_dims != 0 {
+fn validate_homogeneous_domain(
+    domain: &Domain,
+    expected_discrete_dims: usize,
+    expected_continuous_dims: usize,
+) -> Result<(), BuildError> {
+    let (actual_continuous_dims, actual_discrete_dims) =
+        domain.fixed_rectangular_dims().ok_or_else(|| {
+            BuildError::build(
+                "python_homogeneous_monte_carlo sampler requires a fixed rectangular domain",
+            )
+        })?;
+    if actual_discrete_dims != expected_discrete_dims {
         return Err(BuildError::build(format!(
-            "python_homogeneous_monte_carlo sampler requires discrete_dims=0, got {}",
-            discrete_dims
+            "python_homogeneous_monte_carlo sampler expects discrete_dims={}, got {} from domain",
+            expected_discrete_dims, actual_discrete_dims
         )));
     }
-    if continuous_dims != input_dim {
+    if actual_continuous_dims != expected_continuous_dims {
         return Err(BuildError::build(format!(
-            "python_homogeneous_monte_carlo sampler expects input_dim={}, got {} from domain",
-            input_dim, continuous_dims
+            "python_homogeneous_monte_carlo sampler expects continuous_dims={}, got {} from domain",
+            expected_continuous_dims, actual_continuous_dims
         )));
     }
     Ok(())
@@ -155,7 +179,8 @@ struct PythonSamplerWorker {
     stdout: BufReader<ChildStdout>,
     stderr: ChildStderr,
     next_id: u64,
-    input_dim: usize,
+    discrete_dims: usize,
+    continuous_dims: usize,
 }
 
 impl PythonSamplerWorker {
@@ -216,12 +241,14 @@ impl PythonSamplerWorker {
             stdout: BufReader::new(stdout),
             stderr,
             next_id: 1,
-            input_dim: params.input_dim,
+            discrete_dims: params.discrete_dims,
+            continuous_dims: params.continuous_dims,
         };
         worker.send_init(
             &params.module,
             &params.class,
-            params.input_dim,
+            params.discrete_dims,
+            params.continuous_dims,
             params.init_args.clone(),
             snapshot,
         )?;
@@ -232,7 +259,8 @@ impl PythonSamplerWorker {
         &mut self,
         module: &str,
         class: &str,
-        input_dim: usize,
+        discrete_dims: usize,
+        continuous_dims: usize,
         init_args: Value,
         snapshot: Option<Value>,
     ) -> Result<(), BuildError> {
@@ -241,7 +269,8 @@ impl PythonSamplerWorker {
             "op": "init",
             "module": module,
             "class": class,
-            "input_dim": input_dim,
+            "discrete_dims": discrete_dims,
+            "continuous_dims": continuous_dims,
             "init_args": init_args,
             "snapshot": snapshot,
         });
@@ -281,7 +310,10 @@ impl PythonSamplerWorker {
         })
     }
 
-    fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<Vec<f64>, EngineError> {
+    fn produce_latent_batch(
+        &mut self,
+        nr_samples: usize,
+    ) -> Result<(Vec<i64>, Vec<f64>), EngineError> {
         let request = serde_json::json!({
             "id": self.allocate_request_id(),
             "op": "produce_latent_batch",
@@ -289,30 +321,59 @@ impl PythonSamplerWorker {
         });
         let response = self.send_request(&request).map_err(EngineError::engine)?;
         Self::expect_ok(response.clone()).map_err(EngineError::engine)?;
-        let xs = response
-            .get("xs_row_major")
+        let xs_discrete = response
+            .get("xs_discrete_row_major")
             .and_then(Value::as_array)
             .ok_or_else(|| {
-                EngineError::engine("python sampler response missing 'xs_row_major' array")
+                EngineError::engine("python sampler response missing 'xs_discrete_row_major' array")
             })?;
-        let expected_len = nr_samples.saturating_mul(self.input_dim);
-        if xs.len() != expected_len {
+        let expected_discrete_len = nr_samples.saturating_mul(self.discrete_dims);
+        if xs_discrete.len() != expected_discrete_len {
             return Err(EngineError::engine(format!(
-                "python sampler output size mismatch: expected {} values, got {}",
-                expected_len,
-                xs.len()
+                "python sampler discrete output size mismatch: expected {} values, got {}",
+                expected_discrete_len,
+                xs_discrete.len()
             )));
         }
-        xs.iter()
+        let xs_continuous = response
+            .get("xs_continuous_row_major")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                EngineError::engine(
+                    "python sampler response missing 'xs_continuous_row_major' array",
+                )
+            })?;
+        let expected_continuous_len = nr_samples.saturating_mul(self.continuous_dims);
+        if xs_continuous.len() != expected_continuous_len {
+            return Err(EngineError::engine(format!(
+                "python sampler continuous output size mismatch: expected {} values, got {}",
+                expected_continuous_len,
+                xs_continuous.len()
+            )));
+        }
+        let xs_discrete = xs_discrete
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                value.as_i64().ok_or_else(|| {
+                    EngineError::engine(format!(
+                        "python sampler returned non-i64 value at xs_discrete_row_major[{index}]"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let xs_continuous = xs_continuous
+            .iter()
             .enumerate()
             .map(|(index, value)| {
                 value.as_f64().ok_or_else(|| {
                     EngineError::engine(format!(
-                        "python sampler returned non-f64 value at xs_row_major[{index}]"
+                        "python sampler returned non-f64 value at xs_continuous_row_major[{index}]"
                     ))
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((xs_discrete, xs_continuous))
     }
 
     fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError> {
@@ -336,6 +397,51 @@ impl PythonSamplerWorker {
             .get("snapshot")
             .cloned()
             .ok_or_else(|| EngineError::engine("python sampler response missing 'snapshot'"))
+    }
+
+    fn pdf(&mut self, point: &PdfPoint) -> Result<Option<f64>, EngineError> {
+        if point.0.len() != self.discrete_dims {
+            return Err(EngineError::engine(format!(
+                "python sampler pdf discrete dimension mismatch: expected {}, got {}",
+                self.discrete_dims,
+                point.0.len()
+            )));
+        }
+        if point.1.len() != self.continuous_dims {
+            return Err(EngineError::engine(format!(
+                "python sampler pdf continuous dimension mismatch: expected {}, got {}",
+                self.continuous_dims,
+                point.1.len()
+            )));
+        }
+        let request = serde_json::json!({
+            "id": self.allocate_request_id(),
+            "op": "pdf",
+            "nr_samples": 1,
+            "xs_discrete_row_major": point.0,
+            "xs_continuous_row_major": point.1,
+        });
+        let response = self.send_request(&request).map_err(EngineError::engine)?;
+        Self::expect_ok(response.clone()).map_err(EngineError::engine)?;
+        match response.get("values") {
+            Some(Value::Null) | None => Ok(None),
+            Some(Value::Array(values)) => {
+                if values.len() != 1 {
+                    return Err(EngineError::engine(format!(
+                        "python sampler pdf output size mismatch: expected 1, got {}",
+                        values.len()
+                    )));
+                }
+                values[0].as_f64().map(Some).ok_or_else(|| {
+                    EngineError::engine(
+                        "python sampler response field 'values[0]' must be f64 or null",
+                    )
+                })
+            }
+            Some(_) => Err(EngineError::engine(
+                "python sampler response field 'values' must be an array or null",
+            )),
+        }
     }
 
     fn get_diagnostics(&mut self) -> Result<Value, EngineError> {
@@ -536,7 +642,7 @@ fn build_worker_pythonpath(runtime_root: &Path) -> Option<OsString> {
 
 fn sampler_worker_script_path() -> Result<PathBuf, BuildError> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("integrand_api")
+        .join("python_api")
         .join("python_workers")
         .join("sampler_worker.py");
     if !path.is_file() {
@@ -568,4 +674,22 @@ fn is_executable(path: &Path) -> bool {
 
 fn default_init_args() -> Value {
     Value::Object(serde_json::Map::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_homogeneous_domain;
+    use crate::utils::domain::Domain;
+
+    #[test]
+    fn python_sampler_domain_accepts_fixed_rectangular_mixed_dims() {
+        validate_homogeneous_domain(&Domain::rectangular(3, 2), 2, 3).expect("valid domain");
+    }
+
+    #[test]
+    fn python_sampler_domain_rejects_discrete_dim_mismatch() {
+        let err = validate_homogeneous_domain(&Domain::rectangular(3, 1), 2, 3)
+            .expect_err("expected mismatch");
+        assert!(err.to_string().contains("discrete_dims=2"));
+    }
 }
