@@ -12,9 +12,8 @@ use crate::evaluation::BatchResult;
 use crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint;
 use crate::sampling::LatentBatch;
 use crate::stores::read_models::{
-    EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress,
+    EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress, RuntimeLogPage,
     SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot, WorkQueueStats,
-    WorkerLogPage,
 };
 use crate::utils::domain::Domain;
 use async_trait::async_trait;
@@ -261,15 +260,17 @@ pub trait RunReadStore: Send + Sync {
         run_id: i32,
         task_id: i64,
     ) -> Result<Option<TaskStageSnapshot>, StoreError>;
-    async fn get_worker_logs(
+    async fn get_runtime_logs(
         &self,
-        run_id: i32,
         limit: i64,
+        source: Option<&str>,
+        run_id: Option<i32>,
         node_name: Option<&str>,
+        node_uuid: Option<&str>,
         level: Option<&str>,
         query: Option<&str>,
         before_id: Option<i64>,
-    ) -> Result<WorkerLogPage, StoreError>;
+    ) -> Result<RuntimeLogPage, StoreError>;
     async fn get_registered_workers(
         &self,
         run_id: Option<i32>,

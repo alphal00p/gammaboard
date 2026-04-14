@@ -162,7 +162,10 @@ fn default_limit() -> i64 {
 struct LogQuery {
     #[serde(default = "default_log_limit")]
     limit: i64,
+    source: Option<String>,
+    run_id: Option<i32>,
     node_name: Option<String>,
+    node_uuid: Option<String>,
     level: Option<String>,
     q: Option<String>,
     before_id: Option<i64>,
@@ -297,6 +300,7 @@ fn build_app(state: AppState) -> Router {
         )
         .route("/runs/:id/tasks/:task_id/output", post(get_run_task_output))
         .route("/runs/:id/stats", get(get_run_stats))
+        .route("/logs", get(get_logs))
         .route("/runs/:id/logs", get(get_run_logs))
         .route(
             "/runs/:id/performance/evaluator",
@@ -783,10 +787,37 @@ async fn get_run_logs(
     let limit = clamp_limit(params.limit);
     let logs = state
         .store
-        .get_worker_logs(
-            id,
+        .get_runtime_logs(
             limit,
+            params.source.as_deref(),
+            Some(id),
             params.node_name.as_deref(),
+            params.node_uuid.as_deref(),
+            params.level.as_deref(),
+            params
+                .q
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty()),
+            params.before_id,
+        )
+        .await?;
+    json_response(logs)
+}
+
+async fn get_logs(
+    State(state): State<AppState>,
+    Query(params): Query<LogQuery>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    let limit = clamp_limit(params.limit);
+    let logs = state
+        .store
+        .get_runtime_logs(
+            limit,
+            params.source.as_deref(),
+            params.run_id,
+            params.node_name.as_deref(),
+            params.node_uuid.as_deref(),
             params.level.as_deref(),
             params
                 .q

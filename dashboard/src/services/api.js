@@ -118,7 +118,7 @@ const normalizeWorkerEntry = (entry) => {
   };
 };
 
-const normalizeRunLogEntry = (entry) => {
+const normalizeRuntimeLogEntry = (entry) => {
   if (!entry || typeof entry !== "object") return null;
   const rawId = entry.id ?? null;
   if (rawId == null) return null;
@@ -131,19 +131,21 @@ const normalizeRunLogEntry = (entry) => {
   return {
     id: String(rawId),
     ts: timestamp,
+    source: typeof entry.source === "string" ? entry.source : "unknown",
     run_id: runId != null && Number.isFinite(runId) ? runId : null,
     node_uuid: entry.node_uuid ?? null,
     node_name: entry.node_name ?? null,
     level,
+    target: typeof entry.target === "string" ? entry.target : "",
     message: entry.message ?? "",
     fields: entry.fields ?? {},
   };
 };
 
-const normalizeRunLogPage = (payload) => {
+const normalizeRuntimeLogPage = (payload) => {
   const rows = asArray(payload?.items);
   return {
-    items: rows.map(normalizeRunLogEntry).filter(Boolean),
+    items: rows.map(normalizeRuntimeLogEntry).filter(Boolean),
     next_before_id: payload?.next_before_id != null ? String(payload.next_before_id) : null,
     has_more_older: payload?.has_more_older === true,
   };
@@ -304,24 +306,54 @@ export const saveTemplateFile = async (kind, { name, toml }, signal) =>
 export const deleteTemplateFile = async (kind, name, signal) =>
   apiDelete(`/templates/${kind}/${encodeURIComponent(name)}`, `Failed to delete template ${name}`, signal);
 
-export const fetchRunLogPage = async (
-  runId,
-  { limit = 100, nodeName = null, level = null, search = "", beforeId = null } = {},
+export const fetchRuntimeLogPage = async (
+  {
+    limit = 100,
+    source = null,
+    runId = null,
+    nodeName = null,
+    nodeUuid = null,
+    level = null,
+    search = "",
+    beforeId = null,
+  } = {},
   signal,
 ) => {
   const data = await apiGet(
-    `/runs/${runId}/logs${buildQueryString([
+    `/logs${buildQueryString([
       ["limit", limit],
+      ["source", source],
+      ["run_id", runId],
       ["node_name", nodeName],
+      ["node_uuid", nodeUuid],
       ["level", level],
       ["q", search],
       ["before_id", beforeId],
     ])}`,
-    "Failed to fetch run logs",
+    "Failed to fetch runtime logs",
     signal,
   );
-  return normalizeRunLogPage(data);
+  return normalizeRuntimeLogPage(data);
 };
+
+export const fetchRunLogPage = async (
+  runId,
+  { limit = 100, source = null, nodeName = null, nodeUuid = null, level = null, search = "", beforeId = null } = {},
+  signal,
+) =>
+  fetchRuntimeLogPage(
+    {
+      limit,
+      source,
+      runId,
+      nodeName,
+      nodeUuid,
+      level,
+      search,
+      beforeId,
+    },
+    signal,
+  );
 
 export const fetchEvaluatorPerformanceHistory = async (runId, limit = 500, nodeName = null, signal) => {
   return apiGet(

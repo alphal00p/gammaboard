@@ -61,6 +61,21 @@ const WorkerLogsPanel = ({
       </Typography>
 
       <Stack direction="row" spacing={1.5} useFlexGap flexWrap="wrap" sx={{ mb: 1.5 }}>
+        <FormControl size="small" sx={{ minWidth: 150 }}>
+          <InputLabel id="worker-log-filter-source">Source</InputLabel>
+          <Select
+            labelId="worker-log-filter-source"
+            value={filters.source}
+            label="Source"
+            onChange={(event) => setFilters((current) => ({ ...current, source: event.target.value }))}
+          >
+            <MenuItem value="">All sources</MenuItem>
+            <MenuItem value="worker">worker</MenuItem>
+            <MenuItem value="server">server</MenuItem>
+            <MenuItem value="control">control</MenuItem>
+          </Select>
+        </FormControl>
+
         <FormControl size="small" sx={{ minWidth: 220 }}>
           <InputLabel id="worker-log-filter-worker">Node</InputLabel>
           <Select
@@ -123,7 +138,9 @@ const WorkerLogsPanel = ({
             <TableHead>
               <TableRow>
                 <TableCell sx={{ width: 220 }}>Timestamp</TableCell>
+                <TableCell sx={{ width: 120 }}>Source</TableCell>
                 <TableCell sx={{ width: 110 }}>Level</TableCell>
+                <TableCell sx={{ width: 110 }}>Run</TableCell>
                 <TableCell sx={{ width: 220 }}>Node</TableCell>
                 <TableCell>Message</TableCell>
               </TableRow>
@@ -138,18 +155,20 @@ const WorkerLogsPanel = ({
                   sx={{ cursor: "pointer" }}
                 >
                   <TableCell>{formatDateTime(entry.ts, "-")}</TableCell>
+                  <TableCell>{entry.source || "-"}</TableCell>
                   <TableCell>
                     <Box component="span" sx={{ color: levelTone(entry.level), fontWeight: 700 }}>
                       {String(entry.level || "unknown").toUpperCase()}
                     </Box>
                   </TableCell>
+                  <TableCell>{entry.run_id != null ? String(entry.run_id) : "-"}</TableCell>
                   <TableCell>{entry.node_name || entry.node_uuid || "-"}</TableCell>
                   <TableCell sx={{ fontFamily: "monospace" }}>{entry.message || ""}</TableCell>
                 </TableRow>
               ))}
               {logItems.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4}>
+                  <TableCell colSpan={6}>
                     <Typography variant="body2" color="text.secondary">
                       No logs match the current filters.
                     </Typography>
@@ -179,10 +198,12 @@ const WorkerLogsPanel = ({
               {
                 id: selectedLog.id,
                 ts: selectedLog.ts,
+                source: selectedLog.source,
                 run_id: selectedLog.run_id,
                 node_name: selectedLog.node_name,
                 node_uuid: selectedLog.node_uuid,
                 level: selectedLog.level,
+                target: selectedLog.target,
                 message: selectedLog.message,
                 fields: selectedLog.fields || {},
               },

@@ -191,6 +191,44 @@ const SHARED_HISTORY_X_VIEW_PANEL_IDS = new Set([
 ]);
 const inferXAxisLabel = (panelId) => (String(panelId || "").includes("_history") ? "Nr samples" : null);
 const inferNumericXAxisLabel = (panelId) => inferXAxisLabel(panelId) || "x";
+const TIMESTAMP_X_THRESHOLD_MS = 1e11;
+const isTimestampDomain = (domain) => {
+  const [min, max] = asArray(domain);
+  return Number.isFinite(min) && Number.isFinite(max) && min >= 0 && max >= TIMESTAMP_X_THRESHOLD_MS;
+};
+const formatElapsedTime = (elapsedMs) => {
+  const totalSeconds = Math.max(0, Math.round(Number(elapsedMs) / 1000));
+  if (!Number.isFinite(totalSeconds)) return "n/a";
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+};
+const formatAbsoluteLocalTime = (timestampMs) => {
+  const date = new Date(Number(timestampMs));
+  return Number.isNaN(date.getTime()) ? "n/a" : date.toLocaleString();
+};
+const formatTimeseriesXAxisValue = (value, isTimestamp, originMs) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "n/a";
+  return isTimestamp ? formatElapsedTime(numeric - originMs) : formatAxisValue(numeric);
+};
+const buildTimeseriesTooltipFormatter = (isTimestamp, originMs) => (params) => {
+  const entries = asArray(params);
+  if (entries.length === 0) return "";
+  const axisValue = Number(entries[0]?.axisValue);
+  const header = isTimestamp
+    ? `${formatElapsedTime(axisValue - originMs)}<br/>${escapeXml(formatAbsoluteLocalTime(axisValue))}`
+    : escapeXml(formatAxisValue(axisValue));
+  const lines = entries.map((entry) => {
+    const rawValue = Array.isArray(entry?.value) ? entry.value[1] : entry?.value;
+    return `${entry?.marker ?? ""}${escapeXml(entry?.seriesName ?? "")}: ${Number.isFinite(Number(rawValue)) ? formatScientific(Number(rawValue), 6) : "n/a"}`;
+  });
+  return [header, ...lines].join("<br/>");
+};
 const isObject = (value) => value && typeof value === "object" && !Array.isArray(value);
 
 const buildMultiSeriesData = (seriesList) => {
@@ -515,6 +553,8 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
   const panelId = state?.panel_id || null;
   const zoomRange = readZoomFromPanelValue(value, FULL_ZOOM);
   const isHistoryPanel = useMemo(() => String(panelId || "").includes("_history"), [panelId]);
+  const usesTimestampXAxis = useMemo(() => isTimestampDomain(xDomain), [xDomain]);
+  const xAxisOriginMs = useMemo(() => (usesTimestampXAxis ? Number(xDomain[0]) : 0), [usesTimestampXAxis, xDomain]);
   const tailPinned = readTailPinnedFromPanelValue(value, isHistoryPanel);
   const visibleXRange = useMemo(() => visibleXRangeFromZoom(xDomain, zoomRange), [xDomain, zoomRange]);
   const visibleDomain = useMemo(() => {
@@ -587,8 +627,11 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
         type: "value",
         min: xDomain[0],
         max: xDomain[1],
-        name: inferNumericXAxisLabel(panelId),
-        axisLabel: baseAxisLabel,
+        name: usesTimestampXAxis ? "Elapsed Time" : inferNumericXAxisLabel(panelId),
+        axisLabel: {
+          ...baseAxisLabel,
+          formatter: (axisValue) => formatTimeseriesXAxisValue(axisValue, usesTimestampXAxis, xAxisOriginMs),
+        },
         splitLine: { show: false },
         nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
       },
@@ -601,7 +644,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
       },
       tooltip: {
         trigger: "axis",
-        valueFormatter: (value) => (Number.isFinite(Number(value)) ? formatScientific(Number(value), 6) : "n/a"),
+        formatter: buildTimeseriesTooltipFormatter(usesTimestampXAxis, xAxisOriginMs),
       },
       dataZoom: buildDataZoom(zoomRange),
       series: [
@@ -649,7 +692,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
         },
       ],
     }),
-    [errorBarData, isHistoryPanel, bandSegments, meanData, state?.panel_id, visibleDomain, xDomain, zoomRange],
+    [bandSegments, errorBarData, isHistoryPanel, meanData, panelId, state?.smooth, usesTimestampXAxis, visibleDomain, xAxisOriginMs, xDomain, zoomRange],
   );
   if (points.length === 0) return null;
   return (
@@ -701,6 +744,8 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
   const xDomain = fitXDomain(data.map((row) => row.x));
   const panelId = state?.panel_id || null;
   const zoomRange = readZoomFromPanelValue(value, FULL_ZOOM);
+  const usesTimestampXAxis = useMemo(() => isTimestampDomain(xDomain), [xDomain]);
+  const xAxisOriginMs = useMemo(() => (usesTimestampXAxis ? Number(xDomain[0]) : 0), [usesTimestampXAxis, xDomain]);
   const onDataZoom = useMemo(
     () => ({
       datazoom: (event) => {
@@ -725,8 +770,11 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
         type: "value",
         min: xDomain[0],
         max: xDomain[1],
-        name: inferNumericXAxisLabel(panelId),
-        axisLabel: baseAxisLabel,
+        name: usesTimestampXAxis ? "Elapsed Time" : inferNumericXAxisLabel(panelId),
+        axisLabel: {
+          ...baseAxisLabel,
+          formatter: (axisValue) => formatTimeseriesXAxisValue(axisValue, usesTimestampXAxis, xAxisOriginMs),
+        },
         splitLine: { show: false },
         nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
       },
@@ -739,7 +787,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
       },
       tooltip: {
         trigger: "axis",
-        valueFormatter: (value) => (Number.isFinite(Number(value)) ? formatScientific(Number(value), 6) : "n/a"),
+        formatter: buildTimeseriesTooltipFormatter(usesTimestampXAxis, xAxisOriginMs),
       },
       dataZoom: buildDataZoom(zoomRange),
       series: series.map((item, index) => ({
@@ -758,7 +806,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
         },
       })),
     }),
-    [domain, panelId, series, xDomain, zoomRange],
+    [domain, panelId, series, usesTimestampXAxis, xAxisOriginMs, xDomain, zoomRange],
   );
   if (data.length === 0) return null;
   return (
@@ -888,6 +936,7 @@ const buildDiscreteRelativeErrorData = (bins) =>
     if (!Number.isFinite(value) || !Number.isFinite(error) || value === 0) {
       return {
         index,
+        relative_error: null,
         positive_relative_error: null,
         negative_relative_error: null,
       };
@@ -895,6 +944,7 @@ const buildDiscreteRelativeErrorData = (bins) =>
     const relativeError = Math.abs(error / value);
     return {
       index,
+      relative_error: relativeError,
       positive_relative_error: relativeError,
       negative_relative_error: -relativeError,
     };
@@ -1126,7 +1176,7 @@ const buildHistogramYDomain = (bins, scale, visibleXRange = null) => {
 const buildRelativeErrorYDomain = (points, visibleXRange = null) => {
   const selectedPoints = asArray(points).filter((point) => {
     if (!visibleXRange) return true;
-    const x = Number(point?.x);
+    const x = Number(point?.x ?? point?.index);
     return Number.isFinite(x) && x >= visibleXRange.min && x <= visibleXRange.max;
   });
   const sourcePoints = selectedPoints.length > 0 ? selectedPoints : asArray(points);
@@ -1503,22 +1553,21 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
   );
   const yDomain = useMemo(() => buildHistogramYDomain(bins, yScale, visibleXRange), [bins, yScale, visibleXRange]);
   const relativeErrorYDomain = useMemo(
-    () => buildRelativeErrorYDomain(relativeErrorData, visibleXRange),
-    [relativeErrorData, visibleXRange],
+    () => buildRelativeErrorYDomain(isDiscrete ? discreteRelativeErrorData : relativeErrorData, visibleXRange),
+    [discreteRelativeErrorData, isDiscrete, relativeErrorData, visibleXRange],
   );
   const binErrorData = useMemo(
     () =>
       bins
-        .map((bin) => {
+        .map((bin, index) => {
           const x = isDiscrete ? null : Number(bin?.x);
           const y = Number(bin?.value);
           const err = Number(bin?.error);
           if (isDiscrete) {
-            // ECharts error bar with category axis expects [index, low, high] but we use custom error series elsewhere; skip numeric x checks
             if (!Number.isFinite(y) || !Number.isFinite(err) || err <= 0) return null;
             const yLow = y - Math.abs(err);
             const yHigh = y + Math.abs(err);
-            return yLow <= 0 && yScale === "log" ? null : [null, yLow, yHigh];
+            return yLow <= 0 && yScale === "log" ? null : [index, yLow, yHigh];
           }
           if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(err) || err <= 0) {
             return null;
@@ -1548,7 +1597,11 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
           type: "category",
           data: categoriesData,
           name: inferNumericXAxisLabel(panelId),
-          axisLabel: { ...baseAxisLabel, rotate: categoriesData.length > 6 ? 30 : 0 },
+          axisLabel: {
+            ...baseAxisLabel,
+            interval: 0,
+            rotate: categoriesData.length > 6 ? 30 : 0,
+          },
           splitLine: { show: false },
           nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
         },
@@ -1571,6 +1624,7 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
         },
         dataZoom: buildDataZoom(zoomRange, false),
         series: [
+          ...(Array.isArray(binErrorData) && binErrorData.length > 0 ? [buildErrorBarSeries({ name: "error", data: binErrorData })] : []),
           {
             type: "bar",
             name: "value",
@@ -1623,7 +1677,7 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
         baseSeries,
       ],
     };
-  }, [binErrorData, bins, categories, effectiveXScale, isDiscrete, panelId, stepData, xDomain, yDomain, yScale, zoomRange]);
+  }, [binErrorData, bins, categories, effectiveXScale, isDiscrete, panelId, showRelativeErrors, stepData, xDomain, yDomain, yScale, zoomRange]);
 
   const relativeOption = useMemo(() => {
     if (isDiscrete) {
@@ -1635,7 +1689,11 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
           type: "category",
           data: categoriesData,
           name: inferNumericXAxisLabel(panelId),
-          axisLabel: { ...baseAxisLabel, rotate: categoriesData.length > 6 ? 30 : 0 },
+          axisLabel: {
+            ...baseAxisLabel,
+            interval: 0,
+            rotate: categoriesData.length > 6 ? 30 : 0,
+          },
           splitLine: { show: false },
           nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
         },
@@ -1656,15 +1714,13 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
             type: "bar",
             name: "positive_relative_error",
             data: discreteRelativeErrorData.map((point) => point.positive_relative_error),
-            stack: "relative_error",
             itemStyle: { color: "rgba(187, 62, 3, 0.75)" },
           },
           {
             type: "bar",
             name: "negative_relative_error",
             data: discreteRelativeErrorData.map((point) => point.negative_relative_error),
-            stack: "relative_error",
-            itemStyle: { color: "rgba(10, 147, 150, 0.55)" },
+            itemStyle: { color: "rgba(187, 62, 3, 0.75)" },
           },
         ],
       };

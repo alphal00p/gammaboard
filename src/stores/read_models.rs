@@ -61,23 +61,25 @@ pub struct TaskStageSnapshot {
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-/// Worker log event persisted from runtime tracing (`source='worker'`).
+/// Runtime log event persisted from tracing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkerLogEntry {
+pub struct RuntimeLogEntry {
     pub id: String,
     pub ts: chrono::DateTime<chrono::Utc>,
+    pub source: String,
     pub run_id: Option<i32>,
     pub node_uuid: Option<String>,
     pub node_name: Option<String>,
     pub level: String,
+    pub target: String,
     pub message: String,
     pub fields: serde_json::Value,
 }
 
 /// Cursor-paged runtime log response for dashboard browsing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkerLogPage {
-    pub items: Vec<WorkerLogEntry>,
+pub struct RuntimeLogPage {
+    pub items: Vec<RuntimeLogEntry>,
     pub next_before_id: Option<String>,
     pub has_more_older: bool,
 }

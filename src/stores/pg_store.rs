@@ -206,17 +206,19 @@ impl RunReadStore for PgStore {
         Ok(queries::get_latest_task_stage_snapshot(&self.pool, run_id, task_id).await?)
     }
 
-    async fn get_worker_logs(
+    async fn get_runtime_logs(
         &self,
-        run_id: i32,
         limit: i64,
+        source: Option<&str>,
+        run_id: Option<i32>,
         node_name: Option<&str>,
+        node_uuid: Option<&str>,
         level: Option<&str>,
         query: Option<&str>,
         before_id: Option<i64>,
-    ) -> Result<crate::stores::WorkerLogPage, StoreError> {
-        Ok(queries::get_worker_logs(
-            &self.pool, run_id, limit, node_name, level, query, before_id,
+    ) -> Result<crate::stores::RuntimeLogPage, StoreError> {
+        Ok(queries::get_runtime_logs(
+            &self.pool, limit, source, run_id, node_name, node_uuid, level, query, before_id,
         )
         .await?)
     }

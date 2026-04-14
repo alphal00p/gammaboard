@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { fetchRunLogPage } from "../services/api";
+import { fetchRuntimeLogPage } from "../services/api";
 import { asArray } from "../utils/collections";
 
 const defaultFilters = Object.freeze({
+  source: "",
   nodeName: "",
   level: "",
   search: "",
@@ -48,11 +49,13 @@ export const useWorkerLogs = ({ runId, workers = [], limit = 100 } = {}) => {
 
       setIsLoading(true);
       try {
-        const page = await fetchRunLogPage(
-          runId,
+        const page = await fetchRuntimeLogPage(
           {
             limit,
+            source: filters.source || null,
+            runId,
             nodeName: filters.nodeName || null,
+            nodeUuid: null,
             level: filters.level || null,
             search: filters.search || "",
             beforeId,

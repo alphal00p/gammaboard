@@ -933,7 +933,7 @@ mod tests {
     use crate::stores::{
         EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress,
         SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot, WorkQueueStats,
-        WorkerLogPage,
+        RuntimeLogPage,
     };
     use crate::utils::domain::Domain;
     use async_trait::async_trait;
@@ -1360,15 +1360,17 @@ mod tests {
             unreachable!("unused in test")
         }
 
-        async fn get_worker_logs(
+        async fn get_runtime_logs(
             &self,
-            _run_id: i32,
             _limit: i64,
+            _source: Option<&str>,
+            _run_id: Option<i32>,
             _node_name: Option<&str>,
+            _node_uuid: Option<&str>,
             _level: Option<&str>,
             _query: Option<&str>,
             _before_id: Option<i64>,
-        ) -> Result<WorkerLogPage, StoreError> {
+        ) -> Result<RuntimeLogPage, StoreError> {
             unreachable!("unused in test")
         }
 

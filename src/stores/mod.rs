@@ -9,6 +9,6 @@ pub use bootstrap::{get_pg_pool, init_pg_store};
 pub use pg_store::PgStore;
 pub use read_models::{
     EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress,
-    SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot, WorkQueueStats,
-    WorkerLogEntry, WorkerLogPage,
+    RuntimeLogEntry, RuntimeLogPage, SamplerPerformanceHistoryEntry, TaskOutputSnapshot,
+    TaskStageSnapshot, WorkQueueStats,
 };

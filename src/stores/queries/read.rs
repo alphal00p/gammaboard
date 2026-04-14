@@ -2,8 +2,8 @@ use crate::core::SamplerPerformanceMetrics;
 use crate::evaluation::ObservableState;
 use crate::stores::{
     EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress,
-    SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot, WorkQueueStats,
-    WorkerLogEntry, WorkerLogPage,
+    RuntimeLogEntry, RuntimeLogPage, SamplerPerformanceHistoryEntry, TaskOutputSnapshot,
+    TaskStageSnapshot, WorkQueueStats,
 };
 use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
@@ -168,23 +168,27 @@ impl TryFrom<TaskStageSnapshotRow> for TaskStageSnapshot {
 struct WorkerLogRow {
     id: i64,
     ts: DateTime<Utc>,
+    source: String,
     run_id: Option<i32>,
     node_uuid: Option<String>,
     node_name: Option<String>,
     level: String,
+    target: String,
     message: String,
     fields: JsonValue,
 }
 
-impl From<WorkerLogRow> for WorkerLogEntry {
+impl From<WorkerLogRow> for RuntimeLogEntry {
     fn from(value: WorkerLogRow) -> Self {
         Self {
             id: id_text(value.id),
             ts: value.ts,
+            source: value.source,
             run_id: value.run_id,
             node_uuid: value.node_uuid,
             node_name: value.node_name,
             level: value.level,
+            target: value.target,
             message: value.message,
             fields: value.fields,
         }
@@ -554,52 +558,61 @@ pub(crate) async fn get_latest_task_stage_snapshot(
     row.map(TryInto::try_into).transpose()
 }
 
-pub(crate) async fn get_worker_logs(
+pub(crate) async fn get_runtime_logs(
     pool: &PgPool,
-    run_id: i32,
     limit: i64,
+    source: Option<&str>,
+    run_id: Option<i32>,
     node_name: Option<&str>,
+    node_uuid: Option<&str>,
     level: Option<&str>,
     query: Option<&str>,
     before_id: Option<i64>,
-) -> Result<WorkerLogPage, sqlx::Error> {
+) -> Result<RuntimeLogPage, sqlx::Error> {
     let query_pattern = query.map(|value| format!("%{value}%"));
     let rows = sqlx::query_as::<_, WorkerLogRow>(
         r#"
         SELECT
             id,
             ts,
+            source,
             run_id,
             node_uuid,
             node_name,
             level,
+            target,
             message,
             fields
         FROM (
             SELECT
                 id,
                 ts,
+                source,
                 run_id,
                 node_uuid,
                 node_name,
                 level,
+                target,
                 message,
                 fields
             FROM runtime_logs
-            WHERE source = 'worker'
-              AND run_id = $1
-              AND ($2::text IS NULL OR node_name = $2)
-              AND ($3::text IS NULL OR level = $3)
-              AND ($4::text IS NULL OR message ILIKE $4 OR fields::text ILIKE $4)
-              AND ($5::bigint IS NULL OR id < $5)
+            WHERE ($1::text IS NULL OR source = $1)
+              AND ($2::int IS NULL OR run_id = $2)
+              AND ($3::text IS NULL OR node_name = $3)
+              AND ($4::text IS NULL OR node_uuid = $4)
+              AND ($5::text IS NULL OR level = $5)
+              AND ($6::text IS NULL OR message ILIKE $6 OR target ILIKE $6 OR fields::text ILIKE $6)
+              AND ($7::bigint IS NULL OR id < $7)
             ORDER BY id DESC
-            LIMIT $6
+            LIMIT $8
         ) recent
         ORDER BY id DESC
         "#,
     )
+    .bind(source)
     .bind(run_id)
     .bind(node_name)
+    .bind(node_uuid)
     .bind(level)
     .bind(query_pattern)
     .bind(before_id)
@@ -608,7 +621,7 @@ pub(crate) async fn get_worker_logs(
     .await?;
 
     let has_more_older = rows.len() as i64 > limit;
-    let items: Vec<WorkerLogEntry> = rows
+    let items: Vec<RuntimeLogEntry> = rows
         .into_iter()
         .take(limit as usize)
         .map(Into::into)
@@ -619,7 +632,7 @@ pub(crate) async fn get_worker_logs(
         None
     };
 
-    Ok(WorkerLogPage {
+    Ok(RuntimeLogPage {
         items,
         next_before_id,
         has_more_older,
