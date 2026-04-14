@@ -23,7 +23,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use std::time::{Duration, Instant};
 use thiserror::Error;
-use tokio::time::sleep;
 
 const MIN_BATCH_SIZE: usize = 16;
 const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.25;
@@ -580,24 +579,15 @@ where
         Ok(())
     }
 
-    async fn drain_evaluator_work_on_stop(&mut self) -> Result<(), RunnerError> {
+    async fn drain_local_work_on_stop(&mut self) -> Result<(), RunnerError> {
         loop {
-            let completed = self.queue.get_processed_blocking().await?;
-            self.process_completed_batches(completed).await?;
-
-            let queue_counts = self.queue.queue_counts().await?;
-            if queue_counts.claimed <= 0
-                && queue_counts.completed <= 0
-                && self.queue.local_work_drained()
-            {
+            let completed = self.queue.get_processed_ready().await?;
+            if completed.is_empty() {
                 break;
             }
-
-            sleep(Duration::from_millis(25)).await;
+            self.process_completed_batches(completed).await?;
         }
-
-        let completed = self.queue.get_processed_blocking().await?;
-        self.process_completed_batches(completed).await?;
+        self.queue.cancel_nonessential_background_work();
         Ok(())
     }
 
@@ -740,7 +730,7 @@ where
         self.queue.flush().await?;
         let queue_empty = match mode {
             FinalizeMode::PersistState => {
-                self.drain_evaluator_work_on_stop().await?;
+                self.drain_local_work_on_stop().await?;
                 self.queue.open_batch_count().await? <= 0
             }
             FinalizeMode::CompleteTask => true,

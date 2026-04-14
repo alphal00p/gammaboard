@@ -464,14 +464,6 @@ where
                 .sum::<usize>()
     }
 
-    pub(crate) fn local_work_drained(&self) -> bool {
-        self.local_insert_work_drained()
-            && self.ready_processed.is_empty()
-            && self.pending_processed_fetch.is_none()
-            && self.pending_completed_cleanup.is_none()
-            && !self.insert_pump_running
-    }
-
     fn snapshot_insert_bundle_start_state(&self) -> (usize, Option<i64>) {
         (
             self.pending_insert.len(),
@@ -503,22 +495,19 @@ where
         Ok(self.take_ready_processed())
     }
 
-    pub(crate) async fn get_processed_blocking(
-        &mut self,
-    ) -> Result<Vec<CompletedBatch>, StoreError> {
-        let ready = self.get_processed().await?;
-        if !ready.is_empty() {
-            return Ok(ready);
-        }
-
-        if self.pending_processed_fetch.is_none() {
-            self.ensure_processed_prefetch();
-        }
-        let Some(task) = self.pending_processed_fetch.take() else {
-            return Ok(Vec::new());
-        };
-        self.consume_processed_fetch_task(task).await?;
+    pub(crate) async fn get_processed_ready(&mut self) -> Result<Vec<CompletedBatch>, StoreError> {
+        self.drain_finished_insert().await?;
+        self.drain_finished_processed_fetch().await?;
         Ok(self.take_ready_processed())
+    }
+
+    pub(crate) fn cancel_nonessential_background_work(&mut self) {
+        if let Some(task) = self.pending_processed_fetch.take() {
+            task.handle.abort();
+        }
+        if let Some(task) = self.pending_completed_cleanup.take() {
+            task.handle.abort();
+        }
     }
 
     pub fn get_sample(
@@ -954,11 +943,16 @@ mod tests {
     #[derive(Clone, Default)]
     struct RecordingStore {
         inserts: Arc<Mutex<Vec<(f64, Vec<i64>)>>>,
+        fetch_completed_calls: Arc<Mutex<usize>>,
     }
 
     impl RecordingStore {
         fn recorded_inserts(&self) -> Vec<(f64, Vec<i64>)> {
             self.inserts.lock().expect("recording lock").clone()
+        }
+
+        fn fetch_completed_calls(&self) -> usize {
+            *self.fetch_completed_calls.lock().expect("recording lock")
         }
     }
 
@@ -1056,7 +1050,8 @@ mod tests {
             _strict_ordering: bool,
             _after_batch_id: Option<i64>,
         ) -> Result<Vec<crate::core::CompletedBatch>, StoreError> {
-            unreachable!("unused in test")
+            *self.fetch_completed_calls.lock().expect("recording lock") += 1;
+            Ok(Vec::new())
         }
 
         async fn cleanup_consumed_completed_batches(
@@ -1478,5 +1473,38 @@ mod tests {
             first_ids,
             second_ids
         );
+    }
+
+    #[tokio::test]
+    async fn get_processed_ready_does_not_start_completed_fetch() {
+        let store = RecordingStore::default();
+        let mut queue = SamplerQueue::new(
+            store.clone(),
+            1,
+            1,
+            true,
+            SamplerQueueConfig {
+                queue_buffer: 1.0,
+                target_batch_eval_ms: 500.0,
+                max_batch_size: 4096,
+                local_pending_buffer_multiplier: 1.0,
+                max_queue_size: 16,
+                max_batches_per_tick: 16,
+                max_insert_bundle_size: 1,
+                max_concurrent_insert_tasks: 2,
+                completed_batch_fetch_limit: 16,
+                strict_batch_ordering: true,
+            },
+            SamplerQueueCheckpoint::default(),
+            128,
+        );
+
+        let processed = queue
+            .get_processed_ready()
+            .await
+            .expect("non-blocking processed drain");
+
+        assert!(processed.is_empty());
+        assert_eq!(store.fetch_completed_calls(), 0);
     }
 }
