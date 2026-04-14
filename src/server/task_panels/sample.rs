@@ -4,17 +4,16 @@ use super::{
 };
 use crate::core::{EngineError, ObservableConfig, RunTaskSpec};
 use crate::evaluation::{
-    GammaLoopObservableState, Observable, ObservableState, SemanticObservableKind,
+    Observable, ObservableState, SemanticObservableKind,
 };
 use crate::server::panels::{
-    HistogramBin, PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, key_value,
+    PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, key_value,
     key_value_panel, panel_spec, progress_panel, scalar_timeseries_panel_with_smoothing,
     table_panel_with_payload, with_panel_width,
 };
 use gammalooprs::observables::{ObservablePhase, ObservableValueTransform};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use std::collections::BTreeMap;
 
 pub(super) fn projectors(
     task_spec: &RunTaskSpec,
