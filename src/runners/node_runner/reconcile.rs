@@ -357,8 +357,6 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             )));
         };
 
-        let run_progress = role_store.load_run_sample_progress(worker.run_id).await?;
-
         let initial_batch_size = initial_batch_size_hint
             .unwrap_or(spec.sampler_aggregator_runner_params.queue.max_batch_size);
 
@@ -377,7 +375,6 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             spec.sampler_aggregator_runner_params.clone(),
             initial_batch_size,
             restored_snapshot_for_runner,
-            run_progress,
         );
 
         info!("sampler-aggregator worker started");

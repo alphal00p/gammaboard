@@ -22,6 +22,16 @@ pub struct GammaLoopObservableDigest {
 }
 
 impl GammaLoopObservableState {
+    pub fn cleared_bundle(bundle: &ObservableSnapshotBundle) -> ObservableSnapshotBundle {
+        ObservableSnapshotBundle {
+            histograms: bundle
+                .histograms
+                .iter()
+                .map(|(name, histogram)| (name.clone(), cleared_histogram_snapshot(histogram)))
+                .collect(),
+        }
+    }
+
     pub fn merge_in_place(&mut self, other: Self) -> Result<(), EngineError> {
         if self.bundle.histograms.is_empty() {
             self.bundle = other.bundle;
@@ -60,14 +70,28 @@ impl GammaLoopObservableState {
         {
             return Some(name.as_str());
         }
-        self.bundle.histograms.iter().next().map(|(name, _)| name.as_str())
+        self.bundle
+            .histograms
+            .iter()
+            .next()
+            .map(|(name, _)| name.as_str())
     }
 
     pub fn primary_histogram(&self) -> Option<&HistogramSnapshot> {
-        if let Some((_, hist)) = self.bundle.histograms.iter().find(|(_, h)| h.discrete_ordering.is_some()) {
+        if let Some((_, hist)) = self
+            .bundle
+            .histograms
+            .iter()
+            .find(|(_, h)| h.discrete_ordering.is_some())
+        {
             return Some(hist);
         }
-        if let Some((_, hist)) = self.bundle.histograms.iter().max_by_key(|(_, h)| h.sample_count) {
+        if let Some((_, hist)) = self
+            .bundle
+            .histograms
+            .iter()
+            .max_by_key(|(_, h)| h.sample_count)
+        {
             return Some(hist);
         }
         self.bundle.histograms.values().next()
@@ -104,6 +128,27 @@ impl GammaLoopObservableState {
     pub fn rsd(&self) -> f64 {
         self.estimate.rsd()
     }
+}
+
+fn cleared_histogram_snapshot(histogram: &HistogramSnapshot) -> HistogramSnapshot {
+    let mut cleared = histogram.clone();
+    cleared.sample_count = 0;
+    for bin in &mut cleared.bins {
+        clear_histogram_bin(bin);
+    }
+    clear_histogram_bin(&mut cleared.underflow_bin);
+    clear_histogram_bin(&mut cleared.overflow_bin);
+    cleared.statistics.in_range_entry_count = 0;
+    cleared.statistics.nan_value_count = 0;
+    cleared.statistics.mitigated_pair_count = 0;
+    cleared
+}
+
+fn clear_histogram_bin(bin: &mut gammalooprs::observables::HistogramBinSnapshot) {
+    bin.entry_count = 0;
+    bin.sum_weights = 0.0;
+    bin.sum_weights_squared = 0.0;
+    bin.mitigated_fill_count = 0;
 }
 
 impl Observable for GammaLoopObservableState {
@@ -255,6 +300,22 @@ mod tests {
         assert_eq!(left.sample_count(), 2);
         assert_eq!(left.real_mean(), 3.0);
         assert_eq!(left.primary_histogram_name(), Some("pt"));
+    }
+
+    #[test]
+    fn cleared_bundle_preserves_layout_and_zeros_counts() {
+        let original = state(4.0, 20.0, 2, 6.0, 20.0, 2).bundle;
+
+        let cleared = GammaLoopObservableState::cleared_bundle(&original);
+
+        let histogram = cleared.histograms.get("pt").unwrap();
+        assert_eq!(histogram.title, "pt");
+        assert_eq!(histogram.type_description, "HwU");
+        assert_eq!(histogram.sample_count, 0);
+        assert_eq!(histogram.bins[0].entry_count, 0);
+        assert_eq!(histogram.bins[0].sum_weights, 0.0);
+        assert_eq!(histogram.bins[0].sum_weights_squared, 0.0);
+        assert_eq!(histogram.statistics.in_range_entry_count, 0);
     }
 
     #[test]

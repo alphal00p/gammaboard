@@ -7,7 +7,6 @@ use gammalooprs::integrands::HasIntegrand;
 use gammalooprs::integrands::evaluation::EvaluationResult;
 use gammalooprs::integrands::process::{MomentumSpaceEvaluationInput, ProcessIntegrand};
 use gammalooprs::model::Model;
-use gammalooprs::observables::ObservableSnapshotBundle;
 use gammalooprs::settings::runtime::{DiscreteGraphSamplingType, SamplingSettings};
 use gammalooprs::utils::F;
 use serde::{Deserialize, Serialize};
@@ -24,11 +23,11 @@ use crate::{
 
 pub struct GammaLoopEvaluator {
     integrand: ProcessIntegrand,
+    pristine_integrand: ProcessIntegrand,
     model: Model,
     momentum_space: bool,
     training_projection: TrainingProjection,
     domain: Domain,
-    empty_observable_bundle: Option<ObservableSnapshotBundle>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, Eq)]
@@ -277,15 +276,13 @@ impl GammaLoopEvaluator {
             integrand
                 .warm_up(&model)
                 .map_err(|err| BuildError::build(format!("failed to warm up integrand: {err}")))?;
-            let empty_observable_bundle = integrand.observable_snapshot_bundle();
-
             Ok(Self {
+                pristine_integrand: integrand.clone(),
                 integrand,
                 model,
                 momentum_space: params.momentum_space,
                 training_projection: params.training_projection,
                 domain,
-                empty_observable_bundle,
             })
         })) {
             Ok(result) => result,
@@ -307,13 +304,8 @@ impl GammaLoopEvaluator {
         value
     }
 
-    fn restore_empty_observable_bundle(&mut self) -> Result<(), EvalError> {
-        let Some(bundle) = self.empty_observable_bundle.clone() else {
-            return Ok(());
-        };
-        Self::call_external("restore_observable_snapshot_bundle", || {
-            self.integrand.restore_observable_snapshot_bundle(&bundle)
-        })
+    fn reset_observables(&mut self) {
+        self.integrand = self.pristine_integrand.clone();
     }
 
     fn batch_gammaloop_observable(
@@ -487,7 +479,7 @@ impl Evaluator for GammaLoopEvaluator {
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
         if matches!(observable, ObservableConfig::Gammaloop) {
-            self.restore_empty_observable_bundle()?;
+            self.reset_observables();
         }
         let weights = batch.weights();
         let evaluation_results = self.evaluate(batch)?;
@@ -515,7 +507,7 @@ impl Evaluator for GammaLoopEvaluator {
                 observable_state = ObservableState::Gammaloop(
                     self.batch_gammaloop_observable(&evaluation_results, weights.as_slice()),
                 );
-                self.restore_empty_observable_bundle()?;
+                self.reset_observables();
                 if options.require_training_values {
                     Some(
                         evaluation_results

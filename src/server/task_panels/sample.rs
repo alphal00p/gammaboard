@@ -3,13 +3,11 @@ use super::{
     panel_projector, panel_projector_with_source,
 };
 use crate::core::{EngineError, ObservableConfig, RunTaskSpec};
-use crate::evaluation::{
-    Observable, ObservableState, SemanticObservableKind,
-};
+use crate::evaluation::{Observable, ObservableState, SemanticObservableKind};
 use crate::server::panels::{
-    PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, key_value,
-    key_value_panel, panel_spec, progress_panel, scalar_timeseries_panel_with_smoothing,
-    table_panel_with_payload, with_panel_width,
+    PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, key_value, key_value_panel,
+    panel_spec, progress_panel, scalar_timeseries_panel_with_smoothing, table_panel_with_payload,
+    with_panel_width,
 };
 use gammalooprs::observables::{ObservablePhase, ObservableValueTransform};
 use serde::Serialize;
@@ -588,11 +586,24 @@ fn gammaloop_histogram_bundle_panel(observable: ObservableState) -> Option<Panel
                     }),
                     JsonValue::from(histogram.sample_count as i64),
                     JsonValue::from(histogram.bins.len() as i64),
-                    JsonValue::String(format!(
-                        "[{}, {}]",
-                        histogram.x_min.unwrap(),
-                        histogram.x_max.unwrap()
-                    )),
+                    JsonValue::String(match histogram.kind {
+                        gammalooprs::observables::HistogramSnapshotKind::Continuous => {
+                            match (histogram.x_min, histogram.x_max) {
+                                (Some(x_min), Some(x_max)) => format!("[{}, {}]", x_min, x_max),
+                                _ => "continuous".to_string(),
+                            }
+                        }
+                        gammalooprs::observables::HistogramSnapshotKind::Discrete => histogram
+                            .discrete_min_bin_id
+                            .map(|min_bin_id| {
+                                format!(
+                                    "[{}, {}]",
+                                    min_bin_id,
+                                    min_bin_id + histogram.bins.len() as isize
+                                )
+                            })
+                            .unwrap_or_else(|| "discrete".to_string()),
+                    }),
                     JsonValue::from(histogram.statistics.in_range_entry_count as i64),
                     JsonValue::from(histogram.underflow_bin.entry_count as i64),
                     JsonValue::from(histogram.overflow_bin.entry_count as i64),

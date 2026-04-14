@@ -1,13 +1,4 @@
-# PDF-adaptation comparison workflow.
-# Sequence:
-# 1) train a Havana sampler
-# 2) compare that sampler's PDF against the normalized integrand on a 2D raster
-#
-# Notes:
-# - `pdf_adaptation_image` uses `latest` by default when `sampler_aggregator` is omitted.
-# - This example uses `{ from_name = "train" }` explicitly so the source task is obvious.
-# - `batch_transforms = []` clears inherited transforms because the raster sampler emits points
-#   directly in the evaluator domain.
+# Train a Havana sampler, then rasterize its PDF.
 
 [[task_queue]]
 name = "train"
@@ -17,9 +8,8 @@ observable = { config = "complex" }
 sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 64, samples_for_update = 16384, initial_training_rate = 0.1, final_training_rate = 0.001 } }
 
 [[task_queue]]
-name = "pdf-adaptation"
+name = "pdf"
 kind = "pdf_adaptation_image"
-sampler_aggregator = { from_name = "train" }
 batch_transforms = []
 
 [task_queue.geometry]

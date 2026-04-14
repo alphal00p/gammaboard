@@ -6,6 +6,8 @@ import {
   CardContent,
   Button,
   FormControl,
+  FormControlLabel,
+  Switch,
   LinearProgress,
   MenuItem,
   Stack,
@@ -97,15 +99,58 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
           sample_count: selectedHistogram.sample_count,
           x_min: selectedHistogram.x_min,
           x_max: selectedHistogram.x_max,
+          discrete_ordering: selectedHistogram.discrete_ordering,
           log_x_axis: selectedHistogram.log_x_axis,
           log_y_axis: selectedHistogram.log_y_axis,
-          bins: asArray(selectedHistogram.bins),
+          bins: normalizeGammaLoopHistogramBins(selectedHistogram),
         },
         value: bundlePanel.value ?? null,
       });
     }
   }
   return sortRenderablePanels(renderablePanels);
+};
+
+const computeGammaLoopBinAverage = (bin, sampleCount) => {
+  const n = Number(sampleCount);
+  const sumWeights = Number(bin?.sum_weights);
+  if (!Number.isFinite(n) || n <= 0 || !Number.isFinite(sumWeights)) return 0;
+  return sumWeights / n;
+};
+
+const computeGammaLoopBinError = (bin, sampleCount) => {
+  const n = Number(sampleCount);
+  const sumWeights = Number(bin?.sum_weights);
+  const sumWeightsSquared = Number(bin?.sum_weights_squared);
+  if (!Number.isFinite(n) || n <= 1 || !Number.isFinite(sumWeights) || !Number.isFinite(sumWeightsSquared)) {
+    return 0;
+  }
+  const varianceNumerator = sumWeightsSquared - (sumWeights * sumWeights) / n;
+  if (!Number.isFinite(varianceNumerator) || varianceNumerator <= 0) return 0;
+  return Math.sqrt(varianceNumerator / (n * (n - 1)));
+};
+
+const normalizeGammaLoopHistogramBins = (histogram) => {
+  const bins = asArray(histogram?.bins);
+  const sampleCount = Number(histogram?.sample_count);
+  const isDiscrete = bins.some((bin) => bin && (bin.bin_id != null || bin.label != null));
+  return bins.map((bin, index) => {
+    const binId = Number(bin?.bin_id);
+    const start = isDiscrete
+      ? (Number.isFinite(binId) ? binId : index)
+      : Number(bin?.x_min);
+    const stop = isDiscrete
+      ? (Number.isFinite(binId) ? binId + 1 : index + 1)
+      : Number(bin?.x_max);
+    return {
+      start,
+      stop,
+      value: computeGammaLoopBinAverage(bin, sampleCount),
+      error: computeGammaLoopBinError(bin, sampleCount),
+      label: bin?.label ?? null,
+      bin_id: bin?.bin_id ?? null,
+    };
+  });
 };
 
 const fitDomain = (values) => {
@@ -265,7 +310,7 @@ const readHistogramScaleFromPanelValue = (value, axis) => {
 
 const writeHistogramBundlePanelValue = (
   current,
-  { selectedHistogram = undefined, zoom = undefined, xScale = undefined, yScale = undefined } = {},
+  { selectedHistogram = undefined, zoom = undefined, xScale = undefined, yScale = undefined, showRelativeError = undefined } = {},
 ) => {
   const next = isObject(current) ? { ...current } : {};
   const nextView = isObject(next.histogram_view) ? { ...next.histogram_view } : {};
@@ -280,6 +325,9 @@ const writeHistogramBundlePanelValue = (
   }
   if (yScale !== undefined) {
     nextView.y_scale = yScale === "log" ? "log" : "linear";
+  }
+  if (showRelativeError !== undefined) {
+    nextView.show_relative_error = Boolean(showRelativeError);
   }
   if (Object.keys(nextView).length > 0) {
     next.histogram_view = nextView;
@@ -833,6 +881,25 @@ const buildRelativeErrorStepData = (bins) =>
     })
     .filter((point) => Number.isFinite(point.x));
 
+const buildDiscreteRelativeErrorData = (bins) =>
+  asArray(bins).map((bin, index) => {
+    const value = Number(bin?.value);
+    const error = Number(bin?.error);
+    if (!Number.isFinite(value) || !Number.isFinite(error) || value === 0) {
+      return {
+        index,
+        positive_relative_error: null,
+        negative_relative_error: null,
+      };
+    }
+    const relativeError = Math.abs(error / value);
+    return {
+      index,
+      positive_relative_error: relativeError,
+      negative_relative_error: -relativeError,
+    };
+  });
+
 const toExponential8 = (value) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric.toExponential(8) : "0.00000000e+00";
@@ -1383,16 +1450,45 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
   const isBundleControlled = sourcePanelId === "gammaloop_histogram_bundle";
   const [localYScale, setLocalYScale] = useState("linear");
   const [localXScale, setLocalXScale] = useState("linear");
+  const [localShowRelativeErrors, setLocalShowRelativeErrors] = useState(() => {
+    const pid = state?.panel_id || "";
+    return String(pid).startsWith("pdf_adaptation_") ? false : true;
+  });
   const yScale = isBundleControlled ? readHistogramScaleFromPanelValue(value, "y") : localYScale;
   const xScale = isBundleControlled ? readHistogramScaleFromPanelValue(value, "x") : localXScale;
   const zoomRange = isBundleControlled
     ? readHistogramZoomFromPanelValue(value, FULL_ZOOM)
     : readZoomFromPanelValue(value, FULL_ZOOM);
+  const view = isBundleControlled ? readHistogramBundleView(value) : {};
+  const showRelativeErrors = isBundleControlled ? view.show_relative_error !== false : localShowRelativeErrors;
   const bins = useMemo(() => buildHistogramData(state?.bins), [state?.bins]);
   const stepData = useMemo(() => buildHistogramRenderData(state?.bins, yScale), [state?.bins, yScale]);
   const relativeErrorData = useMemo(() => buildRelativeErrorStepData(state?.bins), [state?.bins]);
+  // Detect discrete histograms: presence of bin labels/bin_id or explicit discrete ordering
+  const isDiscrete = useMemo(() => {
+    if (!Array.isArray(state?.bins)) return false;
+    if (state?.discrete_ordering) return true;
+    return state.bins.some((b) => b && (b.label != null || b.bin_id != null));
+  }, [state]);
+
+  const categories = useMemo(() => {
+    if (!isDiscrete) return null;
+    return bins.map((bin, idx) => {
+      if (bin?.label != null) return String(bin.label);
+      if (bin?.bin_id != null) return String(bin.bin_id);
+      // fallback to range if available
+      const start = Number(bin?.start);
+      const stop = Number(bin?.stop);
+      if (Number.isFinite(start) && Number.isFinite(stop)) return `${formatScientific(start, 4)}→${formatScientific(stop,4)}`;
+      return `#${idx}`;
+    });
+  }, [isDiscrete, bins]);
+  const discreteRelativeErrorData = useMemo(() => buildDiscreteRelativeErrorData(bins), [bins]);
+  const effectiveXScale = isDiscrete ? "linear" : xScale;
+
   const xDomain = useMemo(() => {
-    if (xScale !== "log") return fitHistogramXDomain(bins);
+    if (isDiscrete) return null;
+    if (effectiveXScale !== "log") return fitHistogramXDomain(bins);
     const positiveEdges = bins
       .flatMap((bin) => [Number(bin?.start), Number(bin?.stop)])
       .filter((value) => Number.isFinite(value) && value > 0);
@@ -1400,10 +1496,10 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
     const min = Math.min(...positiveEdges);
     const max = Math.max(...positiveEdges);
     return [Math.max(min, Number.EPSILON), Math.max(max, min * (1 + Number.EPSILON))];
-  }, [bins, xScale]);
+  }, [bins, effectiveXScale, isDiscrete]);
   const visibleXRange = useMemo(
-    () => visibleXRangeFromZoomWithScale(xDomain, zoomRange, xScale),
-    [xDomain, xScale, zoomRange],
+    () => (isDiscrete ? null : visibleXRangeFromZoomWithScale(xDomain, zoomRange, effectiveXScale)),
+    [xDomain, effectiveXScale, zoomRange, isDiscrete],
   );
   const yDomain = useMemo(() => buildHistogramYDomain(bins, yScale, visibleXRange), [bins, yScale, visibleXRange]);
   const relativeErrorYDomain = useMemo(
@@ -1414,25 +1510,81 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
     () =>
       bins
         .map((bin) => {
-          const x = Number(bin?.x);
+          const x = isDiscrete ? null : Number(bin?.x);
           const y = Number(bin?.value);
           const err = Number(bin?.error);
+          if (isDiscrete) {
+            // ECharts error bar with category axis expects [index, low, high] but we use custom error series elsewhere; skip numeric x checks
+            if (!Number.isFinite(y) || !Number.isFinite(err) || err <= 0) return null;
+            const yLow = y - Math.abs(err);
+            const yHigh = y + Math.abs(err);
+            return yLow <= 0 && yScale === "log" ? null : [null, yLow, yHigh];
+          }
           if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(err) || err <= 0) {
             return null;
           }
           const yLow = y - Math.abs(err);
           const yHigh = y + Math.abs(err);
-          if (xScale === "log" && x <= 0) return null;
+          if (effectiveXScale === "log" && x <= 0) return null;
           if (yScale === "log" && yLow <= 0) return null;
           return [x, yLow, yHigh];
         })
         .filter(Boolean),
-    [bins, xScale, yScale],
+    [bins, effectiveXScale, yScale, isDiscrete],
   );
   const histogramOption = useMemo(() => {
+    if (isDiscrete) {
+      const categoriesData = categories || bins.map((_, idx) => `#${idx}`);
+      const barData = bins.map((bin) => {
+        const numericValue = Number(bin?.value);
+        if (!Number.isFinite(numericValue)) return null;
+        if (yScale === "log" && numericValue <= 0) return null;
+        return numericValue;
+      });
+      return {
+        animation: false,
+        grid: baseCartesianGrid,
+        xAxis: {
+          type: "category",
+          data: categoriesData,
+          name: inferNumericXAxisLabel(panelId),
+          axisLabel: { ...baseAxisLabel, rotate: categoriesData.length > 6 ? 30 : 0 },
+          splitLine: { show: false },
+          nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
+        },
+        yAxis: {
+          type: yScale === "log" ? "log" : "value",
+          min: yScale === "log" ? Math.max(Number.EPSILON, yDomain[0] || Number.EPSILON) : yDomain[0],
+          max: yScale === "log" ? null : yDomain[1],
+          axisLabel: baseAxisLabel,
+          splitLine: { lineStyle: { color: gridColor } },
+        },
+        tooltip: {
+          trigger: "item",
+          formatter: (params) => {
+            const idx = params.dataIndex;
+            const label = categoriesData[idx] ?? String(idx);
+            const val = Number(bins[idx]?.value);
+            const err = Number(bins[idx]?.error);
+            return `${escapeXml(label)}: ${formatScientific(val, 6)} ${Number.isFinite(err) && err > 0 ? `(±${formatScientific(err,6)})` : ""}`;
+          },
+        },
+        dataZoom: buildDataZoom(zoomRange, false),
+        series: [
+          {
+            type: "bar",
+            name: "value",
+            data: barData,
+            barCategoryGap: "30%",
+            itemStyle: { color: "#005f73" },
+          },
+        ],
+      };
+    }
+
     const valueSeriesData = stepData
       .map((point) => [Number(point?.x), Number(point?.y)])
-      .filter(([x]) => Number.isFinite(x) && (xScale !== "log" || x > 0));
+      .filter(([x]) => Number.isFinite(x) && (effectiveXScale !== "log" || x > 0));
     const baseSeries = {
       type: "line",
       name: "value",
@@ -1446,7 +1598,7 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
       animation: false,
       grid: baseCartesianGrid,
       xAxis: {
-        type: xScale === "log" ? "log" : "value",
+        type: effectiveXScale === "log" ? "log" : "value",
         min: xDomain[0],
         max: xDomain[1],
         name: inferNumericXAxisLabel(panelId),
@@ -1466,16 +1618,65 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
         valueFormatter: (value) => (Number.isFinite(Number(value)) ? formatScientific(Number(value), 6) : "n/a"),
       },
       dataZoom: buildDataZoom(zoomRange, false),
-      series: [buildErrorBarSeries({ name: "error", data: binErrorData }), baseSeries],
+      series: [
+        ...(showRelativeErrors && Array.isArray(binErrorData) && binErrorData.length > 0 ? [buildErrorBarSeries({ name: "error", data: binErrorData })] : []),
+        baseSeries,
+      ],
     };
-  }, [binErrorData, panelId, stepData, xDomain, xScale, yDomain, yScale, zoomRange]);
+  }, [binErrorData, bins, categories, effectiveXScale, isDiscrete, panelId, stepData, xDomain, yDomain, yScale, zoomRange]);
 
-  const relativeOption = useMemo(
-    () => ({
+  const relativeOption = useMemo(() => {
+    if (isDiscrete) {
+      const categoriesData = categories || bins.map((_, idx) => `#${idx}`);
+      return {
+        animation: false,
+        grid: baseCartesianGrid,
+        xAxis: {
+          type: "category",
+          data: categoriesData,
+          name: inferNumericXAxisLabel(panelId),
+          axisLabel: { ...baseAxisLabel, rotate: categoriesData.length > 6 ? 30 : 0 },
+          splitLine: { show: false },
+          nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
+        },
+        yAxis: {
+          type: "value",
+          min: relativeErrorYDomain[0],
+          max: relativeErrorYDomain[1],
+          axisLabel: baseAxisLabel,
+          splitLine: { lineStyle: { color: gridColor } },
+        },
+        tooltip: {
+          trigger: "axis",
+          valueFormatter: (value) => (Number.isFinite(Number(value)) ? formatScientific(Number(value), 6) : "n/a"),
+        },
+        dataZoom: buildDataZoom(zoomRange, true),
+        series: [
+          {
+            type: "bar",
+            name: "positive_relative_error",
+            data: discreteRelativeErrorData.map((point) => point.positive_relative_error),
+            stack: "relative_error",
+            itemStyle: { color: "rgba(187, 62, 3, 0.75)" },
+          },
+          {
+            type: "bar",
+            name: "negative_relative_error",
+            data: discreteRelativeErrorData.map((point) => point.negative_relative_error),
+            stack: "relative_error",
+            itemStyle: { color: "rgba(10, 147, 150, 0.55)" },
+          },
+        ],
+      };
+    }
+    if (!xDomain) {
+      return null;
+    }
+    return {
       animation: false,
       grid: baseCartesianGrid,
       xAxis: {
-        type: xScale === "log" ? "log" : "value",
+        type: effectiveXScale === "log" ? "log" : "value",
         min: xDomain[0],
         max: xDomain[1],
         name: inferNumericXAxisLabel(panelId),
@@ -1501,7 +1702,7 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
           name: "positive_relative_error",
           data: relativeErrorData
             .map((point) => [Number(point?.x), Number(point?.positive_relative_error)])
-            .filter(([x]) => Number.isFinite(x) && (xScale !== "log" || x > 0)),
+            .filter(([x]) => Number.isFinite(x) && (effectiveXScale !== "log" || x > 0)),
           step: "end",
           showSymbol: false,
           lineStyle: { width: 1.2, color: "#bb3e03" },
@@ -1513,7 +1714,7 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
           name: "negative_relative_error",
           data: relativeErrorData
             .map((point) => [Number(point?.x), Number(point?.negative_relative_error)])
-            .filter(([x]) => Number.isFinite(x) && (xScale !== "log" || x > 0)),
+            .filter(([x]) => Number.isFinite(x) && (effectiveXScale !== "log" || x > 0)),
           step: "end",
           showSymbol: false,
           lineStyle: { width: 1.2, color: "#bb3e03" },
@@ -1521,9 +1722,19 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
           connectNulls: false,
         },
       ],
-    }),
-    [panelId, relativeErrorData, relativeErrorYDomain, xDomain, xScale, zoomRange],
-  );
+    };
+  }, [
+    bins,
+    categories,
+    discreteRelativeErrorData,
+    effectiveXScale,
+    isDiscrete,
+    panelId,
+    relativeErrorData,
+    relativeErrorYDomain,
+    xDomain,
+    zoomRange,
+  ]);
   const onDataZoom = useMemo(
     () => ({
       datazoom: (event) => {
@@ -1552,7 +1763,7 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
           <Stack direction="row" spacing={1} alignItems="center">
             <FigureExportActions
               baseName={state?.panel_id || state?.name || title || "histogram"}
-              payload={{ panel_id: state?.panel_id ?? null, kind: "histogram", state, xScale, yScale }}
+              payload={{ panel_id: state?.panel_id ?? null, kind: "histogram", state, xScale: effectiveXScale, yScale }}
               elementRef={figureRef}
               onResetView={
                 sourcePanelId && typeof onValueChange === "function"
@@ -1589,9 +1800,13 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
             </FormControl>
             <FormControl size="small" sx={{ minWidth: 128 }}>
               <Select
-                value={xScale}
+                value={effectiveXScale}
+                disabled={isDiscrete}
                 onChange={(event) => {
                   const next = event.target.value;
+                  if (isDiscrete) {
+                    return;
+                  }
                   if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
                     onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { xScale: next }), false);
                     return;
@@ -1607,6 +1822,24 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
                 <MenuItem value="log">X Log</MenuItem>
               </Select>
             </FormControl>
+            <FormControlLabel
+              control={
+                <Switch
+                  size="small"
+                  checked={Boolean(showRelativeErrors)}
+                  onChange={(event) => {
+                    const next = Boolean(event.target.checked);
+                    if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
+                      onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { showRelativeError: next }), false);
+                      return;
+                    }
+                    setLocalShowRelativeErrors(next);
+                  }}
+                />
+              }
+              label="Relative Error"
+              sx={{ mr: 1 }}
+            />
           </Stack>
         </Box>
         <Box ref={figureRef} sx={{ width: "100%", display: "grid", gap: 2 }}>
@@ -1621,21 +1854,23 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
               style={{ width: "100%", height: "100%" }}
             />
           </Box>
-          <Box>
-            <Typography variant="caption" color="text.secondary">
-              Relative Error Shape
-            </Typography>
-            <Box sx={{ width: "100%", height: 168 }}>
-              <ReactECharts
-                option={relativeOption}
-                notMerge={false}
-                onEvents={onDataZoom}
-                lazyUpdate
-                opts={{ renderer: "canvas" }}
-                style={{ width: "100%", height: "100%" }}
-              />
+          {showRelativeErrors && relativeOption ? (
+            <Box>
+              <Typography variant="caption" color="text.secondary">
+                Relative Error Shape
+              </Typography>
+              <Box sx={{ width: "100%", height: 168 }}>
+                <ReactECharts
+                  option={relativeOption}
+                  notMerge={false}
+                  onEvents={onDataZoom}
+                  lazyUpdate
+                  opts={{ renderer: "canvas" }}
+                  style={{ width: "100%", height: "100%" }}
+                />
+              </Box>
             </Box>
-          </Box>
+          ) : null}
         </Box>
       </CardContent>
     </Card>

@@ -1,31 +1,24 @@
-# GammaLoop triangle workflow using the new sample task model.
-# Sequence:
-# 1) train (100k)
-# 2) sample (100k, havana_inference)
-# 3) line plot
-# 4) x-z image plot over (-10, 10)^2
-# 5) resume training from task "sample-initial"
-# 6) sample again (100k, havana_inference)
+# Triangle handoff workflow with training resume, line plot, and image tasks.
 
 [[task_queue]]
-name = "train-initial"
+name = "train"
 kind = "sample"
 nr_samples = 100_000
-batch_transforms = [{ kind = "spherical" }] # needed because havana ouputs popints in [0,1]^3 but the domain is R^3.
+batch_transforms = [{ kind = "spherical" }]
 observable = { config = "complex" }
 sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 64, samples_for_update = 16384, initial_training_rate = 0.1, final_training_rate = 0.001 } }
 
 [[task_queue]]
-name = "sample-initial"
+name = "infer"
 kind = "sample"
 nr_samples = 100_000
-# batch_transforms = [{ kind = "spherical" }] can be ommited as default behavour is to apply the same batch transforms as the previous task
 sampler_aggregator = { config = { kind = "havana_inference" } }
 
 [[task_queue]]
+name = "line"
 kind = "plot_line"
 observable = "complex"
-batch_transforms = [] # now disable the parametrization as the rasterizer emmits points directly in R^3
+batch_transforms = []
 [task_queue.geometry]
 offset = [0.0, 0.0, 0.0]
 direction = [1.0, 0.0, 0.0]
@@ -33,8 +26,10 @@ linspace = { start = -10.0, stop = 10.0, count = 1024 }
 discrete = []
 
 [[task_queue]]
+name = "image"
 kind = "image"
 observable = "complex"
+batch_transforms = []
 [task_queue.geometry]
 offset = [0.0, 0.0, 0.0]
 u_vector = [1.0, 0.0, 0.0]
@@ -44,14 +39,15 @@ v_linspace = { start = -50.0, stop = 50.0, count = 512 }
 discrete = []
 
 [[task_queue]]
-name = "train-resume"
+name = "train2"
 kind = "sample"
 nr_samples = 100_000
 batch_transforms = [{ kind = "spherical" }]
-sampler_aggregator = { from_name = "sample-initial" }
-observable = { from_name = "sample-initial" }
+sampler_aggregator = { from_name = "infer" }
+observable = { from_name = "infer" }
 
 [[task_queue]]
+name = "infer2"
 kind = "sample"
 nr_samples = 100_000
 sampler_aggregator = { config = { kind = "havana_inference" } }

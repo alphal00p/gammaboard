@@ -8,9 +8,9 @@
 //! - persist lightweight UI sync snapshots and full resume checkpoints
 
 use crate::core::{
-    BatchTransformConfig, EngineError, RunSampleProgress, RunStageSnapshot, RunTask,
-    SamplerAggregatorConfig, SamplerAggregatorPerformanceSnapshot, SamplerRuntimeMetrics,
-    SamplerWorkRollingAverages, SamplerWorkerStore, StoreError,
+    BatchTransformConfig, EngineError, RunStageSnapshot, RunTask, SamplerAggregatorConfig,
+    SamplerAggregatorPerformanceSnapshot, SamplerRuntimeMetrics, SamplerWorkRollingAverages,
+    SamplerWorkerStore, StoreError,
 };
 use crate::evaluation::ObservableState;
 use crate::runners::process_memory::current_rss_bytes;
@@ -246,11 +246,11 @@ where
         params: SamplerAggregatorRunnerParams,
         initial_batch_size: usize,
         resume_snapshot: Option<SamplerAggregatorCheckpoint>,
-        run_progress: Option<RunSampleProgress>,
     ) -> Self {
         let mut runtime_state;
         let queue_checkpoint;
         let max_batch_size = params.queue.max_batch_size.max(MIN_BATCH_SIZE);
+        let has_resume_snapshot = resume_snapshot.is_some();
         if let Some(snapshot) = resume_snapshot {
             runtime_state = snapshot.runtime_state.clone();
             queue_checkpoint = snapshot.queue.clone();
@@ -265,10 +265,9 @@ where
             .batch_size_current
             .clamp(MIN_BATCH_SIZE, max_batch_size);
 
-        let (nr_produced_samples, nr_completed_samples) = run_progress
-            .map(|progress| (progress.nr_produced_samples, progress.nr_completed_samples))
-            .unwrap_or((0, 0));
-        if nr_completed_samples > 0 {
+        let nr_produced_samples = task.nr_produced_samples;
+        let nr_completed_samples = task.nr_completed_samples;
+        if !has_resume_snapshot && nr_completed_samples > 0 {
             runtime_state.observable_checkpoint_state = ObservableCheckpointState::Ready;
         }
 
@@ -1242,5 +1241,21 @@ mod tests {
 
         assert_eq!(snapshot.reduced_carryover_batch_size(512), 32);
         assert_eq!(snapshot.reduced_carryover_batch_size(24), 24);
+    }
+
+    #[test]
+    fn fresh_task_does_not_skip_initial_round_trip_due_to_run_level_progress() {
+        let mut runtime_state = SamplerRuntimeState::default();
+        let task_completed_samples = 0_i64;
+        let has_resume_snapshot = false;
+
+        if !has_resume_snapshot && task_completed_samples > 0 {
+            runtime_state.observable_checkpoint_state = super::ObservableCheckpointState::Ready;
+        }
+
+        assert_eq!(
+            runtime_state.observable_checkpoint_state,
+            super::ObservableCheckpointState::NeedsInitialRoundTrip
+        );
     }
 }
