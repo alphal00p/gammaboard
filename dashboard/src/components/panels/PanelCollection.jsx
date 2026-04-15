@@ -240,6 +240,7 @@ const buildMultiSeriesData = (seriesList) => {
 };
 
 const lineColors = ["#005f73", "#bb3e03", "#0a9396", "#ae2012", "#ca6702"];
+const histogramOverlayColors = ["#9b2226", "#3a86ff", "#ff006e", "#6a994e", "#ff7f11", "#8338ec"];
 
 const isIsoDateTime = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value);
 const isEstimateValue = (value) =>
@@ -957,6 +958,115 @@ const buildDiscreteRelativeErrorData = (bins) =>
     };
   });
 
+const discreteHistogramBinKey = (bin, index) => {
+  if (bin?.label != null) return `label:${String(bin.label)}`;
+  if (bin?.bin_id != null) return `id:${String(bin.bin_id)}`;
+  const start = Number(bin?.start);
+  if (Number.isFinite(start)) return `start:${start}`;
+  return `index:${index}`;
+};
+
+const normalizeUploadedHistogram = (name, histogram) => {
+  if (!isObject(histogram)) {
+    throw new Error(`histogram '${name}' must be an object`);
+  }
+  const bins = asArray(histogram?.bins);
+  if (bins.length === 0) {
+    throw new Error(`histogram '${name}' must contain at least one bin`);
+  }
+
+  const isNormalizedBins = bins.every(
+    (bin) =>
+      isObject(bin) &&
+      Number.isFinite(Number(bin.start)) &&
+      Number.isFinite(Number(bin.stop)) &&
+      Number.isFinite(Number(bin.value)),
+  );
+
+  const normalizedBins = isNormalizedBins
+    ? bins.map((bin, index) => {
+        const start = Number(bin.start);
+        const stop = Number(bin.stop);
+        const value = Number(bin.value);
+        const error = Number(bin.error);
+        if (!Number.isFinite(start) || !Number.isFinite(stop) || !Number.isFinite(value)) {
+          throw new Error(`histogram '${name}' contains invalid normalized bin at index ${index}`);
+        }
+        return {
+          start,
+          stop,
+          value,
+          error: Number.isFinite(error) ? Math.abs(error) : 0,
+          label: bin?.label ?? null,
+          bin_id: bin?.bin_id ?? null,
+        };
+      })
+    : (() => {
+        const sampleCount = Number(histogram?.sample_count);
+        const hasGammaLoopBinShape = bins.every(
+          (bin) =>
+            isObject(bin) &&
+            Number.isFinite(Number(bin?.x_min)) &&
+            Number.isFinite(Number(bin?.x_max)) &&
+            Number.isFinite(Number(bin?.sum_weights)) &&
+            Number.isFinite(Number(bin?.sum_weights_squared)),
+        );
+        if (!hasGammaLoopBinShape || !Number.isFinite(sampleCount) || sampleCount < 0) {
+          throw new Error(`histogram '${name}' uses unsupported bin syntax`);
+        }
+        return normalizeGammaLoopHistogramBins(histogram);
+      })();
+
+  if (
+    normalizedBins.some(
+      (bin) =>
+        !Number.isFinite(Number(bin?.start)) ||
+        !Number.isFinite(Number(bin?.stop)) ||
+        !Number.isFinite(Number(bin?.value)) ||
+        !Number.isFinite(Number(bin?.error)),
+    )
+  ) {
+    throw new Error(`histogram '${name}' contains non-finite bin values`);
+  }
+
+  return {
+    title: typeof histogram?.title === "string" && histogram.title.trim() ? histogram.title : name,
+    bins: normalizedBins.map((bin) => ({
+      start: Number(bin.start),
+      stop: Number(bin.stop),
+      value: Number(bin.value),
+      error: Math.abs(Number(bin.error)),
+      label: bin?.label ?? null,
+      bin_id: bin?.bin_id ?? null,
+    })),
+  };
+};
+
+const parseUploadedHistogramBundle = (payload) => {
+  if (!isObject(payload)) {
+    throw new Error("bundle payload must be a JSON object");
+  }
+  const histograms = payload?.histograms;
+  if (!isObject(histograms) || Array.isArray(histograms)) {
+    throw new Error("bundle payload must contain a 'histograms' object");
+  }
+  const entries = Object.entries(histograms).filter(
+    ([name, histogram]) => typeof name === "string" && name.trim().length > 0 && isObject(histogram),
+  );
+  if (entries.length === 0) {
+    throw new Error("bundle payload contains no valid histograms");
+  }
+  const normalizedHistograms = {};
+  entries.forEach(([name, histogram]) => {
+    normalizedHistograms[name] = normalizeUploadedHistogram(name, histogram);
+  });
+  return {
+    primaryHistogramName:
+      typeof payload?.primary_histogram_name === "string" ? payload.primary_histogram_name : null,
+    histograms: normalizedHistograms,
+  };
+};
+
 const toExponential8 = (value) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric.toExponential(8) : "0.00000000e+00";
@@ -1502,9 +1612,13 @@ const ScalarImageHeatmapPanel = ({
 const HistogramPanel = ({ title, state, value = undefined, onValueChange = null }) => {
   const figureRef = useRef(null);
   const echartsRef = useRef(null);
+  const overlayUploadInputRef = useRef(null);
   const panelId = state?.panel_id || null;
   const sourcePanelId = state?.source_panel_id || panelId;
   const isBundleControlled = sourcePanelId === "gammaloop_histogram_bundle";
+  const currentHistogramName = typeof state?.name === "string" ? state.name : null;
+  const [overlayBundles, setOverlayBundles] = useState([]);
+  const [overlayUploadError, setOverlayUploadError] = useState(null);
   const [localYScale, setLocalYScale] = useState("linear");
   const [localXScale, setLocalXScale] = useState("linear");
   const [localShowRelativeErrors, setLocalShowRelativeErrors] = useState(() => {
@@ -1542,6 +1656,50 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
   }, [isDiscrete, bins]);
   const discreteRelativeErrorData = useMemo(() => buildDiscreteRelativeErrorData(bins), [bins]);
   const effectiveXScale = isDiscrete ? "linear" : xScale;
+  const discreteBaseKeys = useMemo(() => bins.map((bin, index) => discreteHistogramBinKey(bin, index)), [bins]);
+  const overlaySeries = useMemo(
+    () =>
+      overlayBundles
+        .filter((bundle) => bundle.visible !== false && typeof bundle.selectedHistogram === "string")
+        .map((bundle, bundleIndex) => {
+          const selectedName = bundle.selectedHistogram;
+          const histogram = bundle.histograms?.[selectedName];
+          if (!histogram) return null;
+          const color = histogramOverlayColors[bundleIndex % histogramOverlayColors.length];
+          const seriesLabel = `${bundle.label}: ${selectedName}`;
+          if (isDiscrete) {
+            const overlayBinByKey = new Map(
+              asArray(histogram.bins).map((bin, index) => [discreteHistogramBinKey(bin, index), bin]),
+            );
+            const values = discreteBaseKeys.map((key) => {
+              const bin = overlayBinByKey.get(key);
+              if (!bin) return null;
+              const numeric = Number(bin?.value);
+              if (!Number.isFinite(numeric)) return null;
+              if (yScale === "log" && numeric <= 0) return null;
+              return numeric;
+            });
+            const relative = discreteBaseKeys.map((key) => {
+              const bin = overlayBinByKey.get(key);
+              if (!bin) return null;
+              const value = Number(bin?.value);
+              const error = Number(bin?.error);
+              if (!Number.isFinite(value) || !Number.isFinite(error) || value === 0) return null;
+              return Math.abs(error / value);
+            });
+            return { id: bundle.id, name: seriesLabel, color, discreteValues: values, discreteRelative: relative };
+          }
+          const valueStep = buildHistogramRenderData(histogram.bins, yScale)
+            .map((point) => [Number(point?.x), Number(point?.y)])
+            .filter(([x]) => Number.isFinite(x) && (effectiveXScale !== "log" || x > 0));
+          const relativeStep = buildRelativeErrorStepData(histogram.bins)
+            .map((point) => [Number(point?.x), Number(point?.relative_error)])
+            .filter(([x]) => Number.isFinite(x) && (effectiveXScale !== "log" || x > 0));
+          return { id: bundle.id, name: seriesLabel, color, valueStep, relativeStep };
+        })
+        .filter(Boolean),
+    [discreteBaseKeys, effectiveXScale, isDiscrete, overlayBundles, yScale],
+  );
 
   const xDomain = useMemo(() => {
     if (isDiscrete) return null;
@@ -1639,6 +1797,18 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
             barCategoryGap: "30%",
             itemStyle: { color: "#005f73" },
           },
+          ...overlaySeries.map((overlay) => ({
+            type: "line",
+            name: overlay.name,
+            data: overlay.discreteValues,
+            showSymbol: true,
+            symbol: "circle",
+            symbolSize: 5,
+            connectNulls: false,
+            lineStyle: { width: 1.6, type: "dashed", color: overlay.color },
+            itemStyle: { color: overlay.color },
+            emphasis: { focus: "series" },
+          })),
         ],
       };
     }
@@ -1682,9 +1852,34 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
       series: [
         ...(showRelativeErrors && Array.isArray(binErrorData) && binErrorData.length > 0 ? [buildErrorBarSeries({ name: "error", data: binErrorData })] : []),
         baseSeries,
+        ...overlaySeries.map((overlay) => ({
+          type: "line",
+          name: overlay.name,
+          data: overlay.valueStep,
+          step: "end",
+          showSymbol: false,
+          connectNulls: false,
+          lineStyle: { width: 1.4, type: "dashed", color: overlay.color },
+          itemStyle: { color: overlay.color },
+          emphasis: { focus: "series" },
+        })),
       ],
     };
-  }, [binErrorData, bins, categories, effectiveXScale, isDiscrete, panelId, showRelativeErrors, stepData, xDomain, yDomain, yScale, zoomRange]);
+  }, [
+    binErrorData,
+    bins,
+    categories,
+    effectiveXScale,
+    isDiscrete,
+    overlaySeries,
+    panelId,
+    showRelativeErrors,
+    stepData,
+    xDomain,
+    yDomain,
+    yScale,
+    zoomRange,
+  ]);
 
   const relativeOption = useMemo(() => {
     if (isDiscrete) {
@@ -1719,16 +1914,22 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
         series: [
           {
             type: "bar",
-            name: "positive_relative_error",
-            data: discreteRelativeErrorData.map((point) => point.positive_relative_error),
+            name: "relative_error",
+            data: discreteRelativeErrorData.map((point) => point.relative_error),
             itemStyle: { color: "rgba(187, 62, 3, 0.75)" },
           },
-          {
-            type: "bar",
-            name: "negative_relative_error",
-            data: discreteRelativeErrorData.map((point) => point.negative_relative_error),
-            itemStyle: { color: "rgba(187, 62, 3, 0.75)" },
-          },
+          ...overlaySeries.map((overlay) => ({
+            type: "line",
+            name: overlay.name,
+            data: overlay.discreteRelative,
+            showSymbol: true,
+            symbol: "circle",
+            symbolSize: 4,
+            connectNulls: false,
+            lineStyle: { width: 1.35, type: "dashed", color: overlay.color },
+            itemStyle: { color: overlay.color },
+            emphasis: { focus: "series" },
+          })),
         ],
       };
     }
@@ -1784,6 +1985,17 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
           areaStyle: { color: "rgba(187, 62, 3, 0.22)" },
           connectNulls: false,
         },
+        ...overlaySeries.map((overlay) => ({
+          type: "line",
+          name: overlay.name,
+          data: overlay.relativeStep,
+          step: "end",
+          showSymbol: false,
+          connectNulls: false,
+          lineStyle: { width: 1.35, type: "dashed", color: overlay.color },
+          itemStyle: { color: overlay.color },
+          emphasis: { focus: "series" },
+        })),
       ],
     };
   }, [
@@ -1792,12 +2004,55 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
     discreteRelativeErrorData,
     effectiveXScale,
     isDiscrete,
+    overlaySeries,
     panelId,
     relativeErrorData,
     relativeErrorYDomain,
     xDomain,
     zoomRange,
   ]);
+
+  const handleUploadOverlayBundle = useCallback(
+    async (event) => {
+      const file = event?.target?.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const parsed = JSON.parse(text);
+        const bundle = parseUploadedHistogramBundle(parsed);
+        const histogramNames = Object.keys(bundle.histograms);
+        const defaultHistogram =
+          currentHistogramName && bundle.histograms[currentHistogramName] ? currentHistogramName : null;
+        setOverlayBundles((current) => [
+          ...current,
+          {
+            id: `overlay-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+            label: file.name || `bundle-${current.length + 1}`,
+            histograms: bundle.histograms,
+            selectedHistogram: defaultHistogram,
+            visible: true,
+          },
+        ]);
+        setOverlayUploadError(null);
+        if (overlayUploadInputRef.current) {
+          overlayUploadInputRef.current.value = "";
+        }
+        if (histogramNames.length === 0) {
+          setOverlayUploadError("Uploaded bundle contains no selectable histograms.");
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Invalid histogram bundle JSON.";
+        setOverlayUploadError(message);
+      }
+    },
+    [currentHistogramName],
+  );
+
+  const updateOverlayBundle = useCallback((bundleId, updater) => {
+    setOverlayBundles((current) =>
+      current.map((bundle) => (bundle.id === bundleId ? { ...bundle, ...updater(bundle) } : bundle)),
+    );
+  }, []);
   const onDataZoom = useMemo(
     () => ({
       datazoom: (event) => {
@@ -1903,8 +2158,92 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
               label="Relative Error"
               sx={{ mr: 1 }}
             />
+            <input
+              ref={overlayUploadInputRef}
+              type="file"
+              accept="application/json,.json"
+              style={{ display: "none" }}
+              onChange={handleUploadOverlayBundle}
+            />
+            <Button size="small" variant="outlined" onClick={() => overlayUploadInputRef.current?.click()}>
+              Upload Bundle
+            </Button>
           </Stack>
         </Box>
+        {overlayUploadError ? (
+          <Alert severity="error" sx={{ mb: 1.5 }}>
+            {overlayUploadError}
+          </Alert>
+        ) : null}
+        {overlayBundles.length > 0 ? (
+          <Box sx={{ mb: 1.5, display: "grid", gap: 1 }}>
+            {overlayBundles.map((bundle) => {
+              const histogramNames = Object.keys(bundle.histograms || {});
+              return (
+                <Box
+                  key={bundle.id}
+                  sx={{
+                    display: "grid",
+                    gridTemplateColumns: { xs: "1fr", md: "minmax(0, 1fr) 220px auto auto" },
+                    gap: 1,
+                    alignItems: "center",
+                    border: "1px solid",
+                    borderColor: "divider",
+                    borderRadius: 1,
+                    px: 1,
+                    py: 0.75,
+                  }}
+                >
+                  <Typography variant="caption" color="text.secondary" sx={{ minWidth: 0 }}>
+                    {bundle.label}
+                  </Typography>
+                  <FormControl size="small">
+                    <Select
+                      value={bundle.selectedHistogram ?? "__none__"}
+                      onChange={(event) =>
+                        updateOverlayBundle(bundle.id, () => ({
+                          selectedHistogram:
+                            event.target.value === "__none__" ? null : String(event.target.value || "__none__"),
+                        }))
+                      }
+                      sx={{ fontSize: "0.8125rem", ".MuiSelect-select": { py: 0.625 } }}
+                    >
+                      <MenuItem value="__none__">No histogram</MenuItem>
+                      {histogramNames.map((name) => (
+                        <MenuItem key={`${bundle.id}-${name}`} value={name}>
+                          {name}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        size="small"
+                        checked={bundle.visible !== false}
+                        onChange={(event) =>
+                          updateOverlayBundle(bundle.id, () => ({ visible: Boolean(event.target.checked) }))
+                        }
+                      />
+                    }
+                    label="Show"
+                    sx={{ mr: 0 }}
+                  />
+                  <Button
+                    size="small"
+                    variant="text"
+                    color="error"
+                    onClick={() =>
+                      setOverlayBundles((current) => current.filter((candidate) => candidate.id !== bundle.id))
+                    }
+                  >
+                    Remove
+                  </Button>
+                </Box>
+              );
+            })}
+          </Box>
+        ) : null}
         <Box ref={figureRef} sx={{ width: "100%", display: "grid", gap: 2 }}>
           <Box sx={{ width: "100%", height: 280 }}>
             <ReactECharts
