@@ -294,6 +294,8 @@ const panelColumnSpan = (descriptor) => {
 };
 
 const gridColor = "rgba(148,163,184,0.18)";
+const DISCRETE_BAR_CATEGORY_GAP = "30%";
+const DISCRETE_BAR_GAP = "30%";
 
 const formatAxisValue = (value) => {
   const numeric = Number(value);
@@ -523,6 +525,152 @@ const buildErrorBarSeries = ({ name = "error", data, color = "#7c8a96", capPx = 
           style: { stroke: color, lineWidth: 1.2 },
         },
       ],
+    };
+  },
+});
+
+const buildDiscreteOffsetErrorBarSeries = ({
+  name = "error",
+  data,
+  color = "#7c8a96",
+  slotIndex = 0,
+  slotCount = 1,
+  barWidthRatio = 0.58,
+  barCategoryGap = DISCRETE_BAR_CATEGORY_GAP,
+  barGap = DISCRETE_BAR_GAP,
+}) => ({
+  type: "custom",
+  name,
+  data,
+  clip: true,
+  silent: true,
+  z: 6,
+  tooltip: { show: false },
+  renderItem: (params, api) => {
+    const xValue = Number(api.value(0));
+    const yLowValue = Number(api.value(1));
+    const yHighValue = Number(api.value(2));
+    if (!Number.isFinite(xValue) || !Number.isFinite(yLowValue) || !Number.isFinite(yHighValue)) {
+      return null;
+    }
+    const [baseXPx, yLowPx] = api.coord([xValue, yLowValue]);
+    const [, yHighPx] = api.coord([xValue, yHighValue]);
+    if (!Number.isFinite(baseXPx) || !Number.isFinite(yLowPx) || !Number.isFinite(yHighPx)) {
+      return null;
+    }
+    const coordSys = params?.coordSys;
+    if (!coordSys) return null;
+    const left = Number(coordSys.x);
+    const right = Number(coordSys.x) + Number(coordSys.width);
+    const top = Number(coordSys.y);
+    const bottom = Number(coordSys.y) + Number(coordSys.height);
+    if (!Number.isFinite(left) || !Number.isFinite(right) || !Number.isFinite(top) || !Number.isFinite(bottom)) {
+      return null;
+    }
+    const normalizedSlotCount = Math.max(1, Number(slotCount) || 1);
+    const normalizedSlotIndex = Math.min(normalizedSlotCount - 1, Math.max(0, Number(slotIndex) || 0));
+    const layouts = api.barLayout({
+      count: normalizedSlotCount,
+      barCategoryGap,
+      barGap,
+    });
+    const selectedLayout = layouts[normalizedSlotIndex] || layouts[0];
+    const slotPixelWidth = Math.max(1, Number(selectedLayout?.width) || Number(api.size([1, 0])?.[0]) || 1);
+    const centerOffset = Number(selectedLayout?.offsetCenter ?? selectedLayout?.offset ?? 0);
+    const xPx = baseXPx + centerOffset;
+    const barWidth = Math.max(1, slotPixelWidth * barWidthRatio);
+    const capHalf = Math.max(1, Math.min(6, barWidth * 0.5));
+    if (xPx < left || xPx > right) return null;
+    if ((yLowPx < top && yHighPx < top) || (yLowPx > bottom && yHighPx > bottom)) return null;
+    const y1 = Math.max(top, Math.min(bottom, yLowPx));
+    const y2 = Math.max(top, Math.min(bottom, yHighPx));
+    const capLeft = Math.max(left, xPx - capHalf);
+    const capRight = Math.min(right, xPx + capHalf);
+    return {
+      type: "group",
+      children: [
+        {
+          type: "line",
+          shape: { x1: xPx, y1, x2: xPx, y2 },
+          style: { stroke: color, lineWidth: 1.1 },
+        },
+        {
+          type: "line",
+          shape: { x1: capLeft, y1, x2: capRight, y2: y1 },
+          style: { stroke: color, lineWidth: 1.1 },
+        },
+        {
+          type: "line",
+          shape: { x1: capLeft, y1: y2, x2: capRight, y2 },
+          style: { stroke: color, lineWidth: 1.1 },
+        },
+      ],
+    };
+  },
+});
+
+const buildDiscreteOffsetRangeBarSeries = ({
+  name = "range",
+  data,
+  color = "rgba(187, 62, 3, 0.55)",
+  widthRatio = 0.58,
+  slotIndex = 0,
+  slotCount = 1,
+  barCategoryGap = DISCRETE_BAR_CATEGORY_GAP,
+  barGap = DISCRETE_BAR_GAP,
+}) => ({
+  type: "custom",
+  name,
+  data,
+  clip: true,
+  silent: true,
+  z: 4,
+  tooltip: { show: false },
+  renderItem: (params, api) => {
+    const xValue = Number(api.value(0));
+    const yLowValue = Number(api.value(1));
+    const yHighValue = Number(api.value(2));
+    if (!Number.isFinite(xValue) || !Number.isFinite(yLowValue) || !Number.isFinite(yHighValue)) {
+      return null;
+    }
+    const [baseXPx, yLowPx] = api.coord([xValue, yLowValue]);
+    const [, yHighPx] = api.coord([xValue, yHighValue]);
+    if (!Number.isFinite(baseXPx) || !Number.isFinite(yLowPx) || !Number.isFinite(yHighPx)) {
+      return null;
+    }
+    const coordSys = params?.coordSys;
+    if (!coordSys) return null;
+    const left = Number(coordSys.x);
+    const right = Number(coordSys.x) + Number(coordSys.width);
+    const top = Number(coordSys.y);
+    const bottom = Number(coordSys.y) + Number(coordSys.height);
+    if (!Number.isFinite(left) || !Number.isFinite(right) || !Number.isFinite(top) || !Number.isFinite(bottom)) {
+      return null;
+    }
+    const normalizedSlotCount = Math.max(1, Number(slotCount) || 1);
+    const normalizedSlotIndex = Math.min(normalizedSlotCount - 1, Math.max(0, Number(slotIndex) || 0));
+    const layouts = api.barLayout({
+      count: normalizedSlotCount,
+      barCategoryGap,
+      barGap,
+    });
+    const selectedLayout = layouts[normalizedSlotIndex] || layouts[0];
+    const slotPixelWidth = Math.max(1, Number(selectedLayout?.width) || Number(api.size([1, 0])?.[0]) || 1);
+    const centerOffset = Number(selectedLayout?.offsetCenter ?? selectedLayout?.offset ?? 0);
+    const xPx = baseXPx + centerOffset;
+    const barWidth = Math.max(1, slotPixelWidth * widthRatio);
+    const xLeft = Math.max(left, xPx - barWidth / 2);
+    const xRight = Math.min(right, xPx + barWidth / 2);
+    if (xRight <= xLeft) return null;
+    const y1 = Math.max(top, Math.min(bottom, yLowPx));
+    const y2 = Math.max(top, Math.min(bottom, yHighPx));
+    const rectTop = Math.min(y1, y2);
+    const rectBottom = Math.max(y1, y2);
+    if (rectBottom <= rectTop) return null;
+    return {
+      type: "rect",
+      shape: { x: xLeft, y: rectTop, width: xRight - xLeft, height: rectBottom - rectTop },
+      style: { fill: color, stroke: color, lineWidth: 0.6 },
     };
   },
 });
@@ -966,6 +1114,9 @@ const discreteHistogramBinKey = (bin, index) => {
   return `index:${index}`;
 };
 
+const histogramIsDiscrete = (histogram) =>
+  asArray(histogram?.bins).some((bin) => bin && (bin.label != null || bin.bin_id != null));
+
 const normalizeUploadedHistogram = (name, histogram) => {
   if (!isObject(histogram)) {
     throw new Error(`histogram '${name}' must be an object`);
@@ -1064,6 +1215,36 @@ const parseUploadedHistogramBundle = (payload) => {
     primaryHistogramName:
       typeof payload?.primary_histogram_name === "string" ? payload.primary_histogram_name : null,
     histograms: normalizedHistograms,
+  };
+};
+
+const histogramSelectionKey = (histogramName) =>
+  typeof histogramName === "string" && histogramName.trim().length > 0 ? histogramName : "__default__";
+
+const normalizeHistogramSelectionState = (bundle, histogramName) => {
+  const key = histogramSelectionKey(histogramName);
+  const stored = isObject(bundle?.selectionsByHistogram) ? bundle.selectionsByHistogram[key] : null;
+  if (isObject(stored)) {
+    const selectedHistograms = asArray(stored.selectedHistograms)
+      .filter((value) => typeof value === "string")
+      .filter((value, index, values) => values.indexOf(value) === index);
+    const discreteAlignmentByHistogram = isObject(stored.discreteAlignmentByHistogram)
+      ? Object.fromEntries(
+          Object.entries(stored.discreteAlignmentByHistogram)
+            .filter(([name, value]) => typeof name === "string" && typeof value === "string")
+            .map(([name, value]) => [name, value === "by_index" ? "by_index" : "by_key"]),
+        )
+      : Object.fromEntries(selectedHistograms.map((name) => [name, "by_key"]));
+    return { key, selectedHistograms, discreteAlignmentByHistogram };
+  }
+  const fallbackSelection =
+    typeof histogramName === "string" && isObject(bundle?.histograms) && isObject(bundle.histograms[histogramName])
+      ? [histogramName]
+      : [];
+  return {
+    key,
+    selectedHistograms: fallbackSelection,
+    discreteAlignmentByHistogram: Object.fromEntries(fallbackSelection.map((name) => [name, "by_key"])),
   };
 };
 
@@ -1609,16 +1790,22 @@ const ScalarImageHeatmapPanel = ({
   );
 };
 
-const HistogramPanel = ({ title, state, value = undefined, onValueChange = null }) => {
+const HistogramPanel = ({
+  title,
+  state,
+  value = undefined,
+  onValueChange = null,
+  uploadedBundles = [],
+  onUpdateBundleSelection = null,
+  onRemoveComparedHistogram = null,
+  onAddComparedHistogram = null,
+}) => {
   const figureRef = useRef(null);
   const echartsRef = useRef(null);
-  const overlayUploadInputRef = useRef(null);
   const panelId = state?.panel_id || null;
   const sourcePanelId = state?.source_panel_id || panelId;
   const isBundleControlled = sourcePanelId === "gammaloop_histogram_bundle";
   const currentHistogramName = typeof state?.name === "string" ? state.name : null;
-  const [overlayBundles, setOverlayBundles] = useState([]);
-  const [overlayUploadError, setOverlayUploadError] = useState(null);
   const [localYScale, setLocalYScale] = useState("linear");
   const [localXScale, setLocalXScale] = useState("linear");
   const [localShowRelativeErrors, setLocalShowRelativeErrors] = useState(() => {
@@ -1657,48 +1844,133 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
   const discreteRelativeErrorData = useMemo(() => buildDiscreteRelativeErrorData(bins), [bins]);
   const effectiveXScale = isDiscrete ? "linear" : xScale;
   const discreteBaseKeys = useMemo(() => bins.map((bin, index) => discreteHistogramBinKey(bin, index)), [bins]);
+  const comparedBundleSelections = useMemo(
+    () =>
+      asArray(uploadedBundles).map((bundle) => ({
+        bundle,
+        selectionState: normalizeHistogramSelectionState(bundle, currentHistogramName),
+      })),
+    [currentHistogramName, uploadedBundles],
+  );
   const overlaySeries = useMemo(
     () =>
-      overlayBundles
-        .filter((bundle) => bundle.visible !== false && typeof bundle.selectedHistogram === "string")
-        .map((bundle, bundleIndex) => {
-          const selectedName = bundle.selectedHistogram;
-          const histogram = bundle.histograms?.[selectedName];
-          if (!histogram) return null;
-          const color = histogramOverlayColors[bundleIndex % histogramOverlayColors.length];
-          const seriesLabel = `${bundle.label}: ${selectedName}`;
-          if (isDiscrete) {
-            const overlayBinByKey = new Map(
-              asArray(histogram.bins).map((bin, index) => [discreteHistogramBinKey(bin, index), bin]),
-            );
-            const values = discreteBaseKeys.map((key) => {
-              const bin = overlayBinByKey.get(key);
-              if (!bin) return null;
-              const numeric = Number(bin?.value);
-              if (!Number.isFinite(numeric)) return null;
-              if (yScale === "log" && numeric <= 0) return null;
-              return numeric;
-            });
-            const relative = discreteBaseKeys.map((key) => {
-              const bin = overlayBinByKey.get(key);
-              if (!bin) return null;
-              const value = Number(bin?.value);
-              const error = Number(bin?.error);
-              if (!Number.isFinite(value) || !Number.isFinite(error) || value === 0) return null;
-              return Math.abs(error / value);
-            });
-            return { id: bundle.id, name: seriesLabel, color, discreteValues: values, discreteRelative: relative };
-          }
-          const valueStep = buildHistogramRenderData(histogram.bins, yScale)
-            .map((point) => [Number(point?.x), Number(point?.y)])
-            .filter(([x]) => Number.isFinite(x) && (effectiveXScale !== "log" || x > 0));
-          const relativeStep = buildRelativeErrorStepData(histogram.bins)
-            .map((point) => [Number(point?.x), Number(point?.relative_error)])
-            .filter(([x]) => Number.isFinite(x) && (effectiveXScale !== "log" || x > 0));
-          return { id: bundle.id, name: seriesLabel, color, valueStep, relativeStep };
+      comparedBundleSelections
+        .flatMap(({ bundle, selectionState }, bundleIndex) => {
+          const selectedNames = asArray(selectionState.selectedHistograms)
+            .filter((name) => typeof name === "string")
+            .filter((name, index, values) => values.indexOf(name) === index);
+          return selectedNames.map((selectedName, selectedIndex) => {
+            const histogram = bundle.histograms?.[selectedName];
+            if (!histogram) return null;
+            if (histogramIsDiscrete(histogram) !== isDiscrete) return null;
+            const discreteMatchMode =
+              selectionState.discreteAlignmentByHistogram?.[selectedName] === "by_index"
+                ? "by_index"
+                : "by_key";
+            const color =
+              histogramOverlayColors[(bundleIndex * 3 + selectedIndex) % histogramOverlayColors.length];
+            const seriesLabel = `${bundle.label}: ${selectedName}`;
+            if (isDiscrete) {
+              const overlayBins = asArray(histogram.bins);
+              const overlayBinByKey = new Map(
+                overlayBins.map((bin, index) => [discreteHistogramBinKey(bin, index), bin]),
+              );
+              const values =
+                discreteMatchMode === "by_index"
+                  ? discreteBaseKeys.map((_, index) => {
+                      const bin = overlayBins[index];
+                      if (!bin) return null;
+                      const numeric = Number(bin?.value);
+                      if (!Number.isFinite(numeric)) return null;
+                      if (yScale === "log" && numeric <= 0) return null;
+                      return numeric;
+                    })
+                  : (() => {
+                      return discreteBaseKeys.map((key) => {
+                        const bin = overlayBinByKey.get(key);
+                        if (!bin) return null;
+                        const numeric = Number(bin?.value);
+                        if (!Number.isFinite(numeric)) return null;
+                        if (yScale === "log" && numeric <= 0) return null;
+                        return numeric;
+                      });
+                    })();
+              const relative =
+                discreteMatchMode === "by_index"
+                  ? discreteBaseKeys.map((_, index) => {
+                      const bin = overlayBins[index];
+                      if (!bin) return null;
+                      const value = Number(bin?.value);
+                      const error = Number(bin?.error);
+                      if (!Number.isFinite(value) || !Number.isFinite(error) || value === 0) return null;
+                      return Math.abs(error / value);
+                    })
+                  : (() => {
+                      return discreteBaseKeys.map((key) => {
+                        const bin = overlayBinByKey.get(key);
+                        if (!bin) return null;
+                        const value = Number(bin?.value);
+                        const error = Number(bin?.error);
+                        if (!Number.isFinite(value) || !Number.isFinite(error) || value === 0) return null;
+                        return Math.abs(error / value);
+                      });
+                    })();
+              const absoluteError = values.map((value, index) => {
+                if (!Number.isFinite(value)) return null;
+                const sourceBin =
+                  discreteMatchMode === "by_index"
+                    ? overlayBins[index]
+                    : (() => {
+                        const key = discreteBaseKeys[index];
+                        return key ? overlayBinByKey.get(key) || null : null;
+                      })();
+                const err = Number(sourceBin?.error);
+                if (!Number.isFinite(err) || err <= 0) return null;
+                const yLow = value - Math.abs(err);
+                const yHigh = value + Math.abs(err);
+                if (yScale === "log" && yLow <= 0) return null;
+                return [index, yLow, yHigh];
+              });
+              return {
+                id: `${bundle.id}-${selectedName}`,
+                name: seriesLabel,
+                color,
+                discreteValues: values,
+                discreteRelative: relative,
+                discreteAbsError: absoluteError.filter(Boolean),
+              };
+            }
+            const valueStep = buildHistogramRenderData(histogram.bins, yScale)
+              .map((point) => [Number(point?.x), Number(point?.y)])
+              .filter(([x]) => Number.isFinite(x) && (effectiveXScale !== "log" || x > 0));
+            const relativeStep = buildRelativeErrorStepData(histogram.bins)
+              .map((point) => [Number(point?.x), Number(point?.relative_error)])
+              .filter(([x]) => Number.isFinite(x) && (effectiveXScale !== "log" || x > 0));
+            const absError = buildHistogramData(histogram.bins)
+              .map((bin) => {
+                const x = Number(bin?.x);
+                const y = Number(bin?.value);
+                const err = Number(bin?.error);
+                if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(err) || err <= 0) return null;
+                const yLow = y - Math.abs(err);
+                const yHigh = y + Math.abs(err);
+                if (effectiveXScale === "log" && x <= 0) return null;
+                if (yScale === "log" && yLow <= 0) return null;
+                return [x, yLow, yHigh];
+              })
+              .filter(Boolean);
+            return {
+              id: `${bundle.id}-${selectedName}`,
+              name: seriesLabel,
+              color,
+              valueStep,
+              relativeStep,
+              absError,
+            };
+          });
         })
         .filter(Boolean),
-    [discreteBaseKeys, effectiveXScale, isDiscrete, overlayBundles, yScale],
+    [comparedBundleSelections, discreteBaseKeys, effectiveXScale, isDiscrete, yScale],
   );
 
   const xDomain = useMemo(() => {
@@ -1755,6 +2027,7 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
         if (yScale === "log" && numericValue <= 0) return null;
         return numericValue;
       });
+      const discreteBarSeriesCount = 1 + overlaySeries.length;
       return {
         animation: false,
         grid: baseCartesianGrid,
@@ -1789,26 +2062,50 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
         },
         dataZoom: buildDataZoom(zoomRange, false),
         series: [
-          ...(Array.isArray(binErrorData) && binErrorData.length > 0 ? [buildErrorBarSeries({ name: "error", data: binErrorData })] : []),
+          ...(Array.isArray(binErrorData) && binErrorData.length > 0
+            ? [
+                buildDiscreteOffsetErrorBarSeries({
+                  name: "error",
+                  data: binErrorData,
+                  slotIndex: 0,
+                  slotCount: discreteBarSeriesCount,
+                }),
+              ]
+            : []),
           {
             type: "bar",
             name: "value",
             data: barData,
-            barCategoryGap: "30%",
+            barCategoryGap: DISCRETE_BAR_CATEGORY_GAP,
+            barGap: DISCRETE_BAR_GAP,
             itemStyle: { color: "#005f73" },
           },
-          ...overlaySeries.map((overlay) => ({
-            type: "line",
-            name: overlay.name,
-            data: overlay.discreteValues,
-            showSymbol: true,
-            symbol: "circle",
-            symbolSize: 5,
-            connectNulls: false,
-            lineStyle: { width: 1.6, type: "dashed", color: overlay.color },
-            itemStyle: { color: overlay.color },
-            emphasis: { focus: "series" },
-          })),
+          ...overlaySeries.flatMap((overlay, index) => {
+            const slotIndex = index + 1;
+            const series = [
+              {
+                type: "bar",
+                name: overlay.name,
+                data: overlay.discreteValues,
+                barCategoryGap: DISCRETE_BAR_CATEGORY_GAP,
+                barGap: DISCRETE_BAR_GAP,
+                itemStyle: { color: overlay.color, opacity: 0.52 },
+                emphasis: { focus: "series" },
+              },
+            ];
+            if (Array.isArray(overlay.discreteAbsError) && overlay.discreteAbsError.length > 0) {
+              series.push(
+                buildDiscreteOffsetErrorBarSeries({
+                  name: `${overlay.name} error`,
+                  data: overlay.discreteAbsError,
+                  color: overlay.color,
+                  slotIndex,
+                  slotCount: discreteBarSeriesCount,
+                }),
+              );
+            }
+            return series;
+          }),
         ],
       };
     }
@@ -1852,17 +2149,22 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
       series: [
         ...(showRelativeErrors && Array.isArray(binErrorData) && binErrorData.length > 0 ? [buildErrorBarSeries({ name: "error", data: binErrorData })] : []),
         baseSeries,
-        ...overlaySeries.map((overlay) => ({
-          type: "line",
-          name: overlay.name,
-          data: overlay.valueStep,
-          step: "end",
-          showSymbol: false,
-          connectNulls: false,
-          lineStyle: { width: 1.4, type: "dashed", color: overlay.color },
-          itemStyle: { color: overlay.color },
-          emphasis: { focus: "series" },
-        })),
+        ...overlaySeries.flatMap((overlay) => [
+          ...(Array.isArray(overlay.absError) && overlay.absError.length > 0
+            ? [buildErrorBarSeries({ name: `${overlay.name} error`, data: overlay.absError, color: overlay.color })]
+            : []),
+          {
+            type: "line",
+            name: overlay.name,
+            data: overlay.valueStep,
+            step: "end",
+            showSymbol: false,
+            connectNulls: false,
+            lineStyle: { width: 1.4, type: "dashed", color: overlay.color },
+            itemStyle: { color: overlay.color },
+            emphasis: { focus: "series" },
+          },
+        ]),
       ],
     };
   }, [
@@ -1884,6 +2186,7 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
   const relativeOption = useMemo(() => {
     if (isDiscrete) {
       const categoriesData = categories || bins.map((_, idx) => `#${idx}`);
+      const discreteBarSeriesCount = 1 + overlaySeries.length;
       return {
         animation: false,
         grid: baseCartesianGrid,
@@ -1912,24 +2215,34 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
         },
         dataZoom: buildDataZoom(zoomRange, true),
         series: [
-          {
-            type: "bar",
+          buildDiscreteOffsetRangeBarSeries({
             name: "relative_error",
-            data: discreteRelativeErrorData.map((point) => point.relative_error),
-            itemStyle: { color: "rgba(187, 62, 3, 0.75)" },
-          },
-          ...overlaySeries.map((overlay) => ({
-            type: "line",
-            name: overlay.name,
-            data: overlay.discreteRelative,
-            showSymbol: true,
-            symbol: "circle",
-            symbolSize: 4,
-            connectNulls: false,
-            lineStyle: { width: 1.35, type: "dashed", color: overlay.color },
-            itemStyle: { color: overlay.color },
-            emphasis: { focus: "series" },
-          })),
+            data: discreteRelativeErrorData
+              .map((point) => {
+                const rel = Number(point?.relative_error);
+                if (!Number.isFinite(rel)) return null;
+                return [Number(point?.index), -Math.abs(rel), Math.abs(rel)];
+              })
+              .filter(Boolean),
+            color: "rgba(187, 62, 3, 0.55)",
+            slotIndex: 0,
+            slotCount: discreteBarSeriesCount,
+          }),
+          ...overlaySeries.map((overlay, index) =>
+            buildDiscreteOffsetRangeBarSeries({
+              name: overlay.name,
+              data: overlay.discreteRelative
+                .map((rel, relIndex) => {
+                  const numeric = Number(rel);
+                  if (!Number.isFinite(numeric)) return null;
+                  return [relIndex, -Math.abs(numeric), Math.abs(numeric)];
+                })
+                .filter(Boolean),
+              color: overlay.color,
+              slotIndex: index + 1,
+              slotCount: discreteBarSeriesCount,
+            }),
+          ),
         ],
       };
     }
@@ -2012,47 +2325,6 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
     zoomRange,
   ]);
 
-  const handleUploadOverlayBundle = useCallback(
-    async (event) => {
-      const file = event?.target?.files?.[0];
-      if (!file) return;
-      try {
-        const text = await file.text();
-        const parsed = JSON.parse(text);
-        const bundle = parseUploadedHistogramBundle(parsed);
-        const histogramNames = Object.keys(bundle.histograms);
-        const defaultHistogram =
-          currentHistogramName && bundle.histograms[currentHistogramName] ? currentHistogramName : null;
-        setOverlayBundles((current) => [
-          ...current,
-          {
-            id: `overlay-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-            label: file.name || `bundle-${current.length + 1}`,
-            histograms: bundle.histograms,
-            selectedHistogram: defaultHistogram,
-            visible: true,
-          },
-        ]);
-        setOverlayUploadError(null);
-        if (overlayUploadInputRef.current) {
-          overlayUploadInputRef.current.value = "";
-        }
-        if (histogramNames.length === 0) {
-          setOverlayUploadError("Uploaded bundle contains no selectable histograms.");
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Invalid histogram bundle JSON.";
-        setOverlayUploadError(message);
-      }
-    },
-    [currentHistogramName],
-  );
-
-  const updateOverlayBundle = useCallback((bundleId, updater) => {
-    setOverlayBundles((current) =>
-      current.map((bundle) => (bundle.id === bundleId ? { ...bundle, ...updater(bundle) } : bundle)),
-    );
-  }, []);
   const onDataZoom = useMemo(
     () => ({
       datazoom: (event) => {
@@ -2158,35 +2430,24 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
               label="Relative Error"
               sx={{ mr: 1 }}
             />
-            <input
-              ref={overlayUploadInputRef}
-              type="file"
-              accept="application/json,.json"
-              style={{ display: "none" }}
-              onChange={handleUploadOverlayBundle}
-            />
-            <Button size="small" variant="outlined" onClick={() => overlayUploadInputRef.current?.click()}>
-              Upload Bundle
-            </Button>
           </Stack>
         </Box>
-        {overlayUploadError ? (
-          <Alert severity="error" sx={{ mb: 1.5 }}>
-            {overlayUploadError}
-          </Alert>
-        ) : null}
-        {overlayBundles.length > 0 ? (
+        {comparedBundleSelections.length > 0 ? (
           <Box sx={{ mb: 1.5, display: "grid", gap: 1 }}>
-            {overlayBundles.map((bundle) => {
-              const histogramNames = Object.keys(bundle.histograms || {});
+            {comparedBundleSelections.map(({ bundle, selectionState }) => {
+              const histogramNames = Object.keys(bundle.histograms || {}).filter(
+                (name) => histogramIsDiscrete(bundle.histograms?.[name]) === isDiscrete,
+              );
+              const usedNames = new Set(
+                asArray(selectionState.selectedHistograms).filter((value) => typeof value === "string"),
+              );
+              const hasAddableComparison = histogramNames.some((name) => !usedNames.has(name));
               return (
                 <Box
                   key={bundle.id}
                   sx={{
                     display: "grid",
-                    gridTemplateColumns: { xs: "1fr", md: "minmax(0, 1fr) 220px auto auto" },
                     gap: 1,
-                    alignItems: "center",
                     border: "1px solid",
                     borderColor: "divider",
                     borderRadius: 1,
@@ -2194,51 +2455,120 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
                     py: 0.75,
                   }}
                 >
-                  <Typography variant="caption" color="text.secondary" sx={{ minWidth: 0 }}>
-                    {bundle.label}
-                  </Typography>
-                  <FormControl size="small">
-                    <Select
-                      value={bundle.selectedHistogram ?? "__none__"}
-                      onChange={(event) =>
-                        updateOverlayBundle(bundle.id, () => ({
-                          selectedHistogram:
-                            event.target.value === "__none__" ? null : String(event.target.value || "__none__"),
-                        }))
+                  <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: "wrap", rowGap: 0.75 }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ minWidth: 0, mr: 0.5 }}>
+                      {bundle.label}
+                    </Typography>
+                    {isDiscrete ? (
+                      <Typography variant="caption" color="text.secondary">
+                        Discrete matching is configured per histogram row.
+                      </Typography>
+                    ) : null}
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      disabled={!hasAddableComparison}
+                      onClick={() =>
+                        onAddComparedHistogram?.(sourcePanelId, bundle.id, currentHistogramName, isDiscrete)
                       }
-                      sx={{ fontSize: "0.8125rem", ".MuiSelect-select": { py: 0.625 } }}
                     >
-                      <MenuItem value="__none__">No histogram</MenuItem>
-                      {histogramNames.map((name) => (
-                        <MenuItem key={`${bundle.id}-${name}`} value={name}>
-                          {name}
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
-                  <FormControlLabel
-                    control={
-                      <Switch
-                        size="small"
-                        checked={bundle.visible !== false}
-                        onChange={(event) =>
-                          updateOverlayBundle(bundle.id, () => ({ visible: Boolean(event.target.checked) }))
-                        }
-                      />
-                    }
-                    label="Show"
-                    sx={{ mr: 0 }}
-                  />
-                  <Button
-                    size="small"
-                    variant="text"
-                    color="error"
-                    onClick={() =>
-                      setOverlayBundles((current) => current.filter((candidate) => candidate.id !== bundle.id))
-                    }
-                  >
-                    Remove
-                  </Button>
+                      Add Histogram
+                    </Button>
+                  </Stack>
+                  <Box sx={{ display: "grid", gap: 0.75 }}>
+                    {selectionState.selectedHistograms.map((comparedName, comparedIndex) => (
+                      <Box
+                        key={`${bundle.id}-${comparedIndex}`}
+                        sx={{
+                          display: "grid",
+                          gridTemplateColumns: {
+                            xs: "1fr auto",
+                            sm: isDiscrete ? "minmax(0, 200px) 150px auto" : "minmax(0, 220px) auto",
+                          },
+                          gap: 0.75,
+                          alignItems: "center",
+                        }}
+                      >
+                        <FormControl size="small">
+                          <Select
+                            value={comparedName}
+                            onChange={(event) => {
+                              const nextSelectedHistograms = selectionState.selectedHistograms.slice();
+                              nextSelectedHistograms[comparedIndex] = String(event.target.value || "");
+                              const nextDiscreteAlignmentByHistogram = {
+                                ...(selectionState.discreteAlignmentByHistogram || {}),
+                              };
+                              const oldName = selectionState.selectedHistograms[comparedIndex];
+                              const nextName = nextSelectedHistograms[comparedIndex];
+                              if (oldName && oldName !== nextName && !nextSelectedHistograms.includes(oldName)) {
+                                delete nextDiscreteAlignmentByHistogram[oldName];
+                              }
+                              if (nextName && !nextDiscreteAlignmentByHistogram[nextName]) {
+                                nextDiscreteAlignmentByHistogram[nextName] = "by_key";
+                              }
+                              onUpdateBundleSelection?.(
+                                sourcePanelId,
+                                bundle.id,
+                                currentHistogramName,
+                                nextSelectedHistograms,
+                                nextDiscreteAlignmentByHistogram,
+                              );
+                            }}
+                            sx={{ minWidth: 140, fontSize: "0.8125rem", ".MuiSelect-select": { py: 0.625 } }}
+                          >
+                            {histogramNames.map((name) => (
+                              <MenuItem key={`${bundle.id}-${comparedIndex}-${name}`} value={name}>
+                                {name}
+                              </MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                        {isDiscrete ? (
+                          <FormControl size="small">
+                            <Select
+                              value={
+                                selectionState.discreteAlignmentByHistogram?.[comparedName] === "by_index"
+                                  ? "by_index"
+                                  : "by_key"
+                              }
+                              onChange={(event) => {
+                                const nextDiscreteAlignmentByHistogram = {
+                                  ...(selectionState.discreteAlignmentByHistogram || {}),
+                                  [comparedName]: event.target.value === "by_index" ? "by_index" : "by_key",
+                                };
+                                onUpdateBundleSelection?.(
+                                  sourcePanelId,
+                                  bundle.id,
+                                  currentHistogramName,
+                                  selectionState.selectedHistograms,
+                                  nextDiscreteAlignmentByHistogram,
+                                );
+                              }}
+                              sx={{ minWidth: 140, fontSize: "0.8125rem", ".MuiSelect-select": { py: 0.625 } }}
+                            >
+                              <MenuItem value="by_key">Match: Key</MenuItem>
+                              <MenuItem value="by_index">Match: Index</MenuItem>
+                            </Select>
+                          </FormControl>
+                        ) : null}
+                        <Button
+                          size="small"
+                          variant="text"
+                          color="error"
+                          onClick={() =>
+                            onRemoveComparedHistogram?.(
+                              sourcePanelId,
+                              bundle.id,
+                              currentHistogramName,
+                              comparedIndex,
+                            )
+                          }
+                        >
+                          Remove
+                        </Button>
+                      </Box>
+                    ))}
+                  </Box>
                 </Box>
               );
             })}
@@ -2249,7 +2579,7 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
             <ReactECharts
               ref={echartsRef}
               option={histogramOption}
-              notMerge={false}
+              notMerge
               onEvents={onDataZoom}
               lazyUpdate
               opts={{ renderer: "canvas" }}
@@ -2264,7 +2594,7 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
               <Box sx={{ width: "100%", height: 168 }}>
                 <ReactECharts
                   option={relativeOption}
-                  notMerge={false}
+                  notMerge
                   onEvents={onDataZoom}
                   lazyUpdate
                   opts={{ renderer: "canvas" }}
@@ -2279,7 +2609,15 @@ const HistogramPanel = ({ title, state, value = undefined, onValueChange = null 
   );
 };
 
-const TablePanel = ({ title, state }) => {
+const TablePanel = ({
+  title,
+  state,
+  uploadedBundles = [],
+  onUploadBundle = null,
+  onRemoveBundle = null,
+  bundleUploadError = null,
+}) => {
+  const uploadInputRef = useRef(null);
   const columns = asArray(state?.columns);
   const rows = asArray(state?.rows);
   const isGammaLoopBundle = state?.panel_id === "gammaloop_histogram_bundle";
@@ -2291,6 +2629,34 @@ const TablePanel = ({ title, state }) => {
             <Typography variant="subtitle1" sx={{ mb: 1 }}>
               {title}
             </Typography>
+            {isGammaLoopBundle ? (
+              <Box sx={{ mb: 1.5 }}>
+                <input
+                  ref={uploadInputRef}
+                  type="file"
+                  accept="application/json,.json"
+                  style={{ display: "none" }}
+                  onChange={(event) => onUploadBundle?.(state?.panel_id, event)}
+                />
+                <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: bundleUploadError ? 1 : 0 }}>
+                  <Button size="small" variant="outlined" onClick={() => uploadInputRef.current?.click()}>
+                    Upload Bundle
+                  </Button>
+                  {asArray(uploadedBundles).map((bundle) => (
+                    <Button
+                      key={bundle.id}
+                      size="small"
+                      variant="text"
+                      color="error"
+                      onClick={() => onRemoveBundle?.(state?.panel_id, bundle.id)}
+                    >
+                      Remove {bundle.label}
+                    </Button>
+                  ))}
+                </Stack>
+                {bundleUploadError ? <Alert severity="error">{bundleUploadError}</Alert> : null}
+              </Box>
+            ) : null}
             <Alert severity="warning">
               GammaLoop histogram bundle is empty or incompatible with the current payload shape. Check backend
               task-output errors for observable decode details.
@@ -2342,6 +2708,34 @@ const TablePanel = ({ title, state }) => {
             </Stack>
           ) : null}
         </Box>
+        {isGammaLoopBundle ? (
+          <Box sx={{ mb: 1.5, display: "grid", gap: 1 }}>
+            <input
+              ref={uploadInputRef}
+              type="file"
+              accept="application/json,.json"
+              style={{ display: "none" }}
+              onChange={(event) => onUploadBundle?.(state?.panel_id, event)}
+            />
+            <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: "wrap" }}>
+              <Button size="small" variant="outlined" onClick={() => uploadInputRef.current?.click()}>
+                Upload Bundle
+              </Button>
+              {asArray(uploadedBundles).map((bundle) => (
+                <Button
+                  key={bundle.id}
+                  size="small"
+                  variant="text"
+                  color="error"
+                  onClick={() => onRemoveBundle?.(state?.panel_id, bundle.id)}
+                >
+                  Remove {bundle.label}
+                </Button>
+              ))}
+            </Stack>
+            {bundleUploadError ? <Alert severity="error">{bundleUploadError}</Alert> : null}
+          </Box>
+        ) : null}
         <TableContainer sx={{ maxHeight: 440, overflowX: "auto" }}>
           <MuiTable size="small" stickyHeader>
             <TableHead>
@@ -2750,7 +3144,19 @@ const Image2dPanel = ({ title, state, value = undefined, onValueChange = null })
   );
 };
 
-const PanelRenderer = ({ descriptor, state, value, onValueChange }) => {
+const PanelRenderer = ({
+  descriptor,
+  state,
+  value,
+  onValueChange,
+  histogramBundlesByPanel,
+  histogramBundleUploadErrors,
+  onUploadHistogramBundle,
+  onRemoveHistogramBundle,
+  onUpdateHistogramBundleSelection,
+  onRemoveComparedHistogram,
+  onAddComparedHistogram,
+}) => {
   if (!descriptor) return null;
   switch (descriptor.kind) {
     case "select":
@@ -2802,6 +3208,10 @@ const PanelRenderer = ({ descriptor, state, value, onValueChange }) => {
         <TablePanel
           title={descriptor.label}
           state={{ ...state, panel_id: descriptor.panel_id, selected_value: value, onValueChange }}
+          uploadedBundles={histogramBundlesByPanel?.[descriptor.panel_id] ?? []}
+          bundleUploadError={histogramBundleUploadErrors?.[descriptor.panel_id] ?? null}
+          onUploadBundle={onUploadHistogramBundle}
+          onRemoveBundle={onRemoveHistogramBundle}
         />
       );
     case "histogram":
@@ -2812,6 +3222,10 @@ const PanelRenderer = ({ descriptor, state, value, onValueChange }) => {
           state={{ ...state, panel_id: descriptor.panel_id }}
           value={value}
           onValueChange={onValueChange}
+          uploadedBundles={histogramBundlesByPanel?.[state?.source_panel_id || descriptor.panel_id] ?? []}
+          onUpdateBundleSelection={onUpdateHistogramBundleSelection}
+          onRemoveComparedHistogram={onRemoveComparedHistogram}
+          onAddComparedHistogram={onAddComparedHistogram}
         />
       );
     case "text":
@@ -2823,10 +3237,141 @@ const PanelRenderer = ({ descriptor, state, value, onValueChange }) => {
 };
 
 const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = {}, onPanelValueChange = null }) => {
+  const [histogramBundlesByPanel, setHistogramBundlesByPanel] = useState({});
+  const [histogramBundleUploadErrors, setHistogramBundleUploadErrors] = useState({});
   const renderablePanels = useMemo(
     () => buildRenderablePanels(panelSpecs, panelStates, panelValues),
     [panelSpecs, panelStates, panelValues],
   );
+  const handleUploadHistogramBundle = useCallback(async (panelId, event) => {
+    const file = event?.target?.files?.[0];
+    if (!panelId || !file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const bundle = parseUploadedHistogramBundle(parsed);
+      setHistogramBundlesByPanel((current) => {
+        const existing = asArray(current?.[panelId]);
+        return {
+          ...current,
+          [panelId]: [
+            ...existing,
+            {
+              id: `overlay-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+              label: file.name || `bundle-${existing.length + 1}`,
+              histograms: bundle.histograms,
+              selectionsByHistogram: {},
+            },
+          ],
+        };
+      });
+      setHistogramBundleUploadErrors((current) => ({ ...current, [panelId]: null }));
+      if (event?.target) event.target.value = "";
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid histogram bundle JSON.";
+      setHistogramBundleUploadErrors((current) => ({ ...current, [panelId]: message }));
+    } finally {
+      if (event?.target) event.target.value = "";
+    }
+  }, []);
+  const handleRemoveHistogramBundle = useCallback((panelId, bundleId) => {
+    if (!panelId || !bundleId) return;
+    setHistogramBundlesByPanel((current) => ({
+      ...current,
+      [panelId]: asArray(current?.[panelId]).filter((bundle) => bundle?.id !== bundleId),
+    }));
+  }, []);
+  const handleUpdateHistogramBundleSelection = useCallback(
+    (panelId, bundleId, histogramName, selectedHistograms, discreteAlignmentByHistogram = {}) => {
+      if (!panelId || !bundleId) return;
+      const key = histogramSelectionKey(histogramName);
+      setHistogramBundlesByPanel((current) => ({
+        ...current,
+        [panelId]: asArray(current?.[panelId]).map((bundle) => {
+          if (bundle?.id !== bundleId) return bundle;
+          return {
+            ...bundle,
+            selectionsByHistogram: {
+              ...(isObject(bundle?.selectionsByHistogram) ? bundle.selectionsByHistogram : {}),
+              [key]: {
+                selectedHistograms: asArray(selectedHistograms)
+                  .filter((value) => typeof value === "string")
+                  .filter((value, index, values) => values.indexOf(value) === index),
+                discreteAlignmentByHistogram: Object.fromEntries(
+                  Object.entries(isObject(discreteAlignmentByHistogram) ? discreteAlignmentByHistogram : {})
+                    .filter(([name, value]) => typeof name === "string" && typeof value === "string")
+                    .map(([name, value]) => [name, value === "by_index" ? "by_index" : "by_key"]),
+                ),
+              },
+            },
+          };
+        }),
+      }));
+    },
+    [],
+  );
+  const handleRemoveComparedHistogram = useCallback((panelId, bundleId, histogramName, comparedIndex) => {
+    if (!panelId || !bundleId || !Number.isInteger(comparedIndex)) return;
+    setHistogramBundlesByPanel((current) => ({
+      ...current,
+      [panelId]: asArray(current?.[panelId]).map((bundle) => {
+        if (bundle?.id !== bundleId) return bundle;
+        const selection = normalizeHistogramSelectionState(bundle, histogramName);
+        const nextSelectedHistograms = selection.selectedHistograms.filter((_, index) => index !== comparedIndex);
+        return {
+          ...bundle,
+          selectionsByHistogram: {
+            ...(isObject(bundle?.selectionsByHistogram) ? bundle.selectionsByHistogram : {}),
+            [selection.key]: {
+              selectedHistograms: nextSelectedHistograms,
+              discreteAlignmentByHistogram: Object.fromEntries(
+                Object.entries(selection.discreteAlignmentByHistogram || {}).filter(([name]) =>
+                  nextSelectedHistograms.includes(name),
+                ),
+              ),
+            },
+          },
+        };
+      }),
+    }));
+  }, []);
+  const handleAddComparedHistogram = useCallback((panelId, bundleId, histogramName, currentHistogramIsDiscrete) => {
+    if (!panelId || !bundleId) return;
+    setHistogramBundlesByPanel((current) => ({
+      ...current,
+      [panelId]: asArray(current?.[panelId]).map((bundle) => {
+        if (bundle?.id !== bundleId) return bundle;
+        const selection = normalizeHistogramSelectionState(bundle, histogramName);
+        const histogramNames = Object.keys(bundle?.histograms || {}).filter(
+          (name) => histogramIsDiscrete(bundle?.histograms?.[name]) === Boolean(currentHistogramIsDiscrete),
+        );
+        const used = new Set(
+          asArray(selection.selectedHistograms).filter((value) => typeof value === "string"),
+        );
+        const preferred =
+          typeof histogramName === "string" && histogramNames.includes(histogramName) ? histogramName : null;
+        const candidate = (preferred && !used.has(preferred))
+          ? preferred
+          : histogramNames.find((name) => !used.has(name)) || null;
+        if (typeof candidate !== "string") return bundle;
+        return {
+          ...bundle,
+          selectionsByHistogram: {
+            ...(isObject(bundle?.selectionsByHistogram) ? bundle.selectionsByHistogram : {}),
+            [selection.key]: {
+              selectedHistograms: [...selection.selectedHistograms, candidate].filter(
+                (value, index, values) => values.indexOf(value) === index,
+              ),
+              discreteAlignmentByHistogram: {
+                ...(selection.discreteAlignmentByHistogram || {}),
+                [candidate]: "by_key",
+              },
+            },
+          },
+        };
+      }),
+    }));
+  }, []);
   const handlePanelValueChange = useCallback(
     (panelId, nextValue, shouldTriggerPoll = true) => {
       if (typeof onPanelValueChange !== "function") return;
@@ -2883,7 +3428,19 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
               gridColumn: panelColumnSpan(descriptor),
             }}
           >
-            <PanelRenderer descriptor={descriptor} state={state} value={value} onValueChange={handlePanelValueChange} />
+            <PanelRenderer
+              descriptor={descriptor}
+              state={state}
+              value={value}
+              onValueChange={handlePanelValueChange}
+              histogramBundlesByPanel={histogramBundlesByPanel}
+              histogramBundleUploadErrors={histogramBundleUploadErrors}
+              onUploadHistogramBundle={handleUploadHistogramBundle}
+              onRemoveHistogramBundle={handleRemoveHistogramBundle}
+              onUpdateHistogramBundleSelection={handleUpdateHistogramBundleSelection}
+              onRemoveComparedHistogram={handleRemoveComparedHistogram}
+              onAddComparedHistogram={handleAddComparedHistogram}
+            />
           </Box>
         ))}
       </Box>

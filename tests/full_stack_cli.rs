@@ -1808,7 +1808,7 @@ async fn full_stack_cli_server_can_restart_while_nodes_keep_running() -> anyhow:
 }
 
 #[cfg(unix)]
-#[tokio::test]
+#[cfg_attr(tokio::test, unix)]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_run_node_exits_on_sigterm_and_releases_name() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
