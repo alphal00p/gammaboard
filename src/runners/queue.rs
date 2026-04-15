@@ -14,13 +14,23 @@ const RECLAIM_INTERVAL: Duration = Duration::from_secs(1);
 const COMPLETED_CLEANUP_INTERVAL: Duration = Duration::from_secs(1);
 const COMPLETED_CLEANUP_BATCH_LIMIT: usize = 2048;
 const MIN_BATCH_SIZE: usize = 16;
-const MAX_BATCH_SIZE_UP_FACTOR: f64 = 4.0;
-const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.25;
+const DEFAULT_BATCH_SIZE_DEADBAND_RATIO: f64 = 0.15;
+const DEFAULT_BATCH_SIZE_COOLDOWN_TICKS: u32 = 3;
+const DEFAULT_PENDING_REFILL_LOW_RATIO: f64 = 0.85;
+const DEFAULT_PENDING_REFILL_HIGH_RATIO: f64 = 1.15;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerQueueConfig {
     pub queue_buffer: f64,
     pub target_batch_eval_ms: f64,
+    #[serde(default = "default_batch_size_deadband_ratio")]
+    pub batch_size_deadband_ratio: f64,
+    #[serde(default = "default_batch_size_cooldown_ticks")]
+    pub batch_size_cooldown_ticks: u32,
+    #[serde(default = "default_pending_refill_low_ratio")]
+    pub pending_refill_low_ratio: f64,
+    #[serde(default = "default_pending_refill_high_ratio")]
+    pub pending_refill_high_ratio: f64,
     pub max_batch_size: usize,
     pub local_pending_buffer_multiplier: f64,
     pub max_queue_size: usize,
@@ -28,7 +38,6 @@ pub struct SamplerQueueConfig {
     pub max_insert_bundle_size: usize,
     pub max_concurrent_insert_tasks: usize,
     pub completed_batch_fetch_limit: usize,
-    pub strict_batch_ordering: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -58,9 +67,26 @@ pub struct SamplerQueue<S> {
     last_reclaim_at: Instant,
     last_completed_cleanup_at: Instant,
     batch_size_current: usize,
+    batch_size_tune_cooldown_remaining: u32,
     eval_ms_per_sample: RollingMetric,
     metrics: QueueMetricsState,
     utilization: QueueUtilizationState,
+}
+
+const fn default_batch_size_deadband_ratio() -> f64 {
+    DEFAULT_BATCH_SIZE_DEADBAND_RATIO
+}
+
+const fn default_batch_size_cooldown_ticks() -> u32 {
+    DEFAULT_BATCH_SIZE_COOLDOWN_TICKS
+}
+
+const fn default_pending_refill_low_ratio() -> f64 {
+    DEFAULT_PENDING_REFILL_LOW_RATIO
+}
+
+const fn default_pending_refill_high_ratio() -> f64 {
+    DEFAULT_PENDING_REFILL_HIGH_RATIO
 }
 
 struct PendingInsertTask {
@@ -176,6 +202,7 @@ where
             last_reclaim_at: now.checked_sub(RECLAIM_INTERVAL).unwrap_or(now),
             last_completed_cleanup_at: now.checked_sub(COMPLETED_CLEANUP_INTERVAL).unwrap_or(now),
             batch_size_current,
+            batch_size_tune_cooldown_remaining: 0,
             eval_ms_per_sample: RollingMetric::default(),
             metrics: QueueMetricsState::default(),
             utilization: QueueUtilizationState::new(now),
@@ -422,23 +449,66 @@ where
     }
 
     pub fn target_pending_batches(&self, active_evaluator_count: usize) -> Option<usize> {
+        self.target_pending_batches_with_ratio(active_evaluator_count, 1.0)
+    }
+
+    pub fn target_pending_low_batches(&self, active_evaluator_count: usize) -> Option<usize> {
+        self.target_pending_batches_with_ratio(
+            active_evaluator_count,
+            self.sanitized_pending_refill_low_ratio(),
+        )
+    }
+
+    pub fn target_pending_high_batches(&self, active_evaluator_count: usize) -> Option<usize> {
+        self.target_pending_batches_with_ratio(
+            active_evaluator_count,
+            self.sanitized_pending_refill_high_ratio(),
+        )
+    }
+
+    fn target_pending_batches_with_ratio(
+        &self,
+        active_evaluator_count: usize,
+        ratio: f64,
+    ) -> Option<usize> {
         if !self.config.queue_buffer.is_finite() || self.config.queue_buffer < 0.0 {
             return None;
         }
+        if !ratio.is_finite() || ratio < 0.0 {
+            return None;
+        }
         Some(
-            ((active_evaluator_count as f64) * self.config.queue_buffer)
+            ((active_evaluator_count as f64) * self.config.queue_buffer * ratio)
                 .ceil()
                 .max(0.0) as usize,
         )
     }
 
     pub fn target_local_pending_batches(&self, active_evaluator_count: usize) -> Option<usize> {
+        self.target_local_pending_batches_from_target(
+            self.target_pending_batches(active_evaluator_count),
+        )
+    }
+
+    pub fn target_local_pending_high_batches(
+        &self,
+        active_evaluator_count: usize,
+    ) -> Option<usize> {
+        self.target_local_pending_batches_from_target(
+            self.target_pending_high_batches(active_evaluator_count),
+        )
+    }
+
+    fn target_local_pending_batches_from_target(
+        &self,
+        target_pending_batches: Option<usize>,
+    ) -> Option<usize> {
         if !self.config.local_pending_buffer_multiplier.is_finite()
             || self.config.local_pending_buffer_multiplier < 0.0
         {
             return None;
         }
-        let target_pending_batches = self.target_pending_batches(active_evaluator_count)?;
+        let target_pending_batches = target_pending_batches?;
         Some(
             ((target_pending_batches as f64) * self.config.local_pending_buffer_multiplier)
                 .ceil()
@@ -526,12 +596,21 @@ where
         }
 
         let Some(target_pending_after_enqueue) =
-            self.target_pending_batches(active_evaluator_count)
+            self.target_pending_high_batches(active_evaluator_count)
         else {
             return Vec::new();
         };
+        let mut target_pending_low = self
+            .target_pending_low_batches(active_evaluator_count)
+            .unwrap_or(target_pending_after_enqueue);
+        if target_pending_low > target_pending_after_enqueue {
+            target_pending_low = target_pending_after_enqueue;
+        }
+        if pending_before > target_pending_low {
+            return Vec::new();
+        }
         let local_target_pending_after_enqueue = self
-            .target_local_pending_batches(active_evaluator_count)
+            .target_local_pending_high_batches(active_evaluator_count)
             .unwrap_or(target_pending_after_enqueue);
 
         let batch_limit = hard_limit
@@ -681,18 +760,12 @@ where
         let store = self.store.clone();
         let run_id = self.run_id;
         let fetch_limit = self.config.completed_batch_fetch_limit.max(1);
-        let strict_batch_ordering = self.config.strict_batch_ordering;
         let after_batch_id = self.checkpoint.last_completed_batch_id;
         self.pending_processed_fetch = Some(PendingProcessedFetchTask {
             started_at: Instant::now(),
             handle: tokio::spawn(async move {
                 store
-                    .fetch_completed_batches(
-                        run_id,
-                        fetch_limit,
-                        strict_batch_ordering,
-                        after_batch_id,
-                    )
+                    .fetch_completed_batches(run_id, fetch_limit, true, after_batch_id)
                     .await
             }),
         });
@@ -881,6 +954,10 @@ where
         let Some(eval_ms_per_sample) = self.eval_ms_per_sample.value() else {
             return;
         };
+        if self.batch_size_tune_cooldown_remaining > 0 {
+            self.batch_size_tune_cooldown_remaining -= 1;
+            return;
+        }
         if self.config.target_batch_eval_ms <= 0.0 || !self.config.target_batch_eval_ms.is_finite()
         {
             return;
@@ -889,10 +966,23 @@ where
         if current_eval_batch_ms <= 0.0 || !current_eval_batch_ms.is_finite() {
             return;
         }
-        let raw_ratio = self.config.target_batch_eval_ms / current_eval_batch_ms;
-        let ratio = raw_ratio.clamp(MAX_BATCH_SIZE_DOWN_FACTOR, MAX_BATCH_SIZE_UP_FACTOR);
+        let ratio = self.config.target_batch_eval_ms / current_eval_batch_ms;
+        if !ratio.is_finite() || ratio <= 0.0 {
+            return;
+        }
+        let deadband = self.sanitized_batch_size_deadband_ratio();
+        let lower = 1.0 - deadband;
+        let upper = 1.0 + deadband;
+        if ratio >= lower && ratio <= upper {
+            return;
+        }
         let next = ((self.batch_size_current as f64) * ratio).round() as usize;
-        self.batch_size_current = next.clamp(MIN_BATCH_SIZE, self.effective_max_batch_size());
+        let next = next.clamp(MIN_BATCH_SIZE, self.effective_max_batch_size());
+        if next == self.batch_size_current {
+            return;
+        }
+        self.batch_size_current = next;
+        self.batch_size_tune_cooldown_remaining = self.config.batch_size_cooldown_ticks;
     }
 
     fn local_insert_work_drained(&self) -> bool {
@@ -909,6 +999,33 @@ where
 
     fn effective_max_batch_size(&self) -> usize {
         self.config.max_batch_size.max(MIN_BATCH_SIZE)
+    }
+
+    fn sanitized_batch_size_deadband_ratio(&self) -> f64 {
+        let value = self.config.batch_size_deadband_ratio;
+        if !value.is_finite() || value < 0.0 {
+            DEFAULT_BATCH_SIZE_DEADBAND_RATIO
+        } else {
+            value.min(0.95)
+        }
+    }
+
+    fn sanitized_pending_refill_low_ratio(&self) -> f64 {
+        let value = self.config.pending_refill_low_ratio;
+        if !value.is_finite() || value < 0.0 {
+            DEFAULT_PENDING_REFILL_LOW_RATIO
+        } else {
+            value
+        }
+    }
+
+    fn sanitized_pending_refill_high_ratio(&self) -> f64 {
+        let value = self.config.pending_refill_high_ratio;
+        if !value.is_finite() || value < 0.0 {
+            DEFAULT_PENDING_REFILL_HIGH_RATIO
+        } else {
+            value
+        }
     }
 }
 
@@ -1431,6 +1548,10 @@ mod tests {
             SamplerQueueConfig {
                 queue_buffer: 1.0,
                 target_batch_eval_ms: 500.0,
+                batch_size_deadband_ratio: 0.15,
+                batch_size_cooldown_ticks: 3,
+                pending_refill_low_ratio: 0.85,
+                pending_refill_high_ratio: 1.15,
                 max_batch_size: 4096,
                 local_pending_buffer_multiplier: 1.0,
                 max_queue_size: 16,
@@ -1438,7 +1559,6 @@ mod tests {
                 max_insert_bundle_size: 1,
                 max_concurrent_insert_tasks: 2,
                 completed_batch_fetch_limit: 16,
-                strict_batch_ordering: true,
             },
             SamplerQueueCheckpoint::default(),
             128,
@@ -1487,6 +1607,10 @@ mod tests {
             SamplerQueueConfig {
                 queue_buffer: 1.0,
                 target_batch_eval_ms: 500.0,
+                batch_size_deadband_ratio: 0.15,
+                batch_size_cooldown_ticks: 3,
+                pending_refill_low_ratio: 0.85,
+                pending_refill_high_ratio: 1.15,
                 max_batch_size: 4096,
                 local_pending_buffer_multiplier: 1.0,
                 max_queue_size: 16,
@@ -1494,7 +1618,6 @@ mod tests {
                 max_insert_bundle_size: 1,
                 max_concurrent_insert_tasks: 2,
                 completed_batch_fetch_limit: 16,
-                strict_batch_ordering: true,
             },
             SamplerQueueCheckpoint::default(),
             128,

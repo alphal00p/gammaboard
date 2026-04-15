@@ -948,14 +948,17 @@ mod tests {
                 "queue": {
                     "queue_buffer": 1.0,
                     "target_batch_eval_ms": 200.0,
+                    "batch_size_deadband_ratio": 0.15,
+                    "batch_size_cooldown_ticks": 3,
+                    "pending_refill_low_ratio": 0.85,
+                    "pending_refill_high_ratio": 1.15,
                     "max_batch_size": 64,
                     "local_pending_buffer_multiplier": 1.0,
                     "max_queue_size": 128,
                     "max_batches_per_tick": 1,
                     "max_insert_bundle_size": 4,
                     "max_concurrent_insert_tasks": 1,
-                    "completed_batch_fetch_limit": 512,
-                    "strict_batch_ordering": true
+                    "completed_batch_fetch_limit": 512
                 }
             }
         });
@@ -996,14 +999,17 @@ mod tests {
                 "queue": {
                     "queue_buffer": 1.0,
                     "target_batch_eval_ms": 200.0,
+                    "batch_size_deadband_ratio": 0.15,
+                    "batch_size_cooldown_ticks": 3,
+                    "pending_refill_low_ratio": 0.85,
+                    "pending_refill_high_ratio": 1.15,
                     "max_batch_size": 64,
                     "local_pending_buffer_multiplier": 1.0,
                     "max_queue_size": 128,
                     "max_batches_per_tick": 1,
                     "max_insert_bundle_size": 4,
                     "max_concurrent_insert_tasks": 1,
-                    "completed_batch_fetch_limit": 512,
-                    "strict_batch_ordering": true
+                    "completed_batch_fetch_limit": 512
                 }
             }))
             .unwrap()
@@ -1044,14 +1050,17 @@ mod tests {
                     "queue": {
                         "queue_buffer": 1.0,
                         "target_batch_eval_ms": 200.0,
+                        "batch_size_deadband_ratio": 0.15,
+                        "batch_size_cooldown_ticks": 3,
+                        "pending_refill_low_ratio": 0.85,
+                        "pending_refill_high_ratio": 1.15,
                         "max_batch_size": 64,
                         "local_pending_buffer_multiplier": 1.0,
                         "max_queue_size": 128,
                         "max_batches_per_tick": 1,
                         "max_insert_bundle_size": 4,
                         "max_concurrent_insert_tasks": 1,
-                        "completed_batch_fetch_limit": 512,
-                        "strict_batch_ordering": true
+                        "completed_batch_fetch_limit": 512
                     }
                 }
             }),
@@ -1075,14 +1084,17 @@ mod tests {
                     "queue": {
                         "queue_buffer": 1.0,
                         "target_batch_eval_ms": 200.0,
+                        "batch_size_deadband_ratio": 0.15,
+                        "batch_size_cooldown_ticks": 3,
+                        "pending_refill_low_ratio": 0.85,
+                        "pending_refill_high_ratio": 1.15,
                         "max_batch_size": 64,
                         "local_pending_buffer_multiplier": 1.0,
                         "max_queue_size": 128,
                         "max_batches_per_tick": 1,
                         "max_insert_bundle_size": 4,
                         "max_concurrent_insert_tasks": 1,
-                        "completed_batch_fetch_limit": 512,
-                        "strict_batch_ordering": true
+                        "completed_batch_fetch_limit": 512
                     }
                 }
             }),

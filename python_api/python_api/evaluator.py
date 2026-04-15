@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Self
 
 from .types import ComplexOut, DiscreteBatch, RealBatch, RealOut
 
@@ -20,7 +20,9 @@ class ScalarBatchIntegrand(ABC):
 
     @classmethod
     @abstractmethod
-    def from_config(cls, *, discrete_dims: int, continuous_dims: int, init_args: dict[str, Any] | None):
+    def from_config(
+        cls, *, discrete_dims: int, continuous_dims: int, init_args: dict[str, Any] | None
+    ) -> Self:
         """Optional factory to construct a fresh integrand from configuration.
 
         Mirrors example integrand signatures. Implementations may validate dims and
@@ -51,7 +53,9 @@ class ComplexBatchIntegrand(ABC):
 
     @classmethod
     @abstractmethod
-    def from_config(cls, *, discrete_dims: int, continuous_dims: int, init_args: dict[str, Any] | None):
+    def from_config(
+        cls, *, discrete_dims: int, continuous_dims: int, init_args: dict[str, Any] | None
+    ) -> Self:
         """Optional factory to construct a fresh integrand from configuration.
 
         Mirrors example integrand signatures. Implementations may validate dims and

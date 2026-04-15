@@ -318,10 +318,10 @@ Evaluators use a fixed single-slot latent prefetch and single-slot async submit 
 `sampler_aggregator_runner_params` also controls queue and persistence behavior:
 - `frontend_sync_interval_ms` sets how often the sampler runner refreshes the frontend-facing observable state and persisted observable snapshots during sampling; the shared run default is `2000`.
 - Sampler queue settings live under the nested TOML table `[sampler_aggregator_runner_params.queue]`.
-- `target_batch_eval_ms` and `max_batch_size` are queue-level controls under `[sampler_aggregator_runner_params.queue]`; the queue owns batch-size tuning during production planning.
+- `target_batch_eval_ms`, `batch_size_deadband_ratio`, `batch_size_cooldown_ticks`, and `max_batch_size` are queue-level controls under `[sampler_aggregator_runner_params.queue]`; the queue owns batch-size tuning during production planning.
 - `queue_buffer` is the single queue buffer knob for the sampler queue. The runner targets about `queue_buffer * active_evaluator_count` pending batches. A value of `0.0` is the most aggressive and lets the queue drain to zero pending batches when the sampler cannot refill it faster than evaluators consume work. Larger values keep more pending work buffered. `max_queue_size` remains the hard cap.
+- Refill hysteresis is controlled with `pending_refill_low_ratio` and `pending_refill_high_ratio`. Production starts when pending drops to the low watermark and refills toward the high watermark.
 - Total open batches (`pending + claimed + completed`) are still capped by `max_queue_size`.
-- `strict_batch_ordering` controls whether completed batches are ingested only as a contiguous id prefix (`true`) or in any completed id order (`false`).
 - The sampler queue owns a local pending-insert buffer and a local processed buffer. Polling completed work is non-blocking during normal ticks, and pause/unassign drains the local queue fully before the sampler checkpoint is persisted.
 
 Deterministic scan tasks are supported:

@@ -193,6 +193,16 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
                     ctx.runner_params.queue.target_batch_eval_ms,
                 ),
                 key_value(
+                    "batch_size_deadband_ratio",
+                    "Batch Size Deadband Ratio",
+                    ctx.runner_params.queue.batch_size_deadband_ratio,
+                ),
+                key_value(
+                    "batch_size_cooldown_ticks",
+                    "Batch Size Cooldown (ticks)",
+                    ctx.runner_params.queue.batch_size_cooldown_ticks,
+                ),
+                key_value(
                     "max_queue_size",
                     "Max Open Batches",
                     ctx.runner_params.queue.max_queue_size,
@@ -218,9 +228,14 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
                     ctx.runner_params.queue.completed_batch_fetch_limit,
                 ),
                 key_value(
-                    "strict_batch_ordering",
-                    "Strict Batch Ordering",
-                    ctx.runner_params.queue.strict_batch_ordering,
+                    "pending_refill_low_ratio",
+                    "Pending Refill Low Ratio",
+                    ctx.runner_params.queue.pending_refill_low_ratio,
+                ),
+                key_value(
+                    "pending_refill_high_ratio",
+                    "Pending Refill High Ratio",
+                    ctx.runner_params.queue.pending_refill_high_ratio,
                 ),
                 key_value(
                     "snapshot_interval_ms",

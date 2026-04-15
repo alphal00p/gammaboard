@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Self
 
 from .types import Diagnostics, DiscreteBatch, RealBatch, RealOut, SamplePlan, Snapshot
 
@@ -87,8 +87,8 @@ class SamplerAggregator(ABC):
         snapshot: Snapshot,
         discrete_dims: int,
         continuous_dims: int,
-        init_args: dict | None = None,
-    ) -> "SamplerAggregator":
+        init_args: dict[str, Any] | None = None,
+    ) -> Self:
         """Factory to restore an instance from a snapshot produced by snapshot().
 
         Args:
@@ -108,8 +108,8 @@ class SamplerAggregator(ABC):
         *,
         discrete_dims: int,
         continuous_dims: int,
-        init_args: dict | None = None,
-    ) -> "SamplerAggregator":
+        init_args: dict[str, Any] | None = None,
+    ) -> Self:
         """Factory to construct a fresh sampler from configuration.
 
         This mirrors example samplers' from_config signature. init_args is the
@@ -121,7 +121,9 @@ class SamplerAggregator(ABC):
         """Optional runtime diagnostics. Empty dict means no diagnostics available."""
         return {}
 
-    def pdf(self, xs_discrete: DiscreteBatch, xs_continuous: RealBatch) -> RealOut | None:
+    def pdf(
+        self, xs_discrete: DiscreteBatch, xs_continuous: RealBatch
+    ) -> RealOut | None:
         """Return per-sample PDF values if supported.
 
         Return a float64 array with shape (nr_samples,) or None to signal that

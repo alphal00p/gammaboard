@@ -599,6 +599,11 @@ fn sampler_current_panels(
                     "Eval Us / Sample",
                     runtime.sampler.eval_ms_per_sample.mean.map(ms_to_us),
                 ),
+                key_value(
+                    "batch_size_current",
+                    "Current Batch Size",
+                    runtime.batch_size_current,
+                ),
             ],
         ),
         tick_breakdown_panel(
