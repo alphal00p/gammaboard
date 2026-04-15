@@ -1,9 +1,9 @@
 use crate::core::SamplerPerformanceMetrics;
 use crate::evaluation::ObservableState;
 use crate::stores::{
-    EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress,
-    RuntimeLogEntry, RuntimeLogPage, SamplerPerformanceHistoryEntry, TaskOutputSnapshot,
-    TaskStageSnapshot, WorkQueueStats,
+    EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress, RuntimeLogEntry,
+    RuntimeLogPage, SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot,
+    WorkQueueStats,
 };
 use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;

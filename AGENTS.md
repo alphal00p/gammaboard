@@ -124,6 +124,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 
 ## Logging And Read APIs
 - Runtime logs are persisted through the tracing pipeline into PostgreSQL.
+- CLI console output should stay minimal and operator-focused; recurring runtime diagnostics should go to persisted runtime logs, not tracing `fmt` spam.
 - Worker performance history is append-only, and dashboard "latest" performance reads should come from dedicated latest tables maintained on write, not recomputed latest-per-worker views over history.
 - The global `/nodes` list is a lightweight summary read; do not join per-worker metrics into the hot polling list query. Load worker metrics/details only for focused views.
 - Run read APIs should keep `batches` as the source of truth; when batch aggregation is expensive, prefer scoped multi-query reads over duplicated persisted queue counters.

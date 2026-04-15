@@ -184,11 +184,7 @@ const fitHistogramXDomain = (bins) => {
 };
 
 const FULL_ZOOM = Object.freeze({ start: 0, end: 100 });
-const SHARED_HISTORY_X_VIEW_PANEL_IDS = new Set([
-  "real_estimate_history",
-  "imag_estimate_history",
-  "abs_signal_to_noise_history",
-]);
+const isSharedHistoryXPanelId = (panelId) => String(panelId || "").includes("_history");
 const inferXAxisLabel = (panelId) => (String(panelId || "").includes("_history") ? "Nr samples" : null);
 const inferNumericXAxisLabel = (panelId) => inferXAxisLabel(panelId) || "x";
 const TIMESTAMP_X_THRESHOLD_MS = 1e11;
@@ -744,18 +740,29 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
   const xDomain = fitXDomain(data.map((row) => row.x));
   const panelId = state?.panel_id || null;
   const zoomRange = readZoomFromPanelValue(value, FULL_ZOOM);
+  const isHistoryPanel = useMemo(() => String(panelId || "").includes("_history"), [panelId]);
+  const tailPinned = readTailPinnedFromPanelValue(value, isHistoryPanel);
   const usesTimestampXAxis = useMemo(() => isTimestampDomain(xDomain), [xDomain]);
   const xAxisOriginMs = useMemo(() => (usesTimestampXAxis ? Number(xDomain[0]) : 0), [usesTimestampXAxis, xDomain]);
+  useEffect(() => {
+    if (!isHistoryPanel || !tailPinned || typeof onValueChange !== "function" || !panelId) return;
+    const normalized = normalizeZoomRange(zoomRange) || FULL_ZOOM;
+    const width = Math.max(0, normalized.end - normalized.start);
+    const next = { start: Math.max(0, 100 - width), end: 100 };
+    if (!zoomRangeChanged(normalized, next)) return;
+    onValueChange(panelId, writeZoomPanelValue(value, next, true), false);
+  }, [isHistoryPanel, onValueChange, panelId, data.length, tailPinned, value, zoomRange]);
   const onDataZoom = useMemo(
     () => ({
       datazoom: (event) => {
         const next = readDataZoomRange(event);
         if (!next || typeof onValueChange !== "function" || !panelId) return;
-        if (!zoomRangeChanged(zoomRange, next)) return;
-        onValueChange(panelId, writeZoomPanelValue(value, next), false);
+        const nextTailPinned = next.end >= 99.5;
+        if (!zoomRangeChanged(zoomRange, next) && (!isHistoryPanel || tailPinned === nextTailPinned)) return;
+        onValueChange(panelId, writeZoomPanelValue(value, next, isHistoryPanel ? nextTailPinned : null), false);
       },
     }),
-    [onValueChange, panelId, value, zoomRange],
+    [isHistoryPanel, onValueChange, panelId, tailPinned, value, zoomRange],
   );
   const option = useMemo(
     () => ({
@@ -821,7 +828,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
             echartsRef={echartsRef}
             onResetView={
               panelId && typeof onValueChange === "function"
-                ? () => onValueChange(panelId, writeZoomPanelValue(value, FULL_ZOOM), false)
+                ? () => onValueChange(panelId, writeZoomPanelValue(value, FULL_ZOOM, isHistoryPanel ? true : null), false)
                 : null
             }
           />
@@ -2484,7 +2491,7 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
   const handlePanelValueChange = useCallback(
     (panelId, nextValue, shouldTriggerPoll = true) => {
       if (typeof onPanelValueChange !== "function") return;
-      if (!SHARED_HISTORY_X_VIEW_PANEL_IDS.has(panelId)) {
+      if (!isSharedHistoryXPanelId(panelId)) {
         onPanelValueChange(panelId, nextValue, shouldTriggerPoll);
         return;
       }
@@ -2495,7 +2502,7 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
       }
       const targetIds = asArray(panelSpecs)
         .map((spec) => spec?.panel_id)
-        .filter((id) => typeof id === "string" && SHARED_HISTORY_X_VIEW_PANEL_IDS.has(id));
+        .filter((id) => typeof id === "string" && isSharedHistoryXPanelId(id));
       if (targetIds.length <= 1) {
         onPanelValueChange(panelId, nextValue, shouldTriggerPoll);
         return;

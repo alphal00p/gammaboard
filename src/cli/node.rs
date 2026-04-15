@@ -82,17 +82,14 @@ pub async fn run_node_commands(
                     let run = resolve_run_ref(&store, &run).await?;
                     let assigned =
                         node_api::assign_node(&store, &node_name, run.run_id, role.into()).await?;
-                    tracing::info!(
+                    println!(
                         "assigned node={} role={} run_id={} run_name={}",
-                        assigned.node_name,
-                        assigned.role,
-                        assigned.run_id,
-                        assigned.run_name
+                        assigned.node_name, assigned.role, assigned.run_id, assigned.run_name
                     );
                 }
                 NodeCommand::Unassign { node_name } => {
                     node_api::unassign_node(&store, &node_name).await?;
-                    tracing::info!("unassigned node={}", node_name);
+                    println!("unassigned node={}", node_name);
                 }
                 NodeCommand::List { node_name } => {
                     let nodes = store.list_nodes(node_name.as_deref()).await?;
@@ -120,6 +117,10 @@ fn node_command_name(command: &NodeCommand) -> &'static str {
 
 async fn run_node(args: NodeRunArgs, config: &RuntimeConfig, quiet: bool) -> Result<()> {
     let node_name = args.name.clone();
+    println!(
+        "starting node runner: name={} max_start_failures={}",
+        node_name, args.max_start_failures
+    );
     let span = tracing::span!(
         tracing::Level::TRACE,
         "node-run",
@@ -173,32 +174,32 @@ async fn run_auto_run_command(
         let name = node_name.clone();
         std::thread::spawn(move || match child.wait() {
             Ok(status) if !status.success() => {
-                tracing::warn!(
-                    node_name = %name,
-                    exit_status = %status,
-                    stdout_log = %stdout_log_path.display(),
-                    stderr_log = %stderr_log_path.display(),
-                    "spawned node process exited unsuccessfully"
+                eprintln!(
+                    "spawned node process exited unsuccessfully: node_name={} exit_status={} stdout_log={} stderr_log={}",
+                    name,
+                    status,
+                    stdout_log_path.display(),
+                    stderr_log_path.display()
                 );
             }
             Ok(_) => {}
             Err(err) => {
-                tracing::warn!(
-                    node_name = %name,
-                    error = %err,
-                    stdout_log = %stdout_log_path.display(),
-                    stderr_log = %stderr_log_path.display(),
-                    "spawned node process wait failed"
+                eprintln!(
+                    "spawned node process wait failed: node_name={} error={} stdout_log={} stderr_log={}",
+                    name,
+                    err,
+                    stdout_log_path.display(),
+                    stderr_log_path.display()
                 );
             }
         });
     }
 
-    tracing::info!(
-        requested = planned.requested_count,
-        started = planned.node_names.len(),
-        node_names = ?planned.node_names,
-        "started node processes"
+    println!(
+        "started node processes: requested={} started={} node_names={}",
+        planned.requested_count,
+        planned.node_names.len(),
+        planned.node_names.join(",")
     );
     Ok(())
 }
@@ -215,16 +216,15 @@ fn node_process_log_paths(node_name: &str) -> Result<(PathBuf, PathBuf)> {
 async fn stop_nodes(store: &PgStore, selection: NodeSelection) -> Result<()> {
     if selection.all {
         let rows = store.request_all_nodes_shutdown().await?;
-        tracing::info!("requested shutdown for all nodes: rows_updated={rows}");
+        println!("requested shutdown for all nodes: rows_updated={rows}");
         return Ok(());
     }
 
     for node_name in selection.node_names {
         let stopped = node_api::stop_node(store, &node_name).await?;
-        tracing::info!(
+        println!(
             "requested shutdown for node={}: rows_updated={}",
-            stopped.node_name,
-            stopped.rows_updated
+            stopped.node_name, stopped.rows_updated
         );
     }
     Ok(())

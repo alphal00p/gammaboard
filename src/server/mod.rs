@@ -121,6 +121,8 @@ pub async fn serve(
 
     let app = build_app(state);
 
+    println!("server listening on http://{}", bind);
+    println!("api available at http://{}/api", bind);
     tracing::info!("server listening on http://{}", bind);
     tracing::info!("api available at http://{}/api", bind);
 

@@ -89,17 +89,12 @@ fn run_command_name(command: &RunCommand) -> &'static str {
 
 async fn run_add(store: &PgStore, config_file: &PathBuf) -> Result<()> {
     let config = run_api::load_run_add_config_file(config_file).map_err(api_to_anyhow)?;
-    let run_name = config.name.clone();
-    tracing::info!(run = %run_name, "run-add preflight started");
-    let created = run_api::create_run(store, config).await.map_err(|err| {
-        tracing::info!(run = %run_name, error = %err, "run-add preflight failed");
-        api_to_anyhow(err)
-    })?;
-    tracing::info!(run = %run_name, "run-add preflight finished");
-    tracing::info!(
+    let created = run_api::create_run(store, config)
+        .await
+        .map_err(api_to_anyhow)?;
+    println!(
         "created run_id={} name={}",
-        created.run_id,
-        created.run_name
+        created.run_id, created.run_name
     );
     Ok(())
 }
@@ -115,13 +110,13 @@ async fn clone_run(
         .await
         .map_err(api_to_anyhow)?;
 
-    tracing::info!(
-        run_id = cloned.run_id,
-        new_name = cloned.run_name,
-        source_run_id = cloned.source_run_id,
-        from_snapshot_id = cloned.from_snapshot_id,
-        cloned_tasks = cloned.cloned_tasks,
-        "cloned run"
+    println!(
+        "cloned run_id={} name={} from run_id={} snapshot_id={} copied_tasks={}",
+        cloned.run_id,
+        cloned.run_name,
+        cloned.source_run_id,
+        cloned.from_snapshot_id,
+        cloned.cloned_tasks
     );
     Ok(())
 }
@@ -138,7 +133,7 @@ async fn list_runs(store: &PgStore, run_name: Option<&str>) -> Result<()> {
 async fn pause_runs(store: &PgStore, selection: RunSelection) -> Result<()> {
     if selection.all {
         let assignments_cleared = store.clear_all_desired_assignments().await?;
-        tracing::info!("paused all runs: assignments_cleared={assignments_cleared}");
+        println!("paused all runs: assignments_cleared={assignments_cleared}");
         return Ok(());
     }
 
@@ -147,11 +142,9 @@ async fn pause_runs(store: &PgStore, selection: RunSelection) -> Result<()> {
             .await
             .map_err(api_to_anyhow)?
             .assignments_cleared;
-        tracing::info!(
+        println!(
             "run {} ({}) paused assignments_cleared={}",
-            run.run_id,
-            run.run_name,
-            assignments_cleared
+            run.run_id, run.run_name, assignments_cleared
         );
     }
     Ok(())
@@ -167,7 +160,7 @@ async fn remove_runs(store: &PgStore, selection: RunSelection) -> Result<()> {
                 .map_err(api_to_anyhow)?;
             removed += 1;
         }
-        tracing::info!("removed all runs: removed={removed}");
+        println!("removed all runs: removed={removed}");
         return Ok(());
     }
 
@@ -175,7 +168,7 @@ async fn remove_runs(store: &PgStore, selection: RunSelection) -> Result<()> {
         run_api::remove_run(store, run.run_id)
             .await
             .map_err(api_to_anyhow)?;
-        tracing::info!("removed run {} ({})", run.run_id, run.run_name);
+        println!("removed run {} ({})", run.run_id, run.run_name);
     }
     Ok(())
 }
@@ -192,38 +185,40 @@ async fn run_task_command(store: &PgStore, command: TaskCommand) -> Result<()> {
             )
             .await
             .map_err(api_to_anyhow)?;
-            tracing::info!(
-                run_id,
-                tasks_added = inserted.tasks.len(),
-                "appended run tasks"
+            println!(
+                "appended run tasks: run_id={run_id} count={}",
+                inserted.tasks.len()
             );
         }
         TaskCommand::List { run } => {
             let run = resolve_run_ref(store, &run).await?;
             let run_id = run.run_id;
             let tasks = store.list_run_tasks(run_id).await?;
+            if tasks.is_empty() {
+                println!("no tasks found for run_id={run_id}");
+            }
             for task in tasks {
-                tracing::info!(
-                    run_id = task.run_id,
-                    task_id = task.id,
-                    task_name = task.name,
-                    state = task.state.as_str(),
-                    kind = task.task.kind_str(),
-                    nr_produced_samples = task.nr_produced_samples,
-                    nr_completed_samples = task.nr_completed_samples,
-                    sampler_source = format_task_source_ref(
+                println!(
+                    "run_id={} task_id={} name={} state={} kind={} produced={} completed={} sampler_source={} observable_source={} spawned_from={} failure_reason={}",
+                    task.run_id,
+                    task.id,
+                    task.name,
+                    task.state.as_str(),
+                    task.task.kind_str(),
+                    task.nr_produced_samples,
+                    task.nr_completed_samples,
+                    format_task_source_ref(
                         &task.task,
                         task.task.sample_sampler_source(),
                         task.task.sample_sampler_config().is_some(),
                     ),
-                    observable_source = format_task_source_ref(
+                    format_task_source_ref(
                         &task.task,
                         task.task.sample_observable_source(),
                         task.task.new_observable_config().ok().flatten().is_some(),
                     ),
-                    spawned_from = format_task_snapshot_origin(task.spawned_from_snapshot_id),
-                    failure_reason = task.failure_reason.as_deref().unwrap_or(""),
-                    "run task"
+                    format_task_snapshot_origin(task.spawned_from_snapshot_id),
+                    task.failure_reason.as_deref().unwrap_or("")
                 );
             }
         }
@@ -233,7 +228,7 @@ async fn run_task_command(store: &PgStore, command: TaskCommand) -> Result<()> {
             run_api::remove_pending_task(store, run_id, task_id)
                 .await
                 .map_err(api_to_anyhow)?;
-            tracing::info!(run_id, task_id, "removed pending run task");
+            println!("removed pending run task: run_id={run_id} task_id={task_id}");
         }
     }
     Ok(())

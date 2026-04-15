@@ -95,16 +95,10 @@ impl SpanLevelPolicy {
     }
 
     fn fmt_from_quiet(quiet: bool) -> Self {
-        if quiet {
-            Self {
-                gammaboard: Some(LevelFilter::WARN),
-                external: Some(LevelFilter::WARN),
-            }
-        } else {
-            Self {
-                gammaboard: Some(LevelFilter::INFO),
-                external: Some(LevelFilter::WARN),
-            }
+        let _ = quiet;
+        Self {
+            gammaboard: Some(LevelFilter::ERROR),
+            external: Some(LevelFilter::ERROR),
         }
     }
 

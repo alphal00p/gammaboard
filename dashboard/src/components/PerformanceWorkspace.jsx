@@ -1,5 +1,5 @@
 import { Alert, FormControl, InputLabel, MenuItem, Select, Stack } from "@mui/material";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import ConnectionStatus from "./ConnectionStatus";
 import EmptyStateCard from "./common/EmptyStateCard";
 import PanelCollection from "./panels/PanelCollection";
@@ -8,6 +8,33 @@ import { useRunPerformancePanels } from "../hooks/useRunPerformancePanels";
 import { asArray } from "../utils/collections";
 
 const evaluatorNodeNameFor = (worker) => worker?.node_name ?? null;
+const asObject = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : {});
+const isSharedHistoryPanelId = (panelId) => String(panelId || "").includes("_history");
+const normalizeZoomRange = (candidate) => {
+  const start = Number(candidate?.start);
+  const end = Number(candidate?.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  const normalizedStart = Math.max(0, Math.min(100, start));
+  const normalizedEnd = Math.max(0, Math.min(100, end));
+  if (normalizedEnd < normalizedStart) return { start: normalizedEnd, end: normalizedStart };
+  return { start: normalizedStart, end: normalizedEnd };
+};
+const extractSharedHistoryView = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const zoom = normalizeZoomRange(value.zoom);
+  const hasTailPinned = typeof value.tailPinned === "boolean";
+  if (!zoom && !hasTailPinned) return null;
+  const shared = {};
+  if (zoom) shared.zoom = zoom;
+  if (hasTailPinned) shared.tailPinned = value.tailPinned;
+  return shared;
+};
+const mergeSharedHistoryView = (current, sharedView) => {
+  const next = asObject(current) ? { ...current } : {};
+  if (sharedView.zoom) next.zoom = sharedView.zoom;
+  if ("tailPinned" in sharedView) next.tailPinned = sharedView.tailPinned;
+  return next;
+};
 
 const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isConnected }) => {
   const runWorkers = useMemo(
@@ -21,6 +48,7 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
     [selectedRun, workers],
   );
   const [selectedEvaluatorNodeName, setSelectedEvaluatorNodeName] = useState(null);
+  const [panelValues, setPanelValues] = useState({});
 
   useEffect(() => {
     if (runWorkers.length === 0) {
@@ -43,6 +71,65 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
     pollMs: 5000,
   });
 
+  useEffect(() => {
+    setPanelValues({});
+  }, [selectedRun, selectedEvaluatorNodeName]);
+
+  const knownPanelIds = useMemo(
+    () =>
+      [
+        ...asArray(sampler?.panelSpecs).map((spec) => spec?.panel_id),
+        ...asArray(runEvaluator?.panelSpecs).map((spec) => spec?.panel_id),
+        ...asArray(evaluator?.panelSpecs).map((spec) => spec?.panel_id),
+      ].filter((id) => typeof id === "string"),
+    [evaluator?.panelSpecs, runEvaluator?.panelSpecs, sampler?.panelSpecs],
+  );
+
+  useEffect(() => {
+    setPanelValues((previous) => {
+      const next = {};
+      let changed = false;
+      for (const panelId of knownPanelIds) {
+        if (panelId in previous) {
+          next[panelId] = previous[panelId];
+        }
+      }
+      if (Object.keys(next).length !== Object.keys(previous).length) changed = true;
+      return changed ? next : previous;
+    });
+  }, [knownPanelIds]);
+
+  const handlePanelValueChange = useCallback((panelId, nextValue) => {
+    setPanelValues((previous) => {
+      if (!isSharedHistoryPanelId(panelId)) {
+        return {
+          ...previous,
+          [panelId]: nextValue,
+        };
+      }
+      const sharedView = extractSharedHistoryView(nextValue);
+      if (!sharedView) {
+        return {
+          ...previous,
+          [panelId]: nextValue,
+        };
+      }
+      const targetIds = knownPanelIds.filter((id) => isSharedHistoryPanelId(id));
+      if (targetIds.length <= 1) {
+        return {
+          ...previous,
+          [panelId]: nextValue,
+        };
+      }
+      const merged = { ...previous };
+      targetIds.forEach((targetId) => {
+        const sourceValue = targetId === panelId ? nextValue : previous[targetId];
+        merged[targetId] = mergeSharedHistoryView(sourceValue, sharedView);
+      });
+      return merged;
+    });
+  }, [knownPanelIds]);
+
   return (
     <RunScopedWorkspace
       runs={runs}
@@ -56,7 +143,13 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
       {selectedRun == null ? null : (
         <Stack spacing={2}>
           {sampler?.sourceId ? (
-            <PanelCollection title="Run Throughput" panelSpecs={sampler.panelSpecs} panelStates={sampler.panelStates} />
+            <PanelCollection
+              title="Run Throughput"
+              panelSpecs={sampler.panelSpecs}
+              panelStates={sampler.panelStates}
+              panelValues={panelValues}
+              onPanelValueChange={handlePanelValueChange}
+            />
           ) : (
             <EmptyStateCard
               title="No run performance snapshots"
@@ -68,6 +161,8 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
               title="Evaluator Summary"
               panelSpecs={runEvaluator.panelSpecs}
               panelStates={runEvaluator.panelStates}
+              panelValues={panelValues}
+              onPanelValueChange={handlePanelValueChange}
             />
           ) : null}
           <FormControl size="small" sx={{ maxWidth: 320 }}>
@@ -95,6 +190,8 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
               title={`Evaluator ${selectedEvaluatorNodeName}`}
               panelSpecs={evaluator.panelSpecs}
               panelStates={evaluator.panelStates}
+              panelValues={panelValues}
+              onPanelValueChange={handlePanelValueChange}
             />
           ) : (
             <EmptyStateCard

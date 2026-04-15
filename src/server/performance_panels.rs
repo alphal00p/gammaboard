@@ -214,6 +214,12 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
 }
 
 fn evaluator_current_panels(entry: &EvaluatorPerformanceHistoryEntry) -> Vec<PanelState> {
+    let fetch_sync_ms = evaluator_fetch_sync_ms(&entry.metrics);
+    let runner_sync_overhead_ms = evaluator_runner_sync_overhead_ms(&entry.metrics);
+    let runner_wait_overhead_ms = evaluator_runner_wait_overhead_ms(&entry.metrics);
+    let runner_total_overhead_ms = runner_sync_overhead_ms + runner_wait_overhead_ms;
+    let pipeline_total_ms = evaluator_pipeline_total_ms(&entry.metrics);
+
     vec![
         tick_breakdown_panel(
             "evaluator_tick_breakdown",
@@ -236,8 +242,13 @@ fn evaluator_current_panels(entry: &EvaluatorPerformanceHistoryEntry) -> Vec<Pan
                 ),
                 key_value(
                     "avg_total_time_us",
-                    "Avg Total Per Sample (us)",
+                    "Avg Eval+Materialize Per Sample (us)",
                     ms_to_us(entry.metrics.avg_time_per_sample_ms),
+                ),
+                key_value(
+                    "avg_pipeline_total_time_us",
+                    "Avg Pipeline End-To-End Per Sample (us)",
+                    ms_to_us(pipeline_total_ms),
                 ),
                 key_value(
                     "prefetch_hit_ratio",
@@ -275,8 +286,13 @@ fn evaluator_current_panels(entry: &EvaluatorPerformanceHistoryEntry) -> Vec<Pan
             vec![
                 key_value(
                     "avg_fetch_decode_time_us",
-                    "Fetch+Decode Per Sample (us)",
+                    "Fetch+Decode Total Per Sample (us)",
                     ms_to_us(entry.metrics.avg_fetch_time_per_sample_ms),
+                ),
+                key_value(
+                    "avg_fetch_decode_sync_time_us",
+                    "Fetch+Decode (sync) Per Sample (us)",
+                    ms_to_us(fetch_sync_ms),
                 ),
                 key_value(
                     "avg_fetch_stall_time_us",
@@ -290,13 +306,33 @@ fn evaluator_current_panels(entry: &EvaluatorPerformanceHistoryEntry) -> Vec<Pan
                 ),
                 key_value(
                     "avg_evaluate_time_us",
-                    "Evaluate Per Sample (us)",
+                    "Evaluate Engine Per Sample (us)",
                     ms_to_us(entry.metrics.avg_evaluate_time_per_sample_ms),
+                ),
+                key_value(
+                    "std_evaluate_time_us",
+                    "Evaluate Engine StdDev Per Sample (us)",
+                    ms_to_us(entry.metrics.std_evaluate_time_per_sample_ms),
                 ),
                 key_value(
                     "avg_submit_time_us",
                     "Submit Per Sample (us)",
                     ms_to_us(entry.metrics.avg_submit_time_per_sample_ms),
+                ),
+                key_value(
+                    "std_fetch_decode_time_us",
+                    "Fetch+Decode StdDev Per Sample (us)",
+                    ms_to_us(entry.metrics.std_fetch_time_per_sample_ms),
+                ),
+                key_value(
+                    "std_materialization_time_us",
+                    "Materialization StdDev Per Sample (us)",
+                    ms_to_us(entry.metrics.std_materialization_time_per_sample_ms),
+                ),
+                key_value(
+                    "std_submit_time_us",
+                    "Submit StdDev Per Sample (us)",
+                    ms_to_us(entry.metrics.std_submit_time_per_sample_ms),
                 ),
                 key_value(
                     "avg_submit_stall_time_us",
@@ -307,6 +343,21 @@ fn evaluator_current_panels(entry: &EvaluatorPerformanceHistoryEntry) -> Vec<Pan
                     "submit_slot_hit_ratio",
                     "Submit Slot Hit Ratio",
                     entry.metrics.submit_slot_hit_ratio,
+                ),
+                key_value(
+                    "avg_runner_sync_overhead_time_us",
+                    "Runner Sync Overhead Per Sample (us)",
+                    ms_to_us(runner_sync_overhead_ms),
+                ),
+                key_value(
+                    "avg_runner_wait_overhead_time_us",
+                    "Runner Wait Overhead Per Sample (us)",
+                    ms_to_us(runner_wait_overhead_ms),
+                ),
+                key_value(
+                    "avg_runner_total_overhead_time_us",
+                    "Runner Total Overhead Per Sample (us)",
+                    ms_to_us(runner_total_overhead_ms),
                 ),
             ],
         ),
@@ -325,8 +376,13 @@ fn evaluator_summary_panel(entries: &[EvaluatorPerformanceHistoryEntry]) -> Pane
             ),
             key_value(
                 "avg_total_time_us",
-                "Avg Total Per Sample (us)",
+                "Avg Eval+Materialize Per Sample (us)",
                 summary.avg_total_time_per_sample_ms.map(ms_to_us),
+            ),
+            key_value(
+                "avg_pipeline_total_time_us",
+                "Avg Pipeline End-To-End Per Sample (us)",
+                summary.avg_pipeline_total_time_per_sample_ms.map(ms_to_us),
             ),
             key_value(
                 "avg_fetch_stall_time_us",
@@ -347,6 +403,13 @@ fn evaluator_summary_panel(entries: &[EvaluatorPerformanceHistoryEntry]) -> Pane
                 "avg_submit_time_us",
                 "Avg Submit Per Sample (us)",
                 summary.avg_submit_time_per_sample_ms.map(ms_to_us),
+            ),
+            key_value(
+                "avg_runner_overhead_time_us",
+                "Avg Runner Total Overhead Per Sample (us)",
+                summary
+                    .avg_runner_total_overhead_per_sample_ms
+                    .map(ms_to_us),
             ),
             key_value(
                 "avg_prefetch_hit_ratio",
@@ -370,12 +433,14 @@ fn evaluator_summary_panel(entries: &[EvaluatorPerformanceHistoryEntry]) -> Pane
 struct EvaluatorSummary {
     evaluator_count: usize,
     avg_total_time_per_sample_ms: Option<f64>,
+    avg_pipeline_total_time_per_sample_ms: Option<f64>,
     avg_fetch_stall_time_per_sample_ms: Option<f64>,
     avg_prefetch_hit_ratio: Option<f64>,
     avg_queue_starvation_ratio: Option<f64>,
     avg_materialization_time_per_sample_ms: Option<f64>,
     avg_evaluate_time_per_sample_ms: Option<f64>,
     avg_submit_time_per_sample_ms: Option<f64>,
+    avg_runner_total_overhead_per_sample_ms: Option<f64>,
     avg_evaluator_utilization: Option<f64>,
 }
 
@@ -392,33 +457,39 @@ fn summarize_evaluator_metrics(entries: &[EvaluatorPerformanceHistoryEntry]) -> 
         return EvaluatorSummary {
             evaluator_count: 0,
             avg_total_time_per_sample_ms: None,
+            avg_pipeline_total_time_per_sample_ms: None,
             avg_fetch_stall_time_per_sample_ms: None,
             avg_prefetch_hit_ratio: None,
             avg_queue_starvation_ratio: None,
             avg_materialization_time_per_sample_ms: None,
             avg_evaluate_time_per_sample_ms: None,
             avg_submit_time_per_sample_ms: None,
+            avg_runner_total_overhead_per_sample_ms: None,
             avg_evaluator_utilization: None,
         };
     }
 
     let mut total_sum = 0.0;
+    let mut pipeline_total_sum = 0.0;
     let mut fetch_stall_sum = 0.0;
     let mut prefetch_hit_sum = 0.0;
     let mut queue_starvation_ratio_sum = 0.0;
     let mut materialization_sum = 0.0;
     let mut evaluate_sum = 0.0;
     let mut submit_sum = 0.0;
+    let mut runner_overhead_sum = 0.0;
     let mut utilization_sum = 0.0;
     let mut utilization_count = 0usize;
     for metrics in latest_by_worker.values() {
         total_sum += metrics.avg_time_per_sample_ms;
+        pipeline_total_sum += evaluator_pipeline_total_ms(metrics);
         fetch_stall_sum += metrics.avg_fetch_stall_time_per_sample_ms;
         prefetch_hit_sum += metrics.prefetch_hit_ratio;
         queue_starvation_ratio_sum += metrics.queue_starvation_ratio;
         materialization_sum += metrics.avg_materialization_time_per_sample_ms;
         evaluate_sum += metrics.avg_evaluate_time_per_sample_ms;
         submit_sum += metrics.avg_submit_time_per_sample_ms;
+        runner_overhead_sum += evaluator_runner_total_overhead_ms(metrics);
         if let Some(idle_ratio) = metrics
             .idle_profile
             .as_ref()
@@ -433,12 +504,14 @@ fn summarize_evaluator_metrics(entries: &[EvaluatorPerformanceHistoryEntry]) -> 
     EvaluatorSummary {
         evaluator_count: count,
         avg_total_time_per_sample_ms: Some(total_sum / count_f64),
+        avg_pipeline_total_time_per_sample_ms: Some(pipeline_total_sum / count_f64),
         avg_fetch_stall_time_per_sample_ms: Some(fetch_stall_sum / count_f64),
         avg_prefetch_hit_ratio: Some(prefetch_hit_sum / count_f64),
         avg_queue_starvation_ratio: Some(queue_starvation_ratio_sum / count_f64),
         avg_materialization_time_per_sample_ms: Some(materialization_sum / count_f64),
         avg_evaluate_time_per_sample_ms: Some(evaluate_sum / count_f64),
         avg_submit_time_per_sample_ms: Some(submit_sum / count_f64),
+        avg_runner_total_overhead_per_sample_ms: Some(runner_overhead_sum / count_f64),
         avg_evaluator_utilization: (utilization_count > 0)
             .then_some(utilization_sum / utilization_count as f64),
     }
@@ -999,6 +1072,29 @@ fn ms_to_us(value_ms: f64) -> f64 {
     value_ms * 1000.0
 }
 
+fn evaluator_fetch_sync_ms(metrics: &EvaluatorPerformanceMetrics) -> f64 {
+    (metrics.avg_fetch_time_per_sample_ms - metrics.avg_fetch_stall_time_per_sample_ms).max(0.0)
+}
+
+fn evaluator_runner_sync_overhead_ms(metrics: &EvaluatorPerformanceMetrics) -> f64 {
+    evaluator_fetch_sync_ms(metrics)
+        + metrics.avg_materialization_time_per_sample_ms.max(0.0)
+        + metrics.avg_submit_time_per_sample_ms.max(0.0)
+}
+
+fn evaluator_runner_wait_overhead_ms(metrics: &EvaluatorPerformanceMetrics) -> f64 {
+    metrics.avg_fetch_stall_time_per_sample_ms.max(0.0)
+        + metrics.avg_submit_stall_time_per_sample_ms.max(0.0)
+}
+
+fn evaluator_runner_total_overhead_ms(metrics: &EvaluatorPerformanceMetrics) -> f64 {
+    evaluator_runner_sync_overhead_ms(metrics) + evaluator_runner_wait_overhead_ms(metrics)
+}
+
+fn evaluator_pipeline_total_ms(metrics: &EvaluatorPerformanceMetrics) -> f64 {
+    metrics.avg_evaluate_time_per_sample_ms.max(0.0) + evaluator_runner_total_overhead_ms(metrics)
+}
+
 fn segment(key: &str, label: &str, value_ms: f64, color: &str) -> TickBreakdownSegment {
     TickBreakdownSegment {
         key: key.to_string(),
@@ -1009,9 +1105,7 @@ fn segment(key: &str, label: &str, value_ms: f64, color: &str) -> TickBreakdownS
 }
 
 fn evaluator_tick_segments(metrics: &EvaluatorPerformanceMetrics) -> Vec<TickBreakdownSegment> {
-    let fetch_sync_ms = (metrics.avg_fetch_time_per_sample_ms
-        - metrics.avg_fetch_stall_time_per_sample_ms)
-        .max(0.0);
+    let fetch_sync_ms = evaluator_fetch_sync_ms(metrics);
     [
         segment(
             "fetch_decode",

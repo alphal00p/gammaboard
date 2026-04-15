@@ -62,14 +62,16 @@ pub async fn run_auto_assign_command(
             assigned_evaluators.push(node_name);
         }
 
-        tracing::info!(
-            run_id = run.run_id,
-            run_name = run.run_name,
+        println!(
+            "auto-assign completed: run_id={} run_name={} sampler_already_assigned={} assigned_sampler={} assigned_evaluators={} requested_evaluator_limit={}",
+            run.run_id,
+            run.run_name,
             sampler_already_assigned,
-            assigned_sampler = assigned_sampler.as_deref().unwrap_or("none"),
-            assigned_evaluators = assigned_evaluators.len(),
-            requested_evaluator_limit = args.max_evaluators,
-            "auto-assign completed"
+            assigned_sampler.as_deref().unwrap_or("none"),
+            assigned_evaluators.len(),
+            args.max_evaluators
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string())
         );
         Ok(())
     })

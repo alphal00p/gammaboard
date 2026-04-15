@@ -931,9 +931,8 @@ mod tests {
     use crate::evaluation::{Batch, Point};
     use crate::sampling::{LatentBatchPayload, LatentBatchSpec};
     use crate::stores::{
-        EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress,
+        EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress, RuntimeLogPage,
         SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot, WorkQueueStats,
-        RuntimeLogPage,
     };
     use crate::utils::domain::Domain;
     use async_trait::async_trait;
