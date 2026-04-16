@@ -54,12 +54,17 @@ const QueueTuningPanel = ({
   const [form, setForm] = useState(initialForm);
   const [error, setError] = useState(null);
   const [refreshHoldUntilMs, setRefreshHoldUntilMs] = useState(0);
+  const [skipNextExternalRefreshes, setSkipNextExternalRefreshes] = useState(0);
 
   useEffect(() => {
     if (Date.now() < refreshHoldUntilMs) return;
+    if (skipNextExternalRefreshes > 0) {
+      setSkipNextExternalRefreshes((count) => Math.max(0, count - 1));
+      return;
+    }
     setForm(initialForm);
     setError(null);
-  }, [initialForm, refreshHoldUntilMs]);
+  }, [initialForm, refreshHoldUntilMs, skipNextExternalRefreshes]);
 
   const disabled = busy || !authenticated || runId == null || !task?.id || !isSampleTask;
 
@@ -70,18 +75,20 @@ const QueueTuningPanel = ({
       const parsed = parseFieldValue(form[field.key], field.kind);
       if (!parsed.ok) {
         setError(`Invalid value for "${field.label}".`);
-        return;
+        return false;
       }
       payload[field.key] = parsed.value;
     }
     setError(null);
     await onSave(payload);
+    return true;
   };
 
   const handleClear = async () => {
     if (!onClear || disabled) return;
     setError(null);
     await onClear();
+    return true;
   };
 
   return (
@@ -133,8 +140,11 @@ const QueueTuningPanel = ({
                   <Button
                     variant="contained"
                     onClick={async () => {
-                      await handleSave();
-                      setRefreshHoldUntilMs(0);
+                      const applied = await handleSave();
+                      if (applied) {
+                        setSkipNextExternalRefreshes(1);
+                        setRefreshHoldUntilMs(0);
+                      }
                     }}
                     disabled={busy}
                   >
@@ -144,8 +154,11 @@ const QueueTuningPanel = ({
                     variant="outlined"
                     color="warning"
                     onClick={async () => {
-                      await handleClear();
-                      setRefreshHoldUntilMs(0);
+                      const cleared = await handleClear();
+                      if (cleared) {
+                        setSkipNextExternalRefreshes(1);
+                        setRefreshHoldUntilMs(0);
+                      }
                     }}
                     disabled={busy}
                   >
