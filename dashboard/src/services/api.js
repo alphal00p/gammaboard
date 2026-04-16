@@ -208,6 +208,14 @@ export const cloneRun = async ({ sourceRunId, fromSnapshotId, newName }, signal)
 export const addRunTasks = async (runId, toml, signal) =>
   apiPost(`/runs/${runId}/tasks`, { toml }, "Failed to add tasks", signal);
 
+export const updateRunTaskQueueTuning = async (runId, taskId, queueTuning, signal) =>
+  apiPost(
+    `/runs/${runId}/tasks/${taskId}/queue-tuning`,
+    { queue_tuning: queueTuning },
+    "Failed to update task queue tuning",
+    signal,
+  );
+
 export const deleteRun = async (runId, signal) => apiDelete(`/runs/${runId}`, "Failed to delete run", signal);
 
 export const deleteRunTask = async (runId, taskId, signal) =>

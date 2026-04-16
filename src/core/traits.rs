@@ -6,8 +6,7 @@ use super::models::{
     InsertBatchesOutcome, RegisteredNode, RunSampleProgress, RunStageSnapshot, RuntimeLogEvent,
     SamplerAggregatorPerformanceSnapshot,
 };
-use crate::core::RunSpec;
-use crate::core::{RunTask, RunTaskInput};
+use crate::core::{RunSpec, RunTask, RunTaskInput, SamplerQueueTuning};
 use crate::evaluation::BatchResult;
 use crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint;
 use crate::sampling::LatentBatch;
@@ -190,6 +189,12 @@ pub trait RunTaskStore: Send + Sync {
     async fn list_run_tasks(&self, run_id: i32) -> Result<Vec<RunTask>, StoreError>;
     async fn load_run_task(&self, task_id: i64) -> Result<Option<RunTask>, StoreError>;
     async fn remove_pending_run_task(&self, run_id: i32, task_id: i64) -> Result<bool, StoreError>;
+    async fn update_run_task_queue_tuning(
+        &self,
+        run_id: i32,
+        task_id: i64,
+        queue_tuning: Option<SamplerQueueTuning>,
+    ) -> Result<RunTask, StoreError>;
     async fn load_active_run_task(&self, run_id: i32) -> Result<Option<RunTask>, StoreError>;
     async fn activate_next_run_task(&self, run_id: i32) -> Result<Option<RunTask>, StoreError>;
     async fn update_run_task_progress(

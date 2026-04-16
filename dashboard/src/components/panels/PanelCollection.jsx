@@ -36,9 +36,9 @@ import { asArray } from "../../utils/collections";
 const PANEL_ORDER_RANK = new Map([
   ["sample_progress", 0],
   ["estimate_summary", 1],
-  ["real_estimate_history", 2],
-  ["imag_estimate_history", 3],
-  ["abs_signal_to_noise_history", 4],
+  ["real_estimate_history", 3],
+  ["imag_estimate_history", 4],
+  ["abs_signal_to_noise_history", 5],
   ["gammaloop_histogram_bundle", 20],
   ["gammaloop_selected_histogram", 21],
 ]);
@@ -300,6 +300,12 @@ const DISCRETE_BAR_GAP = "30%";
 const formatAxisValue = (value) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? formatScientific(numeric, 3) : "";
+};
+
+const formatCategoryAxisValue = (value) => {
+  if (value == null) return "";
+  const text = String(value).trim();
+  return text.length > 0 ? text : "";
 };
 
 const normalizeZoomRange = (candidate) => {
@@ -2036,7 +2042,9 @@ const HistogramPanel = ({
           data: categoriesData,
           name: inferNumericXAxisLabel(panelId),
           axisLabel: {
-            ...baseAxisLabel,
+            color: baseAxisLabel.color,
+            fontSize: baseAxisLabel.fontSize,
+            formatter: (axisValue) => formatCategoryAxisValue(axisValue),
             interval: 0,
             rotate: categoriesData.length > 6 ? 30 : 0,
           },
@@ -2195,7 +2203,9 @@ const HistogramPanel = ({
           data: categoriesData,
           name: inferNumericXAxisLabel(panelId),
           axisLabel: {
-            ...baseAxisLabel,
+            color: baseAxisLabel.color,
+            fontSize: baseAxisLabel.fontSize,
+            formatter: (axisValue) => formatCategoryAxisValue(axisValue),
             interval: 0,
             rotate: categoriesData.length > 6 ? 30 : 0,
           },

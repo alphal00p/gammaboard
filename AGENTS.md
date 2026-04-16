@@ -90,6 +90,9 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Evaluators are stateless across reconcile-down. On stop they should drain already-claimed local latent batches without claiming new work, not persist evaluator state.
 - `node run` uses a tiny outer control-plane pool; role-specific PostgreSQL worker pool sizing lives on `evaluator_runner_params.db_pool_size` and `sampler_aggregator_runner_params.db_pool_size`.
 - Sampler queue settings live under the nested TOML table `[sampler_aggregator_runner_params.queue]`.
+- Sample tasks may optionally set `[task.queue_tuning]` to override queue knobs for that task only. Effective queue config is `run_spec.queue` overlaid by `task.queue_tuning`.
+- Queue tuning updates are allowed for `pending` and `active` sample tasks via the explicit admin endpoint `POST /api/runs/:id/tasks/:task_id/queue-tuning`; non-sample tasks must reject queue-tuning updates.
+- Live sampler runners must periodically refresh active-task queue tuning from storage and hot-apply it without restarting the role runner.
 - `sampler_aggregator_runner_params.queue.queue_buffer` is the single public queue buffer control. The runner targets about `queue_buffer * active_evaluator_count` pending batches. `0.0` is the most aggressive setting and lets pending work drain to zero when the sampler cannot refill fast enough; larger values keep more pending work buffered. `max_queue_size` remains the hard cap.
 - `sampler_aggregator_runner_params.queue.max_batches_per_tick` is a hard per-tick production cap and must apply to every sampler production path, including the forced initial round-trip batch.
 - `sampler_aggregator_runner_params.queue.max_concurrent_insert_tasks` bounds how many sampler queue insert tasks may write batches concurrently on the shared process DB pool.

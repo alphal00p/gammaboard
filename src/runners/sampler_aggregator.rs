@@ -9,8 +9,8 @@
 
 use crate::core::{
     BatchTransformConfig, EngineError, RunStageSnapshot, RunTask, SamplerAggregatorConfig,
-    SamplerAggregatorPerformanceSnapshot, SamplerRuntimeMetrics, SamplerWorkRollingAverages,
-    SamplerWorkerStore, StoreError,
+    SamplerAggregatorPerformanceSnapshot, SamplerQueueTuning, SamplerRuntimeMetrics,
+    SamplerWorkRollingAverages, SamplerWorkerStore, StoreError,
 };
 use crate::evaluation::ObservableState;
 use crate::runners::process_memory::current_rss_bytes;
@@ -27,6 +27,7 @@ use thiserror::Error;
 const MIN_BATCH_SIZE: usize = 16;
 const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.25;
 const COMPLETED_SAMPLES_PER_SECOND_EWMA_ALPHA: f64 = 0.2;
+const TASK_CONFIG_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerAggregatorRunnerParams {
     pub performance_snapshot_interval_ms: u64,
@@ -205,6 +206,8 @@ pub struct SamplerAggregatorRunner<S> {
     runtime_state: SamplerRuntimeState,
     window_state: SamplerWindowState,
     queue: SamplerQueue<S>,
+    base_queue_config: SamplerQueueConfig,
+    last_task_config_refresh_at: Instant,
     utilization_window_started_at: Instant,
     sync_tick_busy_time: Duration,
 }
@@ -243,6 +246,7 @@ where
         sampler_config: SamplerAggregatorConfig,
         batch_transforms: Vec<BatchTransformConfig>,
         params: SamplerAggregatorRunnerParams,
+        base_queue_config: SamplerQueueConfig,
         initial_batch_size: usize,
         resume_snapshot: Option<SamplerAggregatorCheckpoint>,
     ) -> Self {
@@ -308,6 +312,10 @@ where
             runtime_state,
             window_state: SamplerWindowState::default(),
             queue,
+            base_queue_config,
+            last_task_config_refresh_at: now
+                .checked_sub(TASK_CONFIG_REFRESH_INTERVAL)
+                .unwrap_or(now),
             utilization_window_started_at: now,
             sync_tick_busy_time: Duration::ZERO,
         }
@@ -315,6 +323,44 @@ where
 
     pub fn params(&self) -> &SamplerAggregatorRunnerParams {
         &self.params
+    }
+
+    fn effective_queue_config_for_tuning(
+        &self,
+        queue_tuning: Option<&SamplerQueueTuning>,
+    ) -> SamplerQueueConfig {
+        let mut effective = self.base_queue_config.clone();
+        if let Some(queue_tuning) = queue_tuning {
+            effective.apply_tuning(queue_tuning);
+        }
+        effective
+    }
+
+    async fn refresh_live_queue_tuning(&mut self) -> Result<(), RunnerError> {
+        if self.last_task_config_refresh_at.elapsed() < TASK_CONFIG_REFRESH_INTERVAL {
+            return Ok(());
+        }
+        self.last_task_config_refresh_at = Instant::now();
+        let Some(active_task) = self.store.load_active_run_task(self.run_id).await? else {
+            return Ok(());
+        };
+        if active_task.id != self.task.id {
+            return Ok(());
+        }
+        let next_tuning = active_task.task.sample_queue_tuning().cloned();
+        let current_tuning = self.task.task.sample_queue_tuning().cloned();
+        if next_tuning == current_tuning {
+            return Ok(());
+        }
+        self.task
+            .task
+            .set_sample_queue_tuning(next_tuning.clone())
+            .map_err(|err| RunnerError::Engine(EngineError::invalid_input(err)))?;
+        let next_queue_config = self.effective_queue_config_for_tuning(next_tuning.as_ref());
+        self.params.queue = next_queue_config.clone();
+        self.queue.apply_config(next_queue_config);
+        self.runtime_state.batch_size_current = self.queue.current_batch_size();
+        Ok(())
     }
 
     fn current_runner_diagnostics(&mut self) -> JsonValue {
@@ -443,6 +489,7 @@ where
     }
 
     pub async fn tick(&mut self) -> Result<bool, RunnerError> {
+        self.refresh_live_queue_tuning().await?;
         let tick_started = Instant::now();
         let QueueTickResult {
             completed,

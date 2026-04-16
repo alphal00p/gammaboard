@@ -22,8 +22,8 @@ pub use run_spec::{
 pub use tasks::{
     ImageDisplayMode, LineDisplayMode, LineRasterGeometry, Linspace, ObservableSourceSpec,
     PlaneRasterGeometry, PlotObservableKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState,
-    SampleTaskConfig, SamplerAggregatorSourceSpec, SourceRefSpec, canonical_task_toml,
-    generated_task_name,
+    SampleTaskConfig, SamplerAggregatorSourceSpec, SamplerQueueTuning, SourceRefSpec,
+    canonical_task_toml, generated_task_name,
 };
 pub use traits::{
     AggregationStore, ControlPlaneStore, EvaluatorWorkerStore, RunReadStore, RunSpecStore,

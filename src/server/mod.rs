@@ -10,7 +10,9 @@ use crate::api::{
     ApiError, db as db_api, nodes as node_api, runs as run_api, stage as stage_api,
     templates as template_api,
 };
-use crate::core::{AggregationStore, RunReadStore, RunSpecStore, RunTask, RunTaskStore};
+use crate::core::{
+    AggregationStore, RunReadStore, RunSpecStore, RunTask, RunTaskStore, SamplerQueueTuning,
+};
 use crate::evaluation::ObservableState;
 use crate::server::config_panels::{
     EvaluatorPanelContext, PanelRenderer, SamplerAggregatorPanelContext,
@@ -253,6 +255,12 @@ struct AddTasksRequest {
 }
 
 #[derive(Deserialize)]
+struct UpdateTaskQueueTuningRequest {
+    #[serde(default)]
+    queue_tuning: Option<SamplerQueueTuning>,
+}
+
+#[derive(Deserialize)]
 struct TemplateSaveRequest {
     name: String,
     toml: String,
@@ -327,6 +335,10 @@ fn build_app(state: AppState) -> Router {
         .route("/runs/:id", delete(delete_run))
         .route("/runs/:id/pause", post(pause_run))
         .route("/runs/:id/tasks", post(add_run_tasks))
+        .route(
+            "/runs/:id/tasks/:task_id/queue-tuning",
+            post(update_run_task_queue_tuning),
+        )
         .route("/runs/:id/tasks/:task_id", delete(delete_run_task))
         .route("/runs/:id/auto-assign", post(auto_assign_run))
         .route("/nodes/:id/assign", post(assign_node))
@@ -962,6 +974,25 @@ async fn delete_run_task(
         "run_id": result.run_id,
         "task_id": result.task_id,
     }))
+}
+
+async fn update_run_task_queue_tuning(
+    State(state): State<AppState>,
+    AxumPath((run_id, task_id)): AxumPath<(i32, i64)>,
+    AxumJson(payload): AxumJson<UpdateTaskQueueTuningRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result =
+        run_api::update_task_queue_tuning(&state.store, run_id, task_id, payload.queue_tuning)
+            .await?;
+    tracing::info!(
+        source = "control",
+        control_surface = "dashboard",
+        action = "run_task_update_queue_tuning",
+        run_id = result.run_id,
+        task_id = result.task.id,
+        "dashboard action completed"
+    );
+    json_response(result.task)
 }
 
 async fn assign_node(

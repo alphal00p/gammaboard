@@ -1,6 +1,6 @@
 use crate::core::{
     BatchQueueCounts, CompletedBatch, InsertBatchesMetrics, SamplerQueueRollingAverages,
-    SamplerQueueRuntimeMetrics, SamplerWorkerStore, StoreError, next_batch_ids,
+    SamplerQueueRuntimeMetrics, SamplerQueueTuning, SamplerWorkerStore, StoreError, next_batch_ids,
 };
 use crate::runners::rolling_metric::RollingMetric;
 use crate::runners::window_metric::WindowMetric;
@@ -38,6 +38,50 @@ pub struct SamplerQueueConfig {
     pub max_insert_bundle_size: usize,
     pub max_concurrent_insert_tasks: usize,
     pub completed_batch_fetch_limit: usize,
+}
+
+impl SamplerQueueConfig {
+    pub fn apply_tuning(&mut self, tuning: &SamplerQueueTuning) {
+        if let Some(value) = tuning.queue_buffer {
+            self.queue_buffer = value;
+        }
+        if let Some(value) = tuning.target_batch_eval_ms {
+            self.target_batch_eval_ms = value;
+        }
+        if let Some(value) = tuning.batch_size_deadband_ratio {
+            self.batch_size_deadband_ratio = value;
+        }
+        if let Some(value) = tuning.batch_size_cooldown_ticks {
+            self.batch_size_cooldown_ticks = value;
+        }
+        if let Some(value) = tuning.pending_refill_low_ratio {
+            self.pending_refill_low_ratio = value;
+        }
+        if let Some(value) = tuning.pending_refill_high_ratio {
+            self.pending_refill_high_ratio = value;
+        }
+        if let Some(value) = tuning.max_batch_size {
+            self.max_batch_size = value;
+        }
+        if let Some(value) = tuning.local_pending_buffer_multiplier {
+            self.local_pending_buffer_multiplier = value;
+        }
+        if let Some(value) = tuning.max_queue_size {
+            self.max_queue_size = value;
+        }
+        if let Some(value) = tuning.max_batches_per_tick {
+            self.max_batches_per_tick = value;
+        }
+        if let Some(value) = tuning.max_insert_bundle_size {
+            self.max_insert_bundle_size = value;
+        }
+        if let Some(value) = tuning.max_concurrent_insert_tasks {
+            self.max_concurrent_insert_tasks = value;
+        }
+        if let Some(value) = tuning.completed_batch_fetch_limit {
+            self.completed_batch_fetch_limit = value;
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -211,6 +255,15 @@ where
 
     pub fn config(&self) -> &SamplerQueueConfig {
         &self.config
+    }
+
+    pub fn apply_config(&mut self, config: SamplerQueueConfig) {
+        self.config = config;
+        self.batch_size_current = self
+            .batch_size_current
+            .clamp(MIN_BATCH_SIZE, self.effective_max_batch_size());
+        self.batch_size_tune_cooldown_remaining = 0;
+        self.refresh_insert_pump_state();
     }
 
     pub fn checkpoint(&self) -> SamplerQueueCheckpoint {
@@ -1292,6 +1345,15 @@ mod tests {
             _run_id: i32,
             _task_id: i64,
         ) -> Result<bool, StoreError> {
+            unreachable!("unused in test")
+        }
+
+        async fn update_run_task_queue_tuning(
+            &self,
+            _run_id: i32,
+            _task_id: i64,
+            _queue_tuning: Option<crate::core::SamplerQueueTuning>,
+        ) -> Result<RunTask, StoreError> {
             unreachable!("unused in test")
         }
 

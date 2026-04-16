@@ -437,36 +437,6 @@ fn estimate_summary_panel(observable: ObservableState) -> PanelState {
             "estimate_summary",
             vec![
                 key_value("count", "Count", state.sample_count()),
-                key_value("histograms", "Histograms", state.histogram_count()),
-                key_value(
-                    "primary_histogram",
-                    "Primary Histogram",
-                    state.primary_histogram_name().unwrap_or("-"),
-                ),
-                key_value(
-                    "primary_title",
-                    "Primary Title",
-                    state
-                        .primary_histogram()
-                        .map(|histogram| histogram.title.as_str())
-                        .unwrap_or("-"),
-                ),
-                key_value(
-                    "primary_samples",
-                    "Primary Samples",
-                    state
-                        .primary_histogram()
-                        .map(|histogram| histogram.sample_count)
-                        .unwrap_or(0),
-                ),
-                key_value(
-                    "primary_bins",
-                    "Primary Bins",
-                    state
-                        .primary_histogram()
-                        .map(|histogram| histogram.bins.len())
-                        .unwrap_or(0),
-                ),
                 key_value(
                     "real_mean",
                     "Real Mean",
@@ -481,11 +451,6 @@ fn estimate_summary_panel(observable: ObservableState) -> PanelState {
                     "abs_mean",
                     "Abs Mean",
                     estimate_value(state.abs_mean(), state.abs_stderr()),
-                ),
-                key_value(
-                    "signal_to_noise",
-                    "Mean(|x|)^2 / abs_err^2",
-                    state.signal_to_noise(),
                 ),
                 key_value("rsd", "RSD", state.rsd()),
             ],

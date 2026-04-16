@@ -5,7 +5,6 @@ import { AuthProvider, useAuth } from "./auth/AuthProvider";
 import EvaluatorPanel from "./components/EvaluatorPanel";
 import LogsWorkspace from "./components/LogsWorkspace";
 import PerformanceWorkspace from "./components/PerformanceWorkspace";
-import RunInfo from "./components/RunInfo";
 import SamplerAggregatorPanel from "./components/SamplerAggregatorPanel";
 import SelectedTaskTomlPanel from "./components/SelectedTaskTomlPanel";
 import TaskOutputPanel from "./components/TaskOutputPanel";
@@ -14,6 +13,7 @@ import WorkersWorkspace from "./components/WorkersWorkspace";
 import LoginDialog from "./components/auth/LoginDialog";
 import RunScopedWorkspace from "./components/common/RunScopedWorkspace";
 import CloneRunDialog from "./components/runs/CloneRunDialog";
+import QueueTuningPanel from "./components/runs/QueueTuningPanel";
 import TomlActionDialog from "./components/runs/TomlActionDialog";
 import { useRunConfigPanels } from "./hooks/useRunConfigPanels";
 import { useRuns } from "./hooks/useRuns";
@@ -27,10 +27,13 @@ import {
   deleteRun,
   deleteRunTask,
   deleteTemplateFile,
+  fetchNodes,
   fetchTemplateFile,
   fetchTemplateList,
   pauseRun,
+  updateRunTaskQueueTuning,
   saveTemplateFile,
+  unassignNode,
 } from "./services/api";
 import { asArray } from "./utils/collections";
 import { asTaskList, getCurrentTask } from "./utils/tasks";
@@ -41,6 +44,7 @@ const DEFAULT_ADD_TASKS_TOML = `[[task_queue]]
 kind = "sample"
 nr_samples = 10000
 observable = { config = "scalar" }`;
+const EVALUATOR_COUNT_STORAGE_KEY = "runs.evaluator_count";
 
 const DashboardHeader = () => {
   const { authenticated, busy, ready, requestLogin, logout } = useAuth();
@@ -92,10 +96,16 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
   const [addTasksOpen, setAddTasksOpen] = useState(false);
   const [cloneRunBusy, setCloneRunBusy] = useState(false);
   const [addTasksBusy, setAddTasksBusy] = useState(false);
+  const [queueTuningBusy, setQueueTuningBusy] = useState(false);
   const [cloneRunError, setCloneRunError] = useState(null);
   const [addTasksError, setAddTasksError] = useState(null);
   const [taskTemplates, setTaskTemplates] = useState([]);
-  const [maxEvaluators, setMaxEvaluators] = useState("");
+  const [evaluatorCount, setEvaluatorCount] = useState(() => {
+    if (typeof window === "undefined") return "";
+    const stored = window.localStorage.getItem(EVALUATOR_COUNT_STORAGE_KEY);
+    return stored && /^\d+$/.test(stored) ? stored : "";
+  });
+  const [autoUnassigning, setAutoUnassigning] = useState(false);
   const { authenticated } = useAuth();
 
   const reloadTaskTemplates = useCallback(async () => {
@@ -120,6 +130,15 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (evaluatorCount && /^\d+$/.test(evaluatorCount)) {
+      window.localStorage.setItem(EVALUATOR_COUNT_STORAGE_KEY, evaluatorCount);
+    } else {
+      window.localStorage.removeItem(EVALUATOR_COUNT_STORAGE_KEY);
+    }
+  }, [evaluatorCount]);
 
   useEffect(() => {
     const taskList = asTaskList(tasks);
@@ -160,6 +179,14 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
     setAddTasksOpen(false);
   };
 
+  const parseEvaluatorTarget = (value) => {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed) || parsed < 1) return null;
+    return Math.floor(parsed);
+  };
+
   return (
     <>
       {authenticated ? (
@@ -167,18 +194,23 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
           <Stack direction={{ xs: "column", md: "row" }} spacing={1.5}>
             <TextField
               size="small"
-              label="Max Evaluators"
-              value={maxEvaluators}
-              onChange={(event) => setMaxEvaluators(event.target.value.replace(/[^\d]/g, ""))}
+              value={evaluatorCount}
+              onChange={(event) => setEvaluatorCount(event.target.value.replace(/[^\d]/g, ""))}
+              placeholder="all"
+              inputProps={{ "aria-label": "Evaluator node count" }}
               sx={{ minWidth: 160 }}
             />
             <Button
               variant="contained"
-              disabled={!selectedRun || pausing || autoAssigning}
+              disabled={!selectedRun || pausing || autoAssigning || autoUnassigning}
               onClick={async () => {
-                setAutoAssigning(true);
-                try {
-                  const limit = maxEvaluators.trim() ? Number(maxEvaluators) : null;
+                  setAutoAssigning(true);
+                  try {
+                  const limit = parseEvaluatorTarget(evaluatorCount);
+                  if (evaluatorCount.trim() && limit == null) {
+                    setSnackbar({ message: "N must be at least 1.", severity: "error" });
+                    return;
+                  }
                   const response = await autoAssignRun(selectedRun, { maxEvaluators: limit });
                   const assignedEvaluators = Array.isArray(response?.assigned_evaluators)
                     ? response.assigned_evaluators.length
@@ -195,12 +227,51 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
                 }
               }}
             >
-              Auto-Assign
+              Assign
             </Button>
             <Button
               variant="contained"
               color="warning"
-              disabled={!selectedRun || pausing || autoAssigning || deletingRun}
+              disabled={!selectedRun || pausing || autoAssigning || autoUnassigning}
+              onClick={async () => {
+                setAutoUnassigning(true);
+                try {
+                  const requested = parseEvaluatorTarget(evaluatorCount);
+                  if (evaluatorCount.trim() && requested == null) {
+                    setSnackbar({ message: "N must be at least 1.", severity: "error" });
+                    return;
+                  }
+                  const nodes = await fetchNodes(selectedRun);
+                  const assignedEvaluators = asArray(nodes).filter(
+                    (worker) =>
+                      worker?.node_name &&
+                      worker?.desired_run_id === selectedRun &&
+                      worker?.desired_role === "evaluator",
+                  );
+                  const target = requested == null ? assignedEvaluators.length : Math.max(0, requested);
+                  const evaluators = assignedEvaluators.slice(0, target);
+                  if (evaluators.length === 0) {
+                    setSnackbar({ message: "No evaluator nodes assigned to this run.", severity: "info" });
+                    return;
+                  }
+                  await Promise.all(evaluators.map((worker) => unassignNode(worker.node_name)));
+                  setSnackbar({
+                    message: `Requested unassign for ${evaluators.length} evaluator node${evaluators.length === 1 ? "" : "s"}.`,
+                    severity: "success",
+                  });
+                } catch (err) {
+                  setSnackbar({ message: err?.message || "Failed to unassign evaluator nodes.", severity: "error" });
+                } finally {
+                  setAutoUnassigning(false);
+                }
+              }}
+            >
+              Unassign
+            </Button>
+            <Button
+              variant="contained"
+              color="warning"
+              disabled={!selectedRun || pausing || autoAssigning || autoUnassigning || deletingRun}
               onClick={async () => {
                 setPausing(true);
                 try {
@@ -218,7 +289,9 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
             <Button
               variant="outlined"
               color="error"
-              disabled={!selectedRun || pausing || autoAssigning || deletingRun || cloneRunBusy || addTasksBusy}
+              disabled={
+                !selectedRun || pausing || autoAssigning || autoUnassigning || deletingRun || cloneRunBusy || addTasksBusy
+              }
               onClick={async () => {
                 if (!window.confirm("Delete this run? This cannot be undone.")) return;
                 setDeletingRun(true);
@@ -312,7 +385,37 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
         task={selectedTask}
         excludePanelIds={["sample_progress"]}
       />
-      <RunInfo runId={selectedRun} />
+      <QueueTuningPanel
+        run={currentRun}
+        runId={selectedRun}
+        task={selectedTask}
+        authenticated={authenticated}
+        busy={queueTuningBusy}
+        onSave={async (payload) => {
+          if (!selectedRun || !selectedTask?.id) return;
+          setQueueTuningBusy(true);
+          try {
+            await updateRunTaskQueueTuning(selectedRun, selectedTask.id, payload);
+            setSnackbar({ message: "Queue tuning updated.", severity: "success" });
+          } catch (err) {
+            setSnackbar({ message: err?.message || "Failed to update queue tuning.", severity: "error" });
+          } finally {
+            setQueueTuningBusy(false);
+          }
+        }}
+        onClear={async () => {
+          if (!selectedRun || !selectedTask?.id) return;
+          setQueueTuningBusy(true);
+          try {
+            await updateRunTaskQueueTuning(selectedRun, selectedTask.id, null);
+            setSnackbar({ message: "Queue tuning override cleared.", severity: "success" });
+          } catch (err) {
+            setSnackbar({ message: err?.message || "Failed to clear queue tuning override.", severity: "error" });
+          } finally {
+            setQueueTuningBusy(false);
+          }
+        }}
+      />
       <EvaluatorPanel run={currentRun} panelResponse={evaluator} />
       <SamplerAggregatorPanel run={currentRun} panelResponse={sampler} />
       <CloneRunDialog

@@ -5,9 +5,8 @@ mod sample;
 use crate::core::{EngineError, ObservableConfig, RunTask, RunTaskSpec};
 use crate::evaluation::ObservableState;
 use crate::server::panels::{
-    PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelUpdate, PanelWidth,
-    append_panel, key_value, key_value_panel, merge_panel_state, panel_spec, replace_panel,
-    with_panel_width,
+    PanelHistoryMode, PanelResponse, PanelSpec, PanelState, PanelUpdate, append_panel,
+    merge_panel_state, replace_panel,
 };
 use crate::stores::{TaskOutputSnapshot, TaskStageSnapshot};
 use serde_json::Value as JsonValue;
@@ -204,7 +203,7 @@ impl RunTaskSpec {
         &self,
         effective_observable_config: Option<ObservableConfig>,
     ) -> Vec<TaskPanelProjector> {
-        let mut projectors = vec![task_summary_projector()];
+        let mut projectors = Vec::new();
         projectors.extend(match self {
             Self::Sample { .. } => sample::projectors(self, effective_observable_config),
             Self::Image {
@@ -222,55 +221,6 @@ impl RunTaskSpec {
         });
         projectors
     }
-}
-
-fn task_summary_projector() -> TaskPanelProjector {
-    panel_projector(
-        with_panel_width(
-            panel_spec(
-                "task_summary",
-                "Selected Task",
-                PanelKind::KeyValue,
-                PanelHistoryMode::None,
-            ),
-            PanelWidth::Half,
-        ),
-        |ctx| {
-            let task = ctx.task;
-            Ok(Some(key_value_panel(
-                "task_summary",
-                vec![
-                    key_value(
-                        "identity",
-                        "Identity",
-                        format!("{} ({})", task.name, task.task.kind_str()),
-                    ),
-                    key_value("state", "State", task.state.as_str()),
-                    key_value("target", "Target", task.task.nr_expected_samples()),
-                    key_value("produced", "Produced", task.nr_produced_samples),
-                    key_value("completed", "Completed", task.nr_completed_samples),
-                    key_value(
-                        "sampler_source",
-                        "Sampler Source",
-                        source_ref_label(task.task.sample_sampler_source()),
-                    ),
-                    key_value(
-                        "observable_source",
-                        "Observable Source",
-                        source_ref_label(task.task.sample_observable_source()),
-                    ),
-                    key_value(
-                        "spawned_from",
-                        "Spawned From",
-                        task.spawned_from_snapshot_id
-                            .map(|snapshot_id| snapshot_id.to_string())
-                            .unwrap_or_else(|| "none".to_string()),
-                    ),
-                ],
-            )))
-        },
-        |_ctx| Ok(None),
-    )
 }
 
 impl TaskPanelSource {
@@ -399,14 +349,6 @@ fn resolve_current_source<'a>(
         }
     }
     TaskPanelCurrentSource::Empty
-}
-
-fn source_ref_label(source: Option<crate::core::SourceRefSpec>) -> String {
-    match source {
-        Some(crate::core::SourceRefSpec::Latest) => "latest".to_string(),
-        Some(crate::core::SourceRefSpec::FromName(name)) => format!("from_name:{name}"),
-        None => "config".to_string(),
-    }
 }
 
 fn full_updates(
@@ -666,6 +608,7 @@ mod tests {
             nr_samples: Some(10),
             sampler_aggregator: None,
             observable: None,
+            queue_tuning: None,
             batch_transforms: None,
         }
     }

@@ -360,6 +360,14 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         let initial_batch_size = initial_batch_size_hint
             .unwrap_or(spec.sampler_aggregator_runner_params.queue.max_batch_size);
 
+        let base_queue_config = spec.sampler_aggregator_runner_params.queue.clone();
+        let mut effective_sampler_runner_params = spec.sampler_aggregator_runner_params.clone();
+        if let Some(queue_tuning) = task.task.sample_queue_tuning() {
+            effective_sampler_runner_params
+                .queue
+                .apply_tuning(queue_tuning);
+        }
+
         let restored_snapshot_for_runner = restored_snapshot.clone();
         let task_for_runner = task.clone();
 
@@ -372,7 +380,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             observable_state,
             sampler_config,
             batch_transforms,
-            spec.sampler_aggregator_runner_params.clone(),
+            effective_sampler_runner_params,
+            base_queue_config,
             initial_batch_size,
             restored_snapshot_for_runner,
         );

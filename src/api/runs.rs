@@ -1,6 +1,7 @@
 use crate::api::ApiError;
 use crate::core::{
     AggregationStore, ControlPlaneStore, RunStageSnapshot, RunTask, RunTaskInput, RunTaskStore,
+    SamplerQueueTuning,
 };
 use crate::preprocess::{RunAddConfig, preprocess_run_add};
 use crate::stores::RunProgress;
@@ -49,6 +50,12 @@ pub struct RemovedRun {
 pub struct RemovedPendingTask {
     pub run_id: i32,
     pub task_id: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct UpdatedTaskQueueTuning {
+    pub run_id: i32,
+    pub task: RunTask,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -277,6 +284,24 @@ pub async fn remove_pending_task(
         )));
     }
     Ok(RemovedPendingTask { run_id, task_id })
+}
+
+pub async fn update_task_queue_tuning(
+    store: &(impl crate::core::RunReadStore + RunTaskStore),
+    run_id: i32,
+    task_id: i64,
+    queue_tuning: Option<SamplerQueueTuning>,
+) -> Result<UpdatedTaskQueueTuning, ApiError> {
+    let _run = load_run_progress(store, run_id).await?;
+    if let Some(queue_tuning) = queue_tuning.as_ref() {
+        queue_tuning
+            .validate()
+            .map_err(|err| ApiError::BadRequest(format!("invalid queue_tuning: {err}")))?;
+    }
+    let task = store
+        .update_run_task_queue_tuning(run_id, task_id, queue_tuning)
+        .await?;
+    Ok(UpdatedTaskQueueTuning { run_id, task })
 }
 
 async fn preflight_task_batch(

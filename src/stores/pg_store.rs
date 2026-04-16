@@ -8,7 +8,7 @@ use crate::core::{
     RuntimeLogEvent, RuntimeLogStore, SamplerAggregatorPerformanceSnapshot, StoreError,
     WorkQueueStore, WorkerRole, generated_task_name,
 };
-use crate::core::{IntegrationParams, RunSpec, canonical_task_toml};
+use crate::core::{IntegrationParams, RunSpec, SamplerQueueTuning, canonical_task_toml};
 use crate::evaluation::BatchResult;
 use crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint;
 use crate::sampling::LatentBatch;
@@ -866,6 +866,17 @@ impl RunTaskStore for PgStore {
 
     async fn remove_pending_run_task(&self, run_id: i32, task_id: i64) -> Result<bool, StoreError> {
         queries::remove_pending_run_task(&self.pool, run_id, task_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn update_run_task_queue_tuning(
+        &self,
+        run_id: i32,
+        task_id: i64,
+        queue_tuning: Option<SamplerQueueTuning>,
+    ) -> Result<RunTask, StoreError> {
+        queries::update_run_task_queue_tuning(&self.pool, run_id, task_id, queue_tuning)
             .await
             .map_err(map_sqlx)
     }

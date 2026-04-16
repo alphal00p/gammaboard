@@ -1,5 +1,6 @@
 use crate::core::{
-    RunTask, RunTaskInput, RunTaskSpec, RunTaskState, canonical_task_toml, generated_task_name,
+    RunTask, RunTaskInput, RunTaskSpec, RunTaskState, SamplerQueueTuning, canonical_task_toml,
+    generated_task_name,
 };
 use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
@@ -197,6 +198,83 @@ pub(crate) async fn remove_pending_run_task(
     .execute(pool)
     .await?;
     Ok(result.rows_affected() > 0)
+}
+
+pub(crate) async fn update_run_task_queue_tuning(
+    pool: &PgPool,
+    run_id: i32,
+    task_id: i64,
+    queue_tuning: Option<SamplerQueueTuning>,
+) -> Result<RunTask, sqlx::Error> {
+    let current = load_run_task(pool, task_id)
+        .await?
+        .ok_or_else(|| sqlx::Error::Protocol(format!("run task {task_id} not found for update")))?;
+    if current.run_id != run_id {
+        return Err(sqlx::Error::Protocol(format!(
+            "run task {task_id} belongs to run {}, not run {run_id}",
+            current.run_id
+        )));
+    }
+    if !matches!(current.state, RunTaskState::Pending | RunTaskState::Active) {
+        return Err(sqlx::Error::Protocol(format!(
+            "run task {task_id} cannot be updated in state {}",
+            current.state.as_str()
+        )));
+    }
+
+    let mut next_task_spec = current.task.clone();
+    next_task_spec
+        .set_sample_queue_tuning(queue_tuning)
+        .map_err(sqlx::Error::Protocol)?;
+    next_task_spec.validate().map_err(sqlx::Error::Protocol)?;
+
+    let next_task_input = RunTaskInput {
+        name: Some(current.name.clone()),
+        task: next_task_spec.clone(),
+    };
+    let next_task_toml = canonical_task_toml(&next_task_input)
+        .map_err(|err| sqlx::Error::Protocol(format!("failed to serialize task TOML: {err}")))?;
+
+    let row = sqlx::query_as::<_, RunTaskRow>(
+        r#"
+        UPDATE run_tasks
+        SET
+            task = $3,
+            task_toml = $4
+        WHERE id = $1
+          AND run_id = $2
+          AND state IN ('pending', 'active')
+        RETURNING
+            id,
+            run_id,
+            name,
+            sequence_nr,
+            task,
+            task_toml,
+            spawned_from_snapshot_id,
+            state,
+            nr_produced_samples,
+            nr_completed_samples,
+            failure_reason,
+            started_at,
+            completed_at,
+            failed_at,
+            created_at
+        "#,
+    )
+    .bind(task_id)
+    .bind(run_id)
+    .bind(encode_task(&next_task_spec)?)
+    .bind(next_task_toml)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| {
+        sqlx::Error::Protocol(format!(
+            "run task {task_id} update raced with a state transition"
+        ))
+    })?;
+
+    decode_task_row(row)
 }
 
 pub(crate) async fn load_active_run_task(

@@ -30,6 +30,106 @@ pub struct SampleTaskConfig {
     pub batch_transforms: Option<Vec<BatchTransformConfig>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SamplerQueueTuning {
+    pub queue_buffer: Option<f64>,
+    pub target_batch_eval_ms: Option<f64>,
+    pub batch_size_deadband_ratio: Option<f64>,
+    pub batch_size_cooldown_ticks: Option<u32>,
+    pub pending_refill_low_ratio: Option<f64>,
+    pub pending_refill_high_ratio: Option<f64>,
+    pub max_batch_size: Option<usize>,
+    pub local_pending_buffer_multiplier: Option<f64>,
+    pub max_queue_size: Option<usize>,
+    pub max_batches_per_tick: Option<usize>,
+    pub max_insert_bundle_size: Option<usize>,
+    pub max_concurrent_insert_tasks: Option<usize>,
+    pub completed_batch_fetch_limit: Option<usize>,
+}
+
+impl Default for SamplerQueueTuning {
+    fn default() -> Self {
+        Self {
+            queue_buffer: None,
+            target_batch_eval_ms: None,
+            batch_size_deadband_ratio: None,
+            batch_size_cooldown_ticks: None,
+            pending_refill_low_ratio: None,
+            pending_refill_high_ratio: None,
+            max_batch_size: None,
+            local_pending_buffer_multiplier: None,
+            max_queue_size: None,
+            max_batches_per_tick: None,
+            max_insert_bundle_size: None,
+            max_concurrent_insert_tasks: None,
+            completed_batch_fetch_limit: None,
+        }
+    }
+}
+
+impl SamplerQueueTuning {
+    pub fn validate(&self) -> Result<(), String> {
+        fn validate_non_negative_finite(value: Option<f64>, label: &str) -> Result<(), String> {
+            if let Some(value) = value
+                && (!value.is_finite() || value < 0.0)
+            {
+                return Err(format!("{label} must be finite and >= 0"));
+            }
+            Ok(())
+        }
+
+        fn validate_positive(value: Option<usize>, label: &str) -> Result<(), String> {
+            if value.is_some_and(|value| value == 0) {
+                return Err(format!("{label} must be > 0"));
+            }
+            Ok(())
+        }
+
+        validate_non_negative_finite(self.queue_buffer, "queue_tuning.queue_buffer")?;
+        if let Some(value) = self.target_batch_eval_ms
+            && (!value.is_finite() || value <= 0.0)
+        {
+            return Err("queue_tuning.target_batch_eval_ms must be finite and > 0".to_string());
+        }
+        validate_non_negative_finite(
+            self.batch_size_deadband_ratio,
+            "queue_tuning.batch_size_deadband_ratio",
+        )?;
+        validate_non_negative_finite(
+            self.pending_refill_low_ratio,
+            "queue_tuning.pending_refill_low_ratio",
+        )?;
+        validate_non_negative_finite(
+            self.pending_refill_high_ratio,
+            "queue_tuning.pending_refill_high_ratio",
+        )?;
+        validate_non_negative_finite(
+            self.local_pending_buffer_multiplier,
+            "queue_tuning.local_pending_buffer_multiplier",
+        )?;
+        validate_positive(self.max_batch_size, "queue_tuning.max_batch_size")?;
+        validate_positive(self.max_queue_size, "queue_tuning.max_queue_size")?;
+        validate_positive(
+            self.max_batches_per_tick,
+            "queue_tuning.max_batches_per_tick",
+        )?;
+        validate_positive(
+            self.max_insert_bundle_size,
+            "queue_tuning.max_insert_bundle_size",
+        )?;
+        validate_positive(
+            self.max_concurrent_insert_tasks,
+            "queue_tuning.max_concurrent_insert_tasks",
+        )?;
+        validate_positive(
+            self.completed_batch_fetch_limit,
+            "queue_tuning.completed_batch_fetch_limit",
+        )?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceRefSpec {
     Latest,
@@ -107,6 +207,8 @@ pub enum RunTaskSpec {
         #[serde(default)]
         observable: Option<ObservableSourceSpec>,
         #[serde(default)]
+        queue_tuning: Option<SamplerQueueTuning>,
+        #[serde(default)]
         batch_transforms: Option<Vec<BatchTransformConfig>>,
     },
     Image {
@@ -156,6 +258,7 @@ impl RunTaskSpec {
             Self::Sample {
                 sampler_aggregator,
                 observable,
+                queue_tuning,
                 ..
             } => {
                 if let Some(source) = sampler_aggregator {
@@ -163,6 +266,9 @@ impl RunTaskSpec {
                 }
                 if let Some(source) = observable {
                     source.validate()?;
+                }
+                if let Some(queue_tuning) = queue_tuning {
+                    queue_tuning.validate()?;
                 }
                 Ok(())
             }
@@ -324,6 +430,32 @@ impl RunTaskSpec {
             Self::PlotLine { geometry, .. } => Some(geometry.nr_points() as i64),
         }
     }
+
+    pub fn sample_queue_tuning(&self) -> Option<&SamplerQueueTuning> {
+        match self {
+            Self::Sample { queue_tuning, .. } => queue_tuning.as_ref(),
+            Self::Image { .. } | Self::PdfAdaptationImage { .. } | Self::PlotLine { .. } => None,
+        }
+    }
+
+    pub fn set_sample_queue_tuning(
+        &mut self,
+        queue_tuning: Option<SamplerQueueTuning>,
+    ) -> Result<(), String> {
+        match self {
+            Self::Sample {
+                queue_tuning: current,
+                ..
+            } => {
+                if let Some(next) = queue_tuning.as_ref() {
+                    next.validate()?;
+                }
+                *current = queue_tuning;
+                Ok(())
+            }
+            _ => Err("queue_tuning is only supported for sample tasks".to_string()),
+        }
+    }
 }
 
 pub fn generated_task_name(task: &RunTaskSpec, sequence_nr: i32) -> String {
@@ -342,11 +474,13 @@ impl IntoPreflightTask for RunTaskSpec {
                 nr_samples,
                 sampler_aggregator,
                 observable,
+                queue_tuning,
                 batch_transforms,
             } => Ok(Some(Self::Sample {
                 nr_samples: Some(if nr_samples == Some(0) { 0 } else { 1 }),
                 sampler_aggregator,
                 observable,
+                queue_tuning,
                 batch_transforms,
             })),
             Self::Image {
@@ -616,6 +750,7 @@ mod tests {
                 },
             }),
             observable: Some(ObservableSourceSpec::Latest("latest".to_string())),
+            queue_tuning: None,
             batch_transforms: Some(Vec::new()),
         };
 
@@ -630,6 +765,7 @@ mod tests {
                 nr_samples: Some(10),
                 sampler_aggregator: None,
                 observable: None,
+                queue_tuning: None,
                 batch_transforms: None,
             },
         };
@@ -647,6 +783,7 @@ mod tests {
             nr_samples: Some(0),
             sampler_aggregator: None,
             observable: None,
+            queue_tuning: None,
             batch_transforms: None,
         };
         assert!(missing.validate().is_ok());
@@ -655,6 +792,7 @@ mod tests {
             nr_samples: Some(0),
             sampler_aggregator: Some(SamplerAggregatorSourceSpec::Latest("latest".to_string())),
             observable: None,
+            queue_tuning: None,
             batch_transforms: None,
         };
         assert!(both.validate().is_ok());
@@ -670,6 +808,7 @@ mod tests {
                 },
             }),
             observable: None,
+            queue_tuning: None,
             batch_transforms: None,
         };
         assert!(task.validate().is_err());

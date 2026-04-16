@@ -5,7 +5,7 @@ use crate::server::panels::{
     key_value_panel, panel_spec, replace_panel, with_panel_width,
 };
 use crate::utils::domain::Domain;
-use serde::Serialize;
+use serde_json::json;
 use serde_json::Value as JsonValue;
 
 pub trait PanelRenderer<C> {
@@ -39,15 +39,17 @@ pub struct SamplerAggregatorPanelContext<'a> {
 
 impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
     fn panel_specs(&self, _ctx: &EvaluatorPanelContext<'_>) -> Vec<PanelSpec> {
-        let mut panels = vec![panel_spec(
-            "evaluator_summary",
-            "Evaluator Summary",
-            PanelKind::KeyValue,
-            PanelHistoryMode::None,
-        )];
-        panels[0].width = PanelWidth::Half;
-        if has_object_fields(self) {
-            panels.push(with_panel_width(
+        vec![
+            with_panel_width(
+                panel_spec(
+                    "evaluator_summary",
+                    "Evaluator Summary",
+                    PanelKind::KeyValue,
+                    PanelHistoryMode::None,
+                ),
+                PanelWidth::Full,
+            ),
+            with_panel_width(
                 panel_spec(
                     "evaluator_config",
                     "Evaluator Config",
@@ -55,9 +57,8 @@ impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
                     PanelHistoryMode::None,
                 ),
                 PanelWidth::Full,
-            ));
-        }
-        panels
+            ),
+        ]
     }
 
     fn panel_states(
@@ -96,8 +97,16 @@ impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
                 ),
             );
         }
+        let config_payload = json!({
+            "evaluator": self,
+            "runner": {
+                "performance_snapshot_interval_ms": ctx.runner_params.performance_snapshot_interval_ms,
+                "min_tick_time_ms": ctx.runner_params.min_tick_time_ms,
+                "db_pool_size": ctx.runner_params.db_pool_size,
+            },
+        });
         let mut panels = vec![key_value_panel("evaluator_summary", summary)];
-        if let Some(config_panel) = json_object_panel("evaluator_config", self)? {
+        if let Some(config_panel) = json_value_panel("evaluator_config", &config_payload)? {
             panels.push(config_panel);
         }
         Ok(panels)
@@ -127,15 +136,17 @@ fn evaluator_observable_kind(
 
 impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfig {
     fn panel_specs(&self, _ctx: &SamplerAggregatorPanelContext<'_>) -> Vec<PanelSpec> {
-        let mut panels = vec![panel_spec(
-            "sampler_summary",
-            "Sampler Aggregator Summary",
-            PanelKind::KeyValue,
-            PanelHistoryMode::None,
-        )];
-        panels[0].width = PanelWidth::Half;
-        if has_object_fields(self) {
-            panels.push(with_panel_width(
+        vec![
+            with_panel_width(
+                panel_spec(
+                    "sampler_summary",
+                    "Sampler Aggregator Summary",
+                    PanelKind::KeyValue,
+                    PanelHistoryMode::None,
+                ),
+                PanelWidth::Full,
+            ),
+            with_panel_width(
                 panel_spec(
                     "sampler_config",
                     "Sampler Aggregator Config",
@@ -143,9 +154,8 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
                     PanelHistoryMode::None,
                 ),
                 PanelWidth::Full,
-            ));
-        }
-        panels
+            ),
+        ]
     }
 
     fn panel_states(
@@ -157,6 +167,11 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
             vec![
                 key_value("implementation", "Implementation", self.kind_str()),
                 key_value("domain", "Domain", summarize_domain(ctx.domain)),
+                key_value(
+                    "snapshot_interval_ms",
+                    "Snapshot Interval (ms)",
+                    ctx.runner_params.performance_snapshot_interval_ms,
+                ),
                 key_value(
                     "min_tick_time_ms",
                     "Min Tick Time (ms)",
@@ -172,79 +187,19 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
                     "DB Pool Size",
                     ctx.runner_params.db_pool_size,
                 ),
-                key_value(
-                    "queue_buffer",
-                    "Target Pending Batches / Evaluator",
-                    ctx.runner_params.queue.queue_buffer,
-                ),
-                key_value(
-                    "local_pending_buffer_multiplier",
-                    "Target Local Pending Multiplier",
-                    ctx.runner_params.queue.local_pending_buffer_multiplier,
-                ),
-                key_value(
-                    "max_batch_size",
-                    "Max Batch Size",
-                    ctx.runner_params.queue.max_batch_size,
-                ),
-                key_value(
-                    "target_batch_eval_ms",
-                    "Target Batch Eval (ms)",
-                    ctx.runner_params.queue.target_batch_eval_ms,
-                ),
-                key_value(
-                    "batch_size_deadband_ratio",
-                    "Batch Size Deadband Ratio",
-                    ctx.runner_params.queue.batch_size_deadband_ratio,
-                ),
-                key_value(
-                    "batch_size_cooldown_ticks",
-                    "Batch Size Cooldown (ticks)",
-                    ctx.runner_params.queue.batch_size_cooldown_ticks,
-                ),
-                key_value(
-                    "max_queue_size",
-                    "Max Open Batches",
-                    ctx.runner_params.queue.max_queue_size,
-                ),
-                key_value(
-                    "max_batches_per_tick",
-                    "Max Produced Batches / Tick",
-                    ctx.runner_params.queue.max_batches_per_tick,
-                ),
-                key_value(
-                    "max_insert_bundle_size",
-                    "Max Insert Bundle Size",
-                    ctx.runner_params.queue.max_insert_bundle_size,
-                ),
-                key_value(
-                    "max_concurrent_insert_tasks",
-                    "Max Concurrent Insert Tasks",
-                    ctx.runner_params.queue.max_concurrent_insert_tasks,
-                ),
-                key_value(
-                    "completed_fetch_limit",
-                    "Completed Prefetch Fetch Limit",
-                    ctx.runner_params.queue.completed_batch_fetch_limit,
-                ),
-                key_value(
-                    "pending_refill_low_ratio",
-                    "Pending Refill Low Ratio",
-                    ctx.runner_params.queue.pending_refill_low_ratio,
-                ),
-                key_value(
-                    "pending_refill_high_ratio",
-                    "Pending Refill High Ratio",
-                    ctx.runner_params.queue.pending_refill_high_ratio,
-                ),
-                key_value(
-                    "snapshot_interval_ms",
-                    "Snapshot Interval (ms)",
-                    ctx.runner_params.performance_snapshot_interval_ms,
-                ),
             ],
         )];
-        if let Some(config_panel) = json_object_panel("sampler_config", self)? {
+        let config_payload = json!({
+            "sampler_aggregator": self,
+            "runner": {
+                "performance_snapshot_interval_ms": ctx.runner_params.performance_snapshot_interval_ms,
+                "min_tick_time_ms": ctx.runner_params.min_tick_time_ms,
+                "frontend_sync_interval_ms": ctx.runner_params.frontend_sync_interval_ms,
+                "db_pool_size": ctx.runner_params.db_pool_size,
+                "queue": ctx.runner_params.queue,
+            },
+        });
+        if let Some(config_panel) = json_value_panel("sampler_config", &config_payload)? {
             panels.push(config_panel);
         }
         Ok(panels)
@@ -262,27 +217,6 @@ fn summarize_domain(domain: &Domain) -> String {
             format!("{axis}[{}]", branches.len())
         }
     }
-}
-
-fn has_object_fields<T: Serialize>(value: &T) -> bool {
-    serde_json::to_value(value)
-        .ok()
-        .is_some_and(|value| json_has_object_fields(&value))
-}
-
-fn json_has_object_fields(value: &JsonValue) -> bool {
-    value
-        .as_object()
-        .is_some_and(|object| object.iter().any(|(key, _)| key.as_str() != "kind"))
-}
-
-fn json_object_panel<T: Serialize>(
-    panel_id: &str,
-    value: &T,
-) -> Result<Option<PanelState>, EngineError> {
-    let value = serde_json::to_value(value)
-        .map_err(|err| EngineError::engine(format!("failed to serialize config panel: {err}")))?;
-    json_value_panel(panel_id, &value)
 }
 
 fn json_value_panel(panel_id: &str, value: &JsonValue) -> Result<Option<PanelState>, EngineError> {

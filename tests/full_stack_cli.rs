@@ -1808,7 +1808,7 @@ async fn full_stack_cli_server_can_restart_while_nodes_keep_running() -> anyhow:
 }
 
 #[cfg(unix)]
-#[cfg_attr(tokio::test, unix)]
+#[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_run_node_exits_on_sigterm_and_releases_name() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
@@ -1836,6 +1836,221 @@ async fn full_stack_cli_run_node_exits_on_sigterm_and_releases_name() -> anyhow:
         .await?;
 
     harness.start_node("w-1").await?;
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_server_queue_tuning_update_applies_to_active_sample_task() -> anyhow::Result<()>
+{
+    let mut harness = FullStackHarness::new().await?;
+
+    let config = temp_run_add_config(
+        r#"
+name = "queue-tuning-live-update-e2e"
+
+[evaluator]
+kind = "sin_evaluator"
+min_eval_time_per_sample_ms = 5
+
+[[task_queue]]
+name = "sample-a"
+kind = "sample"
+nr_samples = 8192
+observable = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+
+[sampler_aggregator_runner_params]
+performance_snapshot_interval_ms = 100
+min_tick_time_ms = 10
+frontend_sync_interval_ms = 100
+
+[sampler_aggregator_runner_params.queue]
+queue_buffer = 1.0
+target_batch_eval_ms = 50.0
+max_batch_size = 32
+local_pending_buffer_multiplier = 1.0
+max_queue_size = 64
+max_batches_per_tick = 8
+max_insert_bundle_size = 8
+max_concurrent_insert_tasks = 2
+completed_batch_fetch_limit = 64
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = $1")
+        .bind("queue-tuning-live-update-e2e")
+        .fetch_one(&harness.pool)
+        .await?;
+    let task_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM run_tasks WHERE run_id = $1 AND name = 'sample-a' LIMIT 1",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+
+    let password = "operator-secret";
+    let password_hash = hash_password_for_tests(password);
+    let server_url = harness
+        .start_server_with_auth((&password_hash, "test-session-secret"))
+        .await?;
+
+    let login = http_post_json(
+        &server_url,
+        "/api/auth/login",
+        json!({ "password": password }),
+        None,
+    )
+    .await?;
+    assert_eq!(login.status(), reqwest::StatusCode::OK);
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.split(';').next().unwrap_or("").to_string())
+        .ok_or_else(|| anyhow::anyhow!("missing session cookie"))?;
+
+    harness.start_node("w-1").await?;
+    harness.start_node("w-2").await?;
+
+    let assign_sampler = http_post_json(
+        &server_url,
+        "/api/nodes/w-1/assign",
+        json!({ "run_id": run_id, "role": "sampler_aggregator" }),
+        Some(&cookie),
+    )
+    .await?;
+    assert_eq!(assign_sampler.status(), reqwest::StatusCode::OK);
+
+    let assign_eval = http_post_json(
+        &server_url,
+        "/api/nodes/w-2/assign",
+        json!({ "run_id": run_id, "role": "evaluator" }),
+        Some(&cookie),
+    )
+    .await?;
+    assert_eq!(assign_eval.status(), reqwest::StatusCode::OK);
+
+    harness
+        .wait_for(
+            "sample task becomes active",
+            Duration::from_secs(20),
+            || {
+                let pool = harness.pool.clone();
+                async move {
+                    let state: Option<String> = sqlx::query_scalar(
+                        "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'sample-a'",
+                    )
+                    .bind(run_id)
+                    .fetch_optional(&pool)
+                    .await?;
+                    Ok(state.as_deref() == Some("active"))
+                }
+            },
+        )
+        .await?;
+
+    harness
+        .wait_for(
+            "initial sampler diagnostics persisted",
+            Duration::from_secs(20),
+            || {
+                let pool = harness.pool.clone();
+                async move {
+                    let diag: Option<JsonValue> = sqlx::query_scalar(
+                        r#"
+                    SELECT engine_diagnostics
+                    FROM sampler_aggregator_performance_latest
+                    WHERE run_id = $1 AND worker_id = 'w-1'
+                    "#,
+                    )
+                    .bind(run_id)
+                    .fetch_optional(&pool)
+                    .await?;
+                    let Some(diag) = diag else {
+                        return Ok(false);
+                    };
+                    Ok(diag["runner"]["queue_buffer"].as_f64() == Some(1.0))
+                }
+            },
+        )
+        .await?;
+
+    let update = http_post_json(
+        &server_url,
+        &format!("/api/runs/{run_id}/tasks/{task_id}/queue-tuning"),
+        json!({
+            "queue_tuning": {
+                "queue_buffer": 0.0,
+                "max_batches_per_tick": 1,
+                "completed_batch_fetch_limit": 7
+            }
+        }),
+        Some(&cookie),
+    )
+    .await?;
+    assert_eq!(update.status(), reqwest::StatusCode::OK);
+
+    harness
+        .wait_for(
+            "updated queue tuning reflected in active task payload",
+            Duration::from_secs(20),
+            || {
+                let pool = harness.pool.clone();
+                async move {
+                    let task: JsonValue = sqlx::query_scalar(
+                        "SELECT task FROM run_tasks WHERE run_id = $1 AND id = $2",
+                    )
+                    .bind(run_id)
+                    .bind(task_id)
+                    .fetch_one(&pool)
+                    .await?;
+                    Ok(task["queue_tuning"]["queue_buffer"].as_f64() == Some(0.0)
+                        && task["queue_tuning"]["max_batches_per_tick"].as_u64() == Some(1)
+                        && task["queue_tuning"]["completed_batch_fetch_limit"].as_u64() == Some(7))
+                }
+            },
+        )
+        .await?;
+
+    harness
+        .wait_for(
+            "updated queue tuning reflected in live runner diagnostics",
+            Duration::from_secs(20),
+            || {
+                let pool = harness.pool.clone();
+                async move {
+                    let diag: Option<JsonValue> = sqlx::query_scalar(
+                        r#"
+                        SELECT engine_diagnostics
+                        FROM sampler_aggregator_performance_latest
+                        WHERE run_id = $1 AND worker_id = 'w-1'
+                        "#,
+                    )
+                    .bind(run_id)
+                    .fetch_optional(&pool)
+                    .await?;
+                    let Some(diag) = diag else {
+                        return Ok(false);
+                    };
+                    Ok(diag["runner"]["queue_buffer"].as_f64() == Some(0.0)
+                        && diag["runner"]["target_pending_batches"].as_u64() == Some(0))
+                }
+            },
+        )
+        .await?;
 
     harness.stop_children().await;
     harness.pool.close().await;
