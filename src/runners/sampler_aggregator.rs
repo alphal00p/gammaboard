@@ -1,10 +1,10 @@
 //! Sampler task executor orchestration.
 //!
 //! This module owns one active sampler task at a time:
-//! - restore/build the sampler and observable for that task
+//! - restore/build the sampler and accumulator for that task
 //! - enqueue latent batches
 //! - fetch completed batches and pass training weights back into the sampler
-//! - merge completed batch observables into the current observable state
+//! - merge completed batch observables into the current accumulator state
 //! - persist lightweight UI sync snapshots and full resume checkpoints
 
 use crate::core::{
@@ -12,7 +12,7 @@ use crate::core::{
     SamplerAggregatorPerformanceSnapshot, SamplerQueueTuning, SamplerRuntimeMetrics,
     SamplerWorkRollingAverages, SamplerWorkerStore, StoreError,
 };
-use crate::evaluation::ObservableState;
+use crate::evaluation::AccumulatorState;
 use crate::runners::process_memory::current_rss_bytes;
 use crate::runners::queue::QueueUtilizationSnapshot;
 use crate::runners::rolling_metric::RollingMetric;
@@ -53,7 +53,7 @@ struct SamplerRollingState {
     reclaim_ms: RollingMetric,
     queue_counts_ms: RollingMetric,
     completed_merge_ingest_ms: RollingMetric,
-    persist_observable_ms: RollingMetric,
+    persist_accumulator_ms: RollingMetric,
     completed_delete_ms: RollingMetric,
     produce_ms: RollingMetric,
     progress_sync_ms: RollingMetric,
@@ -71,7 +71,7 @@ struct SamplerWindowState {
     reclaim_ms: WindowMetric,
     queue_counts_ms: WindowMetric,
     completed_merge_ingest_ms: WindowMetric,
-    persist_observable_ms: WindowMetric,
+    persist_accumulator_ms: WindowMetric,
     completed_delete_ms: WindowMetric,
     produce_ms: WindowMetric,
     progress_sync_ms: WindowMetric,
@@ -79,7 +79,7 @@ struct SamplerWindowState {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
-enum ObservableCheckpointState {
+enum AccumulatorCheckpointState {
     #[default]
     NeedsInitialRoundTrip,
     WaitingForInitialRoundTrip,
@@ -113,7 +113,7 @@ struct SamplerRuntimeState {
     batch_size_current: usize,
     #[serde(default)]
     sampler_tick_busy_ratio: Option<f64>,
-    observable_checkpoint_state: ObservableCheckpointState,
+    accumulator_checkpoint_state: AccumulatorCheckpointState,
     rolling: SamplerRollingState,
 }
 
@@ -130,7 +130,7 @@ impl Default for SamplerRuntimeState {
             pending_persisted_completed_batches: 0,
             batch_size_current: 0,
             sampler_tick_busy_ratio: None,
-            observable_checkpoint_state: ObservableCheckpointState::NeedsInitialRoundTrip,
+            accumulator_checkpoint_state: AccumulatorCheckpointState::NeedsInitialRoundTrip,
             rolling: SamplerRollingState::default(),
         }
     }
@@ -140,7 +140,7 @@ impl Default for SamplerRuntimeState {
 pub struct SamplerAggregatorCheckpoint {
     pub task_id: i64,
     pub sampler_snapshot: SamplerAggregatorSnapshot,
-    pub observable_state: ObservableState,
+    pub observable_state: AccumulatorState,
     runtime_state: SamplerRuntimeState,
     queue: SamplerQueueCheckpoint,
 }
@@ -195,7 +195,7 @@ pub struct SamplerAggregatorRunner<S> {
     node_name: String,
     task: RunTask,
     sampler: Box<dyn SamplerAggregator>,
-    observable_state: ObservableState,
+    observable_state: AccumulatorState,
     sampler_config: SamplerAggregatorConfig,
     batch_transforms: Vec<BatchTransformConfig>,
     store: S,
@@ -248,7 +248,7 @@ where
         node_name: impl Into<String>,
         task: RunTask,
         sampler: Box<dyn SamplerAggregator>,
-        observable_state: ObservableState,
+        observable_state: AccumulatorState,
         sampler_config: SamplerAggregatorConfig,
         batch_transforms: Vec<BatchTransformConfig>,
         params: SamplerAggregatorRunnerParams,
@@ -277,7 +277,7 @@ where
         let nr_produced_samples = task.nr_produced_samples;
         let nr_completed_samples = task.nr_completed_samples;
         if !has_resume_snapshot && nr_completed_samples > 0 {
-            runtime_state.observable_checkpoint_state = ObservableCheckpointState::Ready;
+            runtime_state.accumulator_checkpoint_state = AccumulatorCheckpointState::Ready;
         }
 
         let performance_snapshot_interval =
@@ -432,10 +432,10 @@ where
             "local_inflight_insert_tasks": queue_runtime.local_inflight_insert_tasks,
             "local_inflight_insert_batches": queue_runtime.local_inflight_insert_batches,
             "local_ready_processed_batches": queue_runtime.local_ready_processed_batches,
-            "observable_checkpoint_state": match self.runtime_state.observable_checkpoint_state {
-                ObservableCheckpointState::NeedsInitialRoundTrip => "needs_initial_round_trip",
-                ObservableCheckpointState::WaitingForInitialRoundTrip => "waiting_for_initial_round_trip",
-                ObservableCheckpointState::Ready => "ready",
+            "accumulator_checkpoint_state": match self.runtime_state.accumulator_checkpoint_state {
+                AccumulatorCheckpointState::NeedsInitialRoundTrip => "needs_initial_round_trip",
+                AccumulatorCheckpointState::WaitingForInitialRoundTrip => "waiting_for_initial_round_trip",
+                AccumulatorCheckpointState::Ready => "ready",
             },
             "training_samples_remaining": self.sampler.training_samples_remaining(),
         })
@@ -460,7 +460,10 @@ where
                 .window_state
                 .completed_merge_ingest_ms
                 .snapshot_and_reset(),
-            persist_observable_ms: self.window_state.persist_observable_ms.snapshot_and_reset(),
+            persist_accumulator_ms: self
+                .window_state
+                .persist_accumulator_ms
+                .snapshot_and_reset(),
             completed_delete_ms: self.window_state.completed_delete_ms.snapshot_and_reset(),
             produce_ms: self.window_state.produce_ms.snapshot_and_reset(),
             progress_sync_ms: self.window_state.progress_sync_ms.snapshot_and_reset(),
@@ -692,7 +695,7 @@ where
         let persist_snapshot = force
             || self.runtime_state.initial_round_trip_snapshot_pending
             || self.runtime_state.pending_persisted_completed_batches > 0;
-        let current_observable = self
+        let current_accumulator = self
             .observable_state
             .to_json()
             .map_err(RunnerError::Engine)?;
@@ -722,7 +725,7 @@ where
                 .save_aggregation(
                     run_id,
                     task_id,
-                    &current_observable,
+                    &current_accumulator,
                     snapshot_ref.as_ref(),
                     flushed_completed_batches,
                 )
@@ -764,8 +767,8 @@ where
         match task.handle.await {
             Ok(Ok(())) => {
                 observe_duration_pair(
-                    &mut self.runtime_state.rolling.persist_observable_ms,
-                    &mut self.window_state.persist_observable_ms,
+                    &mut self.runtime_state.rolling.persist_accumulator_ms,
+                    &mut self.window_state.persist_accumulator_ms,
                     task.started_at.elapsed(),
                 );
                 if task.cleared_initial_round_trip {
@@ -842,8 +845,8 @@ where
         let mut completed_merge_ms = 0.0_f64;
         let mut completed_training_ingest_batches = 0_usize;
         let was_waiting_initial_round_trip = matches!(
-            self.runtime_state.observable_checkpoint_state,
-            ObservableCheckpointState::WaitingForInitialRoundTrip
+            self.runtime_state.accumulator_checkpoint_state,
+            AccumulatorCheckpointState::WaitingForInitialRoundTrip
         );
         for batch in &completed {
             let batch_samples = batch.batch_size;
@@ -901,7 +904,7 @@ where
 
             let merge_started = Instant::now();
             self.observable_state
-                .merge(batch.result.observable.clone())
+                .merge(batch.result.accumulator.clone())
                 .map_err(RunnerError::Engine)?;
             completed_merge_ms += merge_started.elapsed().as_secs_f64() * 1000.0;
         }
@@ -916,7 +919,7 @@ where
             .pending_persisted_completed_batches
             .saturating_add(completed.len() as i32);
         if completed_samples_delta > 0 {
-            self.runtime_state.observable_checkpoint_state = ObservableCheckpointState::Ready;
+            self.runtime_state.accumulator_checkpoint_state = AccumulatorCheckpointState::Ready;
             if was_waiting_initial_round_trip {
                 self.runtime_state.initial_round_trip_snapshot_pending = true;
             }
@@ -944,7 +947,7 @@ where
         &mut self,
         queue_before_produce: crate::core::BatchQueueCounts,
     ) -> Result<usize, RunnerError> {
-        let observable_config = self.observable_state.config();
+        let accumulator_config = self.observable_state.config();
         let sample_plan = self.sampler.sample_plan().map_err(RunnerError::Engine)?;
         let open_before_produce = queue_before_produce.open().max(0) as usize;
         let batch_plan = self
@@ -970,7 +973,7 @@ where
             }
             produced.push(
                 batch
-                    .with_observable_config(observable_config.clone())
+                    .with_accumulator_config(accumulator_config.clone())
                     .build(),
             );
         }
@@ -1028,8 +1031,8 @@ where
             None => training_samples_remaining,
         };
         let max_samples = self.max_samples_to_produce_this_tick(engine_max_samples)?;
-        Ok(match self.runtime_state.observable_checkpoint_state {
-            ObservableCheckpointState::NeedsInitialRoundTrip => {
+        Ok(match self.runtime_state.accumulator_checkpoint_state {
+            AccumulatorCheckpointState::NeedsInitialRoundTrip => {
                 if self.params.queue.max_queue_size <= open_before_produce {
                     ProduceDecision::None
                 } else {
@@ -1037,20 +1040,20 @@ where
                     if nr_samples == 0 {
                         ProduceDecision::None
                     } else {
-                        self.runtime_state.observable_checkpoint_state =
-                            ObservableCheckpointState::WaitingForInitialRoundTrip;
+                        self.runtime_state.accumulator_checkpoint_state =
+                            AccumulatorCheckpointState::WaitingForInitialRoundTrip;
                         ProduceDecision::InitialRoundTrip(nr_samples.min(MIN_BATCH_SIZE))
                     }
                 }
             }
-            ObservableCheckpointState::WaitingForInitialRoundTrip => {
+            AccumulatorCheckpointState::WaitingForInitialRoundTrip => {
                 if open_before_produce == 0 {
-                    self.runtime_state.observable_checkpoint_state =
-                        ObservableCheckpointState::NeedsInitialRoundTrip;
+                    self.runtime_state.accumulator_checkpoint_state =
+                        AccumulatorCheckpointState::NeedsInitialRoundTrip;
                 }
                 ProduceDecision::None
             }
-            ObservableCheckpointState::Ready => ProduceDecision::PlannedByQueue(max_samples),
+            AccumulatorCheckpointState::Ready => ProduceDecision::PlannedByQueue(max_samples),
         })
     }
 
@@ -1306,7 +1309,7 @@ mod tests {
         let snapshot = SamplerAggregatorCheckpoint {
             task_id: 1,
             sampler_snapshot: SamplerAggregatorSnapshot::NaiveMonteCarlo { raw: json!({}) },
-            observable_state: crate::evaluation::ObservableState::empty_scalar(),
+            observable_state: crate::evaluation::AccumulatorState::empty_scalar(),
             runtime_state: SamplerRuntimeState {
                 batch_size_current: 128,
                 ..SamplerRuntimeState::default()
@@ -1325,12 +1328,12 @@ mod tests {
         let has_resume_snapshot = false;
 
         if !has_resume_snapshot && task_completed_samples > 0 {
-            runtime_state.observable_checkpoint_state = super::ObservableCheckpointState::Ready;
+            runtime_state.accumulator_checkpoint_state = super::AccumulatorCheckpointState::Ready;
         }
 
         assert_eq!(
-            runtime_state.observable_checkpoint_state,
-            super::ObservableCheckpointState::NeedsInitialRoundTrip
+            runtime_state.accumulator_checkpoint_state,
+            super::AccumulatorCheckpointState::NeedsInitialRoundTrip
         );
     }
 }

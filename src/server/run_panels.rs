@@ -267,10 +267,10 @@ fn panel_states(
             vec![
                 key_value("evaluator", "Evaluator", kind_of(&run_spec.evaluator)),
                 key_value(
-                    "observable",
-                    "Observable",
+                    "accumulator",
+                    "Accumulator",
                     current_task
-                        .map(|task| observable_label(&task.task))
+                        .map(|task| accumulator_label(&task.task))
                         .unwrap_or_else(|| "none".to_string()),
                 ),
                 key_value(
@@ -293,8 +293,8 @@ fn panel_states(
     ])
 }
 
-fn observable_label(task: &crate::core::RunTaskSpec) -> String {
-    match task.new_observable_config() {
+fn accumulator_label(task: &crate::core::RunTaskSpec) -> String {
+    match task.new_accumulator_config() {
         Ok(Some(config)) => kind_of(&config),
         Ok(None) => "reuse_previous".to_string(),
         Err(_) => "none".to_string(),

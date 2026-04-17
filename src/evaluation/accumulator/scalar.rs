@@ -1,8 +1,8 @@
-use super::{IngestScalar, Observable};
+use super::{Accumulator, IngestScalar};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ScalarObservableState {
+pub struct ScalarAccumulatorState {
     pub count: i64,
     pub sum_weighted_value: f64,
     pub sum_abs: f64,
@@ -11,7 +11,7 @@ pub struct ScalarObservableState {
     pub nan_count: usize,
 }
 
-impl ScalarObservableState {
+impl ScalarAccumulatorState {
     pub fn add_sample(&mut self, value: f64, weight: f64) {
         let weight = weight.abs();
         let weighted_value = value * weight;
@@ -51,13 +51,13 @@ impl ScalarObservableState {
     }
 }
 
-impl IngestScalar for ScalarObservableState {
+impl IngestScalar for ScalarAccumulatorState {
     fn ingest_scalar(&mut self, value: f64, weight: f64) {
         self.add_sample(value, weight);
     }
 }
 
-impl Observable for ScalarObservableState {
+impl Accumulator for ScalarAccumulatorState {
     type Persistent = Self;
     type Digest = Self;
 
@@ -118,32 +118,32 @@ fn relative_squared_dispersion(variance: f64, mean_abs: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::ScalarObservableState;
+    use super::ScalarAccumulatorState;
 
     #[test]
     fn add_sample_accepts_finite_weighted_contributions() {
-        let mut observable = ScalarObservableState::default();
+        let mut accumulator = ScalarAccumulatorState::default();
 
-        observable.add_sample(2.0, -3.0);
+        accumulator.add_sample(2.0, -3.0);
 
-        assert_eq!(observable.count, 1);
-        assert_eq!(observable.sum_weighted_value, 6.0);
-        assert_eq!(observable.sum_abs, 6.0);
-        assert_eq!(observable.sum_sq, 36.0);
-        assert_eq!(observable.nan_count, 0);
+        assert_eq!(accumulator.count, 1);
+        assert_eq!(accumulator.sum_weighted_value, 6.0);
+        assert_eq!(accumulator.sum_abs, 6.0);
+        assert_eq!(accumulator.sum_sq, 36.0);
+        assert_eq!(accumulator.nan_count, 0);
     }
 
     #[test]
     fn add_sample_skips_non_finite_weighted_contributions() {
-        let mut observable = ScalarObservableState::default();
+        let mut accumulator = ScalarAccumulatorState::default();
 
-        observable.add_sample(f64::NAN, 1.0);
-        observable.add_sample(1.0, f64::INFINITY);
+        accumulator.add_sample(f64::NAN, 1.0);
+        accumulator.add_sample(1.0, f64::INFINITY);
 
-        assert_eq!(observable.count, 0);
-        assert_eq!(observable.sum_weighted_value, 0.0);
-        assert_eq!(observable.sum_abs, 0.0);
-        assert_eq!(observable.sum_sq, 0.0);
-        assert_eq!(observable.nan_count, 2);
+        assert_eq!(accumulator.count, 0);
+        assert_eq!(accumulator.sum_weighted_value, 0.0);
+        assert_eq!(accumulator.sum_abs, 0.0);
+        assert_eq!(accumulator.sum_sq, 0.0);
+        assert_eq!(accumulator.nan_count, 2);
     }
 }

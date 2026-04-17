@@ -45,7 +45,7 @@ const DEFAULT_CREATE_RUN_TOML = `name = "new-run"`;
 const DEFAULT_ADD_TASKS_TOML = `[[task_queue]]
 kind = "sample"
 nr_samples = 10000
-observable = { config = "scalar" }`;
+accumulator = { config = "scalar" }`;
 const EVALUATOR_COUNT_STORAGE_KEY = "runs.evaluator_count";
 
 const DashboardHeader = () => {
@@ -457,7 +457,7 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
         label="Task Queue TOML"
         submitLabel="Add Tasks"
         initialValue={DEFAULT_ADD_TASKS_TOML}
-        helperText='Submit one or more [[task_queue]] entries using sampler_aggregator / observable sources: omitted = latest, or { from_name = "..." }, or { config = ... }.'
+        helperText='Submit one or more [[task_queue]] entries using sampler_aggregator / accumulator sources: omitted = latest, or { from_name = "..." }, or { config = ... }.'
         templates={taskTemplates}
         loadTemplate={async (name) => {
           const response = await fetchTemplateFile("tasks", name);

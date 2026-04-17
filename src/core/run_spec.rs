@@ -33,7 +33,7 @@ pub struct RunSpec {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum ObservableConfig {
+pub enum AccumulatorConfig {
     Empty,
     Scalar,
     Complex,
@@ -42,14 +42,16 @@ pub enum ObservableConfig {
     FullComplex,
 }
 
-impl ObservableConfig {
-    pub const fn semantic_kind(&self) -> crate::evaluation::SemanticObservableKind {
+impl AccumulatorConfig {
+    pub const fn semantic_kind(&self) -> crate::evaluation::SemanticAccumulatorKind {
         match self {
             Self::Empty | Self::Scalar | Self::FullScalar => {
-                crate::evaluation::SemanticObservableKind::Scalar
+                crate::evaluation::SemanticAccumulatorKind::Scalar
             }
-            Self::Complex | Self::FullComplex => crate::evaluation::SemanticObservableKind::Complex,
-            Self::Gammaloop => crate::evaluation::SemanticObservableKind::Scalar,
+            Self::Complex | Self::FullComplex => {
+                crate::evaluation::SemanticAccumulatorKind::Complex
+            }
+            Self::Gammaloop => crate::evaluation::SemanticAccumulatorKind::Scalar,
         }
     }
 }

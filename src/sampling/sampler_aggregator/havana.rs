@@ -594,7 +594,7 @@ impl SamplerAggregator for HavanaInferenceSampler {
         self.samples_produced = self.samples_produced.saturating_add(nr_samples);
         Ok(LatentBatchSpec {
             nr_samples,
-            observable: crate::core::ObservableConfig::Scalar,
+            accumulator: crate::core::AccumulatorConfig::Scalar,
             payload: LatentBatchPayload::HavanaInference { seed },
         })
     }

@@ -1239,7 +1239,7 @@ mod tests {
 
     #[async_trait]
     impl AggregationStore for RecordingStore {
-        async fn load_current_observable(
+        async fn load_current_accumulator(
             &self,
             _run_id: i32,
         ) -> Result<Option<JsonValue>, StoreError> {
@@ -1290,7 +1290,7 @@ mod tests {
             &self,
             _run_id: i32,
             _task_id: i64,
-            _current_observable: &JsonValue,
+            _current_accumulator: &JsonValue,
             _persisted_observable: Option<&JsonValue>,
             _delta_batches_completed: i32,
         ) -> Result<(), StoreError> {

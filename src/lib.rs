@@ -15,20 +15,20 @@ pub mod stores;
 pub mod tracing;
 pub mod utils;
 
-pub use core::{BatchRecord, BatchStatus};
-pub use core::{BuildError, EngineError, EvalError, StoreError};
 pub use core::{
-    ImageDisplayMode, LineDisplayMode, LineRasterGeometry, Linspace, ObservableSourceSpec,
-    PlaneRasterGeometry, PlotObservableKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState,
+    AccumulatorSourceSpec, ImageDisplayMode, LineDisplayMode, LineRasterGeometry, Linspace,
+    PlaneRasterGeometry, PlotAccumulatorKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState,
     SampleTaskConfig, SamplerAggregatorSourceSpec, SourceRefSpec, canonical_task_toml,
 };
+pub use core::{BatchRecord, BatchStatus};
+pub use core::{BuildError, EngineError, EvalError, StoreError};
 pub use evaluation::{
-    Batch, BatchError, BatchResult, BatchTransform, ComplexObservableState, ComplexSampleEvaluator,
-    ComplexValue, ComplexValueEvaluator, EmptyObservableState, EvalBatchOptions, Evaluator,
-    FullComplexObservableState, FullObservableProgress, FullScalarObservableState,
-    GammaLoopObservableDigest, GammaLoopObservableState, IngestComplex, IngestScalar, Materializer,
-    Observable, ObservableState, Point, ScalarObservableState, ScalarSampleEvaluator,
-    ScalarValueEvaluator, SemanticObservableKind,
+    Accumulator, AccumulatorState, Batch, BatchError, BatchResult, BatchTransform,
+    ComplexAccumulatorState, ComplexSampleEvaluator, ComplexValue, ComplexValueEvaluator,
+    EmptyAccumulatorState, EvalBatchOptions, Evaluator, FullAccumulatorProgress,
+    FullComplexAccumulatorState, FullScalarAccumulatorState, GammaLoopAccumulatorDigest,
+    GammaLoopAccumulatorState, IngestComplex, IngestScalar, Materializer, Point,
+    ScalarAccumulatorState, ScalarSampleEvaluator, ScalarValueEvaluator, SemanticAccumulatorKind,
 };
 pub use sampling::{
     LatentBatch, LatentBatchPayload, LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator,

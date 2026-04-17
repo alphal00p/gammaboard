@@ -199,7 +199,7 @@ async fn run_task_command(store: &PgStore, command: TaskCommand) -> Result<()> {
             }
             for task in tasks {
                 println!(
-                    "run_id={} task_id={} name={} state={} kind={} produced={} completed={} sampler_source={} observable_source={} spawned_from={} failure_reason={}",
+                    "run_id={} task_id={} name={} state={} kind={} produced={} completed={} sampler_source={} accumulator_source={} spawned_from={} failure_reason={}",
                     task.run_id,
                     task.id,
                     task.name,
@@ -214,8 +214,8 @@ async fn run_task_command(store: &PgStore, command: TaskCommand) -> Result<()> {
                     ),
                     format_task_source_ref(
                         &task.task,
-                        task.task.sample_observable_source(),
-                        task.task.new_observable_config().ok().flatten().is_some(),
+                        task.task.sample_accumulator_source(),
+                        task.task.new_accumulator_config().ok().flatten().is_some(),
                     ),
                     format_task_snapshot_origin(task.spawned_from_snapshot_id),
                     task.failure_reason.as_deref().unwrap_or("")

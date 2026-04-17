@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::{error::Error, fmt};
 
-use crate::evaluation::ObservableState;
+use crate::evaluation::AccumulatorState;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Point {
@@ -99,7 +99,7 @@ impl Batch {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchResult {
     pub values: Option<Vec<f64>>,
-    pub observable: ObservableState,
+    pub accumulator: AccumulatorState,
 }
 
 impl BatchResult {
@@ -107,8 +107,11 @@ impl BatchResult {
         standard()
     }
 
-    pub fn new(values: Option<Vec<f64>>, observable: ObservableState) -> Self {
-        Self { values, observable }
+    pub fn new(values: Option<Vec<f64>>, accumulator: AccumulatorState) -> Self {
+        Self {
+            values,
+            accumulator,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -146,20 +149,20 @@ impl BatchResult {
     }
 
     pub fn validate_json_safe(&self) -> Result<(), BatchError> {
-        let observable_json = self.observable.to_json().map_err(|err| {
+        let observable_json = self.accumulator.to_json().map_err(|err| {
             BatchError::layout(format!(
-                "failed to serialize batch observable payload: {err}"
+                "failed to serialize batch accumulator payload: {err}"
             ))
         })?;
-        ObservableState::from_json(&observable_json).map_err(|err| {
-            BatchError::layout(format!("batch observable is not JSON-safe: {err}"))
+        AccumulatorState::from_json(&observable_json).map_err(|err| {
+            BatchError::layout(format!("batch accumulator is not JSON-safe: {err}"))
         })?;
         Ok(())
     }
 
     pub fn values_from_json(
         values: Option<&JsonValue>,
-        observable: &JsonValue,
+        accumulator: &JsonValue,
     ) -> Result<Self, BatchError> {
         let parsed_values = match values {
             Some(values) if !values.is_null() => {
@@ -169,15 +172,15 @@ impl BatchResult {
             }
             _ => None,
         };
-        let parsed_observable = serde_json::from_value(observable.clone()).map_err(|err| {
-            BatchError::layout(format!("invalid batch observable payload: {err}"))
+        let parsed_observable = serde_json::from_value(accumulator.clone()).map_err(|err| {
+            BatchError::layout(format!("invalid batch accumulator payload: {err}"))
         })?;
         Ok(Self::new(parsed_values, parsed_observable))
     }
 
     pub fn values_from_bytes(
         values: Option<&[u8]>,
-        observable: &JsonValue,
+        accumulator: &JsonValue,
     ) -> Result<Self, BatchError> {
         let parsed_values = match values {
             Some(values) => {
@@ -189,8 +192,8 @@ impl BatchResult {
             }
             None => None,
         };
-        let parsed_observable = serde_json::from_value(observable.clone()).map_err(|err| {
-            BatchError::layout(format!("invalid batch observable payload: {err}"))
+        let parsed_observable = serde_json::from_value(accumulator.clone()).map_err(|err| {
+            BatchError::layout(format!("invalid batch accumulator payload: {err}"))
         })?;
         Ok(Self::new(parsed_values, parsed_observable))
     }
@@ -199,13 +202,13 @@ impl BatchResult {
 #[cfg(test)]
 mod tests {
     use super::BatchResult;
-    use crate::evaluation::{FullScalarObservableState, ObservableState};
+    use crate::evaluation::{AccumulatorState, FullScalarAccumulatorState};
 
     #[test]
-    fn validate_json_safe_rejects_non_finite_full_observable_values() {
+    fn validate_json_safe_rejects_non_finite_full_accumulator_values() {
         let result = BatchResult::new(
             None,
-            ObservableState::FullScalar(FullScalarObservableState {
+            AccumulatorState::FullScalar(FullScalarAccumulatorState {
                 values: vec![1.0, f64::NAN],
                 nan_entries: vec![],
             }),
@@ -216,17 +219,17 @@ mod tests {
             .expect_err("expected non-finite error");
         assert!(
             err.to_string()
-                .contains("batch observable is not JSON-safe")
+                .contains("batch accumulator is not JSON-safe")
         );
     }
 
     #[test]
     fn training_values_roundtrip_binary() {
-        let result = BatchResult::new(Some(vec![1.0, 2.0, 3.5]), ObservableState::empty_scalar());
+        let result = BatchResult::new(Some(vec![1.0, 2.0, 3.5]), AccumulatorState::empty_scalar());
         let bytes = result.values_to_bytes().expect("encode values");
         let restored = BatchResult::values_from_bytes(
             bytes.as_deref(),
-            &result.observable.to_json().expect("observable json"),
+            &result.accumulator.to_json().expect("accumulator json"),
         )
         .expect("decode values");
         assert_eq!(restored.values, result.values);
@@ -236,7 +239,7 @@ mod tests {
     fn validate_json_safe_allows_non_finite_training_values() {
         let result = BatchResult::new(
             Some(vec![1.0, f64::NAN, f64::INFINITY]),
-            ObservableState::empty_scalar(),
+            AccumulatorState::empty_scalar(),
         );
 
         result

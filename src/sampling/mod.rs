@@ -5,7 +5,7 @@ pub mod materializer;
 pub mod sampler;
 pub mod sampler_aggregator;
 
-use crate::evaluation::ObservableState;
+use crate::evaluation::AccumulatorState;
 use crate::{core::RunStageSnapshot, runners::sampler_aggregator::SamplerAggregatorCheckpoint};
 
 pub use batch_transform::{SphericalBatchTransformParams, UnitBallBatchTransformParams};
@@ -21,13 +21,13 @@ pub use sampler_aggregator::{
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StageHandoff<'a> {
     pub sampler_snapshot: Option<&'a SamplerAggregatorSnapshot>,
-    pub observable_state: Option<&'a ObservableState>,
+    pub observable_state: Option<&'a AccumulatorState>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct StageHandoffOwned {
     pub sampler_snapshot: Option<SamplerAggregatorSnapshot>,
-    pub observable_state: Option<ObservableState>,
+    pub observable_state: Option<AccumulatorState>,
 }
 
 impl StageHandoffOwned {

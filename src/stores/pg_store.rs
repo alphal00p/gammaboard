@@ -714,8 +714,8 @@ impl WorkQueueStore for PgStore {
 
 #[async_trait::async_trait]
 impl AggregationStore for PgStore {
-    async fn load_current_observable(&self, run_id: i32) -> Result<Option<JsonValue>, StoreError> {
-        queries::get_run_current_observable(&self.pool, run_id)
+    async fn load_current_accumulator(&self, run_id: i32) -> Result<Option<JsonValue>, StoreError> {
+        queries::get_run_current_accumulator(&self.pool, run_id)
             .await
             .map_err(map_sqlx)
     }
@@ -777,7 +777,7 @@ impl AggregationStore for PgStore {
         &self,
         run_id: i32,
         task_id: i64,
-        current_observable: &JsonValue,
+        current_accumulator: &JsonValue,
         persisted_observable: Option<&JsonValue>,
         delta_batches_completed: i32,
     ) -> Result<(), StoreError> {
@@ -795,10 +795,10 @@ impl AggregationStore for PgStore {
             .await
             .map_err(map_sqlx)?;
         }
-        queries::update_run_current_observable(
+        queries::update_run_current_accumulator(
             &self.pool,
             run_id,
-            current_observable,
+            current_accumulator,
             delta_batches_completed,
         )
         .await

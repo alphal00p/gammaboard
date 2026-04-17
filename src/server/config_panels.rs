@@ -84,15 +84,15 @@ impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
                 ctx.runner_params.db_pool_size,
             ),
         ];
-        if let Some(observable_kind) = evaluator_observable_kind(self) {
+        if let Some(accumulator_kind) = evaluator_accumulator_kind(self) {
             summary.insert(
                 3,
                 key_value(
-                    "observable_kind",
-                    "Observable Kind",
-                    match observable_kind {
-                        crate::evaluation::SemanticObservableKind::Scalar => "scalar",
-                        crate::evaluation::SemanticObservableKind::Complex => "complex",
+                    "accumulator_kind",
+                    "Accumulator Kind",
+                    match accumulator_kind {
+                        crate::evaluation::SemanticAccumulatorKind::Scalar => "scalar",
+                        crate::evaluation::SemanticAccumulatorKind::Complex => "complex",
                     },
                 ),
             );
@@ -113,23 +113,23 @@ impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
     }
 }
 
-fn evaluator_observable_kind(
+fn evaluator_accumulator_kind(
     config: &EvaluatorConfig,
-) -> Option<crate::evaluation::SemanticObservableKind> {
+) -> Option<crate::evaluation::SemanticAccumulatorKind> {
     match config {
         EvaluatorConfig::Gammaloop { .. } => None,
         EvaluatorConfig::SinEvaluator { .. } => {
-            Some(crate::evaluation::SemanticObservableKind::Scalar)
+            Some(crate::evaluation::SemanticAccumulatorKind::Scalar)
         }
         EvaluatorConfig::SincEvaluator { .. } => {
-            Some(crate::evaluation::SemanticObservableKind::Complex)
+            Some(crate::evaluation::SemanticAccumulatorKind::Complex)
         }
-        EvaluatorConfig::Unit { params } => Some(params.observable_kind),
+        EvaluatorConfig::Unit { params } => Some(params.accumulator_kind),
         EvaluatorConfig::Symbolica { .. } => {
-            Some(crate::evaluation::SemanticObservableKind::Scalar)
+            Some(crate::evaluation::SemanticAccumulatorKind::Scalar)
         }
         EvaluatorConfig::PythonScalar { .. } => {
-            Some(crate::evaluation::SemanticObservableKind::Scalar)
+            Some(crate::evaluation::SemanticAccumulatorKind::Scalar)
         }
     }
 }

@@ -1,16 +1,16 @@
-use super::{IngestComplex, IngestScalar, Observable};
+use super::{Accumulator, IngestComplex, IngestScalar};
 use num::complex::Complex64;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-pub struct FullScalarObservableState {
+pub struct FullScalarAccumulatorState {
     pub values: Vec<f64>,
     #[serde(default)]
     pub nan_entries: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-pub struct FullComplexObservableState {
+pub struct FullComplexAccumulatorState {
     pub values: Vec<ComplexValue>,
     #[serde(default)]
     pub nan_entries: Vec<usize>,
@@ -23,11 +23,11 @@ pub struct ComplexValue {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct FullObservableProgress {
+pub struct FullAccumulatorProgress {
     pub processed: usize,
 }
 
-impl FullScalarObservableState {
+impl FullScalarAccumulatorState {
     pub fn push(&mut self, value: f64) {
         if !value.is_finite() {
             self.nan_entries.push(self.values.len());
@@ -38,13 +38,13 @@ impl FullScalarObservableState {
     }
 }
 
-impl IngestScalar for FullScalarObservableState {
+impl IngestScalar for FullScalarAccumulatorState {
     fn ingest_scalar(&mut self, value: f64, weight: f64) {
         self.push(value * weight.abs());
     }
 }
 
-impl FullComplexObservableState {
+impl FullComplexAccumulatorState {
     pub fn push(&mut self, value: ComplexValue) {
         if !value.re.is_finite() || !value.im.is_finite() {
             self.nan_entries.push(self.values.len());
@@ -55,7 +55,7 @@ impl FullComplexObservableState {
     }
 }
 
-impl IngestComplex for FullComplexObservableState {
+impl IngestComplex for FullComplexAccumulatorState {
     fn ingest_complex(&mut self, value: Complex64, weight: f64) {
         let weight = weight.abs();
         self.push(ComplexValue {
@@ -65,8 +65,8 @@ impl IngestComplex for FullComplexObservableState {
     }
 }
 
-impl Observable for FullScalarObservableState {
-    type Persistent = FullObservableProgress;
+impl Accumulator for FullScalarAccumulatorState {
+    type Persistent = FullAccumulatorProgress;
     type Digest = Self;
 
     fn sample_count(&self) -> i64 {
@@ -81,14 +81,14 @@ impl Observable for FullScalarObservableState {
     }
 
     fn get_persistent(&self) -> Self::Persistent {
-        FullObservableProgress {
+        FullAccumulatorProgress {
             processed: self.values.len(),
         }
     }
 }
 
-impl Observable for FullComplexObservableState {
-    type Persistent = FullObservableProgress;
+impl Accumulator for FullComplexAccumulatorState {
+    type Persistent = FullAccumulatorProgress;
     type Digest = Self;
 
     fn sample_count(&self) -> i64 {
@@ -103,7 +103,7 @@ impl Observable for FullComplexObservableState {
     }
 
     fn get_persistent(&self) -> Self::Persistent {
-        FullObservableProgress {
+        FullAccumulatorProgress {
             processed: self.values.len(),
         }
     }
@@ -111,48 +111,48 @@ impl Observable for FullComplexObservableState {
 
 #[cfg(test)]
 mod tests {
-    use super::{ComplexValue, FullComplexObservableState, FullScalarObservableState};
-    use crate::evaluation::{IngestComplex, IngestScalar, Observable};
+    use super::{ComplexValue, FullComplexAccumulatorState, FullScalarAccumulatorState};
+    use crate::evaluation::{Accumulator, IngestComplex, IngestScalar};
     use num::complex::Complex64;
 
     #[test]
     fn full_scalar_preserves_positions_for_non_finite_values() {
-        let mut observable = FullScalarObservableState::default();
+        let mut accumulator = FullScalarAccumulatorState::default();
 
-        observable.ingest_scalar(1.0, 2.0);
-        observable.ingest_scalar(f64::NAN, 1.0);
-        observable.ingest_scalar(1.0, f64::INFINITY);
+        accumulator.ingest_scalar(1.0, 2.0);
+        accumulator.ingest_scalar(f64::NAN, 1.0);
+        accumulator.ingest_scalar(1.0, f64::INFINITY);
 
-        assert_eq!(observable.values, vec![2.0, 0.0, 0.0]);
-        assert_eq!(observable.nan_entries, vec![1, 2]);
+        assert_eq!(accumulator.values, vec![2.0, 0.0, 0.0]);
+        assert_eq!(accumulator.nan_entries, vec![1, 2]);
     }
 
     #[test]
     fn full_complex_preserves_positions_for_non_finite_values() {
-        let mut observable = FullComplexObservableState::default();
+        let mut accumulator = FullComplexAccumulatorState::default();
 
-        observable.ingest_complex(Complex64::new(1.0, -2.0), 3.0);
-        observable.ingest_complex(Complex64::new(f64::NAN, 0.0), 1.0);
-        observable.ingest_complex(Complex64::new(1.0, 0.0), f64::INFINITY);
+        accumulator.ingest_complex(Complex64::new(1.0, -2.0), 3.0);
+        accumulator.ingest_complex(Complex64::new(f64::NAN, 0.0), 1.0);
+        accumulator.ingest_complex(Complex64::new(1.0, 0.0), f64::INFINITY);
 
         assert_eq!(
-            observable.values,
+            accumulator.values,
             vec![
                 ComplexValue { re: 3.0, im: -6.0 },
                 ComplexValue::default(),
                 ComplexValue::default(),
             ]
         );
-        assert_eq!(observable.nan_entries, vec![1, 2]);
+        assert_eq!(accumulator.nan_entries, vec![1, 2]);
     }
 
     #[test]
     fn full_scalar_merge_offsets_nan_entry_positions() {
-        let mut left = FullScalarObservableState {
+        let mut left = FullScalarAccumulatorState {
             values: vec![1.0, 0.0],
             nan_entries: vec![1],
         };
-        let right = FullScalarObservableState {
+        let right = FullScalarAccumulatorState {
             values: vec![2.0, 0.0, 3.0],
             nan_entries: vec![1],
         };
@@ -165,11 +165,11 @@ mod tests {
 
     #[test]
     fn full_complex_merge_offsets_nan_entry_positions() {
-        let mut left = FullComplexObservableState {
+        let mut left = FullComplexAccumulatorState {
             values: vec![ComplexValue { re: 1.0, im: 1.0 }],
             nan_entries: vec![],
         };
-        let right = FullComplexObservableState {
+        let right = FullComplexAccumulatorState {
             values: vec![ComplexValue::default(), ComplexValue { re: 2.0, im: -2.0 }],
             nan_entries: vec![0],
         };

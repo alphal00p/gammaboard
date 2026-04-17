@@ -131,10 +131,10 @@ pub trait WorkQueueStore: Send + Sync {
     async fn reclaim_abandoned_batches(&self, run_id: i32) -> Result<u64, StoreError>;
 }
 
-/// Persists active-stage observable state and task-local persisted snapshots.
+/// Persists active-stage accumulator state and task-local persisted snapshots.
 #[async_trait]
 pub trait AggregationStore: Send + Sync {
-    async fn load_current_observable(&self, run_id: i32) -> Result<Option<JsonValue>, StoreError>;
+    async fn load_current_accumulator(&self, run_id: i32) -> Result<Option<JsonValue>, StoreError>;
     async fn load_sampler_checkpoint(
         &self,
         run_id: i32,
@@ -161,7 +161,7 @@ pub trait AggregationStore: Send + Sync {
         &self,
         run_id: i32,
         task_id: i64,
-        current_observable: &JsonValue,
+        current_accumulator: &JsonValue,
         persisted_observable: Option<&JsonValue>,
         delta_batches_completed: i32,
     ) -> Result<(), StoreError>;

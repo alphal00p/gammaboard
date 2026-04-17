@@ -1,6 +1,6 @@
-use crate::core::{EvalError, ObservableConfig};
+use crate::core::{AccumulatorConfig, EvalError};
 use crate::evaluation::{
-    Batch, BatchResult, ComplexSampleEvaluator, EvalBatchOptions, Evaluator, ObservableState,
+    AccumulatorState, Batch, BatchResult, ComplexSampleEvaluator, EvalBatchOptions, Evaluator,
     SinEvaluatorParams,
 };
 use crate::utils::domain::Domain;
@@ -58,30 +58,30 @@ impl Evaluator for SincEvaluator {
     fn eval_batch(
         &mut self,
         batch: &Batch,
-        observable: &ObservableConfig,
+        accumulator: &AccumulatorConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
         let started = Instant::now();
-        let mut observable_state = ObservableState::from_config(observable);
+        let mut observable_state = AccumulatorState::from_config(accumulator);
         let weighted_values = match &mut observable_state {
-            ObservableState::Empty(observable) => {
-                self.eval_complex_into(batch, observable, options.require_training_values, |v| {
+            AccumulatorState::Empty(accumulator) => {
+                self.eval_complex_into(batch, accumulator, options.require_training_values, |v| {
                     v.norm()
                 })?
             }
-            ObservableState::Complex(observable) => {
-                self.eval_complex_into(batch, observable, options.require_training_values, |v| {
+            AccumulatorState::Complex(accumulator) => {
+                self.eval_complex_into(batch, accumulator, options.require_training_values, |v| {
                     v.norm()
                 })?
             }
-            ObservableState::FullComplex(observable) => {
-                self.eval_complex_into(batch, observable, options.require_training_values, |v| {
+            AccumulatorState::FullComplex(accumulator) => {
+                self.eval_complex_into(batch, accumulator, options.require_training_values, |v| {
                     v.norm()
                 })?
             }
             other => {
                 return Err(EvalError::eval(format!(
-                    "sinc evaluator does not support observable kind {}",
+                    "sinc evaluator does not support accumulator kind {}",
                     other.kind_str()
                 )));
             }

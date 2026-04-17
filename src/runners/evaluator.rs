@@ -534,7 +534,7 @@ where
         let started = Instant::now();
         match self.evaluator.eval_batch(
             &transformed_batch,
-            &claimed.latent_batch.observable,
+            &claimed.latent_batch.accumulator,
             EvalBatchOptions {
                 require_training_values: claimed.requires_training_values,
             },

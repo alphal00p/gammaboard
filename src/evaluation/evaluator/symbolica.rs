@@ -3,9 +3,9 @@ use std::{fs, path::Path};
 use crate::utils::domain::Domain;
 use crate::{
     Batch, BatchResult, BuildError, EngineError, EvalError,
-    core::ObservableConfig,
+    core::AccumulatorConfig,
+    evaluation::{AccumulatorState, IngestScalar},
     evaluation::{EvalBatchOptions, Evaluator},
-    evaluation::{IngestScalar, ObservableState},
 };
 use serde::{Deserialize, Serialize};
 use symbolica::evaluate::{
@@ -113,7 +113,7 @@ impl Evaluator for SymbolicaEngine {
     fn eval_batch(
         &mut self,
         batch: &Batch,
-        observable: &ObservableConfig,
+        accumulator: &AccumulatorConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
         let width = self.args.len();
@@ -138,7 +138,7 @@ impl Evaluator for SymbolicaEngine {
             weights.push(point.weight);
         }
 
-        let mut observable_state = ObservableState::from_config(observable);
+        let mut observable_state = AccumulatorState::from_config(accumulator);
 
         let mut out = vec![0.0; batch.size()];
         self.eval
@@ -146,24 +146,24 @@ impl Evaluator for SymbolicaEngine {
             .map_err(|err| EngineError::Eval(err.to_string()))?;
 
         match &mut observable_state {
-            ObservableState::Empty(observable) => {
+            AccumulatorState::Empty(accumulator) => {
                 for (value, weight) in out.iter().zip(weights.iter()) {
-                    observable.ingest_scalar(*value, *weight);
+                    accumulator.ingest_scalar(*value, *weight);
                 }
             }
-            ObservableState::Scalar(observable) => {
+            AccumulatorState::Scalar(accumulator) => {
                 for (value, weight) in out.iter().zip(weights.iter()) {
-                    observable.ingest_scalar(*value, *weight);
+                    accumulator.ingest_scalar(*value, *weight);
                 }
             }
-            ObservableState::FullScalar(observable) => {
+            AccumulatorState::FullScalar(accumulator) => {
                 for (value, weight) in out.iter().zip(weights.iter()) {
-                    observable.ingest_scalar(*value, *weight);
+                    accumulator.ingest_scalar(*value, *weight);
                 }
             }
             other => {
                 return Err(EvalError::eval(format!(
-                    "symbolica evaluator does not support observable kind {}",
+                    "symbolica evaluator does not support accumulator kind {}",
                     other.kind_str()
                 )));
             }

@@ -184,7 +184,11 @@ const fitHistogramXDomain = (bins) => {
 };
 
 const FULL_ZOOM = Object.freeze({ start: 0, end: 100 });
-const isSharedHistoryXPanelId = (panelId) => String(panelId || "").includes("_history");
+const isSharedHistoryTimeseriesPanelSpec = (spec) => {
+  const kind = String(spec?.kind || "");
+  const history = String(spec?.history || "");
+  return (kind === "scalar_timeseries" || kind === "multi_timeseries") && history !== "none";
+};
 const HISTORY_X_AXIS_MODE_WALL_TIME = "wall_time";
 const HISTORY_X_AXIS_MODE_SAMPLER_UPTIME = "sampler_uptime";
 const HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES = "completed_samples";
@@ -2752,7 +2756,7 @@ const TablePanel = ({
             ) : null}
             <Alert severity="warning">
               GammaLoop histogram bundle is empty or incompatible with the current payload shape. Check backend
-              task-output errors for observable decode details.
+              task-output errors for accumulator decode details.
             </Alert>
           </CardContent>
         </Card>
@@ -3336,6 +3340,14 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
     () => buildRenderablePanels(panelSpecs, panelStates, panelValues),
     [panelSpecs, panelStates, panelValues],
   );
+  const sharedHistoryPanelIds = useMemo(
+    () =>
+      asArray(panelSpecs)
+        .filter((spec) => isSharedHistoryTimeseriesPanelSpec(spec))
+        .map((spec) => spec?.panel_id)
+        .filter((id) => typeof id === "string"),
+    [panelSpecs],
+  );
   const handleUploadHistogramBundle = useCallback(async (panelId, event) => {
     const file = event?.target?.files?.[0];
     if (!panelId || !file) return;
@@ -3468,7 +3480,7 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
   const handlePanelValueChange = useCallback(
     (panelId, nextValue, shouldTriggerPoll = true) => {
       if (typeof onPanelValueChange !== "function") return;
-      if (!isSharedHistoryXPanelId(panelId)) {
+      if (!sharedHistoryPanelIds.includes(panelId)) {
         onPanelValueChange(panelId, nextValue, shouldTriggerPoll);
         return;
       }
@@ -3477,9 +3489,7 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
         onPanelValueChange(panelId, nextValue, shouldTriggerPoll);
         return;
       }
-      const targetIds = asArray(panelSpecs)
-        .map((spec) => spec?.panel_id)
-        .filter((id) => typeof id === "string" && isSharedHistoryXPanelId(id));
+      const targetIds = sharedHistoryPanelIds;
       if (targetIds.length <= 1) {
         onPanelValueChange(panelId, nextValue, shouldTriggerPoll);
         return;
@@ -3491,7 +3501,7 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
         onPanelValueChange(targetId, mergedValue, trigger);
       });
     },
-    [onPanelValueChange, panelSpecs, panelValues],
+    [onPanelValueChange, panelValues, sharedHistoryPanelIds],
   );
 
   return (

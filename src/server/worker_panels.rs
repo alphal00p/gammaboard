@@ -171,7 +171,7 @@ fn diagnostics_panel(value: Option<&JsonValue>) -> Option<PanelState> {
             "Local In-Flight Insert Batches",
         ),
         ("local_ready_processed_batches", "Completed Prefetch Buffer"),
-        ("observable_checkpoint_state", "Checkpoint State"),
+        ("accumulator_checkpoint_state", "Checkpoint State"),
         ("training_samples_remaining", "Training Samples Remaining"),
     ]
     .into_iter()

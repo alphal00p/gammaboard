@@ -2,8 +2,8 @@ use super::{
     TaskPanelContext, TaskPanelCurrentSourcePolicy, TaskPanelHistoryContext, TaskPanelProjector,
     panel_projector, panel_projector_with_source,
 };
-use crate::core::{EngineError, ObservableConfig, RunTaskSpec};
-use crate::evaluation::{Observable, ObservableState, SemanticObservableKind};
+use crate::core::{AccumulatorConfig, EngineError, RunTaskSpec};
+use crate::evaluation::{Accumulator, AccumulatorState, SemanticAccumulatorKind};
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, key_value, key_value_panel,
     panel_spec, progress_panel, scalar_timeseries_panel_with_smoothing, table_panel_with_payload,
@@ -15,24 +15,25 @@ use serde_json::Value as JsonValue;
 
 pub(super) fn projectors(
     task_spec: &RunTaskSpec,
-    effective_observable_config: Option<ObservableConfig>,
+    effective_accumulator_config: Option<AccumulatorConfig>,
 ) -> Vec<TaskPanelProjector> {
-    let observable_config = task_observable_config(task_spec).or(effective_observable_config);
+    let accumulator_config = task_accumulator_config(task_spec).or(effective_accumulator_config);
     let mut projectors = vec![
         sample_progress_projector(),
-        estimate_summary_projector(observable_config.as_ref()),
-        real_estimate_history_projector(observable_config.as_ref()),
+        estimate_summary_projector(accumulator_config.as_ref()),
+        real_estimate_history_projector(accumulator_config.as_ref()),
     ];
     if matches!(
-        observable_config,
-        Some(ObservableConfig::Complex | ObservableConfig::Gammaloop)
+        accumulator_config,
+        Some(AccumulatorConfig::Complex | AccumulatorConfig::Gammaloop)
     ) {
-        projectors.push(imag_estimate_history_projector(observable_config.as_ref()));
+        projectors.push(imag_estimate_history_projector(accumulator_config.as_ref()));
     }
-    projectors.push(abs_signal_to_noise_history_projector(
-        observable_config.as_ref(),
-    ));
-    if matches!(observable_config, Some(ObservableConfig::Gammaloop) | None) {
+    projectors.push(rsd_history_projector(accumulator_config.as_ref()));
+    if matches!(
+        accumulator_config,
+        Some(AccumulatorConfig::Gammaloop) | None
+    ) {
         projectors.push(gammaloop_histogram_bundle_projector());
     }
     projectors
@@ -67,49 +68,47 @@ fn sample_progress_projector() -> TaskPanelProjector {
 }
 
 fn real_estimate_history_projector(
-    observable_config: Option<&ObservableConfig>,
+    accumulator_config: Option<&AccumulatorConfig>,
 ) -> TaskPanelProjector {
     persisted_first_history_projector(
         "real_estimate_history",
-        estimate_label(observable_config),
-        observable_config.cloned(),
-        |observable| Some(real_estimate_history_panel(observable)),
+        estimate_label(accumulator_config),
+        accumulator_config.cloned(),
+        |accumulator| Some(real_estimate_history_panel(accumulator)),
     )
 }
 
 fn imag_estimate_history_projector(
-    observable_config: Option<&ObservableConfig>,
+    accumulator_config: Option<&AccumulatorConfig>,
 ) -> TaskPanelProjector {
     persisted_first_history_projector(
         "imag_estimate_history",
         "Imaginary Mean",
-        observable_config.cloned(),
+        accumulator_config.cloned(),
         imag_estimate_history_panel,
     )
 }
 
-fn abs_signal_to_noise_history_projector(
-    observable_config: Option<&ObservableConfig>,
-) -> TaskPanelProjector {
+fn rsd_history_projector(accumulator_config: Option<&AccumulatorConfig>) -> TaskPanelProjector {
     persisted_first_history_projector(
         "abs_signal_to_noise_history",
-        "Mean(|x|)^2 / abs_err^2",
-        observable_config.cloned(),
-        |observable| Some(abs_signal_to_noise_panel(observable)),
+        "RSD",
+        accumulator_config.cloned(),
+        |accumulator| Some(rsd_history_panel(accumulator)),
     )
 }
 
 fn persisted_first_history_projector<F>(
     panel_id: &'static str,
     label: &'static str,
-    observable_config: Option<ObservableConfig>,
+    accumulator_config: Option<AccumulatorConfig>,
     map_panel: F,
 ) -> TaskPanelProjector
 where
-    F: Fn(ObservableState) -> Option<PanelState> + Copy + Send + Sync + 'static,
+    F: Fn(AccumulatorState) -> Option<PanelState> + Copy + Send + Sync + 'static,
 {
-    let current_config = observable_config.clone();
-    let history_config = observable_config;
+    let current_config = accumulator_config.clone();
+    let history_config = accumulator_config;
     panel_projector_with_source(
         with_panel_width(
             panel_spec(
@@ -121,13 +120,15 @@ where
             PanelWidth::Full,
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
-        move |ctx| Ok(sample_observable(ctx, current_config.as_ref())?.and_then(map_panel)),
+        move |ctx| Ok(sample_accumulator(ctx, current_config.as_ref())?.and_then(map_panel)),
         move |ctx| Ok(decode_history_observable(ctx, history_config.as_ref())?.and_then(map_panel)),
     )
 }
 
-fn estimate_summary_projector(observable_config: Option<&ObservableConfig>) -> TaskPanelProjector {
-    let observable_config = observable_config.cloned();
+fn estimate_summary_projector(
+    accumulator_config: Option<&AccumulatorConfig>,
+) -> TaskPanelProjector {
+    let accumulator_config = accumulator_config.cloned();
     panel_projector_with_source(
         with_panel_width(
             panel_spec(
@@ -140,7 +141,7 @@ fn estimate_summary_projector(observable_config: Option<&ObservableConfig>) -> T
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
-            Ok(sample_observable(ctx, observable_config.as_ref())?.map(estimate_summary_panel))
+            Ok(sample_accumulator(ctx, accumulator_config.as_ref())?.map(estimate_summary_panel))
         },
         |_ctx| Ok(None),
     )
@@ -158,12 +159,14 @@ fn gammaloop_histogram_bundle_projector() -> TaskPanelProjector {
             PanelWidth::Full,
         ),
         |ctx| {
-            Ok(sample_observable(ctx, Some(&ObservableConfig::Gammaloop))?
-                .and_then(gammaloop_histogram_bundle_panel))
+            Ok(
+                sample_accumulator(ctx, Some(&AccumulatorConfig::Gammaloop))?
+                    .and_then(gammaloop_histogram_bundle_panel),
+            )
         },
         |ctx| {
             Ok(
-                decode_history_observable(ctx, Some(&ObservableConfig::Gammaloop))?
+                decode_history_observable(ctx, Some(&AccumulatorConfig::Gammaloop))?
                     .and_then(gammaloop_histogram_bundle_panel),
             )
         },
@@ -174,146 +177,146 @@ fn sample_progress_value(ctx: &TaskPanelContext<'_>) -> f64 {
     ctx.task.nr_completed_samples.max(0) as f64
 }
 
-fn sample_observable(
+fn sample_accumulator(
     ctx: &TaskPanelContext<'_>,
-    observable_config: Option<&ObservableConfig>,
-) -> Result<Option<ObservableState>, EngineError> {
-    if let Some(observable) = ctx.source.observable() {
-        let requested_config = observable_config.cloned();
+    accumulator_config: Option<&AccumulatorConfig>,
+) -> Result<Option<AccumulatorState>, EngineError> {
+    if let Some(accumulator) = ctx.source.accumulator() {
+        let requested_config = accumulator_config.cloned();
         if requested_config
             .as_ref()
-            .map(|config| observable_matches_requested_config(observable, config))
+            .map(|config| accumulator_matches_requested_config(accumulator, config))
             .unwrap_or(true)
         {
-            return Ok(Some(observable.clone()));
+            return Ok(Some(accumulator.clone()));
         }
         if ctx.source.persisted().is_none() {
             return Err(EngineError::build(format!(
-                "observable type mismatch: expected {}, got {} and no persisted snapshot was available for fallback decoding",
+                "accumulator type mismatch: expected {}, got {} and no persisted snapshot was available for fallback decoding",
                 config_label(&requested_config.expect("checked is_some above")),
-                observable.kind_str()
+                accumulator.kind_str()
             )));
         }
     }
     match ctx.source.persisted() {
         Some(persisted) => {
-            decode_aggregate_persisted_observable_with_fallback(observable_config, persisted)
+            decode_aggregate_persisted_accumulator_with_fallback(accumulator_config, persisted)
         }
         None => Ok(None),
     }
 }
 
-fn observable_matches_requested_config(
-    observable: &ObservableState,
-    requested: &ObservableConfig,
+fn accumulator_matches_requested_config(
+    accumulator: &AccumulatorState,
+    requested: &AccumulatorConfig,
 ) -> bool {
     match requested {
-        ObservableConfig::Empty => matches!(observable, ObservableState::Empty(_)),
-        ObservableConfig::Scalar => matches!(
-            observable,
-            ObservableState::Scalar(_) | ObservableState::FullScalar(_)
+        AccumulatorConfig::Empty => matches!(accumulator, AccumulatorState::Empty(_)),
+        AccumulatorConfig::Scalar => matches!(
+            accumulator,
+            AccumulatorState::Scalar(_) | AccumulatorState::FullScalar(_)
         ),
-        ObservableConfig::Complex => matches!(
-            observable,
-            ObservableState::Complex(_) | ObservableState::FullComplex(_)
+        AccumulatorConfig::Complex => matches!(
+            accumulator,
+            AccumulatorState::Complex(_) | AccumulatorState::FullComplex(_)
         ),
-        ObservableConfig::Gammaloop => matches!(observable, ObservableState::Gammaloop(_)),
-        ObservableConfig::FullScalar => matches!(observable, ObservableState::FullScalar(_)),
-        ObservableConfig::FullComplex => matches!(observable, ObservableState::FullComplex(_)),
+        AccumulatorConfig::Gammaloop => matches!(accumulator, AccumulatorState::Gammaloop(_)),
+        AccumulatorConfig::FullScalar => matches!(accumulator, AccumulatorState::FullScalar(_)),
+        AccumulatorConfig::FullComplex => matches!(accumulator, AccumulatorState::FullComplex(_)),
     }
 }
 
 fn decode_history_observable(
     ctx: &TaskPanelHistoryContext<'_>,
-    observable_config: Option<&ObservableConfig>,
-) -> Result<Option<ObservableState>, EngineError> {
-    decode_aggregate_persisted_observable_with_fallback(
-        observable_config,
+    accumulator_config: Option<&AccumulatorConfig>,
+) -> Result<Option<AccumulatorState>, EngineError> {
+    decode_aggregate_persisted_accumulator_with_fallback(
+        accumulator_config,
         &ctx.snapshot.persisted_output,
     )
 }
 
-fn decode_aggregate_persisted_observable(
-    config: &ObservableConfig,
+fn decode_aggregate_persisted_accumulator(
+    config: &AccumulatorConfig,
     persisted: &JsonValue,
-) -> Result<ObservableState, EngineError> {
+) -> Result<AccumulatorState, EngineError> {
     match config {
-        ObservableConfig::Empty => Err(EngineError::build(
-            "sample task expected aggregate observable, got empty".to_string(),
+        AccumulatorConfig::Empty => Err(EngineError::build(
+            "sample task expected aggregate accumulator, got empty".to_string(),
         )),
-        ObservableConfig::Scalar => ObservableState::from_aggregate_persistent_json(
-            SemanticObservableKind::Scalar,
+        AccumulatorConfig::Scalar => AccumulatorState::from_aggregate_persistent_json(
+            SemanticAccumulatorKind::Scalar,
             persisted,
         ),
-        ObservableConfig::Complex => ObservableState::from_aggregate_persistent_json(
-            SemanticObservableKind::Complex,
+        AccumulatorConfig::Complex => AccumulatorState::from_aggregate_persistent_json(
+            SemanticAccumulatorKind::Complex,
             persisted,
         ),
-        ObservableConfig::Gammaloop => ObservableState::from_gammaloop_persistent_json(persisted),
-        ObservableConfig::FullScalar | ObservableConfig::FullComplex => {
+        AccumulatorConfig::Gammaloop => AccumulatorState::from_gammaloop_persistent_json(persisted),
+        AccumulatorConfig::FullScalar | AccumulatorConfig::FullComplex => {
             Err(EngineError::build(format!(
-                "sample task expected aggregate observable, got {}",
+                "sample task expected aggregate accumulator, got {}",
                 config_label(config)
             )))
         }
     }
 }
 
-fn decode_aggregate_persisted_observable_with_fallback(
-    observable_config: Option<&ObservableConfig>,
+fn decode_aggregate_persisted_accumulator_with_fallback(
+    accumulator_config: Option<&AccumulatorConfig>,
     persisted: &JsonValue,
-) -> Result<Option<ObservableState>, EngineError> {
-    if let Some(config) = observable_config {
-        return decode_aggregate_persisted_observable(config, persisted).map(Some);
+) -> Result<Option<AccumulatorState>, EngineError> {
+    if let Some(config) = accumulator_config {
+        return decode_aggregate_persisted_accumulator(config, persisted).map(Some);
     }
-    if let Ok(observable) =
-        decode_aggregate_persisted_observable(&ObservableConfig::Scalar, persisted)
+    if let Ok(accumulator) =
+        decode_aggregate_persisted_accumulator(&AccumulatorConfig::Scalar, persisted)
     {
-        return Ok(Some(observable));
+        return Ok(Some(accumulator));
     }
-    if let Ok(observable) =
-        decode_aggregate_persisted_observable(&ObservableConfig::Complex, persisted)
+    if let Ok(accumulator) =
+        decode_aggregate_persisted_accumulator(&AccumulatorConfig::Complex, persisted)
     {
-        return Ok(Some(observable));
+        return Ok(Some(accumulator));
     }
-    if let Ok(observable) =
-        decode_aggregate_persisted_observable(&ObservableConfig::Gammaloop, persisted)
+    if let Ok(accumulator) =
+        decode_aggregate_persisted_accumulator(&AccumulatorConfig::Gammaloop, persisted)
     {
-        return Ok(Some(observable));
+        return Ok(Some(accumulator));
     }
     Ok(None)
 }
 
-fn estimate_label(observable_config: Option<&ObservableConfig>) -> &'static str {
-    match observable_config {
-        Some(ObservableConfig::Empty) => "Estimate",
-        Some(ObservableConfig::Scalar) => "Mean",
-        Some(ObservableConfig::Complex) => "Real Mean",
-        Some(ObservableConfig::Gammaloop) => "Real Mean",
+fn estimate_label(accumulator_config: Option<&AccumulatorConfig>) -> &'static str {
+    match accumulator_config {
+        Some(AccumulatorConfig::Empty) => "Estimate",
+        Some(AccumulatorConfig::Scalar) => "Mean",
+        Some(AccumulatorConfig::Complex) => "Real Mean",
+        Some(AccumulatorConfig::Gammaloop) => "Real Mean",
         None => "Estimate",
-        Some(ObservableConfig::FullScalar) | Some(ObservableConfig::FullComplex) => "Estimate",
+        Some(AccumulatorConfig::FullScalar) | Some(AccumulatorConfig::FullComplex) => "Estimate",
     }
 }
 
-fn task_observable_config(task: &RunTaskSpec) -> Option<ObservableConfig> {
-    task.new_observable_config().ok().flatten()
+fn task_accumulator_config(task: &RunTaskSpec) -> Option<AccumulatorConfig> {
+    task.new_accumulator_config().ok().flatten()
 }
 
-fn config_label(config: &ObservableConfig) -> &'static str {
+fn config_label(config: &AccumulatorConfig) -> &'static str {
     match config {
-        ObservableConfig::Empty => "empty",
-        ObservableConfig::Scalar => "scalar",
-        ObservableConfig::Complex => "complex",
-        ObservableConfig::Gammaloop => "gammaloop",
-        ObservableConfig::FullScalar => "full_scalar",
-        ObservableConfig::FullComplex => "full_complex",
+        AccumulatorConfig::Empty => "empty",
+        AccumulatorConfig::Scalar => "scalar",
+        AccumulatorConfig::Complex => "complex",
+        AccumulatorConfig::Gammaloop => "gammaloop",
+        AccumulatorConfig::FullScalar => "full_scalar",
+        AccumulatorConfig::FullComplex => "full_complex",
     }
 }
 
-fn real_estimate_history_panel(observable: ObservableState) -> PanelState {
+fn real_estimate_history_panel(accumulator: AccumulatorState) -> PanelState {
     let smooth = Some(true);
-    match observable {
-        ObservableState::Scalar(state) => scalar_timeseries_panel_with_smoothing(
+    match accumulator {
+        AccumulatorState::Scalar(state) => scalar_timeseries_panel_with_smoothing(
             "real_estimate_history",
             vec![PlotPoint {
                 x: state.count as f64,
@@ -325,7 +328,7 @@ fn real_estimate_history_panel(observable: ObservableState) -> PanelState {
             }],
             smooth,
         ),
-        ObservableState::Complex(state) => scalar_timeseries_panel_with_smoothing(
+        AccumulatorState::Complex(state) => scalar_timeseries_panel_with_smoothing(
             "real_estimate_history",
             vec![PlotPoint {
                 x: state.count as f64,
@@ -337,7 +340,7 @@ fn real_estimate_history_panel(observable: ObservableState) -> PanelState {
             }],
             smooth,
         ),
-        ObservableState::Gammaloop(state) => scalar_timeseries_panel_with_smoothing(
+        AccumulatorState::Gammaloop(state) => scalar_timeseries_panel_with_smoothing(
             "real_estimate_history",
             vec![PlotPoint {
                 x: state.sample_count() as f64,
@@ -353,10 +356,10 @@ fn real_estimate_history_panel(observable: ObservableState) -> PanelState {
     }
 }
 
-fn imag_estimate_history_panel(observable: ObservableState) -> Option<PanelState> {
+fn imag_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
     let smooth = Some(true);
-    match observable {
-        ObservableState::Complex(state) => Some(scalar_timeseries_panel_with_smoothing(
+    match accumulator {
+        AccumulatorState::Complex(state) => Some(scalar_timeseries_panel_with_smoothing(
             "imag_estimate_history",
             vec![PlotPoint {
                 x: state.count as f64,
@@ -368,7 +371,7 @@ fn imag_estimate_history_panel(observable: ObservableState) -> Option<PanelState
             }],
             smooth,
         )),
-        ObservableState::Gammaloop(state) => Some(scalar_timeseries_panel_with_smoothing(
+        AccumulatorState::Gammaloop(state) => Some(scalar_timeseries_panel_with_smoothing(
             "imag_estimate_history",
             vec![PlotPoint {
                 x: state.sample_count() as f64,
@@ -384,12 +387,18 @@ fn imag_estimate_history_panel(observable: ObservableState) -> Option<PanelState
     }
 }
 
-fn abs_signal_to_noise_panel(observable: ObservableState) -> PanelState {
+fn rsd_history_panel(accumulator: AccumulatorState) -> PanelState {
+    let rsd = match &accumulator {
+        AccumulatorState::Scalar(state) => state.rsd(),
+        AccumulatorState::Complex(state) => state.rsd(),
+        AccumulatorState::Gammaloop(state) => state.rsd(),
+        _ => 0.0,
+    };
     scalar_timeseries_panel_with_smoothing(
         "abs_signal_to_noise_history",
         vec![PlotPoint {
-            x: observable.sample_count() as f64,
-            y: observable.abs_signal_to_noise(),
+            x: accumulator.sample_count() as f64,
+            y: rsd,
             x_sampler_uptime_ms: None,
             x_completed_samples_total: None,
             y_min: None,
@@ -399,12 +408,12 @@ fn abs_signal_to_noise_panel(observable: ObservableState) -> PanelState {
     )
 }
 
-fn estimate_summary_panel(observable: ObservableState) -> PanelState {
-    match observable {
-        ObservableState::Empty(_) => {
+fn estimate_summary_panel(accumulator: AccumulatorState) -> PanelState {
+    match accumulator {
+        AccumulatorState::Empty(_) => {
             key_value_panel("estimate_summary", vec![key_value("count", "Count", 0)])
         }
-        ObservableState::Scalar(state) => key_value_panel(
+        AccumulatorState::Scalar(state) => key_value_panel(
             "estimate_summary",
             vec![
                 key_value("count", "Count", state.count),
@@ -418,7 +427,7 @@ fn estimate_summary_panel(observable: ObservableState) -> PanelState {
                 key_value("rsd", "RSD", state.rsd()),
             ],
         ),
-        ObservableState::Complex(state) => key_value_panel(
+        AccumulatorState::Complex(state) => key_value_panel(
             "estimate_summary",
             vec![
                 key_value("count", "Count", state.count),
@@ -445,7 +454,7 @@ fn estimate_summary_panel(observable: ObservableState) -> PanelState {
                 key_value("rsd", "RSD", state.rsd()),
             ],
         ),
-        ObservableState::Gammaloop(state) => key_value_panel(
+        AccumulatorState::Gammaloop(state) => key_value_panel(
             "estimate_summary",
             vec![
                 key_value("count", "Count", state.sample_count()),
@@ -467,7 +476,7 @@ fn estimate_summary_panel(observable: ObservableState) -> PanelState {
                 key_value("rsd", "RSD", state.rsd()),
             ],
         ),
-        ObservableState::FullScalar(state) => key_value_panel(
+        AccumulatorState::FullScalar(state) => key_value_panel(
             "estimate_summary",
             vec![
                 key_value("count", "Count", state.values.len()),
@@ -487,7 +496,7 @@ fn estimate_summary_panel(observable: ObservableState) -> PanelState {
                 ),
             ],
         ),
-        ObservableState::FullComplex(state) => key_value_panel(
+        AccumulatorState::FullComplex(state) => key_value_panel(
             "estimate_summary",
             vec![
                 key_value("count", "Count", state.values.len()),
@@ -520,8 +529,8 @@ fn estimate_value(value: f64, error: f64) -> EstimateValuePayload {
     }
 }
 
-fn gammaloop_histogram_bundle_panel(observable: ObservableState) -> Option<PanelState> {
-    let ObservableState::Gammaloop(state) = observable else {
+fn gammaloop_histogram_bundle_panel(accumulator: AccumulatorState) -> Option<PanelState> {
+    let AccumulatorState::Gammaloop(state) = accumulator else {
         return None;
     };
     let payload = serde_json::to_value(&state.bundle).unwrap_or(JsonValue::Null);

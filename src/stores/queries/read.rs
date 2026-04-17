@@ -1,5 +1,5 @@
 use crate::core::SamplerPerformanceMetrics;
-use crate::evaluation::ObservableState;
+use crate::evaluation::AccumulatorState;
 use crate::stores::{
     EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress, RuntimeLogEntry,
     RuntimeLogPage, SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot,
@@ -150,7 +150,7 @@ impl TryFrom<TaskStageSnapshotRow> for TaskStageSnapshot {
 
     fn try_from(value: TaskStageSnapshotRow) -> Result<Self, Self::Error> {
         let observable_state =
-            ObservableState::from_json(&value.observable_state).map_err(|err| {
+            AccumulatorState::from_json(&value.observable_state).map_err(|err| {
                 invalid_data_error(
                     "failed to decode observable_state from run_stage_snapshots",
                     err,

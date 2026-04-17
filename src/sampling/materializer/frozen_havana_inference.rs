@@ -80,7 +80,7 @@ impl Materializer for HavanaInferenceMaterializer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{ObservableConfig, SamplerAggregatorConfig};
+    use crate::core::{AccumulatorConfig, SamplerAggregatorConfig};
     use crate::sampling::{HavanaInferenceSamplerParams, HavanaSamplerParams};
 
     #[test]
@@ -133,7 +133,7 @@ mod tests {
         let batch = materializer
             .materialize_batch(&crate::sampling::LatentBatch {
                 nr_samples: latent_batch.nr_samples,
-                observable: ObservableConfig::Scalar,
+                accumulator: AccumulatorConfig::Scalar,
                 payload: latent_batch.payload,
             })
             .expect("materialize batch");

@@ -42,7 +42,7 @@ pub struct WorkQueueStats {
     pub avg_sample_time_ms: Option<f64>,
 }
 
-/// Task-local persisted observable snapshot.
+/// Task-local persisted accumulator snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskOutputSnapshot {
     pub id: String,
@@ -57,7 +57,7 @@ pub struct TaskStageSnapshot {
     pub id: String,
     pub run_id: i32,
     pub task_id: String,
-    pub observable_state: ObservableState,
+    pub observable_state: AccumulatorState,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -131,4 +131,4 @@ pub struct SamplerPerformanceHistoryEntry {
     pub rss_bytes: Option<i64>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
-use crate::evaluation::ObservableState;
+use crate::evaluation::AccumulatorState;

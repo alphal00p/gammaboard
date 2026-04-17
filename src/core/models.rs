@@ -1,6 +1,6 @@
 use crate::core::BatchTransformConfig;
 use crate::core::SamplerAggregatorConfig;
-use crate::evaluation::{Batch, BatchResult, ObservableState};
+use crate::evaluation::{AccumulatorState, Batch, BatchResult};
 use crate::sampling::{LatentBatch, SamplerAggregatorSnapshot};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -229,7 +229,7 @@ pub struct SamplerWorkRollingAverages {
     pub reclaim_ms: RollingMetricSnapshot,
     pub queue_counts_ms: RollingMetricSnapshot,
     pub completed_merge_ingest_ms: RollingMetricSnapshot,
-    pub persist_observable_ms: RollingMetricSnapshot,
+    pub persist_accumulator_ms: RollingMetricSnapshot,
     pub completed_delete_ms: RollingMetricSnapshot,
     pub produce_ms: RollingMetricSnapshot,
     pub progress_sync_ms: RollingMetricSnapshot,
@@ -369,7 +369,7 @@ pub struct RunStageSnapshot {
     pub sequence_nr: Option<i32>,
     pub queue_empty: bool,
     pub sampler_snapshot: Option<SamplerAggregatorSnapshot>,
-    pub observable_state: Option<ObservableState>,
+    pub observable_state: Option<AccumulatorState>,
     pub sampler_aggregator: Option<SamplerAggregatorConfig>,
     pub batch_transforms: Vec<BatchTransformConfig>,
 }

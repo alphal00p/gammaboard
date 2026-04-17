@@ -1,9 +1,9 @@
-use super::{IngestComplex, Observable};
+use super::{Accumulator, IngestComplex};
 use num::complex::Complex64;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ComplexObservableState {
+pub struct ComplexAccumulatorState {
     pub count: i64,
     pub real_sum: f64,
     pub imag_sum: f64,
@@ -16,7 +16,7 @@ pub struct ComplexObservableState {
     pub nan_count: usize,
 }
 
-impl ComplexObservableState {
+impl ComplexAccumulatorState {
     pub fn add_sample(&mut self, value: Complex64, weight: f64) {
         let weight = weight.abs();
         let weighted_real = value.re * weight;
@@ -83,13 +83,13 @@ impl ComplexObservableState {
     }
 }
 
-impl IngestComplex for ComplexObservableState {
+impl IngestComplex for ComplexAccumulatorState {
     fn ingest_complex(&mut self, value: Complex64, weight: f64) {
         self.add_sample(value, weight);
     }
 }
 
-impl Observable for ComplexObservableState {
+impl Accumulator for ComplexAccumulatorState {
     type Persistent = Self;
     type Digest = Self;
 
@@ -154,53 +154,53 @@ fn relative_squared_dispersion(variance: f64, mean_abs: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::ComplexObservableState;
+    use super::ComplexAccumulatorState;
     use num::complex::Complex64;
 
     #[test]
     fn add_sample_uses_weighted_contribution_moments() {
-        let mut observable = ComplexObservableState::default();
+        let mut accumulator = ComplexAccumulatorState::default();
 
-        observable.add_sample(Complex64::new(3.0, 4.0), 2.0);
+        accumulator.add_sample(Complex64::new(3.0, 4.0), 2.0);
 
-        assert_eq!(observable.count, 1);
-        assert_eq!(observable.real_sum, 6.0);
-        assert_eq!(observable.imag_sum, 8.0);
-        assert_eq!(observable.abs_sum, 10.0);
-        assert_eq!(observable.real_sq_sum, 36.0);
-        assert_eq!(observable.imag_sq_sum, 64.0);
-        assert_eq!(observable.abs_sq_sum, 100.0);
-        assert_eq!(observable.weight_sum, 2.0);
-        assert_eq!(observable.nan_count, 0);
+        assert_eq!(accumulator.count, 1);
+        assert_eq!(accumulator.real_sum, 6.0);
+        assert_eq!(accumulator.imag_sum, 8.0);
+        assert_eq!(accumulator.abs_sum, 10.0);
+        assert_eq!(accumulator.real_sq_sum, 36.0);
+        assert_eq!(accumulator.imag_sq_sum, 64.0);
+        assert_eq!(accumulator.abs_sq_sum, 100.0);
+        assert_eq!(accumulator.weight_sum, 2.0);
+        assert_eq!(accumulator.nan_count, 0);
     }
 
     #[test]
     fn add_sample_normalizes_negative_weights() {
-        let mut observable = ComplexObservableState::default();
+        let mut accumulator = ComplexAccumulatorState::default();
 
-        observable.add_sample(Complex64::new(1.5, -2.0), -3.0);
+        accumulator.add_sample(Complex64::new(1.5, -2.0), -3.0);
 
-        assert_eq!(observable.real_sum, 4.5);
-        assert_eq!(observable.imag_sum, -6.0);
-        assert_eq!(observable.weight_sum, 3.0);
-        assert_eq!(observable.nan_count, 0);
+        assert_eq!(accumulator.real_sum, 4.5);
+        assert_eq!(accumulator.imag_sum, -6.0);
+        assert_eq!(accumulator.weight_sum, 3.0);
+        assert_eq!(accumulator.nan_count, 0);
     }
 
     #[test]
     fn add_sample_skips_non_finite_weighted_contributions() {
-        let mut observable = ComplexObservableState::default();
+        let mut accumulator = ComplexAccumulatorState::default();
 
-        observable.add_sample(Complex64::new(f64::NAN, 1.0), 1.0);
-        observable.add_sample(Complex64::new(1.0, 0.0), f64::INFINITY);
+        accumulator.add_sample(Complex64::new(f64::NAN, 1.0), 1.0);
+        accumulator.add_sample(Complex64::new(1.0, 0.0), f64::INFINITY);
 
-        assert_eq!(observable.count, 0);
-        assert_eq!(observable.real_sum, 0.0);
-        assert_eq!(observable.imag_sum, 0.0);
-        assert_eq!(observable.abs_sum, 0.0);
-        assert_eq!(observable.real_sq_sum, 0.0);
-        assert_eq!(observable.imag_sq_sum, 0.0);
-        assert_eq!(observable.abs_sq_sum, 0.0);
-        assert_eq!(observable.weight_sum, 0.0);
-        assert_eq!(observable.nan_count, 2);
+        assert_eq!(accumulator.count, 0);
+        assert_eq!(accumulator.real_sum, 0.0);
+        assert_eq!(accumulator.imag_sum, 0.0);
+        assert_eq!(accumulator.abs_sum, 0.0);
+        assert_eq!(accumulator.real_sq_sum, 0.0);
+        assert_eq!(accumulator.imag_sq_sum, 0.0);
+        assert_eq!(accumulator.abs_sq_sum, 0.0);
+        assert_eq!(accumulator.weight_sum, 0.0);
+        assert_eq!(accumulator.nan_count, 2);
     }
 }

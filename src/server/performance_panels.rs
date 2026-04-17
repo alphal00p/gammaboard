@@ -682,7 +682,7 @@ fn sampler_current_panels(
                 key_value(
                     "frontend_sync_flushes",
                     "Frontend Sync Flushes",
-                    runtime.sampler.persist_observable_ms.count,
+                    runtime.sampler.persist_accumulator_ms.count,
                 ),
                 key_value(
                     "cleanup_passes",
@@ -717,16 +717,16 @@ fn sampler_current_panels(
                 ),
                 key_value(
                     "merge_completed_batches_ms",
-                    "Avg Merge Completed Observables Ms",
+                    "Avg Merge Completed Accumulators Ms",
                     window_mean_value(
                         &runtime.sampler.completed_merge_ingest_ms,
                         "no completed merges",
                     ),
                 ),
                 key_value(
-                    "persist_observable_ms",
-                    "Avg Persist Observable Ms",
-                    window_mean_value(&runtime.sampler.persist_observable_ms, "no frontend sync"),
+                    "persist_accumulator_ms",
+                    "Avg Persist Accumulator Ms",
+                    window_mean_value(&runtime.sampler.persist_accumulator_ms, "no frontend sync"),
                 ),
                 key_value(
                     "completed_delete_ms",
@@ -1204,7 +1204,7 @@ fn sampler_tick_segments(runtime: &SamplerRuntimeMetrics) -> Vec<TickBreakdownSe
         ),
         (
             "completed_merge",
-            "Merge Completed Observables (sync)",
+            "Merge Completed Accumulators (sync)",
             runtime
                 .sampler
                 .completed_merge_ingest_ms

@@ -3,7 +3,7 @@ use sqlx::{Executor, PgPool, Postgres};
 use std::collections::HashMap;
 
 use crate::core::{BatchTransformConfig, RunStageSnapshot, SamplerAggregatorConfig};
-use crate::evaluation::ObservableState;
+use crate::evaluation::AccumulatorState;
 use crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint;
 use crate::sampling::SamplerAggregatorSnapshot;
 
@@ -53,7 +53,7 @@ impl TryFrom<RunStageSnapshotRow> for RunStageSnapshot {
             observable_state: value
                 .observable_state
                 .map(|payload| {
-                    ObservableState::from_json(&payload).map_err(|err| {
+                    AccumulatorState::from_json(&payload).map_err(|err| {
                         sqlx::Error::Protocol(format!(
                             "failed to decode observable_state from run_stage_snapshots: {err}"
                         ))
@@ -75,7 +75,7 @@ impl TryFrom<RunStageSnapshotRow> for RunStageSnapshot {
     }
 }
 
-pub(crate) async fn get_run_current_observable(
+pub(crate) async fn get_run_current_accumulator(
     pool: &PgPool,
     run_id: i32,
 ) -> Result<Option<JsonValue>, sqlx::Error> {
@@ -301,10 +301,10 @@ pub(crate) async fn insert_persisted_observable_snapshot(
     Ok(())
 }
 
-pub(crate) async fn update_run_current_observable(
+pub(crate) async fn update_run_current_accumulator(
     pool: &PgPool,
     run_id: i32,
-    current_observable: &JsonValue,
+    current_accumulator: &JsonValue,
     delta_batches_completed: i32,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
@@ -315,7 +315,7 @@ pub(crate) async fn update_run_current_observable(
         WHERE id = $3
         "#,
     )
-    .bind(current_observable)
+    .bind(current_accumulator)
     .bind(delta_batches_completed)
     .bind(run_id)
     .execute(pool)
@@ -418,8 +418,8 @@ where
         snapshot
             .observable_state
             .as_ref()
-            .map(|observable| {
-                observable.to_json().map_err(|err| {
+            .map(|accumulator| {
+                accumulator.to_json().map_err(|err| {
                     sqlx::Error::Protocol(format!(
                         "failed to encode observable_state for run_stage_snapshots: {err}"
                     ))

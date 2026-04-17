@@ -1,9 +1,9 @@
-mod full_observable;
+mod full_accumulator;
 mod pdf_adaptation;
 mod sample;
 
-use crate::core::{EngineError, ObservableConfig, RunTask, RunTaskSpec};
-use crate::evaluation::ObservableState;
+use crate::core::{AccumulatorConfig, EngineError, RunTask, RunTaskSpec};
+use crate::evaluation::AccumulatorState;
 use crate::server::panels::{
     PanelHistoryMode, PanelResponse, PanelSpec, PanelState, PanelUpdate, append_panel,
     merge_panel_state, replace_panel,
@@ -36,16 +36,16 @@ pub enum TaskPanelCurrentSourcePolicy {
 
 #[derive(Clone, Copy)]
 pub enum TaskPanelCurrentSource<'a> {
-    Runtime(&'a ObservableState),
+    Runtime(&'a AccumulatorState),
     StageSnapshot(&'a TaskStageSnapshot),
     Persisted(&'a JsonValue),
     Empty,
 }
 
 impl TaskPanelCurrentSource<'_> {
-    pub fn observable(&self) -> Option<&ObservableState> {
+    pub fn accumulator(&self) -> Option<&AccumulatorState> {
         match self {
-            Self::Runtime(observable) => Some(observable),
+            Self::Runtime(accumulator) => Some(accumulator),
             Self::StageSnapshot(snapshot) => Some(&snapshot.observable_state),
             Self::Persisted(_) | Self::Empty => None,
         }
@@ -152,7 +152,7 @@ fn project_current_panels(
     projectors: &[TaskPanelProjector],
     task: &RunTask,
     panel_state: &JsonValue,
-    current_observable: Option<&ObservableState>,
+    current_accumulator: Option<&AccumulatorState>,
     latest_stage_snapshot: Option<&TaskStageSnapshot>,
     latest_persisted_snapshot: Option<&TaskOutputSnapshot>,
 ) -> Result<Vec<PanelState>, EngineError> {
@@ -161,7 +161,7 @@ fn project_current_panels(
         .filter_map(|projector| {
             let source = resolve_current_source(
                 task,
-                current_observable,
+                current_accumulator,
                 latest_stage_snapshot,
                 latest_persisted_snapshot,
                 projector.current_source_policy(),
@@ -201,23 +201,23 @@ fn project_snapshot_history_panels(
 impl RunTaskSpec {
     fn panel_projectors(
         &self,
-        effective_observable_config: Option<ObservableConfig>,
+        effective_accumulator_config: Option<AccumulatorConfig>,
     ) -> Vec<TaskPanelProjector> {
         let mut projectors = Vec::new();
         projectors.extend(match self {
-            Self::Sample { .. } => sample::projectors(self, effective_observable_config),
+            Self::Sample { .. } => sample::projectors(self, effective_accumulator_config),
             Self::Image {
                 geometry, display, ..
-            } => full_observable::image_projectors(geometry.clone(), *display),
+            } => full_accumulator::image_projectors(geometry.clone(), *display),
             Self::PdfAdaptationImage { geometry, .. } => {
                 pdf_adaptation::projectors(geometry.clone(), crate::core::ImageDisplayMode::Auto)
             }
             Self::PlotLine {
                 geometry,
                 display,
-                observable,
+                accumulator,
                 ..
-            } => full_observable::line_projectors(geometry.clone(), *display, *observable),
+            } => full_accumulator::line_projectors(geometry.clone(), *display, *accumulator),
         });
         projectors
     }
@@ -226,10 +226,10 @@ impl RunTaskSpec {
 impl TaskPanelSource {
     pub fn new(
         task_spec: &RunTaskSpec,
-        effective_observable_config: Option<ObservableConfig>,
+        effective_accumulator_config: Option<AccumulatorConfig>,
     ) -> Self {
         Self {
-            projectors: task_spec.panel_projectors(effective_observable_config),
+            projectors: task_spec.panel_projectors(effective_accumulator_config),
         }
     }
 
@@ -250,7 +250,7 @@ impl TaskPanelSource {
         &self,
         task: &RunTask,
         panel_state: &JsonValue,
-        current_observable: Option<&ObservableState>,
+        current_accumulator: Option<&AccumulatorState>,
         latest_stage_snapshot: Option<&TaskStageSnapshot>,
         latest_persisted_snapshot: Option<&TaskOutputSnapshot>,
     ) -> Result<Vec<PanelState>, EngineError> {
@@ -258,7 +258,7 @@ impl TaskPanelSource {
             &self.projectors,
             task,
             panel_state,
-            current_observable,
+            current_accumulator,
             latest_stage_snapshot,
             latest_persisted_snapshot,
         )
@@ -270,7 +270,7 @@ impl TaskPanelSource {
         requested_cursor: TaskPanelCursor,
         task: &RunTask,
         panel_state: &JsonValue,
-        current_observable: Option<&ObservableState>,
+        current_accumulator: Option<&AccumulatorState>,
         latest_stage_snapshot: Option<&TaskStageSnapshot>,
         latest_persisted_snapshot: Option<&TaskOutputSnapshot>,
         full_history_snapshots: &[TaskOutputSnapshot],
@@ -280,7 +280,7 @@ impl TaskPanelSource {
             &self.projectors,
             task,
             panel_state,
-            current_observable,
+            current_accumulator,
             latest_stage_snapshot,
             latest_persisted_snapshot,
         )?;
@@ -320,14 +320,14 @@ impl TaskPanelSource {
 
 fn resolve_current_source<'a>(
     task: &RunTask,
-    current_observable: Option<&'a ObservableState>,
+    current_accumulator: Option<&'a AccumulatorState>,
     latest_stage_snapshot: Option<&'a TaskStageSnapshot>,
     latest_persisted_snapshot: Option<&'a TaskOutputSnapshot>,
     policy: TaskPanelCurrentSourcePolicy,
 ) -> TaskPanelCurrentSource<'a> {
     if matches!(task.state, crate::core::RunTaskState::Active) {
-        if let Some(observable) = current_observable {
-            return TaskPanelCurrentSource::Runtime(observable);
+        if let Some(accumulator) = current_accumulator {
+            return TaskPanelCurrentSource::Runtime(accumulator);
         }
     }
     match policy {
@@ -567,13 +567,15 @@ fn format_cursor(cursor: TaskPanelCursor) -> Option<String> {
 mod tests {
     use super::*;
     use crate::core::{
-        LineDisplayMode, ObservableConfig, RunTaskInput, RunTaskState, canonical_task_toml,
+        AccumulatorConfig, LineDisplayMode, RunTaskInput, RunTaskState, canonical_task_toml,
     };
     use crate::evaluation::{
-        ComplexObservableState, ComplexValue, FullComplexObservableState, GammaLoopObservableState,
-        ObservableState,
+        AccumulatorState, ComplexAccumulatorState, ComplexValue, FullComplexAccumulatorState,
+        GammaLoopAccumulatorState,
     };
-    use crate::server::panels::{PanelUpdateMode, PlotPoint, scalar_timeseries_panel};
+    use crate::server::panels::{
+        PanelKind, PanelUpdateMode, PlotPoint, panel_spec, scalar_timeseries_panel,
+    };
     use chrono::Utc;
     use gammalooprs::observables::{
         HistogramBinSnapshot, HistogramSnapshot, HistogramSnapshotKind,
@@ -597,7 +599,7 @@ mod tests {
     fn plot_task(display: LineDisplayMode) -> RunTaskSpec {
         RunTaskSpec::PlotLine {
             geometry: line_geometry(),
-            observable: crate::core::PlotObservableKind::Complex,
+            accumulator: crate::core::PlotAccumulatorKind::Complex,
             display,
             batch_transforms: None,
         }
@@ -607,7 +609,7 @@ mod tests {
         RunTaskSpec::Sample {
             nr_samples: Some(10),
             sampler_aggregator: None,
-            observable: None,
+            accumulator: None,
             queue_tuning: None,
             batch_transforms: None,
         }
@@ -638,8 +640,8 @@ mod tests {
         }
     }
 
-    fn complex_observable() -> ObservableState {
-        ObservableState::FullComplex(FullComplexObservableState {
+    fn complex_observable() -> AccumulatorState {
+        AccumulatorState::FullComplex(FullComplexAccumulatorState {
             values: vec![
                 ComplexValue { re: 1.0, im: -1.0 },
                 ComplexValue { re: 2.0, im: -2.0 },
@@ -649,8 +651,8 @@ mod tests {
         })
     }
 
-    fn gammaloop_observable() -> ObservableState {
-        ObservableState::Gammaloop(GammaLoopObservableState {
+    fn gammaloop_accumulator() -> AccumulatorState {
+        AccumulatorState::Gammaloop(GammaLoopAccumulatorState {
             bundle: ObservableSnapshotBundle {
                 histograms: std::collections::BTreeMap::from([
                     (
@@ -761,7 +763,7 @@ mod tests {
                     ),
                 ]),
             },
-            estimate: ComplexObservableState {
+            estimate: ComplexAccumulatorState {
                 count: 3,
                 real_sum: 7.0,
                 imag_sum: -1.0,
@@ -778,13 +780,13 @@ mod tests {
     fn current_panels(
         task_spec: &RunTaskSpec,
         task: &RunTask,
-        observable: &ObservableState,
+        accumulator: &AccumulatorState,
     ) -> Vec<PanelState> {
         TaskPanelSource::new(task_spec, None)
             .current_panels(
                 task,
                 &JsonValue::Object(Default::default()),
-                Some(observable),
+                Some(accumulator),
                 None,
                 None,
             )
@@ -807,8 +809,8 @@ mod tests {
         );
 
         let run_task = run_task(task.clone());
-        let observable = complex_observable();
-        let current = current_panels(&task, &run_task, &observable);
+        let accumulator = complex_observable();
+        let current = current_panels(&task, &run_task, &accumulator);
         let panel = current
             .into_iter()
             .find(|panel| matches!(panel, PanelState::MultiTimeseries { panel_id, .. } if panel_id == "line_components"))
@@ -835,8 +837,8 @@ mod tests {
         );
 
         let run_task = run_task(task.clone());
-        let observable = complex_observable();
-        let current = current_panels(&task, &run_task, &observable);
+        let accumulator = complex_observable();
+        let current = current_panels(&task, &run_task, &accumulator);
         assert!(
             current
                 .iter()
@@ -853,7 +855,7 @@ mod tests {
     fn inherited_complex_sample_uses_imag_panel() {
         let task = inherited_complex_sample_task();
         let descriptors =
-            TaskPanelSource::new(&task, Some(ObservableConfig::Complex)).panel_specs();
+            TaskPanelSource::new(&task, Some(AccumulatorConfig::Complex)).panel_specs();
         assert!(
             descriptors
                 .iter()
@@ -865,7 +867,7 @@ mod tests {
     fn gammaloop_sample_exposes_histogram_bundle_panels() {
         let task = inherited_complex_sample_task();
         let descriptors =
-            TaskPanelSource::new(&task, Some(ObservableConfig::Gammaloop)).panel_specs();
+            TaskPanelSource::new(&task, Some(AccumulatorConfig::Gammaloop)).panel_specs();
         assert!(
             descriptors
                 .iter()
@@ -873,12 +875,12 @@ mod tests {
         );
 
         let run_task = run_task(task.clone());
-        let observable = gammaloop_observable();
-        let current = TaskPanelSource::new(&task, Some(ObservableConfig::Gammaloop))
+        let accumulator = gammaloop_accumulator();
+        let current = TaskPanelSource::new(&task, Some(AccumulatorConfig::Gammaloop))
             .current_panels(
                 &run_task,
                 &JsonValue::Object(Default::default()),
-                Some(&observable),
+                Some(&accumulator),
                 None,
                 None,
             )
@@ -945,8 +947,8 @@ mod tests {
     fn build_response_emits_non_null_cursor_for_append_history_without_persisted_snapshots() {
         let task = inherited_complex_sample_task();
         let run_task = run_task(task.clone());
-        let observable = complex_observable();
-        let source = TaskPanelSource::new(&task, Some(ObservableConfig::Complex));
+        let accumulator = complex_observable();
+        let source = TaskPanelSource::new(&task, Some(AccumulatorConfig::Complex));
 
         let response = source
             .build_response(
@@ -954,7 +956,7 @@ mod tests {
                 TaskPanelCursor::default(),
                 &run_task,
                 &JsonValue::Object(Default::default()),
-                Some(&observable),
+                Some(&accumulator),
                 None,
                 None,
                 &[],

@@ -9,7 +9,11 @@ import { asArray } from "../utils/collections";
 
 const evaluatorNodeNameFor = (worker) => worker?.node_name ?? null;
 const asObject = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : {});
-const isSharedHistoryPanelId = (panelId) => String(panelId || "").includes("_history");
+const isHistoryTimeseriesPanelSpec = (spec) => {
+  const kind = String(spec?.kind || "");
+  const history = String(spec?.history || "");
+  return (kind === "scalar_timeseries" || kind === "multi_timeseries") && history !== "none";
+};
 const HISTORY_X_AXIS_MODE_WALL_TIME = "wall_time";
 const HISTORY_X_AXIS_MODE_SAMPLER_UPTIME = "sampler_uptime";
 const HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES = "completed_samples";
@@ -98,6 +102,18 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
       ].filter((id) => typeof id === "string"),
     [evaluator?.panelSpecs, runEvaluator?.panelSpecs, sampler?.panelSpecs],
   );
+  const sharedHistoryPanelIds = useMemo(
+    () =>
+      [
+        ...asArray(sampler?.panelSpecs),
+        ...asArray(runEvaluator?.panelSpecs),
+        ...asArray(evaluator?.panelSpecs),
+      ]
+        .filter((spec) => isHistoryTimeseriesPanelSpec(spec))
+        .map((spec) => spec?.panel_id)
+        .filter((id) => typeof id === "string"),
+    [evaluator?.panelSpecs, runEvaluator?.panelSpecs, sampler?.panelSpecs],
+  );
 
   useEffect(() => {
     setPanelValues((previous) => {
@@ -114,11 +130,10 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
   }, [knownPanelIds]);
 
   useEffect(() => {
-    const historyPanelIds = knownPanelIds.filter((id) => isSharedHistoryPanelId(id));
-    if (historyPanelIds.length === 0) return;
+    if (sharedHistoryPanelIds.length === 0) return;
     setPanelValues((previous) => {
       const merged = { ...previous };
-      historyPanelIds.forEach((panelId) => {
+      sharedHistoryPanelIds.forEach((panelId) => {
         merged[panelId] = {
           ...(asObject(previous?.[panelId]) ? previous[panelId] : {}),
           xAxisMode: historyXAxisMode,
@@ -126,11 +141,11 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
       });
       return merged;
     });
-  }, [historyXAxisMode, knownPanelIds]);
+  }, [historyXAxisMode, sharedHistoryPanelIds]);
 
   const handlePanelValueChange = useCallback((panelId, nextValue) => {
     setPanelValues((previous) => {
-      if (!isSharedHistoryPanelId(panelId)) {
+      if (!sharedHistoryPanelIds.includes(panelId)) {
         return {
           ...previous,
           [panelId]: nextValue,
@@ -143,7 +158,7 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
           [panelId]: nextValue,
         };
       }
-      const targetIds = knownPanelIds.filter((id) => isSharedHistoryPanelId(id));
+      const targetIds = sharedHistoryPanelIds;
       if (targetIds.length <= 1) {
         return {
           ...previous,
@@ -157,7 +172,7 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
       });
       return merged;
     });
-  }, [knownPanelIds]);
+  }, [sharedHistoryPanelIds]);
 
   return (
     <RunScopedWorkspace
@@ -171,6 +186,39 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
       <ConnectionStatus isConnected={isConnected} lastUpdate={null} />
       {selectedRun == null ? null : (
         <Stack spacing={2}>
+          <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
+            <FormControl size="small" sx={{ maxWidth: 320 }}>
+              <InputLabel id="performance-x-axis-label">X-Axis</InputLabel>
+              <Select
+                labelId="performance-x-axis-label"
+                value={historyXAxisMode}
+                label="X-Axis"
+                onChange={(event) => setHistoryXAxisMode(event.target.value)}
+              >
+                <MenuItem value={HISTORY_X_AXIS_MODE_SAMPLER_UPTIME}>Sampler Uptime (Default)</MenuItem>
+                <MenuItem value={HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES}>Completed Samples</MenuItem>
+                <MenuItem value={HISTORY_X_AXIS_MODE_WALL_TIME}>Wall Time</MenuItem>
+              </Select>
+            </FormControl>
+            <FormControl size="small" sx={{ maxWidth: 320 }}>
+              <InputLabel id="performance-evaluator-label">Evaluator</InputLabel>
+              <Select
+                labelId="performance-evaluator-label"
+                value={selectedEvaluatorNodeName ?? ""}
+                label="Evaluator"
+                onChange={(event) => setSelectedEvaluatorNodeName(event.target.value || null)}
+              >
+                {runWorkers.map((worker) => {
+                  const nodeName = evaluatorNodeNameFor(worker);
+                  return (
+                    <MenuItem key={nodeName} value={nodeName}>
+                      {nodeName}
+                    </MenuItem>
+                  );
+                })}
+              </Select>
+            </FormControl>
+          </Stack>
           {sampler?.sourceId ? (
             <PanelCollection
               title="Run Throughput"
@@ -194,37 +242,6 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
               onPanelValueChange={handlePanelValueChange}
             />
           ) : null}
-          <FormControl size="small" sx={{ maxWidth: 320 }}>
-            <InputLabel id="performance-x-axis-label">X-Axis</InputLabel>
-            <Select
-              labelId="performance-x-axis-label"
-              value={historyXAxisMode}
-              label="X-Axis"
-              onChange={(event) => setHistoryXAxisMode(event.target.value)}
-            >
-              <MenuItem value={HISTORY_X_AXIS_MODE_SAMPLER_UPTIME}>Sampler Uptime (Default)</MenuItem>
-              <MenuItem value={HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES}>Completed Samples</MenuItem>
-              <MenuItem value={HISTORY_X_AXIS_MODE_WALL_TIME}>Wall Time</MenuItem>
-            </Select>
-          </FormControl>
-          <FormControl size="small" sx={{ maxWidth: 320 }}>
-            <InputLabel id="performance-evaluator-label">Evaluator</InputLabel>
-            <Select
-              labelId="performance-evaluator-label"
-              value={selectedEvaluatorNodeName ?? ""}
-              label="Evaluator"
-              onChange={(event) => setSelectedEvaluatorNodeName(event.target.value || null)}
-            >
-              {runWorkers.map((worker) => {
-                const nodeName = evaluatorNodeNameFor(worker);
-                return (
-                  <MenuItem key={nodeName} value={nodeName}>
-                    {nodeName}
-                  </MenuItem>
-                );
-              })}
-            </Select>
-          </FormControl>
           {selectedEvaluatorNodeName == null ? (
             <Alert severity="info">No active evaluator selected for this run.</Alert>
           ) : evaluator?.sourceId ? (

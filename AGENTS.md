@@ -5,7 +5,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 ## Ownership
 - `src/api/*`: high-level typed application use-cases shared by CLI and server.
 - `src/core/*`: shared contracts, run/task types, store traits, errors.
-- `src/evaluation/*`: evaluator-side batch/result semantics and observables.
+- `src/evaluation/*`: evaluator-side batch/result semantics and accumulators.
 - `src/sampling/*`: sampler-side latent queue semantics, samplers, materializers, and batch transforms.
 - `src/runners/*`: evaluator/sampler runtimes and node reconciliation loops.
 - `src/stores/*`: PostgreSQL store, queries, read models.
@@ -17,7 +17,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Concrete evaluator batches are `Vec<Point>`, not rectangular matrices.
 - Run-global layout metadata uses `Domain`, not `PointSpec`.
 - Runs are driven by persisted `run_tasks`. The evaluator work queue is lower-level and distinct.
-- `RunSpec` should keep only immutable run-global state. Task-varying sampler, materializer, batch-transform, and observable choices belong on tasks or in stored integration defaults, not on `RunSpec`.
+- `RunSpec` should keep only immutable run-global state. Task-varying sampler, materializer, batch-transform, and accumulator choices belong on tasks or in stored integration defaults, not on `RunSpec`.
 - Run names are human-facing and not unique. CLI run references may be numeric ids or exact names; ambiguous names must fail and print matches.
 - If `task_queue` is omitted during `run add`, the run is created idle.
 - `run add` must persist an initial queue-empty `run_stage_snapshot` immediately.
@@ -49,7 +49,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Snapshots are the branchable state timeline. Tasks are queued work items that may produce snapshots, but are not themselves the canonical branch identity.
 - Every run must persist a root stage snapshot at initialization with `sequence_nr = 0` and `task_id = null`.
 - There is no reserved `init` run task; initialization is represented only by the root stage snapshot.
-- Sample source selection is per component (`sampler_aggregator`, `observable`), not a task-level snapshot id.
+- Sample source selection is per component (`sampler_aggregator`, `accumulator`), not a task-level snapshot id.
 - Cloning a run from a stage snapshot must not copy queued tasks; the cloned run starts idle at that cloned root snapshot.
 - A cloned run root snapshot name should identify the source run and source task (or root) it was cloned from.
 - Sample source specs support three forms: omitted/`"latest"`, `{ from_name = "<task-name>" }`, or `{ config = ... }`.
@@ -59,7 +59,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Task `batch_transforms` is stage state: omitted inherits the previous effective stage, and `batch_transforms = []` explicitly clears inherited transforms.
 - Sample tasks may omit `sampler_aggregator`; omitted sampler uses the previous effective stage.
 - Explicit sampler configs (`sampler_aggregator = { config = ... }`) start fresh and must not implicitly resume the previous sampler snapshot (except `havana_inference`, which still resolves its configured handoff source).
-- Sample tasks may omit `observable`; that means reuse the previous observable state.
+- Sample tasks may omit `accumulator`; that means reuse the previous accumulator state.
 - Havana inference source selection lives inside Havana sampler config. Default is `latest_training_sampler_aggregator`, with optional explicit `snapshot_id`.
 - `sample` with `nr_samples = 0` is the only supported no-work stage update task shape, including pure configuration updates.
 - GammaLoop evaluator point dimensions are inferred from the selected integrand. Do not configure `continuous_dims` or `discrete_dims` for `evaluator.kind = "gammaloop"`.
@@ -68,24 +68,24 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Python evaluator/sampler worker protocol scripts are checked in under `python_api/python_workers/` and should remain protocol-compatible when edited. Python-side contracts for user modules are split across `python_api/python_api/evaluator.py` and `python_api/python_api/sampler.py`.
 - Samplers expose an optional `pdf(point)` hook where `point` is the materialized evaluator-domain point `(Vec<i64>, Vec<f64>)`; default is unsupported (`None`) for samplers that cannot define a meaningful PDF query.
 - Homogeneous batch-evaluator helpers are for fixed-rectangular inputs with per-batch-constant discrete and continuous dimensions. They must reject mixed or ragged batch point layouts explicitly and keep output cardinality equal to `batch.size()`.
-- `observable = { config = "gammaloop" }` is supported only with `evaluator.kind = "gammaloop"` and persists GammaLoop's native histogram snapshot bundle directly.
-- Persisted and API-facing observable payloads must remain JSON-safe. Observable implementations must not emit raw `NaN` or infinite `f64` values into serialized state; they must sanitize, summarize, count, or reject such values explicitly inside the observable implementation instead of relying on storage-layer serialization failures. Full observables must preserve positional cardinality when non-finite values occur and persist which entry positions were invalid instead of dropping them.
+- `accumulator = { config = "gammaloop" }` is supported only with `evaluator.kind = "gammaloop"` and persists GammaLoop's native histogram snapshot bundle directly.
+- Persisted and API-facing accumulator payloads must remain JSON-safe. Accumulator implementations must not emit raw `NaN` or infinite `f64` values into serialized state; they must sanitize, summarize, count, or reject such values explicitly inside the accumulator implementation instead of relying on storage-layer serialization failures. Full accumulators must preserve positional cardinality when non-finite values occur and persist which entry positions were invalid instead of dropping them.
 - Task files used for `run task add` may contain either `task = { ... }`, `[[task_queue]]`, or both. Normalize them as `task` first, then `task_queue`. Missing both should resolve to an empty task list.
-- There is no run-level observable default. A first executable task that needs a fresh observable must declare it explicitly.
-- `observable = { config = "empty" }` is a valid no-op observable for tasks that need runtime/plumbing compatibility without accumulating observable state.
+- There is no run-level accumulator default. A first executable task that needs a fresh accumulator must declare it explicitly.
+- `accumulator = { config = "empty" }` is a valid no-op accumulator for tasks that need runtime/plumbing compatibility without accumulating accumulator state.
 - `pdf_adaptation_image` is a dedicated task kind that rasterizes a plane with `pdf_adaptation_raster_plane`, defaults its sampler source to `latest`, and may also use `{ from_name = "<task-name>" }`.
-- `pdf_adaptation_image` frontend snapshots come from sampler-owned persisted output payloads; `runs.current_observable` stays the task's `empty` observable and is not the image data source.
-- `image` and `plot_line` tasks must declare their observable family explicitly and start with a fresh full observable.
+- `pdf_adaptation_image` frontend snapshots come from sampler-owned persisted output payloads; `runs.current_observable` (current accumulator payload) stays the task's `empty` accumulator and is not the image data source.
+- `image` and `plot_line` tasks must declare their accumulator family explicitly and start with a fresh full accumulator.
 - Fresh sampler tasks may inherit a reduced initial batch size from the previous sampler task, but should not carry over the full rolling metrics state.
 - Claimed batches are fenced by live node ownership. Do not add a second independent batch lease.
 - Whether evaluator training values are required is a per-batch persisted contract (`batches.requires_training_values`), not inferred at ingest time from the currently active sampler config.
 - Queue payloads are transient and may use compact binary storage; do not optimize them for ad hoc SQL readability at the expense of runtime throughput.
 - Havana training and inference samplers must support nested discrete domains and preserve the full grid topology in persisted snapshots for restore/materialization.
 - Havana training runs in deterministic lockstep windows: it may keep producing while earlier batches from the same window are still in flight, but must cap in-flight+ingested production to at most one `samples_for_update` window at a time, then pause until that window is fully ingested before updating the grid and continuing.
-- Sample tasks must force an initial small batch round-trip before normal queue ramp-up so an observable snapshot is persisted immediately at task start, and must persist the observable again when the task completes.
+- Sample tasks must force an initial small batch round-trip before normal queue ramp-up so an accumulator snapshot is persisted immediately at task start, and must persist the accumulator again when the task completes.
 - Sampler-aggregator completed-batch ingestion should advance from a persisted `batch.id` cursor, not rescan the whole run on every tick.
 - Sampler-aggregator hot-loop control should reuse queue snapshots where possible and prefer direct evaluator counts over materializing full node rows.
-- `sampler_aggregator_runner_params.frontend_sync_interval_ms` controls how often frontend-facing observable state is refreshed during sampling; full sampler resume checkpoints are persisted only on unassignment/pause, and task completion still forces a final observable flush.
+- `sampler_aggregator_runner_params.frontend_sync_interval_ms` controls how often frontend-facing accumulator state is refreshed during sampling; full sampler resume checkpoints are persisted only on unassignment/pause, and task completion still forces a final accumulator flush.
 - Evaluators use a fixed single-slot latent prefetch and single-slot async submit pipeline to hide DB latency. Materialization and evaluation remain strictly one batch at a time.
 - Evaluators are stateless across reconcile-down. On stop they should drain already-claimed local latent batches without claiming new work, not persist evaluator state.
 - `node run` uses a tiny outer control-plane pool; role-specific PostgreSQL worker pool sizing lives on `evaluator_runner_params.db_pool_size` and `sampler_aggregator_runner_params.db_pool_size`.
@@ -99,7 +99,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Batch-size control belongs to the sampler queue (`sampler_aggregator_runner_params.queue.target_batch_eval_ms`, `batch_size_deadband_ratio`, `batch_size_cooldown_ticks`, `max_batch_size`, and queue-maintained `batch_size_current` tuning from completed-batch eval timings), not to sampler runner orchestration.
 - Queue refill hysteresis belongs to the sampler queue (`pending_refill_low_ratio`, `pending_refill_high_ratio`) and should gate refill using low/high pending watermarks scaled by active evaluators and `queue_buffer`.
 - The sampler queue owns the local pending-insert buffer, local processed buffer, and completed-batch cleanup scheduling. Normal ticks must poll these buffers and drain finished background tasks without blocking on database latency, while pause/unassign must drain the local queue fully before persisting the sampler checkpoint.
-- Sampler frontend sync is lightweight and periodic: it updates `runs.current_observable`, appends `persisted_observable_snapshots`, and records performance snapshots. Full sampler resume state belongs in `run_sampler_checkpoints`, which is overwritten on unassignment/pause and contains the full sampler-aggregator checkpoint blob.
+- Sampler frontend sync is lightweight and periodic: it updates `runs.current_observable` (current accumulator payload), appends `persisted_observable_snapshots`, and records performance snapshots. Full sampler resume state belongs in `run_sampler_checkpoints`, which is overwritten on unassignment/pause and contains the full sampler-aggregator checkpoint blob.
 
 ## Panels And Dashboard
 - Backend visualization uses the generic panel model in `src/server/panels.rs`.

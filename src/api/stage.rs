@@ -1,5 +1,5 @@
 use crate::core::{
-    AggregationStore, ObservableConfig, RunStageSnapshot, RunTask, RunTaskStore, SourceRefSpec,
+    AccumulatorConfig, AggregationStore, RunStageSnapshot, RunTask, RunTaskStore, SourceRefSpec,
     StoreError,
 };
 
@@ -57,28 +57,28 @@ where
     }
 }
 
-pub async fn resolve_effective_sample_observable_config<S>(
+pub async fn resolve_effective_sample_accumulator_config<S>(
     store: &S,
     run_id: i32,
     task: &RunTask,
-) -> Result<Option<ObservableConfig>, StoreError>
+) -> Result<Option<AccumulatorConfig>, StoreError>
 where
     S: AggregationStore + RunTaskStore + Send + Sync,
 {
     if let Some(config) = task
         .task
-        .new_observable_config()
+        .new_accumulator_config()
         .map_err(|err| StoreError::store(err.to_string()))?
     {
         return Ok(Some(config));
     }
 
     if let Some(source_snapshot) =
-        resolve_task_source_snapshot(store, run_id, task, task.task.sample_observable_source())
+        resolve_task_source_snapshot(store, run_id, task, task.task.sample_accumulator_source())
             .await?
     {
-        if let Some(observable) = source_snapshot.observable_state {
-            return Ok(Some(observable.config()));
+        if let Some(accumulator) = source_snapshot.observable_state {
+            return Ok(Some(accumulator.config()));
         }
     }
 
@@ -86,8 +86,8 @@ where
         .load_latest_stage_snapshot_before_sequence(run_id, task.sequence_nr)
         .await?
     {
-        if let Some(observable) = base_snapshot.observable_state {
-            return Ok(Some(observable.config()));
+        if let Some(accumulator) = base_snapshot.observable_state {
+            return Ok(Some(accumulator.config()));
         }
     }
 

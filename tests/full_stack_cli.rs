@@ -320,8 +320,8 @@ impl FullStackHarness {
         ))
     }
 
-    async fn run_current_observable(&self, run_id: i32) -> anyhow::Result<Option<JsonValue>> {
-        let observable: Option<JsonValue> = sqlx::query_scalar(
+    async fn run_current_accumulator(&self, run_id: i32) -> anyhow::Result<Option<JsonValue>> {
+        let accumulator: Option<JsonValue> = sqlx::query_scalar(
             r#"
             SELECT current_observable
             FROM runs
@@ -331,7 +331,7 @@ impl FullStackHarness {
         .bind(run_id)
         .fetch_one(&self.pool)
         .await?;
-        Ok(observable)
+        Ok(accumulator)
     }
 
     async fn run_sampler_checkpoint(&self, run_id: i32) -> anyhow::Result<Option<JsonValue>> {
@@ -509,7 +509,7 @@ min_eval_time_per_sample_ms = 2
 name = "train-a"
 kind = "sample"
 nr_samples = {training_samples}
-observable = {{ config = "complex" }}
+accumulator = {{ config = "complex" }}
 sampler_aggregator = {{ config = {{ kind = "havana_training", seed = 0, bins = 8, samples_for_update = 8, initial_training_rate = 0.1, final_training_rate = 0.01 }} }}
 "#,
     ));
@@ -754,7 +754,7 @@ kind = "sinc_evaluator"
 name = "train-a"
 kind = "sample"
 nr_samples = 128
-observable = { config = "complex" }
+accumulator = { config = "complex" }
 sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 8, samples_for_update = 8 } }
 
 [[task_queue]]
@@ -771,7 +771,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 [[task_queue]]
 kind = "image"
-observable = "complex"
+accumulator = "complex"
 [task_queue.geometry]
 offset = [0.0, 0.0]
 u_vector = [1.0, 0.0]
@@ -845,7 +845,7 @@ count = 8
 kind = "sample"
 nr_samples = 128
 sampler_aggregator = { from_name = "infer-a" }
-observable = { from_name = "infer-a" }
+accumulator = { from_name = "infer-a" }
 
 [[task_queue]]
 kind = "sample"
@@ -988,7 +988,7 @@ init_args = {{ scale = 1.0, bias = 0.0 }}
 name = "sample-a"
 kind = "sample"
 nr_samples = 64
-observable = {{ config = "scalar" }}
+accumulator = {{ config = "scalar" }}
 sampler_aggregator = {{ config = {{ kind = "python_homogeneous_monte_carlo", flake_ref = "{sampler_flake_ref}", module = "demo_sampler", class = "BasicMonteCarloSampler", continuous_dims = 1, discrete_dims = 0, init_args = {{ seed = 0, training_target_samples = 0 }} }} }}
 "#
     ));
@@ -1244,7 +1244,7 @@ struct SamplerCheckpointProgram<'a> {
     harness: &'a mut FullStackHarness,
     run_id: i32,
     run_name: &'a str,
-    paused_current_observable: Option<JsonValue>,
+    paused_current_accumulator: Option<JsonValue>,
     paused_checkpoint: Option<JsonValue>,
     paused_progress: Option<(i64, i64)>,
 }
@@ -1255,7 +1255,7 @@ impl<'a> SamplerCheckpointProgram<'a> {
             harness,
             run_id,
             run_name,
-            paused_current_observable: None,
+            paused_current_accumulator: None,
             paused_checkpoint: None,
             paused_progress: None,
         }
@@ -1347,11 +1347,11 @@ impl<'a> SamplerCheckpointProgram<'a> {
     async fn capture_paused_state(&mut self, timeout: Duration) -> anyhow::Result<()> {
         let deadline = Instant::now() + timeout;
         loop {
-            let current_observable = self.harness.run_current_observable(self.run_id).await?;
+            let current_accumulator = self.harness.run_current_accumulator(self.run_id).await?;
             let checkpoint = self.harness.run_sampler_checkpoint(self.run_id).await?;
             let progress = self.harness.run_sample_progress(self.run_id).await?;
-            if current_observable.is_some() && checkpoint.is_some() {
-                self.paused_current_observable = current_observable;
+            if current_accumulator.is_some() && checkpoint.is_some() {
+                self.paused_current_accumulator = current_accumulator;
                 self.paused_checkpoint = checkpoint;
                 self.paused_progress = Some(progress);
                 return Ok(());
@@ -1368,17 +1368,17 @@ impl<'a> SamplerCheckpointProgram<'a> {
         sampler_node_name: &str,
         timeout: Duration,
     ) -> anyhow::Result<()> {
-        let paused_current_observable = self.paused_current_observable.clone();
+        let paused_current_accumulator = self.paused_current_accumulator.clone();
         let paused_checkpoint = self.paused_checkpoint.clone();
         let paused_completed_samples = self.paused_progress.map(|(_, completed)| completed);
         let run_id = self.run_id;
         self.harness
             .wait_for(
-                "sampler checkpoint restores paused observable and completed progress",
+                "sampler checkpoint restores paused accumulator and completed progress",
                 timeout,
                 || async {
                     let sampler_state = self.harness.node_state(sampler_node_name).await?;
-                    let current_observable = self.harness.run_current_observable(run_id).await?;
+                    let current_accumulator = self.harness.run_current_accumulator(run_id).await?;
                     let checkpoint = self.harness.run_sampler_checkpoint(run_id).await?;
                     let progress = self.harness.run_sample_progress(run_id).await?;
                     let sampler_restored = sampler_state.0 == Some(run_id)
@@ -1388,7 +1388,7 @@ impl<'a> SamplerCheckpointProgram<'a> {
                     let completed_restored = paused_completed_samples
                         .is_none_or(|paused_completed| progress.1 >= paused_completed);
                     Ok(sampler_restored
-                        && current_observable == paused_current_observable
+                        && current_accumulator == paused_current_accumulator
                         && checkpoint == paused_checkpoint
                         && completed_restored)
                 },
@@ -1686,13 +1686,13 @@ name = "sampler-checkpoint-e2e"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-observable_kind = "scalar"
+accumulator_kind = "scalar"
 
 [[task_queue]]
 name = "train-a"
 kind = "sample"
 nr_samples = 100000000
-observable = { config = "scalar" }
+accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 "#,
     );
@@ -1861,7 +1861,7 @@ min_eval_time_per_sample_ms = 5
 name = "sample-a"
 kind = "sample"
 nr_samples = 8192
-observable = { config = "scalar" }
+accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 [sampler_aggregator_runner_params]
@@ -2303,7 +2303,7 @@ min_eval_time_per_sample_ms = 20
 [[task_queue]]
 kind = "sample"
 nr_samples = 128
-observable = { config = "scalar" }
+accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 [evaluator_runner_params]
@@ -2453,12 +2453,12 @@ name = "sampler-error-e2e"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-observable_kind = "scalar"
+accumulator_kind = "scalar"
 
 [[task_queue]]
 kind = "sample"
 nr_samples = 32
-observable = { config = "scalar" }
+accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_produce_batch_nr = 1 } }
 "#,
     );
@@ -2516,12 +2516,12 @@ name = "materializer-error-e2e"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-observable_kind = "scalar"
+accumulator_kind = "scalar"
 
 [[task_queue]]
 kind = "sample"
 nr_samples = 32
-observable = { config = "scalar" }
+accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materialize_batch_nr = 1 } }
 "#,
     );
@@ -2596,13 +2596,13 @@ name = "evaluator-error-e2e"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-observable_kind = "scalar"
+accumulator_kind = "scalar"
 fail_on_batch_nr = 1
 
 [[task_queue]]
 kind = "sample"
 nr_samples = 32
-observable = { config = "scalar" }
+accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 "#,
     );
@@ -2672,7 +2672,7 @@ kind = "sin_evaluator"
 [[task_queue]]
 kind = "sample"
 nr_samples = 16
-observable = { config = "scalar" }
+accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 [[task_queue]]

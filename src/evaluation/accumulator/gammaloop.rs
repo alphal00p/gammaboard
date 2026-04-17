@@ -1,16 +1,16 @@
-use super::{ComplexObservableState, Observable};
+use super::{Accumulator, ComplexAccumulatorState};
 use crate::core::{EngineError, RunSpec};
 use gammalooprs::observables::{HistogramSnapshot, ObservableSnapshotBundle};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct GammaLoopObservableState {
+pub struct GammaLoopAccumulatorState {
     pub bundle: ObservableSnapshotBundle,
-    pub estimate: ComplexObservableState,
+    pub estimate: ComplexAccumulatorState,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GammaLoopObservableDigest {
+pub struct GammaLoopAccumulatorDigest {
     pub histogram_count: usize,
     pub sample_count: i64,
     pub primary_histogram_name: Option<String>,
@@ -21,7 +21,7 @@ pub struct GammaLoopObservableDigest {
     pub imag_error: f64,
 }
 
-impl GammaLoopObservableState {
+impl GammaLoopAccumulatorState {
     pub fn cleared_bundle(bundle: &ObservableSnapshotBundle) -> ObservableSnapshotBundle {
         ObservableSnapshotBundle {
             histograms: bundle
@@ -38,7 +38,7 @@ impl GammaLoopObservableState {
         } else if !other.bundle.histograms.is_empty() {
             self.bundle.merge_in_place(&other.bundle).map_err(|err| {
                 EngineError::engine(format!(
-                    "failed to merge gammaloop observable bundle: {err}"
+                    "failed to merge gammaloop accumulator bundle: {err}"
                 ))
             })?;
         }
@@ -151,9 +151,9 @@ fn clear_histogram_bin(bin: &mut gammalooprs::observables::HistogramBinSnapshot)
     bin.mitigated_fill_count = 0;
 }
 
-impl Observable for GammaLoopObservableState {
+impl Accumulator for GammaLoopAccumulatorState {
     type Persistent = Self;
-    type Digest = GammaLoopObservableDigest;
+    type Digest = GammaLoopAccumulatorDigest;
 
     fn sample_count(&self) -> i64 {
         self.estimate.sample_count()
@@ -161,7 +161,7 @@ impl Observable for GammaLoopObservableState {
 
     fn merge(&mut self, other: Self) {
         self.merge_in_place(other)
-            .expect("gammaloop observable payloads should be merge-compatible");
+            .expect("gammaloop accumulator payloads should be merge-compatible");
     }
 
     fn get_persistent(&self) -> Self::Persistent {
@@ -170,7 +170,7 @@ impl Observable for GammaLoopObservableState {
 
     fn get_digest(&self, _run_spec: &RunSpec) -> Result<Self::Digest, EngineError> {
         let primary_histogram = self.primary_histogram();
-        Ok(GammaLoopObservableDigest {
+        Ok(GammaLoopAccumulatorDigest {
             histogram_count: self.histogram_count(),
             sample_count: self.sample_count(),
             primary_histogram_name: self.primary_histogram_name().map(str::to_string),
@@ -183,8 +183,8 @@ impl Observable for GammaLoopObservableState {
     }
 }
 
-impl From<GammaLoopObservableState> for GammaLoopObservableDigest {
-    fn from(state: GammaLoopObservableState) -> Self {
+impl From<GammaLoopAccumulatorState> for GammaLoopAccumulatorDigest {
+    fn from(state: GammaLoopAccumulatorState) -> Self {
         let primary_histogram = state.primary_histogram().cloned();
         Self {
             histogram_count: state.histogram_count(),
@@ -203,8 +203,8 @@ impl From<GammaLoopObservableState> for GammaLoopObservableDigest {
 
 #[cfg(test)]
 mod tests {
-    use super::GammaLoopObservableState;
-    use crate::evaluation::{ComplexObservableState, Observable};
+    use super::GammaLoopAccumulatorState;
+    use crate::evaluation::{Accumulator, ComplexAccumulatorState};
     use gammalooprs::observables::{
         HistogramBinSnapshot, HistogramSnapshot, HistogramStatisticsSnapshot, ObservablePhase,
         ObservableSnapshotBundle, ObservableValueTransform,
@@ -218,8 +218,8 @@ mod tests {
         estimate_real_sum: f64,
         estimate_real_sq_sum: f64,
         estimate_count: i64,
-    ) -> GammaLoopObservableState {
-        GammaLoopObservableState {
+    ) -> GammaLoopAccumulatorState {
+        GammaLoopAccumulatorState {
             bundle: ObservableSnapshotBundle {
                 histograms: BTreeMap::from([(
                     "pt".to_string(),
@@ -275,7 +275,7 @@ mod tests {
                     },
                 )]),
             },
-            estimate: ComplexObservableState {
+            estimate: ComplexAccumulatorState {
                 count: estimate_count,
                 real_sum: estimate_real_sum,
                 imag_sum: 0.0,
@@ -291,7 +291,7 @@ mod tests {
 
     #[test]
     fn empty_state_accepts_first_non_empty_merge() {
-        let mut left = GammaLoopObservableState::default();
+        let mut left = GammaLoopAccumulatorState::default();
         let right = state(4.0, 20.0, 2, 6.0, 20.0, 2);
 
         left.merge(right.clone());
@@ -306,7 +306,7 @@ mod tests {
     fn cleared_bundle_preserves_layout_and_zeros_counts() {
         let original = state(4.0, 20.0, 2, 6.0, 20.0, 2).bundle;
 
-        let cleared = GammaLoopObservableState::cleared_bundle(&original);
+        let cleared = GammaLoopAccumulatorState::cleared_bundle(&original);
 
         let histogram = cleared.histograms.get("pt").unwrap();
         assert_eq!(histogram.title, "pt");

@@ -13,7 +13,7 @@ use crate::api::{
 use crate::core::{
     AggregationStore, RunReadStore, RunSpecStore, RunTask, RunTaskStore, SamplerQueueTuning,
 };
-use crate::evaluation::ObservableState;
+use crate::evaluation::AccumulatorState;
 use crate::server::config_panels::{
     EvaluatorPanelContext, PanelRenderer, SamplerAggregatorPanelContext,
 };
@@ -711,8 +711,8 @@ async fn get_run_task_output(
     let cursor =
         parse_task_panel_cursor(request.request.cursor.as_deref()).map_err(ApiError::BadRequest)?;
     let task = load_run_task(&state.store, run_id, task_id).await?;
-    let mut effective_observable_config =
-        stage_api::resolve_effective_sample_observable_config(&state.store, run_id, &task).await?;
+    let mut effective_accumulator_config =
+        stage_api::resolve_effective_sample_accumulator_config(&state.store, run_id, &task).await?;
     let latest_persisted_snapshot = state
         .store
         .get_task_output_snapshots(run_id, task.id, None, 1)
@@ -723,13 +723,13 @@ async fn get_run_task_output(
         .store
         .get_latest_task_stage_snapshot(run_id, task.id)
         .await?;
-    let current_observable = if matches!(task.state, crate::core::RunTaskState::Active) {
+    let current_accumulator = if matches!(task.state, crate::core::RunTaskState::Active) {
         state
             .store
-            .load_current_observable(run_id)
+            .load_current_accumulator(run_id)
             .await?
-            .map(|current_observable| {
-                ObservableState::from_json(&current_observable)
+            .map(|current_accumulator| {
+                AccumulatorState::from_json(&current_accumulator)
                     .map_err(|err| ApiError::Internal(err.to_string()))
             })
             .transpose()?
@@ -737,22 +737,22 @@ async fn get_run_task_output(
         None
     };
     let has_gammaloop_observable =
-        matches!(current_observable, Some(ObservableState::Gammaloop(_)))
+        matches!(current_accumulator, Some(AccumulatorState::Gammaloop(_)))
             || latest_stage_snapshot.as_ref().is_some_and(|snapshot| {
-                matches!(&snapshot.observable_state, ObservableState::Gammaloop(_))
+                matches!(&snapshot.observable_state, AccumulatorState::Gammaloop(_))
             })
             || latest_persisted_snapshot.as_ref().is_some_and(|snapshot| {
-                ObservableState::from_gammaloop_persistent_json(&snapshot.persisted_output).is_ok()
+                AccumulatorState::from_gammaloop_persistent_json(&snapshot.persisted_output).is_ok()
             });
     if has_gammaloop_observable
         && !matches!(
-            effective_observable_config,
-            Some(crate::core::ObservableConfig::Gammaloop)
+            effective_accumulator_config,
+            Some(crate::core::AccumulatorConfig::Gammaloop)
         )
     {
-        effective_observable_config = Some(crate::core::ObservableConfig::Gammaloop);
+        effective_accumulator_config = Some(crate::core::AccumulatorConfig::Gammaloop);
     }
-    let panel_source = TaskPanelSource::new(&task.task, effective_observable_config);
+    let panel_source = TaskPanelSource::new(&task.task, effective_accumulator_config);
     let delta_history_snapshots = if panel_source.needs_history() && cursor.snapshot_id.is_some() {
         state
             .store
@@ -775,7 +775,7 @@ async fn get_run_task_output(
             cursor,
             &task,
             &request.request.panel_state,
-            current_observable.as_ref(),
+            current_accumulator.as_ref(),
             latest_stage_snapshot.as_ref(),
             latest_persisted_snapshot.as_ref(),
             &full_history_snapshots,

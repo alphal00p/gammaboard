@@ -5,7 +5,7 @@ use super::{
 
 use crate::api::stage::resolve_task_source_snapshot;
 use crate::core::{
-    AggregationStore, BatchTransformConfig, ObservableConfig, RunTask, RunTaskStore, StoreError,
+    AccumulatorConfig, AggregationStore, BatchTransformConfig, RunTask, RunTaskStore, StoreError,
     WorkQueueStore,
 };
 use crate::runners::{
@@ -273,11 +273,11 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         let base_stage_snapshot = role_store
             .load_latest_stage_snapshot_before_sequence(worker.run_id, task.sequence_nr)
             .await?;
-        let observable_source_snapshot = resolve_task_source_snapshot(
+        let accumulator_source_snapshot = resolve_task_source_snapshot(
             &role_store,
             worker.run_id,
             &task,
-            task.task.sample_observable_source(),
+            task.task.sample_accumulator_source(),
         )
         .await?;
 
@@ -327,32 +327,32 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             }
         };
 
-        let new_observable_config = task
+        let new_accumulator_config = task
             .task
-            .new_observable_config()
+            .new_accumulator_config()
             .map_err(|err| StoreError::store(err.to_string()))?;
 
         let observable_state = if let Some(snapshot) = restored_snapshot.as_ref() {
             snapshot.observable_state.clone()
-        } else if let Some(source_snapshot) = observable_source_snapshot.as_ref() {
+        } else if let Some(source_snapshot) = accumulator_source_snapshot.as_ref() {
             source_snapshot.observable_state.clone().ok_or_else(|| {
                 StoreError::store(format!(
-                    "run {} task {} source snapshot has no observable state",
+                    "run {} task {} source snapshot has no accumulator state",
                     worker.run_id, task.id
                 ))
             })?
-        } else if let Some(config) = new_observable_config {
+        } else if let Some(config) = new_accumulator_config {
             Self::observable_state_from_config(config)
         } else if let Some(snapshot) = base_stage_snapshot.as_ref() {
             snapshot.observable_state.clone().ok_or_else(|| {
                 StoreError::store(format!(
-                    "run {} task {} has no observable configuration",
+                    "run {} task {} has no accumulator configuration",
                     worker.run_id, task.id
                 ))
             })?
         } else {
             return Err(StoreError::store(format!(
-                "run {} task {} has no observable configuration",
+                "run {} task {} has no accumulator configuration",
                 worker.run_id, task.id
             )));
         };
@@ -391,24 +391,24 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
     }
 
     fn observable_state_from_config(
-        config: ObservableConfig,
-    ) -> crate::evaluation::ObservableState {
+        config: AccumulatorConfig,
+    ) -> crate::evaluation::AccumulatorState {
         match config {
-            crate::core::ObservableConfig::Empty => crate::evaluation::ObservableState::empty(),
-            crate::core::ObservableConfig::Scalar => {
-                crate::evaluation::ObservableState::empty_scalar()
+            crate::core::AccumulatorConfig::Empty => crate::evaluation::AccumulatorState::empty(),
+            crate::core::AccumulatorConfig::Scalar => {
+                crate::evaluation::AccumulatorState::empty_scalar()
             }
-            crate::core::ObservableConfig::Complex => {
-                crate::evaluation::ObservableState::empty_complex()
+            crate::core::AccumulatorConfig::Complex => {
+                crate::evaluation::AccumulatorState::empty_complex()
             }
-            crate::core::ObservableConfig::Gammaloop => {
-                crate::evaluation::ObservableState::empty_gammaloop()
+            crate::core::AccumulatorConfig::Gammaloop => {
+                crate::evaluation::AccumulatorState::empty_gammaloop()
             }
-            crate::core::ObservableConfig::FullScalar => {
-                crate::evaluation::ObservableState::empty_full_scalar()
+            crate::core::AccumulatorConfig::FullScalar => {
+                crate::evaluation::AccumulatorState::empty_full_scalar()
             }
-            crate::core::ObservableConfig::FullComplex => {
-                crate::evaluation::ObservableState::empty_full_complex()
+            crate::core::AccumulatorConfig::FullComplex => {
+                crate::evaluation::AccumulatorState::empty_full_complex()
             }
         }
     }

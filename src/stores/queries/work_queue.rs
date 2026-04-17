@@ -311,8 +311,8 @@ pub(crate) async fn submit_batch_results(
     result
         .validate_json_safe()
         .map_err(|err| StoreError::store(format!("invalid batch result payload: {err}")))?;
-    let observable =
-        encode_json("batch observable", &result.observable).map_err(StoreError::from)?;
+    let accumulator =
+        encode_json("batch accumulator", &result.accumulator).map_err(StoreError::from)?;
     let values = result.values_to_bytes().map_err(|err| {
         StoreError::store(format!("failed to serialize batch training values: {err}"))
     })?;
@@ -348,7 +348,7 @@ pub(crate) async fn submit_batch_results(
     )
     .bind(batch_id)
     .bind(values)
-    .bind(observable)
+    .bind(accumulator)
     .bind(eval_time_ms)
     .execute(&mut *tx)
     .await
@@ -663,7 +663,7 @@ pub(crate) async fn fetch_completed_batches(
     {
         let Some(batch_observable) = batch_observable else {
             return Err(sqlx::Error::Protocol(format!(
-                "completed batch {batch_id} is missing persisted observable"
+                "completed batch {batch_id} is missing persisted accumulator"
             )));
         };
         completed.push(CompletedBatchRaw {

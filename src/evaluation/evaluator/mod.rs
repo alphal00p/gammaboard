@@ -5,8 +5,8 @@ mod sinc_evaluator;
 mod symbolica;
 pub(crate) mod unit;
 
-use crate::core::{BuildError, EvaluatorConfig, ObservableConfig};
-use crate::evaluation::{Evaluator, ObservableState};
+use crate::core::{AccumulatorConfig, BuildError, EvaluatorConfig};
+use crate::evaluation::{AccumulatorState, Evaluator};
 
 use self::gammaloop::GammaLoopEvaluator;
 use self::python::ScalarPythonEvaluator;
@@ -54,10 +54,10 @@ impl EvaluatorConfig {
         }
     }
 
-    pub fn empty_observable_state(
+    pub fn empty_accumulator_state(
         &self,
-        config: &ObservableConfig,
-    ) -> Result<ObservableState, BuildError> {
-        Ok(ObservableState::from_config(config))
+        config: &AccumulatorConfig,
+    ) -> Result<AccumulatorState, BuildError> {
+        Ok(AccumulatorState::from_config(config))
     }
 }

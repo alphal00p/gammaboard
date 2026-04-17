@@ -2,7 +2,7 @@
 
 [[task_queue]]
 kind = "plot_line"
-observable = "complex"
+accumulator = "complex"
 
 [task_queue.geometry]
 offset = [0.0, 0.0]

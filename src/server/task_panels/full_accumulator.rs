@@ -1,9 +1,9 @@
 use super::{TaskPanelContext, TaskPanelProjector, panel_projector};
 use crate::core::{
     EngineError, ImageDisplayMode, LineDisplayMode, LineRasterGeometry, PlaneRasterGeometry,
-    PlotObservableKind,
+    PlotAccumulatorKind,
 };
-use crate::evaluation::{FullObservableProgress, ObservableState};
+use crate::evaluation::{AccumulatorState, FullAccumulatorProgress};
 use crate::server::panels::{
     ImageColorMode, ImageNormalizationMode, PanelHistoryMode, PanelKind, PanelSpec, PanelState,
     PanelWidth, PlotPoint, PlotSeries, key_value, key_value_panel, multi_timeseries_panel,
@@ -79,7 +79,7 @@ impl ImageViewMode {
 pub(super) fn line_projectors(
     geometry: LineRasterGeometry,
     display: LineDisplayMode,
-    observable: PlotObservableKind,
+    accumulator: PlotAccumulatorKind,
 ) -> Vec<TaskPanelProjector> {
     let mut projectors = vec![
         progress_projector(
@@ -90,10 +90,10 @@ pub(super) fn line_projectors(
         ),
         completion_projector("line_completion", "Line Completion", geometry.nr_points()),
     ];
-    if line_uses_complex_components(display, observable) {
+    if line_uses_complex_components(display, accumulator) {
         projectors.push(line_components_projector(geometry));
     } else {
-        let label = if matches!(observable, PlotObservableKind::Complex) {
+        let label = if matches!(accumulator, PlotAccumulatorKind::Complex) {
             "Real Part"
         } else {
             "Value"
@@ -159,9 +159,9 @@ fn image_view_projector(
             ),
             PanelWidth::Full,
         ),
-        move |ctx| match ctx.source.observable() {
-            Some(observable) => Ok(Some(image_view_panel(
-                observable,
+        move |ctx| match ctx.source.accumulator() {
+            Some(accumulator) => Ok(Some(image_view_panel(
+                accumulator,
                 &geometry,
                 selected_image_view_mode(ctx, display),
             )?)),
@@ -191,8 +191,8 @@ fn line_components_projector(geometry: LineRasterGeometry) -> TaskPanelProjector
             ),
             PanelWidth::Full,
         ),
-        move |ctx| match ctx.source.observable() {
-            Some(observable) => line_components_panel(observable, &geometry),
+        move |ctx| match ctx.source.accumulator() {
+            Some(accumulator) => line_components_panel(accumulator, &geometry),
             None => Ok(None),
         },
         |_ctx| Ok(None),
@@ -210,8 +210,8 @@ fn line_real_projector(geometry: LineRasterGeometry, label: &'static str) -> Tas
             ),
             PanelWidth::Full,
         ),
-        move |ctx| match ctx.source.observable() {
-            Some(observable) => Ok(line_real_panel(observable, &geometry)?),
+        move |ctx| match ctx.source.accumulator() {
+            Some(accumulator) => Ok(line_real_panel(accumulator, &geometry)?),
             None => Ok(None),
         },
         |_ctx| Ok(None),
@@ -226,15 +226,15 @@ fn current_processed(ctx: &TaskPanelContext<'_>, total: usize) -> Result<usize, 
 }
 
 fn image_view_panel(
-    observable: &ObservableState,
+    accumulator: &AccumulatorState,
     geometry: &PlaneRasterGeometry,
     mode: ImageViewMode,
 ) -> Result<PanelState, EngineError> {
     let width = geometry.u_linspace.count;
     let height = geometry.v_linspace.count;
     let total = geometry.nr_points();
-    match observable {
-        ObservableState::FullScalar(state) => Ok(PanelState::Image2d {
+    match accumulator {
+        AccumulatorState::FullScalar(state) => Ok(PanelState::Image2d {
             panel_id: "image_view".to_string(),
             width,
             height,
@@ -246,7 +246,7 @@ fn image_view_panel(
             color_mode: image_color_mode(mode),
             normalization_mode: image_normalization_mode(mode),
         }),
-        ObservableState::FullComplex(state) => Ok(PanelState::Image2d {
+        AccumulatorState::FullComplex(state) => Ok(PanelState::Image2d {
             panel_id: "image_view".to_string(),
             width,
             height,
@@ -263,7 +263,7 @@ fn image_view_panel(
             normalization_mode: image_normalization_mode(mode),
         }),
         other => Err(EngineError::engine(format!(
-            "image task expected full observable, got {}",
+            "image task expected full accumulator, got {}",
             other.kind_str()
         ))),
     }
@@ -309,12 +309,12 @@ fn image_normalization_mode(mode: ImageViewMode) -> ImageNormalizationMode {
 }
 
 fn line_components_panel(
-    observable: &ObservableState,
+    accumulator: &AccumulatorState,
     geometry: &LineRasterGeometry,
 ) -> Result<Option<PanelState>, EngineError> {
     let xs = line_xs(geometry);
-    match observable {
-        ObservableState::FullComplex(state) => Ok(Some(multi_timeseries_panel(
+    match accumulator {
+        AccumulatorState::FullComplex(state) => Ok(Some(multi_timeseries_panel(
             "line_components",
             vec![
                 PlotSeries {
@@ -333,37 +333,40 @@ fn line_components_panel(
                 },
             ],
         ))),
-        ObservableState::FullScalar(_) => Ok(None),
+        AccumulatorState::FullScalar(_) => Ok(None),
         other => Err(EngineError::engine(format!(
-            "line task expected full observable, got {}",
+            "line task expected full accumulator, got {}",
             other.kind_str()
         ))),
     }
 }
 
 fn line_real_panel(
-    observable: &ObservableState,
+    accumulator: &AccumulatorState,
     geometry: &LineRasterGeometry,
 ) -> Result<Option<PanelState>, EngineError> {
     let xs = line_xs(geometry);
-    match observable {
-        ObservableState::FullScalar(state) => Ok(Some(scalar_timeseries_panel(
+    match accumulator {
+        AccumulatorState::FullScalar(state) => Ok(Some(scalar_timeseries_panel(
             "line_real",
             reordered_line_scalar_points(&xs, &state.values),
         ))),
-        ObservableState::FullComplex(state) => Ok(Some(scalar_timeseries_panel(
+        AccumulatorState::FullComplex(state) => Ok(Some(scalar_timeseries_panel(
             "line_real",
             reordered_line_points(&xs, &state.values, |value| value.re),
         ))),
         other => Err(EngineError::engine(format!(
-            "line task expected full observable, got {}",
+            "line task expected full accumulator, got {}",
             other.kind_str()
         ))),
     }
 }
 
-fn line_uses_complex_components(display: LineDisplayMode, observable: PlotObservableKind) -> bool {
-    matches!(observable, PlotObservableKind::Complex)
+fn line_uses_complex_components(
+    display: LineDisplayMode,
+    accumulator: PlotAccumulatorKind,
+) -> bool {
+    matches!(accumulator, PlotAccumulatorKind::Complex)
         && matches!(
             display,
             LineDisplayMode::Auto | LineDisplayMode::ComplexComponents
@@ -505,9 +508,9 @@ fn completion_panel(panel_id: &str, total: usize, processed: usize) -> PanelStat
     )
 }
 
-fn decode_full_progress(persisted: &JsonValue) -> Result<FullObservableProgress, EngineError> {
+fn decode_full_progress(persisted: &JsonValue) -> Result<FullAccumulatorProgress, EngineError> {
     serde_json::from_value(persisted.clone())
-        .map_err(|err| EngineError::build(format!("invalid full observable progress: {err}")))
+        .map_err(|err| EngineError::build(format!("invalid full accumulator progress: {err}")))
 }
 
 fn line_x_value(geometry: &LineRasterGeometry, index: usize) -> f64 {

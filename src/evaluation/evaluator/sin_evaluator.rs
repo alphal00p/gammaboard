@@ -1,6 +1,6 @@
-use crate::core::{EvalError, ObservableConfig};
+use crate::core::{AccumulatorConfig, EvalError};
 use crate::evaluation::{
-    Batch, BatchResult, EvalBatchOptions, Evaluator, ObservableState, ScalarSampleEvaluator,
+    AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator, ScalarSampleEvaluator,
 };
 use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
@@ -53,24 +53,24 @@ impl Evaluator for SinEvaluator {
     fn eval_batch(
         &mut self,
         batch: &Batch,
-        observable: &ObservableConfig,
+        accumulator: &AccumulatorConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
         let started = Instant::now();
-        let mut observable_state = ObservableState::from_config(observable);
+        let mut observable_state = AccumulatorState::from_config(accumulator);
         let weighted_values = match &mut observable_state {
-            ObservableState::Empty(observable) => {
-                self.eval_scalar_into(batch, observable, options.require_training_values)?
+            AccumulatorState::Empty(accumulator) => {
+                self.eval_scalar_into(batch, accumulator, options.require_training_values)?
             }
-            ObservableState::Scalar(observable) => {
-                self.eval_scalar_into(batch, observable, options.require_training_values)?
+            AccumulatorState::Scalar(accumulator) => {
+                self.eval_scalar_into(batch, accumulator, options.require_training_values)?
             }
-            ObservableState::FullScalar(observable) => {
-                self.eval_scalar_into(batch, observable, options.require_training_values)?
+            AccumulatorState::FullScalar(accumulator) => {
+                self.eval_scalar_into(batch, accumulator, options.require_training_values)?
             }
             other => {
                 return Err(EvalError::eval(format!(
-                    "sin evaluator does not support observable kind {}",
+                    "sin evaluator does not support accumulator kind {}",
                     other.kind_str()
                 )));
             }

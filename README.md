@@ -294,10 +294,10 @@ Every run stores an initial root stage snapshot (`sequence_nr = 0`) immediately 
 
 ### Task Queue
 Sample tasks use direct per-component source specs:
-- omit `sampler_aggregator` or `observable` to use `latest`
+- omit `sampler_aggregator` or `accumulator` to use `latest`
 - use `{ from_name = "..." }` to load from a prior task name
 - use `{ config = ... }` to set explicit inline config
-- `observable = { config = "gammaloop" }` is available for GammaLoop runs and persists GammaLoop's native histogram snapshot bundle
+- `accumulator = { config = "gammaloop" }` is available for GammaLoop runs and persists GammaLoop's native histogram snapshot bundle
 
 Task names are unique per run and can be referenced by `from_name`.
 `batch_transforms` is stage state for tasks. Omitted inherits; `batch_transforms = []` explicitly clears inherited transforms.
@@ -311,14 +311,14 @@ Sample task config example:
 name = "warmup-sample" # optional; auto-generated when omitted
 kind = "sample"
 nr_samples = 10000
-observable = { config = "scalar" }
+accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 ```
 
 Evaluators use a fixed single-slot latent prefetch and single-slot async submit pipeline. Materialization and evaluation still remain strictly one batch at a time.
 
 `sampler_aggregator_runner_params` also controls queue and persistence behavior:
-- `frontend_sync_interval_ms` sets how often the sampler runner refreshes the frontend-facing observable state and persisted observable snapshots during sampling; the shared run default is `2000`.
+- `frontend_sync_interval_ms` sets how often the sampler runner refreshes the frontend-facing accumulator state and persisted accumulator snapshots during sampling; the shared run default is `2000`.
 - Sampler queue settings live under the nested TOML table `[sampler_aggregator_runner_params.queue]`.
 - `target_batch_eval_ms`, `batch_size_deadband_ratio`, `batch_size_cooldown_ticks`, and `max_batch_size` are queue-level controls under `[sampler_aggregator_runner_params.queue]`; the queue owns batch-size tuning during production planning.
 - `queue_buffer` is the single queue buffer knob for the sampler queue. The runner targets about `queue_buffer * active_evaluator_count` pending batches. A value of `0.0` is the most aggressive and lets the queue drain to zero pending batches when the sampler cannot refill it faster than evaluators consume work. Larger values keep more pending work buffered. `max_queue_size` remains the hard cap.
@@ -330,7 +330,7 @@ Deterministic scan tasks are supported:
 ```toml
 [[task_queue]]
 kind = "image"
-observable = "complex"
+accumulator = "complex"
 [task_queue.geometry]
 offset = [0.0, 0.0]
 u_vector = [1.0, 0.0]
@@ -340,7 +340,7 @@ v_linspace = { start = -2.0, stop = 2.0, count = 128 }
 
 [[task_queue]]
 kind = "plot_line"
-observable = "complex"
+accumulator = "complex"
 [task_queue.geometry]
 offset = [0.0, 0.0]
 direction = [1.0, 0.0]

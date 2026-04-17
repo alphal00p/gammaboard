@@ -5,20 +5,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
-use crate::core::ObservableConfig;
+use crate::core::AccumulatorConfig;
 use crate::evaluation::{Batch, BatchError, Point};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LatentBatch {
     pub nr_samples: usize,
-    pub observable: ObservableConfig,
+    pub accumulator: AccumulatorConfig,
     pub payload: LatentBatchPayload,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LatentBatchSpec {
     pub nr_samples: usize,
-    pub observable: ObservableConfig,
+    pub accumulator: AccumulatorConfig,
     pub payload: LatentBatchPayload,
 }
 
@@ -47,7 +47,7 @@ pub enum SamplePlan {
 #[derive(Debug, Serialize, Deserialize)]
 struct LatentBatchBinary {
     nr_samples: usize,
-    observable: ObservableConfig,
+    accumulator: AccumulatorConfig,
     payload: LatentBatchPayloadBinary,
 }
 
@@ -146,7 +146,7 @@ impl LatentBatchSpec {
     pub fn from_batch(batch: &Batch) -> Self {
         Self {
             nr_samples: batch.size(),
-            observable: ObservableConfig::Scalar,
+            accumulator: AccumulatorConfig::Scalar,
             payload: LatentBatchPayload::from_batch(batch),
         }
     }
@@ -154,13 +154,13 @@ impl LatentBatchSpec {
     pub fn build(self) -> LatentBatch {
         LatentBatch {
             nr_samples: self.nr_samples,
-            observable: self.observable,
+            accumulator: self.accumulator,
             payload: self.payload,
         }
     }
 
-    pub fn with_observable_config(mut self, observable: ObservableConfig) -> Self {
-        self.observable = observable;
+    pub fn with_accumulator_config(mut self, accumulator: AccumulatorConfig) -> Self {
+        self.accumulator = accumulator;
         self
     }
 }
@@ -247,7 +247,7 @@ impl LatentBatch {
         bincode::serde::encode_to_vec(
             LatentBatchBinary {
                 nr_samples: self.nr_samples,
-                observable: self.observable.clone(),
+                accumulator: self.accumulator.clone(),
                 payload,
             },
             Self::binary_config(),
@@ -280,7 +280,7 @@ impl LatentBatch {
         };
         let restored = Self {
             nr_samples: latent.nr_samples,
-            observable: latent.observable,
+            accumulator: latent.accumulator,
             payload,
         };
         restored.validate_nr_samples()?;
@@ -426,7 +426,7 @@ mod tests {
     fn latent_batch_rejects_mismatched_nr_samples() {
         let latent = LatentBatch {
             nr_samples: 2,
-            observable: ObservableConfig::Scalar,
+            accumulator: AccumulatorConfig::Scalar,
             payload: LatentBatchPayload::IndexedBatch {
                 discrete_signatures: vec![vec![1]],
                 discrete_map: vec![0],

@@ -16,12 +16,12 @@ pub use models::{
     SamplerRuntimeMetrics, SamplerWorkRollingAverages, WorkerRole,
 };
 pub use run_spec::{
-    BatchTransformConfig, EvaluatorConfig, IntegrationParams, ObservableConfig, RunSpec,
+    AccumulatorConfig, BatchTransformConfig, EvaluatorConfig, IntegrationParams, RunSpec,
     SamplerAggregatorConfig,
 };
 pub use tasks::{
-    ImageDisplayMode, LineDisplayMode, LineRasterGeometry, Linspace, ObservableSourceSpec,
-    PlaneRasterGeometry, PlotObservableKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState,
+    AccumulatorSourceSpec, ImageDisplayMode, LineDisplayMode, LineRasterGeometry, Linspace,
+    PlaneRasterGeometry, PlotAccumulatorKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState,
     SampleTaskConfig, SamplerAggregatorSourceSpec, SamplerQueueTuning, SourceRefSpec,
     canonical_task_toml, generated_task_name,
 };

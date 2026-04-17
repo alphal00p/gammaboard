@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::core::{BatchTransformConfig, BuildError, ObservableConfig, SamplerAggregatorConfig};
+use crate::core::{AccumulatorConfig, BatchTransformConfig, BuildError, SamplerAggregatorConfig};
 use crate::sampling::{RasterLineSamplerParams, RasterPlaneSamplerParams};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -146,10 +146,10 @@ pub enum SamplerAggregatorSourceSpec {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum ObservableSourceSpec {
+pub enum AccumulatorSourceSpec {
     Latest(String),
     FromName { from_name: String },
-    Config { config: ObservableConfig },
+    Config { config: AccumulatorConfig },
 }
 
 fn validate_source_name(field: &str, from_name: &str) -> Result<(), String> {
@@ -181,17 +181,17 @@ impl SamplerAggregatorSourceSpec {
     }
 }
 
-impl ObservableSourceSpec {
+impl AccumulatorSourceSpec {
     pub fn validate(&self) -> Result<(), String> {
         match self {
             Self::Latest(value) => {
                 if value == "latest" {
                     Ok(())
                 } else {
-                    Err("observable must be one of: \"latest\", { from_name = ... }, { config = ... }".to_string())
+                    Err("accumulator must be one of: \"latest\", { from_name = ... }, { config = ... }".to_string())
                 }
             }
-            Self::FromName { from_name } => validate_source_name("observable", from_name),
+            Self::FromName { from_name } => validate_source_name("accumulator", from_name),
             Self::Config { .. } => Ok(()),
         }
     }
@@ -205,7 +205,7 @@ pub enum RunTaskSpec {
         #[serde(default)]
         sampler_aggregator: Option<SamplerAggregatorSourceSpec>,
         #[serde(default)]
-        observable: Option<ObservableSourceSpec>,
+        accumulator: Option<AccumulatorSourceSpec>,
         #[serde(default)]
         queue_tuning: Option<SamplerQueueTuning>,
         #[serde(default)]
@@ -213,7 +213,7 @@ pub enum RunTaskSpec {
     },
     Image {
         geometry: PlaneRasterGeometry,
-        observable: PlotObservableKind,
+        accumulator: PlotAccumulatorKind,
         #[serde(default)]
         display: ImageDisplayMode,
         #[serde(default)]
@@ -228,7 +228,7 @@ pub enum RunTaskSpec {
     },
     PlotLine {
         geometry: LineRasterGeometry,
-        observable: PlotObservableKind,
+        accumulator: PlotAccumulatorKind,
         #[serde(default)]
         display: LineDisplayMode,
         #[serde(default)]
@@ -257,14 +257,14 @@ impl RunTaskSpec {
             ),
             Self::Sample {
                 sampler_aggregator,
-                observable,
+                accumulator,
                 queue_tuning,
                 ..
             } => {
                 if let Some(source) = sampler_aggregator {
                     source.validate()?;
                 }
-                if let Some(source) = observable {
+                if let Some(source) = accumulator {
                     source.validate()?;
                 }
                 if let Some(queue_tuning) = queue_tuning {
@@ -380,14 +380,14 @@ impl RunTaskSpec {
         }
     }
 
-    pub fn sample_observable_source(&self) -> Option<SourceRefSpec> {
+    pub fn sample_accumulator_source(&self) -> Option<SourceRefSpec> {
         match self {
-            Self::Sample { observable, .. } => match observable {
-                None | Some(ObservableSourceSpec::Latest(_)) => Some(SourceRefSpec::Latest),
-                Some(ObservableSourceSpec::FromName { from_name }) => {
+            Self::Sample { accumulator, .. } => match accumulator {
+                None | Some(AccumulatorSourceSpec::Latest(_)) => Some(SourceRefSpec::Latest),
+                Some(AccumulatorSourceSpec::FromName { from_name }) => {
                     Some(SourceRefSpec::FromName(from_name.clone()))
                 }
-                Some(ObservableSourceSpec::Config { .. }) => None,
+                Some(AccumulatorSourceSpec::Config { .. }) => None,
             },
             Self::Image { .. } | Self::PdfAdaptationImage { .. } | Self::PlotLine { .. } => None,
         }
@@ -398,7 +398,7 @@ impl RunTaskSpec {
         if let Some(SourceRefSpec::FromName(name)) = self.sample_sampler_source() {
             out.push(name);
         }
-        if let Some(SourceRefSpec::FromName(name)) = self.sample_observable_source() {
+        if let Some(SourceRefSpec::FromName(name)) = self.sample_accumulator_source() {
             out.push(name);
         }
         out
@@ -408,16 +408,16 @@ impl RunTaskSpec {
         true
     }
 
-    pub fn new_observable_config(&self) -> Result<Option<ObservableConfig>, BuildError> {
+    pub fn new_accumulator_config(&self) -> Result<Option<AccumulatorConfig>, BuildError> {
         match self {
             Self::Sample {
-                observable: Some(ObservableSourceSpec::Config { config }),
+                accumulator: Some(AccumulatorSourceSpec::Config { config }),
                 ..
             } => Ok(Some(config.clone())),
             Self::Sample { .. } => Ok(None),
-            Self::PdfAdaptationImage { .. } => Ok(Some(ObservableConfig::Empty)),
-            Self::Image { observable, .. } | Self::PlotLine { observable, .. } => {
-                Ok(Some(observable.full_config()))
+            Self::PdfAdaptationImage { .. } => Ok(Some(AccumulatorConfig::Empty)),
+            Self::Image { accumulator, .. } | Self::PlotLine { accumulator, .. } => {
+                Ok(Some(accumulator.full_config()))
             }
         }
     }
@@ -473,26 +473,26 @@ impl IntoPreflightTask for RunTaskSpec {
             Self::Sample {
                 nr_samples,
                 sampler_aggregator,
-                observable,
+                accumulator,
                 queue_tuning,
                 batch_transforms,
             } => Ok(Some(Self::Sample {
                 nr_samples: Some(if nr_samples == Some(0) { 0 } else { 1 }),
                 sampler_aggregator,
-                observable,
+                accumulator,
                 queue_tuning,
                 batch_transforms,
             })),
             Self::Image {
                 mut geometry,
-                observable,
+                accumulator,
                 display,
                 batch_transforms,
             } => {
                 geometry.reduce_for_preflight(4, 4);
                 Ok(Some(Self::Image {
                     geometry,
-                    observable,
+                    accumulator,
                     display,
                     batch_transforms,
                 }))
@@ -511,14 +511,14 @@ impl IntoPreflightTask for RunTaskSpec {
             }
             Self::PlotLine {
                 mut geometry,
-                observable,
+                accumulator,
                 display,
                 batch_transforms,
             } => {
                 geometry.reduce_for_preflight(8);
                 Ok(Some(Self::PlotLine {
                     geometry,
-                    observable,
+                    accumulator,
                     display,
                     batch_transforms,
                 }))
@@ -547,16 +547,16 @@ pub enum LineDisplayMode {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum PlotObservableKind {
+pub enum PlotAccumulatorKind {
     Scalar,
     Complex,
 }
 
-impl PlotObservableKind {
-    pub const fn full_config(self) -> ObservableConfig {
+impl PlotAccumulatorKind {
+    pub const fn full_config(self) -> AccumulatorConfig {
         match self {
-            Self::Scalar => ObservableConfig::FullScalar,
-            Self::Complex => ObservableConfig::FullComplex,
+            Self::Scalar => AccumulatorConfig::FullScalar,
+            Self::Complex => AccumulatorConfig::FullComplex,
         }
     }
 }
@@ -741,7 +741,7 @@ mod tests {
     use crate::sampling::{HavanaSamplerParams, NaiveMonteCarloSamplerParams};
 
     #[test]
-    fn sample_task_without_observable_reuses_previous_state() {
+    fn sample_task_without_accumulator_reuses_previous_state() {
         let task = RunTaskSpec::Sample {
             nr_samples: Some(10),
             sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
@@ -749,12 +749,12 @@ mod tests {
                     params: NaiveMonteCarloSamplerParams::default(),
                 },
             }),
-            observable: Some(ObservableSourceSpec::Latest("latest".to_string())),
+            accumulator: Some(AccumulatorSourceSpec::Latest("latest".to_string())),
             queue_tuning: None,
             batch_transforms: Some(Vec::new()),
         };
 
-        assert_eq!(task.new_observable_config().unwrap(), None);
+        assert_eq!(task.new_accumulator_config().unwrap(), None);
     }
 
     #[test]
@@ -764,7 +764,7 @@ mod tests {
             task: RunTaskSpec::Sample {
                 nr_samples: Some(10),
                 sampler_aggregator: None,
-                observable: None,
+                accumulator: None,
                 queue_tuning: None,
                 batch_transforms: None,
             },
@@ -782,7 +782,7 @@ mod tests {
         let missing = RunTaskSpec::Sample {
             nr_samples: Some(0),
             sampler_aggregator: None,
-            observable: None,
+            accumulator: None,
             queue_tuning: None,
             batch_transforms: None,
         };
@@ -791,7 +791,7 @@ mod tests {
         let both = RunTaskSpec::Sample {
             nr_samples: Some(0),
             sampler_aggregator: Some(SamplerAggregatorSourceSpec::Latest("latest".to_string())),
-            observable: None,
+            accumulator: None,
             queue_tuning: None,
             batch_transforms: None,
         };
@@ -807,7 +807,7 @@ mod tests {
                     params: HavanaSamplerParams::default(),
                 },
             }),
-            observable: None,
+            accumulator: None,
             queue_tuning: None,
             batch_transforms: None,
         };
@@ -833,7 +833,7 @@ mod tests {
                 },
                 discrete: Vec::new(),
             },
-            observable: PlotObservableKind::Complex,
+            accumulator: PlotAccumulatorKind::Complex,
             display: ImageDisplayMode::Auto,
             batch_transforms: None,
         };
@@ -848,18 +848,18 @@ mod tests {
                 },
                 discrete: Vec::new(),
             },
-            observable: PlotObservableKind::Scalar,
+            accumulator: PlotAccumulatorKind::Scalar,
             display: LineDisplayMode::Auto,
             batch_transforms: None,
         };
 
         assert_eq!(
-            image.new_observable_config().unwrap(),
-            Some(ObservableConfig::FullComplex)
+            image.new_accumulator_config().unwrap(),
+            Some(AccumulatorConfig::FullComplex)
         );
         assert_eq!(
-            line.new_observable_config().unwrap(),
-            Some(ObservableConfig::FullScalar)
+            line.new_accumulator_config().unwrap(),
+            Some(AccumulatorConfig::FullScalar)
         );
     }
 
@@ -888,8 +888,8 @@ mod tests {
 
         assert_eq!(task.sample_sampler_source(), Some(SourceRefSpec::Latest));
         assert_eq!(
-            task.new_observable_config().unwrap(),
-            Some(ObservableConfig::Empty)
+            task.new_accumulator_config().unwrap(),
+            Some(AccumulatorConfig::Empty)
         );
     }
 

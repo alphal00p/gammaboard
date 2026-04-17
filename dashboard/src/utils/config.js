@@ -33,8 +33,8 @@ export const deriveObservableImplementation = (evaluatorConfig, observablePayloa
   }
 
   const { params } = splitKindConfig(evaluatorConfig, fallback);
-  if (typeof params.observable_kind === "string") {
-    return params.observable_kind;
+  if (typeof params.accumulator_kind === "string") {
+    return params.accumulator_kind;
   }
 
   return fallback;
