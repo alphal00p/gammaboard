@@ -318,6 +318,8 @@ fn real_estimate_history_panel(observable: ObservableState) -> PanelState {
             vec![PlotPoint {
                 x: state.count as f64,
                 y: state.mean(),
+                x_sampler_uptime_ms: None,
+                x_completed_samples_total: None,
                 y_min: Some(state.mean() - state.stderr()),
                 y_max: Some(state.mean() + state.stderr()),
             }],
@@ -328,6 +330,8 @@ fn real_estimate_history_panel(observable: ObservableState) -> PanelState {
             vec![PlotPoint {
                 x: state.count as f64,
                 y: state.real_mean(),
+                x_sampler_uptime_ms: None,
+                x_completed_samples_total: None,
                 y_min: Some(state.real_mean() - state.real_stderr()),
                 y_max: Some(state.real_mean() + state.real_stderr()),
             }],
@@ -338,6 +342,8 @@ fn real_estimate_history_panel(observable: ObservableState) -> PanelState {
             vec![PlotPoint {
                 x: state.sample_count() as f64,
                 y: state.real_mean(),
+                x_sampler_uptime_ms: None,
+                x_completed_samples_total: None,
                 y_min: Some(state.real_mean() - state.real_stderr()),
                 y_max: Some(state.real_mean() + state.real_stderr()),
             }],
@@ -355,6 +361,8 @@ fn imag_estimate_history_panel(observable: ObservableState) -> Option<PanelState
             vec![PlotPoint {
                 x: state.count as f64,
                 y: state.imag_mean(),
+                x_sampler_uptime_ms: None,
+                x_completed_samples_total: None,
                 y_min: Some(state.imag_mean() - state.imag_stderr()),
                 y_max: Some(state.imag_mean() + state.imag_stderr()),
             }],
@@ -365,6 +373,8 @@ fn imag_estimate_history_panel(observable: ObservableState) -> Option<PanelState
             vec![PlotPoint {
                 x: state.sample_count() as f64,
                 y: state.imag_mean(),
+                x_sampler_uptime_ms: None,
+                x_completed_samples_total: None,
                 y_min: Some(state.imag_mean() - state.imag_stderr()),
                 y_max: Some(state.imag_mean() + state.imag_stderr()),
             }],
@@ -380,6 +390,8 @@ fn abs_signal_to_noise_panel(observable: ObservableState) -> PanelState {
         vec![PlotPoint {
             x: observable.sample_count() as f64,
             y: observable.abs_signal_to_noise(),
+            x_sampler_uptime_ms: None,
+            x_completed_samples_total: None,
             y_min: None,
             y_max: None,
         }],

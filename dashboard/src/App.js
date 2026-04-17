@@ -30,11 +30,13 @@ import {
   fetchNodes,
   fetchTemplateFile,
   fetchTemplateList,
+  fetchRunReproToml,
   pauseRun,
   updateRunTaskQueueTuning,
   saveTemplateFile,
   unassignNode,
 } from "./services/api";
+import { copyToClipboard } from "./utils/clipboard";
 import { asArray } from "./utils/collections";
 import { asTaskList, getCurrentTask } from "./utils/tasks";
 
@@ -506,6 +508,7 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, onRunCr
   const { authenticated } = useAuth();
   const [createRunOpen, setCreateRunOpen] = useState(false);
   const [createRunBusy, setCreateRunBusy] = useState(false);
+  const [copyRunBusy, setCopyRunBusy] = useState(false);
   const [createRunError, setCreateRunError] = useState(null);
   const [snackbar, setSnackbar] = useState(null);
   const [runTemplates, setRunTemplates] = useState([]);
@@ -543,20 +546,41 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, onRunCr
         noRunsMessage="Create a run to start monitoring task output and engine configuration."
         noSelectionMessage="Pick a run to view task-scoped output and run configuration."
         headerActions={
-          authenticated ? (
-            <Box sx={{ mb: 2, display: "flex", justifyContent: "flex-end" }}>
+          <Box sx={{ mb: 2, display: "flex", justifyContent: "flex-end" }}>
+            <Stack direction="row" spacing={1}>
               <Button
                 variant="outlined"
-                disabled={createRunBusy}
-                onClick={() => {
-                  setCreateRunError(null);
-                  setCreateRunOpen(true);
+                disabled={!selectedRun || copyRunBusy}
+                onClick={async () => {
+                  if (!selectedRun) return;
+                  setCopyRunBusy(true);
+                  try {
+                    const response = await fetchRunReproToml(selectedRun);
+                    await copyToClipboard(response?.toml || "");
+                    setSnackbar({ message: "Run reproduction TOML copied.", severity: "success" });
+                  } catch (err) {
+                    setSnackbar({ message: err?.message || "Failed to copy run TOML.", severity: "error" });
+                  } finally {
+                    setCopyRunBusy(false);
+                  }
                 }}
               >
-                New Run
+                Copy Run TOML
               </Button>
-            </Box>
-          ) : null
+              {authenticated ? (
+                <Button
+                  variant="outlined"
+                  disabled={createRunBusy}
+                  onClick={() => {
+                    setCreateRunError(null);
+                    setCreateRunOpen(true);
+                  }}
+                >
+                  New Run
+                </Button>
+              ) : null}
+            </Stack>
+          </Box>
         }
       >
         <RunModeContent

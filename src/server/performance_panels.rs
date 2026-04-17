@@ -620,6 +620,11 @@ fn sampler_current_panels(
                     runtime.sampler_tick_busy_ratio,
                 ),
                 key_value(
+                    "sampler_uptime_seconds",
+                    "Sampler Uptime (s)",
+                    (runtime.sampler_uptime_ms / 1000.0).max(0.0),
+                ),
+                key_value(
                     "insert_task_utilization",
                     "Insert Task Utilization",
                     runtime.queue.insert_task_utilization,
@@ -909,13 +914,18 @@ fn sampler_completed_throughput_panel(
             } else {
                 runtime.ingested_samples_total
             };
-            Some((history_x(entry.created_at), cumulative_samples))
+            Some(SamplerProgressPoint {
+                x_wall_time_ms: history_x(entry.created_at),
+                x_sampler_uptime_ms: sampler_uptime_ms(&runtime),
+                x_completed_samples_total: cumulative_samples as f64,
+                cumulative_samples,
+            })
         })
         .collect::<Vec<_>>();
     if samples.is_empty() {
         return (None, 0.0);
     }
-    samples.sort_by(|left, right| left.0.total_cmp(&right.0));
+    samples.sort_by(|left, right| left.x_wall_time_ms.total_cmp(&right.x_wall_time_ms));
     let instant_points = instant_throughput_points_from_cumulative(&samples);
     let latest_instant = instant_points.last().map(|point| point.y).unwrap_or(0.0);
     (
@@ -943,29 +953,39 @@ fn sampler_utilization_history_panel(
 
     for entry in entries.iter().rev() {
         let runtime = decode_sampler_runtime_metrics(entry)?;
-        let x = history_x(entry.created_at);
+        let x_wall_time_ms = history_x(entry.created_at);
+        let x_sampler_uptime_ms = sampler_uptime_ms(&runtime);
+        let x_completed_samples_total = Some(runtime.completed_samples_total as f64);
         sampler_tick_points.push(PlotPoint {
-            x,
+            x: x_wall_time_ms,
             y: runtime.sampler_tick_busy_ratio.unwrap_or(0.0),
+            x_sampler_uptime_ms,
+            x_completed_samples_total,
             y_min: None,
             y_max: None,
         });
         insert_task_points.push(PlotPoint {
-            x,
+            x: x_wall_time_ms,
             y: runtime.queue.insert_task_utilization.unwrap_or(0.0),
+            x_sampler_uptime_ms,
+            x_completed_samples_total,
             y_min: None,
             y_max: None,
         });
         completed_fetch_points.push(PlotPoint {
-            x,
+            x: x_wall_time_ms,
             y: runtime.queue.completed_fetch_utilization.unwrap_or(0.0),
+            x_sampler_uptime_ms,
+            x_completed_samples_total,
             y_min: None,
             y_max: None,
         });
         if let Some(utilization) = runtime.avg_evaluator_utilization {
             evaluator_utilization_points.push(PlotPoint {
-                x,
+                x: x_wall_time_ms,
                 y: utilization.clamp(0.0, 1.0),
+                x_sampler_uptime_ms,
+                x_completed_samples_total,
                 y_min: None,
                 y_max: None,
             });
@@ -1007,18 +1027,32 @@ fn sampler_utilization_history_panel(
     ))
 }
 
-fn instant_throughput_points_from_cumulative(samples: &[(f64, i64)]) -> Vec<PlotPoint> {
+#[derive(Debug, Clone, Copy)]
+struct SamplerProgressPoint {
+    x_wall_time_ms: f64,
+    x_sampler_uptime_ms: Option<f64>,
+    x_completed_samples_total: f64,
+    cumulative_samples: i64,
+}
+
+fn instant_throughput_points_from_cumulative(samples: &[SamplerProgressPoint]) -> Vec<PlotPoint> {
     if samples.is_empty() {
         return Vec::new();
     }
     let mut points = Vec::with_capacity(samples.len());
-    for (index, (x_ms, cumulative_samples)) in samples.iter().copied().enumerate() {
+    for (index, point) in samples.iter().enumerate() {
         let y = if index == 0 {
             0.0
         } else {
-            let (prev_x_ms, prev_cumulative_samples) = samples[index - 1];
-            let elapsed_secs = (x_ms - prev_x_ms) / 1000.0;
-            let delta_samples = cumulative_samples.saturating_sub(prev_cumulative_samples);
+            let previous = samples[index - 1];
+            let elapsed_ms = match (point.x_sampler_uptime_ms, previous.x_sampler_uptime_ms) {
+                (Some(current), Some(prev)) if current > prev => current - prev,
+                _ => point.x_wall_time_ms - previous.x_wall_time_ms,
+            };
+            let elapsed_secs = elapsed_ms / 1000.0;
+            let delta_samples = point
+                .cumulative_samples
+                .saturating_sub(previous.cumulative_samples);
             if elapsed_secs > 0.0 {
                 (delta_samples as f64 / elapsed_secs).max(0.0)
             } else {
@@ -1026,13 +1060,20 @@ fn instant_throughput_points_from_cumulative(samples: &[(f64, i64)]) -> Vec<Plot
             }
         };
         points.push(PlotPoint {
-            x: x_ms,
+            x: point.x_wall_time_ms,
             y,
+            x_sampler_uptime_ms: point.x_sampler_uptime_ms,
+            x_completed_samples_total: Some(point.x_completed_samples_total),
             y_min: None,
             y_max: None,
         });
     }
     points
+}
+
+fn sampler_uptime_ms(runtime: &SamplerRuntimeMetrics) -> Option<f64> {
+    (runtime.sampler_uptime_ms.is_finite() && runtime.sampler_uptime_ms >= 0.0)
+        .then_some(runtime.sampler_uptime_ms)
 }
 
 fn queue_buffer_value(value: &JsonValue, key: &str) -> Option<JsonValue> {

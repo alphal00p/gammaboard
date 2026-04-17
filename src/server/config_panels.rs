@@ -5,8 +5,8 @@ use crate::server::panels::{
     key_value_panel, panel_spec, replace_panel, with_panel_width,
 };
 use crate::utils::domain::Domain;
-use serde_json::json;
 use serde_json::Value as JsonValue;
+use serde_json::json;
 
 pub trait PanelRenderer<C> {
     fn panel_specs(&self, ctx: &C) -> Vec<PanelSpec>;

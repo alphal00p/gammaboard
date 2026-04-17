@@ -278,6 +278,11 @@ struct TemplateFileResponse {
 }
 
 #[derive(Serialize)]
+struct RunReproTomlResponse {
+    toml: String,
+}
+
+#[derive(Serialize)]
 struct RunTaskResponse {
     #[serde(flatten)]
     task: RunTask,
@@ -297,6 +302,7 @@ fn build_app(state: AppState) -> Router {
         .route("/nodes", get(get_nodes))
         .route("/nodes/:id/panels", get(get_node_panels))
         .route("/runs/:id", get(get_run))
+        .route("/runs/:id/repro-toml", get(get_run_repro_toml))
         .route("/runs/:id/panels", get(get_run_panels))
         .route("/runs/:id/tasks", get(get_run_tasks))
         .route("/templates/runs", get(list_run_templates))
@@ -459,6 +465,14 @@ async fn get_run(
         .await?
         .ok_or_else(|| ApiError::NotFound("Run not found".to_string()))?;
     json_response(run)
+}
+
+async fn get_run_repro_toml(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i32>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    let toml = run_api::export_run_repro_toml(&state.store, id).await?;
+    json_response(RunReproTomlResponse { toml })
 }
 
 async fn get_run_panels(

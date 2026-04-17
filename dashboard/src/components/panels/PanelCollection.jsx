@@ -185,8 +185,20 @@ const fitHistogramXDomain = (bins) => {
 
 const FULL_ZOOM = Object.freeze({ start: 0, end: 100 });
 const isSharedHistoryXPanelId = (panelId) => String(panelId || "").includes("_history");
+const HISTORY_X_AXIS_MODE_WALL_TIME = "wall_time";
+const HISTORY_X_AXIS_MODE_SAMPLER_UPTIME = "sampler_uptime";
+const HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES = "completed_samples";
+const HISTORY_X_AXIS_MODE_SET = new Set([
+  HISTORY_X_AXIS_MODE_WALL_TIME,
+  HISTORY_X_AXIS_MODE_SAMPLER_UPTIME,
+  HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES,
+]);
 const inferXAxisLabel = (panelId) => (String(panelId || "").includes("_history") ? "Nr samples" : null);
-const inferNumericXAxisLabel = (panelId) => inferXAxisLabel(panelId) || "x";
+const inferNumericXAxisLabel = (panelId, mode = HISTORY_X_AXIS_MODE_WALL_TIME) => {
+  if (mode === HISTORY_X_AXIS_MODE_SAMPLER_UPTIME) return "Sampler Uptime";
+  if (mode === HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES) return "Completed Samples";
+  return inferXAxisLabel(panelId) || "x";
+};
 const TIMESTAMP_X_THRESHOLD_MS = 1e11;
 const isTimestampDomain = (domain) => {
   const [min, max] = asArray(domain);
@@ -207,18 +219,24 @@ const formatAbsoluteLocalTime = (timestampMs) => {
   const date = new Date(Number(timestampMs));
   return Number.isNaN(date.getTime()) ? "n/a" : date.toLocaleString();
 };
-const formatTimeseriesXAxisValue = (value, isTimestamp, originMs) => {
+const formatTimeseriesXAxisValue = (value, mode, isTimestamp, originMs) => {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "n/a";
+  if (mode === HISTORY_X_AXIS_MODE_SAMPLER_UPTIME) return formatElapsedTime(numeric);
+  if (mode === HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES) return formatAxisValue(numeric);
   return isTimestamp ? formatElapsedTime(numeric - originMs) : formatAxisValue(numeric);
 };
-const buildTimeseriesTooltipFormatter = (isTimestamp, originMs) => (params) => {
+const buildTimeseriesTooltipFormatter = (mode, isTimestamp, originMs) => (params) => {
   const entries = asArray(params);
   if (entries.length === 0) return "";
   const axisValue = Number(entries[0]?.axisValue);
-  const header = isTimestamp
-    ? `${formatElapsedTime(axisValue - originMs)}<br/>${escapeXml(formatAbsoluteLocalTime(axisValue))}`
-    : escapeXml(formatAxisValue(axisValue));
+  const header = mode === HISTORY_X_AXIS_MODE_SAMPLER_UPTIME
+    ? escapeXml(formatElapsedTime(axisValue))
+    : mode === HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES
+      ? escapeXml(formatAxisValue(axisValue))
+      : isTimestamp
+        ? `${formatElapsedTime(axisValue - originMs)}<br/>${escapeXml(formatAbsoluteLocalTime(axisValue))}`
+        : escapeXml(formatAxisValue(axisValue));
   const lines = entries.map((entry) => {
     const rawValue = Array.isArray(entry?.value) ? entry.value[1] : entry?.value;
     return `${entry?.marker ?? ""}${escapeXml(entry?.seriesName ?? "")}: ${Number.isFinite(Number(rawValue)) ? formatScientific(Number(rawValue), 6) : "n/a"}`;
@@ -238,6 +256,24 @@ const buildMultiSeriesData = (seriesList) => {
   }
   return Array.from(rows.values()).sort((a, b) => a.x - b.x);
 };
+
+const historyXAxisValueForPoint = (point, mode) => {
+  if (mode === HISTORY_X_AXIS_MODE_SAMPLER_UPTIME) {
+    const uptimeMs = Number(point?.x_sampler_uptime_ms);
+    if (Number.isFinite(uptimeMs)) return uptimeMs;
+  }
+  if (mode === HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES) {
+    const completedSamples = Number(point?.x_completed_samples_total);
+    if (Number.isFinite(completedSamples)) return completedSamples;
+  }
+  const fallback = Number(point?.x);
+  return Number.isFinite(fallback) ? fallback : 0;
+};
+
+const remapTimeseriesPointXAxis = (point, mode) => ({
+  ...point,
+  x: historyXAxisValueForPoint(point, mode),
+});
 
 const lineColors = ["#005f73", "#bb3e03", "#0a9396", "#ae2012", "#ca6702"];
 const histogramOverlayColors = ["#9b2226", "#3a86ff", "#ff006e", "#6a994e", "#ff7f11", "#8338ec"];
@@ -322,6 +358,10 @@ const readZoomFromPanelValue = (value, fallback = FULL_ZOOM) =>
   normalizeZoomRange(isObject(value) ? value.zoom : null) || fallback;
 const readTailPinnedFromPanelValue = (value, fallback = true) =>
   typeof value?.tailPinned === "boolean" ? value.tailPinned : fallback;
+const readHistoryXAxisModeFromPanelValue = (value, fallback = HISTORY_X_AXIS_MODE_WALL_TIME) => {
+  const mode = isObject(value) ? value.xAxisMode : null;
+  return HISTORY_X_AXIS_MODE_SET.has(mode) ? mode : fallback;
+};
 const writeZoomPanelValue = (current, zoom, tailPinned = null) => {
   const next = isObject(current) ? { ...current } : {};
   next.zoom = normalizeZoomRange(zoom) || FULL_ZOOM;
@@ -382,10 +422,12 @@ const extractSharedHistoryView = (value) => {
   if (!isObject(value)) return null;
   const zoom = normalizeZoomRange(value.zoom);
   const hasTailPinned = typeof value.tailPinned === "boolean";
-  if (!zoom && !hasTailPinned) return null;
+  const xAxisMode = HISTORY_X_AXIS_MODE_SET.has(value.xAxisMode) ? value.xAxisMode : null;
+  if (!zoom && !hasTailPinned && !xAxisMode) return null;
   const shared = {};
   if (zoom) shared.zoom = zoom;
   if (hasTailPinned) shared.tailPinned = value.tailPinned;
+  if (xAxisMode) shared.xAxisMode = xAxisMode;
   return shared;
 };
 
@@ -393,6 +435,9 @@ const mergeSharedHistoryView = (current, sharedView) => {
   const next = isObject(current) ? { ...current } : {};
   if (sharedView.zoom) next.zoom = sharedView.zoom;
   if ("tailPinned" in sharedView) next.tailPinned = sharedView.tailPinned;
+  if ("xAxisMode" in sharedView && HISTORY_X_AXIS_MODE_SET.has(sharedView.xAxisMode)) {
+    next.xAxisMode = sharedView.xAxisMode;
+  }
   return next;
 };
 
@@ -684,8 +729,15 @@ const buildDiscreteOffsetRangeBarSeries = ({
 const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange = null }) => {
   const figureRef = useRef(null);
   const echartsRef = useRef(null);
+  const panelId = state?.panel_id || null;
+  const isHistoryPanel = useMemo(() => String(panelId || "").includes("_history"), [panelId]);
+  const historyXAxisMode = readHistoryXAxisModeFromPanelValue(
+    value,
+    isHistoryPanel ? HISTORY_X_AXIS_MODE_SAMPLER_UPTIME : HISTORY_X_AXIS_MODE_WALL_TIME,
+  );
   const points = asArray(state?.points)
     .slice()
+    .map((point) => remapTimeseriesPointXAxis(point, historyXAxisMode))
     .sort((a, b) => a.x - b.x);
   const meanData = points.map((point) => [Number(point?.x), Number(point?.y)]);
   const errorBarData = points
@@ -701,10 +753,11 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
     .filter(Boolean);
   const domain = fitDomain(points.flatMap((point) => [point.y, point.y_min, point.y_max]));
   const xDomain = fitXDomain(points.map((point) => point.x));
-  const panelId = state?.panel_id || null;
   const zoomRange = readZoomFromPanelValue(value, FULL_ZOOM);
-  const isHistoryPanel = useMemo(() => String(panelId || "").includes("_history"), [panelId]);
-  const usesTimestampXAxis = useMemo(() => isTimestampDomain(xDomain), [xDomain]);
+  const usesTimestampXAxis = useMemo(
+    () => historyXAxisMode === HISTORY_X_AXIS_MODE_WALL_TIME && isTimestampDomain(xDomain),
+    [historyXAxisMode, xDomain],
+  );
   const xAxisOriginMs = useMemo(() => (usesTimestampXAxis ? Number(xDomain[0]) : 0), [usesTimestampXAxis, xDomain]);
   const tailPinned = readTailPinnedFromPanelValue(value, isHistoryPanel);
   const visibleXRange = useMemo(() => visibleXRangeFromZoom(xDomain, zoomRange), [xDomain, zoomRange]);
@@ -759,7 +812,12 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
       datazoom: (event) => {
         const next = readDataZoomRange(event);
         if (!next || typeof onValueChange !== "function" || !panelId) return;
-        if (!zoomRangeChanged(zoomRange, next) && (!isHistoryPanel || tailPinned === next.end >= 99.5)) return;
+        if (
+          !zoomRangeChanged(zoomRange, next) &&
+          (!isHistoryPanel || tailPinned === (next.end >= 99.5))
+        ) {
+          return;
+        }
         onValueChange(panelId, writeZoomPanelValue(value, next, isHistoryPanel ? next.end >= 99.5 : null), false);
       },
     }),
@@ -778,10 +836,11 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
         type: "value",
         min: xDomain[0],
         max: xDomain[1],
-        name: usesTimestampXAxis ? "Elapsed Time" : inferNumericXAxisLabel(panelId),
+        name: usesTimestampXAxis ? "Elapsed Time" : inferNumericXAxisLabel(panelId, historyXAxisMode),
         axisLabel: {
           ...baseAxisLabel,
-          formatter: (axisValue) => formatTimeseriesXAxisValue(axisValue, usesTimestampXAxis, xAxisOriginMs),
+          formatter: (axisValue) =>
+            formatTimeseriesXAxisValue(axisValue, historyXAxisMode, usesTimestampXAxis, xAxisOriginMs),
         },
         splitLine: { show: false },
         nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
@@ -795,7 +854,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
       },
       tooltip: {
         trigger: "axis",
-        formatter: buildTimeseriesTooltipFormatter(usesTimestampXAxis, xAxisOriginMs),
+        formatter: buildTimeseriesTooltipFormatter(historyXAxisMode, usesTimestampXAxis, xAxisOriginMs),
       },
       dataZoom: buildDataZoom(zoomRange),
       series: [
@@ -843,7 +902,20 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
         },
       ],
     }),
-    [bandSegments, errorBarData, isHistoryPanel, meanData, panelId, state?.smooth, usesTimestampXAxis, visibleDomain, xAxisOriginMs, xDomain, zoomRange],
+    [
+      bandSegments,
+      errorBarData,
+      historyXAxisMode,
+      isHistoryPanel,
+      meanData,
+      panelId,
+      state?.smooth,
+      usesTimestampXAxis,
+      visibleDomain,
+      xAxisOriginMs,
+      xDomain,
+      zoomRange,
+    ],
   );
   if (points.length === 0) return null;
   return (
@@ -883,7 +955,16 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
 const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange = null }) => {
   const figureRef = useRef(null);
   const echartsRef = useRef(null);
-  const series = asArray(state?.series);
+  const panelId = state?.panel_id || null;
+  const isHistoryPanel = useMemo(() => String(panelId || "").includes("_history"), [panelId]);
+  const historyXAxisMode = readHistoryXAxisModeFromPanelValue(
+    value,
+    isHistoryPanel ? HISTORY_X_AXIS_MODE_SAMPLER_UPTIME : HISTORY_X_AXIS_MODE_WALL_TIME,
+  );
+  const series = asArray(state?.series).map((item) => ({
+    ...item,
+    points: asArray(item?.points).map((point) => remapTimeseriesPointXAxis(point, historyXAxisMode)),
+  }));
   const data = buildMultiSeriesData(series);
   const domain = fitDomain(
     data.flatMap((row) =>
@@ -893,11 +974,12 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
     ),
   );
   const xDomain = fitXDomain(data.map((row) => row.x));
-  const panelId = state?.panel_id || null;
   const zoomRange = readZoomFromPanelValue(value, FULL_ZOOM);
-  const isHistoryPanel = useMemo(() => String(panelId || "").includes("_history"), [panelId]);
   const tailPinned = readTailPinnedFromPanelValue(value, isHistoryPanel);
-  const usesTimestampXAxis = useMemo(() => isTimestampDomain(xDomain), [xDomain]);
+  const usesTimestampXAxis = useMemo(
+    () => historyXAxisMode === HISTORY_X_AXIS_MODE_WALL_TIME && isTimestampDomain(xDomain),
+    [historyXAxisMode, xDomain],
+  );
   const xAxisOriginMs = useMemo(() => (usesTimestampXAxis ? Number(xDomain[0]) : 0), [usesTimestampXAxis, xDomain]);
   useEffect(() => {
     if (!isHistoryPanel || !tailPinned || typeof onValueChange !== "function" || !panelId) return;
@@ -932,10 +1014,11 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
         type: "value",
         min: xDomain[0],
         max: xDomain[1],
-        name: usesTimestampXAxis ? "Elapsed Time" : inferNumericXAxisLabel(panelId),
+        name: usesTimestampXAxis ? "Elapsed Time" : inferNumericXAxisLabel(panelId, historyXAxisMode),
         axisLabel: {
           ...baseAxisLabel,
-          formatter: (axisValue) => formatTimeseriesXAxisValue(axisValue, usesTimestampXAxis, xAxisOriginMs),
+          formatter: (axisValue) =>
+            formatTimeseriesXAxisValue(axisValue, historyXAxisMode, usesTimestampXAxis, xAxisOriginMs),
         },
         splitLine: { show: false },
         nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
@@ -949,7 +1032,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
       },
       tooltip: {
         trigger: "axis",
-        formatter: buildTimeseriesTooltipFormatter(usesTimestampXAxis, xAxisOriginMs),
+        formatter: buildTimeseriesTooltipFormatter(historyXAxisMode, usesTimestampXAxis, xAxisOriginMs),
       },
       dataZoom: buildDataZoom(zoomRange),
       series: series.map((item, index) => ({
@@ -968,7 +1051,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
         },
       })),
     }),
-    [domain, panelId, series, usesTimestampXAxis, xAxisOriginMs, xDomain, zoomRange],
+    [domain, historyXAxisMode, panelId, series, usesTimestampXAxis, xAxisOriginMs, xDomain, zoomRange],
   );
   if (data.length === 0) return null;
   return (

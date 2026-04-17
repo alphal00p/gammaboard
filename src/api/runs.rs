@@ -1,11 +1,12 @@
 use crate::api::ApiError;
+use crate::core::IntegrationParams;
 use crate::core::{
-    AggregationStore, ControlPlaneStore, RunStageSnapshot, RunTask, RunTaskInput, RunTaskStore,
-    SamplerQueueTuning,
+    AggregationStore, ControlPlaneStore, RunStageSnapshot, RunTask, RunTaskInput, RunTaskState,
+    RunTaskStore, SamplerQueueTuning,
 };
 use crate::preprocess::{RunAddConfig, preprocess_run_add};
 use crate::stores::RunProgress;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
@@ -56,6 +57,17 @@ pub struct RemovedPendingTask {
 pub struct UpdatedTaskQueueTuning {
     pub run_id: i32,
     pub task: RunTask,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RunReproToml {
+    name: String,
+    #[serde(flatten)]
+    integration_params: IntegrationParams,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    task_queue: Vec<RunTaskInput>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -302,6 +314,41 @@ pub async fn update_task_queue_tuning(
         .update_run_task_queue_tuning(run_id, task_id, queue_tuning)
         .await?;
     Ok(UpdatedTaskQueueTuning { run_id, task })
+}
+
+pub async fn export_run_repro_toml(
+    store: &(impl crate::core::RunReadStore + RunTaskStore),
+    run_id: i32,
+) -> Result<String, ApiError> {
+    let run = load_run_progress(store, run_id).await?;
+    let integration_params_value = run
+        .integration_params
+        .clone()
+        .ok_or_else(|| ApiError::Internal(format!("run {run_id} is missing integration_params")))?;
+    let integration_params: IntegrationParams = serde_json::from_value(integration_params_value)
+        .map_err(|err| {
+            ApiError::Internal(format!(
+                "run {run_id} has invalid integration_params payload: {err}"
+            ))
+        })?;
+    let completed_tasks = store
+        .list_run_tasks(run_id)
+        .await?
+        .into_iter()
+        .filter(|task| matches!(task.state, RunTaskState::Completed))
+        .map(|task| RunTaskInput {
+            name: Some(task.name),
+            task: task.task,
+        })
+        .collect::<Vec<_>>();
+
+    toml::to_string(&RunReproToml {
+        name: run.run_name,
+        integration_params,
+        target: run.target.filter(|value| !value.is_null()),
+        task_queue: completed_tasks,
+    })
+    .map_err(|err| ApiError::Internal(format!("failed to serialize run repro TOML: {err}")))
 }
 
 async fn preflight_task_batch(

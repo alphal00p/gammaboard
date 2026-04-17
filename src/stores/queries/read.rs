@@ -36,6 +36,8 @@ fn default_sampler_performance_metrics() -> SamplerPerformanceMetrics {
         ingested_samples: 0,
         avg_ingest_time_per_sample_ms: 0.0,
         std_ingest_time_per_sample_ms: 0.0,
+        completed_samples_total: 0,
+        sampler_uptime_ms: 0.0,
     }
 }
 

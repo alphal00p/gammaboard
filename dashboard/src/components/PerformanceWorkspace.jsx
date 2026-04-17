@@ -10,6 +10,14 @@ import { asArray } from "../utils/collections";
 const evaluatorNodeNameFor = (worker) => worker?.node_name ?? null;
 const asObject = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : {});
 const isSharedHistoryPanelId = (panelId) => String(panelId || "").includes("_history");
+const HISTORY_X_AXIS_MODE_WALL_TIME = "wall_time";
+const HISTORY_X_AXIS_MODE_SAMPLER_UPTIME = "sampler_uptime";
+const HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES = "completed_samples";
+const HISTORY_X_AXIS_MODE_SET = new Set([
+  HISTORY_X_AXIS_MODE_WALL_TIME,
+  HISTORY_X_AXIS_MODE_SAMPLER_UPTIME,
+  HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES,
+]);
 const normalizeZoomRange = (candidate) => {
   const start = Number(candidate?.start);
   const end = Number(candidate?.end);
@@ -23,16 +31,21 @@ const extractSharedHistoryView = (value) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const zoom = normalizeZoomRange(value.zoom);
   const hasTailPinned = typeof value.tailPinned === "boolean";
-  if (!zoom && !hasTailPinned) return null;
+  const xAxisMode = HISTORY_X_AXIS_MODE_SET.has(value.xAxisMode) ? value.xAxisMode : null;
+  if (!zoom && !hasTailPinned && !xAxisMode) return null;
   const shared = {};
   if (zoom) shared.zoom = zoom;
   if (hasTailPinned) shared.tailPinned = value.tailPinned;
+  if (xAxisMode) shared.xAxisMode = xAxisMode;
   return shared;
 };
 const mergeSharedHistoryView = (current, sharedView) => {
   const next = asObject(current) ? { ...current } : {};
   if (sharedView.zoom) next.zoom = sharedView.zoom;
   if ("tailPinned" in sharedView) next.tailPinned = sharedView.tailPinned;
+  if ("xAxisMode" in sharedView && HISTORY_X_AXIS_MODE_SET.has(sharedView.xAxisMode)) {
+    next.xAxisMode = sharedView.xAxisMode;
+  }
   return next;
 };
 
@@ -49,6 +62,7 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
   );
   const [selectedEvaluatorNodeName, setSelectedEvaluatorNodeName] = useState(null);
   const [panelValues, setPanelValues] = useState({});
+  const [historyXAxisMode, setHistoryXAxisMode] = useState(HISTORY_X_AXIS_MODE_SAMPLER_UPTIME);
 
   useEffect(() => {
     if (runWorkers.length === 0) {
@@ -98,6 +112,21 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
       return changed ? next : previous;
     });
   }, [knownPanelIds]);
+
+  useEffect(() => {
+    const historyPanelIds = knownPanelIds.filter((id) => isSharedHistoryPanelId(id));
+    if (historyPanelIds.length === 0) return;
+    setPanelValues((previous) => {
+      const merged = { ...previous };
+      historyPanelIds.forEach((panelId) => {
+        merged[panelId] = {
+          ...(asObject(previous?.[panelId]) ? previous[panelId] : {}),
+          xAxisMode: historyXAxisMode,
+        };
+      });
+      return merged;
+    });
+  }, [historyXAxisMode, knownPanelIds]);
 
   const handlePanelValueChange = useCallback((panelId, nextValue) => {
     setPanelValues((previous) => {
@@ -165,6 +194,19 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
               onPanelValueChange={handlePanelValueChange}
             />
           ) : null}
+          <FormControl size="small" sx={{ maxWidth: 320 }}>
+            <InputLabel id="performance-x-axis-label">X-Axis</InputLabel>
+            <Select
+              labelId="performance-x-axis-label"
+              value={historyXAxisMode}
+              label="X-Axis"
+              onChange={(event) => setHistoryXAxisMode(event.target.value)}
+            >
+              <MenuItem value={HISTORY_X_AXIS_MODE_SAMPLER_UPTIME}>Sampler Uptime (Default)</MenuItem>
+              <MenuItem value={HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES}>Completed Samples</MenuItem>
+              <MenuItem value={HISTORY_X_AXIS_MODE_WALL_TIME}>Wall Time</MenuItem>
+            </Select>
+          </FormControl>
           <FormControl size="small" sx={{ maxWidth: 320 }}>
             <InputLabel id="performance-evaluator-label">Evaluator</InputLabel>
             <Select

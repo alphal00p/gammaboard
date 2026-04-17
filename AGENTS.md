@@ -111,6 +111,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Run info, task output, worker details, performance, and engine config should stay backend-owned.
 - Tick breakdown bar panels must visualize only synchronous runner-tick work. Concurrent pipeline/queue work and wait/stall time must be surfaced in separate metrics panels, not stacked into the tick bar.
 - Dashboard auth is operator-oriented: read-only endpoints may stay open, while explicit steering endpoints require admin auth.
+- The Runs tab `Copy Run TOML` action is a read-only export and should return run-add compatible TOML including run config plus successfully completed tasks as `[[task_queue]]`.
 - Dashboard steering should use explicit endpoints such as `pause`, `assign`, `unassign`, `append task`, `remove pending task`, `create run`, `clone run`, and `remove run`, not generic patch endpoints.
 - Dashboard auth is intended for small trusted deployments behind HTTPS.
 - Run and task templates should be simple `.toml` files served from server-configured directories; the frontend should treat them as editable starting points, not as a second schema, and may persist/delete template files via explicit admin-protected template endpoints.
@@ -129,6 +130,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Runtime logs are persisted through the tracing pipeline into PostgreSQL.
 - CLI console output should stay minimal and operator-focused; recurring runtime diagnostics should go to persisted runtime logs, not tracing `fmt` spam.
 - Worker performance history is append-only, and dashboard "latest" performance reads should come from dedicated latest tables maintained on write, not recomputed latest-per-worker views over history.
+- Persisted sampler runtime performance snapshots should include monotonic sampler-active uptime (pause intervals excluded) and total completed samples so frontend history axes can switch between wall time, sampler uptime, and completed-samples progress.
 - The global `/nodes` list is a lightweight summary read; do not join per-worker metrics into the hot polling list query. Load worker metrics/details only for focused views.
 - Run read APIs should keep `batches` as the source of truth; when batch aggregation is expensive, prefer scoped multi-query reads over duplicated persisted queue counters.
 - Log read APIs should expose `node_name` and `node_uuid` even if SQL columns still use older names.

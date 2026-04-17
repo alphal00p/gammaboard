@@ -120,6 +120,10 @@ pub struct PanelActionInvocation {
 pub struct PlotPoint {
     pub x: f64,
     pub y: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_sampler_uptime_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_completed_samples_total: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub y_min: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -919,6 +919,8 @@ mod tests {
                     vec![PlotPoint {
                         x: index as f64,
                         y: index as f64,
+                        x_sampler_uptime_ms: None,
+                        x_completed_samples_total: None,
                         y_min: None,
                         y_max: None,
                     }],

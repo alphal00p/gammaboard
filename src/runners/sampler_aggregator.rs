@@ -106,6 +106,8 @@ struct SamplerRuntimeState {
     ingested_samples_total: i64,
     completed_samples_per_second: f64,
     #[serde(default)]
+    sampler_uptime_ms_accumulated: f64,
+    #[serde(default)]
     initial_round_trip_snapshot_pending: bool,
     pending_persisted_completed_batches: i32,
     batch_size_current: usize,
@@ -123,6 +125,7 @@ impl Default for SamplerRuntimeState {
             ingested_batches_total: 0,
             ingested_samples_total: 0,
             completed_samples_per_second: 0.0,
+            sampler_uptime_ms_accumulated: 0.0,
             initial_round_trip_snapshot_pending: false,
             pending_persisted_completed_batches: 0,
             batch_size_current: 0,
@@ -156,6 +159,7 @@ impl SamplerRuntimeState {
         sampler: SamplerWorkRollingAverages,
         queue: crate::core::SamplerQueueRuntimeMetrics,
         completed_samples_total: i64,
+        sampler_uptime_ms: f64,
         evaluator_fleet: EvaluatorFleetSnapshot,
     ) -> SamplerRuntimeMetrics {
         SamplerRuntimeMetrics {
@@ -164,6 +168,7 @@ impl SamplerRuntimeState {
             ingested_batches_total: self.ingested_batches_total,
             ingested_samples_total: self.ingested_samples_total,
             completed_samples_total,
+            sampler_uptime_ms,
             completed_samples_per_second: self.completed_samples_per_second,
             batch_size_current: self.batch_size_current,
             sampler_tick_busy_ratio: self.sampler_tick_busy_ratio,
@@ -210,6 +215,7 @@ pub struct SamplerAggregatorRunner<S> {
     last_task_config_refresh_at: Instant,
     utilization_window_started_at: Instant,
     sync_tick_busy_time: Duration,
+    sampler_uptime_started_at: Instant,
 }
 
 struct CompletedIngestStats {
@@ -318,7 +324,24 @@ where
                 .unwrap_or(now),
             utilization_window_started_at: now,
             sync_tick_busy_time: Duration::ZERO,
+            sampler_uptime_started_at: now,
         }
+    }
+
+    fn current_sampler_uptime_ms(&self) -> f64 {
+        self.runtime_state.sampler_uptime_ms_accumulated
+            + self
+                .sampler_uptime_started_at
+                .elapsed()
+                .as_secs_f64()
+                .mul_add(1000.0, 0.0)
+    }
+
+    fn checkpoint_sampler_uptime_now(&mut self) -> f64 {
+        let uptime_ms = self.current_sampler_uptime_ms();
+        self.runtime_state.sampler_uptime_ms_accumulated = uptime_ms;
+        self.sampler_uptime_started_at = Instant::now();
+        uptime_ms
     }
 
     pub fn params(&self) -> &SamplerAggregatorRunnerParams {
@@ -626,6 +649,7 @@ where
     }
 
     async fn persist_sampler_checkpoint(&mut self) -> Result<(), RunnerError> {
+        self.checkpoint_sampler_uptime_now();
         let checkpoint = SamplerAggregatorCheckpoint {
             task_id: self.task.id,
             sampler_snapshot: self.sampler.snapshot().map_err(RunnerError::Engine)?,
@@ -1111,6 +1135,7 @@ where
                 sampler_runtime,
                 queue_runtime,
                 self.nr_completed_samples,
+                self.current_sampler_uptime_ms(),
                 evaluator_fleet,
             ),
             engine_diagnostics,

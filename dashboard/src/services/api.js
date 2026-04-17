@@ -266,6 +266,9 @@ export const fetchRun = async (runId, signal) => {
   return normalizeRunEntry(data) ?? data;
 };
 
+export const fetchRunReproToml = async (runId, signal) =>
+  apiGet(`/runs/${runId}/repro-toml`, "Failed to export run TOML", signal);
+
 export const fetchRunPanels = async (runId, signal) =>
   apiGet(`/runs/${runId}/panels`, "Failed to fetch run panels", signal);
 

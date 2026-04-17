@@ -744,6 +744,14 @@ where
             return Ok(());
         }
 
+        let completed_samples_total = self
+            .store
+            .load_run_sample_progress(self.run_id)
+            .await
+            .map_err(EvaluatorRunnerError::Store)?
+            .map(|progress| progress.nr_completed_samples)
+            .unwrap_or(self.samples_evaluated_total);
+
         let snapshot = EvaluatorPerformanceSnapshot {
             run_id: self.run_id,
             node_name: self.node_name.clone(),
@@ -811,6 +819,7 @@ where
                     self.counters.submit_stalls,
                     self.counters.submit_attempts,
                 ),
+                completed_samples_total,
                 idle_profile: Some(EvaluatorIdleProfileMetrics {
                     idle_ratio: self.rolling.idle_ratio.value().unwrap_or(0.0),
                 }),

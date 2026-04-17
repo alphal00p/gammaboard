@@ -732,7 +732,7 @@ struct TaskTomlFile<'a> {
 }
 
 pub fn canonical_task_toml(task: &RunTaskInput) -> Result<String, toml::ser::Error> {
-    toml::to_string_pretty(&TaskTomlFile { task })
+    toml::to_string(&TaskTomlFile { task })
 }
 
 #[cfg(test)]

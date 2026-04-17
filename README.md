@@ -210,7 +210,9 @@ Important:
 ## Dashboard Auth
 - Read-only dashboard endpoints stay open.
 - Steering actions currently require admin login and are backed by a signed session cookie.
+- The Runs tab includes a `Copy Run TOML` action that exports a run-add compatible TOML containing the run config and all successfully completed tasks as `[[task_queue]]` entries.
 - The dashboard currently supports creating runs from raw TOML, cloning runs from a stored stage snapshot, appending tasks from raw TOML, deleting pending tasks, pausing runs, removing runs, auto-assigning free nodes, assigning and unassigning nodes, requesting node shutdown (single or all), starting new local nodes, and restarting the local database when `allow_db_admin = true`.
+- The Performance tab defaults history x-axes to sampler uptime (active sampler runtime, excluding paused intervals) and lets operators switch to wall time or total completed samples.
 - The create-run and add-task dialogs can load `.toml` templates from `run_templates_dir` and `task_templates_dir`; admin users can also save edited TOML back as templates, and task templates can be deleted from the dashboard.
 - Node shutdown from the dashboard is guarded by a confirmation dialog.
 - Put `auth.admin_password_hash` in your server config to enable dashboard auth.

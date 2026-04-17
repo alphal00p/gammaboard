@@ -168,10 +168,13 @@ pub struct EvaluatorPerformanceMetrics {
     pub std_submit_stall_time_per_sample_ms: f64,
     pub submit_slot_hit_ratio: f64,
     pub submit_stall_ratio: f64,
+    #[serde(default)]
+    pub completed_samples_total: i64,
     pub idle_profile: Option<EvaluatorIdleProfileMetrics>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct SamplerPerformanceMetrics {
     pub produced_batches: i64,
     pub produced_samples: i64,
@@ -181,6 +184,10 @@ pub struct SamplerPerformanceMetrics {
     pub ingested_samples: i64,
     pub avg_ingest_time_per_sample_ms: f64,
     pub std_ingest_time_per_sample_ms: f64,
+    #[serde(default)]
+    pub completed_samples_total: i64,
+    #[serde(default)]
+    pub sampler_uptime_ms: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -292,6 +299,8 @@ pub struct SamplerRuntimeMetrics {
     pub ingested_samples_total: i64,
     #[serde(default)]
     pub completed_samples_total: i64,
+    #[serde(default)]
+    pub sampler_uptime_ms: f64,
     pub completed_samples_per_second: f64,
     pub batch_size_current: usize,
     pub sampler_tick_busy_ratio: Option<f64>,
@@ -322,6 +331,8 @@ impl SamplerRuntimeMetrics {
                 .mean
                 .unwrap_or(0.0),
             std_ingest_time_per_sample_ms: self.sampler.training_ingest_ms_per_sample.std_dev,
+            completed_samples_total: self.completed_samples_total,
+            sampler_uptime_ms: self.sampler_uptime_ms,
         }
     }
 }
