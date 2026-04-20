@@ -497,6 +497,23 @@ const mergeSharedHistoryView = (current, sharedView) => {
   return next;
 };
 
+const isPdfAdaptationImagePanelSpec = (spec) =>
+  spec?.kind === "image2d" &&
+  typeof spec?.panel_id === "string" &&
+  spec.panel_id.startsWith("pdf_adaptation_");
+
+const extractSharedImageZoom = (value) => {
+  if (!isObject(value)) return null;
+  const zoom = normalizeZoomRange(value.zoom);
+  return zoom ? { zoom } : null;
+};
+
+const mergeSharedImageZoom = (current, sharedView) => {
+  const next = isObject(current) ? { ...current } : {};
+  if (sharedView.zoom) next.zoom = sharedView.zoom;
+  return next;
+};
+
 const zoomRangeChanged = (left, right) =>
   Math.abs((left?.start ?? 0) - (right?.start ?? 0)) > 0.01 ||
   Math.abs((left?.end ?? 100) - (right?.end ?? 100)) > 0.01;
@@ -890,7 +907,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
       datazoom: (event) => {
         const next = readDataZoomRange(event);
         if (!next || typeof onValueChange !== "function" || !panelId) return;
-        if (!zoomRangeChanged(zoomRange, next) && (!isHistoryPanel || tailPinned === next.end >= 99.5)) {
+        if (!zoomRangeChanged(zoomRange, next) && (!isHistoryPanel || tailPinned === (next.end >= 99.5))) {
           return;
         }
         onValueChange(panelId, writeZoomPanelValue(value, next, isHistoryPanel ? next.end >= 99.5 : null), false);
@@ -3634,6 +3651,14 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
         .filter((id) => typeof id === "string"),
     [panelSpecs],
   );
+  const sharedPdfImagePanelIds = useMemo(
+    () =>
+      asArray(panelSpecs)
+        .filter((spec) => isPdfAdaptationImagePanelSpec(spec))
+        .map((spec) => spec?.panel_id)
+        .filter((id) => typeof id === "string"),
+    [panelSpecs],
+  );
   const handleUploadHistogramBundle = useCallback(async (panelId, event) => {
     const file = event?.target?.files?.[0];
     if (!panelId || !file) return;
@@ -3784,6 +3809,25 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
   const handlePanelValueChange = useCallback(
     (panelId, nextValue, shouldTriggerPoll = true) => {
       if (typeof onPanelValueChange !== "function") return;
+      if (sharedPdfImagePanelIds.includes(panelId)) {
+        const sharedImageView = extractSharedImageZoom(nextValue);
+        if (!sharedImageView) {
+          onPanelValueChange(panelId, nextValue, shouldTriggerPoll);
+          return;
+        }
+        const targetIds = sharedPdfImagePanelIds;
+        if (targetIds.length <= 1) {
+          onPanelValueChange(panelId, nextValue, shouldTriggerPoll);
+          return;
+        }
+        targetIds.forEach((targetId, index) => {
+          const sourceValue = targetId === panelId ? nextValue : panelValues?.[targetId];
+          const mergedValue = mergeSharedImageZoom(sourceValue, sharedImageView);
+          const trigger = shouldTriggerPoll && index === targetIds.length - 1;
+          onPanelValueChange(targetId, mergedValue, trigger);
+        });
+        return;
+      }
       if (!sharedHistoryPanelIds.includes(panelId)) {
         onPanelValueChange(panelId, nextValue, shouldTriggerPoll);
         return;
@@ -3805,7 +3849,7 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
         onPanelValueChange(targetId, mergedValue, trigger);
       });
     },
-    [onPanelValueChange, panelValues, sharedHistoryPanelIds],
+    [onPanelValueChange, panelValues, sharedHistoryPanelIds, sharedPdfImagePanelIds],
   );
 
   return (

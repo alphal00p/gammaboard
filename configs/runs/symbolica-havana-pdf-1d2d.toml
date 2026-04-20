@@ -1,0 +1,37 @@
+# Symbolica + Havana training, then PDF adaptation plots in 2D and 1D.
+
+name = "symbolica-havana-pdf-1d2d"
+
+[evaluator]
+kind = "symbolica"
+expr = "x^2 + y^2"
+args = ["x", "y"]
+
+[[task_queue]]
+name = "havana-train"
+kind = "sample"
+stop_condition = { max_samples = 200_000 }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 64, samples_for_update = 16_384, initial_training_rate = 0.1, final_training_rate = 0.001 } }
+
+[[task_queue]]
+name = "pdf-2d"
+kind = "pdf_adaptation_image"
+batch_transforms = []
+
+[task_queue.geometry]
+offset = [0.0, 0.0]
+u_vector = [1.0, 0.0]
+v_vector = [0.0, 1.0]
+u_linspace = { start = 0.0, stop = 1.0, count = 128 }
+v_linspace = { start = 0.0, stop = 1.0, count = 128 }
+
+[[task_queue]]
+name = "pdf-1d"
+kind = "pdf_adaptation_plot_line"
+batch_transforms = []
+
+[task_queue.geometry]
+offset = [0.0, 0.0]
+direction = [1.0, 0.0]
+linspace = { start = -1.0, stop = 1.0, count = 512 }

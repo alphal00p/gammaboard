@@ -23,49 +23,49 @@ pub(super) fn projectors(
         summary_projector(),
         image_projector(
             "pdf_adaptation_log_integrand",
-            "Log10 Normalized |I|",
+            "Log10(|I| / sum_plane |I|)",
             PanelWidth::Half,
             geometry.clone(),
-            ImageKind::LogNormalizedIntegrand,
+            ImageKind::LogPlaneNormalizedIntegrand,
         ),
         image_projector(
             "pdf_adaptation_log_pdf",
-            "Log10 Normalized PDF",
+            "Log10(P / sum_plane P)",
             PanelWidth::Half,
             geometry.clone(),
-            ImageKind::LogNormalizedPdf,
+            ImageKind::LogPlaneNormalizedPdf,
         ),
         histogram_projector(
             "pdf_adaptation_log_integrand_histogram",
-            "Histogram: Log10 Normalized |I|",
+            "Histogram: Log10(|I| / sum_plane |I|)",
             PanelWidth::Half,
-            ImageKind::LogNormalizedIntegrand,
+            ImageKind::LogPlaneNormalizedIntegrand,
         ),
         histogram_projector(
             "pdf_adaptation_log_pdf_histogram",
-            "Histogram: Log10 Normalized PDF",
+            "Histogram: Log10(P / sum_plane P)",
             PanelWidth::Half,
-            ImageKind::LogNormalizedPdf,
+            ImageKind::LogPlaneNormalizedPdf,
         ),
         image_projector(
             "pdf_adaptation_oversampling",
             "Oversampling: Log10(P / (|I| / <|I|>))",
             PanelWidth::Half,
             geometry.clone(),
-            ImageKind::Oversampling,
+            ImageKind::OversamplingLegacy,
         ),
         image_projector(
-            "pdf_adaptation_sign",
-            "Sign(I)",
+            "pdf_adaptation_oversampling_plane_normalized",
+            "Oversampling: Log10((P / sum_plane P) / (|I| / sum_plane |I|))",
             PanelWidth::Half,
             geometry,
-            ImageKind::Sign,
+            ImageKind::OversamplingPlaneNormalized,
         ),
         histogram_projector(
             "pdf_adaptation_oversampling_histogram",
-            "Histogram: Oversampling",
+            "Histogram: Oversampling Log10(P / (|I| / <|I|>))",
             PanelWidth::Half,
-            ImageKind::Oversampling,
+            ImageKind::OversamplingLegacy,
         ),
     ]
 }
@@ -80,59 +80,59 @@ pub(super) fn line_projectors(
         summary_projector(),
         line_projector(
             "pdf_adaptation_log_integrand_line",
-            "Log10 Normalized |I| (1D)",
+            "Log10(|I| / sum_plane |I|) (1D)",
             PanelWidth::Half,
             geometry.clone(),
-            ImageKind::LogNormalizedIntegrand,
+            ImageKind::LogPlaneNormalizedIntegrand,
         ),
         line_projector(
             "pdf_adaptation_log_pdf_line",
-            "Log10 Normalized PDF (1D)",
+            "Log10(P / sum_plane P) (1D)",
             PanelWidth::Half,
             geometry.clone(),
-            ImageKind::LogNormalizedPdf,
+            ImageKind::LogPlaneNormalizedPdf,
         ),
         line_projector(
             "pdf_adaptation_oversampling_line",
             "Oversampling: Log10(P / (|I| / <|I|>)) (1D)",
             PanelWidth::Half,
             geometry.clone(),
-            ImageKind::Oversampling,
+            ImageKind::OversamplingLegacy,
         ),
         line_projector(
-            "pdf_adaptation_sign_line",
-            "Sign(I) (1D)",
+            "pdf_adaptation_oversampling_plane_normalized_line",
+            "Oversampling: Log10((P / sum_plane P) / (|I| / sum_plane |I|)) (1D)",
             PanelWidth::Half,
             geometry,
-            ImageKind::Sign,
+            ImageKind::OversamplingPlaneNormalized,
         ),
         histogram_projector(
             "pdf_adaptation_log_integrand_histogram",
-            "Histogram: Log10 Normalized |I|",
+            "Histogram: Log10(|I| / sum_plane |I|)",
             PanelWidth::Half,
-            ImageKind::LogNormalizedIntegrand,
+            ImageKind::LogPlaneNormalizedIntegrand,
         ),
         histogram_projector(
             "pdf_adaptation_log_pdf_histogram",
-            "Histogram: Log10 Normalized PDF",
+            "Histogram: Log10(P / sum_plane P)",
             PanelWidth::Half,
-            ImageKind::LogNormalizedPdf,
+            ImageKind::LogPlaneNormalizedPdf,
         ),
         histogram_projector(
             "pdf_adaptation_oversampling_histogram",
-            "Histogram: Oversampling",
+            "Histogram: Oversampling Log10(P / (|I| / <|I|>))",
             PanelWidth::Half,
-            ImageKind::Oversampling,
+            ImageKind::OversamplingLegacy,
         ),
     ]
 }
 
 #[derive(Clone, Copy)]
 enum ImageKind {
-    LogNormalizedIntegrand,
-    LogNormalizedPdf,
-    Oversampling,
-    Sign,
+    LogPlaneNormalizedIntegrand,
+    LogPlaneNormalizedPdf,
+    OversamplingLegacy,
+    OversamplingPlaneNormalized,
 }
 
 fn progress_projector(total: usize, label: &'static str, unit: &'static str) -> TaskPanelProjector {
@@ -241,13 +241,13 @@ fn summary_projector() -> TaskPanelProjector {
                 return Ok(None);
             };
             let valid_ratio_count = derived
-                .oversampling_log10
+                .oversampling_legacy_log10
                 .iter()
                 .filter(|value| value.is_some())
                 .count();
             let mean_ratio = finite_mean(
                 derived
-                    .oversampling_log10
+                    .oversampling_legacy_log10
                     .iter()
                     .filter_map(|value| value.map(|v| 10_f64.powf(-v))),
             );
@@ -352,53 +352,57 @@ fn current_output(
 
 struct DerivedValues {
     output: PdfAdaptationImagePersistedOutput,
-    log_normalized_integrand: Vec<Option<f64>>,
-    log_normalized_pdf: Vec<Option<f64>>,
-    oversampling_log10: Vec<Option<f64>>,
-    sign: Vec<Option<f64>>,
+    log_plane_normalized_integrand: Vec<Option<f64>>,
+    log_plane_normalized_pdf: Vec<Option<f64>>,
+    oversampling_legacy_log10: Vec<Option<f64>>,
+    oversampling_plane_normalized_log10: Vec<Option<f64>>,
 }
 
 impl DerivedValues {
     fn from_output(output: PdfAdaptationImagePersistedOutput) -> Self {
-        let pdf_mean = finite_mean(output.pdf_values.iter().flatten().copied());
-        let log_normalized_integrand = output
+        let sum_abs_integrand = finite_sum(output.abs_integrand_values.iter().flatten().copied());
+        let sum_pdf = finite_sum(output.pdf_values.iter().flatten().copied());
+        let log_plane_normalized_integrand = output
             .abs_integrand_values
             .iter()
-            .map(|value| log10_ratio(*value, output.abs_integrand_mean))
+            .map(|value| log10_ratio(*value, sum_abs_integrand))
             .collect::<Vec<_>>();
-        let log_normalized_pdf = output
+        let log_plane_normalized_pdf = output
             .pdf_values
             .iter()
-            .map(|value| log10_ratio(*value, pdf_mean))
+            .map(|value| log10_ratio(*value, sum_pdf))
             .collect::<Vec<_>>();
-        let oversampling_log10 = log_normalized_pdf
+        let oversampling_legacy_log10 = output
+            .pdf_values
             .iter()
-            .zip(log_normalized_integrand.iter())
+            .zip(output.abs_integrand_values.iter())
+            .map(|(pdf, abs_integrand)| {
+                log10_pdf_over_integrand_over_mean(*pdf, *abs_integrand, output.abs_integrand_mean)
+            })
+            .collect::<Vec<_>>();
+        let oversampling_plane_normalized_log10 = log_plane_normalized_pdf
+            .iter()
+            .zip(log_plane_normalized_integrand.iter())
             .map(|(pdf, integrand)| match (pdf, integrand) {
                 (Some(pdf), Some(integrand)) => Some(pdf - integrand),
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let sign = output
-            .signed_integrand_values
-            .iter()
-            .map(|value| value.map(f64::signum))
-            .collect::<Vec<_>>();
         Self {
             output,
-            log_normalized_integrand,
-            log_normalized_pdf,
-            oversampling_log10,
-            sign,
+            log_plane_normalized_integrand,
+            log_plane_normalized_pdf,
+            oversampling_legacy_log10,
+            oversampling_plane_normalized_log10,
         }
     }
 
     fn values(&self, image_kind: ImageKind) -> &[Option<f64>] {
         match image_kind {
-            ImageKind::LogNormalizedIntegrand => &self.log_normalized_integrand,
-            ImageKind::LogNormalizedPdf => &self.log_normalized_pdf,
-            ImageKind::Oversampling => &self.oversampling_log10,
-            ImageKind::Sign => &self.sign,
+            ImageKind::LogPlaneNormalizedIntegrand => &self.log_plane_normalized_integrand,
+            ImageKind::LogPlaneNormalizedPdf => &self.log_plane_normalized_pdf,
+            ImageKind::OversamplingLegacy => &self.oversampling_legacy_log10,
+            ImageKind::OversamplingPlaneNormalized => &self.oversampling_plane_normalized_log10,
         }
     }
 }
@@ -421,12 +425,7 @@ fn build_image_panel(
         x_range: [geometry.u_linspace.start, geometry.u_linspace.stop],
         y_range: [geometry.v_linspace.start, geometry.v_linspace.stop],
         color_mode: ImageColorMode::ScalarHeatmap,
-        normalization_mode: match image_kind {
-            ImageKind::LogNormalizedIntegrand | ImageKind::LogNormalizedPdf => {
-                ImageNormalizationMode::MinMax
-            }
-            ImageKind::Oversampling | ImageKind::Sign => ImageNormalizationMode::Symmetric,
-        },
+        normalization_mode: ImageNormalizationMode::Symmetric,
     })
 }
 
@@ -569,7 +568,37 @@ fn histogram_bins(values: &[Option<f64>]) -> Vec<HistogramBin> {
 
 fn log10_ratio(value: Option<f64>, mean: Option<f64>) -> Option<f64> {
     match (value, mean) {
-        (Some(value), Some(mean)) if value > 0.0 && mean > 0.0 => Some((value / mean).log10()),
+        (Some(value), Some(scale)) if value > 0.0 && scale > 0.0 => Some((value / scale).log10()),
+        _ => None,
+    }
+}
+
+fn log10_pdf_over_integrand_over_mean(
+    pdf: Option<f64>,
+    abs_integrand: Option<f64>,
+    abs_integrand_mean: Option<f64>,
+) -> Option<f64> {
+    match (pdf, abs_integrand, abs_integrand_mean) {
+        (Some(pdf), Some(abs_integrand), Some(mean))
+            if pdf > 0.0 && abs_integrand > 0.0 && mean > 0.0 =>
+        {
+            Some((pdf / (abs_integrand / mean)).log10())
+        }
+        _ => None,
+    }
+}
+
+fn finite_sum(values: impl IntoIterator<Item = f64>) -> Option<f64> {
+    let mut sum = 0.0;
+    let mut count = 0usize;
+    for value in values {
+        if value.is_finite() {
+            sum += value;
+            count += 1;
+        }
+    }
+    match (count > 0, sum > 0.0) {
+        (true, true) => Some(sum),
         _ => None,
     }
 }
@@ -640,34 +669,41 @@ mod tests {
     fn derived_values_compute_log_panels() {
         let derived = DerivedValues::from_output(output());
         assert_eq!(
-            derived.log_normalized_integrand,
-            vec![Some((2.0_f64 / 3.0).log10()), Some((4.0_f64 / 3.0).log10())]
+            derived.log_plane_normalized_integrand,
+            vec![Some((2.0_f64 / 6.0).log10()), Some((4.0_f64 / 6.0).log10())]
         );
         assert_eq!(
-            derived.log_normalized_pdf,
-            vec![Some((1.0_f64 / 1.5).log10()), Some((2.0_f64 / 1.5).log10())]
+            derived.log_plane_normalized_pdf,
+            vec![Some((1.0_f64 / 3.0).log10()), Some((2.0_f64 / 3.0).log10())]
         );
-        assert_eq!(derived.sign, vec![Some(-1.0), Some(1.0)]);
+        assert_eq!(
+            derived.oversampling_legacy_log10,
+            vec![
+                Some((1.0_f64 / (2.0 / 3.0)).log10()),
+                Some((2.0_f64 / (4.0 / 3.0)).log10())
+            ]
+        );
+        assert_eq!(
+            derived.oversampling_plane_normalized_log10,
+            vec![Some(0.0), Some(0.0)]
+        );
     }
 
     #[test]
-    fn sign_panel_uses_symmetric_normalization() {
+    fn plane_normalized_pdf_panel_uses_symmetric_normalization() {
         let panel = build_image_panel(
-            "sign",
+            "pdf",
             &geometry(),
             &DerivedValues::from_output(output()),
-            ImageKind::Sign,
+            ImageKind::LogPlaneNormalizedPdf,
         )
-        .expect("build sign panel");
+        .expect("build plane normalized pdf panel");
         let PanelState::Image2d {
-            values,
-            normalization_mode,
-            ..
+            normalization_mode, ..
         } = panel
         else {
             panic!("expected image panel");
         };
-        assert_eq!(values, vec![-1.0, 1.0]);
         assert!(matches!(
             normalization_mode,
             ImageNormalizationMode::Symmetric
@@ -680,7 +716,7 @@ mod tests {
             "oversampling",
             &geometry(),
             &DerivedValues::from_output(output()),
-            ImageKind::Oversampling,
+            ImageKind::OversamplingLegacy,
         )
         .expect("build oversampling panel");
         let PanelState::Image2d {
@@ -709,7 +745,7 @@ mod tests {
             "pdf_adaptation_log_pdf_line",
             &line_geometry(),
             &DerivedValues::from_output(output()),
-            ImageKind::LogNormalizedPdf,
+            ImageKind::LogPlaneNormalizedPdf,
         )
         .expect("build line panel");
         let PanelState::ScalarTimeseries { points, .. } = panel else {
@@ -718,7 +754,7 @@ mod tests {
         assert_eq!(points.len(), 2);
         assert!((points[0].x - 0.0).abs() < 1e-12);
         assert!((points[1].x - 1.0).abs() < 1e-12);
-        assert!((points[0].y - (1.0_f64 / 1.5).log10()).abs() < 1e-12);
-        assert!((points[1].y - (2.0_f64 / 1.5).log10()).abs() < 1e-12);
+        assert!((points[0].y - (1.0_f64 / 3.0).log10()).abs() < 1e-12);
+        assert!((points[1].y - (2.0_f64 / 3.0).log10()).abs() < 1e-12);
     }
 }

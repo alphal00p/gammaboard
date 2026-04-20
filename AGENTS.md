@@ -77,6 +77,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - `pdf_adaptation_image` is a dedicated task kind that rasterizes a plane with `pdf_adaptation_raster_plane`, defaults its sampler source to `latest`, and may also use `{ from_name = "<task-name>" }`.
 - `pdf_adaptation_plot_line` is a dedicated task kind that rasterizes a line with `pdf_adaptation_raster_line`, defaults its sampler source to `latest`, and may also use `{ from_name = "<task-name>" }`.
 - `pdf_adaptation_image` frontend snapshots come from sampler-owned persisted output payloads; `runs.current_observable` (current accumulator payload) stays the task's `empty` accumulator and is not the image data source.
+- `pdf_adaptation_*` panels should treat `log(1)=0` as the neutral reference color on image plots (symmetric normalization), use plane-normalized logs for top `log_pdf`/`log_integrand` views, and expose both oversampling variants (`log(P / (|I|/<|I|>))` and `log((P/sum_plane P) / (|I|/sum_plane |I|))`).
 - `image` and `plot_line` tasks must declare their accumulator family explicitly and start with a fresh full accumulator.
 - Fresh sampler tasks may inherit a reduced initial batch size from the previous sampler task, but should not carry over the full rolling metrics state.
 - Claimed batches are fenced by live node ownership. Do not add a second independent batch lease.
