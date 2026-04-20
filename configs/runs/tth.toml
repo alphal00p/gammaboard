@@ -13,7 +13,7 @@ momentum_space = false
 [[task_queue]]
 name = "havana-train-10m"
 kind = "sample"
-nr_samples = 100_000_000
+stop_condition = { max_samples = 100_000_000 }
 accumulator = { config = "gammaloop" }
 sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 128, samples_for_update = 10_000_000, initial_training_rate = 0.05, final_training_rate = 0.005 } }
 
@@ -35,5 +35,5 @@ completed_batch_fetch_limit = 100
 [[task_queue]]
 name = "havana-infer-100m"
 kind = "sample"
-nr_samples = 100_000_000
+stop_condition = { max_samples = 100_000_000 }
 sampler_aggregator = { config = { kind = "havana_inference", source = "latest_training_sampler_aggregator" } }

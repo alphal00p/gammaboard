@@ -2,7 +2,9 @@ use super::{
     TaskPanelContext, TaskPanelCurrentSourcePolicy, TaskPanelHistoryContext, TaskPanelProjector,
     panel_projector, panel_projector_with_source,
 };
-use crate::core::{AccumulatorConfig, EngineError, RunTaskSpec};
+use crate::core::{
+    AccumulatorConfig, EngineError, RunTaskSpec, SampleErrorProjection, SampleStopCondition,
+};
 use crate::evaluation::{Accumulator, AccumulatorState, SemanticAccumulatorKind};
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, key_value, key_value_panel,
@@ -141,7 +143,16 @@ fn estimate_summary_projector(
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
-            Ok(sample_accumulator(ctx, accumulator_config.as_ref())?.map(estimate_summary_panel))
+            Ok(
+                sample_accumulator(ctx, accumulator_config.as_ref())?.map(|accumulator| {
+                    estimate_summary_panel(
+                        accumulator,
+                        ctx.task.task.sample_stop_condition(),
+                        ctx.task.nr_completed_samples,
+                        ctx.completed_samples_per_second,
+                    )
+                }),
+            )
         },
         |_ctx| Ok(None),
     )
@@ -408,110 +419,307 @@ fn rsd_history_panel(accumulator: AccumulatorState) -> PanelState {
     )
 }
 
-fn estimate_summary_panel(accumulator: AccumulatorState) -> PanelState {
+fn estimate_summary_panel(
+    accumulator: AccumulatorState,
+    stop_condition: Option<&SampleStopCondition>,
+    completed_samples: i64,
+    completed_samples_per_second: Option<f64>,
+) -> PanelState {
+    let mut entries = base_estimate_summary_entries(&accumulator);
+    append_stop_condition_entries(
+        &mut entries,
+        stop_condition,
+        &accumulator,
+        completed_samples,
+        completed_samples_per_second,
+    );
+    key_value_panel("estimate_summary", entries)
+}
+
+fn base_estimate_summary_entries(
+    accumulator: &AccumulatorState,
+) -> Vec<crate::server::panels::KeyValueEntry> {
     match accumulator {
-        AccumulatorState::Empty(_) => {
-            key_value_panel("estimate_summary", vec![key_value("count", "Count", 0)])
-        }
-        AccumulatorState::Scalar(state) => key_value_panel(
-            "estimate_summary",
-            vec![
-                key_value("count", "Count", state.count),
-                key_value("mean", "Mean", estimate_value(state.mean(), state.stderr())),
-                key_value("mean_abs", "Mean Abs", state.mean_abs()),
-                key_value(
-                    "signal_to_noise",
-                    "Mean(|x|)^2 / abs_err^2",
-                    state.signal_to_noise(),
-                ),
-                key_value("rsd", "RSD", state.rsd()),
-            ],
-        ),
-        AccumulatorState::Complex(state) => key_value_panel(
-            "estimate_summary",
-            vec![
-                key_value("count", "Count", state.count),
-                key_value(
-                    "real_mean",
-                    "Real Mean",
-                    estimate_value(state.real_mean(), state.real_stderr()),
-                ),
-                key_value(
-                    "imag_mean",
-                    "Imag Mean",
-                    estimate_value(state.imag_mean(), state.imag_stderr()),
-                ),
-                key_value(
-                    "abs_mean",
-                    "Abs Mean",
-                    estimate_value(state.abs_mean(), state.abs_stderr()),
-                ),
-                key_value(
-                    "signal_to_noise",
-                    "Mean(|x|)^2 / abs_err^2",
-                    state.signal_to_noise(),
-                ),
-                key_value("rsd", "RSD", state.rsd()),
-            ],
-        ),
-        AccumulatorState::Gammaloop(state) => key_value_panel(
-            "estimate_summary",
-            vec![
-                key_value("count", "Count", state.sample_count()),
-                key_value(
-                    "real_mean",
-                    "Real Mean",
-                    estimate_value(state.real_mean(), state.real_stderr()),
-                ),
-                key_value(
-                    "imag_mean",
-                    "Imag Mean",
-                    estimate_value(state.imag_mean(), state.imag_stderr()),
-                ),
-                key_value(
-                    "abs_mean",
-                    "Abs Mean",
-                    estimate_value(state.abs_mean(), state.abs_stderr()),
-                ),
-                key_value("rsd", "RSD", state.rsd()),
-            ],
-        ),
-        AccumulatorState::FullScalar(state) => key_value_panel(
-            "estimate_summary",
-            vec![
-                key_value("count", "Count", state.values.len()),
-                key_value(
-                    "min",
-                    "Min",
-                    state.values.iter().copied().fold(f64::INFINITY, f64::min),
-                ),
-                key_value(
-                    "max",
-                    "Max",
-                    state
-                        .values
-                        .iter()
-                        .copied()
-                        .fold(f64::NEG_INFINITY, f64::max),
-                ),
-            ],
-        ),
-        AccumulatorState::FullComplex(state) => key_value_panel(
-            "estimate_summary",
-            vec![
-                key_value("count", "Count", state.values.len()),
-                key_value(
-                    "max_abs",
-                    "Max |z|",
-                    state
-                        .values
-                        .iter()
-                        .map(|value| (value.re * value.re + value.im * value.im).sqrt())
-                        .fold(0.0, f64::max),
-                ),
-            ],
-        ),
+        AccumulatorState::Empty(_) => vec![key_value("count", "Count", 0)],
+        AccumulatorState::Scalar(state) => vec![
+            key_value("count", "Count", state.count),
+            key_value("mean", "Mean", estimate_value(state.mean(), state.stderr())),
+            key_value("mean_abs", "Mean Abs", state.mean_abs()),
+            key_value(
+                "signal_to_noise",
+                "Mean(|x|)^2 / abs_err^2",
+                state.signal_to_noise(),
+            ),
+            key_value("rsd", "RSD", state.rsd()),
+        ],
+        AccumulatorState::Complex(state) => vec![
+            key_value("count", "Count", state.count),
+            key_value(
+                "real_mean",
+                "Real Mean",
+                estimate_value(state.real_mean(), state.real_stderr()),
+            ),
+            key_value(
+                "imag_mean",
+                "Imag Mean",
+                estimate_value(state.imag_mean(), state.imag_stderr()),
+            ),
+            key_value(
+                "abs_mean",
+                "Abs Mean",
+                estimate_value(state.abs_mean(), state.abs_stderr()),
+            ),
+            key_value(
+                "signal_to_noise",
+                "Mean(|x|)^2 / abs_err^2",
+                state.signal_to_noise(),
+            ),
+            key_value("rsd", "RSD", state.rsd()),
+        ],
+        AccumulatorState::Gammaloop(state) => vec![
+            key_value("count", "Count", state.sample_count()),
+            key_value(
+                "real_mean",
+                "Real Mean",
+                estimate_value(state.real_mean(), state.real_stderr()),
+            ),
+            key_value(
+                "imag_mean",
+                "Imag Mean",
+                estimate_value(state.imag_mean(), state.imag_stderr()),
+            ),
+            key_value(
+                "abs_mean",
+                "Abs Mean",
+                estimate_value(state.abs_mean(), state.abs_stderr()),
+            ),
+            key_value("rsd", "RSD", state.rsd()),
+        ],
+        AccumulatorState::FullScalar(state) => vec![
+            key_value("count", "Count", state.values.len()),
+            key_value(
+                "min",
+                "Min",
+                state.values.iter().copied().fold(f64::INFINITY, f64::min),
+            ),
+            key_value(
+                "max",
+                "Max",
+                state
+                    .values
+                    .iter()
+                    .copied()
+                    .fold(f64::NEG_INFINITY, f64::max),
+            ),
+        ],
+        AccumulatorState::FullComplex(state) => vec![
+            key_value("count", "Count", state.values.len()),
+            key_value(
+                "max_abs",
+                "Max |z|",
+                state
+                    .values
+                    .iter()
+                    .map(|value| (value.re * value.re + value.im * value.im).sqrt())
+                    .fold(0.0, f64::max),
+            ),
+        ],
     }
+}
+
+fn append_stop_condition_entries(
+    entries: &mut Vec<crate::server::panels::KeyValueEntry>,
+    stop_condition: Option<&SampleStopCondition>,
+    accumulator: &AccumulatorState,
+    completed_samples: i64,
+    completed_samples_per_second: Option<f64>,
+) {
+    let Some(stop_condition) = stop_condition else {
+        return;
+    };
+    let projection = stop_condition
+        .projection
+        .unwrap_or_else(|| match accumulator {
+            AccumulatorState::Complex(_) | AccumulatorState::Gammaloop(_) => {
+                SampleErrorProjection::Abs
+            }
+            _ => SampleErrorProjection::Real,
+        });
+    entries.push(key_value(
+        "stop_projection",
+        "Stop Projection",
+        format_projection(projection),
+    ));
+    if let Some(target) = stop_condition.max_samples {
+        entries.push(key_value("stop_max_samples", "Stop Max Samples", target));
+    }
+
+    let projected = projected_estimate(accumulator, projection);
+    if let Some(projected) = projected {
+        if let Some(target) = stop_condition.absolute_error {
+            entries.push(key_value(
+                "stop_absolute_error_current",
+                "Absolute Error",
+                projected.error,
+            ));
+            entries.push(key_value(
+                "stop_absolute_error_target",
+                "Absolute Error Target",
+                target,
+            ));
+        }
+        if let Some(target) = stop_condition.relative_error {
+            let current = relative_error(projected.value, projected.error);
+            entries.push(key_value(
+                "stop_relative_error_current",
+                "Relative Error",
+                current,
+            ));
+            entries.push(key_value(
+                "stop_relative_error_target",
+                "Relative Error Target",
+                target,
+            ));
+        }
+    }
+
+    let eta_seconds = estimate_eta_seconds(
+        stop_condition,
+        projected,
+        completed_samples,
+        completed_samples_per_second,
+    );
+    entries.push(key_value(
+        "eta",
+        "ETA",
+        eta_seconds
+            .map(format_eta_duration)
+            .unwrap_or_else(|| "n/a".to_string()),
+    ));
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProjectedEstimate {
+    value: f64,
+    error: f64,
+}
+
+fn projected_estimate(
+    accumulator: &AccumulatorState,
+    projection: SampleErrorProjection,
+) -> Option<ProjectedEstimate> {
+    match accumulator {
+        AccumulatorState::Scalar(state) => match projection {
+            SampleErrorProjection::Real => Some(ProjectedEstimate {
+                value: state.mean(),
+                error: state.stderr(),
+            }),
+            SampleErrorProjection::Imag | SampleErrorProjection::Abs => None,
+        },
+        AccumulatorState::Complex(state) => match projection {
+            SampleErrorProjection::Real => Some(ProjectedEstimate {
+                value: state.real_mean(),
+                error: state.real_stderr(),
+            }),
+            SampleErrorProjection::Imag => Some(ProjectedEstimate {
+                value: state.imag_mean(),
+                error: state.imag_stderr(),
+            }),
+            SampleErrorProjection::Abs => Some(ProjectedEstimate {
+                value: state.abs_mean(),
+                error: state.abs_stderr(),
+            }),
+        },
+        AccumulatorState::Gammaloop(state) => match projection {
+            SampleErrorProjection::Real => Some(ProjectedEstimate {
+                value: state.real_mean(),
+                error: state.real_stderr(),
+            }),
+            SampleErrorProjection::Imag => Some(ProjectedEstimate {
+                value: state.imag_mean(),
+                error: state.imag_stderr(),
+            }),
+            SampleErrorProjection::Abs => Some(ProjectedEstimate {
+                value: state.abs_mean(),
+                error: state.abs_stderr(),
+            }),
+        },
+        AccumulatorState::Empty(_)
+        | AccumulatorState::FullScalar(_)
+        | AccumulatorState::FullComplex(_) => None,
+    }
+}
+
+fn relative_error(value: f64, abs_error: f64) -> f64 {
+    let denominator = value.abs();
+    if denominator == 0.0 {
+        if abs_error == 0.0 { 0.0 } else { f64::INFINITY }
+    } else {
+        abs_error.abs() / denominator
+    }
+}
+
+fn estimate_eta_seconds(
+    stop_condition: &SampleStopCondition,
+    projected: Option<ProjectedEstimate>,
+    completed_samples: i64,
+    completed_samples_per_second: Option<f64>,
+) -> Option<f64> {
+    let rate = completed_samples_per_second.filter(|value| value.is_finite() && *value > 0.0)?;
+    let completed_samples = completed_samples.max(0) as f64;
+    let mut etas = Vec::new();
+    if let Some(max_samples) = stop_condition.max_samples {
+        let remaining = (max_samples as f64 - completed_samples).max(0.0);
+        etas.push(remaining / rate);
+    }
+    if let (Some(target), Some(projected)) = (stop_condition.absolute_error, projected) {
+        if projected.error <= target {
+            etas.push(0.0);
+        } else if completed_samples > 0.0 && projected.error.is_finite() && target.is_finite() {
+            let required_total = completed_samples * (projected.error / target).powi(2);
+            let remaining = (required_total - completed_samples).max(0.0);
+            etas.push(remaining / rate);
+        }
+    }
+    if let (Some(target), Some(projected)) = (stop_condition.relative_error, projected) {
+        let current_relative = relative_error(projected.value, projected.error);
+        if current_relative <= target {
+            etas.push(0.0);
+        } else if completed_samples > 0.0 && current_relative.is_finite() && target.is_finite() {
+            let required_total = completed_samples * (current_relative / target).powi(2);
+            let remaining = (required_total - completed_samples).max(0.0);
+            etas.push(remaining / rate);
+        }
+    }
+    etas.into_iter().reduce(f64::min)
+}
+
+fn format_projection(value: SampleErrorProjection) -> &'static str {
+    match value {
+        SampleErrorProjection::Real => "real",
+        SampleErrorProjection::Imag => "imag",
+        SampleErrorProjection::Abs => "abs",
+    }
+}
+
+fn format_eta_duration(seconds: f64) -> String {
+    if !seconds.is_finite() {
+        return "n/a".to_string();
+    }
+    if seconds < 60.0 {
+        return format!("{seconds:.2} s");
+    }
+    if seconds < 3600.0 {
+        return format!("{:.2} min", seconds / 60.0);
+    }
+    if seconds < 365.0 * 24.0 * 3600.0 {
+        return format!("{:.2} h", seconds / 3600.0);
+    }
+    let years = seconds / (365.0 * 24.0 * 3600.0);
+    if years >= 1_000_000.0 {
+        return format!("{years:.3e} y");
+    }
+    format!("{years:.2} y")
 }
 
 #[derive(Debug, Serialize)]

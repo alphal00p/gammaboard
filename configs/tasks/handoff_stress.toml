@@ -3,20 +3,20 @@
 [[task_queue]]
 name = "train"
 kind = "sample"
-nr_samples = 8_192
+stop_condition = { max_samples = 8_192 }
 accumulator = { config = "complex" }
 sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 32, samples_for_update = 2_048, initial_training_rate = 0.1, final_training_rate = 0.01 } }
 
 [[task_queue]]
 name = "infer"
 kind = "sample"
-nr_samples = 4_096
+stop_condition = { max_samples = 4_096 }
 sampler_aggregator = { config = { kind = "havana_inference" } }
 
 [[task_queue]]
 name = "train2"
 kind = "sample"
-nr_samples = 4_096
+stop_condition = { max_samples = 4_096 }
 batch_transforms = []
 sampler_aggregator = { from_name = "infer" }
 accumulator = { from_name = "infer" }
@@ -24,7 +24,7 @@ accumulator = { from_name = "infer" }
 [[task_queue]]
 name = "infer2"
 kind = "sample"
-nr_samples = 4_096
+stop_condition = { max_samples = 4_096 }
 sampler_aggregator = { config = { kind = "havana_inference" } }
 
 [[task_queue]]
@@ -57,7 +57,7 @@ discrete = [0,0,0]
 [[task_queue]]
 name = "infer3"
 kind = "sample"
-nr_samples = 4_096
+stop_condition = { max_samples = 4_096 }
 sampler_aggregator = { config = { kind = "havana_inference" } }
 
 

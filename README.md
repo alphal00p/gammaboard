@@ -302,7 +302,7 @@ Sample tasks use direct per-component source specs:
 Task names are unique per run and can be referenced by `from_name`.
 `batch_transforms` is stage state for tasks. Omitted inherits; `batch_transforms = []` explicitly clears inherited transforms.
 When you want raster `image`/`plot_line` tasks to evaluate directly in declared geometry coordinates after transformed sampling stages, set `batch_transforms = []` on those raster tasks.
-Use `nr_samples = 0` when you want a sample task to only update stage state without producing work. This is the configuration-only task shape.
+Use `stop_condition = { max_samples = 0 }` when you want a sample task to only update stage state without producing work. This is the configuration-only task shape.
 Task files used with `gammaboard run task add` may contain either a single `task = { ... }`, a `[[task_queue]]` array, or both. When both are present, `task` is appended first.
 
 Sample task config example:
@@ -310,7 +310,7 @@ Sample task config example:
 [[task_queue]]
 name = "warmup-sample" # optional; auto-generated when omitted
 kind = "sample"
-nr_samples = 10000
+stop_condition = { max_samples = 10000, absolute_error = 1e-3, relative_error = 1e-2, projection = "real" }
 accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 ```

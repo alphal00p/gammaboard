@@ -2,6 +2,6 @@
 
 [[task_queue]]
 kind = "sample"
-nr_samples = 1_000
+stop_condition = { max_samples = 1_000 }
 accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }

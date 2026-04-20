@@ -30,6 +30,78 @@ pub struct SampleTaskConfig {
     pub batch_transforms: Option<Vec<BatchTransformConfig>>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SampleErrorProjection {
+    Real,
+    Imag,
+    Abs,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct SampleStopCondition {
+    pub max_samples: Option<i64>,
+    pub absolute_error: Option<f64>,
+    pub relative_error: Option<f64>,
+    pub projection: Option<SampleErrorProjection>,
+}
+
+impl Default for SampleStopCondition {
+    fn default() -> Self {
+        Self {
+            max_samples: None,
+            absolute_error: None,
+            relative_error: None,
+            projection: None,
+        }
+    }
+}
+
+impl SampleStopCondition {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.max_samples.is_some_and(|value| value < 0) {
+            return Err(
+                "sample.stop_condition.max_samples must be a non-negative integer when set"
+                    .to_string(),
+            );
+        }
+        if let Some(value) = self.absolute_error
+            && (!value.is_finite() || value <= 0.0)
+        {
+            return Err(
+                "sample.stop_condition.absolute_error must be finite and > 0 when set".to_string(),
+            );
+        }
+        if let Some(value) = self.relative_error
+            && (!value.is_finite() || value <= 0.0)
+        {
+            return Err(
+                "sample.stop_condition.relative_error must be finite and > 0 when set".to_string(),
+            );
+        }
+        if self.max_samples.is_none()
+            && self.absolute_error.is_none()
+            && self.relative_error.is_none()
+        {
+            return Err(
+                "sample.stop_condition must set at least one of: max_samples, absolute_error, relative_error"
+                    .to_string(),
+            );
+        }
+        if self.projection.is_some()
+            && self.absolute_error.is_none()
+            && self.relative_error.is_none()
+        {
+            return Err(
+                "sample.stop_condition.projection requires absolute_error and/or relative_error"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct SamplerQueueTuning {
@@ -201,7 +273,7 @@ impl AccumulatorSourceSpec {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RunTaskSpec {
     Sample {
-        nr_samples: Option<i64>,
+        stop_condition: SampleStopCondition,
         #[serde(default)]
         sampler_aggregator: Option<SamplerAggregatorSourceSpec>,
         #[serde(default)]
@@ -239,28 +311,25 @@ pub enum RunTaskSpec {
 impl RunTaskSpec {
     pub fn validate(&self) -> Result<(), String> {
         match self {
-            Self::Sample { nr_samples, .. }
-                if nr_samples.is_some_and(|nr_samples| nr_samples < 0) =>
-            {
-                Err("sample task nr_samples must be a non-negative integer when set".to_string())
-            }
             Self::Sample {
-                nr_samples: None,
+                stop_condition,
                 sampler_aggregator:
                     Some(SamplerAggregatorSourceSpec::Config {
                         config: SamplerAggregatorConfig::HavanaTraining { .. },
                     }),
                 ..
-            } => Err(
-                "sample task with havana_training sampler requires nr_samples for training budget"
+            } if stop_condition.max_samples.is_none() => Err(
+                "sample task with havana_training sampler requires stop_condition.max_samples for training budget"
                     .to_string(),
             ),
             Self::Sample {
+                stop_condition,
                 sampler_aggregator,
                 accumulator,
                 queue_tuning,
                 ..
             } => {
+                stop_condition.validate()?;
                 if let Some(source) = sampler_aggregator {
                     source.validate()?;
                 }
@@ -424,10 +493,17 @@ impl RunTaskSpec {
 
     pub fn nr_expected_samples(&self) -> Option<i64> {
         match self {
-            Self::Sample { nr_samples, .. } => *nr_samples,
+            Self::Sample { stop_condition, .. } => stop_condition.max_samples,
             Self::Image { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::PdfAdaptationImage { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::PlotLine { geometry, .. } => Some(geometry.nr_points() as i64),
+        }
+    }
+
+    pub fn sample_stop_condition(&self) -> Option<&SampleStopCondition> {
+        match self {
+            Self::Sample { stop_condition, .. } => Some(stop_condition),
+            Self::Image { .. } | Self::PdfAdaptationImage { .. } | Self::PlotLine { .. } => None,
         }
     }
 
@@ -471,13 +547,22 @@ impl IntoPreflightTask for RunTaskSpec {
         self.validate().map_err(BuildError::invalid_input)?;
         match self {
             Self::Sample {
-                nr_samples,
+                mut stop_condition,
                 sampler_aggregator,
                 accumulator,
                 queue_tuning,
                 batch_transforms,
             } => Ok(Some(Self::Sample {
-                nr_samples: Some(if nr_samples == Some(0) { 0 } else { 1 }),
+                stop_condition: SampleStopCondition {
+                    max_samples: Some(if stop_condition.max_samples == Some(0) {
+                        0
+                    } else {
+                        1
+                    }),
+                    absolute_error: stop_condition.absolute_error.take(),
+                    relative_error: stop_condition.relative_error.take(),
+                    projection: stop_condition.projection.take(),
+                },
                 sampler_aggregator,
                 accumulator,
                 queue_tuning,
@@ -743,7 +828,10 @@ mod tests {
     #[test]
     fn sample_task_without_accumulator_reuses_previous_state() {
         let task = RunTaskSpec::Sample {
-            nr_samples: Some(10),
+            stop_condition: SampleStopCondition {
+                max_samples: Some(10),
+                ..SampleStopCondition::default()
+            },
             sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
                 config: SamplerAggregatorConfig::NaiveMonteCarlo {
                     params: NaiveMonteCarloSamplerParams::default(),
@@ -762,7 +850,10 @@ mod tests {
         let input = RunTaskInput {
             name: Some("sample-1".to_string()),
             task: RunTaskSpec::Sample {
-                nr_samples: Some(10),
+                stop_condition: SampleStopCondition {
+                    max_samples: Some(10),
+                    ..SampleStopCondition::default()
+                },
                 sampler_aggregator: None,
                 accumulator: None,
                 queue_tuning: None,
@@ -780,7 +871,10 @@ mod tests {
     #[test]
     fn sample_task_rejects_dual_source() {
         let missing = RunTaskSpec::Sample {
-            nr_samples: Some(0),
+            stop_condition: SampleStopCondition {
+                max_samples: Some(0),
+                ..SampleStopCondition::default()
+            },
             sampler_aggregator: None,
             accumulator: None,
             queue_tuning: None,
@@ -789,7 +883,10 @@ mod tests {
         assert!(missing.validate().is_ok());
 
         let both = RunTaskSpec::Sample {
-            nr_samples: Some(0),
+            stop_condition: SampleStopCondition {
+                max_samples: Some(0),
+                ..SampleStopCondition::default()
+            },
             sampler_aggregator: Some(SamplerAggregatorSourceSpec::Latest("latest".to_string())),
             accumulator: None,
             queue_tuning: None,
@@ -801,7 +898,7 @@ mod tests {
     #[test]
     fn sample_task_with_havana_training_requires_budget_in_config_mode() {
         let task = RunTaskSpec::Sample {
-            nr_samples: None,
+            stop_condition: SampleStopCondition::default(),
             sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
                 config: SamplerAggregatorConfig::HavanaTraining {
                     params: HavanaSamplerParams::default(),

@@ -775,6 +775,25 @@ async fn get_run_task_output(
             cursor,
             &task,
             &request.request.panel_state,
+            if matches!(task.task, crate::core::RunTaskSpec::Sample { .. })
+                && matches!(task.state, crate::core::RunTaskState::Active)
+            {
+                state
+                    .store
+                    .get_sampler_performance_history(run_id, 1, None)
+                    .await?
+                    .first()
+                    .and_then(|entry| {
+                        serde_json::from_value::<crate::core::SamplerRuntimeMetrics>(
+                            entry.runtime_metrics.clone(),
+                        )
+                        .ok()
+                    })
+                    .map(|metrics| metrics.completed_samples_per_second)
+                    .filter(|value| value.is_finite() && *value > 0.0)
+            } else {
+                None
+            },
             current_accumulator.as_ref(),
             latest_stage_snapshot.as_ref(),
             latest_persisted_snapshot.as_ref(),

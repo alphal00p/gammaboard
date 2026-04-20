@@ -18,7 +18,8 @@ pub mod utils;
 pub use core::{
     AccumulatorSourceSpec, ImageDisplayMode, LineDisplayMode, LineRasterGeometry, Linspace,
     PlaneRasterGeometry, PlotAccumulatorKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState,
-    SampleTaskConfig, SamplerAggregatorSourceSpec, SourceRefSpec, canonical_task_toml,
+    SampleErrorProjection, SampleStopCondition, SampleTaskConfig, SamplerAggregatorSourceSpec,
+    SourceRefSpec, canonical_task_toml,
 };
 pub use core::{BatchRecord, BatchStatus};
 pub use core::{BuildError, EngineError, EvalError, StoreError};

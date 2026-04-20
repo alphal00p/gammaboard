@@ -8,9 +8,9 @@
 //! - persist lightweight UI sync snapshots and full resume checkpoints
 
 use crate::core::{
-    BatchTransformConfig, EngineError, RunStageSnapshot, RunTask, SamplerAggregatorConfig,
-    SamplerAggregatorPerformanceSnapshot, SamplerQueueTuning, SamplerRuntimeMetrics,
-    SamplerWorkRollingAverages, SamplerWorkerStore, StoreError,
+    BatchTransformConfig, EngineError, RunStageSnapshot, RunTask, SampleErrorProjection,
+    SamplerAggregatorConfig, SamplerAggregatorPerformanceSnapshot, SamplerQueueTuning,
+    SamplerRuntimeMetrics, SamplerWorkRollingAverages, SamplerWorkerStore, StoreError,
 };
 use crate::evaluation::AccumulatorState;
 use crate::runners::process_memory::current_rss_bytes;
@@ -228,6 +228,20 @@ struct PendingAggregationFlushTask {
     flushed_completed_batches: i32,
     cleared_initial_round_trip: bool,
     handle: tokio::task::JoinHandle<Result<(), StoreError>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProjectedEstimate {
+    value: f64,
+    error: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StopConditionStatus {
+    reached: bool,
+    max_samples_reached: bool,
+    absolute_error_reached: bool,
+    relative_error_reached: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -490,7 +504,10 @@ where
     }
 
     fn active_sample_remaining_budget(&self) -> Result<Option<usize>, RunnerError> {
-        let Some(target) = self.task.task.nr_expected_samples() else {
+        let Some(target) = self.task.task.sample_stop_condition().map_or_else(
+            || self.task.task.nr_expected_samples(),
+            |condition| condition.max_samples,
+        ) else {
             return Ok(None);
         };
         let remaining = target.saturating_sub(self.task.nr_produced_samples);
@@ -504,6 +521,138 @@ where
             ))));
         }
         Ok(usize::try_from(remaining).ok())
+    }
+
+    fn effective_stop_projection(&self) -> SampleErrorProjection {
+        self.task
+            .task
+            .sample_stop_condition()
+            .and_then(|condition| condition.projection)
+            .unwrap_or_else(|| match self.observable_state {
+                AccumulatorState::Complex(_) | AccumulatorState::Gammaloop(_) => {
+                    SampleErrorProjection::Abs
+                }
+                _ => SampleErrorProjection::Real,
+            })
+    }
+
+    fn projected_estimate_for_stop(
+        &self,
+        projection: SampleErrorProjection,
+    ) -> Option<ProjectedEstimate> {
+        match &self.observable_state {
+            AccumulatorState::Scalar(state) => match projection {
+                SampleErrorProjection::Real => Some(ProjectedEstimate {
+                    value: state.mean(),
+                    error: state.stderr(),
+                }),
+                SampleErrorProjection::Imag | SampleErrorProjection::Abs => None,
+            },
+            AccumulatorState::Complex(state) => match projection {
+                SampleErrorProjection::Real => Some(ProjectedEstimate {
+                    value: state.real_mean(),
+                    error: state.real_stderr(),
+                }),
+                SampleErrorProjection::Imag => Some(ProjectedEstimate {
+                    value: state.imag_mean(),
+                    error: state.imag_stderr(),
+                }),
+                SampleErrorProjection::Abs => Some(ProjectedEstimate {
+                    value: state.abs_mean(),
+                    error: state.abs_stderr(),
+                }),
+            },
+            AccumulatorState::Gammaloop(state) => match projection {
+                SampleErrorProjection::Real => Some(ProjectedEstimate {
+                    value: state.real_mean(),
+                    error: state.real_stderr(),
+                }),
+                SampleErrorProjection::Imag => Some(ProjectedEstimate {
+                    value: state.imag_mean(),
+                    error: state.imag_stderr(),
+                }),
+                SampleErrorProjection::Abs => Some(ProjectedEstimate {
+                    value: state.abs_mean(),
+                    error: state.abs_stderr(),
+                }),
+            },
+            AccumulatorState::Empty(_)
+            | AccumulatorState::FullScalar(_)
+            | AccumulatorState::FullComplex(_) => None,
+        }
+    }
+
+    fn relative_error(value: f64, abs_error: f64) -> f64 {
+        let denominator = value.abs();
+        if denominator == 0.0 {
+            if abs_error == 0.0 { 0.0 } else { f64::INFINITY }
+        } else {
+            abs_error.abs() / denominator
+        }
+    }
+
+    fn stop_condition_status(&self) -> Result<StopConditionStatus, RunnerError> {
+        if self.task.task.sample_stop_condition().is_none() {
+            let reached = self
+                .task
+                .task
+                .nr_expected_samples()
+                .is_some_and(|target| self.task.nr_completed_samples >= target);
+            return Ok(StopConditionStatus {
+                reached,
+                max_samples_reached: reached,
+                absolute_error_reached: false,
+                relative_error_reached: false,
+            });
+        }
+        let stop_condition = self.task.task.sample_stop_condition().ok_or_else(|| {
+            RunnerError::Engine(EngineError::engine(format!(
+                "run {} task {} missing sample stop_condition",
+                self.run_id, self.task.id
+            )))
+        })?;
+        let projection = self.effective_stop_projection();
+        let projected = self.projected_estimate_for_stop(projection);
+        if (stop_condition.absolute_error.is_some() || stop_condition.relative_error.is_some())
+            && projected.is_none()
+        {
+            return Err(RunnerError::Engine(EngineError::engine(format!(
+                "run {} task {} stop_condition.projection={} is incompatible with accumulator {}",
+                self.run_id,
+                self.task.id,
+                match projection {
+                    SampleErrorProjection::Real => "real",
+                    SampleErrorProjection::Imag => "imag",
+                    SampleErrorProjection::Abs => "abs",
+                },
+                self.observable_state.kind_str()
+            ))));
+        }
+
+        let max_samples_reached = stop_condition
+            .max_samples
+            .is_some_and(|target| self.task.nr_completed_samples >= target);
+        let absolute_error_reached =
+            stop_condition
+                .absolute_error
+                .zip(projected)
+                .is_some_and(|(target, estimate)| {
+                    estimate.error.is_finite() && estimate.error <= target
+                });
+        let relative_error_reached =
+            stop_condition
+                .relative_error
+                .zip(projected)
+                .is_some_and(|(target, estimate)| {
+                    let relative = Self::relative_error(estimate.value, estimate.error);
+                    relative.is_finite() && relative <= target
+                });
+        Ok(StopConditionStatus {
+            reached: max_samples_reached || absolute_error_reached || relative_error_reached,
+            max_samples_reached,
+            absolute_error_reached,
+            relative_error_reached,
+        })
     }
 
     pub fn task_id(&self) -> i64 {
@@ -613,21 +762,23 @@ where
             .open()
             .saturating_add(produced_batches as i64))
         .max(0) as usize;
-        if let Some(target) = self.task.task.nr_expected_samples()
-            && self.task.nr_completed_samples < target
+        let stop_status = self.stop_condition_status()?;
+        if !stop_status.reached
             && open_batch_count == 0
             && completed_batches == 0
             && produced_batches == 0
         {
             return Err(RunnerError::Engine(EngineError::engine(format!(
-                "run {} task {} cannot make further progress: completed={} target={} and sampler produced no new batches",
-                self.run_id, self.task.id, self.task.nr_completed_samples, target
+                "run {} task {} cannot make further progress: stop condition not reached (max_samples_reached={}, absolute_error_reached={}, relative_error_reached={}) and sampler produced no new batches",
+                self.run_id,
+                self.task.id,
+                stop_status.max_samples_reached,
+                stop_status.absolute_error_reached,
+                stop_status.relative_error_reached
             ))));
         }
 
-        Ok(self.task.task.nr_expected_samples().is_some_and(|target| {
-            self.task.nr_completed_samples >= target && open_batch_count == 0
-        }))
+        Ok(stop_status.reached && open_batch_count == 0)
     }
 
     async fn persist_stage_state_with_queue_empty(
@@ -910,9 +1061,7 @@ where
         }
 
         self.nr_completed_samples += completed_samples_delta;
-        if self.task.task.nr_expected_samples().is_some() {
-            self.task.nr_completed_samples += completed_samples_delta;
-        }
+        self.task.nr_completed_samples += completed_samples_delta;
 
         self.runtime_state.pending_persisted_completed_batches = self
             .runtime_state
@@ -996,6 +1145,9 @@ where
         queue_before_produce: crate::core::BatchQueueCounts,
         open_before_produce: usize,
     ) -> Result<Vec<usize>, RunnerError> {
+        if self.stop_condition_status()?.reached {
+            return Ok(Vec::new());
+        }
         let decision = self.decide_produce(sample_plan, open_before_produce)?;
         let batch_plan = match decision {
             ProduceDecision::None => Vec::new(),
@@ -1080,15 +1232,13 @@ where
         if !self.progress_sync_due(force) {
             return Ok(());
         }
-        if self.task.task.nr_expected_samples().is_some() {
-            self.store
-                .update_run_task_progress(
-                    self.task.id,
-                    self.task.nr_produced_samples,
-                    self.task.nr_completed_samples,
-                )
-                .await?;
-        }
+        self.store
+            .update_run_task_progress(
+                self.task.id,
+                self.task.nr_produced_samples,
+                self.task.nr_completed_samples,
+            )
+            .await?;
         self.store
             .save_run_sample_progress(
                 self.run_id,

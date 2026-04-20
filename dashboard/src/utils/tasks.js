@@ -22,7 +22,8 @@ export const getTaskTargetLabel = (task) => {
   if (task?.task?.kind === "init") {
     return "-";
   }
-  const raw = Number(task?.task?.nr_samples) || getGeometryPointCount(task?.task);
+  const raw =
+    Number(task?.task?.stop_condition?.max_samples) || getGeometryPointCount(task?.task);
   return Number.isFinite(raw) ? raw.toLocaleString() : "unbounded";
 };
 

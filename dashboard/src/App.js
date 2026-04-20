@@ -44,8 +44,10 @@ const DEFAULT_CREATE_RUN_TOML = `name = "new-run"`;
 
 const DEFAULT_ADD_TASKS_TOML = `[[task_queue]]
 kind = "sample"
-nr_samples = 10000
-accumulator = { config = "scalar" }`;
+accumulator = { config = "scalar" }
+
+stop_condition = { max_samples = 10000 }
+`;
 const EVALUATOR_COUNT_STORAGE_KEY = "runs.evaluator_count";
 
 const DashboardHeader = () => {

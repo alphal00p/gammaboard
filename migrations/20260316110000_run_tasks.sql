@@ -22,6 +22,16 @@ CREATE TABLE IF NOT EXISTS run_tasks (
         AND nr_completed_samples >= 0
         AND nr_completed_samples <= nr_produced_samples
     ),
+    CONSTRAINT run_tasks_sample_stop_condition_shape CHECK (
+        CASE
+            WHEN task->>'kind' = 'sample' THEN
+                jsonb_typeof(task->'stop_condition') = 'object'
+                AND NOT (task ? 'nr_samples')
+            ELSE
+                NOT (task ? 'stop_condition')
+                AND NOT (task ? 'nr_samples')
+        END
+    ),
     CONSTRAINT run_tasks_sequence_unique UNIQUE (run_id, sequence_nr),
     CONSTRAINT run_tasks_name_unique UNIQUE (run_id, name)
 );

@@ -508,7 +508,7 @@ min_eval_time_per_sample_ms = 2
 [[task_queue]]
 name = "train-a"
 kind = "sample"
-nr_samples = {training_samples}
+stop_condition = {{ max_samples = {training_samples} }}
 accumulator = {{ config = "complex" }}
 sampler_aggregator = {{ config = {{ kind = "havana_training", seed = 0, bins = 8, samples_for_update = 8, initial_training_rate = 0.1, final_training_rate = 0.01 }} }}
 "#,
@@ -651,7 +651,7 @@ sampler_aggregator = {{ config = {{ kind = "havana_training", seed = 0, bins = 8
 [[task_queue]]
 name = "infer-a"
 kind = "sample"
-nr_samples = {inference_samples}
+stop_condition = {{ max_samples = {inference_samples} }}
 sampler_aggregator = {{ config = {{ kind = "havana_inference" }} }}
 "#,
     ));
@@ -753,20 +753,20 @@ kind = "sinc_evaluator"
 [[task_queue]]
 name = "train-a"
 kind = "sample"
-nr_samples = 128
+stop_condition = { max_samples = 128 }
 accumulator = { config = "complex" }
 sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 8, samples_for_update = 8 } }
 
 [[task_queue]]
 name = "infer-a"
 kind = "sample"
-nr_samples = 128
+stop_condition = { max_samples = 128 }
 sampler_aggregator = { config = { kind = "havana_inference" } }
 
 [[task_queue]]
 name = "naive-a"
 kind = "sample"
-nr_samples = 32
+stop_condition = { max_samples = 32 }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 [[task_queue]]
@@ -843,13 +843,13 @@ count = 8
     let tasks_toml = r#"
 [[task_queue]]
 kind = "sample"
-nr_samples = 128
+stop_condition = { max_samples = 128 }
 sampler_aggregator = { from_name = "infer-a" }
 accumulator = { from_name = "infer-a" }
 
 [[task_queue]]
 kind = "sample"
-nr_samples = 128
+stop_condition = { max_samples = 128 }
 sampler_aggregator = { config = { kind = "havana_inference" } }
 "#
     .to_string();
@@ -987,7 +987,7 @@ init_args = {{ scale = 1.0, bias = 0.0 }}
 [[task_queue]]
 name = "sample-a"
 kind = "sample"
-nr_samples = 64
+stop_condition = {{ max_samples = 64 }}
 accumulator = {{ config = "scalar" }}
 sampler_aggregator = {{ config = {{ kind = "python_homogeneous_monte_carlo", flake_ref = "{sampler_flake_ref}", module = "demo_sampler", class = "BasicMonteCarloSampler", continuous_dims = 1, discrete_dims = 0, init_args = {{ seed = 0, training_target_samples = 0 }} }} }}
 "#
@@ -1691,7 +1691,7 @@ accumulator_kind = "scalar"
 [[task_queue]]
 name = "train-a"
 kind = "sample"
-nr_samples = 100000000
+stop_condition = { max_samples = 100000000 }
 accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 "#,
@@ -1860,7 +1860,7 @@ min_eval_time_per_sample_ms = 5
 [[task_queue]]
 name = "sample-a"
 kind = "sample"
-nr_samples = 8192
+stop_condition = { max_samples = 8192 }
 accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
@@ -2302,7 +2302,7 @@ min_eval_time_per_sample_ms = 20
 
 [[task_queue]]
 kind = "sample"
-nr_samples = 128
+stop_condition = { max_samples = 128 }
 accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
@@ -2457,7 +2457,7 @@ accumulator_kind = "scalar"
 
 [[task_queue]]
 kind = "sample"
-nr_samples = 32
+stop_condition = { max_samples = 32 }
 accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_produce_batch_nr = 1 } }
 "#,
@@ -2520,7 +2520,7 @@ accumulator_kind = "scalar"
 
 [[task_queue]]
 kind = "sample"
-nr_samples = 32
+stop_condition = { max_samples = 32 }
 accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materialize_batch_nr = 1 } }
 "#,
@@ -2601,7 +2601,7 @@ fail_on_batch_nr = 1
 
 [[task_queue]]
 kind = "sample"
-nr_samples = 32
+stop_condition = { max_samples = 32 }
 accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 "#,
@@ -2671,13 +2671,13 @@ kind = "sin_evaluator"
 
 [[task_queue]]
 kind = "sample"
-nr_samples = 16
+stop_condition = { max_samples = 16 }
 accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 [[task_queue]]
 kind = "sample"
-nr_samples = 16
+stop_condition = { max_samples = 16 }
 "#,
     );
 

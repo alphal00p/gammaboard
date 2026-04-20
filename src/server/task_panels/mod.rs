@@ -63,6 +63,7 @@ pub struct TaskPanelContext<'a> {
     pub task: &'a RunTask,
     pub source: TaskPanelCurrentSource<'a>,
     pub panel_state: &'a JsonValue,
+    pub completed_samples_per_second: Option<f64>,
 }
 
 impl TaskPanelContext<'_> {
@@ -152,6 +153,7 @@ fn project_current_panels(
     projectors: &[TaskPanelProjector],
     task: &RunTask,
     panel_state: &JsonValue,
+    completed_samples_per_second: Option<f64>,
     current_accumulator: Option<&AccumulatorState>,
     latest_stage_snapshot: Option<&TaskStageSnapshot>,
     latest_persisted_snapshot: Option<&TaskOutputSnapshot>,
@@ -171,6 +173,7 @@ fn project_current_panels(
                     task,
                     source,
                     panel_state,
+                    completed_samples_per_second,
                 })
                 .transpose()
         })
@@ -250,6 +253,7 @@ impl TaskPanelSource {
         &self,
         task: &RunTask,
         panel_state: &JsonValue,
+        completed_samples_per_second: Option<f64>,
         current_accumulator: Option<&AccumulatorState>,
         latest_stage_snapshot: Option<&TaskStageSnapshot>,
         latest_persisted_snapshot: Option<&TaskOutputSnapshot>,
@@ -258,6 +262,7 @@ impl TaskPanelSource {
             &self.projectors,
             task,
             panel_state,
+            completed_samples_per_second,
             current_accumulator,
             latest_stage_snapshot,
             latest_persisted_snapshot,
@@ -270,6 +275,7 @@ impl TaskPanelSource {
         requested_cursor: TaskPanelCursor,
         task: &RunTask,
         panel_state: &JsonValue,
+        completed_samples_per_second: Option<f64>,
         current_accumulator: Option<&AccumulatorState>,
         latest_stage_snapshot: Option<&TaskStageSnapshot>,
         latest_persisted_snapshot: Option<&TaskOutputSnapshot>,
@@ -280,6 +286,7 @@ impl TaskPanelSource {
             &self.projectors,
             task,
             panel_state,
+            completed_samples_per_second,
             current_accumulator,
             latest_stage_snapshot,
             latest_persisted_snapshot,
@@ -607,7 +614,10 @@ mod tests {
 
     fn inherited_complex_sample_task() -> RunTaskSpec {
         RunTaskSpec::Sample {
-            nr_samples: Some(10),
+            stop_condition: crate::core::SampleStopCondition {
+                max_samples: Some(10),
+                ..crate::core::SampleStopCondition::default()
+            },
             sampler_aggregator: None,
             accumulator: None,
             queue_tuning: None,
@@ -786,6 +796,7 @@ mod tests {
             .current_panels(
                 task,
                 &JsonValue::Object(Default::default()),
+                None,
                 Some(accumulator),
                 None,
                 None,
@@ -880,6 +891,7 @@ mod tests {
             .current_panels(
                 &run_task,
                 &JsonValue::Object(Default::default()),
+                None,
                 Some(&accumulator),
                 None,
                 None,
@@ -956,6 +968,7 @@ mod tests {
                 TaskPanelCursor::default(),
                 &run_task,
                 &JsonValue::Object(Default::default()),
+                None,
                 Some(&accumulator),
                 None,
                 None,

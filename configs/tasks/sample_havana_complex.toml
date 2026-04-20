@@ -3,12 +3,12 @@
 [[task_queue]]
 name = "train"
 kind = "sample"
-nr_samples = 1_000
+stop_condition = { max_samples = 1_000 }
 accumulator = { config = "complex" }
 sampler_aggregator = { config = { kind = "havana_training" } }
 
 [[task_queue]]
 name = "infer"
 kind = "sample"
-nr_samples = 1_000
+stop_condition = { max_samples = 1_000 }
 sampler_aggregator = { config = { kind = "havana_inference" } }

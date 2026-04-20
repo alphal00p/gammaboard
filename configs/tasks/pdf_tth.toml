@@ -3,7 +3,7 @@
 [[task_queue]]
 name = "train"
 kind = "sample"
-nr_samples = 100_000
+stop_condition = { max_samples = 100_000 }
 accumulator = { config = "complex" }
 sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 64, samples_for_update = 16384, initial_training_rate = 0.1, final_training_rate = 0.001 } }
 
