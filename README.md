@@ -301,7 +301,7 @@ Sample tasks use direct per-component source specs:
 
 Task names are unique per run and can be referenced by `from_name`.
 `batch_transforms` is stage state for tasks. Omitted inherits; `batch_transforms = []` explicitly clears inherited transforms.
-When you want raster `image`/`plot_line` tasks to evaluate directly in declared geometry coordinates after transformed sampling stages, set `batch_transforms = []` on those raster tasks.
+When you want raster `image`/`plot_line`/`pdf_adaptation_image`/`pdf_adaptation_plot_line` tasks to evaluate directly in declared geometry coordinates after transformed sampling stages, set `batch_transforms = []` on those raster tasks.
 Use `stop_condition = { max_samples = 0 }` when you want a sample task to only update stage state without producing work. This is the configuration-only task shape.
 Task files used with `gammaboard run task add` may contain either a single `task = { ... }`, a `[[task_queue]]` array, or both. When both are present, `task` is appended first.
 
@@ -345,6 +345,14 @@ accumulator = "complex"
 offset = [0.0, 0.0]
 direction = [1.0, 0.0]
 linspace = { start = -2.0, stop = 2.0, count = 512 }
+
+[[task_queue]]
+kind = "pdf_adaptation_plot_line"
+[task_queue.geometry]
+offset = [0.0, 0.0]
+direction = [1.0, 0.0]
+linspace = { start = -2.0, stop = 2.0, count = 512 }
+# sampler_aggregator omitted => latest; or use { from_name = "..." }
 ```
 
 ## Runs And Names

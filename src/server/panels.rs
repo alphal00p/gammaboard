@@ -203,6 +203,8 @@ pub enum PanelState {
         current: f64,
         total: Option<f64>,
         unit: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        eta_seconds: Option<f64>,
     },
     KeyValue {
         panel_id: String,
@@ -346,12 +348,14 @@ pub(crate) fn progress_panel(
     current: f64,
     total: Option<f64>,
     unit: Option<&str>,
+    eta_seconds: Option<f64>,
 ) -> PanelState {
     PanelState::Progress {
         panel_id: panel_id.to_string(),
         current,
         total,
         unit: unit.map(str::to_string),
+        eta_seconds,
     }
 }
 

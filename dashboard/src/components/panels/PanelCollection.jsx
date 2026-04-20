@@ -21,6 +21,7 @@ import {
   Typography,
 } from "@mui/material";
 import ReactECharts from "echarts-for-react";
+import prettyMilliseconds from "pretty-ms";
 import "../../lib/echarts";
 import LatexFormula from "../LatexFormula";
 import {
@@ -136,12 +137,8 @@ const normalizeGammaLoopHistogramBins = (histogram) => {
   const isDiscrete = bins.some((bin) => bin && (bin.bin_id != null || bin.label != null));
   return bins.map((bin, index) => {
     const binId = Number(bin?.bin_id);
-    const start = isDiscrete
-      ? (Number.isFinite(binId) ? binId : index)
-      : Number(bin?.x_min);
-    const stop = isDiscrete
-      ? (Number.isFinite(binId) ? binId + 1 : index + 1)
-      : Number(bin?.x_max);
+    const start = isDiscrete ? (Number.isFinite(binId) ? binId : index) : Number(bin?.x_min);
+    const stop = isDiscrete ? (Number.isFinite(binId) ? binId + 1 : index + 1) : Number(bin?.x_max);
     return {
       start,
       stop,
@@ -181,6 +178,31 @@ const fitXDomain = (values) => {
 const fitHistogramXDomain = (bins) => {
   const edges = bins.flatMap((bin) => [bin.start, bin.stop]).filter((value) => Number.isFinite(value));
   return fitXDomain(edges);
+};
+
+const SIGNED_LOG_EPSILON = Number.EPSILON;
+const HISTOGRAM_POSITIVE_COLOR = "#0a9396";
+const HISTOGRAM_NEGATIVE_COLOR = "#ca6702";
+const HISTOGRAM_ZERO_COLOR = "#6b7280";
+
+const signedLog10 = (value) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return Number.NaN;
+  return Math.log10(Math.max(Math.abs(numeric), SIGNED_LOG_EPSILON));
+};
+
+const formatSignedLogAxisValue = (value) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "n/a";
+  return `10^${formatCompactNumber(numeric, 2)}`;
+};
+
+const histogramSignColorFromRaw = (rawValue) => {
+  const numeric = Number(rawValue);
+  if (!Number.isFinite(numeric)) return HISTOGRAM_ZERO_COLOR;
+  if (numeric < 0) return HISTOGRAM_NEGATIVE_COLOR;
+  if (numeric > 0) return HISTOGRAM_POSITIVE_COLOR;
+  return HISTOGRAM_ZERO_COLOR;
 };
 
 const FULL_ZOOM = Object.freeze({ start: 0, end: 100 });
@@ -234,13 +256,14 @@ const buildTimeseriesTooltipFormatter = (mode, isTimestamp, originMs) => (params
   const entries = asArray(params);
   if (entries.length === 0) return "";
   const axisValue = Number(entries[0]?.axisValue);
-  const header = mode === HISTORY_X_AXIS_MODE_SAMPLER_UPTIME
-    ? escapeXml(formatElapsedTime(axisValue))
-    : mode === HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES
-      ? escapeXml(formatAxisValue(axisValue))
-      : isTimestamp
-        ? `${formatElapsedTime(axisValue - originMs)}<br/>${escapeXml(formatAbsoluteLocalTime(axisValue))}`
-        : escapeXml(formatAxisValue(axisValue));
+  const header =
+    mode === HISTORY_X_AXIS_MODE_SAMPLER_UPTIME
+      ? escapeXml(formatElapsedTime(axisValue))
+      : mode === HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES
+        ? escapeXml(formatAxisValue(axisValue))
+        : isTimestamp
+          ? `${formatElapsedTime(axisValue - originMs)}<br/>${escapeXml(formatAbsoluteLocalTime(axisValue))}`
+          : escapeXml(formatAxisValue(axisValue));
   const lines = entries.map((entry) => {
     const rawValue = Array.isArray(entry?.value) ? entry.value[1] : entry?.value;
     return `${entry?.marker ?? ""}${escapeXml(entry?.seriesName ?? "")}: ${Number.isFinite(Number(rawValue)) ? formatScientific(Number(rawValue), 6) : "n/a"}`;
@@ -248,6 +271,17 @@ const buildTimeseriesTooltipFormatter = (mode, isTimestamp, originMs) => (params
   return [header, ...lines].join("<br/>");
 };
 const isObject = (value) => value && typeof value === "object" && !Array.isArray(value);
+const formatEtaSeconds = (seconds) => {
+  const numericSeconds = Number(seconds);
+  if (!Number.isFinite(numericSeconds) || numericSeconds < 0) return null;
+  const etaMs = Math.max(0, Math.round(numericSeconds * 1000));
+  return prettyMilliseconds(etaMs, {
+    colonNotation: true,
+    secondsDecimalDigits: 0,
+    keepDecimalsOnWholeSeconds: false,
+    verbose: false,
+  });
+};
 
 const buildMultiSeriesData = (seriesList) => {
   const rows = new Map();
@@ -397,7 +431,14 @@ const readHistogramScaleFromPanelValue = (value, axis) => {
 
 const writeHistogramBundlePanelValue = (
   current,
-  { selectedHistogram = undefined, zoom = undefined, xScale = undefined, yScale = undefined, showRelativeError = undefined } = {},
+  {
+    selectedHistogram = undefined,
+    zoom = undefined,
+    xScale = undefined,
+    yScale = undefined,
+    showRelativeError = undefined,
+    sortModeByHistogram = undefined,
+  } = {},
 ) => {
   const next = isObject(current) ? { ...current } : {};
   const nextView = isObject(next.histogram_view) ? { ...next.histogram_view } : {};
@@ -415,6 +456,17 @@ const writeHistogramBundlePanelValue = (
   }
   if (showRelativeError !== undefined) {
     nextView.show_relative_error = Boolean(showRelativeError);
+  }
+  if (isObject(sortModeByHistogram)) {
+    const normalizedSortModes = Object.fromEntries(
+      Object.entries(sortModeByHistogram)
+        .filter(([name]) => typeof name === "string")
+        .map(([name, value]) => [name, normalizeHistogramSortMode(value)]),
+    );
+    nextView.sort_mode_by_histogram = {
+      ...(isObject(nextView.sort_mode_by_histogram) ? nextView.sort_mode_by_histogram : {}),
+      ...normalizedSortModes,
+    };
   }
   if (Object.keys(nextView).length > 0) {
     next.histogram_view = nextView;
@@ -450,8 +502,17 @@ const zoomRangeChanged = (left, right) =>
   Math.abs((left?.end ?? 100) - (right?.end ?? 100)) > 0.01;
 
 const readDataZoomRange = (event) => {
-  const payload = Array.isArray(event?.batch) && event.batch.length > 0 ? event.batch[0] : event;
-  return normalizeZoomRange(payload);
+  const payloads = Array.isArray(event?.batch) && event.batch.length > 0 ? event.batch : [event];
+  const xPayload = payloads.find((payload) => {
+    if (!payload || typeof payload !== "object") return false;
+    const dataZoomId = typeof payload.dataZoomId === "string" ? payload.dataZoomId : "";
+    if (dataZoomId.startsWith("x-")) return true;
+    if (Array.isArray(payload.xAxisIndex)) return payload.xAxisIndex.includes(0);
+    if (Number.isFinite(Number(payload.xAxisIndex))) return Number(payload.xAxisIndex) === 0;
+    return false;
+  });
+  if (!xPayload) return null;
+  return normalizeZoomRange(xPayload);
 };
 
 const visibleXRangeFromZoom = (xDomain, zoomRange) => {
@@ -489,11 +550,13 @@ const visibleXRangeFromZoomWithScale = (xDomain, zoomRange, scale = "linear") =>
   return visibleXRangeFromZoom(xDomain, normalizedZoom);
 };
 
-const buildDataZoom = (zoomRange = FULL_ZOOM, includeSlider = true) => {
+const buildDataZoom = (zoomRange = FULL_ZOOM, includeSlider = true, includeYInside = true) => {
   const normalizedZoom = normalizeZoomRange(zoomRange) || FULL_ZOOM;
   const zoom = [
     {
+      id: "x-inside",
       type: "inside",
+      xAxisIndex: [0],
       filterMode: "none",
       throttle: 50,
       start: normalizedZoom.start,
@@ -502,12 +565,23 @@ const buildDataZoom = (zoomRange = FULL_ZOOM, includeSlider = true) => {
   ];
   if (includeSlider) {
     zoom.push({
+      id: "x-slider",
       type: "slider",
+      xAxisIndex: [0],
       filterMode: "none",
       height: 18,
       bottom: 4,
       start: normalizedZoom.start,
       end: normalizedZoom.end,
+    });
+  }
+  if (includeYInside) {
+    zoom.push({
+      id: "y-inside",
+      type: "inside",
+      yAxisIndex: [0],
+      filterMode: "none",
+      throttle: 50,
     });
   }
   return zoom;
@@ -816,10 +890,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
       datazoom: (event) => {
         const next = readDataZoomRange(event);
         if (!next || typeof onValueChange !== "function" || !panelId) return;
-        if (
-          !zoomRangeChanged(zoomRange, next) &&
-          (!isHistoryPanel || tailPinned === (next.end >= 99.5))
-        ) {
+        if (!zoomRangeChanged(zoomRange, next) && (!isHistoryPanel || tailPinned === next.end >= 99.5)) {
           return;
         }
         onValueChange(panelId, writeZoomPanelValue(value, next, isHistoryPanel ? next.end >= 99.5 : null), false);
@@ -1070,7 +1141,8 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
             echartsRef={echartsRef}
             onResetView={
               panelId && typeof onValueChange === "function"
-                ? () => onValueChange(panelId, writeZoomPanelValue(value, FULL_ZOOM, isHistoryPanel ? true : null), false)
+                ? () =>
+                    onValueChange(panelId, writeZoomPanelValue(value, FULL_ZOOM, isHistoryPanel ? true : null), false)
                 : null
             }
           />
@@ -1150,7 +1222,8 @@ const buildHistogramRenderData = (bins, scale) => {
   if (scale !== "log") return stepData;
   return stepData.map((point) => ({
     ...point,
-    y: Math.max(point.y, Number.EPSILON),
+    raw_y: Number(point.y),
+    y: signedLog10(point.y),
     error: Number.isFinite(point.error) ? point.error : 0,
   }));
 };
@@ -1305,14 +1378,49 @@ const parseUploadedHistogramBundle = (payload) => {
     normalizedHistograms[name] = normalizeUploadedHistogram(name, histogram);
   });
   return {
-    primaryHistogramName:
-      typeof payload?.primary_histogram_name === "string" ? payload.primary_histogram_name : null,
+    primaryHistogramName: typeof payload?.primary_histogram_name === "string" ? payload.primary_histogram_name : null,
     histograms: normalizedHistograms,
   };
 };
 
 const histogramSelectionKey = (histogramName) =>
   typeof histogramName === "string" && histogramName.trim().length > 0 ? histogramName : "__default__";
+
+const HISTOGRAM_SORT_CANONICAL = "canonical";
+const HISTOGRAM_SORT_BY_VALUE = "by_value";
+const HISTOGRAM_SORT_BY_ABS_VALUE = "by_abs_value";
+
+const normalizeHistogramSortMode = (value) => {
+  if (value === HISTOGRAM_SORT_BY_VALUE) return HISTOGRAM_SORT_BY_VALUE;
+  if (value === HISTOGRAM_SORT_BY_ABS_VALUE) return HISTOGRAM_SORT_BY_ABS_VALUE;
+  return HISTOGRAM_SORT_CANONICAL;
+};
+
+const sortHistogramBinsByMode = (bins, sortMode) => {
+  const normalizedMode = normalizeHistogramSortMode(sortMode);
+  if (normalizedMode === HISTOGRAM_SORT_CANONICAL) return asArray(bins);
+  return asArray(bins)
+    .map((bin, index) => ({
+      bin,
+      index,
+      value: Number(bin?.value),
+    }))
+    .sort((left, right) => {
+      const leftValue = Number.isFinite(left.value)
+        ? normalizedMode === HISTOGRAM_SORT_BY_ABS_VALUE
+          ? Math.abs(left.value)
+          : left.value
+        : Number.NEGATIVE_INFINITY;
+      const rightValue = Number.isFinite(right.value)
+        ? normalizedMode === HISTOGRAM_SORT_BY_ABS_VALUE
+          ? Math.abs(right.value)
+          : right.value
+        : Number.NEGATIVE_INFINITY;
+      if (leftValue !== rightValue) return rightValue - leftValue;
+      return left.index - right.index;
+    })
+    .map((entry) => entry.bin);
+};
 
 const normalizeHistogramSelectionState = (bundle, histogramName) => {
   const key = histogramSelectionKey(histogramName);
@@ -1328,7 +1436,14 @@ const normalizeHistogramSelectionState = (bundle, histogramName) => {
             .map(([name, value]) => [name, value === "by_index" ? "by_index" : "by_key"]),
         )
       : Object.fromEntries(selectedHistograms.map((name) => [name, "by_key"]));
-    return { key, selectedHistograms, discreteAlignmentByHistogram };
+    const sortModeByHistogram = isObject(stored.sortModeByHistogram)
+      ? Object.fromEntries(
+          Object.entries(stored.sortModeByHistogram)
+            .filter(([name]) => typeof name === "string")
+            .map(([name, value]) => [name, normalizeHistogramSortMode(value)]),
+        )
+      : Object.fromEntries(selectedHistograms.map((name) => [name, HISTOGRAM_SORT_CANONICAL]));
+    return { key, selectedHistograms, discreteAlignmentByHistogram, sortModeByHistogram };
   }
   const fallbackSelection =
     typeof histogramName === "string" && isObject(bundle?.histograms) && isObject(bundle.histograms[histogramName])
@@ -1338,6 +1453,7 @@ const normalizeHistogramSelectionState = (bundle, histogramName) => {
     key,
     selectedHistograms: fallbackSelection,
     discreteAlignmentByHistogram: Object.fromEntries(fallbackSelection.map((name) => [name, "by_key"])),
+    sortModeByHistogram: Object.fromEntries(fallbackSelection.map((name) => [name, HISTOGRAM_SORT_CANONICAL])),
   };
 };
 
@@ -1555,11 +1671,8 @@ const buildHistogramYDomain = (bins, scale, visibleXRange = null) => {
           .filter((value) => Number.isFinite(value));
   if (values.length === 0) return ["auto", "auto"];
   if (scale === "log") {
-    const positive = values.filter((value) => value > 0);
-    if (positive.length === 0) return ["auto", "auto"];
-    const min = Math.min(...positive);
-    const max = Math.max(...positive);
-    return [Math.max(min / 2, Number.EPSILON), max * 1.08];
+    const transformed = values.map((entry) => signedLog10(entry)).filter((entry) => Number.isFinite(entry));
+    return fitDomain(transformed);
   }
   return fitDomain(values);
 };
@@ -1901,6 +2014,7 @@ const HistogramPanel = ({
   const currentHistogramName = typeof state?.name === "string" ? state.name : null;
   const [localYScale, setLocalYScale] = useState("linear");
   const [localXScale, setLocalXScale] = useState("linear");
+  const [localSortMode, setLocalSortMode] = useState(HISTOGRAM_SORT_CANONICAL);
   const [localShowRelativeErrors, setLocalShowRelativeErrors] = useState(() => {
     const pid = state?.panel_id || "";
     return String(pid).startsWith("pdf_adaptation_") ? false : true;
@@ -1912,7 +2026,18 @@ const HistogramPanel = ({
     : readZoomFromPanelValue(value, FULL_ZOOM);
   const view = isBundleControlled ? readHistogramBundleView(value) : {};
   const showRelativeErrors = isBundleControlled ? view.show_relative_error !== false : localShowRelativeErrors;
-  const bins = useMemo(() => buildHistogramData(state?.bins), [state?.bins]);
+  const requestedSortMode = isBundleControlled
+    ? normalizeHistogramSortMode(
+        isObject(view?.sort_mode_by_histogram) && currentHistogramName
+          ? view.sort_mode_by_histogram[currentHistogramName]
+          : HISTOGRAM_SORT_CANONICAL,
+      )
+    : normalizeHistogramSortMode(localSortMode);
+  const baseCanonicalBins = useMemo(() => buildHistogramData(state?.bins), [state?.bins]);
+  const bins = useMemo(() => {
+    const isDiscreteHistogram = baseCanonicalBins.some((bin) => bin && (bin.label != null || bin.bin_id != null));
+    return isDiscreteHistogram ? sortHistogramBinsByMode(baseCanonicalBins, requestedSortMode) : baseCanonicalBins;
+  }, [baseCanonicalBins, requestedSortMode]);
   const stepData = useMemo(() => buildHistogramRenderData(state?.bins, yScale), [state?.bins, yScale]);
   const relativeErrorData = useMemo(() => buildRelativeErrorStepData(state?.bins), [state?.bins]);
   // Detect discrete histograms: presence of bin labels/bin_id or explicit discrete ordering
@@ -1930,13 +2055,22 @@ const HistogramPanel = ({
       // fallback to range if available
       const start = Number(bin?.start);
       const stop = Number(bin?.stop);
-      if (Number.isFinite(start) && Number.isFinite(stop)) return `${formatScientific(start, 4)}→${formatScientific(stop,4)}`;
+      if (Number.isFinite(start) && Number.isFinite(stop))
+        return `${formatScientific(start, 4)}→${formatScientific(stop, 4)}`;
       return `#${idx}`;
     });
   }, [isDiscrete, bins]);
   const discreteRelativeErrorData = useMemo(() => buildDiscreteRelativeErrorData(bins), [bins]);
   const effectiveXScale = isDiscrete ? "linear" : xScale;
   const discreteBaseKeys = useMemo(() => bins.map((bin, index) => discreteHistogramBinKey(bin, index)), [bins]);
+  const discreteBaseSortedCanonicalIndices = useMemo(() => {
+    if (!isDiscrete) return [];
+    const canonicalIndexByBin = new Map(asArray(baseCanonicalBins).map((bin, index) => [bin, index]));
+    return asArray(bins).map((bin) => {
+      const index = canonicalIndexByBin.get(bin);
+      return Number.isFinite(index) ? index : -1;
+    });
+  }, [baseCanonicalBins, bins, isDiscrete]);
   const comparedBundleSelections = useMemo(
     () =>
       asArray(uploadedBundles).map((bundle) => ({
@@ -1957,26 +2091,22 @@ const HistogramPanel = ({
             if (!histogram) return null;
             if (histogramIsDiscrete(histogram) !== isDiscrete) return null;
             const discreteMatchMode =
-              selectionState.discreteAlignmentByHistogram?.[selectedName] === "by_index"
-                ? "by_index"
-                : "by_key";
-            const color =
-              histogramOverlayColors[(bundleIndex * 3 + selectedIndex) % histogramOverlayColors.length];
+              selectionState.discreteAlignmentByHistogram?.[selectedName] === "by_index" ? "by_index" : "by_key";
+            const color = histogramOverlayColors[(bundleIndex * 3 + selectedIndex) % histogramOverlayColors.length];
             const seriesLabel = `${bundle.label}: ${selectedName}`;
             if (isDiscrete) {
-              const overlayBins = asArray(histogram.bins);
+              const overlayCanonicalBins = buildHistogramData(histogram.bins);
               const overlayBinByKey = new Map(
-                overlayBins.map((bin, index) => [discreteHistogramBinKey(bin, index), bin]),
+                overlayCanonicalBins.map((bin, index) => [discreteHistogramBinKey(bin, index), bin]),
               );
               const values =
                 discreteMatchMode === "by_index"
-                  ? discreteBaseKeys.map((_, index) => {
-                      const bin = overlayBins[index];
+                  ? discreteBaseSortedCanonicalIndices.map((sourceIndex) => {
+                      const bin = sourceIndex >= 0 ? overlayCanonicalBins[sourceIndex] : null;
                       if (!bin) return null;
                       const numeric = Number(bin?.value);
                       if (!Number.isFinite(numeric)) return null;
-                      if (yScale === "log" && numeric <= 0) return null;
-                      return numeric;
+                      return yScale === "log" ? signedLog10(numeric) : numeric;
                     })
                   : (() => {
                       return discreteBaseKeys.map((key) => {
@@ -1984,14 +2114,13 @@ const HistogramPanel = ({
                         if (!bin) return null;
                         const numeric = Number(bin?.value);
                         if (!Number.isFinite(numeric)) return null;
-                        if (yScale === "log" && numeric <= 0) return null;
-                        return numeric;
+                        return yScale === "log" ? signedLog10(numeric) : numeric;
                       });
                     })();
               const relative =
                 discreteMatchMode === "by_index"
-                  ? discreteBaseKeys.map((_, index) => {
-                      const bin = overlayBins[index];
+                  ? discreteBaseSortedCanonicalIndices.map((sourceIndex) => {
+                      const bin = sourceIndex >= 0 ? overlayCanonicalBins[sourceIndex] : null;
                       if (!bin) return null;
                       const value = Number(bin?.value);
                       const error = Number(bin?.error);
@@ -2012,16 +2141,22 @@ const HistogramPanel = ({
                 if (!Number.isFinite(value)) return null;
                 const sourceBin =
                   discreteMatchMode === "by_index"
-                    ? overlayBins[index]
+                    ? (() => {
+                        const sourceIndex = discreteBaseSortedCanonicalIndices[index];
+                        return sourceIndex >= 0 ? overlayCanonicalBins[sourceIndex] : null;
+                      })()
                     : (() => {
                         const key = discreteBaseKeys[index];
                         return key ? overlayBinByKey.get(key) || null : null;
                       })();
                 const err = Number(sourceBin?.error);
                 if (!Number.isFinite(err) || err <= 0) return null;
-                const yLow = value - Math.abs(err);
-                const yHigh = value + Math.abs(err);
-                if (yScale === "log" && yLow <= 0) return null;
+                const sourceValue = Number(sourceBin?.value);
+                if (!Number.isFinite(sourceValue)) return null;
+                const yLowRaw = sourceValue - Math.abs(err);
+                const yHighRaw = sourceValue + Math.abs(err);
+                const yLow = yScale === "log" ? signedLog10(yLowRaw) : yLowRaw;
+                const yHigh = yScale === "log" ? signedLog10(yHighRaw) : yHighRaw;
                 return [index, yLow, yHigh];
               });
               return {
@@ -2045,10 +2180,11 @@ const HistogramPanel = ({
                 const y = Number(bin?.value);
                 const err = Number(bin?.error);
                 if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(err) || err <= 0) return null;
-                const yLow = y - Math.abs(err);
-                const yHigh = y + Math.abs(err);
+                const yLowRaw = y - Math.abs(err);
+                const yHighRaw = y + Math.abs(err);
+                const yLow = yScale === "log" ? signedLog10(yLowRaw) : yLowRaw;
+                const yHigh = yScale === "log" ? signedLog10(yHighRaw) : yHighRaw;
                 if (effectiveXScale === "log" && x <= 0) return null;
-                if (yScale === "log" && yLow <= 0) return null;
                 return [x, yLow, yHigh];
               })
               .filter(Boolean);
@@ -2063,7 +2199,14 @@ const HistogramPanel = ({
           });
         })
         .filter(Boolean),
-    [comparedBundleSelections, discreteBaseKeys, effectiveXScale, isDiscrete, yScale],
+    [
+      comparedBundleSelections,
+      discreteBaseKeys,
+      discreteBaseSortedCanonicalIndices,
+      effectiveXScale,
+      isDiscrete,
+      yScale,
+    ],
   );
 
   const xDomain = useMemo(() => {
@@ -2095,17 +2238,20 @@ const HistogramPanel = ({
           const err = Number(bin?.error);
           if (isDiscrete) {
             if (!Number.isFinite(y) || !Number.isFinite(err) || err <= 0) return null;
-            const yLow = y - Math.abs(err);
-            const yHigh = y + Math.abs(err);
-            return yLow <= 0 && yScale === "log" ? null : [index, yLow, yHigh];
+            const yLowRaw = y - Math.abs(err);
+            const yHighRaw = y + Math.abs(err);
+            const yLow = yScale === "log" ? signedLog10(yLowRaw) : yLowRaw;
+            const yHigh = yScale === "log" ? signedLog10(yHighRaw) : yHighRaw;
+            return [index, yLow, yHigh];
           }
           if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(err) || err <= 0) {
             return null;
           }
-          const yLow = y - Math.abs(err);
-          const yHigh = y + Math.abs(err);
+          const yLowRaw = y - Math.abs(err);
+          const yHighRaw = y + Math.abs(err);
+          const yLow = yScale === "log" ? signedLog10(yLowRaw) : yLowRaw;
+          const yHigh = yScale === "log" ? signedLog10(yHighRaw) : yHighRaw;
           if (effectiveXScale === "log" && x <= 0) return null;
-          if (yScale === "log" && yLow <= 0) return null;
           return [x, yLow, yHigh];
         })
         .filter(Boolean),
@@ -2117,8 +2263,10 @@ const HistogramPanel = ({
       const barData = bins.map((bin) => {
         const numericValue = Number(bin?.value);
         if (!Number.isFinite(numericValue)) return null;
-        if (yScale === "log" && numericValue <= 0) return null;
-        return numericValue;
+        return {
+          value: yScale === "log" ? signedLog10(numericValue) : numericValue,
+          rawValue: numericValue,
+        };
       });
       const discreteBarSeriesCount = 1 + overlaySeries.length;
       return {
@@ -2139,10 +2287,10 @@ const HistogramPanel = ({
           nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
         },
         yAxis: {
-          type: yScale === "log" ? "log" : "value",
-          min: yScale === "log" ? Math.max(Number.EPSILON, yDomain[0] || Number.EPSILON) : yDomain[0],
-          max: yScale === "log" ? null : yDomain[1],
-          axisLabel: baseAxisLabel,
+          type: "value",
+          min: yDomain[0],
+          max: yDomain[1],
+          axisLabel: yScale === "log" ? { ...baseAxisLabel, formatter: formatSignedLogAxisValue } : baseAxisLabel,
           splitLine: { lineStyle: { color: gridColor } },
         },
         tooltip: {
@@ -2152,7 +2300,7 @@ const HistogramPanel = ({
             const label = categoriesData[idx] ?? String(idx);
             const val = Number(bins[idx]?.value);
             const err = Number(bins[idx]?.error);
-            return `${escapeXml(label)}: ${formatScientific(val, 6)} ${Number.isFinite(err) && err > 0 ? `(±${formatScientific(err,6)})` : ""}`;
+            return `${escapeXml(label)}: ${formatScientific(val, 6)} ${Number.isFinite(err) && err > 0 ? `(±${formatScientific(err, 6)})` : ""}`;
           },
         },
         dataZoom: buildDataZoom(zoomRange, false),
@@ -2173,7 +2321,12 @@ const HistogramPanel = ({
             data: barData,
             barCategoryGap: DISCRETE_BAR_CATEGORY_GAP,
             barGap: DISCRETE_BAR_GAP,
-            itemStyle: { color: "#005f73" },
+            itemStyle:
+              yScale === "log"
+                ? {
+                    color: (params) => histogramSignColorFromRaw(params?.data?.rawValue),
+                  }
+                : { color: "#005f73" },
           },
           ...overlaySeries.flatMap((overlay, index) => {
             const slotIndex = index + 1;
@@ -2205,18 +2358,71 @@ const HistogramPanel = ({
       };
     }
 
-    const valueSeriesData = stepData
-      .map((point) => [Number(point?.x), Number(point?.y)])
-      .filter(([x]) => Number.isFinite(x) && (effectiveXScale !== "log" || x > 0));
-    const baseSeries = {
-      type: "line",
-      name: "value",
-      data: valueSeriesData,
-      step: "end",
-      showSymbol: false,
-      lineStyle: { width: 1.35, color: "#005f73" },
-      connectNulls: false,
-    };
+    const stepSeriesPoints = stepData
+      .map((point) => ({
+        x: Number(point?.x),
+        y: Number(point?.y),
+        rawY: Number(point?.raw_y ?? point?.y),
+      }))
+      .filter(
+        (point) => Number.isFinite(point.x) && Number.isFinite(point.y) && (effectiveXScale !== "log" || point.x > 0),
+      );
+    const valueSeriesData = stepSeriesPoints.map((point) => [point.x, point.y]);
+    const positiveSeriesData =
+      yScale === "log"
+        ? stepSeriesPoints.map((point) => (point.rawY > 0 ? [point.x, point.y] : [point.x, null]))
+        : valueSeriesData;
+    const negativeSeriesData =
+      yScale === "log" ? stepSeriesPoints.map((point) => (point.rawY < 0 ? [point.x, point.y] : [point.x, null])) : [];
+    const zeroSeriesData =
+      yScale === "log"
+        ? stepSeriesPoints.map((point) => (point.rawY === 0 ? [point.x, point.y] : [point.x, null]))
+        : [];
+    const valueSeries =
+      yScale === "log"
+        ? [
+            {
+              type: "line",
+              name: "value (+)",
+              data: positiveSeriesData,
+              step: "end",
+              showSymbol: false,
+              lineStyle: { width: 1.35, color: HISTOGRAM_POSITIVE_COLOR },
+              itemStyle: { color: HISTOGRAM_POSITIVE_COLOR },
+              connectNulls: false,
+            },
+            {
+              type: "line",
+              name: "value (-)",
+              data: negativeSeriesData,
+              step: "end",
+              showSymbol: false,
+              lineStyle: { width: 1.35, color: HISTOGRAM_NEGATIVE_COLOR },
+              itemStyle: { color: HISTOGRAM_NEGATIVE_COLOR },
+              connectNulls: false,
+            },
+            {
+              type: "line",
+              name: "value (0)",
+              data: zeroSeriesData,
+              step: "end",
+              showSymbol: false,
+              lineStyle: { width: 1.35, color: HISTOGRAM_ZERO_COLOR },
+              itemStyle: { color: HISTOGRAM_ZERO_COLOR },
+              connectNulls: false,
+            },
+          ]
+        : [
+            {
+              type: "line",
+              name: "value",
+              data: valueSeriesData,
+              step: "end",
+              showSymbol: false,
+              lineStyle: { width: 1.35, color: "#005f73" },
+              connectNulls: false,
+            },
+          ];
     return {
       animation: false,
       grid: baseCartesianGrid,
@@ -2230,20 +2436,26 @@ const HistogramPanel = ({
         nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
       },
       yAxis: {
-        type: yScale === "log" ? "log" : "value",
-        min: yScale === "log" ? null : yDomain[0],
-        max: yScale === "log" ? null : yDomain[1],
-        axisLabel: baseAxisLabel,
+        type: "value",
+        min: yDomain[0],
+        max: yDomain[1],
+        axisLabel: yScale === "log" ? { ...baseAxisLabel, formatter: formatSignedLogAxisValue } : baseAxisLabel,
         splitLine: { lineStyle: { color: gridColor } },
       },
       tooltip: {
         trigger: "axis",
-        valueFormatter: (value) => (Number.isFinite(Number(value)) ? formatScientific(Number(value), 6) : "n/a"),
+        valueFormatter: (axisValue) => {
+          const numeric = Number(axisValue);
+          if (!Number.isFinite(numeric)) return "n/a";
+          return yScale === "log" ? formatSignedLogAxisValue(numeric) : formatScientific(numeric, 6);
+        },
       },
       dataZoom: buildDataZoom(zoomRange, false),
       series: [
-        ...(showRelativeErrors && Array.isArray(binErrorData) && binErrorData.length > 0 ? [buildErrorBarSeries({ name: "error", data: binErrorData })] : []),
-        baseSeries,
+        ...(showRelativeErrors && Array.isArray(binErrorData) && binErrorData.length > 0
+          ? [buildErrorBarSeries({ name: "error", data: binErrorData })]
+          : []),
+        ...valueSeries,
         ...overlaySeries.flatMap((overlay) => [
           ...(Array.isArray(overlay.absError) && overlay.absError.length > 0
             ? [buildErrorBarSeries({ name: `${overlay.name} error`, data: overlay.absError, color: overlay.color })]
@@ -2509,6 +2721,40 @@ const HistogramPanel = ({
                 <MenuItem value="log">X Log</MenuItem>
               </Select>
             </FormControl>
+            {isDiscrete ? (
+              <FormControl size="small" sx={{ minWidth: 156 }}>
+                <Select
+                  value={requestedSortMode}
+                  onChange={(event) => {
+                    const next = normalizeHistogramSortMode(event.target.value);
+                    if (
+                      isBundleControlled &&
+                      sourcePanelId &&
+                      typeof onValueChange === "function" &&
+                      currentHistogramName
+                    ) {
+                      onValueChange(
+                        sourcePanelId,
+                        writeHistogramBundlePanelValue(value, {
+                          sortModeByHistogram: { [currentHistogramName]: next },
+                        }),
+                        false,
+                      );
+                      return;
+                    }
+                    setLocalSortMode(next);
+                  }}
+                  sx={{
+                    fontSize: "0.875rem",
+                    ".MuiSelect-select": { py: 0.75 },
+                  }}
+                >
+                  <MenuItem value={HISTOGRAM_SORT_CANONICAL}>Default</MenuItem>
+                  <MenuItem value={HISTOGRAM_SORT_BY_VALUE}>By Value</MenuItem>
+                  <MenuItem value={HISTOGRAM_SORT_BY_ABS_VALUE}>By |Value|</MenuItem>
+                </Select>
+              </FormControl>
+            ) : null}
             <FormControlLabel
               control={
                 <Switch
@@ -2517,7 +2763,11 @@ const HistogramPanel = ({
                   onChange={(event) => {
                     const next = Boolean(event.target.checked);
                     if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
-                      onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { showRelativeError: next }), false);
+                      onValueChange(
+                        sourcePanelId,
+                        writeHistogramBundlePanelValue(value, { showRelativeError: next }),
+                        false,
+                      );
                       return;
                     }
                     setLocalShowRelativeErrors(next);
@@ -2580,7 +2830,7 @@ const HistogramPanel = ({
                           display: "grid",
                           gridTemplateColumns: {
                             xs: "1fr auto",
-                            sm: isDiscrete ? "minmax(0, 200px) 150px auto" : "minmax(0, 220px) auto",
+                            sm: isDiscrete ? "minmax(0, 200px) 150px 150px auto" : "minmax(0, 220px) auto",
                           },
                           gap: 0.75,
                           alignItems: "center",
@@ -2595,13 +2845,20 @@ const HistogramPanel = ({
                               const nextDiscreteAlignmentByHistogram = {
                                 ...(selectionState.discreteAlignmentByHistogram || {}),
                               };
+                              const nextSortModeByHistogram = {
+                                ...(selectionState.sortModeByHistogram || {}),
+                              };
                               const oldName = selectionState.selectedHistograms[comparedIndex];
                               const nextName = nextSelectedHistograms[comparedIndex];
                               if (oldName && oldName !== nextName && !nextSelectedHistograms.includes(oldName)) {
                                 delete nextDiscreteAlignmentByHistogram[oldName];
+                                delete nextSortModeByHistogram[oldName];
                               }
                               if (nextName && !nextDiscreteAlignmentByHistogram[nextName]) {
                                 nextDiscreteAlignmentByHistogram[nextName] = "by_key";
+                              }
+                              if (nextName && !nextSortModeByHistogram[nextName]) {
+                                nextSortModeByHistogram[nextName] = HISTOGRAM_SORT_CANONICAL;
                               }
                               onUpdateBundleSelection?.(
                                 sourcePanelId,
@@ -2609,6 +2866,7 @@ const HistogramPanel = ({
                                 currentHistogramName,
                                 nextSelectedHistograms,
                                 nextDiscreteAlignmentByHistogram,
+                                nextSortModeByHistogram,
                               );
                             }}
                             sx={{ minWidth: 140, fontSize: "0.8125rem", ".MuiSelect-select": { py: 0.625 } }}
@@ -2620,6 +2878,32 @@ const HistogramPanel = ({
                             ))}
                           </Select>
                         </FormControl>
+                        {isDiscrete ? (
+                          <FormControl size="small">
+                            <Select
+                              value={normalizeHistogramSortMode(selectionState.sortModeByHistogram?.[comparedName])}
+                              onChange={(event) => {
+                                const nextSortModeByHistogram = {
+                                  ...(selectionState.sortModeByHistogram || {}),
+                                  [comparedName]: normalizeHistogramSortMode(event.target.value),
+                                };
+                                onUpdateBundleSelection?.(
+                                  sourcePanelId,
+                                  bundle.id,
+                                  currentHistogramName,
+                                  selectionState.selectedHistograms,
+                                  selectionState.discreteAlignmentByHistogram,
+                                  nextSortModeByHistogram,
+                                );
+                              }}
+                              sx={{ minWidth: 140, fontSize: "0.8125rem", ".MuiSelect-select": { py: 0.625 } }}
+                            >
+                              <MenuItem value={HISTOGRAM_SORT_CANONICAL}>Canonical</MenuItem>
+                              <MenuItem value={HISTOGRAM_SORT_BY_VALUE}>By Value</MenuItem>
+                              <MenuItem value={HISTOGRAM_SORT_BY_ABS_VALUE}>By |Value|</MenuItem>
+                            </Select>
+                          </FormControl>
+                        ) : null}
                         {isDiscrete ? (
                           <FormControl size="small">
                             <Select
@@ -2639,6 +2923,7 @@ const HistogramPanel = ({
                                   currentHistogramName,
                                   selectionState.selectedHistograms,
                                   nextDiscreteAlignmentByHistogram,
+                                  selectionState.sortModeByHistogram,
                                 );
                               }}
                               sx={{ minWidth: 140, fontSize: "0.8125rem", ".MuiSelect-select": { py: 0.625 } }}
@@ -2653,12 +2938,7 @@ const HistogramPanel = ({
                           variant="text"
                           color="error"
                           onClick={() =>
-                            onRemoveComparedHistogram?.(
-                              sourcePanelId,
-                              bundle.id,
-                              currentHistogramName,
-                              comparedIndex,
-                            )
+                            onRemoveComparedHistogram?.(sourcePanelId, bundle.id, currentHistogramName, comparedIndex)
                           }
                         >
                           Remove
@@ -2901,6 +3181,7 @@ const TablePanel = ({
 const ProgressPanel = ({ title, state }) => {
   const current = Number(state?.current);
   const total = Number(state?.total);
+  const eta = formatEtaSeconds(state?.eta_seconds);
   const progress = Number.isFinite(current) && Number.isFinite(total) && total > 0 ? (current / total) * 100 : 0;
   return (
     <Card variant="outlined">
@@ -2916,6 +3197,11 @@ const ProgressPanel = ({ title, state }) => {
           variant={Number.isFinite(total) && total > 0 ? "determinate" : "indeterminate"}
           value={progress}
         />
+        {eta ? (
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            ETA: {eta}
+          </Typography>
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -3387,7 +3673,14 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
     }));
   }, []);
   const handleUpdateHistogramBundleSelection = useCallback(
-    (panelId, bundleId, histogramName, selectedHistograms, discreteAlignmentByHistogram = {}) => {
+    (
+      panelId,
+      bundleId,
+      histogramName,
+      selectedHistograms,
+      discreteAlignmentByHistogram = {},
+      sortModeByHistogram = {},
+    ) => {
       if (!panelId || !bundleId) return;
       const key = histogramSelectionKey(histogramName);
       setHistogramBundlesByPanel((current) => ({
@@ -3406,6 +3699,11 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
                   Object.entries(isObject(discreteAlignmentByHistogram) ? discreteAlignmentByHistogram : {})
                     .filter(([name, value]) => typeof name === "string" && typeof value === "string")
                     .map(([name, value]) => [name, value === "by_index" ? "by_index" : "by_key"]),
+                ),
+                sortModeByHistogram: Object.fromEntries(
+                  Object.entries(isObject(sortModeByHistogram) ? sortModeByHistogram : {})
+                    .filter(([name]) => typeof name === "string")
+                    .map(([name, value]) => [name, normalizeHistogramSortMode(value)]),
                 ),
               },
             },
@@ -3434,6 +3732,11 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
                   nextSelectedHistograms.includes(name),
                 ),
               ),
+              sortModeByHistogram: Object.fromEntries(
+                Object.entries(selection.sortModeByHistogram || {}).filter(([name]) =>
+                  nextSelectedHistograms.includes(name),
+                ),
+              ),
             },
           },
         };
@@ -3450,14 +3753,11 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
         const histogramNames = Object.keys(bundle?.histograms || {}).filter(
           (name) => histogramIsDiscrete(bundle?.histograms?.[name]) === Boolean(currentHistogramIsDiscrete),
         );
-        const used = new Set(
-          asArray(selection.selectedHistograms).filter((value) => typeof value === "string"),
-        );
+        const used = new Set(asArray(selection.selectedHistograms).filter((value) => typeof value === "string"));
         const preferred =
           typeof histogramName === "string" && histogramNames.includes(histogramName) ? histogramName : null;
-        const candidate = (preferred && !used.has(preferred))
-          ? preferred
-          : histogramNames.find((name) => !used.has(name)) || null;
+        const candidate =
+          preferred && !used.has(preferred) ? preferred : histogramNames.find((name) => !used.has(name)) || null;
         if (typeof candidate !== "string") return bundle;
         return {
           ...bundle,
@@ -3470,6 +3770,10 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
               discreteAlignmentByHistogram: {
                 ...(selection.discreteAlignmentByHistogram || {}),
                 [candidate]: "by_key",
+              },
+              sortModeByHistogram: {
+                ...(selection.sortModeByHistogram || {}),
+                [candidate]: HISTOGRAM_SORT_CANONICAL,
               },
             },
           },

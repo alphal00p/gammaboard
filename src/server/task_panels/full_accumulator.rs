@@ -121,6 +121,7 @@ fn progress_projector(
                 processed as f64,
                 Some(total as f64),
                 Some(unit),
+                None,
             )))
         },
         |_ctx| Ok(None),

@@ -298,6 +298,13 @@ pub enum RunTaskSpec {
         #[serde(default)]
         batch_transforms: Option<Vec<BatchTransformConfig>>,
     },
+    PdfAdaptationPlotLine {
+        geometry: LineRasterGeometry,
+        #[serde(default)]
+        sampler_aggregator: Option<SamplerAggregatorSourceSpec>,
+        #[serde(default)]
+        batch_transforms: Option<Vec<BatchTransformConfig>>,
+    },
     PlotLine {
         geometry: LineRasterGeometry,
         accumulator: PlotAccumulatorKind,
@@ -361,6 +368,25 @@ impl RunTaskSpec {
                 }
                 Ok(())
             }
+            Self::PdfAdaptationPlotLine {
+                geometry,
+                sampler_aggregator,
+                ..
+            } => {
+                geometry.validate()?;
+                if let Some(source) = sampler_aggregator {
+                    match source {
+                        SamplerAggregatorSourceSpec::Config { .. } => {
+                            return Err(
+                                "pdf_adaptation_plot_line sampler_aggregator must be omitted, \"latest\", or { from_name = ... }"
+                                    .to_string(),
+                            );
+                        }
+                        _ => source.validate()?,
+                    }
+                }
+                Ok(())
+            }
             Self::PlotLine { geometry, .. } => geometry.validate(),
         }
     }
@@ -370,6 +396,7 @@ impl RunTaskSpec {
             Self::Sample { .. } => "sample",
             Self::Image { .. } => "image",
             Self::PdfAdaptationImage { .. } => "pdf_adaptation_image",
+            Self::PdfAdaptationPlotLine { .. } => "pdf_adaptation_plot_line",
             Self::PlotLine { .. } => "plot_line",
         }
     }
@@ -385,6 +412,13 @@ impl RunTaskSpec {
             Self::PdfAdaptationImage { geometry, .. } => {
                 Some(SamplerAggregatorConfig::PdfAdaptationRasterPlane {
                     params: RasterPlaneSamplerParams {
+                        geometry: geometry.clone(),
+                    },
+                })
+            }
+            Self::PdfAdaptationPlotLine { geometry, .. } => {
+                Some(SamplerAggregatorConfig::PdfAdaptationRasterLine {
+                    params: RasterLineSamplerParams {
                         geometry: geometry.clone(),
                     },
                 })
@@ -417,6 +451,15 @@ impl RunTaskSpec {
                 }
                 Some(SamplerAggregatorSourceSpec::Config { .. }) => None,
             },
+            Self::PdfAdaptationPlotLine {
+                sampler_aggregator, ..
+            } => match sampler_aggregator {
+                None | Some(SamplerAggregatorSourceSpec::Latest(_)) => Some(SourceRefSpec::Latest),
+                Some(SamplerAggregatorSourceSpec::FromName { from_name }) => {
+                    Some(SourceRefSpec::FromName(from_name.clone()))
+                }
+                Some(SamplerAggregatorSourceSpec::Config { .. }) => None,
+            },
             Self::Image { .. } | Self::PlotLine { .. } => None,
         }
     }
@@ -428,7 +471,10 @@ impl RunTaskSpec {
                 ..
             } => Some(config.clone()),
             Self::Sample { .. } => None,
-            Self::Image { .. } | Self::PdfAdaptationImage { .. } | Self::PlotLine { .. } => None,
+            Self::Image { .. }
+            | Self::PdfAdaptationImage { .. }
+            | Self::PdfAdaptationPlotLine { .. }
+            | Self::PlotLine { .. } => None,
         }
     }
 
@@ -441,6 +487,9 @@ impl RunTaskSpec {
                 batch_transforms, ..
             }
             | Self::PdfAdaptationImage {
+                batch_transforms, ..
+            }
+            | Self::PdfAdaptationPlotLine {
                 batch_transforms, ..
             }
             | Self::PlotLine {
@@ -458,7 +507,10 @@ impl RunTaskSpec {
                 }
                 Some(AccumulatorSourceSpec::Config { .. }) => None,
             },
-            Self::Image { .. } | Self::PdfAdaptationImage { .. } | Self::PlotLine { .. } => None,
+            Self::Image { .. }
+            | Self::PdfAdaptationImage { .. }
+            | Self::PdfAdaptationPlotLine { .. }
+            | Self::PlotLine { .. } => None,
         }
     }
 
@@ -484,7 +536,9 @@ impl RunTaskSpec {
                 ..
             } => Ok(Some(config.clone())),
             Self::Sample { .. } => Ok(None),
-            Self::PdfAdaptationImage { .. } => Ok(Some(AccumulatorConfig::Empty)),
+            Self::PdfAdaptationImage { .. } | Self::PdfAdaptationPlotLine { .. } => {
+                Ok(Some(AccumulatorConfig::Empty))
+            }
             Self::Image { accumulator, .. } | Self::PlotLine { accumulator, .. } => {
                 Ok(Some(accumulator.full_config()))
             }
@@ -496,6 +550,7 @@ impl RunTaskSpec {
             Self::Sample { stop_condition, .. } => stop_condition.max_samples,
             Self::Image { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::PdfAdaptationImage { geometry, .. } => Some(geometry.nr_points() as i64),
+            Self::PdfAdaptationPlotLine { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::PlotLine { geometry, .. } => Some(geometry.nr_points() as i64),
         }
     }
@@ -503,14 +558,20 @@ impl RunTaskSpec {
     pub fn sample_stop_condition(&self) -> Option<&SampleStopCondition> {
         match self {
             Self::Sample { stop_condition, .. } => Some(stop_condition),
-            Self::Image { .. } | Self::PdfAdaptationImage { .. } | Self::PlotLine { .. } => None,
+            Self::Image { .. }
+            | Self::PdfAdaptationImage { .. }
+            | Self::PdfAdaptationPlotLine { .. }
+            | Self::PlotLine { .. } => None,
         }
     }
 
     pub fn sample_queue_tuning(&self) -> Option<&SamplerQueueTuning> {
         match self {
             Self::Sample { queue_tuning, .. } => queue_tuning.as_ref(),
-            Self::Image { .. } | Self::PdfAdaptationImage { .. } | Self::PlotLine { .. } => None,
+            Self::Image { .. }
+            | Self::PdfAdaptationImage { .. }
+            | Self::PdfAdaptationPlotLine { .. }
+            | Self::PlotLine { .. } => None,
         }
     }
 
@@ -589,6 +650,18 @@ impl IntoPreflightTask for RunTaskSpec {
             } => {
                 geometry.reduce_for_preflight(4, 4);
                 Ok(Some(Self::PdfAdaptationImage {
+                    geometry,
+                    sampler_aggregator,
+                    batch_transforms,
+                }))
+            }
+            Self::PdfAdaptationPlotLine {
+                mut geometry,
+                sampler_aggregator,
+                batch_transforms,
+            } => {
+                geometry.reduce_for_preflight(8);
+                Ok(Some(Self::PdfAdaptationPlotLine {
                     geometry,
                     sampler_aggregator,
                     batch_transforms,
@@ -1006,6 +1079,54 @@ mod tests {
                     start: 0.0,
                     stop: 1.0,
                     count: 4,
+                },
+                discrete: Vec::new(),
+            },
+            sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
+                config: SamplerAggregatorConfig::NaiveMonteCarlo {
+                    params: NaiveMonteCarloSamplerParams::default(),
+                },
+            }),
+            batch_transforms: None,
+        };
+
+        assert!(task.validate().is_err());
+    }
+
+    #[test]
+    fn pdf_adaptation_plot_line_task_defaults_sampler_source_to_latest() {
+        let task = RunTaskSpec::PdfAdaptationPlotLine {
+            geometry: LineRasterGeometry {
+                offset: vec![0.0, 0.0],
+                direction: vec![1.0, 0.0],
+                linspace: Linspace {
+                    start: 0.0,
+                    stop: 1.0,
+                    count: 8,
+                },
+                discrete: Vec::new(),
+            },
+            sampler_aggregator: None,
+            batch_transforms: None,
+        };
+
+        assert_eq!(task.sample_sampler_source(), Some(SourceRefSpec::Latest));
+        assert_eq!(
+            task.new_accumulator_config().unwrap(),
+            Some(AccumulatorConfig::Empty)
+        );
+    }
+
+    #[test]
+    fn pdf_adaptation_plot_line_task_rejects_inline_sampler_config() {
+        let task = RunTaskSpec::PdfAdaptationPlotLine {
+            geometry: LineRasterGeometry {
+                offset: vec![0.0, 0.0],
+                direction: vec![1.0, 0.0],
+                linspace: Linspace {
+                    start: 0.0,
+                    stop: 1.0,
+                    count: 8,
                 },
                 discrete: Vec::new(),
             },

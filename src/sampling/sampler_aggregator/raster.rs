@@ -23,6 +23,11 @@ pub struct PdfAdaptationRasterPlaneSamplerParams {
     pub geometry: PlaneRasterGeometry,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PdfAdaptationRasterLineSamplerParams {
+    pub geometry: LineRasterGeometry,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RasterPlaneSamplerSnapshot {
     params: RasterPlaneSamplerParams,
@@ -40,6 +45,16 @@ pub struct RasterLineSamplerSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PdfAdaptationRasterPlaneSamplerSnapshot {
     params: PdfAdaptationRasterPlaneSamplerParams,
+    next_index: usize,
+    stride: usize,
+    ingested_samples: usize,
+    output_state: PdfAdaptationImageOutputState,
+    source_sampler_snapshot: SamplerAggregatorSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PdfAdaptationRasterLineSamplerSnapshot {
+    params: PdfAdaptationRasterLineSamplerParams,
     next_index: usize,
     stride: usize,
     ingested_samples: usize,
@@ -79,6 +94,16 @@ pub struct RasterLineSampler {
 
 pub struct PdfAdaptationRasterPlaneSampler {
     params: PdfAdaptationRasterPlaneSamplerParams,
+    next_index: usize,
+    stride: usize,
+    ingested_samples: usize,
+    output_state: PdfAdaptationImageOutputState,
+    source_sampler_snapshot: SamplerAggregatorSnapshot,
+    source_sampler: Box<dyn SamplerAggregator>,
+}
+
+pub struct PdfAdaptationRasterLineSampler {
+    params: PdfAdaptationRasterLineSamplerParams,
     next_index: usize,
     stride: usize,
     ingested_samples: usize,
@@ -216,6 +241,94 @@ impl PdfAdaptationRasterPlaneSampler {
 
     fn point_at(&self, index: usize) -> Vec<f64> {
         raster_plane_point(&self.params.geometry, index)
+    }
+
+    fn permuted_index(&self, index: usize) -> usize {
+        permuted_raster_index(index, self.total_samples(), self.stride)
+    }
+
+    fn output_for_frontend(&self) -> PdfAdaptationImagePersistedOutput {
+        PdfAdaptationImagePersistedOutput {
+            processed: self.ingested_samples,
+            abs_integrand_mean: self.output_state.abs_integrand_mean(),
+            signed_integrand_values: self.output_state.signed_integrand_values.clone(),
+            abs_integrand_values: self.output_state.abs_integrand_values.clone(),
+            pdf_values: self.output_state.pdf_values.clone(),
+        }
+    }
+
+    fn record_training_weight(
+        &mut self,
+        canonical_index: usize,
+        training_weight: f64,
+    ) -> Result<(), EngineError> {
+        if !training_weight.is_finite() {
+            self.output_state.signed_integrand_values[canonical_index] = None;
+            self.output_state.abs_integrand_values[canonical_index] = None;
+            self.output_state.pdf_values[canonical_index] = None;
+            return Ok(());
+        }
+
+        let point = (
+            self.params.geometry.discrete.clone(),
+            self.point_at(canonical_index),
+        );
+        self.output_state.signed_integrand_values[canonical_index] = Some(training_weight);
+        self.output_state.abs_integrand_values[canonical_index] = Some(training_weight.abs());
+        self.output_state.pdf_values[canonical_index] = self
+            .source_sampler
+            .pdf(&point)?
+            .filter(|pdf| pdf.is_finite());
+        self.output_state.abs_integrand_sum += training_weight.abs();
+        self.output_state.abs_integrand_count += 1;
+        Ok(())
+    }
+}
+
+impl PdfAdaptationRasterLineSampler {
+    pub fn from_params_and_snapshot(
+        params: PdfAdaptationRasterLineSamplerParams,
+        source_sampler_snapshot: SamplerAggregatorSnapshot,
+        domain: &Domain,
+    ) -> Result<Self, BuildError> {
+        validate_line_geometry(&params.geometry, domain)?;
+        let total_samples = params.geometry.nr_points();
+        let source_sampler = source_sampler_snapshot.clone().into_runtime(domain)?;
+        Ok(Self {
+            params,
+            next_index: 0,
+            stride: coprime_stride(total_samples),
+            ingested_samples: 0,
+            output_state: PdfAdaptationImageOutputState::new(total_samples),
+            source_sampler_snapshot,
+            source_sampler,
+        })
+    }
+
+    pub fn from_snapshot(
+        snapshot: PdfAdaptationRasterLineSamplerSnapshot,
+        domain: &Domain,
+    ) -> Result<Self, BuildError> {
+        let sampler = Self::from_params_and_snapshot(
+            snapshot.params,
+            snapshot.source_sampler_snapshot,
+            domain,
+        )?;
+        Ok(Self {
+            next_index: snapshot.next_index,
+            stride: snapshot.stride,
+            ingested_samples: snapshot.ingested_samples,
+            output_state: snapshot.output_state,
+            ..sampler
+        })
+    }
+
+    fn total_samples(&self) -> usize {
+        self.params.geometry.nr_points()
+    }
+
+    fn point_at(&self, index: usize) -> Vec<f64> {
+        raster_line_point(&self.params.geometry, index)
     }
 
     fn permuted_index(&self, index: usize) -> usize {
@@ -461,6 +574,86 @@ impl SamplerAggregator for PdfAdaptationRasterPlaneSampler {
     }
 }
 
+impl SamplerAggregator for PdfAdaptationRasterLineSampler {
+    fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
+        validate_line_geometry(&self.params.geometry, domain)
+    }
+
+    fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
+        let remaining = self.total_samples().saturating_sub(self.next_index);
+        if remaining == 0 {
+            Ok(SamplePlan::Pause)
+        } else {
+            Ok(SamplePlan::Produce {
+                nr_samples: remaining,
+            })
+        }
+    }
+
+    fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
+        let remaining = self.total_samples().saturating_sub(self.next_index);
+        let nr_samples = nr_samples.min(remaining);
+        if nr_samples == 0 {
+            return Err(EngineError::engine(
+                "pdf adaptation raster line sampler cannot produce an empty batch",
+            ));
+        }
+        let batch = Batch::from_points((0..nr_samples).map(|row_idx| {
+            Point::new(
+                self.point_at(self.permuted_index(self.next_index + row_idx)),
+                self.params.geometry.discrete.clone(),
+                1.0,
+            )
+        }))
+        .map_err(|err| EngineError::engine(err.to_string()))?;
+        self.next_index += nr_samples;
+        Ok(LatentBatchSpec::from_batch(&batch))
+    }
+
+    fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError> {
+        let total_samples = self.total_samples();
+        if self.ingested_samples + training_weights.len() > total_samples {
+            return Err(EngineError::engine(format!(
+                "pdf adaptation raster line sampler ingest overflow: {} + {} exceeds {}",
+                self.ingested_samples,
+                training_weights.len(),
+                total_samples,
+            )));
+        }
+        for (offset, training_weight) in training_weights.iter().copied().enumerate() {
+            let shuffled_index = self.ingested_samples + offset;
+            let canonical_index = self.permuted_index(shuffled_index);
+            self.record_training_weight(canonical_index, training_weight)?;
+        }
+        self.ingested_samples += training_weights.len();
+        Ok(())
+    }
+
+    fn pdf(&mut self, point: &PdfPoint) -> Result<Option<f64>, EngineError> {
+        self.source_sampler.pdf(point)
+    }
+
+    fn persisted_output(&mut self) -> Result<Option<serde_json::Value>, EngineError> {
+        serde_json::to_value(self.output_for_frontend())
+            .map(Some)
+            .map_err(|err| EngineError::engine(err.to_string()))
+    }
+
+    fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
+        Ok(SamplerAggregatorSnapshot::PdfAdaptationRasterLine {
+            raw: serde_json::to_value(PdfAdaptationRasterLineSamplerSnapshot {
+                params: self.params.clone(),
+                next_index: self.next_index,
+                stride: self.stride,
+                ingested_samples: self.ingested_samples,
+                output_state: self.output_state.clone(),
+                source_sampler_snapshot: self.source_sampler_snapshot.clone(),
+            })
+            .map_err(|err| EngineError::engine(err.to_string()))?,
+        })
+    }
+}
+
 fn raster_plane_point(geometry: &PlaneRasterGeometry, index: usize) -> Vec<f64> {
     let width = geometry.u_linspace.count;
     let u_idx = index % width;
@@ -473,6 +666,16 @@ fn raster_plane_point(geometry: &PlaneRasterGeometry, index: usize) -> Vec<f64> 
         .zip(geometry.u_vector.iter())
         .zip(geometry.v_vector.iter())
         .map(|((offset, basis_u), basis_v)| offset + u * basis_u + v * basis_v)
+        .collect()
+}
+
+fn raster_line_point(geometry: &LineRasterGeometry, index: usize) -> Vec<f64> {
+    let t = linspace_value(&geometry.linspace, index);
+    geometry
+        .offset
+        .iter()
+        .zip(geometry.direction.iter())
+        .map(|(offset, direction)| offset + t * direction)
         .collect()
 }
 

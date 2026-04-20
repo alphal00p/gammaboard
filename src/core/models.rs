@@ -302,6 +302,10 @@ pub struct SamplerRuntimeMetrics {
     #[serde(default)]
     pub sampler_uptime_ms: f64,
     pub completed_samples_per_second: f64,
+    #[serde(default)]
+    pub eta_completed_samples_per_second: f64,
+    #[serde(default)]
+    pub eta_seconds_smoothed: Option<f64>,
     pub batch_size_current: usize,
     pub sampler_tick_busy_ratio: Option<f64>,
     #[serde(default)]

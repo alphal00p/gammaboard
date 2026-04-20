@@ -14,8 +14,8 @@ pub use sampler::{PdfPoint, SamplerAggregator, SamplerAggregatorSnapshot};
 pub use sampler_aggregator::{
     HavanaInferenceSamplerParams, HavanaInferenceSource, HavanaSamplerParams,
     NaiveMonteCarloSamplerParams, PdfAdaptationImagePersistedOutput,
-    PdfAdaptationRasterPlaneSamplerParams, PythonHomogeneousMonteCarloSamplerParams,
-    RasterLineSamplerParams, RasterPlaneSamplerParams,
+    PdfAdaptationRasterLineSamplerParams, PdfAdaptationRasterPlaneSamplerParams,
+    PythonHomogeneousMonteCarloSamplerParams, RasterLineSamplerParams, RasterPlaneSamplerParams,
 };
 
 #[derive(Debug, Clone, Copy, Default)]

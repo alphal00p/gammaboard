@@ -64,6 +64,7 @@ pub struct TaskPanelContext<'a> {
     pub source: TaskPanelCurrentSource<'a>,
     pub panel_state: &'a JsonValue,
     pub completed_samples_per_second: Option<f64>,
+    pub smoothed_eta_seconds: Option<f64>,
 }
 
 impl TaskPanelContext<'_> {
@@ -154,6 +155,7 @@ fn project_current_panels(
     task: &RunTask,
     panel_state: &JsonValue,
     completed_samples_per_second: Option<f64>,
+    smoothed_eta_seconds: Option<f64>,
     current_accumulator: Option<&AccumulatorState>,
     latest_stage_snapshot: Option<&TaskStageSnapshot>,
     latest_persisted_snapshot: Option<&TaskOutputSnapshot>,
@@ -174,6 +176,7 @@ fn project_current_panels(
                     source,
                     panel_state,
                     completed_samples_per_second,
+                    smoothed_eta_seconds,
                 })
                 .transpose()
         })
@@ -215,6 +218,10 @@ impl RunTaskSpec {
             Self::PdfAdaptationImage { geometry, .. } => {
                 pdf_adaptation::projectors(geometry.clone(), crate::core::ImageDisplayMode::Auto)
             }
+            Self::PdfAdaptationPlotLine { geometry, .. } => pdf_adaptation::line_projectors(
+                geometry.clone(),
+                crate::core::LineDisplayMode::Auto,
+            ),
             Self::PlotLine {
                 geometry,
                 display,
@@ -254,6 +261,7 @@ impl TaskPanelSource {
         task: &RunTask,
         panel_state: &JsonValue,
         completed_samples_per_second: Option<f64>,
+        smoothed_eta_seconds: Option<f64>,
         current_accumulator: Option<&AccumulatorState>,
         latest_stage_snapshot: Option<&TaskStageSnapshot>,
         latest_persisted_snapshot: Option<&TaskOutputSnapshot>,
@@ -263,6 +271,7 @@ impl TaskPanelSource {
             task,
             panel_state,
             completed_samples_per_second,
+            smoothed_eta_seconds,
             current_accumulator,
             latest_stage_snapshot,
             latest_persisted_snapshot,
@@ -276,6 +285,7 @@ impl TaskPanelSource {
         task: &RunTask,
         panel_state: &JsonValue,
         completed_samples_per_second: Option<f64>,
+        smoothed_eta_seconds: Option<f64>,
         current_accumulator: Option<&AccumulatorState>,
         latest_stage_snapshot: Option<&TaskStageSnapshot>,
         latest_persisted_snapshot: Option<&TaskOutputSnapshot>,
@@ -287,6 +297,7 @@ impl TaskPanelSource {
             task,
             panel_state,
             completed_samples_per_second,
+            smoothed_eta_seconds,
             current_accumulator,
             latest_stage_snapshot,
             latest_persisted_snapshot,
@@ -797,6 +808,7 @@ mod tests {
                 task,
                 &JsonValue::Object(Default::default()),
                 None,
+                None,
                 Some(accumulator),
                 None,
                 None,
@@ -892,6 +904,7 @@ mod tests {
                 &run_task,
                 &JsonValue::Object(Default::default()),
                 None,
+                None,
                 Some(&accumulator),
                 None,
                 None,
@@ -968,6 +981,7 @@ mod tests {
                 TaskPanelCursor::default(),
                 &run_task,
                 &JsonValue::Object(Default::default()),
+                None,
                 None,
                 Some(&accumulator),
                 None,

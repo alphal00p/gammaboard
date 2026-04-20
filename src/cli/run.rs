@@ -270,7 +270,9 @@ fn format_task_source_ref(
 ) -> String {
     if !matches!(
         task,
-        RunTaskSpec::Sample { .. } | RunTaskSpec::PdfAdaptationImage { .. }
+        RunTaskSpec::Sample { .. }
+            | RunTaskSpec::PdfAdaptationImage { .. }
+            | RunTaskSpec::PdfAdaptationPlotLine { .. }
     ) {
         return String::new();
     }

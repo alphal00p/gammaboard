@@ -106,6 +106,10 @@ pub enum SamplerAggregatorConfig {
         #[serde(flatten)]
         params: RasterPlaneSamplerParams,
     },
+    PdfAdaptationRasterLine {
+        #[serde(flatten)]
+        params: RasterLineSamplerParams,
+    },
     HavanaTraining {
         #[serde(flatten)]
         params: HavanaSamplerParams,

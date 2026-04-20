@@ -14,6 +14,7 @@ pub enum SamplerAggregatorSnapshot {
     RasterPlane { raw: JsonValue },
     RasterLine { raw: JsonValue },
     PdfAdaptationRasterPlane { raw: JsonValue },
+    PdfAdaptationRasterLine { raw: JsonValue },
     HavanaTraining { raw: JsonValue },
     HavanaInference { raw: JsonValue },
     PythonHomogeneousMonteCarlo { raw: JsonValue },
@@ -35,6 +36,9 @@ impl SamplerAggregatorSnapshot {
             ) | (
                 SamplerAggregatorSnapshot::PdfAdaptationRasterPlane { .. },
                 SamplerAggregatorConfig::PdfAdaptationRasterPlane { .. }
+            ) | (
+                SamplerAggregatorSnapshot::PdfAdaptationRasterLine { .. },
+                SamplerAggregatorConfig::PdfAdaptationRasterLine { .. }
             ) | (
                 SamplerAggregatorSnapshot::HavanaTraining { .. },
                 SamplerAggregatorConfig::HavanaTraining { .. }

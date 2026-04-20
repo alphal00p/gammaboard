@@ -27,6 +27,7 @@ use thiserror::Error;
 const MIN_BATCH_SIZE: usize = 16;
 const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.25;
 const COMPLETED_SAMPLES_PER_SECOND_EWMA_ALPHA: f64 = 0.2;
+const ETA_COMPLETED_SAMPLES_PER_SECOND_EWMA_ALPHA: f64 = 0.02;
 const TASK_CONFIG_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerAggregatorRunnerParams {
@@ -106,6 +107,10 @@ struct SamplerRuntimeState {
     ingested_samples_total: i64,
     completed_samples_per_second: f64,
     #[serde(default)]
+    eta_completed_samples_per_second: f64,
+    #[serde(default)]
+    eta_seconds_smoothed: Option<f64>,
+    #[serde(default)]
     sampler_uptime_ms_accumulated: f64,
     #[serde(default)]
     initial_round_trip_snapshot_pending: bool,
@@ -125,6 +130,8 @@ impl Default for SamplerRuntimeState {
             ingested_batches_total: 0,
             ingested_samples_total: 0,
             completed_samples_per_second: 0.0,
+            eta_completed_samples_per_second: 0.0,
+            eta_seconds_smoothed: None,
             sampler_uptime_ms_accumulated: 0.0,
             initial_round_trip_snapshot_pending: false,
             pending_persisted_completed_batches: 0,
@@ -170,6 +177,8 @@ impl SamplerRuntimeState {
             completed_samples_total,
             sampler_uptime_ms,
             completed_samples_per_second: self.completed_samples_per_second,
+            eta_completed_samples_per_second: self.eta_completed_samples_per_second,
+            eta_seconds_smoothed: self.eta_seconds_smoothed,
             batch_size_current: self.batch_size_current,
             sampler_tick_busy_ratio: self.sampler_tick_busy_ratio,
             avg_evaluator_utilization: evaluator_fleet.avg_utilization,
@@ -653,6 +662,88 @@ where
             absolute_error_reached,
             relative_error_reached,
         })
+    }
+
+    fn estimate_eta_seconds_for_current_state(
+        &self,
+        completed_samples_per_second: f64,
+    ) -> Option<f64> {
+        let stop_condition = self.task.task.sample_stop_condition()?;
+        if !completed_samples_per_second.is_finite() || completed_samples_per_second <= 0.0 {
+            return None;
+        }
+        let projection = self.effective_stop_projection();
+        let projected = self.projected_estimate_for_stop(projection);
+        let completed_samples = self.task.nr_completed_samples.max(0) as f64;
+        let mut etas = Vec::new();
+        if let Some(max_samples) = stop_condition.max_samples {
+            let remaining = (max_samples as f64 - completed_samples).max(0.0);
+            etas.push(remaining / completed_samples_per_second);
+        }
+        if let (Some(target), Some(projected)) = (stop_condition.absolute_error, projected) {
+            if projected.error <= target {
+                etas.push(0.0);
+            } else if completed_samples > 0.0
+                && projected.error.is_finite()
+                && target.is_finite()
+                && target > 0.0
+            {
+                let required_total = completed_samples * (projected.error / target).powi(2);
+                let remaining = (required_total - completed_samples).max(0.0);
+                etas.push(remaining / completed_samples_per_second);
+            }
+        }
+        if let (Some(target), Some(projected)) = (stop_condition.relative_error, projected) {
+            let current_relative = Self::relative_error(projected.value, projected.error);
+            if current_relative <= target {
+                etas.push(0.0);
+            } else if completed_samples > 0.0
+                && current_relative.is_finite()
+                && target.is_finite()
+                && target > 0.0
+            {
+                let required_total = completed_samples * (current_relative / target).powi(2);
+                let remaining = (required_total - completed_samples).max(0.0);
+                etas.push(remaining / completed_samples_per_second);
+            }
+        }
+        etas.into_iter().reduce(f64::min)
+    }
+
+    fn eta_smoothing_alpha(elapsed_secs: f64, eta_seconds: f64) -> f64 {
+        // Continuous EMA:
+        // alpha = 1 - exp(-dt / tau(eta))
+        // Larger ETA -> substantially larger tau -> much stronger smoothing.
+        // Smaller ETA -> smaller tau -> faster response.
+        let eta_seconds = eta_seconds.max(0.0);
+        let tau_seconds = (8.0 + 4.0 * eta_seconds.powf(0.6)).clamp(8.0, 86_400.0);
+        let elapsed_secs = elapsed_secs.max(0.0);
+        if elapsed_secs <= 0.0 {
+            return 0.0;
+        }
+        (1.0 - (-elapsed_secs / tau_seconds).exp()).clamp(0.0, 1.0)
+    }
+
+    fn update_smoothed_eta_seconds(&mut self, elapsed: Duration) {
+        let raw_eta = self.estimate_eta_seconds_for_current_state(
+            self.runtime_state.eta_completed_samples_per_second,
+        );
+        let Some(raw_eta) = raw_eta.filter(|value| value.is_finite() && *value >= 0.0) else {
+            return;
+        };
+        let alpha = Self::eta_smoothing_alpha(elapsed.as_secs_f64(), raw_eta);
+        self.runtime_state.eta_seconds_smoothed = match self.runtime_state.eta_seconds_smoothed {
+            Some(previous) if previous.is_finite() && previous > 0.0 && raw_eta > 0.0 => {
+                // Log-domain smoothing damps multiplicative swings (common on ETA).
+                let prev_log = previous.ln();
+                let raw_log = raw_eta.ln();
+                Some((prev_log + alpha * (raw_log - prev_log)).exp())
+            }
+            Some(previous) if previous.is_finite() && previous >= 0.0 => {
+                Some(previous * (1.0 - alpha) + raw_eta * alpha)
+            }
+            _ => Some(raw_eta),
+        };
     }
 
     pub fn task_id(&self) -> i64 {
@@ -1358,8 +1449,9 @@ where
     ) {
         let elapsed_secs = elapsed.as_secs_f64();
         if elapsed_secs > 0.0 {
+            let completed_samples_delta_non_negative = completed_samples_delta.max(0);
             let instantaneous_rate =
-                (completed_samples_delta.max(0) as f64 / elapsed_secs).max(0.0);
+                (completed_samples_delta_non_negative as f64 / elapsed_secs).max(0.0);
             let previous = self.runtime_state.completed_samples_per_second;
             if !previous.is_finite() || previous <= 0.0 {
                 self.runtime_state.completed_samples_per_second = instantaneous_rate;
@@ -1368,7 +1460,18 @@ where
                     * (1.0 - COMPLETED_SAMPLES_PER_SECOND_EWMA_ALPHA)
                     + instantaneous_rate * COMPLETED_SAMPLES_PER_SECOND_EWMA_ALPHA;
             }
+            if completed_samples_delta_non_negative > 0 {
+                let previous_eta_rate = self.runtime_state.eta_completed_samples_per_second;
+                if !previous_eta_rate.is_finite() || previous_eta_rate <= 0.0 {
+                    self.runtime_state.eta_completed_samples_per_second = instantaneous_rate;
+                } else {
+                    self.runtime_state.eta_completed_samples_per_second = previous_eta_rate
+                        * (1.0 - ETA_COMPLETED_SAMPLES_PER_SECOND_EWMA_ALPHA)
+                        + instantaneous_rate * ETA_COMPLETED_SAMPLES_PER_SECOND_EWMA_ALPHA;
+                }
+            }
         }
+        self.update_smoothed_eta_seconds(elapsed);
     }
 }
 

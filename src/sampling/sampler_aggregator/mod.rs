@@ -20,10 +20,11 @@ pub use self::naive_monte_carlo::NaiveMonteCarloSamplerParams;
 pub use self::python::PythonHomogeneousMonteCarloSamplerParams;
 use self::python::{PythonHomogeneousMonteCarloSampler, PythonHomogeneousMonteCarloSnapshot};
 pub use self::raster::{
-    PdfAdaptationImagePersistedOutput, PdfAdaptationRasterPlaneSamplerParams,
-    RasterLineSamplerParams, RasterPlaneSamplerParams,
+    PdfAdaptationImagePersistedOutput, PdfAdaptationRasterLineSamplerParams,
+    PdfAdaptationRasterPlaneSamplerParams, RasterLineSamplerParams, RasterPlaneSamplerParams,
 };
 use self::raster::{
+    PdfAdaptationRasterLineSampler, PdfAdaptationRasterLineSamplerSnapshot,
     PdfAdaptationRasterPlaneSampler, PdfAdaptationRasterPlaneSamplerSnapshot, RasterLineSampler,
     RasterLineSamplerSnapshot, RasterPlaneSampler, RasterPlaneSamplerSnapshot,
 };
@@ -75,6 +76,17 @@ impl SamplerAggregatorSnapshot {
                     snapshot, domain,
                 )?))
             }
+            Self::PdfAdaptationRasterLine { raw } => {
+                let snapshot: PdfAdaptationRasterLineSamplerSnapshot = serde_json::from_value(raw)
+                    .map_err(|err| {
+                        BuildError::build(format!(
+                            "failed to decode pdf adaptation raster line sampler snapshot: {err}"
+                        ))
+                    })?;
+                Ok(Box::new(PdfAdaptationRasterLineSampler::from_snapshot(
+                    snapshot, domain,
+                )?))
+            }
             Self::HavanaTraining { raw } => {
                 let snapshot: HavanaSamplerSnapshot =
                     serde_json::from_value(raw).map_err(|err| {
@@ -114,7 +126,9 @@ impl SamplerAggregatorConfig {
     pub fn requires_training(&self) -> bool {
         matches!(
             self,
-            Self::HavanaTraining { .. } | Self::PdfAdaptationRasterPlane { .. }
+            Self::HavanaTraining { .. }
+                | Self::PdfAdaptationRasterPlane { .. }
+                | Self::PdfAdaptationRasterLine { .. }
         )
     }
 
@@ -124,6 +138,7 @@ impl SamplerAggregatorConfig {
             Self::RasterPlane { .. } => "raster_plane",
             Self::RasterLine { .. } => "raster_line",
             Self::PdfAdaptationRasterPlane { .. } => "pdf_adaptation_raster_plane",
+            Self::PdfAdaptationRasterLine { .. } => "pdf_adaptation_raster_line",
             Self::HavanaTraining { .. } => "havana_training",
             Self::HavanaInference { .. } => "havana_inference",
             Self::PythonHomogeneousMonteCarlo { .. } => "python_homogeneous_monte_carlo",
@@ -164,6 +179,23 @@ impl SamplerAggregatorConfig {
                 Ok(Box::new(
                     PdfAdaptationRasterPlaneSampler::from_params_and_snapshot(
                         crate::sampling::PdfAdaptationRasterPlaneSamplerParams {
+                            geometry: params.geometry.clone(),
+                        },
+                        snapshot,
+                        &domain,
+                    )?,
+                ))
+            }
+            Self::PdfAdaptationRasterLine { params } => {
+                let Some(snapshot) = handoff.and_then(|handoff| handoff.sampler_snapshot.cloned())
+                else {
+                    return Err(BuildError::build(
+                        "pdf_adaptation_raster_line sampler requires a persisted sampler snapshot handoff",
+                    ));
+                };
+                Ok(Box::new(
+                    PdfAdaptationRasterLineSampler::from_params_and_snapshot(
+                        crate::sampling::PdfAdaptationRasterLineSamplerParams {
                             geometry: params.geometry.clone(),
                         },
                         snapshot,

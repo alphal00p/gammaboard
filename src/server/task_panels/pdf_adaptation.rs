@@ -1,11 +1,14 @@
 use super::{
     TaskPanelContext, TaskPanelCurrentSourcePolicy, TaskPanelProjector, panel_projector_with_source,
 };
-use crate::core::{EngineError, ImageDisplayMode, PlaneRasterGeometry};
+use crate::core::{
+    EngineError, ImageDisplayMode, LineDisplayMode, LineRasterGeometry, PlaneRasterGeometry,
+};
 use crate::sampling::PdfAdaptationImagePersistedOutput;
 use crate::server::panels::{
     HistogramBin, ImageColorMode, ImageNormalizationMode, PanelHistoryMode, PanelKind, PanelState,
-    PanelWidth, key_value, key_value_panel, panel_spec, progress_panel, with_panel_width,
+    PanelWidth, PlotPoint, key_value, key_value_panel, panel_spec, progress_panel,
+    scalar_timeseries_panel, with_panel_width,
 };
 
 const HISTOGRAM_BIN_COUNT: usize = 31;
@@ -15,8 +18,8 @@ pub(super) fn projectors(
     _display: ImageDisplayMode,
 ) -> Vec<TaskPanelProjector> {
     vec![
-        progress_projector(geometry.nr_points()),
-        completion_projector(geometry.nr_points()),
+        progress_projector(geometry.nr_points(), "Image Progress", "pixels"),
+        completion_projector(geometry.nr_points(), "Image Completion"),
         summary_projector(),
         image_projector(
             "pdf_adaptation_log_integrand",
@@ -67,6 +70,63 @@ pub(super) fn projectors(
     ]
 }
 
+pub(super) fn line_projectors(
+    geometry: LineRasterGeometry,
+    _display: LineDisplayMode,
+) -> Vec<TaskPanelProjector> {
+    vec![
+        progress_projector(geometry.nr_points(), "Line Progress", "points"),
+        completion_projector(geometry.nr_points(), "Line Completion"),
+        summary_projector(),
+        line_projector(
+            "pdf_adaptation_log_integrand_line",
+            "Log10 Normalized |I| (1D)",
+            PanelWidth::Half,
+            geometry.clone(),
+            ImageKind::LogNormalizedIntegrand,
+        ),
+        line_projector(
+            "pdf_adaptation_log_pdf_line",
+            "Log10 Normalized PDF (1D)",
+            PanelWidth::Half,
+            geometry.clone(),
+            ImageKind::LogNormalizedPdf,
+        ),
+        line_projector(
+            "pdf_adaptation_oversampling_line",
+            "Oversampling: Log10(P / (|I| / <|I|>)) (1D)",
+            PanelWidth::Half,
+            geometry.clone(),
+            ImageKind::Oversampling,
+        ),
+        line_projector(
+            "pdf_adaptation_sign_line",
+            "Sign(I) (1D)",
+            PanelWidth::Half,
+            geometry,
+            ImageKind::Sign,
+        ),
+        histogram_projector(
+            "pdf_adaptation_log_integrand_histogram",
+            "Histogram: Log10 Normalized |I|",
+            PanelWidth::Half,
+            ImageKind::LogNormalizedIntegrand,
+        ),
+        histogram_projector(
+            "pdf_adaptation_log_pdf_histogram",
+            "Histogram: Log10 Normalized PDF",
+            PanelWidth::Half,
+            ImageKind::LogNormalizedPdf,
+        ),
+        histogram_projector(
+            "pdf_adaptation_oversampling_histogram",
+            "Histogram: Oversampling",
+            PanelWidth::Half,
+            ImageKind::Oversampling,
+        ),
+    ]
+}
+
 #[derive(Clone, Copy)]
 enum ImageKind {
     LogNormalizedIntegrand,
@@ -75,12 +135,12 @@ enum ImageKind {
     Sign,
 }
 
-fn progress_projector(total: usize) -> TaskPanelProjector {
+fn progress_projector(total: usize, label: &'static str, unit: &'static str) -> TaskPanelProjector {
     panel_projector_with_source(
         with_panel_width(
             panel_spec(
                 "pdf_adaptation_progress",
-                "Image Progress",
+                label,
                 PanelKind::Progress,
                 PanelHistoryMode::None,
             ),
@@ -93,19 +153,20 @@ fn progress_projector(total: usize) -> TaskPanelProjector {
                 "pdf_adaptation_progress",
                 processed as f64,
                 Some(total as f64),
-                Some("pixels"),
+                Some(unit),
+                None,
             )))
         },
         |_ctx| Ok(None),
     )
 }
 
-fn completion_projector(total: usize) -> TaskPanelProjector {
+fn completion_projector(total: usize, label: &'static str) -> TaskPanelProjector {
     panel_projector_with_source(
         with_panel_width(
             panel_spec(
                 "pdf_adaptation_completion",
-                "Image Completion",
+                label,
                 PanelKind::KeyValue,
                 PanelHistoryMode::None,
             ),
@@ -130,6 +191,34 @@ fn completion_projector(total: usize) -> TaskPanelProjector {
                     ),
                 ],
             )))
+        },
+        |_ctx| Ok(None),
+    )
+}
+
+fn line_projector(
+    panel_id: &'static str,
+    label: &'static str,
+    width: PanelWidth,
+    geometry: LineRasterGeometry,
+    image_kind: ImageKind,
+) -> TaskPanelProjector {
+    panel_projector_with_source(
+        with_panel_width(
+            panel_spec(
+                panel_id,
+                label,
+                PanelKind::ScalarTimeseries,
+                PanelHistoryMode::None,
+            ),
+            width,
+        ),
+        TaskPanelCurrentSourcePolicy::PersistedFirst,
+        move |ctx| {
+            let Some(derived) = current_output(ctx)?.map(DerivedValues::from_output) else {
+                return Ok(None);
+            };
+            build_line_panel(panel_id, &geometry, &derived, image_kind).map(Some)
         },
         |_ctx| Ok(None),
     )
@@ -320,7 +409,7 @@ fn build_image_panel(
     derived: &DerivedValues,
     image_kind: ImageKind,
 ) -> Result<PanelState, EngineError> {
-    validate_lengths(geometry, &derived.output)?;
+    validate_output_length(geometry.nr_points(), &derived.output)?;
     let (values, invalid_indices) = option_values_to_image(derived.values(image_kind));
     Ok(PanelState::Image2d {
         panel_id: panel_id.to_string(),
@@ -341,6 +430,19 @@ fn build_image_panel(
     })
 }
 
+fn build_line_panel(
+    panel_id: &str,
+    geometry: &LineRasterGeometry,
+    derived: &DerivedValues,
+    image_kind: ImageKind,
+) -> Result<PanelState, EngineError> {
+    validate_output_length(geometry.nr_points(), &derived.output)?;
+    Ok(scalar_timeseries_panel(
+        panel_id,
+        line_points(geometry, derived.values(image_kind)),
+    ))
+}
+
 fn histogram_panel(panel_id: &str, derived: &DerivedValues, image_kind: ImageKind) -> PanelState {
     PanelState::Histogram {
         panel_id: panel_id.to_string(),
@@ -348,11 +450,10 @@ fn histogram_panel(panel_id: &str, derived: &DerivedValues, image_kind: ImageKin
     }
 }
 
-fn validate_lengths(
-    geometry: &PlaneRasterGeometry,
+fn validate_output_length(
+    total: usize,
     output: &PdfAdaptationImagePersistedOutput,
 ) -> Result<(), EngineError> {
-    let total = geometry.nr_points();
     if output.signed_integrand_values.len() != total
         || output.abs_integrand_values.len() != total
         || output.pdf_values.len() != total
@@ -366,6 +467,33 @@ fn validate_lengths(
         )));
     }
     Ok(())
+}
+
+fn line_points(geometry: &LineRasterGeometry, values: &[Option<f64>]) -> Vec<PlotPoint> {
+    (0..geometry.linspace.count)
+        .filter_map(|index| {
+            let y = values.get(index).copied().flatten()?;
+            if !y.is_finite() {
+                return None;
+            }
+            Some(PlotPoint {
+                x: line_x_value(geometry, index),
+                y,
+                x_sampler_uptime_ms: None,
+                x_completed_samples_total: None,
+                y_min: None,
+                y_max: None,
+            })
+        })
+        .collect()
+}
+
+fn line_x_value(geometry: &LineRasterGeometry, index: usize) -> f64 {
+    if geometry.linspace.count <= 1 {
+        return geometry.linspace.start;
+    }
+    let t = index as f64 / (geometry.linspace.count - 1) as f64;
+    geometry.linspace.start + t * (geometry.linspace.stop - geometry.linspace.start)
 }
 
 fn option_values_to_image(values: &[Option<f64>]) -> (Vec<f32>, Option<Vec<usize>>) {
@@ -460,8 +588,8 @@ fn finite_mean(values: impl IntoIterator<Item = f64>) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ImageKind, build_image_panel, histogram_bins};
-    use crate::core::{Linspace, PlaneRasterGeometry};
+    use super::{ImageKind, build_image_panel, build_line_panel, histogram_bins};
+    use crate::core::{LineRasterGeometry, Linspace, PlaneRasterGeometry};
     use crate::sampling::PdfAdaptationImagePersistedOutput;
     use crate::server::panels::{ImageNormalizationMode, PanelState};
     use crate::server::task_panels::pdf_adaptation::DerivedValues;
@@ -492,6 +620,19 @@ mod tests {
             signed_integrand_values: vec![Some(-2.0), Some(4.0)],
             abs_integrand_values: vec![Some(2.0), Some(4.0)],
             pdf_values: vec![Some(1.0), Some(2.0)],
+        }
+    }
+
+    fn line_geometry() -> LineRasterGeometry {
+        LineRasterGeometry {
+            offset: vec![0.0, 0.0],
+            direction: vec![1.0, 0.0],
+            linspace: Linspace {
+                start: 0.0,
+                stop: 1.0,
+                count: 2,
+            },
+            discrete: vec![],
         }
     }
 
@@ -560,5 +701,24 @@ mod tests {
         assert!(!bins.is_empty());
         let total_density = bins.iter().map(|bin| bin.value).sum::<f64>();
         assert!((total_density - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn line_panel_projects_log_pdf_metric() {
+        let panel = build_line_panel(
+            "pdf_adaptation_log_pdf_line",
+            &line_geometry(),
+            &DerivedValues::from_output(output()),
+            ImageKind::LogNormalizedPdf,
+        )
+        .expect("build line panel");
+        let PanelState::ScalarTimeseries { points, .. } = panel else {
+            panic!("expected scalar timeseries");
+        };
+        assert_eq!(points.len(), 2);
+        assert!((points[0].x - 0.0).abs() < 1e-12);
+        assert!((points[1].x - 1.0).abs() < 1e-12);
+        assert!((points[0].y - (1.0_f64 / 1.5).log10()).abs() < 1e-12);
+        assert!((points[1].y - (2.0_f64 / 1.5).log10()).abs() < 1e-12);
     }
 }

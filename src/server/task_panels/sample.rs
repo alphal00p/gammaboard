@@ -55,6 +55,7 @@ fn sample_progress_projector() -> TaskPanelProjector {
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         |ctx| {
             let current = sample_progress_value(ctx);
+            let eta_seconds = sample_eta_seconds(ctx)?;
             Ok(Some(progress_panel(
                 "sample_progress",
                 current,
@@ -63,6 +64,7 @@ fn sample_progress_projector() -> TaskPanelProjector {
                     .nr_expected_samples()
                     .map(|value| value as f64),
                 Some("samples"),
+                eta_seconds,
             )))
         },
         |_ctx| Ok(None),
@@ -143,16 +145,7 @@ fn estimate_summary_projector(
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
-            Ok(
-                sample_accumulator(ctx, accumulator_config.as_ref())?.map(|accumulator| {
-                    estimate_summary_panel(
-                        accumulator,
-                        ctx.task.task.sample_stop_condition(),
-                        ctx.task.nr_completed_samples,
-                        ctx.completed_samples_per_second,
-                    )
-                }),
-            )
+            Ok(sample_accumulator(ctx, accumulator_config.as_ref())?.map(estimate_summary_panel))
         },
         |_ctx| Ok(None),
     )
@@ -419,21 +412,11 @@ fn rsd_history_panel(accumulator: AccumulatorState) -> PanelState {
     )
 }
 
-fn estimate_summary_panel(
-    accumulator: AccumulatorState,
-    stop_condition: Option<&SampleStopCondition>,
-    completed_samples: i64,
-    completed_samples_per_second: Option<f64>,
-) -> PanelState {
-    let mut entries = base_estimate_summary_entries(&accumulator);
-    append_stop_condition_entries(
-        &mut entries,
-        stop_condition,
-        &accumulator,
-        completed_samples,
-        completed_samples_per_second,
-    );
-    key_value_panel("estimate_summary", entries)
+fn estimate_summary_panel(accumulator: AccumulatorState) -> PanelState {
+    key_value_panel(
+        "estimate_summary",
+        base_estimate_summary_entries(&accumulator),
+    )
 }
 
 fn base_estimate_summary_entries(
@@ -527,75 +510,32 @@ fn base_estimate_summary_entries(
     }
 }
 
-fn append_stop_condition_entries(
-    entries: &mut Vec<crate::server::panels::KeyValueEntry>,
-    stop_condition: Option<&SampleStopCondition>,
-    accumulator: &AccumulatorState,
-    completed_samples: i64,
-    completed_samples_per_second: Option<f64>,
-) {
-    let Some(stop_condition) = stop_condition else {
-        return;
+fn sample_eta_seconds(ctx: &TaskPanelContext<'_>) -> Result<Option<f64>, EngineError> {
+    let Some(stop_condition) = ctx.task.task.sample_stop_condition() else {
+        return Ok(None);
     };
+    if let Some(smoothed_eta_seconds) = ctx.smoothed_eta_seconds {
+        return Ok(Some(smoothed_eta_seconds));
+    }
+    let accumulator = sample_accumulator(ctx, None)?;
     let projection = stop_condition
         .projection
         .unwrap_or_else(|| match accumulator {
-            AccumulatorState::Complex(_) | AccumulatorState::Gammaloop(_) => {
+            Some(AccumulatorState::Complex(_) | AccumulatorState::Gammaloop(_)) => {
                 SampleErrorProjection::Abs
             }
             _ => SampleErrorProjection::Real,
         });
-    entries.push(key_value(
-        "stop_projection",
-        "Stop Projection",
-        format_projection(projection),
-    ));
-    if let Some(target) = stop_condition.max_samples {
-        entries.push(key_value("stop_max_samples", "Stop Max Samples", target));
-    }
-
-    let projected = projected_estimate(accumulator, projection);
-    if let Some(projected) = projected {
-        if let Some(target) = stop_condition.absolute_error {
-            entries.push(key_value(
-                "stop_absolute_error_current",
-                "Absolute Error",
-                projected.error,
-            ));
-            entries.push(key_value(
-                "stop_absolute_error_target",
-                "Absolute Error Target",
-                target,
-            ));
-        }
-        if let Some(target) = stop_condition.relative_error {
-            let current = relative_error(projected.value, projected.error);
-            entries.push(key_value(
-                "stop_relative_error_current",
-                "Relative Error",
-                current,
-            ));
-            entries.push(key_value(
-                "stop_relative_error_target",
-                "Relative Error Target",
-                target,
-            ));
-        }
-    }
-
+    let projected = accumulator
+        .as_ref()
+        .and_then(|accumulator| projected_estimate(accumulator, projection));
     let eta_seconds = estimate_eta_seconds(
         stop_condition,
         projected,
-        completed_samples,
-        completed_samples_per_second,
+        ctx.task.nr_completed_samples,
+        ctx.completed_samples_per_second,
     );
-    entries.push(key_value(
-        "eta",
-        "ETA",
-        eta_seconds
-            .map(format_eta_duration)
-            .unwrap_or_else(|| "n/a".to_string()),
-    ));
+    Ok(eta_seconds)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -692,34 +632,6 @@ fn estimate_eta_seconds(
         }
     }
     etas.into_iter().reduce(f64::min)
-}
-
-fn format_projection(value: SampleErrorProjection) -> &'static str {
-    match value {
-        SampleErrorProjection::Real => "real",
-        SampleErrorProjection::Imag => "imag",
-        SampleErrorProjection::Abs => "abs",
-    }
-}
-
-fn format_eta_duration(seconds: f64) -> String {
-    if !seconds.is_finite() {
-        return "n/a".to_string();
-    }
-    if seconds < 60.0 {
-        return format!("{seconds:.2} s");
-    }
-    if seconds < 3600.0 {
-        return format!("{:.2} min", seconds / 60.0);
-    }
-    if seconds < 365.0 * 24.0 * 3600.0 {
-        return format!("{:.2} h", seconds / 3600.0);
-    }
-    let years = seconds / (365.0 * 24.0 * 3600.0);
-    if years >= 1_000_000.0 {
-        return format!("{years:.3e} y");
-    }
-    format!("{years:.2} y")
 }
 
 #[derive(Debug, Serialize)]

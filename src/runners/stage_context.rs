@@ -6,7 +6,7 @@ use crate::sampling::StageHandoffOwned;
 pub(crate) const HAVANA_HANDOFF_REQUIRED_ERROR: &str =
     "havana_inference sampler requires a havana training or inference snapshot handoff";
 pub(crate) const PDF_ADAPTATION_HANDOFF_REQUIRED_ERROR: &str =
-    "pdf_adaptation_raster_plane sampler requires a persisted sampler snapshot handoff";
+    "pdf_adaptation sampler requires a persisted sampler snapshot handoff";
 
 pub(crate) struct ResolvedStageContext {
     pub(crate) sampler_config: crate::core::SamplerAggregatorConfig,
@@ -135,7 +135,8 @@ where
                     }
                 }
             }
-            crate::core::SamplerAggregatorConfig::PdfAdaptationRasterPlane { .. } => {
+            crate::core::SamplerAggregatorConfig::PdfAdaptationRasterPlane { .. }
+            | crate::core::SamplerAggregatorConfig::PdfAdaptationRasterLine { .. } => {
                 if let Some(snapshot) = base_stage_snapshot.clone() {
                     Some(snapshot.into())
                 } else {
@@ -162,6 +163,7 @@ where
             sampler_config,
             crate::core::SamplerAggregatorConfig::HavanaInference { .. }
                 | crate::core::SamplerAggregatorConfig::PdfAdaptationRasterPlane { .. }
+                | crate::core::SamplerAggregatorConfig::PdfAdaptationRasterLine { .. }
         ) {
         None
     } else {

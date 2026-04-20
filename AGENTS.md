@@ -75,6 +75,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - There is no run-level accumulator default. A first executable task that needs a fresh accumulator must declare it explicitly.
 - `accumulator = { config = "empty" }` is a valid no-op accumulator for tasks that need runtime/plumbing compatibility without accumulating accumulator state.
 - `pdf_adaptation_image` is a dedicated task kind that rasterizes a plane with `pdf_adaptation_raster_plane`, defaults its sampler source to `latest`, and may also use `{ from_name = "<task-name>" }`.
+- `pdf_adaptation_plot_line` is a dedicated task kind that rasterizes a line with `pdf_adaptation_raster_line`, defaults its sampler source to `latest`, and may also use `{ from_name = "<task-name>" }`.
 - `pdf_adaptation_image` frontend snapshots come from sampler-owned persisted output payloads; `runs.current_observable` (current accumulator payload) stays the task's `empty` accumulator and is not the image data source.
 - `image` and `plot_line` tasks must declare their accumulator family explicitly and start with a fresh full accumulator.
 - Fresh sampler tasks may inherit a reduced initial batch size from the previous sampler task, but should not carry over the full rolling metrics state.

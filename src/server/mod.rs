@@ -769,31 +769,50 @@ async fn get_run_task_output(
     } else {
         Vec::new()
     };
+    let (completed_samples_per_second, smoothed_eta_seconds) =
+        if matches!(task.task, crate::core::RunTaskSpec::Sample { .. })
+            && matches!(task.state, crate::core::RunTaskState::Active)
+        {
+            let metrics = state
+                .store
+                .get_sampler_performance_history(run_id, 1, None)
+                .await?
+                .first()
+                .and_then(|entry| {
+                    serde_json::from_value::<crate::core::SamplerRuntimeMetrics>(
+                        entry.runtime_metrics.clone(),
+                    )
+                    .ok()
+                });
+            let completed_samples_per_second = metrics
+                .as_ref()
+                .map(|metrics| {
+                    if metrics.eta_completed_samples_per_second.is_finite()
+                        && metrics.eta_completed_samples_per_second > 0.0
+                    {
+                        metrics.eta_completed_samples_per_second
+                    } else {
+                        metrics.completed_samples_per_second
+                    }
+                })
+                .filter(|value| value.is_finite() && *value > 0.0);
+            let smoothed_eta_seconds = metrics
+                .as_ref()
+                .and_then(|metrics| metrics.eta_seconds_smoothed)
+                .filter(|value| value.is_finite() && *value >= 0.0);
+            (completed_samples_per_second, smoothed_eta_seconds)
+        } else {
+            (None, None)
+        };
+
     let payload = panel_source
         .build_response(
             format!("run:{run_id}:task:{}", task.id),
             cursor,
             &task,
             &request.request.panel_state,
-            if matches!(task.task, crate::core::RunTaskSpec::Sample { .. })
-                && matches!(task.state, crate::core::RunTaskState::Active)
-            {
-                state
-                    .store
-                    .get_sampler_performance_history(run_id, 1, None)
-                    .await?
-                    .first()
-                    .and_then(|entry| {
-                        serde_json::from_value::<crate::core::SamplerRuntimeMetrics>(
-                            entry.runtime_metrics.clone(),
-                        )
-                        .ok()
-                    })
-                    .map(|metrics| metrics.completed_samples_per_second)
-                    .filter(|value| value.is_finite() && *value > 0.0)
-            } else {
-                None
-            },
+            completed_samples_per_second,
+            smoothed_eta_seconds,
             current_accumulator.as_ref(),
             latest_stage_snapshot.as_ref(),
             latest_persisted_snapshot.as_ref(),
