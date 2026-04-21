@@ -23,49 +23,55 @@ pub(super) fn projectors(
         summary_projector(),
         image_projector(
             "pdf_adaptation_log_integrand",
-            "Log10(|I| / sum_plane |I|)",
+            "Normalized integrand",
             PanelWidth::Half,
             geometry.clone(),
             ImageKind::LogPlaneNormalizedIntegrand,
         ),
         image_projector(
             "pdf_adaptation_log_pdf",
-            "Log10(P / sum_plane P)",
+            "Normalized PDF",
             PanelWidth::Half,
             geometry.clone(),
             ImageKind::LogPlaneNormalizedPdf,
         ),
         histogram_projector(
             "pdf_adaptation_log_integrand_histogram",
-            "Histogram: Log10(|I| / sum_plane |I|)",
+            "Histogram: Normalized integrand",
             PanelWidth::Half,
             ImageKind::LogPlaneNormalizedIntegrand,
         ),
         histogram_projector(
             "pdf_adaptation_log_pdf_histogram",
-            "Histogram: Log10(P / sum_plane P)",
+            "Histogram: Normalized PDF",
             PanelWidth::Half,
             ImageKind::LogPlaneNormalizedPdf,
         ),
         image_projector(
             "pdf_adaptation_oversampling",
-            "Oversampling: Log10(P / (|I| / <|I|>))",
+            "Oversampling",
             PanelWidth::Half,
             geometry.clone(),
             ImageKind::OversamplingLegacy,
         ),
         image_projector(
             "pdf_adaptation_oversampling_plane_normalized",
-            "Oversampling: Log10((P / sum_plane P) / (|I| / sum_plane |I|))",
+            "Normalized oversampling",
             PanelWidth::Half,
             geometry,
             ImageKind::OversamplingPlaneNormalized,
         ),
         histogram_projector(
             "pdf_adaptation_oversampling_histogram",
-            "Histogram: Oversampling Log10(P / (|I| / <|I|>))",
+            "Histogram: Oversampling",
             PanelWidth::Half,
             ImageKind::OversamplingLegacy,
+        ),
+        histogram_projector(
+            "pdf_adaptation_oversampling_plane_normalized_histogram",
+            "Histogram: Normalized oversampling",
+            PanelWidth::Half,
+            ImageKind::OversamplingPlaneNormalized,
         ),
     ]
 }
@@ -80,49 +86,55 @@ pub(super) fn line_projectors(
         summary_projector(),
         line_projector(
             "pdf_adaptation_log_integrand_line",
-            "Log10(|I| / sum_plane |I|) (1D)",
+            "Normalized integrand (1D)",
             PanelWidth::Half,
             geometry.clone(),
             ImageKind::LogPlaneNormalizedIntegrand,
         ),
         line_projector(
             "pdf_adaptation_log_pdf_line",
-            "Log10(P / sum_plane P) (1D)",
+            "Normalized PDF (1D)",
             PanelWidth::Half,
             geometry.clone(),
             ImageKind::LogPlaneNormalizedPdf,
         ),
         line_projector(
             "pdf_adaptation_oversampling_line",
-            "Oversampling: Log10(P / (|I| / <|I|>)) (1D)",
+            "Oversampling (1D)",
             PanelWidth::Half,
             geometry.clone(),
             ImageKind::OversamplingLegacy,
         ),
         line_projector(
             "pdf_adaptation_oversampling_plane_normalized_line",
-            "Oversampling: Log10((P / sum_plane P) / (|I| / sum_plane |I|)) (1D)",
+            "Normalized oversampling (1D)",
             PanelWidth::Half,
             geometry,
             ImageKind::OversamplingPlaneNormalized,
         ),
         histogram_projector(
             "pdf_adaptation_log_integrand_histogram",
-            "Histogram: Log10(|I| / sum_plane |I|)",
+            "Histogram: Normalized integrand",
             PanelWidth::Half,
             ImageKind::LogPlaneNormalizedIntegrand,
         ),
         histogram_projector(
             "pdf_adaptation_log_pdf_histogram",
-            "Histogram: Log10(P / sum_plane P)",
+            "Histogram: Normalized PDF",
             PanelWidth::Half,
             ImageKind::LogPlaneNormalizedPdf,
         ),
         histogram_projector(
             "pdf_adaptation_oversampling_histogram",
-            "Histogram: Oversampling Log10(P / (|I| / <|I|>))",
+            "Histogram: Oversampling",
             PanelWidth::Half,
             ImageKind::OversamplingLegacy,
+        ),
+        histogram_projector(
+            "pdf_adaptation_oversampling_plane_normalized_histogram",
+            "Histogram: Normalized oversampling",
+            PanelWidth::Half,
+            ImageKind::OversamplingPlaneNormalized,
         ),
     ]
 }
@@ -360,17 +372,17 @@ struct DerivedValues {
 
 impl DerivedValues {
     fn from_output(output: PdfAdaptationImagePersistedOutput) -> Self {
-        let sum_abs_integrand = finite_sum(output.abs_integrand_values.iter().flatten().copied());
-        let sum_pdf = finite_sum(output.pdf_values.iter().flatten().copied());
+        let mean_abs_integrand = finite_mean(output.abs_integrand_values.iter().flatten().copied());
+        let mean_pdf = finite_mean(output.pdf_values.iter().flatten().copied());
         let log_plane_normalized_integrand = output
             .abs_integrand_values
             .iter()
-            .map(|value| log10_ratio(*value, sum_abs_integrand))
+            .map(|value| log10_ratio(*value, mean_abs_integrand))
             .collect::<Vec<_>>();
         let log_plane_normalized_pdf = output
             .pdf_values
             .iter()
-            .map(|value| log10_ratio(*value, sum_pdf))
+            .map(|value| log10_ratio(*value, mean_pdf))
             .collect::<Vec<_>>();
         let oversampling_legacy_log10 = output
             .pdf_values
@@ -588,21 +600,6 @@ fn log10_pdf_over_integrand_over_mean(
     }
 }
 
-fn finite_sum(values: impl IntoIterator<Item = f64>) -> Option<f64> {
-    let mut sum = 0.0;
-    let mut count = 0usize;
-    for value in values {
-        if value.is_finite() {
-            sum += value;
-            count += 1;
-        }
-    }
-    match (count > 0, sum > 0.0) {
-        (true, true) => Some(sum),
-        _ => None,
-    }
-}
-
 fn finite_mean(values: impl IntoIterator<Item = f64>) -> Option<f64> {
     let mut sum = 0.0;
     let mut count = 0usize;
@@ -670,11 +667,11 @@ mod tests {
         let derived = DerivedValues::from_output(output());
         assert_eq!(
             derived.log_plane_normalized_integrand,
-            vec![Some((2.0_f64 / 6.0).log10()), Some((4.0_f64 / 6.0).log10())]
+            vec![Some((2.0_f64 / 3.0).log10()), Some((4.0_f64 / 3.0).log10())]
         );
         assert_eq!(
             derived.log_plane_normalized_pdf,
-            vec![Some((1.0_f64 / 3.0).log10()), Some((2.0_f64 / 3.0).log10())]
+            vec![Some((1.0_f64 / 1.5).log10()), Some((2.0_f64 / 1.5).log10())]
         );
         assert_eq!(
             derived.oversampling_legacy_log10,
@@ -754,7 +751,7 @@ mod tests {
         assert_eq!(points.len(), 2);
         assert!((points[0].x - 0.0).abs() < 1e-12);
         assert!((points[1].x - 1.0).abs() < 1e-12);
-        assert!((points[0].y - (1.0_f64 / 3.0).log10()).abs() < 1e-12);
-        assert!((points[1].y - (2.0_f64 / 3.0).log10()).abs() < 1e-12);
+        assert!((points[0].y - (1.0_f64 / 1.5).log10()).abs() < 1e-12);
+        assert!((points[1].y - (2.0_f64 / 1.5).log10()).abs() < 1e-12);
     }
 }

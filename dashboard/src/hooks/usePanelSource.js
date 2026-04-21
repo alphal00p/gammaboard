@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePolling } from "./usePolling";
-import { asArray } from "../utils/collections";
+import { asArray, isPlainObject } from "../utils/collections";
 
 const emptyState = Object.freeze({
   sourceId: null,
@@ -11,7 +11,7 @@ const emptyState = Object.freeze({
   error: null,
 });
 
-const asObject = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : {});
+const asObject = (value) => (isPlainObject(value) ? value : {});
 const PANEL_VALUES_STORAGE_PREFIX = "gammaboard.panel-values.";
 const canUseStorage = () => typeof window !== "undefined" && typeof window.localStorage !== "undefined";
 const storageKeyForSource = (sourceId) => `${PANEL_VALUES_STORAGE_PREFIX}${sourceId}`;
@@ -78,6 +78,7 @@ const mergePanelState = (previous, incoming) => {
 };
 
 const applyUpdates = (previousStates, updates, resetRequired) => {
+  if (!resetRequired && asArray(updates).length === 0) return previousStates;
   const next = resetRequired
     ? new Map()
     : new Map(
@@ -108,7 +109,9 @@ const defaultPanelValue = (spec) => {
 };
 
 const reconcilePanelValues = (previousValues, panelSpecs, resetRequired) => {
-  const next = resetRequired ? {} : { ...asObject(previousValues) };
+  const previous = asObject(previousValues);
+  const next = resetRequired ? {} : { ...previous };
+  let changed = resetRequired && Object.keys(previous).length > 0;
   const knownIds = new Set();
 
   for (const spec of asArray(panelSpecs)) {
@@ -116,15 +119,30 @@ const reconcilePanelValues = (previousValues, panelSpecs, resetRequired) => {
     knownIds.add(spec.panel_id);
     if (!(spec.panel_id in next)) {
       const defaultValue = defaultPanelValue(spec);
-      if (defaultValue !== undefined) next[spec.panel_id] = defaultValue;
+      if (defaultValue !== undefined) {
+        next[spec.panel_id] = defaultValue;
+        changed = true;
+      }
     }
   }
 
   for (const key of Object.keys(next)) {
-    if (!knownIds.has(key)) delete next[key];
+    if (!knownIds.has(key)) {
+      delete next[key];
+      changed = true;
+    }
   }
 
-  return next;
+  return changed ? next : previous;
+};
+
+const panelValueEquals = (left, right) => {
+  if (Object.is(left, right)) return true;
+  if (!isPlainObject(left) || !isPlainObject(right)) return false;
+  const leftEntries = Object.entries(left);
+  const rightEntries = Object.entries(right);
+  if (leftEntries.length !== rightEntries.length) return false;
+  return leftEntries.every(([key, value]) => Object.is(value, right[key]));
 };
 
 export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, useCursor = true } = {}) => {
@@ -166,7 +184,9 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
           const shouldSeedFromStorage = sourceChanged || (previous.sourceId == null && nextSourceId != null);
           const resetRequired = response?.reset_required === true || sourceChanged;
           const panelSpecs = asArray(response?.panels);
-          const seededPanelValues = shouldSeedFromStorage ? readStoredPanelValues(nextSourceId) : previous.panelValues;
+          const seededPanelValues = shouldSeedFromStorage
+            ? readStoredPanelValues(nextSourceId)
+            : panelValuesRef.current;
           const panelValues = reconcilePanelValues(seededPanelValues, panelSpecs, resetRequired && !sourceChanged);
           panelValuesRef.current = panelValues;
           return {
@@ -200,6 +220,8 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
 
   const setPanelValue = useCallback(
     (panelId, value, shouldTriggerPoll = true) => {
+      const existing = panelValuesRef.current?.[panelId];
+      if (panelValueEquals(existing, value)) return;
       setState((previous) => {
         const panelValues = {
           ...asObject(previous.panelValues),

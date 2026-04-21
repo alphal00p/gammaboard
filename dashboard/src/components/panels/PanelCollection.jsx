@@ -1873,31 +1873,7 @@ const ScalarImageHeatmapPanel = ({
         textStyle: { color: "#64748b", fontSize: 12 },
         inRange: { color: scalarHeatmapColors },
       },
-      dataZoom: [
-        {
-          type: "inside",
-          xAxisIndex: [0],
-          yAxisIndex: [0],
-          filterMode: "none",
-          throttle: 50,
-          start: zoomRange.start,
-          end: zoomRange.end,
-          zoomOnMouseWheel: true,
-          moveOnMouseMove: true,
-          moveOnMouseWheel: true,
-        },
-        {
-          type: "slider",
-          xAxisIndex: [0],
-          yAxisIndex: [0],
-          filterMode: "none",
-          start: zoomRange.start,
-          end: zoomRange.end,
-          height: 12,
-          bottom: 4,
-          showDetail: false,
-        },
-      ],
+      dataZoom: buildDataZoom(zoomRange, true, true),
       series: [
         {
           type: "heatmap",
@@ -1923,8 +1899,7 @@ const ScalarImageHeatmapPanel = ({
       invalidOverlay,
       width,
       xCenters,
-      zoomRange.end,
-      zoomRange.start,
+      zoomRange,
       yCenters,
       zmax,
       zmin,
@@ -2973,7 +2948,7 @@ const HistogramPanel = ({
             <ReactECharts
               ref={echartsRef}
               option={histogramOption}
-              notMerge
+              notMerge={!isDiscrete}
               onEvents={onDataZoom}
               lazyUpdate
               opts={{ renderer: "canvas" }}
@@ -3651,6 +3626,7 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
         .filter((id) => typeof id === "string"),
     [panelSpecs],
   );
+  const sharedHistoryPanelIdSet = useMemo(() => new Set(sharedHistoryPanelIds), [sharedHistoryPanelIds]);
   const sharedPdfImagePanelIds = useMemo(
     () =>
       asArray(panelSpecs)
@@ -3659,6 +3635,7 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
         .filter((id) => typeof id === "string"),
     [panelSpecs],
   );
+  const sharedPdfImagePanelIdSet = useMemo(() => new Set(sharedPdfImagePanelIds), [sharedPdfImagePanelIds]);
   const handleUploadHistogramBundle = useCallback(async (panelId, event) => {
     const file = event?.target?.files?.[0];
     if (!panelId || !file) return;
@@ -3809,7 +3786,7 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
   const handlePanelValueChange = useCallback(
     (panelId, nextValue, shouldTriggerPoll = true) => {
       if (typeof onPanelValueChange !== "function") return;
-      if (sharedPdfImagePanelIds.includes(panelId)) {
+      if (sharedPdfImagePanelIdSet.has(panelId)) {
         const sharedImageView = extractSharedImageZoom(nextValue);
         if (!sharedImageView) {
           onPanelValueChange(panelId, nextValue, shouldTriggerPoll);
@@ -3828,7 +3805,7 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
         });
         return;
       }
-      if (!sharedHistoryPanelIds.includes(panelId)) {
+      if (!sharedHistoryPanelIdSet.has(panelId)) {
         onPanelValueChange(panelId, nextValue, shouldTriggerPoll);
         return;
       }
@@ -3849,7 +3826,7 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
         onPanelValueChange(targetId, mergedValue, trigger);
       });
     },
-    [onPanelValueChange, panelValues, sharedHistoryPanelIds, sharedPdfImagePanelIds],
+    [onPanelValueChange, panelValues, sharedHistoryPanelIdSet, sharedHistoryPanelIds, sharedPdfImagePanelIdSet, sharedPdfImagePanelIds],
   );
 
   return (

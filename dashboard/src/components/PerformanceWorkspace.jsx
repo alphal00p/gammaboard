@@ -5,10 +5,10 @@ import EmptyStateCard from "./common/EmptyStateCard";
 import PanelCollection from "./panels/PanelCollection";
 import RunScopedWorkspace from "./common/RunScopedWorkspace";
 import { useRunPerformancePanels } from "../hooks/useRunPerformancePanels";
-import { asArray } from "../utils/collections";
+import { asArray, isPlainObject } from "../utils/collections";
 
 const evaluatorNodeNameFor = (worker) => worker?.node_name ?? null;
-const asObject = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : {});
+const asObject = (value) => (isPlainObject(value) ? value : {});
 const isHistoryTimeseriesPanelSpec = (spec) => {
   const kind = String(spec?.kind || "");
   const history = String(spec?.history || "");
@@ -114,6 +114,7 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
         .filter((id) => typeof id === "string"),
     [evaluator?.panelSpecs, runEvaluator?.panelSpecs, sampler?.panelSpecs],
   );
+  const sharedHistoryPanelIdSet = useMemo(() => new Set(sharedHistoryPanelIds), [sharedHistoryPanelIds]);
 
   useEffect(() => {
     setPanelValues((previous) => {
@@ -145,7 +146,7 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
 
   const handlePanelValueChange = useCallback((panelId, nextValue) => {
     setPanelValues((previous) => {
-      if (!sharedHistoryPanelIds.includes(panelId)) {
+      if (!sharedHistoryPanelIdSet.has(panelId)) {
         return {
           ...previous,
           [panelId]: nextValue,
@@ -172,7 +173,7 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
       });
       return merged;
     });
-  }, [sharedHistoryPanelIds]);
+  }, [sharedHistoryPanelIdSet, sharedHistoryPanelIds]);
 
   return (
     <RunScopedWorkspace

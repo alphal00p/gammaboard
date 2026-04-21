@@ -256,6 +256,7 @@ discrete_dims = 0
 ```
 
 For `evaluator.kind = "gammaloop"`, `continuous_dims` and `discrete_dims` are inferred from the selected integrand and should be omitted.
+`post_load_commands = ["set ...", ...]` is optional and executes in-memory after loading the GammaLoop state and before integrand selection; commands are not saved back to disk.
 
 For `evaluator.kind = "python_scalar"`, configure:
 - `flake_ref`: nix flake reference that resolves to a runtime package (for example `path:./python_api/examples/python_scalar_sin#runtime`)

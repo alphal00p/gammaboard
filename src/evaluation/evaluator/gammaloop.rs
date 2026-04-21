@@ -1,12 +1,17 @@
-use std::{any::Any, panic::AssertUnwindSafe, path::PathBuf};
+use std::{any::Any, ops::ControlFlow, panic::AssertUnwindSafe, path::PathBuf};
 
-use gammaloop_api::state::{ProcessRef, State};
+use gammaloop_api::{
+    CLISettings,
+    commands::Commands,
+    state::{CommandHistory, ProcessRef, RunHistory, State},
+};
 use gammalooprs::graph::GroupId;
 use gammalooprs::initialisation::initialise;
 use gammalooprs::integrands::HasIntegrand;
 use gammalooprs::integrands::evaluation::EvaluationResult;
 use gammalooprs::integrands::process::{MomentumSpaceEvaluationInput, ProcessIntegrand};
 use gammalooprs::model::Model;
+use gammalooprs::settings::RuntimeSettings;
 use gammalooprs::settings::runtime::{DiscreteGraphSamplingType, SamplingSettings};
 use gammalooprs::utils::F;
 use serde::{Deserialize, Serialize};
@@ -60,6 +65,8 @@ pub struct GammaLoopParams {
     pub momentum_space: bool,
     pub use_f128: bool,
     pub training_projection: TrainingProjection,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub post_load_commands: Vec<String>,
 }
 
 impl Default for GammaLoopParams {
@@ -71,11 +78,64 @@ impl Default for GammaLoopParams {
             momentum_space: true,
             use_f128: false,
             training_projection: TrainingProjection::default(),
+            post_load_commands: Vec::new(),
         }
     }
 }
 
 impl GammaLoopEvaluator {
+    fn run_post_load_commands(
+        params: &GammaLoopParams,
+        state: &mut State,
+    ) -> Result<(), BuildError> {
+        if params.post_load_commands.is_empty() {
+            return Ok(());
+        }
+
+        let mut run_history = RunHistory::default();
+        let mut cli_settings = CLISettings::default();
+        cli_settings.state.folder = params.state_folder.clone();
+        let mut default_runtime_settings = RuntimeSettings::default();
+
+        for (index, raw_command) in params.post_load_commands.iter().enumerate() {
+            let command = CommandHistory::from_raw_string(raw_command).map_err(|err| {
+                BuildError::build(format!(
+                    "failed to parse post_load_commands[{index}] '{raw_command}': {err}"
+                ))
+            })?;
+
+            if !matches!(command.command, Commands::Set(_)) {
+                return Err(BuildError::build(format!(
+                    "post_load_commands[{index}] must be a 'set' command to keep the state in-memory; got '{}'",
+                    raw_command
+                )));
+            }
+
+            let execution = command
+                .command
+                .run(
+                    state,
+                    &mut run_history,
+                    &mut cli_settings,
+                    &mut default_runtime_settings,
+                )
+                .map_err(|err| {
+                    BuildError::build(format!(
+                        "failed to execute post_load_commands[{index}] '{raw_command}': {err}"
+                    ))
+                })?;
+
+            if let ControlFlow::Break(_) = execution.flow {
+                return Err(BuildError::build(format!(
+                    "post_load_commands[{index}] triggered flow break and is not supported: '{}'",
+                    raw_command
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
     fn build_domain(
         integrand: &ProcessIntegrand,
         momentum_space: bool,
@@ -261,6 +321,7 @@ impl GammaLoopEvaluator {
                         params.state_folder.display()
                     ))
                 })?;
+            Self::run_post_load_commands(&params, &mut state)?;
 
             let (process_id, integrand_name) = state
                 .find_integrand_ref(params.process_id.as_ref(), params.integrand_name.as_ref())
@@ -588,5 +649,71 @@ impl Evaluator for GammaLoopEvaluator {
             },
         };
         Ok(BatchResult::new(weighted_values, observable_state))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GammaLoopEvaluator, GammaLoopParams};
+    use std::path::PathBuf;
+
+    fn tth_state_folder() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../gammaloop/examples/cli/epem_a_ttxh/LO/state")
+    }
+
+    #[test]
+    fn post_load_set_process_command_changes_kinematics_in_memory_only() {
+        let state_folder = tth_state_folder();
+        if !state_folder.exists() {
+            eprintln!(
+                "skipping test: tth gammaloop state not found at {}",
+                state_folder.display()
+            );
+            return;
+        }
+
+        let baseline_params = GammaLoopParams {
+            state_folder: state_folder.clone(),
+            integrand_name: Some("LO".to_string()),
+            momentum_space: false,
+            ..GammaLoopParams::default()
+        };
+
+        let baseline = match GammaLoopEvaluator::from_params(baseline_params.clone()) {
+            Ok(baseline) => baseline,
+            Err(err) => {
+                eprintln!("skipping test: failed to load baseline tth state: {err}");
+                return;
+            }
+        };
+        let baseline_e_cm = baseline.integrand.get_settings().kinematics.e_cm;
+        let changed_e_cm = baseline_e_cm + 17.0;
+
+        let mut changed_params = baseline_params.clone();
+        changed_params.post_load_commands =
+            vec![format!("set process kv kinematics.e_cm={changed_e_cm}")];
+
+        let changed =
+            GammaLoopEvaluator::from_params(changed_params).expect("changed build should succeed");
+        let changed_loaded_e_cm = changed.integrand.get_settings().kinematics.e_cm;
+
+        assert!(
+            (changed_loaded_e_cm - changed_e_cm).abs() < 1.0e-9,
+            "expected changed e_cm {changed_e_cm}, got {changed_loaded_e_cm}"
+        );
+
+        let reloaded =
+            GammaLoopEvaluator::from_params(baseline_params).expect("reloaded baseline build");
+        let reloaded_e_cm = reloaded.integrand.get_settings().kinematics.e_cm;
+
+        assert!(
+            (reloaded_e_cm - baseline_e_cm).abs() < 1.0e-9,
+            "expected reloaded e_cm {baseline_e_cm}, got {reloaded_e_cm}"
+        );
+        assert!(
+            (reloaded_e_cm - changed_loaded_e_cm).abs() > 1.0e-9,
+            "expected reloaded e_cm to differ from changed e_cm ({changed_loaded_e_cm})"
+        );
     }
 }
