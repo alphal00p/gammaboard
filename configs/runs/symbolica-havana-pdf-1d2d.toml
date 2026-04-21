@@ -34,4 +34,4 @@ batch_transforms = []
 [task_queue.geometry]
 offset = [0.0, 0.0]
 direction = [1.0, 0.0]
-linspace = { start = -1.0, stop = 1.0, count = 512 }
+linspace = { start = 0.0, stop = 1.0, count = 512 }

@@ -75,7 +75,7 @@ impl Default for GammaLoopParams {
             state_folder: PathBuf::from("./gammaloop_state"),
             process_id: None,
             integrand_name: None,
-            momentum_space: true,
+            momentum_space: false,
             use_f128: false,
             training_projection: TrainingProjection::default(),
             post_load_commands: Vec::new(),
@@ -373,18 +373,20 @@ impl GammaLoopEvaluator {
         &self,
         evaluation_results: &[EvaluationResult],
         weights: &[f64],
-    ) -> GammaLoopAccumulatorState {
+    ) -> Result<GammaLoopAccumulatorState, EvalError> {
         let mut estimate = ComplexAccumulatorState::default();
         for (result, &weight) in evaluation_results.iter().zip(weights.iter()) {
             estimate.add_sample(Self::project_result_value(result), weight);
         }
-        GammaLoopAccumulatorState {
-            bundle: self
-                .integrand
-                .observable_snapshot_bundle()
-                .unwrap_or_default(),
+        let bundle = self.integrand.observable_snapshot_bundle().ok_or_else(|| {
+            EvalError::eval(
+                "gammaloop accumulator requested histogram bundle, but no observable snapshot bundle is available",
+            )
+        })?;
+        Ok(GammaLoopAccumulatorState {
+            bundle,
             estimate,
-        }
+        })
     }
 
     fn evaluate(&mut self, batch: &Batch) -> Result<Vec<EvaluationResult>, EvalError> {
@@ -565,8 +567,13 @@ impl Evaluator for GammaLoopEvaluator {
                 }
             }
             AccumulatorConfig::Gammaloop => {
+                if !self.integrand.has_observables() {
+                    return Err(EvalError::eval(
+                        "gammaloop accumulator requires configured observables, but the loaded integrand has none (empty [observables] in runtime settings)",
+                    ));
+                }
                 observable_state = AccumulatorState::Gammaloop(
-                    self.batch_gammaloop_observable(&evaluation_results, weights.as_slice()),
+                    self.batch_gammaloop_observable(&evaluation_results, weights.as_slice())?,
                 );
                 self.reset_observables();
                 if options.require_training_values {

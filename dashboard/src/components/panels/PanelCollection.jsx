@@ -335,6 +335,14 @@ const renderStructuredValue = (value) => {
   return JSON.stringify(value);
 };
 
+const formatDebugJson = (value) => {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch (_error) {
+    return String(value);
+  }
+};
+
 const scalarHeatmapColors = ["rgb(0,0,255)", "rgb(128,200,128)", "rgb(255,0,0)"];
 
 const panelColumnSpan = (descriptor) => {
@@ -394,15 +402,18 @@ const normalizeZoomRange = (candidate) => {
 
 const readZoomFromPanelValue = (value, fallback = FULL_ZOOM) =>
   normalizeZoomRange(isObject(value) ? value.zoom : null) || fallback;
+const readYZoomFromPanelValue = (value, fallback = FULL_ZOOM) =>
+  normalizeZoomRange(isObject(value) ? value.yZoom : null) || fallback;
 const readTailPinnedFromPanelValue = (value, fallback = true) =>
   typeof value?.tailPinned === "boolean" ? value.tailPinned : fallback;
 const readHistoryXAxisModeFromPanelValue = (value, fallback = HISTORY_X_AXIS_MODE_WALL_TIME) => {
   const mode = isObject(value) ? value.xAxisMode : null;
   return HISTORY_X_AXIS_MODE_SET.has(mode) ? mode : fallback;
 };
-const writeZoomPanelValue = (current, zoom, tailPinned = null) => {
+const writeZoomPanelValue = (current, zoom, tailPinned = null, yZoom = undefined) => {
   const next = isObject(current) ? { ...current } : {};
   next.zoom = normalizeZoomRange(zoom) || FULL_ZOOM;
+  if (yZoom !== undefined) next.yZoom = normalizeZoomRange(yZoom) || FULL_ZOOM;
   if (tailPinned != null) next.tailPinned = Boolean(tailPinned);
   return next;
 };
@@ -422,6 +433,10 @@ const readHistogramZoomFromPanelValue = (value, fallback = FULL_ZOOM) => {
   const view = readHistogramBundleView(value);
   return normalizeZoomRange(view.zoom) || readZoomFromPanelValue(value, fallback);
 };
+const readHistogramYZoomFromPanelValue = (value, fallback = FULL_ZOOM) => {
+  const view = readHistogramBundleView(value);
+  return normalizeZoomRange(view.y_zoom) || readYZoomFromPanelValue(value, fallback);
+};
 
 const readHistogramScaleFromPanelValue = (value, axis) => {
   const view = readHistogramBundleView(value);
@@ -434,6 +449,7 @@ const writeHistogramBundlePanelValue = (
   {
     selectedHistogram = undefined,
     zoom = undefined,
+    yZoom = undefined,
     xScale = undefined,
     yScale = undefined,
     showRelativeError = undefined,
@@ -447,6 +463,9 @@ const writeHistogramBundlePanelValue = (
   }
   if (zoom !== undefined) {
     nextView.zoom = normalizeZoomRange(zoom) || FULL_ZOOM;
+  }
+  if (yZoom !== undefined) {
+    nextView.y_zoom = normalizeZoomRange(yZoom) || FULL_ZOOM;
   }
   if (xScale !== undefined) {
     nextView.x_scale = xScale === "log" ? "log" : "linear";
@@ -518,7 +537,7 @@ const zoomRangeChanged = (left, right) =>
   Math.abs((left?.start ?? 0) - (right?.start ?? 0)) > 0.01 ||
   Math.abs((left?.end ?? 100) - (right?.end ?? 100)) > 0.01;
 
-const readDataZoomRange = (event) => {
+const readDataZoomRanges = (event) => {
   const payloads = Array.isArray(event?.batch) && event.batch.length > 0 ? event.batch : [event];
   const xPayload = payloads.find((payload) => {
     if (!payload || typeof payload !== "object") return false;
@@ -528,8 +547,18 @@ const readDataZoomRange = (event) => {
     if (Number.isFinite(Number(payload.xAxisIndex))) return Number(payload.xAxisIndex) === 0;
     return false;
   });
-  if (!xPayload) return null;
-  return normalizeZoomRange(xPayload);
+  const yPayload = payloads.find((payload) => {
+    if (!payload || typeof payload !== "object") return false;
+    const dataZoomId = typeof payload.dataZoomId === "string" ? payload.dataZoomId : "";
+    if (dataZoomId.startsWith("y-")) return true;
+    if (Array.isArray(payload.yAxisIndex)) return payload.yAxisIndex.includes(0);
+    if (Number.isFinite(Number(payload.yAxisIndex))) return Number(payload.yAxisIndex) === 0;
+    return false;
+  });
+  return {
+    x: normalizeZoomRange(xPayload),
+    y: normalizeZoomRange(yPayload),
+  };
 };
 
 const visibleXRangeFromZoom = (xDomain, zoomRange) => {
@@ -567,8 +596,15 @@ const visibleXRangeFromZoomWithScale = (xDomain, zoomRange, scale = "linear") =>
   return visibleXRangeFromZoom(xDomain, normalizedZoom);
 };
 
-const buildDataZoom = (zoomRange = FULL_ZOOM, includeSlider = true, includeYInside = true) => {
+const buildDataZoom = (
+  zoomRange = FULL_ZOOM,
+  includeSlider = true,
+  includeYInside = true,
+  yZoomRange = FULL_ZOOM,
+  includeYSlider = true,
+) => {
   const normalizedZoom = normalizeZoomRange(zoomRange) || FULL_ZOOM;
+  const normalizedYZoom = normalizeZoomRange(yZoomRange) || FULL_ZOOM;
   const zoom = [
     {
       id: "x-inside",
@@ -599,6 +635,22 @@ const buildDataZoom = (zoomRange = FULL_ZOOM, includeSlider = true, includeYInsi
       yAxisIndex: [0],
       filterMode: "none",
       throttle: 50,
+      start: normalizedYZoom.start,
+      end: normalizedYZoom.end,
+    });
+  }
+  if (includeYSlider) {
+    zoom.push({
+      id: "y-slider",
+      type: "slider",
+      yAxisIndex: [0],
+      filterMode: "none",
+      width: 14,
+      right: 2,
+      top: 16,
+      bottom: 32,
+      start: normalizedYZoom.start,
+      end: normalizedYZoom.end,
     });
   }
   return zoom;
@@ -856,6 +908,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
   const xAxisOriginMs = useMemo(() => (usesTimestampXAxis ? Number(xDomain[0]) : 0), [usesTimestampXAxis, xDomain]);
   const tailPinned = readTailPinnedFromPanelValue(value, isHistoryPanel);
   const visibleXRange = useMemo(() => visibleXRangeFromZoom(xDomain, zoomRange), [xDomain, zoomRange]);
+  const yZoomRange = readYZoomFromPanelValue(value, FULL_ZOOM);
   const visibleDomain = useMemo(() => {
     if (!visibleXRange) return domain;
     const inRangeValues = points
@@ -905,15 +958,23 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
   const onDataZoom = useMemo(
     () => ({
       datazoom: (event) => {
-        const next = readDataZoomRange(event);
+        const next = readDataZoomRanges(event);
         if (!next || typeof onValueChange !== "function" || !panelId) return;
-        if (!zoomRangeChanged(zoomRange, next) && (!isHistoryPanel || tailPinned === (next.end >= 99.5))) {
+        const nextX = next.x || zoomRange;
+        const nextY = next.y || yZoomRange;
+        const xChanged = Boolean(next.x) && zoomRangeChanged(zoomRange, nextX);
+        const yChanged = Boolean(next.y) && zoomRangeChanged(yZoomRange, nextY);
+        if (!xChanged && !yChanged && (!isHistoryPanel || tailPinned === (nextX.end >= 99.5))) {
           return;
         }
-        onValueChange(panelId, writeZoomPanelValue(value, next, isHistoryPanel ? next.end >= 99.5 : null), false);
+        onValueChange(
+          panelId,
+          writeZoomPanelValue(value, nextX, isHistoryPanel ? nextX.end >= 99.5 : null, nextY),
+          false,
+        );
       },
     }),
-    [isHistoryPanel, onValueChange, panelId, tailPinned, value, zoomRange],
+    [isHistoryPanel, onValueChange, panelId, tailPinned, value, yZoomRange, zoomRange],
   );
   const option = useMemo(
     () => ({
@@ -948,7 +1009,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
         trigger: "axis",
         formatter: buildTimeseriesTooltipFormatter(historyXAxisMode, usesTimestampXAxis, xAxisOriginMs),
       },
-      dataZoom: buildDataZoom(zoomRange),
+      dataZoom: buildDataZoom(zoomRange, true, true, yZoomRange, true),
       series: [
         ...(isHistoryPanel
           ? [
@@ -1006,6 +1067,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
       visibleDomain,
       xAxisOriginMs,
       xDomain,
+      yZoomRange,
       zoomRange,
     ],
   );
@@ -1023,7 +1085,11 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
             onResetView={
               panelId && typeof onValueChange === "function"
                 ? () =>
-                    onValueChange(panelId, writeZoomPanelValue(value, FULL_ZOOM, isHistoryPanel ? true : null), false)
+                    onValueChange(
+                      panelId,
+                      writeZoomPanelValue(value, FULL_ZOOM, isHistoryPanel ? true : null, FULL_ZOOM),
+                      false,
+                    )
                 : null
             }
           />
@@ -1067,6 +1133,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
   );
   const xDomain = fitXDomain(data.map((row) => row.x));
   const zoomRange = readZoomFromPanelValue(value, FULL_ZOOM);
+  const yZoomRange = readYZoomFromPanelValue(value, FULL_ZOOM);
   const tailPinned = readTailPinnedFromPanelValue(value, isHistoryPanel);
   const usesTimestampXAxis = useMemo(
     () => historyXAxisMode === HISTORY_X_AXIS_MODE_WALL_TIME && isTimestampDomain(xDomain),
@@ -1084,14 +1151,22 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
   const onDataZoom = useMemo(
     () => ({
       datazoom: (event) => {
-        const next = readDataZoomRange(event);
+        const next = readDataZoomRanges(event);
         if (!next || typeof onValueChange !== "function" || !panelId) return;
-        const nextTailPinned = next.end >= 99.5;
-        if (!zoomRangeChanged(zoomRange, next) && (!isHistoryPanel || tailPinned === nextTailPinned)) return;
-        onValueChange(panelId, writeZoomPanelValue(value, next, isHistoryPanel ? nextTailPinned : null), false);
+        const nextX = next.x || zoomRange;
+        const nextY = next.y || yZoomRange;
+        const nextTailPinned = nextX.end >= 99.5;
+        const xChanged = Boolean(next.x) && zoomRangeChanged(zoomRange, nextX);
+        const yChanged = Boolean(next.y) && zoomRangeChanged(yZoomRange, nextY);
+        if (!xChanged && !yChanged && (!isHistoryPanel || tailPinned === nextTailPinned)) return;
+        onValueChange(
+          panelId,
+          writeZoomPanelValue(value, nextX, isHistoryPanel ? nextTailPinned : null, nextY),
+          false,
+        );
       },
     }),
-    [isHistoryPanel, onValueChange, panelId, tailPinned, value, zoomRange],
+    [isHistoryPanel, onValueChange, panelId, tailPinned, value, yZoomRange, zoomRange],
   );
   const option = useMemo(
     () => ({
@@ -1126,7 +1201,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
         trigger: "axis",
         formatter: buildTimeseriesTooltipFormatter(historyXAxisMode, usesTimestampXAxis, xAxisOriginMs),
       },
-      dataZoom: buildDataZoom(zoomRange),
+      dataZoom: buildDataZoom(zoomRange, true, true, yZoomRange, true),
       series: series.map((item, index) => ({
         type: "line",
         name: item.label,
@@ -1143,7 +1218,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
         },
       })),
     }),
-    [domain, historyXAxisMode, panelId, series, usesTimestampXAxis, xAxisOriginMs, xDomain, zoomRange],
+    [domain, historyXAxisMode, panelId, series, usesTimestampXAxis, xAxisOriginMs, xDomain, yZoomRange, zoomRange],
   );
   if (data.length === 0) return null;
   return (
@@ -1159,7 +1234,11 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
             onResetView={
               panelId && typeof onValueChange === "function"
                 ? () =>
-                    onValueChange(panelId, writeZoomPanelValue(value, FULL_ZOOM, isHistoryPanel ? true : null), false)
+                    onValueChange(
+                      panelId,
+                      writeZoomPanelValue(value, FULL_ZOOM, isHistoryPanel ? true : null, FULL_ZOOM),
+                      false,
+                    )
                 : null
             }
           />
@@ -1795,6 +1874,7 @@ const ScalarImageHeatmapPanel = ({
 
   const heatmapMargins = useMemo(() => ({ left: 56, right: 154, top: 16, bottom: 44 }), []);
   const zoomRange = readZoomFromPanelValue(value, FULL_ZOOM);
+  const yZoomRange = readYZoomFromPanelValue(value, FULL_ZOOM);
   const chartHeight = useMemo(() => {
     if (width <= 0 || height <= 0 || panelWidth <= 0) return 360;
     const innerWidth = Math.max(1, panelWidth - heatmapMargins.left - heatmapMargins.right);
@@ -1873,7 +1953,7 @@ const ScalarImageHeatmapPanel = ({
         textStyle: { color: "#64748b", fontSize: 12 },
         inRange: { color: scalarHeatmapColors },
       },
-      dataZoom: buildDataZoom(zoomRange, true, true),
+      dataZoom: buildDataZoom(zoomRange, true, true, yZoomRange, true),
       series: [
         {
           type: "heatmap",
@@ -1900,6 +1980,7 @@ const ScalarImageHeatmapPanel = ({
       width,
       xCenters,
       zoomRange,
+      yZoomRange,
       yCenters,
       zmax,
       zmin,
@@ -1909,12 +1990,16 @@ const ScalarImageHeatmapPanel = ({
     () => ({
       datazoom: (event) => {
         if (typeof onValueChange !== "function" || !panelId) return;
-        const next = readDataZoomRange(event) || zoomRange;
-        if (!zoomRangeChanged(zoomRange, next)) return;
-        onValueChange(panelId, writeZoomPanelValue(value, next), false);
+        const next = readDataZoomRanges(event);
+        const nextX = next?.x || zoomRange;
+        const nextY = next?.y || yZoomRange;
+        const xChanged = Boolean(next?.x) && zoomRangeChanged(zoomRange, nextX);
+        const yChanged = Boolean(next?.y) && zoomRangeChanged(yZoomRange, nextY);
+        if (!xChanged && !yChanged) return;
+        onValueChange(panelId, writeZoomPanelValue(value, nextX, null, nextY), false);
       },
     }),
-    [onValueChange, panelId, value, zoomRange],
+    [onValueChange, panelId, value, yZoomRange, zoomRange],
   );
   useEffect(() => {
     const element = figureRef.current;
@@ -1960,7 +2045,7 @@ const ScalarImageHeatmapPanel = ({
             echartsRef={echartsRef}
             onResetView={
               panelId && typeof onValueChange === "function"
-                ? () => onValueChange(panelId, writeZoomPanelValue(value, FULL_ZOOM), false)
+                ? () => onValueChange(panelId, writeZoomPanelValue(value, FULL_ZOOM, null, FULL_ZOOM), false)
                 : null
             }
           />
@@ -2016,6 +2101,9 @@ const HistogramPanel = ({
   const zoomRange = isBundleControlled
     ? readHistogramZoomFromPanelValue(value, FULL_ZOOM)
     : readZoomFromPanelValue(value, FULL_ZOOM);
+  const yZoomRange = isBundleControlled
+    ? readHistogramYZoomFromPanelValue(value, FULL_ZOOM)
+    : readYZoomFromPanelValue(value, FULL_ZOOM);
   const view = isBundleControlled ? readHistogramBundleView(value) : {};
   const showRelativeErrors = isBundleControlled ? view.show_relative_error !== false : localShowRelativeErrors;
   const requestedSortMode = isBundleControlled
@@ -2292,10 +2380,23 @@ const HistogramPanel = ({
             const label = categoriesData[idx] ?? String(idx);
             const val = Number(bins[idx]?.value);
             const err = Number(bins[idx]?.error);
-            return `${escapeXml(label)}: ${formatScientific(val, 6)} ${Number.isFinite(err) && err > 0 ? `(±${formatScientific(err, 6)})` : ""}`;
+            const absErrorText =
+              Number.isFinite(err) && err > 0 ? `±${formatScientific(err, 6)}` : "n/a";
+            const relError =
+              Number.isFinite(val) && Number.isFinite(err) && val !== 0
+                ? Math.abs(err / val)
+                : null;
+            const relErrorText = Number.isFinite(relError)
+              ? formatScientific(relError, 6)
+              : "n/a";
+            return [
+              `${escapeXml(label)}: ${formatScientific(val, 6)}`,
+              `abs error: ${absErrorText}`,
+              `rel error: ${relErrorText}`,
+            ].join("<br/>");
           },
         },
-        dataZoom: buildDataZoom(zoomRange, false),
+        dataZoom: buildDataZoom(zoomRange, false, true, yZoomRange, true),
         series: [
           ...(Array.isArray(binErrorData) && binErrorData.length > 0
             ? [
@@ -2442,7 +2543,7 @@ const HistogramPanel = ({
           return yScale === "log" ? formatSignedLogAxisValue(numeric) : formatScientific(numeric, 6);
         },
       },
-      dataZoom: buildDataZoom(zoomRange, false),
+      dataZoom: buildDataZoom(zoomRange, false, true, yZoomRange, true),
       series: [
         ...(showRelativeErrors && Array.isArray(binErrorData) && binErrorData.length > 0
           ? [buildErrorBarSeries({ name: "error", data: binErrorData })]
@@ -2479,6 +2580,7 @@ const HistogramPanel = ({
     xDomain,
     yDomain,
     yScale,
+    yZoomRange,
     zoomRange,
   ]);
 
@@ -2514,7 +2616,7 @@ const HistogramPanel = ({
           trigger: "axis",
           valueFormatter: (value) => (Number.isFinite(Number(value)) ? formatScientific(Number(value), 6) : "n/a"),
         },
-        dataZoom: buildDataZoom(zoomRange, true),
+        dataZoom: buildDataZoom(zoomRange, true, true, yZoomRange, true),
         series: [
           buildDiscreteOffsetRangeBarSeries({
             name: "relative_error",
@@ -2573,7 +2675,7 @@ const HistogramPanel = ({
         trigger: "axis",
         valueFormatter: (value) => (Number.isFinite(Number(value)) ? formatScientific(Number(value), 6) : "n/a"),
       },
-      dataZoom: buildDataZoom(zoomRange, true),
+      dataZoom: buildDataZoom(zoomRange, true, true, yZoomRange, true),
       series: [
         {
           type: "line",
@@ -2623,23 +2725,30 @@ const HistogramPanel = ({
     relativeErrorData,
     relativeErrorYDomain,
     xDomain,
+    yZoomRange,
     zoomRange,
   ]);
 
   const onDataZoom = useMemo(
     () => ({
       datazoom: (event) => {
-        const next = readDataZoomRange(event);
+        const next = readDataZoomRanges(event);
         if (!next || typeof onValueChange !== "function" || !sourcePanelId) return;
-        if (!zoomRangeChanged(zoomRange, next)) return;
+        const nextX = next.x || zoomRange;
+        const nextY = next.y || yZoomRange;
+        const xChanged = Boolean(next.x) && zoomRangeChanged(zoomRange, nextX);
+        const yChanged = Boolean(next.y) && zoomRangeChanged(yZoomRange, nextY);
+        if (!xChanged && !yChanged) return;
         onValueChange(
           sourcePanelId,
-          isBundleControlled ? writeHistogramBundlePanelValue(value, { zoom: next }) : writeZoomPanelValue(value, next),
+          isBundleControlled
+            ? writeHistogramBundlePanelValue(value, { zoom: nextX, yZoom: nextY })
+            : writeZoomPanelValue(value, nextX, null, nextY),
           false,
         );
       },
     }),
-    [isBundleControlled, onValueChange, sourcePanelId, value, zoomRange],
+    [isBundleControlled, onValueChange, sourcePanelId, value, yZoomRange, zoomRange],
   );
 
   if (bins.length === 0) return null;
@@ -2662,8 +2771,8 @@ const HistogramPanel = ({
                       onValueChange(
                         sourcePanelId,
                         isBundleControlled
-                          ? writeHistogramBundlePanelValue(value, { zoom: FULL_ZOOM })
-                          : writeZoomPanelValue(value, FULL_ZOOM),
+                          ? writeHistogramBundlePanelValue(value, { zoom: FULL_ZOOM, yZoom: FULL_ZOOM })
+                          : writeZoomPanelValue(value, FULL_ZOOM, null, FULL_ZOOM),
                         false,
                       )
                   : null
@@ -3030,6 +3139,33 @@ const TablePanel = ({
               GammaLoop histogram bundle is empty or incompatible with the current payload shape. Check backend
               task-output errors for accumulator decode details.
             </Alert>
+            <Box sx={{ mt: 1.5 }}>
+              <Typography variant="caption" color="text.secondary">
+                Debug: raw panel state from API
+              </Typography>
+              <Box
+                component="pre"
+                sx={{
+                  mt: 0.75,
+                  mb: 0,
+                  p: 1,
+                  maxHeight: 220,
+                  overflow: "auto",
+                  backgroundColor: "rgba(15, 23, 42, 0.04)",
+                  borderRadius: 1,
+                  fontSize: "0.75rem",
+                  lineHeight: 1.35,
+                }}
+              >
+                {formatDebugJson({
+                  panel_id: state?.panel_id,
+                  columns: state?.columns,
+                  rows: state?.rows,
+                  payload: state?.payload,
+                  selected_value: state?.selected_value,
+                })}
+              </Box>
+            </Box>
           </CardContent>
         </Card>
       );

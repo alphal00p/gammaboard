@@ -51,6 +51,38 @@ test-e2e:
     just stop-kill
     cargo test -q --test full_stack_cli -- --ignored --nocapture --test-threads=1
 
+cli_example:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    run_gammaloop="gammaloop_tth"
+    run_python="python-scalar-python-sampler-flake-demo"
+    run_symbolica="symbolica-havana-pdf-1d2d"
+
+    {{bin}} db delete --yes
+    {{bin}} db start
+    {{bin}} node auto-run 8
+
+    sleep 4
+
+    {{bin}} run add "configs/runs/gammaloop.toml"
+    {{bin}} run task add "$run_gammaloop" "configs/tasks/train_sample.toml"
+    {{bin}} run add "configs/runs/python-scalar-python-sampler-flake-demo.toml"
+    {{bin}} run add "configs/runs/symbolica-havana-pdf-1d2d.toml"
+
+    {{bin}} node assign "w-1" sampler-aggregator "$run_gammaloop"
+    {{bin}} node assign "w-2" evaluator "$run_gammaloop"
+    {{bin}} node assign "w-3" evaluator "$run_gammaloop"
+    {{bin}} node assign "w-4" evaluator "$run_gammaloop"
+
+    {{bin}} node assign "w-5" sampler-aggregator "$run_python"
+    {{bin}} node assign "w-6" evaluator "$run_python"
+
+    {{bin}} node assign "w-7" sampler-aggregator "$run_symbolica"
+    {{bin}} node assign "w-8" evaluator "$run_symbolica"
+
+    {{bin}} run list
+
 stop:
     -timeout 5s {{bin}} run pause -a
     -timeout 5s {{bin}} node stop -a
