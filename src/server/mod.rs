@@ -710,6 +710,11 @@ async fn get_run_task_output(
     let limit = clamp_limit(request.limit);
     let cursor =
         parse_task_panel_cursor(request.request.cursor.as_deref()).map_err(ApiError::BadRequest)?;
+    let run = state
+        .store
+        .get_run_progress(run_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
     let task = load_run_task(&state.store, run_id, task_id).await?;
     let mut effective_accumulator_config =
         stage_api::resolve_effective_sample_accumulator_config(&state.store, run_id, &task).await?;
@@ -811,6 +816,7 @@ async fn get_run_task_output(
             cursor,
             &task,
             &request.request.panel_state,
+            run.target.as_ref(),
             completed_samples_per_second,
             smoothed_eta_seconds,
             current_accumulator.as_ref(),

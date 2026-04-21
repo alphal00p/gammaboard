@@ -14,7 +14,9 @@ pub use self::empty::EmptyAccumulatorState;
 pub use self::full::{
     ComplexValue, FullAccumulatorProgress, FullComplexAccumulatorState, FullScalarAccumulatorState,
 };
-pub use self::gammaloop::{GammaLoopAccumulatorDigest, GammaLoopAccumulatorState};
+pub use self::gammaloop::{
+    GammaLoopAccumulatorDigest, GammaLoopAccumulatorState, GammaLoopDiagnostics,
+};
 pub use self::scalar::ScalarAccumulatorState;
 
 /// Accumulator payloads are persisted and served through JSON-facing APIs.

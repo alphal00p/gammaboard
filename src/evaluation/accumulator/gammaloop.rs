@@ -1,12 +1,34 @@
 use super::{Accumulator, ComplexAccumulatorState};
 use crate::core::{EngineError, RunSpec};
+use gammalooprs::integrands::evaluation::{EvaluationResult, StabilityStatus};
 use gammalooprs::observables::{HistogramSnapshot, ObservableSnapshotBundle};
+use gammalooprs::settings::runtime::Precision;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GammaLoopAccumulatorState {
     pub bundle: ObservableSnapshotBundle,
     pub estimate: ComplexAccumulatorState,
+    #[serde(default)]
+    pub diagnostics: GammaLoopDiagnostics,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GammaLoopDiagnostics {
+    pub count_total: i64,
+    pub count_double_precision: i64,
+    pub count_quad_precision: i64,
+    pub count_arb_precision: i64,
+    pub count_nan: i64,
+    pub count_nan_or_unstable: i64,
+    pub count_loop_momenta_escalated: i64,
+    pub total_eval_time_ms: f64,
+    pub total_integrand_eval_time_ms: f64,
+    pub total_evaluator_eval_time_ms: f64,
+    pub total_parameterization_time_ms: f64,
+    pub total_event_processing_time_ms: f64,
+    pub total_generated_events: i64,
+    pub total_accepted_events: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,6 +44,64 @@ pub struct GammaLoopAccumulatorDigest {
 }
 
 impl GammaLoopAccumulatorState {
+    pub fn diagnostics_from_evaluation_results(
+        results: &[EvaluationResult],
+    ) -> GammaLoopDiagnostics {
+        let mut diagnostics = GammaLoopDiagnostics::default();
+        for result in results {
+            diagnostics.count_total += 1;
+            diagnostics.total_eval_time_ms +=
+                result.evaluation_metadata.total_timing.as_secs_f64() * 1000.0;
+            diagnostics.total_integrand_eval_time_ms += result
+                .evaluation_metadata
+                .integrand_evaluation_time
+                .as_secs_f64()
+                * 1000.0;
+            diagnostics.total_evaluator_eval_time_ms += result
+                .evaluation_metadata
+                .evaluator_evaluation_time
+                .as_secs_f64()
+                * 1000.0;
+            diagnostics.total_parameterization_time_ms += result
+                .evaluation_metadata
+                .parameterization_time
+                .as_secs_f64()
+                * 1000.0;
+            diagnostics.total_event_processing_time_ms += result
+                .evaluation_metadata
+                .event_processing_time
+                .as_secs_f64()
+                * 1000.0;
+            diagnostics.total_generated_events +=
+                result.evaluation_metadata.generated_event_count as i64;
+            diagnostics.total_accepted_events +=
+                result.evaluation_metadata.accepted_event_count as i64;
+            if result.evaluation_metadata.is_nan {
+                diagnostics.count_nan += 1;
+            }
+            if result.evaluation_metadata.loop_momenta_escalation.is_some() {
+                diagnostics.count_loop_momenta_escalated += 1;
+            }
+            let final_stability = result.evaluation_metadata.stability_results.last();
+            if result.evaluation_metadata.is_nan
+                || final_stability
+                    .map(|entry| matches!(entry.status, StabilityStatus::Unstable(_)))
+                    .unwrap_or(false)
+            {
+                diagnostics.count_nan_or_unstable += 1;
+            }
+            match final_stability
+                .map(|entry| entry.precision)
+                .unwrap_or(Precision::Double)
+            {
+                Precision::Double => diagnostics.count_double_precision += 1,
+                Precision::Quad => diagnostics.count_quad_precision += 1,
+                Precision::Arb => diagnostics.count_arb_precision += 1,
+            }
+        }
+        diagnostics
+    }
+
     pub fn cleared_bundle(bundle: &ObservableSnapshotBundle) -> ObservableSnapshotBundle {
         ObservableSnapshotBundle {
             histograms: bundle
@@ -43,6 +123,7 @@ impl GammaLoopAccumulatorState {
             })?;
         }
         self.estimate.merge(other.estimate);
+        self.diagnostics.merge_in_place(other.diagnostics);
         Ok(())
     }
 
@@ -130,6 +211,76 @@ impl GammaLoopAccumulatorState {
     }
 }
 
+impl GammaLoopDiagnostics {
+    pub fn merge_in_place(&mut self, other: Self) {
+        self.count_total += other.count_total;
+        self.count_double_precision += other.count_double_precision;
+        self.count_quad_precision += other.count_quad_precision;
+        self.count_arb_precision += other.count_arb_precision;
+        self.count_nan += other.count_nan;
+        self.count_nan_or_unstable += other.count_nan_or_unstable;
+        self.count_loop_momenta_escalated += other.count_loop_momenta_escalated;
+        self.total_eval_time_ms += other.total_eval_time_ms;
+        self.total_integrand_eval_time_ms += other.total_integrand_eval_time_ms;
+        self.total_evaluator_eval_time_ms += other.total_evaluator_eval_time_ms;
+        self.total_parameterization_time_ms += other.total_parameterization_time_ms;
+        self.total_event_processing_time_ms += other.total_event_processing_time_ms;
+        self.total_generated_events += other.total_generated_events;
+        self.total_accepted_events += other.total_accepted_events;
+    }
+
+    pub fn avg_eval_time_ms(&self) -> f64 {
+        safe_ratio(self.total_eval_time_ms, self.count_total)
+    }
+
+    pub fn avg_integrand_eval_time_ms(&self) -> f64 {
+        safe_ratio(self.total_integrand_eval_time_ms, self.count_total)
+    }
+
+    pub fn avg_evaluator_eval_time_ms(&self) -> f64 {
+        safe_ratio(self.total_evaluator_eval_time_ms, self.count_total)
+    }
+
+    pub fn avg_parameterization_time_ms(&self) -> f64 {
+        safe_ratio(self.total_parameterization_time_ms, self.count_total)
+    }
+
+    pub fn avg_event_processing_time_ms(&self) -> f64 {
+        safe_ratio(self.total_event_processing_time_ms, self.count_total)
+    }
+
+    pub fn promoted_to_quad_ratio(&self) -> f64 {
+        safe_ratio(self.count_quad_precision as f64, self.count_total)
+    }
+
+    pub fn promoted_to_arb_ratio(&self) -> f64 {
+        safe_ratio(self.count_arb_precision as f64, self.count_total)
+    }
+
+    pub fn nan_or_unstable_ratio(&self) -> f64 {
+        safe_ratio(self.count_nan_or_unstable as f64, self.count_total)
+    }
+
+    pub fn loop_momenta_escalated_ratio(&self) -> f64 {
+        safe_ratio(self.count_loop_momenta_escalated as f64, self.count_total)
+    }
+
+    pub fn accepted_event_ratio(&self) -> f64 {
+        safe_ratio(
+            self.total_accepted_events as f64,
+            self.total_generated_events,
+        )
+    }
+}
+
+fn safe_ratio(numerator: f64, denominator: i64) -> f64 {
+    if denominator > 0 {
+        numerator / denominator as f64
+    } else {
+        0.0
+    }
+}
+
 fn cleared_histogram_snapshot(histogram: &HistogramSnapshot) -> HistogramSnapshot {
     let mut cleared = histogram.clone();
     cleared.sample_count = 0;
@@ -203,7 +354,7 @@ impl From<GammaLoopAccumulatorState> for GammaLoopAccumulatorDigest {
 
 #[cfg(test)]
 mod tests {
-    use super::GammaLoopAccumulatorState;
+    use super::{GammaLoopAccumulatorState, GammaLoopDiagnostics};
     use crate::evaluation::{Accumulator, ComplexAccumulatorState};
     use gammalooprs::observables::{
         HistogramBinSnapshot, HistogramSnapshot, HistogramStatisticsSnapshot, ObservablePhase,
@@ -286,6 +437,7 @@ mod tests {
                 weight_sum: estimate_count as f64,
                 nan_count: 0,
             },
+            diagnostics: GammaLoopDiagnostics::default(),
         }
     }
 

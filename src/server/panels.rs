@@ -174,6 +174,8 @@ pub enum PanelState {
         points: Vec<PlotPoint>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         smooth: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<f64>,
     },
     MultiTimeseries {
         panel_id: String,
@@ -326,6 +328,7 @@ pub(crate) fn scalar_timeseries_panel_with_smoothing(
         panel_id: panel_id.to_string(),
         points,
         smooth,
+        target: None,
     }
 }
 

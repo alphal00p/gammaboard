@@ -5,11 +5,13 @@ use super::{
 use crate::core::{
     AccumulatorConfig, EngineError, RunTaskSpec, SampleErrorProjection, SampleStopCondition,
 };
-use crate::evaluation::{Accumulator, AccumulatorState, SemanticAccumulatorKind};
+use crate::evaluation::{
+    Accumulator, AccumulatorState, GammaLoopDiagnostics, SemanticAccumulatorKind,
+};
 use crate::server::panels::{
-    PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, key_value, key_value_panel,
-    panel_spec, progress_panel, scalar_timeseries_panel_with_smoothing, table_panel_with_payload,
-    with_panel_width,
+    PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, TickBreakdownSegment,
+    key_value, key_value_panel, panel_spec, progress_panel, scalar_timeseries_panel_with_smoothing,
+    table_panel_with_payload, tick_breakdown_panel, with_panel_width,
 };
 use gammalooprs::observables::{ObservablePhase, ObservableValueTransform};
 use serde::Serialize;
@@ -37,6 +39,8 @@ pub(super) fn projectors(
         Some(AccumulatorConfig::Gammaloop) | None
     ) {
         projectors.push(gammaloop_histogram_bundle_projector());
+        projectors.push(gammaloop_evaluation_timing_projector());
+        projectors.push(gammaloop_evaluation_diagnostics_projector());
     }
     projectors
 }
@@ -74,22 +78,58 @@ fn sample_progress_projector() -> TaskPanelProjector {
 fn real_estimate_history_projector(
     accumulator_config: Option<&AccumulatorConfig>,
 ) -> TaskPanelProjector {
-    persisted_first_history_projector(
-        "real_estimate_history",
-        estimate_label(accumulator_config),
-        accumulator_config.cloned(),
-        |accumulator| Some(real_estimate_history_panel(accumulator)),
+    let current_config = accumulator_config.cloned();
+    let history_config = accumulator_config.cloned();
+    panel_projector_with_source(
+        with_panel_width(
+            panel_spec(
+                "real_estimate_history",
+                estimate_label(accumulator_config),
+                PanelKind::ScalarTimeseries,
+                PanelHistoryMode::Append,
+            ),
+            PanelWidth::Full,
+        ),
+        TaskPanelCurrentSourcePolicy::PersistedFirst,
+        move |ctx| {
+            let target = run_target_from_json(ctx.run_target).map(|target| target.re);
+            Ok(sample_accumulator(ctx, current_config.as_ref())?
+                .and_then(|accumulator| Some(real_estimate_history_panel(accumulator)))
+                .map(|panel| with_scalar_target(panel, target)))
+        },
+        move |ctx| {
+            Ok(decode_history_observable(ctx, history_config.as_ref())?
+                .and_then(|accumulator| Some(real_estimate_history_panel(accumulator))))
+        },
     )
 }
 
 fn imag_estimate_history_projector(
     accumulator_config: Option<&AccumulatorConfig>,
 ) -> TaskPanelProjector {
-    persisted_first_history_projector(
-        "imag_estimate_history",
-        "Imaginary Mean",
-        accumulator_config.cloned(),
-        imag_estimate_history_panel,
+    let current_config = accumulator_config.cloned();
+    let history_config = accumulator_config.cloned();
+    panel_projector_with_source(
+        with_panel_width(
+            panel_spec(
+                "imag_estimate_history",
+                "Imaginary Mean",
+                PanelKind::ScalarTimeseries,
+                PanelHistoryMode::Append,
+            ),
+            PanelWidth::Full,
+        ),
+        TaskPanelCurrentSourcePolicy::PersistedFirst,
+        move |ctx| {
+            let target = run_target_from_json(ctx.run_target).map(|target| target.im);
+            Ok(sample_accumulator(ctx, current_config.as_ref())?
+                .and_then(imag_estimate_history_panel)
+                .map(|panel| with_scalar_target(panel, target)))
+        },
+        move |ctx| {
+            Ok(decode_history_observable(ctx, history_config.as_ref())?
+                .and_then(imag_estimate_history_panel))
+        },
     )
 }
 
@@ -145,7 +185,9 @@ fn estimate_summary_projector(
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
-            Ok(sample_accumulator(ctx, accumulator_config.as_ref())?.map(estimate_summary_panel))
+            let run_target = run_target_from_json(ctx.run_target);
+            Ok(sample_accumulator(ctx, accumulator_config.as_ref())?
+                .map(|accumulator| estimate_summary_panel(accumulator, run_target)))
         },
         |_ctx| Ok(None),
     )
@@ -172,6 +214,58 @@ fn gammaloop_histogram_bundle_projector() -> TaskPanelProjector {
             Ok(
                 decode_history_observable(ctx, Some(&AccumulatorConfig::Gammaloop))?
                     .and_then(gammaloop_histogram_bundle_panel),
+            )
+        },
+    )
+}
+
+fn gammaloop_evaluation_diagnostics_projector() -> TaskPanelProjector {
+    panel_projector(
+        with_panel_width(
+            panel_spec(
+                "gammaloop_evaluation_diagnostics",
+                "Evaluation Diagnostics",
+                PanelKind::KeyValue,
+                PanelHistoryMode::None,
+            ),
+            PanelWidth::Full,
+        ),
+        |ctx| {
+            Ok(
+                sample_accumulator(ctx, Some(&AccumulatorConfig::Gammaloop))?
+                    .and_then(gammaloop_evaluation_diagnostics_panel),
+            )
+        },
+        |ctx| {
+            Ok(
+                decode_history_observable(ctx, Some(&AccumulatorConfig::Gammaloop))?
+                    .and_then(gammaloop_evaluation_diagnostics_panel),
+            )
+        },
+    )
+}
+
+fn gammaloop_evaluation_timing_projector() -> TaskPanelProjector {
+    panel_projector(
+        with_panel_width(
+            panel_spec(
+                "gammaloop_evaluation_timing",
+                "Evaluation Timing Breakdown",
+                PanelKind::TickBreakdown,
+                PanelHistoryMode::None,
+            ),
+            PanelWidth::Full,
+        ),
+        |ctx| {
+            Ok(
+                sample_accumulator(ctx, Some(&AccumulatorConfig::Gammaloop))?
+                    .and_then(gammaloop_evaluation_timing_panel),
+            )
+        },
+        |ctx| {
+            Ok(
+                decode_history_observable(ctx, Some(&AccumulatorConfig::Gammaloop))?
+                    .and_then(gammaloop_evaluation_timing_panel),
             )
         },
     )
@@ -412,15 +506,19 @@ fn rsd_history_panel(accumulator: AccumulatorState) -> PanelState {
     )
 }
 
-fn estimate_summary_panel(accumulator: AccumulatorState) -> PanelState {
+fn estimate_summary_panel(
+    accumulator: AccumulatorState,
+    run_target: Option<RunTarget>,
+) -> PanelState {
     key_value_panel(
         "estimate_summary",
-        base_estimate_summary_entries(&accumulator),
+        base_estimate_summary_entries(&accumulator, run_target),
     )
 }
 
 fn base_estimate_summary_entries(
     accumulator: &AccumulatorState,
+    run_target: Option<RunTarget>,
 ) -> Vec<crate::server::panels::KeyValueEntry> {
     match accumulator {
         AccumulatorState::Empty(_) => vec![key_value("count", "Count", 0)],
@@ -459,25 +557,52 @@ fn base_estimate_summary_entries(
             ),
             key_value("rsd", "RSD", state.rsd()),
         ],
-        AccumulatorState::Gammaloop(state) => vec![
-            key_value("count", "Count", state.sample_count()),
-            key_value(
-                "real_mean",
-                "Real Mean",
-                estimate_value(state.real_mean(), state.real_stderr()),
-            ),
-            key_value(
-                "imag_mean",
-                "Imag Mean",
-                estimate_value(state.imag_mean(), state.imag_stderr()),
-            ),
-            key_value(
-                "abs_mean",
-                "Abs Mean",
-                estimate_value(state.abs_mean(), state.abs_stderr()),
-            ),
-            key_value("rsd", "RSD", state.rsd()),
-        ],
+        AccumulatorState::Gammaloop(state) => {
+            let mut entries = vec![
+                key_value("count", "Count", state.sample_count()),
+                key_value(
+                    "real_mean",
+                    "Real Mean",
+                    estimate_value(state.real_mean(), state.real_stderr()),
+                ),
+                key_value(
+                    "imag_mean",
+                    "Imag Mean",
+                    estimate_value(state.imag_mean(), state.imag_stderr()),
+                ),
+                key_value(
+                    "abs_mean",
+                    "Abs Mean",
+                    estimate_value(state.abs_mean(), state.abs_stderr()),
+                ),
+                key_value("rsd", "RSD", state.rsd()),
+            ];
+            if let Some(target) = run_target {
+                entries.push(key_value("target_real", "Target Real", target.re));
+                entries.push(key_value("target_imag", "Target Imag", target.im));
+                entries.push(key_value(
+                    "target_delta_real_sigma",
+                    "Δ Real [σ]",
+                    delta_sigma(state.real_mean(), state.real_stderr(), target.re),
+                ));
+                entries.push(key_value(
+                    "target_delta_real_percent",
+                    "Δ Real [%]",
+                    delta_percent(state.real_mean(), target.re),
+                ));
+                entries.push(key_value(
+                    "target_delta_imag_sigma",
+                    "Δ Imag [σ]",
+                    delta_sigma(state.imag_mean(), state.imag_stderr(), target.im),
+                ));
+                entries.push(key_value(
+                    "target_delta_imag_percent",
+                    "Δ Imag [%]",
+                    delta_percent(state.imag_mean(), target.im),
+                ));
+            }
+            entries
+        }
         AccumulatorState::FullScalar(state) => vec![
             key_value("count", "Count", state.values.len()),
             key_value(
@@ -507,6 +632,88 @@ fn base_estimate_summary_entries(
                     .fold(0.0, f64::max),
             ),
         ],
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RunTarget {
+    re: f64,
+    im: f64,
+}
+
+fn run_target_from_json(run_target: Option<&JsonValue>) -> Option<RunTarget> {
+    let value = run_target?;
+    if let Some(scalar) = value.as_f64() {
+        return Some(RunTarget {
+            re: scalar,
+            im: 0.0,
+        });
+    }
+    let object = value.as_object()?;
+    let kind = object
+        .get("kind")
+        .or_else(|| object.get("type"))
+        .and_then(JsonValue::as_str)
+        .map(|value| value.to_ascii_lowercase());
+    if matches!(kind.as_deref(), Some("scalar") | Some("value")) {
+        let scalar = object.get("value").and_then(JsonValue::as_f64)?;
+        return Some(RunTarget {
+            re: scalar,
+            im: 0.0,
+        });
+    }
+    let source = object
+        .get("value")
+        .and_then(JsonValue::as_object)
+        .unwrap_or(object);
+    let re = source
+        .get("re")
+        .or_else(|| source.get("real"))
+        .and_then(JsonValue::as_f64)?;
+    let im = source
+        .get("im")
+        .or_else(|| source.get("imag"))
+        .and_then(JsonValue::as_f64)
+        .unwrap_or(0.0);
+    Some(RunTarget { re, im })
+}
+
+fn with_scalar_target(panel: PanelState, target: Option<f64>) -> PanelState {
+    match panel {
+        PanelState::ScalarTimeseries {
+            panel_id,
+            points,
+            smooth,
+            ..
+        } => PanelState::ScalarTimeseries {
+            panel_id,
+            points,
+            smooth,
+            target,
+        },
+        other => other,
+    }
+}
+
+fn delta_sigma(value: f64, error: f64, target: f64) -> f64 {
+    let sigma = error.abs();
+    if sigma > 0.0 && sigma.is_finite() && value.is_finite() && target.is_finite() {
+        (value - target).abs() / sigma
+    } else if (value - target).abs() == 0.0 {
+        0.0
+    } else {
+        f64::INFINITY
+    }
+}
+
+fn delta_percent(value: f64, target: f64) -> f64 {
+    let denominator = target.abs();
+    if denominator > 0.0 && denominator.is_finite() && value.is_finite() && target.is_finite() {
+        (value - target).abs() / denominator * 100.0
+    } else if (value - target).abs() == 0.0 {
+        0.0
+    } else {
+        f64::INFINITY
     }
 }
 
@@ -723,4 +930,138 @@ fn gammaloop_histogram_bundle_panel(accumulator: AccumulatorState) -> Option<Pan
             .collect(),
         Some(payload),
     ))
+}
+
+fn gammaloop_evaluation_diagnostics_panel(accumulator: AccumulatorState) -> Option<PanelState> {
+    let AccumulatorState::Gammaloop(state) = accumulator else {
+        return None;
+    };
+    Some(key_value_panel(
+        "gammaloop_evaluation_diagnostics",
+        gammaloop_diagnostics_entries(&state.diagnostics),
+    ))
+}
+
+fn gammaloop_diagnostics_entries(
+    diagnostics: &GammaLoopDiagnostics,
+) -> Vec<crate::server::panels::KeyValueEntry> {
+    vec![
+        key_value("count_total", "Evaluations", diagnostics.count_total),
+        key_value(
+            "count_double_precision",
+            "Double Precision",
+            diagnostics.count_double_precision,
+        ),
+        key_value(
+            "count_quad_precision",
+            "Quad Precision",
+            diagnostics.count_quad_precision,
+        ),
+        key_value(
+            "count_arb_precision",
+            "Arb Precision",
+            diagnostics.count_arb_precision,
+        ),
+        key_value(
+            "promoted_to_quad_ratio",
+            "Quad Fraction",
+            diagnostics.promoted_to_quad_ratio(),
+        ),
+        key_value(
+            "promoted_to_arb_ratio",
+            "Arb Fraction",
+            diagnostics.promoted_to_arb_ratio(),
+        ),
+        key_value("count_nan", "NaN", diagnostics.count_nan),
+        key_value(
+            "count_nan_or_unstable",
+            "NaN Or Unstable",
+            diagnostics.count_nan_or_unstable,
+        ),
+        key_value(
+            "nan_or_unstable_ratio",
+            "NaN/Unstable Fraction",
+            diagnostics.nan_or_unstable_ratio(),
+        ),
+        key_value(
+            "count_loop_momenta_escalated",
+            "Loop Momenta Escalated",
+            diagnostics.count_loop_momenta_escalated,
+        ),
+        key_value(
+            "loop_momenta_escalated_ratio",
+            "Escalation Fraction",
+            diagnostics.loop_momenta_escalated_ratio(),
+        ),
+        key_value(
+            "total_generated_events",
+            "Generated Events",
+            diagnostics.total_generated_events,
+        ),
+        key_value(
+            "total_accepted_events",
+            "Accepted Events",
+            diagnostics.total_accepted_events,
+        ),
+        key_value(
+            "accepted_event_ratio",
+            "Accepted/Generated",
+            diagnostics.accepted_event_ratio(),
+        ),
+    ]
+}
+
+fn gammaloop_evaluation_timing_panel(accumulator: AccumulatorState) -> Option<PanelState> {
+    let AccumulatorState::Gammaloop(state) = accumulator else {
+        return None;
+    };
+    let diagnostics = &state.diagnostics;
+    let segments = vec![
+        timing_segment(
+            "parameterization",
+            "Parameterization",
+            diagnostics.avg_parameterization_time_ms(),
+            "#0a9396",
+        ),
+        timing_segment(
+            "integrand",
+            "Integrand Evaluation",
+            diagnostics.avg_integrand_eval_time_ms(),
+            "#ca6702",
+        ),
+        timing_segment(
+            "evaluator",
+            "Evaluator Call",
+            diagnostics.avg_evaluator_eval_time_ms(),
+            "#bb3e03",
+        ),
+        timing_segment(
+            "events",
+            "Event Processing",
+            diagnostics.avg_event_processing_time_ms(),
+            "#6d597a",
+        ),
+    ]
+    .into_iter()
+    .filter(|segment| segment.value_ms.is_finite() && segment.value_ms > 0.0)
+    .collect::<Vec<_>>();
+
+    let segment_sum_ms: f64 = segments.iter().map(|segment| segment.value_ms).sum();
+    if segments.is_empty() || !segment_sum_ms.is_finite() || segment_sum_ms <= 0.0 {
+        return None;
+    }
+    Some(tick_breakdown_panel(
+        "gammaloop_evaluation_timing",
+        segment_sum_ms,
+        segments,
+    ))
+}
+
+fn timing_segment(key: &str, label: &str, value_ms: f64, color: &str) -> TickBreakdownSegment {
+    TickBreakdownSegment {
+        key: key.to_string(),
+        label: label.to_string(),
+        value_ms,
+        color: color.to_string(),
+    }
 }

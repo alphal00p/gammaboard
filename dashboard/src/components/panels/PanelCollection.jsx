@@ -42,6 +42,8 @@ const PANEL_ORDER_RANK = new Map([
   ["abs_signal_to_noise_history", 5],
   ["gammaloop_histogram_bundle", 20],
   ["gammaloop_selected_histogram", 21],
+  ["gammaloop_evaluation_timing", 22],
+  ["gammaloop_evaluation_diagnostics", 23],
 ]);
 
 const sortRenderablePanels = (panels) =>
@@ -887,6 +889,8 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
     .map((point) => remapTimeseriesPointXAxis(point, historyXAxisMode))
     .sort((a, b) => a.x - b.x);
   const meanData = points.map((point) => [Number(point?.x), Number(point?.y)]);
+  const targetValue = Number(state?.target);
+  const hasTargetLine = Number.isFinite(targetValue);
   const errorBarData = points
     .map((point) => {
       const x = Number(point?.x);
@@ -898,7 +902,10 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
       return [x, yMin, yMax];
     })
     .filter(Boolean);
-  const domain = fitDomain(points.flatMap((point) => [point.y, point.y_min, point.y_max]));
+  const domain = fitDomain([
+    ...points.flatMap((point) => [point.y, point.y_min, point.y_max]),
+    ...(hasTargetLine ? [targetValue] : []),
+  ]);
   const xDomain = fitXDomain(points.map((point) => point.x));
   const zoomRange = readZoomFromPanelValue(value, FULL_ZOOM);
   const usesTimestampXAxis = useMemo(
@@ -917,9 +924,10 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
         return Number.isFinite(x) && x >= visibleXRange.min && x <= visibleXRange.max;
       })
       .flatMap((point) => [point.y, point.y_min, point.y_max]);
+    if (hasTargetLine) inRangeValues.push(targetValue);
     const fitted = fitDomain(inRangeValues);
     return inRangeValues.length > 0 ? fitted : domain;
-  }, [domain, points, visibleXRange]);
+  }, [domain, hasTargetLine, points, targetValue, visibleXRange]);
   const bandSegments = useMemo(() => {
     const segments = [];
     for (let index = 1; index < points.length; index += 1) {
@@ -1053,6 +1061,22 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
           lineStyle: { width: 1.8, color: "#005f73" },
           connectNulls: false,
         },
+        ...(hasTargetLine
+          ? [
+              {
+                type: "line",
+                name: "target",
+                data: [
+                  [xDomain[0], targetValue],
+                  [xDomain[1], targetValue],
+                ],
+                smooth: false,
+                showSymbol: false,
+                lineStyle: { width: 1.4, type: "dashed", color: "#ca6702" },
+                connectNulls: false,
+              },
+            ]
+          : []),
       ],
     }),
     [
@@ -1062,7 +1086,9 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
       isHistoryPanel,
       meanData,
       panelId,
+      hasTargetLine,
       state?.smooth,
+      targetValue,
       usesTimestampXAxis,
       visibleDomain,
       xAxisOriginMs,

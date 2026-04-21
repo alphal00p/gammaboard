@@ -71,6 +71,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Samplers expose an optional `pdf(point)` hook where `point` is the materialized evaluator-domain point `(Vec<i64>, Vec<f64>)`; default is unsupported (`None`) for samplers that cannot define a meaningful PDF query.
 - Homogeneous batch-evaluator helpers are for fixed-rectangular inputs with per-batch-constant discrete and continuous dimensions. They must reject mixed or ragged batch point layouts explicitly and keep output cardinality equal to `batch.size()`.
 - `accumulator = { config = "gammaloop" }` is supported only with `evaluator.kind = "gammaloop"` and persists GammaLoop's native histogram snapshot bundle directly.
+- GammaLoop accumulators also persist merged per-batch evaluation diagnostics (precision promotions, instability/NaN counters, and timing/event aggregates) alongside the histogram bundle so task panels can expose evaluator internals.
 - Persisted and API-facing accumulator payloads must remain JSON-safe. Accumulator implementations must not emit raw `NaN` or infinite `f64` values into serialized state; they must sanitize, summarize, count, or reject such values explicitly inside the accumulator implementation instead of relying on storage-layer serialization failures. Full accumulators must preserve positional cardinality when non-finite values occur and persist which entry positions were invalid instead of dropping them.
 - Task files used for `run task add` may contain either `task = { ... }`, `[[task_queue]]`, or both. Normalize them as `task` first, then `task_queue`. Missing both should resolve to an empty task list.
 - There is no run-level accumulator default. A first executable task that needs a fresh accumulator must declare it explicitly.
@@ -109,6 +110,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Backend visualization uses the generic panel model in `src/server/panels.rs`.
 - The frontend should render panels generically; it should not reimplement domain projections or panel merge semantics.
 - GammaLoop sample observables should project a histogram bundle table whose payload includes the histogram bins; the frontend renders the selected-histogram chart client-side as a stepped histogram with bin error bars and a linear/log y-scale toggle, and table row selection should drive the selected histogram using the live bundle rows.
+- When a run-level complex target is configured, GammaLoop sample estimate history panels should include target overlays (real/imag target lines), and GammaLoop estimate summary should include target-comparison deltas (sigma and percent) for real/imag components.
 - Panel APIs are poll-based: clients send an optional opaque `cursor`, plus `panel_state` and `panel_actions`; the backend returns `PanelResponse`.
 - `append` is only valid when the backend can safely extend existing state; otherwise it must send `replace`.
 - Panel specs may include simple width hints such as `compact`, `half`, and `full`.

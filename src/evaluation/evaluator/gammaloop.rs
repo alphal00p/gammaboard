@@ -35,6 +35,11 @@ pub struct GammaLoopEvaluator {
     domain: Domain,
 }
 
+struct GammaLoopBatchEvaluation {
+    samples: Vec<EvaluationResult>,
+    diagnostics: crate::evaluation::GammaLoopDiagnostics,
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TrainingProjection {
@@ -371,11 +376,11 @@ impl GammaLoopEvaluator {
 
     fn batch_gammaloop_observable(
         &self,
-        evaluation_results: &[EvaluationResult],
+        evaluation: &GammaLoopBatchEvaluation,
         weights: &[f64],
     ) -> Result<GammaLoopAccumulatorState, EvalError> {
         let mut estimate = ComplexAccumulatorState::default();
-        for (result, &weight) in evaluation_results.iter().zip(weights.iter()) {
+        for (result, &weight) in evaluation.samples.iter().zip(weights.iter()) {
             estimate.add_sample(Self::project_result_value(result), weight);
         }
         let bundle = self.integrand.observable_snapshot_bundle().ok_or_else(|| {
@@ -386,10 +391,11 @@ impl GammaLoopEvaluator {
         Ok(GammaLoopAccumulatorState {
             bundle,
             estimate,
+            diagnostics: evaluation.diagnostics.clone(),
         })
     }
 
-    fn evaluate(&mut self, batch: &Batch) -> Result<Vec<EvaluationResult>, EvalError> {
+    fn evaluate(&mut self, batch: &Batch) -> Result<GammaLoopBatchEvaluation, EvalError> {
         if self.momentum_space {
             let inputs = batch
                 .points()
@@ -459,8 +465,12 @@ impl GammaLoopEvaluator {
                     false,
                 )
             })?;
-
-            return Ok(results.samples);
+            let diagnostics =
+                GammaLoopAccumulatorState::diagnostics_from_evaluation_results(&results.samples);
+            return Ok(GammaLoopBatchEvaluation {
+                samples: results.samples,
+                diagnostics,
+            });
         }
 
         let samples = batch
@@ -502,8 +512,12 @@ impl GammaLoopEvaluator {
                 Default::default(),
             )
         })?;
-
-        Ok(results.samples)
+        let diagnostics =
+            GammaLoopAccumulatorState::diagnostics_from_evaluation_results(&results.samples);
+        Ok(GammaLoopBatchEvaluation {
+            samples: results.samples,
+            diagnostics,
+        })
     }
 }
 
@@ -545,7 +559,8 @@ impl Evaluator for GammaLoopEvaluator {
             self.reset_observables();
         }
         let weights = batch.weights();
-        let evaluation_results = self.evaluate(batch)?;
+        let evaluation = self.evaluate(batch)?;
+        let evaluation_results = &evaluation.samples;
         let mut observable_state = AccumulatorState::from_config(accumulator);
         let weighted_values = match accumulator {
             AccumulatorConfig::Empty => {
@@ -573,7 +588,7 @@ impl Evaluator for GammaLoopEvaluator {
                     ));
                 }
                 observable_state = AccumulatorState::Gammaloop(
-                    self.batch_gammaloop_observable(&evaluation_results, weights.as_slice())?,
+                    self.batch_gammaloop_observable(&evaluation, weights.as_slice())?,
                 );
                 self.reset_observables();
                 if options.require_training_values {

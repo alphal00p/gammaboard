@@ -63,6 +63,7 @@ pub struct TaskPanelContext<'a> {
     pub task: &'a RunTask,
     pub source: TaskPanelCurrentSource<'a>,
     pub panel_state: &'a JsonValue,
+    pub run_target: Option<&'a JsonValue>,
     pub completed_samples_per_second: Option<f64>,
     pub smoothed_eta_seconds: Option<f64>,
 }
@@ -154,6 +155,7 @@ fn project_current_panels(
     projectors: &[TaskPanelProjector],
     task: &RunTask,
     panel_state: &JsonValue,
+    run_target: Option<&JsonValue>,
     completed_samples_per_second: Option<f64>,
     smoothed_eta_seconds: Option<f64>,
     current_accumulator: Option<&AccumulatorState>,
@@ -175,6 +177,7 @@ fn project_current_panels(
                     task,
                     source,
                     panel_state,
+                    run_target,
                     completed_samples_per_second,
                     smoothed_eta_seconds,
                 })
@@ -260,6 +263,7 @@ impl TaskPanelSource {
         &self,
         task: &RunTask,
         panel_state: &JsonValue,
+        run_target: Option<&JsonValue>,
         completed_samples_per_second: Option<f64>,
         smoothed_eta_seconds: Option<f64>,
         current_accumulator: Option<&AccumulatorState>,
@@ -270,6 +274,7 @@ impl TaskPanelSource {
             &self.projectors,
             task,
             panel_state,
+            run_target,
             completed_samples_per_second,
             smoothed_eta_seconds,
             current_accumulator,
@@ -284,6 +289,7 @@ impl TaskPanelSource {
         requested_cursor: TaskPanelCursor,
         task: &RunTask,
         panel_state: &JsonValue,
+        run_target: Option<&JsonValue>,
         completed_samples_per_second: Option<f64>,
         smoothed_eta_seconds: Option<f64>,
         current_accumulator: Option<&AccumulatorState>,
@@ -296,6 +302,7 @@ impl TaskPanelSource {
             &self.projectors,
             task,
             panel_state,
+            run_target,
             completed_samples_per_second,
             smoothed_eta_seconds,
             current_accumulator,
@@ -589,7 +596,7 @@ mod tests {
     };
     use crate::evaluation::{
         AccumulatorState, ComplexAccumulatorState, ComplexValue, FullComplexAccumulatorState,
-        GammaLoopAccumulatorState,
+        GammaLoopAccumulatorState, GammaLoopDiagnostics,
     };
     use crate::server::panels::{
         PanelKind, PanelUpdateMode, PlotPoint, panel_spec, scalar_timeseries_panel,
@@ -795,6 +802,22 @@ mod tests {
                 weight_sum: 3.0,
                 nan_count: 0,
             },
+            diagnostics: GammaLoopDiagnostics {
+                count_total: 3,
+                count_double_precision: 2,
+                count_quad_precision: 1,
+                count_arb_precision: 0,
+                count_nan: 0,
+                count_nan_or_unstable: 1,
+                count_loop_momenta_escalated: 1,
+                total_eval_time_ms: 12.0,
+                total_integrand_eval_time_ms: 7.0,
+                total_evaluator_eval_time_ms: 3.0,
+                total_parameterization_time_ms: 1.0,
+                total_event_processing_time_ms: 1.0,
+                total_generated_events: 10,
+                total_accepted_events: 7,
+            },
         })
     }
 
@@ -807,6 +830,7 @@ mod tests {
             .current_panels(
                 task,
                 &JsonValue::Object(Default::default()),
+                None,
                 None,
                 None,
                 Some(accumulator),
@@ -905,6 +929,7 @@ mod tests {
                 &JsonValue::Object(Default::default()),
                 None,
                 None,
+                None,
                 Some(&accumulator),
                 None,
                 None,
@@ -916,6 +941,61 @@ mod tests {
                 if panel_id == "gammaloop_histogram_bundle"
                     && columns.len() >= 5
                     && rows.len() == 2
+        )));
+        assert!(current.iter().any(|panel| matches!(
+            panel,
+            PanelState::TickBreakdown { panel_id, total_ms, segments }
+                if panel_id == "gammaloop_evaluation_timing"
+                    && *total_ms > 0.0
+                    && !segments.is_empty()
+        )));
+        assert!(current.iter().any(|panel| matches!(
+            panel,
+            PanelState::KeyValue { panel_id, entries }
+                if panel_id == "gammaloop_evaluation_diagnostics"
+                    && entries.iter().any(|entry| entry.key == "count_arb_precision")
+        )));
+    }
+
+    #[test]
+    fn gammaloop_sample_uses_complex_target_for_lines_and_summary_metrics() {
+        let task = inherited_complex_sample_task();
+        let run_task = run_task(task.clone());
+        let accumulator = gammaloop_accumulator();
+        let run_target = serde_json::json!({
+            "kind": "complex",
+            "re": 1.5,
+            "im": -0.25
+        });
+        let current = TaskPanelSource::new(&task, Some(AccumulatorConfig::Gammaloop))
+            .current_panels(
+                &run_task,
+                &JsonValue::Object(Default::default()),
+                Some(&run_target),
+                None,
+                None,
+                Some(&accumulator),
+                None,
+                None,
+            )
+            .unwrap();
+
+        assert!(current.iter().any(|panel| matches!(
+            panel,
+            PanelState::ScalarTimeseries { panel_id, target: Some(target), .. }
+                if panel_id == "real_estimate_history" && (*target - 1.5).abs() < 1.0e-12
+        )));
+        assert!(current.iter().any(|panel| matches!(
+            panel,
+            PanelState::ScalarTimeseries { panel_id, target: Some(target), .. }
+                if panel_id == "imag_estimate_history" && (*target + 0.25).abs() < 1.0e-12
+        )));
+        assert!(current.iter().any(|panel| matches!(
+            panel,
+            PanelState::KeyValue { panel_id, entries }
+                if panel_id == "estimate_summary"
+                    && entries.iter().any(|entry| entry.key == "target_delta_real_sigma")
+                    && entries.iter().any(|entry| entry.key == "target_delta_imag_sigma")
         )));
     }
 
@@ -981,6 +1061,7 @@ mod tests {
                 TaskPanelCursor::default(),
                 &run_task,
                 &JsonValue::Object(Default::default()),
+                None,
                 None,
                 None,
                 Some(&accumulator),

@@ -1,6 +1,8 @@
 # Symbolica + Havana training, then PDF adaptation plots in 2D and 1D.
 
 name = "symbolica-havana-pdf-1d2d"
+# Integral over [0,1]^2 of (x^2 + y^2): (1/3 + 1/3) = 2/3.
+target = { kind = "scalar", value = 0.6666666666666666 }
 
 [evaluator]
 kind = "symbolica"
