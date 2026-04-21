@@ -1,14 +1,14 @@
-# Example GammaLoop run.
-# Assumes `gammaloop` is a sister folder of `gammaboard`.
+# Full GammaLoop + Havana training/inference example with task-level queue tuning.
 
-name = "tth"
+name = "gammaloop_tth"
 
 [evaluator]
 kind = "gammaloop"
+# Assumes `gammaloop` is a sister folder of `gammaboard`.
 state_folder = "../gammaloop/examples/cli/epem_a_ttxh/LO/state"
 integrand_name = "LO"
-momentum_space = false
-
+# In-memory override only (not persisted to state on disk):
+# post_load_commands = ["set process kv kinematics.e_cm=14000.0"]
 
 [[task_queue]]
 name = "havana-train-10m"

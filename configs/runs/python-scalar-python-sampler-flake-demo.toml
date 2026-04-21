@@ -1,3 +1,4 @@
+# Python evaluator + Python sampler flake demo.
 name = "python-scalar-python-sampler-flake-demo"
 
 [evaluator]

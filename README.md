@@ -234,15 +234,24 @@ Add a run with:
 gammaboard run add configs/runs/live-test-unit-naive-scalar.toml
 ```
 
-Flake-backed Python scalar example:
-```bash
-gammaboard run add configs/runs/python-scalar-flake-demo.toml
-```
-
-Flake-backed Python scalar + Python Monte Carlo sampler example:
+Flake-backed Python evaluator + sampler example:
 ```bash
 gammaboard run add configs/runs/python-scalar-python-sampler-flake-demo.toml
 ```
+
+Curated run configs (kept intentionally small):
+- `configs/runs/default.toml`: baseline defaults merged into every run config.
+- `configs/runs/live-test-unit-naive-scalar.toml`: small unit + naive Monte Carlo run for smoke/live orchestration.
+- `configs/runs/symbolica-live-test.toml` + `configs/runs/symbolica-live-test-sin.toml`: two Symbolica runs used by `just live-test-basic` reassignment flow.
+- `configs/runs/symbolica-havana-pdf-1d2d.toml`: Symbolica + Havana training + both PDF adaptation task kinds (`pdf_adaptation_image`, `pdf_adaptation_plot_line`).
+- `configs/runs/python-scalar-python-sampler-flake-demo.toml`: Python evaluator and Python sampler integration.
+- `configs/runs/gammaloop-triangle.toml`: GammaLoop evaluator-focused config, including optional `post_load_commands`.
+- `configs/runs/tth.toml`: full GammaLoop + Havana workflow with task-level queue tuning.
+
+Curated task bundles:
+- `configs/tasks/sample_monte_carlo_real.toml`: minimal scalar sample task with naive Monte Carlo.
+- `configs/tasks/pdf_adaptation_image.toml`: Havana training followed by PDF adaptation image rasterization.
+- `configs/tasks/triangle_train_sample_plot_resume.toml`: comprehensive handoff/resume bundle with transforms, `from_name` sourcing, and both raster task kinds (`plot_line`, `image`).
 
 Minimal shape:
 ```toml
