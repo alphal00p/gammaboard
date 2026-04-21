@@ -245,13 +245,12 @@ Curated run configs (kept intentionally small):
 - `configs/runs/symbolica-live-test.toml` + `configs/runs/symbolica-live-test-sin.toml`: two Symbolica runs used by `just live-test-basic` reassignment flow.
 - `configs/runs/symbolica-havana-pdf-1d2d.toml`: Symbolica + Havana training + both PDF adaptation task kinds (`pdf_adaptation_image`, `pdf_adaptation_plot_line`).
 - `configs/runs/python-scalar-python-sampler-flake-demo.toml`: Python evaluator and Python sampler integration.
-- `configs/runs/gammaloop-triangle.toml`: GammaLoop evaluator-focused config, including optional `post_load_commands`.
-- `configs/runs/tth.toml`: full GammaLoop + Havana workflow with task-level queue tuning.
+- `configs/runs/gammaloop.toml`: GammaLoop TTH evaluator config, including optional `post_load_commands`.
 
 Curated task bundles:
 - `configs/tasks/sample_monte_carlo_real.toml`: minimal scalar sample task with naive Monte Carlo.
 - `configs/tasks/pdf_adaptation_image.toml`: Havana training followed by PDF adaptation image rasterization.
-- `configs/tasks/triangle_train_sample_plot_resume.toml`: comprehensive handoff/resume bundle with transforms, `from_name` sourcing, and both raster task kinds (`plot_line`, `image`).
+- `configs/tasks/train_sample.toml`: GammaLoop TTH train+sample queue with queue tuning and inference stop target (`relative_error = 0.001`, `max_samples = 1_000_000_000`).
 
 Minimal shape:
 ```toml
