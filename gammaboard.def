@@ -9,6 +9,7 @@ From: rust:1-bookworm
     set -eux
 
     export DEBIAN_FRONTEND=noninteractive
+    # compilation is still slow, prob. because LTO settings are not the same for both crates
     export CARGO_TARGET_DIR=/opt/target
 
     apt-get update
