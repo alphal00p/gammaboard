@@ -167,6 +167,14 @@ pub struct TickBreakdownSegment {
     pub color: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TableStateOptions {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visible_column_indices: Vec<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_keys: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PanelState {
@@ -224,6 +232,10 @@ pub enum PanelState {
         panel_id: String,
         columns: Vec<String>,
         rows: Vec<Vec<JsonValue>>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        visible_column_indices: Vec<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        row_keys: Option<Vec<String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         payload: Option<JsonValue>,
     },
@@ -408,10 +420,28 @@ pub(crate) fn table_panel_with_payload(
     rows: Vec<Vec<JsonValue>>,
     payload: Option<JsonValue>,
 ) -> PanelState {
+    table_panel_with_payload_and_options(
+        panel_id,
+        columns,
+        rows,
+        payload,
+        TableStateOptions::default(),
+    )
+}
+
+pub(crate) fn table_panel_with_payload_and_options(
+    panel_id: &str,
+    columns: Vec<String>,
+    rows: Vec<Vec<JsonValue>>,
+    payload: Option<JsonValue>,
+    options: TableStateOptions,
+) -> PanelState {
     PanelState::Table {
         panel_id: panel_id.to_string(),
         columns,
         rows,
+        visible_column_indices: options.visible_column_indices,
+        row_keys: options.row_keys,
         payload,
     }
 }

@@ -361,9 +361,6 @@ const formatDebugJson = (value) => {
 const scalarHeatmapColors = ["rgb(0,0,255)", "rgb(128,200,128)", "rgb(255,0,0)"];
 
 const panelColumnSpan = (descriptor) => {
-  if (descriptor?.panel_id === "estimate_summary") {
-    return { xs: "1 / -1", md: "1 / -1" };
-  }
   switch (descriptor?.width) {
     case "compact":
       return { xs: "1 / -1", md: "span 4" };
@@ -454,11 +451,17 @@ const readHistogramYZoomFromPanelValue = (value, fallback = FULL_ZOOM) => {
   return normalizeZoomRange(view.y_zoom) || readYZoomFromPanelValue(value, fallback);
 };
 
-const readHistogramScaleFromPanelValue = (value, axis) => {
+const readHistogramScaleFromPanelValue = (value, axis, fallback = "linear") => {
   const view = readHistogramBundleView(value);
   const scale = view?.[`${axis}_scale`];
-  return scale === "log" ? "log" : "linear";
+  if (scale === "log") return "log";
+  if (scale === "linear") return "linear";
+  return fallback === "log" ? "log" : "linear";
 };
+
+const inferDefaultHistogramYScale = (state) => (state?.log_y_axis ? "log" : "linear");
+
+const inferDefaultHistogramXScale = (state) => (state?.log_x_axis ? "log" : "linear");
 
 const writeHistogramBundlePanelValue = (
   current,
@@ -819,79 +822,6 @@ const buildDiscreteOffsetErrorBarSeries = ({
           style: { stroke: color, lineWidth: 1.1 },
         },
       ],
-    };
-  },
-});
-
-const buildContinuousHistogramTooltip = (bin) => {
-  const start = Number(bin?.start);
-  const stop = Number(bin?.stop);
-  const value = Number(bin?.value);
-  const error = Number(bin?.error);
-  const absErrorText = Number.isFinite(error) && error > 0 ? `±${formatScientific(error, 6)}` : "n/a";
-  const relError =
-    Number.isFinite(value) && Number.isFinite(error) && value !== 0 ? Math.abs(error / value) : null;
-  const relErrorText = Number.isFinite(relError) ? formatScientific(relError, 6) : "n/a";
-  return [
-    `${escapeXml(`${formatScientific(start, 6)} → ${formatScientific(stop, 6)}`)}: ${formatScientific(value, 6)}`,
-    `abs error: ${absErrorText}`,
-    `rel error: ${relErrorText}`,
-  ].join("<br/>");
-};
-
-const buildContinuousHoverZoneSeries = ({ bins, xScale = "linear", tooltipFormatter }) => ({
-  id: "continuous-hover-zones",
-  type: "custom",
-  name: "bin",
-  data: asArray(bins)
-    .map((bin, index) => ({
-      value: [Number(bin?.start), Number(bin?.stop)],
-      binIndex: index,
-      bin,
-    }))
-    .filter(
-      (entry) =>
-        Number.isFinite(Number(entry?.value?.[0])) &&
-        Number.isFinite(Number(entry?.value?.[1])) &&
-        (xScale !== "log" || (Number(entry.value[0]) > 0 && Number(entry.value[1]) > 0)),
-    ),
-  clip: true,
-  z: 20,
-  silent: false,
-  tooltip: {
-    show: true,
-    trigger: "item",
-    formatter: (params) => tooltipFormatter?.(params?.data?.bin ?? null) ?? "",
-  },
-  renderItem: (params, api) => {
-    const start = Number(api.value(0));
-    const stop = Number(api.value(1));
-    if (!Number.isFinite(start) || !Number.isFinite(stop) || stop <= start) {
-      return null;
-    }
-    const coordSys = params?.coordSys;
-    if (!coordSys) return null;
-    const [startPx] = api.coord([start, 0]);
-    const [stopPx] = api.coord([stop, 0]);
-    if (!Number.isFinite(startPx) || !Number.isFinite(stopPx)) {
-      return null;
-    }
-    const x = Math.min(startPx, stopPx);
-    const width = Math.abs(stopPx - startPx);
-    if (!Number.isFinite(x) || !Number.isFinite(width) || width <= 0) {
-      return null;
-    }
-    return {
-      type: "rect",
-      shape: {
-        x,
-        y: Number(coordSys.y),
-        width,
-        height: Number(coordSys.height),
-      },
-      style: {
-        fill: "rgba(0,0,0,0)",
-      },
     };
   },
 });
@@ -2202,6 +2132,8 @@ const HistogramPanel = ({
   const sourcePanelId = state?.source_panel_id || panelId;
   const isBundleControlled = sourcePanelId === "gammaloop_histogram_bundle";
   const currentHistogramName = typeof state?.name === "string" ? state.name : null;
+  const defaultYScale = inferDefaultHistogramYScale(state);
+  const defaultXScale = inferDefaultHistogramXScale(state);
   const [localYScale, setLocalYScale] = useState("linear");
   const [localXScale, setLocalXScale] = useState("linear");
   const [localSortMode, setLocalSortMode] = useState(HISTOGRAM_SORT_CANONICAL);
@@ -2209,8 +2141,8 @@ const HistogramPanel = ({
     const pid = state?.panel_id || "";
     return String(pid).startsWith("pdf_adaptation_") ? false : true;
   });
-  const yScale = isBundleControlled ? readHistogramScaleFromPanelValue(value, "y") : localYScale;
-  const xScale = isBundleControlled ? readHistogramScaleFromPanelValue(value, "x") : localXScale;
+  const yScale = isBundleControlled ? readHistogramScaleFromPanelValue(value, "y", defaultYScale) : localYScale;
+  const xScale = isBundleControlled ? readHistogramScaleFromPanelValue(value, "x", defaultXScale) : localXScale;
   const zoomRange = isBundleControlled
     ? readHistogramZoomFromPanelValue(value, FULL_ZOOM)
     : readZoomFromPanelValue(value, FULL_ZOOM);
@@ -2254,7 +2186,17 @@ const HistogramPanel = ({
     });
   }, [isDiscrete, bins]);
   const discreteRelativeErrorData = useMemo(() => buildDiscreteRelativeErrorData(bins), [bins]);
-  const effectiveXScale = isDiscrete ? "linear" : xScale;
+  const hasPositiveContinuousEdges = useMemo(
+    () =>
+      asArray(bins).some((bin) => {
+        const start = Number(bin?.start);
+        const stop = Number(bin?.stop);
+        return Number.isFinite(start) && Number.isFinite(stop) && (start > 0 || stop > 0);
+      }),
+    [bins],
+  );
+  const effectiveXScale =
+    isDiscrete || xScale !== "log" || hasPositiveContinuousEdges ? (isDiscrete ? "linear" : xScale) : "linear";
   const discreteBaseKeys = useMemo(() => bins.map((bin, index) => discreteHistogramBinKey(bin, index)), [bins]);
   const discreteBaseSortedCanonicalIndices = useMemo(() => {
     if (!isDiscrete) return [];
@@ -2661,7 +2603,36 @@ const HistogramPanel = ({
         splitLine: { lineStyle: { color: gridColor } },
       },
       tooltip: {
-        trigger: "item",
+        trigger: "axis",
+        formatter: (params) => {
+          const entries = asArray(params);
+          const xValue = Number(entries[0]?.axisValue);
+          if (!Number.isFinite(xValue)) return "n/a";
+          const bin = bins.find((candidate) => {
+            const start = Number(candidate?.start);
+            const stop = Number(candidate?.stop);
+            if (!Number.isFinite(start) || !Number.isFinite(stop)) return false;
+            const inclusiveStop = Math.abs(xValue - stop) <= 1e-12;
+            return xValue >= start && (xValue < stop || inclusiveStop);
+          });
+          if (!bin) {
+            return `${formatScientific(xValue, 6)}: n/a`;
+          }
+          const valueNumeric = Number(bin?.value);
+          const errorNumeric = Number(bin?.error);
+          const absErrorText =
+            Number.isFinite(errorNumeric) && errorNumeric > 0 ? `±${formatScientific(errorNumeric, 6)}` : "n/a";
+          const relError =
+            Number.isFinite(valueNumeric) && Number.isFinite(errorNumeric) && valueNumeric !== 0
+              ? Math.abs(errorNumeric / valueNumeric)
+              : null;
+          const relErrorText = Number.isFinite(relError) ? formatScientific(relError, 6) : "n/a";
+          return [
+            `${escapeXml(`${formatScientific(Number(bin?.start), 6)} → ${formatScientific(Number(bin?.stop), 6)}`)}: ${formatScientific(valueNumeric, 6)}`,
+            `abs error: ${absErrorText}`,
+            `rel error: ${relErrorText}`,
+          ].join("<br/>");
+        },
       },
       dataZoom: buildDataZoom(zoomRange, false, true, yZoomRange, true),
       series: [
@@ -2669,11 +2640,6 @@ const HistogramPanel = ({
           ? [buildErrorBarSeries({ name: "error", data: binErrorData })]
           : []),
         ...valueSeries,
-        buildContinuousHoverZoneSeries({
-          bins,
-          xScale: effectiveXScale,
-          tooltipFormatter: buildContinuousHistogramTooltip,
-        }),
         ...overlaySeries.flatMap((overlay) => [
           ...(Array.isArray(overlay.absError) && overlay.absError.length > 0
             ? [buildErrorBarSeries({ name: `${overlay.name} error`, data: overlay.absError, color: overlay.color })]
@@ -3184,7 +3150,7 @@ const HistogramPanel = ({
             <ReactECharts
               ref={echartsRef}
               option={histogramOption}
-              notMerge={false}
+              notMerge={!isDiscrete}
               onEvents={onDataZoom}
               lazyUpdate
               opts={{ renderer: "canvas" }}
@@ -3304,12 +3270,23 @@ const TablePanel = ({
       .trim()
       .toLowerCase(),
   );
+  const visibleColumnIndices = (() => {
+    const provided = asArray(state?.visible_column_indices)
+      .map((value) => Number(value))
+      .filter((index) => Number.isInteger(index) && index >= 0 && index < columns.length);
+    if (provided.length === 0) return columns.map((_, index) => index);
+    const deduplicated = provided.filter((index, position) => provided.indexOf(index) === position);
+    return deduplicated.length > 0 ? deduplicated : columns.map((_, index) => index);
+  })();
+  const rowKeys = asArray(state?.row_keys).map((value) => String(value ?? ""));
   const centralValueIndex = columnKeys.findIndex((column) => column === "central value");
   const errorIndex = columnKeys.findIndex((column) => column === "dy" || column === "error");
   const payload = state?.payload;
-  const selectableRows =
+  const hasRowKeys = rowKeys.length === rows.length;
+  const selectableRows = hasRowKeys;
+  const isDownloadableHistogramBundle =
     payload?.histograms && typeof payload.histograms === "object" && !Array.isArray(payload.histograms);
-  const bundleJson = selectableRows ? buildHistogramBundleJson(payload) : null;
+  const bundleJson = isDownloadableHistogramBundle ? buildHistogramBundleJson(payload) : null;
   const handleDownloadJson = () => {
     const filename = `${state?.panel_id ?? "histogram_bundle"}.json`;
     downloadTextFile(filename, `${JSON.stringify(bundleJson, null, 2)}\n`, "application/json;charset=utf-8");
@@ -3329,7 +3306,7 @@ const TablePanel = ({
       <CardContent>
         <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, mb: 2 }}>
           <Typography variant="subtitle1">{title}</Typography>
-          {selectableRows ? (
+          {isDownloadableHistogramBundle ? (
             <Stack direction="row" spacing={1} alignItems="center">
               <Button size="small" variant="outlined" onClick={handleDownloadJson}>
                 JSON
@@ -3372,9 +3349,9 @@ const TablePanel = ({
           <MuiTable size="small" stickyHeader>
             <TableHead>
               <TableRow>
-                {columns.map((column) => (
-                  <TableCell key={column} sx={{ fontWeight: 600, whiteSpace: "nowrap" }}>
-                    {column}
+                {visibleColumnIndices.map((columnIndex) => (
+                  <TableCell key={`${columns[columnIndex]}-${columnIndex}`} sx={{ fontWeight: 600, whiteSpace: "nowrap" }}>
+                    {columns[columnIndex]}
                   </TableCell>
                 ))}
               </TableRow>
@@ -3386,7 +3363,7 @@ const TablePanel = ({
                   hover={selectableRows}
                   selected={
                     selectableRows &&
-                    String(row?.[0] ?? "") ===
+                    String(rowKeys[rowIndex] ?? "") ===
                       String(
                         isGammaLoopBundle
                           ? readHistogramBundleSelectedValue(state?.selected_value)
@@ -3397,20 +3374,20 @@ const TablePanel = ({
                     cursor: selectableRows ? "pointer" : "default",
                   }}
                   onClick={
-                    selectableRows && typeof row?.[0] === "string"
+                    selectableRows
                       ? () =>
                           state?.onValueChange?.(
                             state?.panel_id,
                             isGammaLoopBundle
                               ? writeHistogramBundlePanelValue(state?.selected_value, {
-                                  selectedHistogram: row[0],
+                                  selectedHistogram: rowKeys[rowIndex],
                                 })
-                              : row[0],
+                              : rowKeys[rowIndex],
                           )
                       : undefined
                   }
                 >
-                  {columns.map((_, columnIndex) => (
+                  {visibleColumnIndices.map((columnIndex) => (
                     <TableCell
                       key={`${rowIndex}-${columnIndex}`}
                       sx={{

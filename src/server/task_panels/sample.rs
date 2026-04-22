@@ -9,9 +9,10 @@ use crate::evaluation::{
     Accumulator, AccumulatorState, GammaLoopDiagnostics, Point, SemanticAccumulatorKind,
 };
 use crate::server::panels::{
-    PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, TickBreakdownSegment,
-    key_value, key_value_panel, panel_spec, progress_panel, scalar_timeseries_panel_with_smoothing,
-    table_panel_with_payload, tick_breakdown_panel, with_panel_width,
+    PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, TableStateOptions,
+    TickBreakdownSegment, key_value, key_value_panel, panel_spec, progress_panel,
+    scalar_timeseries_panel_with_smoothing, table_panel_with_payload,
+    table_panel_with_payload_and_options, tick_breakdown_panel, with_panel_width,
 };
 use gammalooprs::observables::{ObservablePhase, ObservableValueTransform};
 use serde::Serialize;
@@ -235,7 +236,7 @@ fn estimate_summary_projector(
                 PanelKind::KeyValue,
                 PanelHistoryMode::None,
             ),
-            PanelWidth::Half,
+            PanelWidth::Full,
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
@@ -1148,73 +1149,101 @@ fn gammaloop_histogram_bundle_panel(accumulator: AccumulatorState) -> Option<Pan
     };
     let payload = serde_json::to_value(&state.bundle).unwrap_or(JsonValue::Null);
 
-    Some(table_panel_with_payload(
-        "gammaloop_histogram_bundle",
-        vec![
-            "Name".to_string(),
-            "Title".to_string(),
-            "Phase".to_string(),
-            "Transform".to_string(),
-            "Samples".to_string(),
-            "Bins".to_string(),
-            "Range".to_string(),
-            "In Range".to_string(),
-            "Underflow".to_string(),
-            "Overflow".to_string(),
-            "NaN".to_string(),
-            "Mitigated Pairs".to_string(),
-            "Misbinning".to_string(),
-            "Log X".to_string(),
-            "Log Y".to_string(),
-        ],
-        state
-            .bundle
-            .histograms
-            .iter()
-            .map(|(name, histogram)| {
-                vec![
-                    JsonValue::String(name.clone()),
-                    JsonValue::String(histogram.title.clone()),
-                    JsonValue::String(match histogram.phase {
-                        ObservablePhase::Real => "real".to_string(),
-                        ObservablePhase::Imag => "imag".to_string(),
-                    }),
-                    JsonValue::String(match histogram.value_transform {
-                        ObservableValueTransform::Identity => "identity".to_string(),
-                        ObservableValueTransform::Log10 => "log10".to_string(),
-                    }),
-                    JsonValue::from(histogram.sample_count as i64),
-                    JsonValue::from(histogram.bins.len() as i64),
-                    JsonValue::String(match histogram.kind {
-                        gammalooprs::observables::HistogramSnapshotKind::Continuous => {
-                            match (histogram.x_min, histogram.x_max) {
-                                (Some(x_min), Some(x_max)) => format!("[{}, {}]", x_min, x_max),
-                                _ => "continuous".to_string(),
-                            }
+    let columns = vec![
+        "Name".to_string(),
+        "Title".to_string(),
+        "Phase".to_string(),
+        "Transform".to_string(),
+        "Samples".to_string(),
+        "Bins".to_string(),
+        "Range".to_string(),
+        "In Range".to_string(),
+        "Underflow".to_string(),
+        "Overflow".to_string(),
+        "NaN".to_string(),
+        "Mitigated Pairs".to_string(),
+        "Misbinning".to_string(),
+        "Log X".to_string(),
+        "Log Y".to_string(),
+    ];
+    let rows = state
+        .bundle
+        .histograms
+        .iter()
+        .map(|(name, histogram)| {
+            vec![
+                JsonValue::String(name.clone()),
+                JsonValue::String(histogram.title.clone()),
+                JsonValue::String(match histogram.phase {
+                    ObservablePhase::Real => "real".to_string(),
+                    ObservablePhase::Imag => "imag".to_string(),
+                }),
+                JsonValue::String(match histogram.value_transform {
+                    ObservableValueTransform::Identity => "identity".to_string(),
+                    ObservableValueTransform::Log10 => "log10".to_string(),
+                }),
+                JsonValue::from(histogram.sample_count as i64),
+                JsonValue::from(histogram.bins.len() as i64),
+                JsonValue::String(match histogram.kind {
+                    gammalooprs::observables::HistogramSnapshotKind::Continuous => {
+                        match (histogram.x_min, histogram.x_max) {
+                            (Some(x_min), Some(x_max)) => format!("[{}, {}]", x_min, x_max),
+                            _ => "continuous".to_string(),
                         }
-                        gammalooprs::observables::HistogramSnapshotKind::Discrete => histogram
-                            .discrete_min_bin_id
-                            .map(|min_bin_id| {
-                                format!(
-                                    "[{}, {}]",
-                                    min_bin_id,
-                                    min_bin_id + histogram.bins.len() as isize
-                                )
-                            })
-                            .unwrap_or_else(|| "discrete".to_string()),
-                    }),
-                    JsonValue::from(histogram.statistics.in_range_entry_count as i64),
-                    JsonValue::from(histogram.underflow_bin.entry_count as i64),
-                    JsonValue::from(histogram.overflow_bin.entry_count as i64),
-                    JsonValue::from(histogram.statistics.nan_value_count as i64),
-                    JsonValue::from(histogram.statistics.mitigated_pair_count as i64),
-                    JsonValue::from(histogram.supports_misbinning_mitigation),
-                    JsonValue::from(histogram.log_x_axis),
-                    JsonValue::from(histogram.log_y_axis),
-                ]
+                    }
+                    gammalooprs::observables::HistogramSnapshotKind::Discrete => histogram
+                        .discrete_min_bin_id
+                        .map(|min_bin_id| {
+                            format!(
+                                "[{}, {}]",
+                                min_bin_id,
+                                min_bin_id + histogram.bins.len() as isize
+                            )
+                        })
+                        .unwrap_or_else(|| "discrete".to_string()),
+                }),
+                JsonValue::from(histogram.statistics.in_range_entry_count as i64),
+                JsonValue::from(histogram.underflow_bin.entry_count as i64),
+                JsonValue::from(histogram.overflow_bin.entry_count as i64),
+                JsonValue::from(histogram.statistics.nan_value_count as i64),
+                JsonValue::from(histogram.statistics.mitigated_pair_count as i64),
+                JsonValue::from(histogram.supports_misbinning_mitigation),
+                JsonValue::from(histogram.log_x_axis),
+                JsonValue::from(histogram.log_y_axis),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let name_column_index = columns.iter().position(|column| column == "Name");
+    let hidden_columns = ["Name", "Log X", "Log Y"];
+    let visible_column_indices = columns
+        .iter()
+        .enumerate()
+        .filter_map(|(index, column)| {
+            if hidden_columns.iter().any(|hidden| column == hidden) {
+                None
+            } else {
+                Some(index)
+            }
+        })
+        .collect::<Vec<_>>();
+    let row_keys = name_column_index.and_then(|index| {
+        rows.iter()
+            .map(|row| match row.get(index) {
+                Some(JsonValue::String(name)) => Some(name.clone()),
+                _ => None,
             })
-            .collect(),
+            .collect::<Option<Vec<_>>>()
+    });
+
+    Some(table_panel_with_payload_and_options(
+        "gammaloop_histogram_bundle",
+        columns,
+        rows,
         Some(payload),
+        TableStateOptions {
+            visible_column_indices,
+            row_keys,
+        },
     ))
 }
 

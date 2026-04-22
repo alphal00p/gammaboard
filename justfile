@@ -102,3 +102,8 @@ db-reset:
     {{bin}} db stop
     {{bin}} db delete --yes
     {{bin}} db start
+
+build-apptainer:
+    mkdir -p /var/tmp/${USER}
+    APPTAINER_TMPDIR=/var/tmp/${USER} APPTAINER_CACHEDIR=/var/tmp/${USER} \
+        apptainer build --notest gammaboard.sif gammaboard.def

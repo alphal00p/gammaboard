@@ -276,11 +276,7 @@ fn panel_states(
                         .map(|task| accumulator_label(&task.task))
                         .unwrap_or_else(|| "none".to_string()),
                 ),
-                key_value(
-                    "domain",
-                    "Domain",
-                    &run_spec.domain,
-                ),
+                key_value("domain", "Domain", &run_spec.domain),
                 key_value(
                     "sampler",
                     "Sampler",
