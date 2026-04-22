@@ -279,15 +279,13 @@ fn panel_states(
                 key_value(
                     "domain",
                     "Domain",
-                    serde_json::to_string(&run_spec.domain)
-                        .unwrap_or_else(|_| "<invalid domain>".to_string()),
+                    &run_spec.domain,
                 ),
                 key_value(
                     "sampler",
                     "Sampler",
                     current_task
-                        .and_then(|task| task.task.sampler_config())
-                        .map(|config| kind_of(&config))
+                        .map(sampler_label)
                         .unwrap_or_else(|| "none".to_string()),
                 ),
             ],
@@ -302,6 +300,21 @@ fn accumulator_label(task: &crate::core::RunTaskSpec) -> String {
         Ok(Some(config)) => kind_of(&config),
         Ok(None) => "reuse_previous".to_string(),
         Err(_) => "none".to_string(),
+    }
+}
+
+fn sampler_label(task: &RunTask) -> String {
+    let spec = &task.task;
+    if let Some(config) = spec
+        .sample_sampler_config()
+        .or_else(|| spec.sampler_config())
+    {
+        return kind_of(&config);
+    }
+    match spec.sample_sampler_source() {
+        Some(crate::core::SourceRefSpec::Latest) => "reuse_previous".to_string(),
+        Some(crate::core::SourceRefSpec::FromName(name)) => format!("from:{name}"),
+        None => "none".to_string(),
     }
 }
 

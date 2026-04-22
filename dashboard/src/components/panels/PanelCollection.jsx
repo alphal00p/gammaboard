@@ -337,6 +337,19 @@ const renderStructuredValue = (value) => {
   return JSON.stringify(value);
 };
 
+const domainSummaryText = (value) => {
+  if (!isObject(value)) return "Expand";
+  const kind = typeof value.kind === "string" ? value.kind : "domain";
+  if (kind === "continuous" && Number.isFinite(Number(value.dimension))) {
+    return `continuous (${Number(value.dimension)}D)`;
+  }
+  if (kind === "discrete") {
+    const branches = asArray(value.branches);
+    return `discrete (${branches.length} branches)`;
+  }
+  return kind;
+};
+
 const formatDebugJson = (value) => {
   try {
     return JSON.stringify(value, null, 2);
@@ -806,6 +819,79 @@ const buildDiscreteOffsetErrorBarSeries = ({
           style: { stroke: color, lineWidth: 1.1 },
         },
       ],
+    };
+  },
+});
+
+const buildContinuousHistogramTooltip = (bin) => {
+  const start = Number(bin?.start);
+  const stop = Number(bin?.stop);
+  const value = Number(bin?.value);
+  const error = Number(bin?.error);
+  const absErrorText = Number.isFinite(error) && error > 0 ? `±${formatScientific(error, 6)}` : "n/a";
+  const relError =
+    Number.isFinite(value) && Number.isFinite(error) && value !== 0 ? Math.abs(error / value) : null;
+  const relErrorText = Number.isFinite(relError) ? formatScientific(relError, 6) : "n/a";
+  return [
+    `${escapeXml(`${formatScientific(start, 6)} → ${formatScientific(stop, 6)}`)}: ${formatScientific(value, 6)}`,
+    `abs error: ${absErrorText}`,
+    `rel error: ${relErrorText}`,
+  ].join("<br/>");
+};
+
+const buildContinuousHoverZoneSeries = ({ bins, xScale = "linear", tooltipFormatter }) => ({
+  id: "continuous-hover-zones",
+  type: "custom",
+  name: "bin",
+  data: asArray(bins)
+    .map((bin, index) => ({
+      value: [Number(bin?.start), Number(bin?.stop)],
+      binIndex: index,
+      bin,
+    }))
+    .filter(
+      (entry) =>
+        Number.isFinite(Number(entry?.value?.[0])) &&
+        Number.isFinite(Number(entry?.value?.[1])) &&
+        (xScale !== "log" || (Number(entry.value[0]) > 0 && Number(entry.value[1]) > 0)),
+    ),
+  clip: true,
+  z: 20,
+  silent: false,
+  tooltip: {
+    show: true,
+    trigger: "item",
+    formatter: (params) => tooltipFormatter?.(params?.data?.bin ?? null) ?? "",
+  },
+  renderItem: (params, api) => {
+    const start = Number(api.value(0));
+    const stop = Number(api.value(1));
+    if (!Number.isFinite(start) || !Number.isFinite(stop) || stop <= start) {
+      return null;
+    }
+    const coordSys = params?.coordSys;
+    if (!coordSys) return null;
+    const [startPx] = api.coord([start, 0]);
+    const [stopPx] = api.coord([stop, 0]);
+    if (!Number.isFinite(startPx) || !Number.isFinite(stopPx)) {
+      return null;
+    }
+    const x = Math.min(startPx, stopPx);
+    const width = Math.abs(stopPx - startPx);
+    if (!Number.isFinite(x) || !Number.isFinite(width) || width <= 0) {
+      return null;
+    }
+    return {
+      type: "rect",
+      shape: {
+        x,
+        y: Number(coordSys.y),
+        width,
+        height: Number(coordSys.height),
+      },
+      style: {
+        fill: "rgba(0,0,0,0)",
+      },
     };
   },
 });
@@ -2502,6 +2588,7 @@ const HistogramPanel = ({
       yScale === "log"
         ? [
             {
+              id: "histogram-value-positive",
               type: "line",
               name: "value (+)",
               data: positiveSeriesData,
@@ -2510,8 +2597,11 @@ const HistogramPanel = ({
               lineStyle: { width: 1.35, color: HISTOGRAM_POSITIVE_COLOR },
               itemStyle: { color: HISTOGRAM_POSITIVE_COLOR },
               connectNulls: false,
+              emphasis: { disabled: true },
+              tooltip: { show: false },
             },
             {
+              id: "histogram-value-negative",
               type: "line",
               name: "value (-)",
               data: negativeSeriesData,
@@ -2520,8 +2610,11 @@ const HistogramPanel = ({
               lineStyle: { width: 1.35, color: HISTOGRAM_NEGATIVE_COLOR },
               itemStyle: { color: HISTOGRAM_NEGATIVE_COLOR },
               connectNulls: false,
+              emphasis: { disabled: true },
+              tooltip: { show: false },
             },
             {
+              id: "histogram-value-zero",
               type: "line",
               name: "value (0)",
               data: zeroSeriesData,
@@ -2530,10 +2623,13 @@ const HistogramPanel = ({
               lineStyle: { width: 1.35, color: HISTOGRAM_ZERO_COLOR },
               itemStyle: { color: HISTOGRAM_ZERO_COLOR },
               connectNulls: false,
+              emphasis: { disabled: true },
+              tooltip: { show: false },
             },
           ]
         : [
             {
+              id: "histogram-value",
               type: "line",
               name: "value",
               data: valueSeriesData,
@@ -2541,6 +2637,8 @@ const HistogramPanel = ({
               showSymbol: false,
               lineStyle: { width: 1.35, color: "#005f73" },
               connectNulls: false,
+              emphasis: { disabled: true },
+              tooltip: { show: false },
             },
           ];
     return {
@@ -2563,12 +2661,7 @@ const HistogramPanel = ({
         splitLine: { lineStyle: { color: gridColor } },
       },
       tooltip: {
-        trigger: "axis",
-        valueFormatter: (axisValue) => {
-          const numeric = Number(axisValue);
-          if (!Number.isFinite(numeric)) return "n/a";
-          return yScale === "log" ? formatSignedLogAxisValue(numeric) : formatScientific(numeric, 6);
-        },
+        trigger: "item",
       },
       dataZoom: buildDataZoom(zoomRange, false, true, yZoomRange, true),
       series: [
@@ -2576,11 +2669,17 @@ const HistogramPanel = ({
           ? [buildErrorBarSeries({ name: "error", data: binErrorData })]
           : []),
         ...valueSeries,
+        buildContinuousHoverZoneSeries({
+          bins,
+          xScale: effectiveXScale,
+          tooltipFormatter: buildContinuousHistogramTooltip,
+        }),
         ...overlaySeries.flatMap((overlay) => [
           ...(Array.isArray(overlay.absError) && overlay.absError.length > 0
             ? [buildErrorBarSeries({ name: `${overlay.name} error`, data: overlay.absError, color: overlay.color })]
             : []),
           {
+            id: `histogram-overlay-${overlay.id}`,
             type: "line",
             name: overlay.name,
             data: overlay.valueStep,
@@ -2589,7 +2688,8 @@ const HistogramPanel = ({
             connectNulls: false,
             lineStyle: { width: 1.4, type: "dashed", color: overlay.color },
             itemStyle: { color: overlay.color },
-            emphasis: { focus: "series" },
+            emphasis: { disabled: true },
+            tooltip: { show: false },
           },
         ]),
       ],
@@ -3084,7 +3184,7 @@ const HistogramPanel = ({
             <ReactECharts
               ref={echartsRef}
               option={histogramOption}
-              notMerge={!isDiscrete}
+              notMerge={false}
               onEvents={onDataZoom}
               lazyUpdate
               opts={{ renderer: "canvas" }}
@@ -3395,6 +3495,27 @@ const KeyValuePanel = ({ title, state }) => (
             </Typography>
             {isEstimateValue(entry.value) ? (
               <EstimateValueBlock value={entry.value} />
+            ) : entry?.key === "domain" && isObject(entry.value) ? (
+              <Box sx={{ minWidth: 0 }}>
+                <Box component="details">
+                  <Box component="summary" sx={{ cursor: "pointer", fontSize: "0.8rem", color: "text.secondary" }}>
+                    {domainSummaryText(entry.value)}
+                  </Box>
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      mt: 0.5,
+                      display: "block",
+                      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace",
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      color: "text.primary",
+                    }}
+                  >
+                    {formatDebugJson(entry.value)}
+                  </Typography>
+                </Box>
+              </Box>
             ) : (
               <Typography
                 variant="body2"
