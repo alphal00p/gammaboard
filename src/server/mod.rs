@@ -2,6 +2,7 @@ mod auth;
 mod config_panels;
 mod panels;
 mod performance_panels;
+mod run_exposed_info;
 mod run_panels;
 mod task_panels;
 mod worker_panels;
@@ -21,6 +22,7 @@ use crate::server::panels::{PanelRequest, PanelResponse};
 use crate::server::performance_panels::{
     build_evaluator_performance_response, build_sampler_performance_response,
 };
+use crate::server::run_exposed_info::ensure_run_exposed_info;
 use crate::server::run_panels::build_run_panel_response;
 use crate::server::task_panels::{TaskPanelSource, parse_cursor as parse_task_panel_cursor};
 use crate::server::worker_panels::build_worker_panel_response;
@@ -489,10 +491,11 @@ async fn get_run_panels(
         .load_run_spec(run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
+    let exposed_info = ensure_run_exposed_info(&state.store, run_id, &run_spec).await?;
     let tasks = state.store.list_run_tasks(run_id).await?;
     let workers = state.store.get_registered_workers(Some(run_id)).await?;
     json_response(
-        build_run_panel_response(&run, &run_spec, &tasks, &workers)
+        build_run_panel_response(&run, &run_spec, &tasks, &workers, &exposed_info)
             .map_err(|err| ApiError::Internal(err.to_string()))?,
     )
 }

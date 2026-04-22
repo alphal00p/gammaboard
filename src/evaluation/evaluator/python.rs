@@ -9,7 +9,8 @@ use serde_json::Value;
 
 use crate::core::{AccumulatorConfig, BuildError, EvalError};
 use crate::evaluation::{
-    AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator, ScalarBatchEvaluator,
+    AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator, IngestScalar,
+    ScalarBatchEvaluator,
 };
 use crate::utils::domain::Domain;
 
@@ -62,6 +63,20 @@ impl ScalarPythonEvaluator {
             worker,
         })
     }
+
+    fn scalar_ingestor<'a>(
+        state: &'a mut AccumulatorState,
+    ) -> Result<&'a mut dyn IngestScalar, EvalError> {
+        match state {
+            AccumulatorState::Empty(accumulator) => Ok(accumulator),
+            AccumulatorState::Scalar(accumulator) => Ok(accumulator),
+            AccumulatorState::FullScalar(accumulator) => Ok(accumulator),
+            other => Err(EvalError::eval(format!(
+                "python_scalar evaluator does not support accumulator kind {}",
+                other.kind_str()
+            ))),
+        }
+    }
 }
 
 impl ScalarBatchEvaluator for ScalarPythonEvaluator {
@@ -96,23 +111,11 @@ impl Evaluator for ScalarPythonEvaluator {
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
         let mut observable_state = AccumulatorState::from_config(accumulator);
-        let weighted_values = match &mut observable_state {
-            AccumulatorState::Empty(accumulator) => {
-                self.eval_scalar_batch_into(batch, accumulator, options.require_training_values)?
-            }
-            AccumulatorState::Scalar(accumulator) => {
-                self.eval_scalar_batch_into(batch, accumulator, options.require_training_values)?
-            }
-            AccumulatorState::FullScalar(accumulator) => {
-                self.eval_scalar_batch_into(batch, accumulator, options.require_training_values)?
-            }
-            other => {
-                return Err(EvalError::eval(format!(
-                    "python_scalar evaluator does not support accumulator kind {}",
-                    other.kind_str()
-                )));
-            }
-        };
+        let weighted_values = self.eval_scalar_batch_into(
+            batch,
+            Self::scalar_ingestor(&mut observable_state)?,
+            options.require_training_values,
+        )?;
         Ok(BatchResult::new(weighted_values, observable_state))
     }
 }

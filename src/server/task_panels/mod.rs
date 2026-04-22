@@ -801,6 +801,7 @@ mod tests {
                 imag_sq_sum: 5.0,
                 weight_sum: 3.0,
                 nan_count: 0,
+                ..Default::default()
             },
             diagnostics: GammaLoopDiagnostics {
                 count_total: 3,
@@ -954,6 +955,17 @@ mod tests {
             PanelState::KeyValue { panel_id, entries }
                 if panel_id == "gammaloop_evaluation_diagnostics"
                     && entries.iter().any(|entry| entry.key == "count_arb_precision")
+        )));
+        assert!(current.iter().any(|panel| matches!(
+            panel,
+            PanelState::KeyValue { panel_id, entries }
+                if panel_id == "max_weight_summary"
+                    && entries.iter().any(|entry| entry.key == "max_weight_impact")
+        )));
+        assert!(current.iter().any(|panel| matches!(
+            panel,
+            PanelState::Table { panel_id, columns, .. }
+                if panel_id == "max_weight_points" && columns.len() == 5
         )));
     }
 

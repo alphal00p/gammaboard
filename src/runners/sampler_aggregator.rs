@@ -557,38 +557,36 @@ where
                 }),
                 SampleErrorProjection::Imag | SampleErrorProjection::Abs => None,
             },
-            AccumulatorState::Complex(state) => match projection {
-                SampleErrorProjection::Real => Some(ProjectedEstimate {
-                    value: state.real_mean(),
-                    error: state.real_stderr(),
-                }),
-                SampleErrorProjection::Imag => Some(ProjectedEstimate {
-                    value: state.imag_mean(),
-                    error: state.imag_stderr(),
-                }),
-                SampleErrorProjection::Abs => Some(ProjectedEstimate {
-                    value: state.abs_mean(),
-                    error: state.abs_stderr(),
-                }),
-            },
-            AccumulatorState::Gammaloop(state) => match projection {
-                SampleErrorProjection::Real => Some(ProjectedEstimate {
-                    value: state.real_mean(),
-                    error: state.real_stderr(),
-                }),
-                SampleErrorProjection::Imag => Some(ProjectedEstimate {
-                    value: state.imag_mean(),
-                    error: state.imag_stderr(),
-                }),
-                SampleErrorProjection::Abs => Some(ProjectedEstimate {
-                    value: state.abs_mean(),
-                    error: state.abs_stderr(),
-                }),
-            },
+            AccumulatorState::Complex(state) => Self::project_complex_like(
+                projection,
+                (state.real_mean(), state.real_stderr()),
+                (state.imag_mean(), state.imag_stderr()),
+                (state.abs_mean(), state.abs_stderr()),
+            ),
+            AccumulatorState::Gammaloop(state) => Self::project_complex_like(
+                projection,
+                (state.real_mean(), state.real_stderr()),
+                (state.imag_mean(), state.imag_stderr()),
+                (state.abs_mean(), state.abs_stderr()),
+            ),
             AccumulatorState::Empty(_)
             | AccumulatorState::FullScalar(_)
             | AccumulatorState::FullComplex(_) => None,
         }
+    }
+
+    fn project_complex_like(
+        projection: SampleErrorProjection,
+        real: (f64, f64),
+        imag: (f64, f64),
+        abs: (f64, f64),
+    ) -> Option<ProjectedEstimate> {
+        let (value, error) = match projection {
+            SampleErrorProjection::Real => real,
+            SampleErrorProjection::Imag => imag,
+            SampleErrorProjection::Abs => abs,
+        };
+        Some(ProjectedEstimate { value, error })
     }
 
     fn relative_error(value: f64, abs_error: f64) -> f64 {

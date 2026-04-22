@@ -2,7 +2,7 @@ use crate::core::{AccumulatorConfig, BuildError, EngineError, EvalError};
 use crate::utils::domain::Domain;
 use num::complex::Complex64;
 
-use super::{Batch, BatchResult, IngestComplex, IngestScalar};
+use super::{Batch, BatchResult, IngestComplex, IngestScalar, Point};
 use crate::sampling::LatentBatch;
 
 #[derive(Debug, Clone, Copy)]
@@ -23,22 +23,18 @@ pub trait Evaluator: Send {
 pub trait ScalarSampleEvaluator {
     fn eval_scalar_sample(&mut self, batch: &Batch, sample_idx: usize) -> Result<f64, EvalError>;
 
-    fn eval_scalar_into<O: IngestScalar>(
+    fn eval_scalar_into<O: IngestScalar + ?Sized>(
         &mut self,
         batch: &Batch,
         accumulator: &mut O,
         require_training_values: bool,
     ) -> Result<Option<Vec<f64>>, EvalError> {
         let mut training_values = require_training_values.then(|| Vec::with_capacity(batch.size()));
-        for sample_idx in 0..batch.size() {
+        for (sample_idx, point) in batch.points().iter().enumerate() {
             let value = self.eval_scalar_sample(batch, sample_idx)?;
-            let weight = batch
-                .point(sample_idx)
-                .map(|point| point.weight)
-                .ok_or_else(|| EvalError::eval(format!("batch is missing sample {sample_idx}")))?;
-            accumulator.ingest_scalar(value, weight);
+            accumulator.ingest_scalar(value, point);
             if let Some(values) = training_values.as_mut() {
-                values.push(value * weight);
+                values.push(value * point.weight);
             }
         }
         Ok(training_values)
@@ -52,7 +48,7 @@ pub trait ComplexSampleEvaluator {
         sample_idx: usize,
     ) -> Result<Complex64, EvalError>;
 
-    fn eval_complex_into<O: IngestComplex>(
+    fn eval_complex_into<O: IngestComplex + ?Sized>(
         &mut self,
         batch: &Batch,
         accumulator: &mut O,
@@ -60,15 +56,11 @@ pub trait ComplexSampleEvaluator {
         training_projection: impl Fn(Complex64) -> f64,
     ) -> Result<Option<Vec<f64>>, EvalError> {
         let mut training_values = require_training_values.then(|| Vec::with_capacity(batch.size()));
-        for sample_idx in 0..batch.size() {
+        for (sample_idx, point) in batch.points().iter().enumerate() {
             let value = self.eval_complex_sample(batch, sample_idx)?;
-            let weight = batch
-                .point(sample_idx)
-                .map(|point| point.weight)
-                .ok_or_else(|| EvalError::eval(format!("batch is missing sample {sample_idx}")))?;
-            accumulator.ingest_complex(value, weight);
+            accumulator.ingest_complex(value, point);
             if let Some(values) = training_values.as_mut() {
-                values.push(training_projection(value) * weight);
+                values.push(training_projection(value) * point.weight);
             }
         }
         Ok(training_values)
@@ -76,25 +68,25 @@ pub trait ComplexSampleEvaluator {
 }
 
 pub trait ScalarValueEvaluator {
-    fn ingest_scalar_values<O: IngestScalar>(
+    fn ingest_scalar_values<O: IngestScalar + ?Sized>(
         &self,
         values: &[f64],
-        weights: &[f64],
+        points: &[Point],
         require_training_values: bool,
         accumulator: &mut O,
     ) -> Result<Option<Vec<f64>>, EvalError> {
-        if values.len() != weights.len() {
+        if values.len() != points.len() {
             return Err(EvalError::eval(format!(
-                "cannot ingest scalar values: values length {} does not match weights length {}",
+                "cannot ingest scalar values: values length {} does not match points length {}",
                 values.len(),
-                weights.len()
+                points.len()
             )));
         }
         let mut training_values = require_training_values.then(|| Vec::with_capacity(values.len()));
-        for (sample_idx, value) in values.iter().enumerate() {
-            accumulator.ingest_scalar(*value, weights[sample_idx]);
+        for (value, point) in values.iter().zip(points.iter()) {
+            accumulator.ingest_scalar(*value, point);
             if let Some(training_values) = training_values.as_mut() {
-                training_values.push(*value * weights[sample_idx]);
+                training_values.push(*value * point.weight);
             }
         }
         Ok(training_values)
@@ -104,26 +96,26 @@ pub trait ScalarValueEvaluator {
 impl<T> ScalarValueEvaluator for T {}
 
 pub trait ComplexValueEvaluator {
-    fn ingest_complex_values<O: IngestComplex>(
+    fn ingest_complex_values<O: IngestComplex + ?Sized>(
         &self,
         values: &[Complex64],
-        weights: &[f64],
+        points: &[Point],
         require_training_values: bool,
         accumulator: &mut O,
         training_projection: impl Fn(Complex64) -> f64,
     ) -> Result<Option<Vec<f64>>, EvalError> {
-        if values.len() != weights.len() {
+        if values.len() != points.len() {
             return Err(EvalError::eval(format!(
-                "cannot ingest complex values: values length {} does not match weights length {}",
+                "cannot ingest complex values: values length {} does not match points length {}",
                 values.len(),
-                weights.len()
+                points.len()
             )));
         }
         let mut training_values = require_training_values.then(|| Vec::with_capacity(values.len()));
-        for (sample_idx, value) in values.iter().enumerate() {
-            accumulator.ingest_complex(*value, weights[sample_idx]);
+        for (value, point) in values.iter().zip(points.iter()) {
+            accumulator.ingest_complex(*value, point);
             if let Some(training_values) = training_values.as_mut() {
-                training_values.push(training_projection(*value) * weights[sample_idx]);
+                training_values.push(training_projection(*value) * point.weight);
             }
         }
         Ok(training_values)
@@ -182,7 +174,7 @@ pub trait ScalarBatchEvaluator: ScalarValueEvaluator {
         Ok(values)
     }
 
-    fn eval_scalar_batch_into<O: IngestScalar>(
+    fn eval_scalar_batch_into<O: IngestScalar + ?Sized>(
         &mut self,
         batch: &Batch,
         accumulator: &mut O,
@@ -191,7 +183,7 @@ pub trait ScalarBatchEvaluator: ScalarValueEvaluator {
         let values = self.eval_scalar_batch(batch)?;
         self.ingest_scalar_values(
             values.as_slice(),
-            batch.weights().as_slice(),
+            batch.points(),
             require_training_values,
             accumulator,
         )
@@ -224,7 +216,7 @@ pub trait ComplexBatchEvaluator: ComplexValueEvaluator {
         Ok(values)
     }
 
-    fn eval_complex_batch_into<O: IngestComplex>(
+    fn eval_complex_batch_into<O: IngestComplex + ?Sized>(
         &mut self,
         batch: &Batch,
         accumulator: &mut O,
@@ -234,7 +226,7 @@ pub trait ComplexBatchEvaluator: ComplexValueEvaluator {
         let values = self.eval_complex_batch(batch)?;
         self.ingest_complex_values(
             values.as_slice(),
-            batch.weights().as_slice(),
+            batch.points(),
             require_training_values,
             accumulator,
             training_projection,

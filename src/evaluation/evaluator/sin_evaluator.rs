@@ -1,6 +1,7 @@
 use crate::core::{AccumulatorConfig, EvalError};
 use crate::evaluation::{
-    AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator, ScalarSampleEvaluator,
+    AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator, IngestScalar,
+    ScalarSampleEvaluator,
 };
 use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,20 @@ impl SinEvaluator {
 
     pub fn from_params(params: SinEvaluatorParams) -> Self {
         Self::new(params.min_eval_time_per_sample_ms)
+    }
+
+    fn scalar_ingestor<'a>(
+        state: &'a mut AccumulatorState,
+    ) -> Result<&'a mut dyn IngestScalar, EvalError> {
+        match state {
+            AccumulatorState::Empty(accumulator) => Ok(accumulator),
+            AccumulatorState::Scalar(accumulator) => Ok(accumulator),
+            AccumulatorState::FullScalar(accumulator) => Ok(accumulator),
+            other => Err(EvalError::eval(format!(
+                "sin evaluator does not support accumulator kind {}",
+                other.kind_str()
+            ))),
+        }
     }
 }
 
@@ -58,23 +73,11 @@ impl Evaluator for SinEvaluator {
     ) -> Result<BatchResult, EvalError> {
         let started = Instant::now();
         let mut observable_state = AccumulatorState::from_config(accumulator);
-        let weighted_values = match &mut observable_state {
-            AccumulatorState::Empty(accumulator) => {
-                self.eval_scalar_into(batch, accumulator, options.require_training_values)?
-            }
-            AccumulatorState::Scalar(accumulator) => {
-                self.eval_scalar_into(batch, accumulator, options.require_training_values)?
-            }
-            AccumulatorState::FullScalar(accumulator) => {
-                self.eval_scalar_into(batch, accumulator, options.require_training_values)?
-            }
-            other => {
-                return Err(EvalError::eval(format!(
-                    "sin evaluator does not support accumulator kind {}",
-                    other.kind_str()
-                )));
-            }
-        };
+        let weighted_values = self.eval_scalar_into(
+            batch,
+            Self::scalar_ingestor(&mut observable_state)?,
+            options.require_training_values,
+        )?;
 
         let min_total =
             Duration::from_millis(self.min_eval_time_per_sample_ms).mul_f64(batch.size() as f64);

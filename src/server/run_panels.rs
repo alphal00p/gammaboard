@@ -1,8 +1,12 @@
-use crate::core::{EngineError, RunSpec, RunTask};
+use crate::core::{
+    EngineError, RunExposedArtifact, RunExposedInfoCache, RunExposedInfoContent,
+    RunExposedInfoStatus, RunSpec, RunTask,
+};
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelWidth, key_value,
-    key_value_panel, panel_spec, replace_panel, text_panel, with_panel_width,
+    key_value_panel, panel_spec, replace_panel, svg_panel, text_panel, with_panel_width,
 };
+use crate::server::run_exposed_info::GAMMALOOP_PROCESS_VIS_KEY;
 use crate::stores::{RegisteredWorkerEntry, RunProgress};
 use serde_json::Value as JsonValue;
 
@@ -11,10 +15,11 @@ pub fn build_run_panel_response(
     run_spec: &RunSpec,
     tasks: &[RunTask],
     workers: &[RegisteredWorkerEntry],
+    exposed_info: &RunExposedInfoCache,
 ) -> Result<PanelResponse, EngineError> {
     let source_id = format!("run:{}:summary", run.run_id);
-    let panels = panel_specs();
-    let updates = panel_states(run, run_spec, tasks, workers)?
+    let panels = panel_specs(run_spec);
+    let updates = panel_states(run, run_spec, tasks, workers, exposed_info)?
         .into_iter()
         .map(replace_panel)
         .collect();
@@ -27,8 +32,8 @@ pub fn build_run_panel_response(
     })
 }
 
-fn panel_specs() -> Vec<PanelSpec> {
-    vec![
+fn panel_specs(run_spec: &RunSpec) -> Vec<PanelSpec> {
+    let mut panels = vec![
         with_panel_width(
             panel_spec(
                 "run_identity",
@@ -92,7 +97,22 @@ fn panel_specs() -> Vec<PanelSpec> {
             ),
             PanelWidth::Full,
         ),
-    ]
+    ];
+    if matches!(
+        run_spec.evaluator,
+        crate::core::EvaluatorConfig::Gammaloop { .. }
+    ) {
+        panels.push(with_panel_width(
+            panel_spec(
+                "gammaloop_process_visualization",
+                "Process Visualization",
+                PanelKind::Svg,
+                PanelHistoryMode::None,
+            ),
+            PanelWidth::Full,
+        ));
+    }
+    panels
 }
 
 fn panel_states(
@@ -100,6 +120,7 @@ fn panel_states(
     run_spec: &RunSpec,
     tasks: &[RunTask],
     workers: &[RegisteredWorkerEntry],
+    exposed_info: &RunExposedInfoCache,
 ) -> Result<Vec<PanelState>, EngineError> {
     let current_task = tasks.iter().find(|task| task.state.as_str() == "active");
     let active_sampler = workers.iter().find(|worker| {
@@ -136,7 +157,7 @@ fn panel_states(
     let current_batch_eval_ms = active_sampler
         .and_then(|worker| worker.sampler_runtime_metrics.as_ref())
         .and_then(batch_eval_ms_mean);
-    Ok(vec![
+    let mut panels = vec![
         key_value_panel(
             "run_identity",
             vec![
@@ -290,7 +311,49 @@ fn panel_states(
             ],
         ),
         text_panel("run_target", &target_summary(run.target.as_ref())),
-    ])
+    ];
+    if matches!(
+        run_spec.evaluator,
+        crate::core::EvaluatorConfig::Gammaloop { .. }
+    ) {
+        panels.push(process_visualization_panel(exposed_info));
+    }
+    Ok(panels)
+}
+
+fn process_visualization_panel(exposed_info: &RunExposedInfoCache) -> PanelState {
+    let Some(entry) = exposed_info.entries.get(GAMMALOOP_PROCESS_VIS_KEY) else {
+        return svg_panel(
+            "gammaloop_process_visualization",
+            None,
+            Some("No process visualization is available for this run.".to_string()),
+        );
+    };
+    let svg = entry.content.as_ref().and_then(extract_primary_svg);
+    let message = if svg.is_some() {
+        None
+    } else if entry.status == RunExposedInfoStatus::Error {
+        Some(
+            entry
+                .error
+                .as_deref()
+                .unwrap_or("Process visualization generation failed.")
+                .to_string(),
+        )
+    } else {
+        Some("Process visualization payload did not include an SVG artifact.".to_string())
+    };
+    svg_panel("gammaloop_process_visualization", svg, message)
+}
+
+fn extract_primary_svg(content: &RunExposedInfoContent) -> Option<String> {
+    match content {
+        RunExposedInfoContent::ArtifactBundle { primary, .. } => match primary {
+            RunExposedArtifact::Svg { data } => Some(data.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn accumulator_label(task: &crate::core::RunTaskSpec) -> String {

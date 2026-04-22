@@ -3,10 +3,10 @@
 use super::queries;
 use crate::core::{
     AggregationStore, BatchClaim, BatchQueueCounts, CompletedBatch, ControlPlaneStore,
-    DesiredAssignment, EvaluatorPerformanceSnapshot, RegisteredNode, RunReadStore,
-    RunSampleProgress, RunSpecStore, RunStageSnapshot, RunTask, RunTaskInput, RunTaskStore,
-    RuntimeLogEvent, RuntimeLogStore, SamplerAggregatorPerformanceSnapshot, StoreError,
-    WorkQueueStore, WorkerRole, generated_task_name,
+    DesiredAssignment, EvaluatorPerformanceSnapshot, RegisteredNode, RunExposedInfoCache,
+    RunReadStore, RunSampleProgress, RunSpecStore, RunStageSnapshot, RunTask, RunTaskInput,
+    RunTaskStore, RuntimeLogEvent, RuntimeLogStore, SamplerAggregatorPerformanceSnapshot,
+    StoreError, WorkQueueStore, WorkerRole, generated_task_name,
 };
 use crate::core::{IntegrationParams, RunSpec, SamplerQueueTuning, canonical_task_toml};
 use crate::evaluation::BatchResult;
@@ -51,6 +51,42 @@ impl PgStore {
         run_id: Option<i32>,
     ) -> Result<Vec<crate::stores::RegisteredWorkerEntry>, StoreError> {
         Ok(queries::get_registered_worker_summaries(&self.pool, run_id).await?)
+    }
+
+    pub async fn load_run_exposed_info(
+        &self,
+        run_id: i32,
+    ) -> Result<RunExposedInfoCache, StoreError> {
+        let payload = queries::get_run_exposed_info(&self.pool, run_id)
+            .await
+            .map_err(map_sqlx)?;
+        match payload {
+            Some(value) => serde_json::from_value(value).map_err(|err| {
+                store_err(format!(
+                    "failed to decode runs.exposed_info for run_id={run_id}: {err}"
+                ))
+            }),
+            None => Err(store_err(format!("run {run_id} not found"))),
+        }
+    }
+
+    pub async fn save_run_exposed_info(
+        &self,
+        run_id: i32,
+        cache: &RunExposedInfoCache,
+    ) -> Result<(), StoreError> {
+        let payload = serde_json::to_value(cache).map_err(|err| {
+            store_err(format!(
+                "failed to encode runs.exposed_info payload for run_id={run_id}: {err}"
+            ))
+        })?;
+        let rows = queries::set_run_exposed_info(&self.pool, run_id, &payload)
+            .await
+            .map_err(map_sqlx)?;
+        if rows == 0 {
+            return Err(store_err(format!("run {run_id} not found")));
+        }
+        Ok(())
     }
 }
 

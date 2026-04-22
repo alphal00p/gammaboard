@@ -1,4 +1,5 @@
 use super::{Accumulator, IngestScalar};
+use crate::evaluation::batch::Point;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -9,11 +10,19 @@ pub struct ScalarAccumulatorState {
     pub sum_sq: f64,
     #[serde(default)]
     pub nan_count: usize,
+    #[serde(default)]
+    pub max_weighted_positive: f64,
+    #[serde(default)]
+    pub max_weighted_negative: f64,
+    #[serde(default)]
+    pub max_weighted_positive_point: Option<Point>,
+    #[serde(default)]
+    pub max_weighted_negative_point: Option<Point>,
 }
 
 impl ScalarAccumulatorState {
-    pub fn add_sample(&mut self, value: f64, weight: f64) {
-        let weight = weight.abs();
+    pub fn add_sample(&mut self, value: f64, point: &Point) {
+        let weight = point.weight.abs();
         let weighted_value = value * weight;
         let weighted_sq = weighted_value * weighted_value;
         if !weighted_value.is_finite() || !weighted_sq.is_finite() {
@@ -24,6 +33,7 @@ impl ScalarAccumulatorState {
         self.sum_weighted_value += weighted_value;
         self.sum_abs += weighted_value.abs();
         self.sum_sq += weighted_sq;
+        self.update_extrema(weighted_value, point);
     }
 
     pub fn mean(&self) -> f64 {
@@ -49,11 +59,46 @@ impl ScalarAccumulatorState {
     pub fn rsd(&self) -> f64 {
         relative_squared_dispersion(self.variance(), self.mean_abs())
     }
+
+    pub fn max_weight_impact(&self) -> f64 {
+        if self.count <= 0 {
+            return 0.0;
+        }
+        let denom = self.mean().abs() * self.count as f64;
+        if !denom.is_finite() || denom <= 0.0 {
+            return 0.0;
+        }
+        let numer = self
+            .max_weighted_positive
+            .abs()
+            .max(self.max_weighted_negative.abs());
+        if !numer.is_finite() {
+            return 0.0;
+        }
+        numer / denom
+    }
+
+    fn update_extrema(&mut self, weighted_value: f64, point: &Point) {
+        if weighted_value >= 0.0
+            && (self.max_weighted_positive_point.is_none()
+                || weighted_value > self.max_weighted_positive)
+        {
+            self.max_weighted_positive = weighted_value;
+            self.max_weighted_positive_point = Some(point.clone());
+        }
+        if weighted_value < 0.0
+            && (self.max_weighted_negative_point.is_none()
+                || weighted_value < self.max_weighted_negative)
+        {
+            self.max_weighted_negative = weighted_value;
+            self.max_weighted_negative_point = Some(point.clone());
+        }
+    }
 }
 
 impl IngestScalar for ScalarAccumulatorState {
-    fn ingest_scalar(&mut self, value: f64, weight: f64) {
-        self.add_sample(value, weight);
+    fn ingest_scalar(&mut self, value: f64, point: &Point) {
+        self.add_sample(value, point);
     }
 }
 
@@ -71,6 +116,18 @@ impl Accumulator for ScalarAccumulatorState {
         self.sum_abs += other.sum_abs;
         self.sum_sq += other.sum_sq;
         self.nan_count += other.nan_count;
+        merge_positive_extrema(
+            &mut self.max_weighted_positive,
+            &mut self.max_weighted_positive_point,
+            other.max_weighted_positive,
+            other.max_weighted_positive_point,
+        );
+        merge_negative_extrema(
+            &mut self.max_weighted_negative,
+            &mut self.max_weighted_negative_point,
+            other.max_weighted_negative,
+            other.max_weighted_negative_point,
+        );
     }
 
     fn get_persistent(&self) -> Self::Persistent {
@@ -116,15 +173,49 @@ fn relative_squared_dispersion(variance: f64, mean_abs: f64) -> f64 {
     }
 }
 
+fn merge_positive_extrema(
+    target_value: &mut f64,
+    target_point: &mut Option<Point>,
+    candidate_value: f64,
+    candidate_point: Option<Point>,
+) {
+    let has_candidate = candidate_point.is_some() || candidate_value != 0.0;
+    if !has_candidate {
+        return;
+    }
+    if target_point.is_none() || candidate_value > *target_value {
+        *target_value = candidate_value;
+        *target_point = candidate_point;
+    }
+}
+
+fn merge_negative_extrema(
+    target_value: &mut f64,
+    target_point: &mut Option<Point>,
+    candidate_value: f64,
+    candidate_point: Option<Point>,
+) {
+    let has_candidate = candidate_point.is_some() || candidate_value != 0.0;
+    if !has_candidate {
+        return;
+    }
+    if target_point.is_none() || candidate_value < *target_value {
+        *target_value = candidate_value;
+        *target_point = candidate_point;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::ScalarAccumulatorState;
+    use crate::evaluation::Point;
 
     #[test]
     fn add_sample_accepts_finite_weighted_contributions() {
         let mut accumulator = ScalarAccumulatorState::default();
 
-        accumulator.add_sample(2.0, -3.0);
+        let point = Point::new(vec![0.5], vec![1], -3.0);
+        accumulator.add_sample(2.0, &point);
 
         assert_eq!(accumulator.count, 1);
         assert_eq!(accumulator.sum_weighted_value, 6.0);
@@ -137,13 +228,30 @@ mod tests {
     fn add_sample_skips_non_finite_weighted_contributions() {
         let mut accumulator = ScalarAccumulatorState::default();
 
-        accumulator.add_sample(f64::NAN, 1.0);
-        accumulator.add_sample(1.0, f64::INFINITY);
+        let point = Point::new(vec![], vec![], 1.0);
+        let inf_point = Point::new(vec![], vec![], f64::INFINITY);
+        accumulator.add_sample(f64::NAN, &point);
+        accumulator.add_sample(1.0, &inf_point);
 
         assert_eq!(accumulator.count, 0);
         assert_eq!(accumulator.sum_weighted_value, 0.0);
         assert_eq!(accumulator.sum_abs, 0.0);
         assert_eq!(accumulator.sum_sq, 0.0);
         assert_eq!(accumulator.nan_count, 2);
+    }
+
+    #[test]
+    fn add_sample_tracks_max_weight_points() {
+        let mut accumulator = ScalarAccumulatorState::default();
+        let point_a = Point::new(vec![0.1], vec![0], 1.0);
+        let point_b = Point::new(vec![0.9], vec![1], 2.0);
+
+        accumulator.add_sample(3.0, &point_a);
+        accumulator.add_sample(-4.0, &point_b);
+
+        assert_eq!(accumulator.max_weighted_positive, 3.0);
+        assert_eq!(accumulator.max_weighted_positive_point, Some(point_a));
+        assert_eq!(accumulator.max_weighted_negative, -8.0);
+        assert_eq!(accumulator.max_weighted_negative_point, Some(point_b));
     }
 }

@@ -6,7 +6,7 @@ use crate::core::{
     AccumulatorConfig, EngineError, RunTaskSpec, SampleErrorProjection, SampleStopCondition,
 };
 use crate::evaluation::{
-    Accumulator, AccumulatorState, GammaLoopDiagnostics, SemanticAccumulatorKind,
+    Accumulator, AccumulatorState, GammaLoopDiagnostics, Point, SemanticAccumulatorKind,
 };
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, TickBreakdownSegment,
@@ -33,6 +33,14 @@ pub(super) fn projectors(
     ) {
         projectors.push(imag_estimate_history_projector(accumulator_config.as_ref()));
     }
+    if matches!(
+        accumulator_config,
+        Some(AccumulatorConfig::Scalar | AccumulatorConfig::Complex | AccumulatorConfig::Gammaloop)
+            | None
+    ) {
+        projectors.push(max_weight_summary_projector(accumulator_config.as_ref()));
+        projectors.push(max_weight_points_projector(accumulator_config.as_ref()));
+    }
     projectors.push(rsd_history_projector(accumulator_config.as_ref()));
     if matches!(
         accumulator_config,
@@ -43,6 +51,52 @@ pub(super) fn projectors(
         projectors.push(gammaloop_evaluation_diagnostics_projector());
     }
     projectors
+}
+
+fn max_weight_summary_projector(
+    accumulator_config: Option<&AccumulatorConfig>,
+) -> TaskPanelProjector {
+    let accumulator_config = accumulator_config.cloned();
+    panel_projector_with_source(
+        with_panel_width(
+            panel_spec(
+                "max_weight_summary",
+                "Max Weight Impact",
+                PanelKind::KeyValue,
+                PanelHistoryMode::None,
+            ),
+            PanelWidth::Half,
+        ),
+        TaskPanelCurrentSourcePolicy::PersistedFirst,
+        move |ctx| {
+            Ok(sample_accumulator(ctx, accumulator_config.as_ref())?
+                .and_then(max_weight_summary_panel))
+        },
+        |_ctx| Ok(None),
+    )
+}
+
+fn max_weight_points_projector(
+    accumulator_config: Option<&AccumulatorConfig>,
+) -> TaskPanelProjector {
+    let accumulator_config = accumulator_config.cloned();
+    panel_projector_with_source(
+        with_panel_width(
+            panel_spec(
+                "max_weight_points",
+                "Max Weight Points",
+                PanelKind::Table,
+                PanelHistoryMode::None,
+            ),
+            PanelWidth::Full,
+        ),
+        TaskPanelCurrentSourcePolicy::PersistedFirst,
+        move |ctx| {
+            Ok(sample_accumulator(ctx, accumulator_config.as_ref())?
+                .and_then(max_weight_points_panel))
+        },
+        |_ctx| Ok(None),
+    )
 }
 
 fn sample_progress_projector() -> TaskPanelProjector {
@@ -514,6 +568,238 @@ fn estimate_summary_panel(
         "estimate_summary",
         base_estimate_summary_entries(&accumulator, run_target),
     )
+}
+
+fn max_weight_summary_panel(accumulator: AccumulatorState) -> Option<PanelState> {
+    let entries = match accumulator {
+        AccumulatorState::Scalar(state) => vec![
+            key_value("max_weight_impact", "Impact", state.max_weight_impact()),
+            key_value(
+                "max_weighted_positive",
+                "Max +",
+                state.max_weighted_positive,
+            ),
+            key_value(
+                "max_weighted_negative",
+                "Max -",
+                state.max_weighted_negative,
+            ),
+        ],
+        AccumulatorState::Complex(state) => vec![
+            key_value("max_weight_impact", "Impact", state.max_weight_impact()),
+            key_value(
+                "max_weight_impact_real",
+                "Impact Re",
+                state.real_max_weight_impact(),
+            ),
+            key_value(
+                "max_weight_impact_imag",
+                "Impact Im",
+                state.imag_max_weight_impact(),
+            ),
+            key_value(
+                "max_real_weighted_positive",
+                "Max Re +",
+                state.max_real_weighted_positive,
+            ),
+            key_value(
+                "max_real_weighted_negative",
+                "Max Re -",
+                state.max_real_weighted_negative,
+            ),
+            key_value(
+                "max_imag_weighted_positive",
+                "Max Im +",
+                state.max_imag_weighted_positive,
+            ),
+            key_value(
+                "max_imag_weighted_negative",
+                "Max Im -",
+                state.max_imag_weighted_negative,
+            ),
+        ],
+        AccumulatorState::Gammaloop(state) => {
+            let estimate = &state.estimate;
+            vec![
+                key_value("max_weight_impact", "Impact", estimate.max_weight_impact()),
+                key_value(
+                    "max_weight_impact_real",
+                    "Impact Re",
+                    estimate.real_max_weight_impact(),
+                ),
+                key_value(
+                    "max_weight_impact_imag",
+                    "Impact Im",
+                    estimate.imag_max_weight_impact(),
+                ),
+                key_value(
+                    "max_real_weighted_positive",
+                    "Max Re +",
+                    estimate.max_real_weighted_positive,
+                ),
+                key_value(
+                    "max_real_weighted_negative",
+                    "Max Re -",
+                    estimate.max_real_weighted_negative,
+                ),
+                key_value(
+                    "max_imag_weighted_positive",
+                    "Max Im +",
+                    estimate.max_imag_weighted_positive,
+                ),
+                key_value(
+                    "max_imag_weighted_negative",
+                    "Max Im -",
+                    estimate.max_imag_weighted_negative,
+                ),
+            ]
+        }
+        _ => return None,
+    };
+    Some(key_value_panel("max_weight_summary", entries))
+}
+
+fn max_weight_points_panel(accumulator: AccumulatorState) -> Option<PanelState> {
+    let columns = vec![
+        "Component".to_string(),
+        "Sign".to_string(),
+        "Max Weighted Value".to_string(),
+        "Impact".to_string(),
+        "Point".to_string(),
+    ];
+    let rows = match accumulator {
+        AccumulatorState::Scalar(state) => {
+            let impact = state.max_weight_impact();
+            let mut rows = Vec::new();
+            push_max_weight_row(
+                &mut rows,
+                "scalar",
+                "+",
+                state.max_weighted_positive,
+                impact,
+                state.max_weighted_positive_point.as_ref(),
+            );
+            push_max_weight_row(
+                &mut rows,
+                "scalar",
+                "-",
+                state.max_weighted_negative,
+                impact,
+                state.max_weighted_negative_point.as_ref(),
+            );
+            rows
+        }
+        AccumulatorState::Complex(state) => {
+            let mut rows = Vec::new();
+            push_max_weight_row(
+                &mut rows,
+                "re",
+                "+",
+                state.max_real_weighted_positive,
+                state.real_max_weight_impact(),
+                state.max_real_weighted_positive_point.as_ref(),
+            );
+            push_max_weight_row(
+                &mut rows,
+                "re",
+                "-",
+                state.max_real_weighted_negative,
+                state.real_max_weight_impact(),
+                state.max_real_weighted_negative_point.as_ref(),
+            );
+            push_max_weight_row(
+                &mut rows,
+                "im",
+                "+",
+                state.max_imag_weighted_positive,
+                state.imag_max_weight_impact(),
+                state.max_imag_weighted_positive_point.as_ref(),
+            );
+            push_max_weight_row(
+                &mut rows,
+                "im",
+                "-",
+                state.max_imag_weighted_negative,
+                state.imag_max_weight_impact(),
+                state.max_imag_weighted_negative_point.as_ref(),
+            );
+            rows
+        }
+        AccumulatorState::Gammaloop(state) => {
+            let estimate = &state.estimate;
+            let mut rows = Vec::new();
+            push_max_weight_row(
+                &mut rows,
+                "re",
+                "+",
+                estimate.max_real_weighted_positive,
+                estimate.real_max_weight_impact(),
+                estimate.max_real_weighted_positive_point.as_ref(),
+            );
+            push_max_weight_row(
+                &mut rows,
+                "re",
+                "-",
+                estimate.max_real_weighted_negative,
+                estimate.real_max_weight_impact(),
+                estimate.max_real_weighted_negative_point.as_ref(),
+            );
+            push_max_weight_row(
+                &mut rows,
+                "im",
+                "+",
+                estimate.max_imag_weighted_positive,
+                estimate.imag_max_weight_impact(),
+                estimate.max_imag_weighted_positive_point.as_ref(),
+            );
+            push_max_weight_row(
+                &mut rows,
+                "im",
+                "-",
+                estimate.max_imag_weighted_negative,
+                estimate.imag_max_weight_impact(),
+                estimate.max_imag_weighted_negative_point.as_ref(),
+            );
+            rows
+        }
+        _ => return None,
+    };
+    Some(table_panel_with_payload(
+        "max_weight_points",
+        columns,
+        rows,
+        None,
+    ))
+}
+
+fn push_max_weight_row(
+    rows: &mut Vec<Vec<JsonValue>>,
+    component: &str,
+    sign: &str,
+    max_weighted_value: f64,
+    impact: f64,
+    point: Option<&Point>,
+) {
+    if point.is_none() && max_weighted_value == 0.0 {
+        return;
+    }
+    rows.push(vec![
+        JsonValue::String(component.to_string()),
+        JsonValue::String(sign.to_string()),
+        JsonValue::from(max_weighted_value),
+        JsonValue::from(impact),
+        JsonValue::String(format_point(point)),
+    ]);
+}
+
+fn format_point(point: Option<&Point>) -> String {
+    match point {
+        Some(point) => format!(
+            "d={:?}, c={:?}, w={:+.6e}",
+            point.discrete, point.continuous, point.weight
+        ),
+        None => "N/A".to_string(),
+    }
 }
 
 fn base_estimate_summary_entries(

@@ -1,4 +1,5 @@
 use super::{Accumulator, IngestComplex, IngestScalar};
+use crate::evaluation::batch::Point;
 use num::complex::Complex64;
 use serde::{Deserialize, Serialize};
 
@@ -39,8 +40,8 @@ impl FullScalarAccumulatorState {
 }
 
 impl IngestScalar for FullScalarAccumulatorState {
-    fn ingest_scalar(&mut self, value: f64, weight: f64) {
-        self.push(value * weight.abs());
+    fn ingest_scalar(&mut self, value: f64, point: &Point) {
+        self.push(value * point.weight.abs());
     }
 }
 
@@ -56,8 +57,8 @@ impl FullComplexAccumulatorState {
 }
 
 impl IngestComplex for FullComplexAccumulatorState {
-    fn ingest_complex(&mut self, value: Complex64, weight: f64) {
-        let weight = weight.abs();
+    fn ingest_complex(&mut self, value: Complex64, point: &Point) {
+        let weight = point.weight.abs();
         self.push(ComplexValue {
             re: value.re * weight,
             im: value.im * weight,
@@ -112,16 +113,19 @@ impl Accumulator for FullComplexAccumulatorState {
 #[cfg(test)]
 mod tests {
     use super::{ComplexValue, FullComplexAccumulatorState, FullScalarAccumulatorState};
-    use crate::evaluation::{Accumulator, IngestComplex, IngestScalar};
+    use crate::evaluation::{Accumulator, IngestComplex, IngestScalar, Point};
     use num::complex::Complex64;
 
     #[test]
     fn full_scalar_preserves_positions_for_non_finite_values() {
         let mut accumulator = FullScalarAccumulatorState::default();
 
-        accumulator.ingest_scalar(1.0, 2.0);
-        accumulator.ingest_scalar(f64::NAN, 1.0);
-        accumulator.ingest_scalar(1.0, f64::INFINITY);
+        let finite_point = Point::new(vec![], vec![], 2.0);
+        let nan_point = Point::new(vec![], vec![], 1.0);
+        let inf_point = Point::new(vec![], vec![], f64::INFINITY);
+        accumulator.ingest_scalar(1.0, &finite_point);
+        accumulator.ingest_scalar(f64::NAN, &nan_point);
+        accumulator.ingest_scalar(1.0, &inf_point);
 
         assert_eq!(accumulator.values, vec![2.0, 0.0, 0.0]);
         assert_eq!(accumulator.nan_entries, vec![1, 2]);
@@ -131,9 +135,12 @@ mod tests {
     fn full_complex_preserves_positions_for_non_finite_values() {
         let mut accumulator = FullComplexAccumulatorState::default();
 
-        accumulator.ingest_complex(Complex64::new(1.0, -2.0), 3.0);
-        accumulator.ingest_complex(Complex64::new(f64::NAN, 0.0), 1.0);
-        accumulator.ingest_complex(Complex64::new(1.0, 0.0), f64::INFINITY);
+        let finite_point = Point::new(vec![], vec![], 3.0);
+        let nan_point = Point::new(vec![], vec![], 1.0);
+        let inf_point = Point::new(vec![], vec![], f64::INFINITY);
+        accumulator.ingest_complex(Complex64::new(1.0, -2.0), &finite_point);
+        accumulator.ingest_complex(Complex64::new(f64::NAN, 0.0), &nan_point);
+        accumulator.ingest_complex(Complex64::new(1.0, 0.0), &inf_point);
 
         assert_eq!(
             accumulator.values,

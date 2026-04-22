@@ -5,6 +5,7 @@ mod gammaloop;
 mod scalar;
 
 use crate::core::{AccumulatorConfig, EngineError, RunSpec};
+use crate::evaluation::batch::Point;
 use num::complex::Complex64;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value as JsonValue;
@@ -24,11 +25,11 @@ pub use self::scalar::ScalarAccumulatorState;
 /// handle non-finite floating-point contributions explicitly instead of
 /// letting serialization degrade them into `null`.
 pub trait IngestScalar {
-    fn ingest_scalar(&mut self, value: f64, weight: f64);
+    fn ingest_scalar(&mut self, value: f64, point: &Point);
 }
 
 pub trait IngestComplex {
-    fn ingest_complex(&mut self, value: Complex64, weight: f64);
+    fn ingest_complex(&mut self, value: Complex64, point: &Point);
 }
 
 pub trait Accumulator: Clone + Serialize + DeserializeOwned {
@@ -287,6 +288,7 @@ mod tests {
             sum_abs: 4.0,
             sum_sq: 5.0,
             nan_count: 0,
+            ..Default::default()
         })
         .to_persistent_json()
         .expect("persistent snapshot");

@@ -1,7 +1,7 @@
 use crate::core::{AccumulatorConfig, EvalError};
 use crate::evaluation::{
     AccumulatorState, Batch, BatchResult, ComplexSampleEvaluator, EvalBatchOptions, Evaluator,
-    SinEvaluatorParams,
+    IngestComplex, SinEvaluatorParams,
 };
 use crate::utils::domain::Domain;
 use num::complex::Complex64;
@@ -24,6 +24,20 @@ impl SincEvaluator {
 
     pub fn from_params(params: SincEvaluatorParams) -> Self {
         Self::new(params.min_eval_time_per_sample_ms)
+    }
+
+    fn complex_ingestor<'a>(
+        state: &'a mut AccumulatorState,
+    ) -> Result<&'a mut dyn IngestComplex, EvalError> {
+        match state {
+            AccumulatorState::Empty(accumulator) => Ok(accumulator),
+            AccumulatorState::Complex(accumulator) => Ok(accumulator),
+            AccumulatorState::FullComplex(accumulator) => Ok(accumulator),
+            other => Err(EvalError::eval(format!(
+                "sinc evaluator does not support accumulator kind {}",
+                other.kind_str()
+            ))),
+        }
     }
 }
 
@@ -63,29 +77,12 @@ impl Evaluator for SincEvaluator {
     ) -> Result<BatchResult, EvalError> {
         let started = Instant::now();
         let mut observable_state = AccumulatorState::from_config(accumulator);
-        let weighted_values = match &mut observable_state {
-            AccumulatorState::Empty(accumulator) => {
-                self.eval_complex_into(batch, accumulator, options.require_training_values, |v| {
-                    v.norm()
-                })?
-            }
-            AccumulatorState::Complex(accumulator) => {
-                self.eval_complex_into(batch, accumulator, options.require_training_values, |v| {
-                    v.norm()
-                })?
-            }
-            AccumulatorState::FullComplex(accumulator) => {
-                self.eval_complex_into(batch, accumulator, options.require_training_values, |v| {
-                    v.norm()
-                })?
-            }
-            other => {
-                return Err(EvalError::eval(format!(
-                    "sinc evaluator does not support accumulator kind {}",
-                    other.kind_str()
-                )));
-            }
-        };
+        let weighted_values = self.eval_complex_into(
+            batch,
+            Self::complex_ingestor(&mut observable_state)?,
+            options.require_training_values,
+            |v| v.norm(),
+        )?;
 
         let min_total =
             Duration::from_millis(self.min_eval_time_per_sample_ms).mul_f64(batch.size() as f64);

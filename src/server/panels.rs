@@ -8,6 +8,7 @@ pub enum PanelKind {
     ScalarTimeseries,
     MultiTimeseries,
     TickBreakdown,
+    Svg,
     Image2d,
     Progress,
     KeyValue,
@@ -185,6 +186,13 @@ pub enum PanelState {
         panel_id: String,
         total_ms: f64,
         segments: Vec<TickBreakdownSegment>,
+    },
+    Svg {
+        panel_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        svg: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
     },
     Image2d {
         panel_id: String,
@@ -381,6 +389,18 @@ pub(crate) fn tick_breakdown_panel(
     }
 }
 
+pub(crate) fn svg_panel(
+    panel_id: &str,
+    svg: Option<String>,
+    message: Option<String>,
+) -> PanelState {
+    PanelState::Svg {
+        panel_id: panel_id.to_string(),
+        svg,
+        message,
+    }
+}
+
 pub(crate) fn table_panel_with_payload(
     panel_id: &str,
     columns: Vec<String>,
@@ -415,6 +435,7 @@ impl PanelState {
             Self::ScalarTimeseries { panel_id, .. }
             | Self::MultiTimeseries { panel_id, .. }
             | Self::TickBreakdown { panel_id, .. }
+            | Self::Svg { panel_id, .. }
             | Self::Image2d { panel_id, .. }
             | Self::Progress { panel_id, .. }
             | Self::KeyValue { panel_id, .. }

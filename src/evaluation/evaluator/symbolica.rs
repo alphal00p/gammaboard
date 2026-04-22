@@ -118,7 +118,6 @@ impl Evaluator for SymbolicaEngine {
     ) -> Result<BatchResult, EvalError> {
         let width = self.args.len();
         let mut continuous = Vec::with_capacity(batch.size() * width);
-        let mut weights = Vec::with_capacity(batch.size());
         for (sample_idx, point) in batch.points().iter().enumerate() {
             if point.continuous.len() != width {
                 return Err(EvalError::Engine(format!(
@@ -135,7 +134,6 @@ impl Evaluator for SymbolicaEngine {
                 )));
             }
             continuous.extend_from_slice(point.continuous.as_slice());
-            weights.push(point.weight);
         }
 
         let mut observable_state = AccumulatorState::from_config(accumulator);
@@ -145,34 +143,25 @@ impl Evaluator for SymbolicaEngine {
             .evaluate_batch(batch.size(), &continuous, &mut out)
             .map_err(|err| EngineError::Eval(err.to_string()))?;
 
-        match &mut observable_state {
-            AccumulatorState::Empty(accumulator) => {
-                for (value, weight) in out.iter().zip(weights.iter()) {
-                    accumulator.ingest_scalar(*value, *weight);
-                }
-            }
-            AccumulatorState::Scalar(accumulator) => {
-                for (value, weight) in out.iter().zip(weights.iter()) {
-                    accumulator.ingest_scalar(*value, *weight);
-                }
-            }
-            AccumulatorState::FullScalar(accumulator) => {
-                for (value, weight) in out.iter().zip(weights.iter()) {
-                    accumulator.ingest_scalar(*value, *weight);
-                }
-            }
+        let scalar_accumulator: &mut dyn IngestScalar = match &mut observable_state {
+            AccumulatorState::Empty(accumulator) => accumulator,
+            AccumulatorState::Scalar(accumulator) => accumulator,
+            AccumulatorState::FullScalar(accumulator) => accumulator,
             other => {
                 return Err(EvalError::eval(format!(
                     "symbolica evaluator does not support accumulator kind {}",
                     other.kind_str()
                 )));
             }
+        };
+        for (value, point) in out.iter().zip(batch.points().iter()) {
+            scalar_accumulator.ingest_scalar(*value, point);
         }
         if options.require_training_values {
             let weighted_values = out
                 .into_iter()
-                .zip(weights.iter().copied())
-                .map(|(value, weight)| value * weight)
+                .zip(batch.points().iter())
+                .map(|(value, point)| value * point.weight)
                 .collect();
             Ok(BatchResult::new(Some(weighted_values), observable_state))
         } else {

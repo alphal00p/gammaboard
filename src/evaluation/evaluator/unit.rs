@@ -1,7 +1,7 @@
 use crate::core::{AccumulatorConfig, EvalError};
 use crate::evaluation::{
     AccumulatorState, Batch, BatchResult, ComplexSampleEvaluator, EvalBatchOptions, Evaluator,
-    ScalarSampleEvaluator, SemanticAccumulatorKind,
+    IngestComplex, IngestScalar, ScalarSampleEvaluator, SemanticAccumulatorKind,
 };
 use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,34 @@ impl UnitEvaluator {
             params.accumulator_kind,
             params.fail_on_batch_nr,
         )
+    }
+
+    fn scalar_ingestor<'a>(
+        state: &'a mut AccumulatorState,
+    ) -> Result<&'a mut dyn IngestScalar, EvalError> {
+        match state {
+            AccumulatorState::Empty(accumulator) => Ok(accumulator),
+            AccumulatorState::Scalar(accumulator) => Ok(accumulator),
+            AccumulatorState::FullScalar(accumulator) => Ok(accumulator),
+            other => Err(EvalError::eval(format!(
+                "unit evaluator scalar mode does not support accumulator kind {}",
+                other.kind_str()
+            ))),
+        }
+    }
+
+    fn complex_ingestor<'a>(
+        state: &'a mut AccumulatorState,
+    ) -> Result<&'a mut dyn IngestComplex, EvalError> {
+        match state {
+            AccumulatorState::Empty(accumulator) => Ok(accumulator),
+            AccumulatorState::Complex(accumulator) => Ok(accumulator),
+            AccumulatorState::FullComplex(accumulator) => Ok(accumulator),
+            other => Err(EvalError::eval(format!(
+                "unit evaluator complex mode does not support accumulator kind {}",
+                other.kind_str()
+            ))),
+        }
     }
 }
 
@@ -97,49 +125,17 @@ impl Evaluator for UnitEvaluator {
         }
         let mut observable_state = AccumulatorState::from_config(accumulator);
         let weighted_values = match self.accumulator_kind {
-            SemanticAccumulatorKind::Scalar => match &mut observable_state {
-                AccumulatorState::Empty(accumulator) => {
-                    self.eval_scalar_into(batch, accumulator, options.require_training_values)?
-                }
-                AccumulatorState::Scalar(accumulator) => {
-                    self.eval_scalar_into(batch, accumulator, options.require_training_values)?
-                }
-                AccumulatorState::FullScalar(accumulator) => {
-                    self.eval_scalar_into(batch, accumulator, options.require_training_values)?
-                }
-                other => {
-                    return Err(EvalError::eval(format!(
-                        "unit evaluator scalar mode does not support accumulator kind {}",
-                        other.kind_str()
-                    )));
-                }
-            },
-            SemanticAccumulatorKind::Complex => match &mut observable_state {
-                AccumulatorState::Empty(accumulator) => self.eval_complex_into(
-                    batch,
-                    accumulator,
-                    options.require_training_values,
-                    |v| v.re,
-                )?,
-                AccumulatorState::Complex(accumulator) => self.eval_complex_into(
-                    batch,
-                    accumulator,
-                    options.require_training_values,
-                    |v| v.re,
-                )?,
-                AccumulatorState::FullComplex(accumulator) => self.eval_complex_into(
-                    batch,
-                    accumulator,
-                    options.require_training_values,
-                    |v| v.re,
-                )?,
-                other => {
-                    return Err(EvalError::eval(format!(
-                        "unit evaluator complex mode does not support accumulator kind {}",
-                        other.kind_str()
-                    )));
-                }
-            },
+            SemanticAccumulatorKind::Scalar => self.eval_scalar_into(
+                batch,
+                Self::scalar_ingestor(&mut observable_state)?,
+                options.require_training_values,
+            )?,
+            SemanticAccumulatorKind::Complex => self.eval_complex_into(
+                batch,
+                Self::complex_ingestor(&mut observable_state)?,
+                options.require_training_values,
+                |v| v.re,
+            )?,
         };
         Ok(BatchResult::new(weighted_values, observable_state))
     }

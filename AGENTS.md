@@ -109,6 +109,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 ## Panels And Dashboard
 - Backend visualization uses the generic panel model in `src/server/panels.rs`.
 - The frontend should render panels generically; it should not reimplement domain projections or panel merge semantics.
+- Run-level derived/exposed artifacts are persisted in `runs.exposed_info` as typed serde payloads; generate them lazily on first panel/API access, keyed by deterministic cache keys, and avoid manual ad-hoc JSON object construction.
 - GammaLoop sample observables should project a histogram bundle table whose payload includes the histogram bins; the frontend renders the selected-histogram chart client-side as a stepped histogram with bin error bars and a linear/log y-scale toggle, and table row selection should drive the selected histogram using the live bundle rows.
 - When a run-level complex target is configured, GammaLoop sample estimate history panels should include target overlays (real/imag target lines), and GammaLoop estimate summary should include target-comparison deltas (sigma and percent) for real/imag components.
 - Panel APIs are poll-based: clients send an optional opaque `cursor`, plus `panel_state` and `panel_actions`; the backend returns `PanelResponse`.

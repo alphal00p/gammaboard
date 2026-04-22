@@ -363,6 +363,7 @@ const panelColumnSpan = (descriptor) => {
         case "scalar_timeseries":
         case "multi_timeseries":
         case "tick_breakdown":
+        case "svg":
         case "image2d":
         case "table":
         case "histogram":
@@ -3472,6 +3473,53 @@ const TextPanel = ({ title, state }) => (
   </Card>
 );
 
+const SvgPanel = ({ title, state }) => {
+  const svg = typeof state?.svg === "string" ? state.svg.trim() : "";
+  const message = typeof state?.message === "string" ? state.message.trim() : "";
+  const src = svg ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}` : null;
+  return (
+    <Card variant="outlined">
+      <CardContent>
+        <Typography variant="subtitle1" sx={{ mb: 1 }}>
+          {title}
+        </Typography>
+        {src ? (
+          <Box
+            sx={{
+              border: "1px solid",
+              borderColor: "divider",
+              borderRadius: 1.5,
+              p: 1,
+              overflowX: "auto",
+              backgroundColor: "background.paper",
+            }}
+          >
+            <Box
+              component="img"
+              src={src}
+              alt={title}
+              sx={{
+                display: "block",
+                width: "100%",
+                height: "auto",
+                minWidth: 320,
+              }}
+            />
+          </Box>
+        ) : (
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+          >
+            {message || "No SVG payload available."}
+          </Typography>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
 const TickBreakdownPanel = ({ title, state }) => {
   const totalMs = Number(state?.total_ms);
   const segments = asArray(state?.segments)
@@ -3768,6 +3816,9 @@ const PanelRenderer = ({
     case "text":
       if (!state) return null;
       return <TextPanel title={descriptor.label} state={state} />;
+    case "svg":
+      if (!state) return null;
+      return <SvgPanel title={descriptor.label} state={state} />;
     default:
       return null;
   }
