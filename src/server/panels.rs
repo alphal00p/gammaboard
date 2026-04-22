@@ -389,6 +389,7 @@ pub(crate) fn tick_breakdown_panel(
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn svg_panel(
     panel_id: &str,
     svg: Option<String>,

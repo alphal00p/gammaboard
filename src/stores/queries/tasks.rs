@@ -24,6 +24,24 @@ type RunTaskRow = (
     DateTime<Utc>,
 );
 
+const RUN_TASK_COLUMNS: &str = r#"
+    id,
+    run_id,
+    name,
+    sequence_nr,
+    task,
+    task_toml,
+    spawned_from_snapshot_id,
+    state,
+    nr_produced_samples,
+    nr_completed_samples,
+    failure_reason,
+    started_at,
+    completed_at,
+    failed_at,
+    created_at
+"#;
+
 fn encode_task(task: &RunTaskSpec) -> Result<JsonValue, sqlx::Error> {
     serde_json::to_value(task)
         .map_err(|err| sqlx::Error::Protocol(format!("failed to serialize run task: {err}")))
@@ -98,7 +116,7 @@ pub(crate) async fn append_run_tasks(
 
     let mut inserted = Vec::with_capacity(tasks.len());
     for (offset, task) in tasks.iter().enumerate() {
-        let row = sqlx::query_as::<_, RunTaskRow>(
+        let row = sqlx::query_as::<_, RunTaskRow>(&format!(
             r#"
             INSERT INTO run_tasks (
                 run_id,
@@ -109,24 +127,9 @@ pub(crate) async fn append_run_tasks(
                 state
             )
             VALUES ($1, $2, $3, $4, $5, 'pending')
-            RETURNING
-                id,
-                run_id,
-                name,
-                sequence_nr,
-                task,
-                task_toml,
-                spawned_from_snapshot_id,
-                state,
-                nr_produced_samples,
-                nr_completed_samples,
-                failure_reason,
-                started_at,
-                completed_at,
-                failed_at,
-                created_at
-            "#,
-        )
+            RETURNING {RUN_TASK_COLUMNS}
+            "#
+        ))
         .bind(run_id)
         .bind(
             task.name
@@ -150,29 +153,14 @@ pub(crate) async fn list_run_tasks(
     pool: &PgPool,
     run_id: i32,
 ) -> Result<Vec<RunTask>, sqlx::Error> {
-    let rows = sqlx::query_as::<_, RunTaskRow>(
+    let rows = sqlx::query_as::<_, RunTaskRow>(&format!(
         r#"
-        SELECT
-            id,
-            run_id,
-            name,
-            sequence_nr,
-            task,
-            task_toml,
-            spawned_from_snapshot_id,
-            state,
-            nr_produced_samples,
-            nr_completed_samples,
-            failure_reason,
-            started_at,
-            completed_at,
-            failed_at,
-            created_at
+        SELECT {RUN_TASK_COLUMNS}
         FROM run_tasks
         WHERE run_id = $1
         ORDER BY sequence_nr ASC, id ASC
-        "#,
-    )
+        "#
+    ))
     .bind(run_id)
     .fetch_all(pool)
     .await?;
@@ -235,7 +223,7 @@ pub(crate) async fn update_run_task_queue_tuning(
     let next_task_toml = canonical_task_toml(&next_task_input)
         .map_err(|err| sqlx::Error::Protocol(format!("failed to serialize task TOML: {err}")))?;
 
-    let row = sqlx::query_as::<_, RunTaskRow>(
+    let row = sqlx::query_as::<_, RunTaskRow>(&format!(
         r#"
         UPDATE run_tasks
         SET
@@ -244,24 +232,9 @@ pub(crate) async fn update_run_task_queue_tuning(
         WHERE id = $1
           AND run_id = $2
           AND state IN ('pending', 'active')
-        RETURNING
-            id,
-            run_id,
-            name,
-            sequence_nr,
-            task,
-            task_toml,
-            spawned_from_snapshot_id,
-            state,
-            nr_produced_samples,
-            nr_completed_samples,
-            failure_reason,
-            started_at,
-            completed_at,
-            failed_at,
-            created_at
-        "#,
-    )
+        RETURNING {RUN_TASK_COLUMNS}
+        "#
+    ))
     .bind(task_id)
     .bind(run_id)
     .bind(encode_task(&next_task_spec)?)
@@ -281,30 +254,15 @@ pub(crate) async fn load_active_run_task(
     pool: &PgPool,
     run_id: i32,
 ) -> Result<Option<RunTask>, sqlx::Error> {
-    let row = sqlx::query_as::<_, RunTaskRow>(
+    let row = sqlx::query_as::<_, RunTaskRow>(&format!(
         r#"
-        SELECT
-            id,
-            run_id,
-            name,
-            sequence_nr,
-            task,
-            task_toml,
-            spawned_from_snapshot_id,
-            state,
-            nr_produced_samples,
-            nr_completed_samples,
-            failure_reason,
-            started_at,
-            completed_at,
-            failed_at,
-            created_at
+        SELECT {RUN_TASK_COLUMNS}
         FROM run_tasks
         WHERE run_id = $1
           AND state = 'active'
         LIMIT 1
-        "#,
-    )
+        "#
+    ))
     .bind(run_id)
     .fetch_optional(pool)
     .await?;
@@ -316,29 +274,14 @@ pub(crate) async fn load_run_task(
     pool: &PgPool,
     task_id: i64,
 ) -> Result<Option<RunTask>, sqlx::Error> {
-    let row = sqlx::query_as::<_, RunTaskRow>(
+    let row = sqlx::query_as::<_, RunTaskRow>(&format!(
         r#"
-        SELECT
-            id,
-            run_id,
-            name,
-            sequence_nr,
-            task,
-            task_toml,
-            spawned_from_snapshot_id,
-            state,
-            nr_produced_samples,
-            nr_completed_samples,
-            failure_reason,
-            started_at,
-            completed_at,
-            failed_at,
-            created_at
+        SELECT {RUN_TASK_COLUMNS}
         FROM run_tasks
         WHERE id = $1
         LIMIT 1
-        "#,
-    )
+        "#
+    ))
     .bind(task_id)
     .fetch_optional(pool)
     .await?;
@@ -350,7 +293,7 @@ pub(crate) async fn activate_next_run_task(
     pool: &PgPool,
     run_id: i32,
 ) -> Result<Option<RunTask>, sqlx::Error> {
-    let row = sqlx::query_as::<_, RunTaskRow>(
+    let row = sqlx::query_as::<_, RunTaskRow>(&format!(
         r#"
         WITH next_task AS (
             SELECT id
@@ -366,24 +309,9 @@ pub(crate) async fn activate_next_run_task(
             state = 'active',
             started_at = COALESCE(started_at, now())
         WHERE id IN (SELECT id FROM next_task)
-        RETURNING
-            id,
-            run_id,
-            name,
-            sequence_nr,
-            task,
-            task_toml,
-            spawned_from_snapshot_id,
-            state,
-            nr_produced_samples,
-            nr_completed_samples,
-            failure_reason,
-            started_at,
-            completed_at,
-            failed_at,
-            created_at
-        "#,
-    )
+        RETURNING {RUN_TASK_COLUMNS}
+        "#
+    ))
     .bind(run_id)
     .fetch_optional(pool)
     .await?;

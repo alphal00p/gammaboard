@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::core::{
     EvaluatorConfig, RunExposedArtifact, RunExposedInfoCache, RunExposedInfoContent,
     RunExposedInfoEntry, RunExposedInfoScope, RunExposedInfoStatus, RunSpec,

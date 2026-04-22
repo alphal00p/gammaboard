@@ -3,6 +3,51 @@ use crate::core::{
     StoreError,
 };
 
+fn source_lookup_error(task: &RunTask, source_task_name: &str, run_id: i32) -> StoreError {
+    StoreError::store(format!(
+        "task {} references source task '{}' but no such task exists in run {}",
+        task.id, source_task_name, run_id
+    ))
+}
+
+fn source_snapshot_missing_error(task: &RunTask, source_task_name: &str) -> StoreError {
+    StoreError::store(format!(
+        "task {} source task '{}' has no queue-empty stage snapshot",
+        task.id, source_task_name
+    ))
+}
+
+async fn resolve_named_source_snapshot<S>(
+    store: &S,
+    run_id: i32,
+    task: &RunTask,
+    source_task_name: &str,
+) -> Result<Option<RunStageSnapshot>, StoreError>
+where
+    S: AggregationStore + RunTaskStore + Send + Sync,
+{
+    let source_task = store
+        .list_run_tasks(run_id)
+        .await?
+        .into_iter()
+        .find(|candidate| candidate.name == source_task_name)
+        .ok_or_else(|| source_lookup_error(task, source_task_name, run_id))?;
+    if source_task.sequence_nr >= task.sequence_nr {
+        return Err(StoreError::store(format!(
+            "task {} references source task '{}' which is not prior in sequence",
+            task.id, source_task_name
+        )));
+    }
+    let snapshot = store
+        .load_latest_stage_snapshot_before_sequence(run_id, source_task.sequence_nr + 1)
+        .await?
+        .ok_or_else(|| source_snapshot_missing_error(task, source_task_name))?;
+    if snapshot.task_id != Some(source_task.id) {
+        return Err(source_snapshot_missing_error(task, source_task_name));
+    }
+    Ok(Some(snapshot))
+}
+
 pub async fn resolve_task_source_snapshot<S>(
     store: &S,
     run_id: i32,
@@ -19,39 +64,7 @@ where
                 .await
         }
         Some(SourceRefSpec::FromName(source_task_name)) => {
-            let source_task = store
-                .list_run_tasks(run_id)
-                .await?
-                .into_iter()
-                .find(|candidate| candidate.name == source_task_name)
-                .ok_or_else(|| {
-                    StoreError::store(format!(
-                        "task {} references source task '{}' but no such task exists in run {}",
-                        task.id, source_task_name, run_id
-                    ))
-                })?;
-            if source_task.sequence_nr >= task.sequence_nr {
-                return Err(StoreError::store(format!(
-                    "task {} references source task '{}' which is not prior in sequence",
-                    task.id, source_task_name
-                )));
-            }
-            let snapshot = store
-                .load_latest_stage_snapshot_before_sequence(run_id, source_task.sequence_nr + 1)
-                .await?
-                .ok_or_else(|| {
-                    StoreError::store(format!(
-                        "task {} source task '{}' has no queue-empty stage snapshot",
-                        task.id, source_task_name
-                    ))
-                })?;
-            if snapshot.task_id != Some(source_task.id) {
-                return Err(StoreError::store(format!(
-                    "task {} source task '{}' has no queue-empty stage snapshot",
-                    task.id, source_task_name
-                )));
-            }
-            Ok(Some(snapshot))
+            resolve_named_source_snapshot(store, run_id, task, &source_task_name).await
         }
         None => Ok(None),
     }

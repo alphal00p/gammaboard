@@ -361,8 +361,8 @@ async fn preflight_task_batch(
     } else {
         Vec::new()
     };
-    let context = build_task_preflight_context(&existing_tasks);
-    validate_task_batch_against_context(tasks, context)
+    let mut context = TaskPreflightContext::from_existing_tasks(&existing_tasks);
+    context.validate_batch(tasks)
 }
 
 struct TaskPreflightContext {
@@ -371,62 +371,64 @@ struct TaskPreflightContext {
     next_sequence: i32,
 }
 
-fn build_task_preflight_context(existing_tasks: &[RunTask]) -> TaskPreflightContext {
-    let known_names = existing_tasks
-        .iter()
-        .map(|task| task.name.clone())
-        .collect::<BTreeSet<_>>();
-    let prior_sourceable_names = existing_tasks
-        .iter()
-        .filter(|task| task.task.is_sourceable())
-        .map(|task| task.name.clone())
-        .collect::<BTreeSet<_>>();
-    let next_sequence = existing_tasks
-        .iter()
-        .map(|task| task.sequence_nr)
-        .max()
-        .unwrap_or(0)
-        + 1;
-    TaskPreflightContext {
-        known_names,
-        prior_sourceable_names,
-        next_sequence,
+impl TaskPreflightContext {
+    fn from_existing_tasks(existing_tasks: &[RunTask]) -> Self {
+        let known_names = existing_tasks
+            .iter()
+            .map(|task| task.name.clone())
+            .collect::<BTreeSet<_>>();
+        let prior_sourceable_names = existing_tasks
+            .iter()
+            .filter(|task| task.task.is_sourceable())
+            .map(|task| task.name.clone())
+            .collect::<BTreeSet<_>>();
+        let next_sequence = existing_tasks
+            .iter()
+            .map(|task| task.sequence_nr)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        Self {
+            known_names,
+            prior_sourceable_names,
+            next_sequence,
+        }
     }
-}
 
-fn validate_task_batch_against_context(
-    tasks: &[RunTaskInput],
-    mut context: TaskPreflightContext,
-) -> Result<(), ApiError> {
-    for task in tasks {
+    fn validate_batch(&mut self, tasks: &[RunTaskInput]) -> Result<(), ApiError> {
+        for task in tasks {
+            self.validate_task(task)?;
+        }
+        Ok(())
+    }
+
+    fn validate_task(&mut self, task: &RunTaskInput) -> Result<(), ApiError> {
         task.validate()
             .map_err(|err| ApiError::BadRequest(format!("invalid task entry: {err}")))?;
-
         for source_name in task.task.source_task_names() {
-            if !context.prior_sourceable_names.contains(&source_name) {
+            if !self.prior_sourceable_names.contains(&source_name) {
                 return Err(ApiError::BadRequest(format!(
                     "task source from_name='{}' does not reference a prior task in this run",
                     source_name
                 )));
             }
         }
-
         let task_name = task
             .name
             .clone()
-            .unwrap_or_else(|| crate::core::generated_task_name(&task.task, context.next_sequence));
-        if !context.known_names.insert(task_name.clone()) {
+            .unwrap_or_else(|| crate::core::generated_task_name(&task.task, self.next_sequence));
+        if !self.known_names.insert(task_name.clone()) {
             return Err(ApiError::BadRequest(format!(
                 "task name '{}' is duplicated in this run",
                 task_name
             )));
         }
         if task.task.is_sourceable() {
-            context.prior_sourceable_names.insert(task_name);
+            self.prior_sourceable_names.insert(task_name);
         }
-        context.next_sequence += 1;
+        self.next_sequence += 1;
+        Ok(())
     }
-    Ok(())
 }
 
 fn format_clone_root_snapshot_name(

@@ -5,7 +5,7 @@ use super::{
 
 use crate::api::stage::resolve_task_source_snapshot;
 use crate::core::{
-    AccumulatorConfig, AggregationStore, BatchTransformConfig, RunTask, RunTaskStore, StoreError,
+    AggregationStore, BatchTransformConfig, RunStageSnapshot, RunTask, RunTaskStore, StoreError,
     WorkQueueStore,
 };
 use crate::runners::{
@@ -16,6 +16,79 @@ use crate::sampling::StageHandoffOwned;
 use tracing::{error, info, warn};
 
 impl<S: NodeRunnerStore> NodeRunner<S> {
+    async fn fail_task_activation_and_pause_run(
+        &self,
+        run_id: i32,
+        task_id: i64,
+        reason: &str,
+        failure_log: &str,
+    ) {
+        if let Err(err) = self.store.fail_run_task(task_id, reason).await {
+            warn!(
+                run_id,
+                task_id,
+                error = %err,
+                "{failure_log}: failed to persist task failure"
+            );
+        }
+        match self.store.clear_desired_assignments_for_run(run_id).await {
+            Ok(cleared) => warn!(
+                run_id,
+                task_id,
+                reason,
+                assignments_cleared = cleared,
+                "{failure_log}: desired assignments cleared"
+            ),
+            Err(err) => warn!(
+                run_id,
+                task_id,
+                reason,
+                error = %err,
+                "{failure_log}: failed to clear desired assignments"
+            ),
+        }
+    }
+
+    fn missing_accumulator_configuration_error(run_id: i32, task_id: i64) -> StoreError {
+        StoreError::store(format!(
+            "run {} task {} has no accumulator configuration",
+            run_id, task_id
+        ))
+    }
+
+    fn resolve_observable_state_for_sampler_task(
+        run_id: i32,
+        task_id: i64,
+        restored_snapshot: Option<&crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint>,
+        accumulator_source_snapshot: Option<&RunStageSnapshot>,
+        base_stage_snapshot: Option<&RunStageSnapshot>,
+        new_accumulator_config: Option<crate::core::AccumulatorConfig>,
+    ) -> Result<crate::evaluation::AccumulatorState, StoreError> {
+        if let Some(snapshot) = restored_snapshot {
+            return Ok(snapshot.observable_state.clone());
+        }
+        if let Some(source_snapshot) = accumulator_source_snapshot {
+            return source_snapshot.observable_state.clone().ok_or_else(|| {
+                StoreError::store(format!(
+                    "run {} task {} source snapshot has no accumulator state",
+                    run_id, task_id
+                ))
+            });
+        }
+        if let Some(config) = new_accumulator_config {
+            return Ok(crate::evaluation::AccumulatorState::from_config(&config));
+        }
+        if let Some(base_snapshot) = base_stage_snapshot {
+            return base_snapshot
+                .observable_state
+                .clone()
+                .ok_or_else(|| Self::missing_accumulator_configuration_error(run_id, task_id));
+        }
+        Err(Self::missing_accumulator_configuration_error(
+            run_id, task_id,
+        ))
+    }
+
     async fn resolve_effective_sampler_context_with_store(
         &self,
         store: &crate::PgStore,
@@ -43,28 +116,13 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             )),
             Err(err) if err.to_string() == HAVANA_HANDOFF_REQUIRED_ERROR => {
                 let reason = err.to_string();
-                if let Err(e) = store.fail_run_task(task.id, &reason).await {
-                    warn!(
-                        run_id,
-                        task_id = task.id,
-                        error = %e,
-                        "failed to persist task failure for activation error"
-                    );
-                }
-                if let Err(e) = self.store.clear_desired_assignments_for_run(run_id).await {
-                    warn!(
-                        run_id,
-                        error = %e,
-                        "failed to clear desired assignments for run after task activation failure"
-                    );
-                } else {
-                    warn!(
-                        run_id,
-                        task_id = task.id,
-                        reason,
-                        "task activation failed (missing havana snapshot); desired assignments cleared"
-                    );
-                }
+                self.fail_task_activation_and_pause_run(
+                    run_id,
+                    task.id,
+                    &reason,
+                    "task activation failed (missing havana snapshot)",
+                )
+                .await;
                 Err(err)
             }
             Err(err) => Err(err),
@@ -293,36 +351,14 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         ) {
             Ok(s) => s,
             Err(err) => {
-                // Sampler build failed at activation time. Persist a task failure and pause the run
-                // (clear desired assignments) so an operator can inspect and add a replacement.
                 let reason = format!("failed to build sampler: {err}");
-                if let Err(e) = role_store.fail_run_task(task.id, &reason).await {
-                    warn!(
-                        run_id = worker.run_id,
-                        task_id = task.id,
-                        error = %e,
-                        "failed to persist task failure after sampler build error"
-                    );
-                }
-                if let Err(e) = self
-                    .store
-                    .clear_desired_assignments_for_run(worker.run_id)
-                    .await
-                {
-                    warn!(
-                        run_id = worker.run_id,
-                        error = %e,
-                        "failed to clear desired assignments for run after sampler build error"
-                    );
-                } else {
-                    warn!(
-                        run_id = worker.run_id,
-                        task_id = task.id,
-                        error = %err,
-                        failure_reason = %reason,
-                        "task activation failed during sampler build; desired assignments cleared"
-                    );
-                }
+                self.fail_task_activation_and_pause_run(
+                    worker.run_id,
+                    task.id,
+                    &reason,
+                    "task activation failed during sampler build",
+                )
+                .await;
                 return Ok(None);
             }
         };
@@ -332,30 +368,14 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             .new_accumulator_config()
             .map_err(|err| StoreError::store(err.to_string()))?;
 
-        let observable_state = if let Some(snapshot) = restored_snapshot.as_ref() {
-            snapshot.observable_state.clone()
-        } else if let Some(source_snapshot) = accumulator_source_snapshot.as_ref() {
-            source_snapshot.observable_state.clone().ok_or_else(|| {
-                StoreError::store(format!(
-                    "run {} task {} source snapshot has no accumulator state",
-                    worker.run_id, task.id
-                ))
-            })?
-        } else if let Some(config) = new_accumulator_config {
-            Self::observable_state_from_config(config)
-        } else if let Some(snapshot) = base_stage_snapshot.as_ref() {
-            snapshot.observable_state.clone().ok_or_else(|| {
-                StoreError::store(format!(
-                    "run {} task {} has no accumulator configuration",
-                    worker.run_id, task.id
-                ))
-            })?
-        } else {
-            return Err(StoreError::store(format!(
-                "run {} task {} has no accumulator configuration",
-                worker.run_id, task.id
-            )));
-        };
+        let observable_state = Self::resolve_observable_state_for_sampler_task(
+            worker.run_id,
+            task.id,
+            restored_snapshot.as_ref(),
+            accumulator_source_snapshot.as_ref(),
+            base_stage_snapshot.as_ref(),
+            new_accumulator_config,
+        )?;
 
         let initial_batch_size = initial_batch_size_hint
             .unwrap_or(spec.sampler_aggregator_runner_params.queue.max_batch_size);
@@ -388,29 +408,6 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
         info!("sampler-aggregator worker started");
         Ok(Some(Box::new(runner)))
-    }
-
-    fn observable_state_from_config(
-        config: AccumulatorConfig,
-    ) -> crate::evaluation::AccumulatorState {
-        match config {
-            crate::core::AccumulatorConfig::Empty => crate::evaluation::AccumulatorState::empty(),
-            crate::core::AccumulatorConfig::Scalar => {
-                crate::evaluation::AccumulatorState::empty_scalar()
-            }
-            crate::core::AccumulatorConfig::Complex => {
-                crate::evaluation::AccumulatorState::empty_complex()
-            }
-            crate::core::AccumulatorConfig::Gammaloop => {
-                crate::evaluation::AccumulatorState::empty_gammaloop()
-            }
-            crate::core::AccumulatorConfig::FullScalar => {
-                crate::evaluation::AccumulatorState::empty_full_scalar()
-            }
-            crate::core::AccumulatorConfig::FullComplex => {
-                crate::evaluation::AccumulatorState::empty_full_complex()
-            }
-        }
     }
 
     pub(super) fn note_role_started(&mut self) {

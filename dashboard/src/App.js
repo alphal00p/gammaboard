@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from "./auth/AuthProvider";
 import EvaluatorPanel from "./components/EvaluatorPanel";
 import LogsWorkspace from "./components/LogsWorkspace";
 import PerformanceWorkspace from "./components/PerformanceWorkspace";
+import RunInfo from "./components/RunInfo";
 import SamplerAggregatorPanel from "./components/SamplerAggregatorPanel";
 import SelectedTaskTomlPanel from "./components/SelectedTaskTomlPanel";
 import TaskOutputPanel from "./components/TaskOutputPanel";
@@ -375,6 +376,7 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
           ) : null
         }
       />
+      <RunInfo runId={selectedRun} />
       <SelectedTaskTomlPanel task={selectedTask} />
       <TaskOutputPanel
         key={`progress-${selectedTask?.id ?? "no-task"}`}

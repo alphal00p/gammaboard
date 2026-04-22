@@ -2,8 +2,6 @@ import { Alert, Box } from "@mui/material";
 import PanelCollection from "./panels/PanelCollection";
 import { useRunPanels } from "../hooks/useRunPanels";
 
-const TOP_LEVEL_PANEL_IDS = ["run_identity", "run_progress"];
-
 const RunInfo = ({ runId }) => {
   const { panelSpecs, panelStates, error } = useRunPanels({ runId, pollMs: 5000 });
 
@@ -17,10 +15,11 @@ const RunInfo = ({ runId }) => {
     );
   }
 
-  const topLevelSpecs = panelSpecs.filter((panel) => TOP_LEVEL_PANEL_IDS.includes(panel?.panel_id));
-  const topLevelStates = panelStates.filter((panel) => TOP_LEVEL_PANEL_IDS.includes(panel?.panel_id));
+  if (!Array.isArray(panelSpecs) || panelSpecs.length === 0) {
+    return null;
+  }
 
-  return <PanelCollection title="Run Summary" panelSpecs={topLevelSpecs} panelStates={topLevelStates} />;
+  return <PanelCollection title="Run Summary" panelSpecs={panelSpecs} panelStates={panelStates} />;
 };
 
 export default RunInfo;
