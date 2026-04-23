@@ -1,16 +1,18 @@
-use std::{any::Any, panic::AssertUnwindSafe, path::PathBuf};
+use std::{any::Any, ops::ControlFlow, panic::AssertUnwindSafe, path::PathBuf};
 
-use gammaloop_api::CLISettings;
-use gammaloop_api::session::CliSessionState;
-use gammaloop_api::state::{ProcessRef, State};
-use gammaloop_api::state::{CommandHistory, RunHistory, SyncSettings};
+use gammaloop_api::{
+    CLISettings,
+    commands::Commands,
+    state::{CommandHistory, ProcessRef, RunHistory, State},
+};
 use gammalooprs::graph::GroupId;
 use gammalooprs::initialisation::initialise;
 use gammalooprs::integrands::HasIntegrand;
 use gammalooprs::integrands::evaluation::EvaluationResult;
 use gammalooprs::integrands::process::{MomentumSpaceEvaluationInput, ProcessIntegrand};
 use gammalooprs::model::Model;
-use gammalooprs::settings::{RuntimeSettings, runtime::{DiscreteGraphSamplingType, SamplingSettings}};
+use gammalooprs::settings::RuntimeSettings;
+use gammalooprs::settings::runtime::{DiscreteGraphSamplingType, SamplingSettings};
 use gammalooprs::utils::F;
 use serde::{Deserialize, Serialize};
 use symbolica::numerical_integration::Sample;
@@ -60,11 +62,11 @@ pub struct GammaLoopParams {
     pub state_folder: PathBuf,
     pub process_id: Option<ProcessRef>,
     pub integrand_name: Option<String>,
-    #[serde(default)]
-    pub post_load_commands: Vec<String>,
     pub momentum_space: bool,
     pub use_f128: bool,
     pub training_projection: TrainingProjection,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub post_load_commands: Vec<String>,
 }
 
 impl Default for GammaLoopParams {
@@ -74,7 +76,7 @@ impl Default for GammaLoopParams {
             process_id: None,
             integrand_name: None,
             post_load_commands: Vec::new(),
-            momentum_space: true,
+            momentum_space: false,
             use_f128: false,
             training_projection: TrainingProjection::default(),
         }
@@ -257,33 +259,76 @@ impl GammaLoopEvaluator {
         }
     }
 
-    pub fn run_post_load_commands(params: &GammaLoopParams, state: &mut State) -> Result<(), BuildError> {
-        if params.post_load_commands.is_empty() {
-            return Ok(());
-        }
-
+    pub fn run_post_load_commands(
+        params: &GammaLoopParams,
+        state: &mut State,
+    ) -> Result<(), BuildError> {
         let mut run_history = RunHistory::default();
         let mut cli_settings = CLISettings::default();
-        cli_settings
-            .sync_settings()
-            .map_err(|err| BuildError::build(format!("failed to initialize GammaLoop CLI settings: {err}")))?;
+        cli_settings.state.folder = params.state_folder.clone();
         let mut default_runtime_settings = RuntimeSettings::default();
-        let mut session_state = CliSessionState::default();
-        let mut session = gammaloop_api::session::CliSession::new(
-            state,
-            &mut run_history,
-            &mut cli_settings,
-            &mut default_runtime_settings,
-            &mut session_state,
-        );
 
-        for command in &params.post_load_commands {
-            let parsed = CommandHistory::from_raw_string(command).map_err(|err| {
-                BuildError::build(format!("invalid GammaLoop post_load_command {:?}: {err}", command))
+        for (index, raw_command) in params.post_load_commands.iter().enumerate() {
+            let command = CommandHistory::from_raw_string(raw_command).map_err(|err| {
+                BuildError::build(format!(
+                    "failed to parse post_load_commands[{index}] '{raw_command}': {err}"
+                ))
             })?;
-            session.execute_command(parsed).map_err(|err| {
-                BuildError::build(format!("failed GammaLoop post_load_command {:?}: {err}", command))
-            })?;
+
+            if !matches!(command.command, Commands::Set(_)) {
+                return Err(BuildError::build(format!(
+                    "post_load_commands[{index}] must be a 'set' command to keep the state in-memory; got '{}'",
+                    raw_command
+                )));
+            }
+
+            let execution = command
+                .command
+                .run(
+                    state,
+                    &mut run_history,
+                    &mut cli_settings,
+                    &mut default_runtime_settings,
+                )
+                .map_err(|err| {
+                    BuildError::build(format!(
+                        "failed to execute post_load_commands[{index}] '{raw_command}': {err}"
+                    ))
+                })?;
+
+            if let ControlFlow::Break(_) = execution.flow {
+                return Err(BuildError::build(format!(
+                    "post_load_commands[{index}] triggered flow break and is not supported: '{}'",
+                    raw_command
+                )));
+            }
+        }
+
+        if params.use_f128 {
+            let command = CommandHistory::from_raw_string("set process bool use_f128 true")
+                .map_err(|err| {
+                    BuildError::build(format!(
+                        "failed to parse built-in use_f128 post-load command: {err}"
+                    ))
+                })?;
+            let execution = command
+                .command
+                .run(
+                    state,
+                    &mut run_history,
+                    &mut cli_settings,
+                    &mut default_runtime_settings,
+                )
+                .map_err(|err| {
+                    BuildError::build(format!(
+                        "failed to execute built-in use_f128 post-load command: {err}"
+                    ))
+                })?;
+            if let ControlFlow::Break(_) = execution.flow {
+                return Err(BuildError::build(
+                    "built-in use_f128 post-load command triggered unsupported flow break",
+                ));
+            }
         }
 
         Ok(())
@@ -311,7 +356,13 @@ impl GammaLoopEvaluator {
                 .map_err(|err| BuildError::build(err.to_string()))?
                 .clone();
             let model = state.model.clone();
-            let domain = Self::build_domain(&integrand, params.momentum_space)?;
+            if params.momentum_space {
+                tracing::warn!(
+                    "GammaLoop momentum_space=true is deprecated for gammaboard; forcing x-space evaluation"
+                );
+            }
+            let momentum_space = false;
+            let domain = Self::build_domain(&integrand, momentum_space)?;
             integrand
                 .warm_up(&model)
                 .map_err(|err| BuildError::build(format!("failed to warm up integrand: {err}")))?;
@@ -319,7 +370,7 @@ impl GammaLoopEvaluator {
                 pristine_integrand: integrand.clone(),
                 integrand,
                 model,
-                momentum_space: params.momentum_space,
+                momentum_space,
                 training_projection: params.training_projection,
                 domain,
             })
@@ -362,8 +413,9 @@ impl GammaLoopEvaluator {
                 .observable_snapshot_bundle()
                 .unwrap_or_default(),
             estimate,
-            diagnostics:
-                GammaLoopAccumulatorState::diagnostics_from_evaluation_results(evaluation_results),
+            diagnostics: GammaLoopAccumulatorState::diagnostics_from_evaluation_results(
+                evaluation_results,
+            ),
         }
     }
 
@@ -557,8 +609,6 @@ impl Evaluator for GammaLoopEvaluator {
                                 self.training_projection
                                     .project(Self::project_result_value(result))
                             })
-                            .zip(points.iter())
-                            .map(|(value, point)| value * point.weight)
                             .collect(),
                     )
                 } else {

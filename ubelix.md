@@ -1,11 +1,11 @@
 # UBELIX Deployment Notes
 
-As of April 23, 2026, the UBELIX docs align with a containerized Slurm model for `gammaloop` + `gammaboard`, with one key constraint: keep PostgreSQL as an external shared service reachable by all jobs.
+As of April 23, 2026, the UBELIX docs and admin guidance align with a containerized Slurm model for `gammaloop` + `gammaboard`. User services may listen on non-privileged ports inside temporary Slurm allocations, and browser/API access from outside the HPC network should use SSH tunnels.
 
 ## Practical Status
 
 - Good fit: Slurm + Apptainer + job arrays map directly to the current runner model.
-- Main blocker: database service lifecycle/networking, not worker scheduling.
+- Main blocker: database lifecycle/networking, not worker scheduling.
 - Initial scripts now live in `ops/ubelix/`:
   - `slurm_smoke_container.sbatch`
   - `slurm_node_worker.sbatch`
@@ -14,6 +14,10 @@ As of April 23, 2026, the UBELIX docs align with a containerized Slurm model for
 
 ## Current UBELIX Constraints To Respect
 
+- Services may listen inside Slurm allocations.
+- Do not use privileged ports (`1-1023`).
+- Ports are not exposed outside the HPC network except through SSH tunnels.
+- PostgreSQL may run temporarily inside an allocation or as an external managed service.
 - `apptainer` is available directly; no module load required.
 - For account selection:
   - `gratis`: `--account=gratis` (debug-friendly QoS available).
@@ -25,11 +29,10 @@ As of April 23, 2026, the UBELIX docs align with a containerized Slurm model for
 ## Suggested Rollout
 
 1. Build and validate the image with `ops/ubelix/slurm_smoke_container.sbatch`.
-2. Point jobs to a stable Postgres URL (`GAMMABOARD_DATABASE_URL`).
-3. Use `ops/ubelix/submit_hello.sh` for first end-to-end hello-world (1 sampler + evaluator array + control job).
-4. Split control-plane and workers for production:
-   - persistent backend/control process,
-   - separate long-lived sampler/evaluator worker jobs.
+2. Use `ops/ubelix/submit_hello.sh` for first end-to-end hello-world with an external Postgres URL.
+3. Add a self-contained allocation mode that starts temporary PostgreSQL, `gammaboard server`, sampler, and evaluators under one Slurm allocation.
+4. Expose the dashboard with an SSH tunnel to the control job's compute node.
+5. Move to external PostgreSQL only when run state must survive allocation expiry or multiple allocations need the same durable control plane.
 
 ## Sources
 
