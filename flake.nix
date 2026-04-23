@@ -85,7 +85,6 @@
         DYLD_LIBRARY_PATH = runtimeLibPath;
 
         packages = with pkgs; [
-          apptainer
           tdf
           cargo-flamegraph
           yaml-language-server
@@ -128,11 +127,6 @@
           virtualenv
           postgresql
           nginx
-          squashfsTools
-          fakeroot
-          shadow
-          cryptsetup
-          libseccomp
           sqlx-cli
           nodejs
           (pkgs.rustPlatform.buildRustPackage rec {

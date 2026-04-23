@@ -60,7 +60,34 @@ Use this once we need run state to survive allocation expiry without copying a l
 
 ## 1) Build Image On UBELIX
 
-If Docker-conversion build cache is too heavy for `/tmp`, UBELIX recommends scratch-backed cache dirs:
+Recommended: build the image through Slurm, not on a login node, if the build takes on the order of tens of minutes. A ~30 minute container build is scheduler-managed compute work.
+
+Why:
+
+- UBELIX is a Slurm cluster; compute-intensive work is supposed to run on allocated compute nodes.
+- Apptainer Docker conversion can be heavy on CPU, memory, and temporary storage.
+- A batch job gives you explicit runtime/memory limits and clean logs.
+
+Use the checked-in batch wrapper:
+
+```bash
+export PROJECT_ROOT=/storage/workspaces/<group>/<workspace>/gammaboard
+sbatch ops/ubelix/build_apptainer.sbatch
+```
+
+The script writes the output `.sif` to `${PROJECT_ROOT}/gammaboard.sif` by default and uses scratch-backed Apptainer temp/cache directories.
+
+You can override output paths, for example:
+
+```bash
+export PROJECT_ROOT=/storage/workspaces/<group>/<workspace>/gammaboard
+export OUTPUT_SIF=/storage/workspaces/<group>/<workspace>/images/gammaboard-$(date +%Y%m%d).sif
+sbatch ops/ubelix/build_apptainer.sbatch
+```
+
+If you want to debug the build interactively first, use an interactive Slurm allocation and then run the same `apptainer build ...` command there. Avoid doing the full build on the login node.
+
+UBELIX specifically recommends scratch-backed cache dirs when pulling or building from Docker containers:
 
 ```bash
 mkdir -p /scratch/network/users/$USER
@@ -68,6 +95,14 @@ export APPTAINER_TMPDIR=/scratch/network/users/$USER
 export APPTAINER_CACHEDIR=/scratch/network/users/$USER
 apptainer build --notest gammaboard.sif gammaboard.def
 ```
+
+Packaging model:
+
+- Build input: the repo checkout plus `gammaboard.def` on UBELIX storage.
+- Build job: a single `sbatch` script that changes into the repo and runs `apptainer build`.
+- Build artifact: a `.sif` written to workspace/scratch storage, then reused by worker/control jobs.
+
+For repeatable builds, keep the `.def` file and the source repos in workspace storage, and treat the `.sif` as a produced artifact, not as something rebuilt inside every run.
 
 ## 2) Smoke Test (No Database Needed)
 
