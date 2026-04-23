@@ -1,28 +1,23 @@
-use std::{any::Any, ops::ControlFlow, panic::AssertUnwindSafe, path::PathBuf};
+use std::{any::Any, panic::AssertUnwindSafe, path::PathBuf};
 
-use gammaloop_api::{
-    CLISettings,
-    commands::Commands,
-    state::{CommandHistory, ProcessRef, RunHistory, State},
-};
+use gammaloop_api::state::{ProcessRef, State};
 use gammalooprs::graph::GroupId;
 use gammalooprs::initialisation::initialise;
 use gammalooprs::integrands::HasIntegrand;
 use gammalooprs::integrands::evaluation::EvaluationResult;
 use gammalooprs::integrands::process::{MomentumSpaceEvaluationInput, ProcessIntegrand};
 use gammalooprs::model::Model;
-use gammalooprs::settings::RuntimeSettings;
 use gammalooprs::settings::runtime::{DiscreteGraphSamplingType, SamplingSettings};
 use gammalooprs::utils::F;
 use serde::{Deserialize, Serialize};
 use symbolica::numerical_integration::Sample;
 
 use crate::{
-    Batch, BatchResult, BuildError, Domain, DomainBranch, EvalError, Point,
+    Batch, BatchResult, BuildError, Domain, DomainBranch, EvalError,
     core::AccumulatorConfig,
     evaluation::{
         AccumulatorState, ComplexAccumulatorState, ComplexValueEvaluator, EvalBatchOptions,
-        Evaluator, GammaLoopAccumulatorState, IngestComplex, IngestScalar, ScalarValueEvaluator,
+        Evaluator, GammaLoopAccumulatorState, ScalarValueEvaluator,
     },
 };
 
@@ -33,11 +28,6 @@ pub struct GammaLoopEvaluator {
     momentum_space: bool,
     training_projection: TrainingProjection,
     domain: Domain,
-}
-
-struct GammaLoopBatchEvaluation {
-    samples: Vec<EvaluationResult>,
-    diagnostics: crate::evaluation::GammaLoopDiagnostics,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, Eq)]
@@ -70,8 +60,6 @@ pub struct GammaLoopParams {
     pub momentum_space: bool,
     pub use_f128: bool,
     pub training_projection: TrainingProjection,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub post_load_commands: Vec<String>,
 }
 
 impl Default for GammaLoopParams {
@@ -80,67 +68,14 @@ impl Default for GammaLoopParams {
             state_folder: PathBuf::from("./gammaloop_state"),
             process_id: None,
             integrand_name: None,
-            momentum_space: false,
+            momentum_space: true,
             use_f128: false,
             training_projection: TrainingProjection::default(),
-            post_load_commands: Vec::new(),
         }
     }
 }
 
 impl GammaLoopEvaluator {
-    pub(crate) fn run_post_load_commands(
-        params: &GammaLoopParams,
-        state: &mut State,
-    ) -> Result<(), BuildError> {
-        if params.post_load_commands.is_empty() {
-            return Ok(());
-        }
-
-        let mut run_history = RunHistory::default();
-        let mut cli_settings = CLISettings::default();
-        cli_settings.state.folder = params.state_folder.clone();
-        let mut default_runtime_settings = RuntimeSettings::default();
-
-        for (index, raw_command) in params.post_load_commands.iter().enumerate() {
-            let command = CommandHistory::from_raw_string(raw_command).map_err(|err| {
-                BuildError::build(format!(
-                    "failed to parse post_load_commands[{index}] '{raw_command}': {err}"
-                ))
-            })?;
-
-            if !matches!(command.command, Commands::Set(_)) {
-                return Err(BuildError::build(format!(
-                    "post_load_commands[{index}] must be a 'set' command to keep the state in-memory; got '{}'",
-                    raw_command
-                )));
-            }
-
-            let execution = command
-                .command
-                .run(
-                    state,
-                    &mut run_history,
-                    &mut cli_settings,
-                    &mut default_runtime_settings,
-                )
-                .map_err(|err| {
-                    BuildError::build(format!(
-                        "failed to execute post_load_commands[{index}] '{raw_command}': {err}"
-                    ))
-                })?;
-
-            if let ControlFlow::Break(_) = execution.flow {
-                return Err(BuildError::build(format!(
-                    "post_load_commands[{index}] triggered flow break and is not supported: '{}'",
-                    raw_command
-                )));
-            }
-        }
-
-        Ok(())
-    }
-
     fn build_domain(
         integrand: &ProcessIntegrand,
         momentum_space: bool,
@@ -326,7 +261,7 @@ impl GammaLoopEvaluator {
                         params.state_folder.display()
                     ))
                 })?;
-            Self::run_post_load_commands(&params, &mut state)?;
+            gammaloop_api::state::
 
             let (process_id, integrand_name) = state
                 .find_integrand_ref(params.process_id.as_ref(), params.integrand_name.as_ref())
@@ -376,26 +311,23 @@ impl GammaLoopEvaluator {
 
     fn batch_gammaloop_observable(
         &self,
-        evaluation: &GammaLoopBatchEvaluation,
-        points: &[Point],
-    ) -> Result<GammaLoopAccumulatorState, EvalError> {
+        evaluation_results: &[EvaluationResult],
+        weights: &[f64],
+    ) -> GammaLoopAccumulatorState {
         let mut estimate = ComplexAccumulatorState::default();
-        for (result, point) in evaluation.samples.iter().zip(points.iter()) {
-            estimate.add_sample(Self::project_result_value(result), point);
+        for (result, &weight) in evaluation_results.iter().zip(weights.iter()) {
+            estimate.add_sample(Self::project_result_value(result), weight);
         }
-        let bundle = self.integrand.observable_snapshot_bundle().ok_or_else(|| {
-            EvalError::eval(
-                "gammaloop accumulator requested histogram bundle, but no observable snapshot bundle is available",
-            )
-        })?;
-        Ok(GammaLoopAccumulatorState {
-            bundle,
+        GammaLoopAccumulatorState {
+            bundle: self
+                .integrand
+                .observable_snapshot_bundle()
+                .unwrap_or_default(),
             estimate,
-            diagnostics: evaluation.diagnostics.clone(),
-        })
+        }
     }
 
-    fn evaluate(&mut self, batch: &Batch) -> Result<GammaLoopBatchEvaluation, EvalError> {
+    fn evaluate(&mut self, batch: &Batch) -> Result<Vec<EvaluationResult>, EvalError> {
         if self.momentum_space {
             let inputs = batch
                 .points()
@@ -465,12 +397,8 @@ impl GammaLoopEvaluator {
                     false,
                 )
             })?;
-            let diagnostics =
-                GammaLoopAccumulatorState::diagnostics_from_evaluation_results(&results.samples);
-            return Ok(GammaLoopBatchEvaluation {
-                samples: results.samples,
-                diagnostics,
-            });
+
+            return Ok(results.samples);
         }
 
         let samples = batch
@@ -512,12 +440,8 @@ impl GammaLoopEvaluator {
                 Default::default(),
             )
         })?;
-        let diagnostics =
-            GammaLoopAccumulatorState::diagnostics_from_evaluation_results(&results.samples);
-        Ok(GammaLoopBatchEvaluation {
-            samples: results.samples,
-            diagnostics,
-        })
+
+        Ok(results.samples)
     }
 }
 
@@ -559,27 +483,20 @@ impl Evaluator for GammaLoopEvaluator {
             self.reset_observables();
         }
         let weights = batch.weights();
-        let evaluation = self.evaluate(batch)?;
-        let evaluation_results = &evaluation.samples;
-        let projected_complex_values = evaluation_results
-            .iter()
-            .map(Self::project_result_value)
-            .collect::<Vec<_>>();
-        let projected_scalar_values = projected_complex_values
-            .iter()
-            .copied()
-            .map(|value| self.training_projection.project(value))
-            .collect::<Vec<_>>();
+        let evaluation_results = self.evaluate(batch)?;
         let mut observable_state = AccumulatorState::from_config(accumulator);
         let weighted_values = match accumulator {
             AccumulatorConfig::Empty => {
                 observable_state = AccumulatorState::empty();
                 if options.require_training_values {
                     Some(
-                        projected_scalar_values
+                        evaluation_results
                             .iter()
-                            .copied()
-                            .zip(weights.iter().copied())
+                            .map(|result| {
+                                self.training_projection
+                                    .project(Self::project_result_value(result))
+                            })
+                            .zip(weights.iter())
                             .map(|(value, weight)| value * weight)
                             .collect(),
                     )
@@ -588,127 +505,89 @@ impl Evaluator for GammaLoopEvaluator {
                 }
             }
             AccumulatorConfig::Gammaloop => {
-                if !self.integrand.has_observables() {
-                    return Err(EvalError::eval(
-                        "gammaloop accumulator requires configured observables, but the loaded integrand has none (empty [observables] in runtime settings)",
-                    ));
-                }
                 observable_state = AccumulatorState::Gammaloop(
-                    self.batch_gammaloop_observable(&evaluation, batch.points())?,
+                    self.batch_gammaloop_observable(&evaluation_results, weights.as_slice()),
                 );
                 self.reset_observables();
                 if options.require_training_values {
-                    Some(projected_scalar_values.clone())
+                    Some(
+                        evaluation_results
+                            .iter()
+                            .map(|result| {
+                                self.training_projection
+                                    .project(Self::project_result_value(result))
+                            })
+                            .collect(),
+                    )
                 } else {
                     None
                 }
             }
             _ => match accumulator.semantic_kind() {
-                crate::evaluation::SemanticAccumulatorKind::Scalar => {
-                    let scalar_accumulator: &mut dyn IngestScalar = match &mut observable_state {
-                        AccumulatorState::Scalar(accumulator) => accumulator,
-                        AccumulatorState::FullScalar(accumulator) => accumulator,
-                        other => {
-                            return Err(EvalError::eval(format!(
-                                "gammaloop scalar mode does not support accumulator kind {}",
-                                other.kind_str()
-                            )));
-                        }
-                    };
-                    self.ingest_scalar_values(
-                        projected_scalar_values.as_slice(),
-                        batch.points(),
+                crate::evaluation::SemanticAccumulatorKind::Scalar => match &mut observable_state {
+                    AccumulatorState::Scalar(accumulator) => self.ingest_scalar_values(
+                        &evaluation_results
+                            .iter()
+                            .map(|result| {
+                                self.training_projection
+                                    .project(Self::project_result_value(result))
+                            })
+                            .collect::<Vec<_>>(),
+                        weights.as_slice(),
                         options.require_training_values,
-                        scalar_accumulator,
-                    )?
-                }
+                        accumulator,
+                    )?,
+                    AccumulatorState::FullScalar(accumulator) => self.ingest_scalar_values(
+                        &evaluation_results
+                            .iter()
+                            .map(|result| {
+                                self.training_projection
+                                    .project(Self::project_result_value(result))
+                            })
+                            .collect::<Vec<_>>(),
+                        weights.as_slice(),
+                        options.require_training_values,
+                        accumulator,
+                    )?,
+                    other => {
+                        return Err(EvalError::eval(format!(
+                            "gammaloop scalar mode does not support accumulator kind {}",
+                            other.kind_str()
+                        )));
+                    }
+                },
                 crate::evaluation::SemanticAccumulatorKind::Complex => {
-                    let complex_accumulator: &mut dyn IngestComplex = match &mut observable_state {
-                        AccumulatorState::Complex(accumulator) => accumulator,
-                        AccumulatorState::FullComplex(accumulator) => accumulator,
+                    match &mut observable_state {
+                        AccumulatorState::Complex(accumulator) => self.ingest_complex_values(
+                            &evaluation_results
+                                .iter()
+                                .map(Self::project_result_value)
+                                .collect::<Vec<_>>(),
+                            weights.as_slice(),
+                            options.require_training_values,
+                            accumulator,
+                            |value| self.training_projection.project(value),
+                        )?,
+                        AccumulatorState::FullComplex(accumulator) => self.ingest_complex_values(
+                            &evaluation_results
+                                .iter()
+                                .map(Self::project_result_value)
+                                .collect::<Vec<_>>(),
+                            weights.as_slice(),
+                            options.require_training_values,
+                            accumulator,
+                            |value| self.training_projection.project(value),
+                        )?,
                         other => {
                             return Err(EvalError::eval(format!(
                                 "gammaloop complex mode does not support accumulator kind {}",
                                 other.kind_str()
                             )));
                         }
-                    };
-                    self.ingest_complex_values(
-                        projected_complex_values.as_slice(),
-                        batch.points(),
-                        options.require_training_values,
-                        complex_accumulator,
-                        |value| self.training_projection.project(value),
-                    )?
+                    }
                 }
             },
         };
         Ok(BatchResult::new(weighted_values, observable_state))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{GammaLoopEvaluator, GammaLoopParams};
-    use std::path::PathBuf;
-
-    fn tth_state_folder() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../gammaloop/examples/cli/epem_a_ttxh/LO/state")
-    }
-
-    #[test]
-    fn post_load_set_process_command_changes_kinematics_in_memory_only() {
-        let state_folder = tth_state_folder();
-        if !state_folder.exists() {
-            eprintln!(
-                "skipping test: tth gammaloop state not found at {}",
-                state_folder.display()
-            );
-            return;
-        }
-
-        let baseline_params = GammaLoopParams {
-            state_folder: state_folder.clone(),
-            integrand_name: Some("LO".to_string()),
-            momentum_space: false,
-            ..GammaLoopParams::default()
-        };
-
-        let baseline = match GammaLoopEvaluator::from_params(baseline_params.clone()) {
-            Ok(baseline) => baseline,
-            Err(err) => {
-                eprintln!("skipping test: failed to load baseline tth state: {err}");
-                return;
-            }
-        };
-        let baseline_e_cm = baseline.integrand.get_settings().kinematics.e_cm;
-        let changed_e_cm = baseline_e_cm + 17.0;
-
-        let mut changed_params = baseline_params.clone();
-        changed_params.post_load_commands =
-            vec![format!("set process kv kinematics.e_cm={changed_e_cm}")];
-
-        let changed =
-            GammaLoopEvaluator::from_params(changed_params).expect("changed build should succeed");
-        let changed_loaded_e_cm = changed.integrand.get_settings().kinematics.e_cm;
-
-        assert!(
-            (changed_loaded_e_cm - changed_e_cm).abs() < 1.0e-9,
-            "expected changed e_cm {changed_e_cm}, got {changed_loaded_e_cm}"
-        );
-
-        let reloaded =
-            GammaLoopEvaluator::from_params(baseline_params).expect("reloaded baseline build");
-        let reloaded_e_cm = reloaded.integrand.get_settings().kinematics.e_cm;
-
-        assert!(
-            (reloaded_e_cm - baseline_e_cm).abs() < 1.0e-9,
-            "expected reloaded e_cm {baseline_e_cm}, got {reloaded_e_cm}"
-        );
-        assert!(
-            (reloaded_e_cm - changed_loaded_e_cm).abs() > 1.0e-9,
-            "expected reloaded e_cm to differ from changed e_cm ({changed_loaded_e_cm})"
-        );
     }
 }

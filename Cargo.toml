@@ -53,3 +53,11 @@ opt-level = 2
 [lib]
 name = "gammaboard"
 crate-type = ["rlib"]
+
+[patch.crates-io]
+#graphica = { git = "https://github.com/benruijl/symbolica", branch = "dev" }
+#numerica = { git = "https://github.com/benruijl/symbolica", branch = "dev" }
+#symbolica = { git = "https://github.com/benruijl/symbolica", branch = "dev" }
+graphica = { git = "https://github.com/benruijl/symbolica", rev = "309a156264f1b535af653803497d91330fc5abfc" }
+numerica = { git = "https://github.com/benruijl/symbolica", rev = "309a156264f1b535af653803497d91330fc5abfc" }
+symbolica = { git = "https://github.com/benruijl/symbolica", rev = "309a156264f1b535af653803497d91330fc5abfc" }
