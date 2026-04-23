@@ -42,6 +42,13 @@ Default config split:
 
 The frontend uses relative `/api` calls and does not require `.env`. The `just` recipes remain as thin wrappers, but the CLI flow above is the primary local workflow.
 
+## UBELIX Quickstart
+For initial Slurm/Apptainer hello-world tests on UBELIX, use:
+
+- [ops/ubelix/README.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/README.md)
+- [ops/ubelix/slurm_smoke_container.sbatch](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/slurm_smoke_container.sbatch)
+- [ops/ubelix/submit_hello.sh](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/submit_hello.sh)
+
 ## Runtime Config
 - All commands load shared runtime config from [configs/runtime/default.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/runtime/default.toml) by default.
 - Override it when needed with:

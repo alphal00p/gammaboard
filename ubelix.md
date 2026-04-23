@@ -1,72 +1,42 @@
 # UBELIX Deployment Notes
 
-## Summary
+As of April 23, 2026, the UBELIX docs align with a containerized Slurm model for `gammaloop` + `gammaboard`, with one key constraint: keep PostgreSQL as an external shared service reachable by all jobs.
 
-Deploying Gammaboard on UBELIX looks feasible, but only if PostgreSQL is available as a stable service reachable from all worker jobs. Slurm, job arrays, interactive jobs, and Apptainer fit the current runtime model well. The main operational friction is the database dependency, not compute scheduling.
+## Practical Status
 
-## Good Fit
+- Good fit: Slurm + Apptainer + job arrays map directly to the current runner model.
+- Main blocker: database service lifecycle/networking, not worker scheduling.
+- Initial scripts now live in `ops/ubelix/`:
+  - `slurm_smoke_container.sbatch`
+  - `slurm_node_worker.sbatch`
+  - `slurm_hello_control.sbatch`
+  - `submit_hello.sh`
 
-- UBELIX supports Slurm batch jobs, interactive jobs, job arrays, and Apptainer containers.
-- Gammaboard already maps well to one sampler-aggregator plus many evaluator workers.
-- Evaluators can scale out naturally as separate Slurm jobs or array tasks.
+## Current UBELIX Constraints To Respect
 
-## Recommended Deployment Shape
+- `apptainer` is available directly; no module load required.
+- For account selection:
+  - `gratis`: `--account=gratis` (debug-friendly QoS available).
+  - `paygo`: also requires `--wckey=<project>`.
+  - `teaching`: requires `--reservation=<reservation>`.
+- For container bind mounts on UBELIX storage, bind full real paths (not only `/scratch`) because scratch/workspace paths are symlinked.
+- For heavy Apptainer Docker conversion/build, use scratch-backed cache/temp directories (`APPTAINER_TMPDIR`, `APPTAINER_CACHEDIR`).
 
-- Package `gammaboard` as a binary or Apptainer image.
-- Run one sampler-aggregator as a small Slurm job.
-- Run evaluators as a Slurm job array or multiple tasks in one allocation.
-- Keep PostgreSQL outside worker jobs as a stable shared service.
-- Run the dashboard/backend outside UBELIX compute jobs, or in a separate interactive/web-facing session.
+## Suggested Rollout
 
-## Main Risks
-
-- PostgreSQL is required as the live control plane and work queue.
-- Scaling will likely become DB-bound before it becomes UBELIX-bound.
-- `run-node` currently handles `ctrl_c`, but Slurm cancellation uses `SIGTERM`; graceful checkpoint/snapshot handling should be improved before production use.
-- Running the dashboard on-cluster is possible in principle, but the simplest setup is to host it elsewhere.
-
-## Ease Of Use
-
-Good once wrapped for Slurm, not turnkey today.
-
-Best next steps:
-- add `SIGTERM` handling for clean sampler snapshot persistence
-- define `sbatch` wrappers for sampler and evaluator arrays
-- decide on external Postgres hosting
-- reduce DB pressure before scaling far
-
-## MPI Work Queue
-
-Moving the work queue to MPI would improve raw intra-allocation throughput, but it is probably the wrong primary direction for this project.
-
-### Pros
-
-- much lower queue latency than PostgreSQL
-- less DB polling and write amplification
-- good fit for tightly coupled workers inside one allocation
-
-### Cons
-
-- much worse operational ergonomics than the current DB-backed control plane
-- harder recovery, pause/resume, and observability across job restarts
-- MPI works best inside one allocation, while Gammaboard currently supports loose, durable coordination across processes and nodes
-- sampler, evaluators, dashboard, and CLI steering would all become harder to decouple
-- it would likely replace a durable queue with an ephemeral one, which is a large architectural regression for this system
-
-## Recommendation On MPI
-
-Do not replace the main work queue with MPI.
-
-If needed, use MPI only as an optional fast path inside evaluator-side execution within a single Slurm allocation. Keep PostgreSQL as the durable control plane, assignment store, snapshot store, and source of truth.
+1. Build and validate the image with `ops/ubelix/slurm_smoke_container.sbatch`.
+2. Point jobs to a stable Postgres URL (`GAMMABOARD_DATABASE_URL`).
+3. Use `ops/ubelix/submit_hello.sh` for first end-to-end hello-world (1 sampler + evaluator array + control job).
+4. Split control-plane and workers for production:
+   - persistent backend/control process,
+   - separate long-lived sampler/evaluator worker jobs.
 
 ## Sources
 
 - https://hpc-unibe-ch.github.io/
-- https://hpc-unibe-ch.github.io/firststeps/accessUBELIX/
-- https://hpc-unibe-ch.github.io/runjobs/scheduled-jobs/submission/
-- https://hpc-unibe-ch.github.io/runjobs/scheduled-jobs/interactive/
-- https://hpc-unibe-ch.github.io/runjobs/scheduled-jobs/throughput/
+- https://hpc-unibe-ch.github.io/runjobs/partitions/
+- https://hpc-unibe-ch.github.io/runjobs/scheduled-jobs/slurm-quickstart/
 - https://hpc-unibe-ch.github.io/runjobs/scheduled-jobs/container-jobs/
 - https://hpc-unibe-ch.github.io/software/containers/apptainer/
-- https://hpc-unibe-ch.github.io/firststeps/loggingin-webui/
-- https://hpc-unibe-ch.github.io/runjobs/scheduled-jobs/checkpointing/
+- https://hpc-unibe-ch.github.io/storage/
+- https://hpc-unibe-ch.github.io/storage/scratch/

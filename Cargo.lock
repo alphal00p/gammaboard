@@ -3357,7 +3357,8 @@ dependencies = [
 [[package]]
 name = "numerica"
 version = "1.4.2"
-source = "git+https://github.com/benruijl/symbolica?rev=309a156264f1b535af653803497d91330fc5abfc#309a156264f1b535af653803497d91330fc5abfc"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81bcc592b28b3d40312870328dda472aa5bbd5976acf6153f7ccbfc75c9df2f8"
 dependencies = [
  "ahash",
  "bincode",
@@ -5454,7 +5455,8 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "symbolica"
 version = "1.5.0"
-source = "git+https://github.com/benruijl/symbolica?rev=309a156264f1b535af653803497d91330fc5abfc#309a156264f1b535af653803497d91330fc5abfc"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07395d35b180c532b7fd85d5de5e65e41db721f070444b7a4b234bedbd246e3e"
 dependencies = [
  "ahash",
  "append-only-vec",
@@ -7410,8 +7412,3 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
-
-[[patch.unused]]
-name = "graphica"
-version = "1.2.1"
-source = "git+https://github.com/benruijl/symbolica?rev=309a156264f1b535af653803497d91330fc5abfc#309a156264f1b535af653803497d91330fc5abfc"

@@ -9,8 +9,11 @@ From: rust:1-bookworm
     set -eux
 
     export DEBIAN_FRONTEND=noninteractive
-    # compilation is still slow, prob. because LTO settings are not the same for both crates
+    # Share one target dir across both repos and force identical release profile settings
+    # so Cargo can reuse compiled artifacts between gammaloop and gammaboard builds.
     export CARGO_TARGET_DIR=/opt/target
+    export CARGO_PROFILE_RELEASE_LTO=fat
+    export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
 
     apt-get update
     apt-get install -y --no-install-recommends \

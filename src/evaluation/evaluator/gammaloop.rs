@@ -1,13 +1,16 @@
 use std::{any::Any, panic::AssertUnwindSafe, path::PathBuf};
 
+use gammaloop_api::CLISettings;
+use gammaloop_api::session::CliSessionState;
 use gammaloop_api::state::{ProcessRef, State};
+use gammaloop_api::state::{CommandHistory, RunHistory, SyncSettings};
 use gammalooprs::graph::GroupId;
 use gammalooprs::initialisation::initialise;
 use gammalooprs::integrands::HasIntegrand;
 use gammalooprs::integrands::evaluation::EvaluationResult;
 use gammalooprs::integrands::process::{MomentumSpaceEvaluationInput, ProcessIntegrand};
 use gammalooprs::model::Model;
-use gammalooprs::settings::runtime::{DiscreteGraphSamplingType, SamplingSettings};
+use gammalooprs::settings::{RuntimeSettings, runtime::{DiscreteGraphSamplingType, SamplingSettings}};
 use gammalooprs::utils::F;
 use serde::{Deserialize, Serialize};
 use symbolica::numerical_integration::Sample;
@@ -57,6 +60,8 @@ pub struct GammaLoopParams {
     pub state_folder: PathBuf,
     pub process_id: Option<ProcessRef>,
     pub integrand_name: Option<String>,
+    #[serde(default)]
+    pub post_load_commands: Vec<String>,
     pub momentum_space: bool,
     pub use_f128: bool,
     pub training_projection: TrainingProjection,
@@ -68,6 +73,7 @@ impl Default for GammaLoopParams {
             state_folder: PathBuf::from("./gammaloop_state"),
             process_id: None,
             integrand_name: None,
+            post_load_commands: Vec::new(),
             momentum_space: true,
             use_f128: false,
             training_projection: TrainingProjection::default(),
@@ -251,6 +257,38 @@ impl GammaLoopEvaluator {
         }
     }
 
+    pub fn run_post_load_commands(params: &GammaLoopParams, state: &mut State) -> Result<(), BuildError> {
+        if params.post_load_commands.is_empty() {
+            return Ok(());
+        }
+
+        let mut run_history = RunHistory::default();
+        let mut cli_settings = CLISettings::default();
+        cli_settings
+            .sync_settings()
+            .map_err(|err| BuildError::build(format!("failed to initialize GammaLoop CLI settings: {err}")))?;
+        let mut default_runtime_settings = RuntimeSettings::default();
+        let mut session_state = CliSessionState::default();
+        let mut session = gammaloop_api::session::CliSession::new(
+            state,
+            &mut run_history,
+            &mut cli_settings,
+            &mut default_runtime_settings,
+            &mut session_state,
+        );
+
+        for command in &params.post_load_commands {
+            let parsed = CommandHistory::from_raw_string(command).map_err(|err| {
+                BuildError::build(format!("invalid GammaLoop post_load_command {:?}: {err}", command))
+            })?;
+            session.execute_command(parsed).map_err(|err| {
+                BuildError::build(format!("failed GammaLoop post_load_command {:?}: {err}", command))
+            })?;
+        }
+
+        Ok(())
+    }
+
     pub fn from_params(params: GammaLoopParams) -> Result<Self, BuildError> {
         match std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<Self, BuildError> {
             _ = initialise();
@@ -261,7 +299,7 @@ impl GammaLoopEvaluator {
                         params.state_folder.display()
                     ))
                 })?;
-            gammaloop_api::state::
+            Self::run_post_load_commands(&params, &mut state)?;
 
             let (process_id, integrand_name) = state
                 .find_integrand_ref(params.process_id.as_ref(), params.integrand_name.as_ref())
@@ -312,11 +350,11 @@ impl GammaLoopEvaluator {
     fn batch_gammaloop_observable(
         &self,
         evaluation_results: &[EvaluationResult],
-        weights: &[f64],
+        points: &[crate::evaluation::Point],
     ) -> GammaLoopAccumulatorState {
         let mut estimate = ComplexAccumulatorState::default();
-        for (result, &weight) in evaluation_results.iter().zip(weights.iter()) {
-            estimate.add_sample(Self::project_result_value(result), weight);
+        for (result, point) in evaluation_results.iter().zip(points.iter()) {
+            estimate.add_sample(Self::project_result_value(result), point);
         }
         GammaLoopAccumulatorState {
             bundle: self
@@ -324,6 +362,8 @@ impl GammaLoopEvaluator {
                 .observable_snapshot_bundle()
                 .unwrap_or_default(),
             estimate,
+            diagnostics:
+                GammaLoopAccumulatorState::diagnostics_from_evaluation_results(evaluation_results),
         }
     }
 
@@ -482,7 +522,7 @@ impl Evaluator for GammaLoopEvaluator {
         if matches!(accumulator, AccumulatorConfig::Gammaloop) {
             self.reset_observables();
         }
-        let weights = batch.weights();
+        let points = batch.points();
         let evaluation_results = self.evaluate(batch)?;
         let mut observable_state = AccumulatorState::from_config(accumulator);
         let weighted_values = match accumulator {
@@ -496,8 +536,8 @@ impl Evaluator for GammaLoopEvaluator {
                                 self.training_projection
                                     .project(Self::project_result_value(result))
                             })
-                            .zip(weights.iter())
-                            .map(|(value, weight)| value * weight)
+                            .zip(points.iter())
+                            .map(|(value, point)| value * point.weight)
                             .collect(),
                     )
                 } else {
@@ -506,7 +546,7 @@ impl Evaluator for GammaLoopEvaluator {
             }
             AccumulatorConfig::Gammaloop => {
                 observable_state = AccumulatorState::Gammaloop(
-                    self.batch_gammaloop_observable(&evaluation_results, weights.as_slice()),
+                    self.batch_gammaloop_observable(&evaluation_results, points),
                 );
                 self.reset_observables();
                 if options.require_training_values {
@@ -517,6 +557,8 @@ impl Evaluator for GammaLoopEvaluator {
                                 self.training_projection
                                     .project(Self::project_result_value(result))
                             })
+                            .zip(points.iter())
+                            .map(|(value, point)| value * point.weight)
                             .collect(),
                     )
                 } else {
@@ -533,7 +575,7 @@ impl Evaluator for GammaLoopEvaluator {
                                     .project(Self::project_result_value(result))
                             })
                             .collect::<Vec<_>>(),
-                        weights.as_slice(),
+                        points,
                         options.require_training_values,
                         accumulator,
                     )?,
@@ -545,7 +587,7 @@ impl Evaluator for GammaLoopEvaluator {
                                     .project(Self::project_result_value(result))
                             })
                             .collect::<Vec<_>>(),
-                        weights.as_slice(),
+                        points,
                         options.require_training_values,
                         accumulator,
                     )?,
@@ -563,7 +605,7 @@ impl Evaluator for GammaLoopEvaluator {
                                 .iter()
                                 .map(Self::project_result_value)
                                 .collect::<Vec<_>>(),
-                            weights.as_slice(),
+                            points,
                             options.require_training_values,
                             accumulator,
                             |value| self.training_projection.project(value),
@@ -573,7 +615,7 @@ impl Evaluator for GammaLoopEvaluator {
                                 .iter()
                                 .map(Self::project_result_value)
                                 .collect::<Vec<_>>(),
-                            weights.as_slice(),
+                            points,
                             options.require_training_values,
                             accumulator,
                             |value| self.training_projection.project(value),
