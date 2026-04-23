@@ -130,7 +130,7 @@
           nginx
           squashfsTools
           fakeroot
-          uidmap
+          shadow
           cryptsetup
           libseccomp
           sqlx-cli
