@@ -30,7 +30,7 @@ The frontend can be separated later, but the first deployment should serve front
 - `slurm/smoke_container.sbatch`: no-DB smoke check (`gammaloop`/`gammaboard` version/help) for a runtime image.
 - `slurm/node_worker.sbatch`: long-running worker (`node run`) for sampler/evaluator.
 - `slurm/hello_control.sbatch`: creates a tiny run, appends one sample task, auto-assigns workers, waits for completion.
-- `submit_hello.sh`: submits one sampler job + evaluator array + control job with dependencies.
+- `justfile` recipe `submit-hello`: submits one sampler job + evaluator array + control job with dependencies.
 
 ## Target Topology
 
@@ -160,7 +160,7 @@ export GAMMABOARD_WORKSPACE_ROOT=/absolute/path/to/itp_localunitaritydata
 export GAMMABOARD_IMAGE=/absolute/path/to/itp_localunitaritydata/images/gammaboard/gammaboard-latest.sif
 export GAMMABOARD_DATABASE_URL=postgresql://<user>:<pass>@<host>:5432/<db>
 export DEPLOY_NAME=default
-./ops/ubelix/submit_hello.sh
+just --justfile ops/ubelix/justfile submit-hello
 ```
 
 Useful overrides:
@@ -220,7 +220,7 @@ Recommended layout:
         smoke_container.sbatch
         node_worker.sbatch
         hello_control.sbatch
-      submit_hello.sh
+      justfile
   runtime/
     <deploy-name>.toml
   db/

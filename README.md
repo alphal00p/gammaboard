@@ -47,7 +47,7 @@ For initial Slurm/Apptainer hello-world tests on UBELIX, use:
 
 - [ops/ubelix/README.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/README.md)
 - [ops/ubelix/slurm/smoke_container.sbatch](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/slurm/smoke_container.sbatch)
-- [ops/ubelix/submit_hello.sh](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/submit_hello.sh)
+- [ops/ubelix/justfile](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/justfile)
 
 ## Runtime Config
 - All commands load shared runtime config from [configs/runtime/default.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/runtime/default.toml) by default.

@@ -1,6 +1,7 @@
 bin := "../../target/dev-optim/gammaboard"
 release_bin := "../../target/release/gammaboard"
 deploy_cfg := "config/deploy.toml"
+runtime_cfg := "../../configs/runtime/default.toml"
 
 deploy mode="release":
     #!/usr/bin/env bash
@@ -9,14 +10,14 @@ deploy mode="release":
     just --justfile ../../justfile build-frontend
     if [[ "{{mode}}" == "release" ]]; then
         just --justfile ../../justfile build-backend-release
-        {{release_bin}} deploy up --deploy-config "{{deploy_cfg}}" --mode "{{mode}}"
+        {{release_bin}} --runtime-config "{{runtime_cfg}}" deploy up --deploy-config "{{deploy_cfg}}" --mode "{{mode}}"
     else
         just --justfile ../../justfile build-backend
-        {{bin}} deploy up --deploy-config "{{deploy_cfg}}" --mode "{{mode}}"
+        {{bin}} --runtime-config "{{runtime_cfg}}" deploy up --deploy-config "{{deploy_cfg}}" --mode "{{mode}}"
     fi
 
 status:
-    {{bin}} deploy status --deploy-config "{{deploy_cfg}}"
+    {{bin}} --runtime-config "{{runtime_cfg}}" deploy status --deploy-config "{{deploy_cfg}}"
 
 down:
-    {{bin}} deploy down --deploy-config "{{deploy_cfg}}"
+    {{bin}} --runtime-config "{{runtime_cfg}}" deploy down --deploy-config "{{deploy_cfg}}"
