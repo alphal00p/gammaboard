@@ -59,9 +59,102 @@ const sortRenderablePanels = (panels) =>
     })
     .map(({ panel }) => panel);
 
+const replacePanelPairWithOverlay = (panels, firstId, secondId, overlayPanel) => {
+  const firstIndex = panels.findIndex((panel) => panel?.descriptor?.panel_id === firstId);
+  const secondIndex = panels.findIndex((panel) => panel?.descriptor?.panel_id === secondId);
+  if (firstIndex < 0 || secondIndex < 0) return panels;
+  const first = panels[firstIndex];
+  const second = panels[secondIndex];
+  if (!first?.state || !second?.state) return panels;
+
+  const next = [...panels];
+  const low = Math.min(firstIndex, secondIndex);
+  const high = Math.max(firstIndex, secondIndex);
+  next.splice(high, 1);
+  next.splice(low, 1, overlayPanel);
+  return next;
+};
+
+const normalizePanelPoints = (points) =>
+  asArray(points)
+    .map((point) => ({
+      x: Number(point?.x),
+      y: Number(point?.y),
+      x_sampler_uptime_ms: Number.isFinite(Number(point?.x_sampler_uptime_ms))
+        ? Number(point?.x_sampler_uptime_ms)
+        : null,
+      x_completed_samples_total: Number.isFinite(Number(point?.x_completed_samples_total))
+        ? Number(point?.x_completed_samples_total)
+        : null,
+      y_min: Number.isFinite(Number(point?.y_min)) ? Number(point?.y_min) : null,
+      y_max: Number.isFinite(Number(point?.y_max)) ? Number(point?.y_max) : null,
+    }))
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+
+const buildPdfLineOverlayPanel = (integrandPanel, pdfPanel) => ({
+  descriptor: {
+    panel_id: "pdf_adaptation_integrand_pdf_line_overlay",
+    label: "Normalized Integrand vs PDF (1D)",
+    kind: "multi_timeseries",
+    history: "none",
+    width: "full",
+  },
+  state: {
+    panel_id: "pdf_adaptation_integrand_pdf_line_overlay",
+    series: [
+      {
+        id: "integrand",
+        label: "Normalized integrand",
+        color: "#005f73",
+        smooth: false,
+        points: normalizePanelPoints(integrandPanel?.state?.points),
+      },
+      {
+        id: "pdf",
+        label: "Normalized PDF",
+        color: "#bb3e03",
+        smooth: false,
+        points: normalizePanelPoints(pdfPanel?.state?.points),
+      },
+    ].filter((series) => asArray(series.points).length > 0),
+  },
+  value: null,
+});
+
+const buildPdfHistogramOverlayPanel = ({
+  panelId,
+  label,
+  primaryPanel,
+  overlayPanel,
+  overlayName,
+  overlayColor,
+}) => ({
+  descriptor: {
+    panel_id: panelId,
+    label,
+    kind: "histogram",
+    history: "none",
+    width: "full",
+  },
+  state: {
+    ...(isObject(primaryPanel?.state) ? primaryPanel.state : {}),
+    panel_id: panelId,
+    source_panel_id: panelId,
+    name: null,
+    overlay_histograms: [
+      {
+        name: overlayName,
+        color: overlayColor,
+        bins: asArray(overlayPanel?.state?.bins),
+      },
+    ],
+  },
+  value: null,
+});
+
 const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
   const stateMap = new Map(asArray(panelStates).map((panel) => [panel.panel_id, panel]));
-  const renderablePanels = asArray(panelSpecs).map((spec) => ({
+  let renderablePanels = asArray(panelSpecs).map((spec) => ({
     descriptor: spec,
     state: stateMap.get(spec.panel_id) || null,
     value: panelValues?.[spec.panel_id],
@@ -111,6 +204,64 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
       });
     }
   }
+
+  const lineIntegrandPanel = renderablePanels.find(
+    ({ descriptor }) => descriptor?.panel_id === "pdf_adaptation_log_integrand_line",
+  );
+  const linePdfPanel = renderablePanels.find(({ descriptor }) => descriptor?.panel_id === "pdf_adaptation_log_pdf_line");
+  if (lineIntegrandPanel?.state && linePdfPanel?.state) {
+    renderablePanels = replacePanelPairWithOverlay(
+      renderablePanels,
+      "pdf_adaptation_log_integrand_line",
+      "pdf_adaptation_log_pdf_line",
+      buildPdfLineOverlayPanel(lineIntegrandPanel, linePdfPanel),
+    );
+  }
+
+  const histogramIntegrandPanel = renderablePanels.find(
+    ({ descriptor }) => descriptor?.panel_id === "pdf_adaptation_log_integrand_histogram",
+  );
+  const histogramPdfPanel = renderablePanels.find(
+    ({ descriptor }) => descriptor?.panel_id === "pdf_adaptation_log_pdf_histogram",
+  );
+  if (histogramIntegrandPanel?.state && histogramPdfPanel?.state) {
+    renderablePanels = replacePanelPairWithOverlay(
+      renderablePanels,
+      "pdf_adaptation_log_integrand_histogram",
+      "pdf_adaptation_log_pdf_histogram",
+      buildPdfHistogramOverlayPanel({
+        panelId: "pdf_adaptation_integrand_pdf_histogram_overlay",
+        label: "Histogram: Normalized Integrand vs PDF",
+        primaryPanel: histogramIntegrandPanel,
+        overlayPanel: histogramPdfPanel,
+        overlayName: "Normalized PDF",
+        overlayColor: "#bb3e03",
+      }),
+    );
+  }
+
+  const histogramOversamplingPanel = renderablePanels.find(
+    ({ descriptor }) => descriptor?.panel_id === "pdf_adaptation_oversampling_histogram",
+  );
+  const histogramOversamplingNormalizedPanel = renderablePanels.find(
+    ({ descriptor }) => descriptor?.panel_id === "pdf_adaptation_oversampling_plane_normalized_histogram",
+  );
+  if (histogramOversamplingPanel?.state && histogramOversamplingNormalizedPanel?.state) {
+    renderablePanels = replacePanelPairWithOverlay(
+      renderablePanels,
+      "pdf_adaptation_oversampling_histogram",
+      "pdf_adaptation_oversampling_plane_normalized_histogram",
+      buildPdfHistogramOverlayPanel({
+        panelId: "pdf_adaptation_oversampling_histogram_overlay",
+        label: "Histogram: Oversampling vs Normalized Oversampling",
+        primaryPanel: histogramOversamplingPanel,
+        overlayPanel: histogramOversamplingNormalizedPanel,
+        overlayName: "Normalized oversampling",
+        overlayColor: "#6a994e",
+      }),
+    );
+  }
+
   return sortRenderablePanels(renderablePanels);
 };
 
@@ -2220,7 +2371,7 @@ const HistogramPanel = ({
       })),
     [currentHistogramName, uploadedBundles],
   );
-  const overlaySeries = useMemo(
+  const comparedOverlaySeries = useMemo(
     () =>
       comparedBundleSelections
         .flatMap(({ bundle, selectionState }, bundleIndex) => {
@@ -2348,6 +2499,101 @@ const HistogramPanel = ({
       isDiscrete,
       yScale,
     ],
+  );
+  const embeddedOverlaySeries = useMemo(
+    () =>
+      asArray(state?.overlay_histograms)
+        .map((overlay, overlayIndex) => {
+          const overlayBins = asArray(overlay?.bins);
+          if (overlayBins.length === 0) return null;
+          const overlayName =
+            typeof overlay?.name === "string" && overlay.name.trim().length > 0
+              ? overlay.name
+              : `overlay_${overlayIndex + 1}`;
+          const overlayColor =
+            typeof overlay?.color === "string" && overlay.color.trim().length > 0
+              ? overlay.color
+              : histogramOverlayColors[overlayIndex % histogramOverlayColors.length];
+
+          if (isDiscrete) {
+            const overlayCanonicalBins = buildHistogramData(overlayBins);
+            const overlayBinByKey = new Map(
+              overlayCanonicalBins.map((bin, index) => [discreteHistogramBinKey(bin, index), bin]),
+            );
+            const values = discreteBaseKeys.map((key) => {
+              const bin = overlayBinByKey.get(key);
+              if (!bin) return null;
+              const numeric = Number(bin?.value);
+              if (!Number.isFinite(numeric)) return null;
+              return yScale === "log" ? signedLog10(numeric) : numeric;
+            });
+            const relative = discreteBaseKeys.map((key) => {
+              const bin = overlayBinByKey.get(key);
+              if (!bin) return null;
+              const value = Number(bin?.value);
+              const error = Number(bin?.error);
+              if (!Number.isFinite(value) || !Number.isFinite(error) || value === 0) return null;
+              return Math.abs(error / value);
+            });
+            const absoluteError = values.map((value, index) => {
+              if (!Number.isFinite(value)) return null;
+              const key = discreteBaseKeys[index];
+              const sourceBin = key ? overlayBinByKey.get(key) || null : null;
+              const err = Number(sourceBin?.error);
+              if (!Number.isFinite(err) || err <= 0) return null;
+              const sourceValue = Number(sourceBin?.value);
+              if (!Number.isFinite(sourceValue)) return null;
+              const yLowRaw = sourceValue - Math.abs(err);
+              const yHighRaw = sourceValue + Math.abs(err);
+              const yLow = yScale === "log" ? signedLog10(yLowRaw) : yLowRaw;
+              const yHigh = yScale === "log" ? signedLog10(yHighRaw) : yHighRaw;
+              return [index, yLow, yHigh];
+            });
+            return {
+              id: `embedded-overlay-${overlayIndex}`,
+              name: overlayName,
+              color: overlayColor,
+              discreteValues: values,
+              discreteRelative: relative,
+              discreteAbsError: absoluteError.filter(Boolean),
+            };
+          }
+
+          const valueStep = buildHistogramRenderData(overlayBins, yScale)
+            .map((point) => [Number(point?.x), Number(point?.y)])
+            .filter(([x]) => Number.isFinite(x) && (effectiveXScale !== "log" || x > 0));
+          const relativeStep = buildRelativeErrorStepData(overlayBins)
+            .map((point) => [Number(point?.x), Number(point?.relative_error)])
+            .filter(([x]) => Number.isFinite(x) && (effectiveXScale !== "log" || x > 0));
+          const absError = buildHistogramData(overlayBins)
+            .map((bin) => {
+              const x = Number(bin?.x);
+              const y = Number(bin?.value);
+              const err = Number(bin?.error);
+              if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(err) || err <= 0) return null;
+              const yLowRaw = y - Math.abs(err);
+              const yHighRaw = y + Math.abs(err);
+              const yLow = yScale === "log" ? signedLog10(yLowRaw) : yLowRaw;
+              const yHigh = yScale === "log" ? signedLog10(yHighRaw) : yHighRaw;
+              if (effectiveXScale === "log" && x <= 0) return null;
+              return [x, yLow, yHigh];
+            })
+            .filter(Boolean);
+          return {
+            id: `embedded-overlay-${overlayIndex}`,
+            name: overlayName,
+            color: overlayColor,
+            valueStep,
+            relativeStep,
+            absError,
+          };
+        })
+        .filter(Boolean),
+    [discreteBaseKeys, effectiveXScale, isDiscrete, state?.overlay_histograms, yScale],
+  );
+  const overlaySeries = useMemo(
+    () => [...comparedOverlaySeries, ...embeddedOverlaySeries],
+    [comparedOverlaySeries, embeddedOverlaySeries],
   );
 
   const xDomain = useMemo(() => {
