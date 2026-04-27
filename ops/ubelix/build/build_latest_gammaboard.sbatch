@@ -23,6 +23,7 @@ GB_IMAGE_DIR_REL="images/gammaboard"
 SCRATCH_BASE="${SCRATCH_BASE:-/scratch/network/users/${USER}/apptainer}"
 SCCACHE_BASE="${SCCACHE_BASE:-/scratch/network/users/${USER}/gammaboard-cache/sccache}"
 SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-50G}"
+SCCACHE_NO_DAEMON="${SCCACHE_NO_DAEMON:-1}"
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -89,6 +90,7 @@ export APPTAINER_CACHEDIR="${CACHE_BASE}"
 export SCCACHE_DIR="${SCCACHE_BASE}"
 export APPTAINERENV_SCCACHE_DIR="${SCCACHE_DIR}"
 export APPTAINERENV_SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE}"
+export APPTAINERENV_SCCACHE_NO_DAEMON="${SCCACHE_NO_DAEMON}"
 
 GAMMALOOP_SHA="$(git_head_sha "${GAMMALOOP_REPO}")"
 GAMMABOARD_SHA="$(git_head_sha "${GAMMABOARD_REPO}")"
@@ -112,6 +114,7 @@ echo "APPTAINER_TMPDIR: ${APPTAINER_TMPDIR}"
 echo "APPTAINER_CACHEDIR: ${APPTAINER_CACHEDIR}"
 echo "SCCACHE_DIR: ${SCCACHE_DIR}"
 echo "SCCACHE_CACHE_SIZE: ${SCCACHE_CACHE_SIZE}"
+echo "SCCACHE_NO_DAEMON: ${SCCACHE_NO_DAEMON}"
 
 # Always build both targets: gammaloop first, then gammaboard.
 echo "building image: ${GL_OUT_IMAGE}"

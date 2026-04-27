@@ -45,13 +45,14 @@ if [[ ! -f "${RUNTIME_TEMPLATE}" ]]; then
   echo "missing runtime template: ${RUNTIME_TEMPLATE}" >&2
   exit 1
 fi
+if ! command -v envsubst >/dev/null 2>&1; then
+  echo "missing required command: envsubst (install gettext)" >&2
+  exit 1
+fi
 LOCAL_TMP="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
-template_text="$(cat "${RUNTIME_TEMPLATE}")"
-template_text="${template_text//__DATABASE_URL__/${DATABASE_URL}}"
-template_text="${template_text//__WORKSPACE_ROOT__/${WORKSPACE_ROOT}}"
-template_text="${template_text//__LOCAL_TMP__/${LOCAL_TMP}}"
-template_text="${template_text//__DEPLOY_NAME__/${DEPLOY_NAME}}"
-printf '%s\n' "${template_text}" >"${RUNTIME_CONFIG}"
+export DATABASE_URL WORKSPACE_ROOT LOCAL_TMP DEPLOY_NAME
+envsubst '${DATABASE_URL} ${WORKSPACE_ROOT} ${LOCAL_TMP} ${DEPLOY_NAME}' \
+  <"${RUNTIME_TEMPLATE}" >"${RUNTIME_CONFIG}"
 
 echo "node: ${HOSTNAME}"
 echo "worker role: ${ROLE}"

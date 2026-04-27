@@ -3,4 +3,4 @@ sync-ops host="Ubelix" remote_root="/storage/research/itp_localunitaritydata":
     set -euo pipefail
 
     ssh "{{host}}" "mkdir -p '{{remote_root}}/ops'"
-    scp -r ops/ubelix/* "{{host}}:{{remote_root}}/ops/"
+    scp -r ./* "{{host}}:{{remote_root}}/ops/"

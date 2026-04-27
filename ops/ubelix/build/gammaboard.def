@@ -10,6 +10,7 @@ From: rust:1-bookworm
     export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
     export SCCACHE_DIR="${SCCACHE_DIR:-/tmp/sccache}"
     export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-50G}"
+    export SCCACHE_NO_DAEMON="${SCCACHE_NO_DAEMON:-1}"
     mkdir -p "${SCCACHE_DIR}"
 
     apt-get update

@@ -291,4 +291,5 @@ Important implementation detail: if workers are separate Slurm jobs, PostgreSQL 
 - `GAMMABOARD_DATABASE_URL` must point to a Postgres service reachable from all participating jobs.
 - The target database must already have the `gammaboard` schema/migrations applied.
 - The scripts use `apptainer exec -B <project-root> ...`; bind full storage paths on UBELIX.
+- The worker/control scripts render runtime TOML templates via `envsubst` (GNU `gettext` package).
 - This is an initial smoke/hello setup, not a production deployment profile.
