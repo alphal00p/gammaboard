@@ -378,7 +378,7 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
         }
       />
       {currentRun || selectedTask ? (
-        <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ mb: 2 }}>
+        <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ mt: 1, mb: 2 }}>
           <Box sx={{ flex: 1, minWidth: 0 }}>
             <SelectedRunTomlPanel run={currentRun} />
           </Box>

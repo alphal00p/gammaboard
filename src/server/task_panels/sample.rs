@@ -108,7 +108,7 @@ fn sample_progress_projector() -> TaskPanelProjector {
                 PanelKind::Progress,
                 PanelHistoryMode::None,
             ),
-            PanelWidth::Half,
+            PanelWidth::Full,
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         |ctx| {
@@ -243,7 +243,7 @@ fn estimate_summary_projector(
                 PanelKind::KeyValue,
                 PanelHistoryMode::None,
             ),
-            PanelWidth::Half,
+            PanelWidth::Full,
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
@@ -1339,43 +1339,62 @@ fn gammaloop_evaluation_timing_panel(accumulator: AccumulatorState) -> Option<Pa
         return None;
     };
     let diagnostics = &state.diagnostics;
+    let total_eval_ms = diagnostics.avg_eval_time_ms();
+    if !total_eval_ms.is_finite() || total_eval_ms <= 0.0 {
+        return None;
+    }
+
+    let raw_parameterization = diagnostics.avg_parameterization_time_ms().max(0.0);
+    let raw_integrand = diagnostics.avg_integrand_eval_time_ms().max(0.0);
+    let raw_evaluator = diagnostics.avg_evaluator_eval_time_ms().max(0.0);
+    let raw_events = diagnostics.avg_event_processing_time_ms().max(0.0);
+
+    // GammaLoop timings are flamegraph-style: evaluator/event are nested inside
+    // integrand, and total timing includes overhead outside these categories.
+    // Convert to a disjoint partition so the stacked bar remains correct.
+    let parameterization = raw_parameterization.min(total_eval_ms);
+    let remaining_after_parameterization = (total_eval_ms - parameterization).max(0.0);
+    let integrand = raw_integrand.min(remaining_after_parameterization);
+
+    let nested_sum = raw_evaluator + raw_events;
+    let nested_scale = if nested_sum > 0.0 {
+        (integrand / nested_sum).min(1.0)
+    } else {
+        0.0
+    };
+    let evaluator = raw_evaluator * nested_scale;
+    let events = raw_events * nested_scale;
+    let integrand_core = (integrand - evaluator - events).max(0.0);
+    let overhead = (total_eval_ms - parameterization - integrand).max(0.0);
+
     let segments = vec![
         timing_segment(
             "parameterization",
             "Parameterization",
-            diagnostics.avg_parameterization_time_ms(),
+            parameterization,
             "#0a9396",
         ),
         timing_segment(
-            "integrand",
-            "Integrand Evaluation",
-            diagnostics.avg_integrand_eval_time_ms(),
+            "integrand_core",
+            "Integrand Core",
+            integrand_core,
             "#ca6702",
         ),
-        timing_segment(
-            "evaluator",
-            "Evaluator Call",
-            diagnostics.avg_evaluator_eval_time_ms(),
-            "#bb3e03",
-        ),
-        timing_segment(
-            "events",
-            "Event Processing",
-            diagnostics.avg_event_processing_time_ms(),
-            "#6d597a",
-        ),
+        timing_segment("evaluator", "Evaluator Call", evaluator, "#bb3e03"),
+        timing_segment("events", "Event Processing", events, "#6d597a"),
+        timing_segment("overhead", "Other Overhead", overhead, "#5e6472"),
     ]
     .into_iter()
     .filter(|segment| segment.value_ms.is_finite() && segment.value_ms > 0.0)
     .collect::<Vec<_>>();
 
-    let segment_sum_ms: f64 = segments.iter().map(|segment| segment.value_ms).sum();
-    if segments.is_empty() || !segment_sum_ms.is_finite() || segment_sum_ms <= 0.0 {
+    if segments.is_empty() {
         return None;
     }
+
     Some(tick_breakdown_panel(
         "gammaloop_evaluation_timing",
-        segment_sum_ms,
+        total_eval_ms,
         segments,
     ))
 }

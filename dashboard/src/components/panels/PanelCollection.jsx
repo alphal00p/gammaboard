@@ -3404,6 +3404,7 @@ const ProgressPanel = ({ title, state }) => {
         <LinearProgress
           variant={Number.isFinite(total) && total > 0 ? "determinate" : "indeterminate"}
           value={progress}
+          sx={{ height: 6, borderRadius: 999 }}
         />
         {eta ? (
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>

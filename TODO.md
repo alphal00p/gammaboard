@@ -20,5 +20,5 @@
 - [ ] And if possible it'd be able to manually adjust from the UI the spread of the color spectrum around the central value of 1.0 (meaning perfect sampling).
 - [ ] rename "oversampling" in headers to "sampling accuracy"
 - [ ] Overlay 1D histograms of the 2D slice imager, and also PDF vs integrand for the 1D slice imager
-- [ ] Fix the timing fraction bar so as to only show timing fractions that make sense to be cumulative
+- [x] Fix the timing fraction bar so as to only show timing fractions that make sense to be cumulative
 - [ ] Add the stability percentile plot, per stability level
