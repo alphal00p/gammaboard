@@ -18,6 +18,7 @@ import {
   TableHead,
   TableRow,
   Select,
+  Slider,
   Typography,
 } from "@mui/material";
 import ReactECharts from "echarts-for-react";
@@ -253,10 +254,10 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
       "pdf_adaptation_oversampling_plane_normalized_histogram",
       buildPdfHistogramOverlayPanel({
         panelId: "pdf_adaptation_oversampling_histogram_overlay",
-        label: "Histogram: Oversampling vs Normalized Oversampling",
+        label: "Histogram: Sampling Accuracy vs Normalized Sampling Accuracy",
         primaryPanel: histogramOversamplingPanel,
         overlayPanel: histogramOversamplingNormalizedPanel,
-        overlayName: "Normalized oversampling",
+        overlayName: "Normalized sampling accuracy",
         overlayColor: "#6a994e",
       }),
     );
@@ -575,6 +576,13 @@ const readZoomFromPanelValue = (value, fallback = FULL_ZOOM) =>
   normalizeZoomRange(isObject(value) ? value.zoom : null) || fallback;
 const readYZoomFromPanelValue = (value, fallback = FULL_ZOOM) =>
   normalizeZoomRange(isObject(value) ? value.yZoom : null) || fallback;
+const clampHeatmapSpread = (candidate, fallback = 1) => {
+  const numeric = Number(candidate);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(0.25, Math.min(4, numeric));
+};
+const readHeatmapSpreadFromPanelValue = (value, fallback = 1) =>
+  clampHeatmapSpread(isObject(value) ? value.spread : null, fallback);
 const readTailPinnedFromPanelValue = (value, fallback = true) =>
   typeof value?.tailPinned === "boolean"
     ? value.tailPinned
@@ -592,6 +600,11 @@ const writeZoomPanelValue = (current, zoom, tailPinned = null, yZoom = undefined
   next.zoom = normalizeZoomRange(zoom) || FULL_ZOOM;
   if (yZoom !== undefined) next.yZoom = normalizeZoomRange(yZoom) || FULL_ZOOM;
   if (tailPinned != null) next.tailPinned = Boolean(tailPinned);
+  return next;
+};
+const writeHeatmapSpreadPanelValue = (current, spread) => {
+  const next = isObject(current) ? { ...current } : {};
+  next.spread = clampHeatmapSpread(spread, 1);
   return next;
 };
 
@@ -2040,13 +2053,14 @@ const buildCellCenters = (range, count) => {
   return Array.from({ length: count }, (_, index) => min + step * (index + 0.5));
 };
 
-const buildScalarHeatmapScale = (values, normalizationMode) => {
+const buildScalarHeatmapScale = (values, normalizationMode, spread = 1) => {
   const finite = values.filter((value) => Number.isFinite(value));
   if (finite.length === 0) {
     return { zmin: 0, zmax: 1 };
   }
   if (normalizationMode === "symmetric") {
-    const maxAbs = Math.max(...finite.map((value) => Math.abs(value)), 1e-12);
+    const spreadFactor = clampHeatmapSpread(spread, 1);
+    const maxAbs = Math.max(...finite.map((value) => Math.abs(value)), 1e-12) * spreadFactor;
     return { zmin: -maxAbs, zmax: maxAbs };
   }
   const zmin = Math.min(...finite);
@@ -2091,9 +2105,12 @@ const ScalarImageHeatmapPanel = ({
   const yCenters = useMemo(() => buildCellCenters(yRange, height), [height, yRange]);
   const totalCells = Math.max(0, width * height);
   const boundedValues = useMemo(() => values.slice(0, totalCells), [totalCells, values]);
+  const isPdfPanel = typeof panelId === "string" && panelId.startsWith("pdf_adaptation_");
+  const supportsSpreadControl = normalizationMode === "symmetric" && isPdfPanel && panelId && typeof onValueChange === "function";
+  const spread = supportsSpreadControl ? readHeatmapSpreadFromPanelValue(value, 1) : 1;
   const { zmin, zmax } = useMemo(
-    () => buildScalarHeatmapScale(boundedValues, normalizationMode),
-    [boundedValues, normalizationMode],
+    () => buildScalarHeatmapScale(boundedValues, normalizationMode, spread),
+    [boundedValues, normalizationMode, spread],
   );
   const invalidOverlay = useMemo(
     () => buildInvalidCellOverlay(invalidIndices, width, height),
@@ -2269,28 +2286,59 @@ const ScalarImageHeatmapPanel = ({
       <CardContent>
         <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, mb: 2 }}>
           <Typography variant="subtitle1">{title}</Typography>
-          <FigureExportActions
-            baseName={panelId || title || "image2d"}
-            payload={{
-              panel_id: panelId,
-              kind: "image2d",
-              state: {
-                width,
-                height,
-                x_range: xRange,
-                y_range: yRange,
-                values,
-                invalid_indices: Array.from(invalidIndices || []),
-              },
-            }}
-            elementRef={figureRef}
-            echartsRef={echartsRef}
-            onResetView={
-              panelId && typeof onValueChange === "function"
-                ? () => onValueChange(panelId, writeZoomPanelValue(value, FULL_ZOOM, null, FULL_ZOOM), false)
-                : null
-            }
-          />
+          <Stack direction="row" spacing={2} alignItems="center">
+            {supportsSpreadControl ? (
+              <Stack direction="row" spacing={1.25} alignItems="center" sx={{ minWidth: 240 }}>
+                <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>
+                  Spread
+                </Typography>
+                <Slider
+                  size="small"
+                  min={0.25}
+                  max={4}
+                  step={0.05}
+                  value={spread}
+                  onChangeCommitted={(_event, next) => {
+                    const numeric = Array.isArray(next) ? next[0] : next;
+                    onValueChange(panelId, writeHeatmapSpreadPanelValue(value, numeric), false);
+                  }}
+                  valueLabelDisplay="auto"
+                  valueLabelFormat={(next) => `${Number(next).toFixed(2)}x`}
+                  sx={{ width: 140 }}
+                />
+                <Button
+                  size="small"
+                  variant="text"
+                  onClick={() => onValueChange(panelId, writeHeatmapSpreadPanelValue(value, 1), false)}
+                  disabled={Math.abs(spread - 1) < 1e-9}
+                >
+                  Reset
+                </Button>
+              </Stack>
+            ) : null}
+            <FigureExportActions
+              baseName={panelId || title || "image2d"}
+              payload={{
+                panel_id: panelId,
+                kind: "image2d",
+                state: {
+                  width,
+                  height,
+                  x_range: xRange,
+                  y_range: yRange,
+                  values,
+                  invalid_indices: Array.from(invalidIndices || []),
+                },
+              }}
+              elementRef={figureRef}
+              echartsRef={echartsRef}
+              onResetView={
+                panelId && typeof onValueChange === "function"
+                  ? () => onValueChange(panelId, writeZoomPanelValue(value, FULL_ZOOM, null, FULL_ZOOM), false)
+                  : null
+              }
+            />
+          </Stack>
         </Box>
         <Box
           ref={figureRef}
@@ -3822,24 +3870,32 @@ const TargetComparisonValueBlock = ({ value }) => {
   const target = Number(value?.target);
   const deltaPercent = Number(value?.delta_percent);
   const deltaSigma = Number(value?.delta_sigma);
-  const estimate = formatEstimateDisplay(central, error, "n/a");
   const targetText = formatScientific(target, 4, "n/a");
   const deltaPercentText = Number.isFinite(deltaPercent) ? formatScientific(deltaPercent, 4, "n/a") : "n/a";
   const deltaSigmaText = Number.isFinite(deltaSigma) ? formatScientific(deltaSigma, 4, "n/a") : "n/a";
-  const latex = `${estimate.latex_with_relative || estimate.latex}\\;\\mid\\;t=${targetText},\\;\\Delta=${deltaPercentText}\\%,\\;${deltaSigmaText}\\sigma`;
+  const targetLatex = `t=${targetText}`;
+  const deltaLatex = `\\Delta=${deltaPercentText}\\%,\\;${deltaSigmaText}\\sigma`;
   return (
     <Box sx={{ minWidth: 0 }}>
       <Box
         sx={{
-          fontSize: "1.05rem",
-          fontWeight: 700,
-          lineHeight: 1.35,
-          whiteSpace: "nowrap",
-          overflowX: "auto",
-          pb: 0.25,
+          fontSize: "1rem",
+          fontWeight: 650,
+          lineHeight: 1.4,
+          pb: 0.1,
         }}
       >
-        <LatexFormula latex={latex} display={false} fallbackPrefix="Target Comparison" />
+        <LatexFormula latex={targetLatex} display={false} fallbackPrefix="Target" />
+      </Box>
+      <Box
+        sx={{
+          fontSize: "0.95rem",
+          lineHeight: 1.35,
+          color: "text.secondary",
+          pb: 0.15,
+        }}
+      >
+        <LatexFormula latex={deltaLatex} display={false} fallbackPrefix="Delta" />
       </Box>
       <Box component="details" sx={{ mt: 0.5 }}>
         <Box component="summary" sx={{ cursor: "pointer", fontSize: "0.8rem", color: "text.secondary" }}>
