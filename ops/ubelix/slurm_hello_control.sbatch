@@ -8,22 +8,26 @@
 #SBATCH --account=gratis
 #SBATCH --partition=epyc2
 #SBATCH --qos=job_debug
-#SBATCH --output=logs/%x-%j.out
-#SBATCH --error=logs/%x-%j.err
+#SBATCH --output=logs/control/%x-%j.out
+#SBATCH --error=logs/control/%x-%j.err
 
 set -euo pipefail
 
-mkdir -p logs
+mkdir -p logs/control
 
 IMAGE_PATH="${GAMMABOARD_IMAGE:?set GAMMABOARD_IMAGE to your .sif path}"
-PROJECT_ROOT="${GAMMABOARD_PROJECT_ROOT:?set GAMMABOARD_PROJECT_ROOT to absolute project path}"
+WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-${GAMMABOARD_PROJECT_ROOT:-}}"
+if [[ -z "${WORKSPACE_ROOT}" ]]; then
+  echo "set GAMMABOARD_WORKSPACE_ROOT (or legacy GAMMABOARD_PROJECT_ROOT) to absolute workspace path" >&2
+  exit 1
+fi
 DATABASE_URL="${GAMMABOARD_DATABASE_URL:?set GAMMABOARD_DATABASE_URL to reachable Postgres URL}"
 RUN_NAME="${RUN_NAME:-ubelix-hello}"
 NODE_PREFIX="${NODE_PREFIX:-gb-hello}"
 EVALUATOR_COUNT="${EVALUATOR_COUNT:-2}"
 POLL_TIMEOUT_SECONDS="${POLL_TIMEOUT_SECONDS:-300}"
 
-RUNTIME_DIR="${PROJECT_ROOT}/tmp/ubelix"
+RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
 mkdir -p "${RUNTIME_DIR}"
 RUNTIME_CONFIG="${RUNTIME_DIR}/runtime-${SLURM_JOB_ID}-control.toml"
 RUN_TOML="${RUNTIME_DIR}/run-${SLURM_JOB_ID}.toml"
@@ -68,7 +72,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 EOF
 
 run_in_container() {
-  apptainer exec -B "${PROJECT_ROOT}" "${IMAGE_PATH}" \
+  apptainer exec -B "${WORKSPACE_ROOT}" "${IMAGE_PATH}" \
     gammaboard --runtime-config "${RUNTIME_CONFIG}" "$@"
 }
 
@@ -81,6 +85,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "creating run ${RUN_NAME}"
+echo "workspace_root: ${WORKSPACE_ROOT}"
 run_in_container run add "${RUN_TOML}"
 
 echo "waiting for workers to announce"

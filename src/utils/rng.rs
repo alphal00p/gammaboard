@@ -2,7 +2,7 @@ use rand::{RngCore, SeedableRng};
 use rand_xoshiro::Xoshiro256StarStar;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SerializableMonteCarloRng {
     state: Xoshiro256StarStar,
 }

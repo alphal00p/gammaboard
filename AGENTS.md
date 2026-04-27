@@ -127,6 +127,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Dashboard auth is intended for small trusted deployments behind HTTPS.
 - Run and task templates should be simple `.toml` files served from server-configured directories; the frontend should treat them as editable starting points, not as a second schema, and may persist/delete template files via explicit admin-protected template endpoints.
 - Shared runtime database and tracing settings should come from `configs/runtime/default.toml` by default, with an optional global `--runtime-config <PATH>` override.
+- Default config paths (`configs/runtime/default.toml`, `configs/server/default.toml`, `ops/local/config/deploy.toml`, and run-add defaults) must work even when those files are absent next to the binary; load built-in defaults for default-path fallback and never use `CARGO_MANIFEST_DIR` as a runtime fallback base.
 - Local Postgres lifecycle commands should live under `gammaboard db ...` and use the shared runtime config instead of separate env-driven just recipes; `just db-reset` may wrap `gammaboard db stop`, `gammaboard db delete --yes`, and `gammaboard db start` for convenience.
 - Local Postgres tuning lives under `runtime.local_postgres`; keep latency-sensitive queue defaults explicit there, including WAL/checkpoint settings and whether `synchronous_commit` is relaxed for local throughput.
 - Local `gammaboard db start` should always enable `pg_stat_statements` preload and extension creation for the configured database.

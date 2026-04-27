@@ -3,7 +3,6 @@ use crate::evaluation::{Batch, Materializer};
 use crate::sampling::havana_grid::{sample_to_point, validate_havana_grid_domain};
 use crate::sampling::{LatentBatch, LatentBatchPayload, SamplerAggregatorSnapshot, StageHandoff};
 use crate::utils::domain::Domain;
-use crate::utils::rng::SerializableMonteCarloRng;
 use serde::Deserialize;
 use symbolica::numerical_integration::{Grid, Sample};
 
@@ -54,8 +53,8 @@ impl Materializer for HavanaInferenceMaterializer {
 
     fn materialize_batch(&mut self, latent_batch: &LatentBatch) -> Result<Batch, EngineError> {
         match &latent_batch.payload {
-            LatentBatchPayload::HavanaInference { seed } => {
-                let mut rng = SerializableMonteCarloRng::new(*seed, 0);
+            LatentBatchPayload::HavanaInference { rng_state } => {
+                let mut rng = rng_state.clone();
                 let mut points = Vec::with_capacity(latent_batch.nr_samples);
 
                 for _ in 0..latent_batch.nr_samples {

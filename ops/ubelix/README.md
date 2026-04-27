@@ -1,6 +1,8 @@
 # UBELIX Deployment Plan
 
-This directory contains the current simplified UBELIX workflow: one Apptainer definition file that installs all dependencies, clones the latest `gammaloop` and `gammaboard` from GitHub, builds both, and installs the resulting binaries into the image.
+This directory contains the current simplified UBELIX workflow with commit-named Apptainer images:
+- a GammaLoop-only image builder,
+- and a GammaBoard image builder that always processes both GammaLoop and GammaBoard targets.
 
 ## Deployment Decision
 
@@ -18,8 +20,10 @@ The frontend can be separated later, but the first deployment should serve front
 
 ## Files
 
-- `gammaboard.def`: installs dependencies, clones latest `gammaloop` and `gammaboard`, and builds both into one runtime image.
-- `build_latest_binaries.sbatch`: runs `apptainer build <output> <def>` with hardcoded workspace paths.
+- `build/gammaloop.def`: builds a runtime image containing `gammaloop` only.
+- `build/gammaboard.def`: builds a runtime image containing both `gammaloop` and `gammaboard`.
+- `build/build_latest_gammaloop.sbatch`: always builds `gammaloop` from latest upstream `HEAD`, writes `gammaloop-<commit>.sif`, then updates `gammaloop-latest.sif` symlink.
+- `build/build_latest_gammaboard.sbatch`: always builds both targets (`gammaloop`, then `gammaboard`) from latest upstream `HEAD`, writes commit-named images, and updates both latest symlinks.
 - `slurm_smoke_container.sbatch`: no-DB smoke check (`gammaloop`/`gammaboard` version/help) for a runtime image.
 - `slurm_node_worker.sbatch`: long-running worker (`node run`) for sampler/evaluator.
 - `slurm_hello_control.sbatch`: creates a tiny run, appends one sample task, auto-assigns workers, waits for completion.
@@ -60,41 +64,48 @@ UBELIX worker jobs + optional dashboard/API job
 
 Use this once we need run state to survive allocation expiry without copying a local Postgres data directory, or when multiple independent allocations should attach to the same control plane.
 
-## 1) Build Latest Runtime Image
-
-Recommended: use the single checked-in definition file and let Apptainer do the full dependency install + clone + build inside one image build.
+## 1) Build Commit-Named Runtime Images
 
 Why:
 
 - `gammaloop` needs system build dependencies that are not guaranteed to exist on UBELIX by default.
-- A single `.def` is the simplest workflow for development.
-- There is no separate builder image or extra packaging step to manage.
+- Commit-named image files keep artifact history readable.
+- `*-latest.sif` symlinks make operator-facing paths stable.
 
-The definition file is:
+Definition files:
 
-- [gammaboard.def](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/gammaboard.def)
+- [build/gammaloop.def](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/build/gammaloop.def)
+- [build/gammaboard.def](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/build/gammaboard.def)
 
-Build the latest runtime image with:
-
-```bash
-sbatch ops/ubelix/build_latest_binaries.sbatch
-```
-
-Edit the config block at the top of [build_latest_binaries.sbatch](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/build_latest_binaries.sbatch) directly on UBELIX if you want to change the workspace path or output filename.
-
-By default the Slurm job runs:
+Build GammaLoop image only:
 
 ```bash
-apptainer build --notest "${WORKSPACE_PATH}/${OUT_FILE}" "${WORKSPACE_PATH}/${DEF_FILE}"
+mkdir -p logs/build logs/control logs/workers
+sbatch ops/ubelix/build/build_latest_gammaloop.sbatch
 ```
 
-The output layout is simply:
+Build GammaBoard image (this always processes both GammaLoop and GammaBoard targets):
 
-```text
-<WORKSPACE_PATH>/
-  images/
-    gammaboard-latest.sif
+```bash
+mkdir -p logs/build logs/control logs/workers
+sbatch ops/ubelix/build/build_latest_gammaboard.sbatch
 ```
+
+Both build scripts also enable `sccache` by default for Rust compilation and persist it on scratch:
+
+```bash
+SCCACHE_BASE=/scratch/network/users/$USER/gammaboard-cache/sccache
+SCCACHE_CACHE_SIZE=50G
+```
+
+This speeds up repeated rebuilds even though the scripts always run full image builds.
+
+Edit the config block at the top of these sbatch files directly on UBELIX if you want to change workspace paths, repositories, or scratch/cache roots.
+
+By default, each build job:
+- resolves upstream repository `HEAD` commit SHA(s),
+- always builds new images named with those commit SHA(s),
+- updates `images/<kind>/<kind>-latest.sif` as a symlink to the commit-named image.
 
 If you want to debug the build interactively first, use an interactive Slurm allocation and then run the same `apptainer build ...` command there. Avoid doing the full build on the login node.
 
@@ -104,7 +115,21 @@ UBELIX specifically recommends scratch-backed cache dirs when pulling or buildin
 mkdir -p /scratch/network/users/$USER
 export APPTAINER_TMPDIR=/scratch/network/users/$USER
 export APPTAINER_CACHEDIR=/scratch/network/users/$USER
-apptainer build --notest gammaboard-latest.sif ops/ubelix/gammaboard.def
+export SCCACHE_DIR=/scratch/network/users/$USER/gammaboard-cache/sccache
+apptainer build --notest gammaloop.sif ops/ubelix/build/gammaloop.def
+apptainer build --notest gammaboard.sif ops/ubelix/build/gammaboard.def
+```
+
+Output layout:
+
+```text
+<WORKSPACE_ROOT>/
+  images/gammaloop/
+    gammaloop-<commit>.sif
+    gammaloop-latest.sif -> gammaloop-<commit>.sif
+  images/gammaboard/
+    gammaboard-<commit>.sif
+    gammaboard-latest.sif -> gammaboard-<commit>.sif
 ```
 
 No persistent source checkout on UBELIX is required for this flow. The only persistent artifacts are the `.def` file, Slurm logs, and the built runtime image.
@@ -120,15 +145,16 @@ sbatch ops/ubelix/slurm_smoke_container.sbatch
 Optional environment overrides:
 
 ```bash
-GAMMABOARD_IMAGE=/absolute/path/to/gammaboard.sif
-GAMMABOARD_BIND_PATHS=/absolute/path/to/workspace
+GAMMABOARD_WORKSPACE_ROOT=/absolute/path/to/itp_localunitaritydata
+GAMMABOARD_IMAGE=/absolute/path/to/itp_localunitaritydata/images/gammaboard/gammaboard-latest.sif
+GAMMABOARD_BIND_PATHS=/absolute/path/to/itp_localunitaritydata
 ```
 
 ## 3) End-To-End Hello Test (External Postgres Path)
 
 ```bash
-export GAMMABOARD_IMAGE=/absolute/path/to/gammaboard.sif
-export GAMMABOARD_PROJECT_ROOT=/absolute/path/to/gammaboard
+export GAMMABOARD_WORKSPACE_ROOT=/absolute/path/to/itp_localunitaritydata
+export GAMMABOARD_IMAGE=/absolute/path/to/itp_localunitaritydata/images/gammaboard/gammaboard-latest.sif
 export GAMMABOARD_DATABASE_URL=postgresql://<user>:<pass>@<host>:5432/<db>
 ./ops/ubelix/submit_hello.sh
 ```
@@ -170,13 +196,39 @@ For resumable runs, the control job should not delete the Postgres data director
 Recommended layout:
 
 ```text
-<workspace>/gammaboard-ubelix/
-  images/gammaboard.sif
-  db/<deploy-name>/data
-  db/<deploy-name>/socket
-  db/<deploy-name>/logfile
-  runtime/<deploy-name>.toml
+<workspace>/itp_localunitaritydata/
+  images/
+    gammaboard/
+      gammaboard-<commit>.sif
+      gammaboard-latest.sif -> gammaboard-<commit>.sif
+    gammaloop/
+      gammaloop-<commit>.sif
+      gammaloop-latest.sif -> gammaloop-<commit>.sif
+  ops/
+    ubelix/
+      build/
+        gammaloop.def
+        gammaboard.def
+        build_latest_gammaloop.sbatch
+        build_latest_gammaboard.sbatch
+      slurm_*.sbatch
+      submit_hello.sh
+  runtime/
+    <deploy-name>.toml
+  db/
+    <deploy-name>/
+      data/
+      socket/
+      logfile
+  states/
+    gammaloop/
+      <state-name>/
+  artifacts/
+    <run-id-or-name>/
   logs/
+    build/
+    control/
+    workers/
 ```
 
 The control job should:

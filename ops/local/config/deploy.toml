@@ -1,10 +1,10 @@
 # Detached deploy orchestration for local use.
 # This owns public HTTP exposure, static site serving, and cleanup policy.
 [api_server]
-api_server_config = "../server/local.toml"
+api_server_config = "server.toml"
 
 [static_site]
-frontend_build_dir = "../../dashboard/build"
+frontend_build_dir = "../../../dashboard/build"
 
 [frontend_http]
 frontend_host = "127.0.0.1"

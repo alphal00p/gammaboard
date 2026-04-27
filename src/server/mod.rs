@@ -50,7 +50,12 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::Instrument;
 
 use self::auth::{AuthConfig, SessionStatus, login, logout, require_admin_session};
-use crate::config::normalize_config_path;
+use crate::config::{
+    DEFAULT_SERVER_CONFIG_PATH, config_base_dir, normalize_config_path,
+    read_toml_with_default_fallback,
+};
+
+const DEFAULT_SERVER_CONFIG_TOML: &str = include_str!("../../configs/server/default.toml");
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerConfig {
@@ -73,19 +78,21 @@ pub struct ServerAuthConfig {
 impl ServerConfig {
     pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let path = path.as_ref();
-        let raw = fs::read_to_string(path)
-            .with_context(|| format!("failed reading server config {}", path.display()))?;
+        let raw = read_toml_with_default_fallback(
+            path,
+            DEFAULT_SERVER_CONFIG_PATH,
+            DEFAULT_SERVER_CONFIG_TOML,
+            "server config",
+        )?;
         let mut parsed: Self = toml::from_str(&raw)
             .with_context(|| format!("failed parsing server config {}", path.display()))?;
-        let base_dir = path
-            .parent()
-            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")));
+        let base_dir = config_base_dir(path)?;
         parsed.run_templates_dir =
-            normalize_config_path(base_dir, parsed.run_templates_dir.as_str())
+            normalize_config_path(&base_dir, parsed.run_templates_dir.as_str())
                 .display()
                 .to_string();
         parsed.task_templates_dir =
-            normalize_config_path(base_dir, parsed.task_templates_dir.as_str())
+            normalize_config_path(&base_dir, parsed.task_templates_dir.as_str())
                 .display()
                 .to_string();
         Ok(parsed)

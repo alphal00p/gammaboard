@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use crate::core::AccumulatorConfig;
 use crate::evaluation::{Batch, BatchError, Point};
+use crate::utils::rng::SerializableMonteCarloRng;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LatentBatch {
@@ -33,7 +34,7 @@ pub enum LatentBatchPayload {
         weights: Vec<f64>,
     },
     HavanaInference {
-        seed: u64,
+        rng_state: SerializableMonteCarloRng,
     },
 }
 
@@ -61,7 +62,7 @@ enum LatentBatchPayloadBinary {
         weights: Vec<f64>,
     },
     HavanaInference {
-        seed: u64,
+        rng_state: SerializableMonteCarloRng,
     },
 }
 
@@ -243,8 +244,10 @@ impl LatentBatch {
                 continuous_values: continuous_values.clone(),
                 weights: weights.clone(),
             },
-            LatentBatchPayload::HavanaInference { seed } => {
-                LatentBatchPayloadBinary::HavanaInference { seed: *seed }
+            LatentBatchPayload::HavanaInference { rng_state } => {
+                LatentBatchPayloadBinary::HavanaInference {
+                    rng_state: rng_state.clone(),
+                }
             }
         };
         bincode::serde::encode_to_vec(
@@ -277,8 +280,8 @@ impl LatentBatch {
                 continuous_values,
                 weights,
             },
-            LatentBatchPayloadBinary::HavanaInference { seed } => {
-                LatentBatchPayload::HavanaInference { seed }
+            LatentBatchPayloadBinary::HavanaInference { rng_state } => {
+                LatentBatchPayload::HavanaInference { rng_state }
             }
         };
         let restored = Self {

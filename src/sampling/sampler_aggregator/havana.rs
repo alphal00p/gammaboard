@@ -1,4 +1,3 @@
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::VecDeque;
@@ -589,13 +588,19 @@ impl SamplerAggregator for HavanaInferenceSampler {
     }
 
     fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
-        let seed = self.rng.next_u64();
+        let batch_rng_state = self.rng.clone();
+        for _ in 0..nr_samples {
+            let mut sample = Sample::new();
+            self.grid.sample(&mut self.rng, &mut sample);
+        }
         self.batches_produced += 1;
         self.samples_produced = self.samples_produced.saturating_add(nr_samples);
         Ok(LatentBatchSpec {
             nr_samples,
             accumulator: crate::core::AccumulatorConfig::Scalar,
-            payload: LatentBatchPayload::HavanaInference { seed },
+            payload: LatentBatchPayload::HavanaInference {
+                rng_state: batch_rng_state,
+            },
         })
     }
 
@@ -632,6 +637,10 @@ impl SamplerAggregator for HavanaInferenceSampler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::AccumulatorConfig;
+    use crate::evaluation::Materializer;
+    use crate::sampling::materializer::HavanaInferenceMaterializer;
+    use crate::sampling::{LatentBatch, StageHandoffOwned};
     use rand::RngCore;
 
     #[test]
@@ -777,7 +786,7 @@ mod tests {
     }
 
     #[test]
-    fn havana_inference_handoff_emits_compact_seed_payloads() {
+    fn havana_inference_handoff_emits_compact_rng_payloads() {
         let domain = Domain::rectangular(2, 0);
         let params = HavanaSamplerParams {
             seed: 7,
@@ -895,5 +904,66 @@ mod tests {
             serde_json::from_value(raw).expect("decode inference snapshot");
         validate_havana_grid_domain(&restored.grid, &domain, "havana inference snapshot")
             .expect("grid matches domain");
+    }
+
+    #[test]
+    fn havana_inference_is_expected_to_be_batch_partition_invariant() {
+        let domain = Domain::rectangular(2, 0);
+        let params = HavanaSamplerParams {
+            seed: 7,
+            bins: 8,
+            samples_for_update: 16,
+            initial_training_rate: 0.1,
+            final_training_rate: 0.01,
+        };
+
+        let mut training = HavanaSampler::from_params_and_domain(params, &domain, 32)
+            .expect("build havana sampler");
+        let _ = training
+            .produce_latent_batch(16)
+            .expect("produce training batch");
+        training
+            .ingest_training_weights(&[1.0; 16])
+            .expect("ingest training weights");
+
+        let training_snapshot = training.snapshot().expect("training snapshot");
+
+        let collect_points = |batch_plan: &[usize]| -> Vec<Point> {
+            let mut inference = HavanaInferenceSampler::from_params_and_snapshot(
+                HavanaInferenceSamplerParams::default(),
+                training_snapshot.clone(),
+                &domain,
+            )
+            .expect("build inference sampler");
+
+            let mut points = Vec::new();
+            for &nr_samples in batch_plan {
+                let latent = inference
+                    .produce_latent_batch(nr_samples)
+                    .expect("produce inference batch");
+                let handoff = StageHandoffOwned {
+                    sampler_snapshot: Some(inference.snapshot().expect("inference snapshot")),
+                    observable_state: None,
+                };
+                let mut materializer = HavanaInferenceMaterializer::new(Some(handoff.as_ref()))
+                    .expect("build inference materializer");
+                let batch = materializer
+                    .materialize_batch(&LatentBatch {
+                        nr_samples: latent.nr_samples,
+                        accumulator: AccumulatorConfig::Scalar,
+                        payload: latent.payload,
+                    })
+                    .expect("materialize inference batch");
+                points.extend(batch.points().iter().cloned());
+            }
+            points
+        };
+
+        let one_batch = collect_points(&[16]);
+        let two_batches = collect_points(&[8, 8]);
+        assert_eq!(
+            one_batch, two_batches,
+            "havana inference should be independent of batch partitioning"
+        );
     }
 }

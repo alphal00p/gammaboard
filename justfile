@@ -27,23 +27,43 @@ serve-backend:
 serve-frontend:
     cd dashboard && npx serve build
 
-stop-deploy:
-    {{bin}} deploy down
-
-deploy-status:
-    {{bin}} deploy status
-
 deploy host mode="dev":
     #!/usr/bin/env bash
     set -euo pipefail
 
-    just build-frontend
-    if [[ "{{mode}}" == "release" ]]; then
-        just build-backend-release
-        {{release_bin}} deploy up --deploy-config "configs/deploy/{{host}}.toml" --mode "{{mode}}"
+    if [[ "{{host}}" == "local" ]]; then
+        just --justfile ops/local/justfile deploy "{{mode}}"
+    elif [[ "{{host}}" == "itphlies" ]]; then
+        just --justfile ops/itphlies/justfile deploy "{{mode}}"
     else
-        just build-backend
-        {{bin}} deploy up --deploy-config "configs/deploy/{{host}}.toml" --mode "{{mode}}"
+        echo "unknown deploy host: {{host}} (expected: local or itphlies)" >&2
+        exit 1
+    fi
+
+deploy-status host="local":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    if [[ "{{host}}" == "local" ]]; then
+        just --justfile ops/local/justfile status
+    elif [[ "{{host}}" == "itphlies" ]]; then
+        just --justfile ops/itphlies/justfile status
+    else
+        echo "unknown deploy host: {{host}} (expected: local or itphlies)" >&2
+        exit 1
+    fi
+
+stop-deploy host="local":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    if [[ "{{host}}" == "local" ]]; then
+        just --justfile ops/local/justfile down
+    elif [[ "{{host}}" == "itphlies" ]]; then
+        just --justfile ops/itphlies/justfile down
+    else
+        echo "unknown deploy host: {{host}} (expected: local or itphlies)" >&2
+        exit 1
     fi
 
 test-e2e:
@@ -106,4 +126,4 @@ db-reset:
 build-apptainer:
     mkdir -p /var/tmp/${USER}
     APPTAINER_TMPDIR=/var/tmp/${USER} APPTAINER_CACHEDIR=/var/tmp/${USER} \
-        apptainer build --notest gammaboard.sif ops/ubelix/gammaboard.def
+        apptainer build --notest gammaboard.sif ops/ubelix/build/gammaboard.def

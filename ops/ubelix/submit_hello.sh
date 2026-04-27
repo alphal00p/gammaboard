@@ -2,13 +2,17 @@
 set -euo pipefail
 
 # Example:
-#   GAMMABOARD_IMAGE=/storage/workspaces/<grp>/<ws>/gammaboard.sif \
-#   GAMMABOARD_PROJECT_ROOT=/storage/workspaces/<grp>/<ws>/gammaboard \
+#   GAMMABOARD_WORKSPACE_ROOT=/storage/research/itp_localunitaritydata \
+#   GAMMABOARD_IMAGE=/storage/research/itp_localunitaritydata/images/gammaboard/gammaboard-latest.sif \
 #   GAMMABOARD_DATABASE_URL=postgresql://user:pass@dbhost:5432/gammaboard_db \
 #   ./ops/ubelix/submit_hello.sh
 
 IMAGE_PATH="${GAMMABOARD_IMAGE:?set GAMMABOARD_IMAGE}"
-PROJECT_ROOT="${GAMMABOARD_PROJECT_ROOT:?set GAMMABOARD_PROJECT_ROOT}"
+WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-${GAMMABOARD_PROJECT_ROOT:-}}"
+if [[ -z "${WORKSPACE_ROOT}" ]]; then
+  echo "set GAMMABOARD_WORKSPACE_ROOT (or legacy GAMMABOARD_PROJECT_ROOT)" >&2
+  exit 1
+fi
 DATABASE_URL="${GAMMABOARD_DATABASE_URL:?set GAMMABOARD_DATABASE_URL}"
 
 ACCOUNT="${ACCOUNT:-gratis}"
@@ -31,9 +35,9 @@ else
   extra_args=()
 fi
 
-mkdir -p logs
+mkdir -p logs/control logs/workers
 
-common_export="ALL,GAMMABOARD_IMAGE=${IMAGE_PATH},GAMMABOARD_PROJECT_ROOT=${PROJECT_ROOT},GAMMABOARD_DATABASE_URL=${DATABASE_URL},NODE_PREFIX=${NODE_PREFIX}"
+common_export="ALL,GAMMABOARD_IMAGE=${IMAGE_PATH},GAMMABOARD_WORKSPACE_ROOT=${WORKSPACE_ROOT},GAMMABOARD_PROJECT_ROOT=${WORKSPACE_ROOT},GAMMABOARD_DATABASE_URL=${DATABASE_URL},NODE_PREFIX=${NODE_PREFIX}"
 
 sampler_job_id="$(
   sbatch --parsable \

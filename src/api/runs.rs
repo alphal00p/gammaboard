@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-const DEFAULT_RUN_CONFIG_PATH: &str = "configs/runs/default.toml";
+const DEFAULT_RUN_CONFIG_TOML: &str = include_str!("../../configs/runs/default.toml");
 
 #[derive(Debug, Clone)]
 pub struct CreatedRun {
@@ -103,8 +103,7 @@ pub fn parse_run_add_config_toml(raw: &str) -> Result<RunAddConfig, ApiError> {
 
 /// Loads a run-add TOML file and merges it over `configs/runs/default.toml`.
 pub fn load_run_add_config_file(path: &Path) -> Result<RunAddConfig, ApiError> {
-    let default_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_RUN_CONFIG_PATH);
-    let mut merged = read_toml_file(&default_path, "default run config")?;
+    let mut merged = read_default_run_add_toml()?;
     let overlay = read_toml_file(path, "run-add TOML")?;
     merge_toml(&mut merged, overlay);
     parse_run_add_config_value(merged)
@@ -502,8 +501,9 @@ async fn load_run_progress(
 }
 
 fn read_default_run_add_toml() -> Result<toml::Value, ApiError> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_RUN_CONFIG_PATH);
-    read_toml_file(&path, "default run config")
+    toml::from_str(DEFAULT_RUN_CONFIG_TOML).map_err(|err| {
+        ApiError::Internal(format!("failed parsing embedded default run config: {err}"))
+    })
 }
 
 fn read_toml_file(path: &Path, label: &str) -> Result<toml::Value, ApiError> {

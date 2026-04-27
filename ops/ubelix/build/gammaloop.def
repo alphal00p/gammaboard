@@ -8,6 +8,9 @@ From: rust:1-bookworm
     export CARGO_TARGET_DIR=/opt/target
     export CARGO_PROFILE_RELEASE_LTO=fat
     export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+    export SCCACHE_DIR="${SCCACHE_DIR:-/tmp/sccache}"
+    export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-50G}"
+    mkdir -p "${SCCACHE_DIR}"
 
     apt-get update
     apt-get install -y --no-install-recommends \
@@ -26,21 +29,20 @@ From: rust:1-bookworm
     update-ca-certificates
 
     cargo install just --locked
+    cargo install sccache --locked
+    export RUSTC_WRAPPER=sccache
 
     git clone --depth 1 https://github.com/alphal00p/gammaloop.git /opt/gammaloop
-    git clone --depth 1 https://github.com/SecretGmG/gammaboard.git /opt/gammaboard
 
     cd /opt/gammaloop
     just build-cli
 
-    cd /opt/gammaboard
-    just build-backend-release
+    sccache --show-stats || true
 
     install -Dm755 /opt/target/dev-optim/gammaloop /usr/local/bin/gammaloop
-    install -Dm755 /opt/target/release/gammaboard /usr/local/bin/gammaboard
 
     rm -rf /opt/target
-    rm -rf /opt/gammaloop /opt/gammaboard
+    rm -rf /opt/gammaloop
     rm -rf /root/.cargo/registry /root/.cargo/git
     apt-get clean
     rm -rf /var/lib/apt/lists/*
@@ -53,4 +55,3 @@ From: rust:1-bookworm
 
 %test
     test -x /usr/local/bin/gammaloop
-    test -x /usr/local/bin/gammaboard

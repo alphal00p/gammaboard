@@ -1,12 +1,12 @@
 # Backend API/dashboard settings for the local detached deploy profile.
-# Public HTTP exposure, generated nginx config, and deploy cleanup live in `configs/deploy/local.toml`.
+# Public HTTP exposure, generated nginx config, and deploy cleanup live in `ops/local/config/deploy.toml`.
 api_host = "127.0.0.1"
 api_port = 4000
 allowed_origins = ["http://localhost:8080"]
 secure_cookie = false
 allow_db_admin = true
-run_templates_dir = "../runs"
-task_templates_dir = "../tasks"
+run_templates_dir = "../../../configs/runs"
+task_templates_dir = "../../../configs/tasks"
 
 [auth]
 admin_password_hash = "$argon2id$v=19$m=19456,t=2,p=1$IlJKLA7MFGA5iaXoS0KnGQ$ukiPLlZKlWme0artScJVv7dfc/mslAB2Cy9MbM1mDjk"

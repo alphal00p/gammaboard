@@ -2,12 +2,15 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
+    io::ErrorKind,
     path::{Path, PathBuf},
 };
 
 pub const DEFAULT_RUNTIME_CONFIG_PATH: &str = "configs/runtime/default.toml";
 pub const DEFAULT_SERVER_CONFIG_PATH: &str = "configs/server/default.toml";
-pub const DEFAULT_DEPLOY_CONFIG_PATH: &str = "configs/deploy/local.toml";
+pub const DEFAULT_DEPLOY_CONFIG_PATH: &str = "ops/local/config/deploy.toml";
+const DEFAULT_RUNTIME_CONFIG_TOML: &str = include_str!("../configs/runtime/default.toml");
+const DEFAULT_DEPLOY_CONFIG_TOML: &str = include_str!("../ops/local/config/deploy.toml");
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RuntimeConfig {
@@ -98,8 +101,12 @@ pub struct DeployState {
 impl RuntimeConfig {
     pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let path = path.as_ref();
-        let raw = fs::read_to_string(path)
-            .with_context(|| format!("failed reading runtime config {}", path.display()))?;
+        let raw = read_toml_with_default_fallback(
+            path,
+            DEFAULT_RUNTIME_CONFIG_PATH,
+            DEFAULT_RUNTIME_CONFIG_TOML,
+            "runtime config",
+        )?;
         toml::from_str(&raw)
             .with_context(|| format!("failed parsing runtime config {}", path.display()))
     }
@@ -108,19 +115,21 @@ impl RuntimeConfig {
 impl DeployConfig {
     pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let path = path.as_ref();
-        let raw = fs::read_to_string(path)
-            .with_context(|| format!("failed reading deploy config {}", path.display()))?;
+        let raw = read_toml_with_default_fallback(
+            path,
+            DEFAULT_DEPLOY_CONFIG_PATH,
+            DEFAULT_DEPLOY_CONFIG_TOML,
+            "deploy config",
+        )?;
         let mut parsed: Self = toml::from_str(&raw)
             .with_context(|| format!("failed parsing deploy config {}", path.display()))?;
-        let base_dir = path
-            .parent()
-            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")));
+        let base_dir = config_base_dir(path)?;
         parsed.api_server.api_server_config =
-            normalize_config_path(base_dir, &parsed.api_server.api_server_config)
+            normalize_config_path(&base_dir, &parsed.api_server.api_server_config)
                 .display()
                 .to_string();
         parsed.static_site.frontend_build_dir =
-            normalize_config_path(base_dir, &parsed.static_site.frontend_build_dir)
+            normalize_config_path(&base_dir, &parsed.static_site.frontend_build_dir)
                 .display()
                 .to_string();
         Ok(parsed)
@@ -176,6 +185,28 @@ pub fn normalize_config_path(base_dir: &Path, path: &str) -> PathBuf {
         candidate
     } else {
         base_dir.join(candidate)
+    }
+}
+
+pub fn config_base_dir(path: &Path) -> anyhow::Result<PathBuf> {
+    if let Some(parent) = path.parent() {
+        return Ok(parent.to_path_buf());
+    }
+    std::env::current_dir().context("failed resolving current working directory")
+}
+
+pub fn read_toml_with_default_fallback(
+    path: &Path,
+    default_path: &str,
+    default_toml: &str,
+    label: &str,
+) -> anyhow::Result<String> {
+    match fs::read_to_string(path) {
+        Ok(raw) => Ok(raw),
+        Err(err) if err.kind() == ErrorKind::NotFound && path == Path::new(default_path) => {
+            Ok(default_toml.to_string())
+        }
+        Err(err) => Err(err).with_context(|| format!("failed reading {label} {}", path.display())),
     }
 }
 

@@ -51,6 +51,7 @@ For initial Slurm/Apptainer hello-world tests on UBELIX, use:
 
 ## Runtime Config
 - All commands load shared runtime config from [configs/runtime/default.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/runtime/default.toml) by default.
+- If that default path is not present on disk, the CLI falls back to the built-in default runtime TOML.
 - Override it when needed with:
   ```bash
   gammaboard --runtime-config path/to/runtime/default.toml <COMMAND>
@@ -106,6 +107,7 @@ The checked-in local defaults also bias Postgres toward queue throughput: larger
   gammaboard server --server-config path/to/server/default.toml
   ```
 - The checked-in local default is [configs/server/default.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server/default.toml).
+- If that default path is not present on disk, the CLI falls back to the built-in default server TOML.
 - `Ctrl-C` terminates the server process immediately.
 - Required shape:
   ```toml
@@ -127,20 +129,22 @@ The checked-in local defaults also bias Postgres toward queue throughput: larger
 
 ## Deploy Config
 Detached deploy is now owned by `gammaboard deploy ...` plus a deploy TOML profile.
+- `gammaboard deploy` default config (`ops/local/config/deploy.toml`) also has the same built-in fallback when the default file is absent.
 
 Config split:
 - `configs/runtime/*.toml`: shared DB, tracing, and local Postgres settings for all commands
-- `configs/server/*.toml`: backend API/dashboard settings for `gammaboard server`, including backend bind address and `allowed_origins`
-- `configs/deploy/*.toml`: detached deploy orchestration, including which server config to run, frontend HTTP exposure, static frontend serving, and cleanup policy
+- `configs/server/default.toml`: shared direct `gammaboard server` default profile
+- `ops/<env>/config/server.toml`: environment-specific detached-deploy backend settings
+- `ops/<env>/config/deploy.toml`: environment-specific detached deploy orchestration (server profile, frontend HTTP exposure, static frontend serving, cleanup policy)
 
 The checked-in profiles are:
-- [configs/deploy/local.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/deploy/local.toml)
-- [configs/deploy/itphlies.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/deploy/itphlies.toml)
+- [ops/local/config/deploy.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config/deploy.toml)
+- [ops/itphlies/config/deploy.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/itphlies/config/deploy.toml)
 
 Use:
 ```bash
-gammaboard deploy up --deploy-config configs/deploy/local.toml --mode dev
-gammaboard deploy up --deploy-config configs/deploy/local.toml --mode release
+gammaboard deploy up --deploy-config ops/local/config/deploy.toml --mode dev
+gammaboard deploy up --deploy-config ops/local/config/deploy.toml --mode release
 gammaboard deploy status
 gammaboard deploy down
 ```
@@ -186,17 +190,17 @@ Use this flow when you want both direct LAN access and the SSH tunnel option.
    or `http://itphlies:8080` if your local network resolves that hostname. If you access the server by LAN IP instead, add that origin to `allowed_origins` in the server config first.
 4. To stop all deployed ITPhlies processes:
    ```bash
-   gammaboard deploy down --deploy-config configs/deploy/itphlies.toml
+   gammaboard deploy down --deploy-config ops/itphlies/config/deploy.toml
    ```
 5. The SSH tunnel remains optional; direct LAN access works because nginx listens on `0.0.0.0:8080`, while the backend still stays private on `127.0.0.1:4000`.
 
 Config files used:
-- backend: [configs/server/itphlies.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server/itphlies.toml)
-- deploy: [configs/deploy/itphlies.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/deploy/itphlies.toml)
+- backend: [ops/itphlies/config/server.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/itphlies/config/server.toml)
+- deploy: [ops/itphlies/config/deploy.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/itphlies/config/deploy.toml)
 
 Important:
-- `configs/server/itphlies.toml` currently allows `http://localhost:8080` and `http://itphlies:8080`.
-- `configs/deploy/itphlies.toml` advertises `localhost` and `itphlies` as the operator-facing URLs for that deploy profile.
+- `ops/itphlies/config/server.toml` currently allows `http://localhost:8080` and `http://itphlies:8080`.
+- `ops/itphlies/config/deploy.toml` advertises `localhost` and `itphlies` as the operator-facing URLs for that deploy profile.
 - If you want to access the UI via a raw LAN IP or another hostname, add that exact origin to `allowed_origins`.
 - Backend listens on `127.0.0.1:4000`; nginx listens on `0.0.0.0:8080`.
 - ITPhlies deployment uses the release backend binary by default.
@@ -209,10 +213,10 @@ Important:
   - `location / { root <dashboard-build-dir>; try_files $uri /index.html; }`
   - `location /api/ { proxy_pass http://127.0.0.1:4000/api/; }`
 - Local detached deploy setup:
-  - server config: [configs/server/local.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server/local.toml)
-  - deploy config: [configs/deploy/local.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/deploy/local.toml)
+  - server config: [ops/local/config/server.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config/server.toml)
+  - deploy config: [ops/local/config/deploy.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config/deploy.toml)
   - run with: `just deploy local dev`
-  - stop with: `gammaboard deploy down --deploy-config configs/deploy/local.toml`
+  - stop with: `gammaboard deploy down --deploy-config ops/local/config/deploy.toml`
 
 ## Dashboard Auth
 - Read-only dashboard endpoints stay open.
@@ -234,7 +238,7 @@ Important:
 `auth.admin_password_hash` should contain the full Argon2 encoded hash output from that command.
 
 ## Run Configs
-Run configs are TOML and are deep-merged over `configs/runs/default.toml`.
+Run configs are TOML and are deep-merged over the built-in default run config template (mirrors `configs/runs/default.toml`).
 
 Add a run with:
 ```bash
