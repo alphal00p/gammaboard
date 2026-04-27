@@ -24,6 +24,7 @@ fi
 DATABASE_URL="${GAMMABOARD_DATABASE_URL:?set GAMMABOARD_DATABASE_URL to reachable Postgres URL}"
 NODE_PREFIX="${NODE_PREFIX:-gb-hello}"
 ROLE="${ROLE:?set ROLE to sampler-aggregator or evaluator}"
+DEPLOY_NAME="${DEPLOY_NAME:-default}"
 
 if [[ "${ROLE}" == "sampler-aggregator" ]]; then
   NODE_NAME="${NODE_PREFIX}-sampler"
@@ -38,29 +39,19 @@ fi
 RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
 mkdir -p "${RUNTIME_DIR}"
 RUNTIME_CONFIG="${RUNTIME_DIR}/runtime-${SLURM_JOB_ID}-${NODE_NAME}.toml"
+RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime_external_db.template.toml"
 trap 'rm -f "${RUNTIME_CONFIG}"' EXIT
-cat >"${RUNTIME_CONFIG}" <<EOF
-[database]
-url = "${DATABASE_URL}"
-
-[tracing]
-persist_runtime_logs = true
-db_gammaboard_level = "info"
-db_external_level = "warn"
-
-[local_postgres]
-data_dir = "${TMPDIR}/.postgres"
-socket_dir = "${TMPDIR}/.postgres-socket"
-log_file = "${TMPDIR}/.postgres/logfile"
-max_connections = 32
-shared_buffers = "512MB"
-effective_cache_size = "1GB"
-work_mem = "16MB"
-checkpoint_timeout = "30min"
-max_wal_size = "1GB"
-wal_compression = true
-synchronous_commit = true
-EOF
+if [[ ! -f "${RUNTIME_TEMPLATE}" ]]; then
+  echo "missing runtime template: ${RUNTIME_TEMPLATE}" >&2
+  exit 1
+fi
+LOCAL_TMP="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
+template_text="$(cat "${RUNTIME_TEMPLATE}")"
+template_text="${template_text//__DATABASE_URL__/${DATABASE_URL}}"
+template_text="${template_text//__WORKSPACE_ROOT__/${WORKSPACE_ROOT}}"
+template_text="${template_text//__LOCAL_TMP__/${LOCAL_TMP}}"
+template_text="${template_text//__DEPLOY_NAME__/${DEPLOY_NAME}}"
+printf '%s\n' "${template_text}" >"${RUNTIME_CONFIG}"
 
 echo "node: ${HOSTNAME}"
 echo "worker role: ${ROLE}"

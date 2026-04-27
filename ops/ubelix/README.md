@@ -24,6 +24,9 @@ The frontend can be separated later, but the first deployment should serve front
 - `build/gammaboard.def`: builds a runtime image containing both `gammaloop` and `gammaboard`.
 - `build/build_latest_gammaloop.sbatch`: always builds `gammaloop` from latest upstream `HEAD`, writes `gammaloop-<commit>.sif`, then updates `gammaloop-latest.sif` symlink.
 - `build/build_latest_gammaboard.sbatch`: always builds both targets (`gammaloop`, then `gammaboard`) from latest upstream `HEAD`, writes commit-named images, and updates both latest symlinks.
+- `config/runtime_external_db.template.toml`: worker/control runtime template for external DB mode (persistent data dir + scratch socket dir).
+- `config/runtime_local_postgres.template.toml`: runtime template for future self-contained local-Postgres control jobs.
+- `config/server.toml` and `config/deploy.toml`: UBELIX deploy/server profiles (same split as local/itphlies).
 - `slurm_smoke_container.sbatch`: no-DB smoke check (`gammaloop`/`gammaboard` version/help) for a runtime image.
 - `slurm_node_worker.sbatch`: long-running worker (`node run`) for sampler/evaluator.
 - `slurm_hello_control.sbatch`: creates a tiny run, appends one sample task, auto-assigns workers, waits for completion.
@@ -156,6 +159,7 @@ GAMMABOARD_BIND_PATHS=/absolute/path/to/itp_localunitaritydata
 export GAMMABOARD_WORKSPACE_ROOT=/absolute/path/to/itp_localunitaritydata
 export GAMMABOARD_IMAGE=/absolute/path/to/itp_localunitaritydata/images/gammaboard/gammaboard-latest.sif
 export GAMMABOARD_DATABASE_URL=postgresql://<user>:<pass>@<host>:5432/<db>
+export DEPLOY_NAME=default
 ./ops/ubelix/submit_hello.sh
 ```
 
@@ -168,6 +172,7 @@ QOS=job_debug
 EVALUATOR_COUNT=2
 RUN_NAME=ubelix-hello
 NODE_PREFIX=gb-hello
+DEPLOY_NAME=default
 EXTRA_SBATCH_ARGS="--wckey=<project>"
 ```
 

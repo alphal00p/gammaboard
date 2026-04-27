@@ -1,17 +1,17 @@
-bin := "./target/dev-optim/gammaboard"
-release_bin := "./target/release/gammaboard"
+bin := "../../target/dev-optim/gammaboard"
+release_bin := "../../target/release/gammaboard"
 deploy_cfg := "ops/itphlies/config/deploy.toml"
 
 deploy mode="release":
     #!/usr/bin/env bash
     set -euo pipefail
 
-    just build-frontend
+    just --justfile ../../justfile build-frontend
     if [[ "{{mode}}" == "release" ]]; then
-        just build-backend-release
+        just --justfile ../../justfile build-backend-release
         {{release_bin}} deploy up --deploy-config "{{deploy_cfg}}" --mode "{{mode}}"
     else
-        just build-backend
+        just --justfile ../../justfile build-backend
         {{bin}} deploy up --deploy-config "{{deploy_cfg}}" --mode "{{mode}}"
     fi
 
