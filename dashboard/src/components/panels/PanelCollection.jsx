@@ -1482,6 +1482,61 @@ const buildHistogramData = (bins) =>
     })
     .filter((bin) => Number.isFinite(bin.value) && Number.isFinite(bin.x));
 
+const sampleContinuousHistogramAtX = (bins, x) => {
+  const numericX = Number(x);
+  if (!Number.isFinite(numericX)) return null;
+  const epsilon = 1e-12;
+  for (const bin of asArray(bins)) {
+    const start = Number(bin?.start);
+    const stop = Number(bin?.stop);
+    if (!Number.isFinite(start) || !Number.isFinite(stop)) continue;
+    if (numericX + epsilon < start) continue;
+    if (numericX - epsilon > stop) continue;
+    return bin;
+  }
+  return null;
+};
+
+const projectOverlayHistogramToReferenceBins = (referenceBins, overlayBins, yScale, xScale) => {
+  const referenceCanonical = buildHistogramData(referenceBins);
+  const overlayCanonical = buildHistogramData(overlayBins);
+  const projectedBins = referenceCanonical
+    .map((referenceBin) => {
+      const matched = sampleContinuousHistogramAtX(overlayCanonical, referenceBin.x);
+      if (!matched) return null;
+      return {
+        start: referenceBin.start,
+        stop: referenceBin.stop,
+        value: Number(matched.value),
+        error: Number.isFinite(Number(matched.error)) ? Math.abs(Number(matched.error)) : 0,
+      };
+    })
+    .filter((bin) => Number.isFinite(bin?.start) && Number.isFinite(bin?.stop) && Number.isFinite(bin?.value));
+
+  const valueStep = buildHistogramRenderData(projectedBins, yScale)
+    .map((point) => [Number(point?.x), Number(point?.y)])
+    .filter(([x]) => Number.isFinite(x) && (xScale !== "log" || x > 0));
+  const relativeStep = buildRelativeErrorStepData(projectedBins)
+    .map((point) => [Number(point?.x), Number(point?.relative_error)])
+    .filter(([x]) => Number.isFinite(x) && (xScale !== "log" || x > 0));
+  const absError = buildHistogramData(projectedBins)
+    .map((bin) => {
+      const x = Number(bin?.x);
+      const y = Number(bin?.value);
+      const err = Number(bin?.error);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(err) || err <= 0) return null;
+      const yLowRaw = y - Math.abs(err);
+      const yHighRaw = y + Math.abs(err);
+      const yLow = yScale === "log" ? signedLog10(yLowRaw) : yLowRaw;
+      const yHigh = yScale === "log" ? signedLog10(yHighRaw) : yHighRaw;
+      if (xScale === "log" && x <= 0) return null;
+      return [x, yLow, yHigh];
+    })
+    .filter(Boolean);
+
+  return { valueStep, relativeStep, absError };
+};
+
 const buildHistogramStepData = (bins) => {
   const orderedBins = asArray(bins)
     .slice()
@@ -2460,38 +2515,25 @@ const HistogramPanel = ({
                 discreteAbsError: absoluteError.filter(Boolean),
               };
             }
-            const valueStep = buildHistogramRenderData(histogram.bins, yScale)
-              .map((point) => [Number(point?.x), Number(point?.y)])
-              .filter(([x]) => Number.isFinite(x) && (effectiveXScale !== "log" || x > 0));
-            const relativeStep = buildRelativeErrorStepData(histogram.bins)
-              .map((point) => [Number(point?.x), Number(point?.relative_error)])
-              .filter(([x]) => Number.isFinite(x) && (effectiveXScale !== "log" || x > 0));
-            const absError = buildHistogramData(histogram.bins)
-              .map((bin) => {
-                const x = Number(bin?.x);
-                const y = Number(bin?.value);
-                const err = Number(bin?.error);
-                if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(err) || err <= 0) return null;
-                const yLowRaw = y - Math.abs(err);
-                const yHighRaw = y + Math.abs(err);
-                const yLow = yScale === "log" ? signedLog10(yLowRaw) : yLowRaw;
-                const yHigh = yScale === "log" ? signedLog10(yHighRaw) : yHighRaw;
-                if (effectiveXScale === "log" && x <= 0) return null;
-                return [x, yLow, yHigh];
-              })
-              .filter(Boolean);
+            const projected = projectOverlayHistogramToReferenceBins(
+              bins,
+              histogram.bins,
+              yScale,
+              effectiveXScale,
+            );
             return {
               id: `${bundle.id}-${selectedName}`,
               name: seriesLabel,
               color,
-              valueStep,
-              relativeStep,
-              absError,
+              valueStep: projected.valueStep,
+              relativeStep: projected.relativeStep,
+              absError: projected.absError,
             };
           });
         })
         .filter(Boolean),
     [
+      bins,
       comparedBundleSelections,
       discreteBaseKeys,
       discreteBaseSortedCanonicalIndices,
@@ -2559,37 +2601,23 @@ const HistogramPanel = ({
             };
           }
 
-          const valueStep = buildHistogramRenderData(overlayBins, yScale)
-            .map((point) => [Number(point?.x), Number(point?.y)])
-            .filter(([x]) => Number.isFinite(x) && (effectiveXScale !== "log" || x > 0));
-          const relativeStep = buildRelativeErrorStepData(overlayBins)
-            .map((point) => [Number(point?.x), Number(point?.relative_error)])
-            .filter(([x]) => Number.isFinite(x) && (effectiveXScale !== "log" || x > 0));
-          const absError = buildHistogramData(overlayBins)
-            .map((bin) => {
-              const x = Number(bin?.x);
-              const y = Number(bin?.value);
-              const err = Number(bin?.error);
-              if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(err) || err <= 0) return null;
-              const yLowRaw = y - Math.abs(err);
-              const yHighRaw = y + Math.abs(err);
-              const yLow = yScale === "log" ? signedLog10(yLowRaw) : yLowRaw;
-              const yHigh = yScale === "log" ? signedLog10(yHighRaw) : yHighRaw;
-              if (effectiveXScale === "log" && x <= 0) return null;
-              return [x, yLow, yHigh];
-            })
-            .filter(Boolean);
+          const projected = projectOverlayHistogramToReferenceBins(
+            bins,
+            overlayBins,
+            yScale,
+            effectiveXScale,
+          );
           return {
             id: `embedded-overlay-${overlayIndex}`,
             name: overlayName,
             color: overlayColor,
-            valueStep,
-            relativeStep,
-            absError,
+            valueStep: projected.valueStep,
+            relativeStep: projected.relativeStep,
+            absError: projected.absError,
           };
         })
         .filter(Boolean),
-    [discreteBaseKeys, effectiveXScale, isDiscrete, state?.overlay_histograms, yScale],
+    [bins, discreteBaseKeys, effectiveXScale, isDiscrete, state?.overlay_histograms, yScale],
   );
   const overlaySeries = useMemo(
     () => [...comparedOverlaySeries, ...embeddedOverlaySeries],

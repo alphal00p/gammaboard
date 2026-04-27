@@ -1350,8 +1350,7 @@ fn gammaloop_evaluation_timing_panel(accumulator: AccumulatorState) -> Option<Pa
     let raw_events = diagnostics.avg_event_processing_time_ms().max(0.0);
 
     // GammaLoop timings are flamegraph-style: evaluator/event are nested inside
-    // integrand, and total timing includes overhead outside these categories.
-    // Convert to a disjoint partition so the stacked bar remains correct.
+    // integrand. Keep only the explicitly reported categories here.
     let parameterization = raw_parameterization.min(total_eval_ms);
     let remaining_after_parameterization = (total_eval_ms - parameterization).max(0.0);
     let integrand = raw_integrand.min(remaining_after_parameterization);
@@ -1365,7 +1364,6 @@ fn gammaloop_evaluation_timing_panel(accumulator: AccumulatorState) -> Option<Pa
     let evaluator = raw_evaluator * nested_scale;
     let events = raw_events * nested_scale;
     let integrand_core = (integrand - evaluator - events).max(0.0);
-    let overhead = (total_eval_ms - parameterization - integrand).max(0.0);
 
     let segments = vec![
         timing_segment(
@@ -1382,7 +1380,6 @@ fn gammaloop_evaluation_timing_panel(accumulator: AccumulatorState) -> Option<Pa
         ),
         timing_segment("evaluator", "Evaluator Call", evaluator, "#bb3e03"),
         timing_segment("events", "Event Processing", events, "#6d597a"),
-        timing_segment("overhead", "Other Overhead", overhead, "#5e6472"),
     ]
     .into_iter()
     .filter(|segment| segment.value_ms.is_finite() && segment.value_ms > 0.0)
