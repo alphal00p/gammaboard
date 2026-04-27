@@ -1,6 +1,6 @@
 bin := "../../target/dev-optim/gammaboard"
 release_bin := "../../target/release/gammaboard"
-deploy_cfg := "ops/itphlies/config/deploy.toml"
+deploy_cfg := "config/deploy.toml"
 
 deploy mode="release":
     #!/usr/bin/env bash

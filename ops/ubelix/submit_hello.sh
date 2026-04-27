@@ -25,6 +25,7 @@ RUN_NAME="${RUN_NAME:-ubelix-hello}"
 NODE_PREFIX="${NODE_PREFIX:-gb-hello}"
 POLL_TIMEOUT_SECONDS="${POLL_TIMEOUT_SECONDS:-300}"
 DEPLOY_NAME="${DEPLOY_NAME:-default}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Add account-specific flags here when needed, e.g.:
 # EXTRA_SBATCH_ARGS="--wckey=<project>" or "--reservation=<reservation>"
@@ -48,7 +49,7 @@ sampler_job_id="$(
     --time="${WORKER_TIME}" \
     --export="${common_export},ROLE=sampler-aggregator" \
     "${extra_args[@]}" \
-    ops/ubelix/slurm_node_worker.sbatch
+    "${SCRIPT_DIR}/slurm/node_worker.sbatch"
 )"
 
 evaluator_job_id="$(
@@ -60,7 +61,7 @@ evaluator_job_id="$(
     --array="1-${EVALUATOR_COUNT}" \
     --export="${common_export},ROLE=evaluator" \
     "${extra_args[@]}" \
-    ops/ubelix/slurm_node_worker.sbatch
+    "${SCRIPT_DIR}/slurm/node_worker.sbatch"
 )"
 
 control_job_id="$(
@@ -72,7 +73,7 @@ control_job_id="$(
     --time="${CONTROL_TIME}" \
     --export="${common_export},RUN_NAME=${RUN_NAME},EVALUATOR_COUNT=${EVALUATOR_COUNT},POLL_TIMEOUT_SECONDS=${POLL_TIMEOUT_SECONDS}" \
     "${extra_args[@]}" \
-    ops/ubelix/slurm_hello_control.sbatch
+    "${SCRIPT_DIR}/slurm/hello_control.sbatch"
 )"
 
 echo "submitted sampler job:   ${sampler_job_id}"

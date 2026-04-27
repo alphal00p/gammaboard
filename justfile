@@ -151,3 +151,9 @@ build-apptainer:
     mkdir -p /var/tmp/${USER}
     APPTAINER_TMPDIR=/var/tmp/${USER} APPTAINER_CACHEDIR=/var/tmp/${USER} \
         apptainer build --notest gammaboard.sif ops/ubelix/build/gammaboard.def
+
+sync-ubelix-ops host="Ubelix" remote_root="/storage/research/itp_localunitaritydata":
+    just --justfile ops/ubelix/justfile sync-ops "{{host}}" "{{remote_root}}"
+
+ubelix-tunnel compute_node host="Ubelix" local_port="8080" remote_port="8080":
+    just --justfile ops/ubelix/justfile tunnel "{{compute_node}}" "{{host}}" "{{local_port}}" "{{remote_port}}"

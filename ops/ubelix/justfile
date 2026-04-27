@@ -3,4 +3,10 @@ sync-ops host="Ubelix" remote_root="/storage/research/itp_localunitaritydata":
     set -euo pipefail
 
     ssh "{{host}}" "mkdir -p '{{remote_root}}/ops'"
-    scp -r ./* "{{host}}:{{remote_root}}/ops/"
+    scp -r ops/ubelix/* "{{host}}:{{remote_root}}/ops/"
+
+tunnel compute_node host="Ubelix" local_port="8080" remote_port="8080":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    ssh -N -L "{{local_port}}:{{compute_node}}:{{remote_port}}" "{{host}}"

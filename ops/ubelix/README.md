@@ -27,9 +27,9 @@ The frontend can be separated later, but the first deployment should serve front
 - `config/runtime_external_db.template.toml`: worker/control runtime template for external DB mode (persistent data dir + scratch socket dir).
 - `config/runtime_local_postgres.template.toml`: runtime template for future self-contained local-Postgres control jobs.
 - `config/server.toml` and `config/deploy.toml`: UBELIX deploy/server profiles (same split as local/itphlies).
-- `slurm_smoke_container.sbatch`: no-DB smoke check (`gammaloop`/`gammaboard` version/help) for a runtime image.
-- `slurm_node_worker.sbatch`: long-running worker (`node run`) for sampler/evaluator.
-- `slurm_hello_control.sbatch`: creates a tiny run, appends one sample task, auto-assigns workers, waits for completion.
+- `slurm/smoke_container.sbatch`: no-DB smoke check (`gammaloop`/`gammaboard` version/help) for a runtime image.
+- `slurm/node_worker.sbatch`: long-running worker (`node run`) for sampler/evaluator.
+- `slurm/hello_control.sbatch`: creates a tiny run, appends one sample task, auto-assigns workers, waits for completion.
 - `submit_hello.sh`: submits one sampler job + evaluator array + control job with dependencies.
 
 ## Target Topology
@@ -142,7 +142,7 @@ No persistent source checkout on UBELIX is required for this flow. The only pers
 Once you have such a runtime image, smoke test it with:
 
 ```bash
-sbatch ops/ubelix/slurm_smoke_container.sbatch
+sbatch ops/ubelix/slurm/smoke_container.sbatch
 ```
 
 Optional environment overrides:
@@ -216,7 +216,10 @@ Recommended layout:
         gammaboard.def
         build_latest_gammaloop.sbatch
         build_latest_gammaboard.sbatch
-      slurm_*.sbatch
+      slurm/
+        smoke_container.sbatch
+        node_worker.sbatch
+        hello_control.sbatch
       submit_hello.sh
   runtime/
     <deploy-name>.toml
