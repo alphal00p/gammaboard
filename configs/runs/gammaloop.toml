@@ -1,6 +1,7 @@
 # Full GammaLoop + Havana training/inference example with task-level queue tuning.
 
 name = "gammaloop_tth"
+target = { kind = "complex", real = 1.563e-3, imag = 0.0 }
 
 [evaluator]
 kind = "gammaloop"

@@ -377,6 +377,16 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
           ) : null
         }
       />
+      {currentRun || selectedTask ? (
+        <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ mb: 2 }}>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <SelectedRunTomlPanel run={currentRun} />
+          </Box>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <SelectedTaskTomlPanel task={selectedTask} />
+          </Box>
+        </Stack>
+      ) : null}
       <TaskOutputPanel
         key={`progress-${selectedTask?.id ?? "no-task"}`}
         runId={selectedRun}
@@ -424,8 +434,6 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
       />
       <EvaluatorPanel run={currentRun} panelResponse={evaluator} />
       <SamplerAggregatorPanel run={currentRun} panelResponse={sampler} />
-      <SelectedRunTomlPanel run={currentRun} />
-      <SelectedTaskTomlPanel task={selectedTask} />
       <CloneRunDialog
         open={cloneRunOpen}
         initialName={cloneInitialName}

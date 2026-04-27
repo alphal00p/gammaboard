@@ -59,33 +59,64 @@ const mergeSharedHistoryView = (current, sharedView) => {
 };
 
 const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isConnected }) => {
-  const runWorkers = useMemo(
-    () =>
-      asArray(workers).filter(
-        (worker) =>
-          worker?.current_run_id === selectedRun &&
-          worker?.current_role === "evaluator" &&
-          evaluatorNodeNameFor(worker) != null,
-      ).sort(compareNodeNames),
-    [selectedRun, workers],
-  );
+  const [nodeRunFilter, setNodeRunFilter] = useState("selected_run");
+  const [nodeActivityFilter, setNodeActivityFilter] = useState("active");
+  const [nodeRoleFilter, setNodeRoleFilter] = useState("evaluator");
+  const runFilterOptions = useMemo(() => {
+    const options = [{ value: "selected_run", label: "Selected Run" }, { value: "all_runs", label: "All Runs" }];
+    asArray(runs).forEach((run) => {
+      if (!Number.isFinite(Number(run?.run_id))) return;
+      options.push({
+        value: `run:${Number(run.run_id)}`,
+        label: typeof run?.run_name === "string" && run.run_name.trim() ? run.run_name : `Run ${run.run_id}`,
+      });
+    });
+    options.push({ value: "unassigned", label: "Unassigned" });
+    return options;
+  }, [runs]);
+  const filteredWorkers = useMemo(() => {
+    return asArray(workers)
+      .filter((worker) => evaluatorNodeNameFor(worker) != null)
+      .filter((worker) => {
+        const runId = Number(worker?.current_run_id);
+        if (nodeRunFilter === "all_runs") return true;
+        if (nodeRunFilter === "selected_run") return Number.isFinite(runId) && runId === selectedRun;
+        if (nodeRunFilter === "unassigned") return !Number.isFinite(runId);
+        if (nodeRunFilter.startsWith("run:")) {
+          const explicitRunId = Number(nodeRunFilter.slice(4));
+          return Number.isFinite(runId) && Number.isFinite(explicitRunId) && runId === explicitRunId;
+        }
+        return true;
+      })
+      .filter((worker) => {
+        if (nodeActivityFilter === "all") return true;
+        const isActive = String(worker?.status || "").toLowerCase() === "active";
+        return nodeActivityFilter === "active" ? isActive : !isActive;
+      })
+      .filter((worker) => {
+        if (nodeRoleFilter === "all") return true;
+        const role = String(worker?.current_role || "none");
+        return role === nodeRoleFilter;
+      })
+      .sort(compareNodeNames);
+  }, [nodeActivityFilter, nodeRoleFilter, nodeRunFilter, selectedRun, workers]);
   const [selectedEvaluatorNodeName, setSelectedEvaluatorNodeName] = useState(null);
   const [panelValues, setPanelValues] = useState({});
   const [historyXAxisMode, setHistoryXAxisMode] = useState(HISTORY_X_AXIS_MODE_SAMPLER_UPTIME);
 
   useEffect(() => {
-    if (runWorkers.length === 0) {
+    if (filteredWorkers.length === 0) {
       setSelectedEvaluatorNodeName(null);
       return;
     }
     if (
       selectedEvaluatorNodeName &&
-      runWorkers.some((worker) => evaluatorNodeNameFor(worker) === selectedEvaluatorNodeName)
+      filteredWorkers.some((worker) => evaluatorNodeNameFor(worker) === selectedEvaluatorNodeName)
     ) {
       return;
     }
-    setSelectedEvaluatorNodeName(evaluatorNodeNameFor(runWorkers[0]));
-  }, [runWorkers, selectedEvaluatorNodeName]);
+    setSelectedEvaluatorNodeName(evaluatorNodeNameFor(filteredWorkers[0]));
+  }, [filteredWorkers, selectedEvaluatorNodeName]);
 
   const { evaluator, runEvaluator, sampler } = useRunPerformancePanels({
     runId: selectedRun,
@@ -231,15 +262,59 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
             />
           ) : null}
           <Stack spacing={2}>
-            <FormControl size="small" sx={{ maxWidth: 320 }}>
-              <InputLabel id="performance-evaluator-label">Evaluator</InputLabel>
+            <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
+              <FormControl size="small" sx={{ maxWidth: 260 }}>
+                <InputLabel id="performance-node-run-filter-label">Run</InputLabel>
+                <Select
+                  labelId="performance-node-run-filter-label"
+                  value={nodeRunFilter}
+                  label="Run"
+                  onChange={(event) => setNodeRunFilter(String(event.target.value))}
+                >
+                  {runFilterOptions.map((option) => (
+                    <MenuItem key={option.value} value={option.value}>
+                      {option.label}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <FormControl size="small" sx={{ maxWidth: 220 }}>
+                <InputLabel id="performance-node-status-filter-label">Status</InputLabel>
+                <Select
+                  labelId="performance-node-status-filter-label"
+                  value={nodeActivityFilter}
+                  label="Status"
+                  onChange={(event) => setNodeActivityFilter(String(event.target.value))}
+                >
+                  <MenuItem value="active">Active</MenuItem>
+                  <MenuItem value="inactive">Inactive</MenuItem>
+                  <MenuItem value="all">All</MenuItem>
+                </Select>
+              </FormControl>
+              <FormControl size="small" sx={{ maxWidth: 240 }}>
+                <InputLabel id="performance-node-role-filter-label">Role</InputLabel>
+                <Select
+                  labelId="performance-node-role-filter-label"
+                  value={nodeRoleFilter}
+                  label="Role"
+                  onChange={(event) => setNodeRoleFilter(String(event.target.value))}
+                >
+                  <MenuItem value="evaluator">Evaluator</MenuItem>
+                  <MenuItem value="sampler_aggregator">Sampler</MenuItem>
+                  <MenuItem value="none">None</MenuItem>
+                  <MenuItem value="all">All</MenuItem>
+                </Select>
+              </FormControl>
+            </Stack>
+            <FormControl size="small" sx={{ maxWidth: 420 }}>
+              <InputLabel id="performance-evaluator-label">Node</InputLabel>
               <Select
                 labelId="performance-evaluator-label"
                 value={selectedEvaluatorNodeName ?? ""}
-                label="Evaluator"
+                label="Node"
                 onChange={(event) => setSelectedEvaluatorNodeName(event.target.value || null)}
               >
-                {runWorkers.map((worker) => {
+                {filteredWorkers.map((worker) => {
                   const nodeName = evaluatorNodeNameFor(worker);
                   return (
                     <MenuItem key={nodeName} value={nodeName}>
@@ -250,7 +325,7 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
               </Select>
             </FormControl>
             {selectedEvaluatorNodeName == null ? (
-              <Alert severity="info">No active evaluator selected for this run.</Alert>
+              <Alert severity="info">No node matches the current filters.</Alert>
             ) : evaluator?.sourceId ? (
               <PanelCollection
                 title={`Evaluator ${selectedEvaluatorNodeName}`}

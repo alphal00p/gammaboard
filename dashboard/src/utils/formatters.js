@@ -60,10 +60,25 @@ export const formatF64Full = (value, fallback = "n/a") => {
 export const formatEstimateDisplay = (value, error, fallback = "n/a") => {
   const central = Number(value);
   const uncertainty = Number(error);
+  const relativePercentValue =
+    Number.isFinite(central) && Number.isFinite(uncertainty) && central !== 0
+      ? Math.abs(uncertainty / central) * 100
+      : null;
+  const relativePercentText =
+    relativePercentValue != null && Number.isFinite(relativePercentValue)
+      ? relativePercentValue >= 1000 || (relativePercentValue > 0 && relativePercentValue < 0.01)
+        ? relativePercentValue.toExponential(2)
+        : relativePercentValue.toLocaleString(undefined, { maximumFractionDigits: 3 })
+      : null;
+  const appendRelativeToLatex = (latex) =>
+    relativePercentText != null ? `${latex}\\;\\left(${relativePercentText}\\%\\right)` : latex;
   if (!Number.isFinite(central) || !Number.isFinite(uncertainty) || uncertainty < 0) {
     return {
       text: fallback,
       latex: fallback,
+      relative_percent: null,
+      relative_percent_text: null,
+      latex_with_relative: fallback,
     };
   }
 
@@ -72,6 +87,9 @@ export const formatEstimateDisplay = (value, error, fallback = "n/a") => {
     return {
       text,
       latex: text,
+      relative_percent: relativePercentValue,
+      relative_percent_text: relativePercentText,
+      latex_with_relative: appendRelativeToLatex(text),
     };
   }
 
@@ -80,6 +98,9 @@ export const formatEstimateDisplay = (value, error, fallback = "n/a") => {
     return {
       text: "(0 ± 0) × 10^0",
       latex: "\\left(0 \\pm 0\\right)\\times 10^{0}",
+      relative_percent: relativePercentValue,
+      relative_percent_text: relativePercentText,
+      latex_with_relative: appendRelativeToLatex("\\left(0 \\pm 0\\right)\\times 10^{0}"),
     };
   }
 
@@ -94,5 +115,8 @@ export const formatEstimateDisplay = (value, error, fallback = "n/a") => {
   return {
     text: `(${valueText} ± ${errorText}) × 10^${exponent}`,
     latex: `\\left(${valueText} \\pm ${errorText}\\right)\\times 10^{${exponent}}`,
+    relative_percent: relativePercentValue,
+    relative_percent_text: relativePercentText,
+    latex_with_relative: appendRelativeToLatex(`\\left(${valueText} \\pm ${errorText}\\right)\\times 10^{${exponent}}`),
   };
 };

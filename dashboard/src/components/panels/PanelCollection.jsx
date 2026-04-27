@@ -418,7 +418,13 @@ const readZoomFromPanelValue = (value, fallback = FULL_ZOOM) =>
 const readYZoomFromPanelValue = (value, fallback = FULL_ZOOM) =>
   normalizeZoomRange(isObject(value) ? value.yZoom : null) || fallback;
 const readTailPinnedFromPanelValue = (value, fallback = true) =>
-  typeof value?.tailPinned === "boolean" ? value.tailPinned : fallback;
+  typeof value?.tailPinned === "boolean"
+    ? value.tailPinned
+    : (() => {
+        const zoom = normalizeZoomRange(isObject(value) ? value.zoom : null);
+        if (zoom) return zoom.end >= 99.5;
+        return fallback;
+      })();
 const readHistoryXAxisModeFromPanelValue = (value, fallback = HISTORY_X_AXIS_MODE_WALL_TIME) => {
   const mode = isObject(value) ? value.xAxisMode : null;
   return HISTORY_X_AXIS_MODE_SET.has(mode) ? mode : fallback;
@@ -3506,7 +3512,7 @@ const EstimateValueBlock = ({ value }) => {
           pb: 0.25,
         }}
       >
-        <LatexFormula latex={estimate.latex} display={false} fallbackPrefix="Estimate" />
+        <LatexFormula latex={estimate.latex_with_relative || estimate.latex} display={false} fallbackPrefix="Estimate" />
       </Box>
       <Box component="details" sx={{ mt: 0.5 }}>
         <Box component="summary" sx={{ cursor: "pointer", fontSize: "0.8rem", color: "text.secondary" }}>
