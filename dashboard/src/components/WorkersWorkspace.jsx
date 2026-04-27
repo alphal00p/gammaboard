@@ -26,6 +26,12 @@ import { formatDateTime } from "../utils/formatters";
 import { useAuth } from "../auth/AuthProvider";
 import { autoRunNodes, restartDatabase, stopAllNodes } from "../services/api";
 
+const compareNodeNames = (left, right) =>
+  String(left || "").localeCompare(String(right || ""), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+
 const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => {
   const { authenticated } = useAuth();
   const [selectedNodeName, setSelectedNodeName] = useState(null);
@@ -37,13 +43,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
   const [snackbar, setSnackbar] = useState(null);
   const nodeNameFor = (worker) => worker.node_name || null;
   const sortedWorkers = useMemo(
-    () =>
-      [...workers].sort((left, right) =>
-        String(nodeNameFor(left) || "").localeCompare(String(nodeNameFor(right) || ""), undefined, {
-          numeric: true,
-          sensitivity: "base",
-        }),
-      ),
+    () => [...workers].sort((left, right) => compareNodeNames(nodeNameFor(left), nodeNameFor(right))),
     [workers],
   );
 

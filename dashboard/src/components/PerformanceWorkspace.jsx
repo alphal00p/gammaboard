@@ -8,6 +8,11 @@ import { useRunPerformancePanels } from "../hooks/useRunPerformancePanels";
 import { asArray, isPlainObject } from "../utils/collections";
 
 const evaluatorNodeNameFor = (worker) => worker?.node_name ?? null;
+const compareNodeNames = (left, right) =>
+  String(evaluatorNodeNameFor(left) || "").localeCompare(String(evaluatorNodeNameFor(right) || ""), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
 const asObject = (value) => (isPlainObject(value) ? value : {});
 const isHistoryTimeseriesPanelSpec = (spec) => {
   const kind = String(spec?.kind || "");
@@ -61,7 +66,7 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
           worker?.current_run_id === selectedRun &&
           worker?.current_role === "evaluator" &&
           evaluatorNodeNameFor(worker) != null,
-      ),
+      ).sort(compareNodeNames),
     [selectedRun, workers],
   );
   const [selectedEvaluatorNodeName, setSelectedEvaluatorNodeName] = useState(null);
@@ -201,24 +206,6 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
                 <MenuItem value={HISTORY_X_AXIS_MODE_WALL_TIME}>Wall Time</MenuItem>
               </Select>
             </FormControl>
-            <FormControl size="small" sx={{ maxWidth: 320 }}>
-              <InputLabel id="performance-evaluator-label">Evaluator</InputLabel>
-              <Select
-                labelId="performance-evaluator-label"
-                value={selectedEvaluatorNodeName ?? ""}
-                label="Evaluator"
-                onChange={(event) => setSelectedEvaluatorNodeName(event.target.value || null)}
-              >
-                {runWorkers.map((worker) => {
-                  const nodeName = evaluatorNodeNameFor(worker);
-                  return (
-                    <MenuItem key={nodeName} value={nodeName}>
-                      {nodeName}
-                    </MenuItem>
-                  );
-                })}
-              </Select>
-            </FormControl>
           </Stack>
           {sampler?.sourceId ? (
             <PanelCollection
@@ -243,22 +230,42 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
               onPanelValueChange={handlePanelValueChange}
             />
           ) : null}
-          {selectedEvaluatorNodeName == null ? (
-            <Alert severity="info">No active evaluator selected for this run.</Alert>
-          ) : evaluator?.sourceId ? (
-            <PanelCollection
-              title={`Evaluator ${selectedEvaluatorNodeName}`}
-              panelSpecs={evaluator.panelSpecs}
-              panelStates={evaluator.panelStates}
-              panelValues={panelValues}
-              onPanelValueChange={handlePanelValueChange}
-            />
-          ) : (
-            <EmptyStateCard
-              title="No evaluator performance snapshots"
-              message="Evaluator panels will appear once the selected evaluator records snapshots."
-            />
-          )}
+          <Stack spacing={2}>
+            <FormControl size="small" sx={{ maxWidth: 320 }}>
+              <InputLabel id="performance-evaluator-label">Evaluator</InputLabel>
+              <Select
+                labelId="performance-evaluator-label"
+                value={selectedEvaluatorNodeName ?? ""}
+                label="Evaluator"
+                onChange={(event) => setSelectedEvaluatorNodeName(event.target.value || null)}
+              >
+                {runWorkers.map((worker) => {
+                  const nodeName = evaluatorNodeNameFor(worker);
+                  return (
+                    <MenuItem key={nodeName} value={nodeName}>
+                      {nodeName}
+                    </MenuItem>
+                  );
+                })}
+              </Select>
+            </FormControl>
+            {selectedEvaluatorNodeName == null ? (
+              <Alert severity="info">No active evaluator selected for this run.</Alert>
+            ) : evaluator?.sourceId ? (
+              <PanelCollection
+                title={`Evaluator ${selectedEvaluatorNodeName}`}
+                panelSpecs={evaluator.panelSpecs}
+                panelStates={evaluator.panelStates}
+                panelValues={panelValues}
+                onPanelValueChange={handlePanelValueChange}
+              />
+            ) : (
+              <EmptyStateCard
+                title="No evaluator performance snapshots"
+                message="Evaluator panels will appear once the selected evaluator records snapshots."
+              />
+            )}
+          </Stack>
         </Stack>
       )}
     </RunScopedWorkspace>
