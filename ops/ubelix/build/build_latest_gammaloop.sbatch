@@ -47,6 +47,8 @@ require_cmd awk
 TMP_BASE="${SCRATCH_BASE}/tmp"
 CACHE_BASE="${SCRATCH_BASE}/cache"
 DEF_PATH="${WORKSPACE_ROOT}/${DEF_REL_PATH}"
+DEF_DIR="$(dirname "${DEF_PATH}")"
+DEF_FILE_NAME="$(basename "${DEF_PATH}")"
 IMAGE_DIR="${WORKSPACE_ROOT}/${IMAGE_DIR_REL}"
 LATEST_LINK="${IMAGE_DIR}/gammaloop-latest.sif"
 
@@ -83,7 +85,10 @@ echo "SCCACHE_CACHE_SIZE: ${SCCACHE_CACHE_SIZE}"
 echo "SCCACHE_NO_DAEMON: ${SCCACHE_NO_DAEMON}"
 
 echo "building image: ${OUT_IMAGE}"
-apptainer build --notest "${TMP_IMAGE}" "${DEF_PATH}"
+(
+  cd "${DEF_DIR}"
+  apptainer build --notest "${TMP_IMAGE}" "${DEF_FILE_NAME}"
+)
 mv -f "${TMP_IMAGE}" "${OUT_IMAGE}"
 
 cat >"${META_FILE}" <<EOF

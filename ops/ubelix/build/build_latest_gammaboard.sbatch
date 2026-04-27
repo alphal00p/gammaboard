@@ -62,6 +62,10 @@ CACHE_BASE="${SCRATCH_BASE}/cache"
 
 GL_DEF_PATH="${WORKSPACE_ROOT}/${GAMMALOOP_DEF_REL}"
 GB_DEF_PATH="${WORKSPACE_ROOT}/${GAMMABOARD_DEF_REL}"
+GL_DEF_DIR="$(dirname "${GL_DEF_PATH}")"
+GB_DEF_DIR="$(dirname "${GB_DEF_PATH}")"
+GL_DEF_FILE_NAME="$(basename "${GL_DEF_PATH}")"
+GB_DEF_FILE_NAME="$(basename "${GB_DEF_PATH}")"
 GL_IMAGE_DIR="${WORKSPACE_ROOT}/${GL_IMAGE_DIR_REL}"
 GB_IMAGE_DIR="${WORKSPACE_ROOT}/${GB_IMAGE_DIR_REL}"
 GL_LATEST_LINK="${GL_IMAGE_DIR}/gammaloop-latest.sif"
@@ -118,11 +122,17 @@ echo "SCCACHE_NO_DAEMON: ${SCCACHE_NO_DAEMON}"
 
 # Always build both targets: gammaloop first, then gammaboard.
 echo "building image: ${GL_OUT_IMAGE}"
-apptainer build --notest "${GL_TMP_IMAGE}" "${GL_DEF_PATH}"
+(
+  cd "${GL_DEF_DIR}"
+  apptainer build --notest "${GL_TMP_IMAGE}" "${GL_DEF_FILE_NAME}"
+)
 mv -f "${GL_TMP_IMAGE}" "${GL_OUT_IMAGE}"
 
 echo "building image: ${GB_OUT_IMAGE}"
-apptainer build --notest "${GB_TMP_IMAGE}" "${GB_DEF_PATH}"
+(
+  cd "${GB_DEF_DIR}"
+  apptainer build --notest "${GB_TMP_IMAGE}" "${GB_DEF_FILE_NAME}"
+)
 mv -f "${GB_TMP_IMAGE}" "${GB_OUT_IMAGE}"
 
 write_meta "${GL_META_FILE}" \
