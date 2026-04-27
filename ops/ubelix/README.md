@@ -22,6 +22,7 @@ The frontend can be separated later, but the first deployment should serve front
 
 - `build/gammaloop.def`: builds a runtime image containing `gammaloop` only.
 - `build/gammaboard.def`: builds a runtime image containing both `gammaloop` and `gammaboard`.
+- `build/builder.def`: optional reusable base image with Rust toolchain + system deps + `just` + `sccache` preinstalled.
 - `build/build_latest_gammaloop.sbatch`: always builds `gammaloop` from latest upstream `HEAD`, writes `gammaloop-<commit>.sif`, then updates `gammaloop-latest.sif` symlink.
 - `build/build_latest_gammaboard.sbatch`: always builds both targets (`gammaloop`, then `gammaboard`) from latest upstream `HEAD`, writes commit-named images, and updates both latest symlinks.
 - `config/runtime_external_db.template.toml`: worker/control runtime template for external DB mode (persistent data dir + scratch socket dir).
@@ -77,8 +78,18 @@ Why:
 
 Definition files:
 
+- [build/builder.def](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/build/builder.def)
 - [build/gammaloop.def](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/build/gammaloop.def)
 - [build/gammaboard.def](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/build/gammaboard.def)
+
+Optional optimization: build `builder.def` once and use it as a local base image in `gammaloop.def`/`gammaboard.def`:
+
+```def
+Bootstrap: localimage
+From: /absolute/path/to/builder.sif
+```
+
+This avoids repeating apt installs and `cargo install just/sccache` on every runtime image build.
 
 Build GammaLoop image only:
 
