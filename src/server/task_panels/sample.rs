@@ -15,7 +15,6 @@ use crate::server::panels::{
     table_panel_with_payload_and_options, tick_breakdown_panel, with_panel_width,
 };
 use gammalooprs::observables::{ObservablePhase, ObservableValueTransform};
-use serde::Serialize;
 use serde_json::Value as JsonValue;
 
 pub(super) fn projectors(
@@ -109,7 +108,7 @@ fn sample_progress_projector() -> TaskPanelProjector {
                 PanelKind::Progress,
                 PanelHistoryMode::None,
             ),
-            PanelWidth::Full,
+            PanelWidth::Half,
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         |ctx| {
@@ -135,6 +134,14 @@ fn real_estimate_history_projector(
 ) -> TaskPanelProjector {
     let current_config = accumulator_config.cloned();
     let history_config = accumulator_config.cloned();
+    let width = if matches!(
+        accumulator_config,
+        Some(AccumulatorConfig::Complex | AccumulatorConfig::Gammaloop)
+    ) {
+        PanelWidth::Half
+    } else {
+        PanelWidth::Full
+    };
     panel_projector_with_source(
         with_panel_width(
             panel_spec(
@@ -143,7 +150,7 @@ fn real_estimate_history_projector(
                 PanelKind::ScalarTimeseries,
                 PanelHistoryMode::Append,
             ),
-            PanelWidth::Full,
+            width,
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
@@ -172,7 +179,7 @@ fn imag_estimate_history_projector(
                 PanelKind::ScalarTimeseries,
                 PanelHistoryMode::Append,
             ),
-            PanelWidth::Full,
+            PanelWidth::Half,
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
@@ -236,7 +243,7 @@ fn estimate_summary_projector(
                 PanelKind::KeyValue,
                 PanelHistoryMode::None,
             ),
-            PanelWidth::Full,
+            PanelWidth::Half,
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
@@ -811,7 +818,8 @@ fn base_estimate_summary_entries(
         AccumulatorState::Empty(_) => vec![key_value("count", "Count", 0)],
         AccumulatorState::Scalar(state) => vec![
             key_value("count", "Count", state.count),
-            key_value("mean", "Mean", estimate_value(state.mean(), state.stderr())),
+            key_value("mean", "Mean", state.mean()),
+            key_value("mean_stderr", "Mean Err", state.stderr()),
             key_value("mean_abs", "Mean Abs", state.mean_abs()),
             key_value(
                 "signal_to_noise",
@@ -822,21 +830,12 @@ fn base_estimate_summary_entries(
         ],
         AccumulatorState::Complex(state) => vec![
             key_value("count", "Count", state.count),
-            key_value(
-                "real_mean",
-                "Real Mean",
-                estimate_value(state.real_mean(), state.real_stderr()),
-            ),
-            key_value(
-                "imag_mean",
-                "Imag Mean",
-                estimate_value(state.imag_mean(), state.imag_stderr()),
-            ),
-            key_value(
-                "abs_mean",
-                "Abs Mean",
-                estimate_value(state.abs_mean(), state.abs_stderr()),
-            ),
+            key_value("real_mean", "Real Mean", state.real_mean()),
+            key_value("imag_mean", "Imag Mean", state.imag_mean()),
+            key_value("real_stderr", "Real Err", state.real_stderr()),
+            key_value("imag_stderr", "Imag Err", state.imag_stderr()),
+            key_value("abs_mean", "Abs Mean", state.abs_mean()),
+            key_value("abs_stderr", "Abs Err", state.abs_stderr()),
             key_value(
                 "signal_to_noise",
                 "Mean(|x|)^2 / abs_err^2",
@@ -847,21 +846,12 @@ fn base_estimate_summary_entries(
         AccumulatorState::Gammaloop(state) => {
             let mut entries = vec![
                 key_value("count", "Count", state.sample_count()),
-                key_value(
-                    "real_mean",
-                    "Real Mean",
-                    estimate_value(state.real_mean(), state.real_stderr()),
-                ),
-                key_value(
-                    "imag_mean",
-                    "Imag Mean",
-                    estimate_value(state.imag_mean(), state.imag_stderr()),
-                ),
-                key_value(
-                    "abs_mean",
-                    "Abs Mean",
-                    estimate_value(state.abs_mean(), state.abs_stderr()),
-                ),
+                key_value("real_mean", "Real Mean", state.real_mean()),
+                key_value("imag_mean", "Imag Mean", state.imag_mean()),
+                key_value("real_stderr", "Real Err", state.real_stderr()),
+                key_value("imag_stderr", "Imag Err", state.imag_stderr()),
+                key_value("abs_mean", "Abs Mean", state.abs_mean()),
+                key_value("abs_stderr", "Abs Err", state.abs_stderr()),
                 key_value("rsd", "RSD", state.rsd()),
             ];
             if let Some(target) = run_target {
@@ -873,14 +863,14 @@ fn base_estimate_summary_entries(
                     delta_sigma(state.real_mean(), state.real_stderr(), target.re),
                 ));
                 entries.push(key_value(
-                    "target_delta_real_percent",
-                    "Δ Real [%]",
-                    delta_percent(state.real_mean(), target.re),
-                ));
-                entries.push(key_value(
                     "target_delta_imag_sigma",
                     "Δ Imag [σ]",
                     delta_sigma(state.imag_mean(), state.imag_stderr(), target.im),
+                ));
+                entries.push(key_value(
+                    "target_delta_real_percent",
+                    "Δ Real [%]",
+                    delta_percent(state.real_mean(), target.re),
                 ));
                 entries.push(key_value(
                     "target_delta_imag_percent",
@@ -1126,21 +1116,6 @@ fn estimate_eta_seconds(
         }
     }
     etas.into_iter().reduce(f64::min)
-}
-
-#[derive(Debug, Serialize)]
-struct EstimateValuePayload {
-    kind: &'static str,
-    value: f64,
-    error: f64,
-}
-
-fn estimate_value(value: f64, error: f64) -> EstimateValuePayload {
-    EstimateValuePayload {
-        kind: "estimate",
-        value,
-        error,
-    }
 }
 
 fn gammaloop_histogram_bundle_panel(accumulator: AccumulatorState) -> Option<PanelState> {

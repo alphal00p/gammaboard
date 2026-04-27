@@ -459,7 +459,7 @@ const readHistogramScaleFromPanelValue = (value, axis, fallback = "linear") => {
   return fallback === "log" ? "log" : "linear";
 };
 
-const inferDefaultHistogramYScale = (state) => (state?.log_y_axis ? "log" : "linear");
+const inferDefaultHistogramYScale = (_state) => "linear";
 
 const inferDefaultHistogramXScale = (state) => (state?.log_x_axis ? "log" : "linear");
 

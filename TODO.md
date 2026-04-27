@@ -6,11 +6,11 @@
 ## Imported From todoist.csv
 - [ ] Somehow expose additional metadata about the discrete bin (e.g. upon hovering over it). Also make sure that the export of the histogram is not lossy (but I'm pretty sure it's not already).
 - [ ] Add percentage next to main result incl. error
-- [ ] Reorder sections and entries within section to something prettier looking and more organized
+- [x] Reorder sections and entries within section to something prettier looking and more organized
 - [ ] Make sure significant errors and warnings are logged
 - [x] Fix bias in busy ratio % due to inconsistent rolling window
 - [ ] Investigate why Hwu and Json observable bundles exported don't match
-- [ ] Default linear/log Y axis in histogram visualization based on what the histogram metadata specifies
+- [x] Default linear/log Y axis in histogram visualization based on what the histogram metadata specifies
 - [x] Expose toml of the active run, like currently done for tasks
 - [ ] Fix the latching bug on the performance plots where it would never un-latch
 - [ ] Do not dynamically sort the list of workers when selecting them and add a minimal filter based on task it is active on or inactive.

@@ -377,22 +377,20 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
           ) : null
         }
       />
-      <RunInfo runId={selectedRun} />
-      <SelectedRunTomlPanel run={currentRun} />
-      <SelectedTaskTomlPanel task={selectedTask} />
       <TaskOutputPanel
         key={`progress-${selectedTask?.id ?? "no-task"}`}
         runId={selectedRun}
         task={selectedTask}
-        includePanelIds={["sample_progress"]}
+        includePanelIds={["sample_progress", "estimate_summary"]}
         title="Task Progress"
       />
       <TaskOutputPanel
         key={selectedTask?.id ?? "no-task"}
         runId={selectedRun}
         task={selectedTask}
-        excludePanelIds={["sample_progress"]}
+        excludePanelIds={["sample_progress", "estimate_summary"]}
       />
+      <RunInfo runId={selectedRun} />
       <QueueTuningPanel
         run={currentRun}
         runId={selectedRun}
@@ -426,6 +424,8 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
       />
       <EvaluatorPanel run={currentRun} panelResponse={evaluator} />
       <SamplerAggregatorPanel run={currentRun} panelResponse={sampler} />
+      <SelectedRunTomlPanel run={currentRun} />
+      <SelectedTaskTomlPanel task={selectedTask} />
       <CloneRunDialog
         open={cloneRunOpen}
         initialName={cloneInitialName}
