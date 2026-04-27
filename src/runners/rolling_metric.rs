@@ -23,16 +23,25 @@ impl Default for RollingMetric {
 
 impl RollingMetric {
     pub(crate) fn observe(&mut self, observation: f64) {
+        self.observe_weighted(observation, 1.0);
+    }
+
+    pub(crate) fn observe_weighted(&mut self, observation: f64, weight: f64) {
         if !observation.is_finite() || observation < 0.0 {
             return;
         }
+        if !weight.is_finite() || weight <= 0.0 {
+            return;
+        }
+        let effective_alpha = 1.0 - (1.0 - self.alpha).powf(weight);
+        let effective_alpha = effective_alpha.clamp(0.0, 1.0);
         match self.mean {
             Some(current_mean) => {
                 let delta = observation - current_mean;
-                let next_mean = current_mean + self.alpha * delta;
+                let next_mean = current_mean + effective_alpha * delta;
                 // EWMA-compatible variance update around the changing mean.
                 let next_variance =
-                    (1.0 - self.alpha) * (self.variance + self.alpha * delta * delta);
+                    (1.0 - effective_alpha) * (self.variance + effective_alpha * delta * delta);
                 self.mean = Some(next_mean);
                 self.variance = next_variance.max(0.0);
             }

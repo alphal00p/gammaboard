@@ -495,6 +495,7 @@ impl ControlPlaneStore for PgStore {
     async fn create_run(
         &self,
         name: &str,
+        run_toml: &str,
         integration_params: &JsonValue,
         target: Option<&JsonValue>,
         domain: &Domain,
@@ -507,15 +508,17 @@ impl ControlPlaneStore for PgStore {
             r#"
             INSERT INTO runs (
                 name,
+                run_toml,
                 integration_params,
                 target,
                 point_spec
             )
-            VALUES ($1, $2, $3, $4)
+            VALUES ($1, $2, $3, $4, $5)
             RETURNING id
             "#,
         )
         .bind(name)
+        .bind(run_toml)
         .bind(&sanitized_params)
         .bind(target)
         .bind(sqlx::types::Json(domain))

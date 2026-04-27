@@ -153,6 +153,12 @@ pub async fn create_run(
     let run_id = store
         .create_run(
             &processed.name,
+            &canonical_run_toml(
+                &processed.name,
+                resolved_integration_params,
+                processed.target.as_ref(),
+                &initial_tasks,
+            )?,
             &integration_params,
             processed.target.as_ref(),
             domain,
@@ -191,6 +197,12 @@ pub async fn clone_run(
             "source run {source_run_id} is missing integration_params"
         ))
     })?;
+    let integration_params_typed: IntegrationParams =
+        serde_json::from_value(integration_params.clone()).map_err(|err| {
+            ApiError::Internal(format!(
+                "source run {source_run_id} has invalid integration_params payload: {err}"
+            ))
+        })?;
 
     let snapshot = store
         .load_stage_snapshot(from_snapshot_id)
@@ -214,6 +226,12 @@ pub async fn clone_run(
     let run_id = store
         .create_run(
             new_name,
+            &canonical_run_toml(
+                new_name,
+                &integration_params_typed,
+                source_run.target.as_ref(),
+                &cloned_tasks,
+            )?,
             &integration_params,
             source_run.target.as_ref(),
             &domain,
@@ -240,6 +258,21 @@ pub async fn clone_run(
         from_snapshot_id,
         cloned_tasks: cloned_tasks.len(),
     })
+}
+
+fn canonical_run_toml(
+    name: &str,
+    integration_params: &IntegrationParams,
+    target: Option<&serde_json::Value>,
+    task_queue: &[RunTaskInput],
+) -> Result<String, ApiError> {
+    toml::to_string(&RunReproToml {
+        name: name.to_string(),
+        integration_params: integration_params.clone(),
+        target: target.cloned().filter(|value| !value.is_null()),
+        task_queue: task_queue.to_vec(),
+    })
+    .map_err(|err| ApiError::Internal(format!("failed to serialize run TOML: {err}")))
 }
 
 /// Appends validated tasks to an existing run.

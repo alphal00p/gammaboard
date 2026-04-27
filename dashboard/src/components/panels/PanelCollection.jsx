@@ -3228,37 +3228,7 @@ const TablePanel = ({
                 {bundleUploadError ? <Alert severity="error">{bundleUploadError}</Alert> : null}
               </Box>
             ) : null}
-            <Alert severity="warning">
-              GammaLoop histogram bundle is empty or incompatible with the current payload shape. Check backend
-              task-output errors for accumulator decode details.
-            </Alert>
-            <Box sx={{ mt: 1.5 }}>
-              <Typography variant="caption" color="text.secondary">
-                Debug: raw panel state from API
-              </Typography>
-              <Box
-                component="pre"
-                sx={{
-                  mt: 0.75,
-                  mb: 0,
-                  p: 1,
-                  maxHeight: 220,
-                  overflow: "auto",
-                  backgroundColor: "rgba(15, 23, 42, 0.04)",
-                  borderRadius: 1,
-                  fontSize: "0.75rem",
-                  lineHeight: 1.35,
-                }}
-              >
-                {formatDebugJson({
-                  panel_id: state?.panel_id,
-                  columns: state?.columns,
-                  rows: state?.rows,
-                  payload: state?.payload,
-                  selected_value: state?.selected_value,
-                })}
-              </Box>
-            </Box>
+            <Alert severity="info">Bundle is empty.</Alert>
           </CardContent>
         </Card>
       );

@@ -682,37 +682,37 @@ where
             if total_time_ms.is_finite() && total_time_ms >= 0.0 {
                 self.rolling
                     .total_ms_per_sample
-                    .observe(total_time_ms / samples);
+                    .observe_weighted(total_time_ms / samples, samples);
             }
             if fetch_time_ms.is_finite() && fetch_time_ms >= 0.0 {
                 self.rolling
                     .fetch_ms_per_sample
-                    .observe(fetch_time_ms / samples);
+                    .observe_weighted(fetch_time_ms / samples, samples);
             }
             if fetch_stall_time_ms.is_finite() && fetch_stall_time_ms >= 0.0 {
                 self.rolling
                     .fetch_stall_ms_per_sample
-                    .observe(fetch_stall_time_ms / samples);
+                    .observe_weighted(fetch_stall_time_ms / samples, samples);
             }
             if materialization_time_ms.is_finite() && materialization_time_ms >= 0.0 {
                 self.rolling
                     .materialization_ms_per_sample
-                    .observe(materialization_time_ms / samples);
+                    .observe_weighted(materialization_time_ms / samples, samples);
             }
             if eval_time_ms.is_finite() && eval_time_ms >= 0.0 {
                 self.rolling
                     .evaluate_ms_per_sample
-                    .observe(eval_time_ms / samples);
+                    .observe_weighted(eval_time_ms / samples, samples);
             }
             if submit_time_ms.is_finite() && submit_time_ms >= 0.0 {
                 self.rolling
                     .submit_ms_per_sample
-                    .observe(submit_time_ms / samples);
+                    .observe_weighted(submit_time_ms / samples, samples);
             }
             if submit_stall_time_ms.is_finite() && submit_stall_time_ms >= 0.0 {
                 self.rolling
                     .submit_stall_ms_per_sample
-                    .observe(submit_stall_time_ms / samples);
+                    .observe_weighted(submit_stall_time_ms / samples, samples);
             }
         }
     }
@@ -724,7 +724,10 @@ where
         }
         let compute = compute_time_ms.max(0.0);
         let idle_ratio = ((elapsed_ms - compute).max(0.0) / elapsed_ms).clamp(0.0, 1.0);
-        self.rolling.idle_ratio.observe(idle_ratio);
+        let baseline_ms = self.params.min_tick_time_ms.max(1) as f64;
+        self.rolling
+            .idle_ratio
+            .observe_weighted(idle_ratio, elapsed_ms / baseline_ms);
     }
 
     async fn flush_performance_snapshot_if_due(

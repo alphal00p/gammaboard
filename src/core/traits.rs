@@ -62,6 +62,7 @@ pub trait ControlPlaneStore: Send + Sync {
     async fn create_run(
         &self,
         name: &str,
+        run_toml: &str,
         integration_params: &JsonValue,
         target: Option<&JsonValue>,
         domain: &Domain,

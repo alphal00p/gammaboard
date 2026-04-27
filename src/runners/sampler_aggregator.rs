@@ -1099,10 +1099,11 @@ where
                     &mut self.window_state.eval_ms_per_batch,
                     total_eval_time_ms,
                 );
-                observe_value_pair(
+                observe_value_pair_weighted(
                     &mut self.runtime_state.rolling.eval_ms_per_sample,
                     &mut self.window_state.eval_ms_per_sample,
                     total_eval_time_ms / batch_samples as f64,
+                    batch_samples as f64,
                 );
                 self.queue
                     .observe_completed_eval_batch(batch_samples, total_eval_time_ms);
@@ -1134,10 +1135,11 @@ where
                 self.runtime_state.ingested_batches_total += 1;
                 self.runtime_state.ingested_samples_total += batch_samples as i64;
                 if batch_samples > 0 {
-                    observe_value_pair(
+                    observe_value_pair_weighted(
                         &mut self.runtime_state.rolling.training_ingest_ms_per_sample,
                         &mut self.window_state.training_ingest_ms_per_sample,
                         ingest_time_ms / batch_samples as f64,
+                        batch_samples as f64,
                     );
                 }
             }
@@ -1203,10 +1205,11 @@ where
             let produced_samples = batch.nr_samples;
             produced_samples_total += produced_samples as i64;
             if produced_samples > 0 {
-                observe_value_pair(
+                observe_value_pair_weighted(
                     &mut self.runtime_state.rolling.produce_ms_per_sample,
                     &mut self.window_state.produce_ms_per_sample,
                     produce_time_ms / produced_samples as f64,
+                    produced_samples as f64,
                 );
             }
             produced.push(
@@ -1478,6 +1481,19 @@ fn observe_value_pair(rolling: &mut RollingMetric, window: &mut WindowMetric, va
         return;
     }
     rolling.observe(value);
+    window.observe(value);
+}
+
+fn observe_value_pair_weighted(
+    rolling: &mut RollingMetric,
+    window: &mut WindowMetric,
+    value: f64,
+    weight: f64,
+) {
+    if !value.is_finite() || value < 0.0 || !weight.is_finite() || weight <= 0.0 {
+        return;
+    }
+    rolling.observe_weighted(value, weight);
     window.observe(value);
 }
 

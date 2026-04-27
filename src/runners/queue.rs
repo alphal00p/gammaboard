@@ -282,7 +282,7 @@ where
             return;
         }
         self.eval_ms_per_sample
-            .observe(total_eval_time_ms / batch_size as f64);
+            .observe_weighted(total_eval_time_ms / batch_size as f64, batch_size as f64);
         self.tune_batch_size();
     }
 
@@ -1485,6 +1485,7 @@ mod tests {
         async fn create_run(
             &self,
             _name: &str,
+            _run_toml: &str,
             _integration_params: &JsonValue,
             _target: Option<&JsonValue>,
             _domain: &Domain,

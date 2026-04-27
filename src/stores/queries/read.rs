@@ -49,6 +49,7 @@ fn id_text(value: impl Display) -> String {
 struct RunProgressBaseRow {
     run_id: i32,
     run_name: String,
+    run_toml: Option<String>,
     root_stage_snapshot_id: Option<i64>,
     desired_assignment_count: i64,
     active_worker_count: i64,
@@ -91,6 +92,7 @@ impl RunProgressBaseRow {
         RunProgress {
             run_id: self.run_id,
             run_name: self.run_name,
+            run_toml: self.run_toml,
             root_stage_snapshot_id: self.root_stage_snapshot_id.map(id_text),
             lifecycle_state,
             desired_assignment_count: self.desired_assignment_count,
@@ -341,6 +343,7 @@ fn run_progress_sql(run_where_clause: &str) -> String {
         SELECT
             r.id as run_id,
             r.name as run_name,
+            r.run_toml,
             root.root_stage_snapshot_id,
             COALESCE(a.desired_assignment_count, 0) as desired_assignment_count,
             COALESCE(a.active_worker_count, 0) as active_worker_count,

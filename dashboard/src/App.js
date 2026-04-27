@@ -7,6 +7,7 @@ import LogsWorkspace from "./components/LogsWorkspace";
 import PerformanceWorkspace from "./components/PerformanceWorkspace";
 import RunInfo from "./components/RunInfo";
 import SamplerAggregatorPanel from "./components/SamplerAggregatorPanel";
+import SelectedRunTomlPanel from "./components/SelectedRunTomlPanel";
 import SelectedTaskTomlPanel from "./components/SelectedTaskTomlPanel";
 import TaskOutputPanel from "./components/TaskOutputPanel";
 import TaskQueuePanel from "./components/TaskQueuePanel";
@@ -377,6 +378,7 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
         }
       />
       <RunInfo runId={selectedRun} />
+      <SelectedRunTomlPanel run={currentRun} />
       <SelectedTaskTomlPanel task={selectedTask} />
       <TaskOutputPanel
         key={`progress-${selectedTask?.id ?? "no-task"}`}
