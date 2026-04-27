@@ -1,23 +1,33 @@
-bin := "../../target/dev-optim/gammaboard"
-release_bin := "../../target/release/gammaboard"
-deploy_cfg := "config/deploy.toml"
-runtime_cfg := "../../configs/runtime/default.toml"
+bin := "./target/dev-optim/gammaboard"
+release_bin := "./target/release/gammaboard"
+deploy_cfg := "ops/local/config/deploy.toml"
+runtime_cfg := "configs/runtime/default.toml"
 
 deploy mode="dev":
     #!/usr/bin/env bash
     set -euo pipefail
 
-    just --justfile ../../justfile build-frontend
+    cd ../..
+
+    just build-frontend
     if [[ "{{mode}}" == "release" ]]; then
-        just --justfile ../../justfile build-backend-release
+        just build-backend-release
         {{release_bin}} --runtime-config "{{runtime_cfg}}" deploy up --deploy-config "{{deploy_cfg}}" --mode "{{mode}}"
     else
-        just --justfile ../../justfile build-backend
+        just build-backend
         {{bin}} --runtime-config "{{runtime_cfg}}" deploy up --deploy-config "{{deploy_cfg}}" --mode "{{mode}}"
     fi
 
 status:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    cd ../..
     {{bin}} --runtime-config "{{runtime_cfg}}" deploy status --deploy-config "{{deploy_cfg}}"
 
 down:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    cd ../..
     {{bin}} --runtime-config "{{runtime_cfg}}" deploy down --deploy-config "{{deploy_cfg}}"
