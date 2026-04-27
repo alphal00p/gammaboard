@@ -1,6 +1,6 @@
 # UBELIX Deployment Plan
 
-This directory contains first-pass Slurm jobs for testing `gammaloop` and `gammaboard` on UBELIX with an Apptainer image built from [`gammaboard.def`](/home/cedricsigrist/Workspace/repos/gammaboard/gammaboard.def).
+This directory contains the current simplified UBELIX workflow: one Apptainer definition file that installs all dependencies, clones the latest `gammaloop` and `gammaboard` from GitHub, builds both, and installs the resulting binaries into the image.
 
 ## Deployment Decision
 
@@ -18,7 +18,9 @@ The frontend can be separated later, but the first deployment should serve front
 
 ## Files
 
-- `slurm_smoke_container.sbatch`: no-DB smoke check (`gammaloop`/`gammaboard` version/help).
+- `gammaboard.def`: installs dependencies, clones latest `gammaloop` and `gammaboard`, and builds both into one runtime image.
+- `build_latest_binaries.sbatch`: runs `apptainer build <output> <def>` with hardcoded workspace paths.
+- `slurm_smoke_container.sbatch`: no-DB smoke check (`gammaloop`/`gammaboard` version/help) for a runtime image.
 - `slurm_node_worker.sbatch`: long-running worker (`node run`) for sampler/evaluator.
 - `slurm_hello_control.sbatch`: creates a tiny run, appends one sample task, auto-assigns workers, waits for completion.
 - `submit_hello.sh`: submits one sampler job + evaluator array + control job with dependencies.
@@ -58,31 +60,40 @@ UBELIX worker jobs + optional dashboard/API job
 
 Use this once we need run state to survive allocation expiry without copying a local Postgres data directory, or when multiple independent allocations should attach to the same control plane.
 
-## 1) Build Image On UBELIX
+## 1) Build Latest Runtime Image
 
-Recommended: build the image through Slurm, not on a login node, if the build takes on the order of tens of minutes. A ~30 minute container build is scheduler-managed compute work.
+Recommended: use the single checked-in definition file and let Apptainer do the full dependency install + clone + build inside one image build.
 
 Why:
 
-- UBELIX is a Slurm cluster; compute-intensive work is supposed to run on allocated compute nodes.
-- Apptainer Docker conversion can be heavy on CPU, memory, and temporary storage.
-- A batch job gives you explicit runtime/memory limits and clean logs.
+- `gammaloop` needs system build dependencies that are not guaranteed to exist on UBELIX by default.
+- A single `.def` is the simplest workflow for development.
+- There is no separate builder image or extra packaging step to manage.
 
-Use the checked-in batch wrapper:
+The definition file is:
+
+- [gammaboard.def](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/gammaboard.def)
+
+Build the latest runtime image with:
 
 ```bash
-export PROJECT_ROOT=/storage/workspaces/<group>/<workspace>/gammaboard
-sbatch ops/ubelix/build_apptainer.sbatch
+sbatch ops/ubelix/build_latest_binaries.sbatch
 ```
 
-The script writes the output `.sif` to `${PROJECT_ROOT}/gammaboard.sif` by default and uses scratch-backed Apptainer temp/cache directories.
+Edit the config block at the top of [build_latest_binaries.sbatch](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/build_latest_binaries.sbatch) directly on UBELIX if you want to change the workspace path or output filename.
 
-You can override output paths, for example:
+By default the Slurm job runs:
 
 ```bash
-export PROJECT_ROOT=/storage/workspaces/<group>/<workspace>/gammaboard
-export OUTPUT_SIF=/storage/workspaces/<group>/<workspace>/images/gammaboard-$(date +%Y%m%d).sif
-sbatch ops/ubelix/build_apptainer.sbatch
+apptainer build --notest "${WORKSPACE_PATH}/${OUT_FILE}" "${WORKSPACE_PATH}/${DEF_FILE}"
+```
+
+The output layout is simply:
+
+```text
+<WORKSPACE_PATH>/
+  images/
+    gammaboard-latest.sif
 ```
 
 If you want to debug the build interactively first, use an interactive Slurm allocation and then run the same `apptainer build ...` command there. Avoid doing the full build on the login node.
@@ -93,18 +104,14 @@ UBELIX specifically recommends scratch-backed cache dirs when pulling or buildin
 mkdir -p /scratch/network/users/$USER
 export APPTAINER_TMPDIR=/scratch/network/users/$USER
 export APPTAINER_CACHEDIR=/scratch/network/users/$USER
-apptainer build --notest gammaboard.sif gammaboard.def
+apptainer build --notest gammaboard-latest.sif ops/ubelix/gammaboard.def
 ```
 
-Packaging model:
+No persistent source checkout on UBELIX is required for this flow. The only persistent artifacts are the `.def` file, Slurm logs, and the built runtime image.
 
-- Build input: the repo checkout plus `gammaboard.def` on UBELIX storage.
-- Build job: a single `sbatch` script that changes into the repo and runs `apptainer build`.
-- Build artifact: a `.sif` written to workspace/scratch storage, then reused by worker/control jobs.
+## 2) Runtime Image And Smoke Test
 
-For repeatable builds, keep the `.def` file and the source repos in workspace storage, and treat the `.sif` as a produced artifact, not as something rebuilt inside every run.
-
-## 2) Smoke Test (No Database Needed)
+Once you have such a runtime image, smoke test it with:
 
 ```bash
 sbatch ops/ubelix/slurm_smoke_container.sbatch
