@@ -8,19 +8,85 @@ use std::{error::Error, fmt};
 use crate::evaluation::AccumulatorState;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WeightFactor {
+    pub label: String,
+    pub value: f64,
+}
+
+impl WeightFactor {
+    pub fn new(label: impl Into<String>, value: f64) -> Self {
+        Self {
+            label: label.into(),
+            value,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Point {
     pub continuous: Vec<f64>,
     pub discrete: Vec<i64>,
-    pub weight: f64,
+    pub weight_factors: Vec<WeightFactor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrand_value_re: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrand_value_im: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameterization_jacobian: Option<f64>,
 }
 
 impl Point {
-    pub fn new(continuous: Vec<f64>, discrete: Vec<i64>, weight: f64) -> Self {
+    pub fn new(continuous: Vec<f64>, discrete: Vec<i64>, sampler_weight: f64) -> Self {
         Self {
             continuous,
             discrete,
-            weight,
+            weight_factors: vec![WeightFactor::new("sampler_weight", sampler_weight)],
+            integrand_value_re: None,
+            integrand_value_im: None,
+            parameterization_jacobian: None,
         }
+    }
+
+    pub fn total_weight(&self) -> f64 {
+        self.weight_factors
+            .iter()
+            .map(|factor| factor.value)
+            .product()
+    }
+
+    pub fn add_weight_factor(&mut self, label: impl Into<String>, value: f64) {
+        self.weight_factors.push(WeightFactor::new(label, value));
+    }
+
+    pub fn factor_value(&self, label: &str) -> Option<f64> {
+        self.weight_factors
+            .iter()
+            .find(|factor| factor.label == label)
+            .map(|factor| factor.value)
+    }
+
+    pub fn factor_product_matching(&self, mut predicate: impl FnMut(&str) -> bool) -> Option<f64> {
+        let mut product = 1.0_f64;
+        let mut matched = false;
+        for factor in &self.weight_factors {
+            if predicate(factor.label.as_str()) {
+                product *= factor.value;
+                matched = true;
+            }
+        }
+        matched.then_some(product)
+    }
+
+    pub fn clone_with_continuous_and_added_factor(
+        &self,
+        continuous: Vec<f64>,
+        label: impl Into<String>,
+        value: f64,
+    ) -> Self {
+        let mut next = self.clone();
+        next.continuous = continuous;
+        next.add_weight_factor(label, value);
+        next
     }
 }
 
@@ -83,7 +149,7 @@ impl Batch {
     }
 
     pub fn weights(&self) -> Vec<f64> {
-        self.points.iter().map(|point| point.weight).collect()
+        self.points.iter().map(Point::total_weight).collect()
     }
 
     pub fn to_json(&self) -> JsonValue {

@@ -1,5 +1,5 @@
 use crate::core::{BuildError, EngineError};
-use crate::evaluation::{Batch, BatchTransform, Point};
+use crate::evaluation::{Batch, BatchTransform};
 use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
@@ -78,10 +78,10 @@ impl BatchTransform for SphericalBatchTransform {
             ];
 
             let jacobian = 4.0 * PI * r * r * dr_du_r;
-            transformed_points.push(Point::new(
+            transformed_points.push(point.clone_with_continuous_and_added_factor(
                 transformed_continuous,
-                point.discrete.clone(),
-                point.weight * jacobian.abs(),
+                "spherical_jacobian",
+                jacobian.abs(),
             ));
         }
 

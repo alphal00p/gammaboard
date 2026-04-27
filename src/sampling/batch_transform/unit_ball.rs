@@ -1,5 +1,5 @@
 use crate::core::{BuildError, EngineError};
-use crate::evaluation::{Batch, BatchTransform, Point};
+use crate::evaluation::{Batch, BatchTransform};
 use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
@@ -61,10 +61,10 @@ impl BatchTransform for UnitBallBatchTransform {
             }
 
             let (mapped, jacobian) = unit_hypercube_to_unit_ball(&unit);
-            transformed_points.push(Point::new(
+            transformed_points.push(point.clone_with_continuous_and_added_factor(
                 mapped,
-                point.discrete.clone(),
-                point.weight * jacobian.abs(),
+                "unit_ball_jacobian",
+                jacobian.abs(),
             ));
         }
 

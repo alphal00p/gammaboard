@@ -161,7 +161,7 @@ impl Evaluator for SymbolicaEngine {
             let weighted_values = out
                 .into_iter()
                 .zip(batch.points().iter())
-                .map(|(value, point)| value * point.weight)
+                .map(|(value, point)| value * point.total_weight())
                 .collect();
             Ok(BatchResult::new(Some(weighted_values), observable_state))
         } else {

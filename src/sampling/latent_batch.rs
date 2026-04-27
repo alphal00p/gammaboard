@@ -87,7 +87,10 @@ impl LatentBatchPayload {
             discrete_map.push(signature_idx);
             continuous_layouts.push(point.continuous.len());
             continuous_values.extend_from_slice(&point.continuous);
-            weights.push(point.weight);
+            let sampler_weight = point
+                .factor_value("sampler_weight")
+                .expect("batch point missing sampler_weight factor");
+            weights.push(sampler_weight);
         }
 
         Self::IndexedBatch {

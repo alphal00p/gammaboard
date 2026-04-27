@@ -35,7 +35,7 @@ pub struct ComplexAccumulatorState {
 
 impl ComplexAccumulatorState {
     pub fn add_sample(&mut self, value: Complex64, point: &Point) {
-        let weight = point.weight.abs();
+        let weight = point.total_weight().abs();
         let weighted_real = value.re * weight;
         let weighted_imag = value.im * weight;
         let weighted_abs = value.norm() * weight;

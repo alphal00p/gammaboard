@@ -34,7 +34,7 @@ pub trait ScalarSampleEvaluator {
             let value = self.eval_scalar_sample(batch, sample_idx)?;
             accumulator.ingest_scalar(value, point);
             if let Some(values) = training_values.as_mut() {
-                values.push(value * point.weight);
+                values.push(value * point.total_weight());
             }
         }
         Ok(training_values)
@@ -60,7 +60,7 @@ pub trait ComplexSampleEvaluator {
             let value = self.eval_complex_sample(batch, sample_idx)?;
             accumulator.ingest_complex(value, point);
             if let Some(values) = training_values.as_mut() {
-                values.push(training_projection(value) * point.weight);
+                values.push(training_projection(value) * point.total_weight());
             }
         }
         Ok(training_values)
@@ -86,7 +86,7 @@ pub trait ScalarValueEvaluator {
         for (value, point) in values.iter().zip(points.iter()) {
             accumulator.ingest_scalar(*value, point);
             if let Some(training_values) = training_values.as_mut() {
-                training_values.push(*value * point.weight);
+                training_values.push(*value * point.total_weight());
             }
         }
         Ok(training_values)
@@ -115,7 +115,7 @@ pub trait ComplexValueEvaluator {
         for (value, point) in values.iter().zip(points.iter()) {
             accumulator.ingest_complex(*value, point);
             if let Some(training_values) = training_values.as_mut() {
-                training_values.push(training_projection(*value) * point.weight);
+                training_values.push(training_projection(*value) * point.total_weight());
             }
         }
         Ok(training_values)

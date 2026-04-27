@@ -41,7 +41,7 @@ impl FullScalarAccumulatorState {
 
 impl IngestScalar for FullScalarAccumulatorState {
     fn ingest_scalar(&mut self, value: f64, point: &Point) {
-        self.push(value * point.weight.abs());
+        self.push(value * point.total_weight().abs());
     }
 }
 
@@ -58,7 +58,7 @@ impl FullComplexAccumulatorState {
 
 impl IngestComplex for FullComplexAccumulatorState {
     fn ingest_complex(&mut self, value: Complex64, point: &Point) {
-        let weight = point.weight.abs();
+        let weight = point.total_weight().abs();
         self.push(ComplexValue {
             re: value.re * weight,
             im: value.im * weight,

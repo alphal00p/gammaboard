@@ -405,7 +405,14 @@ impl GammaLoopEvaluator {
     ) -> GammaLoopAccumulatorState {
         let mut estimate = ComplexAccumulatorState::default();
         for (result, point) in evaluation_results.iter().zip(points.iter()) {
-            estimate.add_sample(Self::project_result_value(result), point);
+            let mut debug_point = point.clone();
+            debug_point.integrand_value_re = Some(result.integrand_result.re.0);
+            debug_point.integrand_value_im = Some(result.integrand_result.im.0);
+            if let Some(jacobian) = result.parameterization_jacobian.map(|jac| jac.0) {
+                debug_point.parameterization_jacobian = Some(jacobian);
+                debug_point.add_weight_factor("gammaloop_parameterization_jacobian", jacobian);
+            }
+            estimate.add_sample(Self::project_result_value(result), &debug_point);
         }
         GammaLoopAccumulatorState {
             bundle: self
@@ -589,7 +596,7 @@ impl Evaluator for GammaLoopEvaluator {
                                     .project(Self::project_result_value(result))
                             })
                             .zip(points.iter())
-                            .map(|(value, point)| value * point.weight)
+                            .map(|(value, point)| value * point.total_weight())
                             .collect(),
                     )
                 } else {

@@ -22,7 +22,7 @@ pub struct ScalarAccumulatorState {
 
 impl ScalarAccumulatorState {
     pub fn add_sample(&mut self, value: f64, point: &Point) {
-        let weight = point.weight.abs();
+        let weight = point.total_weight().abs();
         let weighted_value = value * weight;
         let weighted_sq = weighted_value * weighted_value;
         if !weighted_value.is_finite() || !weighted_sq.is_finite() {

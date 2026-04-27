@@ -15,6 +15,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 ## Core Rules
 - PostgreSQL is the source of truth for runs, tasks, batches, nodes, logs, and snapshots.
 - Concrete evaluator batches are `Vec<Point>`, not rectangular matrices.
+- Point weights are stored as named `weight_factors`; effective sample weight is the product of those factors (`total_weight`).
 - Run-global layout metadata uses `Domain`, not `PointSpec`.
 - Runs are driven by persisted `run_tasks`. The evaluator work queue is lower-level and distinct.
 - `RunSpec` should keep only immutable run-global state. Task-varying sampler, materializer, batch-transform, and accumulator choices belong on tasks or in stored integration defaults, not on `RunSpec`.
@@ -119,6 +120,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Panel specs may include simple width hints such as `compact`, `half`, and `full`.
 - Run info, task output, worker details, performance, and engine config should stay backend-owned.
 - Tick breakdown bar panels must visualize only synchronous runner-tick work. Concurrent pipeline/queue work and wait/stall time must be surfaced in separate metrics panels, not stacked into the tick bar.
+- Max-weight diagnostics should keep impact ranking based on weighted products, while exposing decomposed factor values (for example integrand and jacobians) when available.
 - Dashboard auth is operator-oriented: read-only endpoints may stay open, while explicit steering endpoints require admin auth.
 - The Runs tab `Copy Run TOML` action is a read-only export and should return run-add compatible TOML including run config plus successfully completed tasks as `[[task_queue]]`.
 - Dashboard steering should use explicit endpoints such as `pause`, `assign`, `unassign`, `append task`, `remove pending task`, `create run`, `clone run`, and `remove run`, not generic patch endpoints.

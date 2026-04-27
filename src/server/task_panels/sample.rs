@@ -671,6 +671,8 @@ fn max_weight_points_panel(accumulator: AccumulatorState) -> Option<PanelState> 
     let columns = vec![
         "Component".to_string(),
         "Sign".to_string(),
+        "Integrand".to_string(),
+        "Jacobian".to_string(),
         "Max Weighted Value".to_string(),
         "Impact".to_string(),
         "Point".to_string(),
@@ -791,20 +793,51 @@ fn push_max_weight_row(
     if point.is_none() && max_weighted_value == 0.0 {
         return;
     }
+    let (integrand, jacobian) = integrand_and_jacobian_for_component(point, component);
     rows.push(vec![
         JsonValue::String(component.to_string()),
         JsonValue::String(sign.to_string()),
+        json_number_or_na(integrand),
+        json_number_or_na(jacobian),
         JsonValue::from(max_weighted_value),
         JsonValue::from(impact),
         JsonValue::String(format_point(point)),
     ]);
 }
 
+fn integrand_and_jacobian_for_component(
+    point: Option<&Point>,
+    component: &str,
+) -> (Option<f64>, Option<f64>) {
+    let Some(point) = point else {
+        return (None, None);
+    };
+    let integrand = match component {
+        "re" => point.integrand_value_re,
+        "im" => point.integrand_value_im,
+        "scalar" => point.integrand_value_re,
+        _ => None,
+    };
+    let jacobian = point
+        .factor_product_matching(|label| label.contains("jacobian"))
+        .or(point.parameterization_jacobian);
+    (integrand, jacobian)
+}
+
+fn json_number_or_na(value: Option<f64>) -> JsonValue {
+    match value {
+        Some(number) if number.is_finite() => JsonValue::from(number),
+        _ => JsonValue::String("n/a".to_string()),
+    }
+}
+
 fn format_point(point: Option<&Point>) -> String {
     match point {
         Some(point) => format!(
             "d={:?}, c={:?}, w={:+.6e}",
-            point.discrete, point.continuous, point.weight
+            point.discrete,
+            point.continuous,
+            point.total_weight()
         ),
         None => "N/A".to_string(),
     }

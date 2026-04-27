@@ -965,7 +965,7 @@ mod tests {
         assert!(current.iter().any(|panel| matches!(
             panel,
             PanelState::Table { panel_id, columns, .. }
-                if panel_id == "max_weight_points" && columns.len() == 5
+                if panel_id == "max_weight_points" && columns.len() == 7
         )));
     }
 
