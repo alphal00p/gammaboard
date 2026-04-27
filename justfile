@@ -19,7 +19,31 @@ build-frontend:
     if [[ ! -x node_modules/.bin/react-scripts ]]; then
         npm ci
     fi
+
+    stamp_file=".build-input.hash"
+    current_hash="$(
+        {
+            printf '%s\n' package.json
+            printf '%s\n' package-lock.json
+            find src -type f 2>/dev/null | sort
+            find public -type f 2>/dev/null | sort
+        } | while IFS= read -r path; do
+            if [[ -f "${path}" ]]; then
+                sha256sum "${path}"
+            fi
+        done | sha256sum | awk '{print $1}'
+    )"
+
+    if [[ -d build && -f "${stamp_file}" ]]; then
+        previous_hash="$(cat "${stamp_file}")"
+        if [[ "${previous_hash}" == "${current_hash}" ]]; then
+            echo "frontend build unchanged; skipping npm run build"
+            exit 0
+        fi
+    fi
+
     npm run build
+    printf '%s\n' "${current_hash}" > "${stamp_file}"
 
 serve-backend:
     {{bin}} server
