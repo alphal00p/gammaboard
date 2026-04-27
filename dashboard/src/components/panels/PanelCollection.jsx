@@ -476,6 +476,13 @@ const isEstimateValue = (value) =>
   Number.isFinite(Number(value.value)) &&
   Number.isFinite(Number(value.error));
 
+const isTargetComparisonValue = (value) =>
+  isObject(value) &&
+  value.kind === "target_comparison" &&
+  Number.isFinite(Number(value.value)) &&
+  Number.isFinite(Number(value.error)) &&
+  Number.isFinite(Number(value.target));
+
 const renderStructuredValue = (value) => {
   if (value == null) return "none";
   if (typeof value === "number") return formatCompactNumber(value);
@@ -1808,11 +1815,6 @@ const normalizeHistogramSelectionState = (bundle, histogramName) => {
   };
 };
 
-const toExponential8 = (value) => {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric.toExponential(8) : "0.00000000e+00";
-};
-
 const downloadTextFile = (filename, contents, mimeType = "text/plain;charset=utf-8") => {
   const blob = new Blob([contents], { type: mimeType });
   const url = URL.createObjectURL(blob);
@@ -1824,6 +1826,30 @@ const downloadTextFile = (filename, contents, mimeType = "text/plain;charset=utf
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
+};
+
+const requestHistogramBundleExport = async (payload, format) => {
+  const response = await fetch("/api/histogram-bundle/export", {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ payload, format }),
+  });
+  if (!response.ok) {
+    let message = `HTTP ${response.status}`;
+    try {
+      const body = await response.json();
+      if (typeof body?.error === "string" && body.error.trim()) {
+        message = body.error.trim();
+      }
+    } catch {
+      // Keep fallback message.
+    }
+    throw new Error(message);
+  }
+  return response.json();
 };
 
 const sanitizeFigureFilename = (value, fallback = "figure") => {
@@ -1956,45 +1982,6 @@ const FigureExportActions = ({
       </Button>
     </Stack>
   );
-};
-
-const buildHistogramHwUBlock = (name, histogram) => {
-  const bins = asArray(histogram?.bins);
-  const title = histogram?.title ?? name ?? "histogram";
-  const xAxisMode = histogram?.log_x_axis ? "LOG" : "LIN";
-  const yAxisMode = histogram?.log_y_axis ? "LOG" : "LIN";
-  const typeDescription = histogram?.type_description ?? "HwU";
-  const xMin = Number.isFinite(Number(histogram?.x_min)) ? Number(histogram.x_min) : Number(bins[0]?.start);
-  const xMax = Number.isFinite(Number(histogram?.x_max))
-    ? Number(histogram.x_max)
-    : Number(bins[bins.length - 1]?.stop);
-  return [
-    "##& xmin & xmax & central value & dy &",
-    "",
-    `<histogram> ${bins.length} "${title} |X_AXIS@${xAxisMode} |Y_AXIS@${yAxisMode} |TYPE@${typeDescription}"`,
-    ...bins.map((bin) =>
-      [
-        `  ${toExponential8(Number(bin?.start) ?? xMin)}`,
-        `${toExponential8(Number(bin?.stop) ?? xMax)}`,
-        `${toExponential8(Number(bin?.value) ?? 0)}`,
-        `${toExponential8(Number(bin?.error) ?? 0)}`,
-      ].join("   "),
-    ),
-    "<\\histogram>",
-    "",
-  ].join("\n");
-};
-
-const buildHistogramBundleJson = (payload) => ({
-  primary_histogram_name: payload?.primary_histogram_name ?? null,
-  histograms: payload?.histograms ?? {},
-});
-
-const buildHistogramBundleHwU = (payload) => {
-  const histograms = payload?.histograms && typeof payload.histograms === "object" ? payload.histograms : {};
-  return Object.entries(histograms)
-    .map(([name, histogram]) => buildHistogramHwUBlock(name, histogram))
-    .join("\n");
 };
 
 const buildHistogramYDomain = (bins, scale, visibleXRange = null) => {
@@ -3536,14 +3523,32 @@ const TablePanel = ({
   const selectableRows = hasRowKeys;
   const isDownloadableHistogramBundle =
     payload?.histograms && typeof payload.histograms === "object" && !Array.isArray(payload.histograms);
-  const bundleJson = isDownloadableHistogramBundle ? buildHistogramBundleJson(payload) : null;
-  const handleDownloadJson = () => {
-    const filename = `${state?.panel_id ?? "histogram_bundle"}.json`;
-    downloadTextFile(filename, `${JSON.stringify(bundleJson, null, 2)}\n`, "application/json;charset=utf-8");
-  };
-  const handleDownloadHwU = () => {
-    const filename = `${state?.panel_id ?? "histogram_bundle"}.HwU`;
-    downloadTextFile(filename, buildHistogramBundleHwU(payload));
+  const handleDownload = async (format) => {
+    if (!isDownloadableHistogramBundle) return;
+    try {
+      const exported = await requestHistogramBundleExport(payload, format);
+      const filename =
+        typeof exported?.filename === "string" && exported.filename.trim().length > 0
+          ? exported.filename
+          : `${state?.panel_id ?? "histogram_bundle"}.${format === "hwu" ? "HwU" : "json"}`;
+      const contents =
+        typeof exported?.contents === "string"
+          ? exported.contents
+          : format === "json"
+            ? `${JSON.stringify(payload, null, 2)}\n`
+            : "";
+      const mimeType =
+        typeof exported?.mime_type === "string" && exported.mime_type.trim().length > 0
+          ? exported.mime_type
+          : format === "json"
+            ? "application/json;charset=utf-8"
+            : "text/plain;charset=utf-8";
+      downloadTextFile(filename, contents, mimeType);
+    } catch (error) {
+      // Keep failure visible during operator workflows.
+      const message = error instanceof Error ? error.message : String(error);
+      alert(`Failed to export histogram bundle (${format.toUpperCase()}): ${message}`);
+    }
   };
   const renderTableCell = (row, columnIndex) => {
     if (columnIndex === centralValueIndex && errorIndex >= 0) {
@@ -3558,10 +3563,10 @@ const TablePanel = ({
           <Typography variant="subtitle1">{title}</Typography>
           {isDownloadableHistogramBundle ? (
             <Stack direction="row" spacing={1} alignItems="center">
-              <Button size="small" variant="outlined" onClick={handleDownloadJson}>
+              <Button size="small" variant="outlined" onClick={() => handleDownload("json")}>
                 JSON
               </Button>
-              <Button size="small" variant="outlined" onClick={handleDownloadHwU}>
+              <Button size="small" variant="outlined" onClick={() => handleDownload("hwu")}>
                 HwU
               </Button>
             </Stack>
@@ -3723,6 +3728,8 @@ const KeyValuePanel = ({ title, state }) => (
             </Typography>
             {isEstimateValue(entry.value) ? (
               <EstimateValueBlock value={entry.value} />
+            ) : isTargetComparisonValue(entry.value) ? (
+              <TargetComparisonValueBlock value={entry.value} />
             ) : entry?.key === "domain" && isObject(entry.value) ? (
               <Box sx={{ minWidth: 0 }}>
                 <Box component="details">
@@ -3803,6 +3810,51 @@ const EstimateValueBlock = ({ value }) => {
           }}
         >
           {`value = ${formatF64Full(central, "n/a")}\nerror = ${formatF64Full(error, "n/a")}`}
+        </Typography>
+      </Box>
+    </Box>
+  );
+};
+
+const TargetComparisonValueBlock = ({ value }) => {
+  const central = Number(value?.value);
+  const error = Number(value?.error);
+  const target = Number(value?.target);
+  const deltaPercent = Number(value?.delta_percent);
+  const deltaSigma = Number(value?.delta_sigma);
+  const estimate = formatEstimateDisplay(central, error, "n/a");
+  const targetText = formatScientific(target, 4, "n/a");
+  const deltaPercentText = Number.isFinite(deltaPercent) ? formatScientific(deltaPercent, 4, "n/a") : "n/a";
+  const deltaSigmaText = Number.isFinite(deltaSigma) ? formatScientific(deltaSigma, 4, "n/a") : "n/a";
+  const latex = `${estimate.latex_with_relative || estimate.latex}\\;\\mid\\;t=${targetText},\\;\\Delta=${deltaPercentText}\\%,\\;${deltaSigmaText}\\sigma`;
+  return (
+    <Box sx={{ minWidth: 0 }}>
+      <Box
+        sx={{
+          fontSize: "1.05rem",
+          fontWeight: 700,
+          lineHeight: 1.35,
+          whiteSpace: "nowrap",
+          overflowX: "auto",
+          pb: 0.25,
+        }}
+      >
+        <LatexFormula latex={latex} display={false} fallbackPrefix="Target Comparison" />
+      </Box>
+      <Box component="details" sx={{ mt: 0.5 }}>
+        <Box component="summary" sx={{ cursor: "pointer", fontSize: "0.8rem", color: "text.secondary" }}>
+          Full precision (f64)
+        </Box>
+        <Typography
+          variant="caption"
+          sx={{
+            mt: 0.5,
+            display: "block",
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace",
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          {`value = ${formatF64Full(central, "n/a")}\nerror = ${formatF64Full(error, "n/a")}\ntarget = ${formatF64Full(target, "n/a")}\ndelta_percent = ${formatF64Full(deltaPercent, "n/a")}\ndelta_sigma = ${formatF64Full(deltaSigma, "n/a")}`}
         </Typography>
       </Box>
     </Box>

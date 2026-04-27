@@ -1006,8 +1006,24 @@ mod tests {
             panel,
             PanelState::KeyValue { panel_id, entries }
                 if panel_id == "estimate_summary"
-                    && entries.iter().any(|entry| entry.key == "target_delta_real_sigma")
-                    && entries.iter().any(|entry| entry.key == "target_delta_imag_sigma")
+                    && entries.iter().any(|entry| {
+                        entry.key == "target_comparison_real"
+                            && entry
+                                .value
+                                .as_object()
+                                .and_then(|value| value.get("kind"))
+                                .and_then(JsonValue::as_str)
+                                == Some("target_comparison")
+                    })
+                    && entries.iter().any(|entry| {
+                        entry.key == "target_comparison_imag"
+                            && entry
+                                .value
+                                .as_object()
+                                .and_then(|value| value.get("kind"))
+                                .and_then(JsonValue::as_str)
+                                == Some("target_comparison")
+                    })
         )));
     }
 

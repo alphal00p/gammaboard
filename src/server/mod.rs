@@ -36,8 +36,10 @@ use axum::{
     response::{IntoResponse, Json, Response},
     routing::{delete, get, post},
 };
+use gammalooprs::observables::ObservableSnapshotBundle;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 use std::{
     fs,
     fs::File,
@@ -293,6 +295,19 @@ struct RunTaskResponse {
     root_stage_snapshot_id: Option<i64>,
 }
 
+#[derive(Deserialize)]
+struct HistogramBundleExportRequest {
+    payload: JsonValue,
+    format: String,
+}
+
+#[derive(Serialize)]
+struct HistogramBundleExportResponse {
+    filename: String,
+    mime_type: String,
+    contents: String,
+}
+
 fn build_app(state: AppState) -> Router {
     let public_api_routes = Router::new()
         .route("/health", get(health_check))
@@ -334,7 +349,8 @@ fn build_app(state: AppState) -> Router {
         .route(
             "/nodes/:id/performance/sampler-aggregator",
             get(get_node_sampler_performance_history),
-        );
+        )
+        .route("/histogram-bundle/export", post(export_histogram_bundle));
 
     let protected_api_routes = Router::new()
         .route("/runs", post(create_run))
@@ -1367,4 +1383,66 @@ async fn get_node_sampler_performance_history(
         .get_worker_sampler_performance_history(&node_name, limit)
         .await?;
     json_response(build_sampler_performance_response(Some(node_name), payload))
+}
+
+async fn export_histogram_bundle(
+    AxumJson(request): AxumJson<HistogramBundleExportRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let format = request.format.trim().to_ascii_lowercase();
+    let wrapper = if request.payload.get("histograms").is_some() {
+        request.payload
+    } else {
+        serde_json::json!({
+            "histograms": request.payload,
+        })
+    };
+    let primary_histogram_name = wrapper
+        .get("primary_histogram_name")
+        .and_then(JsonValue::as_str)
+        .map(str::to_string);
+    let bundle: ObservableSnapshotBundle = serde_json::from_value(wrapper).map_err(|err| {
+        ApiError::BadRequest(format!(
+            "invalid histogram bundle payload for export: {err}"
+        ))
+    })?;
+
+    let response = match format.as_str() {
+        "json" => {
+            let payload = serde_json::json!({
+                "primary_histogram_name": primary_histogram_name,
+                "histograms": bundle.histograms,
+            });
+            let contents = serde_json::to_string_pretty(&payload).map_err(|err| {
+                ApiError::Internal(format!("failed to serialize histogram bundle json: {err}"))
+            })?;
+            HistogramBundleExportResponse {
+                filename: "histogram_bundle.json".to_string(),
+                mime_type: "application/json;charset=utf-8".to_string(),
+                contents: format!("{contents}\n"),
+            }
+        }
+        "hwu" => {
+            let file = tempfile::NamedTempFile::new().map_err(|err| {
+                ApiError::Internal(format!("failed to create temporary hwu file: {err}"))
+            })?;
+            bundle
+                .write_hwu_file(file.path())
+                .map_err(|err| ApiError::Internal(format!("failed to export HwU bundle: {err}")))?;
+            let contents = fs::read_to_string(file.path()).map_err(|err| {
+                ApiError::Internal(format!("failed to read exported HwU bundle: {err}"))
+            })?;
+            HistogramBundleExportResponse {
+                filename: "histogram_bundle.HwU".to_string(),
+                mime_type: "text/plain;charset=utf-8".to_string(),
+                contents,
+            }
+        }
+        _ => {
+            return Err(ApiError::BadRequest(
+                "unsupported histogram export format (expected 'json' or 'hwu')".to_string(),
+            ));
+        }
+    };
+
+    json_response(response)
 }

@@ -910,27 +910,29 @@ fn base_estimate_summary_entries(
             ];
             if let Some(target) = run_target {
                 entries.push(key_value(
-                    "target_delta_real_percent",
-                    "Δ Real [%]",
-                    delta_percent(state.real_mean(), target.re),
+                    "target_comparison_real",
+                    "Real vs Target",
+                    json!({
+                        "kind":"target_comparison",
+                        "value": state.real_mean(),
+                        "error": state.real_stderr(),
+                        "target": target.re,
+                        "delta_percent": delta_percent(state.real_mean(), target.re),
+                        "delta_sigma": delta_sigma(state.real_mean(), state.real_stderr(), target.re),
+                    }),
                 ));
                 entries.push(key_value(
-                    "target_delta_imag_percent",
-                    "Δ Imag [%]",
-                    delta_percent(state.imag_mean(), target.im),
+                    "target_comparison_imag",
+                    "Imag vs Target",
+                    json!({
+                        "kind":"target_comparison",
+                        "value": state.imag_mean(),
+                        "error": state.imag_stderr(),
+                        "target": target.im,
+                        "delta_percent": delta_percent(state.imag_mean(), target.im),
+                        "delta_sigma": delta_sigma(state.imag_mean(), state.imag_stderr(), target.im),
+                    }),
                 ));
-                entries.push(key_value(
-                    "target_delta_real_sigma",
-                    "Δ Real [σ]",
-                    delta_sigma(state.real_mean(), state.real_stderr(), target.re),
-                ));
-                entries.push(key_value(
-                    "target_delta_imag_sigma",
-                    "Δ Imag [σ]",
-                    delta_sigma(state.imag_mean(), state.imag_stderr(), target.im),
-                ));
-                entries.push(key_value("target_real", "Target Real", target.re));
-                entries.push(key_value("target_imag", "Target Imag", target.im));
             }
             entries.push(key_value(
                 "abs_mean",
