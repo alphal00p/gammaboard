@@ -16,6 +16,7 @@ use crate::server::panels::{
 };
 use gammalooprs::observables::{ObservablePhase, ObservableValueTransform};
 use serde_json::Value as JsonValue;
+use serde_json::json;
 
 pub(super) fn projectors(
     task_spec: &RunTaskSpec,
@@ -851,9 +852,16 @@ fn base_estimate_summary_entries(
         AccumulatorState::Empty(_) => vec![key_value("count", "Count", 0)],
         AccumulatorState::Scalar(state) => vec![
             key_value("count", "Count", state.count),
-            key_value("mean", "Mean", state.mean()),
-            key_value("mean_stderr", "Mean Err", state.stderr()),
-            key_value("mean_abs", "Mean Abs", state.mean_abs()),
+            key_value(
+                "mean",
+                "Mean",
+                json!({"kind":"estimate","value":state.mean(),"error":state.stderr()}),
+            ),
+            key_value(
+                "mean_abs",
+                "Mean Abs",
+                json!({"kind":"estimate","value":state.mean_abs(),"error":state.stderr()}),
+            ),
             key_value(
                 "signal_to_noise",
                 "Mean(|x|)^2 / abs_err^2",
@@ -863,12 +871,21 @@ fn base_estimate_summary_entries(
         ],
         AccumulatorState::Complex(state) => vec![
             key_value("count", "Count", state.count),
-            key_value("real_mean", "Real Mean", state.real_mean()),
-            key_value("imag_mean", "Imag Mean", state.imag_mean()),
-            key_value("real_stderr", "Real Err", state.real_stderr()),
-            key_value("imag_stderr", "Imag Err", state.imag_stderr()),
-            key_value("abs_mean", "Abs Mean", state.abs_mean()),
-            key_value("abs_stderr", "Abs Err", state.abs_stderr()),
+            key_value(
+                "real_mean",
+                "Real Mean",
+                json!({"kind":"estimate","value":state.real_mean(),"error":state.real_stderr()}),
+            ),
+            key_value(
+                "imag_mean",
+                "Imag Mean",
+                json!({"kind":"estimate","value":state.imag_mean(),"error":state.imag_stderr()}),
+            ),
+            key_value(
+                "abs_mean",
+                "Abs Mean",
+                json!({"kind":"estimate","value":state.abs_mean(),"error":state.abs_stderr()}),
+            ),
             key_value(
                 "signal_to_noise",
                 "Mean(|x|)^2 / abs_err^2",
@@ -879,12 +896,21 @@ fn base_estimate_summary_entries(
         AccumulatorState::Gammaloop(state) => {
             let mut entries = vec![
                 key_value("count", "Count", state.sample_count()),
-                key_value("real_mean", "Real Mean", state.real_mean()),
-                key_value("imag_mean", "Imag Mean", state.imag_mean()),
-                key_value("real_stderr", "Real Err", state.real_stderr()),
-                key_value("imag_stderr", "Imag Err", state.imag_stderr()),
-                key_value("abs_mean", "Abs Mean", state.abs_mean()),
-                key_value("abs_stderr", "Abs Err", state.abs_stderr()),
+                key_value(
+                    "real_mean",
+                    "Real Mean",
+                    json!({"kind":"estimate","value":state.real_mean(),"error":state.real_stderr()}),
+                ),
+                key_value(
+                    "imag_mean",
+                    "Imag Mean",
+                    json!({"kind":"estimate","value":state.imag_mean(),"error":state.imag_stderr()}),
+                ),
+                key_value(
+                    "abs_mean",
+                    "Abs Mean",
+                    json!({"kind":"estimate","value":state.abs_mean(),"error":state.abs_stderr()}),
+                ),
                 key_value("rsd", "RSD", state.rsd()),
             ];
             if let Some(target) = run_target {
@@ -1388,10 +1414,14 @@ fn gammaloop_evaluation_timing_panel(accumulator: AccumulatorState) -> Option<Pa
     if segments.is_empty() {
         return None;
     }
+    let segment_sum_ms: f64 = segments.iter().map(|segment| segment.value_ms).sum();
+    if !segment_sum_ms.is_finite() || segment_sum_ms <= 0.0 {
+        return None;
+    }
 
     Some(tick_breakdown_panel(
         "gammaloop_evaluation_timing",
-        total_eval_ms,
+        segment_sum_ms,
         segments,
     ))
 }

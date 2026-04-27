@@ -383,11 +383,12 @@ impl GammaLoopEvaluator {
         }
     }
 
+    fn raw_result_value(result: &EvaluationResult) -> num::complex::Complex64 {
+        num::complex::Complex64::new(result.integrand_result.re.0, result.integrand_result.im.0)
+    }
+
     fn project_result_value(result: &EvaluationResult) -> num::complex::Complex64 {
-        let mut value = num::complex::Complex64::new(
-            result.integrand_result.re.0,
-            result.integrand_result.im.0,
-        );
+        let mut value = Self::raw_result_value(result);
         if let Some(jac) = result.parameterization_jacobian {
             value *= jac.0;
         }
@@ -412,7 +413,9 @@ impl GammaLoopEvaluator {
                 debug_point.parameterization_jacobian = Some(jacobian);
                 debug_point.add_weight_factor("gammaloop_parameterization_jacobian", jacobian);
             }
-            estimate.add_sample(Self::project_result_value(result), &debug_point);
+            // Keep jacobian as an explicit weight factor on the point so max-weight
+            // diagnostics can report integrand/jacobian contributions separately.
+            estimate.add_sample(Self::raw_result_value(result), &debug_point);
         }
         GammaLoopAccumulatorState {
             bundle: self
