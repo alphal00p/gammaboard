@@ -852,6 +852,7 @@ fn base_estimate_summary_entries(
         AccumulatorState::Empty(_) => vec![key_value("count", "Count", 0)],
         AccumulatorState::Scalar(state) => vec![
             key_value("count", "Count", state.count),
+            key_value("rsd", "RSD", state.rsd()),
             key_value(
                 "mean",
                 "Mean",
@@ -867,10 +868,10 @@ fn base_estimate_summary_entries(
                 "Mean(|x|)^2 / abs_err^2",
                 state.signal_to_noise(),
             ),
-            key_value("rsd", "RSD", state.rsd()),
         ],
         AccumulatorState::Complex(state) => vec![
             key_value("count", "Count", state.count),
+            key_value("rsd", "RSD", state.rsd()),
             key_value(
                 "real_mean",
                 "Real Mean",
@@ -891,11 +892,11 @@ fn base_estimate_summary_entries(
                 "Mean(|x|)^2 / abs_err^2",
                 state.signal_to_noise(),
             ),
-            key_value("rsd", "RSD", state.rsd()),
         ],
         AccumulatorState::Gammaloop(state) => {
             let mut entries = vec![
                 key_value("count", "Count", state.sample_count()),
+                key_value("rsd", "RSD", state.rsd()),
                 key_value(
                     "real_mean",
                     "Real Mean",
@@ -906,26 +907,8 @@ fn base_estimate_summary_entries(
                     "Imag Mean",
                     json!({"kind":"estimate","value":state.imag_mean(),"error":state.imag_stderr()}),
                 ),
-                key_value(
-                    "abs_mean",
-                    "Abs Mean",
-                    json!({"kind":"estimate","value":state.abs_mean(),"error":state.abs_stderr()}),
-                ),
-                key_value("rsd", "RSD", state.rsd()),
             ];
             if let Some(target) = run_target {
-                entries.push(key_value("target_real", "Target Real", target.re));
-                entries.push(key_value("target_imag", "Target Imag", target.im));
-                entries.push(key_value(
-                    "target_delta_real_sigma",
-                    "Δ Real [σ]",
-                    delta_sigma(state.real_mean(), state.real_stderr(), target.re),
-                ));
-                entries.push(key_value(
-                    "target_delta_imag_sigma",
-                    "Δ Imag [σ]",
-                    delta_sigma(state.imag_mean(), state.imag_stderr(), target.im),
-                ));
                 entries.push(key_value(
                     "target_delta_real_percent",
                     "Δ Real [%]",
@@ -936,7 +919,24 @@ fn base_estimate_summary_entries(
                     "Δ Imag [%]",
                     delta_percent(state.imag_mean(), target.im),
                 ));
+                entries.push(key_value(
+                    "target_delta_real_sigma",
+                    "Δ Real [σ]",
+                    delta_sigma(state.real_mean(), state.real_stderr(), target.re),
+                ));
+                entries.push(key_value(
+                    "target_delta_imag_sigma",
+                    "Δ Imag [σ]",
+                    delta_sigma(state.imag_mean(), state.imag_stderr(), target.im),
+                ));
+                entries.push(key_value("target_real", "Target Real", target.re));
+                entries.push(key_value("target_imag", "Target Imag", target.im));
             }
+            entries.push(key_value(
+                "abs_mean",
+                "Abs Mean",
+                json!({"kind":"estimate","value":state.abs_mean(),"error":state.abs_stderr()}),
+            ));
             entries
         }
         AccumulatorState::FullScalar(state) => vec![
