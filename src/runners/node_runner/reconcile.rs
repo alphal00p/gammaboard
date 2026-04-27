@@ -176,7 +176,12 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             Ok(None) => Ok(None),
             Err(err) => {
                 self.note_start_failure(target);
-                error!("failed to start role runner: {err}");
+                error!(
+                    role = %target.role,
+                    run_id = target.run_id,
+                    error = %err,
+                    "failed to start role runner"
+                );
                 Ok(None)
             }
         }

@@ -10,10 +10,14 @@ use crate::runners::rolling_metric::RollingMetric;
 use crate::runners::stage_context::resolve_stage_context;
 use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, Instant};
+use std::{
+    any::Any,
+    panic::AssertUnwindSafe,
+    time::{Duration, Instant},
+};
 use thiserror::Error;
 use tokio::task::JoinHandle;
-use tracing::info;
+use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvaluatorRunnerParams {
@@ -326,6 +330,33 @@ impl<S> EvaluatorRunner<S>
 where
     S: EvaluatorWorkerStore + Clone + Send + Sync + 'static,
 {
+    fn panic_message(payload: Box<dyn Any + Send>) -> String {
+        if let Some(message) = payload.downcast_ref::<&str>() {
+            return (*message).to_string();
+        }
+        if let Some(message) = payload.downcast_ref::<String>() {
+            return message.clone();
+        }
+        "unknown panic payload".to_string()
+    }
+
+    fn call_with_panic_guard<T, E>(
+        label: &str,
+        action: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, EvaluatorRunnerError>
+    where
+        E: Into<EvaluatorRunnerError>,
+    {
+        match std::panic::catch_unwind(AssertUnwindSafe(action)) {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(err)) => Err(err.into()),
+            Err(payload) => Err(EvaluatorRunnerError::Engine(EngineError::engine(format!(
+                "{label} panicked: {}",
+                Self::panic_message(payload)
+            )))),
+        }
+    }
+
     pub fn new(
         store: S,
         run_id: i32,
@@ -464,6 +495,14 @@ where
         err: impl Into<EvaluatorRunnerError>,
     ) -> Result<T, EvaluatorRunnerError> {
         let err = err.into();
+        warn!(
+            run_id = self.run_id,
+            node_name = %self.node_name,
+            batch_id,
+            compute_time_ms,
+            error = %err,
+            "evaluator tick failed; failing claimed batch"
+        );
         self.fail_claimed_batch(batch_id, &err.to_string()).await?;
         self.observe_idle_ratio(loop_started, compute_time_ms);
         self.flush_performance_snapshot_if_due(false).await?;
@@ -500,45 +539,48 @@ where
                 claimed.task_id
             )))
         })?;
-        let materialized = materializer.materialize_batch(&claimed.latent_batch);
+        let materialized = Self::call_with_panic_guard("materializer.materialize_batch", || {
+            materializer
+                .materialize_batch(&claimed.latent_batch)
+                .map_err(EvaluatorRunnerError::Engine)
+        });
         let materialization_time_ms = materialization_started.elapsed().as_secs_f64() * 1000.0;
         let materialized_batch = match materialized {
             Ok(batch) => batch,
             Err(err) => {
                 return self
-                    .fail_tick(
-                        loop_started,
-                        claimed.batch_id,
-                        materialization_time_ms,
-                        EvaluatorRunnerError::Engine(err),
-                    )
+                    .fail_tick(loop_started, claimed.batch_id, materialization_time_ms, err)
                     .await;
             }
         };
         let mut transformed_batch = materialized_batch;
         for transform in &self.current_batch_transforms {
-            transformed_batch = match transform.apply(transformed_batch) {
+            transformed_batch = match Self::call_with_panic_guard("batch_transform.apply", || {
+                transform
+                    .apply(transformed_batch)
+                    .map_err(EvaluatorRunnerError::Engine)
+            }) {
                 Ok(batch) => batch,
                 Err(err) => {
                     return self
-                        .fail_tick(
-                            loop_started,
-                            claimed.batch_id,
-                            materialization_time_ms,
-                            EvaluatorRunnerError::Engine(err),
-                        )
+                        .fail_tick(loop_started, claimed.batch_id, materialization_time_ms, err)
                         .await;
                 }
             };
         }
         let started = Instant::now();
-        match self.evaluator.eval_batch(
-            &transformed_batch,
-            &claimed.latent_batch.accumulator,
-            EvalBatchOptions {
-                require_training_values: claimed.requires_training_values,
-            },
-        ) {
+        let eval_result = Self::call_with_panic_guard("evaluator.eval_batch", || {
+            self.evaluator
+                .eval_batch(
+                    &transformed_batch,
+                    &claimed.latent_batch.accumulator,
+                    EvalBatchOptions {
+                        require_training_values: claimed.requires_training_values,
+                    },
+                )
+                .map_err(EvaluatorRunnerError::Eval)
+        });
+        match eval_result {
             Ok(result) => {
                 let eval_time_ms = started.elapsed().as_secs_f64() * 1000.0;
                 let total_time_ms = materialization_time_ms + eval_time_ms;
@@ -561,13 +603,8 @@ where
             Err(err) => {
                 let eval_time_ms = started.elapsed().as_secs_f64() * 1000.0;
                 let total_time_ms = materialization_time_ms + eval_time_ms;
-                self.fail_tick(
-                    loop_started,
-                    claimed.batch_id,
-                    total_time_ms,
-                    EvaluatorRunnerError::Eval(err),
-                )
-                .await
+                self.fail_tick(loop_started, claimed.batch_id, total_time_ms, err)
+                    .await
             }
         }
     }

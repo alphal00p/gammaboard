@@ -215,6 +215,39 @@ impl IntoResponse for ApiError {
     }
 }
 
+fn log_control_api_error(action: &str, err: &ApiError) {
+    match err {
+        ApiError::BadRequest(message) => tracing::warn!(
+            source = "control",
+            control_surface = "dashboard",
+            action,
+            error = %message,
+            "dashboard action rejected"
+        ),
+        ApiError::Unauthorized(message) => tracing::warn!(
+            source = "control",
+            control_surface = "dashboard",
+            action,
+            error = %message,
+            "dashboard action unauthorized"
+        ),
+        ApiError::NotFound(message) => tracing::warn!(
+            source = "control",
+            control_surface = "dashboard",
+            action,
+            error = %message,
+            "dashboard action target not found"
+        ),
+        ApiError::Internal(message) => tracing::error!(
+            source = "control",
+            control_surface = "dashboard",
+            action,
+            error = %message,
+            "dashboard action failed"
+        ),
+    }
+}
+
 #[derive(Deserialize)]
 struct WorkersQuery {
     run_id: Option<i32>,
@@ -924,11 +957,16 @@ async fn create_run(
     State(state): State<AppState>,
     AxumJson(payload): AxumJson<CreateRunRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let run = run_api::create_run(
-        &state.store,
-        run_api::parse_run_add_config_toml(payload.toml.trim())?,
-    )
-    .await?;
+    let config = run_api::parse_run_add_config_toml(payload.toml.trim()).map_err(|err| {
+        log_control_api_error("run_create", &err);
+        err
+    })?;
+    let run = run_api::create_run(&state.store, config)
+        .await
+        .map_err(|err| {
+            log_control_api_error("run_create", &err);
+            err
+        })?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -954,7 +992,11 @@ async fn clone_run(
         payload.from_snapshot_id,
         &payload.new_name,
     )
-    .await?;
+    .await
+    .map_err(|err| {
+        log_control_api_error("run_clone", &err);
+        err
+    })?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -977,12 +1019,16 @@ async fn add_run_tasks(
     AxumPath(run_id): AxumPath<i32>,
     AxumJson(payload): AxumJson<AddTasksRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = run_api::append_tasks(
-        &state.store,
-        run_id,
-        run_api::parse_task_queue_toml(payload.toml.trim())?,
-    )
-    .await?;
+    let tasks = run_api::parse_task_queue_toml(payload.toml.trim()).map_err(|err| {
+        log_control_api_error("run_add_tasks", &err);
+        err
+    })?;
+    let result = run_api::append_tasks(&state.store, run_id, tasks)
+        .await
+        .map_err(|err| {
+            log_control_api_error("run_add_tasks", &err);
+            err
+        })?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -998,7 +1044,12 @@ async fn pause_run(
     State(state): State<AppState>,
     AxumPath(run_id): AxumPath<i32>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = run_api::pause_run(&state.store, run_id).await?;
+    let result = run_api::pause_run(&state.store, run_id)
+        .await
+        .map_err(|err| {
+            log_control_api_error("run_pause", &err);
+            err
+        })?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1018,7 +1069,12 @@ async fn delete_run(
     State(state): State<AppState>,
     AxumPath(run_id): AxumPath<i32>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = run_api::remove_run(&state.store, run_id).await?;
+    let result = run_api::remove_run(&state.store, run_id)
+        .await
+        .map_err(|err| {
+            log_control_api_error("run_remove", &err);
+            err
+        })?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1037,7 +1093,12 @@ async fn delete_run_task(
     State(state): State<AppState>,
     AxumPath((run_id, task_id)): AxumPath<(i32, i64)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = run_api::remove_pending_task(&state.store, run_id, task_id).await?;
+    let result = run_api::remove_pending_task(&state.store, run_id, task_id)
+        .await
+        .map_err(|err| {
+            log_control_api_error("run_task_remove", &err);
+            err
+        })?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1059,7 +1120,11 @@ async fn update_run_task_queue_tuning(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let result =
         run_api::update_task_queue_tuning(&state.store, run_id, task_id, payload.queue_tuning)
-            .await?;
+            .await
+            .map_err(|err| {
+                log_control_api_error("run_task_update_queue_tuning", &err);
+                err
+            })?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1085,7 +1150,11 @@ async fn assign_node(
             .parse()
             .map_err(|err: String| ApiError::BadRequest(err))?,
     )
-    .await?;
+    .await
+    .map_err(|err| {
+        log_control_api_error("node_assign", &err);
+        err
+    })?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1108,7 +1177,12 @@ async fn auto_assign_run(
     AxumPath(run_id): AxumPath<i32>,
     AxumJson(payload): AxumJson<AutoAssignRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = node_api::auto_assign_run(&state.store, run_id, payload.max_evaluators).await?;
+    let result = node_api::auto_assign_run(&state.store, run_id, payload.max_evaluators)
+        .await
+        .map_err(|err| {
+            log_control_api_error("run_auto_assign", &err);
+            err
+        })?;
 
     tracing::info!(
         source = "control",
@@ -1134,7 +1208,12 @@ async fn unassign_node(
     State(state): State<AppState>,
     AxumPath(node_name): AxumPath<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    node_api::unassign_node(&state.store, &node_name).await?;
+    node_api::unassign_node(&state.store, &node_name)
+        .await
+        .map_err(|err| {
+            log_control_api_error("node_unassign", &err);
+            err
+        })?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1151,7 +1230,12 @@ async fn stop_node(
     State(state): State<AppState>,
     AxumPath(node_name): AxumPath<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = node_api::stop_node(&state.store, &node_name).await?;
+    let result = node_api::stop_node(&state.store, &node_name)
+        .await
+        .map_err(|err| {
+            log_control_api_error("node_stop", &err);
+            err
+        })?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1169,7 +1253,12 @@ async fn stop_node(
 async fn stop_all_nodes(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = node_api::stop_all_nodes(&state.store).await?;
+    let result = node_api::stop_all_nodes(&state.store)
+        .await
+        .map_err(|err| {
+            log_control_api_error("node_stop_all", &err);
+            err
+        })?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1187,7 +1276,12 @@ async fn auto_run_nodes(
     AxumJson(payload): AxumJson<AutoRunNodesRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let max_start_failures = payload.max_start_failures.unwrap_or(3);
-    let plan = node_api::plan_auto_run_nodes(&state.store, payload.count).await?;
+    let plan = node_api::plan_auto_run_nodes(&state.store, payload.count)
+        .await
+        .map_err(|err| {
+            log_control_api_error("node_auto_run", &err);
+            err
+        })?;
 
     let binary = std::env::current_exe().map_err(|err| {
         ApiError::Internal(format!("failed to resolve current executable: {err}"))
@@ -1199,7 +1293,11 @@ async fn auto_run_nodes(
             &state.runtime_config_path,
             node_name,
             max_start_failures,
-        )?;
+        )
+        .map_err(|err| {
+            log_control_api_error("node_auto_run", &err);
+            err
+        })?;
     }
 
     tracing::info!(
@@ -1230,7 +1328,11 @@ async fn restart_db(State(state): State<AppState>) -> Result<Json<serde_json::Va
     let binary = std::env::current_exe().map_err(|err| {
         ApiError::Internal(format!("failed to resolve current executable: {err}"))
     })?;
-    let result = db_api::restart_local_database(&binary, &state.runtime_config_path)?;
+    let result =
+        db_api::restart_local_database(&binary, &state.runtime_config_path).map_err(|err| {
+            log_control_api_error("db_restart", &err);
+            err
+        })?;
 
     tracing::info!(
         source = "control",
