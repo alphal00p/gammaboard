@@ -13,6 +13,13 @@
 
 set -euo pipefail
 
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || {
+    echo "missing required command: $1" >&2
+    exit 1
+  }
+}
+
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
 mkdir -p "logs/build" "${WORKSPACE_ROOT}/logs/build"
 
@@ -22,8 +29,18 @@ IMAGE_PATH="${GAMMABOARD_IMAGE:-${WORKSPACE_ROOT}/images/gammaboard/gammaboard-l
 # Bind full storage paths (UBELIX scratch/workspace paths are symlinked).
 BIND_PATHS="${GAMMABOARD_BIND_PATHS:-${WORKSPACE_ROOT}}"
 
+require_cmd apptainer
+
+if [[ ! -d "${WORKSPACE_ROOT}" ]]; then
+  echo "missing workspace root: ${WORKSPACE_ROOT}" >&2
+  exit 1
+fi
 if [[ ! -f "${IMAGE_PATH}" ]]; then
   echo "missing image: ${IMAGE_PATH}" >&2
+  exit 1
+fi
+if [[ ! -e "${BIND_PATHS}" ]]; then
+  echo "missing bind path: ${BIND_PATHS}" >&2
   exit 1
 fi
 

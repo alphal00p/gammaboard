@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=gb-build-latest
-#SBATCH --time=02:00:00
+#SBATCH --time=00:45:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=16G
+#SBATCH --cpus-per-task=6
+#SBATCH --mem=8G
 #SBATCH --account=gratis
 #SBATCH --partition=epyc2
 #SBATCH --output=logs/build/%x-%j.out
@@ -23,6 +23,7 @@ GB_IMAGE_DIR_REL="images/gammaboard"
 GL_SRC_DIR_REL="artifacts/src/gammaloop"
 GB_SRC_DIR_REL="artifacts/src/gammaboard"
 BIN_DIR_REL="artifacts/bin"
+LIB_DIR_REL="artifacts/bin/lib"
 SCRATCH_BASE="${SCRATCH_BASE:-/scratch/network/users/${USER}/apptainer}"
 
 require_cmd() {
@@ -79,6 +80,7 @@ GB_IMAGE_DIR="${WORKSPACE_ROOT}/${GB_IMAGE_DIR_REL}"
 GL_SRC_DIR="${WORKSPACE_ROOT}/${GL_SRC_DIR_REL}"
 GB_SRC_DIR="${WORKSPACE_ROOT}/${GB_SRC_DIR_REL}"
 BIN_DIR="${WORKSPACE_ROOT}/${BIN_DIR_REL}"
+LIB_DIR="${WORKSPACE_ROOT}/${LIB_DIR_REL}"
 RUST_TARGET_BASE="${RUST_TARGET_BASE:-/scratch/network/users/${USER}/gammaboard-target}"
 RUST_TARGET_DIR="${RUST_TARGET_BASE}/target"
 GL_LATEST_LINK="${GL_IMAGE_DIR}/gammaloop-latest.sif"
@@ -91,7 +93,7 @@ mkdir -p \
   "${CACHE_BASE}" \
   "${GL_IMAGE_DIR}" \
   "${GB_IMAGE_DIR}"
-mkdir -p "${BIN_DIR}" "${RUST_TARGET_DIR}"
+mkdir -p "${BIN_DIR}" "${LIB_DIR}" "${RUST_TARGET_DIR}"
 
 if [[ ! -f "${GL_DEF_PATH}" ]]; then
   echo "missing def file: ${GL_DEF_PATH}" >&2
@@ -116,7 +118,7 @@ GL_META_FILE="${GL_IMAGE_DIR}/gammaloop-${GAMMALOOP_SHA}.meta"
 GB_META_FILE="${GB_IMAGE_DIR}/gammaboard-${GAMMABOARD_SHA}.meta"
 HOST_GAMMALOOP_BIN="${BIN_DIR}/gammaloop"
 HOST_GAMMABOARD_BIN="${BIN_DIR}/gammaboard"
-GL_RUST_PROFILE="dev-optim"
+GL_RUST_PROFILE="release"
 GL_RUST_FEATURES="ufo_support"
 GB_RUST_PROFILE="release"
 
@@ -129,6 +131,7 @@ echo "gammaboard_source: ${GB_SRC_DIR}"
 echo "target_dir_compile: ${RUST_TARGET_DIR}"
 echo "gammaloop_bin: ${HOST_GAMMALOOP_BIN}"
 echo "gammaboard_bin: ${HOST_GAMMABOARD_BIN}"
+echo "lib_dir: ${LIB_DIR}"
 echo "gammaloop_sha: ${GAMMALOOP_SHA}"
 echo "gammaboard_sha: ${GAMMABOARD_SHA}"
 echo "gammaloop_image: ${GL_OUT_IMAGE}"
@@ -180,8 +183,14 @@ CARGO_GB_START="$(date +%s)"
 )
 CARGO_GB_END="$(date +%s)"
 BIN_STAGE_START="$(date +%s)"
-install -Dm755 "${RUST_TARGET_DIR}/dev-optim/gammaloop" "${HOST_GAMMALOOP_BIN}"
+install -Dm755 "${RUST_TARGET_DIR}/${GL_RUST_PROFILE}/gammaloop" "${HOST_GAMMALOOP_BIN}"
 install -Dm755 "${RUST_TARGET_DIR}/release/gammaboard" "${HOST_GAMMABOARD_BIN}"
+PY_LIB_PATH="$(ldd "${HOST_GAMMALOOP_BIN}" | awk '/libpython3\.[0-9]+\.so/{print $3; exit}')"
+if [[ -z "${PY_LIB_PATH}" || ! -f "${PY_LIB_PATH}" ]]; then
+  echo "failed to resolve host libpython from ldd for ${HOST_GAMMALOOP_BIN}" >&2
+  exit 1
+fi
+cp -L "${PY_LIB_PATH}" "${LIB_DIR}/"
 BIN_STAGE_END="$(date +%s)"
 
 # Always build both targets: gammaloop first, then gammaboard.

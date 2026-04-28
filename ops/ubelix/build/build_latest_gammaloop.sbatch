@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=gl-build-latest
-#SBATCH --time=01:00:00
+#SBATCH --time=00:30:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=16G
+#SBATCH --cpus-per-task=6
+#SBATCH --mem=8G
 #SBATCH --account=gratis
 #SBATCH --partition=epyc2
 #SBATCH --output=logs/build/%x-%j.out
@@ -19,6 +19,7 @@ DEF_REL_PATH="ops/build/gammaloop.def"
 IMAGE_DIR_REL="images/gammaloop"
 SRC_DIR_REL="artifacts/src/gammaloop"
 BIN_DIR_REL="artifacts/bin"
+LIB_DIR_REL="artifacts/bin/lib"
 SCRATCH_BASE="${SCRATCH_BASE:-/scratch/network/users/${USER}/apptainer}"
 
 require_cmd() {
@@ -69,11 +70,12 @@ DEF_FILE_NAME="$(basename "${DEF_PATH}")"
 IMAGE_DIR="${WORKSPACE_ROOT}/${IMAGE_DIR_REL}"
 SRC_DIR="${WORKSPACE_ROOT}/${SRC_DIR_REL}"
 BIN_DIR="${WORKSPACE_ROOT}/${BIN_DIR_REL}"
+LIB_DIR="${WORKSPACE_ROOT}/${LIB_DIR_REL}"
 RUST_TARGET_BASE="${RUST_TARGET_BASE:-/scratch/network/users/${USER}/gammaboard-target}"
 RUST_TARGET_DIR="${RUST_TARGET_BASE}/target"
 LATEST_LINK="${IMAGE_DIR}/gammaloop-latest.sif"
 
-mkdir -p "logs/build" "${WORKSPACE_ROOT}/logs/build" "${TMP_BASE}" "${CACHE_BASE}" "${IMAGE_DIR}" "${BIN_DIR}" "${RUST_TARGET_DIR}"
+mkdir -p "logs/build" "${WORKSPACE_ROOT}/logs/build" "${TMP_BASE}" "${CACHE_BASE}" "${IMAGE_DIR}" "${BIN_DIR}" "${LIB_DIR}" "${RUST_TARGET_DIR}"
 
 if [[ ! -f "${DEF_PATH}" ]]; then
   echo "missing def file: ${DEF_PATH}" >&2
@@ -88,7 +90,7 @@ OUT_IMAGE="${IMAGE_DIR}/gammaloop-${GAMMALOOP_SHA}.sif"
 TMP_IMAGE="${IMAGE_DIR}/.gammaloop-${GAMMALOOP_SHA}.tmp-${SLURM_JOB_ID:-$$}.sif"
 META_FILE="${IMAGE_DIR}/gammaloop-${GAMMALOOP_SHA}.meta"
 HOST_GAMMALOOP_BIN="${BIN_DIR}/gammaloop"
-RUST_PROFILE="dev-optim"
+RUST_PROFILE="release"
 RUST_FEATURES="ufo_support"
 
 echo "host: ${HOSTNAME}"
@@ -97,6 +99,7 @@ echo "def_path: ${DEF_PATH}"
 echo "source_dir: ${SRC_DIR}"
 echo "target_dir_compile: ${RUST_TARGET_DIR}"
 echo "bin_path: ${HOST_GAMMALOOP_BIN}"
+echo "lib_dir: ${LIB_DIR}"
 echo "gammaloop_sha: ${GAMMALOOP_SHA}"
 echo "out_image: ${OUT_IMAGE}"
 echo "latest_link: ${LATEST_LINK}"
@@ -128,7 +131,13 @@ CARGO_START="$(date +%s)"
 )
 CARGO_END="$(date +%s)"
 BIN_STAGE_START="$(date +%s)"
-install -Dm755 "${RUST_TARGET_DIR}/dev-optim/gammaloop" "${HOST_GAMMALOOP_BIN}"
+install -Dm755 "${RUST_TARGET_DIR}/${RUST_PROFILE}/gammaloop" "${HOST_GAMMALOOP_BIN}"
+PY_LIB_PATH="$(ldd "${HOST_GAMMALOOP_BIN}" | awk '/libpython3\.[0-9]+\.so/{print $3; exit}')"
+if [[ -z "${PY_LIB_PATH}" || ! -f "${PY_LIB_PATH}" ]]; then
+  echo "failed to resolve host libpython from ldd for ${HOST_GAMMALOOP_BIN}" >&2
+  exit 1
+fi
+cp -L "${PY_LIB_PATH}" "${LIB_DIR}/"
 BIN_STAGE_END="$(date +%s)"
 
 echo "building image: ${OUT_IMAGE}"

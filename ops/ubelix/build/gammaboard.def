@@ -3,6 +3,7 @@ From: rust:1-bookworm
 
 %setup
     mkdir -p "${APPTAINER_ROOTFS}/workspace/artifacts/bin"
+    mkdir -p "${APPTAINER_ROOTFS}/workspace/artifacts/bin/lib"
 
 %post
     set -eux
@@ -22,12 +23,19 @@ From: rust:1-bookworm
     test -x "${GAMMABOARD_BIN}"
     install -Dm755 "${GAMMALOOP_BIN}" /usr/local/bin/gammaloop
     install -Dm755 "${GAMMABOARD_BIN}" /usr/local/bin/gammaboard
+    mkdir -p /usr/local/lib/gammaboard
+    for lib in /workspace/artifacts/bin/lib/*.so*; do
+      if [ -e "${lib}" ]; then
+        cp -L "${lib}" /usr/local/lib/gammaboard/
+      fi
+    done
 
     apt-get clean
     rm -rf /var/lib/apt/lists/*
 
 %environment
     export PATH=/usr/local/bin:$PATH
+    export LD_LIBRARY_PATH=/usr/local/lib/gammaboard:${LD_LIBRARY_PATH:-}
 
 %runscript
     exec "$@"
