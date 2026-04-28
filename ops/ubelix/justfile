@@ -2,33 +2,7 @@ show-config:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
-    DEFAULTS_FILE="${WORKSPACE_ROOT}/ops/config/submit_hello.env"
-    if [[ -f "${DEFAULTS_FILE}" ]]; then
-      set -a
-      source "${DEFAULTS_FILE}"
-      set +a
-    fi
-    WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-${WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}}"
-    IMAGE_PATH="${GAMMABOARD_IMAGE:-${IMAGE_PATH:-${WORKSPACE_ROOT}/images/gammaboard/gammaboard-latest.sif}}"
-    DATABASE_URL="${GAMMABOARD_DATABASE_URL:-${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:5433/gammaboard_db}}"
-
-    ACCOUNT="${ACCOUNT:-gratis}"
-    PARTITION="${PARTITION:-epyc2}"
-    QOS="${QOS:-job_debug}"
-    WORKER_TIME="${WORKER_TIME:-00:15:00}"
-    CONTROL_TIME="${CONTROL_TIME:-00:10:00}"
-    EVALUATOR_COUNT="${EVALUATOR_COUNT:-1}"
-    RUN_NAME="${RUN_NAME:-ubelix-hello}"
-    NODE_PREFIX="${NODE_PREFIX:-gb-hello}"
-    POLL_TIMEOUT_SECONDS="${POLL_TIMEOUT_SECONDS:-300}"
-    DEPLOY_NAME="${DEPLOY_NAME:-default}"
-    API_PORT="${API_PORT:-4000}"
-    FRONTEND_PORT="${FRONTEND_PORT:-8080}"
-    FRONTEND_BUILD_DIR="${FRONTEND_BUILD_DIR:-${WORKSPACE_ROOT}/dashboard/build}"
-    UI_TIME="${UI_TIME:-02:00:00}"
-    LOGIN_HOST="${LOGIN_HOST:-submit03.unibe.ch}"
-    EXTRA_SBATCH_ARGS="${EXTRA_SBATCH_ARGS:-}"
+    source "${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}/ops/scripts/load_submit_env.sh"
 
     db_host_port="$(echo "${DATABASE_URL}" | sed -E 's#^[^@]*@##; s#/.*$##')"
 
@@ -88,28 +62,7 @@ submit-hello:
       }
     }
 
-    WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
-    DEFAULTS_FILE="${WORKSPACE_ROOT}/ops/config/submit_hello.env"
-    if [[ -f "${DEFAULTS_FILE}" ]]; then
-      set -a
-      source "${DEFAULTS_FILE}"
-      set +a
-    fi
-    WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-${WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}}"
-    IMAGE_PATH="${GAMMABOARD_IMAGE:-${IMAGE_PATH:-${WORKSPACE_ROOT}/images/gammaboard/gammaboard-latest.sif}}"
-    DATABASE_URL="${GAMMABOARD_DATABASE_URL:-${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:5433/gammaboard_db}}"
-    export GAMMABOARD_DATABASE_URL="${DATABASE_URL}"
-
-    ACCOUNT="${ACCOUNT:-gratis}"
-    PARTITION="${PARTITION:-epyc2}"
-    QOS="${QOS:-job_debug}"
-    WORKER_TIME="${WORKER_TIME:-00:15:00}"
-    CONTROL_TIME="${CONTROL_TIME:-00:10:00}"
-    EVALUATOR_COUNT="${EVALUATOR_COUNT:-1}"
-    RUN_NAME="${RUN_NAME:-ubelix-hello}"
-    NODE_PREFIX="${NODE_PREFIX:-gb-hello}"
-    POLL_TIMEOUT_SECONDS="${POLL_TIMEOUT_SECONDS:-300}"
-    DEPLOY_NAME="${DEPLOY_NAME:-default}"
+    source "${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}/ops/scripts/load_submit_env.sh"
     NODE_WORKER_SCRIPT="${WORKSPACE_ROOT}/ops/slurm/node_worker.sbatch"
     HELLO_CONTROL_SCRIPT="${WORKSPACE_ROOT}/ops/slurm/hello_control.sbatch"
     RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime_external_db.template.toml"
@@ -141,7 +94,6 @@ submit-hello:
 
     # Add account-specific flags here when needed, e.g.:
     # EXTRA_SBATCH_ARGS="--wckey=<project>" or "--reservation=<reservation>"
-    EXTRA_SBATCH_ARGS="${EXTRA_SBATCH_ARGS:-}"
     if [[ -n "${EXTRA_SBATCH_ARGS}" ]]; then
       # shellcheck disable=SC2206
       extra_args=( ${EXTRA_SBATCH_ARGS} )
@@ -213,28 +165,7 @@ submit-hello-single:
       }
     }
 
-    WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
-    DEFAULTS_FILE="${WORKSPACE_ROOT}/ops/config/submit_hello.env"
-    if [[ -f "${DEFAULTS_FILE}" ]]; then
-      set -a
-      source "${DEFAULTS_FILE}"
-      set +a
-    fi
-    WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-${WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}}"
-    IMAGE_PATH="${GAMMABOARD_IMAGE:-${IMAGE_PATH:-${WORKSPACE_ROOT}/images/gammaboard/gammaboard-latest.sif}}"
-    DATABASE_URL="${GAMMABOARD_DATABASE_URL:-${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:5433/gammaboard_db}}"
-    export GAMMABOARD_DATABASE_URL="${DATABASE_URL}"
-    DB_PORT="${DB_PORT:-5433}"
-    export DB_PORT
-
-    ACCOUNT="${ACCOUNT:-gratis}"
-    PARTITION="${PARTITION:-epyc2}"
-    QOS="${QOS:-job_debug}"
-    CONTROL_TIME="${CONTROL_TIME:-00:10:00}"
-    RUN_NAME="${RUN_NAME:-ubelix-hello}"
-    NODE_PREFIX="${NODE_PREFIX:-gb-hello}"
-    POLL_TIMEOUT_SECONDS="${POLL_TIMEOUT_SECONDS:-300}"
-    DEPLOY_NAME="${DEPLOY_NAME:-default}"
+    source "${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}/ops/scripts/load_submit_env.sh"
     HELLO_SINGLE_SCRIPT="${WORKSPACE_ROOT}/ops/slurm/hello_single.sbatch"
 
     require_cmd sbatch
@@ -249,7 +180,6 @@ submit-hello-single:
       exit 1
     fi
 
-    EXTRA_SBATCH_ARGS="${EXTRA_SBATCH_ARGS:-}"
     if [[ -n "${EXTRA_SBATCH_ARGS}" ]]; then
       # shellcheck disable=SC2206
       extra_args=( ${EXTRA_SBATCH_ARGS} )
@@ -287,25 +217,7 @@ submit-ui-single:
       }
     }
 
-    WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
-    DEFAULTS_FILE="${WORKSPACE_ROOT}/ops/config/submit_hello.env"
-    if [[ -f "${DEFAULTS_FILE}" ]]; then
-      set -a
-      source "${DEFAULTS_FILE}"
-      set +a
-    fi
-    WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-${WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}}"
-    IMAGE_PATH="${GAMMABOARD_IMAGE:-${IMAGE_PATH:-${WORKSPACE_ROOT}/images/gammaboard/gammaboard-latest.sif}}"
-    DEPLOY_NAME="${DEPLOY_NAME:-default}"
-    DB_PORT="${DB_PORT:-5433}"
-    API_PORT="${API_PORT:-4000}"
-    FRONTEND_PORT="${FRONTEND_PORT:-8080}"
-    FRONTEND_BUILD_DIR="${FRONTEND_BUILD_DIR:-${WORKSPACE_ROOT}/dashboard/build}"
-
-    ACCOUNT="${ACCOUNT:-gratis}"
-    PARTITION="${PARTITION:-epyc2}"
-    QOS="${QOS:-job_debug}"
-    UI_TIME="${UI_TIME:-02:00:00}"
+    source "${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}/ops/scripts/load_submit_env.sh"
 
     CONTROL_UI_SCRIPT="${WORKSPACE_ROOT}/ops/slurm/control_ui_single.sbatch"
 
@@ -325,7 +237,6 @@ submit-ui-single:
       exit 1
     fi
 
-    EXTRA_SBATCH_ARGS="${EXTRA_SBATCH_ARGS:-}"
     if [[ -n "${EXTRA_SBATCH_ARGS}" ]]; then
       # shellcheck disable=SC2206
       extra_args=( ${EXTRA_SBATCH_ARGS} )
@@ -357,15 +268,7 @@ tunnel-job job_id local_port="8080":
     #!/usr/bin/env bash
     set -euo pipefail
 
-    WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
-    DEFAULTS_FILE="${WORKSPACE_ROOT}/ops/config/submit_hello.env"
-    if [[ -f "${DEFAULTS_FILE}" ]]; then
-      set -a
-      source "${DEFAULTS_FILE}"
-      set +a
-    fi
-    LOGIN_HOST="${LOGIN_HOST:-submit03.unibe.ch}"
-    FRONTEND_PORT="${FRONTEND_PORT:-8080}"
+    source "${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}/ops/scripts/load_submit_env.sh"
     NODE_NAME="$(squeue -h -j "{{job_id}}" -o "%N")"
 
     if [[ -z "${NODE_NAME}" || "${NODE_NAME}" == "(null)" ]]; then
