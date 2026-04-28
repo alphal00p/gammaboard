@@ -27,7 +27,7 @@ RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
 mkdir -p "${RUNTIME_DIR}"
 RUNTIME_CONFIG="${RUNTIME_DIR}/runtime-${SLURM_JOB_ID}-control.toml"
 RUN_TOML="${RUNTIME_DIR}/run-${SLURM_JOB_ID}.toml"
-RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime/external_db.template.toml"
+RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime/external_db_control.template.toml"
 
 if [[ ! -f "${RUNTIME_TEMPLATE}" ]]; then
   echo "missing runtime template: ${RUNTIME_TEMPLATE}" >&2

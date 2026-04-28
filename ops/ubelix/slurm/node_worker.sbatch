@@ -15,26 +15,14 @@ set -euo pipefail
 
 IMAGE_PATH="${GAMMABOARD_IMAGE:?set GAMMABOARD_IMAGE to your .sif path}"
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:?set GAMMABOARD_WORKSPACE_ROOT to absolute workspace path}"
-DATABASE_URL="${GAMMABOARD_DATABASE_URL:?set GAMMABOARD_DATABASE_URL to reachable Postgres URL}"
-NODE_PREFIX="${NODE_PREFIX:-gb-hello}"
-ROLE="${ROLE:?set ROLE to sampler-aggregator or evaluator}"
+NODE_NAME="${NODE_NAME:?set NODE_NAME (e.g. gb-hello-sampler or gb-hello-eval-1)}"
 DEPLOY_NAME="${DEPLOY_NAME:-default}"
 mkdir -p "${WORKSPACE_ROOT}/logs/slurm/workers"
-
-if [[ "${ROLE}" == "sampler-aggregator" ]]; then
-  NODE_NAME="${NODE_PREFIX}-sampler"
-elif [[ "${ROLE}" == "evaluator" ]]; then
-  TASK_ID="${SLURM_ARRAY_TASK_ID:-0}"
-  NODE_NAME="${NODE_PREFIX}-eval-${TASK_ID}"
-else
-  echo "unsupported ROLE=${ROLE}" >&2
-  exit 1
-fi
 
 RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
 mkdir -p "${RUNTIME_DIR}"
 RUNTIME_CONFIG="${RUNTIME_DIR}/runtime-${SLURM_JOB_ID}-${NODE_NAME}.toml"
-RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime/external_db.template.toml"
+RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime/external_db_worker.toml"
 trap 'rm -f "${RUNTIME_CONFIG}"' EXIT
 if [[ ! -f "${RUNTIME_TEMPLATE}" ]]; then
   echo "missing runtime template: ${RUNTIME_TEMPLATE}" >&2
@@ -45,14 +33,13 @@ if ! command -v envsubst >/dev/null 2>&1; then
   exit 1
 fi
 LOCAL_TMP="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
-export DATABASE_URL WORKSPACE_ROOT LOCAL_TMP DEPLOY_NAME
-envsubst '${DATABASE_URL} ${WORKSPACE_ROOT} ${LOCAL_TMP} ${DEPLOY_NAME}' \
+export WORKSPACE_ROOT LOCAL_TMP DEPLOY_NAME
+envsubst '${WORKSPACE_ROOT} ${LOCAL_TMP} ${DEPLOY_NAME}' \
   <"${RUNTIME_TEMPLATE}" >"${RUNTIME_CONFIG}"
 
-db_host_port="$(echo "${DATABASE_URL}" | sed -E 's#^[^@]*@##; s#/.*$##')"
+db_host_port="$(awk -F' *= *' '/^url *=/{gsub(/"/,"",$2); print $2; exit}' "${RUNTIME_CONFIG}" | sed -E 's#^[^@]*@##; s#/.*$##')"
 
 echo "node: ${HOSTNAME}"
-echo "worker role: ${ROLE}"
 echo "node name: ${NODE_NAME}"
 echo "workspace_root: ${WORKSPACE_ROOT}"
 echo "runtime_config: ${RUNTIME_CONFIG}"
