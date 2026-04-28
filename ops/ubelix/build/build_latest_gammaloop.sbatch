@@ -7,8 +7,8 @@
 #SBATCH --mem=8G
 #SBATCH --account=gratis
 #SBATCH --partition=epyc2
-#SBATCH --output=/storage/research/itp_localunitaritydata/logs/build/%x-%j.out
-#SBATCH --error=/storage/research/itp_localunitaritydata/logs/build/%x-%j.err
+#SBATCH --output=/storage/research/itp_localunitaritydata/logs/slurm/build/%x-%j.out
+#SBATCH --error=/storage/research/itp_localunitaritydata/logs/slurm/build/%x-%j.err
 
 set -euo pipefail
 
@@ -75,7 +75,7 @@ RUST_TARGET_BASE="${RUST_TARGET_BASE:-/scratch/network/users/${USER}/gammaboard-
 RUST_TARGET_DIR="${RUST_TARGET_BASE}/target"
 LATEST_LINK="${IMAGE_DIR}/gammaloop-latest.sif"
 
-mkdir -p "${WORKSPACE_ROOT}/logs/build" "${TMP_BASE}" "${CACHE_BASE}" "${IMAGE_DIR}" "${BIN_DIR}" "${LIB_DIR}" "${RUST_TARGET_DIR}"
+mkdir -p "${WORKSPACE_ROOT}/logs/slurm/build" "${TMP_BASE}" "${CACHE_BASE}" "${IMAGE_DIR}" "${BIN_DIR}" "${LIB_DIR}" "${RUST_TARGET_DIR}"
 
 if [[ ! -f "${DEF_PATH}" ]]; then
   echo "missing def file: ${DEF_PATH}" >&2

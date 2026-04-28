@@ -44,7 +44,8 @@ The single-node UBELIX flow is now hardcoded in `slurm/*.sbatch`.
 
 - `WORKSPACE_ROOT` is the only intended override (`GAMMABOARD_WORKSPACE_ROOT`).
 - `justfile` recipes are thin wrappers around direct `sbatch` submission.
-- Logs are submitted with absolute `--output/--error` paths under `${WORKSPACE_ROOT}/logs/...` from `just` submit commands.
+- Slurm stdout/stderr goes under `${WORKSPACE_ROOT}/logs/slurm/{build,control,workers}`.
+- PostgreSQL writes its own persistent log under `${WORKSPACE_ROOT}/logs/postgres`.
 
 ## Target Topology
 
@@ -98,14 +99,14 @@ Definition files:
 Build GammaLoop image only:
 
 ```bash
-mkdir -p logs/build logs/control logs/workers
+mkdir -p logs/slurm/build logs/slurm/control logs/slurm/workers logs/postgres
 sbatch ops/ubelix/build/build_latest_gammaloop.sbatch
 ```
 
 Build GammaBoard image (this always processes both GammaLoop and GammaBoard targets):
 
 ```bash
-mkdir -p logs/build logs/control logs/workers
+mkdir -p logs/slurm/build logs/slurm/control logs/slurm/workers logs/postgres
 sbatch ops/ubelix/build/build_latest_gammaboard.sbatch
 ```
 
@@ -289,9 +290,11 @@ Recommended layout:
   artifacts/
     <run-id-or-name>/
   logs/
-    build/
-    control/
-    workers/
+    slurm/
+      build/
+      control/
+      workers/
+    postgres/
 ```
 
 The control job should:

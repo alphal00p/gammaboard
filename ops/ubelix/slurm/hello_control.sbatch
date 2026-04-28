@@ -8,8 +8,8 @@
 #SBATCH --account=gratis
 #SBATCH --partition=epyc2
 #SBATCH --qos=job_debug
-#SBATCH --output=logs/control/%x-%j.out
-#SBATCH --error=logs/control/%x-%j.err
+#SBATCH --output=logs/slurm/control/%x-%j.out
+#SBATCH --error=logs/slurm/control/%x-%j.err
 
 set -euo pipefail
 
@@ -21,7 +21,7 @@ NODE_PREFIX="${NODE_PREFIX:-gb-hello}"
 EVALUATOR_COUNT="${EVALUATOR_COUNT:-2}"
 POLL_TIMEOUT_SECONDS="${POLL_TIMEOUT_SECONDS:-300}"
 DEPLOY_NAME="${DEPLOY_NAME:-default}"
-mkdir -p "${WORKSPACE_ROOT}/logs/control"
+mkdir -p "${WORKSPACE_ROOT}/logs/slurm/control"
 
 RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
 mkdir -p "${RUNTIME_DIR}"

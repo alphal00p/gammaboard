@@ -8,12 +8,14 @@ submit-hello-single:
     #!/usr/bin/env bash
     set -euo pipefail
     WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
+    mkdir -p "${WORKSPACE_ROOT}/logs/slurm/control" "${WORKSPACE_ROOT}/logs/slurm/workers" "${WORKSPACE_ROOT}/logs/postgres"
     sbatch --chdir "${WORKSPACE_ROOT}" "${WORKSPACE_ROOT}/ops/slurm/hello_single.sbatch"
 
 submit-ui-single:
     #!/usr/bin/env bash
     set -euo pipefail
     WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
+    mkdir -p "${WORKSPACE_ROOT}/logs/slurm/control" "${WORKSPACE_ROOT}/logs/postgres"
     sbatch --chdir "${WORKSPACE_ROOT}" "${WORKSPACE_ROOT}/ops/slurm/control_ui_single.sbatch"
 
 tunnel-job job_id local_port="8080":

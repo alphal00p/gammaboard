@@ -8,8 +8,8 @@
 #SBATCH --account=gratis
 #SBATCH --partition=epyc2
 #SBATCH --qos=job_debug
-#SBATCH --output=logs/build/%x-%j.out
-#SBATCH --error=logs/build/%x-%j.err
+#SBATCH --output=logs/slurm/build/%x-%j.out
+#SBATCH --error=logs/slurm/build/%x-%j.err
 
 set -euo pipefail
 
@@ -21,7 +21,7 @@ require_cmd() {
 }
 
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
-mkdir -p "${WORKSPACE_ROOT}/logs/build"
+mkdir -p "${WORKSPACE_ROOT}/logs/slurm/build"
 
 # Absolute path to SIF image on UBELIX filesystem.
 IMAGE_PATH="${GAMMABOARD_IMAGE:-${WORKSPACE_ROOT}/images/gammaboard/gammaboard-latest.sif}"

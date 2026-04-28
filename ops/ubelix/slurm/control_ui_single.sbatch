@@ -8,8 +8,8 @@
 #SBATCH --account=gratis
 #SBATCH --partition=epyc2
 #SBATCH --qos=job_debug
-#SBATCH --output=logs/control/%x-%j.out
-#SBATCH --error=logs/control/%x-%j.err
+#SBATCH --output=logs/slurm/control/%x-%j.out
+#SBATCH --error=logs/slurm/control/%x-%j.err
 
 set -euo pipefail
 
@@ -17,7 +17,7 @@ WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitarit
 IMAGE_PATH="${WORKSPACE_ROOT}/images/gammaboard/gammaboard-latest.sif"
 RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime/local_postgres.template.toml"
 RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
-CONTROL_LOG_DIR="${WORKSPACE_ROOT}/logs/control"
+SLURM_LOG_DIR="${WORKSPACE_ROOT}/logs/slurm/control"
 RUNTIME_CONFIG="${RUNTIME_DIR}/runtime-${SLURM_JOB_ID}-ui-single.toml"
 INSTANCE_NAME="gb-ui-single-${SLURM_JOB_ID}"
 DEPLOY_CFG="${WORKSPACE_ROOT}/ops/config/deploy/deploy.toml"
@@ -25,7 +25,7 @@ DB_PORT="5433"
 DEPLOY_NAME="default"
 FRONTEND_PORT="8080"
 
-mkdir -p "${RUNTIME_DIR}" "${CONTROL_LOG_DIR}"
+mkdir -p "${RUNTIME_DIR}" "${SLURM_LOG_DIR}"
 
 if [[ ! -f "${RUNTIME_TEMPLATE}" ]]; then
   echo "missing runtime template: ${RUNTIME_TEMPLATE}" >&2

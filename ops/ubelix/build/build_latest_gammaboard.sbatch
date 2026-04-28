@@ -7,8 +7,8 @@
 #SBATCH --mem=8G
 #SBATCH --account=gratis
 #SBATCH --partition=epyc2
-#SBATCH --output=/storage/research/itp_localunitaritydata/logs/build/%x-%j.out
-#SBATCH --error=/storage/research/itp_localunitaritydata/logs/build/%x-%j.err
+#SBATCH --output=/storage/research/itp_localunitaritydata/logs/slurm/build/%x-%j.out
+#SBATCH --error=/storage/research/itp_localunitaritydata/logs/slurm/build/%x-%j.err
 
 set -euo pipefail
 
@@ -90,7 +90,7 @@ GL_LATEST_LINK="${GL_IMAGE_DIR}/gammaloop-latest.sif"
 GB_LATEST_LINK="${GB_IMAGE_DIR}/gammaboard-latest.sif"
 
 mkdir -p \
-  "${WORKSPACE_ROOT}/logs/build" \
+  "${WORKSPACE_ROOT}/logs/slurm/build" \
   "${TMP_BASE}" \
   "${CACHE_BASE}" \
   "${GL_IMAGE_DIR}" \

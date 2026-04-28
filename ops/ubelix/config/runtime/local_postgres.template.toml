@@ -14,7 +14,7 @@ data_dir = "${WORKSPACE_ROOT}/db/${DEPLOY_NAME}/data"
 socket_dir = "${WORKSPACE_ROOT}/db/${DEPLOY_NAME}/socket"
 
 # Persist logs for post-mortem debugging.
-log_file = "${WORKSPACE_ROOT}/logs/control/postgres-${DEPLOY_NAME}.log"
+log_file = "${WORKSPACE_ROOT}/logs/postgres/${DEPLOY_NAME}.log"
 
 max_connections = 128
 shared_buffers = "1GB"

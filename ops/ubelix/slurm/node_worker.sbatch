@@ -8,8 +8,8 @@
 #SBATCH --account=gratis
 #SBATCH --partition=epyc2
 #SBATCH --qos=job_debug
-#SBATCH --output=logs/workers/%x-%A_%a.out
-#SBATCH --error=logs/workers/%x-%A_%a.err
+#SBATCH --output=logs/slurm/workers/%x-%A_%a.out
+#SBATCH --error=logs/slurm/workers/%x-%A_%a.err
 
 set -euo pipefail
 
@@ -19,7 +19,7 @@ DATABASE_URL="${GAMMABOARD_DATABASE_URL:?set GAMMABOARD_DATABASE_URL to reachabl
 NODE_PREFIX="${NODE_PREFIX:-gb-hello}"
 ROLE="${ROLE:?set ROLE to sampler-aggregator or evaluator}"
 DEPLOY_NAME="${DEPLOY_NAME:-default}"
-mkdir -p "${WORKSPACE_ROOT}/logs/workers"
+mkdir -p "${WORKSPACE_ROOT}/logs/slurm/workers"
 
 if [[ "${ROLE}" == "sampler-aggregator" ]]; then
   NODE_NAME="${NODE_PREFIX}-sampler"
