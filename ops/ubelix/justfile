@@ -18,6 +18,69 @@ submit-ui-single:
     mkdir -p "${WORKSPACE_ROOT}/logs/slurm/control" "${WORKSPACE_ROOT}/logs/postgres"
     sbatch --chdir "${WORKSPACE_ROOT}" "${WORKSPACE_ROOT}/ops/slurm/control_ui_single.sbatch"
 
+submit-ui-with-two-workers:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
+    IMAGE_PATH="${GAMMABOARD_IMAGE:-${WORKSPACE_ROOT}/images/gammaboard/gammaboard-latest.sif}"
+    WORKER_RUNTIME_CFG="${WORKSPACE_ROOT}/ops/config/runtime/external_db_worker.toml"
+    WAIT_SECONDS="${CONTROL_NODE_WAIT_SECONDS:-180}"
+
+    mkdir -p "${WORKSPACE_ROOT}/logs/slurm/control" "${WORKSPACE_ROOT}/logs/slurm/workers" "${WORKSPACE_ROOT}/logs/postgres"
+    if [[ ! -f "${WORKER_RUNTIME_CFG}" ]]; then
+      echo "missing worker runtime config: ${WORKER_RUNTIME_CFG}" >&2
+      exit 1
+    fi
+    if [[ ! -f "${IMAGE_PATH}" ]]; then
+      echo "missing image: ${IMAGE_PATH}" >&2
+      exit 1
+    fi
+
+    ui_submit="$(sbatch --chdir "${WORKSPACE_ROOT}" "${WORKSPACE_ROOT}/ops/slurm/control_ui_single.sbatch")"
+    echo "${ui_submit}"
+    ui_job_id="$(awk '/Submitted batch job/{print $4}' <<<"${ui_submit}")"
+    if [[ -z "${ui_job_id}" ]]; then
+      echo "failed to parse control job id from sbatch output" >&2
+      exit 1
+    fi
+
+    deadline=$((SECONDS + WAIT_SECONDS))
+    control_node=""
+    while (( SECONDS < deadline )); do
+      control_node="$(squeue -h -j "${ui_job_id}" -o "%N" || true)"
+      if [[ -n "${control_node}" && "${control_node}" != "(null)" ]]; then
+        break
+      fi
+      sleep 2
+    done
+    if [[ -z "${control_node}" || "${control_node}" == "(null)" ]]; then
+      echo "timed out waiting for control node assignment for job ${ui_job_id}" >&2
+      exit 1
+    fi
+
+    sed -i -E \
+      "s#^(url *= *\"postgresql://postgres:postgres@)[^\"]*(/gammaboard_db\")#\\1${control_node}:5433\\2#" \
+      "${WORKER_RUNTIME_CFG}"
+
+    w1_submit="$(
+      NODE_NAME=w-1 \
+      GAMMABOARD_IMAGE="${IMAGE_PATH}" \
+      GAMMABOARD_WORKSPACE_ROOT="${WORKSPACE_ROOT}" \
+      sbatch --chdir "${WORKSPACE_ROOT}" "${WORKSPACE_ROOT}/ops/slurm/node_worker.sbatch"
+    )"
+    w2_submit="$(
+      NODE_NAME=w-2 \
+      GAMMABOARD_IMAGE="${IMAGE_PATH}" \
+      GAMMABOARD_WORKSPACE_ROOT="${WORKSPACE_ROOT}" \
+      sbatch --chdir "${WORKSPACE_ROOT}" "${WORKSPACE_ROOT}/ops/slurm/node_worker.sbatch"
+    )"
+
+    echo "${w1_submit}"
+    echo "${w2_submit}"
+    echo "control_job_id=${ui_job_id}"
+    echo "control_node=${control_node}"
+
 tunnel-job job_id local_port="8080":
     #!/usr/bin/env bash
     set -euo pipefail

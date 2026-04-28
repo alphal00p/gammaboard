@@ -37,6 +37,10 @@ pub struct LocalPostgresConfig {
     pub socket_dir: String,
     pub log_file: String,
     pub max_connections: u32,
+    #[serde(default = "default_listen_addresses")]
+    pub listen_addresses: String,
+    #[serde(default = "default_host_auth_cidr")]
+    pub host_auth_cidr: String,
     #[serde(default = "default_shared_buffers")]
     pub shared_buffers: String,
     #[serde(default = "default_effective_cache_size")]
@@ -192,6 +196,14 @@ fn default_advertise_host(host: &str, server_name: &str) -> String {
 
 fn default_shared_buffers() -> String {
     "4GB".to_string()
+}
+
+fn default_listen_addresses() -> String {
+    "localhost".to_string()
+}
+
+fn default_host_auth_cidr() -> String {
+    "127.0.0.1/32".to_string()
 }
 
 fn default_effective_cache_size() -> String {

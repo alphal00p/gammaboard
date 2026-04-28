@@ -37,13 +37,33 @@ export WORKSPACE_ROOT LOCAL_TMP DEPLOY_NAME
 envsubst '${WORKSPACE_ROOT} ${LOCAL_TMP} ${DEPLOY_NAME}' \
   <"${RUNTIME_TEMPLATE}" >"${RUNTIME_CONFIG}"
 
-db_host_port="$(awk -F' *= *' '/^url *=/{gsub(/"/,"",$2); print $2; exit}' "${RUNTIME_CONFIG}" | sed -E 's#^[^@]*@##; s#/.*$##')"
+db_url="$(awk -F' *= *' '/^url *=/{gsub(/"/,"",$2); print $2; exit}' "${RUNTIME_CONFIG}")"
+if [[ -z "${db_url}" ]]; then
+  echo "missing [database].url in runtime config: ${RUNTIME_CONFIG}" >&2
+  exit 1
+fi
+db_host_port="$(echo "${db_url}" | sed -E 's#^[^@]*@##; s#/.*$##')"
+db_host="${db_host_port%%:*}"
+
+if [[ "${db_host}" == "127.0.0.1" || "${db_host}" == "localhost" || "${db_host}" == "::1" ]]; then
+  echo "database.url points to loopback (${db_host_port}); separate Slurm worker jobs need the control-node hostname/IP" >&2
+  echo "update ops/config/runtime/external_db_worker.toml to use the control-node DB listener" >&2
+  exit 1
+fi
 
 echo "node: ${HOSTNAME}"
 echo "node name: ${NODE_NAME}"
 echo "workspace_root: ${WORKSPACE_ROOT}"
 echo "runtime_config: ${RUNTIME_CONFIG}"
 echo "database_host_port: ${db_host_port}"
+
+# Fail fast if DB is not reachable from this worker allocation.
+env -u PGTZ -u PGOPTIONS \
+APPTAINERENV_LANG="${APPTAINERENV_LANG:-C.UTF-8}" \
+APPTAINERENV_LC_ALL="${APPTAINERENV_LC_ALL:-C.UTF-8}" \
+APPTAINERENV_TZ="${APPTAINERENV_TZ:-Etc/UTC}" \
+apptainer exec -B "${WORKSPACE_ROOT}" "${IMAGE_PATH}" \
+  psql "${db_url}" -c "SELECT 1;" >/dev/null
 
 env -u PGTZ -u PGOPTIONS \
 APPTAINERENV_LANG="${APPTAINERENV_LANG:-C.UTF-8}" \

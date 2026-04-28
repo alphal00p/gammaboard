@@ -83,6 +83,7 @@ fn init_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
     )?;
     fs::create_dir_all(&local.socket_dir)
         .with_context(|| format!("failed to create socket dir {}", local.socket_dir))?;
+    ensure_pg_hba_rule(local)?;
     Ok(())
 }
 
@@ -91,10 +92,11 @@ fn start_postgres(local: &LocalPostgresConfig, database_url: &str) -> Result<()>
     ensure_parent_dir(&local.log_file)?;
     let socket_dir = ensure_absolute_dir(&local.socket_dir)?;
     let mut startup_options = format!(
-        "-k {} -p {} -c max_connections={} -c shared_buffers={} -c effective_cache_size={} -c work_mem={} -c checkpoint_timeout={} -c max_wal_size={} -c wal_compression={} -c synchronous_commit={}",
+        "-k {} -p {} -c max_connections={} -c listen_addresses={} -c shared_buffers={} -c effective_cache_size={} -c work_mem={} -c checkpoint_timeout={} -c max_wal_size={} -c wal_compression={} -c synchronous_commit={}",
         socket_dir.display(),
         connection.port,
         local.max_connections,
+        local.listen_addresses,
         local.shared_buffers,
         local.effective_cache_size,
         local.work_mem,
@@ -196,6 +198,7 @@ pub(crate) fn start_db(local: &LocalPostgresConfig, database_url: &str) -> Resul
     } else {
         println!("postgres cluster already initialized");
     }
+    ensure_pg_hba_rule(local)?;
 
     if !is_db_running(local)? {
         println!("postgres is stopped; starting");
@@ -404,6 +407,28 @@ fn ensure_absolute_dir(path: &str) -> Result<PathBuf> {
         .join(path)
         .canonicalize()
         .with_context(|| format!("failed to resolve absolute path for {path}"))
+}
+
+fn ensure_pg_hba_rule(local: &LocalPostgresConfig) -> Result<()> {
+    let hba_path = Path::new(&local.data_dir).join("pg_hba.conf");
+    if !hba_path.exists() {
+        return Ok(());
+    }
+    let rule = format!("host all all {} trust", local.host_auth_cidr.trim());
+    let existing =
+        fs::read_to_string(&hba_path).with_context(|| format!("failed to read {}", hba_path.display()))?;
+    if existing.lines().any(|line| line.trim() == rule) {
+        return Ok(());
+    }
+    let mut content = existing;
+    if !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(&rule);
+    content.push('\n');
+    fs::write(&hba_path, content)
+        .with_context(|| format!("failed to update {}", hba_path.display()))?;
+    Ok(())
 }
 
 fn remove_path_if_exists(path: &str) -> Result<bool> {

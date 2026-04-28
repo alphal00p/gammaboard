@@ -27,7 +27,7 @@ The frontend can be separated later, but the first deployment should serve front
 - `build/build_latest_gammaboard.sbatch`: always builds both targets (`gammaloop`, then `gammaboard`) from latest upstream `HEAD`, writes commit-named images, and updates both latest symlinks.
 - `config/runtime/external_db_control.template.toml`: control runtime template for external DB mode (persistent data dir + scratch socket dir).
 - `config/runtime/external_db_worker.toml`: worker runtime config source of truth (including DB URL); copied via `envsubst` for path placeholders.
-- `config/runtime/local_postgres.template.toml`: runtime template for local-Postgres control jobs.
+- `config/runtime/local_postgres.template.toml`: runtime template for local-Postgres control jobs, including network listen/auth settings for remote worker jobs.
 - `config/server/server.toml` and `config/deploy/deploy.toml`: UBELIX deploy/server profiles (same split as local/itphlies).
 - UBELIX server profile sets `allow_local_node_spawn = false` so dashboard "Start Nodes" is disabled; workers should be launched via Slurm jobs/arrays.
 - `config/templates/runs` and `config/templates/tasks`: UBELIX-local run/task template directories used by `server.toml`.
