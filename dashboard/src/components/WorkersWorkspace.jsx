@@ -33,7 +33,7 @@ const compareNodeNames = (left, right) =>
   });
 
 const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => {
-  const { authenticated } = useAuth();
+  const { authenticated, allowLocalNodeSpawn } = useAuth();
   const [selectedNodeName, setSelectedNodeName] = useState(null);
   const [startCount, setStartCount] = useState("1");
   const [startingNodes, setStartingNodes] = useState(false);
@@ -96,39 +96,43 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
         </Typography>
         {authenticated ? (
           <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
-            <TextField
-              size="small"
-              label="Count"
-              value={startCount}
-              onChange={(event) => setStartCount(event.target.value)}
-              sx={{ width: 120 }}
-            />
-            <Button
-              variant="outlined"
-              disabled={startingNodes}
-              onClick={async () => {
-                const count = Number.parseInt(String(startCount).trim(), 10);
-                if (!Number.isFinite(count) || count <= 0) {
-                  setSnackbar({ message: "Count must be a positive integer.", severity: "error" });
-                  return;
-                }
-                setStartingNodes(true);
-                try {
-                  const response = await autoRunNodes({ count });
-                  const started = Number(response?.started ?? 0);
-                  setSnackbar({
-                    message: `Started ${started} node${started === 1 ? "" : "s"}.`,
-                    severity: "success",
-                  });
-                } catch (err) {
-                  setSnackbar({ message: err?.message || "Failed to start nodes.", severity: "error" });
-                } finally {
-                  setStartingNodes(false);
-                }
-              }}
-            >
-              Start Nodes
-            </Button>
+            {allowLocalNodeSpawn ? (
+              <>
+                <TextField
+                  size="small"
+                  label="Count"
+                  value={startCount}
+                  onChange={(event) => setStartCount(event.target.value)}
+                  sx={{ width: 120 }}
+                />
+                <Button
+                  variant="outlined"
+                  disabled={startingNodes}
+                  onClick={async () => {
+                    const count = Number.parseInt(String(startCount).trim(), 10);
+                    if (!Number.isFinite(count) || count <= 0) {
+                      setSnackbar({ message: "Count must be a positive integer.", severity: "error" });
+                      return;
+                    }
+                    setStartingNodes(true);
+                    try {
+                      const response = await autoRunNodes({ count });
+                      const started = Number(response?.started ?? 0);
+                      setSnackbar({
+                        message: `Started ${started} node${started === 1 ? "" : "s"}.`,
+                        severity: "success",
+                      });
+                    } catch (err) {
+                      setSnackbar({ message: err?.message || "Failed to start nodes.", severity: "error" });
+                    } finally {
+                      setStartingNodes(false);
+                    }
+                  }}
+                >
+                  Start Nodes
+                </Button>
+              </>
+            ) : null}
             <Button
               color="error"
               variant="outlined"
@@ -155,6 +159,11 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
               Restart DB
             </Button>
           </Stack>
+        ) : null}
+        {authenticated && !allowLocalNodeSpawn ? (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Local node spawning is disabled for this deployment. Start workers via Slurm launcher jobs.
+          </Alert>
         ) : null}
 
         {workers.length === 0 ? (

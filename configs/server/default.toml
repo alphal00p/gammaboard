@@ -5,6 +5,7 @@ api_port = 4000
 allowed_origins = ["http://localhost:3000"]
 secure_cookie = false
 allow_db_admin = true
+allow_local_node_spawn = true
 run_templates_dir = "../runs"
 task_templates_dir = "../tasks"
 

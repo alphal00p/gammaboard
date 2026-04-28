@@ -31,6 +31,7 @@ pub struct AuthConfig {
 #[derive(Debug, Serialize)]
 pub struct SessionStatus {
     pub authenticated: bool,
+    pub allow_local_node_spawn: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -89,6 +90,7 @@ pub async fn login(
         session_cookie(&token, SESSION_TTL_SECS, state.secure_cookie),
         SessionStatus {
             authenticated: true,
+            allow_local_node_spawn: state.allow_local_node_spawn,
         },
     ))
 }
@@ -104,6 +106,7 @@ pub async fn logout(
         session_cookie("", 0, state.secure_cookie),
         SessionStatus {
             authenticated: false,
+            allow_local_node_spawn: state.allow_local_node_spawn,
         },
     ))
 }
@@ -112,7 +115,10 @@ pub fn auth_status_from_headers(state: &AppState, headers: &HeaderMap) -> Sessio
     let authenticated = cookie_value(headers, COOKIE_NAME)
         .and_then(|value| verify_session_token(&state.auth, &value))
         .is_some();
-    SessionStatus { authenticated }
+    SessionStatus {
+        authenticated,
+        allow_local_node_spawn: state.allow_local_node_spawn,
+    }
 }
 
 fn verify_password_hash(encoded: &str, password: &str) -> bool {

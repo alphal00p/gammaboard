@@ -64,6 +64,7 @@ pub struct ServerConfig {
     pub allowed_origins: Vec<String>,
     pub secure_cookie: bool,
     pub allow_db_admin: bool,
+    pub allow_local_node_spawn: bool,
     pub run_templates_dir: String,
     pub task_templates_dir: String,
     pub auth: ServerAuthConfig,
@@ -126,6 +127,7 @@ pub async fn serve(
         allowed_origins,
         secure_cookie: config.secure_cookie,
         allow_db_admin: config.allow_db_admin,
+        allow_local_node_spawn: config.allow_local_node_spawn,
         run_templates_dir: PathBuf::from(&config.run_templates_dir),
         task_templates_dir: PathBuf::from(&config.task_templates_dir),
         runtime_config_path,
@@ -155,6 +157,7 @@ pub(crate) struct AppState {
     allowed_origins: Vec<axum::http::HeaderValue>,
     secure_cookie: bool,
     allow_db_admin: bool,
+    allow_local_node_spawn: bool,
     run_templates_dir: PathBuf,
     task_templates_dir: PathBuf,
     runtime_config_path: PathBuf,
@@ -1282,6 +1285,12 @@ async fn auto_run_nodes(
     State(state): State<AppState>,
     AxumJson(payload): AxumJson<AutoRunNodesRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    if !state.allow_local_node_spawn {
+        return Err(ApiError::BadRequest(
+            "local node spawning is disabled by server config".to_string(),
+        ));
+    }
+
     let max_start_failures = payload.max_start_failures.unwrap_or(3);
     let plan = node_api::plan_auto_run_nodes(&state.store, payload.count)
         .await

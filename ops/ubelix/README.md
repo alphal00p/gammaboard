@@ -28,6 +28,7 @@ The frontend can be separated later, but the first deployment should serve front
 - `config/runtime/external_db.template.toml`: worker/control runtime template for external DB mode (persistent data dir + scratch socket dir).
 - `config/runtime/local_postgres.template.toml`: runtime template for local-Postgres control jobs.
 - `config/server/server.toml` and `config/deploy/deploy.toml`: UBELIX deploy/server profiles (same split as local/itphlies).
+- UBELIX server profile sets `allow_local_node_spawn = false` so dashboard "Start Nodes" is disabled; workers should be launched via Slurm jobs/arrays.
 - `config/templates/runs` and `config/templates/tasks`: UBELIX-local run/task template directories used by `server.toml`.
 - `slurm/smoke_container.sbatch`: no-DB smoke check (`gammaloop`/`gammaboard` version/help) for a runtime image.
 - `slurm/node_worker.sbatch`: long-running worker (`node run`) for sampler/evaluator.
@@ -336,6 +337,48 @@ gammaboard --runtime-config <runtime.toml> auto-assign <RUN> <EVALUATOR_COUNT>
 ```
 
 The sampler-aggregator remains at most one assigned node per run. Evaluators can be a Slurm array.
+
+## Planned UBELIX Launcher
+
+Keep the Rust `gammaboard` CLI cluster-agnostic. UBELIX-specific scheduling should live in an ops launcher under this directory, not in the core CLI.
+
+Proposed split:
+
+```text
+gammaboard CLI:
+  db start/stop
+  deploy run
+  node run
+  run add/list/pause
+  auto-assign
+
+ops/ubelix launcher:
+  submit control/UI job
+  discover control compute node
+  print SSH tunnel command
+  submit one sampler job
+  submit evaluator job arrays
+  cancel jobs
+  show UBELIX deployment status
+```
+
+The launcher can initially be a small `launcher.py` or shell wrapper around `sbatch`, `squeue`, `sacct`, `scontrol`, and `scancel`. Prefer Python once it needs to parse Slurm output, track job ids, or render multiple command variants safely.
+
+Worker scaling should use Slurm job arrays for evaluators:
+
+```bash
+sbatch --array=1-64%16 ops/slurm/worker_evaluator_array.sbatch
+```
+
+The sampler should remain a singleton job because Gammaboard allows at most one sampler-aggregator assignment per run. Control/UI should also remain singleton and own the database/API/frontend lifetime.
+
+Future frontend-triggered worker scaling should not shell out to `sbatch` directly from a request handler. Prefer this flow:
+
+```text
+frontend -> API records desired worker group -> UBELIX launcher reconciles Slurm jobs
+```
+
+That keeps scheduler interaction durable and recoverable while allowing the dashboard to express operator intent later.
 
 ## Open Design Point
 

@@ -5,6 +5,7 @@ const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
   const [authenticated, setAuthenticated] = useState(false);
+  const [allowLocalNodeSpawn, setAllowLocalNodeSpawn] = useState(true);
   const [ready, setReady] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -14,9 +15,11 @@ export const AuthProvider = ({ children }) => {
     try {
       const response = await fetchSession();
       setAuthenticated(response?.authenticated === true);
+      setAllowLocalNodeSpawn(response?.allow_local_node_spawn !== false);
       setError(null);
     } catch (err) {
       setAuthenticated(false);
+      setAllowLocalNodeSpawn(true);
       setError(err?.status === 401 ? null : err?.message || "Failed to load auth session");
     } finally {
       setReady(true);
@@ -63,6 +66,7 @@ export const AuthProvider = ({ children }) => {
   const value = useMemo(
     () => ({
       authenticated,
+      allowLocalNodeSpawn,
       ready,
       busy,
       error,
@@ -73,7 +77,18 @@ export const AuthProvider = ({ children }) => {
       requestLogin,
       refreshSession,
     }),
-    [authenticated, ready, busy, error, dialogOpen, login, logout, requestLogin, refreshSession],
+    [
+      authenticated,
+      allowLocalNodeSpawn,
+      ready,
+      busy,
+      error,
+      dialogOpen,
+      login,
+      logout,
+      requestLogin,
+      refreshSession,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

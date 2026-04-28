@@ -121,6 +121,7 @@ The checked-in local defaults also bias Postgres toward queue throughput: larger
   allowed_origins = ["http://localhost:3000"]
   secure_cookie = false
   allow_db_admin = true
+  allow_local_node_spawn = true
   run_templates_dir = "../runs"
   task_templates_dir = "../tasks"
 
@@ -130,6 +131,7 @@ The checked-in local defaults also bias Postgres toward queue throughput: larger
   ```
 - All server config fields are explicit; the server does not fill in defaults.
 - Set `allow_db_admin = true` only for trusted local/operator setups; it enables dashboard-triggered `db stop && db start`.
+- Set `allow_local_node_spawn = false` for scheduler-managed deployments (for example UBELIX) where workers must be started by Slurm, not as child processes on the API host.
 - `gammaboard server` is the direct local/manual backend path. Use `gammaboard deploy run ...` when you want one foreground process to supervise local Postgres, the backend, and nginx-backed frontend serving.
 
 ## Deploy Config
@@ -220,7 +222,8 @@ Important:
 - Read-only dashboard endpoints stay open.
 - Steering actions currently require admin login and are backed by a signed session cookie.
 - The Runs tab includes a `Copy Run TOML` action that exports a run-add compatible TOML containing the run config and all successfully completed tasks as `[[task_queue]]` entries.
-- The dashboard currently supports creating runs from raw TOML, cloning runs from a stored stage snapshot, appending tasks from raw TOML, deleting pending tasks, pausing runs, removing runs, auto-assigning free nodes, assigning and unassigning nodes, requesting node shutdown (single or all), starting new local nodes, and restarting the local database when `allow_db_admin = true`.
+- The dashboard currently supports creating runs from raw TOML, cloning runs from a stored stage snapshot, appending tasks from raw TOML, deleting pending tasks, pausing runs, removing runs, auto-assigning free nodes, assigning and unassigning nodes, requesting node shutdown (single or all), and restarting the local database when `allow_db_admin = true`.
+- Starting new local node child processes is available only when `allow_local_node_spawn = true`.
 - The Performance tab defaults history x-axes to sampler uptime (active sampler runtime, excluding paused intervals) and lets operators switch to wall time or total completed samples.
 - The create-run and add-task dialogs can load `.toml` templates from `run_templates_dir` and `task_templates_dir`; admin users can also save edited TOML back as templates, and task templates can be deleted from the dashboard.
 - Node shutdown from the dashboard is guarded by a confirmation dialog.
