@@ -223,6 +223,8 @@ fn start_backend(deploy_config: &DeployConfig, runtime_config_path: &Path) -> Re
 
 fn start_nginx(deploy_config: &DeployConfig) -> Result<Child> {
     Command::new("nginx")
+        .arg("-e")
+        .arg("/dev/stderr")
         .arg("-p")
         .arg(std::env::current_dir()?)
         .arg("-c")
