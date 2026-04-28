@@ -10,8 +10,8 @@ db_external_level = "warn"
 # Persistent state: survives walltime/preemption and lets runs resume.
 data_dir = "${WORKSPACE_ROOT}/db/${DEPLOY_NAME}/data"
 
-# Fast local IPC: recreated every allocation.
-socket_dir = "${LOCAL_TMP}/gammaboard-db/${DEPLOY_NAME}/socket"
+# Workspace socket dir for environments where node-local scratch is read-only.
+socket_dir = "${WORKSPACE_ROOT}/db/${DEPLOY_NAME}/socket"
 
 # Persist logs for post-mortem debugging.
 log_file = "${WORKSPACE_ROOT}/logs/control/postgres-${DEPLOY_NAME}.log"

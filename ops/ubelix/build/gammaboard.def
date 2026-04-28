@@ -4,6 +4,7 @@ From: rust:1-bookworm
 %setup
     mkdir -p "${APPTAINER_ROOTFS}/workspace/artifacts/bin"
     mkdir -p "${APPTAINER_ROOTFS}/workspace/artifacts/bin/lib"
+    mkdir -p "${APPTAINER_ROOTFS}/workspace/artifacts/migrations"
 
 %post
     set -eux
@@ -14,6 +15,7 @@ From: rust:1-bookworm
         ca-certificates \
         python3 \
         libgfortran5 \
+        tzdata \
         postgresql \
         postgresql-contrib
 
@@ -28,10 +30,17 @@ From: rust:1-bookworm
 
     GAMMALOOP_BIN="${GAMMALOOP_BIN:-/workspace/artifacts/bin/gammaloop}"
     GAMMABOARD_BIN="${GAMMABOARD_BIN:-/workspace/artifacts/bin/gammaboard}"
+    SQLX_BIN="${SQLX_BIN:-/workspace/artifacts/bin/sqlx}"
+    MIGRATIONS_DIR="${MIGRATIONS_DIR:-/workspace/artifacts/migrations}"
     test -x "${GAMMALOOP_BIN}"
     test -x "${GAMMABOARD_BIN}"
+    test -x "${SQLX_BIN}"
+    test -d "${MIGRATIONS_DIR}"
     install -Dm755 "${GAMMALOOP_BIN}" /usr/local/bin/gammaloop
     install -Dm755 "${GAMMABOARD_BIN}" /usr/local/bin/gammaboard
+    install -Dm755 "${SQLX_BIN}" /usr/local/bin/sqlx
+    mkdir -p /usr/local/share/gammaboard/migrations
+    cp -a "${MIGRATIONS_DIR}/." /usr/local/share/gammaboard/migrations/
     mkdir -p /usr/local/lib/gammaboard
     for lib in /workspace/artifacts/bin/lib/*.so*; do
       if [ -e "${lib}" ]; then
@@ -45,6 +54,8 @@ From: rust:1-bookworm
 %environment
     export PATH=/usr/local/bin:$PATH
     export LD_LIBRARY_PATH=/usr/local/lib/gammaboard:${LD_LIBRARY_PATH:-}
+    export TZ=UTC
+    export GAMMABOARD_MIGRATIONS_DIR=/usr/local/share/gammaboard/migrations
 
 %runscript
     exec "$@"

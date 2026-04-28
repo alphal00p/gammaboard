@@ -24,6 +24,7 @@ GL_SRC_DIR_REL="artifacts/src/gammaloop"
 GB_SRC_DIR_REL="artifacts/src/gammaboard"
 BIN_DIR_REL="artifacts/bin"
 LIB_DIR_REL="artifacts/bin/lib"
+MIGRATIONS_DIR_REL="artifacts/migrations"
 SCRATCH_BASE="${SCRATCH_BASE:-/scratch/network/users/${USER}/apptainer}"
 
 require_cmd() {
@@ -81,6 +82,8 @@ GL_SRC_DIR="${WORKSPACE_ROOT}/${GL_SRC_DIR_REL}"
 GB_SRC_DIR="${WORKSPACE_ROOT}/${GB_SRC_DIR_REL}"
 BIN_DIR="${WORKSPACE_ROOT}/${BIN_DIR_REL}"
 LIB_DIR="${WORKSPACE_ROOT}/${LIB_DIR_REL}"
+MIGRATIONS_DIR="${WORKSPACE_ROOT}/${MIGRATIONS_DIR_REL}"
+SQLX_ROOT_DIR="${WORKSPACE_ROOT}/artifacts/sqlx-root"
 RUST_TARGET_BASE="${RUST_TARGET_BASE:-/scratch/network/users/${USER}/gammaboard-target}"
 RUST_TARGET_DIR="${RUST_TARGET_BASE}/target"
 GL_LATEST_LINK="${GL_IMAGE_DIR}/gammaloop-latest.sif"
@@ -93,7 +96,7 @@ mkdir -p \
   "${CACHE_BASE}" \
   "${GL_IMAGE_DIR}" \
   "${GB_IMAGE_DIR}"
-mkdir -p "${BIN_DIR}" "${LIB_DIR}" "${RUST_TARGET_DIR}"
+mkdir -p "${BIN_DIR}" "${LIB_DIR}" "${MIGRATIONS_DIR}" "${RUST_TARGET_DIR}" "${SQLX_ROOT_DIR}"
 
 if [[ ! -f "${GL_DEF_PATH}" ]]; then
   echo "missing def file: ${GL_DEF_PATH}" >&2
@@ -118,6 +121,8 @@ GL_META_FILE="${GL_IMAGE_DIR}/gammaloop-${GAMMALOOP_SHA}.meta"
 GB_META_FILE="${GB_IMAGE_DIR}/gammaboard-${GAMMABOARD_SHA}.meta"
 HOST_GAMMALOOP_BIN="${BIN_DIR}/gammaloop"
 HOST_GAMMABOARD_BIN="${BIN_DIR}/gammaboard"
+HOST_SQLX_BIN="${BIN_DIR}/sqlx"
+HOST_MIGRATIONS_DIR="${MIGRATIONS_DIR}"
 GL_RUST_PROFILE="release"
 GL_RUST_FEATURES="ufo_support"
 GB_RUST_PROFILE="release"
@@ -131,6 +136,8 @@ echo "gammaboard_source: ${GB_SRC_DIR}"
 echo "target_dir_compile: ${RUST_TARGET_DIR}"
 echo "gammaloop_bin: ${HOST_GAMMALOOP_BIN}"
 echo "gammaboard_bin: ${HOST_GAMMABOARD_BIN}"
+echo "sqlx_bin: ${HOST_SQLX_BIN}"
+echo "migrations_dir: ${HOST_MIGRATIONS_DIR}"
 echo "lib_dir: ${LIB_DIR}"
 echo "gammaloop_sha: ${GAMMALOOP_SHA}"
 echo "gammaboard_sha: ${GAMMABOARD_SHA}"
@@ -185,12 +192,19 @@ CARGO_GB_END="$(date +%s)"
 BIN_STAGE_START="$(date +%s)"
 install -Dm755 "${RUST_TARGET_DIR}/${GL_RUST_PROFILE}/gammaloop" "${HOST_GAMMALOOP_BIN}"
 install -Dm755 "${RUST_TARGET_DIR}/release/gammaboard" "${HOST_GAMMABOARD_BIN}"
+if [[ ! -x "${SQLX_ROOT_DIR}/bin/sqlx" ]]; then
+  echo "building sqlx-cli binary"
+  cargo install sqlx-cli --locked --no-default-features --features rustls,postgres --root "${SQLX_ROOT_DIR}"
+fi
+install -Dm755 "${SQLX_ROOT_DIR}/bin/sqlx" "${HOST_SQLX_BIN}"
 PY_LIB_PATH="$(ldd "${HOST_GAMMALOOP_BIN}" | awk '/libpython3\.[0-9]+\.so/{print $3; exit}')"
 if [[ -z "${PY_LIB_PATH}" || ! -f "${PY_LIB_PATH}" ]]; then
   echo "failed to resolve host libpython from ldd for ${HOST_GAMMALOOP_BIN}" >&2
   exit 1
 fi
 cp -L "${PY_LIB_PATH}" "${LIB_DIR}/"
+rm -rf "${MIGRATIONS_DIR}"
+cp -a "${GB_SRC_DIR}/migrations" "${MIGRATIONS_DIR}"
 BIN_STAGE_END="$(date +%s)"
 
 # Always build both targets: gammaloop first, then gammaboard.
@@ -207,6 +221,8 @@ APPTAINER_GL_END="$(date +%s)"
 echo "building image: ${GB_OUT_IMAGE}"
 export APPTAINERENV_GAMMALOOP_BIN="/workspace/${BIN_DIR_REL}/gammaloop"
 export APPTAINERENV_GAMMABOARD_BIN="/workspace/${BIN_DIR_REL}/gammaboard"
+export APPTAINERENV_SQLX_BIN="/workspace/${BIN_DIR_REL}/sqlx"
+export APPTAINERENV_MIGRATIONS_DIR="/workspace/${MIGRATIONS_DIR_REL}"
 APPTAINER_GB_START="$(date +%s)"
 (
   cd "${GB_DEF_DIR}"

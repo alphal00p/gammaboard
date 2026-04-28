@@ -141,10 +141,13 @@ fn ensure_database_and_migrations(local: &LocalPostgresConfig, database_url: &st
         println!("database '{}' already exists", connection.database);
     }
     println!("applying migrations");
+    let migrations_dir = resolve_migrations_dir();
     run_command(
         Command::new("sqlx")
             .arg("migrate")
             .arg("run")
+            .arg("--source")
+            .arg(&migrations_dir)
             .arg("--database-url")
             .arg(database_url),
         "sqlx migrate run",
@@ -168,6 +171,19 @@ fn ensure_database_and_migrations(local: &LocalPostgresConfig, database_url: &st
     )?;
 
     Ok(())
+}
+
+fn resolve_migrations_dir() -> String {
+    if let Ok(path) = std::env::var("GAMMABOARD_MIGRATIONS_DIR") {
+        if !path.trim().is_empty() {
+            return path;
+        }
+    }
+    let embedded = "/usr/local/share/gammaboard/migrations";
+    if Path::new(embedded).exists() {
+        return embedded.to_string();
+    }
+    "migrations".to_string()
 }
 
 pub(crate) fn start_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
