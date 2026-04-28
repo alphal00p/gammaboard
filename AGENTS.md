@@ -132,8 +132,8 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Local Postgres tuning lives under `runtime.local_postgres`; keep latency-sensitive queue defaults explicit there, including WAL/checkpoint settings and whether `synchronous_commit` is relaxed for local throughput.
 - Local `gammaboard db start` should always enable `pg_stat_statements` preload and extension creation for the configured database.
 - Server API bind, allowed origins, secure cookie policy, `allow_db_admin` policy, dashboard auth secrets, and template directories should come from `configs/server/default.toml` by default, with an optional `gammaboard server --server-config <PATH>` override.
-- Detached deploy lifecycle should live under `gammaboard deploy ...`, with `configs/deploy/*.toml` owning frontend HTTP exposure, static-site serving, and cleanup policy, while selecting which `configs/server/*.toml` backend profile to run.
-- `gammaboard deploy up` must launch the backend with the same active `--runtime-config` path so detached server-managed node auto-run workers inherit the intended database and tracing settings.
+- Foreground deploy lifecycle should live under `gammaboard deploy run ...`, with `configs/deploy/*.toml` owning frontend HTTP exposure, static-site serving, and cleanup policy, while selecting which `configs/server/*.toml` backend profile to run.
+- `gammaboard deploy run` must launch the backend with the same active `--runtime-config` path so server-managed node auto-run workers inherit the intended database and tracing settings.
 - `gammaboard server` remains the direct foreground backend path; `gammaboard deploy` is orchestration around it, not a replacement for it.
 - Server TOML should be explicit; do not rely on implicit defaults for required server settings.
 - `gammaboard server` should terminate immediately on `Ctrl-C` (no graceful-drain wait path).

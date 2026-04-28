@@ -6,7 +6,7 @@ Gammaboard runs distributed numerical integration jobs with PostgreSQL as the sh
 - `gammaboard run`: create, list, pause, clone, and remove runs.
 - `gammaboard node`: list, assign, unassign, and stop nodes.
 - `gammaboard server`: run the backend directly in the foreground.
-- `gammaboard deploy`: launch the detached full-stack deploy flow.
+- `gammaboard deploy run`: supervise the full-stack deploy flow in the foreground.
 - `gammaboard db`: manage the local PostgreSQL instance used for development.
 
 The dashboard shows runs, task output, nodes, performance, and logs.
@@ -38,7 +38,7 @@ The dashboard shows runs, task output, nodes, performance, and logs.
 Default config split:
 - `configs/runtime/default.toml`: shared database, tracing, and local Postgres settings
 - `configs/server/default.toml`: direct `gammaboard server` settings
-- `ops/<env>/config/{server,deploy}.toml`: detached deploy environment profiles
+- `ops/<env>/config/{server,deploy}.toml`: deploy environment profiles
 
 The frontend uses relative `/api` calls and does not require `.env`. The `just` recipes remain as thin wrappers, but the CLI flow above is the primary local workflow.
 
@@ -50,7 +50,7 @@ For initial Slurm/Apptainer hello-world tests on UBELIX, use:
 - [ops/ubelix/justfile](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/justfile)
 
 ## Ops Layout
-- [ops/local/config](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config): local detached-deploy profiles.
+- [ops/local/config](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config): local deploy profiles.
 - [ops/itphlies/README.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/itphlies/README.md): ITPhlies-specific deploy workflow and config.
 - [ops/ubelix/README.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/README.md): UBELIX Slurm/Apptainer workflow and config.
 
@@ -130,17 +130,17 @@ The checked-in local defaults also bias Postgres toward queue throughput: larger
   ```
 - All server config fields are explicit; the server does not fill in defaults.
 - Set `allow_db_admin = true` only for trusted local/operator setups; it enables dashboard-triggered `db stop && db start`.
-- `gammaboard server` is the direct local/manual backend path. Use `gammaboard deploy ...` when you want detached nginx-backed serving.
+- `gammaboard server` is the direct local/manual backend path. Use `gammaboard deploy run ...` when you want one foreground process to supervise local Postgres, the backend, and nginx-backed frontend serving.
 
 ## Deploy Config
-Detached deploy is now owned by `gammaboard deploy ...` plus a deploy TOML profile.
+Deploy is owned by `gammaboard deploy run ...` plus a deploy TOML profile.
 - `gammaboard deploy` default config (`ops/local/config/deploy.toml`) also has the same built-in fallback when the default file is absent.
 
 Config split:
 - `configs/runtime/*.toml`: shared DB, tracing, and local Postgres settings for all commands
 - `configs/server/default.toml`: shared direct `gammaboard server` default profile
-- `ops/<env>/config/server.toml`: environment-specific detached-deploy backend settings
-- `ops/<env>/config/deploy.toml`: environment-specific detached deploy orchestration (server profile, frontend HTTP exposure, static frontend serving, cleanup policy)
+- `ops/<env>/config/server.toml`: environment-specific deploy backend settings
+- `ops/<env>/config/deploy.toml`: environment-specific deploy orchestration (server profile, frontend HTTP exposure, static frontend serving, cleanup policy)
 
 The checked-in profiles are:
 - [ops/local/config/deploy.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config/deploy.toml)
@@ -148,9 +148,7 @@ The checked-in profiles are:
 
 Use:
 ```bash
-gammaboard deploy up --deploy-config ops/local/config/deploy.toml
-gammaboard deploy status
-gammaboard deploy down
+gammaboard deploy run --deploy-config ops/local/config/deploy.toml
 ```
 
 Useful options:
@@ -158,22 +156,20 @@ Useful options:
 
 Deploy profiles now derive the printed/open URLs from `frontend_http.frontend_port` plus `frontend_http.frontend_advertise_hosts`, instead of duplicating full URL strings in the config.
 
-The `just` wrappers build first, then invoke the CLI:
+The `just` wrappers build first, then run the foreground supervisor:
 ```bash
 just deploy local dev
 just deploy itphlies release
-just deploy-status itphlies
-just stop-deploy itphlies
 ```
 
-Detached deploy:
+Deploy run:
 - optionally starts local Postgres via `gammaboard db start`
-- starts `gammaboard server` detached (using the same active `--runtime-config` path as the deploy command)
-- generates an nginx config from the deploy profile and serves the frontend build directly from nginx
+- starts `gammaboard server` as a supervised child process using the same active `--runtime-config` path
+- generates an nginx config from the deploy profile and runs nginx in the foreground as a supervised child process
+- logs to the parent process stdout/stderr, so terminals, Slurm, or systemd own log collection
+- tears down nginx, the backend, worker assignments, and local Postgres on `Ctrl-C`/`SIGTERM`
 
-`gammaboard deploy ...` itself does not build. Use the `just deploy ...` wrapper when you want the frontend and the requested backend mode built first.
-
-Deploy targets are alternatives, not concurrent stacks on one machine: all profiles currently share the same PID/log namespace under `logs/`, so `deploy up` replaces the current detached deploy stack.
+`gammaboard deploy run ...` itself does not build. Use the `just deploy ...` wrapper when you want the frontend and backend built first.
 
 ## ITPhlies Deployment
 Use this flow when you want both direct LAN access and the SSH tunnel option.
@@ -183,7 +179,7 @@ Use this flow when you want both direct LAN access and the SSH tunnel option.
    just deploy itphlies release
    ```
    (From `ops/itphlies`, you can run `just --justfile justfile deploy`.)
-   This builds the frontend and release backend, then launches `target/release/gammaboard server` and generates the nginx config from the deploy profile.
+   This builds the frontend and release backend, then runs a foreground deploy supervisor for the backend, nginx, and local Postgres.
 2. On your laptop, open an SSH tunnel:
    ```bash
    ssh -N -L 8080:127.0.0.1:8080 ITPhliesTails
@@ -193,10 +189,7 @@ Use this flow when you want both direct LAN access and the SSH tunnel option.
    http://localhost:8080
    ```
    or `http://itphlies:8080` if your local network resolves that hostname. If you access the server by LAN IP instead, add that origin to `allowed_origins` in the server config first.
-4. To stop all deployed ITPhlies processes:
-   ```bash
-   just stop-deploy itphlies
-   ```
+4. To stop all deployed ITPhlies processes, press `Ctrl-C` in the foreground deploy terminal.
 5. The SSH tunnel remains optional; direct LAN access works because nginx listens on `0.0.0.0:8080`, while the backend still stays private on `127.0.0.1:4000`.
 
 Config files used:
@@ -217,11 +210,11 @@ Important:
 - Example nginx layout:
   - `location / { root <dashboard-build-dir>; try_files $uri /index.html; }`
   - `location /api/ { proxy_pass http://127.0.0.1:4000/api/; }`
-- Local detached deploy setup:
+- Local deploy setup:
   - server config: [ops/local/config/server.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config/server.toml)
   - deploy config: [ops/local/config/deploy.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config/deploy.toml)
   - run with: `just deploy local dev`
-  - stop with: `just stop-deploy local`
+  - stop with: `Ctrl-C` in the deploy terminal
 
 ## Dashboard Auth
 - Read-only dashboard endpoints stay open.

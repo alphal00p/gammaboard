@@ -8,26 +8,11 @@ deploy mode="dev":
     set -euo pipefail
 
     cd ../..
-
     just build-frontend
     if [[ "{{mode}}" == "release" ]]; then
         just build-backend-release
-        {{release_bin}} --runtime-config "{{runtime_cfg}}" deploy up --deploy-config "{{deploy_cfg}}"
+        {{release_bin}} --runtime-config "{{runtime_cfg}}" deploy run --deploy-config "{{deploy_cfg}}"
     else
         just build-backend
-        {{bin}} --runtime-config "{{runtime_cfg}}" deploy up --deploy-config "{{deploy_cfg}}"
+        {{bin}} --runtime-config "{{runtime_cfg}}" deploy run --deploy-config "{{deploy_cfg}}"
     fi
-
-status:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    cd ../..
-    {{bin}} --runtime-config "{{runtime_cfg}}" deploy status --deploy-config "{{deploy_cfg}}"
-
-down:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    cd ../..
-    {{bin}} --runtime-config "{{runtime_cfg}}" deploy down --deploy-config "{{deploy_cfg}}"

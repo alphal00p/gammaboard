@@ -1,4 +1,4 @@
-# Backend API/dashboard settings for UBELIX detached deploy profile.
+# Backend API/dashboard settings for the UBELIX deploy profile.
 api_host = "127.0.0.1"
 api_port = 4000
 allowed_origins = ["http://localhost:8080"]

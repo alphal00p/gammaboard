@@ -207,7 +207,7 @@ pub(crate) fn start_db(local: &LocalPostgresConfig, database_url: &str) -> Resul
     ensure_database_and_migrations(local, database_url)
 }
 
-fn stop_db(local: &LocalPostgresConfig) -> Result<()> {
+pub(crate) fn stop_db(local: &LocalPostgresConfig) -> Result<()> {
     if !Path::new(&local.data_dir).exists() {
         println!("postgres already stopped (data directory missing)");
         return Ok(());

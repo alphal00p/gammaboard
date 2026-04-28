@@ -64,32 +64,6 @@ deploy host mode="dev":
         exit 1
     fi
 
-deploy-status host="local":
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    if [[ "{{host}}" == "local" ]]; then
-        just --justfile ops/local/justfile status
-    elif [[ "{{host}}" == "itphlies" ]]; then
-        just --justfile ops/itphlies/justfile status
-    else
-        echo "unknown deploy host: {{host}} (expected: local or itphlies)" >&2
-        exit 1
-    fi
-
-stop-deploy host="local":
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    if [[ "{{host}}" == "local" ]]; then
-        just --justfile ops/local/justfile down
-    elif [[ "{{host}}" == "itphlies" ]]; then
-        just --justfile ops/itphlies/justfile down
-    else
-        echo "unknown deploy host: {{host}} (expected: local or itphlies)" >&2
-        exit 1
-    fi
-
 test-e2e:
     just build-backend
     just stop-kill

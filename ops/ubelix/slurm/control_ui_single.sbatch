@@ -60,8 +60,6 @@ run_in_container() {
 
 cleanup() {
   set +e
-  run_in_container deploy down --deploy-config "${DEPLOY_CFG}"
-  run_in_container db stop
   apptainer instance stop "${INSTANCE_NAME}" 2>/dev/null || true
   rm -f "${RUNTIME_CONFIG}"
 }
@@ -80,9 +78,4 @@ echo "runtime_config: ${RUNTIME_CONFIG}"
 echo "frontend_url: http://${HOSTNAME}:${FRONTEND_PORT}"
 echo "tunnel_cmd: ssh -N -L ${FRONTEND_PORT}:${HOSTNAME}:${FRONTEND_PORT} ${USER}@Ubelix"
 
-run_in_container deploy up --deploy-config "${DEPLOY_CFG}"
-
-while true; do
-  sleep 60 &
-  wait $!
-done
+run_in_container deploy run --deploy-config "${DEPLOY_CFG}"

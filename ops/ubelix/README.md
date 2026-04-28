@@ -33,7 +33,7 @@ The frontend can be separated later, but the first deployment should serve front
 - `slurm/node_worker.sbatch`: long-running worker (`node run`) for sampler/evaluator.
 - `slurm/hello_control.sbatch`: creates a tiny run, appends one sample task, auto-assigns workers, waits for completion.
 - `slurm/hello_single.sbatch`: all-in-one hello flow (local Postgres + 2 workers + control) in one Slurm job, using a persistent Apptainer instance.
-- `slurm/control_ui_single.sbatch`: single-node UI control job that runs `gammaboard deploy up/down` (release mode) with local Postgres and nginx reverse proxy.
+- `slurm/control_ui_single.sbatch`: single-node UI control job that runs `gammaboard deploy run` with local Postgres and nginx reverse proxy.
 - `justfile` recipe `submit-hello-single`: submits one all-in-one hello job (local Postgres + workers + control) for strict QOS submit limits.
 - `justfile` recipe `submit-ui-single`: submits one long-running control/UI job for dashboard access through one SSH tunnel.
 - `justfile` recipe `tunnel-job <jobid>`: resolves the compute node and opens the local SSH tunnel automatically.

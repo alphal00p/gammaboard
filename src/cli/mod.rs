@@ -49,7 +49,7 @@ enum Command {
     Completion(CompletionArgs),
     /// Local PostgreSQL lifecycle helpers
     Db(DbArgs),
-    /// Detached local deploy stack management
+    /// Foreground local deploy stack supervisor
     Deploy(DeployArgs),
 }
 

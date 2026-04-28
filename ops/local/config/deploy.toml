@@ -1,4 +1,4 @@
-# Detached deploy orchestration for local use.
+# Foreground deploy orchestration for local use.
 # This owns public HTTP exposure, static site serving, and cleanup policy.
 [api_server]
 api_server_config = "server.toml"

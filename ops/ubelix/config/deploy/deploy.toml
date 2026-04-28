@@ -1,4 +1,4 @@
-# Detached deploy orchestration for UBELIX control jobs.
+# Foreground deploy orchestration for UBELIX control jobs.
 [api_server]
 api_server_config = "../server/server.toml"
 

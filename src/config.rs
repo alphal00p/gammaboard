@@ -1,5 +1,5 @@
 use anyhow::Context;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{
     fs,
     io::ErrorKind,
@@ -92,12 +92,6 @@ pub struct DeployCleanupConfig {
     pub stop_nodes: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeployState {
-    pub deploy_config: String,
-    pub mode: String,
-}
-
 impl RuntimeConfig {
     pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let path = path.as_ref();
@@ -135,32 +129,8 @@ impl DeployConfig {
         Ok(parsed)
     }
 
-    pub fn backend_pid_file(&self) -> PathBuf {
-        PathBuf::from("logs/deploy-backend.pid")
-    }
-
-    pub fn backend_log_file(&self) -> PathBuf {
-        PathBuf::from("logs/deploy-backend.log")
-    }
-
-    pub fn nginx_pid_file(&self) -> PathBuf {
-        PathBuf::from("logs/nginx-deploy.pid")
-    }
-
-    pub fn nginx_error_log(&self) -> PathBuf {
-        PathBuf::from("logs/nginx-deploy-error.log")
-    }
-
-    pub fn nginx_access_log(&self) -> PathBuf {
-        PathBuf::from("logs/nginx-deploy-access.log")
-    }
-
     pub fn nginx_generated_config(&self) -> PathBuf {
         PathBuf::from("tmp/deploy/nginx.conf")
-    }
-
-    pub fn deploy_state_file(&self) -> PathBuf {
-        PathBuf::from("logs/deploy-state.toml")
     }
 
     pub fn advertised_urls(&self, port: u16) -> Vec<String> {

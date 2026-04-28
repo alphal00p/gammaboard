@@ -1,4 +1,4 @@
-# Backend API/dashboard settings for the local detached deploy profile.
+# Backend API/dashboard settings for the local deploy profile.
 # Public HTTP exposure, generated nginx config, and deploy cleanup live in `ops/local/config/deploy.toml`.
 api_host = "127.0.0.1"
 api_port = 4000
