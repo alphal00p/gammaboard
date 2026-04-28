@@ -34,14 +34,19 @@ The frontend can be separated later, but the first deployment should serve front
 - `slurm/node_worker.sbatch`: long-running worker (`node run`) for sampler/evaluator.
 - `slurm/hello_control.sbatch`: creates a tiny run, appends one sample task, auto-assigns workers, waits for completion.
 - `slurm/hello_single.sbatch`: all-in-one hello flow (local Postgres + 2 workers + control) in one Slurm job, using a persistent Apptainer instance to keep container mounts stable during DB lifetime.
+- `slurm/control_ui_single.sbatch`: single-node UI control job (local Postgres + `gammaboard server` + nginx static+`/api` reverse proxy on one port) for SSH tunneling.
+- `scripts/control_plane.py`: single Python orchestration helper used by `hello_single` and `control_ui_single`.
 - `justfile` recipe `submit-hello`: submits one sampler job + evaluator array + control job with dependencies.
 - `justfile` recipe `submit-hello-single`: submits one all-in-one hello job (local Postgres + workers + control) for strict QOS submit limits.
+- `justfile` recipe `submit-ui-single`: submits one long-running control/UI job for dashboard access through one SSH tunnel.
+- `justfile` recipe `tunnel-job <jobid>`: resolves the compute node and opens the local SSH tunnel automatically.
 
 ## Config Model
 
 Use `config/submit_hello.env` as the primary config source.
 
 - Put persistent defaults there (`WORKSPACE_ROOT`, `IMAGE_PATH`, `DATABASE_URL`, `ACCOUNT`, `PARTITION`, `QOS`, times, run names).
+- For UI tunneling, also set `FRONTEND_BUILD_DIR`, `FRONTEND_PORT`, `API_PORT`, `UI_TIME`, `LOGIN_HOST`.
 - Keep `justfile` recipes thin: source env file, run preflight checks, submit jobs.
 - Allow one-off overrides via shell env vars when needed.
 - Logs are submitted with absolute `--output/--error` paths under `${WORKSPACE_ROOT}/logs/...` from `just` submit commands.
@@ -216,6 +221,42 @@ The next scripts should automate this sequence:
 8. On teardown, pause runs, stop nodes, stop the server/frontend proxy, and stop Postgres.
 
 For resumable runs, the control job should not delete the Postgres data directory on normal shutdown. It should let Postgres flush to disk and exit cleanly. Deleting or archiving the database should be a separate explicit operation.
+
+## 5) Single-Job Dashboard Tunnel
+
+If your QOS/account effectively limits you to one running Slurm job, use the single UI control job.
+
+Prerequisites:
+
+```bash
+# frontend bundle must exist on UBELIX
+ls /storage/research/itp_localunitaritydata/dashboard/build/index.html
+```
+
+Submit:
+
+```bash
+just --justfile ops/ubelix/justfile submit-ui-single
+```
+
+This starts in one allocation:
+- local Postgres (persistent data dir under `db/<deploy>/data`)
+- `gammaboard server` API on `127.0.0.1:${API_PORT}`
+- nginx on `0.0.0.0:${FRONTEND_PORT}` serving static files from `FRONTEND_BUILD_DIR` and forwarding `/api/*` to the local API.
+
+Tunnel from your laptop:
+
+```bash
+just --justfile ops/ubelix/justfile tunnel-job <jobid>
+```
+
+Then open:
+
+```text
+http://localhost:8080
+```
+
+Adjust the local port by passing `local_port` to `tunnel-job` if needed.
 
 ## Database Lifecycle
 

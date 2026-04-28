@@ -16,6 +16,7 @@ From: rust:1-bookworm
         python3 \
         libgfortran5 \
         tzdata \
+        nginx \
         postgresql \
         postgresql-contrib
 
