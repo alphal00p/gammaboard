@@ -16,11 +16,7 @@ set -euo pipefail
 mkdir -p logs/workers
 
 IMAGE_PATH="${GAMMABOARD_IMAGE:?set GAMMABOARD_IMAGE to your .sif path}"
-WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-${GAMMABOARD_PROJECT_ROOT:-}}"
-if [[ -z "${WORKSPACE_ROOT}" ]]; then
-  echo "set GAMMABOARD_WORKSPACE_ROOT (or legacy GAMMABOARD_PROJECT_ROOT) to absolute workspace path" >&2
-  exit 1
-fi
+WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:?set GAMMABOARD_WORKSPACE_ROOT to absolute workspace path}"
 DATABASE_URL="${GAMMABOARD_DATABASE_URL:?set GAMMABOARD_DATABASE_URL to reachable Postgres URL}"
 NODE_PREFIX="${NODE_PREFIX:-gb-hello}"
 ROLE="${ROLE:?set ROLE to sampler-aggregator or evaluator}"
@@ -54,10 +50,14 @@ export DATABASE_URL WORKSPACE_ROOT LOCAL_TMP DEPLOY_NAME
 envsubst '${DATABASE_URL} ${WORKSPACE_ROOT} ${LOCAL_TMP} ${DEPLOY_NAME}' \
   <"${RUNTIME_TEMPLATE}" >"${RUNTIME_CONFIG}"
 
+db_host_port="$(echo "${DATABASE_URL}" | sed -E 's#^[^@]*@##; s#/.*$##')"
+
 echo "node: ${HOSTNAME}"
 echo "worker role: ${ROLE}"
 echo "node name: ${NODE_NAME}"
 echo "workspace_root: ${WORKSPACE_ROOT}"
+echo "runtime_config: ${RUNTIME_CONFIG}"
+echo "database_host_port: ${db_host_port}"
 
 apptainer exec -B "${WORKSPACE_ROOT}" "${IMAGE_PATH}" \
   gammaboard --runtime-config "${RUNTIME_CONFIG}" node run --name "${NODE_NAME}"

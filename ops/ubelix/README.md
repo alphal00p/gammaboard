@@ -28,6 +28,7 @@ The frontend can be separated later, but the first deployment should serve front
 - `config/runtime_external_db.template.toml`: worker/control runtime template for external DB mode (persistent data dir + scratch socket dir).
 - `config/runtime_local_postgres.template.toml`: runtime template for future self-contained local-Postgres control jobs.
 - `config/server.toml` and `config/deploy.toml`: UBELIX deploy/server profiles (same split as local/itphlies).
+- `config/templates/runs` and `config/templates/tasks`: UBELIX-local run/task template directories used by `server.toml`.
 - `slurm/smoke_container.sbatch`: no-DB smoke check (`gammaloop`/`gammaboard` version/help) for a runtime image.
 - `slurm/node_worker.sbatch`: long-running worker (`node run`) for sampler/evaluator.
 - `slurm/hello_control.sbatch`: creates a tiny run, appends one sample task, auto-assigns workers, waits for completion.
@@ -143,8 +144,7 @@ Output layout:
     gammaboard-latest.sif -> gammaboard-<commit>.sif
 ```
 
-No persistent source checkout on UBELIX is required for this flow. The only persistent artifacts are the `.def` file, Slurm logs, and the built runtime image.
-The build jobs keep persistent source checkouts under `artifacts/src/*` and a persistent compile cache under scratch (`RUST_TARGET_BASE`) to accelerate incremental rebuilds.
+The build jobs keep persistent source checkouts under `artifacts/src/*`, staged binaries under `artifacts/bin/*`, and a persistent compile cache under scratch (`RUST_TARGET_BASE`) to accelerate incremental rebuilds.
 
 ## 2) Runtime Image And Smoke Test
 

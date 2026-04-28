@@ -16,11 +16,7 @@ set -euo pipefail
 mkdir -p logs/control
 
 IMAGE_PATH="${GAMMABOARD_IMAGE:?set GAMMABOARD_IMAGE to your .sif path}"
-WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-${GAMMABOARD_PROJECT_ROOT:-}}"
-if [[ -z "${WORKSPACE_ROOT}" ]]; then
-  echo "set GAMMABOARD_WORKSPACE_ROOT (or legacy GAMMABOARD_PROJECT_ROOT) to absolute workspace path" >&2
-  exit 1
-fi
+WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:?set GAMMABOARD_WORKSPACE_ROOT to absolute workspace path}"
 DATABASE_URL="${GAMMABOARD_DATABASE_URL:?set GAMMABOARD_DATABASE_URL to reachable Postgres URL}"
 RUN_NAME="${RUN_NAME:-ubelix-hello}"
 NODE_PREFIX="${NODE_PREFIX:-gb-hello}"
@@ -46,6 +42,7 @@ LOCAL_TMP="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
 export DATABASE_URL WORKSPACE_ROOT LOCAL_TMP DEPLOY_NAME
 envsubst '${DATABASE_URL} ${WORKSPACE_ROOT} ${LOCAL_TMP} ${DEPLOY_NAME}' \
   <"${RUNTIME_TEMPLATE}" >"${RUNTIME_CONFIG}"
+db_host_port="$(echo "${DATABASE_URL}" | sed -E 's#^[^@]*@##; s#/.*$##')"
 
 cat >"${RUN_TOML}" <<EOF
 name = "${RUN_NAME}"
@@ -78,6 +75,8 @@ trap cleanup EXIT
 
 echo "creating run ${RUN_NAME}"
 echo "workspace_root: ${WORKSPACE_ROOT}"
+echo "runtime_config: ${RUNTIME_CONFIG}"
+echo "database_host_port: ${db_host_port}"
 run_in_container run add "${RUN_TOML}"
 
 echo "waiting for workers to announce"
@@ -89,6 +88,9 @@ run_in_container auto-assign "${RUN_NAME}" "${EVALUATOR_COUNT}"
 
 deadline=$((SECONDS + POLL_TIMEOUT_SECONDS))
 while ((SECONDS < deadline)); do
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) poll: node list"
+  run_in_container node list
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) poll: task list"
   TASK_OUTPUT="$(run_in_container run task list "${RUN_NAME}" || true)"
   echo "${TASK_OUTPUT}"
   if grep -q "state=completed" <<<"${TASK_OUTPUT}"; then

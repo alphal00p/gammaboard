@@ -21,8 +21,8 @@ use tempfile::TempDir;
 
 pub struct SymbolicaEngine {
     eval: CompiledRealEvaluator,
-    parsed_expr: Atom,
-    expr: String,
+    _parsed_expr: Atom,
+    _expr: String,
     args: Vec<String>,
     _artifacts_dir: TempDir,
 }
@@ -30,15 +30,15 @@ pub struct SymbolicaEngine {
 impl SymbolicaEngine {
     fn new(
         eval: CompiledRealEvaluator,
-        parsed_expr: Atom,
-        expr: String,
+        _parsed_expr: Atom,
+        _expr: String,
         args: Vec<String>,
         artifacts_dir: TempDir,
     ) -> Self {
         SymbolicaEngine {
             eval,
-            parsed_expr,
-            expr,
+            _parsed_expr,
+            _expr,
             args,
             _artifacts_dir: artifacts_dir,
         }

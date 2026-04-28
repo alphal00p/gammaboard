@@ -259,30 +259,6 @@ impl TaskPanelSource {
             .any(|projector| projector.spec().history != PanelHistoryMode::None)
     }
 
-    pub fn current_panels(
-        &self,
-        task: &RunTask,
-        panel_state: &JsonValue,
-        run_target: Option<&JsonValue>,
-        completed_samples_per_second: Option<f64>,
-        smoothed_eta_seconds: Option<f64>,
-        current_accumulator: Option<&AccumulatorState>,
-        latest_stage_snapshot: Option<&TaskStageSnapshot>,
-        latest_persisted_snapshot: Option<&TaskOutputSnapshot>,
-    ) -> Result<Vec<PanelState>, EngineError> {
-        project_current_panels(
-            &self.projectors,
-            task,
-            panel_state,
-            run_target,
-            completed_samples_per_second,
-            smoothed_eta_seconds,
-            current_accumulator,
-            latest_stage_snapshot,
-            latest_persisted_snapshot,
-        )
-    }
-
     pub fn build_response(
         &self,
         source_id: String,
