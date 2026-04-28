@@ -247,10 +247,7 @@ fn load_deploy_config_for_management(path: Option<&Path>) -> Result<DeployConfig
     }
 }
 
-fn start_backend(
-    deploy_config: &DeployConfig,
-    runtime_config_path: &Path,
-) -> Result<()> {
+fn start_backend(deploy_config: &DeployConfig, runtime_config_path: &Path) -> Result<()> {
     let binary = std::env::current_exe().context("failed to resolve current executable path")?;
     ensure_parent_dir(&deploy_config.backend_log_file())?;
     stop_backend(deploy_config)?;

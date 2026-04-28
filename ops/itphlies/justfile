@@ -12,10 +12,10 @@ deploy mode="release":
     just build-frontend
     if [[ "{{mode}}" == "release" ]]; then
         just build-backend-release
-        {{release_bin}} --runtime-config "{{runtime_cfg}}" deploy up --deploy-config "{{deploy_cfg}}" --mode "{{mode}}"
+        {{release_bin}} --runtime-config "{{runtime_cfg}}" deploy up --deploy-config "{{deploy_cfg}}"
     else
         just build-backend
-        {{bin}} --runtime-config "{{runtime_cfg}}" deploy up --deploy-config "{{deploy_cfg}}" --mode "{{mode}}"
+        {{bin}} --runtime-config "{{runtime_cfg}}" deploy up --deploy-config "{{deploy_cfg}}"
     fi
 
 status:

@@ -148,8 +148,7 @@ The checked-in profiles are:
 
 Use:
 ```bash
-gammaboard deploy up --deploy-config ops/local/config/deploy.toml --mode dev
-gammaboard deploy up --deploy-config ops/local/config/deploy.toml --mode release
+gammaboard deploy up --deploy-config ops/local/config/deploy.toml
 gammaboard deploy status
 gammaboard deploy down
 ```
