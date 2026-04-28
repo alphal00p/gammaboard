@@ -21,6 +21,7 @@ The frontend can be separated later, but the first deployment should serve front
 
 ## Files
 
+- `config/submit_hello.env`: single source of truth for submit-time defaults (workspace/image/db/slurm/run names).
 - `build/gammaloop.def`: builds a runtime image containing `gammaloop` only.
 - `build/gammaboard.def`: builds a runtime image containing both `gammaloop` and `gammaboard`.
 - `build/build_latest_gammaloop.sbatch`: always builds `gammaloop` from latest upstream `HEAD`, writes `gammaloop-<commit>.sif`, then updates `gammaloop-latest.sif` symlink.
@@ -33,6 +34,16 @@ The frontend can be separated later, but the first deployment should serve front
 - `slurm/node_worker.sbatch`: long-running worker (`node run`) for sampler/evaluator.
 - `slurm/hello_control.sbatch`: creates a tiny run, appends one sample task, auto-assigns workers, waits for completion.
 - `justfile` recipe `submit-hello`: submits one sampler job + evaluator array + control job with dependencies.
+- `justfile` recipe `submit-hello-single`: submits one all-in-one hello job (local Postgres + workers + control) for strict QOS submit limits.
+
+## Config Model
+
+Use `config/submit_hello.env` as the primary config source.
+
+- Put persistent defaults there (`WORKSPACE_ROOT`, `IMAGE_PATH`, `DATABASE_URL`, `ACCOUNT`, `PARTITION`, `QOS`, times, run names).
+- Keep `justfile` recipes thin: source env file, run preflight checks, submit jobs.
+- Allow one-off overrides via shell env vars when needed.
+- Logs are submitted with absolute `--output/--error` paths under `${WORKSPACE_ROOT}/logs/...` from `just` submit commands.
 
 ## Target Topology
 
@@ -167,7 +178,7 @@ GAMMABOARD_BIND_PATHS=/absolute/path/to/itp_localunitaritydata
 ```bash
 export GAMMABOARD_WORKSPACE_ROOT=/absolute/path/to/itp_localunitaritydata
 export GAMMABOARD_IMAGE=/absolute/path/to/itp_localunitaritydata/images/gammaboard/gammaboard-latest.sif
-export GAMMABOARD_DATABASE_URL=postgresql://<user>:<pass>@<host>:5432/<db>
+export GAMMABOARD_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5433/gammaboard_db
 export DEPLOY_NAME=default
 just --justfile ops/ubelix/justfile submit-hello
 ```

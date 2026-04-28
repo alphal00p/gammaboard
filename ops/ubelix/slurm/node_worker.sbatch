@@ -13,14 +13,13 @@
 
 set -euo pipefail
 
-mkdir -p logs/workers
-
 IMAGE_PATH="${GAMMABOARD_IMAGE:?set GAMMABOARD_IMAGE to your .sif path}"
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:?set GAMMABOARD_WORKSPACE_ROOT to absolute workspace path}"
 DATABASE_URL="${GAMMABOARD_DATABASE_URL:?set GAMMABOARD_DATABASE_URL to reachable Postgres URL}"
 NODE_PREFIX="${NODE_PREFIX:-gb-hello}"
 ROLE="${ROLE:?set ROLE to sampler-aggregator or evaluator}"
 DEPLOY_NAME="${DEPLOY_NAME:-default}"
+mkdir -p "${WORKSPACE_ROOT}/logs/workers"
 
 if [[ "${ROLE}" == "sampler-aggregator" ]]; then
   NODE_NAME="${NODE_PREFIX}-sampler"

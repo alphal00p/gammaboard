@@ -1,3 +1,59 @@
+show-config:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
+    DEFAULTS_FILE="${WORKSPACE_ROOT}/ops/config/submit_hello.env"
+    if [[ -f "${DEFAULTS_FILE}" ]]; then
+      set -a
+      source "${DEFAULTS_FILE}"
+      set +a
+    fi
+    WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-${WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}}"
+    IMAGE_PATH="${GAMMABOARD_IMAGE:-${IMAGE_PATH:-${WORKSPACE_ROOT}/images/gammaboard/gammaboard-latest.sif}}"
+    DATABASE_URL="${GAMMABOARD_DATABASE_URL:-${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:5433/gammaboard_db}}"
+
+    ACCOUNT="${ACCOUNT:-gratis}"
+    PARTITION="${PARTITION:-epyc2}"
+    QOS="${QOS:-job_debug}"
+    WORKER_TIME="${WORKER_TIME:-00:15:00}"
+    CONTROL_TIME="${CONTROL_TIME:-00:10:00}"
+    EVALUATOR_COUNT="${EVALUATOR_COUNT:-1}"
+    RUN_NAME="${RUN_NAME:-ubelix-hello}"
+    NODE_PREFIX="${NODE_PREFIX:-gb-hello}"
+    POLL_TIMEOUT_SECONDS="${POLL_TIMEOUT_SECONDS:-300}"
+    DEPLOY_NAME="${DEPLOY_NAME:-default}"
+    EXTRA_SBATCH_ARGS="${EXTRA_SBATCH_ARGS:-}"
+
+    db_host_port="$(echo "${DATABASE_URL}" | sed -E 's#^[^@]*@##; s#/.*$##')"
+
+    printf '%s\n' \
+      "workspace_root=${WORKSPACE_ROOT}" \
+      "image_path=${IMAGE_PATH}" \
+      "database_host_port=${db_host_port}" \
+      "account=${ACCOUNT}" \
+      "partition=${PARTITION}" \
+      "qos=${QOS}" \
+      "worker_time=${WORKER_TIME}" \
+      "control_time=${CONTROL_TIME}" \
+      "evaluator_count=${EVALUATOR_COUNT}" \
+      "run_name=${RUN_NAME}" \
+      "node_prefix=${NODE_PREFIX}" \
+      "poll_timeout_seconds=${POLL_TIMEOUT_SECONDS}" \
+      "deploy_name=${DEPLOY_NAME}" \
+      "extra_sbatch_args=${EXTRA_SBATCH_ARGS}"
+
+clear-logs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
+    LOG_DIR="${WORKSPACE_ROOT}/logs"
+
+    rm -rf "${LOG_DIR}"
+    mkdir -p "${LOG_DIR}/build" "${LOG_DIR}/control" "${LOG_DIR}/workers"
+    echo "cleared logs under ${LOG_DIR}"
+
 sync-ops host="Ubelix" remote_root="/storage/research/itp_localunitaritydata":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -22,16 +78,24 @@ submit-hello:
       }
     }
 
-    IMAGE_PATH="${GAMMABOARD_IMAGE:?set GAMMABOARD_IMAGE}"
-    WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:?set GAMMABOARD_WORKSPACE_ROOT}"
-    DATABASE_URL="${GAMMABOARD_DATABASE_URL:?set GAMMABOARD_DATABASE_URL}"
+    WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
+    DEFAULTS_FILE="${WORKSPACE_ROOT}/ops/config/submit_hello.env"
+    if [[ -f "${DEFAULTS_FILE}" ]]; then
+      set -a
+      source "${DEFAULTS_FILE}"
+      set +a
+    fi
+    WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-${WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}}"
+    IMAGE_PATH="${GAMMABOARD_IMAGE:-${IMAGE_PATH:-${WORKSPACE_ROOT}/images/gammaboard/gammaboard-latest.sif}}"
+    DATABASE_URL="${GAMMABOARD_DATABASE_URL:-${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:5433/gammaboard_db}}"
+    export GAMMABOARD_DATABASE_URL="${DATABASE_URL}"
 
     ACCOUNT="${ACCOUNT:-gratis}"
     PARTITION="${PARTITION:-epyc2}"
     QOS="${QOS:-job_debug}"
-    WORKER_TIME="${WORKER_TIME:-00:30:00}"
-    CONTROL_TIME="${CONTROL_TIME:-00:20:00}"
-    EVALUATOR_COUNT="${EVALUATOR_COUNT:-2}"
+    WORKER_TIME="${WORKER_TIME:-00:15:00}"
+    CONTROL_TIME="${CONTROL_TIME:-00:10:00}"
+    EVALUATOR_COUNT="${EVALUATOR_COUNT:-1}"
     RUN_NAME="${RUN_NAME:-ubelix-hello}"
     NODE_PREFIX="${NODE_PREFIX:-gb-hello}"
     POLL_TIMEOUT_SECONDS="${POLL_TIMEOUT_SECONDS:-300}"
@@ -39,6 +103,11 @@ submit-hello:
     NODE_WORKER_SCRIPT="${WORKSPACE_ROOT}/ops/slurm/node_worker.sbatch"
     HELLO_CONTROL_SCRIPT="${WORKSPACE_ROOT}/ops/slurm/hello_control.sbatch"
     RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime_external_db.template.toml"
+
+    if [[ -z "${WORKSPACE_ROOT}" ]]; then
+      echo "set GAMMABOARD_WORKSPACE_ROOT" >&2
+      exit 1
+    fi
 
     require_cmd sbatch
     require_cmd apptainer
@@ -81,6 +150,9 @@ submit-hello:
         --partition="${PARTITION}" \
         --qos="${QOS}" \
         --time="${WORKER_TIME}" \
+        --chdir="${WORKSPACE_ROOT}" \
+        --output="${WORKSPACE_ROOT}/logs/workers/%x-%A_%a.out" \
+        --error="${WORKSPACE_ROOT}/logs/workers/%x-%A_%a.err" \
         --export="${common_export},ROLE=sampler-aggregator" \
         "${extra_args[@]}" \
         "${NODE_WORKER_SCRIPT}"
@@ -92,6 +164,9 @@ submit-hello:
         --partition="${PARTITION}" \
         --qos="${QOS}" \
         --time="${WORKER_TIME}" \
+        --chdir="${WORKSPACE_ROOT}" \
+        --output="${WORKSPACE_ROOT}/logs/workers/%x-%A_%a.out" \
+        --error="${WORKSPACE_ROOT}/logs/workers/%x-%A_%a.err" \
         --array="1-${EVALUATOR_COUNT}" \
         --export="${common_export},ROLE=evaluator" \
         "${extra_args[@]}" \
@@ -105,6 +180,9 @@ submit-hello:
         --partition="${PARTITION}" \
         --qos="${QOS}" \
         --time="${CONTROL_TIME}" \
+        --chdir="${WORKSPACE_ROOT}" \
+        --output="${WORKSPACE_ROOT}/logs/control/%x-%j.out" \
+        --error="${WORKSPACE_ROOT}/logs/control/%x-%j.err" \
         --export="${common_export},RUN_NAME=${RUN_NAME},EVALUATOR_COUNT=${EVALUATOR_COUNT},POLL_TIMEOUT_SECONDS=${POLL_TIMEOUT_SECONDS}" \
         "${extra_args[@]}" \
         "${HELLO_CONTROL_SCRIPT}"
@@ -114,3 +192,78 @@ submit-hello:
     echo "submitted evaluator job: ${evaluator_job_id} (array 1-${EVALUATOR_COUNT})"
     echo "submitted control job:   ${control_job_id}"
     echo "monitor with: squeue --jobs=${sampler_job_id},${evaluator_job_id},${control_job_id}"
+
+submit-hello-single:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    require_cmd() {
+      command -v "$1" >/dev/null 2>&1 || {
+        echo "missing required command: $1" >&2
+        exit 1
+      }
+    }
+
+    WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
+    DEFAULTS_FILE="${WORKSPACE_ROOT}/ops/config/submit_hello.env"
+    if [[ -f "${DEFAULTS_FILE}" ]]; then
+      set -a
+      source "${DEFAULTS_FILE}"
+      set +a
+    fi
+    WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-${WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}}"
+    IMAGE_PATH="${GAMMABOARD_IMAGE:-${IMAGE_PATH:-${WORKSPACE_ROOT}/images/gammaboard/gammaboard-latest.sif}}"
+    DATABASE_URL="${GAMMABOARD_DATABASE_URL:-${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:5433/gammaboard_db}}"
+    export GAMMABOARD_DATABASE_URL="${DATABASE_URL}"
+    DB_PORT="${DB_PORT:-5433}"
+    export DB_PORT
+
+    ACCOUNT="${ACCOUNT:-gratis}"
+    PARTITION="${PARTITION:-epyc2}"
+    QOS="${QOS:-job_debug}"
+    CONTROL_TIME="${CONTROL_TIME:-00:10:00}"
+    RUN_NAME="${RUN_NAME:-ubelix-hello}"
+    NODE_PREFIX="${NODE_PREFIX:-gb-hello}"
+    POLL_TIMEOUT_SECONDS="${POLL_TIMEOUT_SECONDS:-300}"
+    DEPLOY_NAME="${DEPLOY_NAME:-default}"
+    HELLO_SINGLE_SCRIPT="${WORKSPACE_ROOT}/ops/slurm/hello_single.sbatch"
+
+    require_cmd sbatch
+    require_cmd apptainer
+    require_cmd envsubst
+
+    if [[ ! -f "${IMAGE_PATH}" ]]; then
+      echo "missing image: ${IMAGE_PATH}" >&2
+      exit 1
+    fi
+    if [[ ! -f "${HELLO_SINGLE_SCRIPT}" ]]; then
+      echo "missing script: ${HELLO_SINGLE_SCRIPT}" >&2
+      exit 1
+    fi
+
+    EXTRA_SBATCH_ARGS="${EXTRA_SBATCH_ARGS:-}"
+    if [[ -n "${EXTRA_SBATCH_ARGS}" ]]; then
+      # shellcheck disable=SC2206
+      extra_args=( ${EXTRA_SBATCH_ARGS} )
+    else
+      extra_args=()
+    fi
+
+    mkdir -p "${WORKSPACE_ROOT}/logs/control" "${WORKSPACE_ROOT}/logs/workers"
+
+    single_job_id="$(
+      sbatch --parsable \
+        --account="${ACCOUNT}" \
+        --partition="${PARTITION}" \
+        --qos="${QOS}" \
+        --time="${CONTROL_TIME}" \
+        --chdir="${WORKSPACE_ROOT}" \
+        --output="${WORKSPACE_ROOT}/logs/control/%x-%j.out" \
+        --error="${WORKSPACE_ROOT}/logs/control/%x-%j.err" \
+        --export="ALL,GAMMABOARD_IMAGE=${IMAGE_PATH},GAMMABOARD_WORKSPACE_ROOT=${WORKSPACE_ROOT},GAMMABOARD_DATABASE_URL=${DATABASE_URL},RUN_NAME=${RUN_NAME},NODE_PREFIX=${NODE_PREFIX},POLL_TIMEOUT_SECONDS=${POLL_TIMEOUT_SECONDS},DEPLOY_NAME=${DEPLOY_NAME}" \
+        "${extra_args[@]}" \
+        "${HELLO_SINGLE_SCRIPT}"
+    )"
+
+    echo "submitted single hello job: ${single_job_id}"
+    echo "monitor with: squeue --jobs=${single_job_id}"

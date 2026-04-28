@@ -13,8 +13,6 @@
 
 set -euo pipefail
 
-mkdir -p logs/control
-
 IMAGE_PATH="${GAMMABOARD_IMAGE:?set GAMMABOARD_IMAGE to your .sif path}"
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:?set GAMMABOARD_WORKSPACE_ROOT to absolute workspace path}"
 DATABASE_URL="${GAMMABOARD_DATABASE_URL:?set GAMMABOARD_DATABASE_URL to reachable Postgres URL}"
@@ -23,6 +21,7 @@ NODE_PREFIX="${NODE_PREFIX:-gb-hello}"
 EVALUATOR_COUNT="${EVALUATOR_COUNT:-2}"
 POLL_TIMEOUT_SECONDS="${POLL_TIMEOUT_SECONDS:-300}"
 DEPLOY_NAME="${DEPLOY_NAME:-default}"
+mkdir -p "${WORKSPACE_ROOT}/logs/control"
 
 RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
 mkdir -p "${RUNTIME_DIR}"

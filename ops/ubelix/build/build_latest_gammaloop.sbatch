@@ -7,8 +7,8 @@
 #SBATCH --mem=8G
 #SBATCH --account=gratis
 #SBATCH --partition=epyc2
-#SBATCH --output=logs/build/%x-%j.out
-#SBATCH --error=logs/build/%x-%j.err
+#SBATCH --output=/storage/research/itp_localunitaritydata/logs/build/%x-%j.out
+#SBATCH --error=/storage/research/itp_localunitaritydata/logs/build/%x-%j.err
 
 set -euo pipefail
 

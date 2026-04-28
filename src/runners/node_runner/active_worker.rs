@@ -4,7 +4,7 @@ use tracing::warn;
 #[derive(Clone)]
 pub(super) struct ActiveWorker<S: ControlPlaneStore + Clone + Send + Sync + 'static> {
     pub(super) store: S,
-    pub(super) node_name: String,
+    pub(super) _node_name: String,
     pub(super) node_uuid: String,
     pub(super) role: WorkerRole,
     pub(super) run_id: i32,
@@ -20,7 +20,7 @@ impl<S: ControlPlaneStore + Clone + Send + Sync + 'static> ActiveWorker<S> {
     ) -> Self {
         Self {
             store,
-            node_name: node_name.into(),
+            _node_name: node_name.into(),
             node_uuid: node_uuid.into(),
             role,
             run_id,
