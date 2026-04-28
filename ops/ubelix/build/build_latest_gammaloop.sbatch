@@ -75,7 +75,7 @@ RUST_TARGET_BASE="${RUST_TARGET_BASE:-/scratch/network/users/${USER}/gammaboard-
 RUST_TARGET_DIR="${RUST_TARGET_BASE}/target"
 LATEST_LINK="${IMAGE_DIR}/gammaloop-latest.sif"
 
-mkdir -p "logs/build" "${WORKSPACE_ROOT}/logs/build" "${TMP_BASE}" "${CACHE_BASE}" "${IMAGE_DIR}" "${BIN_DIR}" "${LIB_DIR}" "${RUST_TARGET_DIR}"
+mkdir -p "${WORKSPACE_ROOT}/logs/build" "${TMP_BASE}" "${CACHE_BASE}" "${IMAGE_DIR}" "${BIN_DIR}" "${LIB_DIR}" "${RUST_TARGET_DIR}"
 
 if [[ ! -f "${DEF_PATH}" ]]; then
   echo "missing def file: ${DEF_PATH}" >&2

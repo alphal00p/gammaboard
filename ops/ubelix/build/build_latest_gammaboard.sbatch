@@ -90,7 +90,6 @@ GL_LATEST_LINK="${GL_IMAGE_DIR}/gammaloop-latest.sif"
 GB_LATEST_LINK="${GB_IMAGE_DIR}/gammaboard-latest.sif"
 
 mkdir -p \
-  "logs/build" \
   "${WORKSPACE_ROOT}/logs/build" \
   "${TMP_BASE}" \
   "${CACHE_BASE}" \

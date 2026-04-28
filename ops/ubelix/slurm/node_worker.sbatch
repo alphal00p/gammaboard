@@ -58,5 +58,9 @@ echo "workspace_root: ${WORKSPACE_ROOT}"
 echo "runtime_config: ${RUNTIME_CONFIG}"
 echo "database_host_port: ${db_host_port}"
 
+env -u PGTZ -u PGOPTIONS \
+APPTAINERENV_LANG="${APPTAINERENV_LANG:-C.UTF-8}" \
+APPTAINERENV_LC_ALL="${APPTAINERENV_LC_ALL:-C.UTF-8}" \
+APPTAINERENV_TZ="${APPTAINERENV_TZ:-Etc/UTC}" \
 apptainer exec -B "${WORKSPACE_ROOT}" "${IMAGE_PATH}" \
   gammaboard --runtime-config "${RUNTIME_CONFIG}" node run --name "${NODE_NAME}"

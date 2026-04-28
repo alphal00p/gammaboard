@@ -54,7 +54,7 @@ From: rust:1-bookworm
 %environment
     export PATH=/usr/local/bin:$PATH
     export LD_LIBRARY_PATH=/usr/local/lib/gammaboard:${LD_LIBRARY_PATH:-}
-    export TZ=UTC
+    export TZ=Etc/UTC
     export GAMMABOARD_MIGRATIONS_DIR=/usr/local/share/gammaboard/migrations
 
 %runscript

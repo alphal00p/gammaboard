@@ -33,6 +33,7 @@ The frontend can be separated later, but the first deployment should serve front
 - `slurm/smoke_container.sbatch`: no-DB smoke check (`gammaloop`/`gammaboard` version/help) for a runtime image.
 - `slurm/node_worker.sbatch`: long-running worker (`node run`) for sampler/evaluator.
 - `slurm/hello_control.sbatch`: creates a tiny run, appends one sample task, auto-assigns workers, waits for completion.
+- `slurm/hello_single.sbatch`: all-in-one hello flow (local Postgres + 2 workers + control) in one Slurm job, using a persistent Apptainer instance to keep container mounts stable during DB lifetime.
 - `justfile` recipe `submit-hello`: submits one sampler job + evaluator array + control job with dependencies.
 - `justfile` recipe `submit-hello-single`: submits one all-in-one hello job (local Postgres + workers + control) for strict QOS submit limits.
 

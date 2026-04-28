@@ -21,7 +21,7 @@ require_cmd() {
 }
 
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
-mkdir -p "logs/build" "${WORKSPACE_ROOT}/logs/build"
+mkdir -p "${WORKSPACE_ROOT}/logs/build"
 
 # Absolute path to SIF image on UBELIX filesystem.
 IMAGE_PATH="${GAMMABOARD_IMAGE:-${WORKSPACE_ROOT}/images/gammaboard/gammaboard-latest.sif}"
