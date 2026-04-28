@@ -115,6 +115,9 @@ By default, each build job:
 - resolves upstream repository `HEAD` commit SHA(s),
 - always builds new images named with those commit SHA(s),
 - updates `images/<kind>/<kind>-latest.sif` as a symlink to the commit-named image.
+- writes a sibling `.meta` file with provenance and coarse timing fields.
+
+Each `.meta` now includes: repo SHA(s), dirty/clean source status, Slurm job id, build host, toolchain versions, cargo profile/features, target dir, image size/checksum, and phase timings (`timing_fetch_checkout_seconds`, `timing_cargo_gammaloop_seconds`, optional `timing_cargo_gammaboard_seconds`, `timing_binary_stage_seconds`, `timing_apptainer_gammaloop_seconds`, optional `timing_apptainer_gammaboard_seconds`, `timing_total_seconds`).
 
 If you want to debug the build interactively first, use an interactive Slurm allocation and then run the same `apptainer build ...` command there. Avoid doing the full build on the login node.
 
