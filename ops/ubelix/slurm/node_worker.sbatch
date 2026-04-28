@@ -7,7 +7,7 @@
 #SBATCH --mem=2G
 #SBATCH --account=gratis
 #SBATCH --partition=epyc2
-#SBATCH --qos=job_debug
+#SBATCH --qos=job_gratis
 #SBATCH --output=logs/slurm/workers/%x-%A_%a.out
 #SBATCH --error=logs/slurm/workers/%x-%A_%a.err
 
