@@ -34,7 +34,7 @@ fi
 RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
 mkdir -p "${RUNTIME_DIR}"
 RUNTIME_CONFIG="${RUNTIME_DIR}/runtime-${SLURM_JOB_ID}-${NODE_NAME}.toml"
-RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime_external_db.template.toml"
+RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime/external_db.template.toml"
 trap 'rm -f "${RUNTIME_CONFIG}"' EXIT
 if [[ ! -f "${RUNTIME_TEMPLATE}" ]]; then
   echo "missing runtime template: ${RUNTIME_TEMPLATE}" >&2

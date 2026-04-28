@@ -21,34 +21,29 @@ The frontend can be separated later, but the first deployment should serve front
 
 ## Files
 
-- `config/submit_hello.env`: single source of truth for submit-time defaults (workspace/image/db/slurm/run names).
 - `build/gammaloop.def`: builds a runtime image containing `gammaloop` only.
 - `build/gammaboard.def`: builds a runtime image containing both `gammaloop` and `gammaboard`.
 - `build/build_latest_gammaloop.sbatch`: always builds `gammaloop` from latest upstream `HEAD`, writes `gammaloop-<commit>.sif`, then updates `gammaloop-latest.sif` symlink.
 - `build/build_latest_gammaboard.sbatch`: always builds both targets (`gammaloop`, then `gammaboard`) from latest upstream `HEAD`, writes commit-named images, and updates both latest symlinks.
-- `config/runtime_external_db.template.toml`: worker/control runtime template for external DB mode (persistent data dir + scratch socket dir).
-- `config/runtime_local_postgres.template.toml`: runtime template for future self-contained local-Postgres control jobs.
-- `config/server.toml` and `config/deploy.toml`: UBELIX deploy/server profiles (same split as local/itphlies).
+- `config/runtime/external_db.template.toml`: worker/control runtime template for external DB mode (persistent data dir + scratch socket dir).
+- `config/runtime/local_postgres.template.toml`: runtime template for local-Postgres control jobs.
+- `config/server/server.toml` and `config/deploy/deploy.toml`: UBELIX deploy/server profiles (same split as local/itphlies).
 - `config/templates/runs` and `config/templates/tasks`: UBELIX-local run/task template directories used by `server.toml`.
 - `slurm/smoke_container.sbatch`: no-DB smoke check (`gammaloop`/`gammaboard` version/help) for a runtime image.
 - `slurm/node_worker.sbatch`: long-running worker (`node run`) for sampler/evaluator.
 - `slurm/hello_control.sbatch`: creates a tiny run, appends one sample task, auto-assigns workers, waits for completion.
-- `slurm/hello_single.sbatch`: all-in-one hello flow (local Postgres + 2 workers + control) in one Slurm job, using a persistent Apptainer instance to keep container mounts stable during DB lifetime.
-- `slurm/control_ui_single.sbatch`: single-node UI control job (local Postgres + `gammaboard server` + nginx static+`/api` reverse proxy on one port) for SSH tunneling.
-- `scripts/control_plane.py`: single Python orchestration helper used by `hello_single` and `control_ui_single`.
-- `justfile` recipe `submit-hello`: submits one sampler job + evaluator array + control job with dependencies.
+- `slurm/hello_single.sbatch`: all-in-one hello flow (local Postgres + 2 workers + control) in one Slurm job, using a persistent Apptainer instance.
+- `slurm/control_ui_single.sbatch`: single-node UI control job that runs `gammaboard deploy up/down` (release mode) with local Postgres and nginx reverse proxy.
 - `justfile` recipe `submit-hello-single`: submits one all-in-one hello job (local Postgres + workers + control) for strict QOS submit limits.
 - `justfile` recipe `submit-ui-single`: submits one long-running control/UI job for dashboard access through one SSH tunnel.
 - `justfile` recipe `tunnel-job <jobid>`: resolves the compute node and opens the local SSH tunnel automatically.
 
 ## Config Model
 
-Use `config/submit_hello.env` as the primary config source.
+The single-node UBELIX flow is now hardcoded in `slurm/*.sbatch`.
 
-- Put persistent defaults there (`WORKSPACE_ROOT`, `IMAGE_PATH`, `DATABASE_URL`, `ACCOUNT`, `PARTITION`, `QOS`, times, run names).
-- For UI tunneling, also set `FRONTEND_BUILD_DIR`, `FRONTEND_PORT`, `API_PORT`, `UI_TIME`, `LOGIN_HOST`.
-- Keep `justfile` recipes thin: source env file, run preflight checks, submit jobs.
-- Allow one-off overrides via shell env vars when needed.
+- `WORKSPACE_ROOT` is the only intended override (`GAMMABOARD_WORKSPACE_ROOT`).
+- `justfile` recipes are thin wrappers around direct `sbatch` submission.
 - Logs are submitted with absolute `--output/--error` paths under `${WORKSPACE_ROOT}/logs/...` from `just` submit commands.
 
 ## Target Topology
@@ -179,14 +174,12 @@ GAMMABOARD_IMAGE=/absolute/path/to/itp_localunitaritydata/images/gammaboard/gamm
 GAMMABOARD_BIND_PATHS=/absolute/path/to/itp_localunitaritydata
 ```
 
-## 3) End-To-End Hello Test (External Postgres Path)
+## 3) End-To-End Hello Test (Single-Job Path)
 
 ```bash
 export GAMMABOARD_WORKSPACE_ROOT=/absolute/path/to/itp_localunitaritydata
 export GAMMABOARD_IMAGE=/absolute/path/to/itp_localunitaritydata/images/gammaboard/gammaboard-latest.sif
-export GAMMABOARD_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5433/gammaboard_db
-export DEPLOY_NAME=default
-just --justfile ops/ubelix/justfile submit-hello
+just --justfile ops/ubelix/justfile submit-hello-single
 ```
 
 Useful overrides:

@@ -1,280 +1,28 @@
-show-config:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    source "${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}/ops/scripts/load_submit_env.sh"
-
-    db_host_port="$(echo "${DATABASE_URL}" | sed -E 's#^[^@]*@##; s#/.*$##')"
-
-    printf '%s\n' \
-      "workspace_root=${WORKSPACE_ROOT}" \
-      "image_path=${IMAGE_PATH}" \
-      "database_host_port=${db_host_port}" \
-      "account=${ACCOUNT}" \
-      "partition=${PARTITION}" \
-      "qos=${QOS}" \
-      "worker_time=${WORKER_TIME}" \
-      "control_time=${CONTROL_TIME}" \
-      "evaluator_count=${EVALUATOR_COUNT}" \
-      "run_name=${RUN_NAME}" \
-      "node_prefix=${NODE_PREFIX}" \
-      "poll_timeout_seconds=${POLL_TIMEOUT_SECONDS}" \
-      "deploy_name=${DEPLOY_NAME}" \
-      "api_port=${API_PORT}" \
-      "frontend_port=${FRONTEND_PORT}" \
-      "frontend_build_dir=${FRONTEND_BUILD_DIR}" \
-      "ui_time=${UI_TIME}" \
-      "login_host=${LOGIN_HOST}" \
-      "extra_sbatch_args=${EXTRA_SBATCH_ARGS}"
-
-clear-logs:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
-    LOG_DIR="${WORKSPACE_ROOT}/logs"
-
-    rm -rf "${LOG_DIR}"
-    mkdir -p "${LOG_DIR}/build" "${LOG_DIR}/control" "${LOG_DIR}/workers"
-    echo "cleared logs under ${LOG_DIR}"
-
 sync-ops host="Ubelix" remote_root="/storage/research/itp_localunitaritydata":
     #!/usr/bin/env bash
     set -euo pipefail
-
     ssh "{{host}}" "mkdir -p '{{remote_root}}/ops'"
     scp -r ./* "{{host}}:{{remote_root}}/ops/"
-
-tunnel compute_node host="Ubelix" local_port="8080" remote_port="8080":
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    ssh -N -L "{{local_port}}:{{compute_node}}:{{remote_port}}" "{{host}}"
-
-submit-hello:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    require_cmd() {
-      command -v "$1" >/dev/null 2>&1 || {
-        echo "missing required command: $1" >&2
-        exit 1
-      }
-    }
-
-    source "${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}/ops/scripts/load_submit_env.sh"
-    NODE_WORKER_SCRIPT="${WORKSPACE_ROOT}/ops/slurm/node_worker.sbatch"
-    HELLO_CONTROL_SCRIPT="${WORKSPACE_ROOT}/ops/slurm/hello_control.sbatch"
-    RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime_external_db.template.toml"
-
-    if [[ -z "${WORKSPACE_ROOT}" ]]; then
-      echo "set GAMMABOARD_WORKSPACE_ROOT" >&2
-      exit 1
-    fi
-
-    require_cmd sbatch
-    require_cmd apptainer
-
-    if [[ ! -f "${IMAGE_PATH}" ]]; then
-      echo "missing image: ${IMAGE_PATH}" >&2
-      exit 1
-    fi
-    if [[ ! -f "${NODE_WORKER_SCRIPT}" ]]; then
-      echo "missing script: ${NODE_WORKER_SCRIPT}" >&2
-      exit 1
-    fi
-    if [[ ! -f "${HELLO_CONTROL_SCRIPT}" ]]; then
-      echo "missing script: ${HELLO_CONTROL_SCRIPT}" >&2
-      exit 1
-    fi
-    if [[ ! -f "${RUNTIME_TEMPLATE}" ]]; then
-      echo "missing runtime template: ${RUNTIME_TEMPLATE}" >&2
-      exit 1
-    fi
-
-    # Add account-specific flags here when needed, e.g.:
-    # EXTRA_SBATCH_ARGS="--wckey=<project>" or "--reservation=<reservation>"
-    if [[ -n "${EXTRA_SBATCH_ARGS}" ]]; then
-      # shellcheck disable=SC2206
-      extra_args=( ${EXTRA_SBATCH_ARGS} )
-    else
-      extra_args=()
-    fi
-
-    mkdir -p "${WORKSPACE_ROOT}/logs/control" "${WORKSPACE_ROOT}/logs/workers"
-
-    common_export="ALL,GAMMABOARD_IMAGE=${IMAGE_PATH},GAMMABOARD_WORKSPACE_ROOT=${WORKSPACE_ROOT},GAMMABOARD_DATABASE_URL=${DATABASE_URL},NODE_PREFIX=${NODE_PREFIX},DEPLOY_NAME=${DEPLOY_NAME}"
-
-    sampler_job_id="$(
-      sbatch --parsable \
-        --account="${ACCOUNT}" \
-        --partition="${PARTITION}" \
-        --qos="${QOS}" \
-        --time="${WORKER_TIME}" \
-        --chdir="${WORKSPACE_ROOT}" \
-        --output="${WORKSPACE_ROOT}/logs/workers/%x-%A_%a.out" \
-        --error="${WORKSPACE_ROOT}/logs/workers/%x-%A_%a.err" \
-        --export="${common_export},ROLE=sampler-aggregator" \
-        "${extra_args[@]}" \
-        "${NODE_WORKER_SCRIPT}"
-    )"
-
-    evaluator_job_id="$(
-      sbatch --parsable \
-        --account="${ACCOUNT}" \
-        --partition="${PARTITION}" \
-        --qos="${QOS}" \
-        --time="${WORKER_TIME}" \
-        --chdir="${WORKSPACE_ROOT}" \
-        --output="${WORKSPACE_ROOT}/logs/workers/%x-%A_%a.out" \
-        --error="${WORKSPACE_ROOT}/logs/workers/%x-%A_%a.err" \
-        --array="1-${EVALUATOR_COUNT}" \
-        --export="${common_export},ROLE=evaluator" \
-        "${extra_args[@]}" \
-        "${NODE_WORKER_SCRIPT}"
-    )"
-
-    control_job_id="$(
-      sbatch --parsable \
-        --dependency="after:${sampler_job_id}:${evaluator_job_id}" \
-        --account="${ACCOUNT}" \
-        --partition="${PARTITION}" \
-        --qos="${QOS}" \
-        --time="${CONTROL_TIME}" \
-        --chdir="${WORKSPACE_ROOT}" \
-        --output="${WORKSPACE_ROOT}/logs/control/%x-%j.out" \
-        --error="${WORKSPACE_ROOT}/logs/control/%x-%j.err" \
-        --export="${common_export},RUN_NAME=${RUN_NAME},EVALUATOR_COUNT=${EVALUATOR_COUNT},POLL_TIMEOUT_SECONDS=${POLL_TIMEOUT_SECONDS}" \
-        "${extra_args[@]}" \
-        "${HELLO_CONTROL_SCRIPT}"
-    )"
-
-    echo "submitted sampler job:   ${sampler_job_id}"
-    echo "submitted evaluator job: ${evaluator_job_id} (array 1-${EVALUATOR_COUNT})"
-    echo "submitted control job:   ${control_job_id}"
-    echo "monitor with: squeue --jobs=${sampler_job_id},${evaluator_job_id},${control_job_id}"
 
 submit-hello-single:
     #!/usr/bin/env bash
     set -euo pipefail
-
-    require_cmd() {
-      command -v "$1" >/dev/null 2>&1 || {
-        echo "missing required command: $1" >&2
-        exit 1
-      }
-    }
-
-    source "${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}/ops/scripts/load_submit_env.sh"
-    HELLO_SINGLE_SCRIPT="${WORKSPACE_ROOT}/ops/slurm/hello_single.sbatch"
-
-    require_cmd sbatch
-    require_cmd apptainer
-
-    if [[ ! -f "${IMAGE_PATH}" ]]; then
-      echo "missing image: ${IMAGE_PATH}" >&2
-      exit 1
-    fi
-    if [[ ! -f "${HELLO_SINGLE_SCRIPT}" ]]; then
-      echo "missing script: ${HELLO_SINGLE_SCRIPT}" >&2
-      exit 1
-    fi
-
-    if [[ -n "${EXTRA_SBATCH_ARGS}" ]]; then
-      # shellcheck disable=SC2206
-      extra_args=( ${EXTRA_SBATCH_ARGS} )
-    else
-      extra_args=()
-    fi
-
-    mkdir -p "${WORKSPACE_ROOT}/logs/control" "${WORKSPACE_ROOT}/logs/workers"
-
-    single_job_id="$(
-      sbatch --parsable \
-        --account="${ACCOUNT}" \
-        --partition="${PARTITION}" \
-        --qos="${QOS}" \
-        --time="${CONTROL_TIME}" \
-        --chdir="${WORKSPACE_ROOT}" \
-        --output="${WORKSPACE_ROOT}/logs/control/%x-%j.out" \
-        --error="${WORKSPACE_ROOT}/logs/control/%x-%j.err" \
-        --export="ALL,GAMMABOARD_IMAGE=${IMAGE_PATH},GAMMABOARD_WORKSPACE_ROOT=${WORKSPACE_ROOT},GAMMABOARD_DATABASE_URL=${DATABASE_URL},RUN_NAME=${RUN_NAME},NODE_PREFIX=${NODE_PREFIX},POLL_TIMEOUT_SECONDS=${POLL_TIMEOUT_SECONDS},DEPLOY_NAME=${DEPLOY_NAME}" \
-        "${extra_args[@]}" \
-        "${HELLO_SINGLE_SCRIPT}"
-    )"
-
-    echo "submitted single hello job: ${single_job_id}"
-    echo "monitor with: squeue --jobs=${single_job_id}"
+    sbatch ops/slurm/hello_single.sbatch
 
 submit-ui-single:
     #!/usr/bin/env bash
     set -euo pipefail
-
-    require_cmd() {
-      command -v "$1" >/dev/null 2>&1 || {
-        echo "missing required command: $1" >&2
-        exit 1
-      }
-    }
-
-    source "${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}/ops/scripts/load_submit_env.sh"
-
-    CONTROL_UI_SCRIPT="${WORKSPACE_ROOT}/ops/slurm/control_ui_single.sbatch"
-
-    require_cmd sbatch
-    require_cmd apptainer
-
-    if [[ ! -f "${IMAGE_PATH}" ]]; then
-      echo "missing image: ${IMAGE_PATH}" >&2
-      exit 1
-    fi
-    if [[ ! -f "${CONTROL_UI_SCRIPT}" ]]; then
-      echo "missing script: ${CONTROL_UI_SCRIPT}" >&2
-      exit 1
-    fi
-    if [[ ! -d "${FRONTEND_BUILD_DIR}" ]]; then
-      echo "missing frontend build dir: ${FRONTEND_BUILD_DIR}" >&2
-      exit 1
-    fi
-
-    if [[ -n "${EXTRA_SBATCH_ARGS}" ]]; then
-      # shellcheck disable=SC2206
-      extra_args=( ${EXTRA_SBATCH_ARGS} )
-    else
-      extra_args=()
-    fi
-
-    mkdir -p "${WORKSPACE_ROOT}/logs/control" "${WORKSPACE_ROOT}/logs/workers"
-
-    ui_job_id="$(
-      sbatch --parsable \
-        --account="${ACCOUNT}" \
-        --partition="${PARTITION}" \
-        --qos="${QOS}" \
-        --time="${UI_TIME}" \
-        --chdir="${WORKSPACE_ROOT}" \
-        --output="${WORKSPACE_ROOT}/logs/control/%x-%j.out" \
-        --error="${WORKSPACE_ROOT}/logs/control/%x-%j.err" \
-        --export="ALL,GAMMABOARD_IMAGE=${IMAGE_PATH},GAMMABOARD_WORKSPACE_ROOT=${WORKSPACE_ROOT},DEPLOY_NAME=${DEPLOY_NAME},DB_PORT=${DB_PORT},API_PORT=${API_PORT},FRONTEND_PORT=${FRONTEND_PORT},FRONTEND_BUILD_DIR=${FRONTEND_BUILD_DIR}" \
-        "${extra_args[@]}" \
-        "${CONTROL_UI_SCRIPT}"
-    )"
-
-    echo "submitted ui control job: ${ui_job_id}"
-    echo "monitor with: squeue --jobs=${ui_job_id}"
-    echo "tunnel hint: just --justfile ops/ubelix/justfile tunnel-job ${ui_job_id}"
+    sbatch ops/slurm/control_ui_single.sbatch
 
 tunnel-job job_id local_port="8080":
     #!/usr/bin/env bash
     set -euo pipefail
-
-    source "${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}/ops/scripts/load_submit_env.sh"
-    NODE_NAME="$(squeue -h -j "{{job_id}}" -o "%N")"
-
+    LOGIN_HOST="Ubelix"
+    SSH_USER="${SSH_USER:-${USER}}"
+    FRONTEND_PORT="8080"
+    NODE_NAME="$(ssh "${SSH_USER}@${LOGIN_HOST}" "squeue -h -j {{job_id}} -o '%N'")"
     if [[ -z "${NODE_NAME}" || "${NODE_NAME}" == "(null)" ]]; then
       echo "could not resolve node for job {{job_id}} (is it running?)" >&2
       exit 1
     fi
-
-    echo "opening tunnel: localhost:{{local_port}} -> ${NODE_NAME}:${FRONTEND_PORT} via ${LOGIN_HOST}"
-    ssh -N -L "{{local_port}}:${NODE_NAME}:${FRONTEND_PORT}" "${USER}@${LOGIN_HOST}"
+    ssh -N -L "{{local_port}}:${NODE_NAME}:${FRONTEND_PORT}" "${SSH_USER}@${LOGIN_HOST}"

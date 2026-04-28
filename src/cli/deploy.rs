@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{Args, Subcommand};
 use gammaboard::config::{DEFAULT_DEPLOY_CONFIG_PATH, DeployConfig, DeployState, RuntimeConfig};
 use gammaboard::core::ControlPlaneStore;
 use gammaboard::server::ServerConfig;
@@ -26,34 +26,10 @@ pub enum DeployCommand {
     Status(DeployStatusArgs),
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum DeployMode {
-    Dev,
-    Release,
-}
-
-impl DeployMode {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Dev => "dev",
-            Self::Release => "release",
-        }
-    }
-
-    fn binary_path(self) -> PathBuf {
-        match self {
-            Self::Dev => PathBuf::from("./target/dev-optim/gammaboard"),
-            Self::Release => PathBuf::from("./target/release/gammaboard"),
-        }
-    }
-}
-
 #[derive(Debug, Args)]
 pub struct DeployUpArgs {
     #[arg(long = "deploy-config", default_value = DEFAULT_DEPLOY_CONFIG_PATH, value_name = "PATH")]
     deploy_config: PathBuf,
-    #[arg(long, value_enum, default_value = "dev")]
-    mode: DeployMode,
     #[arg(long)]
     frontend_port: Option<u16>,
 }
@@ -108,19 +84,19 @@ async fn deploy_up(
         .frontend_port
         .unwrap_or(deploy_config.frontend_http.frontend_port);
     write_nginx_config(&deploy_config, &server_config, frontend_port)?;
-    start_backend(&deploy_config, runtime_config_path, args.mode)?;
+    start_backend(&deploy_config, runtime_config_path)?;
     start_nginx(&deploy_config)?;
     write_deploy_state(
         &deploy_config,
         &DeployState {
             deploy_config: args.deploy_config.display().to_string(),
-            mode: args.mode.as_str().to_string(),
+            mode: "current-exe".to_string(),
         },
     )?;
 
     println!("Deploy is up");
     println!("Deploy config: {}", args.deploy_config.display());
-    println!("Mode: {}", args.mode.as_str());
+    println!("Mode: current-exe");
     println!(
         "API server config: {}",
         deploy_config.api_server.api_server_config
@@ -274,9 +250,8 @@ fn load_deploy_config_for_management(path: Option<&Path>) -> Result<DeployConfig
 fn start_backend(
     deploy_config: &DeployConfig,
     runtime_config_path: &Path,
-    mode: DeployMode,
 ) -> Result<()> {
-    let binary = mode.binary_path();
+    let binary = std::env::current_exe().context("failed to resolve current executable path")?;
     ensure_parent_dir(&deploy_config.backend_log_file())?;
     stop_backend(deploy_config)?;
     let log = fs::File::create(deploy_config.backend_log_file())?;

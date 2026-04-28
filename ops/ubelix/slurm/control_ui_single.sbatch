@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=gb-ui-single
-#SBATCH --time=02:00:00
+#SBATCH --time=00:20:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
@@ -13,13 +13,76 @@
 
 set -euo pipefail
 
-IMAGE_PATH="${GAMMABOARD_IMAGE:?set GAMMABOARD_IMAGE to your .sif path}"
-WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:?set GAMMABOARD_WORKSPACE_ROOT to absolute workspace path}"
-SCRIPT_PATH="${WORKSPACE_ROOT}/ops/scripts/control_plane.py"
+WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
+IMAGE_PATH="${WORKSPACE_ROOT}/images/gammaboard/gammaboard-latest.sif"
+RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime/local_postgres.template.toml"
+RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
+CONTROL_LOG_DIR="${WORKSPACE_ROOT}/logs/control"
+RUNTIME_CONFIG="${RUNTIME_DIR}/runtime-${SLURM_JOB_ID}-ui-single.toml"
+INSTANCE_NAME="gb-ui-single-${SLURM_JOB_ID}"
+DEPLOY_CFG="${WORKSPACE_ROOT}/ops/config/deploy/deploy.toml"
+DB_PORT="5433"
+DEPLOY_NAME="default"
+FRONTEND_PORT="8080"
 
-if [[ ! -f "${SCRIPT_PATH}" ]]; then
-  echo "missing helper script: ${SCRIPT_PATH}" >&2
+mkdir -p "${RUNTIME_DIR}" "${CONTROL_LOG_DIR}"
+
+if [[ ! -f "${RUNTIME_TEMPLATE}" ]]; then
+  echo "missing runtime template: ${RUNTIME_TEMPLATE}" >&2
+  exit 1
+fi
+if [[ ! -f "${IMAGE_PATH}" ]]; then
+  echo "missing image: ${IMAGE_PATH}" >&2
+  exit 1
+fi
+if [[ ! -f "${DEPLOY_CFG}" ]]; then
+  echo "missing deploy config: ${DEPLOY_CFG}" >&2
+  exit 1
+fi
+if ! command -v envsubst >/dev/null 2>&1; then
+  echo "missing required command: envsubst" >&2
   exit 1
 fi
 
-python3 "${SCRIPT_PATH}" --mode ui-single
+LOCAL_TMP="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
+export WORKSPACE_ROOT LOCAL_TMP DEPLOY_NAME DB_PORT
+envsubst '${WORKSPACE_ROOT} ${LOCAL_TMP} ${DEPLOY_NAME} ${DB_PORT}' \
+  <"${RUNTIME_TEMPLATE}" >"${RUNTIME_CONFIG}"
+
+run_in_container() {
+  env -u PGTZ -u PGOPTIONS \
+  APPTAINERENV_LANG="${APPTAINERENV_LANG:-C.UTF-8}" \
+  APPTAINERENV_LC_ALL="${APPTAINERENV_LC_ALL:-C.UTF-8}" \
+  APPTAINERENV_TZ="${APPTAINERENV_TZ:-Etc/UTC}" \
+  apptainer exec "instance://${INSTANCE_NAME}" \
+    gammaboard --runtime-config "${RUNTIME_CONFIG}" "$@"
+}
+
+cleanup() {
+  set +e
+  run_in_container deploy down --deploy-config "${DEPLOY_CFG}"
+  run_in_container db stop
+  apptainer instance stop "${INSTANCE_NAME}" 2>/dev/null || true
+  rm -f "${RUNTIME_CONFIG}"
+}
+trap cleanup EXIT
+
+apptainer instance stop "${INSTANCE_NAME}" 2>/dev/null || true
+env -u PGTZ -u PGOPTIONS \
+APPTAINERENV_LANG="${APPTAINERENV_LANG:-C.UTF-8}" \
+APPTAINERENV_LC_ALL="${APPTAINERENV_LC_ALL:-C.UTF-8}" \
+APPTAINERENV_TZ="${APPTAINERENV_TZ:-Etc/UTC}" \
+apptainer instance start -B "${WORKSPACE_ROOT}" "${IMAGE_PATH}" "${INSTANCE_NAME}"
+
+echo "node: ${HOSTNAME}"
+echo "workspace_root: ${WORKSPACE_ROOT}"
+echo "runtime_config: ${RUNTIME_CONFIG}"
+echo "frontend_url: http://${HOSTNAME}:${FRONTEND_PORT}"
+echo "tunnel_cmd: ssh -N -L ${FRONTEND_PORT}:${HOSTNAME}:${FRONTEND_PORT} ${USER}@Ubelix"
+
+run_in_container deploy up --deploy-config "${DEPLOY_CFG}"
+
+while true; do
+  sleep 60 &
+  wait $!
+done
