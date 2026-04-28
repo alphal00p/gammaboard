@@ -1,55 +1,30 @@
 Bootstrap: docker
 From: rust:1-bookworm
 
+%setup
+    mkdir -p "${APPTAINER_ROOTFS}/workspace/artifacts/bin"
+
 %post
     set -eux
 
     export DEBIAN_FRONTEND=noninteractive
-    export CARGO_TARGET_DIR=/opt/target
-    export CARGO_PROFILE_RELEASE_LTO=fat
-    export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
-    export SCCACHE_DIR="${SCCACHE_DIR:-/tmp/sccache}"
-    export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-50G}"
-    export SCCACHE_NO_DAEMON="${SCCACHE_NO_DAEMON:-1}"
-    mkdir -p "${SCCACHE_DIR}"
-
     apt-get update
     apt-get install -y --no-install-recommends \
         ca-certificates \
-        git \
         python3 \
-        python3-dev \
-        pkg-config \
-        libssl-dev \
-        libgmp-dev \
-        libmpfr-dev \
-        libmpc-dev \
-        gfortran \
-        m4
+        libgfortran5
 
     update-ca-certificates
 
-    cargo install just --locked
-    cargo install sccache --locked
-    export RUSTC_WRAPPER=sccache
+    GAMMALOOP_BIN="${GAMMALOOP_BIN:-/workspace/artifacts/bin/gammaloop}"
+    test -x "${GAMMALOOP_BIN}"
+    install -Dm755 "${GAMMALOOP_BIN}" /usr/local/bin/gammaloop
 
-    git clone --depth 1 https://github.com/alphal00p/gammaloop.git /opt/gammaloop
-
-    cd /opt/gammaloop
-    just build-cli
-
-    sccache --show-stats || true
-
-    install -Dm755 /opt/target/dev-optim/gammaloop /usr/local/bin/gammaloop
-
-    rm -rf /opt/target
-    rm -rf /opt/gammaloop
-    rm -rf /root/.cargo/registry /root/.cargo/git
     apt-get clean
     rm -rf /var/lib/apt/lists/*
 
 %environment
-    export PATH=/root/.cargo/bin:/usr/local/cargo/bin:/usr/local/bin:$PATH
+    export PATH=/usr/local/bin:$PATH
 
 %runscript
     exec "$@"

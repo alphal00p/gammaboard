@@ -3,6 +3,7 @@
 This directory contains the current simplified UBELIX workflow with commit-named Apptainer images:
 - a GammaLoop-only image builder,
 - and a GammaBoard image builder that always processes both GammaLoop and GammaBoard targets.
+- Native Rust compilation runs in Slurm jobs and reuses a persistent Cargo target cache on scratch storage.
 
 ## Deployment Decision
 
@@ -74,6 +75,7 @@ Why:
 - `gammaloop` needs system build dependencies that are not guaranteed to exist on UBELIX by default.
 - Commit-named image files keep artifact history readable.
 - `*-latest.sif` symlinks make operator-facing paths stable.
+- Rust build artifacts persist in `/scratch/network/users/$USER/gammaboard-target/target` across build jobs.
 
 Definition files:
 
@@ -94,14 +96,18 @@ mkdir -p logs/build logs/control logs/workers
 sbatch ops/ubelix/build/build_latest_gammaboard.sbatch
 ```
 
-Both build scripts also enable `sccache` by default for Rust compilation and persist it on scratch:
+Both build scripts compile Rust natively on compute nodes first, using:
 
 ```bash
-SCCACHE_BASE=/scratch/network/users/$USER/gammaboard-cache/sccache
-SCCACHE_CACHE_SIZE=50G
+CARGO_TARGET_DIR=/scratch/network/users/$USER/gammaboard-target/target
 ```
 
-This speeds up repeated rebuilds even though the scripts always run full image builds.
+Then they build SIF images from package-only `.def` files that install binaries from:
+
+```text
+<WORKSPACE_ROOT>/artifacts/bin/gammaloop
+<WORKSPACE_ROOT>/artifacts/bin/gammaboard
+```
 
 Edit the config block at the top of these sbatch files directly on UBELIX if you want to change workspace paths, repositories, or scratch/cache roots.
 
@@ -116,9 +122,8 @@ UBELIX specifically recommends scratch-backed cache dirs when pulling or buildin
 
 ```bash
 mkdir -p /scratch/network/users/$USER
-export APPTAINER_TMPDIR=/scratch/network/users/$USER
-export APPTAINER_CACHEDIR=/scratch/network/users/$USER
-export SCCACHE_DIR=/scratch/network/users/$USER/gammaboard-cache/sccache
+export APPTAINER_TMPDIR=/scratch/network/users/$USER/apptainer/tmp
+export APPTAINER_CACHEDIR=/scratch/network/users/$USER/apptainer/cache
 apptainer build --notest gammaloop.sif ops/ubelix/build/gammaloop.def
 apptainer build --notest gammaboard.sif ops/ubelix/build/gammaboard.def
 ```
@@ -136,6 +141,7 @@ Output layout:
 ```
 
 No persistent source checkout on UBELIX is required for this flow. The only persistent artifacts are the `.def` file, Slurm logs, and the built runtime image.
+The build jobs keep persistent source checkouts under `artifacts/src/*` and a persistent compile cache under scratch (`RUST_TARGET_BASE`) to accelerate incremental rebuilds.
 
 ## 2) Runtime Image And Smoke Test
 
