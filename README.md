@@ -38,7 +38,7 @@ The dashboard shows runs, task output, nodes, performance, and logs.
 Default config split:
 - `configs/runtime/default.toml`: shared database, tracing, and local Postgres settings
 - `configs/server/default.toml`: direct `gammaboard server` settings
-- `configs/deploy/*.toml`: detached deploy profiles
+- `ops/<env>/config/{server,deploy}.toml`: detached deploy environment profiles
 
 The frontend uses relative `/api` calls and does not require `.env`. The `just` recipes remain as thin wrappers, but the CLI flow above is the primary local workflow.
 
@@ -48,6 +48,11 @@ For initial Slurm/Apptainer hello-world tests on UBELIX, use:
 - [ops/ubelix/README.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/README.md)
 - [ops/ubelix/slurm/smoke_container.sbatch](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/slurm/smoke_container.sbatch)
 - [ops/ubelix/justfile](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/justfile)
+
+## Ops Layout
+- [ops/local/config](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config): local detached-deploy profiles.
+- [ops/itphlies/README.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/itphlies/README.md): ITPhlies-specific deploy workflow and config.
+- [ops/ubelix/README.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/README.md): UBELIX Slurm/Apptainer workflow and config.
 
 ## Runtime Config
 - All commands load shared runtime config from [configs/runtime/default.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/runtime/default.toml) by default.
@@ -158,8 +163,8 @@ The `just` wrappers build first, then invoke the CLI:
 ```bash
 just deploy local dev
 just deploy itphlies release
-just deploy-status
-just stop-deploy
+just deploy-status itphlies
+just stop-deploy itphlies
 ```
 
 Detached deploy:
@@ -178,6 +183,7 @@ Use this flow when you want both direct LAN access and the SSH tunnel option.
    ```bash
    just deploy itphlies release
    ```
+   (From `ops/itphlies`, you can run `just --justfile justfile deploy`.)
    This builds the frontend and release backend, then launches `target/release/gammaboard server` and generates the nginx config from the deploy profile.
 2. On your laptop, open an SSH tunnel:
    ```bash
@@ -190,7 +196,7 @@ Use this flow when you want both direct LAN access and the SSH tunnel option.
    or `http://itphlies:8080` if your local network resolves that hostname. If you access the server by LAN IP instead, add that origin to `allowed_origins` in the server config first.
 4. To stop all deployed ITPhlies processes:
    ```bash
-   gammaboard deploy down --deploy-config ops/itphlies/config/deploy.toml
+   just stop-deploy itphlies
    ```
 5. The SSH tunnel remains optional; direct LAN access works because nginx listens on `0.0.0.0:8080`, while the backend still stays private on `127.0.0.1:4000`.
 
@@ -216,7 +222,7 @@ Important:
   - server config: [ops/local/config/server.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config/server.toml)
   - deploy config: [ops/local/config/deploy.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config/deploy.toml)
   - run with: `just deploy local dev`
-  - stop with: `gammaboard deploy down --deploy-config ops/local/config/deploy.toml`
+  - stop with: `just stop-deploy local`
 
 ## Dashboard Auth
 - Read-only dashboard endpoints stay open.
@@ -242,7 +248,7 @@ Run configs are TOML and are deep-merged over the built-in default run config te
 
 Add a run with:
 ```bash
-gammaboard run add configs/runs/live-test-unit-naive-scalar.toml
+gammaboard run add configs/runs/gammaloop.toml
 ```
 
 Flake-backed Python evaluator + sampler example:
@@ -252,8 +258,6 @@ gammaboard run add configs/runs/python-scalar-python-sampler-flake-demo.toml
 
 Curated run configs (kept intentionally small):
 - `configs/runs/default.toml`: baseline defaults merged into every run config.
-- `configs/runs/live-test-unit-naive-scalar.toml`: small unit + naive Monte Carlo run for smoke/live orchestration.
-- `configs/runs/symbolica-live-test.toml` + `configs/runs/symbolica-live-test-sin.toml`: two Symbolica runs used by `just live-test-basic` reassignment flow.
 - `configs/runs/symbolica-havana-pdf-1d2d.toml`: Symbolica + Havana training + both PDF adaptation task kinds (`pdf_adaptation_image`, `pdf_adaptation_plot_line`).
 - `configs/runs/python-scalar-python-sampler-flake-demo.toml`: Python evaluator and Python sampler integration.
 - `configs/runs/gammaloop.toml`: GammaLoop TTH evaluator config, including optional `post_load_commands`.
