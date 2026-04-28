@@ -86,6 +86,7 @@ MIGRATIONS_DIR="${WORKSPACE_ROOT}/${MIGRATIONS_DIR_REL}"
 SQLX_ROOT_DIR="${WORKSPACE_ROOT}/artifacts/sqlx-root"
 RUST_TARGET_BASE="${RUST_TARGET_BASE:-/scratch/network/users/${USER}/gammaboard-target}"
 RUST_TARGET_DIR="${RUST_TARGET_BASE}/target"
+CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-1}"
 GL_LATEST_LINK="${GL_IMAGE_DIR}/gammaloop-latest.sif"
 GB_LATEST_LINK="${GB_IMAGE_DIR}/gammaboard-latest.sif"
 
@@ -108,6 +109,7 @@ fi
 
 export APPTAINER_TMPDIR="${TMP_BASE}"
 export APPTAINER_CACHEDIR="${CACHE_BASE}"
+export CARGO_INCREMENTAL
 
 GAMMALOOP_SHA="$(git_head_sha "${GAMMALOOP_REPO}")"
 GAMMABOARD_SHA="$(git_head_sha "${GAMMABOARD_REPO}")"
@@ -144,6 +146,7 @@ echo "gammaloop_image: ${GL_OUT_IMAGE}"
 echo "gammaboard_image: ${GB_OUT_IMAGE}"
 echo "APPTAINER_TMPDIR: ${APPTAINER_TMPDIR}"
 echo "APPTAINER_CACHEDIR: ${APPTAINER_CACHEDIR}"
+echo "CARGO_INCREMENTAL: ${CARGO_INCREMENTAL}"
 
 if [[ ! -d "${GL_SRC_DIR}/.git" ]]; then
   git clone "${GAMMALOOP_REPO}" "${GL_SRC_DIR}"
@@ -262,6 +265,7 @@ cargo_version="${CARGO_VERSION}" \
 cargo_profile="${GL_RUST_PROFILE}" \
 cargo_features="${GL_RUST_FEATURES}" \
 rust_target_dir="${RUST_TARGET_DIR}" \
+cargo_incremental="${CARGO_INCREMENTAL}" \
 image_size_bytes="${GL_IMAGE_SIZE_BYTES}" \
 image_sha256="${GL_IMAGE_SHA256}" \
 timing_total_seconds="${TOTAL_SECONDS}" \
@@ -288,6 +292,7 @@ cargo_version="${CARGO_VERSION}" \
 cargo_profile="${GB_RUST_PROFILE}" \
 cargo_features="-" \
 rust_target_dir="${RUST_TARGET_DIR}" \
+cargo_incremental="${CARGO_INCREMENTAL}" \
 image_size_bytes="${GB_IMAGE_SIZE_BYTES}" \
 image_sha256="${GB_IMAGE_SHA256}" \
 timing_total_seconds="${TOTAL_SECONDS}" \

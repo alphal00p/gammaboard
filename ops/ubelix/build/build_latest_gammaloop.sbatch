@@ -73,6 +73,7 @@ BIN_DIR="${WORKSPACE_ROOT}/${BIN_DIR_REL}"
 LIB_DIR="${WORKSPACE_ROOT}/${LIB_DIR_REL}"
 RUST_TARGET_BASE="${RUST_TARGET_BASE:-/scratch/network/users/${USER}/gammaboard-target}"
 RUST_TARGET_DIR="${RUST_TARGET_BASE}/target"
+CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-1}"
 LATEST_LINK="${IMAGE_DIR}/gammaloop-latest.sif"
 
 mkdir -p "${WORKSPACE_ROOT}/logs/slurm/build" "${TMP_BASE}" "${CACHE_BASE}" "${IMAGE_DIR}" "${BIN_DIR}" "${LIB_DIR}" "${RUST_TARGET_DIR}"
@@ -84,6 +85,7 @@ fi
 
 export APPTAINER_TMPDIR="${TMP_BASE}"
 export APPTAINER_CACHEDIR="${CACHE_BASE}"
+export CARGO_INCREMENTAL
 
 GAMMALOOP_SHA="$(git_head_sha "${GAMMALOOP_REPO}")"
 OUT_IMAGE="${IMAGE_DIR}/gammaloop-${GAMMALOOP_SHA}.sif"
@@ -105,6 +107,7 @@ echo "out_image: ${OUT_IMAGE}"
 echo "latest_link: ${LATEST_LINK}"
 echo "APPTAINER_TMPDIR: ${APPTAINER_TMPDIR}"
 echo "APPTAINER_CACHEDIR: ${APPTAINER_CACHEDIR}"
+echo "CARGO_INCREMENTAL: ${CARGO_INCREMENTAL}"
 
 if [[ ! -d "${SRC_DIR}/.git" ]]; then
   git clone "${GAMMALOOP_REPO}" "${SRC_DIR}"
@@ -177,6 +180,7 @@ cargo_version="${CARGO_VERSION}" \
 cargo_profile="${RUST_PROFILE}" \
 cargo_features="${RUST_FEATURES}" \
 rust_target_dir="${RUST_TARGET_DIR}" \
+cargo_incremental="${CARGO_INCREMENTAL}" \
 image_size_bytes="${IMAGE_SIZE_BYTES}" \
 image_sha256="${IMAGE_SHA256}" \
 timing_total_seconds="${TOTAL_SECONDS}" \
