@@ -108,6 +108,9 @@ fn start_postgres(local: &LocalPostgresConfig, database_url: &str) -> Result<()>
         },
     );
     startup_options.push_str(" -c shared_preload_libraries=pg_stat_statements");
+    // Force a canonical timezone name to avoid startup/session failures on hosts
+    // where "UTC" alias resolution is incomplete but "Etc/UTC" is available.
+    startup_options.push_str(" -c timezone=Etc/UTC");
     run_command(
         Command::new("pg_ctl")
             .arg("-D")
