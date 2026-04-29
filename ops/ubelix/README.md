@@ -2,7 +2,7 @@
 
 This directory contains the current simplified UBELIX workflow with commit-named Apptainer images:
 - a GammaLoop-only image builder,
-- and a GammaBoard image builder that always processes both GammaLoop and GammaBoard targets.
+- and a GammaBoard image builder that packages only GammaBoard runtime artifacts.
 - Native Rust compilation runs in Slurm jobs and reuses a persistent Cargo target cache on scratch storage.
 
 ## Deployment Decision
@@ -22,9 +22,9 @@ The frontend can be separated later, but the first deployment should serve front
 ## Files
 
 - `build/gammaloop.def`: builds a runtime image containing `gammaloop` only.
-- `build/gammaboard.def`: builds a runtime image containing both `gammaloop` and `gammaboard`.
+- `build/gammaboard.def`: builds a runtime image containing `gammaboard` only.
 - `build/build_latest_gammaloop.sbatch`: always builds `gammaloop` from latest upstream `HEAD`, writes `gammaloop-<commit>.sif`, then updates `gammaloop-latest.sif` symlink.
-- `build/build_latest_gammaboard.sbatch`: always builds both targets (`gammaloop`, then `gammaboard`) from latest upstream `HEAD`, writes commit-named images, and updates both latest symlinks.
+- `build/build_latest_gammaboard.sbatch`: builds the `gammaboard` image from latest upstream `HEAD`, writes `gammaboard-<commit>.sif`, and updates `gammaboard-latest.sif`.
 - `config/runtime/external_db_control.template.toml`: control runtime template for external DB mode (persistent data dir + scratch socket dir).
 - `config/runtime/external_db_worker.template.toml`: worker runtime template; `DATABASE_URL` is rendered per submission via `envsubst`.
 - `config/runtime/local_postgres.template.toml`: runtime template for local-Postgres control jobs, including network listen/auth settings for remote worker jobs.
@@ -106,7 +106,7 @@ mkdir -p logs/slurm/build logs/slurm/control logs/slurm/workers logs/postgres
 sbatch ops/ubelix/build/build_latest_gammaloop.sbatch
 ```
 
-Build GammaBoard image (this always processes both GammaLoop and GammaBoard targets):
+Build GammaBoard image:
 
 ```bash
 mkdir -p logs/slurm/build logs/slurm/control logs/slurm/workers logs/postgres
@@ -161,7 +161,7 @@ Output layout:
     gammaboard-latest.sif -> gammaboard-<commit>.sif
 ```
 
-The build jobs keep persistent source checkouts under `artifacts/src/*`, staged binaries under `artifacts/bin/*`, and a persistent compile cache under scratch (`RUST_TARGET_BASE`) to accelerate incremental rebuilds.
+The build jobs keep persistent source checkouts under `artifacts/src/*`, staged binaries under `artifacts/bin/*`, and a persistent compile cache under scratch (`RUST_TARGET_BASE`) to accelerate incremental rebuilds. The GammaBoard build checks out only the `gammaboard` repo and compiles against the GammaLoop git dependency pinned in `Cargo.lock`; it does not package the GammaLoop CLI into the GammaBoard image.
 
 ## 2) Runtime Image And Smoke Test
 

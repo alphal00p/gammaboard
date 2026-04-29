@@ -1777,6 +1777,7 @@ dependencies = [
 [[package]]
 name = "gammaloop-api"
 version = "0.1.0"
+source = "git+https://github.com/alphal00p/gammaloop.git#a1e6ce21b85310680a6b95a6cf997191f3cff0d8"
 dependencies = [
  "ahash",
  "bincode",
@@ -1832,6 +1833,7 @@ dependencies = [
 [[package]]
 name = "gammalooprs"
 version = "0.3.3"
+source = "git+https://github.com/alphal00p/gammaloop.git#a1e6ce21b85310680a6b95a6cf997191f3cff0d8"
 dependencies = [
  "ahash",
  "base62",
@@ -2444,6 +2446,7 @@ checksum = "25a2bc672d1148e28034f176e01fffebb08b35768468cc954630da77a1449005"
 [[package]]
 name = "idenso"
 version = "0.3.0"
+source = "git+https://github.com/alphal00p/gammaloop.git#a1e6ce21b85310680a6b95a6cf997191f3cff0d8"
 dependencies = [
  "bincode",
  "bincode-trait-derive",
@@ -2829,6 +2832,7 @@ dependencies = [
 [[package]]
 name = "linnet"
 version = "0.17.0"
+source = "git+https://github.com/alphal00p/gammaloop.git#a1e6ce21b85310680a6b95a6cf997191f3cff0d8"
 dependencies = [
  "ahash",
  "bincode",
@@ -5037,6 +5041,7 @@ checksum = "02ef091d4e8b981dbaa4cc17789d00b53d5d2c001ae689f14e6093f30c529036"
 [[package]]
 name = "spenso"
 version = "0.6.0"
+source = "git+https://github.com/alphal00p/gammaloop.git#a1e6ce21b85310680a6b95a6cf997191f3cff0d8"
 dependencies = [
  "ahash",
  "append-only-vec",
@@ -5076,6 +5081,7 @@ dependencies = [
 [[package]]
 name = "spenso-hep-lib"
 version = "0.1.7"
+source = "git+https://github.com/alphal00p/gammaloop.git#a1e6ce21b85310680a6b95a6cf997191f3cff0d8"
 dependencies = [
  "ahash",
  "idenso",
@@ -5088,6 +5094,7 @@ dependencies = [
 [[package]]
 name = "spenso-macros"
 version = "0.3.2"
+source = "git+https://github.com/alphal00p/gammaloop.git#a1e6ce21b85310680a6b95a6cf997191f3cff0d8"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6348,6 +6355,7 @@ dependencies = [
 [[package]]
 name = "vakint"
 version = "0.1.2"
+source = "git+https://github.com/alphal00p/gammaloop.git#a1e6ce21b85310680a6b95a6cf997191f3cff0d8"
 dependencies = [
  "ahash",
  "arrayvec",

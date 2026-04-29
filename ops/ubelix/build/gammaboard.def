@@ -29,15 +29,12 @@ From: rust:1-bookworm
       fi
     done
 
-    GAMMALOOP_BIN="${GAMMALOOP_BIN:-/workspace/artifacts/bin/gammaloop}"
     GAMMABOARD_BIN="${GAMMABOARD_BIN:-/workspace/artifacts/bin/gammaboard}"
     SQLX_BIN="${SQLX_BIN:-/workspace/artifacts/bin/sqlx}"
     MIGRATIONS_DIR="${MIGRATIONS_DIR:-/workspace/artifacts/migrations}"
-    test -x "${GAMMALOOP_BIN}"
     test -x "${GAMMABOARD_BIN}"
     test -x "${SQLX_BIN}"
     test -d "${MIGRATIONS_DIR}"
-    install -Dm755 "${GAMMALOOP_BIN}" /usr/local/bin/gammaloop
     install -Dm755 "${GAMMABOARD_BIN}" /usr/local/bin/gammaboard
     install -Dm755 "${SQLX_BIN}" /usr/local/bin/sqlx
     mkdir -p /usr/local/share/gammaboard/migrations
@@ -62,5 +59,4 @@ From: rust:1-bookworm
     exec "$@"
 
 %test
-    test -x /usr/local/bin/gammaloop
     test -x /usr/local/bin/gammaboard
