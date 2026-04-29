@@ -1,8 +1,21 @@
 sync-ops host="Ubelix" remote_root="/storage/research/itp_localunitaritydata":
     #!/usr/bin/env bash
     set -euo pipefail
-    ssh "{{host}}" "mkdir -p '{{remote_root}}/ops'"
-    scp -r ./* "{{host}}:{{remote_root}}/ops/"
+    ssh "{{host}}" "mkdir -p '{{remote_root}}/ops/build' '{{remote_root}}/ops/config' '{{remote_root}}/ops/slurm'"
+    scp -r build/* "{{host}}:{{remote_root}}/ops/build/"
+    scp -r config/* "{{host}}:{{remote_root}}/ops/config/"
+    scp -r slurm/* "{{host}}:{{remote_root}}/ops/slurm/"
+    scp justfile "{{host}}:{{remote_root}}/justfile"
+    scp README.md "{{host}}:{{remote_root}}/README-ubelix.md"
+
+sync-dashboard host="Ubelix" remote_root="/storage/research/itp_localunitaritydata":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    cd "${REPO_ROOT}"
+    just build-frontend
+    ssh "{{host}}" "rm -rf '{{remote_root}}/artifacts/dashboard-build' && mkdir -p '{{remote_root}}/artifacts'"
+    scp -r dashboard/build "{{host}}:{{remote_root}}/artifacts/dashboard-build"
 
 submit-hello-single:
     #!/usr/bin/env bash
