@@ -8,6 +8,9 @@ persist_runtime_logs = true
 db_gammaboard_level = "info"
 db_external_level = "warn"
 
+[resources]
+roots = []
+
 [local_postgres]
 data_dir = ".postgres"
 socket_dir = ".postgres-socket"

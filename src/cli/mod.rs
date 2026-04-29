@@ -16,6 +16,7 @@ use completion::{CompletionArgs, run_completion};
 use db::{DbArgs, run_db_command};
 use deploy::{DeployArgs, run_deploy_command};
 use gammaboard::config::{DEFAULT_RUNTIME_CONFIG_PATH, RuntimeConfig};
+use gammaboard::resources::initialize_resource_roots;
 use node::{NodeArgs, run_node_commands};
 use run::{RunArgs, run_run_commands};
 use server::{ServerArgs, run_server};
@@ -57,6 +58,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
     let quiet = cli.quiet;
     let runtime_config_path = cli.runtime_config.clone();
     let config = RuntimeConfig::load(&runtime_config_path)?;
+    initialize_resource_roots(&config.resources.roots);
     match cli.command {
         Command::AutoAssign(args) => run_auto_assign_command(args, &config, quiet).await,
         Command::Run(args) => run_run_commands(args.command, &config, quiet).await,

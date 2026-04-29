@@ -8,6 +8,7 @@ pub mod config;
 pub mod core;
 pub mod evaluation;
 pub mod preprocess;
+pub mod resources;
 pub mod runners;
 pub mod sampling;
 pub mod server;

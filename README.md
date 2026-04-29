@@ -71,6 +71,11 @@ For initial Slurm/Apptainer hello-world tests on UBELIX, use:
   db_gammaboard_level = "info"
   db_external_level = "warn"
 
+  [resources]
+  # Optional ordered search roots for relative evaluator resource paths
+  # (for example GammaLoop state_folder). First existing match wins.
+  roots = []
+
   [local_postgres]
   data_dir = ".postgres"
   socket_dir = ".postgres-socket"
@@ -97,6 +102,7 @@ gammaboard db dump-sql
 ```
 
 These commands use `database.url` and `local_postgres` from `configs/runtime/default.toml`.
+Relative evaluator resource paths (for example `evaluator.kind = "gammaloop"` `state_folder`) resolve against `resources.roots` in order; absolute paths are used as-is.
 To reset local state, use `just db-reset` or run `gammaboard db delete --yes` then `gammaboard db start`.
 `local_postgres.max_connections` controls the local Postgres server connection ceiling used by `gammaboard db start`.
 The checked-in local defaults also bias Postgres toward queue throughput: larger buffers/WAL limits, `wal_compression = true`, and `synchronous_commit = false`. That last setting trades crash durability of the most recent transactions for lower write latency, which is a good fit for the transient local batch queue but should be revisited for stricter durability needs.

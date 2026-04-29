@@ -16,6 +16,8 @@ const DEFAULT_DEPLOY_CONFIG_TOML: &str = include_str!("../ops/local/config/deplo
 pub struct RuntimeConfig {
     pub database: DatabaseConfig,
     pub tracing: TracingConfig,
+    #[serde(default)]
+    pub resources: ResourceConfig,
     pub local_postgres: LocalPostgresConfig,
 }
 
@@ -29,6 +31,12 @@ pub struct TracingConfig {
     pub persist_runtime_logs: bool,
     pub db_gammaboard_level: String,
     pub db_external_level: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ResourceConfig {
+    #[serde(default)]
+    pub roots: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

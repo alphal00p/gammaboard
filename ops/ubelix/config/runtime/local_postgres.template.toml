@@ -6,6 +6,9 @@ persist_runtime_logs = true
 db_gammaboard_level = "info"
 db_external_level = "warn"
 
+[resources]
+roots = ["${WORKSPACE_ROOT}/states"]
+
 [local_postgres]
 # Persistent state: survives walltime/preemption and lets runs resume.
 data_dir = "${WORKSPACE_ROOT}/db/${DEPLOY_NAME}/data"

@@ -24,14 +24,9 @@ submit-ui-with-two-workers:
 
     WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
     IMAGE_PATH="${GAMMABOARD_IMAGE:-${WORKSPACE_ROOT}/images/gammaboard/gammaboard-latest.sif}"
-    WORKER_RUNTIME_CFG="${WORKSPACE_ROOT}/ops/config/runtime/external_db_worker.toml"
     WAIT_SECONDS="${CONTROL_NODE_WAIT_SECONDS:-180}"
 
     mkdir -p "${WORKSPACE_ROOT}/logs/slurm/control" "${WORKSPACE_ROOT}/logs/slurm/workers" "${WORKSPACE_ROOT}/logs/postgres"
-    if [[ ! -f "${WORKER_RUNTIME_CFG}" ]]; then
-      echo "missing worker runtime config: ${WORKER_RUNTIME_CFG}" >&2
-      exit 1
-    fi
     if [[ ! -f "${IMAGE_PATH}" ]]; then
       echo "missing image: ${IMAGE_PATH}" >&2
       exit 1
@@ -59,18 +54,18 @@ submit-ui-with-two-workers:
       exit 1
     fi
 
-    sed -i -E \
-      "s#^(url *= *\"postgresql://postgres:postgres@)[^\"]*(/gammaboard_db\")#\\1${control_node}:5433\\2#" \
-      "${WORKER_RUNTIME_CFG}"
+    worker_db_url="postgresql://postgres:postgres@${control_node}:5433/gammaboard_db"
 
     w1_submit="$(
       NODE_NAME=w-1 \
+      GAMMABOARD_DATABASE_URL="${worker_db_url}" \
       GAMMABOARD_IMAGE="${IMAGE_PATH}" \
       GAMMABOARD_WORKSPACE_ROOT="${WORKSPACE_ROOT}" \
       sbatch --chdir "${WORKSPACE_ROOT}" "${WORKSPACE_ROOT}/ops/slurm/node_worker.sbatch"
     )"
     w2_submit="$(
       NODE_NAME=w-2 \
+      GAMMABOARD_DATABASE_URL="${worker_db_url}" \
       GAMMABOARD_IMAGE="${IMAGE_PATH}" \
       GAMMABOARD_WORKSPACE_ROOT="${WORKSPACE_ROOT}" \
       sbatch --chdir "${WORKSPACE_ROOT}" "${WORKSPACE_ROOT}/ops/slurm/node_worker.sbatch"

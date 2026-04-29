@@ -7,7 +7,7 @@ use crate::core::{
 use crate::evaluation::GammaLoopParams;
 use crate::evaluation::evaluator::gammaloop::GammaLoopEvaluator;
 use crate::stores::PgStore;
-use crate::{BuildError, api::ApiError};
+use crate::{BuildError, api::ApiError, resources::resolve_resource_path};
 use chrono::Utc;
 use gammaloop_api::state::State;
 use gammalooprs::processes::DotExportSettings;
@@ -150,10 +150,16 @@ fn generate_process_visualization(
 ) -> Result<RenderedProcessVisualization, String> {
     let temp_dir =
         tempfile::tempdir().map_err(|err| format!("failed to create temp dir: {err}"))?;
-    let mut state = State::load(params.state_folder.clone(), None, None).map_err(|err| {
+    let resolved_state_folder = resolve_resource_path(&params.state_folder).map_err(|err| {
+        format!(
+            "failed to resolve gammaloop state_folder '{}': {err}",
+            params.state_folder.display()
+        )
+    })?;
+    let mut state = State::load(resolved_state_folder.clone(), None, None).map_err(|err| {
         format!(
             "failed to load state from {}: {err}",
-            params.state_folder.display()
+            resolved_state_folder.display()
         )
     })?;
     GammaLoopEvaluator::run_post_load_commands(params, &mut state)

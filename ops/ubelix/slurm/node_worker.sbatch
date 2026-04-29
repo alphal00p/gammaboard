@@ -16,13 +16,14 @@ set -euo pipefail
 IMAGE_PATH="${GAMMABOARD_IMAGE:?set GAMMABOARD_IMAGE to your .sif path}"
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:?set GAMMABOARD_WORKSPACE_ROOT to absolute workspace path}"
 NODE_NAME="${NODE_NAME:?set NODE_NAME (e.g. gb-hello-sampler or gb-hello-eval-1)}"
+DATABASE_URL="${GAMMABOARD_DATABASE_URL:?set GAMMABOARD_DATABASE_URL to reachable Postgres URL}"
 DEPLOY_NAME="${DEPLOY_NAME:-default}"
 mkdir -p "${WORKSPACE_ROOT}/logs/slurm/workers"
 
 RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
 mkdir -p "${RUNTIME_DIR}"
 RUNTIME_CONFIG="${RUNTIME_DIR}/runtime-${SLURM_JOB_ID}-${NODE_NAME}.toml"
-RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime/external_db_worker.toml"
+RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime/external_db_worker.template.toml"
 trap 'rm -f "${RUNTIME_CONFIG}"' EXIT
 if [[ ! -f "${RUNTIME_TEMPLATE}" ]]; then
   echo "missing runtime template: ${RUNTIME_TEMPLATE}" >&2
@@ -33,8 +34,8 @@ if ! command -v envsubst >/dev/null 2>&1; then
   exit 1
 fi
 LOCAL_TMP="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
-export WORKSPACE_ROOT LOCAL_TMP DEPLOY_NAME
-envsubst '${WORKSPACE_ROOT} ${LOCAL_TMP} ${DEPLOY_NAME}' \
+export DATABASE_URL WORKSPACE_ROOT LOCAL_TMP DEPLOY_NAME
+envsubst '${DATABASE_URL} ${WORKSPACE_ROOT} ${LOCAL_TMP} ${DEPLOY_NAME}' \
   <"${RUNTIME_TEMPLATE}" >"${RUNTIME_CONFIG}"
 
 db_url="$(awk -F' *= *' '/^url *=/{gsub(/"/,"",$2); print $2; exit}' "${RUNTIME_CONFIG}")"
@@ -47,7 +48,7 @@ db_host="${db_host_port%%:*}"
 
 if [[ "${db_host}" == "127.0.0.1" || "${db_host}" == "localhost" || "${db_host}" == "::1" ]]; then
   echo "database.url points to loopback (${db_host_port}); separate Slurm worker jobs need the control-node hostname/IP" >&2
-  echo "update ops/config/runtime/external_db_worker.toml to use the control-node DB listener" >&2
+  echo "set GAMMABOARD_DATABASE_URL to the control-node DB listener before submitting this worker" >&2
   exit 1
 fi
 

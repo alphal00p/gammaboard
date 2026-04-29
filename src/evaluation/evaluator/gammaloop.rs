@@ -24,6 +24,7 @@ use crate::{
         AccumulatorState, ComplexAccumulatorState, ComplexValueEvaluator, EvalBatchOptions,
         Evaluator, GammaLoopAccumulatorState, ScalarValueEvaluator,
     },
+    resources::resolve_resource_path,
 };
 
 pub struct GammaLoopEvaluator {
@@ -334,8 +335,14 @@ impl GammaLoopEvaluator {
         Ok(())
     }
 
-    pub fn from_params(params: GammaLoopParams) -> Result<Self, BuildError> {
+    pub fn from_params(mut params: GammaLoopParams) -> Result<Self, BuildError> {
         match std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<Self, BuildError> {
+            params.state_folder = resolve_resource_path(&params.state_folder).map_err(|err| {
+                BuildError::build(format!(
+                    "failed to resolve gammaloop state_folder '{}': {err}",
+                    params.state_folder.display()
+                ))
+            })?;
             _ = initialise();
             let mut state =
                 State::load(params.state_folder.clone(), None, None).map_err(|err| {

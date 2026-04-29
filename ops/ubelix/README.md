@@ -26,8 +26,9 @@ The frontend can be separated later, but the first deployment should serve front
 - `build/build_latest_gammaloop.sbatch`: always builds `gammaloop` from latest upstream `HEAD`, writes `gammaloop-<commit>.sif`, then updates `gammaloop-latest.sif` symlink.
 - `build/build_latest_gammaboard.sbatch`: always builds both targets (`gammaloop`, then `gammaboard`) from latest upstream `HEAD`, writes commit-named images, and updates both latest symlinks.
 - `config/runtime/external_db_control.template.toml`: control runtime template for external DB mode (persistent data dir + scratch socket dir).
-- `config/runtime/external_db_worker.toml`: worker runtime config source of truth (including DB URL); copied via `envsubst` for path placeholders.
+- `config/runtime/external_db_worker.template.toml`: worker runtime template; `DATABASE_URL` is rendered per submission via `envsubst`.
 - `config/runtime/local_postgres.template.toml`: runtime template for local-Postgres control jobs, including network listen/auth settings for remote worker jobs.
+- UBELIX runtime templates set `resources.roots = ["${WORKSPACE_ROOT}/states"]` so relative evaluator state/resource paths resolve consistently across control and worker jobs.
 - `config/server/server.toml` and `config/deploy/deploy.toml`: UBELIX deploy/server profiles (same split as local/itphlies).
 - UBELIX server profile sets `allow_local_node_spawn = false` so dashboard "Start Nodes" is disabled; workers should be launched via Slurm jobs/arrays.
 - `config/templates/runs` and `config/templates/tasks`: UBELIX-local run/task template directories used by `server.toml`.
@@ -213,7 +214,7 @@ The next scripts should automate this sequence:
    ```bash
    ssh -N -L 8080:<compute-node>:8080 <user>@submit03.unibe.ch
    ```
-6. Submit or launch worker jobs with `NODE_NAME=<name>` and a DB URL configured in `ops/config/runtime/external_db_worker.toml`.
+6. Submit or launch worker jobs with `NODE_NAME=<name>` and `GAMMABOARD_DATABASE_URL=<control-node-postgres-url>`.
 7. Run `gammaboard run add ...`, then `gammaboard auto-assign <RUN> <EVALUATOR_COUNT>`.
 8. On teardown, pause runs, stop nodes, stop the server/frontend proxy, and stop Postgres.
 
@@ -331,7 +332,7 @@ Worker jobs stay simple and identical:
 gammaboard --runtime-config <runtime.toml> node run --name <node-name>
 ```
 
-Workers should use the DB URL defined in `ops/config/runtime/external_db_worker.toml`, announce themselves, and wait for assignment. The control job or an operator can then run:
+Workers should use a rendered `DATABASE_URL`, announce themselves, and wait for assignment. The control job or an operator can then run:
 
 ```bash
 gammaboard --runtime-config <runtime.toml> auto-assign <RUN> <EVALUATOR_COUNT>
@@ -394,7 +395,7 @@ Important implementation detail: if workers are separate Slurm jobs, PostgreSQL 
 
 ## Notes
 
-- The `database.url` in `ops/config/runtime/external_db_worker.toml` must point to a Postgres service reachable from all participating jobs.
+- `GAMMABOARD_DATABASE_URL` for worker jobs must point to a Postgres service reachable from all participating jobs.
 - The target database must already have the `gammaboard` schema/migrations applied.
 - The scripts use `apptainer exec -B <project-root> ...`; bind full storage paths on UBELIX.
 - The worker/control scripts render runtime TOML templates via `envsubst` (GNU `gettext` package).
