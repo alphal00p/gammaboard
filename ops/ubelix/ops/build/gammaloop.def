@@ -1,0 +1,50 @@
+Bootstrap: docker
+From: rust:1-bookworm
+
+%setup
+    mkdir -p "${APPTAINER_ROOTFS}/workspace/artifacts/bin"
+    mkdir -p "${APPTAINER_ROOTFS}/workspace/artifacts/bin/lib"
+
+%post
+    set -eux
+
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        python3 \
+        libgfortran5 \
+        postgresql \
+        postgresql-contrib
+
+    update-ca-certificates
+
+    PG_BINDIR="$(pg_config --bindir)"
+    for bin in initdb pg_ctl psql createdb dropdb; do
+      if [ -x "${PG_BINDIR}/${bin}" ]; then
+        ln -sf "${PG_BINDIR}/${bin}" "/usr/local/bin/${bin}"
+      fi
+    done
+
+    GAMMALOOP_BIN="${GAMMALOOP_BIN:-/workspace/artifacts/bin/gammaloop}"
+    test -x "${GAMMALOOP_BIN}"
+    install -Dm755 "${GAMMALOOP_BIN}" /usr/local/bin/gammaloop
+    mkdir -p /usr/local/lib/gammaboard
+    for lib in /workspace/artifacts/bin/lib/*.so*; do
+      if [ -e "${lib}" ]; then
+        cp -L "${lib}" /usr/local/lib/gammaboard/
+      fi
+    done
+
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+
+%environment
+    export PATH=/usr/local/bin:$PATH
+    export LD_LIBRARY_PATH=/usr/local/lib/gammaboard:${LD_LIBRARY_PATH:-}
+
+%runscript
+    exec "$@"
+
+%test
+    test -x /usr/local/bin/gammaloop

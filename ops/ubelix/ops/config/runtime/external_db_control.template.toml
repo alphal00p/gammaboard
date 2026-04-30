@@ -1,0 +1,29 @@
+[database]
+url = "${DATABASE_URL}"
+
+[tracing]
+persist_runtime_logs = true
+db_gammaboard_level = "info"
+db_external_level = "warn"
+
+[resources]
+roots = ["${WORKSPACE_ROOT}/states"]
+
+[local_postgres]
+# Persistent state: survives walltime/preemption and lets runs resume.
+data_dir = "${WORKSPACE_ROOT}/db/${DEPLOY_NAME}/data"
+
+# Fast local IPC: recreated every allocation.
+socket_dir = "${LOCAL_TMP}/gammaboard-db/${DEPLOY_NAME}/socket"
+
+# Persist logs for post-mortem debugging.
+log_file = "${WORKSPACE_ROOT}/logs/postgres/${DEPLOY_NAME}.log"
+
+max_connections = 128
+shared_buffers = "1GB"
+effective_cache_size = "4GB"
+work_mem = "16MB"
+checkpoint_timeout = "30min"
+max_wal_size = "4GB"
+wal_compression = true
+synchronous_commit = true
