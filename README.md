@@ -45,14 +45,14 @@ The frontend uses relative `/api` calls and does not require `.env`. The `just` 
 ## UBELIX Quickstart
 For initial Slurm/Apptainer hello-world tests on UBELIX, use:
 
-- [ops/ubelix/README.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/README.md)
-- [ops/ubelix/slurm/smoke_container.sbatch](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/slurm/smoke_container.sbatch)
+- [ops/ubelix/README-ubelix.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/README-ubelix.md)
+- [ops/ubelix/ops/slurm/smoke_container.sbatch](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/ops/slurm/smoke_container.sbatch)
 - [ops/ubelix/justfile](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/justfile)
 
 ## Ops Layout
 - [ops/local/config](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config): local deploy profiles.
 - [ops/itphlies/README.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/itphlies/README.md): ITPhlies-specific deploy workflow and config.
-- [ops/ubelix/README.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/README.md): UBELIX Slurm/Apptainer workflow and config.
+- [ops/ubelix/README-ubelix.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/README-ubelix.md): UBELIX Slurm/Apptainer workflow and config.
 
 ## Runtime Config
 - All commands load shared runtime config from [configs/runtime/default.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/runtime/default.toml) by default.
@@ -137,7 +137,7 @@ The checked-in local defaults also bias Postgres toward queue throughput: larger
   ```
 - All server config fields are explicit; the server does not fill in defaults.
 - Set `allow_db_admin = true` only for trusted local/operator setups; it enables dashboard-triggered `db stop && db start`.
-- Set `allow_local_node_spawn = false` for scheduler-managed deployments (for example UBELIX) where workers must be started by Slurm, not as child processes on the API host.
+- Set `allow_local_node_spawn = false` for scheduler-managed deployments (for example UBELIX). Dashboard node-start actions still create DB-backed launch requests, but an external launcher must resolve them.
 - `gammaboard server` is the direct local/manual backend path. Use `gammaboard deploy run ...` when you want one foreground process to supervise local Postgres, the backend, and nginx-backed frontend serving.
 
 ## Deploy Config
@@ -228,8 +228,8 @@ Important:
 - Read-only dashboard endpoints stay open.
 - Steering actions currently require admin login and are backed by a signed session cookie.
 - The Runs tab includes a `Copy Run TOML` action that exports a run-add compatible TOML containing the run config and all successfully completed tasks as `[[task_queue]]` entries.
-- The dashboard currently supports creating runs from raw TOML, cloning runs from a stored stage snapshot, appending tasks from raw TOML, deleting pending tasks, pausing runs, removing runs, auto-assigning free nodes, assigning and unassigning nodes, requesting node shutdown (single or all), and restarting the local database when `allow_db_admin = true`.
-- Starting new local node child processes is available only when `allow_local_node_spawn = true`.
+- The dashboard currently supports creating runs from raw TOML, cloning runs from a stored stage snapshot, appending tasks from raw TOML, deleting pending tasks, pausing runs, removing runs, auto-assigning free nodes, assigning and unassigning nodes, requesting node shutdown (single or all), creating grouped node launch requests, resetting the local database when `allow_db_admin = true`, and shutting down the control process.
+- When `allow_local_node_spawn = true`, the server resolves node launch requests by spawning local child processes. Otherwise launch requests remain queued for an external launcher.
 - The Performance tab defaults history x-axes to sampler uptime (active sampler runtime, excluding paused intervals) and lets operators switch to wall time or total completed samples.
 - The create-run and add-task dialogs can load `.toml` templates from `run_templates_dir` and `task_templates_dir`; admin users can also save edited TOML back as templates, and task templates can be deleted from the dashboard.
 - Node shutdown from the dashboard is guarded by a confirmation dialog.

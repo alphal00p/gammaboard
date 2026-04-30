@@ -3,8 +3,8 @@
 use super::errors::StoreError;
 use super::models::{
     BatchClaim, BatchQueueCounts, CompletedBatch, DesiredAssignment, EvaluatorPerformanceSnapshot,
-    InsertBatchesOutcome, RegisteredNode, RunSampleProgress, RunStageSnapshot, RuntimeLogEvent,
-    SamplerAggregatorPerformanceSnapshot,
+    InsertBatchesOutcome, NodeLaunchRequest, RegisteredNode, RunSampleProgress, RunStageSnapshot,
+    RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
 };
 use crate::core::{RunSpec, RunTask, RunTaskInput, SamplerQueueTuning};
 use crate::evaluation::BatchResult;
@@ -53,6 +53,22 @@ pub trait ControlPlaneStore: Send + Sync {
         node_name: Option<&str>,
     ) -> Result<Vec<DesiredAssignment>, StoreError>;
     async fn list_nodes(&self, node_name: Option<&str>) -> Result<Vec<RegisteredNode>, StoreError>;
+    async fn create_node_launch_request(
+        &self,
+        backend: &str,
+        requested_count: i32,
+        name_prefix: Option<&str>,
+        args: &JsonValue,
+    ) -> Result<NodeLaunchRequest, StoreError>;
+    async fn list_node_launch_requests(&self) -> Result<Vec<NodeLaunchRequest>, StoreError>;
+    async fn update_node_launch_request_state(
+        &self,
+        id: i64,
+        state: &str,
+        started_count: i32,
+        result: &JsonValue,
+        error: Option<&str>,
+    ) -> Result<NodeLaunchRequest, StoreError>;
     async fn count_active_evaluator_nodes(&self, run_id: i32) -> Result<i64, StoreError>;
     async fn request_node_shutdown(&self, node_name: &str) -> Result<u64, StoreError>;
     async fn request_all_nodes_shutdown(&self) -> Result<u64, StoreError>;

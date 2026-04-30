@@ -126,6 +126,36 @@ fn map_sqlx(err: sqlx::Error) -> StoreError {
     StoreError::from(err)
 }
 
+fn node_launch_request_from_raw(
+    (
+        id,
+        created_at,
+        updated_at,
+        state,
+        backend,
+        requested_count,
+        started_count,
+        name_prefix,
+        args,
+        result,
+        error,
+    ): queries::NodeLaunchRequestRaw,
+) -> crate::core::NodeLaunchRequest {
+    crate::core::NodeLaunchRequest {
+        id,
+        created_at,
+        updated_at,
+        state,
+        backend,
+        requested_count,
+        started_count,
+        name_prefix,
+        args,
+        result,
+        error,
+    }
+}
+
 fn serialize_task(task: &RunTaskInput) -> Result<JsonValue, StoreError> {
     serde_json::to_value(&task.task)
         .map_err(|err| store_err(format!("failed to serialize run task: {err}")))
@@ -460,6 +490,55 @@ impl ControlPlaneStore for PgStore {
             });
         }
         Ok(out)
+    }
+
+    async fn create_node_launch_request(
+        &self,
+        backend: &str,
+        requested_count: i32,
+        name_prefix: Option<&str>,
+        args: &JsonValue,
+    ) -> Result<crate::core::NodeLaunchRequest, StoreError> {
+        let row = queries::create_node_launch_request(
+            &self.pool,
+            backend,
+            requested_count,
+            name_prefix,
+            args,
+        )
+        .await
+        .map_err(map_sqlx)?;
+        Ok(node_launch_request_from_raw(row))
+    }
+
+    async fn list_node_launch_requests(
+        &self,
+    ) -> Result<Vec<crate::core::NodeLaunchRequest>, StoreError> {
+        let rows = queries::list_node_launch_requests(&self.pool)
+            .await
+            .map_err(map_sqlx)?;
+        Ok(rows.into_iter().map(node_launch_request_from_raw).collect())
+    }
+
+    async fn update_node_launch_request_state(
+        &self,
+        id: i64,
+        state: &str,
+        started_count: i32,
+        result: &JsonValue,
+        error: Option<&str>,
+    ) -> Result<crate::core::NodeLaunchRequest, StoreError> {
+        let row = queries::update_node_launch_request_state(
+            &self.pool,
+            id,
+            state,
+            started_count,
+            result,
+            error,
+        )
+        .await
+        .map_err(map_sqlx)?;
+        Ok(node_launch_request_from_raw(row))
     }
 
     async fn count_active_evaluator_nodes(&self, run_id: i32) -> Result<i64, StoreError> {

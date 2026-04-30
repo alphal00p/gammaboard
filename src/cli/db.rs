@@ -415,8 +415,8 @@ fn ensure_pg_hba_rule(local: &LocalPostgresConfig) -> Result<()> {
         return Ok(());
     }
     let rule = format!("host all all {} trust", local.host_auth_cidr.trim());
-    let existing =
-        fs::read_to_string(&hba_path).with_context(|| format!("failed to read {}", hba_path.display()))?;
+    let existing = fs::read_to_string(&hba_path)
+        .with_context(|| format!("failed to read {}", hba_path.display()))?;
     if existing.lines().any(|line| line.trim() == rule) {
         return Ok(());
     }

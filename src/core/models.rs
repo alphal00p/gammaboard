@@ -59,6 +59,22 @@ pub struct RegisteredNode {
     pub last_seen: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeLaunchRequest {
+    #[serde(serialize_with = "crate::utils::serde_bigint::serialize_i64_as_string")]
+    pub id: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub state: String,
+    pub backend: String,
+    pub requested_count: i32,
+    pub started_count: i32,
+    pub name_prefix: Option<String>,
+    pub args: JsonValue,
+    pub result: JsonValue,
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct BatchClaim {
     pub batch_id: i64,

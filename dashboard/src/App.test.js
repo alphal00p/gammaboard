@@ -30,6 +30,8 @@ jest.mock("./services/api", () => ({
     panels: [],
     updates: [],
   })),
+  fetchNodeLaunchRequests: jest.fn(async () => []),
+  shutdownControlProcess: jest.fn(async () => ({ shutdown_requested: true })),
 }));
 
 /**
@@ -75,6 +77,8 @@ describe("App Component", () => {
       panels: [],
       updates: [],
     });
+    api.fetchNodeLaunchRequests.mockResolvedValue([]);
+    api.shutdownControlProcess.mockResolvedValue({ shutdown_requested: true });
   });
 
   const renderApp = async () => {
@@ -102,7 +106,7 @@ describe("App Component", () => {
   test("renders mode tabs", async () => {
     await renderApp();
     expect(screen.getByRole("tab", { name: /Runs/i })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /Nodes/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Management/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Performance/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Logs/i })).toBeInTheDocument();
   });

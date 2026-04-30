@@ -703,7 +703,7 @@ function AppContent() {
 
       <Tabs value={mode} onChange={(_, next) => setMode(next)} sx={{ mb: 3 }}>
         <Tab value="runs" label="Runs" />
-        <Tab value="workers" label="Nodes" />
+        <Tab value="workers" label="Management" />
         <Tab value="performance" label="Performance" />
         <Tab value="logs" label="Logs" />
       </Tabs>

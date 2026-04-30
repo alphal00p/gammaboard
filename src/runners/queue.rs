@@ -1459,6 +1459,33 @@ mod tests {
             unreachable!("unused in test")
         }
 
+        async fn create_node_launch_request(
+            &self,
+            _backend: &str,
+            _requested_count: i32,
+            _name_prefix: Option<&str>,
+            _args: &JsonValue,
+        ) -> Result<crate::core::NodeLaunchRequest, StoreError> {
+            unreachable!("unused in test")
+        }
+
+        async fn list_node_launch_requests(
+            &self,
+        ) -> Result<Vec<crate::core::NodeLaunchRequest>, StoreError> {
+            unreachable!("unused in test")
+        }
+
+        async fn update_node_launch_request_state(
+            &self,
+            _id: i64,
+            _state: &str,
+            _started_count: i32,
+            _result: &JsonValue,
+            _error: Option<&str>,
+        ) -> Result<crate::core::NodeLaunchRequest, StoreError> {
+            unreachable!("unused in test")
+        }
+
         async fn count_active_evaluator_nodes(&self, _run_id: i32) -> Result<i64, StoreError> {
             unreachable!("unused in test")
         }

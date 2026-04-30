@@ -237,6 +237,9 @@ export const stopAllNodes = async (signal) => apiPost("/nodes/stop-all", {}, "Fa
 
 export const restartDatabase = async (signal) => apiPost("/admin/db/restart", {}, "Failed to restart database", signal);
 
+export const shutdownControlProcess = async (signal) =>
+  apiPost("/admin/control/shutdown", {}, "Failed to shut down control process", signal);
+
 export const autoRunNodes = async ({ count, maxStartFailures = null, dbPoolSize = null }, signal) =>
   apiPost(
     "/nodes/auto-run",
@@ -248,6 +251,18 @@ export const autoRunNodes = async ({ count, maxStartFailures = null, dbPoolSize 
     "Failed to start nodes",
     signal,
   );
+
+export const fetchNodeLaunchRequests = async (signal) => {
+  const data = await apiGet("/node-launch-requests", "Failed to fetch node launch requests", signal);
+  return asArray(data?.items).map((entry) => ({
+    ...entry,
+    id: entry?.id == null ? "" : String(entry.id),
+    requested_count: Number.isFinite(Number(entry?.requested_count)) ? Number(entry.requested_count) : 0,
+    started_count: Number.isFinite(Number(entry?.started_count)) ? Number(entry.started_count) : 0,
+    args: entry?.args ?? {},
+    result: entry?.result ?? {},
+  }));
+};
 
 export const fetchNodes = async (runId = null, signal) => {
   const data = await apiGet(`/nodes${buildQueryString([["run_id", runId]])}`, "Failed to fetch nodes", signal);

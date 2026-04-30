@@ -7,6 +7,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  Divider,
   Paper,
   Snackbar,
   Stack,
@@ -24,7 +25,8 @@ import WorkerDetailsPanel from "./WorkerDetailsPanel";
 import EmptyStateCard from "./common/EmptyStateCard";
 import { formatDateTime } from "../utils/formatters";
 import { useAuth } from "../auth/AuthProvider";
-import { autoRunNodes, restartDatabase, stopAllNodes } from "../services/api";
+import { useNodeLaunchRequests } from "../hooks/useNodeLaunchRequests";
+import { autoRunNodes, restartDatabase, shutdownControlProcess, stopAllNodes } from "../services/api";
 
 const compareNodeNames = (left, right) =>
   String(left || "").localeCompare(String(right || ""), undefined, {
@@ -40,7 +42,10 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
   const [stoppingAllNodes, setStoppingAllNodes] = useState(false);
   const [restartDbOpen, setRestartDbOpen] = useState(false);
   const [restartingDb, setRestartingDb] = useState(false);
+  const [shutdownControlOpen, setShutdownControlOpen] = useState(false);
+  const [shuttingDownControl, setShuttingDownControl] = useState(false);
   const [snackbar, setSnackbar] = useState(null);
+  const launchRequestsData = useNodeLaunchRequests({ enabled: authenticated });
   const nodeNameFor = (worker) => worker.node_name || null;
   const sortedWorkers = useMemo(
     () => [...workers].sort((left, right) => compareNodeNames(nodeNameFor(left), nodeNameFor(right))),
@@ -92,79 +97,103 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
 
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
         <Typography variant="h6" gutterBottom>
-          Nodes
+          Node Management
         </Typography>
         {authenticated ? (
           <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
-            {allowLocalNodeSpawn ? (
-              <>
-                <TextField
-                  size="small"
-                  label="Count"
-                  value={startCount}
-                  onChange={(event) => setStartCount(event.target.value)}
-                  sx={{ width: 120 }}
-                />
-                <Button
-                  variant="outlined"
-                  disabled={startingNodes}
-                  onClick={async () => {
-                    const count = Number.parseInt(String(startCount).trim(), 10);
-                    if (!Number.isFinite(count) || count <= 0) {
-                      setSnackbar({ message: "Count must be a positive integer.", severity: "error" });
-                      return;
-                    }
-                    setStartingNodes(true);
-                    try {
-                      const response = await autoRunNodes({ count });
-                      const started = Number(response?.started ?? 0);
-                      setSnackbar({
-                        message: `Started ${started} node${started === 1 ? "" : "s"}.`,
-                        severity: "success",
-                      });
-                    } catch (err) {
-                      setSnackbar({ message: err?.message || "Failed to start nodes.", severity: "error" });
-                    } finally {
-                      setStartingNodes(false);
-                    }
-                  }}
-                >
-                  Start Nodes
-                </Button>
-              </>
-            ) : null}
+            <TextField
+              size="small"
+              label="Count"
+              value={startCount}
+              onChange={(event) => setStartCount(event.target.value)}
+              sx={{ width: 120 }}
+            />
             <Button
-              color="error"
               variant="outlined"
-              disabled={stoppingAllNodes}
+              disabled={startingNodes}
               onClick={async () => {
-                setStoppingAllNodes(true);
+                const count = Number.parseInt(String(startCount).trim(), 10);
+                if (!Number.isFinite(count) || count <= 0) {
+                  setSnackbar({ message: "Count must be a positive integer.", severity: "error" });
+                  return;
+                }
+                setStartingNodes(true);
                 try {
-                  const response = await stopAllNodes();
-                  const rows = Number(response?.rows_updated ?? 0);
+                  const response = await autoRunNodes({ count });
+                  const requestId = response?.request?.id;
+                  const started = Number(response?.started ?? 0);
                   setSnackbar({
-                    message: `Requested shutdown for ${rows} node${rows === 1 ? "" : "s"}.`,
+                    message: allowLocalNodeSpawn
+                      ? `Created request ${requestId ?? ""} and started ${started} node${started === 1 ? "" : "s"}.`
+                      : `Created node launch request ${requestId ?? ""}.`,
                     severity: "success",
                   });
                 } catch (err) {
-                  setSnackbar({ message: err?.message || "Failed to stop all nodes.", severity: "error" });
+                  setSnackbar({ message: err?.message || "Failed to request nodes.", severity: "error" });
                 } finally {
-                  setStoppingAllNodes(false);
+                  setStartingNodes(false);
                 }
               }}
             >
-              Stop All Nodes
-            </Button>
-            <Button color="warning" variant="outlined" disabled={restartingDb} onClick={() => setRestartDbOpen(true)}>
-              Restart DB
+              Request Nodes
             </Button>
           </Stack>
         ) : null}
         {authenticated && !allowLocalNodeSpawn ? (
           <Alert severity="info" sx={{ mb: 2 }}>
-            Local node spawning is disabled for this deployment. Start workers via Slurm launcher jobs.
+            Local node spawning is disabled for this deployment. Requests stay queued until an external launcher resolves
+            them.
           </Alert>
         ) : null}
+
+        {authenticated ? (
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="subtitle1" gutterBottom>
+              Node Startup Queue
+            </Typography>
+            {launchRequestsData.error ? (
+              <Alert severity="error" sx={{ mb: 2 }}>
+                Failed to fetch node launch requests.
+              </Alert>
+            ) : null}
+            {launchRequestsData.launchRequests.length === 0 ? (
+              <EmptyStateCard title="No launch requests" message="Node start requests will appear here." />
+            ) : (
+              <TableContainer component={Paper} variant="outlined">
+                <Table size="small" aria-label="node launch requests table">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>ID</TableCell>
+                      <TableCell>State</TableCell>
+                      <TableCell>Backend</TableCell>
+                      <TableCell>Count</TableCell>
+                      <TableCell>Started</TableCell>
+                      <TableCell>Created</TableCell>
+                      <TableCell>Error</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {launchRequestsData.launchRequests.map((request) => (
+                      <TableRow key={request.id}>
+                        <TableCell>{request.id}</TableCell>
+                        <TableCell>{request.state}</TableCell>
+                        <TableCell>{request.backend}</TableCell>
+                        <TableCell>{request.requested_count}</TableCell>
+                        <TableCell>{request.started_count}</TableCell>
+                        <TableCell>{formatDateTime(request.created_at, "-")}</TableCell>
+                        <TableCell>{request.error || "-"}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </Box>
+        ) : null}
+
+        <Typography variant="subtitle1" gutterBottom>
+          Live Nodes
+        </Typography>
 
         {workers.length === 0 ? (
           <EmptyStateCard
@@ -233,6 +262,49 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
       ) : (
         <Alert severity="info">Select a node to view assignment and heartbeat details.</Alert>
       )}
+      {authenticated ? (
+        <Paper variant="outlined" sx={{ p: 2, mt: 3, borderColor: "error.light" }}>
+          <Typography variant="h6" color="error" gutterBottom>
+            Danger Zone
+          </Typography>
+          <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", gap: 1 }}>
+            <Button
+              color="error"
+              variant="outlined"
+              disabled={stoppingAllNodes}
+              onClick={async () => {
+                setStoppingAllNodes(true);
+                try {
+                  const response = await stopAllNodes();
+                  const rows = Number(response?.rows_updated ?? 0);
+                  setSnackbar({
+                    message: `Requested shutdown for ${rows} node${rows === 1 ? "" : "s"}.`,
+                    severity: "success",
+                  });
+                } catch (err) {
+                  setSnackbar({ message: err?.message || "Failed to stop all nodes.", severity: "error" });
+                } finally {
+                  setStoppingAllNodes(false);
+                }
+              }}
+            >
+              Stop All Nodes
+            </Button>
+            <Button color="warning" variant="outlined" disabled={restartingDb} onClick={() => setRestartDbOpen(true)}>
+              Reset DB
+            </Button>
+            <Button
+              color="error"
+              variant="contained"
+              disabled={shuttingDownControl}
+              onClick={() => setShutdownControlOpen(true)}
+            >
+              Kill Control Process
+            </Button>
+          </Stack>
+          <Divider sx={{ mt: 2 }} />
+        </Paper>
+      ) : null}
       <Snackbar
         open={Boolean(snackbar)}
         autoHideDuration={4000}
@@ -245,7 +317,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
         maxWidth="sm"
         fullWidth
       >
-        <DialogTitle>Restart Database?</DialogTitle>
+        <DialogTitle>Reset Database?</DialogTitle>
         <DialogContent>
           This will delete local database state and recreate it from migrations. Running nodes and run execution will be
           interrupted and existing local runs/data will be lost. Do you want to continue?
@@ -263,15 +335,50 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
               try {
                 await restartDatabase();
                 setRestartDbOpen(false);
-                setSnackbar({ message: "Database restarted.", severity: "success" });
+                setSnackbar({ message: "Database reset.", severity: "success" });
               } catch (err) {
-                setSnackbar({ message: err?.message || "Failed to restart database.", severity: "error" });
+                setSnackbar({ message: err?.message || "Failed to reset database.", severity: "error" });
               } finally {
                 setRestartingDb(false);
               }
             }}
           >
-            Confirm Restart
+            Confirm Reset
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog
+        open={shutdownControlOpen}
+        onClose={() => (shuttingDownControl ? null : setShutdownControlOpen(false))}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Kill Control Process?</DialogTitle>
+        <DialogContent>
+          This will ask the running backend process to exit. The dashboard and API will go offline until the deployment is
+          restarted.
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShutdownControlOpen(false)} disabled={shuttingDownControl}>
+            Cancel
+          </Button>
+          <Button
+            color="error"
+            variant="contained"
+            disabled={shuttingDownControl}
+            onClick={async () => {
+              setShuttingDownControl(true);
+              try {
+                await shutdownControlProcess();
+                setShutdownControlOpen(false);
+                setSnackbar({ message: "Control shutdown requested.", severity: "success" });
+              } catch (err) {
+                setSnackbar({ message: err?.message || "Failed to shut down control process.", severity: "error" });
+                setShuttingDownControl(false);
+              }
+            }}
+          >
+            Kill Control Process
           </Button>
         </DialogActions>
       </Dialog>

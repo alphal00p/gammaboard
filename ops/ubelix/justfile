@@ -1,12 +1,11 @@
 sync-ops host="Ubelix" remote_root="/storage/research/itp_localunitaritydata":
     #!/usr/bin/env bash
     set -euo pipefail
-    ssh "{{host}}" "mkdir -p '{{remote_root}}/ops/build' '{{remote_root}}/ops/config' '{{remote_root}}/ops/slurm'"
-    scp -r build/* "{{host}}:{{remote_root}}/ops/build/"
-    scp -r config/* "{{host}}:{{remote_root}}/ops/config/"
-    scp -r slurm/* "{{host}}:{{remote_root}}/ops/slurm/"
+    ssh "{{host}}" "mkdir -p '{{remote_root}}/ops'"
+    scp -r ops "{{host}}:{{remote_root}}/"
+    scp ubelix.py "{{host}}:{{remote_root}}/ubelix.py"
     scp justfile "{{host}}:{{remote_root}}/justfile"
-    scp README.md "{{host}}:{{remote_root}}/README-ubelix.md"
+    scp README-ubelix.md "{{host}}:{{remote_root}}/README-ubelix.md"
 
 sync-dashboard host="Ubelix" remote_root="/storage/research/itp_localunitaritydata":
     #!/usr/bin/env bash

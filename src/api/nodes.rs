@@ -1,5 +1,6 @@
 use crate::api::ApiError;
-use crate::core::{ControlPlaneStore, RunReadStore, WorkerRole};
+use crate::core::{ControlPlaneStore, NodeLaunchRequest, RunReadStore, WorkerRole};
+use serde_json::Value as JsonValue;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
@@ -34,6 +35,78 @@ pub struct StoppedAllNodes {
 pub struct AutoRunNodesPlan {
     pub requested_count: usize,
     pub node_names: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreatedNodeLaunchRequest {
+    pub request: NodeLaunchRequest,
+    pub should_resolve_locally: bool,
+}
+
+pub async fn create_node_launch_request(
+    store: &impl ControlPlaneStore,
+    count: usize,
+    backend: &str,
+    name_prefix: Option<&str>,
+    args: &JsonValue,
+    resolve_locally: bool,
+) -> Result<CreatedNodeLaunchRequest, ApiError> {
+    if count == 0 {
+        return Err(ApiError::BadRequest(
+            "requested node count must be greater than zero".to_string(),
+        ));
+    }
+    let requested_count = i32::try_from(count)
+        .map_err(|_| ApiError::BadRequest("requested node count is too large".to_string()))?;
+    let request = store
+        .create_node_launch_request(backend, requested_count, name_prefix, args)
+        .await?;
+    Ok(CreatedNodeLaunchRequest {
+        request,
+        should_resolve_locally: resolve_locally,
+    })
+}
+
+pub async fn list_node_launch_requests(
+    store: &impl ControlPlaneStore,
+) -> Result<Vec<NodeLaunchRequest>, ApiError> {
+    Ok(store.list_node_launch_requests().await?)
+}
+
+pub async fn mark_node_launch_request_launching(
+    store: &impl ControlPlaneStore,
+    id: i64,
+) -> Result<NodeLaunchRequest, ApiError> {
+    Ok(store
+        .update_node_launch_request_state(id, "launching", 0, &serde_json::json!({}), None)
+        .await?)
+}
+
+pub async fn mark_node_launch_request_succeeded(
+    store: &impl ControlPlaneStore,
+    id: i64,
+    started_count: usize,
+    result: &JsonValue,
+) -> Result<NodeLaunchRequest, ApiError> {
+    let started_count = i32::try_from(started_count)
+        .map_err(|_| ApiError::Internal("started node count is too large".to_string()))?;
+    Ok(store
+        .update_node_launch_request_state(id, "succeeded", started_count, result, None)
+        .await?)
+}
+
+pub async fn mark_node_launch_request_failed(
+    store: &impl ControlPlaneStore,
+    id: i64,
+    started_count: usize,
+    result: &JsonValue,
+    error: &str,
+) -> Result<NodeLaunchRequest, ApiError> {
+    let started_count = i32::try_from(started_count)
+        .map_err(|_| ApiError::Internal("started node count is too large".to_string()))?;
+    Ok(store
+        .update_node_launch_request_state(id, "failed", started_count, result, Some(error))
+        .await?)
 }
 
 /// Assigns a node to a run/role in desired control-plane state.

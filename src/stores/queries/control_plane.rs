@@ -1,4 +1,5 @@
 use crate::core::WorkerRole;
+use serde_json::Value as JsonValue;
 use sqlx::{PgPool, postgres::PgQueryResult};
 
 const CLEAR_DESIRED_ASSIGNMENT_SET: &str = r#"
@@ -30,6 +31,20 @@ pub(crate) struct NodeRaw {
     pub current_run_name: Option<String>,
     pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
 }
+
+pub(crate) type NodeLaunchRequestRaw = (
+    i64,
+    chrono::DateTime<chrono::Utc>,
+    chrono::DateTime<chrono::Utc>,
+    String,
+    String,
+    i32,
+    i32,
+    Option<String>,
+    JsonValue,
+    JsonValue,
+    Option<String>,
+);
 
 fn stale_node_uuid_error(node_uuid: &str) -> sqlx::Error {
     sqlx::Error::Protocol(format!("node uuid '{node_uuid}' is no longer live"))
@@ -302,6 +317,117 @@ pub(crate) async fn list_nodes(
     .await?;
 
     Ok(rows.into_iter().map(node_raw).collect())
+}
+
+pub(crate) async fn create_node_launch_request(
+    pool: &PgPool,
+    backend: &str,
+    requested_count: i32,
+    name_prefix: Option<&str>,
+    args: &JsonValue,
+) -> Result<NodeLaunchRequestRaw, sqlx::Error> {
+    sqlx::query_as::<_, NodeLaunchRequestRaw>(
+        r#"
+        INSERT INTO node_launch_requests (
+            state,
+            backend,
+            requested_count,
+            name_prefix,
+            args
+        ) VALUES (
+            'pending',
+            $1,
+            $2,
+            $3,
+            $4
+        )
+        RETURNING
+            id,
+            created_at,
+            updated_at,
+            state,
+            backend,
+            requested_count,
+            started_count,
+            name_prefix,
+            args,
+            result,
+            error
+        "#,
+    )
+    .bind(backend)
+    .bind(requested_count)
+    .bind(name_prefix)
+    .bind(args)
+    .fetch_one(pool)
+    .await
+}
+
+pub(crate) async fn list_node_launch_requests(
+    pool: &PgPool,
+) -> Result<Vec<NodeLaunchRequestRaw>, sqlx::Error> {
+    sqlx::query_as::<_, NodeLaunchRequestRaw>(
+        r#"
+        SELECT
+            id,
+            created_at,
+            updated_at,
+            state,
+            backend,
+            requested_count,
+            started_count,
+            name_prefix,
+            args,
+            result,
+            error
+        FROM node_launch_requests
+        ORDER BY created_at DESC
+        LIMIT 100
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub(crate) async fn update_node_launch_request_state(
+    pool: &PgPool,
+    id: i64,
+    state: &str,
+    started_count: i32,
+    result: &JsonValue,
+    error: Option<&str>,
+) -> Result<NodeLaunchRequestRaw, sqlx::Error> {
+    sqlx::query_as::<_, NodeLaunchRequestRaw>(
+        r#"
+        UPDATE node_launch_requests
+        SET
+            state = $2,
+            started_count = $3,
+            result = $4,
+            error = $5,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING
+            id,
+            created_at,
+            updated_at,
+            state,
+            backend,
+            requested_count,
+            started_count,
+            name_prefix,
+            args,
+            result,
+            error
+        "#,
+    )
+    .bind(id)
+    .bind(state)
+    .bind(started_count)
+    .bind(result)
+    .bind(error)
+    .fetch_one(pool)
+    .await
 }
 
 pub(crate) async fn count_active_evaluator_nodes(

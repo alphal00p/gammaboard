@@ -11,10 +11,10 @@ pub use errors::{BuildError, EngineError, EvalError, StoreError};
 pub use models::{
     BatchClaim, BatchQueueCounts, BatchRecord, BatchStatus, CompletedBatch, DesiredAssignment,
     EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot,
-    InsertBatchesMetrics, InsertBatchesOutcome, RegisteredNode, RollingMetricSnapshot,
-    RunSampleProgress, RunStageSnapshot, RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
-    SamplerPerformanceMetrics, SamplerQueueRollingAverages, SamplerQueueRuntimeMetrics,
-    SamplerRuntimeMetrics, SamplerWorkRollingAverages, WorkerRole,
+    InsertBatchesMetrics, InsertBatchesOutcome, NodeLaunchRequest, RegisteredNode,
+    RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot, RuntimeLogEvent,
+    SamplerAggregatorPerformanceSnapshot, SamplerPerformanceMetrics, SamplerQueueRollingAverages,
+    SamplerQueueRuntimeMetrics, SamplerRuntimeMetrics, SamplerWorkRollingAverages, WorkerRole,
 };
 pub use run_exposed_info::{
     NamedRunExposedArtifact, RunExposedArtifact, RunExposedInfoCache, RunExposedInfoContent,

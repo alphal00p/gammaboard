@@ -45,6 +45,7 @@ use std::{
     fs::File,
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
+    time::Duration,
 };
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::Instrument;
@@ -278,6 +279,10 @@ struct AutoAssignRequest {
 struct AutoRunNodesRequest {
     count: usize,
     max_start_failures: Option<u32>,
+    #[serde(default)]
+    args: JsonValue,
+    #[serde(default)]
+    name_prefix: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -412,11 +417,16 @@ fn build_app(state: AppState) -> Router {
         .route("/nodes/:id/stop", post(stop_node))
         .route("/nodes/stop-all", post(stop_all_nodes))
         .route("/nodes/auto-run", post(auto_run_nodes))
+        .route(
+            "/node-launch-requests",
+            get(get_node_launch_requests).post(create_node_launch_request),
+        )
         .route("/templates/runs", post(save_run_template))
         .route("/templates/tasks", post(save_task_template))
         .route("/templates/runs/:name", delete(delete_run_template))
         .route("/templates/tasks/:name", delete(delete_task_template))
         .route("/admin/db/restart", post(restart_db))
+        .route("/admin/control/shutdown", post(shutdown_control_process))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_admin_session,
@@ -1285,13 +1295,90 @@ async fn auto_run_nodes(
     State(state): State<AppState>,
     AxumJson(payload): AxumJson<AutoRunNodesRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    if !state.allow_local_node_spawn {
-        return Err(ApiError::BadRequest(
-            "local node spawning is disabled by server config".to_string(),
-        ));
+    create_and_maybe_resolve_node_launch_request(state, payload).await
+}
+
+async fn create_node_launch_request(
+    State(state): State<AppState>,
+    AxumJson(payload): AxumJson<AutoRunNodesRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    create_and_maybe_resolve_node_launch_request(state, payload).await
+}
+
+async fn get_node_launch_requests(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let requests = node_api::list_node_launch_requests(&state.store)
+        .await
+        .map_err(|err| {
+            log_control_api_error("node_launch_requests_list", &err);
+            err
+        })?;
+    json_response(serde_json::json!({ "items": requests }))
+}
+
+async fn create_and_maybe_resolve_node_launch_request(
+    state: AppState,
+    payload: AutoRunNodesRequest,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let max_start_failures = payload.max_start_failures.unwrap_or(3);
+    let backend = if state.allow_local_node_spawn {
+        "local"
+    } else {
+        "external"
+    };
+    let args = match payload.args {
+        JsonValue::Object(mut map) => {
+            map.insert(
+                "max_start_failures".to_string(),
+                JsonValue::from(max_start_failures),
+            );
+            JsonValue::Object(map)
+        }
+        JsonValue::Null => serde_json::json!({ "max_start_failures": max_start_failures }),
+        other => serde_json::json!({
+            "max_start_failures": max_start_failures,
+            "payload": other,
+        }),
+    };
+    let launch = node_api::create_node_launch_request(
+        &state.store,
+        payload.count,
+        backend,
+        payload.name_prefix.as_deref(),
+        &args,
+        state.allow_local_node_spawn,
+    )
+    .await
+    .map_err(|err| {
+        log_control_api_error("node_launch_request_create", &err);
+        err
+    })?;
+
+    if !launch.should_resolve_locally {
+        tracing::info!(
+            source = "control",
+            control_surface = "dashboard",
+            action = "node_launch_request_create",
+            request_id = launch.request.id,
+            requested = launch.request.requested_count,
+            backend = %launch.request.backend,
+            "dashboard action completed"
+        );
+        return json_response(serde_json::json!({
+            "request": launch.request,
+            "requested": payload.count,
+            "started": 0,
+            "node_names": [],
+        }));
     }
 
-    let max_start_failures = payload.max_start_failures.unwrap_or(3);
+    node_api::mark_node_launch_request_launching(&state.store, launch.request.id)
+        .await
+        .map_err(|err| {
+            log_control_api_error("node_launch_request_launching", &err);
+            err
+        })?;
     let plan = node_api::plan_auto_run_nodes(&state.store, payload.count)
         .await
         .map_err(|err| {
@@ -1303,34 +1390,59 @@ async fn auto_run_nodes(
         ApiError::Internal(format!("failed to resolve current executable: {err}"))
     })?;
 
+    let mut started_node_names = Vec::new();
     for node_name in &plan.node_names {
-        spawn_node_process(
+        if let Err(err) = spawn_node_process(
             &binary,
             &state.runtime_config_path,
             node_name,
             max_start_failures,
-        )
-        .map_err(|err| {
+        ) {
+            let result = serde_json::json!({ "node_names": started_node_names });
+            let _ = node_api::mark_node_launch_request_failed(
+                &state.store,
+                launch.request.id,
+                started_node_names.len(),
+                &result,
+                &err.to_string(),
+            )
+            .await;
             log_control_api_error("node_auto_run", &err);
-            err
-        })?;
+            return Err(err);
+        }
+        started_node_names.push(node_name.clone());
     }
+
+    let result = serde_json::json!({ "node_names": started_node_names });
+    let request = node_api::mark_node_launch_request_succeeded(
+        &state.store,
+        launch.request.id,
+        started_node_names.len(),
+        &result,
+    )
+    .await
+    .map_err(|err| {
+        log_control_api_error("node_launch_request_succeeded", &err);
+        err
+    })?;
 
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
         action = "node_auto_run",
+        request_id = launch.request.id,
         requested = plan.requested_count,
-        started = plan.node_names.len(),
-        node_names = ?plan.node_names,
+        started = started_node_names.len(),
+        node_names = ?started_node_names,
         max_start_failures,
         "dashboard action completed"
     );
 
     json_response(serde_json::json!({
+        "request": request,
         "requested": plan.requested_count,
-        "started": plan.node_names.len(),
-        "node_names": plan.node_names,
+        "started": started_node_names.len(),
+        "node_names": started_node_names,
     }))
 }
 
@@ -1363,6 +1475,29 @@ async fn restart_db(State(state): State<AppState>) -> Result<Json<serde_json::Va
         "deleted": result.deleted,
         "started": result.started,
     }))
+}
+
+async fn shutdown_control_process(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !state.allow_db_admin {
+        return Err(ApiError::BadRequest(
+            "control admin endpoints are disabled by server config".to_string(),
+        ));
+    }
+
+    tracing::warn!(
+        source = "control",
+        control_surface = "dashboard",
+        action = "control_shutdown",
+        "dashboard action requested control process shutdown"
+    );
+    tokio::spawn(async {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        std::process::exit(0);
+    });
+
+    json_response(serde_json::json!({ "shutdown_requested": true }))
 }
 
 fn spawn_node_process(
