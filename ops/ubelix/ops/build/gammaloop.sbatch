@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=gl-build-latest
+#SBATCH --job-name=gl-build
 #SBATCH --time=00:30:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

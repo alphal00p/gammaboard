@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=gb-hello-single
+#SBATCH --job-name=gb-hello
 #SBATCH --time=00:20:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -101,12 +101,12 @@ cleanup() {
     kill "${EVALUATOR_PID}" 2>/dev/null || true
     wait "${EVALUATOR_PID}" 2>/dev/null || true
   fi
-  apptainer instance stop "${INSTANCE_NAME}" 2>/dev/null || true
+  apptainer instance stop "${INSTANCE_NAME}" >/dev/null 2>&1 || true
   rm -f "${RUNTIME_CONFIG}" "${RUN_TOML}"
 }
 trap cleanup EXIT
 
-apptainer instance stop "${INSTANCE_NAME}" 2>/dev/null || true
+apptainer instance stop "${INSTANCE_NAME}" >/dev/null 2>&1 || true
 env -u PGTZ -u PGOPTIONS \
 APPTAINERENV_LANG="${APPTAINERENV_LANG:-C.UTF-8}" \
 APPTAINERENV_LC_ALL="${APPTAINERENV_LC_ALL:-C.UTF-8}" \

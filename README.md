@@ -46,7 +46,7 @@ The frontend uses relative `/api` calls and does not require `.env`. The `just` 
 For initial Slurm/Apptainer hello-world tests on UBELIX, use:
 
 - [ops/ubelix/README-ubelix.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/README-ubelix.md)
-- [ops/ubelix/ops/slurm/smoke_container.sbatch](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/ops/slurm/smoke_container.sbatch)
+- [ops/ubelix/ops/slurm/smoke.sbatch](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/ops/slurm/smoke.sbatch)
 - [ops/ubelix/justfile](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/justfile)
 
 ## Ops Layout

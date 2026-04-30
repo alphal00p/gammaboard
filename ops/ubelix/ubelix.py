@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -14,13 +15,13 @@ from dataclasses import dataclass
 
 
 WORKSPACE_ROOT = "/storage/research/itp_localunitaritydata"
-JOB_PREFIX = "gb-default"
-CONTROL_JOB_NAME = f"{JOB_PREFIX}-control"
-WORKER_JOB_NAME = f"{JOB_PREFIX}-worker"
-CONTROL_SBATCH = f"{WORKSPACE_ROOT}/ops/slurm/control_ui_single.sbatch"
-WORKER_SBATCH = f"{WORKSPACE_ROOT}/ops/slurm/node_worker.sbatch"
-GB_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/build_latest_gammaboard.sbatch"
-GL_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/build_latest_gammaloop.sbatch"
+JOB_PREFIX = "gb"
+CONTROL_JOB_NAME = f"{JOB_PREFIX}-ctl"
+WORKER_JOB_NAME = f"{JOB_PREFIX}-wrk"
+CONTROL_SBATCH = f"{WORKSPACE_ROOT}/ops/slurm/control.sbatch"
+WORKER_SBATCH = f"{WORKSPACE_ROOT}/ops/slurm/worker.sbatch"
+GB_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaboard.sbatch"
+GL_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaloop.sbatch"
 IMAGE_PATH = f"{WORKSPACE_ROOT}/images/gammaboard/gammaboard-latest.sif"
 FRONTEND_PORT = 8080
 API_PORT = 4000
@@ -176,6 +177,22 @@ def ssh_target() -> str:
         raise SystemExit("failed to infer SSH user; set SSH_USER or SSH_TARGET")
     host = os.environ.get("SSH_HOST") or DEFAULT_SSH_HOST
     return f"{user}@{host}"
+
+
+def tunnel_command(control_node: str, local_port: int) -> str:
+    return f"ssh -N -L {local_port}:{control_node}:{FRONTEND_PORT} {ssh_target()}"
+
+
+def copy_to_clipboard_osc52(text: str) -> bool:
+    if not sys.stdout.isatty():
+        return False
+    encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
+    try:
+        sys.stdout.write(f"\033]52;c;{encoded}\a")
+        sys.stdout.flush()
+        return True
+    except OSError:
+        return False
 
 
 def database_url(control_node: str) -> str:
@@ -436,7 +453,10 @@ def command_up(args: argparse.Namespace) -> None:
     print(f"control_job_id={control.id}")
     node = wait_for_control_node(control.id, args.startup_timeout, verbose=True)
     print(f"control_node={node}")
-    print(f"tunnel=ssh -N -L {args.local_port}:{node}:{FRONTEND_PORT} {ssh_target()}")
+    tunnel = tunnel_command(node, args.local_port)
+    print(f"tunnel={tunnel}")
+    if args.copy:
+        print(f"copied_to_clipboard={'true' if copy_to_clipboard_osc52(tunnel) else 'false'}")
     if not args.no_wait:
         wait_for_http(
             f"http://{node}:{FRONTEND_PORT}",
@@ -539,6 +559,7 @@ def parser() -> argparse.ArgumentParser:
     up.add_argument("--local-port", type=int, default=8080)
     up.add_argument("--startup-timeout", type=int, default=180)
     up.add_argument("--poll-seconds", type=int, default=15)
+    up.add_argument("--copy", action="store_true", help="copy the SSH tunnel command to the clipboard if supported")
     up.add_argument("--no-wait", action="store_true", help="print the tunnel command without waiting for nginx")
     up.set_defaults(func=command_up)
 

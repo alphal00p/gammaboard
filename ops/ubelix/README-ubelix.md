@@ -55,12 +55,12 @@ Generated data typically lives here:
 
 ## Important Files
 
-- `ops/build/build_latest_gammaloop.sbatch`
-- `ops/build/build_latest_gammaboard.sbatch`
-- `ops/slurm/smoke_container.sbatch`
-- `ops/slurm/hello_single.sbatch`
-- `ops/slurm/control_ui_single.sbatch`
-- `ops/slurm/node_worker.sbatch`
+- `ops/build/gammaloop.sbatch`
+- `ops/build/gammaboard.sbatch`
+- `ops/slurm/smoke.sbatch`
+- `ops/slurm/hello.sbatch`
+- `ops/slurm/control.sbatch`
+- `ops/slurm/worker.sbatch`
 - `ops/ubelix.py`
 - `ops/config/runtime/local_postgres.template.toml`
 - `ops/config/runtime/external_db_control.template.toml`
@@ -110,14 +110,14 @@ Build GammaLoop:
 
 ```bash
 mkdir -p logs/slurm/build logs/slurm/control logs/slurm/workers logs/postgres
-sbatch ops/build/build_latest_gammaloop.sbatch
+sbatch ops/build/gammaloop.sbatch
 ```
 
 Build GammaBoard:
 
 ```bash
 mkdir -p logs/slurm/build logs/slurm/control logs/slurm/workers logs/postgres
-sbatch ops/build/build_latest_gammaboard.sbatch
+sbatch ops/build/gammaboard.sbatch
 ```
 
 Build behavior:
@@ -129,7 +129,7 @@ Build behavior:
 ## Smoke Test
 
 ```bash
-sbatch ops/slurm/smoke_container.sbatch
+sbatch ops/slurm/smoke.sbatch
 ```
 
 Optional overrides:
@@ -170,6 +170,12 @@ python ops/ubelix.py up
 
 ```bash
 python ops/ubelix.py up --no-wait
+```
+
+To also copy the printed tunnel command to your clipboard when the terminal supports OSC 52:
+
+```bash
+python ops/ubelix.py up --copy
 ```
 
 This job starts:

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=gb-build-latest
+#SBATCH --job-name=gb-build
 #SBATCH --time=00:45:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

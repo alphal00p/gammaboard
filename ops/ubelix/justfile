@@ -21,14 +21,14 @@ submit-hello-single:
     set -euo pipefail
     WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
     mkdir -p "${WORKSPACE_ROOT}/logs/slurm/control" "${WORKSPACE_ROOT}/logs/slurm/workers" "${WORKSPACE_ROOT}/logs/postgres"
-    sbatch --chdir "${WORKSPACE_ROOT}" "${WORKSPACE_ROOT}/ops/slurm/hello_single.sbatch"
+    sbatch --chdir "${WORKSPACE_ROOT}" "${WORKSPACE_ROOT}/ops/slurm/hello.sbatch"
 
 submit-ui-single:
     #!/usr/bin/env bash
     set -euo pipefail
     WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
     mkdir -p "${WORKSPACE_ROOT}/logs/slurm/control" "${WORKSPACE_ROOT}/logs/postgres"
-    sbatch --chdir "${WORKSPACE_ROOT}" "${WORKSPACE_ROOT}/ops/slurm/control_ui_single.sbatch"
+    sbatch --chdir "${WORKSPACE_ROOT}" "${WORKSPACE_ROOT}/ops/slurm/control.sbatch"
 
 submit-ui-with-two-workers:
     #!/usr/bin/env bash
@@ -44,7 +44,7 @@ submit-ui-with-two-workers:
       exit 1
     fi
 
-    ui_submit="$(sbatch --chdir "${WORKSPACE_ROOT}" "${WORKSPACE_ROOT}/ops/slurm/control_ui_single.sbatch")"
+    ui_submit="$(sbatch --chdir "${WORKSPACE_ROOT}" "${WORKSPACE_ROOT}/ops/slurm/control.sbatch")"
     echo "${ui_submit}"
     ui_job_id="$(awk '/Submitted batch job/{print $4}' <<<"${ui_submit}")"
     if [[ -z "${ui_job_id}" ]]; then
@@ -73,14 +73,14 @@ submit-ui-with-two-workers:
       GAMMABOARD_DATABASE_URL="${worker_db_url}" \
       GAMMABOARD_IMAGE="${IMAGE_PATH}" \
       GAMMABOARD_WORKSPACE_ROOT="${WORKSPACE_ROOT}" \
-      sbatch --chdir "${WORKSPACE_ROOT}" "${WORKSPACE_ROOT}/ops/slurm/node_worker.sbatch"
+      sbatch --chdir "${WORKSPACE_ROOT}" "${WORKSPACE_ROOT}/ops/slurm/worker.sbatch"
     )"
     w2_submit="$(
       NODE_NAME=w-2 \
       GAMMABOARD_DATABASE_URL="${worker_db_url}" \
       GAMMABOARD_IMAGE="${IMAGE_PATH}" \
       GAMMABOARD_WORKSPACE_ROOT="${WORKSPACE_ROOT}" \
-      sbatch --chdir "${WORKSPACE_ROOT}" "${WORKSPACE_ROOT}/ops/slurm/node_worker.sbatch"
+      sbatch --chdir "${WORKSPACE_ROOT}" "${WORKSPACE_ROOT}/ops/slurm/worker.sbatch"
     )"
 
     echo "${w1_submit}"
@@ -91,7 +91,7 @@ submit-ui-with-two-workers:
 tunnel-job job_id local_port="8080":
     #!/usr/bin/env bash
     set -euo pipefail
-    SSH_TARGET="${SSH_TARGET:-cs22u040@submit03.unibe.ch}"
+    SSH_TARGET="${SSH_TARGET:-${SSH_USER:-${USER}}@${SSH_HOST:-submit03.unibe.ch}}"
     FRONTEND_PORT="8080"
     NODE_NAME="$(ssh "${SSH_TARGET}" "squeue -h -j {{job_id}} -o '%N'")"
     if [[ -z "${NODE_NAME}" || "${NODE_NAME}" == "(null)" ]]; then

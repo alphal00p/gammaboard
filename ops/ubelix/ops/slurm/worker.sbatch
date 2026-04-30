@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=gb-node
+#SBATCH --job-name=gb-wrk
 #SBATCH --time=00:30:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=gb-smoke
+#SBATCH --job-name=gb-smk
 #SBATCH --time=00:00:30
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

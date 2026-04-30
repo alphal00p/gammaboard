@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=gb-ui-single
+#SBATCH --job-name=gb-ctl
 #SBATCH --time=00:20:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -29,8 +29,8 @@ IMAGE_PATH="${WORKSPACE_ROOT}/images/gammaboard/gammaboard-latest.sif"
 RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime/local_postgres.template.toml"
 RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
 SLURM_LOG_DIR="${WORKSPACE_ROOT}/logs/slurm/control"
-RUNTIME_CONFIG="${RUNTIME_DIR}/runtime-${SLURM_JOB_ID}-ui-single.toml"
-INSTANCE_NAME="gb-ui-single-${SLURM_JOB_ID}"
+RUNTIME_CONFIG="${RUNTIME_DIR}/runtime-${SLURM_JOB_ID}-ctl.toml"
+INSTANCE_NAME="gb-ctl-${SLURM_JOB_ID}"
 DEPLOY_CFG="${WORKSPACE_ROOT}/ops/config/deploy/deploy.toml"
 DB_PORT="5433"
 DEPLOY_NAME="default"
@@ -76,12 +76,12 @@ run_in_container() {
 
 cleanup() {
   set +e
-  apptainer instance stop "${INSTANCE_NAME}" 2>/dev/null || true
+  apptainer instance stop "${INSTANCE_NAME}" >/dev/null 2>&1 || true
   rm -f "${RUNTIME_CONFIG}"
 }
 trap cleanup EXIT
 
-apptainer instance stop "${INSTANCE_NAME}" 2>/dev/null || true
+apptainer instance stop "${INSTANCE_NAME}" >/dev/null 2>&1 || true
 env -u PGTZ -u PGOPTIONS \
 APPTAINERENV_LANG="${APPTAINERENV_LANG:-C.UTF-8}" \
 APPTAINERENV_LC_ALL="${APPTAINERENV_LC_ALL:-C.UTF-8}" \
