@@ -268,6 +268,11 @@ fn write_nginx_config(
     frontend_port: u16,
 ) -> Result<()> {
     let backend = server_config.bind_addr();
+    let access_log = if deploy_config.frontend_http.access_log {
+        "access_log /dev/stdout;"
+    } else {
+        "access_log off;"
+    };
     let config = format!(
         "worker_processes 1;\n\
 pid tmp/deploy/nginx.pid;\n\
@@ -293,7 +298,7 @@ http {{\n\
     types_hash_max_size 4096;\n\
     sendfile on;\n\
 \n\
-    access_log /dev/stdout;\n\
+    {access_log}\n\
     error_log /dev/stderr warn;\n\
     client_body_temp_path tmp/nginx/client_body;\n\
     proxy_temp_path tmp/nginx/proxy;\n\
@@ -325,6 +330,7 @@ http {{\n\
         server_name = deploy_config.frontend_http.frontend_server_name,
         static_dir = deploy_config.static_site.frontend_build_dir,
         backend = backend,
+        access_log = access_log,
     );
     fs::write(deploy_config.nginx_generated_config(), config).with_context(|| {
         format!(

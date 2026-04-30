@@ -91,6 +91,8 @@ pub struct DeployFrontendHttpConfig {
     pub frontend_server_name: String,
     #[serde(default)]
     pub frontend_advertise_hosts: Vec<String>,
+    #[serde(default)]
+    pub access_log: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

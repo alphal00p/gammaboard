@@ -11,6 +11,7 @@ frontend_host = "127.0.0.1"
 frontend_port = 8080
 frontend_server_name = "localhost"
 frontend_advertise_hosts = ["localhost"]
+access_log = false
 
 [database]
 ensure_started = true

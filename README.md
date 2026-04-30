@@ -199,6 +199,7 @@ Use this flow when you want both direct LAN access and the SSH tunnel option.
    or `http://itphlies:8080` if your local network resolves that hostname. If you access the server by LAN IP instead, add that origin to `allowed_origins` in the server config first.
 4. To stop all deployed ITPhlies processes, press `Ctrl-C` in the foreground deploy terminal.
 5. The SSH tunnel remains optional; direct LAN access works because nginx listens on `0.0.0.0:8080`, while the backend still stays private on `127.0.0.1:4000`.
+6. Interactive deploy profiles disable nginx access logs by default to keep foreground output readable. Re-enable them in the deploy TOML only when debugging HTTP traffic.
 
 Config files used:
 - backend: [ops/itphlies/config/server.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/itphlies/config/server.toml)
