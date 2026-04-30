@@ -34,8 +34,14 @@ DEPLOY_CFG="${WORKSPACE_ROOT}/ops/config/deploy/deploy.toml"
 DB_PORT="5433"
 DEPLOY_NAME="default"
 FRONTEND_PORT="8080"
+DB_DEPLOY_DIR="${WORKSPACE_ROOT}/db/${DEPLOY_NAME}"
+DB_DATA_DIR="${DB_DEPLOY_DIR}/data"
+DB_SOCKET_DIR="${DB_DEPLOY_DIR}/socket"
 
-mkdir -p "${RUNTIME_DIR}" "${SLURM_LOG_DIR}"
+mkdir -p "${RUNTIME_DIR}" "${SLURM_LOG_DIR}" "${DB_DEPLOY_DIR}" "${DB_SOCKET_DIR}"
+if [[ -d "${DB_DATA_DIR}" ]]; then
+  chmod 700 "${DB_DATA_DIR}"
+fi
 
 if [[ ! -f "${RUNTIME_TEMPLATE}" ]]; then
   echo "missing runtime template: ${RUNTIME_TEMPLATE}" >&2
@@ -86,6 +92,6 @@ echo "node: ${HOSTNAME}"
 echo "workspace_root: ${WORKSPACE_ROOT}"
 echo "runtime_config: ${RUNTIME_CONFIG}"
 echo "frontend_url: http://${HOSTNAME}:${FRONTEND_PORT}"
-echo "tunnel_cmd: ssh -N -L ${FRONTEND_PORT}:${HOSTNAME}:${FRONTEND_PORT} ${USER}@Ubelix"
+echo "tunnel_hint_after_frontend_ready: ssh -N -L ${FRONTEND_PORT}:${HOSTNAME}:${FRONTEND_PORT} ${USER}@Ubelix"
 
 run_in_container deploy run --deploy-config "${DEPLOY_CFG}"

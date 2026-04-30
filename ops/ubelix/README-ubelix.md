@@ -166,6 +166,12 @@ Submit:
 python ops/ubelix.py up
 ```
 
+`up` waits until Slurm assigned a node and nginx answers on the frontend port, then prints `frontend_ready=true`. To only submit/reuse the job and print the tunnel hint immediately:
+
+```bash
+python ops/ubelix.py up --no-wait
+```
+
 This job starts:
 - local Postgres
 - `gammaboard server`
@@ -174,7 +180,14 @@ This job starts:
 Then run the printed tunnel command on your local machine, for example:
 
 ```bash
-ssh -N -L 8080:<control-node>:8080 cs22u040@submit03.unibe.ch
+ssh -N -L 8080:<control-node>:8080 <ubelix-user>@submit03.unibe.ch
+```
+
+The printed target defaults to `${USER}@submit03.unibe.ch` from the UBELIX login node. Override it when needed:
+
+```bash
+SSH_HOST=submit02.unibe.ch python ops/ubelix.py up
+SSH_TARGET=<user>@Ubelix python ops/ubelix.py up
 ```
 
 Then open:

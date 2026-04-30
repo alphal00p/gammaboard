@@ -1,6 +1,8 @@
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Subcommand};
 use gammaboard::config::{LocalPostgresConfig, RuntimeConfig};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     fs::{self, File},
     io::{self, IsTerminal, Write},
@@ -192,6 +194,7 @@ fn resolve_migrations_dir() -> String {
 }
 
 pub(crate) fn start_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
+    ensure_postgres_data_dir_permissions(local)?;
     if !is_cluster_initialized(local) {
         println!("postgres cluster not initialized; creating new cluster");
         init_db(local, database_url)?;
@@ -428,6 +431,24 @@ fn ensure_pg_hba_rule(local: &LocalPostgresConfig) -> Result<()> {
     content.push('\n');
     fs::write(&hba_path, content)
         .with_context(|| format!("failed to update {}", hba_path.display()))?;
+    Ok(())
+}
+
+fn ensure_postgres_data_dir_permissions(local: &LocalPostgresConfig) -> Result<()> {
+    let data_dir = Path::new(&local.data_dir);
+    if let Some(parent) = data_dir.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    if data_dir.exists() {
+        #[cfg(unix)]
+        {
+            fs::set_permissions(data_dir, fs::Permissions::from_mode(0o700))
+                .with_context(|| format!("failed to chmod 0700 {}", data_dir.display()))?;
+        }
+    }
     Ok(())
 }
 

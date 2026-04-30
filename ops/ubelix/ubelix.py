@@ -26,7 +26,7 @@ FRONTEND_PORT = 8080
 API_PORT = 4000
 DB_PORT = 5433
 DEPLOY_NAME = "default"
-SSH_TARGET = "cs22u040@submit03.unibe.ch"
+DEFAULT_SSH_HOST = "submit03.unibe.ch"
 ADMIN_PASSWORD = "admin"
 
 
@@ -91,30 +91,91 @@ def require_single_control() -> Job:
     return jobs[0]
 
 
-def wait_for_control_node(job_id: str, timeout: int = 180) -> str:
+def wait_for_control_node(job_id: str, timeout: int = 180, *, verbose: bool = False) -> str:
     deadline = time.monotonic() + timeout
+    next_status = 0.0
     while time.monotonic() < deadline:
         result = run(["squeue", "-h", "-j", job_id, "-o", "%N"], check=False)
         node = result.stdout.strip()
         if node and node != "(null)":
             return node
+        now = time.monotonic()
+        if verbose and now >= next_status:
+            print(f"waiting for Slurm node assignment for job {job_id}")
+            next_status = now + 10
         time.sleep(2)
     raise SystemExit(f"timed out waiting for control node assignment for job {job_id}")
 
 
-def wait_for_http(url: str, timeout: int = 180) -> None:
+def slurm_log_paths(job_id: str) -> tuple[str, str]:
+    base = os.path.join(WORKSPACE_ROOT, "logs/slurm/control")
+    return (
+        os.path.join(base, f"{CONTROL_JOB_NAME}-{job_id}.out"),
+        os.path.join(base, f"{CONTROL_JOB_NAME}-{job_id}.err"),
+    )
+
+
+def tail_file(path: str, lines: int = 80) -> str:
+    if not os.path.exists(path):
+        return f"{path}: missing"
+    result = run(["tail", "-n", str(lines), path], check=False)
+    return result.stdout.rstrip() or f"{path}: empty"
+
+
+def print_control_log_tail(job_id: str) -> None:
+    out_path, err_path = slurm_log_paths(job_id)
+    print(f"--- {out_path} ---", file=sys.stderr)
+    print(tail_file(out_path), file=sys.stderr)
+    print(f"--- {err_path} ---", file=sys.stderr)
+    print(tail_file(err_path), file=sys.stderr)
+
+
+def job_is_active(job_id: str) -> bool:
+    result = run(["squeue", "-h", "-j", job_id, "-o", "%i"], check=False)
+    return any(line.strip() == job_id for line in result.stdout.splitlines())
+
+
+def wait_for_http(
+    url: str,
+    timeout: int = 180,
+    *,
+    verbose: bool = False,
+    control_job_id: str | None = None,
+) -> None:
     deadline = time.monotonic() + timeout
+    next_status = 0.0
+    last_error = ""
     while time.monotonic() < deadline:
+        if control_job_id is not None and not job_is_active(control_job_id):
+            print_control_log_tail(control_job_id)
+            raise SystemExit(f"control job {control_job_id} exited before frontend became ready")
         try:
             urllib.request.urlopen(url, timeout=3).close()
             return
-        except (OSError, urllib.error.URLError):
+        except (OSError, urllib.error.URLError) as err:
+            last_error = str(err)
+            now = time.monotonic()
+            if verbose and now >= next_status:
+                print(f"waiting for frontend at {url}; last_error={last_error}")
+                next_status = now + 10
             time.sleep(2)
-    raise SystemExit(f"timed out waiting for {url}")
+    if control_job_id is not None:
+        print_control_log_tail(control_job_id)
+    raise SystemExit(f"timed out waiting for {url}; last_error={last_error}")
 
 
 def api_url(control_node: str, path: str) -> str:
     return f"http://{control_node}:{API_PORT}/api{path}"
+
+
+def ssh_target() -> str:
+    if os.environ.get("SSH_TARGET"):
+        return os.environ["SSH_TARGET"]
+    user = os.environ.get("SSH_USER") or os.environ.get("USER") or os.environ.get("LOGNAME")
+    if not user:
+        raise SystemExit("failed to infer SSH user; set SSH_USER or SSH_TARGET")
+    host = os.environ.get("SSH_HOST") or DEFAULT_SSH_HOST
+    return f"{user}@{host}"
 
 
 def database_url(control_node: str) -> str:
@@ -367,11 +428,17 @@ def watch_launch_requests(args: argparse.Namespace, control_node: str) -> None:
 def command_up(args: argparse.Namespace) -> None:
     control = submit_control()
     print(f"control_job_id={control.id}")
-    node = wait_for_control_node(control.id, args.startup_timeout)
+    node = wait_for_control_node(control.id, args.startup_timeout, verbose=True)
     print(f"control_node={node}")
-    print(f"tunnel=ssh -N -L {args.local_port}:{node}:{FRONTEND_PORT} {SSH_TARGET}")
-    wait_for_http(f"http://{node}:{FRONTEND_PORT}", args.startup_timeout)
-    print("frontend_ready=true")
+    print(f"tunnel=ssh -N -L {args.local_port}:{node}:{FRONTEND_PORT} {ssh_target()}")
+    if not args.no_wait:
+        wait_for_http(
+            f"http://{node}:{FRONTEND_PORT}",
+            args.startup_timeout,
+            verbose=True,
+            control_job_id=control.id,
+        )
+        print("frontend_ready=true")
     if args.watch:
         print("watching control job; Ctrl-C stops only this launcher")
         try:
@@ -466,6 +533,7 @@ def parser() -> argparse.ArgumentParser:
     up.add_argument("--local-port", type=int, default=8080)
     up.add_argument("--startup-timeout", type=int, default=180)
     up.add_argument("--poll-seconds", type=int, default=15)
+    up.add_argument("--no-wait", action="store_true", help="print the tunnel command without waiting for nginx")
     up.set_defaults(func=command_up)
 
     down = sub.add_parser("down", help="login node: gracefully stop nodes, then cancel remaining jobs")
