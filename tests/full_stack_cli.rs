@@ -1070,7 +1070,7 @@ fn temp_server_config(
     let run_templates_dir = manifest_dir.join("configs/runs");
     let task_templates_dir = manifest_dir.join("configs/tasks");
     let contents = format!(
-        "api_host = {host:?}\napi_port = {port}\nallowed_origins = [{allowed_origin:?}]\nsecure_cookie = {secure_cookie}\nallow_db_admin = true\nrun_templates_dir = {run_templates_dir:?}\ntask_templates_dir = {task_templates_dir:?}\n\n[auth]\nadmin_password_hash = {admin_password_hash:?}\nsession_secret = {session_secret:?}\n"
+        "api_host = {host:?}\napi_port = {port}\nallowed_origins = [{allowed_origin:?}]\nsecure_cookie = {secure_cookie}\nallow_db_admin = true\nallow_local_node_spawn = true\nrun_templates_dir = {run_templates_dir:?}\ntask_templates_dir = {task_templates_dir:?}\n\n[auth]\nadmin_password_hash = {admin_password_hash:?}\nsession_secret = {session_secret:?}\n"
     );
     let file = NamedTempFile::new().expect("create temp server config");
     std::fs::write(file.path(), contents).expect("write temp server config");
