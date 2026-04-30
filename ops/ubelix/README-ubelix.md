@@ -204,6 +204,26 @@ Submit separate worker jobs:
 python ops/ubelix.py submit-workers --count 2 --prefix w
 ```
 
+Resolve dashboard node-start requests automatically:
+
+```bash
+python ops/ubelix.py watch-requests
+```
+
+The dashboard writes grouped startup requests into Postgres. `watch-requests` claims pending external requests, submits one Slurm worker job per requested node, and records submitted job ids back on the request row.
+
+One-shot mode for debugging:
+
+```bash
+python ops/ubelix.py watch-requests --once
+```
+
+If you run the control launcher in blocking mode, it also resolves requests while watching:
+
+```bash
+python ops/ubelix.py up --watch
+```
+
 Stop a deployment:
 
 ```bash
@@ -230,7 +250,7 @@ Why:
 - clean worker scaling via Slurm
 - persistent DB data under workspace
 
-The frontend node-start action creates DB-backed launch requests on UBELIX. A Slurm-aware launcher should resolve those requests; the control server does not spawn local child processes there.
+The frontend node-start action creates DB-backed launch requests on UBELIX. `python ops/ubelix.py watch-requests` resolves those requests into Slurm jobs; the control server does not spawn local child processes there.
 
 ## Notes
 

@@ -226,6 +226,15 @@ impl FullStackHarness {
     }
 
     async fn start_server_with_auth(&mut self, auth: (&str, &str)) -> anyhow::Result<String> {
+        self.start_server_with_auth_and_local_spawn(auth, true)
+            .await
+    }
+
+    async fn start_server_with_auth_and_local_spawn(
+        &mut self,
+        auth: (&str, &str),
+        allow_local_node_spawn: bool,
+    ) -> anyhow::Result<String> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         let addr = listener.local_addr()?;
         drop(listener);
@@ -234,6 +243,7 @@ impl FullStackHarness {
             addr.port(),
             "http://localhost:3000",
             false,
+            allow_local_node_spawn,
             auth,
         );
 
@@ -1063,6 +1073,7 @@ fn temp_server_config(
     port: u16,
     allowed_origin: &str,
     secure_cookie: bool,
+    allow_local_node_spawn: bool,
     auth: (&str, &str),
 ) -> NamedTempFile {
     let (admin_password_hash, session_secret) = auth;
@@ -1070,7 +1081,7 @@ fn temp_server_config(
     let run_templates_dir = manifest_dir.join("configs/runs");
     let task_templates_dir = manifest_dir.join("configs/tasks");
     let contents = format!(
-        "api_host = {host:?}\napi_port = {port}\nallowed_origins = [{allowed_origin:?}]\nsecure_cookie = {secure_cookie}\nallow_db_admin = true\nallow_local_node_spawn = true\nrun_templates_dir = {run_templates_dir:?}\ntask_templates_dir = {task_templates_dir:?}\n\n[auth]\nadmin_password_hash = {admin_password_hash:?}\nsession_secret = {session_secret:?}\n"
+        "api_host = {host:?}\napi_port = {port}\nallowed_origins = [{allowed_origin:?}]\nsecure_cookie = {secure_cookie}\nallow_db_admin = true\nallow_local_node_spawn = {allow_local_node_spawn}\nrun_templates_dir = {run_templates_dir:?}\ntask_templates_dir = {task_templates_dir:?}\n\n[auth]\nadmin_password_hash = {admin_password_hash:?}\nsession_secret = {session_secret:?}\n"
     );
     let file = NamedTempFile::new().expect("create temp server config");
     std::fs::write(file.path(), contents).expect("write temp server config");
@@ -2220,6 +2231,77 @@ async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> 
             .fetch_one(&harness.pool)
             .await?;
     assert!(shutdown_requested_at.is_some());
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled()
+-> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+
+    let password = "operator-secret";
+    let password_hash = hash_password_for_tests(password);
+    let server_url = harness
+        .start_server_with_auth_and_local_spawn((&password_hash, "test-session-secret"), false)
+        .await?;
+
+    let login = http_post_json(
+        &server_url,
+        "/api/auth/login",
+        json!({ "password": password }),
+        None,
+    )
+    .await?;
+    assert_eq!(login.status(), reqwest::StatusCode::OK);
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.split(';').next().unwrap_or("").to_string())
+        .ok_or_else(|| anyhow::anyhow!("missing session cookie"))?;
+
+    let response = http_post_json(
+        &server_url,
+        "/api/nodes/auto-run",
+        json!({
+            "count": 2,
+            "name_prefix": "queued-w",
+            "args": {
+                "partition": "epyc2"
+            }
+        }),
+        Some(&cookie),
+    )
+    .await
+    .map_err(|err| anyhow::anyhow!("node launch request failed: {err}"))?;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let body: JsonValue = serde_json::from_str(&response.text().await?)?;
+    assert_eq!(body["started"].as_u64(), Some(0));
+    assert_eq!(body["request"]["state"].as_str(), Some("pending"));
+    assert_eq!(body["request"]["backend"].as_str(), Some("external"));
+    assert_eq!(body["request"]["requested_count"].as_str(), Some("2"));
+    assert_eq!(body["request"]["name_prefix"].as_str(), Some("queued-w"));
+    assert_eq!(body["request"]["args"]["partition"].as_str(), Some("epyc2"));
+
+    let node_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM nodes")
+        .fetch_one(&harness.pool)
+        .await
+        .map_err(|err| anyhow::anyhow!("node count query failed: {err}"))?;
+    assert_eq!(node_count, 0);
+
+    let (state, backend): (String, String) =
+        sqlx::query_as("SELECT state, backend FROM node_launch_requests WHERE name_prefix = $1")
+            .bind("queued-w")
+            .fetch_one(&harness.pool)
+            .await
+            .map_err(|err| anyhow::anyhow!("launch request query failed: {err}"))?;
+    assert_eq!(state, "pending");
+    assert_eq!(backend, "external");
 
     harness.stop_children().await;
     harness.pool.close().await;

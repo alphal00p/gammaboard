@@ -35,7 +35,7 @@ const compareNodeNames = (left, right) =>
   });
 
 const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => {
-  const { authenticated, allowLocalNodeSpawn } = useAuth();
+  const { authenticated } = useAuth();
   const [selectedNodeName, setSelectedNodeName] = useState(null);
   const [startCount, setStartCount] = useState("1");
   const [startingNodes, setStartingNodes] = useState(false);
@@ -123,9 +123,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
                   const requestId = response?.request?.id;
                   const started = Number(response?.started ?? 0);
                   setSnackbar({
-                    message: allowLocalNodeSpawn
-                      ? `Created request ${requestId ?? ""} and started ${started} node${started === 1 ? "" : "s"}.`
-                      : `Created node launch request ${requestId ?? ""}.`,
+                    message: `Created node launch request ${requestId ?? ""}; started ${started} node${started === 1 ? "" : "s"}.`,
                     severity: "success",
                   });
                 } catch (err) {
@@ -139,57 +137,50 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
             </Button>
           </Stack>
         ) : null}
-        {authenticated && !allowLocalNodeSpawn ? (
-          <Alert severity="info" sx={{ mb: 2 }}>
-            Local node spawning is disabled for this deployment. Requests stay queued until an external launcher resolves
-            them.
-          </Alert>
-        ) : null}
 
-        {authenticated ? (
-          <Box sx={{ mb: 3 }}>
-            <Typography variant="subtitle1" gutterBottom>
-              Node Startup Queue
-            </Typography>
-            {launchRequestsData.error ? (
-              <Alert severity="error" sx={{ mb: 2 }}>
-                Failed to fetch node launch requests.
-              </Alert>
-            ) : null}
-            {launchRequestsData.launchRequests.length === 0 ? (
-              <EmptyStateCard title="No launch requests" message="Node start requests will appear here." />
-            ) : (
-              <TableContainer component={Paper} variant="outlined">
-                <Table size="small" aria-label="node launch requests table">
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>ID</TableCell>
-                      <TableCell>State</TableCell>
-                      <TableCell>Backend</TableCell>
-                      <TableCell>Count</TableCell>
-                      <TableCell>Started</TableCell>
-                      <TableCell>Created</TableCell>
-                      <TableCell>Error</TableCell>
+        <Box sx={{ mb: 3 }}>
+          <Typography variant="subtitle1" gutterBottom>
+            Node Startup Queue
+          </Typography>
+          {!authenticated ? (
+            <EmptyStateCard title="Login required" message="Authenticate to inspect and create node launch requests." />
+          ) : launchRequestsData.error ? (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              Failed to fetch node launch requests.
+            </Alert>
+          ) : launchRequestsData.launchRequests.length === 0 ? (
+            <EmptyStateCard title="No launch requests" message="Node start requests will appear here." />
+          ) : (
+            <TableContainer component={Paper} variant="outlined">
+              <Table size="small" aria-label="node launch requests table">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>ID</TableCell>
+                    <TableCell>State</TableCell>
+                    <TableCell>Backend</TableCell>
+                    <TableCell>Count</TableCell>
+                    <TableCell>Started</TableCell>
+                    <TableCell>Created</TableCell>
+                    <TableCell>Error</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {launchRequestsData.launchRequests.map((request) => (
+                    <TableRow key={request.id}>
+                      <TableCell>{request.id}</TableCell>
+                      <TableCell>{request.state}</TableCell>
+                      <TableCell>{request.backend}</TableCell>
+                      <TableCell>{request.requested_count}</TableCell>
+                      <TableCell>{request.started_count}</TableCell>
+                      <TableCell>{formatDateTime(request.created_at, "-")}</TableCell>
+                      <TableCell>{request.error || "-"}</TableCell>
                     </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {launchRequestsData.launchRequests.map((request) => (
-                      <TableRow key={request.id}>
-                        <TableCell>{request.id}</TableCell>
-                        <TableCell>{request.state}</TableCell>
-                        <TableCell>{request.backend}</TableCell>
-                        <TableCell>{request.requested_count}</TableCell>
-                        <TableCell>{request.started_count}</TableCell>
-                        <TableCell>{formatDateTime(request.created_at, "-")}</TableCell>
-                        <TableCell>{request.error || "-"}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            )}
-          </Box>
-        ) : null}
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </Box>
 
         <Typography variant="subtitle1" gutterBottom>
           Live Nodes

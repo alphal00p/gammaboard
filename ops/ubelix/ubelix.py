@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -116,6 +117,10 @@ def api_url(control_node: str, path: str) -> str:
     return f"http://{control_node}:{API_PORT}/api{path}"
 
 
+def database_url(control_node: str) -> str:
+    return f"postgresql://postgres:postgres@{control_node}:{DB_PORT}/gammaboard_db"
+
+
 def login(control_node: str) -> str:
     data = f'{{"password":"{ADMIN_PASSWORD}"}}'.encode()
     request = urllib.request.Request(
@@ -160,6 +165,205 @@ def submit_control() -> Job:
     return Job(id=job_id, name=CONTROL_JOB_NAME, state="SUBMITTED", node="")
 
 
+def sql_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def psql_json(control_node: str, inner_sql: str) -> list[dict]:
+    env = os.environ.copy()
+    env.pop("PGTZ", None)
+    env.pop("PGOPTIONS", None)
+    env.setdefault("APPTAINERENV_LANG", "C.UTF-8")
+    env.setdefault("APPTAINERENV_LC_ALL", "C.UTF-8")
+    env.setdefault("APPTAINERENV_TZ", "Etc/UTC")
+    sql = f"""
+COPY (
+  SELECT COALESCE(json_agg(row_to_json(q)), '[]'::json)
+  FROM (
+    {inner_sql}
+  ) q
+) TO STDOUT
+"""
+    result = run(
+        [
+            "apptainer",
+            "exec",
+            "-B",
+            WORKSPACE_ROOT,
+            IMAGE_PATH,
+            "psql",
+            database_url(control_node),
+            "-X",
+            "-qAt",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-c",
+            sql,
+        ],
+        env=env,
+    )
+    payload = result.stdout.strip()
+    if not payload:
+        return []
+    parsed = json.loads(payload)
+    if not isinstance(parsed, list):
+        raise SystemExit(f"expected JSON array from psql, got: {payload}")
+    return parsed
+
+
+def claim_launch_request(control_node: str) -> dict | None:
+    rows = psql_json(
+        control_node,
+        """
+        WITH next_request AS (
+          SELECT id
+          FROM node_launch_requests
+          WHERE state = 'pending'
+            AND backend = 'external'
+          ORDER BY created_at, id
+          LIMIT 1
+          FOR UPDATE SKIP LOCKED
+        )
+        UPDATE node_launch_requests request
+        SET state = 'launching',
+            updated_at = now()
+        FROM next_request
+        WHERE request.id = next_request.id
+        RETURNING
+          request.id,
+          request.backend,
+          request.requested_count,
+          request.started_count,
+          request.name_prefix,
+          request.args
+        """,
+    )
+    return rows[0] if rows else None
+
+
+def update_launch_request(
+    control_node: str,
+    request_id: int,
+    state: str,
+    started_count: int,
+    result: dict,
+    error: str | None = None,
+) -> None:
+    error_sql = "NULL" if error is None else sql_literal(error)
+    psql_json(
+        control_node,
+        f"""
+        UPDATE node_launch_requests
+        SET state = {sql_literal(state)},
+            started_count = {started_count},
+            result = {sql_literal(json.dumps(result, sort_keys=True))}::jsonb,
+            error = {error_sql},
+            updated_at = now()
+        WHERE id = {int(request_id)}
+        RETURNING id
+        """,
+    )
+
+
+def node_names_for_request(request: dict) -> list[str]:
+    count = int(request.get("requested_count") or 0)
+    args = request.get("args") or {}
+    if not isinstance(args, dict):
+        args = {}
+    requested_names = args.get("node_names")
+    if isinstance(requested_names, list):
+        names = [str(name).strip() for name in requested_names if str(name).strip()]
+        if len(names) >= count:
+            return names[:count]
+
+    prefix = str(request.get("name_prefix") or args.get("name_prefix") or "w").strip() or "w"
+    request_id = int(request["id"])
+    return [f"{prefix}-{request_id}-{i}" for i in range(1, count + 1)]
+
+
+def submit_worker(node_name: str, control_node: str, *, max_start_failures: int = 3) -> str:
+    ensure_dirs()
+    env = os.environ.copy()
+    env.update(
+        {
+            "NODE_NAME": node_name,
+            "NODE_MAX_START_FAILURES": str(max_start_failures),
+            "GAMMABOARD_DATABASE_URL": database_url(control_node),
+            "GAMMABOARD_IMAGE": IMAGE_PATH,
+            "GAMMABOARD_WORKSPACE_ROOT": WORKSPACE_ROOT,
+            "DEPLOY_NAME": DEPLOY_NAME,
+        }
+    )
+    result = run(
+        ["sbatch", "--chdir", WORKSPACE_ROOT, "--job-name", WORKER_JOB_NAME, WORKER_SBATCH],
+        env=env,
+    )
+    return parse_job_id(result.stdout)
+
+
+def resolve_one_launch_request(control_node: str) -> bool:
+    request = claim_launch_request(control_node)
+    if request is None:
+        return False
+
+    request_id = int(request["id"])
+    node_names = node_names_for_request(request)
+    args = request.get("args") or {}
+    if not isinstance(args, dict):
+        args = {}
+    max_start_failures = int(args.get("max_start_failures") or 3)
+    submitted: list[dict[str, str]] = []
+    try:
+        if not node_names:
+            raise RuntimeError("launch request requested zero workers")
+        for node_name in node_names:
+            job_id = submit_worker(node_name, control_node, max_start_failures=max_start_failures)
+            submitted.append({"node_name": node_name, "job_id": job_id})
+            print(f"launch_request={request_id}\tnode={node_name}\tjob={job_id}")
+        update_launch_request(
+            control_node,
+            request_id,
+            "succeeded",
+            len(submitted),
+            {"workers": submitted},
+        )
+    except Exception as err:
+        try:
+            update_launch_request(
+                control_node,
+                request_id,
+                "failed",
+                len(submitted),
+                {"workers": submitted},
+                str(err),
+            )
+        finally:
+            print(f"launch_request={request_id}\tfailed={err}", file=sys.stderr)
+    return True
+
+
+def resolve_launch_requests(control_node: str, *, max_requests: int | None = None) -> int:
+    resolved = 0
+    while max_requests is None or resolved < max_requests:
+        if not resolve_one_launch_request(control_node):
+            break
+        resolved += 1
+    return resolved
+
+
+def watch_launch_requests(args: argparse.Namespace, control_node: str) -> None:
+    print(f"watching launch requests on {control_node}; Ctrl-C stops only this launcher")
+    try:
+        while True:
+            resolved = resolve_launch_requests(control_node)
+            if args.once:
+                print(f"resolved_requests={resolved}")
+                return
+            time.sleep(args.poll_seconds)
+    except KeyboardInterrupt:
+        print("launcher stopped")
+
+
 def command_up(args: argparse.Namespace) -> None:
     control = submit_control()
     print(f"control_job_id={control.id}")
@@ -172,6 +376,7 @@ def command_up(args: argparse.Namespace) -> None:
         print("watching control job; Ctrl-C stops only this launcher")
         try:
             while active_jobs(name=CONTROL_JOB_NAME):
+                resolve_launch_requests(node)
                 command_status(argparse.Namespace())
                 time.sleep(args.poll_seconds)
         except KeyboardInterrupt:
@@ -225,25 +430,19 @@ def command_status(_: argparse.Namespace) -> None:
 def command_submit_workers(args: argparse.Namespace) -> None:
     control = require_single_control()
     control_node = wait_for_control_node(control.id)
-    db_url = f"postgresql://postgres:postgres@{control_node}:{DB_PORT}/gammaboard_db"
     ensure_dirs()
     for i in range(1, args.count + 1):
         node_name = f"{args.prefix}-{i}"
-        env = os.environ.copy()
-        env.update(
-            {
-                "NODE_NAME": node_name,
-                "GAMMABOARD_DATABASE_URL": db_url,
-                "GAMMABOARD_IMAGE": IMAGE_PATH,
-                "GAMMABOARD_WORKSPACE_ROOT": WORKSPACE_ROOT,
-                "DEPLOY_NAME": DEPLOY_NAME,
-            }
+        print(
+            f"{node_name}\t"
+            f"{submit_worker(node_name, control_node, max_start_failures=args.max_start_failures)}"
         )
-        result = run(
-            ["sbatch", "--chdir", WORKSPACE_ROOT, "--job-name", WORKER_JOB_NAME, WORKER_SBATCH],
-            env=env,
-        )
-        print(f"{node_name}\t{parse_job_id(result.stdout)}")
+
+
+def command_watch_requests(args: argparse.Namespace) -> None:
+    control = require_single_control()
+    control_node = wait_for_control_node(control.id, args.startup_timeout)
+    watch_launch_requests(args, control_node)
 
 
 def command_build(args: argparse.Namespace) -> None:
@@ -281,7 +480,17 @@ def parser() -> argparse.ArgumentParser:
     workers = sub.add_parser("submit-workers", help="login node: submit N separate worker jobs")
     workers.add_argument("--count", type=int, required=True)
     workers.add_argument("--prefix", default="w")
+    workers.add_argument("--max-start-failures", type=int, default=3)
     workers.set_defaults(func=command_submit_workers)
+
+    watch_requests = sub.add_parser(
+        "watch-requests",
+        help="login node: resolve pending DB node launch requests into Slurm worker jobs",
+    )
+    watch_requests.add_argument("--once", action="store_true", help="resolve current pending requests and exit")
+    watch_requests.add_argument("--startup-timeout", type=int, default=60)
+    watch_requests.add_argument("--poll-seconds", type=int, default=5)
+    watch_requests.set_defaults(func=command_watch_requests)
 
     build = sub.add_parser("build", help="login node: submit a build job")
     build.add_argument("target", choices=("gammaboard", "gammaloop"))
