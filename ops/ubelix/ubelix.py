@@ -230,39 +230,37 @@ def sql_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def psql_json(control_node: str, inner_sql: str) -> list[dict]:
+def psql_json(control_node: str, sql: str) -> list[dict]:
     env = os.environ.copy()
     env.pop("PGTZ", None)
     env.pop("PGOPTIONS", None)
     env.setdefault("APPTAINERENV_LANG", "C.UTF-8")
     env.setdefault("APPTAINERENV_LC_ALL", "C.UTF-8")
     env.setdefault("APPTAINERENV_TZ", "Etc/UTC")
-    sql = f"""
-COPY (
-  SELECT COALESCE(json_agg(row_to_json(q)), '[]'::json)
-  FROM (
-    {inner_sql}
-  ) q
-) TO STDOUT
-"""
-    result = run(
-        [
-            "apptainer",
-            "exec",
-            "-B",
-            WORKSPACE_ROOT,
-            IMAGE_PATH,
-            "psql",
-            database_url(control_node),
-            "-X",
-            "-qAt",
-            "-v",
-            "ON_ERROR_STOP=1",
-            "-c",
-            sql,
-        ],
-        env=env,
-    )
+    try:
+        result = run(
+            [
+                "apptainer",
+                "exec",
+                "-B",
+                WORKSPACE_ROOT,
+                IMAGE_PATH,
+                "psql",
+                database_url(control_node),
+                "-X",
+                "-qAt",
+                "-v",
+                "ON_ERROR_STOP=1",
+                "-c",
+                sql,
+            ],
+            env=env,
+        )
+    except subprocess.CalledProcessError as err:
+        stderr = (err.stderr or "").strip()
+        stdout = (err.stdout or "").strip()
+        detail = stderr or stdout or str(err)
+        raise SystemExit(f"psql query failed: {detail}") from err
     payload = result.stdout.strip()
     if not payload:
         return []
@@ -284,19 +282,23 @@ def claim_launch_request(control_node: str) -> dict | None:
           ORDER BY created_at, id
           LIMIT 1
           FOR UPDATE SKIP LOCKED
+        ),
+        claimed AS (
+          UPDATE node_launch_requests request
+          SET state = 'launching',
+              updated_at = now()
+          FROM next_request
+          WHERE request.id = next_request.id
+          RETURNING
+            request.id,
+            request.backend,
+            request.requested_count,
+            request.started_count,
+            request.name_prefix,
+            request.args
         )
-        UPDATE node_launch_requests request
-        SET state = 'launching',
-            updated_at = now()
-        FROM next_request
-        WHERE request.id = next_request.id
-        RETURNING
-          request.id,
-          request.backend,
-          request.requested_count,
-          request.started_count,
-          request.name_prefix,
-          request.args
+        SELECT COALESCE(json_agg(row_to_json(claimed)), '[]'::json)
+        FROM claimed
         """,
     )
     return rows[0] if rows else None
@@ -314,14 +316,18 @@ def update_launch_request(
     psql_json(
         control_node,
         f"""
-        UPDATE node_launch_requests
-        SET state = {sql_literal(state)},
-            started_count = {started_count},
-            result = {sql_literal(json.dumps(result, sort_keys=True))}::jsonb,
-            error = {error_sql},
-            updated_at = now()
-        WHERE id = {int(request_id)}
-        RETURNING id
+        WITH updated AS (
+          UPDATE node_launch_requests
+          SET state = {sql_literal(state)},
+              started_count = {started_count},
+              result = {sql_literal(json.dumps(result, sort_keys=True))}::jsonb,
+              error = {error_sql},
+              updated_at = now()
+          WHERE id = {int(request_id)}
+          RETURNING id
+        )
+        SELECT COALESCE(json_agg(row_to_json(updated)), '[]'::json)
+        FROM updated
         """,
     )
 

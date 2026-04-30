@@ -12,6 +12,7 @@
 #SBATCH --error=logs/slurm/control/%x-%j.err
 
 set -euo pipefail
+umask 077
 
 PRIVATE_ENV="${HOME}/.config/gammaboard/slurm.env"
 if [[ -f "${PRIVATE_ENV}" ]]; then
@@ -39,9 +40,8 @@ DB_DATA_DIR="${DB_DEPLOY_DIR}/data"
 DB_SOCKET_DIR="${DB_DEPLOY_DIR}/socket"
 
 mkdir -p "${RUNTIME_DIR}" "${SLURM_LOG_DIR}" "${DB_DEPLOY_DIR}" "${DB_SOCKET_DIR}"
-if [[ -d "${DB_DATA_DIR}" ]]; then
-  chmod 700 "${DB_DATA_DIR}"
-fi
+mkdir -p "${DB_DATA_DIR}"
+chmod 700 "${DB_DATA_DIR}"
 
 if [[ ! -f "${RUNTIME_TEMPLATE}" ]]; then
   echo "missing runtime template: ${RUNTIME_TEMPLATE}" >&2
