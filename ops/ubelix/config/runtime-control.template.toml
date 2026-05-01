@@ -1,0 +1,27 @@
+[database]
+url = "postgresql://postgres:postgres@127.0.0.1:${DB_PORT}/gammaboard_db"
+
+[tracing]
+persist_runtime_logs = true
+db_gammaboard_level = "info"
+db_external_level = "warn"
+
+[resources]
+roots = [
+  "${WORKSPACE_ROOT}/states",
+]
+
+[local_postgres]
+data_dir = "${WORKSPACE_ROOT}/db/${DEPLOY_NAME}/data"
+socket_dir = "${WORKSPACE_ROOT}/db/${DEPLOY_NAME}/socket"
+log_file = "${WORKSPACE_ROOT}/logs/postgres/${DEPLOY_NAME}.log"
+max_connections = 128
+listen_addresses = "0.0.0.0"
+host_auth_cidr = "0.0.0.0/0"
+shared_buffers = "256MB"
+effective_cache_size = "2GB"
+work_mem = "16MB"
+checkpoint_timeout = "30min"
+max_wal_size = "8GB"
+wal_compression = true
+synchronous_commit = false
