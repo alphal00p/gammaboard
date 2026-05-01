@@ -5,7 +5,7 @@ React dashboard for monitoring Monte Carlo simulation runs.
 ## Quick Start
 
 ```bash
-npm install
+npm ci
 npm start
 ```
 
@@ -56,6 +56,6 @@ useWorkersData(3000)    // Poll node inventory once app-wide every 3 seconds
 
 ```bash
 npm start       # Development server
-npm build       # Production build
+npm run build   # Production build
 npm test        # Run tests
 ```

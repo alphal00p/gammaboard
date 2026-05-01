@@ -81,6 +81,26 @@ impl Domain {
     pub fn fixed_rectangular_dims(&self) -> Option<(usize, usize)> {
         Some((self.fixed_continuous_dims()?, self.fixed_discrete_depth()?))
     }
+
+    pub fn fixed_discrete_cardinalities(&self) -> Option<Vec<usize>> {
+        match self {
+            Self::Continuous { .. } => Some(Vec::new()),
+            Self::Discrete { branches, .. } => {
+                let first_tail = branches.first()?.domain.fixed_discrete_cardinalities()?;
+                branches
+                    .iter()
+                    .all(|branch| {
+                        branch.domain.fixed_discrete_cardinalities() == Some(first_tail.clone())
+                    })
+                    .then(|| {
+                        let mut cardinalities = Vec::with_capacity(first_tail.len() + 1);
+                        cardinalities.push(branches.len());
+                        cardinalities.extend(first_tail);
+                        cardinalities
+                    })
+            }
+        }
+    }
 }
 
 impl DomainBranch {

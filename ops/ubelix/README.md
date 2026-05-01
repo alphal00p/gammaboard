@@ -142,12 +142,11 @@ GAMMABOARD_BIND_PATHS=/absolute/path/to/itp_localunitaritydata
 
 ## Hello Test
 
-Single-job hello path:
+Run this on a UBELIX login node:
 
 ```bash
-export GAMMABOARD_WORKSPACE_ROOT=/absolute/path/to/itp_localunitaritydata
-export GAMMABOARD_IMAGE=/absolute/path/to/itp_localunitaritydata/images/gammaboard/gammaboard-latest.sif
-just submit-hello-single
+mkdir -p logs/slurm/control logs/slurm/workers logs/postgres
+sbatch ops/slurm/hello.sbatch
 ```
 
 ## Control/UI Job
@@ -256,7 +255,8 @@ python ops/ubelix.py down
 Current UBELIX flow is intentionally simple:
 - `WORKSPACE_ROOT` is the main override
 - Slurm job behavior is mostly hardcoded in `ops/slurm/*.sbatch`
-- the root `justfile` is a thin wrapper around `sbatch`
+- `ops/ubelix.py` is the main operator CLI
+- `ops/ubelix/justfile` is only for syncing and image pruning
 - PostgreSQL logs go to `${WORKSPACE_ROOT}/logs/postgres`
 - Slurm logs go to `${WORKSPACE_ROOT}/logs/slurm/{build,control,workers}`
 
@@ -275,5 +275,4 @@ The frontend node-start action creates DB-backed launch requests on UBELIX. `pyt
 
 - `gammaboard` and `gammaloop` images are separate by design.
 - The GammaBoard image packages only GammaBoard runtime artifacts.
-- For strict QOS limits, prefer `submit-hello-single` or `submit-ui-single`.
 - This is an operator guide for the current UBELIX setup, not a generic deployment system.

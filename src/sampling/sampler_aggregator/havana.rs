@@ -512,26 +512,26 @@ impl SamplerAggregator for HavanaSampler {
         Ok(LatentBatchSpec::from_batch(&batch))
     }
 
-    fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError> {
+    fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
         let Some(samples) = self.pending_training_samples.pop_front() else {
             return Err(EngineError::engine(format!(
                 "havana sampler received {} training weights with no pending training batch",
-                training_weights.len()
+                training_values.len()
             )));
         };
 
-        if training_weights.len() != samples.len() {
+        if training_values.len() != samples.len() {
             return Err(EngineError::engine(format!(
                 "training/sample size mismatch in Havana sampler: weights={}, samples={}",
-                training_weights.len(),
+                training_values.len(),
                 samples.len()
             )));
         }
 
         let before_samples_ingested = self.samples_ingested;
         let remaining_training = self.remaining_training_samples();
-        let train_len = remaining_training.min(training_weights.len());
-        for (eval, sample) in training_weights.iter().zip(samples.iter()).take(train_len) {
+        let train_len = remaining_training.min(training_values.len());
+        for (eval, sample) in training_values.iter().zip(samples.iter()).take(train_len) {
             self.grid
                 .add_training_sample(sample, *eval / sample.get_weight()) // the evaluator return the weighted eval, so it needs to be divided by the sample weight
                 .map_err(|err| EngineError::engine(err.to_string()))?;
@@ -604,8 +604,8 @@ impl SamplerAggregator for HavanaInferenceSampler {
         })
     }
 
-    fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError> {
-        if !training_weights.is_empty() {
+    fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
+        if !training_values.is_empty() {
             return Err(EngineError::engine(
                 "havana inference sampler does not accept training weights",
             ));
@@ -657,7 +657,7 @@ mod tests {
             .expect("build havana sampler");
         let _ = sampler.produce_latent_batch(5).expect("produce");
         sampler
-            .ingest_training_weights(&[1.0, 2.0, 3.0, 4.0, 5.0])
+            .ingest_training_values(&[1.0, 2.0, 3.0, 4.0, 5.0])
             .expect("ingest");
         let _ = sampler
             .produce_latent_batch(3)
@@ -707,12 +707,12 @@ mod tests {
         assert_eq!(sampler.training_samples_remaining(), None);
 
         sampler
-            .ingest_training_weights(&[1.0, 2.0, 3.0, 4.0, 5.0])
+            .ingest_training_values(&[1.0, 2.0, 3.0, 4.0, 5.0])
             .expect("ingest first batch");
         assert_eq!(sampler.training_samples_remaining(), None);
 
         sampler
-            .ingest_training_weights(&[1.0, 2.0, 3.0])
+            .ingest_training_values(&[1.0, 2.0, 3.0])
             .expect("ingest second batch");
         assert_eq!(sampler.training_samples_remaining(), None);
     }
@@ -746,7 +746,7 @@ mod tests {
         );
 
         sampler
-            .ingest_training_weights(&[1.0, 2.0, 3.0, 4.0, 5.0])
+            .ingest_training_values(&[1.0, 2.0, 3.0, 4.0, 5.0])
             .expect("ingest first batch");
         assert_eq!(
             sampler
@@ -766,7 +766,7 @@ mod tests {
         );
 
         sampler
-            .ingest_training_weights(&[1.0; 11])
+            .ingest_training_values(&[1.0; 11])
             .expect("ingest remainder of first window");
         assert_eq!(
             sampler.sample_plan().expect("next full training window"),
@@ -777,7 +777,7 @@ mod tests {
             .produce_latent_batch(16)
             .expect("produce second training window");
         sampler
-            .ingest_training_weights(&[1.0; 16])
+            .ingest_training_values(&[1.0; 16])
             .expect("ingest second training window");
         assert_eq!(
             sampler.sample_plan().expect("final partial window"),
@@ -801,7 +801,7 @@ mod tests {
             .produce_latent_batch(4)
             .expect("produce training batch");
         sampler
-            .ingest_training_weights(&[1.0, 2.0, 3.0, 4.0])
+            .ingest_training_values(&[1.0, 2.0, 3.0, 4.0])
             .expect("ingest training batch");
 
         let snapshot = sampler.snapshot().expect("snapshot");
@@ -884,7 +884,7 @@ mod tests {
             .produce_latent_batch(4)
             .expect("produce training batch");
         sampler
-            .ingest_training_weights(&[1.0, 2.0, 3.0, 4.0])
+            .ingest_training_values(&[1.0, 2.0, 3.0, 4.0])
             .expect("ingest training batch");
 
         let snapshot = sampler.snapshot().expect("snapshot");
@@ -923,7 +923,7 @@ mod tests {
             .produce_latent_batch(16)
             .expect("produce training batch");
         training
-            .ingest_training_weights(&[1.0; 16])
+            .ingest_training_values(&[1.0; 16])
             .expect("ingest training weights");
 
         let training_snapshot = training.snapshot().expect("training snapshot");

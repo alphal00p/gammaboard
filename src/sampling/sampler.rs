@@ -17,7 +17,7 @@ pub enum SamplerAggregatorSnapshot {
     PdfAdaptationRasterLine { raw: JsonValue },
     HavanaTraining { raw: JsonValue },
     HavanaInference { raw: JsonValue },
-    PythonHomogeneousMonteCarlo { raw: JsonValue },
+    PythonSampler { raw: JsonValue },
 }
 
 impl SamplerAggregatorSnapshot {
@@ -46,8 +46,8 @@ impl SamplerAggregatorSnapshot {
                 SamplerAggregatorSnapshot::HavanaInference { .. },
                 SamplerAggregatorConfig::HavanaInference { .. }
             ) | (
-                SamplerAggregatorSnapshot::PythonHomogeneousMonteCarlo { .. },
-                SamplerAggregatorConfig::PythonHomogeneousMonteCarlo { .. }
+                SamplerAggregatorSnapshot::PythonSampler { .. },
+                SamplerAggregatorConfig::PythonSampler { .. }
             )
         )
     }
@@ -72,7 +72,7 @@ pub trait SamplerAggregator: Send {
         })
     }
     fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError>;
-    fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError>;
+    fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError>;
     fn pdf(&mut self, _point: &PdfPoint) -> Result<Option<f64>, EngineError> {
         Ok(None)
     }

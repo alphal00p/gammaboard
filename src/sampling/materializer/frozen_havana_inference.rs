@@ -99,7 +99,7 @@ mod tests {
             .produce_latent_batch(4)
             .expect("produce training batch");
         training
-            .ingest_training_weights(&[1.0, 2.0, 3.0, 4.0])
+            .ingest_training_values(&[1.0, 2.0, 3.0, 4.0])
             .expect("ingest training weights");
 
         let snapshot = training.snapshot().expect("snapshot");

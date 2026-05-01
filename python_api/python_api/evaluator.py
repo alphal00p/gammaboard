@@ -1,72 +1,50 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from typing import Any, Self
 
-from .types import ComplexOut, DiscreteBatch, RealBatch, RealOut
+import numpy as np
+import numpy.typing as npt
 
 
-class ScalarBatchIntegrand(ABC):
+class ScalarBatchIntegrand:
     """Vectorized scalar integrand.
 
-    Contract:
-    - xs_discrete is an int64 array with shape (nr_samples, discrete_dims)
-    - xs_continuous is a float64 array with shape (nr_samples, continuous_dims)
-    - eval(xs_discrete, xs_continuous) returns float64 array with shape (nr_samples,)
+    Implementations are loaded by the worker through duck typing; inheriting from
+    this class is optional.
     """
 
     discrete_dims: int
     continuous_dims: int
 
     @classmethod
-    @abstractmethod
     def from_config(
         cls, *, discrete_dims: int, continuous_dims: int, init_args: dict[str, Any] | None
     ) -> Self:
-        """Optional factory to construct a fresh integrand from configuration.
+        return cls(**(init_args or {}))
 
-        Mirrors example integrand signatures. Implementations may validate dims and
-        return a configured instance.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def eval(self, xs_discrete: DiscreteBatch, xs_continuous: RealBatch) -> RealOut:
-        """Must be purely functional and vectorized: return array with length == xs_discrete.shape[0].
-
-        Avoid side-effects; callers may invoke concurrently.
-        """
+    def eval(
+        self,
+        xs_discrete: npt.NDArray[np.int64],
+        xs_continuous: npt.NDArray[np.float64],
+    ) -> npt.NDArray[np.float64]:
         raise NotImplementedError
 
 
-class ComplexBatchIntegrand(ABC):
-    """Vectorized complex integrand.
-
-    Contract:
-    - xs_discrete is an int64 array with shape (nr_samples, discrete_dims)
-    - xs_continuous is a float64 array with shape (nr_samples, continuous_dims)
-    - eval(xs_discrete, xs_continuous) returns complex128 array with shape (nr_samples,)
-    """
+class ComplexBatchIntegrand:
+    """Vectorized complex integrand."""
 
     discrete_dims: int
     continuous_dims: int
 
     @classmethod
-    @abstractmethod
     def from_config(
         cls, *, discrete_dims: int, continuous_dims: int, init_args: dict[str, Any] | None
     ) -> Self:
-        """Optional factory to construct a fresh integrand from configuration.
+        return cls(**(init_args or {}))
 
-        Mirrors example integrand signatures. Implementations may validate dims and
-        return a configured instance.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def eval(self, xs_discrete: DiscreteBatch, xs_continuous: RealBatch) -> ComplexOut:
-        """Must be purely functional and vectorized: return array with length == xs_discrete.shape[0].
-
-        Avoid side-effects; callers may invoke concurrently.
-        """
+    def eval(
+        self,
+        xs_discrete: npt.NDArray[np.int64],
+        xs_continuous: npt.NDArray[np.float64],
+    ) -> npt.NDArray[np.complex128]:
         raise NotImplementedError

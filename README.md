@@ -43,11 +43,11 @@ Default config split:
 The frontend uses relative `/api` calls and does not require `.env`. The `just` recipes remain as thin wrappers, but the CLI flow above is the primary local workflow.
 
 ## UBELIX Quickstart
-For initial Slurm/Apptainer hello-world tests on UBELIX, use:
+For UBELIX Slurm/Apptainer operation, use:
 
 - [ops/ubelix/README-ubelix.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/README-ubelix.md)
 - [ops/ubelix/ops/slurm/smoke.sbatch](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/ops/slurm/smoke.sbatch)
-- [ops/ubelix/justfile](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/justfile)
+- [ops/ubelix/justfile](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/justfile) for sync/prune helpers
 
 ## Ops Layout
 - [ops/local/config](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config): local deploy profiles.
@@ -164,7 +164,7 @@ Useful options:
 
 Deploy profiles now derive the printed/open URLs from `frontend_http.frontend_port` plus `frontend_http.frontend_advertise_hosts`, instead of duplicating full URL strings in the config.
 
-The `just` wrappers build first, then run the foreground supervisor:
+The `just` wrappers build first, then `exec` the foreground supervisor:
 ```bash
 just deploy local dev
 just deploy itphlies release
@@ -292,28 +292,31 @@ For `evaluator.kind = "python_scalar"`, configure:
 - `continuous_dims`: expected continuous dimension for homogeneous rectangular batches
 - `discrete_dims`: expected discrete dimension for homogeneous rectangular batches
 - optional `init_args = { ... }`: constructor/config payload forwarded to python init
-- Optional evaluator ABCs are provided in `python_api.evaluator` (`ScalarBatchIntegrand`, `ComplexBatchIntegrand`) for type-checkable interfaces.
+- Optional evaluator base classes are provided in `python_api.evaluator` (`ScalarBatchIntegrand`, `ComplexBatchIntegrand`) for type-checkable interfaces.
 
 Python construction semantics:
 - if the class defines `from_config(discrete_dims=..., continuous_dims=..., init_args=...)`, that is called
 - otherwise the worker calls `ClassName(**init_args)` (or `ClassName()` when `init_args` is empty)
 
-For `sampler_aggregator.kind = "python_homogeneous_monte_carlo"`, configure:
+For `sampler_aggregator.kind = "python_sampler"`, configure:
 - `flake_ref`: nix flake reference that resolves to a runtime package
 - `module`: python module name to import
-- `class`: python class implementing sampler methods (`sample_plan`, `training_samples_remaining`, `produce_latent_batch`, `ingest_training_weights`, `snapshot`, optional `pdf`)
+- `class`: python class implementing sampler methods (`sample_plan`, `training_samples_remaining`, `produce_latent_batch`, `ingest_training_values`, `snapshot`, optional `pdf`)
 - `continuous_dims`: expected homogeneous continuous dimension
-- `discrete_dims`: expected homogeneous discrete dimension
+- `requires_training_values`: set to `true` when the sampler needs evaluator feedback through `ingest_training_values`
 - optional `init_args = { ... }`: constructor/config payload forwarded to python init
-- Optional sampler ABC is provided in `python_api.sampler` (`SamplerAggregator`) for a typed contract.
+- Optional sampler base class is provided in `python_api.sampler` (`SamplerAggregator`) for a typed contract.
 - Python evaluator and sampler methods are vectorized over fixed rectangular batches:
-  `xs_discrete` has shape `(nr_samples, discrete_dims)` and `xs_continuous` has shape `(nr_samples, continuous_dims)`.
-- `produce_latent_batch(nr_samples)` returns `(xs_discrete, xs_continuous)`.
+  `xs_discrete` has shape `(nr_samples, len(discrete_cardinalities))` and `xs_continuous` has shape `(nr_samples, continuous_dims)`.
+- Python samplers receive `discrete_cardinalities` derived from the run domain, not a separate sampler config field.
+- `produce_latent_batch(nr_samples)` returns `SampleBatch(xs_discrete, xs_continuous, weights)` from `python_api.sampler`.
+- `weights` are the per-sample multipliers stored as the `sampler_weight` factor before accumulation.
 - optional `pdf(xs_discrete, xs_continuous)` returns `(nr_samples,)`.
+- the checked-in Symbolica Havana example lives at `python_api/examples/python_sampler_symbolica_havana` and currently expects the host `python` on `PATH` to provide `symbolica`
 
 Python sampler construction semantics:
-- restore path: `from_snapshot(snapshot=..., discrete_dims=..., continuous_dims=..., init_args=...)` when present
-- fresh path: `from_config(discrete_dims=..., continuous_dims=..., init_args=...)` when present
+- restore path: `from_snapshot(snapshot=..., discrete_cardinalities=..., continuous_dims=..., init_args=...)` when present
+- fresh path: `from_config(discrete_cardinalities=..., continuous_dims=..., init_args=...)` when present
 - fallback: `ClassName(**init_args)` / `ClassName()`
 - Worker protocol entrypoints are checked in under `python_api/python_workers/` and launched with the flake runtime python executable.
 

@@ -17,7 +17,4 @@ deploy mode="release":
         deploy_bin="{{bin}}"
     fi
 
-    "${deploy_bin}" --runtime-config "{{runtime_cfg}}" deploy run --deploy-config "{{deploy_cfg}}" &
-    deploy_pid="$!"
-    trap 'wait "${deploy_pid}" 2>/dev/null || true; exit 0' INT TERM
-    wait "${deploy_pid}"
+    exec "${deploy_bin}" --runtime-config "{{runtime_cfg}}" deploy run --deploy-config "{{deploy_cfg}}"

@@ -40,6 +40,7 @@ Backend panel poll endpoints → `usePanelSource` → PanelCollection → panel 
 
 The API base URL is fixed to relative `/api` in `src/services/api.js`.
 For local development, CRA proxying is configured in `dashboard/package.json`.
+Server-side node startup requests always go through the generic launch-request queue; the frontend does not branch on local vs external spawning.
 
 ## Tech Stack
 

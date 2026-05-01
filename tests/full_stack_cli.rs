@@ -978,7 +978,7 @@ async fn full_stack_cli_python_scalar_flake_e2e() -> anyhow::Result<()> {
     let sampler_flake_ref = format!(
         "path:{}#runtime",
         manifest_dir
-            .join("python_api/examples/python_sampler_monte_carlo")
+            .join("python_api/examples/python_sampler_symbolica_havana")
             .display()
     );
     let config = temp_run_add_config(&format!(
@@ -999,7 +999,7 @@ name = "sample-a"
 kind = "sample"
 stop_condition = {{ max_samples = 64 }}
 accumulator = {{ config = "scalar" }}
-sampler_aggregator = {{ config = {{ kind = "python_homogeneous_monte_carlo", flake_ref = "{sampler_flake_ref}", module = "demo_sampler", class = "BasicMonteCarloSampler", continuous_dims = 1, discrete_dims = 0, init_args = {{ seed = 0, training_target_samples = 0 }} }} }}
+sampler_aggregator = {{ config = {{ kind = "python_sampler", flake_ref = "{sampler_flake_ref}", module = "demo_sampler", class = "SymbolicaHavanaSampler", continuous_dims = 1, requires_training_values = true, init_args = {{ seed = 0, bins = 8, samples_for_update = 8, stop_training_after_n_samples = 64, initial_training_rate = 0.1, final_training_rate = 0.01 }} }} }}
 "#
     ));
 
@@ -2225,12 +2225,24 @@ async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> 
 
     let stop = http_post_json(&server_url, "/api/nodes/w-1/stop", json!({}), Some(&cookie)).await?;
     assert_eq!(stop.status(), reqwest::StatusCode::OK);
+    let stop_body: JsonValue = serde_json::from_str(&stop.text().await?)?;
+    assert_eq!(stop_body["node_name"].as_str(), Some("w-1"));
+    assert_eq!(stop_body["rows_updated"].as_u64(), Some(1));
 
-    let shutdown_requested_at: Option<chrono::DateTime<chrono::Utc>> =
-        sqlx::query_scalar("SELECT shutdown_requested_at FROM nodes WHERE name = 'w-1'")
-            .fetch_one(&harness.pool)
-            .await?;
-    assert!(shutdown_requested_at.is_some());
+    harness
+        .wait_for(
+            "authenticated stop expires node lease",
+            Duration::from_secs(10),
+            || async {
+                let live: bool = sqlx::query_scalar(
+                    "SELECT lease_expires_at > now() FROM nodes WHERE name = 'w-1'",
+                )
+                .fetch_one(&harness.pool)
+                .await?;
+                Ok(!live)
+            },
+        )
+        .await?;
 
     harness.stop_children().await;
     harness.pool.close().await;
@@ -2284,7 +2296,7 @@ async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled
     assert_eq!(body["started"].as_u64(), Some(0));
     assert_eq!(body["request"]["state"].as_str(), Some("pending"));
     assert_eq!(body["request"]["backend"].as_str(), Some("external"));
-    assert_eq!(body["request"]["requested_count"].as_str(), Some("2"));
+    assert_eq!(body["request"]["requested_count"].as_u64(), Some(2));
     assert_eq!(body["request"]["name_prefix"].as_str(), Some("queued-w"));
     assert_eq!(body["request"]["args"]["partition"].as_str(), Some("epyc2"));
 

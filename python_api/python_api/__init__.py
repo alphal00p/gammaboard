@@ -1,16 +1,9 @@
 from .evaluator import ComplexBatchIntegrand, ScalarBatchIntegrand
-from .sampler import SamplerAggregator
-from .types import ComplexOut, Diagnostics, DiscreteBatch, RealBatch, RealOut, SamplePlan, Snapshot
+from .sampler import SampleBatch, SamplerAggregator
 
 __all__ = [
     "ComplexBatchIntegrand",
-    "ComplexOut",
-    "DiscreteBatch",
-    "Diagnostics",
-    "RealBatch",
-    "RealOut",
-    "ScalarBatchIntegrand",
-    "SamplePlan",
+    "SampleBatch",
     "SamplerAggregator",
-    "Snapshot",
+    "ScalarBatchIntegrand",
 ]

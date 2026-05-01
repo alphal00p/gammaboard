@@ -23,6 +23,7 @@ just --justfile justfile deploy
 ```
 
 The deploy command is foreground-supervised. Stop it with `Ctrl-C`; the CLI then shuts down nginx, the backend, worker assignments, and local Postgres.
+Nginx access logs are disabled in the checked-in ITPhlies deploy profile so the foreground terminal stays readable.
 
 ## Notes
 

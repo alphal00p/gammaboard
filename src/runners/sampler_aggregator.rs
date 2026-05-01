@@ -1111,23 +1111,23 @@ where
             }
 
             if batch.requires_training_values {
-                let training_weights = batch.result.values.as_deref().ok_or_else(|| {
+                let training_values = batch.result.values.as_deref().ok_or_else(|| {
                     RunnerError::Engine(EngineError::engine(format!(
                         "completed batch {} requires training but has no training values",
                         batch.batch_id
                     )))
                 })?;
-                if training_weights.len() != batch_samples {
+                if training_values.len() != batch_samples {
                     return Err(RunnerError::Engine(EngineError::engine(format!(
                         "completed batch {} training value count mismatch: expected {}, got {}",
                         batch.batch_id,
                         batch_samples,
-                        training_weights.len()
+                        training_values.len()
                     ))));
                 }
                 let ingest_started = Instant::now();
                 self.sampler
-                    .ingest_training_weights(training_weights)
+                    .ingest_training_values(training_values)
                     .map_err(RunnerError::Engine)?;
                 let ingest_time_ms = ingest_started.elapsed().as_secs_f64() * 1000.0;
                 completed_training_ingest_ms += ingest_time_ms;

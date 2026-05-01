@@ -5,7 +5,7 @@ import numpy as np
 import sys
 
 sampler = None
-discrete_dims = None
+discrete_cardinalities = None
 continuous_dims = None
 
 
@@ -25,7 +25,10 @@ for raw in sys.stdin:
         if op == "init":
             module = importlib.import_module(req["module"])
             cls = getattr(module, req["class"])
-            discrete_dims = int(req["discrete_dims"])
+            discrete_cardinalities = [int(value) for value in req["discrete_cardinalities"]]
+            if any(value <= 0 for value in discrete_cardinalities):
+                raise ValueError("discrete_cardinalities must contain only positive integers")
+            discrete_dims = len(discrete_cardinalities)
             continuous_dims = int(req["continuous_dims"])
             init_args = req.get("init_args") or {}
             if not isinstance(init_args, dict):
@@ -36,13 +39,13 @@ for raw in sys.stdin:
                     raise TypeError("class must define from_snapshot(...) when restoring from snapshot")
                 sampler = cls.from_snapshot(
                     snapshot=snapshot,
-                    discrete_dims=discrete_dims,
+                    discrete_cardinalities=discrete_cardinalities,
                     continuous_dims=continuous_dims,
                     init_args=init_args,
                 )
             elif hasattr(cls, "from_config"):
                 sampler = cls.from_config(
-                    discrete_dims=discrete_dims,
+                    discrete_cardinalities=discrete_cardinalities,
                     continuous_dims=continuous_dims,
                     init_args=init_args,
                 )
@@ -50,10 +53,10 @@ for raw in sys.stdin:
                 sampler = cls(**init_args)
             else:
                 sampler = cls()
-            maybe_discrete_dims = getattr(sampler, "discrete_dims", None)
-            if maybe_discrete_dims is not None and int(maybe_discrete_dims) != discrete_dims:
+            maybe_discrete_cardinalities = getattr(sampler, "discrete_cardinalities", None)
+            if maybe_discrete_cardinalities is not None and [int(value) for value in maybe_discrete_cardinalities] != discrete_cardinalities:
                 raise ValueError(
-                    f"sampler discrete_dims mismatch: expected {discrete_dims}, got {int(maybe_discrete_dims)}"
+                    f"sampler discrete_cardinalities mismatch: expected {discrete_cardinalities}, got {maybe_discrete_cardinalities}"
                 )
             maybe_continuous_dims = getattr(sampler, "continuous_dims", None)
             if maybe_continuous_dims is not None and int(maybe_continuous_dims) != continuous_dims:
@@ -74,12 +77,19 @@ for raw in sys.stdin:
                 remaining = int(remaining)
             send({"id": req_id, "ok": True, "remaining": remaining})
         elif op == "produce_latent_batch":
-            if sampler is None or discrete_dims is None or continuous_dims is None:
+            if sampler is None or discrete_cardinalities is None or continuous_dims is None:
                 raise RuntimeError("worker not initialized")
             nr_samples = int(req["nr_samples"])
-            xs_discrete, xs_continuous = sampler.produce_latent_batch(nr_samples)
+            batch = sampler.produce_latent_batch(nr_samples)
+            if isinstance(batch, tuple):
+                raise TypeError("produce_latent_batch must return an object with xs_discrete, xs_continuous, and weights attributes, not a tuple")
+            xs_discrete = batch.xs_discrete
+            xs_continuous = batch.xs_continuous
+            weights = batch.weights
             xs_discrete = np.asarray(xs_discrete, dtype=np.int64)
             xs_continuous = np.asarray(xs_continuous, dtype=np.float64)
+            weights = np.asarray(weights, dtype=np.float64).reshape((nr_samples,))
+            discrete_dims = len(discrete_cardinalities)
             if xs_discrete.shape != (nr_samples, discrete_dims):
                 raise ValueError(
                     f"produce_latent_batch returned discrete shape {xs_discrete.shape}, expected ({nr_samples}, {discrete_dims})"
@@ -90,22 +100,34 @@ for raw in sys.stdin:
                 )
             if not np.isfinite(xs_continuous).all():
                 raise ValueError("produce_latent_batch returned non-finite continuous values")
+            if not np.isfinite(weights).all():
+                raise ValueError("produce_latent_batch returned non-finite weights")
+            if (weights <= 0.0).any():
+                raise ValueError("produce_latent_batch returned non-positive weights")
+            for axis, cardinality in enumerate(discrete_cardinalities):
+                axis_values = xs_discrete[:, axis]
+                if ((axis_values < 0) | (axis_values >= cardinality)).any():
+                    raise ValueError(
+                        f"produce_latent_batch returned discrete values outside [0, {cardinality}) on axis {axis}"
+                    )
             send({
                 "id": req_id,
                 "ok": True,
                 "xs_discrete_row_major": xs_discrete.reshape((nr_samples * discrete_dims,)).tolist(),
                 "xs_continuous_row_major": xs_continuous.reshape((nr_samples * continuous_dims,)).tolist(),
+                "weights": weights.tolist(),
             })
-        elif op == "ingest_training_weights":
+        elif op == "ingest_training_values":
             if sampler is None:
                 raise RuntimeError("worker not initialized")
-            training_weights = np.asarray(req["training_weights"], dtype=np.float64).reshape((-1,))
-            sampler.ingest_training_weights(training_weights)
+            training_values = np.asarray(req["training_values"], dtype=np.float64).reshape((-1,))
+            sampler.ingest_training_values(training_values)
             send({"id": req_id, "ok": True})
         elif op == "pdf":
-            if sampler is None or discrete_dims is None or continuous_dims is None:
+            if sampler is None or discrete_cardinalities is None or continuous_dims is None:
                 raise RuntimeError("worker not initialized")
             nr_samples = int(req["nr_samples"])
+            discrete_dims = len(discrete_cardinalities)
             xs_discrete = np.asarray(req["xs_discrete_row_major"], dtype=np.int64).reshape(
                 (nr_samples, discrete_dims)
             )

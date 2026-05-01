@@ -120,24 +120,3 @@ db-reset:
     {{bin}} db stop
     {{bin}} db delete --yes
     {{bin}} db start
-
-build-apptainer:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    scratch_root="${SCRATCH:-/scratch/network/users/${USER}}/apptainer"
-
-    APPTAINER_TMPDIR="${APPTAINER_TMPDIR:-${scratch_root}/tmp}"
-    APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-${scratch_root}/cache}"
-    SCCACHE_DIR="${SCCACHE_DIR:-/scratch/network/users/${USER}/gammaboard-cache/sccache}"
-    SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-50G}"
-    SCCACHE_NO_DAEMON="${SCCACHE_NO_DAEMON:-1}"
-
-    mkdir -p "${APPTAINER_TMPDIR}" "${APPTAINER_CACHEDIR}" "${SCCACHE_DIR}"
-
-    APPTAINER_TMPDIR="${APPTAINER_TMPDIR}" \
-    APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR}" \
-    APPTAINERENV_SCCACHE_DIR="${SCCACHE_DIR}" \
-    APPTAINERENV_SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE}" \
-    APPTAINERENV_SCCACHE_NO_DAEMON="${SCCACHE_NO_DAEMON}" \
-      apptainer build --notest gammaboard.sif ops/ubelix/build/gammaboard.def

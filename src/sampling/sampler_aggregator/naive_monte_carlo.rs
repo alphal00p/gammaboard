@@ -186,18 +186,18 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
         Ok(LatentBatchSpec::from_batch(&batch))
     }
 
-    fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError> {
+    fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
         let accepted = if self.training_target_samples == 0 {
-            training_weights.len()
+            training_values.len()
         } else {
             self.training_target_samples
                 .saturating_sub(self.trained_samples)
-                .min(training_weights.len())
+                .min(training_values.len())
         };
 
         self.nr_batches += 1;
         self.nr_samples += accepted as i64;
-        self.sum += training_weights.iter().take(accepted).sum::<f64>();
+        self.sum += training_values.iter().take(accepted).sum::<f64>();
 
         if accepted > 0 && self.training_delay_per_sample_ms > 0 {
             if self.training_target_samples > 0 {
@@ -209,7 +209,7 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
         self.trained_samples = self.trained_samples.saturating_add(accepted);
         self.pending_training_samples = self
             .pending_training_samples
-            .saturating_sub(training_weights.len());
+            .saturating_sub(training_values.len());
         Ok(())
     }
 

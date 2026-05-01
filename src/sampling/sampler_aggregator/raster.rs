@@ -257,12 +257,12 @@ impl PdfAdaptationRasterPlaneSampler {
         }
     }
 
-    fn record_training_weight(
+    fn record_training_value(
         &mut self,
         canonical_index: usize,
-        training_weight: f64,
+        training_value: f64,
     ) -> Result<(), EngineError> {
-        if !training_weight.is_finite() {
+        if !training_value.is_finite() {
             self.output_state.signed_integrand_values[canonical_index] = None;
             self.output_state.abs_integrand_values[canonical_index] = None;
             self.output_state.pdf_values[canonical_index] = None;
@@ -273,13 +273,13 @@ impl PdfAdaptationRasterPlaneSampler {
             self.params.geometry.discrete.clone(),
             self.point_at(canonical_index),
         );
-        self.output_state.signed_integrand_values[canonical_index] = Some(training_weight);
-        self.output_state.abs_integrand_values[canonical_index] = Some(training_weight.abs());
+        self.output_state.signed_integrand_values[canonical_index] = Some(training_value);
+        self.output_state.abs_integrand_values[canonical_index] = Some(training_value.abs());
         self.output_state.pdf_values[canonical_index] = self
             .source_sampler
             .pdf(&point)?
             .filter(|pdf| pdf.is_finite());
-        self.output_state.abs_integrand_sum += training_weight.abs();
+        self.output_state.abs_integrand_sum += training_value.abs();
         self.output_state.abs_integrand_count += 1;
         Ok(())
     }
@@ -345,12 +345,12 @@ impl PdfAdaptationRasterLineSampler {
         }
     }
 
-    fn record_training_weight(
+    fn record_training_value(
         &mut self,
         canonical_index: usize,
-        training_weight: f64,
+        training_value: f64,
     ) -> Result<(), EngineError> {
-        if !training_weight.is_finite() {
+        if !training_value.is_finite() {
             self.output_state.signed_integrand_values[canonical_index] = None;
             self.output_state.abs_integrand_values[canonical_index] = None;
             self.output_state.pdf_values[canonical_index] = None;
@@ -361,13 +361,13 @@ impl PdfAdaptationRasterLineSampler {
             self.params.geometry.discrete.clone(),
             self.point_at(canonical_index),
         );
-        self.output_state.signed_integrand_values[canonical_index] = Some(training_weight);
-        self.output_state.abs_integrand_values[canonical_index] = Some(training_weight.abs());
+        self.output_state.signed_integrand_values[canonical_index] = Some(training_value);
+        self.output_state.abs_integrand_values[canonical_index] = Some(training_value.abs());
         self.output_state.pdf_values[canonical_index] = self
             .source_sampler
             .pdf(&point)?
             .filter(|pdf| pdf.is_finite());
-        self.output_state.abs_integrand_sum += training_weight.abs();
+        self.output_state.abs_integrand_sum += training_value.abs();
         self.output_state.abs_integrand_count += 1;
         Ok(())
     }
@@ -426,7 +426,7 @@ impl SamplerAggregator for RasterPlaneSampler {
         Ok(LatentBatchSpec::from_batch(&batch))
     }
 
-    fn ingest_training_weights(&mut self, _training_weights: &[f64]) -> Result<(), EngineError> {
+    fn ingest_training_values(&mut self, _training_values: &[f64]) -> Result<(), EngineError> {
         Ok(())
     }
 
@@ -478,7 +478,7 @@ impl SamplerAggregator for RasterLineSampler {
         Ok(LatentBatchSpec::from_batch(&batch))
     }
 
-    fn ingest_training_weights(&mut self, _training_weights: &[f64]) -> Result<(), EngineError> {
+    fn ingest_training_values(&mut self, _training_values: &[f64]) -> Result<(), EngineError> {
         Ok(())
     }
 
@@ -530,22 +530,22 @@ impl SamplerAggregator for PdfAdaptationRasterPlaneSampler {
         Ok(LatentBatchSpec::from_batch(&batch))
     }
 
-    fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError> {
+    fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
         let total_samples = self.total_samples();
-        if self.ingested_samples + training_weights.len() > total_samples {
+        if self.ingested_samples + training_values.len() > total_samples {
             return Err(EngineError::engine(format!(
                 "pdf adaptation raster plane sampler ingest overflow: {} + {} exceeds {}",
                 self.ingested_samples,
-                training_weights.len(),
+                training_values.len(),
                 total_samples,
             )));
         }
-        for (offset, training_weight) in training_weights.iter().copied().enumerate() {
+        for (offset, training_value) in training_values.iter().copied().enumerate() {
             let shuffled_index = self.ingested_samples + offset;
             let canonical_index = self.permuted_index(shuffled_index);
-            self.record_training_weight(canonical_index, training_weight)?;
+            self.record_training_value(canonical_index, training_value)?;
         }
-        self.ingested_samples += training_weights.len();
+        self.ingested_samples += training_values.len();
         Ok(())
     }
 
@@ -610,22 +610,22 @@ impl SamplerAggregator for PdfAdaptationRasterLineSampler {
         Ok(LatentBatchSpec::from_batch(&batch))
     }
 
-    fn ingest_training_weights(&mut self, training_weights: &[f64]) -> Result<(), EngineError> {
+    fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
         let total_samples = self.total_samples();
-        if self.ingested_samples + training_weights.len() > total_samples {
+        if self.ingested_samples + training_values.len() > total_samples {
             return Err(EngineError::engine(format!(
                 "pdf adaptation raster line sampler ingest overflow: {} + {} exceeds {}",
                 self.ingested_samples,
-                training_weights.len(),
+                training_values.len(),
                 total_samples,
             )));
         }
-        for (offset, training_weight) in training_weights.iter().copied().enumerate() {
+        for (offset, training_value) in training_values.iter().copied().enumerate() {
             let shuffled_index = self.ingested_samples + offset;
             let canonical_index = self.permuted_index(shuffled_index);
-            self.record_training_weight(canonical_index, training_weight)?;
+            self.record_training_value(canonical_index, training_value)?;
         }
-        self.ingested_samples += training_weights.len();
+        self.ingested_samples += training_values.len();
         Ok(())
     }
 
@@ -914,7 +914,7 @@ mod tests {
         .expect("build pdf adaptation sampler");
 
         sampler
-            .ingest_training_weights(&[2.0, 4.0])
+            .ingest_training_values(&[2.0, 4.0])
             .expect("ingest weights");
         let output = sampler
             .persisted_output()
@@ -966,7 +966,7 @@ mod tests {
         .expect("build pdf adaptation sampler");
 
         sampler
-            .ingest_training_weights(&[f64::NAN, 4.0])
+            .ingest_training_values(&[f64::NAN, 4.0])
             .expect("ingest weights");
         let output = sampler
             .persisted_output()

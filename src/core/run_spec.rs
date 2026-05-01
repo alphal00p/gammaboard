@@ -7,7 +7,7 @@ use crate::utils::domain::Domain;
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use crate::sampling::HavanaInferenceSamplerParams;
 use crate::sampling::{
-    HavanaSamplerParams, NaiveMonteCarloSamplerParams, PythonHomogeneousMonteCarloSamplerParams,
+    HavanaSamplerParams, NaiveMonteCarloSamplerParams, PythonSamplerParams,
     RasterLineSamplerParams, RasterPlaneSamplerParams, SphericalBatchTransformParams,
     UnitBallBatchTransformParams,
 };
@@ -118,9 +118,9 @@ pub enum SamplerAggregatorConfig {
         #[serde(flatten)]
         params: HavanaInferenceSamplerParams,
     },
-    PythonHomogeneousMonteCarlo {
+    PythonSampler {
         #[serde(flatten)]
-        params: PythonHomogeneousMonteCarloSamplerParams,
+        params: PythonSamplerParams,
     },
 }
 
