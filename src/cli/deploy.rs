@@ -2,7 +2,6 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use gammaboard::api::nodes as node_api;
 use gammaboard::config::{DEFAULT_DEPLOY_CONFIG_PATH, DeployConfig, RuntimeConfig};
-use gammaboard::core::ControlPlaneStore;
 use gammaboard::server::ServerConfig;
 use std::{
     fs,
@@ -101,64 +100,44 @@ async fn cleanup_deploy(
     backend: &mut Child,
     nginx: &mut Child,
 ) -> Result<()> {
-    let sampler_drain_error = if deploy_config.cleanup.stop_nodes {
-        with_control_store(
-            runtime_config,
-            10,
-            true,
-            "deploy_stop_all_nodes_gracefully",
-            |store| async move {
-                let stopped = node_api::stop_all_nodes_gracefully(
-                    &store,
-                    node_api::GracefulNodeShutdownParams {
-                        sampler_drain_timeout: Duration::from_secs(
-                            deploy_config.cleanup.sampler_drain_timeout_seconds,
-                        ),
-                        node_stop_timeout: Duration::from_secs(
-                            deploy_config.cleanup.node_stop_timeout_seconds,
-                        ),
-                        poll_interval: Duration::from_millis(
-                            deploy_config.cleanup.poll_interval_ms,
-                        ),
-                    },
-                )
-                .await?;
-                tracing::info!(
-                    rows_updated = stopped.rows_updated,
-                    active_samplers_remaining = stopped.active_samplers_remaining,
-                    live_nodes_remaining = stopped.live_nodes_remaining,
-                    sampler_drain_timed_out = stopped.sampler_drain_timed_out,
-                    node_stop_timed_out = stopped.node_stop_timed_out,
-                    "graceful node shutdown completed"
+    let sampler_drain_error = with_control_store(
+        runtime_config,
+        10,
+        true,
+        "deploy_stop_all_nodes_gracefully",
+        |store| async move {
+            let stopped = node_api::stop_all_nodes_gracefully(
+                &store,
+                node_api::GracefulNodeShutdownParams {
+                    sampler_drain_timeout: Duration::from_secs(
+                        deploy_config.cleanup.sampler_drain_timeout_seconds,
+                    ),
+                    node_stop_timeout: Duration::from_secs(
+                        deploy_config.cleanup.node_stop_timeout_seconds,
+                    ),
+                    poll_interval: Duration::from_millis(deploy_config.cleanup.poll_interval_ms),
+                },
+            )
+            .await?;
+            tracing::info!(
+                rows_updated = stopped.rows_updated,
+                active_samplers_remaining = stopped.active_samplers_remaining,
+                live_nodes_remaining = stopped.live_nodes_remaining,
+                sampler_drain_timed_out = stopped.sampler_drain_timed_out,
+                node_stop_timed_out = stopped.node_stop_timed_out,
+                "graceful node shutdown completed"
+            );
+            if stopped.sampler_drain_timed_out {
+                bail!(
+                    "timed out waiting for sampler nodes to persist state: active_samplers_remaining={}",
+                    stopped.active_samplers_remaining
                 );
-                if stopped.sampler_drain_timed_out {
-                    bail!(
-                        "timed out waiting for sampler nodes to persist state: active_samplers_remaining={}",
-                        stopped.active_samplers_remaining
-                    );
-                }
-                Ok(())
-            },
-        )
-        .await
-        .err()
-    } else if deploy_config.cleanup.pause_runs {
-        let _ = with_control_store(
-            runtime_config,
-            10,
-            true,
-            "deploy_pause_all_runs",
-            |store| async move {
-                let assignments_cleared = store.clear_all_desired_assignments().await?;
-                tracing::info!("paused all runs: assignments_cleared={assignments_cleared}");
-                Ok(())
-            },
-        )
-        .await;
-        None
-    } else {
-        None
-    };
+            }
+            Ok(())
+        },
+    )
+    .await
+    .err();
 
     terminate_child(nginx, "nginx")?;
     terminate_child(backend, "backend")?;

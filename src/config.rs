@@ -102,8 +102,6 @@ pub struct DeployDatabaseConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct DeployCleanupConfig {
-    pub pause_runs: bool,
-    pub stop_nodes: bool,
     #[serde(default = "default_sampler_drain_timeout_seconds")]
     pub sampler_drain_timeout_seconds: u64,
     #[serde(default = "default_node_stop_timeout_seconds")]

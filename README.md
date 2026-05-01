@@ -148,7 +148,7 @@ Config split:
 - `src/config_defaults/*.toml`: built-in fallback defaults for runtime/server/run-add
 - `ops/<env>/config/runtime.toml`: environment-specific runtime and local Postgres settings
 - `ops/<env>/config/server.toml`: environment-specific backend settings
-- `ops/<env>/config/deploy.toml`: environment-specific deploy orchestration (server profile, frontend HTTP exposure, static frontend serving, cleanup policy)
+- `ops/<env>/config/deploy.toml`: environment-specific deploy orchestration (server profile, frontend HTTP exposure, static frontend serving, cleanup timing)
 
 The checked-in profiles are:
 - [ops/local/config/deploy.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config/deploy.toml)
@@ -415,7 +415,7 @@ gammaboard node run --name w-1
 ```
 
 `node run` uses a fast-start reconcile backoff internally: it starts polling at `50ms`, grows by a factor of `2.0`, and caps at `2s`.
-`node run` exits on `Ctrl-C` and `SIGTERM`, and expires its lease on shutdown so the same node name can be reused immediately.
+`node run` starts graceful shutdown on `Ctrl-C` and `SIGTERM`, and expires its lease on shutdown so the same node name can be reused immediately.
 `node auto-run N` picks names `w-1`, `w-2`, ... and skips names that already exist in the control plane.
 `node auto-run` uses a moderate default `--db-pool-size 4` to reduce worker-side pool contention while still keeping large fanout manageable under database connection pressure.
 Auto-run workers now write per-node startup logs to `logs/nodes/<NODE_NAME>.stdout.log` and `logs/nodes/<NODE_NAME>.stderr.log`.

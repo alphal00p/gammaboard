@@ -71,6 +71,7 @@ Notes:
 - UBELIX runtime templates set `resources.roots = ["${WORKSPACE_ROOT}/states"]`.
 - The UBELIX server profile sets `allow_local_node_spawn = false`.
 - Worker runtime TOML is rendered per job via `envsubst`.
+- Control, worker, and hello jobs request a batch-script `SIGTERM` 60 seconds before Slurm time limit and trap `SIGTERM`/`SIGINT` for graceful cleanup.
 
 ## Sync
 
@@ -216,6 +217,7 @@ For multi-job mode:
 - the control job owns Postgres and the API
 - worker jobs connect using `GAMMABOARD_DATABASE_URL`
 - the database must be reachable from other compute nodes
+- workers launched through `ubelix.py` also watch the owning control Slurm job and stop when it disappears, even if Postgres is still reachable
 
 Submit separate worker jobs:
 
@@ -250,6 +252,10 @@ python ubelix.py down
 ```
 
 `down` requests `POST /api/nodes/stop-all`, waits for worker jobs to exit, then uses `scancel` for remaining workers and finally the control job.
+
+If a control job exits unexpectedly, its sbatch cleanup also tries to stop the local Postgres daemon before stopping the Apptainer instance. Worker jobs submitted by `ubelix.py` receive the control job id and terminate themselves when that job is no longer active.
+
+UBELIX sends `SIGCONT` followed by `SIGTERM` before `scancel` or time-limit cancellation and gives roughly 60 seconds before `SIGKILL`. The UBELIX sbatch scripts use that window to forward `SIGTERM` into `gammaboard`, request node shutdown, wait for sampler persistence, and stop local Postgres.
 
 ## Config Model
 

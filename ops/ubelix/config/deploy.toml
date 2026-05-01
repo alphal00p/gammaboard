@@ -16,8 +16,6 @@ access_log = false
 ensure_started = true
 
 [cleanup]
-pause_runs = true
-stop_nodes = true
 sampler_drain_timeout_seconds = 60
 node_stop_timeout_seconds = 15
 poll_interval_ms = 250

@@ -395,7 +395,13 @@ def node_names_for_request(request: dict) -> list[str]:
     return [f"{prefix}-{request_id}-{i}" for i in range(1, count + 1)]
 
 
-def submit_worker(node_name: str, control_node: str, *, max_start_failures: int = 3) -> str:
+def submit_worker(
+    node_name: str,
+    control_node: str,
+    *,
+    control_job_id: str,
+    max_start_failures: int = 3,
+) -> str:
     ensure_dirs()
     env = os.environ.copy()
     env.update(
@@ -406,6 +412,7 @@ def submit_worker(node_name: str, control_node: str, *, max_start_failures: int 
             "GAMMABOARD_IMAGE": IMAGE_PATH,
             "GAMMABOARD_WORKSPACE_ROOT": WORKSPACE_ROOT,
             "DEPLOY_NAME": DEPLOY_NAME,
+            "CONTROL_JOB_ID": control_job_id,
         }
     )
     result = run(
@@ -431,7 +438,13 @@ def resolve_one_launch_request(control_node: str) -> bool:
         if not node_names:
             raise RuntimeError("launch request requested zero workers")
         for node_name in node_names:
-            job_id = submit_worker(node_name, control_node, max_start_failures=max_start_failures)
+            control = require_single_control()
+            job_id = submit_worker(
+                node_name,
+                control_node,
+                control_job_id=control.id,
+                max_start_failures=max_start_failures,
+            )
             submitted.append({"node_name": node_name, "job_id": job_id})
             print(f"launch_request={request_id}\tnode={node_name}\tjob={job_id}")
         update_launch_request(
@@ -558,7 +571,7 @@ def command_submit_workers(args: argparse.Namespace) -> None:
         node_name = f"{args.prefix}-{i}"
         print(
             f"{node_name}\t"
-            f"{submit_worker(node_name, control_node, max_start_failures=args.max_start_failures)}"
+            f"{submit_worker(node_name, control_node, control_job_id=control.id, max_start_failures=args.max_start_failures)}"
         )
 
 

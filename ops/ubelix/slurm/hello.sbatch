@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=gb-hello
 #SBATCH --time=00:20:00
+#SBATCH --signal=B:TERM@60
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
@@ -91,19 +92,41 @@ run_in_container() {
 
 cleanup() {
   set +e
+  trap - TERM INT EXIT
   run_in_container node stop --all
-  run_in_container db stop
   if [[ -n "${SAMPLER_PID:-}" ]]; then
-    kill "${SAMPLER_PID}" 2>/dev/null || true
-    wait "${SAMPLER_PID}" 2>/dev/null || true
+    kill -TERM "${SAMPLER_PID}" 2>/dev/null || true
   fi
   if [[ -n "${EVALUATOR_PID:-}" ]]; then
-    kill "${EVALUATOR_PID}" 2>/dev/null || true
-    wait "${EVALUATOR_PID}" 2>/dev/null || true
+    kill -TERM "${EVALUATOR_PID}" 2>/dev/null || true
   fi
+  for pid in "${SAMPLER_PID:-}" "${EVALUATOR_PID:-}"; do
+    if [[ -z "${pid}" ]]; then
+      continue
+    fi
+    for _ in $(seq 1 55); do
+      if ! kill -0 "${pid}" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 1
+    done
+    if kill -0 "${pid}" >/dev/null 2>&1; then
+      kill -KILL "${pid}" >/dev/null 2>&1 || true
+    fi
+    wait "${pid}" 2>/dev/null || true
+  done
+  run_in_container db stop
   apptainer instance stop "${INSTANCE_NAME}" >/dev/null 2>&1 || true
   rm -f "${RUNTIME_CONFIG}" "${RUN_TOML}"
 }
+
+handle_term() {
+  echo "received termination signal; stopping hello job gracefully" >&2
+  cleanup
+  exit 143
+}
+
+trap handle_term TERM INT
 trap cleanup EXIT
 
 apptainer instance stop "${INSTANCE_NAME}" >/dev/null 2>&1 || true

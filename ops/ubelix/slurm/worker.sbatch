@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=gb-wrk
 #SBATCH --time=00:30:00
+#SBATCH --signal=B:TERM@60
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
@@ -29,13 +30,48 @@ NODE_NAME="${NODE_NAME:?set NODE_NAME (e.g. gb-hello-sampler or gb-hello-eval-1)
 NODE_MAX_START_FAILURES="${NODE_MAX_START_FAILURES:-3}"
 DATABASE_URL="${GAMMABOARD_DATABASE_URL:?set GAMMABOARD_DATABASE_URL to reachable Postgres URL}"
 DEPLOY_NAME="${DEPLOY_NAME:-default}"
+CONTROL_JOB_ID="${CONTROL_JOB_ID:-}"
 mkdir -p "${WORKSPACE_ROOT}/logs/slurm/workers"
 
 RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
 mkdir -p "${RUNTIME_DIR}"
 RUNTIME_CONFIG="${RUNTIME_DIR}/runtime-${SLURM_JOB_ID}-${NODE_NAME}.toml"
 RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime-external_db.template.toml"
-trap 'rm -f "${RUNTIME_CONFIG}"' EXIT
+
+worker_pid=""
+monitor_pid=""
+
+stop_worker() {
+  set +e
+  trap - TERM INT EXIT
+  if [[ -n "${monitor_pid}" ]]; then
+    kill "${monitor_pid}" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${worker_pid}" ]] && kill -0 "${worker_pid}" >/dev/null 2>&1; then
+    kill -TERM "${worker_pid}" >/dev/null 2>&1 || true
+    for _ in $(seq 1 55); do
+      if ! kill -0 "${worker_pid}" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 1
+    done
+    if kill -0 "${worker_pid}" >/dev/null 2>&1; then
+      echo "worker ${NODE_NAME} did not exit before grace timeout; forcing termination" >&2
+      kill -KILL "${worker_pid}" >/dev/null 2>&1 || true
+    fi
+    wait "${worker_pid}" >/dev/null 2>&1 || true
+  fi
+  rm -f "${RUNTIME_CONFIG}"
+}
+
+handle_term() {
+  echo "received termination signal; stopping worker ${NODE_NAME}" >&2
+  stop_worker
+  exit 143
+}
+
+trap handle_term TERM INT
+trap stop_worker EXIT
 if [[ ! -f "${RUNTIME_TEMPLATE}" ]]; then
   echo "missing runtime template: ${RUNTIME_TEMPLATE}" >&2
   exit 1
@@ -69,6 +105,9 @@ echo "workspace_root: ${WORKSPACE_ROOT}"
 echo "runtime_config: ${RUNTIME_CONFIG}"
 echo "database_host_port: ${db_host_port}"
 echo "max_start_failures: ${NODE_MAX_START_FAILURES}"
+if [[ -n "${CONTROL_JOB_ID}" ]]; then
+  echo "control_job_id: ${CONTROL_JOB_ID}"
+fi
 
 # Fail fast if DB is not reachable from this worker allocation.
 env -u PGTZ -u PGOPTIONS \
@@ -85,4 +124,34 @@ APPTAINERENV_TZ="${APPTAINERENV_TZ:-Etc/UTC}" \
 apptainer exec -B "${WORKSPACE_ROOT}" "${IMAGE_PATH}" \
   gammaboard --runtime-config "${RUNTIME_CONFIG}" node run \
     --name "${NODE_NAME}" \
-    --max-start-failures "${NODE_MAX_START_FAILURES}"
+    --max-start-failures "${NODE_MAX_START_FAILURES}" &
+worker_pid="$!"
+
+if [[ -n "${CONTROL_JOB_ID}" ]]; then
+  (
+    while kill -0 "${worker_pid}" >/dev/null 2>&1; do
+      if [[ -z "$(squeue -h -j "${CONTROL_JOB_ID}" -o "%i")" ]]; then
+        echo "control job ${CONTROL_JOB_ID} is no longer active; stopping worker ${NODE_NAME}" >&2
+        kill -TERM "${worker_pid}" >/dev/null 2>&1 || true
+        for _ in $(seq 1 55); do
+          if ! kill -0 "${worker_pid}" >/dev/null 2>&1; then
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "worker ${NODE_NAME} did not exit after control job ended; forcing termination" >&2
+        kill -KILL "${worker_pid}" >/dev/null 2>&1 || true
+        exit 0
+      fi
+      sleep 5
+    done
+  ) &
+  monitor_pid="$!"
+else
+  monitor_pid=""
+fi
+
+set +e
+wait "${worker_pid}"
+status="$?"
+exit "${status}"

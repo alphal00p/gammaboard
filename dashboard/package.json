@@ -43,5 +43,9 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
+  },
+  "devDependencies": {
+    "source-map-explorer": "^2.5.3",
+    "webpack-bundle-analyzer": "^5.3.0"
   }
 }

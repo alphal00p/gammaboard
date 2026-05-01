@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=gb-ctl
 #SBATCH --time=00:20:00
+#SBATCH --signal=B:TERM@60
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
@@ -76,9 +77,24 @@ run_in_container() {
 
 cleanup() {
   set +e
+  trap - TERM INT EXIT
+  if [[ -n "${deploy_pid:-}" ]] && kill -0 "${deploy_pid}" >/dev/null 2>&1; then
+    kill -TERM "${deploy_pid}" >/dev/null 2>&1 || true
+    wait "${deploy_pid}" >/dev/null 2>&1 || true
+  fi
+  if [[ -f "${RUNTIME_CONFIG}" ]]; then
+    run_in_container db stop >/dev/null 2>&1 || true
+  fi
   apptainer instance stop "${INSTANCE_NAME}" >/dev/null 2>&1 || true
   rm -f "${RUNTIME_CONFIG}"
 }
+
+handle_term() {
+  echo "received termination signal; forwarding to deploy process"
+  cleanup
+  exit 143
+}
+trap handle_term TERM INT
 trap cleanup EXIT
 
 apptainer instance stop "${INSTANCE_NAME}" >/dev/null 2>&1 || true
@@ -94,4 +110,6 @@ echo "runtime_config: ${RUNTIME_CONFIG}"
 echo "frontend_url: http://${HOSTNAME}:${FRONTEND_PORT}"
 echo "tunnel_hint_after_frontend_ready: ssh -N -L ${FRONTEND_PORT}:${HOSTNAME}:${FRONTEND_PORT} ${USER}@Ubelix"
 
-run_in_container deploy run --deploy-config "${DEPLOY_CFG}"
+run_in_container deploy run --deploy-config "${DEPLOY_CFG}" &
+deploy_pid="$!"
+wait "${deploy_pid}"
