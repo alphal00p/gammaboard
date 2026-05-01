@@ -164,7 +164,7 @@ Submit:
 python ubelix.py up
 ```
 
-`up` waits until Slurm assigned a node and nginx answers on the frontend port, then prints `frontend_ready=true`.
+`up` waits until Slurm assigned a node and nginx answers on the frontend port, then prints `frontend_ready=true`. While waiting, it ignores proxy environment variables for the readiness probe and periodically prints the latest control log tail.
 
 To submit a new control job with a custom walltime:
 

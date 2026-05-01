@@ -12,6 +12,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from typing import Callable
 
 
 WORKSPACE_ROOT = "/storage/research/itp_localunitaritydata"
@@ -49,6 +50,10 @@ def run(args: list[str], *, env: dict[str, str] | None = None, check: bool = Tru
         stderr=subprocess.PIPE,
         env=env,
     )
+
+
+def http_opener_without_proxies() -> urllib.request.OpenerDirector:
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def ensure_dirs() -> None:
@@ -143,22 +148,29 @@ def wait_for_http(
     *,
     verbose: bool = False,
     control_job_id: str | None = None,
+    on_status: Callable[[str], None] | None = None,
 ) -> None:
     deadline = time.monotonic() + timeout
     next_status = 0.0
     last_error = ""
+    opener = http_opener_without_proxies()
     while time.monotonic() < deadline:
         if control_job_id is not None and not job_is_active(control_job_id):
             print_control_log_tail(control_job_id)
             raise SystemExit(f"control job {control_job_id} exited before frontend became ready")
         try:
-            urllib.request.urlopen(url, timeout=3).close()
+            with opener.open(url, timeout=3) as response:
+                status = getattr(response, "status", None) or response.getcode()
+            if on_status is not None:
+                on_status(f"http_ready status={status} url={url}")
             return
         except (OSError, urllib.error.URLError) as err:
             last_error = str(err)
             now = time.monotonic()
             if verbose and now >= next_status:
                 print(f"waiting for frontend at {url}; last_error={last_error}")
+                if control_job_id is not None:
+                    print_control_log_tail(control_job_id)
                 next_status = now + 10
             time.sleep(2)
     if control_job_id is not None:
@@ -480,6 +492,7 @@ def command_up(args: argparse.Namespace) -> None:
         args.startup_timeout,
         verbose=True,
         control_job_id=control.id,
+        on_status=print,
     )
     print("frontend_ready=true")
     if args.watch:
