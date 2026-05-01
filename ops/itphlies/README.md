@@ -27,7 +27,7 @@ Nginx access logs are disabled in the checked-in ITPhlies deploy profile so the 
 
 ## Notes
 
-- Runtime config comes from `configs/runtime/default.toml` and is passed explicitly by the wrapper.
+- Runtime config comes from `ops/itphlies/config/runtime.toml` and is passed explicitly by the wrapper.
 - If deploy fails with `Address already in use`, free the conflicting port, typically `4000`, `5433`, or `8080`, and retry.
 - If deploy fails during DB start, inspect the Postgres log from repo root:
   ```bash

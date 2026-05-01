@@ -36,26 +36,26 @@ The dashboard shows runs, task output, nodes, performance, and logs.
    ```
 
 Default config split:
-- `configs/runtime/default.toml`: shared database, tracing, and local Postgres settings
-- `configs/server/default.toml`: direct `gammaboard server` settings
-- `ops/<env>/config/{server,deploy}.toml`: deploy environment profiles
+- `src/config_defaults/*.toml`: built-in fallback defaults embedded into the Rust binary
+- `ops/<env>/config/{runtime,server,deploy}.toml`: operator-facing environment profiles
+- `templates/{runs,tasks}/`: shared run/task templates served by the backend
 
 The frontend uses relative `/api` calls and does not require `.env`. The `just` recipes remain as thin wrappers, but the CLI flow above is the primary local workflow.
 
 ## UBELIX Quickstart
 For UBELIX Slurm/Apptainer operation, use:
 
-- [ops/ubelix/README-ubelix.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/README-ubelix.md)
-- [ops/ubelix/ops/slurm/smoke.sbatch](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/ops/slurm/smoke.sbatch)
+- [ops/ubelix/README.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/README.md)
+- [ops/ubelix/slurm/smoke.sbatch](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/slurm/smoke.sbatch)
 - [ops/ubelix/justfile](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/justfile) for sync/prune helpers
 
 ## Ops Layout
 - [ops/local/config](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config): local deploy profiles.
 - [ops/itphlies/README.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/itphlies/README.md): ITPhlies-specific deploy workflow and config.
-- [ops/ubelix/README-ubelix.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/README-ubelix.md): UBELIX Slurm/Apptainer workflow and config.
+- [ops/ubelix/README.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/README.md): UBELIX Slurm/Apptainer workflow and config.
 
 ## Runtime Config
-- All commands load shared runtime config from [configs/runtime/default.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/runtime/default.toml) by default.
+- All commands load runtime config from [ops/local/config/runtime.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config/runtime.toml) by default.
 - If that default path is not present on disk, the CLI falls back to the built-in default runtime TOML.
 - Override it when needed with:
   ```bash
@@ -101,7 +101,7 @@ gammaboard db delete
 gammaboard db dump-sql
 ```
 
-These commands use `database.url` and `local_postgres` from `configs/runtime/default.toml`.
+These commands use `database.url` and `local_postgres` from the active runtime config, which defaults to `ops/local/config/runtime.toml`.
 Relative evaluator resource paths (for example `evaluator.kind = "gammaloop"` `state_folder`) resolve against `resources.roots` in order; absolute paths are used as-is.
 To reset local state, use `just db-reset` or run `gammaboard db delete --yes` then `gammaboard db start`.
 `local_postgres.max_connections` controls the local Postgres server connection ceiling used by `gammaboard db start`.
@@ -117,19 +117,19 @@ The checked-in local defaults also bias Postgres toward queue throughput: larger
   ```bash
   gammaboard server --server-config path/to/server/default.toml
   ```
-- The checked-in local default is [configs/server/default.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server/default.toml).
+- The checked-in local default is [ops/local/config/server.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config/server.toml).
 - If that default path is not present on disk, the CLI falls back to the built-in default server TOML.
 - `Ctrl-C` terminates a direct `gammaboard server` process immediately. Dashboard control shutdown first requests graceful node shutdown, then exits the backend so a supervising `gammaboard deploy run` can stop nginx and Postgres.
 - Required shape:
   ```toml
   api_host = "0.0.0.0"
   api_port = 4000
-  allowed_origins = ["http://localhost:3000"]
+  allowed_origins = ["http://localhost:3000", "http://localhost:8080"]
   secure_cookie = false
   allow_db_admin = true
   allow_local_node_spawn = true
-  run_templates_dir = "../runs"
-  task_templates_dir = "../tasks"
+  run_templates_dir = "../../../templates/runs"
+  task_templates_dir = "../../../templates/tasks"
 
   [auth]
   admin_password_hash = "$argon2id$..."
@@ -145,9 +145,9 @@ Deploy is owned by `gammaboard deploy run ...` plus a deploy TOML profile.
 - `gammaboard deploy` default config (`ops/local/config/deploy.toml`) also has the same built-in fallback when the default file is absent.
 
 Config split:
-- `configs/runtime/*.toml`: shared DB, tracing, and local Postgres settings for all commands
-- `configs/server/default.toml`: shared direct `gammaboard server` default profile
-- `ops/<env>/config/server.toml`: environment-specific deploy backend settings
+- `src/config_defaults/*.toml`: built-in fallback defaults for runtime/server/run-add
+- `ops/<env>/config/runtime.toml`: environment-specific runtime and local Postgres settings
+- `ops/<env>/config/server.toml`: environment-specific backend settings
 - `ops/<env>/config/deploy.toml`: environment-specific deploy orchestration (server profile, frontend HTTP exposure, static frontend serving, cleanup policy)
 
 The checked-in profiles are:
@@ -246,28 +246,27 @@ Important:
 `auth.admin_password_hash` should contain the full Argon2 encoded hash output from that command.
 
 ## Run Configs
-Run configs are TOML and are deep-merged over the built-in default run config template (mirrors `configs/runs/default.toml`).
+Run configs are TOML and are deep-merged over the built-in default run config template from `src/config_defaults/run.toml`.
 
 Add a run with:
 ```bash
-gammaboard run add configs/runs/gammaloop.toml
+gammaboard run add templates/runs/gammaloop.toml
 ```
 
 Flake-backed Python evaluator + sampler example:
 ```bash
-gammaboard run add configs/runs/python-scalar-python-sampler-flake-demo.toml
+gammaboard run add templates/runs/python-scalar-python-sampler-flake-demo.toml
 ```
 
-Curated run configs (kept intentionally small):
-- `configs/runs/default.toml`: baseline defaults merged into every run config.
-- `configs/runs/symbolica-havana-pdf-1d2d.toml`: Symbolica + Havana training + both PDF adaptation task kinds (`pdf_adaptation_image`, `pdf_adaptation_plot_line`).
-- `configs/runs/python-scalar-python-sampler-flake-demo.toml`: Python evaluator and Python sampler integration.
-- `configs/runs/gammaloop.toml`: GammaLoop TTH evaluator config, including optional `post_load_commands`.
+Curated run templates:
+- `templates/runs/symbolica-havana-pdf-1d2d.toml`: Symbolica + Havana training + both PDF adaptation task kinds (`pdf_adaptation_image`, `pdf_adaptation_plot_line`).
+- `templates/runs/python-scalar-python-sampler-flake-demo.toml`: Python evaluator and Python sampler integration.
+- `templates/runs/gammaloop.toml`: GammaLoop TTH evaluator config, including optional `post_load_commands`.
 
 Curated task bundles:
-- `configs/tasks/sample_monte_carlo_real.toml`: minimal scalar sample task with naive Monte Carlo.
-- `configs/tasks/pdf_adaptation_image.toml`: Havana training followed by PDF adaptation image rasterization.
-- `configs/tasks/train_sample.toml`: GammaLoop TTH train+sample queue with queue tuning and inference stop target (`relative_error = 0.001`, `max_samples = 1_000_000_000`).
+- `templates/tasks/sample_monte_carlo_real.toml`: minimal scalar sample task with naive Monte Carlo.
+- `templates/tasks/pdf_adaptation_image.toml`: Havana training followed by PDF adaptation image rasterization.
+- `templates/tasks/train_sample.toml`: GammaLoop TTH train+sample queue with queue tuning and inference stop target (`relative_error = 0.001`, `max_samples = 1_000_000_000`).
 
 Minimal shape:
 ```toml

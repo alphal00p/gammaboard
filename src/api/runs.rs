@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-const DEFAULT_RUN_CONFIG_TOML: &str = include_str!("../../configs/runs/default.toml");
+const DEFAULT_RUN_CONFIG_TOML: &str = include_str!("../config_defaults/run.toml");
 
 #[derive(Debug, Clone)]
 pub struct CreatedRun {
@@ -101,7 +101,7 @@ pub fn parse_run_add_config_toml(raw: &str) -> Result<RunAddConfig, ApiError> {
     parse_run_add_config_value(merged)
 }
 
-/// Loads a run-add TOML file and merges it over `configs/runs/default.toml`.
+/// Loads a run-add TOML file and merges it over the built-in default run template.
 pub fn load_run_add_config_file(path: &Path) -> Result<RunAddConfig, ApiError> {
     let mut merged = read_default_run_add_toml()?;
     let overlay = read_toml_file(path, "run-add TOML")?;

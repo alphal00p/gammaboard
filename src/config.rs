@@ -6,10 +6,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const DEFAULT_RUNTIME_CONFIG_PATH: &str = "configs/runtime/default.toml";
-pub const DEFAULT_SERVER_CONFIG_PATH: &str = "configs/server/default.toml";
+pub const DEFAULT_RUNTIME_CONFIG_PATH: &str = "ops/local/config/runtime.toml";
+pub const DEFAULT_SERVER_CONFIG_PATH: &str = "ops/local/config/server.toml";
 pub const DEFAULT_DEPLOY_CONFIG_PATH: &str = "ops/local/config/deploy.toml";
-const DEFAULT_RUNTIME_CONFIG_TOML: &str = include_str!("../configs/runtime/default.toml");
+const DEFAULT_RUNTIME_CONFIG_TOML: &str = include_str!("config_defaults/runtime.toml");
 const DEFAULT_DEPLOY_CONFIG_TOML: &str = include_str!("../ops/local/config/deploy.toml");
 
 #[derive(Debug, Clone, Deserialize)]

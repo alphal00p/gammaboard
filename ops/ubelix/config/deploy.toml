@@ -1,6 +1,6 @@
 # Foreground deploy orchestration for UBELIX control jobs.
 [api_server]
-api_server_config = "../server/server.toml"
+api_server_config = "server.toml"
 
 [static_site]
 frontend_build_dir = "../../../artifacts/dashboard-build"

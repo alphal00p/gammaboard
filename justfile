@@ -83,10 +83,10 @@ cli_example:
 
     sleep 4
 
-    {{bin}} run add "configs/runs/gammaloop.toml"
-    {{bin}} run task add "$run_gammaloop" "configs/tasks/train_sample.toml"
-    {{bin}} run add "configs/runs/python-scalar-python-sampler-flake-demo.toml"
-    {{bin}} run add "configs/runs/symbolica-havana-pdf-1d2d.toml"
+    {{bin}} run add "templates/runs/gammaloop.toml"
+    {{bin}} run task add "$run_gammaloop" "templates/tasks/train_sample.toml"
+    {{bin}} run add "templates/runs/python-scalar-python-sampler-flake-demo.toml"
+    {{bin}} run add "templates/runs/symbolica-havana-pdf-1d2d.toml"
 
     {{bin}} node assign "w-1" sampler-aggregator "$run_gammaloop"
     {{bin}} node assign "w-2" evaluator "$run_gammaloop"

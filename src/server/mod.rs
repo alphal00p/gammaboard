@@ -56,7 +56,7 @@ use crate::config::{
     read_toml_with_default_fallback,
 };
 
-const DEFAULT_SERVER_CONFIG_TOML: &str = include_str!("../../configs/server/default.toml");
+const DEFAULT_SERVER_CONFIG_TOML: &str = include_str!("../config_defaults/server.toml");
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerConfig {

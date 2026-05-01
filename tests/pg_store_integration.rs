@@ -13,7 +13,7 @@ fn unique_id(prefix: &str) -> String {
 }
 
 async fn test_store() -> Option<PgStore> {
-    let db_url = RuntimeConfig::load("configs/runtime/default.toml")
+    let db_url = RuntimeConfig::load("ops/local/config/runtime.toml")
         .ok()?
         .database
         .url;

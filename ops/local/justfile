@@ -1,7 +1,7 @@
 bin := "./target/dev-optim/gammaboard"
 release_bin := "./target/release/gammaboard"
 deploy_cfg := "ops/local/config/deploy.toml"
-runtime_cfg := "configs/runtime/default.toml"
+runtime_cfg := "ops/local/config/runtime.toml"
 
 deploy mode="dev":
     #!/usr/bin/env bash

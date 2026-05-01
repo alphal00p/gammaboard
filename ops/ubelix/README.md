@@ -7,8 +7,8 @@ Current model:
 - access the frontend through one SSH tunnel
 
 Execution context:
-- run `python ops/ubelix.py up` on an UBELIX login node
-- `python ops/ubelix.py up` prints the SSH tunnel command to run on your local machine
+- run `python ubelix.py up` on an UBELIX login node
+- `python ubelix.py up` prints the SSH tunnel command to run on your local machine
 - run `just --justfile ops/ubelix/justfile sync-ops` and `sync-dashboard` on your local machine
 
 ## Layout
@@ -18,12 +18,12 @@ Repo source lives under `ops/ubelix/` and mirrors this server-side layout direct
 ```text
 <WORKSPACE_ROOT>/
   ops/
-    ubelix.py
     build/
     config/
     slurm/
+  ubelix.py
   justfile
-  README-ubelix.md
+  README.md
 ```
 
 Generated data typically lives here:
@@ -55,18 +55,17 @@ Generated data typically lives here:
 
 ## Important Files
 
-- `ops/build/gammaloop.sbatch`
-- `ops/build/gammaboard.sbatch`
-- `ops/slurm/smoke.sbatch`
-- `ops/slurm/hello.sbatch`
-- `ops/slurm/control.sbatch`
-- `ops/slurm/worker.sbatch`
-- `ops/ubelix.py`
-- `ops/config/runtime/local_postgres.template.toml`
-- `ops/config/runtime/external_db_control.template.toml`
-- `ops/config/runtime/external_db_worker.template.toml`
-- `ops/config/server/server.toml`
-- `ops/config/deploy/deploy.toml`
+- `build/gammaloop.sbatch`
+- `build/gammaboard.sbatch`
+- `slurm/smoke.sbatch`
+- `slurm/hello.sbatch`
+- `slurm/control.sbatch`
+- `slurm/worker.sbatch`
+- `ubelix.py`
+- `config/runtime-local_postgres.template.toml`
+- `config/runtime-external_db.template.toml`
+- `config/server.toml`
+- `config/deploy.toml`
 
 Notes:
 - UBELIX runtime templates set `resources.roots = ["${WORKSPACE_ROOT}/states"]`.
@@ -162,19 +161,19 @@ ls /storage/research/itp_localunitaritydata/artifacts/dashboard-build/index.html
 Submit:
 
 ```bash
-python ops/ubelix.py up
+python ubelix.py up
 ```
 
 `up` waits until Slurm assigned a node and nginx answers on the frontend port, then prints `frontend_ready=true`. To only submit/reuse the job and print the tunnel hint immediately:
 
 ```bash
-python ops/ubelix.py up --no-wait
+python ubelix.py up --no-wait
 ```
 
 To also copy the printed tunnel command to your clipboard when the terminal supports OSC 52:
 
 ```bash
-python ops/ubelix.py up --copy
+python ubelix.py up --copy
 ```
 
 This job starts:
@@ -191,8 +190,8 @@ ssh -N -L 8080:<control-node>:8080 <ubelix-user>@submit03.unibe.ch
 The printed target defaults to `${USER}@submit03.unibe.ch` from the UBELIX login node. Override it when needed:
 
 ```bash
-SSH_HOST=submit02.unibe.ch python ops/ubelix.py up
-SSH_TARGET=<user>@Ubelix python ops/ubelix.py up
+SSH_HOST=submit02.unibe.ch python ubelix.py up
+SSH_TARGET=<user>@Ubelix python ubelix.py up
 ```
 
 Then open:
@@ -219,13 +218,13 @@ For multi-job mode:
 Submit separate worker jobs:
 
 ```bash
-python ops/ubelix.py submit-workers --count 2 --prefix w
+python ubelix.py submit-workers --count 2 --prefix w
 ```
 
 Resolve dashboard node-start requests automatically:
 
 ```bash
-python ops/ubelix.py watch-requests
+python ubelix.py watch-requests
 ```
 
 The dashboard writes grouped startup requests into Postgres. `watch-requests` claims pending external requests, submits one Slurm worker job per requested node, and records submitted job ids back on the request row.
@@ -233,19 +232,19 @@ The dashboard writes grouped startup requests into Postgres. `watch-requests` cl
 One-shot mode for debugging:
 
 ```bash
-python ops/ubelix.py watch-requests --once
+python ubelix.py watch-requests --once
 ```
 
 If you run the control launcher in blocking mode, it also resolves requests while watching:
 
 ```bash
-python ops/ubelix.py up --watch
+python ubelix.py up --watch
 ```
 
 Stop a deployment:
 
 ```bash
-python ops/ubelix.py down
+python ubelix.py down
 ```
 
 `down` requests `POST /api/nodes/stop-all`, waits for worker jobs to exit, then uses `scancel` for remaining workers and finally the control job.
@@ -254,8 +253,8 @@ python ops/ubelix.py down
 
 Current UBELIX flow is intentionally simple:
 - `WORKSPACE_ROOT` is the main override
-- Slurm job behavior is mostly hardcoded in `ops/slurm/*.sbatch`
-- `ops/ubelix.py` is the main operator CLI
+- Slurm job behavior is mostly hardcoded in `slurm/*.sbatch`
+- `ubelix.py` is the main operator CLI
 - `ops/ubelix/justfile` is only for syncing and image pruning
 - PostgreSQL logs go to `${WORKSPACE_ROOT}/logs/postgres`
 - Slurm logs go to `${WORKSPACE_ROOT}/logs/slurm/{build,control,workers}`
@@ -269,7 +268,7 @@ Why:
 - clean worker scaling via Slurm
 - persistent DB data under workspace
 
-The frontend node-start action creates DB-backed launch requests on UBELIX. `python ops/ubelix.py watch-requests` resolves those requests into Slurm jobs; the control server does not spawn local child processes there.
+The frontend node-start action creates DB-backed launch requests on UBELIX. `python ubelix.py watch-requests` resolves those requests into Slurm jobs; the control server does not spawn local child processes there.
 
 ## Notes
 

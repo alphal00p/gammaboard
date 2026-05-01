@@ -1,0 +1,32 @@
+[database]
+url = "${GAMMABOARD_DATABASE_URL}"
+
+[tracing]
+env_filter = "info"
+
+[resources]
+roots = [
+  "${WORKSPACE_ROOT}/states",
+]
+
+[local_postgres]
+enabled = false
+
+[evaluator_runner_params]
+db_pool_size = 8
+
+[sampler_aggregator_runner_params]
+db_pool_size = 8
+frontend_sync_interval_ms = 2000
+
+[sampler_aggregator_runner_params.queue]
+max_queue_size = 512
+max_batches_per_tick = 64
+queue_buffer = 2.0
+pending_refill_low_ratio = 0.75
+pending_refill_high_ratio = 1.5
+max_concurrent_insert_tasks = 32
+target_batch_eval_ms = 750
+max_batch_size = 10000
+batch_size_deadband_ratio = 0.2
+batch_size_cooldown_ticks = 4
