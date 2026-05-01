@@ -11,7 +11,7 @@ sync-ops host="ubelix" remote_root="/storage/research/itp_localunitaritydata":
     scp ops/ubelix/justfile "{{host}}:{{remote_root}}/justfile"
     scp ops/ubelix/README.md "{{host}}:{{remote_root}}/README.md"
 
-sync-dashboard host="Ubelix" remote_root="/storage/research/itp_localunitaritydata":
+sync-dashboard host="ubelix" remote_root="/storage/research/itp_localunitaritydata":
     #!/usr/bin/env bash
     set -euo pipefail
     REPO_ROOT="$(git rev-parse --show-toplevel)"

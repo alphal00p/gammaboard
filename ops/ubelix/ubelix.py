@@ -18,8 +18,10 @@ from typing import Callable
 WORKSPACE_ROOT = "/storage/research/itp_localunitaritydata"
 JOB_PREFIX = "gb"
 CONTROL_JOB_NAME = f"{JOB_PREFIX}-ctl"
+SINGLE_NODE_JOB_NAME = f"{JOB_PREFIX}-single"
 WORKER_JOB_NAME = f"{JOB_PREFIX}-wrk"
 CONTROL_SBATCH = f"{WORKSPACE_ROOT}/ops/slurm/control.sbatch"
+SINGLE_NODE_SBATCH = f"{WORKSPACE_ROOT}/ops/slurm/single_node_deploy.sbatch"
 WORKER_SBATCH = f"{WORKSPACE_ROOT}/ops/slurm/worker.sbatch"
 GB_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaboard.sbatch"
 GL_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaloop.sbatch"
@@ -98,7 +100,7 @@ def require_single_control() -> Job:
     return jobs[0]
 
 
-def wait_for_control_node(job_id: str, timeout: int = 180, *, verbose: bool = False) -> str:
+def wait_for_job_node(job_id: str, timeout: int = 180, *, verbose: bool = False) -> str:
     deadline = time.monotonic() + timeout
     next_status = 0.0
     while time.monotonic() < deadline:
@@ -111,14 +113,14 @@ def wait_for_control_node(job_id: str, timeout: int = 180, *, verbose: bool = Fa
             print(f"waiting for Slurm node assignment for job {job_id}")
             next_status = now + 10
         time.sleep(2)
-    raise SystemExit(f"timed out waiting for control node assignment for job {job_id}")
+    raise SystemExit(f"timed out waiting for Slurm node assignment for job {job_id}")
 
 
-def slurm_log_paths(job_id: str) -> tuple[str, str]:
+def slurm_log_paths(job_name: str, job_id: str) -> tuple[str, str]:
     base = os.path.join(WORKSPACE_ROOT, "logs/slurm/control")
     return (
-        os.path.join(base, f"{CONTROL_JOB_NAME}-{job_id}.out"),
-        os.path.join(base, f"{CONTROL_JOB_NAME}-{job_id}.err"),
+        os.path.join(base, f"{job_name}-{job_id}.out"),
+        os.path.join(base, f"{job_name}-{job_id}.err"),
     )
 
 
@@ -129,8 +131,8 @@ def tail_file(path: str, lines: int = 80) -> str:
     return result.stdout.rstrip() or f"{path}: empty"
 
 
-def print_control_log_tail(job_id: str) -> None:
-    out_path, err_path = slurm_log_paths(job_id)
+def print_job_log_tail(job: Job) -> None:
+    out_path, err_path = slurm_log_paths(job.name, job.id)
     print(f"--- {out_path} ---", file=sys.stderr)
     print(tail_file(out_path), file=sys.stderr)
     print(f"--- {err_path} ---", file=sys.stderr)
@@ -147,7 +149,7 @@ def wait_for_http(
     timeout: int = 180,
     *,
     verbose: bool = False,
-    control_job_id: str | None = None,
+    job: Job | None = None,
     on_status: Callable[[str], None] | None = None,
 ) -> None:
     deadline = time.monotonic() + timeout
@@ -155,9 +157,9 @@ def wait_for_http(
     last_error = ""
     opener = http_opener_without_proxies()
     while time.monotonic() < deadline:
-        if control_job_id is not None and not job_is_active(control_job_id):
-            print_control_log_tail(control_job_id)
-            raise SystemExit(f"control job {control_job_id} exited before frontend became ready")
+        if job is not None and not job_is_active(job.id):
+            print_job_log_tail(job)
+            raise SystemExit(f"{job.name} job {job.id} exited before frontend became ready")
         try:
             with opener.open(url, timeout=3) as response:
                 status = getattr(response, "status", None) or response.getcode()
@@ -169,12 +171,12 @@ def wait_for_http(
             now = time.monotonic()
             if verbose and now >= next_status:
                 print(f"waiting for frontend at {url}; last_error={last_error}")
-                if control_job_id is not None:
-                    print_control_log_tail(control_job_id)
+                if job is not None:
+                    print_job_log_tail(job)
                 next_status = now + 10
             time.sleep(2)
-    if control_job_id is not None:
-        print_control_log_tail(control_job_id)
+    if job is not None:
+        print_job_log_tail(job)
     raise SystemExit(f"timed out waiting for {url}; last_error={last_error}")
 
 
@@ -247,14 +249,14 @@ def parse_hms(value: str) -> str:
     return value
 
 
-def submit_control(time_limit: str) -> Job:
-    jobs = active_jobs(name=CONTROL_JOB_NAME)
+def submit_singleton_job(job_name: str, sbatch_path: str, time_limit: str) -> Job:
+    jobs = active_jobs(name=job_name)
     if len(jobs) == 1:
         return jobs[0]
     if len(jobs) > 1:
         for job in jobs:
             print(f"{job.id}\t{job.name}\t{job.state}\t{job.node}", file=sys.stderr)
-        raise SystemExit(f"multiple active control jobs named {CONTROL_JOB_NAME}")
+        raise SystemExit(f"multiple active jobs named {job_name}")
 
     ensure_dirs()
     result = run(
@@ -263,14 +265,22 @@ def submit_control(time_limit: str) -> Job:
             "--chdir",
             WORKSPACE_ROOT,
             "--job-name",
-            CONTROL_JOB_NAME,
+            job_name,
             "--time",
             time_limit,
-            CONTROL_SBATCH,
+            sbatch_path,
         ]
     )
     job_id = parse_job_id(result.stdout)
-    return Job(id=job_id, name=CONTROL_JOB_NAME, state="SUBMITTED", node="")
+    return Job(id=job_id, name=job_name, state="SUBMITTED", node="")
+
+
+def submit_control(time_limit: str) -> Job:
+    return submit_singleton_job(CONTROL_JOB_NAME, CONTROL_SBATCH, time_limit)
+
+
+def submit_single_node(time_limit: str) -> Job:
+    return submit_singleton_job(SINGLE_NODE_JOB_NAME, SINGLE_NODE_SBATCH, time_limit)
 
 
 def sql_literal(value: str) -> str:
@@ -422,7 +432,7 @@ def submit_worker(
     return parse_job_id(result.stdout)
 
 
-def resolve_one_launch_request(control_node: str) -> bool:
+def resolve_one_launch_request(control: Job, control_node: str) -> bool:
     request = claim_launch_request(control_node)
     if request is None:
         return False
@@ -438,7 +448,6 @@ def resolve_one_launch_request(control_node: str) -> bool:
         if not node_names:
             raise RuntimeError("launch request requested zero workers")
         for node_name in node_names:
-            control = require_single_control()
             job_id = submit_worker(
                 node_name,
                 control_node,
@@ -469,20 +478,20 @@ def resolve_one_launch_request(control_node: str) -> bool:
     return True
 
 
-def resolve_launch_requests(control_node: str, *, max_requests: int | None = None) -> int:
+def resolve_launch_requests(control: Job, control_node: str, *, max_requests: int | None = None) -> int:
     resolved = 0
     while max_requests is None or resolved < max_requests:
-        if not resolve_one_launch_request(control_node):
+        if not resolve_one_launch_request(control, control_node):
             break
         resolved += 1
     return resolved
 
 
-def watch_launch_requests(args: argparse.Namespace, control_node: str) -> None:
+def watch_launch_requests(args: argparse.Namespace, control: Job, control_node: str) -> None:
     print(f"watching launch requests on {control_node}; Ctrl-C stops only this launcher")
     try:
         while True:
-            resolved = resolve_launch_requests(control_node)
+            resolved = resolve_launch_requests(control, control_node)
             if args.once:
                 print(f"resolved_requests={resolved}")
                 return
@@ -492,9 +501,9 @@ def watch_launch_requests(args: argparse.Namespace, control_node: str) -> None:
 
 
 def command_up(args: argparse.Namespace) -> None:
-    control = submit_control(args.time)
-    print(f"control_job_id={control.id}")
-    node = wait_for_control_node(control.id, args.startup_timeout, verbose=True)
+    job = submit_single_node(args.time) if args.single_node else submit_control(args.time)
+    print(f"{'single_node_job_id' if args.single_node else 'control_job_id'}={job.id}")
+    node = wait_for_job_node(job.id, args.startup_timeout, verbose=True)
     print(f"control_node={node}")
     tunnel = tunnel_command(node, args.local_port)
     print(f"tunnel={tunnel}")
@@ -504,15 +513,16 @@ def command_up(args: argparse.Namespace) -> None:
         f"http://{node}:{FRONTEND_PORT}",
         args.startup_timeout,
         verbose=True,
-        control_job_id=control.id,
+        job=job,
         on_status=print,
     )
     print("frontend_ready=true")
     if args.watch:
-        print("watching control job; Ctrl-C stops only this launcher")
+        print(f"watching {job.name} job; Ctrl-C stops only this launcher")
         try:
-            while active_jobs(name=CONTROL_JOB_NAME):
-                resolve_launch_requests(node)
+            while job_is_active(job.id):
+                if not args.single_node:
+                    resolve_launch_requests(job, node)
                 command_status(argparse.Namespace())
                 time.sleep(args.poll_seconds)
         except KeyboardInterrupt:
@@ -520,9 +530,18 @@ def command_up(args: argparse.Namespace) -> None:
 
 
 def command_down(args: argparse.Namespace) -> None:
-    control = require_single_control()
-    node = wait_for_control_node(control.id, args.startup_timeout)
-    print(f"control_job_id={control.id}")
+    deploy_jobs = active_jobs(name=CONTROL_JOB_NAME) + active_jobs(name=SINGLE_NODE_JOB_NAME)
+    if not deploy_jobs:
+        raise SystemExit(f"no active {CONTROL_JOB_NAME} or {SINGLE_NODE_JOB_NAME} job")
+    if len(deploy_jobs) > 1:
+        for job in deploy_jobs:
+            print(f"{job.id}\t{job.name}\t{job.state}\t{job.node}", file=sys.stderr)
+        raise SystemExit("multiple active deploy jobs; cancel the unwanted job explicitly or retry when only one remains")
+
+    job = deploy_jobs[0]
+    node = wait_for_job_node(job.id, args.startup_timeout)
+    print(f"job_id={job.id}")
+    print(f"job_name={job.name}")
     print(f"control_node={node}")
 
     try:
@@ -532,32 +551,39 @@ def command_down(args: argparse.Namespace) -> None:
     except Exception as err:
         print(f"warning: API node stop failed: {err}", file=sys.stderr)
 
-    deadline = time.monotonic() + args.worker_timeout
-    while time.monotonic() < deadline:
-        workers = active_jobs(name=WORKER_JOB_NAME)
-        if not workers:
-            break
-        print(f"waiting for workers to exit: {len(workers)} active")
-        time.sleep(5)
+    if job.name == CONTROL_JOB_NAME:
+        deadline = time.monotonic() + args.worker_timeout
+        while time.monotonic() < deadline:
+            workers = active_jobs(name=WORKER_JOB_NAME)
+            if not workers:
+                break
+            print(f"waiting for workers to exit: {len(workers)} active")
+            time.sleep(5)
 
-    workers = active_jobs(name=WORKER_JOB_NAME)
-    if workers:
-        print(f"canceling remaining workers: {', '.join(job.id for job in workers)}")
-        run(["scancel", *[job.id for job in workers]], check=False)
+        workers = active_jobs(name=WORKER_JOB_NAME)
+        if workers:
+            print(f"canceling remaining workers: {', '.join(worker.id for worker in workers)}")
+            run(["scancel", *[worker.id for worker in workers]], check=False)
 
     time.sleep(args.control_grace_seconds)
-    print(f"canceling control job {control.id}")
-    run(["scancel", control.id], check=False)
+    print(f"canceling {job.name} job {job.id}")
+    run(["scancel", job.id], check=False)
 
 
 def command_status(_: argparse.Namespace) -> None:
     control_jobs = active_jobs(name=CONTROL_JOB_NAME)
+    single_node_jobs = active_jobs(name=SINGLE_NODE_JOB_NAME)
     worker_jobs = active_jobs(name=WORKER_JOB_NAME)
     if control_jobs:
         for job in control_jobs:
             print(f"control\t{job.id}\t{job.state}\t{job.node}")
     else:
         print("control\t-\tnot-running\t-")
+    if single_node_jobs:
+        for job in single_node_jobs:
+            print(f"single-node\t{job.id}\t{job.state}\t{job.node}")
+    else:
+        print("single-node\t-\tnot-running\t-")
     print(f"workers\t{len(worker_jobs)}")
     for job in worker_jobs:
         print(f"worker\t{job.id}\t{job.state}\t{job.node}")
@@ -565,7 +591,7 @@ def command_status(_: argparse.Namespace) -> None:
 
 def command_submit_workers(args: argparse.Namespace) -> None:
     control = require_single_control()
-    control_node = wait_for_control_node(control.id)
+    control_node = wait_for_job_node(control.id)
     ensure_dirs()
     for i in range(1, args.count + 1):
         node_name = f"{args.prefix}-{i}"
@@ -577,8 +603,8 @@ def command_submit_workers(args: argparse.Namespace) -> None:
 
 def command_watch_requests(args: argparse.Namespace) -> None:
     control = require_single_control()
-    control_node = wait_for_control_node(control.id, args.startup_timeout)
-    watch_launch_requests(args, control_node)
+    control_node = wait_for_job_node(control.id, args.startup_timeout)
+    watch_launch_requests(args, control, control_node)
 
 
 def command_build(args: argparse.Namespace) -> None:
@@ -597,9 +623,10 @@ def parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="command", required=True)
 
-    up = sub.add_parser("up", help="login node: submit or reuse the control/UI job")
-    up.add_argument("--watch", action="store_true", help="block and print status until control exits")
-    up.add_argument("--time", type=parse_hms, default=DEFAULT_CONTROL_TIME, help="Slurm walltime for a newly submitted control job (HH:MM:SS)")
+    up = sub.add_parser("up", help="login node: submit or reuse a deploy job")
+    up.add_argument("--watch", action="store_true", help="block and print status until the deploy job exits")
+    up.add_argument("--time", type=parse_hms, default=DEFAULT_CONTROL_TIME, help="Slurm walltime for a newly submitted deploy job (HH:MM:SS)")
+    up.add_argument("--single-node", action="store_true", help="run control and local workers in one Slurm allocation")
     up.add_argument("--local-port", type=int, default=8080)
     up.add_argument("--startup-timeout", type=int, default=180)
     up.add_argument("--poll-seconds", type=int, default=15)
@@ -612,7 +639,7 @@ def parser() -> argparse.ArgumentParser:
     down.add_argument("--control-grace-seconds", type=int, default=5)
     down.set_defaults(func=command_down)
 
-    status = sub.add_parser("status", help="login node: show active control and worker jobs")
+    status = sub.add_parser("status", help="login node: show active deploy and worker jobs")
     status.set_defaults(func=command_status)
 
     workers = sub.add_parser("submit-workers", help="login node: submit N separate worker jobs")

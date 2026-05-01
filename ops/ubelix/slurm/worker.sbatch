@@ -36,7 +36,7 @@ mkdir -p "${WORKSPACE_ROOT}/logs/slurm/workers"
 RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
 mkdir -p "${RUNTIME_DIR}"
 RUNTIME_CONFIG="${RUNTIME_DIR}/runtime-${SLURM_JOB_ID}-${NODE_NAME}.toml"
-RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime-worker.template.toml"
+RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime.template.toml"
 
 worker_pid=""
 monitor_pid=""

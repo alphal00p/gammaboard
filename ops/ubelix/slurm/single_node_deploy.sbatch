@@ -27,7 +27,7 @@ export APPTAINERENV_NO_SYMBOLICA_OEM_LICENSE="${NO_SYMBOLICA_OEM_LICENSE}"
 
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
 IMAGE_PATH="${WORKSPACE_ROOT}/images/gammaboard/gammaboard-latest.sif"
-RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime-control.template.toml"
+RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime.template.toml"
 RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
 SLURM_LOG_DIR="${WORKSPACE_ROOT}/logs/slurm/control"
 RUNTIME_CONFIG="${RUNTIME_DIR}/runtime-${SLURM_JOB_ID}-single-node.toml"
@@ -61,15 +61,16 @@ if ! command -v envsubst >/dev/null 2>&1; then
 fi
 
 LOCAL_TMP="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
-export WORKSPACE_ROOT LOCAL_TMP DEPLOY_NAME DB_PORT
-envsubst '${WORKSPACE_ROOT} ${LOCAL_TMP} ${DEPLOY_NAME} ${DB_PORT}' \
+DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:${DB_PORT}/gammaboard_db"
+export WORKSPACE_ROOT LOCAL_TMP DEPLOY_NAME DB_PORT DATABASE_URL
+envsubst '${WORKSPACE_ROOT} ${LOCAL_TMP} ${DEPLOY_NAME} ${DB_PORT} ${DATABASE_URL}' \
   <"${RUNTIME_TEMPLATE}" >"${RUNTIME_CONFIG}"
 
 echo "node: ${HOSTNAME}"
 echo "workspace_root: ${WORKSPACE_ROOT}"
 echo "runtime_config: ${RUNTIME_CONFIG}"
 echo "frontend_url: http://${HOSTNAME}:${FRONTEND_PORT}"
-echo "tunnel_hint_after_frontend_ready: ssh -N -L ${FRONTEND_PORT}:${HOSTNAME}:${FRONTEND_PORT} ${USER}@Ubelix"
+echo "tunnel_hint_after_frontend_ready: ssh -N -L ${FRONTEND_PORT}:${HOSTNAME}:${FRONTEND_PORT} ${USER}@ubelix"
 echo "local_node_spawn: true"
 
 exec env -u PGTZ -u PGOPTIONS \

@@ -62,8 +62,7 @@ Generated data typically lives here:
 - `slurm/control.sbatch`
 - `slurm/worker.sbatch`
 - `ubelix.py`
-- `config/runtime-control.template.toml`
-- `config/runtime-worker.template.toml`
+- `config/runtime.template.toml`
 - `config/server.toml`
 - `config/server-single-node.toml`
 - `config/deploy.toml`
@@ -72,7 +71,7 @@ Generated data typically lives here:
 Notes:
 - UBELIX runtime templates set `resources.roots = ["${WORKSPACE_ROOT}/states"]`.
 - The UBELIX server profile sets `allow_local_node_spawn = false`.
-- Worker runtime TOML is rendered per job via `envsubst`.
+- Runtime TOML is rendered per job via `envsubst`; control jobs set a loopback database URL, workers receive the control-node database URL from `ubelix.py`.
 - Control and single-node deploy jobs use foreground `exec apptainer ... gammaboard deploy run`, so `gammaboard` receives Slurm termination directly. Worker jobs still supervise a sidecar control-job watcher and trap `SIGTERM`/`SIGINT` for graceful cleanup.
 
 ## Sync
@@ -147,11 +146,16 @@ GAMMABOARD_BIND_PATHS=/absolute/path/to/itp_localunitaritydata
 Run this on a UBELIX login node:
 
 ```bash
-mkdir -p logs/slurm/control logs/slurm/workers logs/postgres
-sbatch ops/slurm/single_node_deploy.sbatch
+python ubelix.py up --single-node
 ```
 
 This starts the same foreground deploy stack as the normal control job, but uses `config/server-single-node.toml`, where `allow_local_node_spawn = true`. Dashboard node-start actions spawn local worker processes inside the same Slurm allocation instead of creating external worker requests.
+
+Direct Slurm submission also works when debugging:
+
+```bash
+sbatch ops/slurm/single_node_deploy.sbatch
+```
 
 ## Control/UI Job
 
@@ -198,7 +202,7 @@ The printed target defaults to `${USER}@submit03.unibe.ch` from the UBELIX login
 
 ```bash
 SSH_HOST=submit02.unibe.ch python ubelix.py up
-SSH_TARGET=<user>@Ubelix python ubelix.py up
+SSH_TARGET=<user>@ubelix python ubelix.py up
 ```
 
 Then open:
@@ -243,7 +247,7 @@ One-shot mode for debugging:
 python ubelix.py watch-requests --once
 ```
 
-If you run the control launcher in blocking mode, it also resolves requests while watching:
+If you run the multi-job control launcher in blocking mode, it also resolves requests while watching:
 
 ```bash
 python ubelix.py up --watch
@@ -255,7 +259,7 @@ Stop a deployment:
 python ubelix.py down
 ```
 
-`down` requests `POST /api/nodes/stop-all`, waits for worker jobs to exit, then uses `scancel` for remaining workers and finally the control job.
+`down` requests `POST /api/nodes/stop-all`, waits for worker jobs to exit in multi-job mode, then uses `scancel` for remaining workers and finally the deploy job. It handles both `gb-ctl` and `gb-single`, but expects only one active deploy job.
 
 If a control job exits unexpectedly, its sbatch cleanup also tries to stop the local Postgres daemon before stopping the Apptainer instance. Worker jobs submitted by `ubelix.py` receive the control job id and terminate themselves when that job is no longer active.
 
