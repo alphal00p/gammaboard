@@ -34,6 +34,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - If announce fails for 30 seconds, the node shuts down.
 - `node run` reconcile polling should use a fast-start backoff: start at `50ms`, multiply by `2.0`, cap at `2s`, and reset on meaningful role/task changes.
 - `node run` reconcile backoff should add bounded jitter around the exponential sleep to reduce synchronized retries between workers.
+- Expired node leases must not keep desired/current assignments alive. Assignment writes and replacement announces should opportunistically clear expired node assignments so stale sampler rows cannot block restart after an ungraceful control/database shutdown.
 - Role tick pacing may differ by worker type. Keep evaluator polling conservative, but let sampler-aggregator ticks run more frequently so queue refill is not artificially bursty.
 - `node run` should begin graceful shutdown immediately on `Ctrl-C` and `SIGTERM`.
 - Graceful shutdown should expire the lease immediately so the same node name can be reused at once.

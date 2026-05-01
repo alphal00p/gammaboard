@@ -58,6 +58,30 @@ fn require_live_uuid(result: PgQueryResult, node_uuid: &str) -> Result<(), sqlx:
     }
 }
 
+async fn clear_expired_assignments(pool: &PgPool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        UPDATE nodes
+        SET
+            desired_run_id = NULL,
+            desired_role = NULL,
+            active_run_id = NULL,
+            active_role = NULL,
+            updated_at = now()
+        WHERE lease_expires_at <= now()
+          AND (
+            desired_run_id IS NOT NULL
+            OR desired_role IS NOT NULL
+            OR active_run_id IS NOT NULL
+            OR active_role IS NOT NULL
+          )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 fn desired_assignment_raw(
     (node_name, role, run_id): (String, String, i32),
 ) -> DesiredAssignmentRaw {
@@ -110,6 +134,7 @@ pub(crate) async fn upsert_desired_assignment(
     role: WorkerRole,
     run_id: i32,
 ) -> Result<bool, sqlx::Error> {
+    clear_expired_assignments(pool).await?;
     let result = sqlx::query(
         r#"
         UPDATE nodes
@@ -155,6 +180,16 @@ pub(crate) async fn announce_node(
             lease_expires_at = EXCLUDED.lease_expires_at,
             last_seen = EXCLUDED.last_seen,
             updated_at = EXCLUDED.updated_at,
+            desired_run_id = CASE
+                WHEN nodes.uuid = EXCLUDED.uuid THEN nodes.desired_run_id
+                WHEN nodes.lease_expires_at <= now() THEN NULL
+                ELSE nodes.desired_run_id
+            END,
+            desired_role = CASE
+                WHEN nodes.uuid = EXCLUDED.uuid THEN nodes.desired_role
+                WHEN nodes.lease_expires_at <= now() THEN NULL
+                ELSE nodes.desired_role
+            END,
             active_run_id = CASE
                 WHEN nodes.uuid = EXCLUDED.uuid THEN nodes.active_run_id
                 WHEN nodes.lease_expires_at <= now() THEN NULL
@@ -455,6 +490,7 @@ pub(crate) async fn set_current_assignment(
     role: WorkerRole,
     run_id: i32,
 ) -> Result<(), sqlx::Error> {
+    clear_expired_assignments(pool).await?;
     let result = sqlx::query(
         r#"
         UPDATE nodes
@@ -463,6 +499,7 @@ pub(crate) async fn set_current_assignment(
             active_role = $3,
             updated_at = now()
         WHERE uuid = $1
+          AND lease_expires_at > now()
         "#,
     )
     .bind(node_uuid)
@@ -483,6 +520,7 @@ pub(crate) async fn clear_current_assignment(
         SET
             {set_clause}
         WHERE uuid = $1
+          AND lease_expires_at > now()
         "#,
         set_clause = CLEAR_CURRENT_ASSIGNMENT_SET
     ))
@@ -502,13 +540,17 @@ pub(crate) async fn request_node_shutdown(
             name,
             uuid,
             lease_expires_at,
+            desired_run_id,
+            desired_role,
             shutdown_requested_at,
             updated_at
         )
         VALUES
-            ($1, '', to_timestamp(0), now(), now())
+            ($1, '', to_timestamp(0), NULL, NULL, now(), now())
         ON CONFLICT (name) DO UPDATE
         SET
+            desired_run_id = NULL,
+            desired_role = NULL,
             shutdown_requested_at = now(),
             updated_at = now()
         "#,
@@ -525,6 +567,8 @@ pub(crate) async fn request_all_nodes_shutdown(pool: &PgPool) -> Result<u64, sql
         r#"
         UPDATE nodes
         SET
+            desired_run_id = NULL,
+            desired_role = NULL,
             shutdown_requested_at = now(),
             updated_at = now()
         WHERE lease_expires_at > now()

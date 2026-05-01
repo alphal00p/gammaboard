@@ -373,6 +373,83 @@ async fn sampler_aggregator_desired_assignment_is_unique_per_run() {
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
+async fn expired_sampler_assignment_does_not_block_new_sampler_assignment() {
+    let Some(store) = test_store().await else {
+        return;
+    };
+    let stale_node = unique_id("stale-sampler");
+    let stale_uuid = unique_id("stale-sampler-uuid");
+    let fresh_node = unique_id("fresh-sampler");
+    let fresh_uuid = unique_id("fresh-sampler-uuid");
+
+    let run_id: i32 = sqlx::query_scalar(
+        r#"
+        INSERT INTO runs (
+            name,
+            integration_params,
+            point_spec
+        ) VALUES (
+            'stale-sampler-assignment-run',
+            '{}'::jsonb,
+            '{"continuous_dims":0,"discrete_dims":0}'::jsonb
+        )
+        RETURNING id
+        "#,
+    )
+    .fetch_one(store.pool())
+    .await
+    .expect("insert run");
+
+    store
+        .announce_node(&stale_node, &stale_uuid)
+        .await
+        .expect("announce stale node");
+    store
+        .upsert_desired_assignment(&stale_node, WorkerRole::SamplerAggregator, run_id)
+        .await
+        .expect("assign stale sampler");
+
+    // Simulate an ungraceful control/database shutdown: the row's lease expires
+    // naturally, but the node process never gets to call expire_node_lease().
+    sqlx::query(
+        r#"
+        UPDATE nodes
+        SET lease_expires_at = now() - interval '1 second'
+        WHERE name = $1
+        "#,
+    )
+    .bind(&stale_node)
+    .execute(store.pool())
+    .await
+    .expect("expire stale node without cleanup");
+
+    store
+        .announce_node(&fresh_node, &fresh_uuid)
+        .await
+        .expect("announce fresh node");
+    store
+        .upsert_desired_assignment(&fresh_node, WorkerRole::SamplerAggregator, run_id)
+        .await
+        .expect("fresh sampler assignment should reap stale sampler assignment first");
+
+    let stale_assignment = store
+        .get_desired_assignment(&stale_node)
+        .await
+        .expect("load stale desired assignment");
+    assert!(
+        stale_assignment.is_none(),
+        "stale expired sampler assignment should be cleared"
+    );
+
+    sqlx::query("DELETE FROM runs WHERE id = $1")
+        .bind(run_id)
+        .execute(store.pool())
+        .await
+        .expect("cleanup run");
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
 async fn assigning_new_role_replaces_existing_desired_assignment_for_node() {
     let Some(store) = test_store().await else {
         return;
@@ -584,6 +661,160 @@ async fn expiring_node_lease_clears_desired_assignment() {
             .is_none(),
         "desired assignment should be cleared on lease expiry"
     );
+
+    sqlx::query("DELETE FROM runs WHERE id = $1")
+        .bind(run_id)
+        .execute(store.pool())
+        .await
+        .expect("cleanup run");
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn shutdown_request_clears_desired_assignment_but_keeps_current_assignment() {
+    let Some(store) = test_store().await else {
+        return;
+    };
+    let node_name = unique_id("shutdown-node");
+    let node_uuid = unique_id("shutdown-uuid");
+
+    let run_id: i32 = sqlx::query_scalar(
+        r#"
+        INSERT INTO runs (
+            name,
+            integration_params,
+            point_spec
+        ) VALUES (
+            'shutdown-clears-desired-run',
+            '{}'::jsonb,
+            '{"continuous_dims":0,"discrete_dims":0}'::jsonb
+        )
+        RETURNING id
+        "#,
+    )
+    .fetch_one(store.pool())
+    .await
+    .expect("insert run");
+
+    store
+        .announce_node(&node_name, &node_uuid)
+        .await
+        .expect("announce node");
+    store
+        .upsert_desired_assignment(&node_name, WorkerRole::SamplerAggregator, run_id)
+        .await
+        .expect("assign desired sampler role");
+    store
+        .set_current_assignment(&node_uuid, WorkerRole::SamplerAggregator, run_id)
+        .await
+        .expect("set current sampler role");
+
+    store
+        .request_node_shutdown(&node_name)
+        .await
+        .expect("request node shutdown");
+
+    let row: (
+        Option<i32>,
+        Option<String>,
+        Option<i32>,
+        Option<String>,
+        bool,
+    ) = sqlx::query_as(
+        r#"
+        SELECT
+            desired_run_id,
+            desired_role,
+            active_run_id,
+            active_role,
+            shutdown_requested_at IS NOT NULL
+        FROM nodes
+        WHERE name = $1
+        "#,
+    )
+    .bind(&node_name)
+    .fetch_one(store.pool())
+    .await
+    .expect("load node row");
+
+    assert_eq!(row.0, None);
+    assert_eq!(row.1, None);
+    assert_eq!(row.2, Some(run_id));
+    assert_eq!(row.3.as_deref(), Some("sampler_aggregator"));
+    assert!(row.4);
+
+    sqlx::query("DELETE FROM runs WHERE id = $1")
+        .bind(run_id)
+        .execute(store.pool())
+        .await
+        .expect("cleanup run");
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn shutdown_all_nodes_clears_desired_assignments() {
+    let Some(store) = test_store().await else {
+        return;
+    };
+    let node_a = unique_id("shutdown-all-a");
+    let node_b = unique_id("shutdown-all-b");
+    let uuid_a = unique_id("shutdown-all-uuid-a");
+    let uuid_b = unique_id("shutdown-all-uuid-b");
+
+    let run_id: i32 = sqlx::query_scalar(
+        r#"
+        INSERT INTO runs (
+            name,
+            integration_params,
+            point_spec
+        ) VALUES (
+            'shutdown-all-clears-desired-run',
+            '{}'::jsonb,
+            '{"continuous_dims":0,"discrete_dims":0}'::jsonb
+        )
+        RETURNING id
+        "#,
+    )
+    .fetch_one(store.pool())
+    .await
+    .expect("insert run");
+
+    store
+        .announce_node(&node_a, &uuid_a)
+        .await
+        .expect("announce node a");
+    store
+        .announce_node(&node_b, &uuid_b)
+        .await
+        .expect("announce node b");
+    store
+        .upsert_desired_assignment(&node_a, WorkerRole::SamplerAggregator, run_id)
+        .await
+        .expect("assign desired sampler");
+    store
+        .upsert_desired_assignment(&node_b, WorkerRole::Evaluator, run_id)
+        .await
+        .expect("assign desired evaluator");
+
+    let rows_updated = store
+        .request_all_nodes_shutdown()
+        .await
+        .expect("request all node shutdown");
+    assert_eq!(rows_updated, 2);
+
+    let desired_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM nodes
+        WHERE name = ANY($1)
+          AND desired_run_id IS NOT NULL
+        "#,
+    )
+    .bind(&[node_a, node_b])
+    .fetch_one(store.pool())
+    .await
+    .expect("count desired assignments");
+    assert_eq!(desired_count, 0);
 
     sqlx::query("DELETE FROM runs WHERE id = $1")
         .bind(run_id)
