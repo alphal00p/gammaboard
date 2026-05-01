@@ -364,6 +364,14 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         }
     }
 
+    async fn sleep_after_database_error(&mut self, err: &StoreError) {
+        warn!(
+            error = %err,
+            "node control-plane database operation failed; retrying while lease renewal remains within failure timeout"
+        );
+        sleep(self.next_reconcile_sleep()).await;
+    }
+
     pub async fn run(mut self) -> Result<(), StoreError> {
         let span = tracing::span!(
             tracing::Level::TRACE,
@@ -406,17 +414,38 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                     break;
                 }
 
-                if self
+                let shutdown_requested = match self
                     .store
                     .consume_node_shutdown_request(&self.node_uuid)
-                    .await?
+                    .await
                 {
+                    Ok(value) => value,
+                    Err(err) if err.is_database_error() => {
+                        self.sleep_after_database_error(&err).await;
+                        continue;
+                    }
+                    Err(err) => return Err(err),
+                };
+                if shutdown_requested {
                     info!("node shutdown requested by control-plane");
                     break;
                 }
 
-                let desired_target = self.resolve_desired_target().await?;
-                self.reconcile(desired_target).await?;
+                let desired_target = match self.resolve_desired_target().await {
+                    Ok(value) => value,
+                    Err(err) if err.is_database_error() => {
+                        self.sleep_after_database_error(&err).await;
+                        continue;
+                    }
+                    Err(err) => return Err(err),
+                };
+                if let Err(err) = self.reconcile(desired_target).await {
+                    if err.is_database_error() {
+                        self.sleep_after_database_error(&err).await;
+                        continue;
+                    }
+                    return Err(err);
+                }
 
                 if self.active_runner.is_some() {
                     let tick_outcome = {
@@ -432,6 +461,10 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                     let (target, result) = tick_outcome;
                     let done = match result {
                         Ok(done) => done,
+                        Err(err) if err.is_database_error() => {
+                            self.sleep_after_database_error(&err).await;
+                            false
+                        }
                         Err(err) => {
                             warn!("role runner tick failed: {err}");
                             self.fail_current_assignment(target, &err).await?;

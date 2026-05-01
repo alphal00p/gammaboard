@@ -423,6 +423,8 @@ Auto-run workers now write per-node startup logs to `logs/nodes/<NODE_NAME>.stdo
 If an auto-run child exits unsuccessfully, the parent control process logs the exit status together with those log paths.
 
 Node names are unique operator handles. Each live worker also owns an internal UUID lease in PostgreSQL. If the worker cannot re-announce itself for 30 seconds, it shuts down.
+Removing a run is immediate: Gammaboard clears node assignments for that run and deletes the run data without waiting for pause/drain persistence.
+Evaluator-side batch errors are retried as batch-local failures and do not fail the run; sampler-aggregator failures can still fail the active task because sampler state owns task progress.
 
 Assign roles:
 ```bash

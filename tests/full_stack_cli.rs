@@ -1251,6 +1251,42 @@ async fn wait_for_task_failed_and_run_unassigned(
         .await
 }
 
+async fn wait_for_task_completed(
+    harness: &FullStackHarness,
+    run_id: i32,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    harness
+        .wait_for("task completed", timeout, || async {
+            let state: Option<String> = sqlx::query_scalar(
+                "SELECT state FROM run_tasks WHERE run_id = $1 AND sequence_nr = 1",
+            )
+            .bind(run_id)
+            .fetch_optional(&harness.pool)
+            .await?;
+            Ok(state.as_deref() == Some("completed"))
+        })
+        .await
+}
+
+async fn wait_for_retried_batch(
+    harness: &FullStackHarness,
+    run_id: i32,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    harness
+        .wait_for("retried batch recorded", timeout, || async {
+            let retried_batches: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM batches WHERE run_id = $1 AND retry_count > 0",
+            )
+            .bind(run_id)
+            .fetch_one(&harness.pool)
+            .await?;
+            Ok(retried_batches > 0)
+        })
+        .await
+}
+
 struct SamplerCheckpointProgram<'a> {
     harness: &'a mut FullStackHarness,
     run_id: i32,
@@ -2071,6 +2107,110 @@ completed_batch_fetch_limit = 64
 
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_removes_assigned_run_immediately() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+
+    let config = temp_run_add_config(
+        r#"
+name = "delete-assigned-run-e2e"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+accumulator_kind = "scalar"
+
+[[task_queue]]
+kind = "sample"
+stop_condition = { max_samples = 100_000 }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 =
+        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'delete-assigned-run-e2e'")
+            .fetch_one(&harness.pool)
+            .await?;
+
+    harness.start_node("w-1").await?;
+    harness.start_node("w-2").await?;
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-1",
+            "sampler-aggregator",
+            "delete-assigned-run-e2e",
+        ])
+        .assert()
+        .success();
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-2",
+            "evaluator",
+            "delete-assigned-run-e2e",
+        ])
+        .assert()
+        .success();
+
+    harness
+        .wait_for(
+            "workers become active before delete",
+            Duration::from_secs(15),
+            || async {
+                let active_count: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM nodes WHERE active_run_id = $1 OR desired_run_id = $1",
+                )
+                .bind(run_id)
+                .fetch_one(&harness.pool)
+                .await?;
+                Ok(active_count >= 2)
+            },
+        )
+        .await?;
+
+    harness
+        .cli()
+        .args(["run", "remove", "delete-assigned-run-e2e"])
+        .assert()
+        .success();
+
+    harness
+        .wait_for("run removed and workers unassigned", Duration::from_secs(15), || async {
+            let run_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE id = $1")
+                .bind(run_id)
+                .fetch_one(&harness.pool)
+                .await?;
+            let assigned_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM nodes WHERE desired_run_id IS NOT NULL OR active_run_id IS NOT NULL",
+            )
+            .fetch_one(&harness.pool)
+            .await?;
+            Ok(run_count == 0 && assigned_count == 0)
+        })
+        .await?;
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
@@ -2599,7 +2739,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_produce_ba
 
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
-async fn full_stack_cli_fails_task_gracefully_on_materializer_error() -> anyhow::Result<()> {
+async fn full_stack_cli_retries_batch_after_materializer_error() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
     let config = temp_run_add_config(
@@ -2659,17 +2799,8 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
         .assert()
         .success();
 
-    wait_for_task_failed_and_run_unassigned(&harness, run_id, Duration::from_secs(40)).await?;
-
-    let failed_batches: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM batches WHERE run_id = $1 AND status = 'failed'")
-            .bind(run_id)
-            .fetch_one(&harness.pool)
-            .await?;
-    assert!(
-        failed_batches > 0,
-        "expected failed batches for materializer error"
-    );
+    wait_for_retried_batch(&harness, run_id, Duration::from_secs(15)).await?;
+    wait_for_task_completed(&harness, run_id, Duration::from_secs(40)).await?;
 
     harness.stop_children().await;
     harness.pool.close().await;
@@ -2679,7 +2810,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
 
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
-async fn full_stack_cli_fails_task_gracefully_on_evaluator_error() -> anyhow::Result<()> {
+async fn full_stack_cli_retries_batch_after_evaluator_error() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
     let config = temp_run_add_config(
@@ -2733,17 +2864,8 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
         .assert()
         .success();
 
-    wait_for_task_failed_and_run_unassigned(&harness, run_id, Duration::from_secs(40)).await?;
-
-    let failed_batches: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM batches WHERE run_id = $1 AND status = 'failed'")
-            .bind(run_id)
-            .fetch_one(&harness.pool)
-            .await?;
-    assert!(
-        failed_batches > 0,
-        "expected failed batches for evaluator error"
-    );
+    wait_for_retried_batch(&harness, run_id, Duration::from_secs(15)).await?;
+    wait_for_task_completed(&harness, run_id, Duration::from_secs(40)).await?;
 
     harness.stop_children().await;
     harness.pool.close().await;

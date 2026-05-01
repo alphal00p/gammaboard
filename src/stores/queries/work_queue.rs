@@ -524,9 +524,12 @@ pub(crate) async fn fail_batch(
         r#"
         UPDATE batches
         SET
-            status = 'failed',
+            status = 'pending',
             last_error = $2,
-            completed_at = now(),
+            claimed_by_node_name = NULL,
+            claimed_by_node_uuid = NULL,
+            claimed_at = NULL,
+            completed_at = NULL,
             retry_count = COALESCE(retry_count, 0) + 1
         WHERE id = $1
         "#,

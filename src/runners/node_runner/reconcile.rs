@@ -174,6 +174,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         match self.build_runner_for_target(target).await {
             Ok(Some(runner)) => Ok(Some((target, runner))),
             Ok(None) => Ok(None),
+            Err(err) if err.is_database_error() => Err(err),
             Err(err) => {
                 self.note_start_failure(target);
                 error!(
@@ -451,10 +452,17 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         self.reset_reconcile_backoff();
         self.stop_current().await;
         let role = target.role;
-        if matches!(
-            role,
-            crate::core::WorkerRole::SamplerAggregator | crate::core::WorkerRole::Evaluator
-        ) {
+        if matches!(role, crate::core::WorkerRole::Evaluator) {
+            warn!(
+                run_id = target.run_id,
+                role = %role,
+                error = %err,
+                "evaluator role failed; worker will retry without failing the run"
+            );
+            return Ok(());
+        }
+
+        if matches!(role, crate::core::WorkerRole::SamplerAggregator) {
             if let Some(task) = self.store.load_active_run_task(target.run_id).await? {
                 let reason = format!("{role} role failed: {err}");
                 if let Err(fail_err) = self.store.fail_run_task(task.id, &reason).await {

@@ -98,6 +98,8 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - `sampler_aggregator_runner_params.frontend_sync_interval_ms` controls how often frontend-facing accumulator state is refreshed during sampling; full sampler resume checkpoints are persisted only on unassignment/pause, and task completion still forces a final accumulator flush.
 - Evaluators use a fixed single-slot latent prefetch and single-slot async submit pipeline to hide DB latency. Materialization and evaluation remain strictly one batch at a time.
 - Evaluators are stateless across reconcile-down. On stop they should drain already-claimed local latent batches without claiming new work, not persist evaluator state.
+- Recoverable evaluator/materializer/batch-transform errors are batch-local: requeue the claimed batch with `last_error`/`retry_count` and keep the run alive. Evaluator role failures must not fail the run; sampler-aggregator role failures may fail the active task because sampler state owns task progress.
+- Deleting a run is immediate control-plane teardown: clear desired/current node assignments for that run first, then delete the run and cascading data. Do not wait for pause/drain persistence.
 - `node run` uses a tiny outer control-plane pool; role-specific PostgreSQL worker pool sizing lives on `evaluator_runner_params.db_pool_size` and `sampler_aggregator_runner_params.db_pool_size`.
 - Sampler queue settings live under the nested TOML table `[sampler_aggregator_runner_params.queue]`.
 - Sample tasks may optionally set `[task.queue_tuning]` to override queue knobs for that task only. Effective queue config is `run_spec.queue` overlaid by `task.queue_tuning`.

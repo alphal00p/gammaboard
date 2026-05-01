@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS batches (
 
     -- Work queue status
     status TEXT NOT NULL DEFAULT 'pending',
-    -- Status: 'pending', 'claimed', 'completed', 'failed'
+    -- Status: 'pending', 'claimed', 'completed'
 
     claimed_by_node_name TEXT,
     claimed_by_node_uuid TEXT,

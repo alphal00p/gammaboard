@@ -43,6 +43,10 @@ impl StoreError {
     pub fn is_batch_ownership_lost(&self) -> bool {
         matches!(self, Self::BatchOwnershipLost { .. })
     }
+
+    pub fn is_database_error(&self) -> bool {
+        matches!(self, Self::Database(_))
+    }
 }
 
 impl From<sqlx::Error> for StoreError {

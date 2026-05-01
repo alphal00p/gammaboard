@@ -487,13 +487,13 @@ where
             .map_err(EvaluatorRunnerError::Store)
     }
 
-    async fn fail_tick<T>(
+    async fn fail_tick(
         &mut self,
         loop_started: Instant,
         batch_id: i64,
         compute_time_ms: f64,
         err: impl Into<EvaluatorRunnerError>,
-    ) -> Result<T, EvaluatorRunnerError> {
+    ) -> Result<(), EvaluatorRunnerError> {
         let err = err.into();
         warn!(
             run_id = self.run_id,
@@ -501,12 +501,12 @@ where
             batch_id,
             compute_time_ms,
             error = %err,
-            "evaluator tick failed; failing claimed batch"
+            "evaluator batch failed; requeueing claimed batch"
         );
         self.fail_claimed_batch(batch_id, &err.to_string()).await?;
         self.observe_idle_ratio(loop_started, compute_time_ms);
         self.flush_performance_snapshot_if_due(false).await?;
-        Err(err)
+        Ok(())
     }
 
     pub async fn tick(&mut self) -> Result<(), EvaluatorRunnerError> {
@@ -628,7 +628,14 @@ where
                 batch_id
             ));
             self.fail_claimed_batch(batch_id, &err.to_string()).await?;
-            return Err(EvaluatorRunnerError::Engine(err));
+            warn!(
+                run_id = self.run_id,
+                node_name = %self.node_name,
+                batch_id,
+                error = %err,
+                "evaluator result rejected; requeueing claimed batch"
+            );
+            return Ok(());
         }
         if !result.matches_batch(batch) {
             let err = EngineError::engine(format!(
@@ -638,7 +645,14 @@ where
                 result.len()
             ));
             self.fail_claimed_batch(batch_id, &err.to_string()).await?;
-            return Err(EvaluatorRunnerError::Engine(err));
+            warn!(
+                run_id = self.run_id,
+                node_name = %self.node_name,
+                batch_id,
+                error = %err,
+                "evaluator result rejected; requeueing claimed batch"
+            );
+            return Ok(());
         }
 
         self.counters.submit_attempts += 1;

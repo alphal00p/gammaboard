@@ -582,6 +582,23 @@ pub(crate) async fn expire_node_lease(pool: &PgPool, node_uuid: &str) -> Result<
 }
 
 pub(crate) async fn remove_run(pool: &PgPool, run_id: i32) -> Result<u64, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        r#"
+        UPDATE nodes
+        SET
+            desired_run_id = CASE WHEN desired_run_id = $1 THEN NULL ELSE desired_run_id END,
+            desired_role = CASE WHEN desired_run_id = $1 THEN NULL ELSE desired_role END,
+            active_run_id = CASE WHEN active_run_id = $1 THEN NULL ELSE active_run_id END,
+            active_role = CASE WHEN active_run_id = $1 THEN NULL ELSE active_role END,
+            updated_at = now()
+        WHERE desired_run_id = $1
+           OR active_run_id = $1
+        "#,
+    )
+    .bind(run_id)
+    .execute(&mut *tx)
+    .await?;
     let result = sqlx::query(
         r#"
         DELETE FROM runs
@@ -589,7 +606,8 @@ pub(crate) async fn remove_run(pool: &PgPool, run_id: i32) -> Result<u64, sqlx::
         "#,
     )
     .bind(run_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(result.rows_affected())
 }
