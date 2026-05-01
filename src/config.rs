@@ -104,6 +104,12 @@ pub struct DeployDatabaseConfig {
 pub struct DeployCleanupConfig {
     pub pause_runs: bool,
     pub stop_nodes: bool,
+    #[serde(default = "default_sampler_drain_timeout_seconds")]
+    pub sampler_drain_timeout_seconds: u64,
+    #[serde(default = "default_node_stop_timeout_seconds")]
+    pub node_stop_timeout_seconds: u64,
+    #[serde(default = "default_cleanup_poll_interval_ms")]
+    pub poll_interval_ms: u64,
 }
 
 impl RuntimeConfig {
@@ -226,6 +232,18 @@ fn default_work_mem() -> String {
 
 fn default_checkpoint_timeout() -> String {
     "30min".to_string()
+}
+
+fn default_sampler_drain_timeout_seconds() -> u64 {
+    60
+}
+
+fn default_node_stop_timeout_seconds() -> u64 {
+    15
+}
+
+fn default_cleanup_poll_interval_ms() -> u64 {
+    250
 }
 
 fn default_max_wal_size() -> String {

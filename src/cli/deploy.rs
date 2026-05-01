@@ -101,7 +101,48 @@ async fn cleanup_deploy(
     backend: &mut Child,
     nginx: &mut Child,
 ) -> Result<()> {
-    if deploy_config.cleanup.pause_runs {
+    let sampler_drain_error = if deploy_config.cleanup.stop_nodes {
+        with_control_store(
+            runtime_config,
+            10,
+            true,
+            "deploy_stop_all_nodes_gracefully",
+            |store| async move {
+                let stopped = node_api::stop_all_nodes_gracefully(
+                    &store,
+                    node_api::GracefulNodeShutdownParams {
+                        sampler_drain_timeout: Duration::from_secs(
+                            deploy_config.cleanup.sampler_drain_timeout_seconds,
+                        ),
+                        node_stop_timeout: Duration::from_secs(
+                            deploy_config.cleanup.node_stop_timeout_seconds,
+                        ),
+                        poll_interval: Duration::from_millis(
+                            deploy_config.cleanup.poll_interval_ms,
+                        ),
+                    },
+                )
+                .await?;
+                tracing::info!(
+                    rows_updated = stopped.rows_updated,
+                    active_samplers_remaining = stopped.active_samplers_remaining,
+                    live_nodes_remaining = stopped.live_nodes_remaining,
+                    sampler_drain_timed_out = stopped.sampler_drain_timed_out,
+                    node_stop_timed_out = stopped.node_stop_timed_out,
+                    "graceful node shutdown completed"
+                );
+                if stopped.sampler_drain_timed_out {
+                    bail!(
+                        "timed out waiting for sampler nodes to persist state: active_samplers_remaining={}",
+                        stopped.active_samplers_remaining
+                    );
+                }
+                Ok(())
+            },
+        )
+        .await
+        .err()
+    } else if deploy_config.cleanup.pause_runs {
         let _ = with_control_store(
             runtime_config,
             10,
@@ -114,27 +155,17 @@ async fn cleanup_deploy(
             },
         )
         .await;
-    }
-    if deploy_config.cleanup.stop_nodes {
-        let _ = with_control_store(
-            runtime_config,
-            10,
-            true,
-            "deploy_stop_all_nodes",
-            |store| async move {
-                let stopped = node_api::stop_all_nodes(&store).await?;
-                tracing::info!(
-                    "requested shutdown for all nodes: rows_updated={}",
-                    stopped.rows_updated
-                );
-                Ok(())
-            },
-        )
-        .await;
-    }
+        None
+    } else {
+        None
+    };
 
     terminate_child(nginx, "nginx")?;
     terminate_child(backend, "backend")?;
+
+    if let Some(err) = sampler_drain_error {
+        return Err(err.context("database left running because sampler shutdown did not complete"));
+    }
 
     if deploy_config.database.ensure_started {
         db::stop_db(&runtime_config.local_postgres)?;
@@ -160,8 +191,10 @@ async fn supervise_children(backend: &mut Child, nginx: &mut Child) -> Result<()
                     return Ok(());
                 }
                 _ = tokio::time::sleep(Duration::from_millis(500)) => {
-                    check_child_running(backend, "backend")?;
-                    check_child_running(nginx, "nginx")?;
+                    if check_child_running(backend, "backend", true)? {
+                        return Ok(());
+                    }
+                    check_child_running(nginx, "nginx", false)?;
                 }
             }
         }
@@ -174,22 +207,32 @@ async fn supervise_children(backend: &mut Child, nginx: &mut Child) -> Result<()
                     return Ok(());
                 }
                 _ = tokio::time::sleep(Duration::from_millis(500)) => {
-                    check_child_running(backend, "backend")?;
-                    check_child_running(nginx, "nginx")?;
+                    if check_child_running(backend, "backend", true)? {
+                        return Ok(());
+                    }
+                    check_child_running(nginx, "nginx", false)?;
                 }
             }
         }
     }
 }
 
-fn check_child_running(child: &mut Child, label: &str) -> Result<()> {
+fn check_child_running(
+    child: &mut Child,
+    label: &str,
+    success_means_shutdown: bool,
+) -> Result<bool> {
     if let Some(status) = child
         .try_wait()
         .with_context(|| format!("failed checking {label} process"))?
     {
+        if success_means_shutdown && status.success() {
+            println!("{label} exited; shutting down deploy");
+            return Ok(true);
+        }
         bail!("{label} exited unexpectedly with status {status}");
     }
-    Ok(())
+    Ok(false)
 }
 
 fn prepare_runtime_dirs() -> Result<()> {

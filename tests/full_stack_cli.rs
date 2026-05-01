@@ -4,6 +4,7 @@ use argon2::{
 };
 use assert_cmd::Command;
 use gammaboard::Domain;
+use gammaboard::api::nodes as node_api;
 use gammaboard::config::RuntimeConfig;
 use gammaboard::sampling::{HavanaSamplerParams, SamplerAggregatorSnapshot};
 use num::complex::Complex64;
@@ -2202,6 +2203,98 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
             Ok(run_count == 0 && assigned_count == 0)
         })
         .await?;
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_graceful_node_shutdown_waits_for_sampler_unassign() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+
+    let config = temp_run_add_config(
+        r#"
+name = "graceful-node-shutdown-e2e"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+accumulator_kind = "scalar"
+
+[[task_queue]]
+kind = "sample"
+stop_condition = { max_samples = 100_000 }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 =
+        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'graceful-node-shutdown-e2e'")
+            .fetch_one(&harness.pool)
+            .await?;
+
+    harness.start_node("w-1").await?;
+    harness.start_node("w-2").await?;
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-1",
+            "sampler-aggregator",
+            "graceful-node-shutdown-e2e",
+        ])
+        .assert()
+        .success();
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-2",
+            "evaluator",
+            "graceful-node-shutdown-e2e",
+        ])
+        .assert()
+        .success();
+
+    harness
+        .wait_for(
+            "sampler becomes active",
+            Duration::from_secs(15),
+            || async {
+                let sampler = harness.node_state("w-1").await?;
+                Ok(sampler.2 == Some(run_id) && sampler.3.as_deref() == Some("sampler_aggregator"))
+            },
+        )
+        .await?;
+
+    let store = gammaboard::init_pg_store(&harness.db.database_url, 10).await?;
+    let result = node_api::stop_all_nodes_gracefully(
+        &store,
+        node_api::GracefulNodeShutdownParams {
+            sampler_drain_timeout: Duration::from_secs(10),
+            node_stop_timeout: Duration::from_secs(10),
+            poll_interval: Duration::from_millis(50),
+        },
+    )
+    .await?;
+
+    assert!(!result.sampler_drain_timed_out);
+    assert_eq!(result.active_samplers_remaining, 0);
 
     harness.stop_children().await;
     harness.pool.close().await;

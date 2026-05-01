@@ -2,6 +2,7 @@ use crate::api::ApiError;
 use crate::core::{ControlPlaneStore, NodeLaunchRequest, RunReadStore, WorkerRole};
 use serde_json::Value as JsonValue;
 use std::collections::HashSet;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub struct AssignedNode {
@@ -29,6 +30,22 @@ pub struct StoppedNode {
 #[derive(Debug, Clone)]
 pub struct StoppedAllNodes {
     pub rows_updated: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct GracefulNodeShutdownParams {
+    pub sampler_drain_timeout: Duration,
+    pub node_stop_timeout: Duration,
+    pub poll_interval: Duration,
+}
+
+#[derive(Debug, Clone)]
+pub struct GracefulNodeShutdownResult {
+    pub rows_updated: u64,
+    pub sampler_drain_timed_out: bool,
+    pub node_stop_timed_out: bool,
+    pub active_samplers_remaining: usize,
+    pub live_nodes_remaining: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -156,6 +173,77 @@ pub async fn stop_node(
 pub async fn stop_all_nodes(store: &impl ControlPlaneStore) -> Result<StoppedAllNodes, ApiError> {
     let rows_updated = store.request_all_nodes_shutdown().await?;
     Ok(StoppedAllNodes { rows_updated })
+}
+
+pub async fn stop_all_nodes_gracefully(
+    store: &impl ControlPlaneStore,
+    params: GracefulNodeShutdownParams,
+) -> Result<GracefulNodeShutdownResult, ApiError> {
+    let rows_updated = store.request_all_nodes_shutdown().await?;
+    let sampler_drain_timed_out = wait_until(
+        params.sampler_drain_timeout,
+        params.poll_interval,
+        || async {
+            let nodes = store.list_nodes(None).await?;
+            Ok(nodes
+                .iter()
+                .filter(|node| {
+                    node.current_assignment
+                        .as_ref()
+                        .is_some_and(|assignment| assignment.role == WorkerRole::SamplerAggregator)
+                })
+                .count())
+        },
+    )
+    .await?
+    .is_some();
+
+    let node_stop_timed_out =
+        wait_until(params.node_stop_timeout, params.poll_interval, || async {
+            Ok(store.list_nodes(None).await?.len())
+        })
+        .await?
+        .is_some();
+
+    let nodes = store.list_nodes(None).await?;
+    let active_samplers_remaining = nodes
+        .iter()
+        .filter(|node| {
+            node.current_assignment
+                .as_ref()
+                .is_some_and(|assignment| assignment.role == WorkerRole::SamplerAggregator)
+        })
+        .count();
+
+    Ok(GracefulNodeShutdownResult {
+        rows_updated,
+        sampler_drain_timed_out,
+        node_stop_timed_out,
+        active_samplers_remaining,
+        live_nodes_remaining: nodes.len(),
+    })
+}
+
+async fn wait_until<F, Fut>(
+    timeout: Duration,
+    poll_interval: Duration,
+    mut remaining: F,
+) -> Result<Option<usize>, ApiError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<usize, crate::core::StoreError>>,
+{
+    let deadline = Instant::now() + timeout;
+    loop {
+        let count = remaining().await?;
+        if count == 0 {
+            return Ok(None);
+        }
+        if Instant::now() >= deadline {
+            return Ok(Some(count));
+        }
+        tokio::time::sleep(poll_interval).await;
+    }
 }
 
 /// Auto-assigns currently free nodes to sampler/evaluator roles for a run.

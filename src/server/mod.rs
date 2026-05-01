@@ -1492,8 +1492,37 @@ async fn shutdown_control_process(
         action = "control_shutdown",
         "dashboard action requested control process shutdown"
     );
-    tokio::spawn(async {
-        tokio::time::sleep(Duration::from_millis(250)).await;
+    let store = state.store.clone();
+    tokio::spawn(async move {
+        let result = node_api::stop_all_nodes_gracefully(
+            &store,
+            node_api::GracefulNodeShutdownParams {
+                sampler_drain_timeout: Duration::from_secs(60),
+                node_stop_timeout: Duration::from_secs(15),
+                poll_interval: Duration::from_millis(250),
+            },
+        )
+        .await;
+        match result {
+            Ok(result) => tracing::info!(
+                source = "control",
+                control_surface = "dashboard",
+                action = "control_shutdown",
+                rows_updated = result.rows_updated,
+                active_samplers_remaining = result.active_samplers_remaining,
+                live_nodes_remaining = result.live_nodes_remaining,
+                sampler_drain_timed_out = result.sampler_drain_timed_out,
+                node_stop_timed_out = result.node_stop_timed_out,
+                "control shutdown drain completed"
+            ),
+            Err(err) => tracing::error!(
+                source = "control",
+                control_surface = "dashboard",
+                action = "control_shutdown",
+                error = %err,
+                "control shutdown drain failed"
+            ),
+        }
         std::process::exit(0);
     });
 

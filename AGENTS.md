@@ -141,6 +141,8 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Foreground deploy lifecycle should live under `gammaboard deploy run ...`, with `configs/deploy/*.toml` owning frontend HTTP exposure, static-site serving, and cleanup policy, while selecting which `configs/server/*.toml` backend profile to run.
 - Deploy HTTP config also owns nginx access-log visibility; interactive/local-style profiles should disable access logs unless explicitly needed for debugging.
 - `gammaboard deploy run` must launch the backend with the same active `--runtime-config` path so server-managed node auto-run workers inherit the intended database and tracing settings.
+- `gammaboard deploy run` shutdown is coordinated: request graceful shutdown for all live nodes, wait for active sampler-aggregator roles to persist state and clear, then stop backend/nginx and finally local Postgres.
+- The dashboard control shutdown endpoint must use the same graceful node shutdown path before exiting the backend process; the deploy parent then performs final service/database cleanup.
 - `gammaboard server` remains the direct foreground backend path; `gammaboard deploy` is orchestration around it, not a replacement for it.
 - Server TOML should be explicit; do not rely on implicit defaults for required server settings.
 - `gammaboard server` should terminate immediately on `Ctrl-C` (no graceful-drain wait path).

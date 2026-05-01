@@ -119,7 +119,7 @@ The checked-in local defaults also bias Postgres toward queue throughput: larger
   ```
 - The checked-in local default is [configs/server/default.toml](/home/cedricsigrist/Workspace/repos/gammaboard/configs/server/default.toml).
 - If that default path is not present on disk, the CLI falls back to the built-in default server TOML.
-- `Ctrl-C` terminates the server process immediately.
+- `Ctrl-C` terminates a direct `gammaboard server` process immediately. Dashboard control shutdown first requests graceful node shutdown, then exits the backend so a supervising `gammaboard deploy run` can stop nginx and Postgres.
 - Required shape:
   ```toml
   api_host = "0.0.0.0"
@@ -175,7 +175,7 @@ Deploy run:
 - starts `gammaboard server` as a supervised child process using the same active `--runtime-config` path
 - generates an nginx config from the deploy profile and runs nginx in the foreground as a supervised child process
 - logs to the parent process stdout/stderr, so terminals, Slurm, or systemd own log collection
-- tears down nginx, the backend, worker assignments, and local Postgres on `Ctrl-C`/`SIGTERM`
+- on `Ctrl-C`/`SIGTERM`, requests graceful shutdown for live nodes, waits for sampler-aggregator roles to persist state and clear, then tears down nginx, backend, and local Postgres
 
 `gammaboard deploy run ...` itself does not build. Use the `just deploy ...` wrapper when you want the frontend and backend built first.
 
