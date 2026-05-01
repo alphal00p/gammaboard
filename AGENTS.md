@@ -38,6 +38,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Role tick pacing may differ by worker type. Keep evaluator polling conservative, but let sampler-aggregator ticks run more frequently so queue refill is not artificially bursty.
 - `node run` should begin graceful shutdown immediately on `Ctrl-C` and `SIGTERM`.
 - Graceful shutdown should expire the lease immediately so the same node name can be reused at once.
+- Node shutdown requests clear desired assignments immediately and keep current assignments until the node reconciles down or its lease expires.
 - Desired/current assignments live directly on `nodes`.
 - Node startup intent lives in `node_launch_requests`, not in `nodes`. A single launch request may represent many requested workers; resolver-specific details belong in its JSON args/result fields.
 - Dashboard node-start actions should create launch requests. If `allow_local_node_spawn = true`, the control process may resolve those requests locally; otherwise an external launcher is expected to resolve them.
