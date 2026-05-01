@@ -1,8 +1,10 @@
 [database]
-url = "postgresql://postgres:postgres@127.0.0.1:5433/gammaboard_db"
+url = "postgresql://postgres:postgres@127.0.0.1:${DB_PORT}/gammaboard_db"
 
 [tracing]
-env_filter = "info"
+persist_runtime_logs = true
+db_gammaboard_level = "info"
+db_external_level = "warn"
 
 [resources]
 roots = [
@@ -10,49 +12,16 @@ roots = [
 ]
 
 [local_postgres]
-enabled = true
-deploy_name = "${DEPLOY_NAME}"
 data_dir = "${WORKSPACE_ROOT}/db/${DEPLOY_NAME}/data"
 socket_dir = "${WORKSPACE_ROOT}/db/${DEPLOY_NAME}/socket"
-log_path = "${WORKSPACE_ROOT}/logs/postgres/${DEPLOY_NAME}.log"
-host = "0.0.0.0"
-port = 5433
-user = "postgres"
-password = "postgres"
-database = "gammaboard_db"
-listen_addresses = "0.0.0.0"
-shared_buffers = "256MB"
+log_file = "${WORKSPACE_ROOT}/logs/postgres/${DEPLOY_NAME}.log"
 max_connections = 128
-wal_level = "minimal"
-fsync = false
-synchronous_commit = false
-full_page_writes = false
+listen_addresses = "0.0.0.0"
+host_auth_cidr = "0.0.0.0/0"
+shared_buffers = "256MB"
+effective_cache_size = "2GB"
+work_mem = "16MB"
 checkpoint_timeout = "30min"
 max_wal_size = "8GB"
-min_wal_size = "1GB"
-wal_compression = "on"
-bgwriter_delay = "200ms"
-bgwriter_lru_maxpages = 256
-random_page_cost = 1.1
-effective_io_concurrency = 64
-timezone = "Etc/UTC"
-timezone_abbreviations = "Default"
-
-[evaluator_runner_params]
-db_pool_size = 8
-
-[sampler_aggregator_runner_params]
-db_pool_size = 8
-frontend_sync_interval_ms = 2000
-
-[sampler_aggregator_runner_params.queue]
-max_queue_size = 512
-max_batches_per_tick = 64
-queue_buffer = 2.0
-pending_refill_low_ratio = 0.75
-pending_refill_high_ratio = 1.5
-max_concurrent_insert_tasks = 32
-target_batch_eval_ms = 750
-max_batch_size = 10000
-batch_size_deadband_ratio = 0.2
-batch_size_cooldown_ticks = 4
+wal_compression = true
+synchronous_commit = false
