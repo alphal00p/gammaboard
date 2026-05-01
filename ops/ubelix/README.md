@@ -164,10 +164,12 @@ Submit:
 python ubelix.py up
 ```
 
-`up` waits until Slurm assigned a node and nginx answers on the frontend port, then prints `frontend_ready=true`. To only submit/reuse the job and print the tunnel hint immediately:
+`up` waits until Slurm assigned a node and nginx answers on the frontend port, then prints `frontend_ready=true`.
+
+To submit a new control job with a custom walltime:
 
 ```bash
-python ubelix.py up --no-wait
+python ubelix.py up --time 00:45:00
 ```
 
 To also copy the printed tunnel command to your clipboard when the terminal supports OSC 52:

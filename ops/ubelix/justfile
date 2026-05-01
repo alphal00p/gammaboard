@@ -1,4 +1,4 @@
-sync-ops host="Ubelix" remote_root="/storage/research/itp_localunitaritydata":
+sync-ops host="ubelix" remote_root="/storage/research/itp_localunitaritydata":
     #!/usr/bin/env bash
     set -euo pipefail
     REPO_ROOT="$(git rev-parse --show-toplevel)"

@@ -29,6 +29,7 @@ DB_PORT = 5433
 DEPLOY_NAME = "default"
 DEFAULT_SSH_HOST = "submit03.unibe.ch"
 ADMIN_PASSWORD = "admin"
+DEFAULT_CONTROL_TIME = "00:20:00"
 
 
 @dataclass(frozen=True)
@@ -228,7 +229,13 @@ def post(control_node: str, path: str, *, cookie: str | None = None) -> None:
         return
 
 
-def submit_control() -> Job:
+def parse_hms(value: str) -> str:
+    if not re.fullmatch(r"\d{2}:\d{2}:\d{2}", value):
+        raise argparse.ArgumentTypeError("expected HH:MM:SS")
+    return value
+
+
+def submit_control(time_limit: str) -> Job:
     jobs = active_jobs(name=CONTROL_JOB_NAME)
     if len(jobs) == 1:
         return jobs[0]
@@ -238,7 +245,18 @@ def submit_control() -> Job:
         raise SystemExit(f"multiple active control jobs named {CONTROL_JOB_NAME}")
 
     ensure_dirs()
-    result = run(["sbatch", "--chdir", WORKSPACE_ROOT, "--job-name", CONTROL_JOB_NAME, CONTROL_SBATCH])
+    result = run(
+        [
+            "sbatch",
+            "--chdir",
+            WORKSPACE_ROOT,
+            "--job-name",
+            CONTROL_JOB_NAME,
+            "--time",
+            time_limit,
+            CONTROL_SBATCH,
+        ]
+    )
     job_id = parse_job_id(result.stdout)
     return Job(id=job_id, name=CONTROL_JOB_NAME, state="SUBMITTED", node="")
 
@@ -449,7 +467,7 @@ def watch_launch_requests(args: argparse.Namespace, control_node: str) -> None:
 
 
 def command_up(args: argparse.Namespace) -> None:
-    control = submit_control()
+    control = submit_control(args.time)
     print(f"control_job_id={control.id}")
     node = wait_for_control_node(control.id, args.startup_timeout, verbose=True)
     print(f"control_node={node}")
@@ -457,14 +475,13 @@ def command_up(args: argparse.Namespace) -> None:
     print(f"tunnel={tunnel}")
     if args.copy:
         print(f"copied_to_clipboard={'true' if copy_to_clipboard_osc52(tunnel) else 'false'}")
-    if not args.no_wait:
-        wait_for_http(
-            f"http://{node}:{FRONTEND_PORT}",
-            args.startup_timeout,
-            verbose=True,
-            control_job_id=control.id,
-        )
-        print("frontend_ready=true")
+    wait_for_http(
+        f"http://{node}:{FRONTEND_PORT}",
+        args.startup_timeout,
+        verbose=True,
+        control_job_id=control.id,
+    )
+    print("frontend_ready=true")
     if args.watch:
         print("watching control job; Ctrl-C stops only this launcher")
         try:
@@ -556,11 +573,11 @@ def parser() -> argparse.ArgumentParser:
 
     up = sub.add_parser("up", help="login node: submit or reuse the control/UI job")
     up.add_argument("--watch", action="store_true", help="block and print status until control exits")
+    up.add_argument("--time", type=parse_hms, default=DEFAULT_CONTROL_TIME, help="Slurm walltime for a newly submitted control job (HH:MM:SS)")
     up.add_argument("--local-port", type=int, default=8080)
     up.add_argument("--startup-timeout", type=int, default=180)
     up.add_argument("--poll-seconds", type=int, default=15)
     up.add_argument("--copy", action="store_true", help="copy the SSH tunnel command to the clipboard if supported")
-    up.add_argument("--no-wait", action="store_true", help="print the tunnel command without waiting for nginx")
     up.set_defaults(func=command_up)
 
     down = sub.add_parser("down", help="login node: gracefully stop nodes, then cancel remaining jobs")
