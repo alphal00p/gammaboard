@@ -27,11 +27,10 @@ export APPTAINERENV_NO_SYMBOLICA_OEM_LICENSE="${NO_SYMBOLICA_OEM_LICENSE}"
 
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
 IMAGE_PATH="${WORKSPACE_ROOT}/images/gammaboard/gammaboard-latest.sif"
-RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime-local_postgres.template.toml"
+RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime-control.template.toml"
 RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
 SLURM_LOG_DIR="${WORKSPACE_ROOT}/logs/slurm/control"
 RUNTIME_CONFIG="${RUNTIME_DIR}/runtime-${SLURM_JOB_ID}-ctl.toml"
-INSTANCE_NAME="gb-ctl-${SLURM_JOB_ID}"
 DEPLOY_CFG="${WORKSPACE_ROOT}/ops/config/deploy.toml"
 DB_PORT="5433"
 DEPLOY_NAME="default"
@@ -66,50 +65,15 @@ export WORKSPACE_ROOT LOCAL_TMP DEPLOY_NAME DB_PORT
 envsubst '${WORKSPACE_ROOT} ${LOCAL_TMP} ${DEPLOY_NAME} ${DB_PORT}' \
   <"${RUNTIME_TEMPLATE}" >"${RUNTIME_CONFIG}"
 
-run_in_container() {
-  env -u PGTZ -u PGOPTIONS \
-  APPTAINERENV_LANG="${APPTAINERENV_LANG:-C.UTF-8}" \
-  APPTAINERENV_LC_ALL="${APPTAINERENV_LC_ALL:-C.UTF-8}" \
-  APPTAINERENV_TZ="${APPTAINERENV_TZ:-Etc/UTC}" \
-  apptainer exec "instance://${INSTANCE_NAME}" \
-    gammaboard --runtime-config "${RUNTIME_CONFIG}" "$@"
-}
-
-cleanup() {
-  set +e
-  trap - TERM INT EXIT
-  if [[ -n "${deploy_pid:-}" ]] && kill -0 "${deploy_pid}" >/dev/null 2>&1; then
-    kill -TERM "${deploy_pid}" >/dev/null 2>&1 || true
-    wait "${deploy_pid}" >/dev/null 2>&1 || true
-  fi
-  if [[ -f "${RUNTIME_CONFIG}" ]]; then
-    run_in_container db stop >/dev/null 2>&1 || true
-  fi
-  apptainer instance stop "${INSTANCE_NAME}" >/dev/null 2>&1 || true
-  rm -f "${RUNTIME_CONFIG}"
-}
-
-handle_term() {
-  echo "received termination signal; forwarding to deploy process"
-  cleanup
-  exit 143
-}
-trap handle_term TERM INT
-trap cleanup EXIT
-
-apptainer instance stop "${INSTANCE_NAME}" >/dev/null 2>&1 || true
-env -u PGTZ -u PGOPTIONS \
-APPTAINERENV_LANG="${APPTAINERENV_LANG:-C.UTF-8}" \
-APPTAINERENV_LC_ALL="${APPTAINERENV_LC_ALL:-C.UTF-8}" \
-APPTAINERENV_TZ="${APPTAINERENV_TZ:-Etc/UTC}" \
-apptainer instance start -B "${WORKSPACE_ROOT}" "${IMAGE_PATH}" "${INSTANCE_NAME}"
-
 echo "node: ${HOSTNAME}"
 echo "workspace_root: ${WORKSPACE_ROOT}"
 echo "runtime_config: ${RUNTIME_CONFIG}"
 echo "frontend_url: http://${HOSTNAME}:${FRONTEND_PORT}"
 echo "tunnel_hint_after_frontend_ready: ssh -N -L ${FRONTEND_PORT}:${HOSTNAME}:${FRONTEND_PORT} ${USER}@Ubelix"
 
-run_in_container deploy run --deploy-config "${DEPLOY_CFG}" &
-deploy_pid="$!"
-wait "${deploy_pid}"
+exec env -u PGTZ -u PGOPTIONS \
+APPTAINERENV_LANG="${APPTAINERENV_LANG:-C.UTF-8}" \
+APPTAINERENV_LC_ALL="${APPTAINERENV_LC_ALL:-C.UTF-8}" \
+APPTAINERENV_TZ="${APPTAINERENV_TZ:-Etc/UTC}" \
+apptainer exec -B "${WORKSPACE_ROOT}" "${IMAGE_PATH}" \
+  gammaboard --runtime-config "${RUNTIME_CONFIG}" deploy run --deploy-config "${DEPLOY_CFG}"

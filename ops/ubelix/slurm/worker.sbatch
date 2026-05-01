@@ -26,7 +26,7 @@ export APPTAINERENV_NO_SYMBOLICA_OEM_LICENSE="${NO_SYMBOLICA_OEM_LICENSE}"
 
 IMAGE_PATH="${GAMMABOARD_IMAGE:?set GAMMABOARD_IMAGE to your .sif path}"
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:?set GAMMABOARD_WORKSPACE_ROOT to absolute workspace path}"
-NODE_NAME="${NODE_NAME:?set NODE_NAME (e.g. gb-hello-sampler or gb-hello-eval-1)}"
+NODE_NAME="${NODE_NAME:?set NODE_NAME (e.g. w-1)}"
 NODE_MAX_START_FAILURES="${NODE_MAX_START_FAILURES:-3}"
 DATABASE_URL="${GAMMABOARD_DATABASE_URL:?set GAMMABOARD_DATABASE_URL to reachable Postgres URL}"
 DEPLOY_NAME="${DEPLOY_NAME:-default}"
@@ -36,7 +36,7 @@ mkdir -p "${WORKSPACE_ROOT}/logs/slurm/workers"
 RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
 mkdir -p "${RUNTIME_DIR}"
 RUNTIME_CONFIG="${RUNTIME_DIR}/runtime-${SLURM_JOB_ID}-${NODE_NAME}.toml"
-RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime-external_db.template.toml"
+RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime-worker.template.toml"
 
 worker_pid=""
 monitor_pid=""
@@ -71,7 +71,7 @@ handle_term() {
 }
 
 trap handle_term TERM INT
-trap stop_worker EXIT
+trap 'rm -f "${RUNTIME_CONFIG}"' EXIT
 if [[ ! -f "${RUNTIME_TEMPLATE}" ]]; then
   echo "missing runtime template: ${RUNTIME_TEMPLATE}" >&2
   exit 1
@@ -154,4 +154,8 @@ fi
 set +e
 wait "${worker_pid}"
 status="$?"
+if [[ -n "${monitor_pid}" ]]; then
+  kill "${monitor_pid}" >/dev/null 2>&1 || true
+fi
+rm -f "${RUNTIME_CONFIG}"
 exit "${status}"

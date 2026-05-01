@@ -58,20 +58,22 @@ Generated data typically lives here:
 - `build/gammaloop.sbatch`
 - `build/gammaboard.sbatch`
 - `slurm/smoke.sbatch`
-- `slurm/hello.sbatch`
+- `slurm/single_node_deploy.sbatch`
 - `slurm/control.sbatch`
 - `slurm/worker.sbatch`
 - `ubelix.py`
-- `config/runtime-local_postgres.template.toml`
-- `config/runtime-external_db.template.toml`
+- `config/runtime-control.template.toml`
+- `config/runtime-worker.template.toml`
 - `config/server.toml`
+- `config/server-single-node.toml`
 - `config/deploy.toml`
+- `config/deploy-single-node.toml`
 
 Notes:
 - UBELIX runtime templates set `resources.roots = ["${WORKSPACE_ROOT}/states"]`.
 - The UBELIX server profile sets `allow_local_node_spawn = false`.
 - Worker runtime TOML is rendered per job via `envsubst`.
-- Control, worker, and hello jobs request a batch-script `SIGTERM` 60 seconds before Slurm time limit and trap `SIGTERM`/`SIGINT` for graceful cleanup.
+- Control and single-node deploy jobs use foreground `exec apptainer ... gammaboard deploy run`, so `gammaboard` receives Slurm termination directly. Worker jobs still supervise a sidecar control-job watcher and trap `SIGTERM`/`SIGINT` for graceful cleanup.
 
 ## Sync
 
@@ -140,14 +142,16 @@ GAMMABOARD_IMAGE=/absolute/path/to/itp_localunitaritydata/images/gammaboard/gamm
 GAMMABOARD_BIND_PATHS=/absolute/path/to/itp_localunitaritydata
 ```
 
-## Hello Test
+## Single-Node Deploy
 
 Run this on a UBELIX login node:
 
 ```bash
 mkdir -p logs/slurm/control logs/slurm/workers logs/postgres
-sbatch ops/slurm/hello.sbatch
+sbatch ops/slurm/single_node_deploy.sbatch
 ```
+
+This starts the same foreground deploy stack as the normal control job, but uses `config/server-single-node.toml`, where `allow_local_node_spawn = true`. Dashboard node-start actions spawn local worker processes inside the same Slurm allocation instead of creating external worker requests.
 
 ## Control/UI Job
 
@@ -255,7 +259,7 @@ python ubelix.py down
 
 If a control job exits unexpectedly, its sbatch cleanup also tries to stop the local Postgres daemon before stopping the Apptainer instance. Worker jobs submitted by `ubelix.py` receive the control job id and terminate themselves when that job is no longer active.
 
-UBELIX sends `SIGCONT` followed by `SIGTERM` before `scancel` or time-limit cancellation and gives roughly 60 seconds before `SIGKILL`. The UBELIX sbatch scripts use that window to forward `SIGTERM` into `gammaboard`, request node shutdown, wait for sampler persistence, and stop local Postgres.
+UBELIX sends `SIGCONT` followed by `SIGTERM` before `scancel` or time-limit cancellation and gives roughly 60 seconds before `SIGKILL`. Control and single-node deploy jobs let `gammaboard deploy run` receive that signal directly, request node shutdown, wait for sampler persistence, and stop local Postgres. Worker jobs use the same window to forward termination to their child node process.
 
 ## Config Model
 
