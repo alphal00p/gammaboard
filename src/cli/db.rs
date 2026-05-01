@@ -74,6 +74,7 @@ fn status_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
 
 fn init_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
     let connection = LocalDbConnection::from_url(database_url)?;
+    ensure_postgres_data_dir_permissions(local)?;
     run_command(
         Command::new("initdb")
             .arg("-D")
@@ -442,12 +443,12 @@ fn ensure_postgres_data_dir_permissions(local: &LocalPostgresConfig) -> Result<(
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    if data_dir.exists() {
-        #[cfg(unix)]
-        {
-            fs::set_permissions(data_dir, fs::Permissions::from_mode(0o700))
-                .with_context(|| format!("failed to chmod 0700 {}", data_dir.display()))?;
-        }
+    fs::create_dir_all(data_dir)
+        .with_context(|| format!("failed to create {}", data_dir.display()))?;
+    #[cfg(unix)]
+    {
+        fs::set_permissions(data_dir, fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("failed to chmod 0700 {}", data_dir.display()))?;
     }
     Ok(())
 }
