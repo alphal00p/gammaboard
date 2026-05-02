@@ -39,6 +39,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - `node run` should begin graceful shutdown immediately on `Ctrl-C` and `SIGTERM`.
 - Graceful shutdown should expire the lease immediately so the same node name can be reused at once.
 - Node shutdown requests clear desired assignments immediately and keep current assignments until the node reconciles down or its lease expires.
+- Control shutdown goes through the shared graceful node shutdown API: clear all desired assignments first, request all nodes to stop, wait for active sampler-aggregator roles to persist/clear, then stop control-owned services.
 - Desired/current assignments live directly on `nodes`.
 - Node startup intent lives in `node_launch_requests`, not in `nodes`. A single launch request may represent many requested workers; resolver-specific details belong in its JSON args/result fields.
 - Dashboard node-start actions should create launch requests. If `allow_local_node_spawn = true`, the control process may resolve those requests locally; otherwise an external launcher is expected to resolve them.
@@ -125,6 +126,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Panel APIs are poll-based: clients send an optional opaque `cursor`, plus `panel_state` and `panel_actions`; the backend returns `PanelResponse`.
 - `append` is only valid when the backend can safely extend existing state; otherwise it must send `replace`.
 - Panel specs may include simple width hints such as `compact`, `half`, and `full`.
+- Sample task panels must receive a resolved effective accumulator kind from the stage/source resolver and must not probe persisted observable payloads to guess the accumulator type.
 - Run info, task output, worker details, performance, and engine config should stay backend-owned.
 - Tick breakdown bar panels must visualize only synchronous runner-tick work. Concurrent pipeline/queue work and wait/stall time must be surfaced in separate metrics panels, not stacked into the tick bar.
 - Max-weight diagnostics should keep impact ranking based on weighted products, while exposing decomposed factor values (for example integrand and jacobians) when available.

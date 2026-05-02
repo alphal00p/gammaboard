@@ -182,6 +182,17 @@ impl FullStackHarness {
     }
 
     async fn start_node(&mut self, node_name: &str) -> anyhow::Result<()> {
+        let previous_last_seen: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+            r#"
+            SELECT last_seen
+            FROM nodes
+            WHERE name = $1
+            "#,
+        )
+        .bind(node_name)
+        .fetch_optional(&self.pool)
+        .await?;
+
         let mut child = TokioCommand::new(&self.bin_path);
         child
             .arg("--runtime-config")
@@ -208,16 +219,31 @@ impl FullStackHarness {
                 let pool = pool.clone();
                 let node_name = node_name.clone();
                 async move {
-                    let count: i64 =
-                        sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE name = $1")
-                            .bind(&node_name)
-                            .fetch_one(&pool)
-                            .await?;
+                    let count: i64 = sqlx::query_scalar(
+                        r#"
+                            SELECT COUNT(*)
+                            FROM nodes
+                            WHERE name = $1
+                              AND lease_expires_at > now()
+                              AND ($2::timestamptz IS NULL OR last_seen > $2)
+                            "#,
+                    )
+                    .bind(&node_name)
+                    .bind(previous_last_seen)
+                    .fetch_one(&pool)
+                    .await?;
                     Ok(count == 1)
                 }
             },
         )
         .await
+    }
+
+    async fn start_nodes(&mut self, node_names: &[&str]) -> anyhow::Result<()> {
+        for node_name in node_names {
+            self.start_node(node_name).await?;
+        }
+        Ok(())
     }
 
     async fn start_server(&mut self) -> anyhow::Result<String> {
@@ -376,6 +402,34 @@ impl FullStackHarness {
         ))
     }
 
+    async fn run_stage_snapshot_count(&self, run_id: i32) -> anyhow::Result<i64> {
+        let count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM run_stage_snapshots
+            WHERE run_id = $1
+            "#,
+        )
+        .bind(run_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count)
+    }
+
+    async fn persisted_observable_snapshot_count(&self, run_id: i32) -> anyhow::Result<i64> {
+        let count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM persisted_observable_snapshots
+            WHERE run_id = $1
+            "#,
+        )
+        .bind(run_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count)
+    }
+
     async fn latest_task_sampler_grid(
         &self,
         run_id: i32,
@@ -442,6 +496,27 @@ impl FullStackHarness {
         let mut managed = self.children.swap_remove(position);
         managed.child.start_kill()?;
         let _ = tokio::time::timeout(Duration::from_secs(5), managed.child.wait()).await;
+        Ok(())
+    }
+
+    async fn reap_child(&mut self, label: &str) -> anyhow::Result<()> {
+        let position = self
+            .children
+            .iter()
+            .position(|managed| managed.label == label)
+            .ok_or_else(|| anyhow::anyhow!("missing child process {label}"))?;
+        let mut managed = self.children.swap_remove(position);
+        let status = tokio::time::timeout(Duration::from_secs(5), managed.child.wait()).await??;
+        if !status.success() {
+            anyhow::bail!("child process {label} exited with status {status}");
+        }
+        Ok(())
+    }
+
+    async fn reap_children(&mut self, labels: &[&str]) -> anyhow::Result<()> {
+        for label in labels {
+            self.reap_child(label).await?;
+        }
         Ok(())
     }
 
@@ -812,8 +887,7 @@ count = 8
         .await?;
 
     // Start nodes and assign roles
-    harness.start_node("w-1").await?;
-    harness.start_node("w-2").await?;
+    harness.start_nodes(&["w-1", "w-2"]).await?;
 
     harness
         .cli()
@@ -930,8 +1004,7 @@ async fn full_stack_cli_havana_pause_resume_matches_direct_baseline() -> anyhow:
         initial_training_rate: 0.1,
         final_training_rate: 0.01,
     };
-    harness.start_node("w-1").await?;
-    harness.start_node("w-2").await?;
+    harness.start_nodes(&["w-1", "w-2"]).await?;
 
     let (uninterrupted_training_grid, uninterrupted_inference_grid) =
         run_havana_training_then_inference(
@@ -966,8 +1039,7 @@ async fn full_stack_cli_havana_pause_resume_matches_direct_baseline() -> anyhow:
 #[ignore = "requires local postgres with CREATE DATABASE privilege, nix, and python+numpy"]
 async fn full_stack_cli_python_scalar_flake_e2e() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
-    harness.start_node("w-1").await?;
-    harness.start_node("w-2").await?;
+    harness.start_nodes(&["w-1", "w-2"]).await?;
 
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let evaluator_flake_ref = format!(
@@ -1295,6 +1367,8 @@ struct SamplerCheckpointProgram<'a> {
     paused_current_accumulator: Option<JsonValue>,
     paused_checkpoint: Option<JsonValue>,
     paused_progress: Option<(i64, i64)>,
+    paused_stage_snapshot_count: Option<i64>,
+    paused_observable_snapshot_count: Option<i64>,
 }
 
 impl<'a> SamplerCheckpointProgram<'a> {
@@ -1306,6 +1380,8 @@ impl<'a> SamplerCheckpointProgram<'a> {
             paused_current_accumulator: None,
             paused_checkpoint: None,
             paused_progress: None,
+            paused_stage_snapshot_count: None,
+            paused_observable_snapshot_count: None,
         }
     }
 
@@ -1392,16 +1468,36 @@ impl<'a> SamplerCheckpointProgram<'a> {
         }
     }
 
+    fn checkpoint_resume_state_matches(
+        current: &Option<JsonValue>,
+        paused: &Option<JsonValue>,
+    ) -> bool {
+        let (Some(current), Some(paused)) = (current, paused) else {
+            return false;
+        };
+        current.get("task_id") == paused.get("task_id")
+            && current.get("sampler_snapshot") == paused.get("sampler_snapshot")
+            && current.get("observable_state") == paused.get("observable_state")
+            && current.get("queue") == paused.get("queue")
+    }
+
     async fn capture_paused_state(&mut self, timeout: Duration) -> anyhow::Result<()> {
         let deadline = Instant::now() + timeout;
         loop {
             let current_accumulator = self.harness.run_current_accumulator(self.run_id).await?;
             let checkpoint = self.harness.run_sampler_checkpoint(self.run_id).await?;
             let progress = self.harness.run_sample_progress(self.run_id).await?;
+            let stage_snapshot_count = self.harness.run_stage_snapshot_count(self.run_id).await?;
+            let observable_snapshot_count = self
+                .harness
+                .persisted_observable_snapshot_count(self.run_id)
+                .await?;
             if current_accumulator.is_some() && checkpoint.is_some() {
                 self.paused_current_accumulator = current_accumulator;
                 self.paused_checkpoint = checkpoint;
                 self.paused_progress = Some(progress);
+                self.paused_stage_snapshot_count = Some(stage_snapshot_count);
+                self.paused_observable_snapshot_count = Some(observable_snapshot_count);
                 return Ok(());
             }
             if Instant::now() >= deadline {
@@ -1411,7 +1507,7 @@ impl<'a> SamplerCheckpointProgram<'a> {
         }
     }
 
-    async fn wait_restored_state(
+    async fn wait_exact_restored_state(
         &mut self,
         sampler_node_name: &str,
         timeout: Duration,
@@ -1419,26 +1515,40 @@ impl<'a> SamplerCheckpointProgram<'a> {
         let paused_current_accumulator = self.paused_current_accumulator.clone();
         let paused_checkpoint = self.paused_checkpoint.clone();
         let paused_completed_samples = self.paused_progress.map(|(_, completed)| completed);
+        let paused_stage_snapshot_count = self.paused_stage_snapshot_count;
+        let paused_observable_snapshot_count = self.paused_observable_snapshot_count;
         let run_id = self.run_id;
         self.harness
             .wait_for(
-                "sampler checkpoint restores paused accumulator and completed progress",
+                "sampler checkpoint restores paused state without losing persisted snapshots",
                 timeout,
                 || async {
                     let sampler_state = self.harness.node_state(sampler_node_name).await?;
                     let current_accumulator = self.harness.run_current_accumulator(run_id).await?;
                     let checkpoint = self.harness.run_sampler_checkpoint(run_id).await?;
                     let progress = self.harness.run_sample_progress(run_id).await?;
+                    let stage_snapshot_count =
+                        self.harness.run_stage_snapshot_count(run_id).await?;
+                    let observable_snapshot_count = self
+                        .harness
+                        .persisted_observable_snapshot_count(run_id)
+                        .await?;
                     let sampler_restored = sampler_state.0 == Some(run_id)
                         && sampler_state.1.as_deref() == Some("sampler_aggregator")
                         && sampler_state.2 == Some(run_id)
                         && sampler_state.3.as_deref() == Some("sampler_aggregator");
                     let completed_restored = paused_completed_samples
                         .is_none_or(|paused_completed| progress.1 >= paused_completed);
+                    let stage_snapshots_retained = paused_stage_snapshot_count
+                        .is_none_or(|paused_count| stage_snapshot_count >= paused_count);
+                    let observable_snapshots_retained = paused_observable_snapshot_count
+                        .is_none_or(|paused_count| observable_snapshot_count >= paused_count);
                     Ok(sampler_restored
                         && current_accumulator == paused_current_accumulator
-                        && checkpoint == paused_checkpoint
-                        && completed_restored)
+                        && Self::checkpoint_resume_state_matches(&checkpoint, &paused_checkpoint)
+                        && completed_restored
+                        && stage_snapshots_retained
+                        && observable_snapshots_retained)
                 },
             )
             .await
@@ -1459,6 +1569,72 @@ impl<'a> SamplerCheckpointProgram<'a> {
                 )
             })
             .await
+    }
+
+    async fn wait_persisted_state_retained(&mut self, timeout: Duration) -> anyhow::Result<()> {
+        let paused_completed_samples = self.paused_progress.map(|(_, completed)| completed);
+        let paused_stage_snapshot_count = self.paused_stage_snapshot_count;
+        let paused_observable_snapshot_count = self.paused_observable_snapshot_count;
+        let run_id = self.run_id;
+        self.harness
+            .wait_for(
+                "resumed run retains persisted sampler state",
+                timeout,
+                || async {
+                    let current_accumulator = self.harness.run_current_accumulator(run_id).await?;
+                    let checkpoint = self.harness.run_sampler_checkpoint(run_id).await?;
+                    let progress = self.harness.run_sample_progress(run_id).await?;
+                    let stage_snapshot_count =
+                        self.harness.run_stage_snapshot_count(run_id).await?;
+                    let observable_snapshot_count = self
+                        .harness
+                        .persisted_observable_snapshot_count(run_id)
+                        .await?;
+                    let completed_restored = paused_completed_samples
+                        .is_none_or(|paused_completed| progress.1 >= paused_completed);
+                    let stage_snapshots_retained = paused_stage_snapshot_count
+                        .is_none_or(|paused_count| stage_snapshot_count >= paused_count);
+                    let observable_snapshots_retained = paused_observable_snapshot_count
+                        .is_none_or(|paused_count| observable_snapshot_count >= paused_count);
+                    Ok(current_accumulator.is_some()
+                        && checkpoint.is_some()
+                        && completed_restored
+                        && stage_snapshots_retained
+                        && observable_snapshots_retained)
+                },
+            )
+            .await
+    }
+
+    async fn resume_and_verify_exact_restore(
+        &mut self,
+        sampler_node_name: &str,
+        evaluator_node_names: &[&str],
+        timeout: Duration,
+    ) -> anyhow::Result<()> {
+        self.assign_sampler(sampler_node_name).await?;
+        self.wait_exact_restored_state(sampler_node_name, timeout)
+            .await?;
+        for node_name in evaluator_node_names {
+            self.assign_evaluator(node_name).await?;
+        }
+        self.wait_progress_advances(timeout).await?;
+        Ok(())
+    }
+
+    async fn restart_and_resume_and_verify_retained_state(
+        &mut self,
+        sampler_node_name: &str,
+        evaluator_node_names: &[&str],
+        timeout: Duration,
+    ) -> anyhow::Result<()> {
+        self.assign_sampler(sampler_node_name).await?;
+        for node_name in evaluator_node_names {
+            self.assign_evaluator(node_name).await?;
+        }
+        self.wait_progress_advances(timeout).await?;
+        self.wait_persisted_state_retained(timeout).await?;
+        Ok(())
     }
 }
 
@@ -1506,8 +1682,7 @@ name = "full-stack-e2e"
         .fetch_one(&harness.pool)
         .await?;
 
-    harness.start_node("w-1").await?;
-    harness.start_node("w-2").await?;
+    harness.start_nodes(&["w-1", "w-2"]).await?;
 
     let node_list = harness
         .cli()
@@ -1762,9 +1937,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
         let mut program =
             SamplerCheckpointProgram::new(&mut harness, run_id, "sampler-checkpoint-e2e");
 
-        program.harness.start_node("w-1").await?;
-        program.harness.start_node("w-2").await?;
-        program.harness.start_node("w-3").await?;
+        program.harness.start_nodes(&["w-1", "w-2", "w-3"]).await?;
 
         program.assign_sampler("w-1").await?;
         program.assign_evaluator("w-2").await?;
@@ -1784,15 +1957,8 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
             .capture_paused_state(Duration::from_secs(15))
             .await?;
 
-        program.assign_sampler("w-1").await?;
         program
-            .wait_restored_state("w-1", Duration::from_secs(15))
-            .await?;
-
-        program.assign_evaluator("w-2").await?;
-        program.assign_evaluator("w-3").await?;
-        program
-            .wait_progress_advances(Duration::from_secs(15))
+            .resume_and_verify_exact_restore("w-1", &["w-2", "w-3"], Duration::from_secs(15))
             .await?;
     }
 
@@ -1808,8 +1974,7 @@ async fn full_stack_cli_server_can_restart_while_nodes_keep_running() -> anyhow:
     let mut harness = FullStackHarness::new().await?;
 
     let server_url = harness.start_server().await?;
-    harness.start_node("w-1").await?;
-    harness.start_node("w-2").await?;
+    harness.start_nodes(&["w-1", "w-2"]).await?;
 
     harness
         .wait_for(
@@ -1860,7 +2025,36 @@ async fn full_stack_cli_server_can_restart_while_nodes_keep_running() -> anyhow:
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_run_node_exits_on_sigterm_and_releases_name() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
+    let config = temp_run_add_config("name = \"sigterm-node-e2e\"\n");
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = 'sigterm-node-e2e'")
+        .fetch_one(&harness.pool)
+        .await?;
+
     harness.start_node("w-1").await?;
+    harness
+        .cli()
+        .args(["node", "assign", "w-1", "evaluator", "sigterm-node-e2e"])
+        .assert()
+        .success();
+
+    harness
+        .wait_for(
+            "node has active evaluator assignment before sigterm",
+            Duration::from_secs(10),
+            || async {
+                let state = harness.node_state("w-1").await?;
+                Ok(state.2 == Some(run_id) && state.3.as_deref() == Some("evaluator"))
+            },
+        )
+        .await?;
 
     harness.terminate_child("w-1").await?;
 
@@ -1882,6 +2076,12 @@ async fn full_stack_cli_run_node_exits_on_sigterm_and_releases_name() -> anyhow:
             },
         )
         .await?;
+
+    let state = harness.node_state("w-1").await?;
+    assert_eq!(state.0, None);
+    assert_eq!(state.1, None);
+    assert_eq!(state.2, None);
+    assert_eq!(state.3, None);
 
     harness.start_node("w-1").await?;
 
@@ -1970,8 +2170,7 @@ completed_batch_fetch_limit = 64
         .map(|value| value.split(';').next().unwrap_or("").to_string())
         .ok_or_else(|| anyhow::anyhow!("missing session cookie"))?;
 
-    harness.start_node("w-1").await?;
-    harness.start_node("w-2").await?;
+    harness.start_nodes(&["w-1", "w-2"]).await?;
 
     let assign_sampler = http_post_json(
         &server_url,
@@ -2142,8 +2341,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
             .fetch_one(&harness.pool)
             .await?;
 
-    harness.start_node("w-1").await?;
-    harness.start_node("w-2").await?;
+    harness.start_nodes(&["w-1", "w-2"]).await?;
     harness
         .cli()
         .args([
@@ -2227,7 +2425,7 @@ accumulator_kind = "scalar"
 
 [[task_queue]]
 kind = "sample"
-stop_condition = { max_samples = 100_000 }
+stop_condition = { max_samples = 10_000_000 }
 accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 "#,
@@ -2246,55 +2444,47 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
             .fetch_one(&harness.pool)
             .await?;
 
-    harness.start_node("w-1").await?;
-    harness.start_node("w-2").await?;
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-1",
-            "sampler-aggregator",
-            "graceful-node-shutdown-e2e",
-        ])
-        .assert()
-        .success();
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-2",
-            "evaluator",
-            "graceful-node-shutdown-e2e",
-        ])
-        .assert()
-        .success();
+    {
+        let mut program =
+            SamplerCheckpointProgram::new(&mut harness, run_id, "graceful-node-shutdown-e2e");
 
-    harness
-        .wait_for(
-            "sampler becomes active",
-            Duration::from_secs(15),
-            || async {
-                let sampler = harness.node_state("w-1").await?;
-                Ok(sampler.2 == Some(run_id) && sampler.3.as_deref() == Some("sampler_aggregator"))
+        program.harness.start_nodes(&["w-1", "w-2"]).await?;
+
+        program.assign_sampler("w-1").await?;
+        program.assign_evaluator("w-2").await?;
+        program
+            .wait_sampler_active("w-1", Duration::from_secs(15))
+            .await?;
+
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        let store = gammaboard::init_pg_store(&program.harness.db.database_url, 10).await?;
+        let result = node_api::stop_all_nodes_gracefully(
+            &store,
+            node_api::GracefulNodeShutdownParams {
+                sampler_drain_timeout: Duration::from_secs(10),
+                node_stop_timeout: Duration::from_secs(10),
+                poll_interval: Duration::from_millis(50),
             },
         )
         .await?;
 
-    let store = gammaboard::init_pg_store(&harness.db.database_url, 10).await?;
-    let result = node_api::stop_all_nodes_gracefully(
-        &store,
-        node_api::GracefulNodeShutdownParams {
-            sampler_drain_timeout: Duration::from_secs(10),
-            node_stop_timeout: Duration::from_secs(10),
-            poll_interval: Duration::from_millis(50),
-        },
-    )
-    .await?;
+        assert!(!result.sampler_drain_timed_out);
+        assert!(result.assignments_cleared >= 2);
+        assert_eq!(result.active_samplers_remaining, 0);
 
-    assert!(!result.sampler_drain_timed_out);
-    assert_eq!(result.active_samplers_remaining, 0);
+        program
+            .wait_nodes_down(&["w-1", "w-2"], Duration::from_secs(15))
+            .await?;
+        program.harness.reap_children(&["w-1", "w-2"]).await?;
+        program
+            .capture_paused_state(Duration::from_secs(15))
+            .await?;
+        program.harness.start_nodes(&["w-1", "w-2"]).await?;
+        program
+            .restart_and_resume_and_verify_retained_state("w-1", &["w-2"], Duration::from_secs(15))
+            .await?;
+    }
 
     harness.stop_children().await;
     harness.pool.close().await;
@@ -2663,9 +2853,7 @@ strict_batch_ordering = true
         .fetch_one(&harness.pool)
         .await?;
 
-    harness.start_node("w-1").await?;
-    harness.start_node("w-2").await?;
-    harness.start_node("w-3").await?;
+    harness.start_nodes(&["w-1", "w-2", "w-3"]).await?;
 
     harness
         .cli()
@@ -2802,8 +2990,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_produce_ba
         .fetch_one(&harness.pool)
         .await?;
 
-    harness.start_node("w-1").await?;
-    harness.start_node("w-2").await?;
+    harness.start_nodes(&["w-1", "w-2"]).await?;
 
     harness
         .cli()
@@ -2866,8 +3053,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
             .fetch_one(&harness.pool)
             .await?;
 
-    harness.start_node("w-1").await?;
-    harness.start_node("w-2").await?;
+    harness.start_nodes(&["w-1", "w-2"]).await?;
 
     harness
         .cli()
@@ -2937,8 +3123,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
         .fetch_one(&harness.pool)
         .await?;
 
-    harness.start_node("w-1").await?;
-    harness.start_node("w-2").await?;
+    harness.start_nodes(&["w-1", "w-2"]).await?;
 
     harness
         .cli()
@@ -3008,8 +3193,7 @@ stop_condition = { max_samples = 16 }
             .fetch_one(&harness.pool)
             .await?;
 
-    harness.start_node("w-1").await?;
-    harness.start_node("w-2").await?;
+    harness.start_nodes(&["w-1", "w-2"]).await?;
 
     harness
         .cli()

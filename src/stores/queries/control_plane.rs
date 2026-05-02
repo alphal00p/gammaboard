@@ -199,6 +199,10 @@ pub(crate) async fn announce_node(
                 WHEN nodes.uuid = EXCLUDED.uuid THEN nodes.active_role
                 WHEN nodes.lease_expires_at <= now() THEN NULL
                 ELSE nodes.active_role
+            END,
+            shutdown_requested_at = CASE
+                WHEN nodes.uuid = EXCLUDED.uuid THEN nodes.shutdown_requested_at
+                ELSE NULL
             END
         WHERE nodes.uuid = EXCLUDED.uuid OR nodes.lease_expires_at <= now()
         RETURNING 1
@@ -615,6 +619,7 @@ pub(crate) async fn expire_node_lease(pool: &PgPool, node_uuid: &str) -> Result<
             desired_role = NULL,
             active_run_id = NULL,
             active_role = NULL,
+            shutdown_requested_at = NULL,
             updated_at = now()
         WHERE uuid = $1
         "#,

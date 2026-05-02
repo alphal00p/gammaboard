@@ -752,6 +752,40 @@ async fn shutdown_request_clears_desired_assignment_but_keeps_current_assignment
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
+async fn expired_shutdown_request_does_not_affect_replacement_node() {
+    let Some(store) = test_store().await else {
+        return;
+    };
+    let node_name = unique_id("shutdown-replacement-node");
+    let old_uuid = unique_id("shutdown-replacement-old");
+    let new_uuid = unique_id("shutdown-replacement-new");
+
+    store
+        .announce_node(&node_name, &old_uuid)
+        .await
+        .expect("announce old node");
+    store
+        .request_node_shutdown(&node_name)
+        .await
+        .expect("request old node shutdown");
+    store
+        .expire_node_lease(&old_uuid)
+        .await
+        .expect("expire old node");
+    store
+        .announce_node(&node_name, &new_uuid)
+        .await
+        .expect("announce replacement node");
+
+    let shutdown_requested = store
+        .consume_node_shutdown_request(&new_uuid)
+        .await
+        .expect("consume replacement shutdown request");
+    assert!(!shutdown_requested);
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
 async fn shutdown_all_nodes_clears_desired_assignments() {
     let Some(store) = test_store().await else {
         return;

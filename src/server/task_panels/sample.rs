@@ -2,9 +2,7 @@ use super::{
     TaskPanelContext, TaskPanelCurrentSourcePolicy, TaskPanelHistoryContext, TaskPanelProjector,
     panel_projector, panel_projector_with_source,
 };
-use crate::core::{
-    AccumulatorConfig, EngineError, RunTaskSpec, SampleErrorProjection, SampleStopCondition,
-};
+use crate::core::{AccumulatorConfig, EngineError, SampleErrorProjection, SampleStopCondition};
 use crate::evaluation::{
     Accumulator, AccumulatorState, GammaLoopDiagnostics, Point, SemanticAccumulatorKind,
 };
@@ -19,34 +17,29 @@ use serde_json::Value as JsonValue;
 use serde_json::json;
 
 pub(super) fn projectors(
-    task_spec: &RunTaskSpec,
-    effective_accumulator_config: Option<AccumulatorConfig>,
+    effective_accumulator_config: AccumulatorConfig,
 ) -> Vec<TaskPanelProjector> {
-    let accumulator_config = task_accumulator_config(task_spec).or(effective_accumulator_config);
+    let accumulator_config = effective_accumulator_config;
     let mut projectors = vec![
-        sample_progress_projector(),
-        estimate_summary_projector(accumulator_config.as_ref()),
-        real_estimate_history_projector(accumulator_config.as_ref()),
+        sample_progress_projector(&accumulator_config),
+        estimate_summary_projector(&accumulator_config),
+        real_estimate_history_projector(&accumulator_config),
     ];
     if matches!(
         accumulator_config,
-        Some(AccumulatorConfig::Complex | AccumulatorConfig::Gammaloop)
+        AccumulatorConfig::Complex | AccumulatorConfig::Gammaloop
     ) {
-        projectors.push(imag_estimate_history_projector(accumulator_config.as_ref()));
+        projectors.push(imag_estimate_history_projector(&accumulator_config));
     }
     if matches!(
         accumulator_config,
-        Some(AccumulatorConfig::Scalar | AccumulatorConfig::Complex | AccumulatorConfig::Gammaloop)
-            | None
+        AccumulatorConfig::Scalar | AccumulatorConfig::Complex | AccumulatorConfig::Gammaloop
     ) {
-        projectors.push(max_weight_summary_projector(accumulator_config.as_ref()));
-        projectors.push(max_weight_points_projector(accumulator_config.as_ref()));
+        projectors.push(max_weight_summary_projector(&accumulator_config));
+        projectors.push(max_weight_points_projector(&accumulator_config));
     }
-    projectors.push(rsd_history_projector(accumulator_config.as_ref()));
-    if matches!(
-        accumulator_config,
-        Some(AccumulatorConfig::Gammaloop) | None
-    ) {
+    projectors.push(rsd_history_projector(&accumulator_config));
+    if matches!(accumulator_config, AccumulatorConfig::Gammaloop) {
         projectors.push(gammaloop_histogram_bundle_projector());
         projectors.push(gammaloop_evaluation_timing_projector());
         projectors.push(gammaloop_evaluation_diagnostics_projector());
@@ -54,10 +47,8 @@ pub(super) fn projectors(
     projectors
 }
 
-fn max_weight_summary_projector(
-    accumulator_config: Option<&AccumulatorConfig>,
-) -> TaskPanelProjector {
-    let accumulator_config = accumulator_config.cloned();
+fn max_weight_summary_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
+    let accumulator_config = *accumulator_config;
     panel_projector_with_source(
         with_panel_width(
             panel_spec(
@@ -70,17 +61,14 @@ fn max_weight_summary_projector(
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
-            Ok(sample_accumulator(ctx, accumulator_config.as_ref())?
-                .and_then(max_weight_summary_panel))
+            Ok(sample_accumulator(ctx, &accumulator_config)?.and_then(max_weight_summary_panel))
         },
         |_ctx| Ok(None),
     )
 }
 
-fn max_weight_points_projector(
-    accumulator_config: Option<&AccumulatorConfig>,
-) -> TaskPanelProjector {
-    let accumulator_config = accumulator_config.cloned();
+fn max_weight_points_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
+    let accumulator_config = *accumulator_config;
     panel_projector_with_source(
         with_panel_width(
             panel_spec(
@@ -93,14 +81,14 @@ fn max_weight_points_projector(
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
-            Ok(sample_accumulator(ctx, accumulator_config.as_ref())?
-                .and_then(max_weight_points_panel))
+            Ok(sample_accumulator(ctx, &accumulator_config)?.and_then(max_weight_points_panel))
         },
         |_ctx| Ok(None),
     )
 }
 
-fn sample_progress_projector() -> TaskPanelProjector {
+fn sample_progress_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
+    let accumulator_config = *accumulator_config;
     panel_projector_with_source(
         with_panel_width(
             panel_spec(
@@ -112,9 +100,9 @@ fn sample_progress_projector() -> TaskPanelProjector {
             PanelWidth::Full,
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
-        |ctx| {
+        move |ctx| {
             let current = sample_progress_value(ctx);
-            let eta_seconds = sample_eta_seconds(ctx)?;
+            let eta_seconds = sample_eta_seconds(ctx, &accumulator_config)?;
             Ok(Some(progress_panel(
                 "sample_progress",
                 current,
@@ -130,14 +118,12 @@ fn sample_progress_projector() -> TaskPanelProjector {
     )
 }
 
-fn real_estimate_history_projector(
-    accumulator_config: Option<&AccumulatorConfig>,
-) -> TaskPanelProjector {
-    let current_config = accumulator_config.cloned();
-    let history_config = accumulator_config.cloned();
+fn real_estimate_history_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
+    let current_config = *accumulator_config;
+    let history_config = *accumulator_config;
     let width = if matches!(
         accumulator_config,
-        Some(AccumulatorConfig::Complex | AccumulatorConfig::Gammaloop)
+        AccumulatorConfig::Complex | AccumulatorConfig::Gammaloop
     ) {
         PanelWidth::Half
     } else {
@@ -156,22 +142,20 @@ fn real_estimate_history_projector(
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
             let target = run_target_from_json(ctx.run_target).map(|target| target.re);
-            Ok(sample_accumulator(ctx, current_config.as_ref())?
+            Ok(sample_accumulator(ctx, &current_config)?
                 .and_then(|accumulator| Some(real_estimate_history_panel(accumulator)))
                 .map(|panel| with_scalar_target(panel, target)))
         },
         move |ctx| {
-            Ok(decode_history_observable(ctx, history_config.as_ref())?
+            Ok(decode_history_observable(ctx, &history_config)?
                 .and_then(|accumulator| Some(real_estimate_history_panel(accumulator))))
         },
     )
 }
 
-fn imag_estimate_history_projector(
-    accumulator_config: Option<&AccumulatorConfig>,
-) -> TaskPanelProjector {
-    let current_config = accumulator_config.cloned();
-    let history_config = accumulator_config.cloned();
+fn imag_estimate_history_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
+    let current_config = *accumulator_config;
+    let history_config = *accumulator_config;
     panel_projector_with_source(
         with_panel_width(
             panel_spec(
@@ -185,22 +169,22 @@ fn imag_estimate_history_projector(
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
             let target = run_target_from_json(ctx.run_target).map(|target| target.im);
-            Ok(sample_accumulator(ctx, current_config.as_ref())?
+            Ok(sample_accumulator(ctx, &current_config)?
                 .and_then(imag_estimate_history_panel)
                 .map(|panel| with_scalar_target(panel, target)))
         },
         move |ctx| {
-            Ok(decode_history_observable(ctx, history_config.as_ref())?
+            Ok(decode_history_observable(ctx, &history_config)?
                 .and_then(imag_estimate_history_panel))
         },
     )
 }
 
-fn rsd_history_projector(accumulator_config: Option<&AccumulatorConfig>) -> TaskPanelProjector {
+fn rsd_history_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
     persisted_first_history_projector(
         "abs_signal_to_noise_history",
         "RSD",
-        accumulator_config.cloned(),
+        *accumulator_config,
         |accumulator| Some(rsd_history_panel(accumulator)),
     )
 }
@@ -208,13 +192,13 @@ fn rsd_history_projector(accumulator_config: Option<&AccumulatorConfig>) -> Task
 fn persisted_first_history_projector<F>(
     panel_id: &'static str,
     label: &'static str,
-    accumulator_config: Option<AccumulatorConfig>,
+    accumulator_config: AccumulatorConfig,
     map_panel: F,
 ) -> TaskPanelProjector
 where
     F: Fn(AccumulatorState) -> Option<PanelState> + Copy + Send + Sync + 'static,
 {
-    let current_config = accumulator_config.clone();
+    let current_config = accumulator_config;
     let history_config = accumulator_config;
     panel_projector_with_source(
         with_panel_width(
@@ -227,15 +211,13 @@ where
             PanelWidth::Full,
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
-        move |ctx| Ok(sample_accumulator(ctx, current_config.as_ref())?.and_then(map_panel)),
-        move |ctx| Ok(decode_history_observable(ctx, history_config.as_ref())?.and_then(map_panel)),
+        move |ctx| Ok(sample_accumulator(ctx, &current_config)?.and_then(map_panel)),
+        move |ctx| Ok(decode_history_observable(ctx, &history_config)?.and_then(map_panel)),
     )
 }
 
-fn estimate_summary_projector(
-    accumulator_config: Option<&AccumulatorConfig>,
-) -> TaskPanelProjector {
-    let accumulator_config = accumulator_config.cloned();
+fn estimate_summary_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
+    let accumulator_config = *accumulator_config;
     panel_projector_with_source(
         with_panel_width(
             panel_spec(
@@ -249,7 +231,7 @@ fn estimate_summary_projector(
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
             let run_target = run_target_from_json(ctx.run_target);
-            Ok(sample_accumulator(ctx, accumulator_config.as_ref())?
+            Ok(sample_accumulator(ctx, &accumulator_config)?
                 .map(|accumulator| estimate_summary_panel(accumulator, run_target)))
         },
         |_ctx| Ok(None),
@@ -268,14 +250,12 @@ fn gammaloop_histogram_bundle_projector() -> TaskPanelProjector {
             PanelWidth::Full,
         ),
         |ctx| {
-            Ok(
-                sample_accumulator(ctx, Some(&AccumulatorConfig::Gammaloop))?
-                    .and_then(gammaloop_histogram_bundle_panel),
-            )
+            Ok(sample_accumulator(ctx, &AccumulatorConfig::Gammaloop)?
+                .and_then(gammaloop_histogram_bundle_panel))
         },
         |ctx| {
             Ok(
-                decode_history_observable(ctx, Some(&AccumulatorConfig::Gammaloop))?
+                decode_history_observable(ctx, &AccumulatorConfig::Gammaloop)?
                     .and_then(gammaloop_histogram_bundle_panel),
             )
         },
@@ -294,14 +274,12 @@ fn gammaloop_evaluation_diagnostics_projector() -> TaskPanelProjector {
             PanelWidth::Full,
         ),
         |ctx| {
-            Ok(
-                sample_accumulator(ctx, Some(&AccumulatorConfig::Gammaloop))?
-                    .and_then(gammaloop_evaluation_diagnostics_panel),
-            )
+            Ok(sample_accumulator(ctx, &AccumulatorConfig::Gammaloop)?
+                .and_then(gammaloop_evaluation_diagnostics_panel))
         },
         |ctx| {
             Ok(
-                decode_history_observable(ctx, Some(&AccumulatorConfig::Gammaloop))?
+                decode_history_observable(ctx, &AccumulatorConfig::Gammaloop)?
                     .and_then(gammaloop_evaluation_diagnostics_panel),
             )
         },
@@ -320,14 +298,12 @@ fn gammaloop_evaluation_timing_projector() -> TaskPanelProjector {
             PanelWidth::Full,
         ),
         |ctx| {
-            Ok(
-                sample_accumulator(ctx, Some(&AccumulatorConfig::Gammaloop))?
-                    .and_then(gammaloop_evaluation_timing_panel),
-            )
+            Ok(sample_accumulator(ctx, &AccumulatorConfig::Gammaloop)?
+                .and_then(gammaloop_evaluation_timing_panel))
         },
         |ctx| {
             Ok(
-                decode_history_observable(ctx, Some(&AccumulatorConfig::Gammaloop))?
+                decode_history_observable(ctx, &AccumulatorConfig::Gammaloop)?
                     .and_then(gammaloop_evaluation_timing_panel),
             )
         },
@@ -340,28 +316,23 @@ fn sample_progress_value(ctx: &TaskPanelContext<'_>) -> f64 {
 
 fn sample_accumulator(
     ctx: &TaskPanelContext<'_>,
-    accumulator_config: Option<&AccumulatorConfig>,
+    accumulator_config: &AccumulatorConfig,
 ) -> Result<Option<AccumulatorState>, EngineError> {
     if let Some(accumulator) = ctx.source.accumulator() {
-        let requested_config = accumulator_config.cloned();
-        if requested_config
-            .as_ref()
-            .map(|config| accumulator_matches_requested_config(accumulator, config))
-            .unwrap_or(true)
-        {
+        if accumulator_matches_requested_config(accumulator, accumulator_config) {
             return Ok(Some(accumulator.clone()));
         }
         if ctx.source.persisted().is_none() {
             return Err(EngineError::build(format!(
-                "accumulator type mismatch: expected {}, got {} and no persisted snapshot was available for fallback decoding",
-                config_label(&requested_config.expect("checked is_some above")),
+                "accumulator type mismatch: expected {}, got {} and no persisted snapshot was available",
+                config_label(accumulator_config),
                 accumulator.kind_str()
             )));
         }
     }
     match ctx.source.persisted() {
         Some(persisted) => {
-            decode_aggregate_persisted_accumulator_with_fallback(accumulator_config, persisted)
+            decode_aggregate_persisted_accumulator(accumulator_config, persisted).map(Some)
         }
         None => Ok(None),
     }
@@ -389,12 +360,10 @@ fn accumulator_matches_requested_config(
 
 fn decode_history_observable(
     ctx: &TaskPanelHistoryContext<'_>,
-    accumulator_config: Option<&AccumulatorConfig>,
+    accumulator_config: &AccumulatorConfig,
 ) -> Result<Option<AccumulatorState>, EngineError> {
-    decode_aggregate_persisted_accumulator_with_fallback(
-        accumulator_config,
-        &ctx.snapshot.persisted_output,
-    )
+    decode_aggregate_persisted_accumulator(accumulator_config, &ctx.snapshot.persisted_output)
+        .map(Some)
 }
 
 fn decode_aggregate_persisted_accumulator(
@@ -423,44 +392,14 @@ fn decode_aggregate_persisted_accumulator(
     }
 }
 
-fn decode_aggregate_persisted_accumulator_with_fallback(
-    accumulator_config: Option<&AccumulatorConfig>,
-    persisted: &JsonValue,
-) -> Result<Option<AccumulatorState>, EngineError> {
-    if let Some(config) = accumulator_config {
-        return decode_aggregate_persisted_accumulator(config, persisted).map(Some);
-    }
-    if let Ok(accumulator) =
-        decode_aggregate_persisted_accumulator(&AccumulatorConfig::Scalar, persisted)
-    {
-        return Ok(Some(accumulator));
-    }
-    if let Ok(accumulator) =
-        decode_aggregate_persisted_accumulator(&AccumulatorConfig::Complex, persisted)
-    {
-        return Ok(Some(accumulator));
-    }
-    if let Ok(accumulator) =
-        decode_aggregate_persisted_accumulator(&AccumulatorConfig::Gammaloop, persisted)
-    {
-        return Ok(Some(accumulator));
-    }
-    Ok(None)
-}
-
-fn estimate_label(accumulator_config: Option<&AccumulatorConfig>) -> &'static str {
+fn estimate_label(accumulator_config: &AccumulatorConfig) -> &'static str {
     match accumulator_config {
-        Some(AccumulatorConfig::Empty) => "Estimate",
-        Some(AccumulatorConfig::Scalar) => "Mean",
-        Some(AccumulatorConfig::Complex) => "Real Mean",
-        Some(AccumulatorConfig::Gammaloop) => "Real Mean",
-        None => "Estimate",
-        Some(AccumulatorConfig::FullScalar) | Some(AccumulatorConfig::FullComplex) => "Estimate",
+        AccumulatorConfig::Empty => "Estimate",
+        AccumulatorConfig::Scalar => "Mean",
+        AccumulatorConfig::Complex => "Real Mean",
+        AccumulatorConfig::Gammaloop => "Real Mean",
+        AccumulatorConfig::FullScalar | AccumulatorConfig::FullComplex => "Estimate",
     }
-}
-
-fn task_accumulator_config(task: &RunTaskSpec) -> Option<AccumulatorConfig> {
-    task.new_accumulator_config().ok().flatten()
 }
 
 fn config_label(config: &AccumulatorConfig) -> &'static str {
@@ -1055,14 +994,17 @@ fn delta_percent(value: f64, target: f64) -> f64 {
     }
 }
 
-fn sample_eta_seconds(ctx: &TaskPanelContext<'_>) -> Result<Option<f64>, EngineError> {
+fn sample_eta_seconds(
+    ctx: &TaskPanelContext<'_>,
+    accumulator_config: &AccumulatorConfig,
+) -> Result<Option<f64>, EngineError> {
     let Some(stop_condition) = ctx.task.task.sample_stop_condition() else {
         return Ok(None);
     };
     if let Some(smoothed_eta_seconds) = ctx.smoothed_eta_seconds {
         return Ok(Some(smoothed_eta_seconds));
     }
-    let accumulator = sample_accumulator(ctx, None)?;
+    let accumulator = sample_accumulator(ctx, accumulator_config)?;
     let projection = stop_condition
         .projection
         .unwrap_or_else(|| match accumulator {

@@ -41,6 +41,7 @@ pub struct GracefulNodeShutdownParams {
 
 #[derive(Debug, Clone)]
 pub struct GracefulNodeShutdownResult {
+    pub assignments_cleared: u64,
     pub rows_updated: u64,
     pub sampler_drain_timed_out: bool,
     pub node_stop_timed_out: bool,
@@ -179,70 +180,71 @@ pub async fn stop_all_nodes_gracefully(
     store: &impl ControlPlaneStore,
     params: GracefulNodeShutdownParams,
 ) -> Result<GracefulNodeShutdownResult, ApiError> {
+    let assignments_cleared = store.clear_all_desired_assignments().await?;
     let rows_updated = store.request_all_nodes_shutdown().await?;
-    let sampler_drain_timed_out = wait_until(
-        params.sampler_drain_timeout,
-        params.poll_interval,
-        || async {
-            let nodes = store.list_nodes(None).await?;
-            Ok(nodes
-                .iter()
-                .filter(|node| {
-                    node.current_assignment
-                        .as_ref()
-                        .is_some_and(|assignment| assignment.role == WorkerRole::SamplerAggregator)
-                })
-                .count())
-        },
-    )
-    .await?
-    .is_some();
-
-    let node_stop_timed_out =
-        wait_until(params.node_stop_timeout, params.poll_interval, || async {
-            Ok(store.list_nodes(None).await?.len())
-        })
-        .await?
-        .is_some();
-
-    let nodes = store.list_nodes(None).await?;
-    let active_samplers_remaining = nodes
-        .iter()
-        .filter(|node| {
-            node.current_assignment
-                .as_ref()
-                .is_some_and(|assignment| assignment.role == WorkerRole::SamplerAggregator)
-        })
-        .count();
+    let wait_result = wait_for_graceful_node_shutdown(store, params).await?;
 
     Ok(GracefulNodeShutdownResult {
+        assignments_cleared,
         rows_updated,
-        sampler_drain_timed_out,
-        node_stop_timed_out,
-        active_samplers_remaining,
-        live_nodes_remaining: nodes.len(),
+        sampler_drain_timed_out: wait_result.sampler_drain_timed_out,
+        node_stop_timed_out: wait_result.node_stop_timed_out,
+        active_samplers_remaining: wait_result.active_samplers_remaining,
+        live_nodes_remaining: wait_result.live_nodes_remaining,
     })
 }
 
-async fn wait_until<F, Fut>(
-    timeout: Duration,
-    poll_interval: Duration,
-    mut remaining: F,
-) -> Result<Option<usize>, ApiError>
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<usize, crate::core::StoreError>>,
-{
-    let deadline = Instant::now() + timeout;
+struct GracefulNodeShutdownWaitResult {
+    sampler_drain_timed_out: bool,
+    node_stop_timed_out: bool,
+    active_samplers_remaining: usize,
+    live_nodes_remaining: usize,
+}
+
+async fn wait_for_graceful_node_shutdown(
+    store: &impl ControlPlaneStore,
+    params: GracefulNodeShutdownParams,
+) -> Result<GracefulNodeShutdownWaitResult, ApiError> {
+    let sampler_deadline = Instant::now() + params.sampler_drain_timeout;
+    let mut node_deadline = None;
+    let mut sampler_drain_timed_out = false;
     loop {
-        let count = remaining().await?;
-        if count == 0 {
-            return Ok(None);
+        let nodes = store.list_nodes(None).await?;
+        let live_nodes_remaining = nodes.len();
+        let active_samplers_remaining = nodes
+            .iter()
+            .filter(|node| {
+                node.current_assignment
+                    .as_ref()
+                    .is_some_and(|assignment| assignment.role == WorkerRole::SamplerAggregator)
+            })
+            .count();
+        let now = Instant::now();
+
+        if active_samplers_remaining == 0 || now >= sampler_deadline {
+            sampler_drain_timed_out = active_samplers_remaining > 0;
+            node_deadline.get_or_insert(now + params.node_stop_timeout);
         }
-        if Instant::now() >= deadline {
-            return Ok(Some(count));
+
+        if live_nodes_remaining == 0 {
+            return Ok(GracefulNodeShutdownWaitResult {
+                sampler_drain_timed_out,
+                node_stop_timed_out: false,
+                active_samplers_remaining,
+                live_nodes_remaining,
+            });
         }
-        tokio::time::sleep(poll_interval).await;
+
+        if node_deadline.is_some_and(|deadline| now >= deadline) {
+            return Ok(GracefulNodeShutdownWaitResult {
+                sampler_drain_timed_out,
+                node_stop_timed_out: true,
+                active_samplers_remaining,
+                live_nodes_remaining,
+            });
+        }
+
+        tokio::time::sleep(params.poll_interval).await;
     }
 }
 

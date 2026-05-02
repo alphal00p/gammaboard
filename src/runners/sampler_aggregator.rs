@@ -93,12 +93,6 @@ enum ProduceDecision {
     PlannedByQueue(Option<usize>),
 }
 
-#[derive(Debug, Clone, Copy)]
-enum FinalizeMode {
-    PersistState,
-    CompleteTask,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SamplerRuntimeState {
     produced_batches_total: i64,
@@ -919,7 +913,7 @@ where
     }
 
     pub async fn persist_state(&mut self) -> Result<(), RunnerError> {
-        self.finalize_task_state(FinalizeMode::PersistState).await?;
+        self.finalize_for_pause().await?;
         self.persist_sampler_checkpoint().await
     }
 
@@ -1043,7 +1037,7 @@ where
     }
 
     pub async fn complete_task(&mut self) -> Result<(), RunnerError> {
-        self.finalize_task_state(FinalizeMode::CompleteTask).await?;
+        self.finalize_completed_task().await?;
         self.store.complete_run_task(self.task.id).await?;
         Ok(())
     }
@@ -1053,15 +1047,19 @@ where
         Ok(())
     }
 
-    async fn finalize_task_state(&mut self, mode: FinalizeMode) -> Result<(), RunnerError> {
+    async fn finalize_for_pause(&mut self) -> Result<(), RunnerError> {
         self.queue.flush().await?;
-        let queue_empty = match mode {
-            FinalizeMode::PersistState => {
-                self.drain_local_work_on_stop().await?;
-                self.queue.open_batch_count().await? <= 0
-            }
-            FinalizeMode::CompleteTask => true,
-        };
+        self.drain_local_work_on_stop().await?;
+        let queue_empty = self.queue.open_batch_count().await? <= 0;
+        self.persist_sampler_state(queue_empty).await
+    }
+
+    async fn finalize_completed_task(&mut self) -> Result<(), RunnerError> {
+        self.queue.flush().await?;
+        self.persist_sampler_state(true).await
+    }
+
+    async fn persist_sampler_state(&mut self, queue_empty: bool) -> Result<(), RunnerError> {
         self.force_cleanup_consumed_completed_batches().await?;
         self.flush_aggregation(true).await?;
         self.flush_performance_snapshot(true).await?;

@@ -120,6 +120,7 @@ async fn cleanup_deploy(
             )
             .await?;
             tracing::info!(
+                assignments_cleared = stopped.assignments_cleared,
                 rows_updated = stopped.rows_updated,
                 active_samplers_remaining = stopped.active_samplers_remaining,
                 live_nodes_remaining = stopped.live_nodes_remaining,

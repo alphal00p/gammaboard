@@ -1,10 +1,1 @@
-/**
- * App.css
- *
- * This file is kept for backward compatibility but is largely unused.
- * Material UI components handle styling through the sx prop and theme.
- *
- * If you need custom styles not provided by MUI, add them here.
- */
-
-/* Additional global styles can be added here if needed */
+/* Global app styles live here when MUI theme/sx is not sufficient. */

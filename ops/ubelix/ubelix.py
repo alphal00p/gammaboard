@@ -124,24 +124,59 @@ def slurm_log_paths(job_name: str, job_id: str) -> tuple[str, str]:
     )
 
 
-def tail_file(path: str, lines: int = 80) -> str:
-    if not os.path.exists(path):
-        return f"{path}: missing"
-    result = run(["tail", "-n", str(lines), path], check=False)
-    return result.stdout.rstrip() or f"{path}: empty"
-
-
-def print_job_log_tail(job: Job) -> None:
-    out_path, err_path = slurm_log_paths(job.name, job.id)
-    print(f"--- {out_path} ---", file=sys.stderr)
-    print(tail_file(out_path), file=sys.stderr)
-    print(f"--- {err_path} ---", file=sys.stderr)
-    print(tail_file(err_path), file=sys.stderr)
-
-
 def job_is_active(job_id: str) -> bool:
     result = run(["squeue", "-h", "-j", job_id, "-o", "%i"], check=False)
     return any(line.strip() == job_id for line in result.stdout.splitlines())
+
+
+def status_lines() -> list[str]:
+    control_jobs = active_jobs(name=CONTROL_JOB_NAME)
+    single_node_jobs = active_jobs(name=SINGLE_NODE_JOB_NAME)
+    worker_jobs = active_jobs(name=WORKER_JOB_NAME)
+    lines: list[str] = []
+    if control_jobs:
+        for job in control_jobs:
+            lines.append(f"control     {job.id:<8} {job.state:<10} {job.node or '-'}")
+    else:
+        lines.append("control     -        not-running -")
+    if single_node_jobs:
+        for job in single_node_jobs:
+            lines.append(f"single-node {job.id:<8} {job.state:<10} {job.node or '-'}")
+    else:
+        lines.append("single-node -        not-running -")
+    lines.append(f"workers     {len(worker_jobs)}")
+    for job in worker_jobs:
+        lines.append(f"worker      {job.id:<8} {job.state:<10} {job.node or '-'}")
+    return lines
+
+
+class LiveStatusPrinter:
+    def __init__(self) -> None:
+        self.enabled = sys.stdout.isatty()
+        self.rendered_lines = 0
+
+    def clear(self) -> None:
+        if not self.enabled or self.rendered_lines == 0:
+            return
+        for _ in range(self.rendered_lines):
+            sys.stdout.write("\r\033[2K\033[1A")
+        sys.stdout.write("\r\033[2K")
+        sys.stdout.flush()
+        self.rendered_lines = 0
+
+    def print_event(self, line: str) -> None:
+        self.clear()
+        print(line)
+
+    def render(self, lines: list[str]) -> None:
+        if not self.enabled:
+            for line in lines:
+                print(line)
+            return
+        self.clear()
+        for line in lines:
+            print(line)
+        self.rendered_lines = len(lines)
 
 
 def wait_for_http(
@@ -158,7 +193,6 @@ def wait_for_http(
     opener = http_opener_without_proxies()
     while time.monotonic() < deadline:
         if job is not None and not job_is_active(job.id):
-            print_job_log_tail(job)
             raise SystemExit(f"{job.name} job {job.id} exited before frontend became ready")
         try:
             with opener.open(url, timeout=3) as response:
@@ -171,12 +205,8 @@ def wait_for_http(
             now = time.monotonic()
             if verbose and now >= next_status:
                 print(f"waiting for frontend at {url}; last_error={last_error}")
-                if job is not None:
-                    print_job_log_tail(job)
                 next_status = now + 10
             time.sleep(2)
-    if job is not None:
-        print_job_log_tail(job)
     raise SystemExit(f"timed out waiting for {url}; last_error={last_error}")
 
 
@@ -432,57 +462,65 @@ def submit_worker(
     return parse_job_id(result.stdout)
 
 
-def resolve_one_launch_request(control: Job, control_node: str) -> bool:
-    request = claim_launch_request(control_node)
-    if request is None:
-        return False
+def resolve_launch_requests(control: Job, control_node: str, *, max_requests: int | None = None) -> int:
+    return resolve_launch_requests_with_callback(control, control_node, max_requests=max_requests)
 
-    request_id = int(request["id"])
-    node_names = node_names_for_request(request)
-    args = request.get("args") or {}
-    if not isinstance(args, dict):
-        args = {}
-    max_start_failures = int(args.get("max_start_failures") or 3)
-    submitted: list[dict[str, str]] = []
-    try:
-        if not node_names:
-            raise RuntimeError("launch request requested zero workers")
-        for node_name in node_names:
-            job_id = submit_worker(
-                node_name,
-                control_node,
-                control_job_id=control.id,
-                max_start_failures=max_start_failures,
-            )
-            submitted.append({"node_name": node_name, "job_id": job_id})
-            print(f"launch_request={request_id}\tnode={node_name}\tjob={job_id}")
-        update_launch_request(
-            control_node,
-            request_id,
-            "succeeded",
-            len(submitted),
-            {"workers": submitted},
-        )
-    except Exception as err:
+
+def resolve_launch_requests_with_callback(
+    control: Job,
+    control_node: str,
+    *,
+    max_requests: int | None = None,
+    on_launch: Callable[[str], None] | None = None,
+) -> int:
+    resolved = 0
+    while max_requests is None or resolved < max_requests:
+        request = claim_launch_request(control_node)
+        if request is None:
+            break
+
+        request_id = int(request["id"])
+        node_names = node_names_for_request(request)
+        args = request.get("args") or {}
+        if not isinstance(args, dict):
+            args = {}
+        max_start_failures = int(args.get("max_start_failures") or 3)
+        submitted: list[dict[str, str]] = []
         try:
+            if not node_names:
+                raise RuntimeError("launch request requested zero workers")
+            for node_name in node_names:
+                job_id = submit_worker(
+                    node_name,
+                    control_node,
+                    control_job_id=control.id,
+                    max_start_failures=max_start_failures,
+                )
+                submitted.append({"node_name": node_name, "job_id": job_id})
+                message = f"launch_request={request_id}\tnode={node_name}\tjob={job_id}"
+                if on_launch is not None:
+                    on_launch(message)
+                else:
+                    print(message)
             update_launch_request(
                 control_node,
                 request_id,
-                "failed",
+                "succeeded",
                 len(submitted),
                 {"workers": submitted},
-                str(err),
             )
-        finally:
-            print(f"launch_request={request_id}\tfailed={err}", file=sys.stderr)
-    return True
-
-
-def resolve_launch_requests(control: Job, control_node: str, *, max_requests: int | None = None) -> int:
-    resolved = 0
-    while max_requests is None or resolved < max_requests:
-        if not resolve_one_launch_request(control, control_node):
-            break
+        except Exception as err:
+            try:
+                update_launch_request(
+                    control_node,
+                    request_id,
+                    "failed",
+                    len(submitted),
+                    {"workers": submitted},
+                    str(err),
+                )
+            finally:
+                print(f"launch_request={request_id}\tfailed={err}", file=sys.stderr)
         resolved += 1
     return resolved
 
@@ -519,13 +557,16 @@ def command_up(args: argparse.Namespace) -> None:
     print("frontend_ready=true")
     if args.watch:
         print(f"watching {job.name} job; Ctrl-C stops only this launcher")
+        status_printer = LiveStatusPrinter()
         try:
             while job_is_active(job.id):
                 if not args.single_node:
-                    resolve_launch_requests(job, node)
-                command_status(argparse.Namespace())
+                    resolve_launch_requests_with_callback(job, node, on_launch=status_printer.print_event)
+                status_printer.render(status_lines())
                 time.sleep(args.poll_seconds)
+            status_printer.clear()
         except KeyboardInterrupt:
+            status_printer.clear()
             print("launcher stopped")
 
 
@@ -571,22 +612,8 @@ def command_down(args: argparse.Namespace) -> None:
 
 
 def command_status(_: argparse.Namespace) -> None:
-    control_jobs = active_jobs(name=CONTROL_JOB_NAME)
-    single_node_jobs = active_jobs(name=SINGLE_NODE_JOB_NAME)
-    worker_jobs = active_jobs(name=WORKER_JOB_NAME)
-    if control_jobs:
-        for job in control_jobs:
-            print(f"control\t{job.id}\t{job.state}\t{job.node}")
-    else:
-        print("control\t-\tnot-running\t-")
-    if single_node_jobs:
-        for job in single_node_jobs:
-            print(f"single-node\t{job.id}\t{job.state}\t{job.node}")
-    else:
-        print("single-node\t-\tnot-running\t-")
-    print(f"workers\t{len(worker_jobs)}")
-    for job in worker_jobs:
-        print(f"worker\t{job.id}\t{job.state}\t{job.node}")
+    for line in status_lines():
+        print(line)
 
 
 def command_submit_workers(args: argparse.Namespace) -> None:

@@ -211,10 +211,14 @@ impl RunTaskSpec {
     fn panel_projectors(
         &self,
         effective_accumulator_config: Option<AccumulatorConfig>,
-    ) -> Vec<TaskPanelProjector> {
+    ) -> Result<Vec<TaskPanelProjector>, EngineError> {
         let mut projectors = Vec::new();
         projectors.extend(match self {
-            Self::Sample { .. } => sample::projectors(self, effective_accumulator_config),
+            Self::Sample { .. } => {
+                sample::projectors(effective_accumulator_config.ok_or_else(|| {
+                    EngineError::build("sample task has no effective accumulator config")
+                })?)
+            }
             Self::Image {
                 geometry, display, ..
             } => full_accumulator::image_projectors(geometry.clone(), *display),
@@ -232,7 +236,7 @@ impl RunTaskSpec {
                 ..
             } => full_accumulator::line_projectors(geometry.clone(), *display, *accumulator),
         });
-        projectors
+        Ok(projectors)
     }
 }
 
@@ -240,10 +244,10 @@ impl TaskPanelSource {
     pub fn new(
         task_spec: &RunTaskSpec,
         effective_accumulator_config: Option<AccumulatorConfig>,
-    ) -> Self {
-        Self {
-            projectors: task_spec.panel_projectors(effective_accumulator_config),
-        }
+    ) -> Result<Self, EngineError> {
+        Ok(Self {
+            projectors: task_spec.panel_projectors(effective_accumulator_config)?,
+        })
     }
 
     pub fn panel_specs(&self) -> Vec<PanelSpec> {
@@ -567,44 +571,12 @@ fn format_cursor(cursor: TaskPanelCursor) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{
-        AccumulatorConfig, LineDisplayMode, RunTaskInput, RunTaskState, canonical_task_toml,
-    };
-    use crate::evaluation::{
-        AccumulatorState, ComplexAccumulatorState, ComplexValue, FullComplexAccumulatorState,
-        GammaLoopAccumulatorState, GammaLoopDiagnostics,
-    };
+    use crate::core::{AccumulatorConfig, RunTaskInput, RunTaskState, canonical_task_toml};
+    use crate::evaluation::{AccumulatorState, ComplexValue, FullComplexAccumulatorState};
     use crate::server::panels::{
         PanelKind, PanelUpdateMode, PlotPoint, panel_spec, scalar_timeseries_panel,
     };
     use chrono::Utc;
-    use gammalooprs::observables::{
-        HistogramBinSnapshot, HistogramSnapshot, HistogramSnapshotKind,
-        HistogramStatisticsSnapshot, ObservablePhase, ObservableSnapshotBundle,
-        ObservableValueTransform,
-    };
-
-    fn line_geometry() -> crate::core::LineRasterGeometry {
-        crate::core::LineRasterGeometry {
-            offset: vec![0.0],
-            direction: vec![1.0],
-            linspace: crate::core::Linspace {
-                start: -1.0,
-                stop: 1.0,
-                count: 3,
-            },
-            discrete: Vec::new(),
-        }
-    }
-
-    fn plot_task(display: LineDisplayMode) -> RunTaskSpec {
-        RunTaskSpec::PlotLine {
-            geometry: line_geometry(),
-            accumulator: crate::core::PlotAccumulatorKind::Complex,
-            display,
-            batch_transforms: None,
-        }
-    }
 
     fn inherited_complex_sample_task() -> RunTaskSpec {
         RunTaskSpec::Sample {
@@ -655,154 +627,12 @@ mod tests {
         })
     }
 
-    fn gammaloop_accumulator() -> AccumulatorState {
-        AccumulatorState::Gammaloop(GammaLoopAccumulatorState {
-            bundle: ObservableSnapshotBundle {
-                histograms: std::collections::BTreeMap::from([
-                    (
-                        "pt".to_string(),
-                        HistogramSnapshot {
-                            kind: HistogramSnapshotKind::Continuous,
-                            title: "pt".to_string(),
-                            type_description: "HwU".to_string(),
-                            phase: ObservablePhase::Real,
-                            value_transform: ObservableValueTransform::Identity,
-                            supports_misbinning_mitigation: false,
-                            discrete_min_bin_id: None,
-                            discrete_ordering: None,
-                            x_min: Some(0.0),
-                            x_max: Some(10.0),
-                            sample_count: 2,
-                            log_x_axis: false,
-                            log_y_axis: false,
-                            bins: vec![HistogramBinSnapshot {
-                                x_min: Some(0.0),
-                                x_max: Some(10.0),
-                                bin_id: None,
-                                label: None,
-                                entry_count: 2,
-                                sum_weights: 4.0,
-                                sum_weights_squared: 10.0,
-                                mitigated_fill_count: 0,
-                            }],
-                            underflow_bin: HistogramBinSnapshot {
-                                x_min: None,
-                                x_max: None,
-                                bin_id: None,
-                                label: None,
-                                entry_count: 0,
-                                sum_weights: 0.0,
-                                sum_weights_squared: 0.0,
-                                mitigated_fill_count: 0,
-                            },
-                            overflow_bin: HistogramBinSnapshot {
-                                x_min: None,
-                                x_max: None,
-                                bin_id: None,
-                                label: None,
-                                entry_count: 0,
-                                sum_weights: 0.0,
-                                sum_weights_squared: 0.0,
-                                mitigated_fill_count: 0,
-                            },
-                            statistics: HistogramStatisticsSnapshot {
-                                in_range_entry_count: 2,
-                                nan_value_count: 0,
-                                mitigated_pair_count: 0,
-                            },
-                        },
-                    ),
-                    (
-                        "eta".to_string(),
-                        HistogramSnapshot {
-                            kind: HistogramSnapshotKind::Continuous,
-                            discrete_min_bin_id: None,
-                            discrete_ordering: None,
-                            title: "eta".to_string(),
-                            type_description: "HwU".to_string(),
-                            phase: ObservablePhase::Imag,
-                            value_transform: ObservableValueTransform::Log10,
-                            supports_misbinning_mitigation: true,
-                            x_min: Some(-1.0),
-                            x_max: Some(1.0),
-                            sample_count: 1,
-                            log_x_axis: true,
-                            log_y_axis: true,
-                            bins: vec![HistogramBinSnapshot {
-                                x_min: Some(-1.0),
-                                x_max: Some(1.0),
-                                bin_id: None,
-                                label: None,
-                                entry_count: 1,
-                                sum_weights: 2.0,
-                                sum_weights_squared: 4.0,
-                                mitigated_fill_count: 1,
-                            }],
-                            underflow_bin: HistogramBinSnapshot {
-                                x_min: None,
-                                x_max: None,
-                                bin_id: None,
-                                label: None,
-                                entry_count: 0,
-                                sum_weights: 0.0,
-                                sum_weights_squared: 0.0,
-                                mitigated_fill_count: 0,
-                            },
-                            overflow_bin: HistogramBinSnapshot {
-                                x_min: None,
-                                x_max: None,
-                                bin_id: None,
-                                label: None,
-                                entry_count: 0,
-                                sum_weights: 0.0,
-                                sum_weights_squared: 0.0,
-                                mitigated_fill_count: 0,
-                            },
-                            statistics: HistogramStatisticsSnapshot {
-                                in_range_entry_count: 1,
-                                nan_value_count: 0,
-                                mitigated_pair_count: 0,
-                            },
-                        },
-                    ),
-                ]),
-            },
-            estimate: ComplexAccumulatorState {
-                count: 3,
-                real_sum: 7.0,
-                imag_sum: -1.0,
-                abs_sum: 8.0,
-                abs_sq_sum: 20.0,
-                real_sq_sum: 17.0,
-                imag_sq_sum: 5.0,
-                weight_sum: 3.0,
-                nan_count: 0,
-                ..Default::default()
-            },
-            diagnostics: GammaLoopDiagnostics {
-                count_total: 3,
-                count_double_precision: 2,
-                count_quad_precision: 1,
-                count_arb_precision: 0,
-                count_nan: 0,
-                count_nan_or_unstable: 1,
-                count_loop_momenta_escalated: 1,
-                total_eval_time_ms: 12.0,
-                total_integrand_eval_time_ms: 7.0,
-                total_evaluator_eval_time_ms: 3.0,
-                total_parameterization_time_ms: 1.0,
-                total_event_processing_time_ms: 1.0,
-                total_generated_events: 10,
-                total_accepted_events: 7,
-            },
-        })
-    }
-
     #[test]
     fn inherited_complex_sample_uses_imag_panel() {
         let task = inherited_complex_sample_task();
-        let descriptors =
-            TaskPanelSource::new(&task, Some(AccumulatorConfig::Complex)).panel_specs();
+        let descriptors = TaskPanelSource::new(&task, Some(AccumulatorConfig::Complex))
+            .expect("panel source")
+            .panel_specs();
         assert!(
             descriptors
                 .iter()
@@ -864,7 +694,8 @@ mod tests {
         let task = inherited_complex_sample_task();
         let run_task = run_task(task.clone());
         let accumulator = complex_observable();
-        let source = TaskPanelSource::new(&task, Some(AccumulatorConfig::Complex));
+        let source =
+            TaskPanelSource::new(&task, Some(AccumulatorConfig::Complex)).expect("panel source");
 
         let response = source
             .build_response(

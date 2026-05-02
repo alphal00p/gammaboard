@@ -787,8 +787,15 @@ async fn get_run_task_output(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
     let task = load_run_task(&state.store, run_id, task_id).await?;
-    let mut effective_accumulator_config =
-        stage_api::resolve_effective_sample_accumulator_config(&state.store, run_id, &task).await?;
+    let effective_accumulator_config =
+        if matches!(task.task, crate::core::RunTaskSpec::Sample { .. }) {
+            Some(
+                stage_api::resolve_effective_sample_accumulator_config(&state.store, run_id, &task)
+                    .await?,
+            )
+        } else {
+            None
+        };
     let latest_persisted_snapshot = state
         .store
         .get_task_output_snapshots(run_id, task.id, None, 1)
@@ -812,23 +819,8 @@ async fn get_run_task_output(
     } else {
         None
     };
-    let has_gammaloop_observable =
-        matches!(current_accumulator, Some(AccumulatorState::Gammaloop(_)))
-            || latest_stage_snapshot.as_ref().is_some_and(|snapshot| {
-                matches!(&snapshot.observable_state, AccumulatorState::Gammaloop(_))
-            })
-            || latest_persisted_snapshot.as_ref().is_some_and(|snapshot| {
-                AccumulatorState::from_gammaloop_persistent_json(&snapshot.persisted_output).is_ok()
-            });
-    if has_gammaloop_observable
-        && !matches!(
-            effective_accumulator_config,
-            Some(crate::core::AccumulatorConfig::Gammaloop)
-        )
-    {
-        effective_accumulator_config = Some(crate::core::AccumulatorConfig::Gammaloop);
-    }
-    let panel_source = TaskPanelSource::new(&task.task, effective_accumulator_config);
+    let panel_source = TaskPanelSource::new(&task.task, effective_accumulator_config)
+        .map_err(|err| ApiError::Internal(err.to_string()))?;
     let delta_history_snapshots = if panel_source.needs_history() && cursor.snapshot_id.is_some() {
         state
             .store
@@ -1508,6 +1500,7 @@ async fn shutdown_control_process(
                 source = "control",
                 control_surface = "dashboard",
                 action = "control_shutdown",
+                assignments_cleared = result.assignments_cleared,
                 rows_updated = result.rows_updated,
                 active_samplers_remaining = result.active_samplers_remaining,
                 live_nodes_remaining = result.live_nodes_remaining,
