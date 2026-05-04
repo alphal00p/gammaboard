@@ -19,7 +19,7 @@ const getGeometryPointCount = (taskSpec) => {
 };
 
 export const getTaskTargetLabel = (task) => {
-  if (task?.task?.kind === "init") {
+  if (task?.task?.kind === "init" || task?.task?.kind === "set_accumulator") {
     return "-";
   }
   const raw =

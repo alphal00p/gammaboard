@@ -325,6 +325,7 @@ Every run stores an initial root stage snapshot (`sequence_nr = 0`) immediately 
 ### Task Queue
 Sample tasks use direct per-component source specs:
 - omit `sampler_aggregator` or `accumulator` to use `latest`
+- use `kind = "set_accumulator"` when you want to establish or reset accumulator state explicitly before later sample tasks
 - use `{ from_name = "..." }` to load from a prior task name
 - use `{ config = ... }` to set explicit inline config
 - `accumulator = { config = "gammaloop" }` is available for GammaLoop runs and persists GammaLoop's native histogram snapshot bundle
@@ -332,7 +333,7 @@ Sample tasks use direct per-component source specs:
 Task names are unique per run and can be referenced by `from_name`.
 `batch_transforms` is stage state for tasks. Omitted inherits; `batch_transforms = []` explicitly clears inherited transforms.
 When you want raster `image`/`plot_line`/`pdf_adaptation_image`/`pdf_adaptation_plot_line` tasks to evaluate directly in declared geometry coordinates after transformed sampling stages, set `batch_transforms = []` on those raster tasks.
-Use `stop_condition = { max_samples = 0 }` when you want a sample task to only update stage state without producing work. This is the configuration-only task shape.
+`set_accumulator` is the explicit no-work task for changing accumulator state. Sample tasks may omit `accumulator`, but only if a prior task in the run already established an effective accumulator state.
 Task files used with `gammaboard run task add` may contain either a single `task = { ... }`, a `[[task_queue]]` array, or both. When both are present, `task` is appended first.
 
 Sample task config example:

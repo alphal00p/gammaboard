@@ -85,6 +85,56 @@ impl Default for GammaLoopParams {
 }
 
 impl GammaLoopEvaluator {
+    fn load_integrand_and_model(
+        mut params: GammaLoopParams,
+    ) -> Result<(ProcessIntegrand, Model, bool), BuildError> {
+        params.state_folder = resolve_resource_path(&params.state_folder).map_err(|err| {
+            BuildError::build(format!(
+                "failed to resolve gammaloop state_folder '{}': {err}",
+                params.state_folder.display()
+            ))
+        })?;
+        _ = initialise();
+        let mut state = State::load(params.state_folder.clone(), None, None).map_err(|err| {
+            BuildError::build(format!(
+                "failed to load state from {}: {err}",
+                params.state_folder.display()
+            ))
+        })?;
+        Self::run_post_load_commands(&params, &mut state)?;
+
+        let (process_id, integrand_name) = state
+            .find_integrand_ref(params.process_id.as_ref(), params.integrand_name.as_ref())
+            .map_err(|err| BuildError::build(format!("failed to find integrand: {err}")))?;
+
+        let integrand = state
+            .process_list
+            .get_integrand_mut(process_id, integrand_name.clone())
+            .map_err(|err| BuildError::build(err.to_string()))?
+            .clone();
+        let model = state.model.clone();
+        if params.momentum_space {
+            tracing::warn!(
+                "GammaLoop momentum_space=true is deprecated for gammaboard; forcing x-space evaluation"
+            );
+        }
+        let momentum_space = false;
+        Ok((integrand, model, momentum_space))
+    }
+
+    pub fn resolve_domain_from_params(params: GammaLoopParams) -> Result<Domain, BuildError> {
+        match std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<Domain, BuildError> {
+            let (integrand, _model, momentum_space) = Self::load_integrand_and_model(params)?;
+            Self::build_domain(&integrand, momentum_space)
+        })) {
+            Ok(result) => result,
+            Err(payload) => Err(BuildError::build(format!(
+                "gammaloop domain resolution panicked: {}",
+                Self::panic_message(payload)
+            ))),
+        }
+    }
+
     fn build_domain(
         integrand: &ProcessIntegrand,
         momentum_space: bool,
@@ -335,40 +385,10 @@ impl GammaLoopEvaluator {
         Ok(())
     }
 
-    pub fn from_params(mut params: GammaLoopParams) -> Result<Self, BuildError> {
+    pub fn from_params(params: GammaLoopParams) -> Result<Self, BuildError> {
         match std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<Self, BuildError> {
-            params.state_folder = resolve_resource_path(&params.state_folder).map_err(|err| {
-                BuildError::build(format!(
-                    "failed to resolve gammaloop state_folder '{}': {err}",
-                    params.state_folder.display()
-                ))
-            })?;
-            _ = initialise();
-            let mut state =
-                State::load(params.state_folder.clone(), None, None).map_err(|err| {
-                    BuildError::build(format!(
-                        "failed to load state from {}: {err}",
-                        params.state_folder.display()
-                    ))
-                })?;
-            Self::run_post_load_commands(&params, &mut state)?;
-
-            let (process_id, integrand_name) = state
-                .find_integrand_ref(params.process_id.as_ref(), params.integrand_name.as_ref())
-                .map_err(|err| BuildError::build(format!("failed to find integrand: {err}")))?;
-
-            let mut integrand = state
-                .process_list
-                .get_integrand_mut(process_id, integrand_name.clone())
-                .map_err(|err| BuildError::build(err.to_string()))?
-                .clone();
-            let model = state.model.clone();
-            if params.momentum_space {
-                tracing::warn!(
-                    "GammaLoop momentum_space=true is deprecated for gammaboard; forcing x-space evaluation"
-                );
-            }
-            let momentum_space = false;
+            let (mut integrand, model, momentum_space) =
+                Self::load_integrand_and_model(params.clone())?;
             let domain = Self::build_domain(&integrand, momentum_space)?;
             integrand
                 .warm_up(&model)

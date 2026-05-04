@@ -272,6 +272,9 @@ impl AccumulatorSourceSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RunTaskSpec {
+    SetAccumulator {
+        accumulator: AccumulatorConfig,
+    },
     Sample {
         stop_condition: SampleStopCondition,
         #[serde(default)]
@@ -318,6 +321,7 @@ pub enum RunTaskSpec {
 impl RunTaskSpec {
     pub fn validate(&self) -> Result<(), String> {
         match self {
+            Self::SetAccumulator { .. } => Ok(()),
             Self::Sample {
                 stop_condition,
                 sampler_aggregator:
@@ -393,6 +397,7 @@ impl RunTaskSpec {
 
     pub fn kind_str(&self) -> &'static str {
         match self {
+            Self::SetAccumulator { .. } => "set_accumulator",
             Self::Sample { .. } => "sample",
             Self::Image { .. } => "image",
             Self::PdfAdaptationImage { .. } => "pdf_adaptation_image",
@@ -403,6 +408,7 @@ impl RunTaskSpec {
 
     pub fn sampler_config(&self) -> Option<SamplerAggregatorConfig> {
         match self {
+            Self::SetAccumulator { .. } => None,
             Self::Sample { .. } => None,
             Self::Image { geometry, .. } => Some(SamplerAggregatorConfig::RasterPlane {
                 params: RasterPlaneSamplerParams {
@@ -433,6 +439,7 @@ impl RunTaskSpec {
 
     pub fn sample_sampler_source(&self) -> Option<SourceRefSpec> {
         match self {
+            Self::SetAccumulator { .. } => None,
             Self::Sample {
                 sampler_aggregator, ..
             } => match sampler_aggregator {
@@ -466,6 +473,7 @@ impl RunTaskSpec {
 
     pub fn sample_sampler_config(&self) -> Option<SamplerAggregatorConfig> {
         match self {
+            Self::SetAccumulator { .. } => None,
             Self::Sample {
                 sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config { config }),
                 ..
@@ -480,6 +488,7 @@ impl RunTaskSpec {
 
     pub fn batch_transforms_config(&self) -> Option<Vec<BatchTransformConfig>> {
         match self {
+            Self::SetAccumulator { .. } => None,
             Self::Sample {
                 batch_transforms, ..
             } => batch_transforms.clone(),
@@ -500,6 +509,7 @@ impl RunTaskSpec {
 
     pub fn sample_accumulator_source(&self) -> Option<SourceRefSpec> {
         match self {
+            Self::SetAccumulator { .. } => None,
             Self::Sample { accumulator, .. } => match accumulator {
                 None | Some(AccumulatorSourceSpec::Latest(_)) => Some(SourceRefSpec::Latest),
                 Some(AccumulatorSourceSpec::FromName { from_name }) => {
@@ -531,6 +541,7 @@ impl RunTaskSpec {
 
     pub fn new_accumulator_config(&self) -> Result<Option<AccumulatorConfig>, BuildError> {
         match self {
+            Self::SetAccumulator { accumulator } => Ok(Some(*accumulator)),
             Self::Sample {
                 accumulator: Some(AccumulatorSourceSpec::Config { config }),
                 ..
@@ -547,6 +558,7 @@ impl RunTaskSpec {
 
     pub fn nr_expected_samples(&self) -> Option<i64> {
         match self {
+            Self::SetAccumulator { .. } => None,
             Self::Sample { stop_condition, .. } => stop_condition.max_samples,
             Self::Image { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::PdfAdaptationImage { geometry, .. } => Some(geometry.nr_points() as i64),
@@ -557,6 +569,7 @@ impl RunTaskSpec {
 
     pub fn sample_stop_condition(&self) -> Option<&SampleStopCondition> {
         match self {
+            Self::SetAccumulator { .. } => None,
             Self::Sample { stop_condition, .. } => Some(stop_condition),
             Self::Image { .. }
             | Self::PdfAdaptationImage { .. }
@@ -567,6 +580,7 @@ impl RunTaskSpec {
 
     pub fn sample_queue_tuning(&self) -> Option<&SamplerQueueTuning> {
         match self {
+            Self::SetAccumulator { .. } => None,
             Self::Sample { queue_tuning, .. } => queue_tuning.as_ref(),
             Self::Image { .. }
             | Self::PdfAdaptationImage { .. }
@@ -607,6 +621,7 @@ impl IntoPreflightTask for RunTaskSpec {
     fn into_preflight(self) -> Result<Option<Self>, BuildError> {
         self.validate().map_err(BuildError::invalid_input)?;
         match self {
+            Self::SetAccumulator { accumulator } => Ok(Some(Self::SetAccumulator { accumulator })),
             Self::Sample {
                 mut stop_condition,
                 sampler_aggregator,
@@ -916,6 +931,20 @@ mod tests {
         };
 
         assert_eq!(task.new_accumulator_config().unwrap(), None);
+    }
+
+    #[test]
+    fn set_accumulator_task_requests_fresh_accumulator_state() {
+        let task = RunTaskSpec::SetAccumulator {
+            accumulator: AccumulatorConfig::Complex,
+        };
+
+        assert_eq!(task.kind_str(), "set_accumulator");
+        assert_eq!(
+            task.new_accumulator_config().unwrap(),
+            Some(AccumulatorConfig::Complex)
+        );
+        assert_eq!(task.sample_stop_condition(), None);
     }
 
     #[test]

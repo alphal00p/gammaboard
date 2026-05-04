@@ -24,11 +24,14 @@ import {
 import prettyMilliseconds from "pretty-ms";
 import LatexFormula from "../LatexFormula";
 import {
+  convertTimeValue,
   formatCentralValueWithError,
   formatCompactNumber,
   formatDateTime,
   formatEstimateDisplay,
   formatF64Full,
+  normalizeTimeUnit,
+  pickBestTimeUnit,
   formatScientific,
 } from "../../utils/formatters";
 import { asArray } from "../../utils/collections";
@@ -521,6 +524,56 @@ const renderStructuredValue = (value) => {
     return value;
   }
   return JSON.stringify(value);
+};
+
+const TIME_UNIT_SUFFIX_RE = /^(?<base>.+?)\s+\((?<unit>[^)]+)\)$/;
+const TIME_UNIT_PER_RE = /^(?<base>.+?)\s+(?<unit>[a-zA-Zµμ]+)\s*\/\s*(?<per>.+)$/;
+const SEC_WORD_RE = /\bSec\b/g;
+
+const normalizeTimeLabelOnly = (label) => {
+  const normalizedSec = label.replace(SEC_WORD_RE, "s");
+  const perMatch = TIME_UNIT_PER_RE.exec(normalizedSec);
+  if (!perMatch?.groups) return normalizedSec;
+  const normalizedUnit = normalizeTimeUnit(perMatch.groups.unit);
+  if (!normalizedUnit) return normalizedSec;
+  return `${perMatch.groups.base} ${normalizedUnit} / ${perMatch.groups.per}`;
+};
+
+const withDynamicTimeUnitEntry = (entry) => {
+  const label = typeof entry?.label === "string" ? entry.label.trim() : "";
+  if (!label) return entry;
+  const normalizedLabel = normalizeTimeLabelOnly(label);
+  if (typeof entry?.value !== "number" || !Number.isFinite(entry.value)) {
+    return normalizedLabel === label ? entry : { ...entry, label: normalizedLabel };
+  }
+  const parsed = TIME_UNIT_SUFFIX_RE.exec(label);
+  if (parsed?.groups) {
+    const baseUnit = normalizeTimeUnit(parsed.groups.unit);
+    if (!baseUnit) return normalizedLabel === label ? entry : { ...entry, label: normalizedLabel };
+    const displayUnit = pickBestTimeUnit(entry.value, baseUnit);
+    if (!displayUnit) return normalizedLabel === label ? entry : { ...entry, label: normalizedLabel };
+    const converted = convertTimeValue(entry.value, baseUnit, displayUnit);
+    if (!Number.isFinite(converted)) return normalizedLabel === label ? entry : { ...entry, label: normalizedLabel };
+    return {
+      ...entry,
+      label: `${parsed.groups.base} (${displayUnit})`,
+      value: converted,
+    };
+  }
+
+  const per = TIME_UNIT_PER_RE.exec(label);
+  if (!per?.groups) return normalizedLabel === label ? entry : { ...entry, label: normalizedLabel };
+  const baseUnit = normalizeTimeUnit(per.groups.unit);
+  if (!baseUnit) return normalizedLabel === label ? entry : { ...entry, label: normalizedLabel };
+  const displayUnit = pickBestTimeUnit(entry.value, baseUnit);
+  if (!displayUnit) return normalizedLabel === label ? entry : { ...entry, label: normalizedLabel };
+  const converted = convertTimeValue(entry.value, baseUnit, displayUnit);
+  if (!Number.isFinite(converted)) return normalizedLabel === label ? entry : { ...entry, label: normalizedLabel };
+  return {
+    ...entry,
+    label: `${per.groups.base} ${displayUnit} / ${per.groups.per}`,
+    value: converted,
+  };
 };
 
 const domainSummaryText = (value) => {
@@ -3786,9 +3839,11 @@ const KeyValuePanel = ({ title, state }) => (
           gap: 1.5,
         }}
       >
-        {asArray(state?.entries).map((entry) => (
+        {asArray(state?.entries).map((entry) => {
+          const displayEntry = withDynamicTimeUnitEntry(entry);
+          return (
           <Box
-            key={entry.key}
+            key={displayEntry.key}
             sx={{
               display: "grid",
               gridTemplateColumns: "minmax(120px, 0.9fr) minmax(0, 1.1fr)",
@@ -3799,17 +3854,17 @@ const KeyValuePanel = ({ title, state }) => (
             }}
           >
             <Typography variant="body2" color="text.secondary">
-              {entry.label}
+              {displayEntry.label}
             </Typography>
-            {isEstimateValue(entry.value) ? (
-              <EstimateValueBlock value={entry.value} />
-            ) : isTargetComparisonValue(entry.value) ? (
-              <TargetComparisonValueBlock value={entry.value} />
-            ) : entry?.key === "domain" && isObject(entry.value) ? (
+            {isEstimateValue(displayEntry.value) ? (
+              <EstimateValueBlock value={displayEntry.value} />
+            ) : isTargetComparisonValue(displayEntry.value) ? (
+              <TargetComparisonValueBlock value={displayEntry.value} />
+            ) : displayEntry?.key === "domain" && isObject(displayEntry.value) ? (
               <Box sx={{ minWidth: 0 }}>
                 <Box component="details">
                   <Box component="summary" sx={{ cursor: "pointer", fontSize: "0.8rem", color: "text.secondary" }}>
-                    {domainSummaryText(entry.value)}
+                    {domainSummaryText(displayEntry.value)}
                   </Box>
                   <Typography
                     variant="caption"
@@ -3822,7 +3877,7 @@ const KeyValuePanel = ({ title, state }) => (
                       color: "text.primary",
                     }}
                   >
-                    {formatDebugJson(entry.value)}
+                    {formatDebugJson(displayEntry.value)}
                   </Typography>
                 </Box>
               </Box>
@@ -3834,20 +3889,21 @@ const KeyValuePanel = ({ title, state }) => (
                   wordBreak: "break-word",
                   whiteSpace: "pre-wrap",
                   color:
-                    entry.tone === "good"
+                    displayEntry.tone === "good"
                       ? "success.main"
-                      : entry.tone === "warning"
+                      : displayEntry.tone === "warning"
                         ? "warning.main"
-                        : entry.tone === "critical"
+                        : displayEntry.tone === "critical"
                           ? "error.main"
                           : "text.primary",
                 }}
               >
-                {renderStructuredValue(entry.value)}
+                {renderStructuredValue(displayEntry.value)}
               </Typography>
             )}
           </Box>
-        ))}
+          );
+        })}
       </Box>
     </CardContent>
   </Card>
@@ -4014,6 +4070,11 @@ const TickBreakdownPanel = ({ title, state }) => {
     .filter((segment) => Number.isFinite(segment.valueMs) && segment.valueMs > 0);
   const normalizedTotal =
     Number.isFinite(totalMs) && totalMs > 0 ? totalMs : segments.reduce((sum, segment) => sum + segment.valueMs, 0);
+  const displayTimeUnit = pickBestTimeUnit(normalizedTotal, "ms") || "ms";
+  const displayTotal =
+    convertTimeValue(normalizedTotal, "ms", displayTimeUnit) ?? normalizedTotal;
+  const displayValueForSegment = (segment) =>
+    convertTimeValue(segment.valueMs, "ms", displayTimeUnit) ?? segment.valueMs;
 
   if (segments.length === 0 || !Number.isFinite(normalizedTotal) || normalizedTotal <= 0) return null;
   const buildTickBreakdownSvg = () => {
@@ -4039,13 +4100,13 @@ const TickBreakdownPanel = ({ title, state }) => {
         return [
           `<rect x="0" y="${y - 10}" width="10" height="10" fill="${escapeXml(segment.color || "#0f766e")}" />`,
           `<text x="16" y="${y - 1}" font-size="12" font-family="monospace" fill="#334155">${escapeXml(segment.label || segment.key)}</text>`,
-          `<text x="${width}" y="${y - 1}" text-anchor="end" font-size="12" font-family="monospace" fill="#475569">${escapeXml(`${formatScientific(segment.valueMs, 4)} ms (${formatScientific(percent, 3)}%)`)}</text>`,
+          `<text x="${width}" y="${y - 1}" text-anchor="end" font-size="12" font-family="monospace" fill="#475569">${escapeXml(`${formatScientific(displayValueForSegment(segment), 4)} ${displayTimeUnit} (${formatScientific(percent, 3)}%)`)}</text>`,
         ].join("");
       })
       .join("");
     return [
       `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
-      `<text x="0" y="60" font-size="12" font-family="monospace" fill="#64748b">total ${escapeXml(formatScientific(normalizedTotal, 4))} ms</text>`,
+      `<text x="0" y="60" font-size="12" font-family="monospace" fill="#64748b">total ${escapeXml(formatScientific(displayTotal, 4))} ${displayTimeUnit}</text>`,
       bars,
       legend,
       "</svg>",
@@ -4064,7 +4125,7 @@ const TickBreakdownPanel = ({ title, state }) => {
               svgBuilder={buildTickBreakdownSvg}
             />
             <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace" }}>
-              total {formatScientific(normalizedTotal, 4)} ms
+              total {formatScientific(displayTotal, 4)} {displayTimeUnit}
             </Typography>
           </Stack>
         </Box>
@@ -4086,7 +4147,7 @@ const TickBreakdownPanel = ({ title, state }) => {
             return (
               <Box
                 key={segment.key}
-                title={`${segment.label}: ${formatScientific(segment.valueMs, 4)} ms (${formatScientific(percent, 3)}%)`}
+                title={`${segment.label}: ${formatScientific(displayValueForSegment(segment), 4)} ${displayTimeUnit} (${formatScientific(percent, 3)}%)`}
                 sx={{
                   width: `${Math.max(percent, 1.5)}%`,
                   minWidth: 0,
@@ -4106,7 +4167,7 @@ const TickBreakdownPanel = ({ title, state }) => {
                       {segment.label}
                     </Typography>
                     <Typography variant="caption" sx={{ color: "inherit", opacity: 0.95, lineHeight: 1.15 }}>
-                      {formatScientific(segment.valueMs, 3)} ms
+                      {formatScientific(displayValueForSegment(segment), 3)} {displayTimeUnit}
                     </Typography>
                   </>
                 ) : null}
@@ -4142,7 +4203,7 @@ const TickBreakdownPanel = ({ title, state }) => {
                   variant="caption"
                   sx={{ ml: "auto", fontFamily: "monospace", color: "text.secondary", whiteSpace: "nowrap" }}
                 >
-                  {formatScientific(segment.valueMs, 4)} ms ({formatScientific(percent, 3)}%)
+                  {formatScientific(displayValueForSegment(segment), 4)} {displayTimeUnit} ({formatScientific(percent, 3)}%)
                 </Typography>
               </Box>
             );

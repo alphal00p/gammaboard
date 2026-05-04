@@ -1912,6 +1912,127 @@ name = "full-stack-e2e"
 
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_rejects_first_sample_without_accumulator_state() -> anyhow::Result<()> {
+    let harness = FullStackHarness::new().await?;
+    let config = temp_run_add_config(
+        r#"
+name = "missing-accumulator-e2e"
+
+[[task_queue]]
+name = "sample-a"
+kind = "sample"
+stop_condition = { max_samples = 16 }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "sample task has no effective accumulator configuration",
+        ));
+
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_set_accumulator_enables_following_sample() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    let config = temp_run_add_config(
+        r#"
+name = "set-accumulator-e2e"
+
+[[task_queue]]
+name = "prep"
+kind = "set_accumulator"
+accumulator = "scalar"
+
+[[task_queue]]
+name = "sample-a"
+kind = "sample"
+stop_condition = { max_samples = 32 }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = 'set-accumulator-e2e'")
+        .fetch_one(&harness.pool)
+        .await?;
+
+    harness.start_nodes(&["w-1", "w-2"]).await?;
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-1",
+            "sampler-aggregator",
+            "set-accumulator-e2e",
+        ])
+        .assert()
+        .success();
+    harness
+        .cli()
+        .args(["node", "assign", "w-2", "evaluator", "set-accumulator-e2e"])
+        .assert()
+        .success();
+
+    harness
+        .wait_for(
+            "set_accumulator task completes",
+            Duration::from_secs(10),
+            || async {
+                let state: String = sqlx::query_scalar(
+                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'prep'",
+                )
+                .bind(run_id)
+                .fetch_one(&harness.pool)
+                .await?;
+                Ok(state == "completed")
+            },
+        )
+        .await?;
+
+    harness
+        .wait_for(
+            "sample task completes after set_accumulator",
+            Duration::from_secs(20),
+            || async {
+                let state: String = sqlx::query_scalar(
+                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'sample-a'",
+                )
+                .bind(run_id)
+                .fetch_one(&harness.pool)
+                .await?;
+                Ok(state == "completed")
+            },
+        )
+        .await?;
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_pause_resume_restores_sampler_checkpoint() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 

@@ -47,12 +47,15 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
     };
 
     let evaluator_kind = config.integration_params.evaluator.kind_str();
-    let evaluator = config.integration_params.evaluator.build().map_err(|err| {
-        BuildError::build(format!(
-            "failed to initialize evaluator {evaluator_kind}: {err}"
-        ))
-    })?;
-    let domain = evaluator.get_domain();
+    let domain = config
+        .integration_params
+        .evaluator
+        .resolve_domain()
+        .map_err(|err| {
+            BuildError::build(format!(
+                "failed to resolve evaluator domain for {evaluator_kind}: {err}"
+            ))
+        })?;
     config.domain = Some(domain.clone());
 
     let initial_stage_snapshot = preflight::build_initial_stage()?;

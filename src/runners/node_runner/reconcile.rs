@@ -269,13 +269,77 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         run_id: i32,
         open_batch_count: usize,
     ) -> Result<Option<RunTask>, StoreError> {
-        if let Some(task) = store.load_active_run_task(run_id).await? {
+        loop {
+            if let Some(task) = store.load_active_run_task(run_id).await? {
+                if self
+                    .apply_immediate_stage_update_task(store, run_id, &task)
+                    .await?
+                {
+                    continue;
+                }
+                return Ok(Some(task));
+            }
+            if open_batch_count > 0 {
+                return Ok(None);
+            }
+            let Some(task) = store.activate_next_run_task(run_id).await? else {
+                return Ok(None);
+            };
+            if self
+                .apply_immediate_stage_update_task(store, run_id, &task)
+                .await?
+            {
+                continue;
+            }
             return Ok(Some(task));
         }
-        if open_batch_count > 0 {
-            return Ok(None);
-        }
-        store.activate_next_run_task(run_id).await
+    }
+
+    async fn apply_immediate_stage_update_task(
+        &self,
+        store: &crate::PgStore,
+        run_id: i32,
+        task: &RunTask,
+    ) -> Result<bool, StoreError> {
+        let crate::core::RunTaskSpec::SetAccumulator { accumulator } = &task.task else {
+            return Ok(false);
+        };
+
+        let base_stage_snapshot = store
+            .load_latest_stage_snapshot_before_sequence(run_id, task.sequence_nr)
+            .await?;
+        let base_stage_snapshot = base_stage_snapshot.ok_or_else(|| {
+            StoreError::store(format!(
+                "run {} task {} cannot resolve base stage snapshot",
+                run_id, task.id
+            ))
+        })?;
+
+        store
+            .save_run_stage_snapshot(&RunStageSnapshot {
+                id: None,
+                run_id,
+                task_id: Some(task.id),
+                name: task.name.clone(),
+                sequence_nr: Some(task.sequence_nr),
+                queue_empty: true,
+                sampler_snapshot: base_stage_snapshot.sampler_snapshot,
+                observable_state: Some(crate::evaluation::AccumulatorState::from_config(
+                    accumulator,
+                )),
+                sampler_aggregator: base_stage_snapshot.sampler_aggregator,
+                batch_transforms: base_stage_snapshot.batch_transforms,
+            })
+            .await?;
+        store.complete_run_task(task.id).await?;
+        info!(
+            run_id,
+            task_id = task.id,
+            task_name = %task.name,
+            accumulator = ?accumulator,
+            "applied set_accumulator task"
+        );
+        Ok(true)
     }
 
     async fn build_sampler_runner(

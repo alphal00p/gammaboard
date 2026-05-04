@@ -214,6 +214,7 @@ impl RunTaskSpec {
     ) -> Result<Vec<TaskPanelProjector>, EngineError> {
         let mut projectors = Vec::new();
         projectors.extend(match self {
+            Self::SetAccumulator { .. } => Vec::new(),
             Self::Sample { .. } => {
                 sample::projectors(effective_accumulator_config.ok_or_else(|| {
                     EngineError::build("sample task has no effective accumulator config")

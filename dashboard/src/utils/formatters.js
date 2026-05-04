@@ -120,3 +120,53 @@ export const formatEstimateDisplay = (value, error, fallback = "n/a") => {
     latex_with_relative: appendRelativeToLatex(`\\left(${valueText} \\pm ${errorText}\\right)\\times 10^{${exponent}}`),
   };
 };
+
+const TIME_UNIT_SECONDS = {
+  s: 1,
+  ms: 1e-3,
+  "µs": 1e-6,
+  ns: 1e-9,
+};
+
+const TIME_UNIT_ORDER_SECONDS = [
+  { unit: "s", seconds: 1 },
+  { unit: "ms", seconds: 1e-3 },
+  { unit: "µs", seconds: 1e-6 },
+  { unit: "ns", seconds: 1e-9 },
+];
+
+export const normalizeTimeUnit = (unit) => {
+  const text = String(unit || "").trim().replace(/μ/g, "µ");
+  if (!text) return null;
+  const lower = text.toLowerCase();
+  if (lower === "s") return "s";
+  if (lower === "ms") return "ms";
+  if (lower === "us" || lower === "µs") return "µs";
+  if (lower === "ns") return "ns";
+  return null;
+};
+
+const unitSeconds = (unit) => {
+  const normalized = normalizeTimeUnit(unit);
+  if (!normalized) return null;
+  return TIME_UNIT_SECONDS[normalized];
+};
+
+export const convertTimeValue = (value, fromUnit, toUnit) => {
+  const numeric = Number(value);
+  const fromSeconds = unitSeconds(fromUnit);
+  const toSeconds = unitSeconds(toUnit);
+  if (!Number.isFinite(numeric) || fromSeconds == null || toSeconds == null) return null;
+  return (numeric * fromSeconds) / toSeconds;
+};
+
+export const pickBestTimeUnit = (value, fromUnit) => {
+  const numeric = Number(value);
+  const fromSeconds = unitSeconds(fromUnit);
+  if (!Number.isFinite(numeric) || fromSeconds == null) return null;
+  const absoluteSeconds = Math.abs(numeric * fromSeconds);
+  for (const candidate of TIME_UNIT_ORDER_SECONDS) {
+    if (absoluteSeconds >= candidate.seconds) return candidate.unit;
+  }
+  return "ns";
+};

@@ -1,13 +1,13 @@
 use crate::api::ApiError;
 use crate::core::IntegrationParams;
 use crate::core::{
-    AggregationStore, ControlPlaneStore, RunStageSnapshot, RunTask, RunTaskInput, RunTaskState,
-    RunTaskStore, SamplerQueueTuning,
+    AccumulatorConfig, AggregationStore, ControlPlaneStore, EvaluatorConfig, RunStageSnapshot,
+    RunTask, RunTaskInput, RunTaskState, RunTaskStore, SamplerQueueTuning, SourceRefSpec,
 };
 use crate::preprocess::{RunAddConfig, preprocess_run_add};
 use crate::stores::RunProgress;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -147,7 +147,13 @@ pub async fn create_run(
         ApiError::Internal("preprocessing did not build initial stage snapshot".to_string())
     })?;
 
-    preflight_task_batch(store, initial_stage_snapshot.run_id, &initial_tasks).await?;
+    preflight_task_batch(
+        store,
+        initial_stage_snapshot.run_id,
+        &initial_tasks,
+        Some(resolved_integration_params.evaluator.clone()),
+    )
+    .await?;
 
     let run_id = store
         .create_run(
@@ -281,8 +287,18 @@ pub async fn append_tasks(
     task_file: TaskQueueFile,
 ) -> Result<AppendedTasks, ApiError> {
     let tasks = task_file.into_tasks();
-    let _run = load_run_progress(store, run_id).await?;
-    preflight_task_batch(store, run_id, &tasks).await?;
+    let run = load_run_progress(store, run_id).await?;
+    let integration_params_value = run
+        .integration_params
+        .clone()
+        .ok_or_else(|| ApiError::Internal(format!("run {run_id} is missing integration_params")))?;
+    let integration_params: IntegrationParams = serde_json::from_value(integration_params_value)
+        .map_err(|err| {
+            ApiError::Internal(format!(
+                "run {run_id} has invalid integration_params payload: {err}"
+            ))
+        })?;
+    preflight_task_batch(store, run_id, &tasks, Some(integration_params.evaluator)).await?;
     let tasks = store.append_run_tasks(run_id, &tasks).await?;
     Ok(AppendedTasks { tasks })
 }
@@ -387,24 +403,31 @@ async fn preflight_task_batch(
     store: &(impl AggregationStore + RunTaskStore),
     run_id: i32,
     tasks: &[RunTaskInput],
+    evaluator: Option<EvaluatorConfig>,
 ) -> Result<(), ApiError> {
     let existing_tasks = if run_id > 0 {
         store.list_run_tasks(run_id).await?
     } else {
         Vec::new()
     };
-    let mut context = TaskPreflightContext::from_existing_tasks(&existing_tasks);
+    let mut context = TaskPreflightContext::from_existing_tasks(&existing_tasks, evaluator)?;
     context.validate_batch(tasks)
 }
 
 struct TaskPreflightContext {
     known_names: BTreeSet<String>,
     prior_sourceable_names: BTreeSet<String>,
+    effective_accumulator_by_name: BTreeMap<String, AccumulatorConfig>,
+    current_accumulator: Option<AccumulatorConfig>,
     next_sequence: i32,
+    evaluator: Option<EvaluatorConfig>,
 }
 
 impl TaskPreflightContext {
-    fn from_existing_tasks(existing_tasks: &[RunTask]) -> Self {
+    fn from_existing_tasks(
+        existing_tasks: &[RunTask],
+        evaluator: Option<EvaluatorConfig>,
+    ) -> Result<Self, ApiError> {
         let known_names = existing_tasks
             .iter()
             .map(|task| task.name.clone())
@@ -420,11 +443,20 @@ impl TaskPreflightContext {
             .max()
             .unwrap_or(0)
             + 1;
-        Self {
+        let mut context = Self {
             known_names,
             prior_sourceable_names,
+            effective_accumulator_by_name: BTreeMap::new(),
+            current_accumulator: None,
             next_sequence,
+            evaluator,
+        };
+        let mut ordered_tasks = existing_tasks.iter().collect::<Vec<_>>();
+        ordered_tasks.sort_by_key(|task| (task.sequence_nr, task.id));
+        for task in ordered_tasks {
+            context.record_existing_task(task)?;
         }
+        Ok(context)
     }
 
     fn validate_batch(&mut self, tasks: &[RunTaskInput]) -> Result<(), ApiError> {
@@ -455,10 +487,80 @@ impl TaskPreflightContext {
                 task_name
             )));
         }
+        let effective_accumulator = self.resolve_effective_accumulator(task)?;
+        if let Some(config) = effective_accumulator {
+            self.validate_accumulator_against_evaluator(&config)?;
+        }
         if task.task.is_sourceable() {
-            self.prior_sourceable_names.insert(task_name);
+            self.prior_sourceable_names.insert(task_name.clone());
+        }
+        if let Some(config) = effective_accumulator {
+            self.effective_accumulator_by_name.insert(task_name, config);
+            self.current_accumulator = Some(config);
         }
         self.next_sequence += 1;
+        Ok(())
+    }
+
+    fn record_existing_task(&mut self, task: &RunTask) -> Result<(), ApiError> {
+        let input = RunTaskInput {
+            name: Some(task.name.clone()),
+            task: task.task.clone(),
+        };
+        let effective_accumulator = self.resolve_effective_accumulator(&input)?;
+        if let Some(config) = effective_accumulator {
+            self.effective_accumulator_by_name
+                .insert(task.name.clone(), config);
+            self.current_accumulator = Some(config);
+        }
+        Ok(())
+    }
+
+    fn resolve_effective_accumulator(
+        &self,
+        task: &RunTaskInput,
+    ) -> Result<Option<AccumulatorConfig>, ApiError> {
+        if let Some(config) = task
+            .task
+            .new_accumulator_config()
+            .map_err(|err| ApiError::BadRequest(format!("invalid task entry: {err}")))?
+        {
+            return Ok(Some(config));
+        }
+
+        match &task.task {
+            crate::core::RunTaskSpec::Sample { .. } => match task.task.sample_accumulator_source() {
+                Some(SourceRefSpec::Latest) => self.current_accumulator.ok_or_else(|| {
+                    ApiError::BadRequest(
+                        "sample task has no effective accumulator configuration; set one explicitly first or add a prior accumulator-producing task".to_string(),
+                    )
+                }).map(Some),
+                Some(SourceRefSpec::FromName(source_name)) => self
+                    .effective_accumulator_by_name
+                    .get(&source_name)
+                    .copied()
+                    .ok_or_else(|| {
+                        ApiError::BadRequest(format!(
+                            "sample task references accumulator source task '{}' but no effective accumulator is available from it",
+                            source_name
+                        ))
+                    })
+                    .map(Some),
+                None => Ok(None),
+            },
+            _ => Ok(None),
+        }
+    }
+
+    fn validate_accumulator_against_evaluator(
+        &self,
+        config: &AccumulatorConfig,
+    ) -> Result<(), ApiError> {
+        if let Some(evaluator) = self.evaluator.as_ref() {
+            evaluator
+                .validate_accumulator_config(config)
+                .map_err(|err| ApiError::BadRequest(err.to_string()))?;
+        }
         Ok(())
     }
 }
@@ -552,5 +654,94 @@ fn merge_toml(base: &mut toml::Value, overlay: toml::Value) {
         (base_value, overlay_value) => {
             *base_value = overlay_value;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{
+        RunTaskSpec, SampleStopCondition, SamplerAggregatorConfig, SamplerAggregatorSourceSpec,
+    };
+    use crate::evaluation::UnitEvaluatorParams;
+    use crate::sampling::NaiveMonteCarloSamplerParams;
+
+    fn scalar_unit_evaluator() -> EvaluatorConfig {
+        EvaluatorConfig::Unit {
+            params: UnitEvaluatorParams::default(),
+        }
+    }
+
+    fn sample_task(accumulator: Option<crate::core::AccumulatorSourceSpec>) -> RunTaskInput {
+        RunTaskInput {
+            name: None,
+            task: RunTaskSpec::Sample {
+                stop_condition: SampleStopCondition {
+                    max_samples: Some(10),
+                    ..SampleStopCondition::default()
+                },
+                sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
+                    config: SamplerAggregatorConfig::NaiveMonteCarlo {
+                        params: NaiveMonteCarloSamplerParams::default(),
+                    },
+                }),
+                accumulator,
+                queue_tuning: None,
+                batch_transforms: None,
+            },
+        }
+    }
+
+    #[test]
+    fn preflight_rejects_first_sample_without_accumulator_state() {
+        let mut context =
+            TaskPreflightContext::from_existing_tasks(&[], Some(scalar_unit_evaluator()))
+                .expect("context");
+        let error = context
+            .validate_batch(&[sample_task(None)])
+            .expect_err("missing accumulator should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("sample task has no effective accumulator configuration")
+        );
+    }
+
+    #[test]
+    fn preflight_accepts_sample_after_set_accumulator() {
+        let mut context =
+            TaskPreflightContext::from_existing_tasks(&[], Some(scalar_unit_evaluator()))
+                .expect("context");
+        context
+            .validate_batch(&[
+                RunTaskInput {
+                    name: Some("prep".to_string()),
+                    task: RunTaskSpec::SetAccumulator {
+                        accumulator: AccumulatorConfig::Scalar,
+                    },
+                },
+                sample_task(None),
+            ])
+            .expect("set_accumulator should establish accumulator state");
+    }
+
+    #[test]
+    fn preflight_rejects_incompatible_gammaloop_accumulator_for_scalar_evaluator() {
+        let mut context =
+            TaskPreflightContext::from_existing_tasks(&[], Some(scalar_unit_evaluator()))
+                .expect("context");
+        let error = context
+            .validate_batch(&[RunTaskInput {
+                name: Some("prep".to_string()),
+                task: RunTaskSpec::SetAccumulator {
+                    accumulator: AccumulatorConfig::Gammaloop,
+                },
+            }])
+            .expect_err("gammaloop accumulator should fail for scalar unit evaluator");
+        assert!(
+            error
+                .to_string()
+                .contains("does not support accumulator config \"gammaloop\"")
+        );
     }
 }

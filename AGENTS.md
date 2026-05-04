@@ -68,7 +68,8 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Explicit sampler configs (`sampler_aggregator = { config = ... }`) start fresh and must not implicitly resume the previous sampler snapshot (except `havana_inference`, which still resolves its configured handoff source).
 - Sample tasks may omit `accumulator`; that means reuse the previous accumulator state.
 - Havana inference source selection lives inside Havana sampler config. Default is `latest_training_sampler_aggregator`, with optional explicit `snapshot_id`.
-- `sample` with `stop_condition.max_samples = 0` is the only supported no-work stage update task shape, including pure configuration updates.
+- `set_accumulator` is the explicit no-work task for changing accumulator state.
+- `sample` tasks may omit `accumulator`; omitted means reuse the latest effective accumulator state, and task insertion must fail if none exists yet.
 - Sample task stop conditions are configured through `stop_condition = { ... }`. Supported keys are `max_samples`, `absolute_error`, `relative_error`, and optional complex projection (`projection = "real" | "imag" | "abs"`).
 - GammaLoop evaluator point dimensions are inferred from the selected integrand. Do not configure `continuous_dims` or `discrete_dims` for `evaluator.kind = "gammaloop"`.
 - GammaLoop evaluation in Gammaboard uses x-space sampling. Do not enable momentum-space GammaLoop evaluation for normal runs; it bypasses the parameterized observable path used by native histograms.

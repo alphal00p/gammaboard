@@ -6,7 +6,8 @@ mod symbolica;
 pub(crate) mod unit;
 
 use crate::core::{AccumulatorConfig, BuildError, EvaluatorConfig};
-use crate::evaluation::{AccumulatorState, Evaluator};
+use crate::evaluation::{AccumulatorState, Evaluator, SemanticAccumulatorKind};
+use crate::utils::domain::Domain;
 
 use self::gammaloop::GammaLoopEvaluator;
 use self::python::ScalarPythonEvaluator;
@@ -54,10 +55,95 @@ impl EvaluatorConfig {
         }
     }
 
+    pub fn resolve_domain(&self) -> Result<Domain, BuildError> {
+        match self {
+            Self::Gammaloop { params } => {
+                GammaLoopEvaluator::resolve_domain_from_params(params.clone())
+            }
+            Self::SinEvaluator { .. } => Ok(Domain::continuous(1)),
+            Self::SincEvaluator { .. } => Ok(Domain::continuous(2)),
+            Self::Unit { params } => Ok(Domain::rectangular(
+                params.continuous_dims,
+                params.discrete_dims,
+            )),
+            Self::Symbolica { params } => Ok(Domain::continuous(params.args.len())),
+            Self::PythonScalar { params } => Ok(Domain::rectangular(
+                params.continuous_dims,
+                params.discrete_dims,
+            )),
+        }
+    }
+
+    pub fn validate_accumulator_config(
+        &self,
+        config: &AccumulatorConfig,
+    ) -> Result<(), BuildError> {
+        if matches!(self, Self::Gammaloop { .. }) {
+            return Ok(());
+        }
+
+        match self {
+            Self::PythonScalar { .. } | Self::SinEvaluator { .. } | Self::Symbolica { .. } => {
+                validate_semantic_accumulator(
+                    self.kind_str(),
+                    config,
+                    SemanticAccumulatorKind::Scalar,
+                )
+            }
+            Self::SincEvaluator { .. } => validate_semantic_accumulator(
+                self.kind_str(),
+                config,
+                SemanticAccumulatorKind::Complex,
+            ),
+            Self::Unit { params } => {
+                validate_semantic_accumulator(self.kind_str(), config, params.accumulator_kind)
+            }
+            Self::Gammaloop { .. } => Ok(()),
+        }
+    }
+
     pub fn empty_accumulator_state(
         &self,
         config: &AccumulatorConfig,
     ) -> Result<AccumulatorState, BuildError> {
         Ok(AccumulatorState::from_config(config))
+    }
+}
+
+fn validate_semantic_accumulator(
+    evaluator_kind: &str,
+    config: &AccumulatorConfig,
+    semantic_kind: SemanticAccumulatorKind,
+) -> Result<(), BuildError> {
+    if matches!(config, AccumulatorConfig::Empty) {
+        return Ok(());
+    }
+
+    let supported = match semantic_kind {
+        SemanticAccumulatorKind::Scalar => {
+            [AccumulatorConfig::Scalar, AccumulatorConfig::FullScalar]
+        }
+        SemanticAccumulatorKind::Complex => {
+            [AccumulatorConfig::Complex, AccumulatorConfig::FullComplex]
+        }
+    };
+    if supported.contains(config) {
+        Ok(())
+    } else {
+        Err(BuildError::invalid_input(format!(
+            "evaluator.kind = \"{evaluator_kind}\" does not support accumulator config \"{}\"",
+            accumulator_config_str(config)
+        )))
+    }
+}
+
+fn accumulator_config_str(config: &AccumulatorConfig) -> &'static str {
+    match config {
+        AccumulatorConfig::Empty => "empty",
+        AccumulatorConfig::Scalar => "scalar",
+        AccumulatorConfig::Complex => "complex",
+        AccumulatorConfig::Gammaloop => "gammaloop",
+        AccumulatorConfig::FullScalar => "full_scalar",
+        AccumulatorConfig::FullComplex => "full_complex",
     }
 }

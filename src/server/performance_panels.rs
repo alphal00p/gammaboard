@@ -242,12 +242,12 @@ fn evaluator_current_panels(entry: &EvaluatorPerformanceHistoryEntry) -> Vec<Pan
                 ),
                 key_value(
                     "avg_total_time_us",
-                    "Avg Eval+Materialize Per Sample (us)",
+                    "Avg Eval+Materialize Per Sample (µs)",
                     ms_to_us(entry.metrics.avg_time_per_sample_ms),
                 ),
                 key_value(
                     "avg_pipeline_total_time_us",
-                    "Avg Pipeline End-To-End Per Sample (us)",
+                    "Avg Pipeline End-To-End Per Sample (µs)",
                     ms_to_us(pipeline_total_ms),
                 ),
                 key_value(
@@ -286,57 +286,57 @@ fn evaluator_current_panels(entry: &EvaluatorPerformanceHistoryEntry) -> Vec<Pan
             vec![
                 key_value(
                     "avg_fetch_decode_time_us",
-                    "Fetch+Decode Total Per Sample (us)",
+                    "Fetch+Decode Total Per Sample (µs)",
                     ms_to_us(entry.metrics.avg_fetch_time_per_sample_ms),
                 ),
                 key_value(
                     "avg_fetch_decode_sync_time_us",
-                    "Fetch+Decode (sync) Per Sample (us)",
+                    "Fetch+Decode (sync) Per Sample (µs)",
                     ms_to_us(fetch_sync_ms),
                 ),
                 key_value(
                     "avg_fetch_stall_time_us",
-                    "Concurrent Fetch Wait Per Sample (us)",
+                    "Concurrent Fetch Wait Per Sample (µs)",
                     ms_to_us(entry.metrics.avg_fetch_stall_time_per_sample_ms),
                 ),
                 key_value(
                     "avg_materialization_time_us",
-                    "Materialization Per Sample (us)",
+                    "Materialization Per Sample (µs)",
                     ms_to_us(entry.metrics.avg_materialization_time_per_sample_ms),
                 ),
                 key_value(
                     "avg_evaluate_time_us",
-                    "Evaluate Engine Per Sample (us)",
+                    "Evaluate Engine Per Sample (µs)",
                     ms_to_us(entry.metrics.avg_evaluate_time_per_sample_ms),
                 ),
                 key_value(
                     "std_evaluate_time_us",
-                    "Evaluate Engine StdDev Per Sample (us)",
+                    "Evaluate Engine StdDev Per Sample (µs)",
                     ms_to_us(entry.metrics.std_evaluate_time_per_sample_ms),
                 ),
                 key_value(
                     "avg_submit_time_us",
-                    "Submit Per Sample (us)",
+                    "Submit Per Sample (µs)",
                     ms_to_us(entry.metrics.avg_submit_time_per_sample_ms),
                 ),
                 key_value(
                     "std_fetch_decode_time_us",
-                    "Fetch+Decode StdDev Per Sample (us)",
+                    "Fetch+Decode StdDev Per Sample (µs)",
                     ms_to_us(entry.metrics.std_fetch_time_per_sample_ms),
                 ),
                 key_value(
                     "std_materialization_time_us",
-                    "Materialization StdDev Per Sample (us)",
+                    "Materialization StdDev Per Sample (µs)",
                     ms_to_us(entry.metrics.std_materialization_time_per_sample_ms),
                 ),
                 key_value(
                     "std_submit_time_us",
-                    "Submit StdDev Per Sample (us)",
+                    "Submit StdDev Per Sample (µs)",
                     ms_to_us(entry.metrics.std_submit_time_per_sample_ms),
                 ),
                 key_value(
                     "avg_submit_stall_time_us",
-                    "Concurrent Submit Wait Per Sample (us)",
+                    "Concurrent Submit Wait Per Sample (µs)",
                     ms_to_us(entry.metrics.avg_submit_stall_time_per_sample_ms),
                 ),
                 key_value(
@@ -346,17 +346,17 @@ fn evaluator_current_panels(entry: &EvaluatorPerformanceHistoryEntry) -> Vec<Pan
                 ),
                 key_value(
                     "avg_runner_sync_overhead_time_us",
-                    "Runner Sync Overhead Per Sample (us)",
+                    "Runner Sync Overhead Per Sample (µs)",
                     ms_to_us(runner_sync_overhead_ms),
                 ),
                 key_value(
                     "avg_runner_wait_overhead_time_us",
-                    "Runner Wait Overhead Per Sample (us)",
+                    "Runner Wait Overhead Per Sample (µs)",
                     ms_to_us(runner_wait_overhead_ms),
                 ),
                 key_value(
                     "avg_runner_total_overhead_time_us",
-                    "Runner Total Overhead Per Sample (us)",
+                    "Runner Total Overhead Per Sample (µs)",
                     ms_to_us(runner_total_overhead_ms),
                 ),
             ],
@@ -376,37 +376,37 @@ fn evaluator_summary_panel(entries: &[EvaluatorPerformanceHistoryEntry]) -> Pane
             ),
             key_value(
                 "avg_total_time_us",
-                "Avg Eval+Materialize Per Sample (us)",
+                "Avg Eval+Materialize Per Sample (µs)",
                 summary.avg_total_time_per_sample_ms.map(ms_to_us),
             ),
             key_value(
                 "avg_pipeline_total_time_us",
-                "Avg Pipeline End-To-End Per Sample (us)",
+                "Avg Pipeline End-To-End Per Sample (µs)",
                 summary.avg_pipeline_total_time_per_sample_ms.map(ms_to_us),
             ),
             key_value(
                 "avg_fetch_stall_time_us",
-                "Avg Fetch Stall Per Sample (us)",
+                "Avg Fetch Stall Per Sample (µs)",
                 summary.avg_fetch_stall_time_per_sample_ms.map(ms_to_us),
             ),
             key_value(
                 "avg_materialization_time_us",
-                "Avg Materialization Per Sample (us)",
+                "Avg Materialization Per Sample (µs)",
                 summary.avg_materialization_time_per_sample_ms.map(ms_to_us),
             ),
             key_value(
                 "avg_evaluate_time_us",
-                "Avg Evaluate Per Sample (us)",
+                "Avg Evaluate Per Sample (µs)",
                 summary.avg_evaluate_time_per_sample_ms.map(ms_to_us),
             ),
             key_value(
                 "avg_submit_time_us",
-                "Avg Submit Per Sample (us)",
+                "Avg Submit Per Sample (µs)",
                 summary.avg_submit_time_per_sample_ms.map(ms_to_us),
             ),
             key_value(
                 "avg_runner_overhead_time_us",
-                "Avg Runner Total Overhead Per Sample (us)",
+                "Avg Runner Total Overhead Per Sample (µs)",
                 summary
                     .avg_runner_total_overhead_per_sample_ms
                     .map(ms_to_us),
