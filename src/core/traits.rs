@@ -60,6 +60,10 @@ pub trait ControlPlaneStore: Send + Sync {
         name_prefix: Option<&str>,
         args: &JsonValue,
     ) -> Result<NodeLaunchRequest, StoreError>;
+    async fn claim_external_node_launch_request(
+        &self,
+    ) -> Result<Option<NodeLaunchRequest>, StoreError>;
+    async fn reconcile_running_node_launch_requests(&self) -> Result<u64, StoreError>;
     async fn list_node_launch_requests(&self) -> Result<Vec<NodeLaunchRequest>, StoreError>;
     async fn update_node_launch_request_state(
         &self,

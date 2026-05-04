@@ -91,16 +91,19 @@ pub async fn list_node_launch_requests(
     Ok(store.list_node_launch_requests().await?)
 }
 
-pub async fn mark_node_launch_request_launching(
+pub async fn claim_external_node_launch_request(
     store: &impl ControlPlaneStore,
-    id: i64,
-) -> Result<NodeLaunchRequest, ApiError> {
-    Ok(store
-        .update_node_launch_request_state(id, "launching", 0, &serde_json::json!({}), None)
-        .await?)
+) -> Result<Option<NodeLaunchRequest>, ApiError> {
+    Ok(store.claim_external_node_launch_request().await?)
 }
 
-pub async fn mark_node_launch_request_succeeded(
+pub async fn reconcile_running_node_launch_requests(
+    store: &impl ControlPlaneStore,
+) -> Result<u64, ApiError> {
+    Ok(store.reconcile_running_node_launch_requests().await?)
+}
+
+pub async fn mark_node_launch_request_starting(
     store: &impl ControlPlaneStore,
     id: i64,
     started_count: usize,
@@ -109,7 +112,20 @@ pub async fn mark_node_launch_request_succeeded(
     let started_count = i32::try_from(started_count)
         .map_err(|_| ApiError::Internal("started node count is too large".to_string()))?;
     Ok(store
-        .update_node_launch_request_state(id, "succeeded", started_count, result, None)
+        .update_node_launch_request_state(id, "starting", started_count, result, None)
+        .await?)
+}
+
+pub async fn mark_node_launch_request_running(
+    store: &impl ControlPlaneStore,
+    id: i64,
+    started_count: usize,
+    result: &JsonValue,
+) -> Result<NodeLaunchRequest, ApiError> {
+    let started_count = i32::try_from(started_count)
+        .map_err(|_| ApiError::Internal("started node count is too large".to_string()))?;
+    Ok(store
+        .update_node_launch_request_state(id, "running", started_count, result, None)
         .await?)
 }
 
@@ -124,6 +140,19 @@ pub async fn mark_node_launch_request_failed(
         .map_err(|_| ApiError::Internal("started node count is too large".to_string()))?;
     Ok(store
         .update_node_launch_request_state(id, "failed", started_count, result, Some(error))
+        .await?)
+}
+
+pub async fn mark_node_launch_request_canceled(
+    store: &impl ControlPlaneStore,
+    id: i64,
+    started_count: usize,
+    result: &JsonValue,
+) -> Result<NodeLaunchRequest, ApiError> {
+    let started_count = i32::try_from(started_count)
+        .map_err(|_| ApiError::Internal("started node count is too large".to_string()))?;
+    Ok(store
+        .update_node_launch_request_state(id, "canceled", started_count, result, None)
         .await?)
 }
 

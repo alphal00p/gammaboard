@@ -123,7 +123,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
                   const requestId = response?.request?.id;
                   const started = Number(response?.started ?? 0);
                   setSnackbar({
-                    message: `Created node launch request ${requestId ?? ""}; started ${started} node${started === 1 ? "" : "s"}.`,
+                    message: `Created node launch request ${requestId ?? ""}; submitted ${started} node${started === 1 ? "" : "s"}.`,
                     severity: "success",
                   });
                 } catch (err) {
@@ -159,7 +159,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
                     <TableCell>State</TableCell>
                     <TableCell>Backend</TableCell>
                     <TableCell>Count</TableCell>
-                    <TableCell>Started</TableCell>
+                    <TableCell>Submitted</TableCell>
                     <TableCell>Created</TableCell>
                     <TableCell>Error</TableCell>
                   </TableRow>

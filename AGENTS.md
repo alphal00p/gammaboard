@@ -43,6 +43,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Desired/current assignments live directly on `nodes`.
 - Node startup intent lives in `node_launch_requests`, not in `nodes`. A single launch request may represent many requested workers; resolver-specific details belong in its JSON args/result fields.
 - Dashboard node-start actions should create launch requests. If `allow_local_node_spawn = true`, the control process may resolve those requests locally; otherwise an external launcher is expected to resolve them.
+- External launchers must communicate through the dashboard API, not direct SQL. Launch request states are `pending`, `starting`, `running`, `failed`, and `canceled`; `starting` means jobs/processes were submitted, while `running` is reconciled from live node leases.
 - At most one sampler-aggregator may be assigned to a run at a time. Many evaluators are allowed.
 
 ## Tasks, Snapshots, Queue

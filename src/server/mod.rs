@@ -286,6 +286,16 @@ struct AutoRunNodesRequest {
 }
 
 #[derive(Deserialize)]
+struct NodeLaunchRequestProgressRequest {
+    state: String,
+    started_count: usize,
+    #[serde(default)]
+    result: JsonValue,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct CreateRunRequest {
     toml: String,
 }
@@ -417,6 +427,14 @@ fn build_app(state: AppState) -> Router {
         .route("/nodes/:id/stop", post(stop_node))
         .route("/nodes/stop-all", post(stop_all_nodes))
         .route("/nodes/auto-run", post(auto_run_nodes))
+        .route(
+            "/node-launch-requests/claim-external",
+            post(claim_external_node_launch_request),
+        )
+        .route(
+            "/node-launch-requests/:id/progress",
+            post(update_node_launch_request_progress),
+        )
         .route(
             "/node-launch-requests",
             get(get_node_launch_requests).post(create_node_launch_request),
@@ -1300,6 +1318,12 @@ async fn create_node_launch_request(
 async fn get_node_launch_requests(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    node_api::reconcile_running_node_launch_requests(&state.store)
+        .await
+        .map_err(|err| {
+            log_control_api_error("node_launch_requests_reconcile", &err);
+            err
+        })?;
     let requests = node_api::list_node_launch_requests(&state.store)
         .await
         .map_err(|err| {
@@ -1307,6 +1331,81 @@ async fn get_node_launch_requests(
             err
         })?;
     json_response(serde_json::json!({ "items": requests }))
+}
+
+async fn claim_external_node_launch_request(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let request = node_api::claim_external_node_launch_request(&state.store)
+        .await
+        .map_err(|err| {
+            log_control_api_error("node_launch_request_claim_external", &err);
+            err
+        })?;
+    json_response(serde_json::json!({ "request": request }))
+}
+
+async fn update_node_launch_request_progress(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i64>,
+    AxumJson(payload): AxumJson<NodeLaunchRequestProgressRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = if payload.result.is_null() {
+        serde_json::json!({})
+    } else {
+        payload.result
+    };
+    let request = match payload.state.as_str() {
+        "starting" => {
+            node_api::mark_node_launch_request_starting(
+                &state.store,
+                id,
+                payload.started_count,
+                &result,
+            )
+            .await
+        }
+        "running" => {
+            node_api::mark_node_launch_request_running(
+                &state.store,
+                id,
+                payload.started_count,
+                &result,
+            )
+            .await
+        }
+        "failed" => {
+            let error = payload
+                .error
+                .as_deref()
+                .unwrap_or("external launcher reported failure");
+            node_api::mark_node_launch_request_failed(
+                &state.store,
+                id,
+                payload.started_count,
+                &result,
+                error,
+            )
+            .await
+        }
+        "canceled" => {
+            node_api::mark_node_launch_request_canceled(
+                &state.store,
+                id,
+                payload.started_count,
+                &result,
+            )
+            .await
+        }
+        other => Err(ApiError::BadRequest(format!(
+            "unsupported node launch request state '{other}'"
+        ))),
+    }
+    .map_err(|err| {
+        log_control_api_error("node_launch_request_progress", &err);
+        err
+    })?;
+    json_response(serde_json::json!({ "request": request }))
 }
 
 async fn create_and_maybe_resolve_node_launch_request(
@@ -1365,12 +1464,6 @@ async fn create_and_maybe_resolve_node_launch_request(
         }));
     }
 
-    node_api::mark_node_launch_request_launching(&state.store, launch.request.id)
-        .await
-        .map_err(|err| {
-            log_control_api_error("node_launch_request_launching", &err);
-            err
-        })?;
     let plan = node_api::plan_auto_run_nodes(&state.store, payload.count)
         .await
         .map_err(|err| {
@@ -1390,7 +1483,11 @@ async fn create_and_maybe_resolve_node_launch_request(
             node_name,
             max_start_failures,
         ) {
-            let result = serde_json::json!({ "node_names": started_node_names });
+            let workers = started_node_names
+                .iter()
+                .map(|node_name| serde_json::json!({ "node_name": node_name }))
+                .collect::<Vec<_>>();
+            let result = serde_json::json!({ "workers": workers });
             let _ = node_api::mark_node_launch_request_failed(
                 &state.store,
                 launch.request.id,
@@ -1405,8 +1502,12 @@ async fn create_and_maybe_resolve_node_launch_request(
         started_node_names.push(node_name.clone());
     }
 
-    let result = serde_json::json!({ "node_names": started_node_names });
-    let request = node_api::mark_node_launch_request_succeeded(
+    let workers = started_node_names
+        .iter()
+        .map(|node_name| serde_json::json!({ "node_name": node_name }))
+        .collect::<Vec<_>>();
+    let result = serde_json::json!({ "workers": workers });
+    let request = node_api::mark_node_launch_request_starting(
         &state.store,
         launch.request.id,
         started_node_names.len(),
@@ -1414,7 +1515,7 @@ async fn create_and_maybe_resolve_node_launch_request(
     )
     .await
     .map_err(|err| {
-        log_control_api_error("node_launch_request_succeeded", &err);
+        log_control_api_error("node_launch_request_starting", &err);
         err
     })?;
 

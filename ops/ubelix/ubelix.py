@@ -252,25 +252,37 @@ def login(control_node: str) -> str:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=5) as response:
+    with http_opener_without_proxies().open(request, timeout=5) as response:
         cookie = response.headers.get("Set-Cookie", "")
     if not cookie:
         raise SystemExit("login did not return a session cookie")
     return cookie.split(";", 1)[0]
 
 
-def post(control_node: str, path: str, *, cookie: str | None = None) -> None:
+def api_request_json(
+    control_node: str,
+    path: str,
+    *,
+    method: str = "POST",
+    payload: dict | None = None,
+    cookie: str | None = None,
+) -> dict:
     headers = {"Content-Type": "application/json"}
     if cookie:
         headers["Cookie"] = cookie
     request = urllib.request.Request(
         api_url(control_node, path),
-        data=b"{}",
+        data=json.dumps(payload or {}).encode(),
         headers=headers,
-        method="POST",
+        method=method,
     )
-    with urllib.request.urlopen(request, timeout=10):
-        return
+    with http_opener_without_proxies().open(request, timeout=10) as response:
+        body = response.read().decode("utf-8")
+    return json.loads(body) if body else {}
+
+
+def post(control_node: str, path: str, *, cookie: str | None = None) -> None:
+    api_request_json(control_node, path, cookie=cookie)
 
 
 def parse_hms(value: str) -> str:
@@ -313,109 +325,35 @@ def submit_single_node(time_limit: str) -> Job:
     return submit_singleton_job(SINGLE_NODE_JOB_NAME, SINGLE_NODE_SBATCH, time_limit)
 
 
-def sql_literal(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
-
-
-def psql_json(control_node: str, sql: str) -> list[dict]:
-    env = os.environ.copy()
-    env.pop("PGTZ", None)
-    env.pop("PGOPTIONS", None)
-    env.setdefault("APPTAINERENV_LANG", "C.UTF-8")
-    env.setdefault("APPTAINERENV_LC_ALL", "C.UTF-8")
-    env.setdefault("APPTAINERENV_TZ", "Etc/UTC")
-    try:
-        result = run(
-            [
-                "apptainer",
-                "exec",
-                "-B",
-                WORKSPACE_ROOT,
-                IMAGE_PATH,
-                "psql",
-                database_url(control_node),
-                "-X",
-                "-qAt",
-                "-v",
-                "ON_ERROR_STOP=1",
-                "-c",
-                sql,
-            ],
-            env=env,
-        )
-    except subprocess.CalledProcessError as err:
-        stderr = (err.stderr or "").strip()
-        stdout = (err.stdout or "").strip()
-        detail = stderr or stdout or str(err)
-        raise SystemExit(f"psql query failed: {detail}") from err
-    payload = result.stdout.strip()
-    if not payload:
-        return []
-    parsed = json.loads(payload)
-    if not isinstance(parsed, list):
-        raise SystemExit(f"expected JSON array from psql, got: {payload}")
-    return parsed
-
-
-def claim_launch_request(control_node: str) -> dict | None:
-    rows = psql_json(
+def claim_launch_request(control_node: str, cookie: str) -> dict | None:
+    response = api_request_json(
         control_node,
-        """
-        WITH next_request AS (
-          SELECT id
-          FROM node_launch_requests
-          WHERE state = 'pending'
-            AND backend = 'external'
-          ORDER BY created_at, id
-          LIMIT 1
-          FOR UPDATE SKIP LOCKED
-        ),
-        claimed AS (
-          UPDATE node_launch_requests request
-          SET state = 'launching',
-              updated_at = now()
-          FROM next_request
-          WHERE request.id = next_request.id
-          RETURNING
-            request.id,
-            request.backend,
-            request.requested_count,
-            request.started_count,
-            request.name_prefix,
-            request.args
-        )
-        SELECT COALESCE(json_agg(row_to_json(claimed)), '[]'::json)
-        FROM claimed
-        """,
+        "/node-launch-requests/claim-external",
+        cookie=cookie,
     )
-    return rows[0] if rows else None
+    request = response.get("request")
+    return request if isinstance(request, dict) else None
 
 
 def update_launch_request(
     control_node: str,
+    cookie: str,
     request_id: int,
     state: str,
     started_count: int,
     result: dict,
     error: str | None = None,
 ) -> None:
-    error_sql = "NULL" if error is None else sql_literal(error)
-    psql_json(
+    api_request_json(
         control_node,
-        f"""
-        WITH updated AS (
-          UPDATE node_launch_requests
-          SET state = {sql_literal(state)},
-              started_count = {started_count},
-              result = {sql_literal(json.dumps(result, sort_keys=True))}::jsonb,
-              error = {error_sql},
-              updated_at = now()
-          WHERE id = {int(request_id)}
-          RETURNING id
-        )
-        SELECT COALESCE(json_agg(row_to_json(updated)), '[]'::json)
-        FROM updated
-        """,
+        f"/node-launch-requests/{int(request_id)}/progress",
+        payload={
+            "state": state,
+            "started_count": started_count,
+            "result": result,
+            "error": error,
+        },
+        cookie=cookie,
     )
 
 
@@ -462,20 +400,21 @@ def submit_worker(
     return parse_job_id(result.stdout)
 
 
-def resolve_launch_requests(control: Job, control_node: str, *, max_requests: int | None = None) -> int:
-    return resolve_launch_requests_with_callback(control, control_node, max_requests=max_requests)
+def resolve_launch_requests(control: Job, control_node: str, cookie: str, *, max_requests: int | None = None) -> int:
+    return resolve_launch_requests_with_callback(control, control_node, cookie, max_requests=max_requests)
 
 
 def resolve_launch_requests_with_callback(
     control: Job,
     control_node: str,
+    cookie: str,
     *,
     max_requests: int | None = None,
     on_launch: Callable[[str], None] | None = None,
 ) -> int:
     resolved = 0
     while max_requests is None or resolved < max_requests:
-        request = claim_launch_request(control_node)
+        request = claim_launch_request(control_node, cookie)
         if request is None:
             break
 
@@ -504,8 +443,9 @@ def resolve_launch_requests_with_callback(
                     print(message)
             update_launch_request(
                 control_node,
+                cookie,
                 request_id,
-                "succeeded",
+                "starting",
                 len(submitted),
                 {"workers": submitted},
             )
@@ -513,6 +453,7 @@ def resolve_launch_requests_with_callback(
             try:
                 update_launch_request(
                     control_node,
+                    cookie,
                     request_id,
                     "failed",
                     len(submitted),
@@ -527,9 +468,10 @@ def resolve_launch_requests_with_callback(
 
 def watch_launch_requests(args: argparse.Namespace, control: Job, control_node: str) -> None:
     print(f"watching launch requests on {control_node}; Ctrl-C stops only this launcher")
+    cookie = login(control_node)
     try:
         while True:
-            resolved = resolve_launch_requests(control, control_node)
+            resolved = resolve_launch_requests(control, control_node, cookie)
             if args.once:
                 print(f"resolved_requests={resolved}")
                 return
@@ -559,9 +501,10 @@ def command_up(args: argparse.Namespace) -> None:
         print(f"watching {job.name} job; Ctrl-C stops only this launcher")
         status_printer = LiveStatusPrinter()
         try:
+            cookie = login(node)
             while job_is_active(job.id):
                 if not args.single_node:
-                    resolve_launch_requests_with_callback(job, node, on_launch=status_printer.print_event)
+                    resolve_launch_requests_with_callback(job, node, cookie, on_launch=status_printer.print_event)
                 status_printer.render(status_lines())
                 time.sleep(args.poll_seconds)
             status_printer.clear()

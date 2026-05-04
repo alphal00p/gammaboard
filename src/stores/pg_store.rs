@@ -514,10 +514,29 @@ impl ControlPlaneStore for PgStore {
     async fn list_node_launch_requests(
         &self,
     ) -> Result<Vec<crate::core::NodeLaunchRequest>, StoreError> {
+        queries::reconcile_running_node_launch_requests(&self.pool)
+            .await
+            .map_err(map_sqlx)?;
         let rows = queries::list_node_launch_requests(&self.pool)
             .await
             .map_err(map_sqlx)?;
         Ok(rows.into_iter().map(node_launch_request_from_raw).collect())
+    }
+
+    async fn claim_external_node_launch_request(
+        &self,
+    ) -> Result<Option<crate::core::NodeLaunchRequest>, StoreError> {
+        let row = queries::claim_external_node_launch_request(&self.pool)
+            .await
+            .map_err(map_sqlx)?;
+        Ok(row.map(node_launch_request_from_raw))
+    }
+
+    async fn reconcile_running_node_launch_requests(&self) -> Result<u64, StoreError> {
+        let result = queries::reconcile_running_node_launch_requests(&self.pool)
+            .await
+            .map_err(map_sqlx)?;
+        Ok(result.rows_affected())
     }
 
     async fn update_node_launch_request_state(

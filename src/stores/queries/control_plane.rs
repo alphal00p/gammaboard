@@ -428,6 +428,70 @@ pub(crate) async fn list_node_launch_requests(
     .await
 }
 
+pub(crate) async fn claim_external_node_launch_request(
+    pool: &PgPool,
+) -> Result<Option<NodeLaunchRequestRaw>, sqlx::Error> {
+    sqlx::query_as::<_, NodeLaunchRequestRaw>(
+        r#"
+        WITH next_request AS (
+            SELECT id
+            FROM node_launch_requests
+            WHERE state = 'pending'
+              AND backend = 'external'
+            ORDER BY created_at, id
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE node_launch_requests request
+        SET
+            state = 'starting',
+            started_count = 0,
+            result = '{}'::jsonb,
+            error = NULL,
+            updated_at = now()
+        FROM next_request
+        WHERE request.id = next_request.id
+        RETURNING
+            request.id,
+            request.created_at,
+            request.updated_at,
+            request.state,
+            request.backend,
+            request.requested_count,
+            request.started_count,
+            request.name_prefix,
+            request.args,
+            request.result,
+            request.error
+        "#,
+    )
+    .fetch_optional(pool)
+    .await
+}
+
+pub(crate) async fn reconcile_running_node_launch_requests(
+    pool: &PgPool,
+) -> Result<PgQueryResult, sqlx::Error> {
+    sqlx::query(
+        r#"
+        UPDATE node_launch_requests request
+        SET
+            state = 'running',
+            updated_at = now()
+        WHERE request.state = 'starting'
+          AND request.started_count >= request.requested_count
+          AND (
+              SELECT COUNT(*)
+              FROM jsonb_array_elements(COALESCE(request.result->'workers', '[]'::jsonb)) worker
+              JOIN nodes node ON node.name = worker->>'node_name'
+              WHERE node.lease_expires_at > now()
+          ) >= request.requested_count
+        "#,
+    )
+    .execute(pool)
+    .await
+}
+
 pub(crate) async fn update_node_launch_request_state(
     pool: &PgPool,
     id: i64,

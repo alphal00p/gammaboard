@@ -1177,6 +1177,20 @@ async fn http_get(base_url: &str, path: &str) -> anyhow::Result<String> {
     Ok(body)
 }
 
+async fn http_get_with_cookie(base_url: &str, path: &str, cookie: &str) -> anyhow::Result<String> {
+    let url = Url::parse(base_url)?.join(path)?;
+    let client = reqwest::Client::new();
+    let body = client
+        .get(url)
+        .header("cookie", cookie)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    Ok(body)
+}
+
 async fn http_post_json(
     base_url: &str,
     path: &str,
@@ -2737,6 +2751,60 @@ async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled
             .map_err(|err| anyhow::anyhow!("launch request query failed: {err}"))?;
     assert_eq!(state, "pending");
     assert_eq!(backend, "external");
+
+    let claim_response = http_post_json(
+        &server_url,
+        "/api/node-launch-requests/claim-external",
+        json!({}),
+        Some(&cookie),
+    )
+    .await?;
+    assert_eq!(claim_response.status(), reqwest::StatusCode::OK);
+    let claim_body: JsonValue = serde_json::from_str(&claim_response.text().await?)?;
+    let request_id = claim_body["request"]["id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing claimed request id"))?
+        .to_string();
+    assert_eq!(claim_body["request"]["state"].as_str(), Some("starting"));
+
+    let workers = json!([
+        { "node_name": "queued-w-1", "job_id": "test-job-1" },
+        { "node_name": "queued-w-2", "job_id": "test-job-2" }
+    ]);
+    let progress_response = http_post_json(
+        &server_url,
+        &format!("/api/node-launch-requests/{request_id}/progress"),
+        json!({
+            "state": "starting",
+            "started_count": 2,
+            "result": { "workers": workers }
+        }),
+        Some(&cookie),
+    )
+    .await?;
+    assert_eq!(progress_response.status(), reqwest::StatusCode::OK);
+
+    harness.start_nodes(&["queued-w-1", "queued-w-2"]).await?;
+    harness
+        .wait_for(
+            "launch request reconciles to running from live node leases",
+            Duration::from_secs(10),
+            || async {
+                let body =
+                    http_get_with_cookie(&server_url, "/api/node-launch-requests", &cookie).await?;
+                let body: JsonValue = serde_json::from_str(&body)?;
+                let state = body["items"]
+                    .as_array()
+                    .and_then(|items| {
+                        items
+                            .iter()
+                            .find(|item| item["id"].as_str() == Some(request_id.as_str()))
+                    })
+                    .and_then(|item| item["state"].as_str());
+                Ok(state == Some("running"))
+            },
+        )
+        .await?;
 
     harness.stop_children().await;
     harness.pool.close().await;

@@ -239,7 +239,7 @@ Resolve dashboard node-start requests automatically:
 python ubelix.py watch-requests
 ```
 
-The dashboard writes grouped startup requests into Postgres. `watch-requests` claims pending external requests, submits one Slurm worker job per requested node, and records submitted job ids back on the request row.
+The dashboard writes grouped startup requests through the API. `watch-requests` claims pending external requests through the API, submits one Slurm worker job per requested node, and reports submitted job ids back through the API. Requests move `pending -> starting` once Slurm accepts jobs; the server marks them `running` after the requested node names have live leases.
 
 One-shot mode for debugging:
 
