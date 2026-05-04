@@ -53,6 +53,7 @@ async fn deploy_run(
     let frontend_port = args
         .frontend_port
         .unwrap_or(deploy_config.frontend_http.frontend_port);
+    validate_frontend_build(&deploy_config)?;
 
     if deploy_config.database.ensure_started {
         db::start_db(&runtime_config.local_postgres, &runtime_config.database.url)?;
@@ -92,6 +93,24 @@ async fn deploy_run(
         (Ok(()), Err(err)) => Err(err),
         (Ok(()), Ok(())) => Ok(()),
     }
+}
+
+fn validate_frontend_build(deploy_config: &DeployConfig) -> Result<()> {
+    let frontend_dir = Path::new(&deploy_config.static_site.frontend_build_dir);
+    if !frontend_dir.is_dir() {
+        bail!(
+            "frontend build dir does not exist or is not a directory: {}",
+            frontend_dir.display()
+        );
+    }
+    let index = frontend_dir.join("index.html");
+    if !index.is_file() {
+        bail!(
+            "frontend build is missing index.html at {}; check static_site.frontend_build_dir and rebuild/sync frontend artifacts",
+            index.display()
+        );
+    }
+    Ok(())
 }
 
 async fn cleanup_deploy(

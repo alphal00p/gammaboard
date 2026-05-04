@@ -27,11 +27,10 @@ GB_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaboard.sbatch"
 GL_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaloop.sbatch"
 IMAGE_PATH = f"{WORKSPACE_ROOT}/images/gammaboard/gammaboard-latest.sif"
 FRONTEND_PORT = 8080
-API_PORT = 4000
 DB_PORT = 5433
 DEPLOY_NAME = "default"
 DEFAULT_SSH_HOST = "submit03.unibe.ch"
-ADMIN_PASSWORD = "admin"
+DEFAULT_ADMIN_PASSWORD = "admin"
 DEFAULT_CONTROL_TIME = "00:20:00"
 DB_PATH = os.path.join(WORKSPACE_ROOT, "db/default")
 
@@ -244,7 +243,8 @@ def wait_for_http(
 
 
 def api_url(control_node: str, path: str) -> str:
-    return f"http://{control_node}:{API_PORT}/api{path}"
+    # Server API binds to loopback on compute nodes; access it through nginx.
+    return f"http://{control_node}:{FRONTEND_PORT}/api{path}"
 
 
 def ssh_target() -> str:
@@ -281,19 +281,35 @@ def database_url(control_node: str) -> str:
     return f"postgresql://postgres:postgres@{control_node}:{DB_PORT}/gammaboard_db"
 
 
-def login(control_node: str) -> str:
-    data = f'{{"password":"{ADMIN_PASSWORD}"}}'.encode()
+def login(control_node: str, admin_password: str) -> str:
+    data = f'{{"password":"{admin_password}"}}'.encode()
     request = urllib.request.Request(
         api_url(control_node, "/auth/login"),
         data=data,
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with http_opener_without_proxies().open(request, timeout=5) as response:
-        cookie = response.headers.get("Set-Cookie", "")
+    try:
+        with http_opener_without_proxies().open(request, timeout=5) as response:
+            cookie = response.headers.get("Set-Cookie", "")
+    except urllib.error.HTTPError as err:
+        if err.code == 401:
+            raise SystemExit(
+                "API login failed (401 Unauthorized). "
+                "Set --admin-password or GAMMABOARD_ADMIN_PASSWORD."
+            ) from err
+        raise
     if not cookie:
         raise SystemExit("login did not return a session cookie")
     return cookie.split(";", 1)[0]
+
+
+def admin_password(args: argparse.Namespace) -> str:
+    return (
+        getattr(args, "admin_password", None)
+        or os.environ.get("GAMMABOARD_ADMIN_PASSWORD")
+        or DEFAULT_ADMIN_PASSWORD
+    )
 
 
 def api_request_json(
@@ -522,7 +538,7 @@ def watch_launch_requests(
     print(
         f"watching launch requests on {control_node}; Ctrl-C stops only this launcher"
     )
-    cookie = login(control_node)
+    cookie = login(control_node, admin_password(args))
     try:
         while True:
             resolved = resolve_launch_requests(control, control_node, cookie)
@@ -559,9 +575,17 @@ def command_up(args: argparse.Namespace) -> None:
         print(f"watching {job.name} job; Ctrl-C stops only this launcher")
         status_printer = LiveStatusPrinter()
         try:
-            cookie = login(node)
+            cookie: str | None = None
+            if not args.single_node:
+                try:
+                    cookie = login(node, admin_password(args))
+                except SystemExit as err:
+                    print(
+                        f"warning: {err}; continuing watch without launch-request resolution",
+                        file=sys.stderr,
+                    )
             while job_is_active(job.id):
-                if not args.single_node:
+                if not args.single_node and cookie:
                     resolve_launch_requests_with_callback(
                         job, node, cookie, on_launch=status_printer.print_event
                     )
@@ -593,7 +617,7 @@ def command_down(args: argparse.Namespace) -> None:
     print(f"control_node={node}")
 
     try:
-        cookie = login(node)
+        cookie = login(node, admin_password(args))
         post(node, "/nodes/stop-all", cookie=cookie)
         print("requested node stop through API")
     except Exception as err:
@@ -684,6 +708,11 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="copy the SSH tunnel command to the clipboard if supported",
     )
+    up.add_argument(
+        "--admin-password",
+        default=None,
+        help="dashboard admin password (or set GAMMABOARD_ADMIN_PASSWORD)",
+    )
     up.set_defaults(func=command_up)
 
     down = sub.add_parser(
@@ -692,6 +721,11 @@ def parser() -> argparse.ArgumentParser:
     down.add_argument("--startup-timeout", type=int, default=60)
     down.add_argument("--worker-timeout", type=int, default=60)
     down.add_argument("--control-grace-seconds", type=int, default=5)
+    down.add_argument(
+        "--admin-password",
+        default=None,
+        help="dashboard admin password (or set GAMMABOARD_ADMIN_PASSWORD)",
+    )
     down.set_defaults(func=command_down)
 
     status = sub.add_parser(
@@ -716,6 +750,11 @@ def parser() -> argparse.ArgumentParser:
     )
     watch_requests.add_argument("--startup-timeout", type=int, default=60)
     watch_requests.add_argument("--poll-seconds", type=int, default=5)
+    watch_requests.add_argument(
+        "--admin-password",
+        default=None,
+        help="dashboard admin password (or set GAMMABOARD_ADMIN_PASSWORD)",
+    )
     watch_requests.set_defaults(func=command_watch_requests)
 
     build = sub.add_parser("build", help="login node: submit a build job")

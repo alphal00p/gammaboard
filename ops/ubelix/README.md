@@ -253,6 +253,13 @@ If you run the multi-job control launcher in blocking mode, it also resolves req
 python ubelix.py up --watch
 ```
 
+Admin-protected API actions (`up --watch`, `watch-requests`, and `down`) use the dashboard admin password. Provide it explicitly when needed:
+
+```bash
+python ubelix.py up --watch --admin-password '<password>'
+GAMMABOARD_ADMIN_PASSWORD='<password>' python ubelix.py watch-requests
+```
+
 Stop a deployment:
 
 ```bash
