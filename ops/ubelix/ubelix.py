@@ -11,9 +11,9 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from cmd import PROMPT
 from dataclasses import dataclass
 from typing import Callable
-
 
 WORKSPACE_ROOT = "/storage/research/itp_localunitaritydata"
 JOB_PREFIX = "gb"
@@ -33,6 +33,25 @@ DEPLOY_NAME = "default"
 DEFAULT_SSH_HOST = "submit03.unibe.ch"
 ADMIN_PASSWORD = "admin"
 DEFAULT_CONTROL_TIME = "00:20:00"
+DB_PATH = os.path.join(WORKSPACE_ROOT, "db/default")
+
+
+def command_clear_db(*_) -> None:
+    import shutil
+
+    print(
+        f"are you sure you want to delete the local SQLite database at {DB_PATH}? [y/N]",
+        file=sys.stderr,
+    )
+    response = input().strip().lower()
+    if response != "y":
+        print("aborting", file=sys.stderr)
+        return
+
+    if os.path.exists(DB_PATH):
+        shutil.rmtree(DB_PATH)
+
+    print("database cleared")
 
 
 @dataclass(frozen=True)
@@ -43,7 +62,9 @@ class Job:
     node: str
 
 
-def run(args: list[str], *, env: dict[str, str] | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
+def run(
+    args: list[str], *, env: dict[str, str] | None = None, check: bool = True
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         args,
         check=check,
@@ -59,7 +80,12 @@ def http_opener_without_proxies() -> urllib.request.OpenerDirector:
 
 
 def ensure_dirs() -> None:
-    for rel in ("logs/slurm/build", "logs/slurm/control", "logs/slurm/workers", "logs/postgres"):
+    for rel in (
+        "logs/slurm/build",
+        "logs/slurm/control",
+        "logs/slurm/workers",
+        "logs/postgres",
+    ):
         os.makedirs(os.path.join(WORKSPACE_ROOT, rel), exist_ok=True)
 
 
@@ -80,7 +106,12 @@ def active_jobs(name: str | None = None, prefix: str | None = None) -> list[Job]
         parts = line.split("|", 3)
         if len(parts) != 4:
             continue
-        job = Job(id=parts[0].strip(), name=parts[1].strip(), state=parts[2].strip(), node=parts[3].strip())
+        job = Job(
+            id=parts[0].strip(),
+            name=parts[1].strip(),
+            state=parts[2].strip(),
+            node=parts[3].strip(),
+        )
         if name is not None and job.name != name:
             continue
         if prefix is not None and not job.name.startswith(prefix):
@@ -193,7 +224,9 @@ def wait_for_http(
     opener = http_opener_without_proxies()
     while time.monotonic() < deadline:
         if job is not None and not job_is_active(job.id):
-            raise SystemExit(f"{job.name} job {job.id} exited before frontend became ready")
+            raise SystemExit(
+                f"{job.name} job {job.id} exited before frontend became ready"
+            )
         try:
             with opener.open(url, timeout=3) as response:
                 status = getattr(response, "status", None) or response.getcode()
@@ -217,7 +250,11 @@ def api_url(control_node: str, path: str) -> str:
 def ssh_target() -> str:
     if os.environ.get("SSH_TARGET"):
         return os.environ["SSH_TARGET"]
-    user = os.environ.get("SSH_USER") or os.environ.get("USER") or os.environ.get("LOGNAME")
+    user = (
+        os.environ.get("SSH_USER")
+        or os.environ.get("USER")
+        or os.environ.get("LOGNAME")
+    )
     if not user:
         raise SystemExit("failed to infer SSH user; set SSH_USER or SSH_TARGET")
     host = os.environ.get("SSH_HOST") or DEFAULT_SSH_HOST
@@ -368,7 +405,9 @@ def node_names_for_request(request: dict) -> list[str]:
         if len(names) >= count:
             return names[:count]
 
-    prefix = str(request.get("name_prefix") or args.get("name_prefix") or "w").strip() or "w"
+    prefix = (
+        str(request.get("name_prefix") or args.get("name_prefix") or "w").strip() or "w"
+    )
     request_id = int(request["id"])
     return [f"{prefix}-{request_id}-{i}" for i in range(1, count + 1)]
 
@@ -394,14 +433,25 @@ def submit_worker(
         }
     )
     result = run(
-        ["sbatch", "--chdir", WORKSPACE_ROOT, "--job-name", WORKER_JOB_NAME, WORKER_SBATCH],
+        [
+            "sbatch",
+            "--chdir",
+            WORKSPACE_ROOT,
+            "--job-name",
+            WORKER_JOB_NAME,
+            WORKER_SBATCH,
+        ],
         env=env,
     )
     return parse_job_id(result.stdout)
 
 
-def resolve_launch_requests(control: Job, control_node: str, cookie: str, *, max_requests: int | None = None) -> int:
-    return resolve_launch_requests_with_callback(control, control_node, cookie, max_requests=max_requests)
+def resolve_launch_requests(
+    control: Job, control_node: str, cookie: str, *, max_requests: int | None = None
+) -> int:
+    return resolve_launch_requests_with_callback(
+        control, control_node, cookie, max_requests=max_requests
+    )
 
 
 def resolve_launch_requests_with_callback(
@@ -466,8 +516,12 @@ def resolve_launch_requests_with_callback(
     return resolved
 
 
-def watch_launch_requests(args: argparse.Namespace, control: Job, control_node: str) -> None:
-    print(f"watching launch requests on {control_node}; Ctrl-C stops only this launcher")
+def watch_launch_requests(
+    args: argparse.Namespace, control: Job, control_node: str
+) -> None:
+    print(
+        f"watching launch requests on {control_node}; Ctrl-C stops only this launcher"
+    )
     cookie = login(control_node)
     try:
         while True:
@@ -481,14 +535,18 @@ def watch_launch_requests(args: argparse.Namespace, control: Job, control_node: 
 
 
 def command_up(args: argparse.Namespace) -> None:
-    job = submit_single_node(args.time) if args.single_node else submit_control(args.time)
+    job = (
+        submit_single_node(args.time) if args.single_node else submit_control(args.time)
+    )
     print(f"{'single_node_job_id' if args.single_node else 'control_job_id'}={job.id}")
     node = wait_for_job_node(job.id, args.startup_timeout, verbose=True)
     print(f"control_node={node}")
     tunnel = tunnel_command(node, args.local_port)
     print(f"tunnel={tunnel}")
     if args.copy:
-        print(f"copied_to_clipboard={'true' if copy_to_clipboard_osc52(tunnel) else 'false'}")
+        print(
+            f"copied_to_clipboard={'true' if copy_to_clipboard_osc52(tunnel) else 'false'}"
+        )
     wait_for_http(
         f"http://{node}:{FRONTEND_PORT}",
         args.startup_timeout,
@@ -504,7 +562,9 @@ def command_up(args: argparse.Namespace) -> None:
             cookie = login(node)
             while job_is_active(job.id):
                 if not args.single_node:
-                    resolve_launch_requests_with_callback(job, node, cookie, on_launch=status_printer.print_event)
+                    resolve_launch_requests_with_callback(
+                        job, node, cookie, on_launch=status_printer.print_event
+                    )
                 status_printer.render(status_lines())
                 time.sleep(args.poll_seconds)
             status_printer.clear()
@@ -514,13 +574,17 @@ def command_up(args: argparse.Namespace) -> None:
 
 
 def command_down(args: argparse.Namespace) -> None:
-    deploy_jobs = active_jobs(name=CONTROL_JOB_NAME) + active_jobs(name=SINGLE_NODE_JOB_NAME)
+    deploy_jobs = active_jobs(name=CONTROL_JOB_NAME) + active_jobs(
+        name=SINGLE_NODE_JOB_NAME
+    )
     if not deploy_jobs:
         raise SystemExit(f"no active {CONTROL_JOB_NAME} or {SINGLE_NODE_JOB_NAME} job")
     if len(deploy_jobs) > 1:
         for job in deploy_jobs:
             print(f"{job.id}\t{job.name}\t{job.state}\t{job.node}", file=sys.stderr)
-        raise SystemExit("multiple active deploy jobs; cancel the unwanted job explicitly or retry when only one remains")
+        raise SystemExit(
+            "multiple active deploy jobs; cancel the unwanted job explicitly or retry when only one remains"
+        )
 
     job = deploy_jobs[0]
     node = wait_for_job_node(job.id, args.startup_timeout)
@@ -546,7 +610,9 @@ def command_down(args: argparse.Namespace) -> None:
 
         workers = active_jobs(name=WORKER_JOB_NAME)
         if workers:
-            print(f"canceling remaining workers: {', '.join(worker.id for worker in workers)}")
+            print(
+                f"canceling remaining workers: {', '.join(worker.id for worker in workers)}"
+            )
             run(["scancel", *[worker.id for worker in workers]], check=False)
 
     time.sleep(args.control_grace_seconds)
@@ -594,25 +660,48 @@ def parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     up = sub.add_parser("up", help="login node: submit or reuse a deploy job")
-    up.add_argument("--watch", action="store_true", help="block and print status until the deploy job exits")
-    up.add_argument("--time", type=parse_hms, default=DEFAULT_CONTROL_TIME, help="Slurm walltime for a newly submitted deploy job (HH:MM:SS)")
-    up.add_argument("--single-node", action="store_true", help="run control and local workers in one Slurm allocation")
+    up.add_argument(
+        "--watch",
+        action="store_true",
+        help="block and print status until the deploy job exits",
+    )
+    up.add_argument(
+        "--time",
+        type=parse_hms,
+        default=DEFAULT_CONTROL_TIME,
+        help="Slurm walltime for a newly submitted deploy job (HH:MM:SS)",
+    )
+    up.add_argument(
+        "--single-node",
+        action="store_true",
+        help="run control and local workers in one Slurm allocation",
+    )
     up.add_argument("--local-port", type=int, default=8080)
     up.add_argument("--startup-timeout", type=int, default=180)
     up.add_argument("--poll-seconds", type=int, default=15)
-    up.add_argument("--copy", action="store_true", help="copy the SSH tunnel command to the clipboard if supported")
+    up.add_argument(
+        "--copy",
+        action="store_true",
+        help="copy the SSH tunnel command to the clipboard if supported",
+    )
     up.set_defaults(func=command_up)
 
-    down = sub.add_parser("down", help="login node: gracefully stop nodes, then cancel remaining jobs")
+    down = sub.add_parser(
+        "down", help="login node: gracefully stop nodes, then cancel remaining jobs"
+    )
     down.add_argument("--startup-timeout", type=int, default=60)
     down.add_argument("--worker-timeout", type=int, default=60)
     down.add_argument("--control-grace-seconds", type=int, default=5)
     down.set_defaults(func=command_down)
 
-    status = sub.add_parser("status", help="login node: show active deploy and worker jobs")
+    status = sub.add_parser(
+        "status", help="login node: show active deploy and worker jobs"
+    )
     status.set_defaults(func=command_status)
 
-    workers = sub.add_parser("submit-workers", help="login node: submit N separate worker jobs")
+    workers = sub.add_parser(
+        "submit-workers", help="login node: submit N separate worker jobs"
+    )
     workers.add_argument("--count", type=int, required=True)
     workers.add_argument("--prefix", default="w")
     workers.add_argument("--max-start-failures", type=int, default=3)
@@ -622,7 +711,9 @@ def parser() -> argparse.ArgumentParser:
         "watch-requests",
         help="login node: resolve pending DB node launch requests into Slurm worker jobs",
     )
-    watch_requests.add_argument("--once", action="store_true", help="resolve current pending requests and exit")
+    watch_requests.add_argument(
+        "--once", action="store_true", help="resolve current pending requests and exit"
+    )
     watch_requests.add_argument("--startup-timeout", type=int, default=60)
     watch_requests.add_argument("--poll-seconds", type=int, default=5)
     watch_requests.set_defaults(func=command_watch_requests)
@@ -630,6 +721,11 @@ def parser() -> argparse.ArgumentParser:
     build = sub.add_parser("build", help="login node: submit a build job")
     build.add_argument("target", choices=("gammaboard", "gammaloop"))
     build.set_defaults(func=command_build)
+
+    clear = sub.add_parser(
+        "clear-db", help="login node: delete the local SQLite database"
+    )
+    clear.set_defaults(func=command_clear_db)
 
     return p
 
