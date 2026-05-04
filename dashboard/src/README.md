@@ -8,8 +8,8 @@ src/
 ├── hooks/            # Polling/data hooks
 ├── services/         # API client
 ├── utils/            # Small formatting/config helpers
-├── App.js            # Main app shell
-└── index.js          # Entry point
+├── App.jsx           # Main app shell
+└── index.jsx         # Entry point
 ```
 
 ## Data Flow
@@ -39,11 +39,12 @@ Backend panel poll endpoints → `usePanelSource` → PanelCollection → panel 
 ## Configuration
 
 The API base URL is fixed to relative `/api` in `src/services/api.js`.
-For local development, CRA proxying is configured in `dashboard/package.json`.
+For local development, Vite proxying is configured in `dashboard/vite.config.js`.
 Server-side node startup requests always go through the generic launch-request queue; the frontend does not branch on local vs external spawning.
 
 ## Tech Stack
 
 - React 19.2.4
-- Material UI 5.x
-- Recharts 3.7.0
+- Vite
+- Material UI 7.x
+- ECharts

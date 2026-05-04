@@ -9,7 +9,7 @@ npm ci
 npm start
 ```
 
-Opens at http://localhost:3000
+Opens at the URL printed by Vite, usually http://localhost:5173.
 
 ## Structure
 
@@ -19,7 +19,7 @@ src/
 ├── hooks/           # shared polling hooks and read-only log browser state
 ├── services/        # API client (runs, node inventory, history, logs)
 ├── utils/           # formatting and viewmodel helpers
-└── App.js           # Main app
+└── App.jsx          # Main app
 ```
 
 ## Configuration
@@ -29,12 +29,16 @@ src/
 const API_BASE_URL = "/api";
 ```
 
-**Dev API proxy:** `package.json`
-```json
-"proxy": "http://127.0.0.1:4000"
+**Dev API proxy:** `vite.config.js`
+```javascript
+server: {
+  proxy: {
+    "/api": "http://127.0.0.1:4000",
+  },
+}
 ```
 
-**Refresh Intervals:** `src/App.js`
+**Refresh Intervals:** `src/App.jsx`
 ```javascript
 useRuns(2000)           // Poll runs every 2 seconds
 useWorkersData(3000)    // Poll node inventory once app-wide every 3 seconds
@@ -49,8 +53,9 @@ useWorkersData(3000)    // Poll node inventory once app-wide every 3 seconds
 ## Tech Stack
 
 - React 19.2.4
-- Material UI 5.x (default theme)
-- Recharts 3.7.0
+- Vite
+- Material UI 7.x
+- ECharts
 
 ## Scripts
 

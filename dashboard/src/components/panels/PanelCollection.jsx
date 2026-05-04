@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, forwardRef, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Box,
@@ -21,9 +21,7 @@ import {
   Slider,
   Typography,
 } from "@mui/material";
-import ReactECharts from "echarts-for-react";
 import prettyMilliseconds from "pretty-ms";
-import "../../lib/echarts";
 import LatexFormula from "../LatexFormula";
 import {
   formatCentralValueWithError,
@@ -34,6 +32,35 @@ import {
   formatScientific,
 } from "../../utils/formatters";
 import { asArray } from "../../utils/collections";
+
+const ReactECharts = lazy(() =>
+  Promise.all([import("echarts-for-react"), import("../../lib/echarts")]).then(([module]) => ({
+    default: module.default,
+  })),
+);
+
+const LazyChart = forwardRef((props, ref) => (
+  <Suspense
+    fallback={
+      <Box
+        sx={{
+          width: "100%",
+          height: "100%",
+          minHeight: 160,
+          display: "grid",
+          placeItems: "center",
+          color: "text.secondary",
+          typography: "body2",
+        }}
+      >
+        Loading chart...
+      </Box>
+    }
+  >
+    <ReactECharts ref={ref} {...props} />
+  </Suspense>
+));
+LazyChart.displayName = "LazyChart";
 
 const PANEL_ORDER_RANK = new Map([
   ["sample_progress", 0],
@@ -1315,7 +1342,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
           />
         </Box>
         <Box ref={figureRef} sx={{ width: "100%", height: 280 }}>
-          <ReactECharts
+          <LazyChart
             ref={echartsRef}
             option={option}
             notMerge={false}
@@ -1464,7 +1491,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
           />
         </Box>
         <Box ref={figureRef} sx={{ width: "100%", height: 280 }}>
-          <ReactECharts
+          <LazyChart
             ref={echartsRef}
             option={option}
             notMerge={false}
@@ -2348,7 +2375,7 @@ const ScalarImageHeatmapPanel = ({
             height: `${chartHeight}px`,
           }}
         >
-          <ReactECharts
+          <LazyChart
             ref={echartsRef}
             option={option}
             notMerge={false}
@@ -3462,7 +3489,7 @@ const HistogramPanel = ({
         ) : null}
         <Box ref={figureRef} sx={{ width: "100%", display: "grid", gap: 2 }}>
           <Box sx={{ width: "100%", height: 280 }}>
-            <ReactECharts
+            <LazyChart
               ref={echartsRef}
               option={histogramOption}
               notMerge={!isDiscrete}
@@ -3478,7 +3505,7 @@ const HistogramPanel = ({
                 Relative Error Shape
               </Typography>
               <Box sx={{ width: "100%", height: 168 }}>
-                <ReactECharts
+                <LazyChart
                   option={relativeOption}
                   notMerge
                   onEvents={onDataZoom}

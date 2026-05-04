@@ -1,5 +1,6 @@
 import { Box, Chip, Typography } from "@mui/material";
-import { WifiOff as WifiOffIcon, Wifi as WifiIcon } from "@mui/icons-material";
+import WifiIcon from "@mui/icons-material/Wifi";
+import WifiOffIcon from "@mui/icons-material/WifiOff";
 
 const ConnectionStatus = ({ isConnected, lastUpdate }) => {
   return (

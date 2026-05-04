@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Accordion, AccordionDetails, AccordionSummary, Box, Typography } from "@mui/material";
-import { ExpandMore as ExpandMoreIcon } from "@mui/icons-material";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 
 const JsonFallback = ({ title = "JSON Fallback", data, defaultExpanded = false }) => {
   const [expanded, setExpanded] = useState(defaultExpanded);

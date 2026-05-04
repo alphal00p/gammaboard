@@ -16,7 +16,7 @@ build-frontend:
     set -euo pipefail
 
     cd dashboard
-    if [[ ! -x node_modules/.bin/react-scripts ]]; then
+    if [[ ! -x node_modules/.bin/vite ]]; then
         npm ci
     fi
 
@@ -25,6 +25,9 @@ build-frontend:
         {
             printf '%s\n' package.json
             printf '%s\n' package-lock.json
+            printf '%s\n' .nvmrc
+            printf '%s\n' vite.config.js
+            printf '%s\n' index.html
             find src -type f 2>/dev/null | sort
             find public -type f 2>/dev/null | sort
         } | while IFS= read -r path; do

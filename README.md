@@ -214,7 +214,7 @@ Important:
 
 ## Frontend API Routing
 - The dashboard frontend always calls relative `/api` endpoints.
-- Local dev: `dashboard/package.json` sets `"proxy": "http://127.0.0.1:4000"` so `npm start` forwards `/api/*` to the backend.
+- Local dev: `dashboard/vite.config.js` proxies `/api/*` to `http://127.0.0.1:4000` for `npm start`.
 - Production: serve frontend and backend behind the same origin, and route `/api/*` to `gammaboard server` via your reverse proxy.
 - Example nginx layout:
   - `location / { root <dashboard-build-dir>; try_files $uri /index.html; }`
