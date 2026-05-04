@@ -22,14 +22,14 @@ pub struct PythonScalarParams {
     pub class: String,
     pub continuous_dims: usize,
     #[serde(default)]
-    pub discrete_dims: usize,
+    pub discrete_cardinalities: Vec<usize>,
     #[serde(default = "default_init_args")]
     pub init_args: Value,
 }
 
 pub struct ScalarPythonEvaluator {
     continuous_dims: usize,
-    discrete_dims: usize,
+    discrete_cardinalities: Vec<usize>,
     worker: PythonWorker,
 }
 
@@ -38,6 +38,15 @@ impl ScalarPythonEvaluator {
         if !params.init_args.is_object() {
             return Err(BuildError::build(
                 "python_scalar init_args must be a TOML table / JSON object",
+            ));
+        }
+        if params
+            .discrete_cardinalities
+            .iter()
+            .any(|value| *value == 0)
+        {
+            return Err(BuildError::build(
+                "python_scalar discrete_cardinalities must contain only positive integers",
             ));
         }
         let flake_ref = normalize_flake_ref(&params.flake_ref);
@@ -53,13 +62,13 @@ impl ScalarPythonEvaluator {
             &output_path,
             &params.module,
             &params.class,
-            params.discrete_dims,
+            &params.discrete_cardinalities,
             params.continuous_dims,
             params.init_args,
         )?;
         Ok(Self {
             continuous_dims: params.continuous_dims,
-            discrete_dims: params.discrete_dims,
+            discrete_cardinalities: params.discrete_cardinalities,
             worker,
         })
     }
@@ -81,7 +90,7 @@ impl ScalarPythonEvaluator {
 
 impl ScalarBatchEvaluator for ScalarPythonEvaluator {
     fn discrete_dims(&self) -> usize {
-        self.discrete_dims
+        self.discrete_cardinalities.len()
     }
 
     fn continuous_dims(&self) -> usize {
@@ -101,7 +110,10 @@ impl ScalarBatchEvaluator for ScalarPythonEvaluator {
 
 impl Evaluator for ScalarPythonEvaluator {
     fn get_domain(&self) -> Domain {
-        Domain::rectangular(self.continuous_dims, self.discrete_dims)
+        Domain::rectangular_with_cardinalities(
+            self.continuous_dims,
+            self.discrete_cardinalities.clone(),
+        )
     }
 
     fn eval_batch(
@@ -126,7 +138,7 @@ struct PythonWorker {
     stdout: BufReader<ChildStdout>,
     stderr: ChildStderr,
     next_id: u64,
-    discrete_dims: usize,
+    discrete_cardinalities: Vec<usize>,
     continuous_dims: usize,
 }
 
@@ -136,7 +148,7 @@ impl PythonWorker {
         runtime_root: &Path,
         module: &str,
         class: &str,
-        discrete_dims: usize,
+        discrete_cardinalities: &[usize],
         continuous_dims: usize,
         init_args: Value,
     ) -> Result<Self, BuildError> {
@@ -179,10 +191,16 @@ impl PythonWorker {
             stdout: BufReader::new(stdout),
             stderr,
             next_id: 1,
-            discrete_dims,
+            discrete_cardinalities: discrete_cardinalities.to_vec(),
             continuous_dims,
         };
-        worker.send_init(module, class, discrete_dims, continuous_dims, init_args)?;
+        worker.send_init(
+            module,
+            class,
+            discrete_cardinalities,
+            continuous_dims,
+            init_args,
+        )?;
         Ok(worker)
     }
 
@@ -190,7 +208,7 @@ impl PythonWorker {
         &mut self,
         module: &str,
         class: &str,
-        discrete_dims: usize,
+        discrete_cardinalities: &[usize],
         continuous_dims: usize,
         init_args: Value,
     ) -> Result<(), BuildError> {
@@ -199,7 +217,7 @@ impl PythonWorker {
             "op": "init",
             "module": module,
             "class": class,
-            "discrete_dims": discrete_dims,
+            "discrete_cardinalities": discrete_cardinalities,
             "continuous_dims": continuous_dims,
             "init_args": init_args,
         });
@@ -217,7 +235,7 @@ impl PythonWorker {
             "id": self.allocate_request_id(),
             "op": "eval_scalar",
             "nr_samples": nr_samples,
-            "discrete_dims": self.discrete_dims,
+            "discrete_cardinalities": self.discrete_cardinalities,
             "continuous_dims": self.continuous_dims,
             "xs_discrete_row_major": xs_discrete_row_major,
             "xs_continuous_row_major": xs_continuous_row_major,

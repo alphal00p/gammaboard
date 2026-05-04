@@ -289,12 +289,12 @@ For `evaluator.kind = "python_scalar"`, configure:
 - `module`: python module name to import
 - `class`: class name to instantiate (must expose `eval(xs_discrete, xs_continuous)`)
 - `continuous_dims`: expected continuous dimension for homogeneous rectangular batches
-- `discrete_dims`: expected discrete dimension for homogeneous rectangular batches
+- `discrete_cardinalities`: expected per-axis discrete cardinalities for homogeneous rectangular batches (for example `[3, 4, 2]`)
 - optional `init_args = { ... }`: constructor/config payload forwarded to python init
 - Optional evaluator base classes are provided in `python_api.evaluator` (`ScalarBatchIntegrand`, `ComplexBatchIntegrand`) for type-checkable interfaces.
 
 Python construction semantics:
-- if the class defines `from_config(discrete_dims=..., continuous_dims=..., init_args=...)`, that is called
+- if the class defines `from_config(discrete_cardinalities=..., continuous_dims=..., init_args=...)`, that is called
 - otherwise the worker calls `ClassName(**init_args)` (or `ClassName()` when `init_args` is empty)
 
 For `sampler_aggregator.kind = "python_sampler"`, configure:

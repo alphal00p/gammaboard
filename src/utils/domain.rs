@@ -27,9 +27,19 @@ impl Domain {
     }
 
     pub fn rectangular(continuous_dims: usize, discrete_dims: usize) -> Self {
+        Self::rectangular_with_cardinalities(continuous_dims, vec![1; discrete_dims])
+    }
+
+    pub fn rectangular_with_cardinalities(
+        continuous_dims: usize,
+        discrete_cardinalities: impl IntoIterator<Item = usize>,
+    ) -> Self {
         let mut domain = Self::continuous(continuous_dims);
-        for _ in 0..discrete_dims {
-            domain = Self::discrete(None, [DomainBranch::new(0, domain)]);
+        let cardinalities: Vec<usize> = discrete_cardinalities.into_iter().collect();
+        for cardinality in cardinalities.into_iter().rev() {
+            let child = domain;
+            let branches = (0..cardinality).map(|index| DomainBranch::new(index, child.clone()));
+            domain = Self::discrete(None, branches);
         }
         domain
     }
@@ -109,5 +119,25 @@ impl DomainBranch {
             index,
             domain: Box::new(domain),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Domain;
+
+    #[test]
+    fn rectangular_with_cardinalities_preserves_exact_shape() {
+        let domain = Domain::rectangular_with_cardinalities(2, [3, 4, 2]);
+        assert_eq!(domain.fixed_continuous_dims(), Some(2));
+        assert_eq!(domain.fixed_discrete_depth(), Some(3));
+        assert_eq!(domain.fixed_discrete_cardinalities(), Some(vec![3, 4, 2]));
+    }
+
+    #[test]
+    fn rectangular_matches_unit_cardinality_constructor() {
+        let a = Domain::rectangular(1, 2);
+        let b = Domain::rectangular_with_cardinalities(1, [1, 1]);
+        assert_eq!(a, b);
     }
 }

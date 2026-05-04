@@ -13,12 +13,16 @@ class ScalarBatchIntegrand:
     this class is optional.
     """
 
-    discrete_dims: int
+    discrete_cardinalities: list[int]
     continuous_dims: int
 
     @classmethod
     def from_config(
-        cls, *, discrete_dims: int, continuous_dims: int, init_args: dict[str, Any] | None
+        cls,
+        *,
+        discrete_cardinalities: list[int],
+        continuous_dims: int,
+        init_args: dict[str, Any] | None,
     ) -> Self:
         return cls(**(init_args or {}))
 
@@ -33,12 +37,16 @@ class ScalarBatchIntegrand:
 class ComplexBatchIntegrand:
     """Vectorized complex integrand."""
 
-    discrete_dims: int
+    discrete_cardinalities: list[int]
     continuous_dims: int
 
     @classmethod
     def from_config(
-        cls, *, discrete_dims: int, continuous_dims: int, init_args: dict[str, Any] | None
+        cls,
+        *,
+        discrete_cardinalities: list[int],
+        continuous_dims: int,
+        init_args: dict[str, Any] | None,
     ) -> Self:
         return cls(**(init_args or {}))
 

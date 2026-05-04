@@ -1063,16 +1063,16 @@ kind = "python_scalar"
 flake_ref = "{evaluator_flake_ref}"
 module = "demo_integrand"
 class = "SinIntegrand"
-continuous_dims = 1
-discrete_dims = 0
-init_args = {{ scale = 1.0, bias = 0.0 }}
+continuous_dims = 2
+discrete_cardinalities = [2, 3]
+init_args = {{ scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }}
 
 [[task_queue]]
 name = "sample-a"
 kind = "sample"
 stop_condition = {{ max_samples = 64 }}
 accumulator = {{ config = "scalar" }}
-sampler_aggregator = {{ config = {{ kind = "python_sampler", flake_ref = "{sampler_flake_ref}", module = "demo_sampler", class = "SymbolicaHavanaSampler", continuous_dims = 1, requires_training_values = true, init_args = {{ seed = 0, bins = 8, samples_for_update = 8, stop_training_after_n_samples = 64, initial_training_rate = 0.1, final_training_rate = 0.01 }} }} }}
+sampler_aggregator = {{ config = {{ kind = "python_sampler", flake_ref = "{sampler_flake_ref}", module = "demo_sampler", class = "SymbolicaHavanaSampler", continuous_dims = 2, requires_training_values = true, init_args = {{ seed = 0, bins = 8, samples_for_update = 8, stop_training_after_n_samples = 64, initial_training_rate = 0.1, final_training_rate = 0.01 }} }} }}
 "#
     ));
 

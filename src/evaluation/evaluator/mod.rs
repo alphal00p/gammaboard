@@ -67,9 +67,9 @@ impl EvaluatorConfig {
                 params.discrete_dims,
             )),
             Self::Symbolica { params } => Ok(Domain::continuous(params.args.len())),
-            Self::PythonScalar { params } => Ok(Domain::rectangular(
+            Self::PythonScalar { params } => Ok(Domain::rectangular_with_cardinalities(
                 params.continuous_dims,
-                params.discrete_dims,
+                params.discrete_cardinalities.clone(),
             )),
         }
     }

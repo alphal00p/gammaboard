@@ -5,7 +5,7 @@ import numpy as np
 import sys
 
 integrand = None
-discrete_dims = None
+discrete_cardinalities = None
 continuous_dims = None
 
 
@@ -25,14 +25,19 @@ for raw in sys.stdin:
         if op == "init":
             module = importlib.import_module(req["module"])
             cls = getattr(module, req["class"])
-            discrete_dims = int(req["discrete_dims"])
+            discrete_cardinalities = [int(value) for value in req["discrete_cardinalities"]]
+            if any(value <= 0 for value in discrete_cardinalities):
+                raise ValueError(
+                    "discrete_cardinalities must contain only positive integers"
+                )
+            discrete_dims = len(discrete_cardinalities)
             continuous_dims = int(req["continuous_dims"])
             init_args = req.get("init_args") or {}
             if not isinstance(init_args, dict):
                 raise TypeError("init_args must be an object")
             if hasattr(cls, "from_config"):
                 integrand = cls.from_config(
-                    discrete_dims=discrete_dims,
+                    discrete_cardinalities=discrete_cardinalities,
                     continuous_dims=continuous_dims,
                     init_args=init_args,
                 )
@@ -40,6 +45,16 @@ for raw in sys.stdin:
                 integrand = cls(**init_args)
             else:
                 integrand = cls()
+            maybe_discrete_cardinalities = getattr(
+                integrand, "discrete_cardinalities", None
+            )
+            if maybe_discrete_cardinalities is not None:
+                parsed = [int(value) for value in maybe_discrete_cardinalities]
+                if parsed != discrete_cardinalities:
+                    raise ValueError(
+                        "integrand discrete_cardinalities mismatch: "
+                        f"expected {discrete_cardinalities}, got {maybe_discrete_cardinalities}"
+                    )
             maybe_discrete_dims = getattr(integrand, "discrete_dims", None)
             if maybe_discrete_dims is not None and int(maybe_discrete_dims) != discrete_dims:
                 raise ValueError(
@@ -52,14 +67,26 @@ for raw in sys.stdin:
                 )
             send({"id": req_id, "ok": True})
         elif op == "eval_scalar":
-            if integrand is None or discrete_dims is None or continuous_dims is None:
+            if (
+                integrand is None
+                or discrete_cardinalities is None
+                or continuous_dims is None
+            ):
                 raise RuntimeError("worker not initialized")
             nr_samples = int(req["nr_samples"])
-            req_discrete_dims = int(req["discrete_dims"])
+            req_discrete_cardinalities = [
+                int(value) for value in req["discrete_cardinalities"]
+            ]
+            req_discrete_dims = len(req_discrete_cardinalities)
             req_continuous_dims = int(req["continuous_dims"])
-            if req_discrete_dims != discrete_dims or req_continuous_dims != continuous_dims:
+            if (
+                req_discrete_cardinalities != discrete_cardinalities
+                or req_continuous_dims != continuous_dims
+            ):
                 raise ValueError(
-                    f"dimension mismatch: worker=({discrete_dims}, {continuous_dims}) request=({req_discrete_dims}, {req_continuous_dims})"
+                    "dimension mismatch: "
+                    f"worker=({discrete_cardinalities}, {continuous_dims}) "
+                    f"request=({req_discrete_cardinalities}, {req_continuous_dims})"
                 )
             xs_discrete = np.asarray(req["xs_discrete_row_major"], dtype=np.int64).reshape(
                 (nr_samples, req_discrete_dims)
@@ -67,6 +94,12 @@ for raw in sys.stdin:
             xs_continuous = np.asarray(
                 req["xs_continuous_row_major"], dtype=np.float64
             ).reshape((nr_samples, req_continuous_dims))
+            for axis, cardinality in enumerate(discrete_cardinalities):
+                axis_values = xs_discrete[:, axis]
+                if (axis_values < 0).any() or (axis_values >= cardinality).any():
+                    raise ValueError(
+                        f"xs_discrete axis {axis} out of bounds for cardinality {cardinality}"
+                    )
             ys = np.asarray(
                 integrand.eval(xs_discrete, xs_continuous), dtype=np.float64
             ).reshape((nr_samples,))
