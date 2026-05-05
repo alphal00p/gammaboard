@@ -6,6 +6,7 @@ use cli::Cli;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    symbolica::activate_oem_license!("SYMBOLICA_OEM_KEY_7facf394");
     let cli = Cli::parse();
     cli::dispatch(cli).await
 }
