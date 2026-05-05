@@ -28,6 +28,14 @@ use std::path::PathBuf;
 pub struct Cli {
     #[arg(long = "runtime-config", global = true, default_value = DEFAULT_RUNTIME_CONFIG_PATH, value_name = "PATH")]
     runtime_config: PathBuf,
+    #[arg(long = "database-url", global = true, value_name = "URL")]
+    database_url: Option<String>,
+    #[arg(long = "postgres-data-dir", global = true, value_name = "PATH")]
+    postgres_data_dir: Option<String>,
+    #[arg(long = "postgres-socket-dir", global = true, value_name = "PATH")]
+    postgres_socket_dir: Option<String>,
+    #[arg(long = "postgres-log-file", global = true, value_name = "PATH")]
+    postgres_log_file: Option<String>,
     #[arg(short = 'q', long, global = true, action = ArgAction::SetTrue)]
     quiet: bool,
     #[command(subcommand)]
@@ -57,7 +65,14 @@ enum Command {
 pub async fn dispatch(cli: Cli) -> Result<()> {
     let quiet = cli.quiet;
     let runtime_config_path = cli.runtime_config.clone();
-    let config = RuntimeConfig::load(&runtime_config_path)?;
+    let mut config = RuntimeConfig::load(&runtime_config_path)?;
+    apply_runtime_overrides(
+        &mut config,
+        cli.database_url,
+        cli.postgres_data_dir,
+        cli.postgres_socket_dir,
+        cli.postgres_log_file,
+    );
     initialize_resource_roots(&config.resources.roots);
     match cli.command {
         Command::AutoAssign(args) => run_auto_assign_command(args, &config, quiet).await,
@@ -74,5 +89,26 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Command::Deploy(args) => {
             run_deploy_command(args, &config, runtime_config_path.as_path()).await
         }
+    }
+}
+
+fn apply_runtime_overrides(
+    config: &mut RuntimeConfig,
+    database_url: Option<String>,
+    postgres_data_dir: Option<String>,
+    postgres_socket_dir: Option<String>,
+    postgres_log_file: Option<String>,
+) {
+    if let Some(value) = database_url {
+        config.database.url = value;
+    }
+    if let Some(value) = postgres_data_dir {
+        config.local_postgres.data_dir = value;
+    }
+    if let Some(value) = postgres_socket_dir {
+        config.local_postgres.socket_dir = value;
+    }
+    if let Some(value) = postgres_log_file {
+        config.local_postgres.log_file = value;
     }
 }

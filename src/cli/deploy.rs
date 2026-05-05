@@ -31,6 +31,10 @@ pub struct DeployRunArgs {
     deploy_config: PathBuf,
     #[arg(long)]
     frontend_port: Option<u16>,
+    #[arg(long)]
+    api_port: Option<u16>,
+    #[arg(long = "allowed-origin", value_name = "ORIGIN")]
+    allowed_origins: Vec<String>,
 }
 
 pub async fn run_deploy_command(
@@ -49,21 +53,29 @@ async fn deploy_run(
     runtime_config_path: &Path,
 ) -> Result<()> {
     let deploy_config = DeployConfig::load(&args.deploy_config)?;
-    let server_config = ServerConfig::load(&deploy_config.api_server.api_server_config)?;
+    let mut server_config = ServerConfig::load(&deploy_config.api_server.api_server_config)?;
+    let runtime_config = runtime_config.clone();
     let frontend_port = args
         .frontend_port
         .unwrap_or(deploy_config.frontend_http.frontend_port);
+    if let Some(api_port) = args.api_port {
+        server_config.api_port = api_port;
+    }
+    server_config
+        .allowed_origins
+        .extend(args.allowed_origins.clone());
     validate_frontend_build(&deploy_config)?;
 
     if deploy_config.database.ensure_started {
         db::start_db(&runtime_config.local_postgres, &runtime_config.database.url)?;
     }
 
-    prepare_runtime_dirs()?;
-    write_nginx_config(&deploy_config, &server_config, frontend_port)?;
+    let deploy_paths = DeployRuntimePaths::new(frontend_port);
+    prepare_runtime_dirs(&deploy_paths)?;
+    write_nginx_config(&deploy_config, &server_config, frontend_port, &deploy_paths)?;
 
-    let mut backend = start_backend(&deploy_config, runtime_config_path)?;
-    let mut nginx = start_nginx(&deploy_config)?;
+    let mut backend = start_backend(&deploy_config, runtime_config_path, &runtime_config, &args)?;
+    let mut nginx = start_nginx(&deploy_config, &deploy_paths)?;
 
     println!("deploy running");
     println!("deploy_config: {}", args.deploy_config.display());
@@ -84,7 +96,7 @@ async fn deploy_run(
     }
 
     let result = supervise_children(&mut backend, &mut nginx).await;
-    let cleanup_result = cleanup_deploy(&deploy_config, runtime_config, &mut backend, &mut nginx)
+    let cleanup_result = cleanup_deploy(&deploy_config, &runtime_config, &mut backend, &mut nginx)
         .await
         .context("deploy cleanup failed");
 
@@ -234,28 +246,76 @@ fn check_child_running(
     Ok(false)
 }
 
-fn prepare_runtime_dirs() -> Result<()> {
+struct DeployRuntimePaths {
+    root: PathBuf,
+    nginx_config: PathBuf,
+    nginx_pid: PathBuf,
+    client_body_temp: PathBuf,
+    proxy_temp: PathBuf,
+    fastcgi_temp: PathBuf,
+    uwsgi_temp: PathBuf,
+    scgi_temp: PathBuf,
+}
+
+impl DeployRuntimePaths {
+    fn new(frontend_port: u16) -> Self {
+        let root = PathBuf::from(format!("tmp/deploy/{frontend_port}"));
+        Self {
+            nginx_config: root.join("nginx.conf"),
+            nginx_pid: root.join("nginx.pid"),
+            client_body_temp: root.join("nginx/client_body"),
+            proxy_temp: root.join("nginx/proxy"),
+            fastcgi_temp: root.join("nginx/fastcgi"),
+            uwsgi_temp: root.join("nginx/uwsgi"),
+            scgi_temp: root.join("nginx/scgi"),
+            root,
+        }
+    }
+}
+
+fn prepare_runtime_dirs(paths: &DeployRuntimePaths) -> Result<()> {
     for path in [
-        "tmp/deploy",
-        "tmp/nginx/client_body",
-        "tmp/nginx/proxy",
-        "tmp/nginx/fastcgi",
-        "tmp/nginx/uwsgi",
-        "tmp/nginx/scgi",
+        &paths.root,
+        &paths.client_body_temp,
+        &paths.proxy_temp,
+        &paths.fastcgi_temp,
+        &paths.uwsgi_temp,
+        &paths.scgi_temp,
     ] {
-        fs::create_dir_all(path).with_context(|| format!("failed to create {path}"))?;
+        fs::create_dir_all(path).with_context(|| format!("failed to create {}", path.display()))?;
     }
     Ok(())
 }
 
-fn start_backend(deploy_config: &DeployConfig, runtime_config_path: &Path) -> Result<Child> {
+fn start_backend(
+    deploy_config: &DeployConfig,
+    runtime_config_path: &Path,
+    runtime_config: &RuntimeConfig,
+    args: &DeployRunArgs,
+) -> Result<Child> {
     let binary = std::env::current_exe().context("failed to resolve current executable path")?;
-    Command::new(&binary)
-        .arg("--runtime-config")
-        .arg(runtime_config_path)
+    let mut command = Command::new(&binary);
+    command.arg("--runtime-config").arg(runtime_config_path);
+    command
+        .arg("--database-url")
+        .arg(&runtime_config.database.url)
+        .arg("--postgres-data-dir")
+        .arg(&runtime_config.local_postgres.data_dir)
+        .arg("--postgres-socket-dir")
+        .arg(&runtime_config.local_postgres.socket_dir)
+        .arg("--postgres-log-file")
+        .arg(&runtime_config.local_postgres.log_file);
+    command
         .arg("server")
         .arg("--server-config")
-        .arg(&deploy_config.api_server.api_server_config)
+        .arg(&deploy_config.api_server.api_server_config);
+    if let Some(api_port) = args.api_port {
+        command.arg("--api-port").arg(api_port.to_string());
+    }
+    for origin in &args.allowed_origins {
+        command.arg("--allowed-origin").arg(origin);
+    }
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -263,14 +323,14 @@ fn start_backend(deploy_config: &DeployConfig, runtime_config_path: &Path) -> Re
         .with_context(|| format!("failed to spawn backend {}", binary.display()))
 }
 
-fn start_nginx(deploy_config: &DeployConfig) -> Result<Child> {
+fn start_nginx(_deploy_config: &DeployConfig, paths: &DeployRuntimePaths) -> Result<Child> {
     Command::new("nginx")
         .arg("-e")
         .arg("/dev/stderr")
         .arg("-p")
         .arg(std::env::current_dir()?)
         .arg("-c")
-        .arg(deploy_config.nginx_generated_config())
+        .arg(&paths.nginx_config)
         .arg("-g")
         .arg("daemon off;")
         .stdin(Stdio::null())
@@ -308,6 +368,7 @@ fn write_nginx_config(
     deploy_config: &DeployConfig,
     server_config: &ServerConfig,
     frontend_port: u16,
+    paths: &DeployRuntimePaths,
 ) -> Result<()> {
     let backend = server_config.bind_addr();
     let access_log = if deploy_config.frontend_http.access_log {
@@ -317,7 +378,7 @@ fn write_nginx_config(
     };
     let config = format!(
         "worker_processes 1;\n\
-pid tmp/deploy/nginx.pid;\n\
+pid {pid_file};\n\
 \n\
 events {{\n    worker_connections 1024;\n}}\n\
 \n\
@@ -342,11 +403,11 @@ http {{\n\
 \n\
     {access_log}\n\
     error_log /dev/stderr warn;\n\
-    client_body_temp_path tmp/nginx/client_body;\n\
-    proxy_temp_path tmp/nginx/proxy;\n\
-    fastcgi_temp_path tmp/nginx/fastcgi;\n\
-    uwsgi_temp_path tmp/nginx/uwsgi;\n\
-    scgi_temp_path tmp/nginx/scgi;\n\
+    client_body_temp_path {client_body_temp};\n\
+    proxy_temp_path {proxy_temp};\n\
+    fastcgi_temp_path {fastcgi_temp};\n\
+    uwsgi_temp_path {uwsgi_temp};\n\
+    scgi_temp_path {scgi_temp};\n\
 \n\
     server {{\n\
         listen {listen_host}:{listen_port};\n\
@@ -373,11 +434,13 @@ http {{\n\
         static_dir = deploy_config.static_site.frontend_build_dir,
         backend = backend,
         access_log = access_log,
+        pid_file = paths.nginx_pid.display(),
+        client_body_temp = paths.client_body_temp.display(),
+        proxy_temp = paths.proxy_temp.display(),
+        fastcgi_temp = paths.fastcgi_temp.display(),
+        uwsgi_temp = paths.uwsgi_temp.display(),
+        scgi_temp = paths.scgi_temp.display(),
     );
-    fs::write(deploy_config.nginx_generated_config(), config).with_context(|| {
-        format!(
-            "failed writing {}",
-            deploy_config.nginx_generated_config().display()
-        )
-    })
+    fs::write(&paths.nginx_config, config)
+        .with_context(|| format!("failed writing {}", paths.nginx_config.display()))
 }

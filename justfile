@@ -54,14 +54,14 @@ serve-backend:
 serve-frontend:
     cd dashboard && npx serve build
 
-deploy host mode="dev":
+deploy host mode="dev" frontend_port="":
     #!/usr/bin/env bash
     set -euo pipefail
 
     if [[ "{{host}}" == "local" ]]; then
         just --justfile ops/local/justfile deploy "{{mode}}"
     elif [[ "{{host}}" == "itphlies" ]]; then
-        just --justfile ops/itphlies/justfile deploy "{{mode}}"
+        just --justfile ops/itphlies/justfile deploy "{{mode}}" "{{frontend_port}}"
     else
         echo "unknown deploy host: {{host}} (expected: local or itphlies)" >&2
         exit 1

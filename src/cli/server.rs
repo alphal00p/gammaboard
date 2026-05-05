@@ -11,6 +11,10 @@ const SERVER_DB_POOL_SIZE: u32 = 8;
 pub struct ServerArgs {
     #[arg(long = "server-config", default_value = DEFAULT_SERVER_CONFIG_PATH, value_name = "PATH")]
     server_config: PathBuf,
+    #[arg(long = "api-port")]
+    api_port: Option<u16>,
+    #[arg(long = "allowed-origin", value_name = "ORIGIN")]
+    allowed_origins: Vec<String>,
 }
 
 pub async fn run_server(
@@ -19,7 +23,11 @@ pub async fn run_server(
     runtime_config_path: &std::path::Path,
     quiet: bool,
 ) -> anyhow::Result<()> {
-    let config = ServerConfig::load(&args.server_config)?;
+    let mut config = ServerConfig::load(&args.server_config)?;
+    if let Some(api_port) = args.api_port {
+        config.api_port = api_port;
+    }
+    config.allowed_origins.extend(args.allowed_origins);
     let bind = config.bind_addr();
     let span = tracing::span!(
         tracing::Level::TRACE,

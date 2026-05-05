@@ -147,10 +147,6 @@ impl DeployConfig {
         Ok(parsed)
     }
 
-    pub fn nginx_generated_config(&self) -> PathBuf {
-        PathBuf::from("tmp/deploy/nginx.conf")
-    }
-
     pub fn advertised_urls(&self, port: u16) -> Vec<String> {
         let hosts = if self.frontend_http.frontend_advertise_hosts.is_empty() {
             vec![default_advertise_host(

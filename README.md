@@ -161,6 +161,8 @@ gammaboard deploy run --deploy-config ops/local/config/deploy.toml
 
 Useful options:
 - `--frontend-port <PORT>` overrides the deploy profile's frontend/nginx listen port for that launch
+- `--api-port <PORT>` overrides the private backend API port for that launch
+- global runtime overrides such as `--database-url`, `--postgres-data-dir`, `--postgres-socket-dir`, and `--postgres-log-file` let one machine run multiple isolated deploy instances
 
 Deploy profiles now derive the printed/open URLs from `frontend_http.frontend_port` plus `frontend_http.frontend_advertise_hosts`, instead of duplicating full URL strings in the config.
 
@@ -168,6 +170,7 @@ The `just` wrappers build first, then `exec` the foreground supervisor:
 ```bash
 just deploy local dev
 just deploy itphlies release
+just deploy itphlies release 8081
 ```
 
 Deploy run:
@@ -188,6 +191,11 @@ Use this flow when you want both direct LAN access and the SSH tunnel option.
    ```
    (From `ops/itphlies`, you can run `just --justfile justfile deploy`.)
    This builds the frontend and release backend, then runs a foreground deploy supervisor for the backend, nginx, and local Postgres.
+   To run an additional isolated instance on the same machine, pass a frontend port:
+   ```bash
+   just deploy itphlies release 8081
+   ```
+   The wrapper derives the backend API port, Postgres port, database name, and Postgres state directories from that frontend port.
 2. On your laptop, open an SSH tunnel:
    ```bash
    ssh -N -L 8080:127.0.0.1:8080 ITPhliesTails
@@ -198,7 +206,7 @@ Use this flow when you want both direct LAN access and the SSH tunnel option.
    ```
    or `http://itphlies:8080` if your local network resolves that hostname. If you access the server by LAN IP instead, add that origin to `allowed_origins` in the server config first.
 4. To stop all deployed ITPhlies processes, press `Ctrl-C` in the foreground deploy terminal.
-5. The SSH tunnel remains optional; direct LAN access works because nginx listens on `0.0.0.0:8080`, while the backend still stays private on `127.0.0.1:4000`.
+5. The SSH tunnel remains optional; direct LAN access works because nginx listens on `0.0.0.0:<frontend-port>`, while the backend still stays private on a derived `127.0.0.1:<api-port>`.
 6. Interactive deploy profiles disable nginx access logs by default to keep foreground output readable. Re-enable them in the deploy TOML only when debugging HTTP traffic.
 
 Config files used:
@@ -206,10 +214,11 @@ Config files used:
 - deploy: [ops/itphlies/config/deploy.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/itphlies/config/deploy.toml)
 
 Important:
-- `ops/itphlies/config/server.toml` currently allows `http://localhost:8080` and `http://itphlies:8080`.
-- `ops/itphlies/config/deploy.toml` advertises `localhost` and `itphlies` as the operator-facing URLs for that deploy profile.
+- The ITPhlies just wrapper adds the selected frontend port to the allowed browser origins for `localhost`, `127.0.0.1`, `itphlies`, and the Tailscale hostname.
+- `ops/itphlies/config/deploy.toml` advertises `localhost` and `itphlies` as the operator-facing URLs for the default deploy profile.
 - If you want to access the UI via a raw LAN IP or another hostname, add that exact origin to `allowed_origins`.
-- Backend listens on `127.0.0.1:4000`; nginx listens on `0.0.0.0:8080`.
+- Default ports are backend `127.0.0.1:4000`, Postgres `127.0.0.1:5433`, and nginx `0.0.0.0:8080`.
+- For `just deploy itphlies release <PORT>`, the wrapper uses API port `<PORT> + 10000`, Postgres port `<PORT> + 20000`, database `gammaboard_<PORT>`, and Postgres state dirs `.postgres-<PORT>` / `.postgres-socket-<PORT>`.
 - ITPhlies deployment uses the release backend binary by default.
 
 ## Frontend API Routing

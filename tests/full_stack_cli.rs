@@ -19,7 +19,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use symbolica::numerical_integration::{ContinuousGrid, DiscreteGrid, Grid, Sample};
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempDir};
 use tokio::process::{Child, Command as TokioCommand};
 use tokio::time::{Instant, sleep};
 use url::Url;
@@ -34,6 +34,22 @@ fn unique_suffix() -> String {
     let pid = std::process::id();
     let counter = UNIQUE_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("{pid}_{nanos}_{counter}")
+}
+
+fn unused_local_port() -> anyhow::Result<u16> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    let port = listener.local_addr()?.port();
+    drop(listener);
+    Ok(port)
+}
+
+fn nginx_available() -> bool {
+    std::process::Command::new("nginx")
+        .arg("-v")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn resolve_bin_path() -> anyhow::Result<PathBuf> {
@@ -1161,6 +1177,29 @@ fn temp_server_config(
     file
 }
 
+fn temp_deploy_config(
+    frontend_build_dir: &std::path::Path,
+    server_config: &std::path::Path,
+) -> NamedTempFile {
+    let contents = format!(
+        "[api_server]\napi_server_config = {:?}\n\n[static_site]\nfrontend_build_dir = {:?}\n\n[frontend_http]\nfrontend_host = \"127.0.0.1\"\nfrontend_port = 8080\nfrontend_server_name = \"_\"\nfrontend_advertise_hosts = [\"localhost\"]\naccess_log = false\n\n[database]\nensure_started = false\n\n[cleanup]\nsampler_drain_timeout_seconds = 5\nnode_stop_timeout_seconds = 5\npoll_interval_ms = 100\n",
+        server_config, frontend_build_dir,
+    );
+    let file = NamedTempFile::new().expect("create temp deploy config");
+    std::fs::write(file.path(), contents).expect("write temp deploy config");
+    file
+}
+
+fn temp_frontend_build() -> TempDir {
+    let dir = tempfile::tempdir().expect("create temp frontend build");
+    std::fs::write(
+        dir.path().join("index.html"),
+        "<!doctype html><html><body>gammaboard e2e</body></html>",
+    )
+    .expect("write index.html");
+    dir
+}
+
 fn temp_cli_config(database_url: &str, persist_runtime_logs: bool) -> NamedTempFile {
     let contents = format!(
         "[database]\nurl = {database_url:?}\n\n[tracing]\npersist_runtime_logs = {persist_runtime_logs}\ndb_gammaboard_level = \"info\"\ndb_external_level = \"warn\"\n\n[local_postgres]\ndata_dir = \".postgres\"\nsocket_dir = \".postgres-socket\"\nlog_file = \".postgres/logfile\"\nmax_connections = 512\n"
@@ -2028,6 +2067,105 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
     harness.stop_children().await;
     harness.pool.close().await;
     harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege and nginx"]
+async fn full_stack_deploy_can_run_two_port_isolated_instances() -> anyhow::Result<()> {
+    if !nginx_available() {
+        eprintln!("skipping deploy isolation e2e because nginx is not available");
+        return Ok(());
+    }
+
+    let mut harness = FullStackHarness::new().await?;
+    let second_db = TestDatabase::create().await?;
+    let frontend_build = temp_frontend_build();
+    let password_hash = hash_password_for_tests("test-password");
+    let server_config = temp_server_config(
+        "127.0.0.1",
+        4000,
+        "http://localhost:8080",
+        false,
+        true,
+        (&password_hash, "test-session-secret"),
+    );
+    let deploy_config = temp_deploy_config(frontend_build.path(), server_config.path());
+    let frontend_port_a = unused_local_port()?;
+    let frontend_port_b = unused_local_port()?;
+    let api_port_a = unused_local_port()?;
+    let api_port_b = unused_local_port()?;
+
+    for (label, database_url, frontend_port, api_port) in [
+        (
+            "deploy-a",
+            harness.db.database_url.as_str(),
+            frontend_port_a,
+            api_port_a,
+        ),
+        (
+            "deploy-b",
+            second_db.database_url.as_str(),
+            frontend_port_b,
+            api_port_b,
+        ),
+    ] {
+        let mut child = TokioCommand::new(&harness.bin_path);
+        child
+            .arg("--runtime-config")
+            .arg(&harness.runtime_config_path)
+            .arg("--database-url")
+            .arg(database_url)
+            .arg("deploy")
+            .arg("run")
+            .arg("--deploy-config")
+            .arg(deploy_config.path())
+            .arg("--frontend-port")
+            .arg(frontend_port.to_string())
+            .arg("--api-port")
+            .arg(api_port.to_string())
+            .arg("--allowed-origin")
+            .arg(format!("http://localhost:{frontend_port}"))
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit());
+        let child = child.spawn()?;
+        harness.children.push(ManagedChild {
+            label: label.to_string(),
+            child,
+        });
+    }
+
+    let base_a = format!("http://127.0.0.1:{frontend_port_a}");
+    let base_b = format!("http://127.0.0.1:{frontend_port_b}");
+    harness
+        .wait_for("first deploy frontend", Duration::from_secs(20), || {
+            let base = base_a.clone();
+            async move { Ok(http_get(&base, "/").await.is_ok()) }
+        })
+        .await?;
+    harness
+        .wait_for("second deploy frontend", Duration::from_secs(20), || {
+            let base = base_b.clone();
+            async move { Ok(http_get(&base, "/").await.is_ok()) }
+        })
+        .await?;
+
+    assert!(
+        http_get(&base_a, "/api/health")
+            .await?
+            .contains("\"status\":\"ok\"")
+    );
+    assert!(
+        http_get(&base_b, "/api/health")
+            .await?
+            .contains("\"status\":\"ok\"")
+    );
+
+    harness.terminate_child("deploy-a").await?;
+    harness.terminate_child("deploy-b").await?;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    second_db.cleanup().await?;
     Ok(())
 }
 
