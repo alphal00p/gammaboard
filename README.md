@@ -65,7 +65,7 @@ For UBELIX Slurm/Apptainer operation, use:
 - Required shape:
   ```toml
   [database]
-  url = "postgresql://postgres:password@127.0.0.1:5433/gammaboard_db"
+  url = "postgresql://postgres:password@127.0.0.1:5400/gammaboard_db"
 
   [tracing]
   persist_runtime_logs = true
@@ -217,7 +217,7 @@ Important:
 - Use `--port-offset` for multi-instance launches.
 - `ops/itphlies/config/deploy.toml` advertises `localhost` and `itphlies` as the operator-facing URLs for the default deploy profile.
 - If you want to access the UI via a raw LAN IP or another hostname, add that exact origin to `allowed_origins`.
-- Default ports are backend `127.0.0.1:4000`, Postgres `127.0.0.1:5433`, and nginx `0.0.0.0:8080`.
+- Default ports are backend `127.0.0.1:4000`, Postgres `127.0.0.1:5400`, and nginx `0.0.0.0:8080`.
 - For local and ITPhlies profiles, `--port-offset <OFFSET>` applies that offset to configured frontend/API/Postgres ports and suffixes Postgres state dirs/log paths with `-<OFFSET>`.
 - ITPhlies deployment uses the release backend binary by default.
 
