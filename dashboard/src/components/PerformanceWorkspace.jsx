@@ -4,59 +4,18 @@ import ConnectionStatus from "./ConnectionStatus";
 import EmptyStateCard from "./common/EmptyStateCard";
 import PanelCollection from "./panels/PanelCollection";
 import RunScopedWorkspace from "./common/RunScopedWorkspace";
-import { useRunPerformancePanels } from "../hooks/useRunPerformancePanels";
-import { asArray, isPlainObject } from "../utils/collections";
-
-const evaluatorNodeNameFor = (worker) => worker?.node_name ?? null;
-const compareNodeNames = (left, right) =>
-  String(evaluatorNodeNameFor(left) || "").localeCompare(String(evaluatorNodeNameFor(right) || ""), undefined, {
-    numeric: true,
-    sensitivity: "base",
-  });
-const asObject = (value) => (isPlainObject(value) ? value : {});
-const isHistoryTimeseriesPanelSpec = (spec) => {
-  const kind = String(spec?.kind || "");
-  const history = String(spec?.history || "");
-  return (kind === "scalar_timeseries" || kind === "multi_timeseries") && history !== "none";
-};
-const HISTORY_X_AXIS_MODE_WALL_TIME = "wall_time";
-const HISTORY_X_AXIS_MODE_SAMPLER_UPTIME = "sampler_uptime";
-const HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES = "completed_samples";
-const HISTORY_X_AXIS_MODE_SET = new Set([
-  HISTORY_X_AXIS_MODE_WALL_TIME,
-  HISTORY_X_AXIS_MODE_SAMPLER_UPTIME,
+import {
   HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES,
-]);
-const normalizeZoomRange = (candidate) => {
-  const start = Number(candidate?.start);
-  const end = Number(candidate?.end);
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-  const normalizedStart = Math.max(0, Math.min(100, start));
-  const normalizedEnd = Math.max(0, Math.min(100, end));
-  if (normalizedEnd < normalizedStart) return { start: normalizedEnd, end: normalizedStart };
-  return { start: normalizedStart, end: normalizedEnd };
-};
-const extractSharedHistoryView = (value) => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const zoom = normalizeZoomRange(value.zoom);
-  const hasTailPinned = typeof value.tailPinned === "boolean";
-  const xAxisMode = HISTORY_X_AXIS_MODE_SET.has(value.xAxisMode) ? value.xAxisMode : null;
-  if (!zoom && !hasTailPinned && !xAxisMode) return null;
-  const shared = {};
-  if (zoom) shared.zoom = zoom;
-  if (hasTailPinned) shared.tailPinned = value.tailPinned;
-  if (xAxisMode) shared.xAxisMode = xAxisMode;
-  return shared;
-};
-const mergeSharedHistoryView = (current, sharedView) => {
-  const next = asObject(current) ? { ...current } : {};
-  if (sharedView.zoom) next.zoom = sharedView.zoom;
-  if ("tailPinned" in sharedView) next.tailPinned = sharedView.tailPinned;
-  if ("xAxisMode" in sharedView && HISTORY_X_AXIS_MODE_SET.has(sharedView.xAxisMode)) {
-    next.xAxisMode = sharedView.xAxisMode;
-  }
-  return next;
-};
+  HISTORY_X_AXIS_MODE_SAMPLER_UPTIME,
+  HISTORY_X_AXIS_MODE_WALL_TIME,
+  extractSharedHistoryView,
+  isObject,
+  isSharedHistoryTimeseriesPanelSpec,
+  mergeSharedHistoryView,
+} from "./panels/panelView";
+import { useRunPerformancePanels } from "../hooks/useRunPerformancePanels";
+import { asArray } from "../utils/collections";
+import { compareNodesByName, nodeNameOf } from "../utils/nodes";
 
 const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isConnected }) => {
   const [nodeRunFilter, setNodeRunFilter] = useState("selected_run");
@@ -76,7 +35,7 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
   }, [runs]);
   const filteredWorkers = useMemo(() => {
     return asArray(workers)
-      .filter((worker) => evaluatorNodeNameFor(worker) != null)
+      .filter((worker) => nodeNameOf(worker) != null)
       .filter((worker) => {
         const runId = Number(worker?.current_run_id);
         if (nodeRunFilter === "all_runs") return true;
@@ -98,7 +57,7 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
         const role = String(worker?.current_role || "none");
         return role === nodeRoleFilter;
       })
-      .sort(compareNodeNames);
+      .sort(compareNodesByName);
   }, [nodeActivityFilter, nodeRoleFilter, nodeRunFilter, selectedRun, workers]);
   const [selectedEvaluatorNodeName, setSelectedEvaluatorNodeName] = useState(null);
   const [panelValues, setPanelValues] = useState({});
@@ -111,11 +70,11 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
     }
     if (
       selectedEvaluatorNodeName &&
-      filteredWorkers.some((worker) => evaluatorNodeNameFor(worker) === selectedEvaluatorNodeName)
+      filteredWorkers.some((worker) => nodeNameOf(worker) === selectedEvaluatorNodeName)
     ) {
       return;
     }
-    setSelectedEvaluatorNodeName(evaluatorNodeNameFor(filteredWorkers[0]));
+    setSelectedEvaluatorNodeName(nodeNameOf(filteredWorkers[0]));
   }, [filteredWorkers, selectedEvaluatorNodeName]);
 
   const { evaluator, runEvaluator, sampler } = useRunPerformancePanels({
@@ -145,7 +104,7 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
         ...asArray(runEvaluator?.panelSpecs),
         ...asArray(evaluator?.panelSpecs),
       ]
-        .filter((spec) => isHistoryTimeseriesPanelSpec(spec))
+        .filter((spec) => isSharedHistoryTimeseriesPanelSpec(spec))
         .map((spec) => spec?.panel_id)
         .filter((id) => typeof id === "string"),
     [evaluator?.panelSpecs, runEvaluator?.panelSpecs, sampler?.panelSpecs],
@@ -172,7 +131,7 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
       const merged = { ...previous };
       sharedHistoryPanelIds.forEach((panelId) => {
         merged[panelId] = {
-          ...(asObject(previous?.[panelId]) ? previous[panelId] : {}),
+          ...(isObject(previous?.[panelId]) ? previous[panelId] : {}),
           xAxisMode: historyXAxisMode,
         };
       });
@@ -315,7 +274,7 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
                 onChange={(event) => setSelectedEvaluatorNodeName(event.target.value || null)}
               >
                 {filteredWorkers.map((worker) => {
-                  const nodeName = evaluatorNodeNameFor(worker);
+                  const nodeName = nodeNameOf(worker);
                   return (
                     <MenuItem key={nodeName} value={nodeName}>
                       {nodeName}

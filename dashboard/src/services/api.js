@@ -272,15 +272,6 @@ export const fetchNodes = async (runId = null, signal) => {
 export const fetchNodePanels = async (nodeName, signal) =>
   apiGet(`/nodes/${nodeName}/panels`, "Failed to fetch node panels", signal);
 
-export const fetchStats = async (runId, signal) => {
-  return apiGet(`/runs/${runId}/stats`, "Failed to fetch stats", signal);
-};
-
-export const fetchRun = async (runId, signal) => {
-  const data = await apiGet(`/runs/${runId}`, "Failed to fetch run", signal);
-  return normalizeRunEntry(data) ?? data;
-};
-
 export const fetchRunReproToml = async (runId, signal) =>
   apiGet(`/runs/${runId}/repro-toml`, "Failed to export run TOML", signal);
 

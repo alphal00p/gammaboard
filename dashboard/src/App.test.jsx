@@ -10,13 +10,11 @@ vi.mock("./services/api", () => ({
   fetchSession: vi.fn(async () => ({ authenticated: false })),
   login: vi.fn(async () => ({ authenticated: true })),
   logout: vi.fn(async () => ({ authenticated: false })),
-  fetchStats: vi.fn(async () => []),
   fetchRunLogPage: vi.fn(async () => ({
     items: [],
     next_before_id: null,
     has_more_older: false,
   })),
-  fetchRun: vi.fn(async () => null),
   fetchRunTasks: vi.fn(async () => []),
   fetchRunEvaluatorConfigPanels: vi.fn(async () => ({ source_id: "cfg:evaluator", panels: [], updates: [] })),
   fetchRunSamplerConfigPanels: vi.fn(async () => ({ source_id: "cfg:sampler", panels: [], updates: [] })),
@@ -49,13 +47,11 @@ describe("App Component", () => {
     api.fetchSession.mockResolvedValue({ authenticated: false });
     api.login.mockResolvedValue({ authenticated: true });
     api.logout.mockResolvedValue({ authenticated: false });
-    api.fetchStats.mockResolvedValue([]);
     api.fetchRunLogPage.mockResolvedValue({
       items: [],
       next_before_id: null,
       has_more_older: false,
     });
-    api.fetchRun.mockResolvedValue(null);
     api.fetchRunTasks.mockResolvedValue([]);
     api.fetchRunEvaluatorConfigPanels.mockResolvedValue({ source_id: "cfg:evaluator", panels: [], updates: [] });
     api.fetchRunSamplerConfigPanels.mockResolvedValue({ source_id: "cfg:sampler", panels: [], updates: [] });

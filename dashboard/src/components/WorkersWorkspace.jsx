@@ -24,15 +24,10 @@ import ConnectionStatus from "./ConnectionStatus";
 import WorkerDetailsPanel from "./WorkerDetailsPanel";
 import EmptyStateCard from "./common/EmptyStateCard";
 import { formatDateTime } from "../utils/formatters";
+import { compareNodesByName, nodeNameOf } from "../utils/nodes";
 import { useAuth } from "../auth/AuthProvider";
 import { useNodeLaunchRequests } from "../hooks/useNodeLaunchRequests";
 import { autoRunNodes, restartDatabase, shutdownControlProcess, stopAllNodes } from "../services/api";
-
-const compareNodeNames = (left, right) =>
-  String(left || "").localeCompare(String(right || ""), undefined, {
-    numeric: true,
-    sensitivity: "base",
-  });
 
 const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => {
   const { authenticated } = useAuth();
@@ -46,11 +41,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
   const [shuttingDownControl, setShuttingDownControl] = useState(false);
   const [snackbar, setSnackbar] = useState(null);
   const launchRequestsData = useNodeLaunchRequests({ enabled: authenticated });
-  const nodeNameFor = (worker) => worker.node_name || null;
-  const sortedWorkers = useMemo(
-    () => [...workers].sort((left, right) => compareNodeNames(nodeNameFor(left), nodeNameFor(right))),
-    [workers],
-  );
+  const sortedWorkers = useMemo(() => [...workers].sort(compareNodesByName), [workers]);
 
   const displayRole = (worker) => worker.current_role || "None";
   const displayRun = (worker) => {
@@ -65,12 +56,12 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
       return;
     }
 
-    const stillExists = sortedWorkers.some((worker) => nodeNameFor(worker) === selectedNodeName);
-    if (!stillExists) setSelectedNodeName(nodeNameFor(sortedWorkers[0]));
+    const stillExists = sortedWorkers.some((worker) => nodeNameOf(worker) === selectedNodeName);
+    if (!stillExists) setSelectedNodeName(nodeNameOf(sortedWorkers[0]));
   }, [selectedNodeName, sortedWorkers, workers.length]);
 
   const selectedWorker = useMemo(
-    () => sortedWorkers.find((worker) => nodeNameFor(worker) === selectedNodeName) || null,
+    () => sortedWorkers.find((worker) => nodeNameOf(worker) === selectedNodeName) || null,
     [selectedNodeName, sortedWorkers],
   );
   const workerRoleCounts = useMemo(() => {
@@ -219,7 +210,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
                 </TableHead>
                 <TableBody>
                   {sortedWorkers.map((worker) => {
-                    const nodeName = nodeNameFor(worker);
+                    const nodeName = nodeNameOf(worker);
                     const selected = nodeName === selectedNodeName;
                     return (
                       <TableRow
