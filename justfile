@@ -48,6 +48,14 @@ build-frontend:
     npm run build
     printf '%s\n' "${current_hash}" > "${stamp_file}"
 
+reset-frontend-assets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    cd dashboard
+    rm -rf build
+    rm -f .build-input.hash
+
 serve-backend:
     {{bin}} server
 
