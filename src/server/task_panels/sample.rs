@@ -1287,10 +1287,10 @@ fn discrete_histogram_bundle_panel(
 ) -> Option<PanelState> {
     let payload = match &accumulator {
         AccumulatorState::Scalar(state) => {
-            scalar_discrete_histogram_payload(&state.discrete_bins, config)
+            scalar_discrete_histogram_payload(&state.discrete_bins, state.count, config)
         }
         AccumulatorState::Complex(state) => {
-            complex_discrete_histogram_payload(&state.discrete_bins, config)
+            complex_discrete_histogram_payload(&state.discrete_bins, state.count, config)
         }
         _ => return None,
     };
@@ -1343,6 +1343,7 @@ fn discrete_histogram_bundle_panel(
 
 fn scalar_discrete_histogram_payload(
     bins: &BTreeMap<String, ScalarDiscreteBinStats>,
+    total_count: i64,
     config: &DiscreteHistogramConfig,
 ) -> Result<JsonValue, String> {
     let histograms = config
@@ -1354,7 +1355,12 @@ fn scalar_discrete_histogram_payload(
                 json!({
                     "title": item.name,
                     "type_description": discrete_histogram_description(item),
-                    "bins": scalar_projected_bins(bins, item, config.max_total_bins_or_default())?,
+                    "bins": scalar_projected_bins(
+                        bins,
+                        item,
+                        total_count,
+                        config.max_total_bins_or_default()
+                    )?,
                 }),
             ))
         })
@@ -1367,6 +1373,7 @@ fn scalar_discrete_histogram_payload(
 
 fn complex_discrete_histogram_payload(
     bins: &BTreeMap<String, ComplexDiscreteBinStats>,
+    total_count: i64,
     config: &DiscreteHistogramConfig,
 ) -> Result<JsonValue, String> {
     let mut histograms = serde_json::Map::new();
@@ -1386,6 +1393,7 @@ fn complex_discrete_histogram_payload(
                         bins,
                         item,
                         projection,
+                        total_count,
                         config.max_total_bins_or_default()
                     )?,
                 }),
@@ -1401,6 +1409,7 @@ fn complex_discrete_histogram_payload(
 fn scalar_projected_bins(
     bins: &BTreeMap<String, ScalarDiscreteBinStats>,
     item: &NamedDiscreteHistogram,
+    total_count: i64,
     max_total_bins: usize,
 ) -> Result<Vec<JsonValue>, String> {
     let mut projected = BTreeMap::<Vec<i64>, ScalarDiscreteBinStats>::new();
@@ -1425,8 +1434,8 @@ fn scalar_projected_bins(
             json!({
                 "start": index as f64,
                 "stop": index as f64 + 1.0,
-                "value": bin.mean(),
-                "error": bin.stderr(),
+                "value": bin.contribution_mean(total_count),
+                "error": bin.contribution_stderr(total_count),
                 "label": histogram_key_label(&bin.discrete),
                 "bin_id": index as i64,
             })
@@ -1438,6 +1447,7 @@ fn complex_projected_bins(
     bins: &BTreeMap<String, ComplexDiscreteBinStats>,
     item: &NamedDiscreteHistogram,
     projection: ComplexDiscreteProjection,
+    total_count: i64,
     max_total_bins: usize,
 ) -> Result<Vec<JsonValue>, String> {
     let mut projected = BTreeMap::<Vec<i64>, ComplexDiscreteBinStats>::new();
@@ -1462,8 +1472,8 @@ fn complex_projected_bins(
             json!({
                 "start": index as f64,
                 "stop": index as f64 + 1.0,
-                "value": bin.projected_mean(projection),
-                "error": bin.projected_stderr(projection),
+                "value": bin.projected_contribution_mean(projection, total_count),
+                "error": bin.projected_contribution_stderr(projection, total_count),
                 "label": histogram_key_label(&bin.discrete),
                 "bin_id": index as i64,
             })

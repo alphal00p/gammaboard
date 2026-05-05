@@ -40,6 +40,24 @@ impl ScalarDiscreteBinStats {
         let variance = (self.sum_sq / count_f - mean * mean).max(0.0);
         (variance / count_f).sqrt()
     }
+
+    pub fn contribution_mean(&self, total_count: i64) -> f64 {
+        if total_count <= 0 {
+            0.0
+        } else {
+            self.sum_weighted_value / total_count as f64
+        }
+    }
+
+    pub fn contribution_stderr(&self, total_count: i64) -> f64 {
+        if total_count <= 0 {
+            return 0.0;
+        }
+        let total_count_f = total_count as f64;
+        let mean = self.sum_weighted_value / total_count_f;
+        let variance = (self.sum_sq / total_count_f - mean * mean).max(0.0);
+        (variance / total_count_f).sqrt()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -104,6 +122,41 @@ impl ComplexDiscreteBinStats {
         let mean = sum / count_f;
         let variance = (sum_sq / count_f - mean * mean).max(0.0);
         (variance / count_f).sqrt()
+    }
+
+    pub fn projected_contribution_mean(
+        &self,
+        projection: ComplexDiscreteProjection,
+        total_count: i64,
+    ) -> f64 {
+        if total_count <= 0 {
+            return 0.0;
+        }
+        let sum = match projection {
+            ComplexDiscreteProjection::Real => self.real_sum,
+            ComplexDiscreteProjection::Imag => self.imag_sum,
+            ComplexDiscreteProjection::Abs => self.abs_sum,
+        };
+        sum / total_count as f64
+    }
+
+    pub fn projected_contribution_stderr(
+        &self,
+        projection: ComplexDiscreteProjection,
+        total_count: i64,
+    ) -> f64 {
+        if total_count <= 0 {
+            return 0.0;
+        }
+        let total_count_f = total_count as f64;
+        let (sum, sum_sq) = match projection {
+            ComplexDiscreteProjection::Real => (self.real_sum, self.real_sq_sum),
+            ComplexDiscreteProjection::Imag => (self.imag_sum, self.imag_sq_sum),
+            ComplexDiscreteProjection::Abs => (self.abs_sum, self.abs_sq_sum),
+        };
+        let mean = sum / total_count_f;
+        let variance = (sum_sq / total_count_f - mean * mean).max(0.0);
+        (variance / total_count_f).sqrt()
     }
 }
 
