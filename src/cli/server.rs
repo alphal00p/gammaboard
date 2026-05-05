@@ -40,7 +40,15 @@ pub async fn run_server(
         SERVER_DB_POOL_SIZE,
         quiet,
         span,
-        |store| async move { serve(store, config, runtime_config_path.to_path_buf()).await },
+        |store| async move {
+            serve(
+                store,
+                config,
+                runtime_config_path.to_path_buf(),
+                runtime_config.clone(),
+            )
+            .await
+        },
     )
     .await
 }

@@ -90,17 +90,6 @@ Build the frontend locally and upload it:
 just --justfile ops/ubelix/justfile sync-dashboard
 ```
 
-Private Slurm env on UBELIX:
-
-```bash
-mkdir -p ~/.config/gammaboard
-cat > ~/.config/gammaboard/slurm.env <<'EOF'
-export SYMBOLICA_LICENSE="..."
-export NO_SYMBOLICA_OEM_LICENSE=1
-EOF
-chmod 600 ~/.config/gammaboard/slurm.env
-```
-
 All UBELIX sbatch scripts source this file automatically and fail early if `SYMBOLICA_LICENSE` is missing.
 
 ## Build Images
