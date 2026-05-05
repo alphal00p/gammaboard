@@ -3,8 +3,8 @@ tmp
 .build-input.hash
 .evaluators
 .direnv/
-.postgres/
-.postgres-socket/
+.postgres*/
+.postgres-socket*/
 /dump/
 /target
 .env

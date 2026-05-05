@@ -3,30 +3,16 @@ release_bin := "./target/release/gammaboard"
 deploy_cfg := "ops/itphlies/config/deploy.toml"
 runtime_cfg := "ops/itphlies/config/runtime.toml"
 
-deploy mode="release" frontend_port="8080":
+deploy mode="release" port_offset="0":
     #!/usr/bin/env bash
     set -euo pipefail
 
     cd ../..
-    port="{{frontend_port}}"
-    if [[ -z "${port}" ]]; then
-        port="8080"
-    fi
-    if ! [[ "${port}" =~ ^[0-9]+$ ]]; then
-        echo "frontend port must be numeric: ${port}" >&2
+    offset="{{port_offset}}"
+    if ! [[ "${offset}" =~ ^[0-9]+$ ]]; then
+        echo "port offset must be a non-negative integer: ${offset}" >&2
         exit 1
     fi
-    if (( port < 1 || port > 45535 )); then
-        echo "frontend port must be between 1 and 45535 so derived ports stay valid" >&2
-        exit 1
-    fi
-    api_port=$((port + 10000))
-    postgres_port=$((port + 20000))
-    database_name="gammaboard_${port}"
-    database_url="postgresql://postgres:NqVj2yt5WsCE5nYCOx01MkeFD8n8awoZ@127.0.0.1:${postgres_port}/${database_name}"
-    postgres_data_dir=".postgres-${port}"
-    postgres_socket_dir=".postgres-socket-${port}"
-    postgres_log_file="${postgres_data_dir}/logfile"
 
     just build-frontend
     if [[ "{{mode}}" == "release" ]]; then
@@ -37,17 +23,11 @@ deploy mode="release" frontend_port="8080":
         deploy_bin="{{bin}}"
     fi
 
-    exec "${deploy_bin}" \
-        --runtime-config "{{runtime_cfg}}" \
-        --database-url "${database_url}" \
-        --postgres-data-dir "${postgres_data_dir}" \
-        --postgres-socket-dir "${postgres_socket_dir}" \
-        --postgres-log-file "${postgres_log_file}" \
-        deploy run \
-        --deploy-config "{{deploy_cfg}}" \
-        --frontend-port "${port}" \
-        --api-port "${api_port}" \
-        --allowed-origin "http://localhost:${port}" \
-        --allowed-origin "http://127.0.0.1:${port}" \
-        --allowed-origin "http://itphlies:${port}" \
-        --allowed-origin "http://itphlies.tailb3264.ts.net:${port}"
+    cmd=(
+        "${deploy_bin}"
+        --runtime-config "{{runtime_cfg}}"
+        deploy run
+        --deploy-config "{{deploy_cfg}}"
+        --port-offset "${offset}"
+    )
+    exec "${cmd[@]}"

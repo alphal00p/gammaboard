@@ -9,6 +9,7 @@ use std::{
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
+use url::Url;
 
 use super::db;
 use super::shared::with_control_store;
@@ -29,8 +30,8 @@ pub enum DeployCommand {
 pub struct DeployRunArgs {
     #[arg(long = "deploy-config", default_value = DEFAULT_DEPLOY_CONFIG_PATH, value_name = "PATH")]
     deploy_config: PathBuf,
-    #[arg(long)]
-    frontend_port: Option<u16>,
+    #[arg(long, default_value_t = 0)]
+    port_offset: u16,
     #[arg(long)]
     api_port: Option<u16>,
     #[arg(long = "allowed-origin", value_name = "ORIGIN")]
@@ -53,11 +54,17 @@ async fn deploy_run(
     runtime_config_path: &Path,
 ) -> Result<()> {
     let deploy_config = DeployConfig::load(&args.deploy_config)?;
+    let mut deploy_config = deploy_config;
     let mut server_config = ServerConfig::load(&deploy_config.api_server.api_server_config)?;
     let runtime_config = runtime_config.clone();
-    let frontend_port = args
-        .frontend_port
-        .unwrap_or(deploy_config.frontend_http.frontend_port);
+    let mut runtime_config = runtime_config;
+    apply_port_offset(
+        &mut deploy_config,
+        &mut server_config,
+        &mut runtime_config,
+        args.port_offset,
+    )?;
+    let frontend_port = deploy_config.frontend_http.frontend_port;
     if let Some(api_port) = args.api_port {
         server_config.api_port = api_port;
     }
@@ -74,7 +81,12 @@ async fn deploy_run(
     prepare_runtime_dirs(&deploy_paths)?;
     write_nginx_config(&deploy_config, &server_config, frontend_port, &deploy_paths)?;
 
-    let mut backend = start_backend(&deploy_config, runtime_config_path, &runtime_config, &args)?;
+    let mut backend = start_backend(
+        &deploy_config,
+        &server_config,
+        runtime_config_path,
+        &runtime_config,
+    )?;
     let mut nginx = start_nginx(&deploy_config, &deploy_paths)?;
 
     println!("deploy running");
@@ -123,6 +135,93 @@ fn validate_frontend_build(deploy_config: &DeployConfig) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn apply_port_offset(
+    deploy_config: &mut DeployConfig,
+    server_config: &mut ServerConfig,
+    runtime_config: &mut RuntimeConfig,
+    port_offset: u16,
+) -> Result<()> {
+    if port_offset == 0 {
+        return Ok(());
+    }
+
+    deploy_config.frontend_http.frontend_port = checked_add_port(
+        deploy_config.frontend_http.frontend_port,
+        port_offset,
+        "frontend port",
+    )?;
+    server_config.api_port = checked_add_port(server_config.api_port, port_offset, "api port")?;
+
+    for origin in &mut server_config.allowed_origins {
+        let Ok(parsed) = Url::parse(origin) else {
+            continue;
+        };
+        let Some(port) = parsed.port() else {
+            continue;
+        };
+        let shifted = checked_add_port(port, port_offset, "allowed origin port")?;
+        let mut updated = parsed;
+        updated
+            .set_port(Some(shifted))
+            .map_err(|_| anyhow::anyhow!("failed setting shifted port for origin {origin}"))?;
+        *origin = updated.origin().ascii_serialization();
+    }
+
+    let mut database_url = Url::parse(&runtime_config.database.url).with_context(|| {
+        format!(
+            "invalid runtime database URL: {}",
+            runtime_config.database.url
+        )
+    })?;
+    let base_db_port = database_url
+        .port()
+        .ok_or_else(|| anyhow::anyhow!("runtime database URL must include an explicit port"))?;
+    let shifted_db_port = checked_add_port(base_db_port, port_offset, "postgres port")?;
+    database_url
+        .set_port(Some(shifted_db_port))
+        .map_err(|_| anyhow::anyhow!("failed setting shifted postgres port"))?;
+    runtime_config.database.url = database_url.to_string();
+
+    let old_data_dir = PathBuf::from(&runtime_config.local_postgres.data_dir);
+    let old_log_file = PathBuf::from(&runtime_config.local_postgres.log_file);
+    let suffix = format!("-{port_offset}");
+    let new_data_dir = append_suffix_to_path(&old_data_dir, &suffix)?;
+    runtime_config.local_postgres.data_dir = new_data_dir.display().to_string();
+    runtime_config.local_postgres.socket_dir = append_suffix_to_path(
+        Path::new(&runtime_config.local_postgres.socket_dir),
+        &suffix,
+    )?
+    .display()
+    .to_string();
+    let new_log_file = if old_log_file.starts_with(&old_data_dir) {
+        let relative = old_log_file
+            .strip_prefix(&old_data_dir)
+            .map_err(|err| anyhow::anyhow!("failed deriving shifted postgres log path: {err}"))?;
+        new_data_dir.join(relative)
+    } else {
+        append_suffix_to_path(&old_log_file, &suffix)?
+    };
+    runtime_config.local_postgres.log_file = new_log_file.display().to_string();
+    Ok(())
+}
+
+fn checked_add_port(base: u16, offset: u16, label: &str) -> Result<u16> {
+    base.checked_add(offset)
+        .ok_or_else(|| anyhow::anyhow!("{label} overflow with port_offset={offset} (base={base})"))
+}
+
+fn append_suffix_to_path(path: &Path, suffix: &str) -> Result<PathBuf> {
+    let file_name = path.file_name().ok_or_else(|| {
+        anyhow::anyhow!(
+            "cannot append suffix to path without file name: {}",
+            path.display()
+        )
+    })?;
+    let mut updated = file_name.to_os_string();
+    updated.push(suffix);
+    Ok(path.with_file_name(updated))
 }
 
 async fn cleanup_deploy(
@@ -289,9 +388,9 @@ fn prepare_runtime_dirs(paths: &DeployRuntimePaths) -> Result<()> {
 
 fn start_backend(
     deploy_config: &DeployConfig,
+    server_config: &ServerConfig,
     runtime_config_path: &Path,
     runtime_config: &RuntimeConfig,
-    args: &DeployRunArgs,
 ) -> Result<Child> {
     let binary = std::env::current_exe().context("failed to resolve current executable path")?;
     let mut command = Command::new(&binary);
@@ -309,10 +408,10 @@ fn start_backend(
         .arg("server")
         .arg("--server-config")
         .arg(&deploy_config.api_server.api_server_config);
-    if let Some(api_port) = args.api_port {
-        command.arg("--api-port").arg(api_port.to_string());
-    }
-    for origin in &args.allowed_origins {
+    command
+        .arg("--api-port")
+        .arg(server_config.api_port.to_string());
+    for origin in &server_config.allowed_origins {
         command.arg("--allowed-origin").arg(origin);
     }
     command

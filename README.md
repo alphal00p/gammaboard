@@ -24,7 +24,8 @@ The dashboard shows runs, task output, nodes, performance, and logs.
    ```
 2. Build:
    ```bash
-   just build
+   cd dashboard && npm ci && npm run build
+   cargo build --profile dev-optim
    ```
 3. Start the backend API:
    ```bash
@@ -32,7 +33,7 @@ The dashboard shows runs, task output, nodes, performance, and logs.
    ```
 4. Start the frontend:
    ```bash
-   just serve-frontend
+   cd dashboard && npx serve build
    ```
 
 Default config split:
@@ -40,7 +41,7 @@ Default config split:
 - `ops/<env>/config/{runtime,server,deploy}.toml`: operator-facing environment profiles
 - `templates/{runs,tasks}/`: shared run/task templates served by the backend
 
-The frontend uses relative `/api` calls and does not require `.env`. The `just` recipes remain as thin wrappers, but the CLI flow above is the primary local workflow.
+The frontend uses relative `/api` calls and does not require `.env`.
 
 ## UBELIX Quickstart
 For UBELIX Slurm/Apptainer operation, use:
@@ -103,7 +104,7 @@ gammaboard db dump-sql
 
 These commands use `database.url` and `local_postgres` from the active runtime config, which defaults to `ops/local/config/runtime.toml`.
 Relative evaluator resource paths (for example `evaluator.kind = "gammaloop"` `state_folder`) resolve against `resources.roots` in order; absolute paths are used as-is.
-To reset local state, use `just db-reset` or run `gammaboard db delete --yes` then `gammaboard db start`.
+To reset local state, run `gammaboard db delete --yes` then `gammaboard db start`.
 `local_postgres.max_connections` controls the local Postgres server connection ceiling used by `gammaboard db start`.
 The checked-in local defaults also bias Postgres toward queue throughput: larger buffers/WAL limits, `wal_compression = true`, and `synchronous_commit = false`. That last setting trades crash durability of the most recent transactions for lower write latency, which is a good fit for the transient local batch queue but should be revisited for stricter durability needs.
 `gammaboard db start` always enables local query statistics by starting Postgres with `shared_preload_libraries=pg_stat_statements` and running `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` for the configured database.
@@ -160,17 +161,17 @@ gammaboard deploy run --deploy-config ops/local/config/deploy.toml
 ```
 
 Useful options:
-- `--frontend-port <PORT>` overrides the deploy profile's frontend/nginx listen port for that launch
+- `--port-offset <N>` adds `N` to deploy-profile frontend/API/Postgres ports and suffixes local Postgres state paths for isolated multi-instance launches
 - `--api-port <PORT>` overrides the private backend API port for that launch
 - global runtime overrides such as `--database-url`, `--postgres-data-dir`, `--postgres-socket-dir`, and `--postgres-log-file` let one machine run multiple isolated deploy instances
 
 Deploy profiles now derive the printed/open URLs from `frontend_http.frontend_port` plus `frontend_http.frontend_advertise_hosts`, instead of duplicating full URL strings in the config.
 
-The `just` wrappers build first, then `exec` the foreground supervisor:
+Example deploy invocations:
 ```bash
-just deploy local dev
-just deploy itphlies release
-just deploy itphlies release 8081
+gammaboard deploy run --deploy-config ops/local/config/deploy.toml
+gammaboard deploy run --deploy-config ops/local/config/deploy.toml --port-offset 1
+gammaboard deploy run --deploy-config ops/itphlies/config/deploy.toml --port-offset 2
 ```
 
 Deploy run:
@@ -180,22 +181,21 @@ Deploy run:
 - logs to the parent process stdout/stderr, so terminals, Slurm, or systemd own log collection
 - on `Ctrl-C`/`SIGTERM`, requests graceful shutdown for live nodes, waits for sampler-aggregator roles to persist state and clear, then tears down nginx, backend, and local Postgres
 
-`gammaboard deploy run ...` itself does not build. Use the `just deploy ...` wrapper when you want the frontend and backend built first.
+`gammaboard deploy run ...` itself does not build. Build frontend/backend first for your selected profile.
 
 ## ITPhlies Deployment
 Use this flow when you want both direct LAN access and the SSH tunnel option.
 
-1. On ITPhlies, from the repo root, run:
+1. On ITPhlies, from the repo root, build and run:
    ```bash
-   just deploy itphlies release
+   cd dashboard && npm ci && npm run build
+   cargo build --release
+   ./target/release/gammaboard --runtime-config ops/itphlies/config/runtime.toml deploy run --deploy-config ops/itphlies/config/deploy.toml
    ```
-   (From `ops/itphlies`, you can run `just --justfile justfile deploy`.)
-   This builds the frontend and release backend, then runs a foreground deploy supervisor for the backend, nginx, and local Postgres.
-   To run an additional isolated instance on the same machine, pass a frontend port:
+   To run an additional isolated instance on the same machine:
    ```bash
-   just deploy itphlies release 8081
+   ./target/release/gammaboard --runtime-config ops/itphlies/config/runtime.toml deploy run --deploy-config ops/itphlies/config/deploy.toml --port-offset 1
    ```
-   The wrapper derives the backend API port, Postgres port, database name, and Postgres state directories from that frontend port.
 2. On your laptop, open an SSH tunnel:
    ```bash
    ssh -N -L 8080:127.0.0.1:8080 ITPhliesTails
@@ -214,11 +214,11 @@ Config files used:
 - deploy: [ops/itphlies/config/deploy.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/itphlies/config/deploy.toml)
 
 Important:
-- The ITPhlies just wrapper adds the selected frontend port to the allowed browser origins for `localhost`, `127.0.0.1`, `itphlies`, and the Tailscale hostname.
+- Use `--port-offset` for multi-instance launches.
 - `ops/itphlies/config/deploy.toml` advertises `localhost` and `itphlies` as the operator-facing URLs for the default deploy profile.
 - If you want to access the UI via a raw LAN IP or another hostname, add that exact origin to `allowed_origins`.
 - Default ports are backend `127.0.0.1:4000`, Postgres `127.0.0.1:5433`, and nginx `0.0.0.0:8080`.
-- For `just deploy itphlies release <PORT>`, the wrapper uses API port `<PORT> + 10000`, Postgres port `<PORT> + 20000`, database `gammaboard_<PORT>`, and Postgres state dirs `.postgres-<PORT>` / `.postgres-socket-<PORT>`.
+- For local and ITPhlies profiles, `--port-offset <OFFSET>` applies that offset to configured frontend/API/Postgres ports and suffixes Postgres state dirs/log paths with `-<OFFSET>`.
 - ITPhlies deployment uses the release backend binary by default.
 
 ## Frontend API Routing
@@ -231,7 +231,7 @@ Important:
 - Local deploy setup:
   - server config: [ops/local/config/server.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config/server.toml)
   - deploy config: [ops/local/config/deploy.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config/deploy.toml)
-  - run with: `just deploy local dev`
+  - run with: `gammaboard deploy run --deploy-config ops/local/config/deploy.toml`
   - stop with: `Ctrl-C` in the deploy terminal
 
 ## Dashboard Auth
@@ -470,7 +470,7 @@ gammaboard node stop <NODE_NAME>
 
 ## Useful Local Commands
 ```bash
-just stop
-just live-test-basic
-just live-test-gammaloop
+gammaboard run pause -a
+gammaboard node stop -a
+cargo test -q --test full_stack_cli -- --ignored --nocapture --test-threads=1
 ```

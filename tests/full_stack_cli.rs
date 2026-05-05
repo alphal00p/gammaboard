@@ -1180,9 +1180,10 @@ fn temp_server_config(
 fn temp_deploy_config(
     frontend_build_dir: &std::path::Path,
     server_config: &std::path::Path,
+    frontend_port: u16,
 ) -> NamedTempFile {
     let contents = format!(
-        "[api_server]\napi_server_config = {:?}\n\n[static_site]\nfrontend_build_dir = {:?}\n\n[frontend_http]\nfrontend_host = \"127.0.0.1\"\nfrontend_port = 8080\nfrontend_server_name = \"_\"\nfrontend_advertise_hosts = [\"localhost\"]\naccess_log = false\n\n[database]\nensure_started = false\n\n[cleanup]\nsampler_drain_timeout_seconds = 5\nnode_stop_timeout_seconds = 5\npoll_interval_ms = 100\n",
+        "[api_server]\napi_server_config = {:?}\n\n[static_site]\nfrontend_build_dir = {:?}\n\n[frontend_http]\nfrontend_host = \"127.0.0.1\"\nfrontend_port = {frontend_port}\nfrontend_server_name = \"_\"\nfrontend_advertise_hosts = [\"localhost\"]\naccess_log = false\n\n[database]\nensure_started = false\n\n[cleanup]\nsampler_drain_timeout_seconds = 5\nnode_stop_timeout_seconds = 5\npoll_interval_ms = 100\n",
         server_config, frontend_build_dir,
     );
     let file = NamedTempFile::new().expect("create temp deploy config");
@@ -2090,24 +2091,29 @@ async fn full_stack_deploy_can_run_two_port_isolated_instances() -> anyhow::Resu
         true,
         (&password_hash, "test-session-secret"),
     );
-    let deploy_config = temp_deploy_config(frontend_build.path(), server_config.path());
     let frontend_port_a = unused_local_port()?;
     let frontend_port_b = unused_local_port()?;
+    let deploy_config_a =
+        temp_deploy_config(frontend_build.path(), server_config.path(), frontend_port_a);
+    let deploy_config_b =
+        temp_deploy_config(frontend_build.path(), server_config.path(), frontend_port_b);
     let api_port_a = unused_local_port()?;
     let api_port_b = unused_local_port()?;
 
-    for (label, database_url, frontend_port, api_port) in [
+    for (label, database_url, frontend_port, api_port, deploy_config_path) in [
         (
             "deploy-a",
             harness.db.database_url.as_str(),
             frontend_port_a,
             api_port_a,
+            deploy_config_a.path(),
         ),
         (
             "deploy-b",
             second_db.database_url.as_str(),
             frontend_port_b,
             api_port_b,
+            deploy_config_b.path(),
         ),
     ] {
         let mut child = TokioCommand::new(&harness.bin_path);
@@ -2119,9 +2125,7 @@ async fn full_stack_deploy_can_run_two_port_isolated_instances() -> anyhow::Resu
             .arg("deploy")
             .arg("run")
             .arg("--deploy-config")
-            .arg(deploy_config.path())
-            .arg("--frontend-port")
-            .arg(frontend_port.to_string())
+            .arg(deploy_config_path)
             .arg("--api-port")
             .arg(api_port.to_string())
             .arg("--allowed-origin")

@@ -81,7 +81,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - `gammaboard db ...` owns local Postgres lifecycle and uses active runtime config; `db start` enables `pg_stat_statements`.
 - `gammaboard deploy run` supervises nginx/backend/Postgres, launches the backend with the same active runtime config and matching CLI overrides, and shuts down via graceful node shutdown.
 - Direct `gammaboard server` exits immediately on `Ctrl-C`.
-- ITPhlies multi-instance deploy derives API/Postgres ports, DB name, Postgres state dirs, and nginx config/pid/temp paths from the selected frontend port; keep them instance-scoped.
+- Multi-instance deploys use a deploy `port_offset` that shifts configured frontend/API/Postgres ports and isolates Postgres state dirs/log paths per instance; keep nginx config/pid/temp paths instance-scoped by frontend port.
 
 ## Policy
 - No backward-compat requirement by default. Prefer direct current-schema migrations unless compatibility is explicitly requested.
