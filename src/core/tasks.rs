@@ -37,6 +37,7 @@ pub const DEFAULT_DISCRETE_HISTOGRAM_MAX_TOTAL_BINS: usize = 4096;
 #[serde(default, deny_unknown_fields)]
 pub struct DiscreteHistogramConfig {
     pub max_total_bins: Option<usize>,
+    pub normalization: DiscreteHistogramNormalization,
     pub items: Vec<NamedDiscreteHistogram>,
 }
 
@@ -44,6 +45,7 @@ impl Default for DiscreteHistogramConfig {
     fn default() -> Self {
         Self {
             max_total_bins: None,
+            normalization: DiscreteHistogramNormalization::Contribution,
             items: Vec::new(),
         }
     }
@@ -80,6 +82,14 @@ impl DiscreteHistogramConfig {
         self.max_total_bins
             .unwrap_or(DEFAULT_DISCRETE_HISTOGRAM_MAX_TOTAL_BINS)
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscreteHistogramNormalization {
+    #[default]
+    Contribution,
+    ConditionalMean,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

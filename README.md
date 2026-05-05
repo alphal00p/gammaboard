@@ -356,6 +356,7 @@ kind = "scalar"
 
 [task_queue.accumulator.discrete_histograms]
 max_total_bins = 4096
+normalization = "contribution" # default; use "conditional_mean" for per-bin means
 
 [[task_queue.accumulator.discrete_histograms.items]]
 name = "summed"

@@ -26,10 +26,11 @@ pub use run_spec::{
 };
 pub use tasks::{
     AccumulatorSourceSpec, DEFAULT_DISCRETE_HISTOGRAM_MAX_TOTAL_BINS, DiscreteHistogramConfig,
-    ImageDisplayMode, LineDisplayMode, LineRasterGeometry, Linspace, NamedDiscreteHistogram,
-    PlaneRasterGeometry, PlotAccumulatorKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState,
-    SampleErrorProjection, SampleStopCondition, SampleTaskConfig, SamplerAggregatorSourceSpec,
-    SamplerQueueTuning, SourceRefSpec, canonical_task_toml, generated_task_name,
+    DiscreteHistogramNormalization, ImageDisplayMode, LineDisplayMode, LineRasterGeometry,
+    Linspace, NamedDiscreteHistogram, PlaneRasterGeometry, PlotAccumulatorKind, RunTask,
+    RunTaskInput, RunTaskSpec, RunTaskState, SampleErrorProjection, SampleStopCondition,
+    SampleTaskConfig, SamplerAggregatorSourceSpec, SamplerQueueTuning, SourceRefSpec,
+    canonical_task_toml, generated_task_name,
 };
 pub use traits::{
     AggregationStore, ControlPlaneStore, EvaluatorWorkerStore, RunReadStore, RunSpecStore,

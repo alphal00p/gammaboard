@@ -295,7 +295,10 @@ impl AccumulatorState {
 #[cfg(test)]
 mod tests {
     use super::{AccumulatorState, ScalarAccumulatorState};
-    use crate::core::{AccumulatorConfig, DiscreteHistogramConfig, NamedDiscreteHistogram};
+    use crate::core::{
+        AccumulatorConfig, DiscreteHistogramConfig, DiscreteHistogramNormalization,
+        NamedDiscreteHistogram,
+    };
 
     #[test]
     fn persistent_json_roundtrips_without_enum_tag() {
@@ -318,6 +321,7 @@ mod tests {
         let config = AccumulatorConfig::Scalar {
             discrete_histograms: Some(DiscreteHistogramConfig {
                 max_total_bins: Some(16),
+                normalization: DiscreteHistogramNormalization::Contribution,
                 items: vec![NamedDiscreteHistogram {
                     name: "spin".to_string(),
                     hist_dims: vec![0],

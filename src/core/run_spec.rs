@@ -406,6 +406,7 @@ kind = "scalar"
 
 [discrete_histograms]
 max_total_bins = 16
+normalization = "conditional_mean"
 
 [[discrete_histograms.items]]
 name = "channel_for_spin_0"
@@ -422,6 +423,10 @@ fixed_dims = { "0" = 0 }
             panic!("expected scalar histogram config");
         };
         assert_eq!(histograms.items[0].fixed_dims.get("0"), Some(&0));
+        assert_eq!(
+            histograms.normalization,
+            crate::core::DiscreteHistogramNormalization::ConditionalMean
+        );
     }
 }
 

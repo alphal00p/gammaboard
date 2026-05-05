@@ -3,8 +3,8 @@ use super::{
     panel_projector, panel_projector_with_source,
 };
 use crate::core::{
-    AccumulatorConfig, DiscreteHistogramConfig, EngineError, NamedDiscreteHistogram,
-    SampleErrorProjection, SampleStopCondition,
+    AccumulatorConfig, DiscreteHistogramConfig, DiscreteHistogramNormalization, EngineError,
+    NamedDiscreteHistogram, SampleErrorProjection, SampleStopCondition,
 };
 use crate::evaluation::accumulator::{
     ComplexDiscreteBinStats, ComplexDiscreteProjection, ScalarDiscreteBinStats,
@@ -1358,6 +1358,7 @@ fn scalar_discrete_histogram_payload(
                     "bins": scalar_projected_bins(
                         bins,
                         item,
+                        config.normalization,
                         total_count,
                         config.max_total_bins_or_default()
                     )?,
@@ -1393,6 +1394,7 @@ fn complex_discrete_histogram_payload(
                         bins,
                         item,
                         projection,
+                        config.normalization,
                         total_count,
                         config.max_total_bins_or_default()
                     )?,
@@ -1409,6 +1411,7 @@ fn complex_discrete_histogram_payload(
 fn scalar_projected_bins(
     bins: &BTreeMap<String, ScalarDiscreteBinStats>,
     item: &NamedDiscreteHistogram,
+    normalization: DiscreteHistogramNormalization,
     total_count: i64,
     max_total_bins: usize,
 ) -> Result<Vec<JsonValue>, String> {
@@ -1434,8 +1437,8 @@ fn scalar_projected_bins(
             json!({
                 "start": index as f64,
                 "stop": index as f64 + 1.0,
-                "value": bin.contribution_mean(total_count),
-                "error": bin.contribution_stderr(total_count),
+                "value": scalar_bin_value(bin, normalization, total_count),
+                "error": scalar_bin_error(bin, normalization, total_count),
                 "label": histogram_key_label(&bin.discrete),
                 "bin_id": index as i64,
             })
@@ -1447,6 +1450,7 @@ fn complex_projected_bins(
     bins: &BTreeMap<String, ComplexDiscreteBinStats>,
     item: &NamedDiscreteHistogram,
     projection: ComplexDiscreteProjection,
+    normalization: DiscreteHistogramNormalization,
     total_count: i64,
     max_total_bins: usize,
 ) -> Result<Vec<JsonValue>, String> {
@@ -1472,13 +1476,63 @@ fn complex_projected_bins(
             json!({
                 "start": index as f64,
                 "stop": index as f64 + 1.0,
-                "value": bin.projected_contribution_mean(projection, total_count),
-                "error": bin.projected_contribution_stderr(projection, total_count),
+                "value": complex_bin_value(bin, projection, normalization, total_count),
+                "error": complex_bin_error(bin, projection, normalization, total_count),
                 "label": histogram_key_label(&bin.discrete),
                 "bin_id": index as i64,
             })
         })
         .collect())
+}
+
+fn scalar_bin_value(
+    bin: &ScalarDiscreteBinStats,
+    normalization: DiscreteHistogramNormalization,
+    total_count: i64,
+) -> f64 {
+    match normalization {
+        DiscreteHistogramNormalization::Contribution => bin.contribution_mean(total_count),
+        DiscreteHistogramNormalization::ConditionalMean => bin.mean(),
+    }
+}
+
+fn scalar_bin_error(
+    bin: &ScalarDiscreteBinStats,
+    normalization: DiscreteHistogramNormalization,
+    total_count: i64,
+) -> f64 {
+    match normalization {
+        DiscreteHistogramNormalization::Contribution => bin.contribution_stderr(total_count),
+        DiscreteHistogramNormalization::ConditionalMean => bin.stderr(),
+    }
+}
+
+fn complex_bin_value(
+    bin: &ComplexDiscreteBinStats,
+    projection: ComplexDiscreteProjection,
+    normalization: DiscreteHistogramNormalization,
+    total_count: i64,
+) -> f64 {
+    match normalization {
+        DiscreteHistogramNormalization::Contribution => {
+            bin.projected_contribution_mean(projection, total_count)
+        }
+        DiscreteHistogramNormalization::ConditionalMean => bin.projected_mean(projection),
+    }
+}
+
+fn complex_bin_error(
+    bin: &ComplexDiscreteBinStats,
+    projection: ComplexDiscreteProjection,
+    normalization: DiscreteHistogramNormalization,
+    total_count: i64,
+) -> f64 {
+    match normalization {
+        DiscreteHistogramNormalization::Contribution => {
+            bin.projected_contribution_stderr(projection, total_count)
+        }
+        DiscreteHistogramNormalization::ConditionalMean => bin.projected_stderr(projection),
+    }
 }
 
 fn matches_fixed_dims(discrete: &[i64], item: &NamedDiscreteHistogram) -> Result<bool, String> {
@@ -1703,5 +1757,71 @@ fn timing_segment(key: &str, label: &str, value_ms: f64, color: &str) -> TickBre
         label: label.to_string(),
         value_ms,
         color: color.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scalar_histogram_fixture() -> (
+        BTreeMap<String, ScalarDiscreteBinStats>,
+        NamedDiscreteHistogram,
+    ) {
+        let mut bins = BTreeMap::new();
+        bins.insert(
+            "0".to_string(),
+            ScalarDiscreteBinStats {
+                discrete: vec![0],
+                count: 2,
+                sum_weighted_value: 6.0,
+                sum_sq: 20.0,
+            },
+        );
+        bins.insert(
+            "1".to_string(),
+            ScalarDiscreteBinStats {
+                discrete: vec![1],
+                count: 1,
+                sum_weighted_value: -3.0,
+                sum_sq: 9.0,
+            },
+        );
+
+        let item = NamedDiscreteHistogram {
+            name: "channel".to_string(),
+            hist_dims: vec![0],
+            fixed_dims: BTreeMap::new(),
+        };
+
+        (bins, item)
+    }
+
+    fn projected_values(normalization: DiscreteHistogramNormalization) -> Vec<f64> {
+        let (bins, item) = scalar_histogram_fixture();
+        let projected =
+            scalar_projected_bins(&bins, &item, normalization, 3, 16).expect("project bins");
+        assert_eq!(projected.len(), 2);
+        let values = projected
+            .iter()
+            .map(|bin| bin["value"].as_f64().expect("numeric bin value"))
+            .collect::<Vec<_>>();
+        values
+    }
+
+    #[test]
+    fn scalar_discrete_histogram_contribution_bins_sum_to_integral() {
+        let values = projected_values(DiscreteHistogramNormalization::Contribution);
+        assert!((values[0] - 2.0).abs() < f64::EPSILON);
+        assert!((values[1] + 1.0).abs() < f64::EPSILON);
+        assert!((values.iter().sum::<f64>() - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn scalar_discrete_histogram_conditional_mean_bins_use_bin_counts() {
+        let values = projected_values(DiscreteHistogramNormalization::ConditionalMean);
+        assert!((values[0] - 3.0).abs() < f64::EPSILON);
+        assert!((values[1] + 3.0).abs() < f64::EPSILON);
+        assert!((values.iter().sum::<f64>()).abs() < f64::EPSILON);
     }
 }

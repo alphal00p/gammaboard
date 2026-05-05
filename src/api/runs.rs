@@ -693,6 +693,7 @@ kind = "scalar"
 
 [task_queue.accumulator.discrete_histograms]
 max_total_bins = 16
+normalization = "conditional_mean"
 
 [[task_queue.accumulator.discrete_histograms.items]]
 name = "channel_for_spin_0"
@@ -706,7 +707,11 @@ fixed_dims = { "0" = 0 }
         else {
             panic!("expected set_accumulator");
         };
-        assert!(accumulator.discrete_histograms().is_some());
+        let histograms = accumulator.discrete_histograms().expect("histogram config");
+        assert_eq!(
+            histograms.normalization,
+            crate::core::DiscreteHistogramNormalization::ConditionalMean
+        );
     }
 
     fn sample_task(accumulator: Option<crate::core::AccumulatorSourceSpec>) -> RunTaskInput {
