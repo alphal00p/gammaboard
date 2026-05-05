@@ -350,7 +350,22 @@ Sample task config example:
 [[task_queue]]
 name = "accumulator"
 kind = "set_accumulator"
-accumulator = "scalar"
+
+[task_queue.accumulator]
+kind = "scalar"
+
+[task_queue.accumulator.discrete_histograms]
+max_total_bins = 4096
+
+[[task_queue.accumulator.discrete_histograms.items]]
+name = "summed"
+hist_dims = [0]
+fixed_dims = {}
+
+[[task_queue.accumulator.discrete_histograms.items]]
+name = "channel_1"
+hist_dims = [1, 2]
+fixed_dims = { "0" = 0 }
 
 [[task_queue]]
 name = "warmup-sample" # optional; auto-generated when omitted

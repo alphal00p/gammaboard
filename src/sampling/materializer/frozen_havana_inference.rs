@@ -132,7 +132,7 @@ mod tests {
         let batch = materializer
             .materialize_batch(&crate::sampling::LatentBatch {
                 nr_samples: latent_batch.nr_samples,
-                accumulator: AccumulatorConfig::Scalar,
+                accumulator: AccumulatorConfig::scalar(),
                 payload: latent_batch.payload,
             })
             .expect("materialize batch");

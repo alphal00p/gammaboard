@@ -159,7 +159,7 @@ mod tests {
         let result = evaluator
             .eval_batch(
                 &batch,
-                &AccumulatorConfig::Scalar,
+                &AccumulatorConfig::scalar(),
                 EvalBatchOptions {
                     require_training_values: true,
                 },
@@ -190,7 +190,7 @@ mod tests {
         let result = evaluator
             .eval_batch(
                 &batch,
-                &AccumulatorConfig::Complex,
+                &AccumulatorConfig::complex(),
                 EvalBatchOptions {
                     require_training_values: true,
                 },

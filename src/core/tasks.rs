@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::{AccumulatorConfig, BatchTransformConfig, BuildError, SamplerAggregatorConfig};
 use crate::sampling::{RasterLineSamplerParams, RasterPlaneSamplerParams};
@@ -28,6 +29,120 @@ impl RunTaskState {
 #[serde(default)]
 pub struct SampleTaskConfig {
     pub batch_transforms: Option<Vec<BatchTransformConfig>>,
+}
+
+pub const DEFAULT_DISCRETE_HISTOGRAM_MAX_TOTAL_BINS: usize = 4096;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct DiscreteHistogramConfig {
+    pub max_total_bins: Option<usize>,
+    pub items: Vec<NamedDiscreteHistogram>,
+}
+
+impl Default for DiscreteHistogramConfig {
+    fn default() -> Self {
+        Self {
+            max_total_bins: None,
+            items: Vec::new(),
+        }
+    }
+}
+
+impl DiscreteHistogramConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(limit) = self.max_total_bins
+            && limit == 0
+        {
+            return Err(
+                "accumulator.discrete_histograms.max_total_bins must be > 0 when set".to_string(),
+            );
+        }
+        if self.items.is_empty() {
+            return Err(
+                "accumulator.discrete_histograms.items must contain at least one entry".to_string(),
+            );
+        }
+        let mut names = BTreeSet::new();
+        for item in &self.items {
+            item.validate()?;
+            if !names.insert(item.name.clone()) {
+                return Err(format!(
+                    "accumulator.discrete_histograms.items contains duplicate name '{}'",
+                    item.name
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn max_total_bins_or_default(&self) -> usize {
+        self.max_total_bins
+            .unwrap_or(DEFAULT_DISCRETE_HISTOGRAM_MAX_TOTAL_BINS)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct NamedDiscreteHistogram {
+    pub name: String,
+    pub hist_dims: Vec<usize>,
+    pub fixed_dims: BTreeMap<String, i64>,
+}
+
+impl Default for NamedDiscreteHistogram {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            hist_dims: Vec::new(),
+            fixed_dims: BTreeMap::new(),
+        }
+    }
+}
+
+impl NamedDiscreteHistogram {
+    pub fn validate(&self) -> Result<(), String> {
+        let trimmed = self.name.trim();
+        if trimmed.is_empty() {
+            return Err("accumulator.discrete_histograms.items.name must be non-empty".to_string());
+        }
+        if trimmed != self.name {
+            return Err(
+                "accumulator.discrete_histograms.items.name cannot have leading/trailing whitespace"
+                    .to_string(),
+            );
+        }
+        if self.hist_dims.is_empty() {
+            return Err(
+                "accumulator.discrete_histograms.items.hist_dims must contain at least one dimension"
+                    .to_string(),
+            );
+        }
+        let mut seen = BTreeSet::new();
+        for dim in &self.hist_dims {
+            if !seen.insert(*dim) {
+                return Err(format!(
+                    "accumulator.discrete_histograms.items '{}' repeats hist_dims entry {}",
+                    self.name, dim
+                ));
+            }
+        }
+        for raw_dim in self.fixed_dims.keys() {
+            let dim = raw_dim.parse::<usize>().map_err(|_| {
+                format!(
+                    "accumulator.discrete_histograms.items '{}' fixed_dims key '{}' is not a non-negative integer dimension index",
+                    self.name, raw_dim
+                )
+            })?;
+            if seen.contains(&dim) {
+                return Err(format!(
+                    "accumulator.discrete_histograms.items '{}' uses dimension {} in both hist_dims and fixed_dims",
+                    self.name, dim
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -264,7 +379,7 @@ impl AccumulatorSourceSpec {
                 }
             }
             Self::FromName { from_name } => validate_source_name("accumulator", from_name),
-            Self::Config { .. } => Ok(()),
+            Self::Config { config } => config.validate(),
         }
     }
 }
@@ -321,7 +436,7 @@ pub enum RunTaskSpec {
 impl RunTaskSpec {
     pub fn validate(&self) -> Result<(), String> {
         match self {
-            Self::SetAccumulator { .. } => Ok(()),
+            Self::SetAccumulator { accumulator } => accumulator.validate(),
             Self::Sample {
                 stop_condition,
                 sampler_aggregator:
@@ -541,7 +656,7 @@ impl RunTaskSpec {
 
     pub fn new_accumulator_config(&self) -> Result<Option<AccumulatorConfig>, BuildError> {
         match self {
-            Self::SetAccumulator { accumulator } => Ok(Some(*accumulator)),
+            Self::SetAccumulator { accumulator } => Ok(Some(accumulator.clone())),
             Self::Sample {
                 accumulator: Some(AccumulatorSourceSpec::Config { config }),
                 ..
@@ -936,13 +1051,13 @@ mod tests {
     #[test]
     fn set_accumulator_task_requests_fresh_accumulator_state() {
         let task = RunTaskSpec::SetAccumulator {
-            accumulator: AccumulatorConfig::Complex,
+            accumulator: AccumulatorConfig::complex(),
         };
 
         assert_eq!(task.kind_str(), "set_accumulator");
         assert_eq!(
             task.new_accumulator_config().unwrap(),
-            Some(AccumulatorConfig::Complex)
+            Some(AccumulatorConfig::complex())
         );
         assert_eq!(task.sample_stop_condition(), None);
     }

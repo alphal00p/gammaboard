@@ -80,23 +80,27 @@ const TablePanel = ({
   const uploadInputRef = useRef(null);
   const columns = asArray(state?.columns);
   const rows = asArray(state?.rows);
-  const isGammaLoopBundle = state?.panel_id === "gammaloop_histogram_bundle";
+  const payload = state?.payload;
+  const isHistogramBundle = payload?.histograms && typeof payload.histograms === "object" && !Array.isArray(payload.histograms);
+  const supportsBundleFileActions = state?.panel_id === "gammaloop_histogram_bundle";
   if (columns.length === 0 || rows.length === 0) {
-    if (!isGammaLoopBundle) return null;
+    if (!isHistogramBundle) return null;
     return (
       <Card variant="outlined">
         <CardContent>
           <Typography variant="subtitle1" sx={{ mb: 1 }}>
             {title}
           </Typography>
-          <BundleUploadControls
-            state={state}
-            uploadedBundles={uploadedBundles}
-            bundleUploadError={bundleUploadError}
-            onUploadBundle={onUploadBundle}
-            onRemoveBundle={onRemoveBundle}
-            inputRef={uploadInputRef}
-          />
+          {supportsBundleFileActions ? (
+            <BundleUploadControls
+              state={state}
+              uploadedBundles={uploadedBundles}
+              bundleUploadError={bundleUploadError}
+              onUploadBundle={onUploadBundle}
+              onRemoveBundle={onRemoveBundle}
+              inputRef={uploadInputRef}
+            />
+          ) : null}
           <Alert severity="info">Bundle is empty.</Alert>
         </CardContent>
       </Card>
@@ -119,13 +123,10 @@ const TablePanel = ({
   const rowKeys = asArray(state?.row_keys).map((value) => String(value ?? ""));
   const centralValueIndex = columnKeys.findIndex((column) => column === "central value");
   const errorIndex = columnKeys.findIndex((column) => column === "dy" || column === "error");
-  const payload = state?.payload;
   const selectableRows = rowKeys.length === rows.length;
-  const isDownloadableHistogramBundle =
-    payload?.histograms && typeof payload.histograms === "object" && !Array.isArray(payload.histograms);
 
   const handleDownload = async (format) => {
-    if (!isDownloadableHistogramBundle) return;
+    if (!isHistogramBundle) return;
     try {
       const exported = await requestHistogramBundleExport(payload, format);
       const filename =
@@ -163,7 +164,7 @@ const TablePanel = ({
       <CardContent>
         <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, mb: 2 }}>
           <Typography variant="subtitle1">{title}</Typography>
-          {isDownloadableHistogramBundle ? (
+          {supportsBundleFileActions ? (
             <Stack direction="row" spacing={1} alignItems="center">
               <Button size="small" variant="outlined" onClick={() => handleDownload("json")}>
                 JSON
@@ -174,7 +175,7 @@ const TablePanel = ({
             </Stack>
           ) : null}
         </Box>
-        {isGammaLoopBundle ? (
+        {supportsBundleFileActions ? (
           <BundleUploadControls
             state={state}
             uploadedBundles={uploadedBundles}
@@ -204,7 +205,7 @@ const TablePanel = ({
                     selectableRows &&
                     String(rowKeys[rowIndex] ?? "") ===
                       String(
-                        isGammaLoopBundle
+                        isHistogramBundle
                           ? readHistogramBundleSelectedValue(state?.selected_value)
                           : state?.selected_value,
                       )
@@ -215,7 +216,7 @@ const TablePanel = ({
                       ? () =>
                           state?.onValueChange?.(
                             state?.panel_id,
-                            isGammaLoopBundle
+                            isHistogramBundle
                               ? writeHistogramBundlePanelValue(state?.selected_value, {
                                   selectedHistogram: rowKeys[rowIndex],
                                 })

@@ -1,4 +1,5 @@
 mod complex;
+mod discrete_bins;
 mod empty;
 mod full;
 mod gammaloop;
@@ -11,6 +12,9 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value as JsonValue;
 
 pub use self::complex::ComplexAccumulatorState;
+pub use self::discrete_bins::{
+    ComplexDiscreteBinStats, ComplexDiscreteProjection, ScalarDiscreteBinStats, discrete_bin_key,
+};
 pub use self::empty::EmptyAccumulatorState;
 pub use self::full::{
     ComplexValue, FullAccumulatorProgress, FullComplexAccumulatorState, FullScalarAccumulatorState,
@@ -88,8 +92,8 @@ pub enum SemanticAccumulatorKind {
 impl SemanticAccumulatorKind {
     pub fn aggregate_accumulator_config(self) -> AccumulatorConfig {
         match self {
-            Self::Scalar => AccumulatorConfig::Scalar,
-            Self::Complex => AccumulatorConfig::Complex,
+            Self::Scalar => AccumulatorConfig::scalar(),
+            Self::Complex => AccumulatorConfig::complex(),
         }
     }
 
@@ -137,8 +141,16 @@ impl AccumulatorState {
     pub fn from_config(config: &AccumulatorConfig) -> Self {
         match config {
             AccumulatorConfig::Empty => Self::empty(),
-            AccumulatorConfig::Scalar => Self::empty_scalar(),
-            AccumulatorConfig::Complex => Self::empty_complex(),
+            AccumulatorConfig::Scalar {
+                discrete_histograms,
+            } => Self::Scalar(ScalarAccumulatorState::from_config(
+                discrete_histograms.clone(),
+            )),
+            AccumulatorConfig::Complex {
+                discrete_histograms,
+            } => Self::Complex(ComplexAccumulatorState::from_config(
+                discrete_histograms.clone(),
+            )),
             AccumulatorConfig::Gammaloop => Self::empty_gammaloop(),
             AccumulatorConfig::FullScalar => Self::empty_full_scalar(),
             AccumulatorConfig::FullComplex => Self::empty_full_complex(),
@@ -183,8 +195,12 @@ impl AccumulatorState {
     pub fn config(&self) -> AccumulatorConfig {
         match self {
             Self::Empty(_) => AccumulatorConfig::Empty,
-            Self::Scalar(_) => AccumulatorConfig::Scalar,
-            Self::Complex(_) => AccumulatorConfig::Complex,
+            Self::Scalar(state) => AccumulatorConfig::Scalar {
+                discrete_histograms: state.discrete_histograms.clone(),
+            },
+            Self::Complex(state) => AccumulatorConfig::Complex {
+                discrete_histograms: state.discrete_histograms.clone(),
+            },
             Self::Gammaloop(_) => AccumulatorConfig::Gammaloop,
             Self::FullScalar(_) => AccumulatorConfig::FullScalar,
             Self::FullComplex(_) => AccumulatorConfig::FullComplex,
@@ -279,6 +295,7 @@ impl AccumulatorState {
 #[cfg(test)]
 mod tests {
     use super::{AccumulatorState, ScalarAccumulatorState};
+    use crate::core::{AccumulatorConfig, DiscreteHistogramConfig, NamedDiscreteHistogram};
 
     #[test]
     fn persistent_json_roundtrips_without_enum_tag() {
@@ -294,5 +311,23 @@ mod tests {
         .expect("persistent snapshot");
 
         assert_eq!(snapshot.get("kind"), None);
+    }
+
+    #[test]
+    fn scalar_state_config_preserves_discrete_histograms() {
+        let config = AccumulatorConfig::Scalar {
+            discrete_histograms: Some(DiscreteHistogramConfig {
+                max_total_bins: Some(16),
+                items: vec![NamedDiscreteHistogram {
+                    name: "spin".to_string(),
+                    hist_dims: vec![0],
+                    fixed_dims: Default::default(),
+                }],
+            }),
+        };
+
+        let state = AccumulatorState::from_config(&config);
+
+        assert_eq!(state.config(), config);
     }
 }

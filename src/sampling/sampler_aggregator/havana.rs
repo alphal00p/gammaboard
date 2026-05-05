@@ -597,7 +597,7 @@ impl SamplerAggregator for HavanaInferenceSampler {
         self.samples_produced = self.samples_produced.saturating_add(nr_samples);
         Ok(LatentBatchSpec {
             nr_samples,
-            accumulator: crate::core::AccumulatorConfig::Scalar,
+            accumulator: crate::core::AccumulatorConfig::scalar(),
             payload: LatentBatchPayload::HavanaInference {
                 rng_state: batch_rng_state,
             },
@@ -950,7 +950,7 @@ mod tests {
                 let batch = materializer
                     .materialize_batch(&LatentBatch {
                         nr_samples: latent.nr_samples,
-                        accumulator: AccumulatorConfig::Scalar,
+                        accumulator: AccumulatorConfig::scalar(),
                         payload: latent.payload,
                     })
                     .expect("materialize inference batch");

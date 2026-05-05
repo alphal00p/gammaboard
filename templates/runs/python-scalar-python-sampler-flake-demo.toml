@@ -13,7 +13,27 @@ init_args = { scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }
 [[task_queue]]
 name = "accumulator"
 kind = "set_accumulator"
-accumulator = "scalar"
+
+[task_queue.accumulator]
+kind = "scalar"
+
+[task_queue.accumulator.discrete_histograms]
+max_total_bins = 16
+
+[[task_queue.accumulator.discrete_histograms.items]]
+name = "spin"
+hist_dims = [0]
+fixed_dims = {}
+
+[[task_queue.accumulator.discrete_histograms.items]]
+name = "channel_for_spin_0"
+hist_dims = [1]
+fixed_dims = { "0" = 0 }
+
+[[task_queue.accumulator.discrete_histograms.items]]
+name = "channel_for_spin_1"
+hist_dims = [1]
+fixed_dims = { "0" = 1 }
 
 [[task_queue]]
 name = "sample-a"

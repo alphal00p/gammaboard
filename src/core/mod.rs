@@ -25,7 +25,8 @@ pub use run_spec::{
     SamplerAggregatorConfig,
 };
 pub use tasks::{
-    AccumulatorSourceSpec, ImageDisplayMode, LineDisplayMode, LineRasterGeometry, Linspace,
+    AccumulatorSourceSpec, DEFAULT_DISCRETE_HISTOGRAM_MAX_TOTAL_BINS, DiscreteHistogramConfig,
+    ImageDisplayMode, LineDisplayMode, LineRasterGeometry, Linspace, NamedDiscreteHistogram,
     PlaneRasterGeometry, PlotAccumulatorKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState,
     SampleErrorProjection, SampleStopCondition, SampleTaskConfig, SamplerAggregatorSourceSpec,
     SamplerQueueTuning, SourceRefSpec, canonical_task_toml, generated_task_name,

@@ -1,10 +1,16 @@
 use super::{Accumulator, IngestComplex};
+use crate::core::DiscreteHistogramConfig;
 use crate::evaluation::batch::Point;
 use num::complex::Complex64;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+use super::discrete_bins::{ComplexDiscreteBinStats, upsert_complex_discrete_bin};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ComplexAccumulatorState {
+    #[serde(default)]
+    pub discrete_histograms: Option<DiscreteHistogramConfig>,
     pub count: i64,
     pub real_sum: f64,
     pub imag_sum: f64,
@@ -31,9 +37,20 @@ pub struct ComplexAccumulatorState {
     pub max_imag_weighted_positive_point: Option<Point>,
     #[serde(default)]
     pub max_imag_weighted_negative_point: Option<Point>,
+    #[serde(default)]
+    pub discrete_bins: BTreeMap<String, ComplexDiscreteBinStats>,
+    #[serde(default)]
+    pub discrete_bins_overflow_count: usize,
 }
 
 impl ComplexAccumulatorState {
+    pub fn from_config(discrete_histograms: Option<DiscreteHistogramConfig>) -> Self {
+        Self {
+            discrete_histograms,
+            ..Self::default()
+        }
+    }
+
     pub fn add_sample(&mut self, value: Complex64, point: &Point) {
         let weight = point.total_weight().abs();
         let weighted_real = value.re * weight;
@@ -63,6 +80,16 @@ impl ComplexAccumulatorState {
         self.weight_sum += weight;
         self.update_real_extrema(weighted_real, point);
         self.update_imag_extrema(weighted_imag, point);
+        if !point.discrete.is_empty() {
+            upsert_complex_discrete_bin(
+                &mut self.discrete_bins,
+                &mut self.discrete_bins_overflow_count,
+                &point.discrete,
+                weighted_real,
+                weighted_imag,
+                weighted_abs,
+            );
+        }
     }
 
     pub fn real_mean(&self) -> f64 {
@@ -207,6 +234,16 @@ impl Accumulator for ComplexAccumulatorState {
             other.max_imag_weighted_negative,
             other.max_imag_weighted_negative_point,
         );
+        for (key, candidate) in other.discrete_bins {
+            self.discrete_bins
+                .entry(key)
+                .and_modify(|current| current.merge_in_place(candidate.clone()))
+                .or_insert(candidate);
+        }
+        self.discrete_bins_overflow_count += other.discrete_bins_overflow_count;
+        if self.discrete_histograms.is_none() {
+            self.discrete_histograms = other.discrete_histograms;
+        }
     }
 
     fn get_persistent(&self) -> Self::Persistent {

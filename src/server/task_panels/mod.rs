@@ -217,7 +217,7 @@ impl RunTaskSpec {
         &self,
         effective_accumulator_config: Option<AccumulatorConfig>,
     ) -> Result<Vec<TaskPanelProjector>, EngineError> {
-        let mut projectors = vec![task_summary_projector(effective_accumulator_config)];
+        let mut projectors = vec![task_summary_projector(effective_accumulator_config.clone())];
         projectors.extend(match self {
             Self::SetAccumulator { .. } => Vec::new(),
             Self::Sample { .. } => effective_accumulator_config
@@ -260,7 +260,7 @@ fn task_summary_projector(
         move |ctx| {
             Ok(Some(key_value_panel(
                 "task_summary",
-                build_task_summary_entries(ctx, effective_accumulator_config),
+                build_task_summary_entries(ctx, effective_accumulator_config.clone()),
             )))
         },
         |_ctx| Ok(None),
@@ -288,7 +288,7 @@ fn build_task_summary_entries(
             entries.push(key_value(
                 "accumulator",
                 "Accumulator",
-                accumulator_label(*accumulator),
+                accumulator_label(accumulator),
             ));
         }
         RunTaskSpec::Sample {
@@ -506,9 +506,10 @@ fn sample_accumulator_label(
     effective: Option<AccumulatorConfig>,
 ) -> String {
     match source {
-        Some(AccumulatorSourceSpec::Config { config }) => accumulator_label(*config).to_string(),
+        Some(AccumulatorSourceSpec::Config { config }) => accumulator_label(config).to_string(),
         Some(AccumulatorSourceSpec::FromName { from_name }) => format!("from {from_name}"),
         Some(AccumulatorSourceSpec::Latest(_)) | None => effective
+            .as_ref()
             .map(accumulator_label)
             .unwrap_or("latest")
             .to_string(),
@@ -567,15 +568,8 @@ fn sampler_config_label(config: &SamplerAggregatorConfig) -> &'static str {
     }
 }
 
-fn accumulator_label(config: AccumulatorConfig) -> &'static str {
-    match config {
-        AccumulatorConfig::Empty => "empty",
-        AccumulatorConfig::Scalar => "scalar",
-        AccumulatorConfig::Complex => "complex",
-        AccumulatorConfig::Gammaloop => "gammaloop",
-        AccumulatorConfig::FullScalar => "full_scalar",
-        AccumulatorConfig::FullComplex => "full_complex",
-    }
+fn accumulator_label(config: &AccumulatorConfig) -> &'static str {
+    config.kind_str()
 }
 
 fn plot_accumulator_label(kind: crate::core::PlotAccumulatorKind) -> &'static str {
@@ -975,7 +969,7 @@ mod tests {
     #[test]
     fn inherited_complex_sample_uses_imag_panel() {
         let task = inherited_complex_sample_task();
-        let descriptors = TaskPanelSource::new(&task, Some(AccumulatorConfig::Complex))
+        let descriptors = TaskPanelSource::new(&task, Some(AccumulatorConfig::complex()))
             .expect("panel source")
             .panel_specs();
         assert!(
@@ -1051,7 +1045,7 @@ mod tests {
         let run_task = run_task(task.clone());
         let accumulator = complex_observable();
         let source =
-            TaskPanelSource::new(&task, Some(AccumulatorConfig::Complex)).expect("panel source");
+            TaskPanelSource::new(&task, Some(AccumulatorConfig::complex())).expect("panel source");
 
         let response = source
             .build_response(

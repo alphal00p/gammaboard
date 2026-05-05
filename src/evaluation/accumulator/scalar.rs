@@ -1,9 +1,15 @@
 use super::{Accumulator, IngestScalar};
+use crate::core::DiscreteHistogramConfig;
 use crate::evaluation::batch::Point;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+use super::discrete_bins::{ScalarDiscreteBinStats, upsert_scalar_discrete_bin};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ScalarAccumulatorState {
+    #[serde(default)]
+    pub discrete_histograms: Option<DiscreteHistogramConfig>,
     pub count: i64,
     pub sum_weighted_value: f64,
     pub sum_abs: f64,
@@ -18,9 +24,20 @@ pub struct ScalarAccumulatorState {
     pub max_weighted_positive_point: Option<Point>,
     #[serde(default)]
     pub max_weighted_negative_point: Option<Point>,
+    #[serde(default)]
+    pub discrete_bins: BTreeMap<String, ScalarDiscreteBinStats>,
+    #[serde(default)]
+    pub discrete_bins_overflow_count: usize,
 }
 
 impl ScalarAccumulatorState {
+    pub fn from_config(discrete_histograms: Option<DiscreteHistogramConfig>) -> Self {
+        Self {
+            discrete_histograms,
+            ..Self::default()
+        }
+    }
+
     pub fn add_sample(&mut self, value: f64, point: &Point) {
         let weight = point.total_weight().abs();
         let weighted_value = value * weight;
@@ -34,6 +51,14 @@ impl ScalarAccumulatorState {
         self.sum_abs += weighted_value.abs();
         self.sum_sq += weighted_sq;
         self.update_extrema(weighted_value, point);
+        if !point.discrete.is_empty() {
+            upsert_scalar_discrete_bin(
+                &mut self.discrete_bins,
+                &mut self.discrete_bins_overflow_count,
+                &point.discrete,
+                weighted_value,
+            );
+        }
     }
 
     pub fn mean(&self) -> f64 {
@@ -128,6 +153,16 @@ impl Accumulator for ScalarAccumulatorState {
             other.max_weighted_negative,
             other.max_weighted_negative_point,
         );
+        for (key, candidate) in other.discrete_bins {
+            self.discrete_bins
+                .entry(key)
+                .and_modify(|current| current.merge_in_place(candidate.clone()))
+                .or_insert(candidate);
+        }
+        self.discrete_bins_overflow_count += other.discrete_bins_overflow_count;
+        if self.discrete_histograms.is_none() {
+            self.discrete_histograms = other.discrete_histograms;
+        }
     }
 
     fn get_persistent(&self) -> Self::Persistent {

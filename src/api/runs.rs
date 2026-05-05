@@ -488,14 +488,15 @@ impl TaskPreflightContext {
             )));
         }
         let effective_accumulator = self.resolve_effective_accumulator(task)?;
-        if let Some(config) = effective_accumulator {
+        if let Some(config) = effective_accumulator.as_ref() {
             self.validate_accumulator_against_evaluator(&config)?;
         }
         if task.task.is_sourceable() {
             self.prior_sourceable_names.insert(task_name.clone());
         }
         if let Some(config) = effective_accumulator {
-            self.effective_accumulator_by_name.insert(task_name, config);
+            self.effective_accumulator_by_name
+                .insert(task_name, config.clone());
             self.current_accumulator = Some(config);
         }
         self.next_sequence += 1;
@@ -510,7 +511,7 @@ impl TaskPreflightContext {
         let effective_accumulator = self.resolve_effective_accumulator(&input)?;
         if let Some(config) = effective_accumulator {
             self.effective_accumulator_by_name
-                .insert(task.name.clone(), config);
+                .insert(task.name.clone(), config.clone());
             self.current_accumulator = Some(config);
         }
         Ok(())
@@ -530,7 +531,7 @@ impl TaskPreflightContext {
 
         match &task.task {
             crate::core::RunTaskSpec::Sample { .. } => match task.task.sample_accumulator_source() {
-                Some(SourceRefSpec::Latest) => self.current_accumulator.ok_or_else(|| {
+                Some(SourceRefSpec::Latest) => self.current_accumulator.clone().ok_or_else(|| {
                     ApiError::BadRequest(
                         "sample task has no effective accumulator configuration; set one explicitly first or add a prior accumulator-producing task".to_string(),
                     )
@@ -538,7 +539,7 @@ impl TaskPreflightContext {
                 Some(SourceRefSpec::FromName(source_name)) => self
                     .effective_accumulator_by_name
                     .get(&source_name)
-                    .copied()
+                    .cloned()
                     .ok_or_else(|| {
                         ApiError::BadRequest(format!(
                             "sample task references accumulator source task '{}' but no effective accumulator is available from it",
@@ -672,6 +673,42 @@ mod tests {
         }
     }
 
+    #[test]
+    fn parse_run_add_accepts_accumulator_discrete_histograms() {
+        let config = parse_run_add_config_toml(
+            r#"
+name = "histogram-config"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 2
+
+[[task_queue]]
+name = "accumulator"
+kind = "set_accumulator"
+
+[task_queue.accumulator]
+kind = "scalar"
+
+[task_queue.accumulator.discrete_histograms]
+max_total_bins = 16
+
+[[task_queue.accumulator.discrete_histograms.items]]
+name = "channel_for_spin_0"
+hist_dims = [1]
+fixed_dims = { "0" = 0 }
+"#,
+        )
+        .expect("run config");
+
+        let RunTaskSpec::SetAccumulator { accumulator } = &config.task_queue.unwrap()[0].task
+        else {
+            panic!("expected set_accumulator");
+        };
+        assert!(accumulator.discrete_histograms().is_some());
+    }
+
     fn sample_task(accumulator: Option<crate::core::AccumulatorSourceSpec>) -> RunTaskInput {
         RunTaskInput {
             name: None,
@@ -717,7 +754,7 @@ mod tests {
                 RunTaskInput {
                     name: Some("prep".to_string()),
                     task: RunTaskSpec::SetAccumulator {
-                        accumulator: AccumulatorConfig::Scalar,
+                        accumulator: AccumulatorConfig::scalar(),
                     },
                 },
                 sample_task(None),

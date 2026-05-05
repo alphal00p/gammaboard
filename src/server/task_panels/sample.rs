@@ -2,7 +2,13 @@ use super::{
     TaskPanelContext, TaskPanelCurrentSourcePolicy, TaskPanelHistoryContext, TaskPanelProjector,
     panel_projector, panel_projector_with_source,
 };
-use crate::core::{AccumulatorConfig, EngineError, SampleErrorProjection, SampleStopCondition};
+use crate::core::{
+    AccumulatorConfig, DiscreteHistogramConfig, EngineError, NamedDiscreteHistogram,
+    SampleErrorProjection, SampleStopCondition,
+};
+use crate::evaluation::accumulator::{
+    ComplexDiscreteBinStats, ComplexDiscreteProjection, ScalarDiscreteBinStats,
+};
 use crate::evaluation::{
     Accumulator, AccumulatorState, GammaLoopDiagnostics, Point, SemanticAccumulatorKind,
 };
@@ -15,6 +21,7 @@ use crate::server::panels::{
 use gammalooprs::observables::{ObservablePhase, ObservableValueTransform};
 use serde_json::Value as JsonValue;
 use serde_json::json;
+use std::collections::BTreeMap;
 
 pub(super) fn projectors(
     effective_accumulator_config: AccumulatorConfig,
@@ -27,13 +34,15 @@ pub(super) fn projectors(
     ];
     if matches!(
         accumulator_config,
-        AccumulatorConfig::Complex | AccumulatorConfig::Gammaloop
+        AccumulatorConfig::Complex { .. } | AccumulatorConfig::Gammaloop
     ) {
         projectors.push(imag_estimate_history_projector(&accumulator_config));
     }
     if matches!(
         accumulator_config,
-        AccumulatorConfig::Scalar | AccumulatorConfig::Complex | AccumulatorConfig::Gammaloop
+        AccumulatorConfig::Scalar { .. }
+            | AccumulatorConfig::Complex { .. }
+            | AccumulatorConfig::Gammaloop
     ) {
         projectors.push(max_weight_summary_projector(&accumulator_config));
         projectors.push(max_weight_points_projector(&accumulator_config));
@@ -43,12 +52,22 @@ pub(super) fn projectors(
         projectors.push(gammaloop_histogram_bundle_projector());
         projectors.push(gammaloop_evaluation_timing_projector());
         projectors.push(gammaloop_evaluation_diagnostics_projector());
+    } else if let Some(histogram_config) = accumulator_config.discrete_histograms().cloned()
+        && matches!(
+            accumulator_config,
+            AccumulatorConfig::Scalar { .. } | AccumulatorConfig::Complex { .. }
+        )
+    {
+        projectors.push(discrete_histogram_bundle_projector(
+            accumulator_config,
+            histogram_config,
+        ));
     }
     projectors
 }
 
 fn max_weight_summary_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
-    let accumulator_config = *accumulator_config;
+    let accumulator_config = accumulator_config.clone();
     panel_projector_with_source(
         with_panel_width(
             panel_spec(
@@ -68,7 +87,7 @@ fn max_weight_summary_projector(accumulator_config: &AccumulatorConfig) -> TaskP
 }
 
 fn max_weight_points_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
-    let accumulator_config = *accumulator_config;
+    let accumulator_config = accumulator_config.clone();
     panel_projector_with_source(
         with_panel_width(
             panel_spec(
@@ -88,7 +107,7 @@ fn max_weight_points_projector(accumulator_config: &AccumulatorConfig) -> TaskPa
 }
 
 fn sample_progress_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
-    let accumulator_config = *accumulator_config;
+    let accumulator_config = accumulator_config.clone();
     panel_projector_with_source(
         with_panel_width(
             panel_spec(
@@ -119,11 +138,11 @@ fn sample_progress_projector(accumulator_config: &AccumulatorConfig) -> TaskPane
 }
 
 fn real_estimate_history_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
-    let current_config = *accumulator_config;
-    let history_config = *accumulator_config;
+    let current_config = accumulator_config.clone();
+    let history_config = accumulator_config.clone();
     let width = if matches!(
         accumulator_config,
-        AccumulatorConfig::Complex | AccumulatorConfig::Gammaloop
+        AccumulatorConfig::Complex { .. } | AccumulatorConfig::Gammaloop
     ) {
         PanelWidth::Half
     } else {
@@ -154,8 +173,8 @@ fn real_estimate_history_projector(accumulator_config: &AccumulatorConfig) -> Ta
 }
 
 fn imag_estimate_history_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
-    let current_config = *accumulator_config;
-    let history_config = *accumulator_config;
+    let current_config = accumulator_config.clone();
+    let history_config = accumulator_config.clone();
     panel_projector_with_source(
         with_panel_width(
             panel_spec(
@@ -184,7 +203,7 @@ fn rsd_history_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelPro
     persisted_first_history_projector(
         "abs_signal_to_noise_history",
         "RSD",
-        *accumulator_config,
+        accumulator_config.clone(),
         |accumulator| Some(rsd_history_panel(accumulator)),
     )
 }
@@ -198,7 +217,7 @@ fn persisted_first_history_projector<F>(
 where
     F: Fn(AccumulatorState) -> Option<PanelState> + Copy + Send + Sync + 'static,
 {
-    let current_config = accumulator_config;
+    let current_config = accumulator_config.clone();
     let history_config = accumulator_config;
     panel_projector_with_source(
         with_panel_width(
@@ -217,7 +236,7 @@ where
 }
 
 fn estimate_summary_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
-    let accumulator_config = *accumulator_config;
+    let accumulator_config = accumulator_config.clone();
     panel_projector_with_source(
         with_panel_width(
             panel_spec(
@@ -257,6 +276,43 @@ fn gammaloop_histogram_bundle_projector() -> TaskPanelProjector {
             Ok(
                 decode_history_observable(ctx, &AccumulatorConfig::Gammaloop)?
                     .and_then(gammaloop_histogram_bundle_panel),
+            )
+        },
+    )
+}
+
+fn discrete_histogram_bundle_projector(
+    accumulator_config: AccumulatorConfig,
+    histogram_config: DiscreteHistogramConfig,
+) -> TaskPanelProjector {
+    let current_accumulator_config = accumulator_config.clone();
+    let history_accumulator_config = accumulator_config;
+    let current_histogram_config = histogram_config.clone();
+    let history_histogram_config = histogram_config;
+    panel_projector(
+        with_panel_width(
+            panel_spec(
+                "discrete_histogram_bundle",
+                "Discrete Histograms",
+                PanelKind::Table,
+                PanelHistoryMode::None,
+            ),
+            PanelWidth::Full,
+        ),
+        move |ctx| {
+            Ok(
+                sample_accumulator(ctx, &current_accumulator_config)?.and_then(|accumulator| {
+                    discrete_histogram_bundle_panel(accumulator, &current_histogram_config)
+                }),
+            )
+        },
+        move |ctx| {
+            Ok(
+                decode_history_observable(ctx, &history_accumulator_config)?.and_then(
+                    |accumulator| {
+                        discrete_histogram_bundle_panel(accumulator, &history_histogram_config)
+                    },
+                ),
             )
         },
     )
@@ -344,11 +400,11 @@ fn accumulator_matches_requested_config(
 ) -> bool {
     match requested {
         AccumulatorConfig::Empty => matches!(accumulator, AccumulatorState::Empty(_)),
-        AccumulatorConfig::Scalar => matches!(
+        AccumulatorConfig::Scalar { .. } => matches!(
             accumulator,
             AccumulatorState::Scalar(_) | AccumulatorState::FullScalar(_)
         ),
-        AccumulatorConfig::Complex => matches!(
+        AccumulatorConfig::Complex { .. } => matches!(
             accumulator,
             AccumulatorState::Complex(_) | AccumulatorState::FullComplex(_)
         ),
@@ -374,11 +430,11 @@ fn decode_aggregate_persisted_accumulator(
         AccumulatorConfig::Empty => Err(EngineError::build(
             "sample task expected aggregate accumulator, got empty".to_string(),
         )),
-        AccumulatorConfig::Scalar => AccumulatorState::from_aggregate_persistent_json(
+        AccumulatorConfig::Scalar { .. } => AccumulatorState::from_aggregate_persistent_json(
             SemanticAccumulatorKind::Scalar,
             persisted,
         ),
-        AccumulatorConfig::Complex => AccumulatorState::from_aggregate_persistent_json(
+        AccumulatorConfig::Complex { .. } => AccumulatorState::from_aggregate_persistent_json(
             SemanticAccumulatorKind::Complex,
             persisted,
         ),
@@ -395,8 +451,8 @@ fn decode_aggregate_persisted_accumulator(
 fn estimate_label(accumulator_config: &AccumulatorConfig) -> &'static str {
     match accumulator_config {
         AccumulatorConfig::Empty => "Estimate",
-        AccumulatorConfig::Scalar => "Mean",
-        AccumulatorConfig::Complex => "Real Mean",
+        AccumulatorConfig::Scalar { .. } => "Mean",
+        AccumulatorConfig::Complex { .. } => "Real Mean",
         AccumulatorConfig::Gammaloop => "Real Mean",
         AccumulatorConfig::FullScalar | AccumulatorConfig::FullComplex => "Estimate",
     }
@@ -405,8 +461,8 @@ fn estimate_label(accumulator_config: &AccumulatorConfig) -> &'static str {
 fn config_label(config: &AccumulatorConfig) -> &'static str {
     match config {
         AccumulatorConfig::Empty => "empty",
-        AccumulatorConfig::Scalar => "scalar",
-        AccumulatorConfig::Complex => "complex",
+        AccumulatorConfig::Scalar { .. } => "scalar",
+        AccumulatorConfig::Complex { .. } => "complex",
         AccumulatorConfig::Gammaloop => "gammaloop",
         AccumulatorConfig::FullScalar => "full_scalar",
         AccumulatorConfig::FullComplex => "full_complex",
@@ -1223,6 +1279,267 @@ fn gammaloop_histogram_bundle_panel(accumulator: AccumulatorState) -> Option<Pan
             row_keys,
         },
     ))
+}
+
+fn discrete_histogram_bundle_panel(
+    accumulator: AccumulatorState,
+    config: &DiscreteHistogramConfig,
+) -> Option<PanelState> {
+    let payload = match &accumulator {
+        AccumulatorState::Scalar(state) => {
+            scalar_discrete_histogram_payload(&state.discrete_bins, config)
+        }
+        AccumulatorState::Complex(state) => {
+            complex_discrete_histogram_payload(&state.discrete_bins, config)
+        }
+        _ => return None,
+    };
+    let payload = match payload {
+        Ok(payload) => payload,
+        Err(err) => {
+            return Some(key_value_panel(
+                "discrete_histogram_bundle",
+                vec![key_value("error", "Error", err)],
+            ));
+        }
+    };
+    let histograms = payload
+        .get("histograms")
+        .and_then(JsonValue::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let rows = histograms
+        .iter()
+        .map(|(name, histogram)| {
+            let bins = histogram
+                .get("bins")
+                .and_then(JsonValue::as_array)
+                .map(|bins| bins.len())
+                .unwrap_or_default();
+            vec![
+                JsonValue::String(name.clone()),
+                histogram
+                    .get("title")
+                    .and_then(JsonValue::as_str)
+                    .map(JsonValue::from)
+                    .unwrap_or(JsonValue::Null),
+                JsonValue::from(bins as i64),
+            ]
+        })
+        .collect::<Vec<_>>();
+
+    let row_keys = histograms.keys().cloned().collect::<Vec<_>>();
+    Some(table_panel_with_payload_and_options(
+        "discrete_histogram_bundle",
+        vec!["Name".to_string(), "Title".to_string(), "Bins".to_string()],
+        rows,
+        Some(payload),
+        TableStateOptions {
+            visible_column_indices: vec![1, 2],
+            row_keys: Some(row_keys),
+        },
+    ))
+}
+
+fn scalar_discrete_histogram_payload(
+    bins: &BTreeMap<String, ScalarDiscreteBinStats>,
+    config: &DiscreteHistogramConfig,
+) -> Result<JsonValue, String> {
+    let histograms = config
+        .items
+        .iter()
+        .map(|item| {
+            Ok((
+                item.name.clone(),
+                json!({
+                    "title": item.name,
+                    "type_description": discrete_histogram_description(item),
+                    "bins": scalar_projected_bins(bins, item, config.max_total_bins_or_default())?,
+                }),
+            ))
+        })
+        .collect::<Result<serde_json::Map<String, JsonValue>, String>>()?;
+    Ok(json!({
+        "primary_histogram_name": config.items.first().map(|item| item.name.clone()),
+        "histograms": histograms,
+    }))
+}
+
+fn complex_discrete_histogram_payload(
+    bins: &BTreeMap<String, ComplexDiscreteBinStats>,
+    config: &DiscreteHistogramConfig,
+) -> Result<JsonValue, String> {
+    let mut histograms = serde_json::Map::new();
+    for item in &config.items {
+        for (suffix, projection) in [
+            ("real", ComplexDiscreteProjection::Real),
+            ("imag", ComplexDiscreteProjection::Imag),
+            ("abs", ComplexDiscreteProjection::Abs),
+        ] {
+            let name = format!("{}.{}", item.name, suffix);
+            histograms.insert(
+                name.clone(),
+                json!({
+                    "title": name,
+                    "type_description": discrete_histogram_description(item),
+                    "bins": complex_projected_bins(
+                        bins,
+                        item,
+                        projection,
+                        config.max_total_bins_or_default()
+                    )?,
+                }),
+            );
+        }
+    }
+    Ok(json!({
+        "primary_histogram_name": histograms.keys().next().cloned(),
+        "histograms": histograms,
+    }))
+}
+
+fn scalar_projected_bins(
+    bins: &BTreeMap<String, ScalarDiscreteBinStats>,
+    item: &NamedDiscreteHistogram,
+    max_total_bins: usize,
+) -> Result<Vec<JsonValue>, String> {
+    let mut projected = BTreeMap::<Vec<i64>, ScalarDiscreteBinStats>::new();
+    for bin in bins.values() {
+        if !matches_fixed_dims(&bin.discrete, item)? {
+            continue;
+        }
+        let key = histogram_key(&bin.discrete, item)?;
+        projected
+            .entry(key.clone())
+            .and_modify(|current| current.merge_in_place(bin.clone()))
+            .or_insert_with(|| ScalarDiscreteBinStats {
+                discrete: key,
+                ..bin.clone()
+            });
+        reject_bin_explosion(projected.len(), max_total_bins, &item.name)?;
+    }
+    Ok(projected
+        .values()
+        .enumerate()
+        .map(|(index, bin)| {
+            json!({
+                "start": index as f64,
+                "stop": index as f64 + 1.0,
+                "value": bin.mean(),
+                "error": bin.stderr(),
+                "label": histogram_key_label(&bin.discrete),
+                "bin_id": index as i64,
+            })
+        })
+        .collect())
+}
+
+fn complex_projected_bins(
+    bins: &BTreeMap<String, ComplexDiscreteBinStats>,
+    item: &NamedDiscreteHistogram,
+    projection: ComplexDiscreteProjection,
+    max_total_bins: usize,
+) -> Result<Vec<JsonValue>, String> {
+    let mut projected = BTreeMap::<Vec<i64>, ComplexDiscreteBinStats>::new();
+    for bin in bins.values() {
+        if !matches_fixed_dims(&bin.discrete, item)? {
+            continue;
+        }
+        let key = histogram_key(&bin.discrete, item)?;
+        projected
+            .entry(key.clone())
+            .and_modify(|current| current.merge_in_place(bin.clone()))
+            .or_insert_with(|| ComplexDiscreteBinStats {
+                discrete: key,
+                ..bin.clone()
+            });
+        reject_bin_explosion(projected.len(), max_total_bins, &item.name)?;
+    }
+    Ok(projected
+        .values()
+        .enumerate()
+        .map(|(index, bin)| {
+            json!({
+                "start": index as f64,
+                "stop": index as f64 + 1.0,
+                "value": bin.projected_mean(projection),
+                "error": bin.projected_stderr(projection),
+                "label": histogram_key_label(&bin.discrete),
+                "bin_id": index as i64,
+            })
+        })
+        .collect())
+}
+
+fn matches_fixed_dims(discrete: &[i64], item: &NamedDiscreteHistogram) -> Result<bool, String> {
+    for (raw_dim, fixed_value) in &item.fixed_dims {
+        let dim = raw_dim.parse::<usize>().map_err(|_| {
+            format!(
+                "discrete histogram '{}' fixed dimension '{}' is not a non-negative integer dimension index",
+                item.name, raw_dim
+            )
+        })?;
+        let actual = discrete.get(dim).ok_or_else(|| {
+            format!(
+                "discrete histogram '{}' fixed dimension {} is out of range for sample with {} discrete dimensions",
+                item.name,
+                dim,
+                discrete.len()
+            )
+        })?;
+        if actual != fixed_value {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn histogram_key(discrete: &[i64], item: &NamedDiscreteHistogram) -> Result<Vec<i64>, String> {
+    item.hist_dims
+        .iter()
+        .map(|dim| {
+            discrete.get(*dim).copied().ok_or_else(|| {
+                format!(
+                    "discrete histogram '{}' axis dimension {} is out of range for sample with {} discrete dimensions",
+                    item.name,
+                    dim,
+                    discrete.len()
+                )
+            })
+        })
+        .collect()
+}
+
+fn reject_bin_explosion(count: usize, max_total_bins: usize, name: &str) -> Result<(), String> {
+    if count > max_total_bins {
+        Err(format!(
+            "discrete histogram '{name}' exceeds max_total_bins={max_total_bins}"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn discrete_histogram_description(item: &NamedDiscreteHistogram) -> String {
+    let fixed = item
+        .fixed_dims
+        .iter()
+        .map(|(dim, value)| format!("d{dim}={value}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if fixed.is_empty() {
+        format!("hist_dims={:?}", item.hist_dims)
+    } else {
+        format!("hist_dims={:?}; fixed {}", item.hist_dims, fixed)
+    }
+}
+
+fn histogram_key_label(key: &[i64]) -> String {
+    match key {
+        [] => "all".to_string(),
+        [value] => value.to_string(),
+        values => format!("{values:?}"),
+    }
 }
 
 fn gammaloop_evaluation_diagnostics_panel(accumulator: AccumulatorState) -> Option<PanelState> {

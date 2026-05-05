@@ -44,6 +44,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 ## Sampling And Evaluation
 - `batch_transforms` is stage state: omitted inherits, `batch_transforms = []` clears inherited transforms.
 - Sample tasks may omit `sampler_aggregator`/`accumulator` to reuse previous effective stage. First executable accumulator use must be established explicitly, usually with `set_accumulator`; there is no run-level accumulator default.
+- Scalar and complex accumulator display projections, including named discrete histograms, belong to the effective accumulator config and are inherited with that accumulator state.
 - Explicit sampler configs start fresh, except `havana_inference`, which resolves its configured handoff source.
 - Sample stop conditions use `stop_condition = { max_samples, absolute_error, relative_error, projection = "real" | "imag" | "abs" }`.
 - GammaLoop dimensions are inferred from the integrand. Do not configure `continuous_dims` or `discrete_dims` for `evaluator.kind = "gammaloop"`.

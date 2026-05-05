@@ -150,7 +150,7 @@ impl LatentBatchSpec {
     pub fn from_batch(batch: &Batch) -> Self {
         Self {
             nr_samples: batch.size(),
-            accumulator: AccumulatorConfig::Scalar,
+            accumulator: AccumulatorConfig::scalar(),
             payload: LatentBatchPayload::from_batch(batch),
         }
     }
@@ -432,7 +432,7 @@ mod tests {
     fn latent_batch_rejects_mismatched_nr_samples() {
         let latent = LatentBatch {
             nr_samples: 2,
-            accumulator: AccumulatorConfig::Scalar,
+            accumulator: AccumulatorConfig::scalar(),
             payload: LatentBatchPayload::IndexedBatch {
                 discrete_signatures: vec![vec![1]],
                 discrete_map: vec![0],

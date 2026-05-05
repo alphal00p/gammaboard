@@ -120,14 +120,16 @@ fn validate_semantic_accumulator(
     }
 
     let supported = match semantic_kind {
-        SemanticAccumulatorKind::Scalar => {
-            [AccumulatorConfig::Scalar, AccumulatorConfig::FullScalar]
-        }
-        SemanticAccumulatorKind::Complex => {
-            [AccumulatorConfig::Complex, AccumulatorConfig::FullComplex]
-        }
+        SemanticAccumulatorKind::Scalar => matches!(
+            config,
+            AccumulatorConfig::Scalar { .. } | AccumulatorConfig::FullScalar
+        ),
+        SemanticAccumulatorKind::Complex => matches!(
+            config,
+            AccumulatorConfig::Complex { .. } | AccumulatorConfig::FullComplex
+        ),
     };
-    if supported.contains(config) {
+    if supported {
         Ok(())
     } else {
         Err(BuildError::invalid_input(format!(
@@ -138,12 +140,5 @@ fn validate_semantic_accumulator(
 }
 
 fn accumulator_config_str(config: &AccumulatorConfig) -> &'static str {
-    match config {
-        AccumulatorConfig::Empty => "empty",
-        AccumulatorConfig::Scalar => "scalar",
-        AccumulatorConfig::Complex => "complex",
-        AccumulatorConfig::Gammaloop => "gammaloop",
-        AccumulatorConfig::FullScalar => "full_scalar",
-        AccumulatorConfig::FullComplex => "full_complex",
-    }
+    config.kind_str()
 }

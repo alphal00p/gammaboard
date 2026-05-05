@@ -241,11 +241,19 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
     state: stateMap.get(spec.panel_id) || null,
     value: panelValues?.[spec.panel_id],
   }));
-  const bundlePanel = renderablePanels.find(({ descriptor }) => descriptor?.panel_id === "gammaloop_histogram_bundle");
+  const bundlePanel = renderablePanels.find(({ descriptor, state }) => {
+    const payload = state?.payload;
+    return (
+      descriptor?.kind === "table" &&
+      payload?.histograms &&
+      typeof payload.histograms === "object" &&
+      !Array.isArray(payload.histograms)
+    );
+  });
   const payload = bundlePanel?.state?.payload;
   const histograms = payload?.histograms;
   if (bundlePanel && histograms && typeof histograms === "object" && !Array.isArray(histograms)) {
-    const sourcePanelId = bundlePanel?.descriptor?.panel_id || "gammaloop_histogram_bundle";
+    const sourcePanelId = bundlePanel?.descriptor?.panel_id || "histogram_bundle";
     const selectedFromValue = readHistogramBundleSelectedValue(bundlePanel.value);
     const selectedName =
       selectedFromValue ??
@@ -258,16 +266,19 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
       Object.values(histograms).find((entry) => entry && typeof entry === "object") ||
       null;
     if (selectedHistogram) {
+      const normalizedBins = asArray(selectedHistogram?.bins).some((bin) => bin?.value != null)
+        ? buildHistogramData(selectedHistogram.bins)
+        : normalizeGammaLoopHistogramBins(selectedHistogram);
       renderablePanels.push({
         descriptor: {
-          panel_id: "gammaloop_selected_histogram",
+          panel_id: `${sourcePanelId}_selected`,
           label: "Selected Histogram",
           kind: "histogram",
           history: "none",
           width: "full",
         },
         state: {
-          panel_id: "gammaloop_selected_histogram",
+          panel_id: `${sourcePanelId}_selected`,
           source_panel_id: sourcePanelId,
           name: selectedName,
           title: selectedHistogram.title,
@@ -280,7 +291,7 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
           discrete_ordering: selectedHistogram.discrete_ordering,
           log_x_axis: selectedHistogram.log_x_axis,
           log_y_axis: selectedHistogram.log_y_axis,
-          bins: normalizeGammaLoopHistogramBins(selectedHistogram),
+          bins: normalizedBins,
         },
         value: bundlePanel.value ?? null,
       });
