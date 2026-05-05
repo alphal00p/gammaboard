@@ -4,7 +4,6 @@
 name = "train"
 kind = "sample"
 stop_condition = { max_samples = 100_000_000 }
-accumulator = { config = "gammaloop" }
 sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 128, samples_for_update = 10_000_000, initial_training_rate = 0.05, final_training_rate = 0.005 } }
 
 [task_queue.queue_tuning]

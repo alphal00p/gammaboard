@@ -11,8 +11,12 @@ discrete_cardinalities = [2, 3]
 init_args = { scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }
 
 [[task_queue]]
+name = "accumulator"
+kind = "set_accumulator"
+accumulator = "scalar"
+
+[[task_queue]]
 name = "sample-a"
 kind = "sample"
 stop_condition = { max_samples = 1000 }
-accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "python_sampler", flake_ref = "path:./python_api/examples/python_sampler_symbolica_havana#runtime", module = "demo_sampler", class = "SymbolicaHavanaSampler", continuous_dims = 2, requires_training_values = true, init_args = { seed = 0, bins = 8, samples_for_update = 16, stop_training_after_n_samples = 1000, initial_training_rate = 0.1, final_training_rate = 0.01 } } }

@@ -10,3 +10,8 @@ state_folder = "../gammaloop/examples/cli/epem_a_ttxh/LO/state"
 integrand_name = "LO"
 # In-memory override only (not persisted to state on disk):
 # post_load_commands = ["set process kv kinematics.e_cm=14000.0"]
+
+[[task_queue]]
+name = "accumulator"
+kind = "set_accumulator"
+accumulator = "gammaloop"

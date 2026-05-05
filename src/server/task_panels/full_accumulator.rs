@@ -6,9 +6,8 @@ use crate::core::{
 use crate::evaluation::{AccumulatorState, FullAccumulatorProgress};
 use crate::server::panels::{
     ImageColorMode, ImageNormalizationMode, PanelHistoryMode, PanelKind, PanelSpec, PanelState,
-    PanelWidth, PlotPoint, PlotSeries, key_value, key_value_panel, multi_timeseries_panel,
-    panel_spec, progress_panel, scalar_timeseries_panel, select_state_spec, state_option,
-    with_panel_width,
+    PanelWidth, PlotPoint, PlotSeries, multi_timeseries_panel, panel_spec, progress_panel,
+    scalar_timeseries_panel, select_state_spec, state_option, with_panel_width,
 };
 use num::Integer;
 use serde_json::Value as JsonValue;
@@ -24,7 +23,6 @@ pub(super) fn image_projectors(
             geometry.nr_points(),
             "pixels",
         ),
-        completion_projector("image_completion", "Image Completion", geometry.nr_points()),
         image_view_mode_projector(display),
         image_view_projector(geometry, display),
     ]
@@ -81,15 +79,12 @@ pub(super) fn line_projectors(
     display: LineDisplayMode,
     accumulator: PlotAccumulatorKind,
 ) -> Vec<TaskPanelProjector> {
-    let mut projectors = vec![
-        progress_projector(
-            "line_progress",
-            "Line Progress",
-            geometry.nr_points(),
-            "points",
-        ),
-        completion_projector("line_completion", "Line Completion", geometry.nr_points()),
-    ];
+    let mut projectors = vec![progress_projector(
+        "line_progress",
+        "Line Progress",
+        geometry.nr_points(),
+        "points",
+    )];
     if line_uses_complex_components(display, accumulator) {
         projectors.push(line_components_projector(geometry));
     } else {
@@ -123,24 +118,6 @@ fn progress_projector(
                 Some(unit),
                 None,
             )))
-        },
-        |_ctx| Ok(None),
-    )
-}
-
-fn completion_projector(
-    panel_id: &'static str,
-    label: &'static str,
-    total: usize,
-) -> TaskPanelProjector {
-    panel_projector(
-        with_panel_width(
-            panel_spec(panel_id, label, PanelKind::KeyValue, PanelHistoryMode::None),
-            PanelWidth::Compact,
-        ),
-        move |ctx| {
-            let processed = current_processed(ctx, total)?;
-            Ok(Some(completion_panel(panel_id, total, processed)))
         },
         |_ctx| Ok(None),
     )
@@ -488,25 +465,6 @@ fn coprime_stride(total_samples: usize) -> usize {
         }
     }
     candidate
-}
-
-fn completion_panel(panel_id: &str, total: usize, processed: usize) -> PanelState {
-    key_value_panel(
-        panel_id,
-        vec![
-            key_value("processed", "Processed", processed),
-            key_value("total", "Total", total),
-            key_value(
-                "completion",
-                "Completion",
-                if total > 0 {
-                    processed as f64 / total as f64
-                } else {
-                    0.0
-                },
-            ),
-        ],
-    )
 }
 
 fn decode_full_progress(persisted: &JsonValue) -> Result<FullAccumulatorProgress, EngineError> {

@@ -2,11 +2,16 @@ mod full_accumulator;
 mod pdf_adaptation;
 mod sample;
 
-use crate::core::{AccumulatorConfig, EngineError, RunTask, RunTaskSpec};
+use crate::core::{
+    AccumulatorConfig, AccumulatorSourceSpec, BatchTransformConfig, EngineError, RunTask,
+    RunTaskSpec, SampleErrorProjection, SampleStopCondition, SamplerAggregatorConfig,
+    SamplerAggregatorSourceSpec,
+};
 use crate::evaluation::AccumulatorState;
 use crate::server::panels::{
-    PanelHistoryMode, PanelResponse, PanelSpec, PanelState, PanelUpdate, append_panel,
-    merge_panel_state, replace_panel,
+    PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelUpdate, PanelWidth,
+    append_panel, key_value, key_value_panel, merge_panel_state, panel_spec, replace_panel,
+    with_panel_width,
 };
 use crate::stores::{TaskOutputSnapshot, TaskStageSnapshot};
 use serde_json::Value as JsonValue;
@@ -212,14 +217,12 @@ impl RunTaskSpec {
         &self,
         effective_accumulator_config: Option<AccumulatorConfig>,
     ) -> Result<Vec<TaskPanelProjector>, EngineError> {
-        let mut projectors = Vec::new();
+        let mut projectors = vec![task_summary_projector(effective_accumulator_config)];
         projectors.extend(match self {
             Self::SetAccumulator { .. } => Vec::new(),
-            Self::Sample { .. } => {
-                sample::projectors(effective_accumulator_config.ok_or_else(|| {
-                    EngineError::build("sample task has no effective accumulator config")
-                })?)
-            }
+            Self::Sample { .. } => effective_accumulator_config
+                .map(sample::projectors)
+                .unwrap_or_default(),
             Self::Image {
                 geometry, display, ..
             } => full_accumulator::image_projectors(geometry.clone(), *display),
@@ -238,6 +241,347 @@ impl RunTaskSpec {
             } => full_accumulator::line_projectors(geometry.clone(), *display, *accumulator),
         });
         Ok(projectors)
+    }
+}
+
+fn task_summary_projector(
+    effective_accumulator_config: Option<AccumulatorConfig>,
+) -> TaskPanelProjector {
+    panel_projector(
+        with_panel_width(
+            panel_spec(
+                "task_summary",
+                "Task Summary",
+                PanelKind::KeyValue,
+                PanelHistoryMode::None,
+            ),
+            PanelWidth::Full,
+        ),
+        move |ctx| {
+            Ok(Some(key_value_panel(
+                "task_summary",
+                build_task_summary_entries(ctx, effective_accumulator_config),
+            )))
+        },
+        |_ctx| Ok(None),
+    )
+}
+
+fn build_task_summary_entries(
+    ctx: &TaskPanelContext<'_>,
+    effective_accumulator_config: Option<AccumulatorConfig>,
+) -> Vec<crate::server::panels::KeyValueEntry> {
+    let task = ctx.task;
+    let mut entries = vec![
+        key_value("state", "State", task.state.as_str()),
+        key_value("kind", "Kind", task.task.kind_str()),
+    ];
+
+    if let Some(reason) = task.failure_reason.as_deref()
+        && !reason.is_empty()
+    {
+        entries.push(key_value("failure", "Failure", reason));
+    }
+
+    match &task.task {
+        RunTaskSpec::SetAccumulator { accumulator } => {
+            entries.push(key_value(
+                "accumulator",
+                "Accumulator",
+                accumulator_label(*accumulator),
+            ));
+        }
+        RunTaskSpec::Sample {
+            stop_condition,
+            sampler_aggregator,
+            accumulator,
+            batch_transforms,
+            ..
+        } => {
+            entries.push(key_value(
+                "samples",
+                "Samples",
+                progress_label(task.nr_completed_samples, task.task.nr_expected_samples()),
+            ));
+            entries.push(key_value(
+                "stop_condition",
+                "Stop",
+                sample_stop_condition_label(stop_condition),
+            ));
+            entries.push(key_value(
+                "sampler",
+                "Sampler",
+                sampler_source_label(sampler_aggregator.as_ref()),
+            ));
+            entries.push(key_value(
+                "accumulator",
+                "Accumulator",
+                sample_accumulator_label(accumulator.as_ref(), effective_accumulator_config),
+            ));
+            if let Some(rate) = ctx.completed_samples_per_second {
+                entries.push(key_value("rate", "Rate", format!("{rate:.2} samples/s")));
+            }
+            if let Some(eta_seconds) = ctx.smoothed_eta_seconds {
+                entries.push(key_value(
+                    "eta",
+                    "ETA",
+                    format_duration_seconds(eta_seconds),
+                ));
+            }
+            if let Some(label) = batch_transforms_label(batch_transforms.as_deref()) {
+                entries.push(key_value("batch_transforms", "Transforms", label));
+            }
+        }
+        RunTaskSpec::Image {
+            geometry,
+            accumulator,
+            batch_transforms,
+            ..
+        } => {
+            entries.push(key_value(
+                "points",
+                "Points",
+                progress_label(task.nr_completed_samples, Some(geometry.nr_points() as i64)),
+            ));
+            entries.push(key_value(
+                "geometry",
+                "Geometry",
+                format!(
+                    "{} x {}",
+                    geometry.u_linspace.count, geometry.v_linspace.count
+                ),
+            ));
+            entries.push(key_value(
+                "accumulator",
+                "Accumulator",
+                plot_accumulator_label(*accumulator),
+            ));
+            if let Some(label) = batch_transforms_label(batch_transforms.as_deref()) {
+                entries.push(key_value("batch_transforms", "Transforms", label));
+            }
+        }
+        RunTaskSpec::PdfAdaptationImage {
+            geometry,
+            sampler_aggregator,
+            batch_transforms,
+        } => {
+            entries.push(key_value(
+                "points",
+                "Points",
+                progress_label(task.nr_completed_samples, Some(geometry.nr_points() as i64)),
+            ));
+            entries.push(key_value(
+                "geometry",
+                "Geometry",
+                format!(
+                    "{} x {}",
+                    geometry.u_linspace.count, geometry.v_linspace.count
+                ),
+            ));
+            entries.push(key_value(
+                "sampler_source",
+                "Sampler Source",
+                source_ref_label(task.task.sample_sampler_source()),
+            ));
+            if let Some(label) = sampler_source_override_label(sampler_aggregator.as_ref()) {
+                entries.push(key_value("sampler", "Sampler", label));
+            }
+            if let Some(label) = batch_transforms_label(batch_transforms.as_deref()) {
+                entries.push(key_value("batch_transforms", "Transforms", label));
+            }
+        }
+        RunTaskSpec::PdfAdaptationPlotLine {
+            geometry,
+            sampler_aggregator,
+            batch_transforms,
+        } => {
+            entries.push(key_value(
+                "points",
+                "Points",
+                progress_label(task.nr_completed_samples, Some(geometry.nr_points() as i64)),
+            ));
+            entries.push(key_value("geometry", "Geometry", geometry.linspace.count));
+            entries.push(key_value(
+                "sampler_source",
+                "Sampler Source",
+                source_ref_label(task.task.sample_sampler_source()),
+            ));
+            if let Some(label) = sampler_source_override_label(sampler_aggregator.as_ref()) {
+                entries.push(key_value("sampler", "Sampler", label));
+            }
+            if let Some(label) = batch_transforms_label(batch_transforms.as_deref()) {
+                entries.push(key_value("batch_transforms", "Transforms", label));
+            }
+        }
+        RunTaskSpec::PlotLine {
+            geometry,
+            accumulator,
+            batch_transforms,
+            ..
+        } => {
+            entries.push(key_value(
+                "points",
+                "Points",
+                progress_label(task.nr_completed_samples, Some(geometry.nr_points() as i64)),
+            ));
+            entries.push(key_value("geometry", "Geometry", geometry.linspace.count));
+            entries.push(key_value(
+                "accumulator",
+                "Accumulator",
+                plot_accumulator_label(*accumulator),
+            ));
+            if let Some(label) = batch_transforms_label(batch_transforms.as_deref()) {
+                entries.push(key_value("batch_transforms", "Transforms", label));
+            }
+        }
+    }
+
+    entries
+}
+
+fn format_duration_seconds(seconds: f64) -> String {
+    let seconds = seconds.max(0.0).round() as i64;
+    let hours = seconds / 3600;
+    let minutes = (seconds % 3600) / 60;
+    let seconds = seconds % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes}m {seconds}s")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
+}
+
+fn progress_label(current: i64, total: Option<i64>) -> String {
+    match total {
+        Some(total) => format!("{current} / {total}"),
+        None => current.to_string(),
+    }
+}
+
+fn sample_stop_condition_label(stop: &SampleStopCondition) -> String {
+    let mut parts = Vec::new();
+    if let Some(max_samples) = stop.max_samples {
+        parts.push(format!("max_samples={max_samples}"));
+    }
+    if let Some(value) = stop.absolute_error {
+        parts.push(format!(
+            "abs_error<={value}{}",
+            projection_suffix(stop.projection)
+        ));
+    }
+    if let Some(value) = stop.relative_error {
+        parts.push(format!(
+            "rel_error<={value}{}",
+            projection_suffix(stop.projection)
+        ));
+    }
+    if parts.is_empty() {
+        "-".to_string()
+    } else {
+        parts.join(", ")
+    }
+}
+
+fn projection_suffix(projection: Option<SampleErrorProjection>) -> &'static str {
+    match projection {
+        Some(SampleErrorProjection::Real) => " (real)",
+        Some(SampleErrorProjection::Imag) => " (imag)",
+        Some(SampleErrorProjection::Abs) => " (abs)",
+        None => "",
+    }
+}
+
+fn sampler_source_label(source: Option<&SamplerAggregatorSourceSpec>) -> String {
+    match source {
+        Some(SamplerAggregatorSourceSpec::Config { config }) => sampler_config_label(config).into(),
+        Some(SamplerAggregatorSourceSpec::FromName { from_name }) => format!("from {from_name}"),
+        Some(SamplerAggregatorSourceSpec::Latest(_)) | None => "latest".to_string(),
+    }
+}
+
+fn sample_accumulator_label(
+    source: Option<&AccumulatorSourceSpec>,
+    effective: Option<AccumulatorConfig>,
+) -> String {
+    match source {
+        Some(AccumulatorSourceSpec::Config { config }) => accumulator_label(*config).to_string(),
+        Some(AccumulatorSourceSpec::FromName { from_name }) => format!("from {from_name}"),
+        Some(AccumulatorSourceSpec::Latest(_)) | None => effective
+            .map(accumulator_label)
+            .unwrap_or("latest")
+            .to_string(),
+    }
+}
+
+fn batch_transforms_label(batch_transforms: Option<&[BatchTransformConfig]>) -> Option<String> {
+    let batch_transforms = batch_transforms?;
+    if batch_transforms.is_empty() {
+        Some("cleared".to_string())
+    } else {
+        Some(
+            batch_transforms
+                .iter()
+                .map(batch_transform_label)
+                .collect::<Vec<_>>()
+                .join(", "),
+        )
+    }
+}
+
+fn batch_transform_label(config: &BatchTransformConfig) -> &'static str {
+    match config {
+        BatchTransformConfig::UnitBall { .. } => "unit_ball",
+        BatchTransformConfig::Spherical { .. } => "spherical",
+    }
+}
+
+fn source_ref_label(source: Option<crate::core::SourceRefSpec>) -> String {
+    match source {
+        Some(crate::core::SourceRefSpec::Latest) => "latest".to_string(),
+        Some(crate::core::SourceRefSpec::FromName(name)) => format!("from {name}"),
+        None => "-".to_string(),
+    }
+}
+
+fn sampler_source_override_label(source: Option<&SamplerAggregatorSourceSpec>) -> Option<String> {
+    match source {
+        Some(SamplerAggregatorSourceSpec::Config { config }) => {
+            Some(sampler_config_label(config).to_string())
+        }
+        _ => None,
+    }
+}
+
+fn sampler_config_label(config: &SamplerAggregatorConfig) -> &'static str {
+    match config {
+        SamplerAggregatorConfig::NaiveMonteCarlo { .. } => "naive_monte_carlo",
+        SamplerAggregatorConfig::RasterPlane { .. } => "raster_plane",
+        SamplerAggregatorConfig::RasterLine { .. } => "raster_line",
+        SamplerAggregatorConfig::PdfAdaptationRasterPlane { .. } => "pdf_adaptation_raster_plane",
+        SamplerAggregatorConfig::PdfAdaptationRasterLine { .. } => "pdf_adaptation_raster_line",
+        SamplerAggregatorConfig::HavanaTraining { .. } => "havana_training",
+        SamplerAggregatorConfig::HavanaInference { .. } => "havana_inference",
+        SamplerAggregatorConfig::PythonSampler { .. } => "python_sampler",
+    }
+}
+
+fn accumulator_label(config: AccumulatorConfig) -> &'static str {
+    match config {
+        AccumulatorConfig::Empty => "empty",
+        AccumulatorConfig::Scalar => "scalar",
+        AccumulatorConfig::Complex => "complex",
+        AccumulatorConfig::Gammaloop => "gammaloop",
+        AccumulatorConfig::FullScalar => "full_scalar",
+        AccumulatorConfig::FullComplex => "full_complex",
+    }
+}
+
+fn plot_accumulator_label(kind: crate::core::PlotAccumulatorKind) -> &'static str {
+    match kind {
+        crate::core::PlotAccumulatorKind::Scalar => "scalar",
+        crate::core::PlotAccumulatorKind::Complex => "complex",
     }
 }
 
@@ -639,6 +983,17 @@ mod tests {
                 .iter()
                 .any(|panel| panel.panel_id == "imag_estimate_history")
         );
+    }
+
+    #[test]
+    fn pending_sample_without_effective_accumulator_still_has_summary_panel() {
+        let task = inherited_complex_sample_task();
+        let descriptors = TaskPanelSource::new(&task, None)
+            .expect("panel source")
+            .panel_specs();
+
+        assert_eq!(descriptors.len(), 1);
+        assert_eq!(descriptors[0].panel_id, "task_summary");
     }
 
     #[test]

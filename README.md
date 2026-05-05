@@ -339,10 +339,14 @@ Task files used with `gammaboard run task add` may contain either a single `task
 Sample task config example:
 ```toml
 [[task_queue]]
+name = "accumulator"
+kind = "set_accumulator"
+accumulator = "scalar"
+
+[[task_queue]]
 name = "warmup-sample" # optional; auto-generated when omitted
 kind = "sample"
 stop_condition = { max_samples = 10000, absolute_error = 1e-3, relative_error = 1e-2, projection = "real" }
-accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 ```
 

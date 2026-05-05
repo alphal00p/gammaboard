@@ -5,8 +5,6 @@ import { useTaskOutput } from "../hooks/useTaskOutput";
 const TaskOutputPanel = ({
   runId,
   task,
-  includePanelIds = null,
-  excludePanelIds = null,
   title = "Selected Task Output",
 }) => {
   const { panelSpecs, panelStates, panelValues, setPanelValue, error } = useTaskOutput({
@@ -28,38 +26,15 @@ const TaskOutputPanel = ({
     );
   }
 
-  const includeSet = includePanelIds ? new Set(includePanelIds) : null;
-  const excludeSet = excludePanelIds ? new Set(excludePanelIds) : null;
-  const filteredSpecs = panelSpecs.filter((panel) => {
-    if (includeSet && !includeSet.has(panel?.panel_id)) return false;
-    if (excludeSet && excludeSet.has(panel?.panel_id)) return false;
-    return true;
-  });
-  const filteredStates = panelStates.filter((panel) => {
-    if (includeSet && !includeSet.has(panel?.panel_id)) return false;
-    if (excludeSet && excludeSet.has(panel?.panel_id)) return false;
-    return true;
-  });
-  const filteredValues =
-    panelValues == null
-      ? panelValues
-      : Object.fromEntries(
-          Object.entries(panelValues).filter(([panelId]) => {
-            if (includeSet && !includeSet.has(panelId)) return false;
-            if (excludeSet && excludeSet.has(panelId)) return false;
-            return true;
-          }),
-        );
-
-  if (filteredSpecs.length === 0) return null;
+  if (panelSpecs.length === 0) return null;
 
   return (
     <Box>
       <PanelCollection
         title={title}
-        panelSpecs={filteredSpecs}
-        panelStates={filteredStates}
-        panelValues={filteredValues}
+        panelSpecs={panelSpecs}
+        panelStates={panelStates}
+        panelValues={panelValues}
         onPanelValueChange={setPanelValue}
       />
     </Box>

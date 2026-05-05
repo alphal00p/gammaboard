@@ -7,8 +7,7 @@ use crate::core::{
 use crate::sampling::PdfAdaptationImagePersistedOutput;
 use crate::server::panels::{
     HistogramBin, ImageColorMode, ImageNormalizationMode, PanelHistoryMode, PanelKind, PanelState,
-    PanelWidth, PlotPoint, key_value, key_value_panel, panel_spec, progress_panel,
-    scalar_timeseries_panel, with_panel_width,
+    PanelWidth, PlotPoint, panel_spec, progress_panel, scalar_timeseries_panel, with_panel_width,
 };
 
 const HISTOGRAM_BIN_COUNT: usize = 31;
@@ -19,8 +18,6 @@ pub(super) fn projectors(
 ) -> Vec<TaskPanelProjector> {
     vec![
         progress_projector(geometry.nr_points(), "Image Progress", "pixels"),
-        completion_projector(geometry.nr_points(), "Image Completion"),
-        summary_projector(),
         image_projector(
             "pdf_adaptation_log_integrand",
             "Normalized integrand",
@@ -82,8 +79,6 @@ pub(super) fn line_projectors(
 ) -> Vec<TaskPanelProjector> {
     vec![
         progress_projector(geometry.nr_points(), "Line Progress", "points"),
-        completion_projector(geometry.nr_points(), "Line Completion"),
-        summary_projector(),
         line_projector(
             "pdf_adaptation_log_integrand_line",
             "Normalized integrand (1D)",
@@ -173,41 +168,6 @@ fn progress_projector(total: usize, label: &'static str, unit: &'static str) -> 
     )
 }
 
-fn completion_projector(total: usize, label: &'static str) -> TaskPanelProjector {
-    panel_projector_with_source(
-        with_panel_width(
-            panel_spec(
-                "pdf_adaptation_completion",
-                label,
-                PanelKind::KeyValue,
-                PanelHistoryMode::None,
-            ),
-            PanelWidth::Compact,
-        ),
-        TaskPanelCurrentSourcePolicy::PersistedFirst,
-        move |ctx| {
-            let processed = current_processed(ctx);
-            Ok(Some(key_value_panel(
-                "pdf_adaptation_completion",
-                vec![
-                    key_value("processed", "Processed", processed),
-                    key_value("total", "Total", total),
-                    key_value(
-                        "completion",
-                        "Completion",
-                        if total > 0 {
-                            processed as f64 / total as f64
-                        } else {
-                            0.0
-                        },
-                    ),
-                ],
-            )))
-        },
-        |_ctx| Ok(None),
-    )
-}
-
 fn line_projector(
     panel_id: &'static str,
     label: &'static str,
@@ -231,61 +191,6 @@ fn line_projector(
                 return Ok(None);
             };
             build_line_panel(panel_id, &geometry, &derived, image_kind).map(Some)
-        },
-        |_ctx| Ok(None),
-    )
-}
-
-fn summary_projector() -> TaskPanelProjector {
-    panel_projector_with_source(
-        with_panel_width(
-            panel_spec(
-                "pdf_adaptation_summary",
-                "Adaptation Summary",
-                PanelKind::KeyValue,
-                PanelHistoryMode::None,
-            ),
-            PanelWidth::Full,
-        ),
-        TaskPanelCurrentSourcePolicy::PersistedFirst,
-        |ctx| {
-            let Some(derived) = current_output(ctx)?.map(DerivedValues::from_output) else {
-                return Ok(None);
-            };
-            let valid_ratio_count = derived
-                .oversampling_legacy_log10
-                .iter()
-                .filter(|value| value.is_some())
-                .count();
-            let mean_ratio = finite_mean(
-                derived
-                    .oversampling_legacy_log10
-                    .iter()
-                    .filter_map(|value| value.map(|v| 10_f64.powf(-v))),
-            );
-            Ok(Some(key_value_panel(
-                "pdf_adaptation_summary",
-                vec![
-                    key_value("processed", "Processed", derived.output.processed),
-                    key_value(
-                        "abs_integrand_mean",
-                        "Mean |Integrand|",
-                        derived.output.abs_integrand_mean,
-                    ),
-                    key_value(
-                        "pdf_defined_points",
-                        "PDF Defined",
-                        derived
-                            .output
-                            .pdf_values
-                            .iter()
-                            .filter(|value| value.is_some())
-                            .count(),
-                    ),
-                    key_value("valid_ratio_count", "Valid Oversampling", valid_ratio_count),
-                    key_value("mean_inverse_ratio", "Mean((|I| / <|I|>) / P)", mean_ratio),
-                ],
-            )))
         },
         |_ctx| Ok(None),
     )

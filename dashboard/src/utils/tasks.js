@@ -19,7 +19,7 @@ const getGeometryPointCount = (taskSpec) => {
 };
 
 export const getTaskTargetLabel = (task) => {
-  if (task?.task?.kind === "init" || task?.task?.kind === "set_accumulator") {
+  if (task?.task?.kind === "set_accumulator") {
     return "-";
   }
   const raw =
@@ -32,20 +32,3 @@ export const getCurrentTask = (tasks) =>
   asTaskList(tasks).find((task) => task.state === "pending") ||
   asTaskList(tasks).find((task) => task.state === "completed") ||
   null;
-
-export const formatTaskSourceRef = (task) => {
-  const spec = task?.task;
-  if (!spec || spec.kind !== "sample") {
-    return "-";
-  }
-  if (spec?.sampler_aggregator?.config != null) {
-    return "config";
-  }
-  if (spec?.sampler_aggregator?.from_name) {
-    return `from_name:${spec.sampler_aggregator.from_name}`;
-  }
-  if (spec?.sampler_aggregator === "latest") {
-    return "latest";
-  }
-  return "latest";
-};

@@ -43,12 +43,15 @@ const TaskQueuePanel = lazy(() => import("./components/TaskQueuePanel"));
 const TomlActionDialog = lazy(() => import("./components/runs/TomlActionDialog"));
 const WorkersWorkspace = lazy(() => import("./components/WorkersWorkspace"));
 
-const DEFAULT_CREATE_RUN_TOML = `name = "new-run"`;
+const DEFAULT_CREATE_RUN_TOML = `name = "new-run"
+
+[[task_queue]]
+kind = "set_accumulator"
+accumulator = "scalar"
+`;
 
 const DEFAULT_ADD_TASKS_TOML = `[[task_queue]]
 kind = "sample"
-accumulator = { config = "scalar" }
-
 stop_condition = { max_samples = 10000 }
 `;
 const EVALUATOR_COUNT_STORAGE_KEY = "runs.evaluator_count";
@@ -397,17 +400,9 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
         </Stack>
       ) : null}
       <TaskOutputPanel
-        key={`progress-${selectedTask?.id ?? "no-task"}`}
-        runId={selectedRun}
-        task={selectedTask}
-        includePanelIds={["sample_progress", "estimate_summary"]}
-        title="Task Progress"
-      />
-      <TaskOutputPanel
         key={selectedTask?.id ?? "no-task"}
         runId={selectedRun}
         task={selectedTask}
-        excludePanelIds={["sample_progress", "estimate_summary"]}
       />
       <RunInfo runId={selectedRun} />
       <QueueTuningPanel
