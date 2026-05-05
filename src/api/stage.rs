@@ -78,12 +78,30 @@ pub async fn resolve_effective_sample_accumulator_config<S>(
 where
     S: AggregationStore + RunTaskStore + Send + Sync,
 {
+    try_resolve_effective_sample_accumulator_config(store, run_id, task)
+        .await?
+        .ok_or_else(|| {
+            StoreError::store(format!(
+                "task {} has no effective accumulator configuration",
+                task.id
+            ))
+        })
+}
+
+pub async fn try_resolve_effective_sample_accumulator_config<S>(
+    store: &S,
+    run_id: i32,
+    task: &RunTask,
+) -> Result<Option<AccumulatorConfig>, StoreError>
+where
+    S: AggregationStore + RunTaskStore + Send + Sync,
+{
     if let Some(config) = task
         .task
         .new_accumulator_config()
         .map_err(|err| StoreError::store(err.to_string()))?
     {
-        return Ok(config);
+        return Ok(Some(config));
     }
 
     if let Some(source_snapshot) =
@@ -91,7 +109,7 @@ where
             .await?
     {
         if let Some(accumulator) = source_snapshot.observable_state {
-            return Ok(accumulator.config());
+            return Ok(Some(accumulator.config()));
         }
     }
 
@@ -100,12 +118,9 @@ where
         .await?
     {
         if let Some(accumulator) = base_snapshot.observable_state {
-            return Ok(accumulator.config());
+            return Ok(Some(accumulator.config()));
         }
     }
 
-    Err(StoreError::store(format!(
-        "task {} has no effective accumulator configuration",
-        task.id
-    )))
+    Ok(None)
 }

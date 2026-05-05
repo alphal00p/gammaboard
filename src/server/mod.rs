@@ -807,10 +807,8 @@ async fn get_run_task_output(
     let task = load_run_task(&state.store, run_id, task_id).await?;
     let effective_accumulator_config =
         if matches!(task.task, crate::core::RunTaskSpec::Sample { .. }) {
-            Some(
-                stage_api::resolve_effective_sample_accumulator_config(&state.store, run_id, &task)
-                    .await?,
-            )
+            stage_api::try_resolve_effective_sample_accumulator_config(&state.store, run_id, &task)
+                .await?
         } else {
             None
         };
