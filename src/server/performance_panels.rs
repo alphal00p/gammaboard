@@ -185,6 +185,15 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         ),
         with_panel_width(
             panel_spec(
+                "sampler_runtime_details",
+                "Runner State",
+                PanelKind::KeyValue,
+                PanelHistoryMode::Replace,
+            ),
+            PanelWidth::Half,
+        ),
+        with_panel_width(
+            panel_spec(
                 "sampler_queue_efficiency",
                 "Queue I/O",
                 PanelKind::KeyValue,
@@ -196,15 +205,6 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
             panel_spec(
                 "sampler_runtime_efficiency",
                 "Sampler Work",
-                PanelKind::KeyValue,
-                PanelHistoryMode::Replace,
-            ),
-            PanelWidth::Half,
-        ),
-        with_panel_width(
-            panel_spec(
-                "sampler_runtime_details",
-                "Runner State",
                 PanelKind::KeyValue,
                 PanelHistoryMode::Replace,
             ),
