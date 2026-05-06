@@ -40,6 +40,7 @@ use gammalooprs::observables::ObservableSnapshotBundle;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use std::collections::HashMap;
 use std::{
     fs,
     fs::File,
@@ -461,6 +462,7 @@ fn build_app(state: AppState) -> Router {
         .route("/templates/tasks/:name", delete(delete_task_template))
         .route("/admin/db/restart", post(restart_db))
         .route("/admin/control/shutdown", post(shutdown_control_process))
+        .route("/runs/:id/debug/batches", get(get_run_debug_batches))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_admin_session,
@@ -577,6 +579,22 @@ async fn get_run_repro_toml(
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let toml = run_api::export_run_repro_toml(&state.store, id).await?;
     json_response(RunReproTomlResponse { toml })
+}
+
+async fn get_run_debug_batches(
+    State(state): State<AppState>,
+    AxumPath(run_id): AxumPath<i32>,
+    Query(params): Query<HashMap<String, String>>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    let limit = params
+        .get("limit")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(1000);
+    let payload = state
+        .store
+        .fetch_pending_claimed_batches_json(run_id, limit)
+        .await?;
+    json_response(payload)
 }
 
 async fn get_run_panels(

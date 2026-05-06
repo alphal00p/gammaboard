@@ -220,6 +220,55 @@ pub(crate) async fn get_open_batch_count(pool: &PgPool, run_id: i32) -> Result<i
     Ok(count)
 }
 
+pub(crate) async fn fetch_pending_claimed_batches(
+    pool: &PgPool,
+    run_id: i32,
+    limit: i64,
+) -> Result<
+    Vec<(
+        i64,
+        i64,
+        bool,
+        i32,
+        String,
+        Option<String>,
+        Option<String>,
+        Vec<u8>,
+    )>,
+    sqlx::Error,
+> {
+    // returns tuple: (batch_id, task_id, requires_training_values, batch_size, status, claimed_by_node_name, claimed_by_node_uuid, latent_bytes)
+    let rows = sqlx::query_as::<
+        _,
+        (
+            i64,
+            i64,
+            bool,
+            i32,
+            String,
+            Option<String>,
+            Option<String>,
+            Vec<u8>,
+        ),
+    >(
+        r#"
+        SELECT b.id, b.task_id, b.requires_training_values, b.batch_size,
+               b.status::text, b.claimed_by_node_name, b.claimed_by_node_uuid, i.latent_batch
+        FROM batches b
+        JOIN batch_inputs i ON i.batch_id = b.id
+        WHERE b.run_id = $1
+          AND b.status IN ('pending','claimed')
+        ORDER BY b.created_at, b.id
+        LIMIT $2
+        "#,
+    )
+    .bind(run_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 pub(crate) async fn claim_batch(
     pool: &PgPool,
     run_id: i32,

@@ -88,6 +88,52 @@ impl PgStore {
         }
         Ok(())
     }
+
+    pub async fn fetch_pending_claimed_batches_json(
+        &self,
+        run_id: i32,
+        limit: usize,
+    ) -> Result<serde_json::Value, StoreError> {
+        let raw = queries::fetch_pending_claimed_batches(&self.pool, run_id, limit as i64)
+            .await
+            .map_err(map_sqlx)?;
+        let mut out = Vec::with_capacity(raw.len());
+        for (
+            batch_id,
+            task_id,
+            requires_training_values,
+            batch_size,
+            status,
+            claimed_by_node_name,
+            claimed_by_node_uuid,
+            latent_bytes,
+        ) in raw
+        {
+            match LatentBatch::from_bytes(&latent_bytes) {
+                Ok(latent) => {
+                    let latent_json = latent.into_json();
+                    out.push(serde_json::json!({
+                        "batch_id": batch_id,
+                        "task_id": task_id,
+                        "requires_training_values": requires_training_values,
+                        "batch_size": batch_size as usize,
+                        "status": status,
+                        "claimed_by_node_name": claimed_by_node_name,
+                        "claimed_by_node_uuid": claimed_by_node_uuid,
+                        "latent_batch": latent_json,
+                    }));
+                }
+                Err(err) => {
+                    out.push(serde_json::json!({
+                        "batch_id": batch_id,
+                        "task_id": task_id,
+                        "error": format!("failed to decode latent batch: {}", err),
+                    }));
+                }
+            }
+        }
+        Ok(serde_json::Value::Array(out))
+    }
 }
 
 fn store_err(message: impl Into<String>) -> StoreError {

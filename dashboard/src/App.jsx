@@ -23,6 +23,7 @@ import {
   pauseRun,
   saveTemplateFile,
   unassignNode,
+  fetchRunDebugBatches,
 } from "./services/api";
 import { copyToClipboard } from "./utils/clipboard";
 import { asArray } from "./utils/collections";
@@ -219,8 +220,8 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
               variant="contained"
               disabled={!selectedRun || pausing || autoAssigning || autoUnassigning}
               onClick={async () => {
-                  setAutoAssigning(true);
-                  try {
+                setAutoAssigning(true);
+                try {
                   const limit = parseEvaluatorTarget(evaluatorCount);
                   if (evaluatorCount.trim() && limit == null) {
                     setSnackbar({ message: "N must be at least 1.", severity: "error" });
@@ -305,7 +306,13 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
               variant="outlined"
               color="error"
               disabled={
-                !selectedRun || pausing || autoAssigning || autoUnassigning || deletingRun || cloneRunBusy || addTasksBusy
+                !selectedRun ||
+                pausing ||
+                autoAssigning ||
+                autoUnassigning ||
+                deletingRun ||
+                cloneRunBusy ||
+                addTasksBusy
               }
               onClick={async () => {
                 if (!window.confirm("Delete this run? This cannot be undone.")) return;
@@ -396,11 +403,7 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
           </Box>
         </Stack>
       ) : null}
-      <TaskOutputPanel
-        key={selectedTask?.id ?? "no-task"}
-        runId={selectedRun}
-        task={selectedTask}
-      />
+      <TaskOutputPanel key={selectedTask?.id ?? "no-task"} runId={selectedRun} task={selectedTask} />
       <RunInfo runId={selectedRun} />
       <EvaluatorPanel run={currentRun} panelResponse={evaluator} />
       <SamplerAggregatorPanel run={currentRun} panelResponse={sampler} />
@@ -578,6 +581,38 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, onRunCr
           }}
         />
       </RunScopedWorkspace>
+      <Box sx={{ mt: 3, display: "flex", justifyContent: "flex-end" }}>
+        <Button
+          variant="outlined"
+          disabled={!selectedRun || !authenticated}
+          onClick={async () => {
+            if (!selectedRun) return;
+            try {
+              // collect the batches and download as JSON
+              const payload = await fetchRunDebugBatches(selectedRun, { limit: 1000 });
+              const filename = `run-${selectedRun}-pending-batches-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+              const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = filename;
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              URL.revokeObjectURL(url);
+              setSnackbar({
+                message: `Downloaded ${Array.isArray(payload) ? payload.length : "?"} batch(es).`,
+                severity: "success",
+              });
+            } catch (err) {
+              setSnackbar({ message: err?.message || "Failed to download batches.", severity: "error" });
+            }
+          }}
+        >
+          Download Pending Batches
+        </Button>
+      </Box>
+
       <TomlActionDialog
         open={createRunOpen}
         title="Create Run"
