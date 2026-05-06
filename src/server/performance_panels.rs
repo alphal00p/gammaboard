@@ -141,7 +141,7 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         with_panel_width(
             panel_spec(
                 "sampler_priority_overview",
-                "Sampler Priority Metrics",
+                "Sampler Overview",
                 PanelKind::KeyValue,
                 PanelHistoryMode::Replace,
             ),
@@ -149,8 +149,8 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         ),
         with_panel_width(
             panel_spec(
-                "sampler_utilization_history",
-                "Sampler Utilization History",
+                "sampler_completed_samples_per_second",
+                "Throughput",
                 PanelKind::MultiTimeseries,
                 PanelHistoryMode::Replace,
             ),
@@ -158,8 +158,8 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         ),
         with_panel_width(
             panel_spec(
-                "sampler_completed_samples_per_second",
-                "Completed Samples / Sec",
+                "sampler_utilization_history",
+                "Utilization",
                 PanelKind::MultiTimeseries,
                 PanelHistoryMode::Replace,
             ),
@@ -168,7 +168,7 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         with_panel_width(
             panel_spec(
                 "sampler_tick_breakdown",
-                "Sampler Tick (Synchronous)",
+                "Tick Breakdown",
                 PanelKind::TickBreakdown,
                 PanelHistoryMode::Replace,
             ),
@@ -176,26 +176,8 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         ),
         with_panel_width(
             panel_spec(
-                "sampler_runtime_efficiency",
-                "Sampler Work Metrics",
-                PanelKind::KeyValue,
-                PanelHistoryMode::Replace,
-            ),
-            PanelWidth::Half,
-        ),
-        with_panel_width(
-            panel_spec(
-                "sampler_runtime_details",
-                "Sampler Runner State",
-                PanelKind::KeyValue,
-                PanelHistoryMode::Replace,
-            ),
-            PanelWidth::Half,
-        ),
-        with_panel_width(
-            panel_spec(
                 "sampler_queue_state",
-                "Queue Buffers",
+                "Queue State",
                 PanelKind::KeyValue,
                 PanelHistoryMode::Replace,
             ),
@@ -204,7 +186,25 @@ fn sampler_panel_specs() -> Vec<PanelSpec> {
         with_panel_width(
             panel_spec(
                 "sampler_queue_efficiency",
-                "Queue Hand-Off And DB",
+                "Queue I/O",
+                PanelKind::KeyValue,
+                PanelHistoryMode::Replace,
+            ),
+            PanelWidth::Half,
+        ),
+        with_panel_width(
+            panel_spec(
+                "sampler_runtime_efficiency",
+                "Sampler Work",
+                PanelKind::KeyValue,
+                PanelHistoryMode::Replace,
+            ),
+            PanelWidth::Half,
+        ),
+        with_panel_width(
+            panel_spec(
+                "sampler_runtime_details",
+                "Runner State",
                 PanelKind::KeyValue,
                 PanelHistoryMode::Replace,
             ),
@@ -548,6 +548,13 @@ fn sampler_current_panels(
         .avg_evaluator_utilization
         .map(|value| value.clamp(0.0, 1.0));
     let evaluator_busy_tone = evaluator_busy_ratio.and_then(evaluator_busy_ratio_tone);
+    let eval_ms_per_batch_mean = runtime.sampler.eval_ms_per_batch.mean;
+    let eval_ms_per_batch_std = finite_positive_std(
+        eval_ms_per_batch_mean,
+        runtime.sampler.eval_ms_per_batch.std_dev,
+    );
+    let eval_ms_per_batch_cv =
+        coefficient_of_variation(eval_ms_per_batch_mean, eval_ms_per_batch_std);
 
     vec![
         key_value_panel(
@@ -560,17 +567,17 @@ fn sampler_current_panels(
                 ),
                 key_value(
                     "total_memory_usage",
-                    "Total Memory Usage (Sampler + Evaluators)",
+                    "Total Memory",
                     total_memory_bytes.map(format_bytes_human),
                 ),
                 key_value(
                     "sampler_memory_usage",
-                    "Sampler Memory Usage",
+                    "Sampler Memory",
                     entry.rss_bytes.map(format_bytes_human),
                 ),
                 key_value(
                     "avg_evaluator_memory",
-                    "Avg Evaluator Memory Usage",
+                    "Avg Evaluator Memory",
                     runtime.avg_evaluator_rss_bytes.map(format_bytes_human),
                 ),
                 key_value(
@@ -580,28 +587,38 @@ fn sampler_current_panels(
                 ),
                 key_value_with_tone(
                     "evaluator_busy_ratio",
-                    "Evaluator Busy Ratio",
+                    "Evaluator Busy",
                     evaluator_busy_ratio.map(|value| format!("{:.1}%", value * 100.0)),
                     evaluator_busy_tone,
                 ),
                 key_value(
-                    "eval_ms_per_batch",
-                    "Eval Ms / Batch",
-                    runtime.sampler.eval_ms_per_batch.mean,
+                    "eval_ms_per_batch_mean",
+                    "Eval / Batch Mean (ms)",
+                    eval_ms_per_batch_mean,
+                ),
+                key_value(
+                    "eval_ms_per_batch_std",
+                    "Eval / Batch Std (ms)",
+                    eval_ms_per_batch_std,
+                ),
+                key_value(
+                    "eval_ms_per_batch_cv",
+                    "Eval / Batch CV",
+                    eval_ms_per_batch_cv.map(|value| format!("{:.1}%", value * 100.0)),
                 ),
                 key_value(
                     "target_batch_eval_ms",
-                    "Target Eval Ms / Batch",
+                    "Target Eval / Batch (ms)",
                     target_batch_eval_ms,
                 ),
                 key_value(
                     "eval_us_per_sample",
-                    "Eval Us / Sample",
+                    "Eval / Sample (us)",
                     runtime.sampler.eval_ms_per_sample.mean.map(ms_to_us),
                 ),
                 key_value(
                     "batch_size_current",
-                    "Current Batch Size",
+                    "Batch Size",
                     runtime.batch_size_current,
                 ),
             ],
@@ -616,42 +633,42 @@ fn sampler_current_panels(
             vec![
                 key_value(
                     "sampler_tick_busy_ratio",
-                    "Sampler Tick Busy Ratio",
+                    "Tick Busy",
                     runtime.sampler_tick_busy_ratio,
                 ),
                 key_value(
                     "sampler_uptime_seconds",
-                    "Sampler Uptime (s)",
+                    "Sampler Runner Uptime (s)",
                     (runtime.sampler_uptime_ms / 1000.0).max(0.0),
                 ),
                 key_value(
                     "insert_task_utilization",
-                    "Insert Task Utilization",
+                    "Insert Utilization",
                     runtime.queue.insert_task_utilization,
                 ),
                 key_value(
                     "completed_fetch_utilization",
-                    "Completed Fetch Utilization",
+                    "Fetch Utilization",
                     runtime.queue.completed_fetch_utilization,
                 ),
                 key_value(
                     "produced_samples_total",
-                    "Produced Samples Total",
+                    "Produced Samples",
                     runtime.produced_samples_total,
                 ),
                 key_value(
                     "ingested_samples_total",
-                    "Ingested Samples Total",
+                    "Ingested Samples",
                     runtime.ingested_samples_total,
                 ),
                 key_value(
                     "completed_samples_total",
-                    "Completed Samples Total",
+                    "Completed Samples",
                     runtime.completed_samples_total,
                 ),
                 key_value(
                     "batch_size_current",
-                    "Batch Size Current",
+                    "Batch Size",
                     runtime.batch_size_current,
                 ),
             ],
@@ -997,28 +1014,28 @@ fn sampler_utilization_history_panel(
         vec![
             PlotSeries {
                 id: "sampler_tick_busy_ratio".to_string(),
-                label: "Sampler Tick Busy Ratio".to_string(),
+                label: "Sampler Busy".to_string(),
                 color: Some("#2563eb".to_string()),
                 smooth: Some(true),
                 points: sampler_tick_points,
             },
             PlotSeries {
                 id: "insert_task_utilization".to_string(),
-                label: "Insert Task Utilization".to_string(),
+                label: "Insert Utilization".to_string(),
                 color: Some("#ea580c".to_string()),
                 smooth: Some(true),
                 points: insert_task_points,
             },
             PlotSeries {
                 id: "completed_fetch_utilization".to_string(),
-                label: "Completed Fetch Utilization".to_string(),
+                label: "Fetch Utilization".to_string(),
                 color: Some("#16a34a".to_string()),
                 smooth: Some(true),
                 points: completed_fetch_points,
             },
             PlotSeries {
                 id: "avg_evaluator_utilization".to_string(),
-                label: "Avg Evaluator Utilization".to_string(),
+                label: "Evaluator Busy".to_string(),
                 color: Some("#7c3aed".to_string()),
                 smooth: Some(true),
                 points: evaluator_utilization_points,
@@ -1112,6 +1129,21 @@ fn window_mean_value(
 
 fn window_total_value(snapshot: &crate::core::RollingMetricSnapshot) -> JsonValue {
     JsonValue::from(snapshot.total.unwrap_or(0.0))
+}
+
+fn finite_positive_std(mean: Option<f64>, std_dev: f64) -> Option<f64> {
+    if mean.is_some_and(|value| value.is_finite()) && std_dev.is_finite() && std_dev >= 0.0 {
+        Some(std_dev)
+    } else {
+        None
+    }
+}
+
+fn coefficient_of_variation(mean: Option<f64>, std_dev: Option<f64>) -> Option<f64> {
+    let mean = mean?;
+    let std_dev = std_dev?;
+    (mean.is_finite() && mean.abs() > f64::EPSILON && std_dev.is_finite())
+        .then_some(std_dev / mean.abs())
 }
 
 fn ms_to_us(value_ms: f64) -> f64 {

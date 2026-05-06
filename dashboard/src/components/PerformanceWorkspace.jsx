@@ -1,8 +1,10 @@
 import { Alert, FormControl, InputLabel, MenuItem, Select, Stack } from "@mui/material";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useAuth } from "../auth/AuthProvider";
 import ConnectionStatus from "./ConnectionStatus";
 import EmptyStateCard from "./common/EmptyStateCard";
 import PanelCollection from "./panels/PanelCollection";
+import QueueTuningPanel from "./runs/QueueTuningPanel";
 import RunScopedWorkspace from "./common/RunScopedWorkspace";
 import {
   HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES,
@@ -14,10 +16,14 @@ import {
   mergeSharedHistoryView,
 } from "./panels/panelView";
 import { useRunPerformancePanels } from "../hooks/useRunPerformancePanels";
+import { useRunTasks } from "../hooks/useRunTasks";
+import { updateRunTaskQueueTuning } from "../services/api";
 import { asArray } from "../utils/collections";
 import { compareNodesByName, nodeNameOf } from "../utils/nodes";
+import { asTaskList, getCurrentTask } from "../utils/tasks";
 
 const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isConnected }) => {
+  const { authenticated } = useAuth();
   const [nodeRunFilter, setNodeRunFilter] = useState("selected_run");
   const [nodeActivityFilter, setNodeActivityFilter] = useState("active");
   const [nodeRoleFilter, setNodeRoleFilter] = useState("evaluator");
@@ -62,6 +68,23 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
   const [selectedEvaluatorNodeName, setSelectedEvaluatorNodeName] = useState(null);
   const [panelValues, setPanelValues] = useState({});
   const [historyXAxisMode, setHistoryXAxisMode] = useState(HISTORY_X_AXIS_MODE_SAMPLER_UPTIME);
+  const [queueTuningBusy, setQueueTuningBusy] = useState(false);
+  const [queueTuningMessage, setQueueTuningMessage] = useState(null);
+  const currentRun = useMemo(
+    () => asArray(runs).find((entry) => entry?.run_id === selectedRun) ?? null,
+    [runs, selectedRun],
+  );
+  const { tasks } = useRunTasks(selectedRun, 2000);
+  const sampleTask = useMemo(() => {
+    const taskList = asTaskList(tasks);
+    const currentTask = getCurrentTask(taskList);
+    if (currentTask?.task?.kind === "sample") return currentTask;
+    return (
+      taskList.find((task) => task?.state === "active" && task?.task?.kind === "sample") ??
+      taskList.find((task) => task?.task?.kind === "sample") ??
+      null
+    );
+  }, [tasks]);
 
   useEffect(() => {
     if (filteredWorkers.length === 0) {
@@ -86,7 +109,39 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
 
   useEffect(() => {
     setPanelValues({});
+    setQueueTuningMessage(null);
   }, [selectedRun, selectedEvaluatorNodeName]);
+
+  const saveQueueTuning = useCallback(
+    async (payload) => {
+      if (!selectedRun || !sampleTask?.id) return;
+      setQueueTuningBusy(true);
+      setQueueTuningMessage(null);
+      try {
+        await updateRunTaskQueueTuning(selectedRun, sampleTask.id, payload);
+        setQueueTuningMessage({ severity: "success", text: "Queue tuning updated." });
+      } catch (err) {
+        setQueueTuningMessage({ severity: "error", text: err?.message || "Failed to update queue tuning." });
+      } finally {
+        setQueueTuningBusy(false);
+      }
+    },
+    [sampleTask?.id, selectedRun],
+  );
+
+  const clearQueueTuning = useCallback(async () => {
+    if (!selectedRun || !sampleTask?.id) return;
+    setQueueTuningBusy(true);
+    setQueueTuningMessage(null);
+    try {
+      await updateRunTaskQueueTuning(selectedRun, sampleTask.id, null);
+      setQueueTuningMessage({ severity: "success", text: "Queue tuning override cleared." });
+    } catch (err) {
+      setQueueTuningMessage({ severity: "error", text: err?.message || "Failed to clear queue tuning override." });
+    } finally {
+      setQueueTuningBusy(false);
+    }
+  }, [sampleTask?.id, selectedRun]);
 
   const knownPanelIds = useMemo(
     () =>
@@ -191,7 +246,7 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
                 label="X-Axis"
                 onChange={(event) => setHistoryXAxisMode(event.target.value)}
               >
-                <MenuItem value={HISTORY_X_AXIS_MODE_SAMPLER_UPTIME}>Sampler Uptime (Default)</MenuItem>
+                <MenuItem value={HISTORY_X_AXIS_MODE_SAMPLER_UPTIME}>Sampler Runner Uptime (Default)</MenuItem>
                 <MenuItem value={HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES}>Completed Samples</MenuItem>
                 <MenuItem value={HISTORY_X_AXIS_MODE_WALL_TIME}>Wall Time</MenuItem>
               </Select>
@@ -211,6 +266,20 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
               message="Run throughput panels will appear once the sampler records snapshots."
             />
           )}
+          <Stack spacing={1}>
+            {queueTuningMessage ? (
+              <Alert severity={queueTuningMessage.severity}>{queueTuningMessage.text}</Alert>
+            ) : null}
+            <QueueTuningPanel
+              run={currentRun}
+              runId={selectedRun}
+              task={sampleTask}
+              authenticated={authenticated}
+              busy={queueTuningBusy}
+              onSave={saveQueueTuning}
+              onClear={clearQueueTuning}
+            />
+          </Stack>
           {runEvaluator?.sourceId ? (
             <PanelCollection
               title="Evaluator Summary"

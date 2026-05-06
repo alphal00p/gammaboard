@@ -15,6 +15,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - `RunSpec` should keep immutable run-global state only. Task-varying sampler, materializer, batch-transform, and accumulator choices belong on tasks or stored integration defaults.
 - Run names are human-facing and not unique; ambiguous CLI name references must fail and print matches.
 - Runs are driven by persisted `run_tasks`; evaluator batches are lower-level queue items.
+- `runs.nr_completed_samples` and `runs.sampler_runner_uptime_ms` are run-global monotonic counters; task-local progress stays on `run_tasks`.
 - `run add` without `task_queue` creates an idle run and immediately persists the root queue-empty `run_stage_snapshot`.
 - Run lifecycle is derived from control-plane state. Do not add a persisted run status column unless explicitly requested.
 - Pausing a run clears desired assignments so workers reconcile down cleanly.

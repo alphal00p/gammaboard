@@ -266,12 +266,13 @@ pub(crate) async fn get_task_activation_stage_snapshot(
 pub(crate) async fn get_run_sample_progress(
     pool: &PgPool,
     run_id: i32,
-) -> Result<Option<(i64, i64)>, sqlx::Error> {
-    sqlx::query_as::<_, (i64, i64)>(
+) -> Result<Option<(i64, i64, f64)>, sqlx::Error> {
+    sqlx::query_as::<_, (i64, i64, f64)>(
         r#"
         SELECT
             nr_produced_samples,
-            nr_completed_samples
+            nr_completed_samples,
+            sampler_runner_uptime_ms
         FROM runs
         WHERE id = $1
         "#,
@@ -355,18 +356,21 @@ pub(crate) async fn update_run_sample_progress(
     run_id: i32,
     nr_produced_samples: i64,
     nr_completed_samples: i64,
+    sampler_runner_uptime_ms: f64,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
         UPDATE runs
         SET
             nr_produced_samples = $1,
-            nr_completed_samples = $2
-        WHERE id = $3
+            nr_completed_samples = $2,
+            sampler_runner_uptime_ms = $3
+        WHERE id = $4
         "#,
     )
     .bind(nr_produced_samples)
     .bind(nr_completed_samples)
+    .bind(sampler_runner_uptime_ms)
     .bind(run_id)
     .execute(pool)
     .await?;

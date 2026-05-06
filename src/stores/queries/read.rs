@@ -59,6 +59,7 @@ struct RunProgressBaseRow {
     target: Option<JsonValue>,
     nr_produced_samples: i64,
     nr_completed_samples: i64,
+    sampler_runner_uptime_ms: f64,
     started_at: Option<DateTime<Utc>>,
     completed_at: Option<DateTime<Utc>>,
     batches_completed: i32,
@@ -103,6 +104,7 @@ impl RunProgressBaseRow {
             target: self.target,
             nr_produced_samples: self.nr_produced_samples,
             nr_completed_samples: self.nr_completed_samples,
+            sampler_runner_uptime_ms: self.sampler_runner_uptime_ms,
             started_at: self.started_at,
             completed_at: self.completed_at,
             batches_completed: self.batches_completed,
@@ -353,6 +355,7 @@ fn run_progress_sql(run_where_clause: &str) -> String {
             r.target,
             r.nr_produced_samples,
             r.nr_completed_samples,
+            r.sampler_runner_uptime_ms,
             r.started_at,
             r.completed_at,
             r.batches_completed

@@ -21,7 +21,6 @@ import {
   fetchTemplateList,
   fetchRunReproToml,
   pauseRun,
-  updateRunTaskQueueTuning,
   saveTemplateFile,
   unassignNode,
 } from "./services/api";
@@ -33,7 +32,6 @@ const CloneRunDialog = lazy(() => import("./components/runs/CloneRunDialog"));
 const EvaluatorPanel = lazy(() => import("./components/EvaluatorPanel"));
 const LogsWorkspace = lazy(() => import("./components/LogsWorkspace"));
 const PerformanceWorkspace = lazy(() => import("./components/PerformanceWorkspace"));
-const QueueTuningPanel = lazy(() => import("./components/runs/QueueTuningPanel"));
 const RunInfo = lazy(() => import("./components/RunInfo"));
 const SamplerAggregatorPanel = lazy(() => import("./components/SamplerAggregatorPanel"));
 const SelectedRunTomlPanel = lazy(() => import("./components/SelectedRunTomlPanel"));
@@ -114,7 +112,6 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
   const [addTasksOpen, setAddTasksOpen] = useState(false);
   const [cloneRunBusy, setCloneRunBusy] = useState(false);
   const [addTasksBusy, setAddTasksBusy] = useState(false);
-  const [queueTuningBusy, setQueueTuningBusy] = useState(false);
   const [cloneRunError, setCloneRunError] = useState(null);
   const [addTasksError, setAddTasksError] = useState(null);
   const [taskTemplates, setTaskTemplates] = useState([]);
@@ -405,37 +402,6 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
         task={selectedTask}
       />
       <RunInfo runId={selectedRun} />
-      <QueueTuningPanel
-        run={currentRun}
-        runId={selectedRun}
-        task={selectedTask}
-        authenticated={authenticated}
-        busy={queueTuningBusy}
-        onSave={async (payload) => {
-          if (!selectedRun || !selectedTask?.id) return;
-          setQueueTuningBusy(true);
-          try {
-            await updateRunTaskQueueTuning(selectedRun, selectedTask.id, payload);
-            setSnackbar({ message: "Queue tuning updated.", severity: "success" });
-          } catch (err) {
-            setSnackbar({ message: err?.message || "Failed to update queue tuning.", severity: "error" });
-          } finally {
-            setQueueTuningBusy(false);
-          }
-        }}
-        onClear={async () => {
-          if (!selectedRun || !selectedTask?.id) return;
-          setQueueTuningBusy(true);
-          try {
-            await updateRunTaskQueueTuning(selectedRun, selectedTask.id, null);
-            setSnackbar({ message: "Queue tuning override cleared.", severity: "success" });
-          } catch (err) {
-            setSnackbar({ message: err?.message || "Failed to clear queue tuning override.", severity: "error" });
-          } finally {
-            setQueueTuningBusy(false);
-          }
-        }}
-      />
       <EvaluatorPanel run={currentRun} panelResponse={evaluator} />
       <SamplerAggregatorPanel run={currentRun} panelResponse={sampler} />
       <CloneRunDialog

@@ -903,9 +903,12 @@ impl AggregationStore for PgStore {
             .await
             .map_err(map_sqlx)?;
         Ok(row.map(
-            |(nr_produced_samples, nr_completed_samples)| RunSampleProgress {
-                nr_produced_samples,
-                nr_completed_samples,
+            |(nr_produced_samples, nr_completed_samples, sampler_runner_uptime_ms)| {
+                RunSampleProgress {
+                    nr_produced_samples,
+                    nr_completed_samples,
+                    sampler_runner_uptime_ms,
+                }
             },
         ))
     }
@@ -959,12 +962,14 @@ impl AggregationStore for PgStore {
         run_id: i32,
         nr_produced_samples: i64,
         nr_completed_samples: i64,
+        sampler_runner_uptime_ms: f64,
     ) -> Result<(), StoreError> {
         queries::update_run_sample_progress(
             &self.pool,
             run_id,
             nr_produced_samples,
             nr_completed_samples,
+            sampler_runner_uptime_ms,
         )
         .await
         .map_err(map_sqlx)

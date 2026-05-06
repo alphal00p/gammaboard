@@ -1310,6 +1310,7 @@ mod tests {
             _run_id: i32,
             _nr_produced_samples: i64,
             _nr_completed_samples: i64,
+            _sampler_runner_uptime_ms: f64,
         ) -> Result<(), StoreError> {
             unreachable!("unused in test")
         }

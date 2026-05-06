@@ -374,10 +374,11 @@ pub struct SamplerAggregatorPerformanceSnapshot {
     pub rss_bytes: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RunSampleProgress {
     pub nr_produced_samples: i64,
     pub nr_completed_samples: i64,
+    pub sampler_runner_uptime_ms: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

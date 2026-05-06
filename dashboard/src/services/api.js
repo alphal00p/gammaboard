@@ -161,6 +161,9 @@ const normalizeRunEntry = (entry) => {
     root_stage_snapshot_id: rootStageSnapshotId,
     nr_produced_samples: Number.isFinite(Number(entry.nr_produced_samples)) ? Number(entry.nr_produced_samples) : 0,
     nr_completed_samples: Number.isFinite(Number(entry.nr_completed_samples)) ? Number(entry.nr_completed_samples) : 0,
+    sampler_runner_uptime_ms: Number.isFinite(Number(entry.sampler_runner_uptime_ms))
+      ? Number(entry.sampler_runner_uptime_ms)
+      : 0,
     integration_params: entry.integration_params ?? {},
     point_spec: entry.point_spec ?? null,
     target: entry.target ?? null,

@@ -8,9 +8,10 @@
 //! - persist lightweight UI sync snapshots and full resume checkpoints
 
 use crate::core::{
-    BatchTransformConfig, EngineError, RunStageSnapshot, RunTask, SampleErrorProjection,
-    SamplerAggregatorConfig, SamplerAggregatorPerformanceSnapshot, SamplerQueueTuning,
-    SamplerRuntimeMetrics, SamplerWorkRollingAverages, SamplerWorkerStore, StoreError,
+    BatchTransformConfig, EngineError, RunSampleProgress, RunStageSnapshot, RunTask,
+    SampleErrorProjection, SamplerAggregatorConfig, SamplerAggregatorPerformanceSnapshot,
+    SamplerQueueTuning, SamplerRuntimeMetrics, SamplerWorkRollingAverages, SamplerWorkerStore,
+    StoreError,
 };
 use crate::evaluation::AccumulatorState;
 use crate::runners::process_memory::current_rss_bytes;
@@ -271,6 +272,7 @@ where
         params: SamplerAggregatorRunnerParams,
         base_queue_config: SamplerQueueConfig,
         initial_batch_size: usize,
+        run_progress: RunSampleProgress,
         resume_snapshot: Option<SamplerAggregatorCheckpoint>,
     ) -> Self {
         let mut runtime_state;
@@ -290,6 +292,9 @@ where
         runtime_state.batch_size_current = runtime_state
             .batch_size_current
             .clamp(MIN_BATCH_SIZE, max_batch_size);
+        runtime_state.sampler_uptime_ms_accumulated = runtime_state
+            .sampler_uptime_ms_accumulated
+            .max(run_progress.sampler_runner_uptime_ms);
 
         let nr_produced_samples = task.nr_produced_samples;
         let nr_completed_samples = task.nr_completed_samples;
@@ -324,8 +329,8 @@ where
             batch_transforms,
             store,
             params,
-            nr_produced_samples,
-            nr_completed_samples,
+            nr_produced_samples: run_progress.nr_produced_samples.max(nr_produced_samples),
+            nr_completed_samples: run_progress.nr_completed_samples.max(nr_completed_samples),
             performance_snapshot_interval,
             frontend_sync_interval,
             last_snapshot_at: now,
@@ -1334,6 +1339,7 @@ where
                 self.run_id,
                 self.nr_produced_samples,
                 self.nr_completed_samples,
+                self.current_sampler_uptime_ms(),
             )
             .await?;
         self.last_progress_sync_at = Instant::now();

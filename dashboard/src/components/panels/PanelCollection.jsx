@@ -360,7 +360,7 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
 
 const inferXAxisLabel = (panelId) => (String(panelId || "").includes("_history") ? "Nr samples" : null);
 const inferNumericXAxisLabel = (panelId, mode = HISTORY_X_AXIS_MODE_WALL_TIME) => {
-  if (mode === HISTORY_X_AXIS_MODE_SAMPLER_UPTIME) return "Sampler Uptime";
+  if (mode === HISTORY_X_AXIS_MODE_SAMPLER_UPTIME) return "Sampler Runner Uptime";
   if (mode === HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES) return "Completed Samples";
   return inferXAxisLabel(panelId) || "x";
 };
@@ -438,6 +438,11 @@ const remapTimeseriesPointXAxis = (point, mode) => ({
   ...point,
   x: historyXAxisValueForPoint(point, mode),
 });
+
+const remapAndSortTimeseriesPoints = (points, mode) =>
+  asArray(points)
+    .map((point) => remapTimeseriesPointXAxis(point, mode))
+    .sort((left, right) => Number(left?.x) - Number(right?.x));
 
 const lineColors = ["#005f73", "#bb3e03", "#0a9396", "#ae2012", "#ca6702"];
 const histogramOverlayColors = ["#9b2226", "#3a86ff", "#ff006e", "#6a994e", "#ff7f11", "#8338ec"];
@@ -735,10 +740,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
     value,
     isHistoryPanel ? HISTORY_X_AXIS_MODE_SAMPLER_UPTIME : HISTORY_X_AXIS_MODE_WALL_TIME,
   );
-  const points = asArray(state?.points)
-    .slice()
-    .map((point) => remapTimeseriesPointXAxis(point, historyXAxisMode))
-    .sort((a, b) => a.x - b.x);
+  const points = remapAndSortTimeseriesPoints(state?.points, historyXAxisMode);
   const meanData = points.map((point) => [Number(point?.x), Number(point?.y)]);
   const targetValue = Number(state?.target);
   const hasTargetLine = Number.isFinite(targetValue);
@@ -998,7 +1000,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
   );
   const series = asArray(state?.series).map((item) => ({
     ...item,
-    points: asArray(item?.points).map((point) => remapTimeseriesPointXAxis(point, historyXAxisMode)),
+    points: remapAndSortTimeseriesPoints(item?.points, historyXAxisMode),
   }));
   const data = buildMultiSeriesData(series);
   const domain = fitDomain(

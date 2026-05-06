@@ -196,6 +196,7 @@ pub trait AggregationStore: Send + Sync {
         run_id: i32,
         nr_produced_samples: i64,
         nr_completed_samples: i64,
+        sampler_runner_uptime_ms: f64,
     ) -> Result<(), StoreError>;
     async fn save_run_stage_snapshot(&self, snapshot: &RunStageSnapshot) -> Result<(), StoreError>;
 }

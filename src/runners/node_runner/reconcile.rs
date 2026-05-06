@@ -449,6 +449,10 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
         let initial_batch_size = initial_batch_size_hint
             .unwrap_or(spec.sampler_aggregator_runner_params.queue.max_batch_size);
+        let run_progress = role_store
+            .load_run_sample_progress(worker.run_id)
+            .await?
+            .unwrap_or_default();
 
         let base_queue_config = spec.sampler_aggregator_runner_params.queue.clone();
         let mut effective_sampler_runner_params = spec.sampler_aggregator_runner_params.clone();
@@ -473,6 +477,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             effective_sampler_runner_params,
             base_queue_config,
             initial_batch_size,
+            run_progress,
             restored_snapshot_for_runner,
         );
 
