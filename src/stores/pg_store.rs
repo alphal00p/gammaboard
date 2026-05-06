@@ -111,17 +111,39 @@ impl PgStore {
         {
             match LatentBatch::from_bytes(&latent_bytes) {
                 Ok(latent) => {
-                    let latent_json = latent.into_json();
-                    out.push(serde_json::json!({
-                        "batch_id": batch_id,
-                        "task_id": task_id,
-                        "requires_training_values": requires_training_values,
-                        "batch_size": batch_size as usize,
-                        "status": status,
-                        "claimed_by_node_name": claimed_by_node_name,
-                        "claimed_by_node_uuid": claimed_by_node_uuid,
-                        "latent_batch": latent_json,
-                    }));
+                    // Attempt to materialize into a concrete Batch (points). Some latent payloads
+                    // (e.g. HavanaInference) cannot be materialized without a materializer, so
+                    // fall back to returning the latent payload if materialization fails.
+                    match latent.payload.as_batch() {
+                        Ok(batch) => {
+                            let batch_json = batch.to_json();
+                            out.push(serde_json::json!({
+                                "batch_id": batch_id,
+                                "task_id": task_id,
+                                "requires_training_values": requires_training_values,
+                                "batch_size": batch_size as usize,
+                                "status": status,
+                                "claimed_by_node_name": claimed_by_node_name,
+                                "claimed_by_node_uuid": claimed_by_node_uuid,
+                                "batch": batch_json,
+                            }));
+                        }
+                        Err(err) => {
+                            // Materialization failed; include latent payload JSON and the error.
+                            let latent_json = latent.into_json();
+                            out.push(serde_json::json!({
+                                "batch_id": batch_id,
+                                "task_id": task_id,
+                                "requires_training_values": requires_training_values,
+                                "batch_size": batch_size as usize,
+                                "status": status,
+                                "claimed_by_node_name": claimed_by_node_name,
+                                "claimed_by_node_uuid": claimed_by_node_uuid,
+                                "materialization_error": format!("{}", err),
+                                "latent_batch": latent_json,
+                            }));
+                        }
+                    }
                 }
                 Err(err) => {
                     out.push(serde_json::json!({
