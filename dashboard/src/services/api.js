@@ -281,9 +281,12 @@ export const fetchRunReproToml = async (runId, signal) =>
 export const fetchRunPanels = async (runId, signal) =>
   apiGet(`/runs/${runId}/panels`, "Failed to fetch run panels", signal);
 
-export const fetchRunDebugBatches = async (runId, { limit = 1000 } = {}, signal) =>
+export const fetchRunDebugBatches = async (runId, { limit = 1000, status = "claimed" } = {}, signal) =>
   apiGet(
-    `/runs/${runId}/debug/batches${buildQueryString([["limit", limit]])}`,
+    `/runs/${runId}/debug/batches${buildQueryString([
+      ["limit", limit],
+      ["status", status],
+    ])}`,
     "Failed to fetch debug batches",
     signal,
   );

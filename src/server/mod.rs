@@ -590,9 +590,17 @@ async fn get_run_debug_batches(
         .get("limit")
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(1000);
+    let status_param = params
+        .get("status")
+        .map(|s| s.to_lowercase())
+        .unwrap_or_else(|| "claimed".to_string());
+    let status_param = match status_param.as_str() {
+        "pending" | "claimed" | "both" => status_param,
+        _ => "claimed".to_string(),
+    };
     let payload = state
         .store
-        .fetch_pending_claimed_batches_json(run_id, limit)
+        .fetch_pending_claimed_batches_json(run_id, status_param.as_str(), limit)
         .await?;
     json_response(payload)
 }

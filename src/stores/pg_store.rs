@@ -92,9 +92,10 @@ impl PgStore {
     pub async fn fetch_pending_claimed_batches_json(
         &self,
         run_id: i32,
+        status: &str,
         limit: usize,
     ) -> Result<serde_json::Value, StoreError> {
-        let raw = queries::fetch_pending_claimed_batches(&self.pool, run_id, limit as i64)
+        let raw = queries::fetch_batches_by_status(&self.pool, run_id, status, limit as i64)
             .await
             .map_err(map_sqlx)?;
         let mut out = Vec::with_capacity(raw.len());

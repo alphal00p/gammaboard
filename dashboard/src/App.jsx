@@ -1,4 +1,17 @@
-import { Alert, Box, Button, Chip, Container, Snackbar, Stack, Tab, Tabs, TextField, Typography } from "@mui/material";
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  Container,
+  Snackbar,
+  Stack,
+  Tab,
+  Tabs,
+  TextField,
+  Typography,
+  MenuItem,
+} from "@mui/material";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import gammaboardLogo from "./assets/gammalooplogo.svg";
 import { AuthProvider, useAuth } from "./auth/AuthProvider";
@@ -499,6 +512,7 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, onRunCr
   const [createRunError, setCreateRunError] = useState(null);
   const [snackbar, setSnackbar] = useState(null);
   const [runTemplates, setRunTemplates] = useState([]);
+  const [downloadStatus, setDownloadStatus] = useState("claimed");
 
   const reloadRunTemplates = useCallback(async () => {
     try {
@@ -581,36 +595,54 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, onRunCr
           }}
         />
       </RunScopedWorkspace>
-      <Box sx={{ mt: 3, display: "flex", justifyContent: "flex-end" }}>
-        <Button
-          variant="outlined"
-          disabled={!selectedRun || !authenticated}
-          onClick={async () => {
-            if (!selectedRun) return;
-            try {
-              // collect the batches and download as JSON
-              const payload = await fetchRunDebugBatches(selectedRun, { limit: 1000 });
-              const filename = `run-${selectedRun}-pending-batches-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
-              const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement("a");
-              a.href = url;
-              a.download = filename;
-              document.body.appendChild(a);
-              a.click();
-              a.remove();
-              URL.revokeObjectURL(url);
-              setSnackbar({
-                message: `Downloaded ${Array.isArray(payload) ? payload.length : "?"} batch(es).`,
-                severity: "success",
-              });
-            } catch (err) {
-              setSnackbar({ message: err?.message || "Failed to download batches.", severity: "error" });
-            }
-          }}
-        >
-          Download Pending Batches
-        </Button>
+      <Box sx={{ mt: 3, display: "flex", justifyContent: "flex-end", alignItems: "center" }}>
+        <Stack direction="row" spacing={1} alignItems="center">
+          <TextField
+            select
+            size="small"
+            label="Status"
+            value={downloadStatus}
+            onChange={(e) => setDownloadStatus(e.target.value)}
+            disabled={!selectedRun || !authenticated}
+            sx={{ minWidth: 160 }}
+            InputLabelProps={{ shrink: true }}
+          >
+            <MenuItem value="claimed">Claimed</MenuItem>
+            <MenuItem value="pending">Pending</MenuItem>
+            <MenuItem value="both">Both</MenuItem>
+          </TextField>
+          <Button
+            variant="outlined"
+            disabled={!selectedRun || !authenticated}
+            onClick={async () => {
+              if (!selectedRun) return;
+              try {
+                // collect the selected batches and download as JSON
+                const payload = await fetchRunDebugBatches(selectedRun, { limit: 1000, status: downloadStatus });
+                const filename = `run-${selectedRun}-${downloadStatus}-batches-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+                const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+                setSnackbar({
+                  message: `Downloaded ${Array.isArray(payload) ? payload.length : "?"} batch(es).`,
+                  severity: "success",
+                });
+              } catch (err) {
+                setSnackbar({ message: err?.message || "Failed to download batches.", severity: "error" });
+              }
+            }}
+          >
+            {downloadStatus === "both"
+              ? "Download Batches"
+              : `Download ${downloadStatus[0].toUpperCase()}${downloadStatus.slice(1)} Batches`}
+          </Button>
+        </Stack>
       </Box>
 
       <TomlActionDialog
