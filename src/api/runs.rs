@@ -714,6 +714,33 @@ fixed_dims = { "0" = 0 }
         );
     }
 
+    #[test]
+    fn parse_run_add_accepts_unit_evaluator_multiple_fail_batches() {
+        let config = parse_run_add_config_toml(
+            r#"
+name = "unit-fail-batches"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+fail_on_batch_nrs = [1, 2, 3]
+
+[[task_queue]]
+kind = "sample"
+stop_condition = { max_samples = 8 }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"#,
+        )
+        .expect("run config");
+
+        let EvaluatorConfig::Unit { params } = config.integration_params.evaluator else {
+            panic!("expected unit evaluator");
+        };
+        assert_eq!(params.fail_on_batch_nrs, vec![1, 2, 3]);
+    }
+
     fn sample_task(accumulator: Option<crate::core::AccumulatorSourceSpec>) -> RunTaskInput {
         RunTaskInput {
             name: None,

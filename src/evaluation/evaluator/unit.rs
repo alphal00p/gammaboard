@@ -11,6 +11,7 @@ pub struct UnitEvaluator {
     domain: Domain,
     accumulator_kind: SemanticAccumulatorKind,
     fail_on_batch_nr: Option<usize>,
+    fail_on_batch_nrs: Vec<usize>,
     eval_batches_total: usize,
 }
 
@@ -19,11 +20,13 @@ impl UnitEvaluator {
         domain: Domain,
         accumulator_kind: SemanticAccumulatorKind,
         fail_on_batch_nr: Option<usize>,
+        fail_on_batch_nrs: Vec<usize>,
     ) -> Self {
         Self {
             domain,
             accumulator_kind,
             fail_on_batch_nr,
+            fail_on_batch_nrs,
             eval_batches_total: 0,
         }
     }
@@ -33,6 +36,7 @@ impl UnitEvaluator {
             Domain::rectangular(params.continuous_dims, params.discrete_dims),
             params.accumulator_kind,
             params.fail_on_batch_nr,
+            params.fail_on_batch_nrs,
         )
     }
 
@@ -63,6 +67,15 @@ impl UnitEvaluator {
             ))),
         }
     }
+
+    fn should_fail_on_batch(&self, batch_nr: usize) -> bool {
+        self.fail_on_batch_nr
+            .is_some_and(|n| n > 0 && n == batch_nr)
+            || self
+                .fail_on_batch_nrs
+                .iter()
+                .any(|n| *n > 0 && *n == batch_nr)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -73,6 +86,8 @@ pub struct UnitEvaluatorParams {
     pub accumulator_kind: SemanticAccumulatorKind,
     #[serde(default)]
     pub fail_on_batch_nr: Option<usize>,
+    #[serde(default)]
+    pub fail_on_batch_nrs: Vec<usize>,
 }
 
 impl Default for UnitEvaluatorParams {
@@ -82,6 +97,7 @@ impl Default for UnitEvaluatorParams {
             discrete_dims: 0,
             accumulator_kind: SemanticAccumulatorKind::Scalar,
             fail_on_batch_nr: None,
+            fail_on_batch_nrs: Vec::new(),
         }
     }
 }
@@ -114,10 +130,7 @@ impl Evaluator for UnitEvaluator {
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
         self.eval_batches_total = self.eval_batches_total.saturating_add(1);
-        if self
-            .fail_on_batch_nr
-            .is_some_and(|n| n > 0 && self.eval_batches_total == n)
-        {
+        if self.should_fail_on_batch(self.eval_batches_total) {
             return Err(EvalError::eval(format!(
                 "unit evaluator injected failure on batch {}",
                 self.eval_batches_total
@@ -153,8 +166,12 @@ mod tests {
             Point::new(vec![1.0], Vec::new(), 3.0),
         ])
         .expect("batch");
-        let mut evaluator =
-            UnitEvaluator::new(Domain::continuous(1), SemanticAccumulatorKind::Scalar, None);
+        let mut evaluator = UnitEvaluator::new(
+            Domain::continuous(1),
+            SemanticAccumulatorKind::Scalar,
+            None,
+            Vec::new(),
+        );
 
         let result = evaluator
             .eval_batch(
@@ -185,6 +202,7 @@ mod tests {
             Domain::continuous(1),
             SemanticAccumulatorKind::Complex,
             None,
+            Vec::new(),
         );
 
         let result = evaluator

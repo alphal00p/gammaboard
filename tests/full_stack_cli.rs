@@ -3503,6 +3503,196 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_evaluator_batch_fails_twice_then_task_recovers() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+
+    let config = temp_run_add_config(
+        r#"
+name = "evaluator-retry-twice-then-recover-e2e"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+accumulator_kind = "scalar"
+fail_on_batch_nrs = [1, 2]
+
+[sampler_aggregator_runner_params.queue]
+max_batch_retries = 3
+
+[[task_queue]]
+kind = "sample"
+stop_condition = { max_samples = 32 }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 = sqlx::query_scalar(
+        "SELECT id FROM runs WHERE name = 'evaluator-retry-twice-then-recover-e2e'",
+    )
+    .fetch_one(&harness.pool)
+    .await?;
+
+    harness.start_nodes(&["w-1", "w-2"]).await?;
+
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-1",
+            "sampler-aggregator",
+            "evaluator-retry-twice-then-recover-e2e",
+        ])
+        .assert()
+        .success();
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-2",
+            "evaluator",
+            "evaluator-retry-twice-then-recover-e2e",
+        ])
+        .assert()
+        .success();
+
+    harness
+        .wait_for("batch reached retry_count >= 2", Duration::from_secs(60), || async {
+            let max_retry: Option<i32> =
+                sqlx::query_scalar("SELECT MAX(retry_count) FROM batches WHERE run_id = $1")
+                    .bind(run_id)
+                    .fetch_one(&harness.pool)
+                    .await?;
+            Ok(max_retry.unwrap_or(0) >= 2)
+        })
+        .await?;
+    wait_for_task_completed(&harness, run_id, Duration::from_secs(90)).await?;
+
+    let failed_batches: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM batches WHERE run_id = $1 AND status = 'failed'")
+            .bind(run_id)
+            .fetch_one(&harness.pool)
+            .await?;
+    assert_eq!(
+        failed_batches, 0,
+        "task recovered, so no batch should be permanently failed"
+    );
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_evaluator_batch_fails_three_times_and_task_fails() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+
+    let config = temp_run_add_config(
+        r#"
+name = "evaluator-retry-three-then-fail-e2e"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+accumulator_kind = "scalar"
+fail_on_batch_nrs = [1, 2, 3]
+
+[sampler_aggregator_runner_params.queue]
+max_batch_retries = 3
+
+[[task_queue]]
+kind = "sample"
+stop_condition = { max_samples = 32 }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 =
+        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'evaluator-retry-three-then-fail-e2e'")
+            .fetch_one(&harness.pool)
+            .await?;
+
+    harness.start_nodes(&["w-1", "w-2"]).await?;
+
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-1",
+            "sampler-aggregator",
+            "evaluator-retry-three-then-fail-e2e",
+        ])
+        .assert()
+        .success();
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-2",
+            "evaluator",
+            "evaluator-retry-three-then-fail-e2e",
+        ])
+        .assert()
+        .success();
+
+    wait_for_task_failed_and_run_unassigned(&harness, run_id, Duration::from_secs(90)).await?;
+
+    let task: (String, Option<String>) = sqlx::query_as(
+        "SELECT state, failure_reason FROM run_tasks WHERE run_id = $1 AND sequence_nr = 1",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(task.0, "failed");
+    let reason = task.1.unwrap_or_default();
+    assert!(
+        reason.contains("3/3"),
+        "expected retry progress in failure reason, got: {reason}"
+    );
+
+    let failed_batches: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM batches WHERE run_id = $1 AND status = 'failed'")
+            .bind(run_id)
+            .fetch_one(&harness.pool)
+            .await?;
+    assert!(
+        failed_batches >= 1,
+        "expected at least one permanently failed batch"
+    );
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_can_clone_run_from_task_snapshot() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
