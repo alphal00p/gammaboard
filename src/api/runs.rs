@@ -741,6 +741,42 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
         assert_eq!(params.fail_on_batch_nrs, vec![1, 2, 3]);
     }
 
+    #[test]
+    fn parse_run_add_accepts_naive_monte_carlo_materializer_failure() {
+        let config = parse_run_add_config_toml(
+            r#"
+name = "materializer-failure"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[task_queue]]
+kind = "sample"
+stop_condition = { max_samples = 8 }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materialize_batch_nr = 1 } }
+"#,
+        )
+        .expect("run config");
+
+        let Some(tasks) = config.task_queue else {
+            panic!("missing task queue");
+        };
+        let RunTaskSpec::Sample {
+            sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config { config }),
+            ..
+        } = &tasks[0].task
+        else {
+            panic!("expected sample task with sampler config");
+        };
+        let SamplerAggregatorConfig::NaiveMonteCarlo { params } = config else {
+            panic!("expected naive monte carlo config");
+        };
+        assert_eq!(params.fail_on_materialize_batch_nr, Some(1));
+    }
+
     fn sample_task(accumulator: Option<crate::core::AccumulatorSourceSpec>) -> RunTaskInput {
         RunTaskInput {
             name: None,

@@ -1,5 +1,7 @@
 use gammaboard::config::RuntimeConfig;
-use gammaboard::core::{ControlPlaneStore, StoreError, WorkQueueStore, WorkerRole, next_batch_ids};
+use gammaboard::core::{
+    BatchFailOutcome, ControlPlaneStore, StoreError, WorkQueueStore, WorkerRole, next_batch_ids,
+};
 use gammaboard::{Batch, LatentBatchSpec, PgStore, Point};
 use sqlx::postgres::PgPoolOptions;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -363,6 +365,93 @@ async fn sampler_aggregator_desired_assignment_is_unique_per_run() {
         }
         other => panic!("expected invalid input, got {other}"),
     }
+
+    sqlx::query("DELETE FROM runs WHERE id = $1")
+        .bind(run_id)
+        .execute(store.pool())
+        .await
+        .expect("cleanup run");
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn cleanup_consumed_completed_batches_does_not_remove_failed_batches() {
+    let Some(store) = test_store().await else {
+        return;
+    };
+
+    let run_id: i32 = sqlx::query_scalar(
+        r#"
+        INSERT INTO runs (
+            name,
+            integration_params,
+            point_spec
+        ) VALUES (
+            'cleanup-failed-batches',
+            '{}'::jsonb,
+            '{"Continuous":{"dims":1}}'::jsonb
+        )
+        RETURNING id
+        "#,
+    )
+    .fetch_one(store.pool())
+    .await
+    .expect("insert run");
+
+    let task_id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO run_tasks (run_id, name, sequence_nr, task, state)
+        VALUES ($1, 'sample-0', 0, '{"kind":"pause"}'::jsonb, 'completed')
+        RETURNING id
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(store.pool())
+    .await
+    .expect("insert run task");
+
+    let batch = Batch::from_points([Point::new(vec![1.0], Vec::new(), 1.0)]).expect("batch");
+    let latent_batch = LatentBatchSpec::from_batch(&batch).build();
+    let batch_ids = next_batch_ids(1);
+    store
+        .insert_batches(run_id, task_id, false, &batch_ids, &[latent_batch])
+        .await
+        .expect("insert batch");
+
+    let outcome = store
+        .fail_batch(batch_ids[0], "forced failure", 1)
+        .await
+        .expect("fail batch");
+    assert!(
+        matches!(
+            outcome,
+            BatchFailOutcome::PermanentlyFailed {
+                retry_count: 1,
+                ..
+            }
+        ),
+        "batch should become permanently failed at retry limit"
+    );
+
+    let removed = store
+        .cleanup_consumed_completed_batches(run_id, i64::MAX, 1024)
+        .await
+        .expect("cleanup completed batches");
+    assert_eq!(removed, 0, "cleanup should only remove completed batches");
+
+    let failed_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM batches
+        WHERE run_id = $1
+          AND status = 'failed'
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(store.pool())
+    .await
+    .expect("count failed batches");
+    assert_eq!(failed_count, 1, "failed batch must remain persisted");
 
     sqlx::query("DELETE FROM runs WHERE id = $1")
         .bind(run_id)

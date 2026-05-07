@@ -520,14 +520,17 @@ where
             retry_count,
         } = outcome
         {
+            let reason = format!(
+                "batch {batch_id} failed after {retry_count}/{} retries: {err}",
+                self.max_batch_retries
+            );
             self.store
-                .fail_run_task(
-                    task_id,
-                    &format!(
-                        "batch {batch_id} failed after {retry_count}/{} retries: {err}",
-                        self.max_batch_retries
-                    ),
-                )
+                .fail_run_task(task_id, &reason)
+                .await
+                .map_err(EvaluatorRunnerError::Store)?;
+            let assignments_cleared = self
+                .store
+                .clear_desired_assignments_for_run(self.run_id)
                 .await
                 .map_err(EvaluatorRunnerError::Store)?;
             warn!(
@@ -536,7 +539,8 @@ where
                 task_id,
                 batch_id,
                 retries = %format!("{retry_count}/{}", self.max_batch_retries),
-                "batch retry limit reached; task marked failed"
+                assignments_cleared,
+                "batch retry limit reached; task marked failed and run assignments cleared"
             );
         }
         self.observe_idle_ratio(loop_started, compute_time_ms);
@@ -564,7 +568,6 @@ where
         if pop.stalled {
             self.counters.fetch_stalls += 1;
         }
-
         self.ensure_task_context(claimed.task_id).await?;
 
         let materialization_started = Instant::now();

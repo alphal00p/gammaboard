@@ -276,6 +276,42 @@ pub(crate) async fn fetch_batches_by_status(
             .fetch_all(pool)
             .await?
         }
+        "failed" => {
+            sqlx::query_as::<_, (i64, i64, bool, i32, String, Option<String>, Option<String>, Vec<u8>)>(
+                r#"
+                SELECT b.id, b.task_id, b.requires_training_values, b.batch_size,
+                       b.status::text, b.claimed_by_node_name, b.claimed_by_node_uuid, i.latent_batch
+                FROM batches b
+                JOIN batch_inputs i ON i.batch_id = b.id
+                WHERE b.run_id = $1
+                  AND b.status = 'failed'
+                ORDER BY b.created_at, b.id
+                LIMIT $2
+                "#,
+            )
+            .bind(run_id)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+        }
+        "all" => {
+            sqlx::query_as::<_, (i64, i64, bool, i32, String, Option<String>, Option<String>, Vec<u8>)>(
+                r#"
+                SELECT b.id, b.task_id, b.requires_training_values, b.batch_size,
+                       b.status::text, b.claimed_by_node_name, b.claimed_by_node_uuid, i.latent_batch
+                FROM batches b
+                JOIN batch_inputs i ON i.batch_id = b.id
+                WHERE b.run_id = $1
+                  AND b.status IN ('pending','claimed','failed')
+                ORDER BY b.created_at, b.id
+                LIMIT $2
+                "#,
+            )
+            .bind(run_id)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+        }
         _ => {
             sqlx::query_as::<_, (i64, i64, bool, i32, String, Option<String>, Option<String>, Vec<u8>)>(
                 r#"
@@ -604,8 +640,8 @@ pub(crate) async fn fail_batch(
         UPDATE batches
         SET
             status = CASE
-                WHEN COALESCE(retry_count, 0) + 1 >= $3 THEN 'failed'::batch_status
-                ELSE 'pending'::batch_status
+                WHEN COALESCE(retry_count, 0) + 1 >= $3 THEN 'failed'
+                ELSE 'pending'
             END,
             last_error = $2,
             claimed_by_node_name = NULL,
@@ -796,6 +832,7 @@ pub(crate) async fn cleanup_consumed_completed_batches(
             FROM batches
             WHERE run_id = $1
               AND status = 'completed'
+              AND COALESCE(retry_count, 0) = 0
               AND id <= $2
             ORDER BY id ASC
             LIMIT $3

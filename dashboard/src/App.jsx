@@ -609,7 +609,8 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, onRunCr
           >
             <MenuItem value="claimed">Claimed</MenuItem>
             <MenuItem value="pending">Pending</MenuItem>
-            <MenuItem value="both">Both</MenuItem>
+            <MenuItem value="failed">Failed</MenuItem>
+            <MenuItem value="all">All</MenuItem>
           </TextField>
           <Button
             variant="outlined"
@@ -638,7 +639,7 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, onRunCr
               }
             }}
           >
-            {downloadStatus === "both"
+            {downloadStatus === "both" || downloadStatus === "all"
               ? "Download Batches"
               : `Download ${downloadStatus[0].toUpperCase()}${downloadStatus.slice(1)} Batches`}
           </Button>

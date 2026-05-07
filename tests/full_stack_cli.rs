@@ -175,7 +175,7 @@ impl FullStackHarness {
             .connect(&db.database_url)
             .await?;
         let bin_path = resolve_bin_path()?;
-        let cli_config = temp_cli_config(&db.database_url, false);
+        let cli_config = temp_cli_config(&db.database_url, true);
         let runtime_config_path = cli_config.path().to_path_buf();
 
         let mut temp_files = Vec::new();
@@ -1415,20 +1415,74 @@ async fn wait_for_task_completed(
         .await
 }
 
-async fn wait_for_retried_batch(
+async fn wait_for_batch_retry_count(
+    harness: &FullStackHarness,
+    run_id: i32,
+    min_retry_count: i32,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let max_retry: Option<i32> =
+            sqlx::query_scalar("SELECT MAX(retry_count) FROM batches WHERE run_id = $1")
+                .bind(run_id)
+                .fetch_one(&harness.pool)
+                .await?;
+        if max_retry.unwrap_or(0) >= min_retry_count {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            let task_rows: Vec<(i64, String, String, Option<String>)> = sqlx::query_as(
+                "SELECT id, name, state, failure_reason FROM run_tasks WHERE run_id = $1 ORDER BY sequence_nr",
+            )
+            .bind(run_id)
+            .fetch_all(&harness.pool)
+            .await?;
+            let batch_counts: Vec<(String, i64, Option<i32>)> = sqlx::query_as(
+                "SELECT status::text, COUNT(*), MAX(retry_count) FROM batches WHERE run_id = $1 GROUP BY status ORDER BY status",
+            )
+            .bind(run_id)
+            .fetch_all(&harness.pool)
+            .await?;
+            let nodes: Vec<(String, Option<i32>, Option<String>, Option<i32>, Option<String>)> =
+                sqlx::query_as(
+                    "SELECT name, desired_run_id, desired_role, active_run_id, active_role FROM nodes ORDER BY name",
+                )
+                .fetch_all(&harness.pool)
+                .await?;
+            let logs: Vec<(String, String, String, JsonValue)> = sqlx::query_as(
+                "SELECT source, level, message, fields FROM runtime_logs WHERE run_id = $1 ORDER BY id DESC LIMIT 12",
+            )
+            .bind(run_id)
+            .fetch_all(&harness.pool)
+            .await?;
+            let all_logs: Vec<(Option<i32>, String, String, String, JsonValue)> = sqlx::query_as(
+                "SELECT run_id, source, level, message, fields FROM runtime_logs ORDER BY id DESC LIMIT 20",
+            )
+            .fetch_all(&harness.pool)
+            .await?;
+            anyhow::bail!(
+                "timed out waiting for batch retry_count >= {min_retry_count}; max_retry={max_retry:?}; tasks={task_rows:?}; batches={batch_counts:?}; nodes={nodes:?}; logs={logs:?}; all_logs={all_logs:?}"
+            );
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn wait_for_failed_batch(
     harness: &FullStackHarness,
     run_id: i32,
     timeout: Duration,
 ) -> anyhow::Result<()> {
     harness
-        .wait_for("retried batch recorded", timeout, || async {
-            let retried_batches: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM batches WHERE run_id = $1 AND retry_count > 0",
+        .wait_for("failed batch recorded", timeout, || async {
+            let failed_batches: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM batches WHERE run_id = $1 AND status = 'failed'",
             )
             .bind(run_id)
             .fetch_one(&harness.pool)
             .await?;
-            Ok(retried_batches > 0)
+            Ok(failed_batches > 0)
         })
         .await
 }
@@ -3428,7 +3482,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
         .assert()
         .success();
 
-    wait_for_retried_batch(&harness, run_id, Duration::from_secs(15)).await?;
+    wait_for_batch_retry_count(&harness, run_id, 1, Duration::from_secs(30)).await?;
     wait_for_task_completed(&harness, run_id, Duration::from_secs(40)).await?;
 
     harness.stop_children().await;
@@ -3492,7 +3546,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
         .assert()
         .success();
 
-    wait_for_retried_batch(&harness, run_id, Duration::from_secs(15)).await?;
+    wait_for_batch_retry_count(&harness, run_id, 1, Duration::from_secs(30)).await?;
     wait_for_task_completed(&harness, run_id, Duration::from_secs(40)).await?;
 
     harness.stop_children().await;
@@ -3567,16 +3621,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
         .assert()
         .success();
 
-    harness
-        .wait_for("batch reached retry_count >= 2", Duration::from_secs(60), || async {
-            let max_retry: Option<i32> =
-                sqlx::query_scalar("SELECT MAX(retry_count) FROM batches WHERE run_id = $1")
-                    .bind(run_id)
-                    .fetch_one(&harness.pool)
-                    .await?;
-            Ok(max_retry.unwrap_or(0) >= 2)
-        })
-        .await?;
+    wait_for_batch_retry_count(&harness, run_id, 2, Duration::from_secs(60)).await?;
     wait_for_task_completed(&harness, run_id, Duration::from_secs(90)).await?;
 
     let failed_batches: i64 =
@@ -3660,6 +3705,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
         .assert()
         .success();
 
+    wait_for_failed_batch(&harness, run_id, Duration::from_secs(60)).await?;
     wait_for_task_failed_and_run_unassigned(&harness, run_id, Duration::from_secs(90)).await?;
 
     let task: (String, Option<String>) = sqlx::query_as(

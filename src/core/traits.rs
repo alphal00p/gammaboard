@@ -241,12 +241,12 @@ pub trait RunTaskStore: Send + Sync {
 
 #[async_trait]
 pub trait EvaluatorWorkerStore:
-    WorkQueueStore + AggregationStore + RunTaskStore + Send + Sync
+    WorkQueueStore + AggregationStore + RunTaskStore + ControlPlaneStore + Send + Sync
 {
 }
 
 impl<T> EvaluatorWorkerStore for T where
-    T: WorkQueueStore + AggregationStore + RunTaskStore + Send + Sync
+    T: WorkQueueStore + AggregationStore + RunTaskStore + ControlPlaneStore + Send + Sync
 {
 }
 
