@@ -20,13 +20,18 @@ pub struct DbArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum DbCommand {
+    /// Show local Postgres cluster status
     Status,
+    /// Start local Postgres and run migrations
     Start,
+    /// Stop local Postgres
     Stop,
+    /// Delete the local Postgres data directory
     Delete {
         #[arg(short = 'y', long, action = clap::ArgAction::SetTrue)]
         yes: bool,
     },
+    /// Dump the configured database as SQL
     DumpSql,
 }
 

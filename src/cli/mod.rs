@@ -50,7 +50,7 @@ enum Command {
     Run(RunArgs),
     /// Node assignment and node lifecycle commands
     Node(NodeArgs),
-    /// API server
+    /// API-only backend server
     Server(ServerArgs),
     /// Auth helpers
     Auth(AuthArgs),
@@ -58,7 +58,7 @@ enum Command {
     Completion(CompletionArgs),
     /// Local PostgreSQL lifecycle helpers
     Db(DbArgs),
-    /// Foreground local deploy stack supervisor
+    /// Foreground dashboard deploy stack supervisor
     Deploy(DeployArgs),
 }
 

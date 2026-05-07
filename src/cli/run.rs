@@ -18,19 +18,21 @@ pub struct RunArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum RunCommand {
-    Add {
-        config_file: PathBuf,
-    },
+    /// Create a run from a run TOML file
+    Add { config_file: PathBuf },
+    /// Clone a run from a persisted stage snapshot
     Clone {
         source_run: String,
         from_snapshot_id: i64,
         new_name: String,
     },
-    List {
-        run_name: Option<String>,
-    },
+    /// List runs, optionally filtered by exact name
+    List { run_name: Option<String> },
+    /// Pause one run or all runs
     Pause(RunSelection),
+    /// Delete one run or all runs
     Remove(RunSelection),
+    /// Add, list, or remove queued run tasks
     Task(TaskArgs),
 }
 
@@ -42,8 +44,11 @@ pub struct TaskArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum TaskCommand {
+    /// Append tasks from a task TOML file
     Add { run: String, task_file: PathBuf },
+    /// List queued and historical tasks for a run
     List { run: String },
+    /// Remove a pending task
     Remove { run: String, task_id: i64 },
 }
 

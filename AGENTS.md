@@ -91,6 +91,7 @@ Use this file for architecture and implementation rules. Use `README.md` for set
 - Fault-injection parameters on test evaluators/samplers must stay optional and default-off.
 - If you change architecture, runtime behavior, CLI behavior, or config shape, update this file. If normal setup or operator workflow changes, update `README.md`.
 ## Required Checks
+Only run these if the rust code changes
 - `cargo fmt`, `cargo check -q`, `cargo test -q`, `just test-e2e`
 
 - Prefer small coherent stages. After a stage is ready, provide a concrete commit message as a bare fenced `text` block with no label or commentary around it.

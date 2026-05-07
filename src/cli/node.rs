@@ -22,19 +22,21 @@ pub struct NodeArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum NodeCommand {
+    /// Run one worker node in the foreground
     Run(NodeRunArgs),
+    /// Spawn local worker node processes
     AutoRun(AutoRunArgs),
+    /// Assign a node role for a run
     Assign {
         node_name: String,
         role: RoleArg,
         run: String,
     },
-    Unassign {
-        node_name: String,
-    },
-    List {
-        node_name: Option<String>,
-    },
+    /// Clear a node's desired assignment
+    Unassign { node_name: String },
+    /// List registered nodes
+    List { node_name: Option<String> },
+    /// Request shutdown for one node or all nodes
     Stop(NodeSelection),
 }
 

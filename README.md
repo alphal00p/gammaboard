@@ -2,237 +2,162 @@
 
 Gammaboard runs distributed numerical integration jobs with PostgreSQL as the shared control plane.
 
+## Quickstart
+Local development from the repo root:
+
+```bash
+just deploy local dev
+```
+
+This builds the dashboard when needed, builds the dev-optimized backend, starts local Postgres from [ops/local/config/runtime.toml](ops/local/config/runtime.toml), starts the backend, and serves the dashboard through nginx at `http://localhost:8080`. Stop the foreground deploy with `Ctrl-C`.
+
+ITPhlies release deploy from the repo root on ITPhlies:
+
+```bash
+just deploy itphlies release
+```
+
+This builds the release backend and uses [ops/itphlies/config/runtime.toml](ops/itphlies/config/runtime.toml) plus [ops/itphlies/config/deploy.toml](ops/itphlies/config/deploy.toml). Open `http://itphlies:8080` on the LAN, or tunnel `ssh -N -L 8080:127.0.0.1:8080 ITPhliesTails` and open `http://localhost:8080`.
+
+Run an additional isolated instance with a port offset:
+
+```bash
+just deploy local dev 1
+just deploy itphlies release 1
+```
+
+`--port-offset 1` shifts frontend/API/Postgres from `8080/4000/5400` to `8081/4001/5401` and suffixes local Postgres state paths.
+
+For UBELIX Slurm/Apptainer operation, use [ops/ubelix/README.md](ops/ubelix/README.md).
+
 ## Main Commands
-- `gammaboard run`: create, list, pause, clone, and remove runs.
-- `gammaboard node`: list, assign, unassign, and stop nodes.
-- `gammaboard server`: run the backend directly in the foreground.
-- `gammaboard deploy run`: supervise the full-stack deploy flow in the foreground.
-- `gammaboard db`: manage the local PostgreSQL instance used for development.
+- `gammaboard deploy run`: supervise local Postgres, backend API, and nginx/frontend in one foreground process.
+- `gammaboard run`: create, list, pause, clone, remove, and append tasks to runs.
+- `gammaboard node`: run workers, list nodes, assign roles, unassign, and request shutdown.
+- `gammaboard db`: manage the local PostgreSQL instance used by the active runtime config.
+- `gammaboard server`: run only the backend API. Use this for API-only/manual setups, not normal dashboard deploys.
 
 The dashboard shows runs, task output, nodes, performance, and logs.
 
 ## Prerequisites
 - Rust
-- PostgreSQL 16 tools (`initdb`, `pg_ctl`, `postgres`, `psql`) available locally for `gammaboard db ...`
+- PostgreSQL 16 tools (`initdb`, `pg_ctl`, `postgres`, `psql`)
 - `sqlx` CLI: `cargo install sqlx-cli --no-default-features --features postgres`
-- Node.js + npm for the frontend
+- Node.js + npm for building the dashboard frontend
+- nginx for `gammaboard deploy run`
+- `just` for the checked-in wrapper commands
 
-## Local Setup
-1. Start PostgreSQL:
-   ```bash
-   gammaboard db start
-   ```
-2. Build:
-   ```bash
-   cd dashboard && npm ci && npm run build
-   cargo build --profile dev-optim
-   ```
-3. Start the backend API:
-   ```bash
-   gammaboard server
-   ```
-4. Start the frontend:
-   ```bash
-   cd dashboard && npx serve build
-   ```
+## Deploy Without Wrappers
+Use the deploy helper directly when you do not want the `just` wrappers but still want the normal dashboard stack.
 
-Default config split:
-- `src/config_defaults/*.toml`: built-in fallback defaults embedded into the Rust binary
-- `ops/<env>/config/{runtime,server,deploy}.toml`: operator-facing environment profiles
-- `templates/{runs,tasks}/`: shared run/task templates served by the backend
+Local dev profile:
 
-The frontend uses relative `/api` calls and does not require `.env`.
+```bash
+just build-frontend
+cargo build --profile dev-optim
+./target/dev-optim/gammaboard deploy run --deploy-config ops/local/config/deploy.toml
+```
 
-## UBELIX Quickstart
-For UBELIX Slurm/Apptainer operation, use:
+ITPhlies release profile:
 
-- [ops/ubelix/README.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/README.md)
-- [ops/ubelix/slurm/smoke.sbatch](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/slurm/smoke.sbatch)
-- [ops/ubelix/justfile](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/justfile) for sync/prune helpers
+```bash
+just build-frontend
+cargo build --release
+./target/release/gammaboard \
+  --runtime-config ops/itphlies/config/runtime.toml \
+  deploy run \
+  --deploy-config ops/itphlies/config/deploy.toml
+```
 
-## Ops Layout
-- [ops/local/config](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config): local deploy profiles.
-- [ops/itphlies/README.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/itphlies/README.md): ITPhlies-specific deploy workflow and config.
-- [ops/ubelix/README.md](/home/cedricsigrist/Workspace/repos/gammaboard/ops/ubelix/README.md): UBELIX Slurm/Apptainer workflow and config.
+Useful deploy options:
+- `--port-offset <N>` adds `N` to configured frontend/API/Postgres ports and suffixes local Postgres state paths for isolated multi-instance launches.
+- `--api-port <PORT>` overrides the private backend API port for one launch.
+- Global runtime overrides such as `--database-url`, `--postgres-data-dir`, `--postgres-socket-dir`, and `--postgres-log-file` can isolate instances without editing TOML files.
 
-## Runtime Config
-- All commands load runtime config from [ops/local/config/runtime.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config/runtime.toml) by default.
-- If that default path is not present on disk, the CLI falls back to the built-in default runtime TOML.
-- Override it when needed with:
-  ```bash
-  gammaboard --runtime-config path/to/runtime/default.toml <COMMAND>
-  ```
-- Required shape:
-  ```toml
-  [database]
-  url = "postgresql://postgres:password@127.0.0.1:5400/gammaboard_db"
+`gammaboard deploy run` validates the frontend build, optionally starts local Postgres, starts `gammaboard server` as a supervised child, generates nginx config, runs nginx in the foreground, and on `Ctrl-C`/`SIGTERM` requests graceful node shutdown before stopping nginx, backend, and local Postgres.
 
-  [tracing]
-  persist_runtime_logs = true
-  db_gammaboard_level = "info"
-  db_external_level = "warn"
+## Fully Manual API-Only Mode
+Use this only if you do not want or need the dashboard frontend. `gammaboard server` starts the backend API directly and does not supervise nginx, build assets, or own a full deploy shutdown sequence.
 
-  [resources]
-  # Optional ordered search roots for relative evaluator resource paths
-  # (for example GammaLoop state_folder). First existing match wins.
-  roots = []
-
-  [local_postgres]
-  data_dir = ".postgres"
-  socket_dir = ".postgres-socket"
-  log_file = ".postgres/logfile"
-  max_connections = 512
-  shared_buffers = "4GB"
-  effective_cache_size = "32GB"
-  work_mem = "64MB"
-  checkpoint_timeout = "30min"
-  max_wal_size = "8GB"
-  wal_compression = true
-  synchronous_commit = false
-  ```
-
-## Local Postgres Commands
-Use the CLI for local database lifecycle:
+Start and stop the local database:
 
 ```bash
 gammaboard db status
 gammaboard db start
 gammaboard db stop
-gammaboard db delete
-gammaboard db dump-sql
+gammaboard db delete --yes
 ```
 
-These commands use `database.url` and `local_postgres` from the active runtime config, which defaults to `ops/local/config/runtime.toml`.
-Relative evaluator resource paths (for example `evaluator.kind = "gammaloop"` `state_folder`) resolve against `resources.roots` in order; absolute paths are used as-is.
-To reset local state, run `gammaboard db delete --yes` then `gammaboard db start`.
-`local_postgres.max_connections` controls the local Postgres server connection ceiling used by `gammaboard db start`.
-The checked-in local defaults also bias Postgres toward queue throughput: larger buffers/WAL limits, `wal_compression = true`, and `synchronous_commit = false`. That last setting trades crash durability of the most recent transactions for lower write latency, which is a good fit for the transient local batch queue but should be revisited for stricter durability needs.
-`gammaboard db start` always enables local query statistics by starting Postgres with `shared_preload_libraries=pg_stat_statements` and running `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` for the configured database.
+Start the API server:
 
-## Server Config
-- The server is configured from a single TOML file. By default:
-  ```bash
-  gammaboard server
-  ```
-- Override the server config path when needed with:
-  ```bash
-  gammaboard server --server-config path/to/server/default.toml
-  ```
-- The checked-in local default is [ops/local/config/server.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config/server.toml).
-- If that default path is not present on disk, the CLI falls back to the built-in default server TOML.
-- `Ctrl-C` terminates a direct `gammaboard server` process immediately. Dashboard control shutdown first requests graceful node shutdown, then exits the backend so a supervising `gammaboard deploy run` can stop nginx and Postgres.
-- Required shape:
-  ```toml
-  api_host = "0.0.0.0"
-  api_port = 4000
-  allowed_origins = ["http://localhost:3000", "http://localhost:8080"]
-  secure_cookie = false
-  allow_db_admin = true
-  allow_local_node_spawn = true
-  run_templates_dir = "../../../templates/runs"
-  task_templates_dir = "../../../templates/tasks"
-
-  [auth]
-  admin_password_hash = "$argon2id$..."
-  session_secret = "replace-me"
-  ```
-- All server config fields are explicit; the server does not fill in defaults.
-- Set `allow_db_admin = true` only for trusted local/operator setups; it enables dashboard-triggered `db stop && db start`.
-- Set `allow_local_node_spawn = false` for scheduler-managed deployments (for example UBELIX). Dashboard node-start actions still create DB-backed launch requests, but an external launcher must resolve them.
-- `gammaboard server` is the direct local/manual backend path. Use `gammaboard deploy run ...` when you want one foreground process to supervise local Postgres, the backend, and nginx-backed frontend serving.
-
-## Deploy Config
-Deploy is owned by `gammaboard deploy run ...` plus a deploy TOML profile.
-- `gammaboard deploy` default config (`ops/local/config/deploy.toml`) also has the same built-in fallback when the default file is absent.
-
-Config split:
-- `src/config_defaults/*.toml`: built-in fallback defaults for runtime/server/run-add
-- `ops/<env>/config/runtime.toml`: environment-specific runtime and local Postgres settings
-- `ops/<env>/config/server.toml`: environment-specific backend settings
-- `ops/<env>/config/deploy.toml`: environment-specific deploy orchestration (server profile, frontend HTTP exposure, static frontend serving, cleanup timing)
-
-The checked-in profiles are:
-- [ops/local/config/deploy.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config/deploy.toml)
-- [ops/itphlies/config/deploy.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/itphlies/config/deploy.toml)
-
-Use:
 ```bash
-gammaboard deploy run --deploy-config ops/local/config/deploy.toml
+gammaboard server --server-config ops/local/config/server.toml
 ```
 
-Useful options:
-- `--port-offset <N>` adds `N` to deploy-profile frontend/API/Postgres ports and suffixes local Postgres state paths for isolated multi-instance launches
-- `--api-port <PORT>` overrides the private backend API port for that launch
-- global runtime overrides such as `--database-url`, `--postgres-data-dir`, `--postgres-socket-dir`, and `--postgres-log-file` let one machine run multiple isolated deploy instances
+Create a run, append tasks, and inspect state:
 
-Deploy profiles now derive the printed/open URLs from `frontend_http.frontend_port` plus `frontend_http.frontend_advertise_hosts`, instead of duplicating full URL strings in the config.
-
-Example deploy invocations:
 ```bash
-gammaboard deploy run --deploy-config ops/local/config/deploy.toml
-gammaboard deploy run --deploy-config ops/local/config/deploy.toml --port-offset 1
-gammaboard deploy run --deploy-config ops/itphlies/config/deploy.toml --port-offset 2
+gammaboard run add templates/runs/gammaloop.toml
+gammaboard run task add gammaloop_tth templates/tasks/train_sample.toml
+gammaboard run list
+gammaboard run task list gammaloop_tth
 ```
 
-Deploy run:
-- optionally starts local Postgres via `gammaboard db start`
-- starts `gammaboard server` as a supervised child process using the same active `--runtime-config` path
-- generates an nginx config from the deploy profile and runs nginx in the foreground as a supervised child process
-- logs to the parent process stdout/stderr, so terminals, Slurm, or systemd own log collection
-- on `Ctrl-C`/`SIGTERM`, requests graceful shutdown for live nodes, waits for sampler-aggregator roles to persist state and clear, then tears down nginx, backend, and local Postgres
+Start local workers and assign them:
 
-`gammaboard deploy run ...` itself does not build. Build frontend/backend first for your selected profile.
+```bash
+gammaboard node auto-run 2
+gammaboard node assign w-1 sampler-aggregator gammaloop_tth
+gammaboard node assign w-2 evaluator gammaloop_tth
+gammaboard node list
+```
 
-## ITPhlies Deployment
-Use this flow when you want both direct LAN access and the SSH tunnel option.
+Pause work and shut down workers:
 
-1. On ITPhlies, from the repo root, build and run:
-   ```bash
-   cd dashboard && npm ci && npm run build
-   cargo build --release
-   ./target/release/gammaboard --runtime-config ops/itphlies/config/runtime.toml deploy run --deploy-config ops/itphlies/config/deploy.toml
-   ```
-   To run an additional isolated instance on the same machine:
-   ```bash
-   ./target/release/gammaboard --runtime-config ops/itphlies/config/runtime.toml deploy run --deploy-config ops/itphlies/config/deploy.toml --port-offset 1
-   ```
-2. On your laptop, open an SSH tunnel:
-   ```bash
-   ssh -N -L 8080:127.0.0.1:8080 ITPhliesTails
-   ```
-3. Open either:
-   ```text
-   http://localhost:8080
-   ```
-   or `http://itphlies:8080` if your local network resolves that hostname. If you access the server by LAN IP instead, add that origin to `allowed_origins` in the server config first.
-4. To stop all deployed ITPhlies processes, press `Ctrl-C` in the foreground deploy terminal.
-5. The SSH tunnel remains optional; direct LAN access works because nginx listens on `0.0.0.0:<frontend-port>`, while the backend still stays private on a derived `127.0.0.1:<api-port>`.
-6. Interactive deploy profiles disable nginx access logs by default to keep foreground output readable. Re-enable them in the deploy TOML only when debugging HTTP traffic.
+```bash
+gammaboard run pause gammaloop_tth
+gammaboard node stop -a
+```
 
-Config files used:
-- backend: [ops/itphlies/config/server.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/itphlies/config/server.toml)
-- deploy: [ops/itphlies/config/deploy.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/itphlies/config/deploy.toml)
+## Config Layout
+- `src/config_defaults/*.toml`: built-in fallback defaults embedded into the Rust binary.
+- [ops/local/config](ops/local/config): local development profiles.
+- [ops/itphlies/config](ops/itphlies/config): ITPhlies profiles.
+- `ops/ubelix/config/*`: UBELIX profiles rendered/submitted by the UBELIX launcher.
+- `templates/{runs,tasks}/`: shared run/task templates served by the backend.
 
-Important:
-- Use `--port-offset` for multi-instance launches.
-- `ops/itphlies/config/deploy.toml` advertises `localhost` and `itphlies` as the operator-facing URLs for the default deploy profile.
-- If you want to access the UI via a raw LAN IP or another hostname, add that exact origin to `allowed_origins`.
-- Default ports are backend `127.0.0.1:4000`, Postgres `127.0.0.1:5400`, and nginx `0.0.0.0:8080`.
-- For local and ITPhlies profiles, `--port-offset <OFFSET>` applies that offset to configured frontend/API/Postgres ports and suffixes Postgres state dirs/log paths with `-<OFFSET>`.
-- ITPhlies deployment uses the release backend binary by default.
+All commands load runtime config from [ops/local/config/runtime.toml](ops/local/config/runtime.toml) by default. Override it with:
 
-## Frontend API Routing
-- The dashboard frontend always calls relative `/api` endpoints.
-- Local dev: `dashboard/vite.config.js` proxies `/api/*` to `http://127.0.0.1:4000` for `npm start`.
-- Production: serve frontend and backend behind the same origin, and route `/api/*` to `gammaboard server` via your reverse proxy.
-- Example nginx layout:
-  - `location / { root <dashboard-build-dir>; try_files $uri /index.html; }`
-  - `location /api/ { proxy_pass http://127.0.0.1:4000/api/; }`
-- Local deploy setup:
-  - server config: [ops/local/config/server.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config/server.toml)
-  - deploy config: [ops/local/config/deploy.toml](/home/cedricsigrist/Workspace/repos/gammaboard/ops/local/config/deploy.toml)
-  - run with: `gammaboard deploy run --deploy-config ops/local/config/deploy.toml`
-  - stop with: `Ctrl-C` in the deploy terminal
+```bash
+gammaboard --runtime-config path/to/runtime.toml <COMMAND>
+```
+
+Deploy config points at the server config and frontend build path:
+
+```toml
+[api_server]
+api_server_config = "server.toml"
+
+[static_site]
+frontend_build_dir = "../../../dashboard/build"
+
+[frontend_http]
+frontend_host = "127.0.0.1"
+frontend_port = 8080
+frontend_advertise_hosts = ["localhost"]
+
+[database]
+ensure_started = true
+```
+
+Runtime config owns the database URL, resource roots, tracing, and local Postgres settings. The checked-in default Postgres port is `5400`; `deploy run --port-offset <N>` shifts it at launch time.
+
+Relative evaluator resources, such as GammaLoop `state_folder`, resolve through `resources.roots` in order. Absolute paths are used as-is.
+
+## Frontend Routing
+- The dashboard frontend always calls relative `/api` endpoints and does not require `.env`.
+- Local Vite dev server still proxies `/api/*` to `http://127.0.0.1:4000` for frontend-only development.
+- Production/dashboard deploys should serve frontend and backend behind the same origin. `gammaboard deploy run` does this with generated nginx config.
 
 ## Dashboard Auth
 - Read-only dashboard endpoints stay open.
