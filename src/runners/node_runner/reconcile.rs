@@ -364,13 +364,18 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             target.run_id,
         );
 
-        let open_batch_count =
-            role_store.get_open_batch_count(worker.run_id).await?.max(0) as usize;
+        let queue_counts = role_store
+            .get_batch_queue_counts(worker.run_id, None)
+            .await?;
+        let unfinished_batch_count = queue_counts
+            .pending
+            .saturating_add(queue_counts.claimed)
+            .max(0) as usize;
         let Some(task) = self
-            .load_or_activate_sampler_task(&role_store, worker.run_id, open_batch_count)
+            .load_or_activate_sampler_task(&role_store, worker.run_id, unfinished_batch_count)
             .await?
         else {
-            if open_batch_count == 0 {
+            if unfinished_batch_count == 0 {
                 let cleared = self
                     .store
                     .clear_desired_assignments_for_run(worker.run_id)
