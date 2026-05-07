@@ -35,6 +35,40 @@ DEFAULT_CONTROL_TIME = "00:20:00"
 DB_PATH = os.path.join(WORKSPACE_ROOT, "db/default")
 
 
+def shifted_port(base: int, port_offset: int, label: str) -> int:
+    port = base + port_offset
+    if port > 65535:
+        raise SystemExit(
+            f"{label} overflow with port_offset={port_offset} (base={base})"
+        )
+    return port
+
+
+def port_offset_from_env() -> int:
+    value = os.environ.get("GAMMABOARD_PORT_OFFSET", "0")
+    try:
+        port_offset = int(value)
+    except ValueError as err:
+        raise SystemExit(
+            f"GAMMABOARD_PORT_OFFSET must be a non-negative integer: {value}"
+        ) from err
+    if port_offset < 0:
+        raise SystemExit(
+            f"GAMMABOARD_PORT_OFFSET must be a non-negative integer: {value}"
+        )
+    return port_offset
+
+
+def frontend_port(port_offset: int | None = None) -> int:
+    resolved = port_offset if port_offset is not None else port_offset_from_env()
+    return shifted_port(FRONTEND_PORT, resolved, "frontend port")
+
+
+def db_port(port_offset: int | None = None) -> int:
+    resolved = port_offset if port_offset is not None else port_offset_from_env()
+    return shifted_port(DB_PORT, resolved, "postgres port")
+
+
 def command_clear_db(*_) -> None:
     import shutil
 
@@ -242,9 +276,9 @@ def wait_for_http(
     raise SystemExit(f"timed out waiting for {url}; last_error={last_error}")
 
 
-def api_url(control_node: str, path: str) -> str:
+def api_url(control_node: str, path: str, *, port_offset: int | None = None) -> str:
     # Server API binds to loopback on compute nodes; access it through nginx.
-    return f"http://{control_node}:{FRONTEND_PORT}/api{path}"
+    return f"http://{control_node}:{frontend_port(port_offset)}/api{path}"
 
 
 def ssh_target() -> str:
@@ -261,8 +295,8 @@ def ssh_target() -> str:
     return f"{user}@{host}"
 
 
-def tunnel_command(control_node: str, local_port: int) -> str:
-    return f"ssh -N -L {local_port}:{control_node}:{FRONTEND_PORT} {ssh_target()}"
+def tunnel_command(control_node: str, local_port: int, *, port_offset: int) -> str:
+    return f"ssh -N -L {local_port}:{control_node}:{frontend_port(port_offset)} {ssh_target()}"
 
 
 def copy_to_clipboard_osc52(text: str) -> bool:
@@ -277,14 +311,14 @@ def copy_to_clipboard_osc52(text: str) -> bool:
         return False
 
 
-def database_url(control_node: str) -> str:
-    return f"postgresql://postgres:postgres@{control_node}:{DB_PORT}/gammaboard_db"
+def database_url(control_node: str, *, port_offset: int | None = None) -> str:
+    return f"postgresql://postgres:postgres@{control_node}:{db_port(port_offset)}/gammaboard_db"
 
 
-def login(control_node: str, admin_password: str) -> str:
+def login(control_node: str, admin_password: str, *, port_offset: int | None = None) -> str:
     data = f'{{"password":"{admin_password}"}}'.encode()
     request = urllib.request.Request(
-        api_url(control_node, "/auth/login"),
+        api_url(control_node, "/auth/login", port_offset=port_offset),
         data=data,
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -319,12 +353,13 @@ def api_request_json(
     method: str = "POST",
     payload: dict | None = None,
     cookie: str | None = None,
+    port_offset: int | None = None,
 ) -> dict:
     headers = {"Content-Type": "application/json"}
     if cookie:
         headers["Cookie"] = cookie
     request = urllib.request.Request(
-        api_url(control_node, path),
+        api_url(control_node, path, port_offset=port_offset),
         data=json.dumps(payload or {}).encode(),
         headers=headers,
         method=method,
@@ -334,8 +369,14 @@ def api_request_json(
     return json.loads(body) if body else {}
 
 
-def post(control_node: str, path: str, *, cookie: str | None = None) -> None:
-    api_request_json(control_node, path, cookie=cookie)
+def post(
+    control_node: str,
+    path: str,
+    *,
+    cookie: str | None = None,
+    port_offset: int | None = None,
+) -> None:
+    api_request_json(control_node, path, cookie=cookie, port_offset=port_offset)
 
 
 def parse_hms(value: str) -> str:
@@ -344,7 +385,21 @@ def parse_hms(value: str) -> str:
     return value
 
 
-def submit_singleton_job(job_name: str, sbatch_path: str, time_limit: str) -> Job:
+def parse_port_offset(value: str) -> int:
+    try:
+        port_offset = int(value)
+    except ValueError as err:
+        raise argparse.ArgumentTypeError("expected non-negative integer") from err
+    if port_offset < 0:
+        raise argparse.ArgumentTypeError("expected non-negative integer")
+    shifted_port(FRONTEND_PORT, port_offset, "frontend port")
+    shifted_port(DB_PORT, port_offset, "postgres port")
+    return port_offset
+
+
+def submit_singleton_job(
+    job_name: str, sbatch_path: str, time_limit: str, *, port_offset: int
+) -> Job:
     jobs = active_jobs(name=job_name)
     if len(jobs) == 1:
         return jobs[0]
@@ -354,6 +409,8 @@ def submit_singleton_job(job_name: str, sbatch_path: str, time_limit: str) -> Jo
         raise SystemExit(f"multiple active jobs named {job_name}")
 
     ensure_dirs()
+    env = os.environ.copy()
+    env["GAMMABOARD_PORT_OFFSET"] = str(port_offset)
     result = run(
         [
             "sbatch",
@@ -364,25 +421,33 @@ def submit_singleton_job(job_name: str, sbatch_path: str, time_limit: str) -> Jo
             "--time",
             time_limit,
             sbatch_path,
-        ]
+        ],
+        env=env,
     )
     job_id = parse_job_id(result.stdout)
     return Job(id=job_id, name=job_name, state="SUBMITTED", node="")
 
 
-def submit_control(time_limit: str) -> Job:
-    return submit_singleton_job(CONTROL_JOB_NAME, CONTROL_SBATCH, time_limit)
+def submit_control(time_limit: str, *, port_offset: int) -> Job:
+    return submit_singleton_job(
+        CONTROL_JOB_NAME, CONTROL_SBATCH, time_limit, port_offset=port_offset
+    )
 
 
-def submit_single_node(time_limit: str) -> Job:
-    return submit_singleton_job(SINGLE_NODE_JOB_NAME, SINGLE_NODE_SBATCH, time_limit)
+def submit_single_node(time_limit: str, *, port_offset: int) -> Job:
+    return submit_singleton_job(
+        SINGLE_NODE_JOB_NAME, SINGLE_NODE_SBATCH, time_limit, port_offset=port_offset
+    )
 
 
-def claim_launch_request(control_node: str, cookie: str) -> dict | None:
+def claim_launch_request(
+    control_node: str, cookie: str, *, port_offset: int | None = None
+) -> dict | None:
     response = api_request_json(
         control_node,
         "/node-launch-requests/claim-external",
         cookie=cookie,
+        port_offset=port_offset,
     )
     request = response.get("request")
     return request if isinstance(request, dict) else None
@@ -396,6 +461,7 @@ def update_launch_request(
     started_count: int,
     result: dict,
     error: str | None = None,
+    port_offset: int | None = None,
 ) -> None:
     api_request_json(
         control_node,
@@ -407,6 +473,7 @@ def update_launch_request(
             "error": error,
         },
         cookie=cookie,
+        port_offset=port_offset,
     )
 
 
@@ -433,18 +500,25 @@ def submit_worker(
     control_node: str,
     *,
     control_job_id: str,
+    port_offset: int | None = None,
     max_start_failures: int = 3,
 ) -> str:
+    resolved_port_offset = (
+        port_offset if port_offset is not None else port_offset_from_env()
+    )
     ensure_dirs()
     env = os.environ.copy()
     env.update(
         {
             "NODE_NAME": node_name,
             "NODE_MAX_START_FAILURES": str(max_start_failures),
-            "GAMMABOARD_DATABASE_URL": database_url(control_node),
+            "GAMMABOARD_DATABASE_URL": database_url(
+                control_node, port_offset=resolved_port_offset
+            ),
             "GAMMABOARD_IMAGE": IMAGE_PATH,
             "GAMMABOARD_WORKSPACE_ROOT": WORKSPACE_ROOT,
             "DEPLOY_NAME": DEPLOY_NAME,
+            "GAMMABOARD_PORT_OFFSET": str(resolved_port_offset),
             "CONTROL_JOB_ID": control_job_id,
         }
     )
@@ -463,10 +537,19 @@ def submit_worker(
 
 
 def resolve_launch_requests(
-    control: Job, control_node: str, cookie: str, *, max_requests: int | None = None
+    control: Job,
+    control_node: str,
+    cookie: str,
+    *,
+    max_requests: int | None = None,
+    port_offset: int | None = None,
 ) -> int:
     return resolve_launch_requests_with_callback(
-        control, control_node, cookie, max_requests=max_requests
+        control,
+        control_node,
+        cookie,
+        max_requests=max_requests,
+        port_offset=port_offset,
     )
 
 
@@ -477,10 +560,16 @@ def resolve_launch_requests_with_callback(
     *,
     max_requests: int | None = None,
     on_launch: Callable[[str], None] | None = None,
+    port_offset: int | None = None,
 ) -> int:
+    resolved_port_offset = (
+        port_offset if port_offset is not None else port_offset_from_env()
+    )
     resolved = 0
     while max_requests is None or resolved < max_requests:
-        request = claim_launch_request(control_node, cookie)
+        request = claim_launch_request(
+            control_node, cookie, port_offset=resolved_port_offset
+        )
         if request is None:
             break
 
@@ -499,6 +588,7 @@ def resolve_launch_requests_with_callback(
                     node_name,
                     control_node,
                     control_job_id=control.id,
+                    port_offset=resolved_port_offset,
                     max_start_failures=max_start_failures,
                 )
                 submitted.append({"node_name": node_name, "job_id": job_id})
@@ -514,6 +604,7 @@ def resolve_launch_requests_with_callback(
                 "starting",
                 len(submitted),
                 {"workers": submitted},
+                port_offset=resolved_port_offset,
             )
         except Exception as err:
             try:
@@ -525,6 +616,7 @@ def resolve_launch_requests_with_callback(
                     len(submitted),
                     {"workers": submitted},
                     str(err),
+                    port_offset=resolved_port_offset,
                 )
             finally:
                 print(f"launch_request={request_id}\tfailed={err}", file=sys.stderr)
@@ -538,10 +630,12 @@ def watch_launch_requests(
     print(
         f"watching launch requests on {control_node}; Ctrl-C stops only this launcher"
     )
-    cookie = login(control_node, admin_password(args))
+    cookie = login(control_node, admin_password(args), port_offset=args.port_offset)
     try:
         while True:
-            resolved = resolve_launch_requests(control, control_node, cookie)
+            resolved = resolve_launch_requests(
+                control, control_node, cookie, port_offset=args.port_offset
+            )
             if args.once:
                 print(f"resolved_requests={resolved}")
                 return
@@ -551,20 +645,23 @@ def watch_launch_requests(
 
 
 def command_up(args: argparse.Namespace) -> None:
+    port_offset = args.port_offset
     job = (
-        submit_single_node(args.time) if args.single_node else submit_control(args.time)
+        submit_single_node(args.time, port_offset=port_offset)
+        if args.single_node
+        else submit_control(args.time, port_offset=port_offset)
     )
     print(f"{'single_node_job_id' if args.single_node else 'control_job_id'}={job.id}")
     node = wait_for_job_node(job.id, args.startup_timeout, verbose=True)
     print(f"control_node={node}")
-    tunnel = tunnel_command(node, args.local_port)
+    tunnel = tunnel_command(node, args.local_port, port_offset=port_offset)
     print(f"tunnel={tunnel}")
     if args.copy:
         print(
             f"copied_to_clipboard={'true' if copy_to_clipboard_osc52(tunnel) else 'false'}"
         )
     wait_for_http(
-        f"http://{node}:{FRONTEND_PORT}",
+        f"http://{node}:{frontend_port(port_offset)}",
         args.startup_timeout,
         verbose=True,
         job=job,
@@ -578,7 +675,7 @@ def command_up(args: argparse.Namespace) -> None:
             cookie: str | None = None
             if not args.single_node:
                 try:
-                    cookie = login(node, admin_password(args))
+                    cookie = login(node, admin_password(args), port_offset=port_offset)
                 except SystemExit as err:
                     print(
                         f"warning: {err}; continuing watch without launch-request resolution",
@@ -587,7 +684,11 @@ def command_up(args: argparse.Namespace) -> None:
             while job_is_active(job.id):
                 if not args.single_node and cookie:
                     resolve_launch_requests_with_callback(
-                        job, node, cookie, on_launch=status_printer.print_event
+                        job,
+                        node,
+                        cookie,
+                        on_launch=status_printer.print_event,
+                        port_offset=port_offset,
                     )
                 status_printer.render(status_lines())
                 time.sleep(args.poll_seconds)
@@ -598,6 +699,7 @@ def command_up(args: argparse.Namespace) -> None:
 
 
 def command_down(args: argparse.Namespace) -> None:
+    port_offset = args.port_offset
     deploy_jobs = active_jobs(name=CONTROL_JOB_NAME) + active_jobs(
         name=SINGLE_NODE_JOB_NAME
     )
@@ -617,8 +719,8 @@ def command_down(args: argparse.Namespace) -> None:
     print(f"control_node={node}")
 
     try:
-        cookie = login(node, admin_password(args))
-        post(node, "/nodes/stop-all", cookie=cookie)
+        cookie = login(node, admin_password(args), port_offset=port_offset)
+        post(node, "/nodes/stop-all", cookie=cookie, port_offset=port_offset)
         print("requested node stop through API")
     except Exception as err:
         print(f"warning: API node stop failed: {err}", file=sys.stderr)
@@ -655,10 +757,14 @@ def command_submit_workers(args: argparse.Namespace) -> None:
     ensure_dirs()
     for i in range(1, args.count + 1):
         node_name = f"{args.prefix}-{i}"
-        print(
-            f"{node_name}\t"
-            f"{submit_worker(node_name, control_node, control_job_id=control.id, max_start_failures=args.max_start_failures)}"
+        job_id = submit_worker(
+            node_name,
+            control_node,
+            control_job_id=control.id,
+            port_offset=args.port_offset,
+            max_start_failures=args.max_start_failures,
         )
+        print(f"{node_name}\t{job_id}")
 
 
 def command_watch_requests(args: argparse.Namespace) -> None:
@@ -701,6 +807,7 @@ def parser() -> argparse.ArgumentParser:
         help="run control and local workers in one Slurm allocation",
     )
     up.add_argument("--local-port", type=int, default=8080)
+    up.add_argument("--port-offset", type=parse_port_offset, default=0)
     up.add_argument("--startup-timeout", type=int, default=180)
     up.add_argument("--poll-seconds", type=int, default=15)
     up.add_argument(
@@ -719,6 +826,7 @@ def parser() -> argparse.ArgumentParser:
         "down", help="login node: gracefully stop nodes, then cancel remaining jobs"
     )
     down.add_argument("--startup-timeout", type=int, default=60)
+    down.add_argument("--port-offset", type=parse_port_offset, default=0)
     down.add_argument("--worker-timeout", type=int, default=60)
     down.add_argument("--control-grace-seconds", type=int, default=5)
     down.add_argument(
@@ -738,6 +846,7 @@ def parser() -> argparse.ArgumentParser:
     )
     workers.add_argument("--count", type=int, required=True)
     workers.add_argument("--prefix", default="w")
+    workers.add_argument("--port-offset", type=parse_port_offset, default=0)
     workers.add_argument("--max-start-failures", type=int, default=3)
     workers.set_defaults(func=command_submit_workers)
 
@@ -749,6 +858,7 @@ def parser() -> argparse.ArgumentParser:
         "--once", action="store_true", help="resolve current pending requests and exit"
     )
     watch_requests.add_argument("--startup-timeout", type=int, default=60)
+    watch_requests.add_argument("--port-offset", type=parse_port_offset, default=0)
     watch_requests.add_argument("--poll-seconds", type=int, default=5)
     watch_requests.add_argument(
         "--admin-password",

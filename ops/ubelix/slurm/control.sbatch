@@ -35,6 +35,16 @@ DEPLOY_CFG="${WORKSPACE_ROOT}/ops/config/deploy.toml"
 DB_PORT="5400"
 DEPLOY_NAME="default"
 FRONTEND_PORT="8080"
+PORT_OFFSET="${GAMMABOARD_PORT_OFFSET:-0}"
+if ! [[ "${PORT_OFFSET}" =~ ^[0-9]+$ ]]; then
+  echo "GAMMABOARD_PORT_OFFSET must be a non-negative integer: ${PORT_OFFSET}" >&2
+  exit 1
+fi
+FRONTEND_PORT="$((FRONTEND_PORT + PORT_OFFSET))"
+if (( DB_PORT + PORT_OFFSET > 65535 || FRONTEND_PORT > 65535 )); then
+  echo "port offset overflows frontend or Postgres port: ${PORT_OFFSET}" >&2
+  exit 1
+fi
 DB_DEPLOY_DIR="${WORKSPACE_ROOT}/db/${DEPLOY_NAME}"
 DB_DATA_DIR="${DB_DEPLOY_DIR}/data"
 DB_SOCKET_DIR="${DB_DEPLOY_DIR}/socket"
@@ -77,4 +87,4 @@ APPTAINERENV_LANG="${APPTAINERENV_LANG:-C.UTF-8}" \
 APPTAINERENV_LC_ALL="${APPTAINERENV_LC_ALL:-C.UTF-8}" \
 APPTAINERENV_TZ="${APPTAINERENV_TZ:-Etc/UTC}" \
 apptainer exec -B "${WORKSPACE_ROOT}" "${IMAGE_PATH}" \
-  gammaboard --runtime-config "${RUNTIME_CONFIG}" deploy run --deploy-config "${DEPLOY_CFG}"
+  gammaboard --runtime-config "${RUNTIME_CONFIG}" deploy run --deploy-config "${DEPLOY_CFG}" --port-offset "${PORT_OFFSET}"

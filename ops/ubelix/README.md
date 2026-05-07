@@ -170,6 +170,14 @@ To submit a new control job with a custom walltime:
 python ubelix.py up --time 00:45:00
 ```
 
+To run on shifted ports, pass the same offset to all control/API commands for that deployment. The base ports are frontend `8080`, API `4000`, and Postgres `5400`; `--port-offset 10` uses `8090`, `4010`, and `5410`.
+
+```bash
+python ubelix.py up --port-offset 10
+python ubelix.py watch-requests --port-offset 10
+python ubelix.py down --port-offset 10
+```
+
 To also copy the printed tunnel command to your clipboard when the terminal supports OSC 52:
 
 ```bash
@@ -221,6 +229,8 @@ Submit separate worker jobs:
 ```bash
 python ubelix.py submit-workers --count 2 --prefix w
 ```
+
+If the control job was launched with a port offset, pass the same `--port-offset` when submitting workers manually so they connect to the shifted Postgres port.
 
 Resolve dashboard node-start requests automatically:
 
