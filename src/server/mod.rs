@@ -595,7 +595,7 @@ async fn get_run_debug_batches(
         .map(|s| s.to_lowercase())
         .unwrap_or_else(|| "claimed".to_string());
     let status_param = match status_param.as_str() {
-        "pending" | "claimed" | "failed" | "both" | "all" => status_param,
+        "pending" | "claimed" | "failed" | "all" => status_param,
         _ => "claimed".to_string(),
     };
     let payload = state

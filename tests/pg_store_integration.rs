@@ -425,10 +425,7 @@ async fn cleanup_consumed_completed_batches_does_not_remove_failed_batches() {
     assert!(
         matches!(
             outcome,
-            BatchFailOutcome::PermanentlyFailed {
-                retry_count: 1,
-                ..
-            }
+            BatchFailOutcome::PermanentlyFailed { retry_count: 1, .. }
         ),
         "batch should become permanently failed at retry limit"
     );

@@ -12,8 +12,7 @@ pub use models::{
     BatchClaim, BatchFailOutcome, BatchQueueCounts, BatchRecord, BatchStatus, CompletedBatch,
     DesiredAssignment, EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics,
     EvaluatorPerformanceSnapshot, InsertBatchesMetrics, InsertBatchesOutcome, NodeLaunchRequest,
-    RegisteredNode,
-    RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot, RuntimeLogEvent,
+    RegisteredNode, RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot, RuntimeLogEvent,
     SamplerAggregatorPerformanceSnapshot, SamplerPerformanceMetrics, SamplerQueueRollingAverages,
     SamplerQueueRuntimeMetrics, SamplerRuntimeMetrics, SamplerWorkRollingAverages, WorkerRole,
 };

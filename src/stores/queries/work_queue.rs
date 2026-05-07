@@ -238,100 +238,43 @@ pub(crate) async fn fetch_batches_by_status(
     )>,
     sqlx::Error,
 > {
-    // returns tuple: (batch_id, task_id, requires_training_values, batch_size, status, claimed_by_node_name, claimed_by_node_uuid, latent_bytes)
-    let rows = match status {
-        "pending" => {
-            sqlx::query_as::<_, (i64, i64, bool, i32, String, Option<String>, Option<String>, Vec<u8>)>(
-                r#"
-                SELECT b.id, b.task_id, b.requires_training_values, b.batch_size,
-                       b.status::text, b.claimed_by_node_name, b.claimed_by_node_uuid, i.latent_batch
-                FROM batches b
-                JOIN batch_inputs i ON i.batch_id = b.id
-                WHERE b.run_id = $1
-                  AND b.status = 'pending'
-                ORDER BY b.created_at, b.id
-                LIMIT $2
-                "#,
-            )
-            .bind(run_id)
-            .bind(limit)
-            .fetch_all(pool)
-            .await?
-        }
-        "claimed" => {
-            sqlx::query_as::<_, (i64, i64, bool, i32, String, Option<String>, Option<String>, Vec<u8>)>(
-                r#"
-                SELECT b.id, b.task_id, b.requires_training_values, b.batch_size,
-                       b.status::text, b.claimed_by_node_name, b.claimed_by_node_uuid, i.latent_batch
-                FROM batches b
-                JOIN batch_inputs i ON i.batch_id = b.id
-                WHERE b.run_id = $1
-                  AND b.status = 'claimed'
-                ORDER BY b.created_at, b.id
-                LIMIT $2
-                "#,
-            )
-            .bind(run_id)
-            .bind(limit)
-            .fetch_all(pool)
-            .await?
-        }
-        "failed" => {
-            sqlx::query_as::<_, (i64, i64, bool, i32, String, Option<String>, Option<String>, Vec<u8>)>(
-                r#"
-                SELECT b.id, b.task_id, b.requires_training_values, b.batch_size,
-                       b.status::text, b.claimed_by_node_name, b.claimed_by_node_uuid, i.latent_batch
-                FROM batches b
-                JOIN batch_inputs i ON i.batch_id = b.id
-                WHERE b.run_id = $1
-                  AND b.status = 'failed'
-                ORDER BY b.created_at, b.id
-                LIMIT $2
-                "#,
-            )
-            .bind(run_id)
-            .bind(limit)
-            .fetch_all(pool)
-            .await?
-        }
-        "all" => {
-            sqlx::query_as::<_, (i64, i64, bool, i32, String, Option<String>, Option<String>, Vec<u8>)>(
-                r#"
-                SELECT b.id, b.task_id, b.requires_training_values, b.batch_size,
-                       b.status::text, b.claimed_by_node_name, b.claimed_by_node_uuid, i.latent_batch
-                FROM batches b
-                JOIN batch_inputs i ON i.batch_id = b.id
-                WHERE b.run_id = $1
-                  AND b.status IN ('pending','claimed','failed')
-                ORDER BY b.created_at, b.id
-                LIMIT $2
-                "#,
-            )
-            .bind(run_id)
-            .bind(limit)
-            .fetch_all(pool)
-            .await?
-        }
-        _ => {
-            sqlx::query_as::<_, (i64, i64, bool, i32, String, Option<String>, Option<String>, Vec<u8>)>(
-                r#"
-                SELECT b.id, b.task_id, b.requires_training_values, b.batch_size,
-                       b.status::text, b.claimed_by_node_name, b.claimed_by_node_uuid, i.latent_batch
-                FROM batches b
-                JOIN batch_inputs i ON i.batch_id = b.id
-                WHERE b.run_id = $1
-                  AND b.status IN ('pending','claimed')
-                ORDER BY b.created_at, b.id
-                LIMIT $2
-                "#,
-            )
-            .bind(run_id)
-            .bind(limit)
-            .fetch_all(pool)
-            .await?
-        }
+    let statuses: Vec<String> = match status {
+        "pending" | "claimed" | "failed" => vec![status.to_string()],
+        "all" => ["pending", "claimed", "failed"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        _ => vec!["claimed".to_string()],
     };
-    Ok(rows)
+    sqlx::query_as::<
+        _,
+        (
+            i64,
+            i64,
+            bool,
+            i32,
+            String,
+            Option<String>,
+            Option<String>,
+            Vec<u8>,
+        ),
+    >(
+        r#"
+        SELECT b.id, b.task_id, b.requires_training_values, b.batch_size,
+               b.status, b.claimed_by_node_name, b.claimed_by_node_uuid, i.latent_batch
+        FROM batches b
+        JOIN batch_inputs i ON i.batch_id = b.id
+        WHERE b.run_id = $1
+          AND b.status = ANY($2)
+        ORDER BY b.created_at, b.id
+        LIMIT $3
+        "#,
+    )
+    .bind(run_id)
+    .bind(statuses)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
 }
 
 pub(crate) async fn claim_batch(

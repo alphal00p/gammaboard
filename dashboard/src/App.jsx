@@ -67,6 +67,12 @@ kind = "sample"
 stop_condition = { max_samples = 10000 }
 `;
 const EVALUATOR_COUNT_STORAGE_KEY = "runs.evaluator_count";
+const DEBUG_BATCH_STATUS_OPTIONS = [
+  { value: "claimed", label: "Claimed" },
+  { value: "pending", label: "Pending" },
+  { value: "failed", label: "Failed" },
+  { value: "all", label: "All" },
+];
 
 const LoadingPanel = ({ label = "Loading..." }) => (
   <Box sx={{ py: 4 }}>
@@ -513,6 +519,8 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, onRunCr
   const [snackbar, setSnackbar] = useState(null);
   const [runTemplates, setRunTemplates] = useState([]);
   const [downloadStatus, setDownloadStatus] = useState("claimed");
+  const selectedDebugBatchStatus =
+    DEBUG_BATCH_STATUS_OPTIONS.find((option) => option.value === downloadStatus) || DEBUG_BATCH_STATUS_OPTIONS[0];
 
   const reloadRunTemplates = useCallback(async () => {
     try {
@@ -536,6 +544,33 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, onRunCr
       cancelled = true;
     };
   }, []);
+
+  const handleDownloadDebugBatches = async () => {
+    if (!selectedRun) return;
+    try {
+      const payload = await fetchRunDebugBatches(selectedRun, {
+        limit: 1000,
+        status: downloadStatus,
+      });
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const filename = `run-${selectedRun}-${downloadStatus}-batches-${timestamp}.json`;
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setSnackbar({
+        message: `Downloaded ${Array.isArray(payload) ? payload.length : "?"} ${selectedDebugBatchStatus.label.toLowerCase()} batch(es).`,
+        severity: "success",
+      });
+    } catch (err) {
+      setSnackbar({ message: err?.message || "Failed to download batches.", severity: "error" });
+    }
+  };
 
   return (
     <>
@@ -600,48 +635,25 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, onRunCr
           <TextField
             select
             size="small"
-            label="Status"
+            label="Debug batches"
             value={downloadStatus}
             onChange={(e) => setDownloadStatus(e.target.value)}
             disabled={!selectedRun || !authenticated}
             sx={{ minWidth: 160 }}
             InputLabelProps={{ shrink: true }}
           >
-            <MenuItem value="claimed">Claimed</MenuItem>
-            <MenuItem value="pending">Pending</MenuItem>
-            <MenuItem value="failed">Failed</MenuItem>
-            <MenuItem value="all">All</MenuItem>
+            {DEBUG_BATCH_STATUS_OPTIONS.map((option) => (
+              <MenuItem key={option.value} value={option.value}>
+                {option.label}
+              </MenuItem>
+            ))}
           </TextField>
           <Button
             variant="outlined"
             disabled={!selectedRun || !authenticated}
-            onClick={async () => {
-              if (!selectedRun) return;
-              try {
-                // collect the selected batches and download as JSON
-                const payload = await fetchRunDebugBatches(selectedRun, { limit: 1000, status: downloadStatus });
-                const filename = `run-${selectedRun}-${downloadStatus}-batches-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
-                const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                URL.revokeObjectURL(url);
-                setSnackbar({
-                  message: `Downloaded ${Array.isArray(payload) ? payload.length : "?"} batch(es).`,
-                  severity: "success",
-                });
-              } catch (err) {
-                setSnackbar({ message: err?.message || "Failed to download batches.", severity: "error" });
-              }
-            }}
+            onClick={handleDownloadDebugBatches}
           >
-            {downloadStatus === "both" || downloadStatus === "all"
-              ? "Download Batches"
-              : `Download ${downloadStatus[0].toUpperCase()}${downloadStatus.slice(1)} Batches`}
+            Download JSON
           </Button>
         </Stack>
       </Box>

@@ -1456,13 +1456,8 @@ async fn wait_for_batch_retry_count(
             .bind(run_id)
             .fetch_all(&harness.pool)
             .await?;
-            let all_logs: Vec<(Option<i32>, String, String, String, JsonValue)> = sqlx::query_as(
-                "SELECT run_id, source, level, message, fields FROM runtime_logs ORDER BY id DESC LIMIT 20",
-            )
-            .fetch_all(&harness.pool)
-            .await?;
             anyhow::bail!(
-                "timed out waiting for batch retry_count >= {min_retry_count}; max_retry={max_retry:?}; tasks={task_rows:?}; batches={batch_counts:?}; nodes={nodes:?}; logs={logs:?}; all_logs={all_logs:?}"
+                "timed out waiting for batch retry_count >= {min_retry_count}; max_retry={max_retry:?}; tasks={task_rows:?}; batches={batch_counts:?}; nodes={nodes:?}; logs={logs:?}"
             );
         }
         sleep(Duration::from_millis(100)).await;
@@ -3675,10 +3670,11 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
         .assert()
         .success();
 
-    let run_id: i32 =
-        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'evaluator-retry-three-then-fail-e2e'")
-            .fetch_one(&harness.pool)
-            .await?;
+    let run_id: i32 = sqlx::query_scalar(
+        "SELECT id FROM runs WHERE name = 'evaluator-retry-three-then-fail-e2e'",
+    )
+    .fetch_one(&harness.pool)
+    .await?;
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
