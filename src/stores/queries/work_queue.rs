@@ -1,6 +1,6 @@
 use crate::core::{
-    BatchQueueCounts, EvaluatorPerformanceSnapshot, InsertBatchesMetrics, InsertBatchesOutcome,
-    SamplerAggregatorPerformanceSnapshot, StoreError,
+    BatchFailOutcome, BatchQueueCounts, EvaluatorPerformanceSnapshot, InsertBatchesMetrics,
+    InsertBatchesOutcome, SamplerAggregatorPerformanceSnapshot, StoreError,
 };
 use crate::evaluation::BatchResult;
 use crate::sampling::LatentBatch;
@@ -597,12 +597,16 @@ pub(crate) async fn fail_batch(
     pool: &PgPool,
     batch_id: i64,
     last_error: &str,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    max_batch_retries: i32,
+) -> Result<BatchFailOutcome, sqlx::Error> {
+    let row = sqlx::query_as::<_, (i64, i32, String)>(
         r#"
         UPDATE batches
         SET
-            status = 'pending',
+            status = CASE
+                WHEN COALESCE(retry_count, 0) + 1 >= $3 THEN 'failed'::batch_status
+                ELSE 'pending'::batch_status
+            END,
             last_error = $2,
             claimed_by_node_name = NULL,
             claimed_by_node_uuid = NULL,
@@ -610,13 +614,26 @@ pub(crate) async fn fail_batch(
             completed_at = NULL,
             retry_count = COALESCE(retry_count, 0) + 1
         WHERE id = $1
+        RETURNING task_id, retry_count, status::text
         "#,
     )
     .bind(batch_id)
     .bind(last_error)
-    .execute(pool)
+    .bind(max_batch_retries)
+    .fetch_one(pool)
     .await?;
-    Ok(())
+    let (task_id, retry_count, status) = row;
+    if status == "failed" {
+        Ok(BatchFailOutcome::PermanentlyFailed {
+            task_id,
+            retry_count,
+        })
+    } else {
+        Ok(BatchFailOutcome::Requeued {
+            task_id,
+            retry_count,
+        })
+    }
 }
 
 pub(crate) async fn fetch_completed_batches(

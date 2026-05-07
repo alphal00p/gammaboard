@@ -9,9 +9,10 @@ pub mod traits;
 pub use batch_ids::next_batch_ids;
 pub use errors::{BuildError, EngineError, EvalError, StoreError};
 pub use models::{
-    BatchClaim, BatchQueueCounts, BatchRecord, BatchStatus, CompletedBatch, DesiredAssignment,
-    EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot,
-    InsertBatchesMetrics, InsertBatchesOutcome, NodeLaunchRequest, RegisteredNode,
+    BatchClaim, BatchFailOutcome, BatchQueueCounts, BatchRecord, BatchStatus, CompletedBatch,
+    DesiredAssignment, EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics,
+    EvaluatorPerformanceSnapshot, InsertBatchesMetrics, InsertBatchesOutcome, NodeLaunchRequest,
+    RegisteredNode,
     RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot, RuntimeLogEvent,
     SamplerAggregatorPerformanceSnapshot, SamplerPerformanceMetrics, SamplerQueueRollingAverages,
     SamplerQueueRuntimeMetrics, SamplerRuntimeMetrics, SamplerWorkRollingAverages, WorkerRole,

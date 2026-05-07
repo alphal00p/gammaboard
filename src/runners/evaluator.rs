@@ -1,8 +1,9 @@
 //! Evaluator worker runner orchestration.
 
 use crate::core::{
-    BatchClaim, BatchTransformConfig, EngineError, EvalError, EvaluatorIdleProfileMetrics,
-    EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot, EvaluatorWorkerStore, StoreError,
+    BatchClaim, BatchFailOutcome, BatchTransformConfig, EngineError, EvalError,
+    EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot,
+    EvaluatorWorkerStore, StoreError,
 };
 use crate::evaluation::{BatchResult, EvalBatchOptions, Evaluator, Materializer};
 use crate::runners::process_memory::current_rss_bytes;
@@ -60,6 +61,7 @@ pub struct EvaluatorRunner<S> {
     counters: EvaluatorPipelineCounters,
     store: S,
     current_batch_transforms: Vec<Box<dyn crate::evaluation::BatchTransform>>,
+    max_batch_retries: i32,
 }
 
 struct TaskRuntimeContext {
@@ -365,6 +367,7 @@ where
         evaluator: Box<dyn Evaluator>,
         domain: Domain,
         params: EvaluatorRunnerParams,
+        max_batch_retries: i32,
     ) -> Self {
         let node_name = node_name.into();
         let node_uuid = node_uuid.into();
@@ -389,6 +392,7 @@ where
             counters: EvaluatorPipelineCounters::default(),
             store,
             current_batch_transforms: Vec::new(),
+            max_batch_retries,
         }
     }
 
@@ -480,9 +484,9 @@ where
         &mut self,
         batch_id: i64,
         err: &str,
-    ) -> Result<(), EvaluatorRunnerError> {
+    ) -> Result<BatchFailOutcome, EvaluatorRunnerError> {
         self.store
-            .fail_batch(batch_id, err)
+            .fail_batch(batch_id, err, self.max_batch_retries)
             .await
             .map_err(EvaluatorRunnerError::Store)
     }
@@ -495,15 +499,46 @@ where
         err: impl Into<EvaluatorRunnerError>,
     ) -> Result<(), EvaluatorRunnerError> {
         let err = err.into();
+        let outcome = self.fail_claimed_batch(batch_id, &err.to_string()).await?;
+        let retry_progress = match outcome {
+            BatchFailOutcome::Requeued { retry_count, .. }
+            | BatchFailOutcome::PermanentlyFailed { retry_count, .. } => {
+                format!("{retry_count}/{}", self.max_batch_retries)
+            }
+        };
         warn!(
             run_id = self.run_id,
             node_name = %self.node_name,
             batch_id,
             compute_time_ms,
+            retries = %retry_progress,
             error = %err,
-            "evaluator batch failed; requeueing claimed batch"
+            "evaluator batch failed"
         );
-        self.fail_claimed_batch(batch_id, &err.to_string()).await?;
+        if let BatchFailOutcome::PermanentlyFailed {
+            task_id,
+            retry_count,
+        } = outcome
+        {
+            self.store
+                .fail_run_task(
+                    task_id,
+                    &format!(
+                        "batch {batch_id} failed after {retry_count}/{} retries: {err}",
+                        self.max_batch_retries
+                    ),
+                )
+                .await
+                .map_err(EvaluatorRunnerError::Store)?;
+            warn!(
+                run_id = self.run_id,
+                node_name = %self.node_name,
+                task_id,
+                batch_id,
+                retries = %format!("{retry_count}/{}", self.max_batch_retries),
+                "batch retry limit reached; task marked failed"
+            );
+        }
         self.observe_idle_ratio(loop_started, compute_time_ms);
         self.flush_performance_snapshot_if_due(false).await?;
         Ok(())

@@ -234,6 +234,18 @@ pub struct InsertBatchesOutcome {
     pub metrics: InsertBatchesMetrics,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchFailOutcome {
+    Requeued {
+        task_id: i64,
+        retry_count: i32,
+    },
+    PermanentlyFailed {
+        task_id: i64,
+        retry_count: i32,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct SamplerWorkRollingAverages {

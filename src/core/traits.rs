@@ -2,9 +2,9 @@
 
 use super::errors::StoreError;
 use super::models::{
-    BatchClaim, BatchQueueCounts, CompletedBatch, DesiredAssignment, EvaluatorPerformanceSnapshot,
-    InsertBatchesOutcome, NodeLaunchRequest, RegisteredNode, RunSampleProgress, RunStageSnapshot,
-    RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
+    BatchClaim, BatchFailOutcome, BatchQueueCounts, CompletedBatch, DesiredAssignment,
+    EvaluatorPerformanceSnapshot, InsertBatchesOutcome, NodeLaunchRequest, RegisteredNode,
+    RunSampleProgress, RunStageSnapshot, RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
 };
 use crate::core::{RunSpec, RunTask, RunTaskInput, SamplerQueueTuning};
 use crate::evaluation::BatchResult;
@@ -135,7 +135,12 @@ pub trait WorkQueueStore: Send + Sync {
         &self,
         snapshot: &SamplerAggregatorPerformanceSnapshot,
     ) -> Result<(), StoreError>;
-    async fn fail_batch(&self, batch_id: i64, last_error: &str) -> Result<(), StoreError>;
+    async fn fail_batch(
+        &self,
+        batch_id: i64,
+        last_error: &str,
+        max_batch_retries: i32,
+    ) -> Result<BatchFailOutcome, StoreError>;
     async fn fetch_completed_batches(
         &self,
         run_id: i32,

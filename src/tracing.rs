@@ -172,6 +172,25 @@ fn is_gammaboard_target(target: &str) -> bool {
     target == "gammaboard" || target.starts_with("gammaboard::")
 }
 
+fn infer_source_from_target(target: &str) -> &'static str {
+    if target.starts_with("gammaboard::server") {
+        "server"
+    } else if target.starts_with("gammaboard::runners")
+        || target.starts_with("gammaboard::evaluation")
+        || target.starts_with("gammaboard::sampling")
+        || target.starts_with("gammaboard::cli::node")
+    {
+        "worker"
+    } else if target.starts_with("gammaboard::cli")
+        || target.starts_with("gammaboard::api")
+        || target.starts_with("gammaboard::stores")
+    {
+        "control"
+    } else {
+        "unknown"
+    }
+}
+
 fn level_to_filter(level: &Level) -> LevelFilter {
     match *level {
         Level::ERROR => LevelFilter::ERROR,
@@ -256,10 +275,9 @@ where
         let mut fields = visitor.fields;
         let event_context = extract_context_update(&mut fields);
         context.merge_from(&event_context);
-
-        let Some(source) = context.source else {
-            return;
-        };
+        let source = context
+            .source
+            .unwrap_or_else(|| infer_source_from_target(metadata.target()).to_string());
         let message = extract_message(&mut fields).unwrap_or_else(|| metadata.name().to_string());
 
         let record = RuntimeLogEvent {

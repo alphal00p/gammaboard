@@ -258,6 +258,9 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             evaluator,
             spec.domain.clone(),
             spec.evaluator_runner_params.clone(),
+            spec.sampler_aggregator_runner_params
+                .queue
+                .max_batch_retries,
         );
 
         Ok(Some(Box::new(runner)))

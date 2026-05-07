@@ -854,8 +854,13 @@ impl WorkQueueStore for PgStore {
             .map_err(map_sqlx)
     }
 
-    async fn fail_batch(&self, batch_id: i64, last_error: &str) -> Result<(), StoreError> {
-        queries::fail_batch(&self.pool, batch_id, last_error)
+    async fn fail_batch(
+        &self,
+        batch_id: i64,
+        last_error: &str,
+        max_batch_retries: i32,
+    ) -> Result<crate::core::BatchFailOutcome, StoreError> {
+        queries::fail_batch(&self.pool, batch_id, last_error, max_batch_retries)
             .await
             .map_err(map_sqlx)
     }

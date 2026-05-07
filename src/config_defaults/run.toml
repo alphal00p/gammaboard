@@ -31,3 +31,4 @@ max_batches_per_tick = 100
 max_insert_bundle_size = 5
 max_concurrent_insert_tasks = 8
 completed_batch_fetch_limit = 100
+max_batch_retries = 3

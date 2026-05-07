@@ -18,6 +18,7 @@ const DEFAULT_BATCH_SIZE_DEADBAND_RATIO: f64 = 0.15;
 const DEFAULT_BATCH_SIZE_COOLDOWN_TICKS: u32 = 3;
 const DEFAULT_PENDING_REFILL_LOW_RATIO: f64 = 0.85;
 const DEFAULT_PENDING_REFILL_HIGH_RATIO: f64 = 1.15;
+const DEFAULT_MAX_BATCH_RETRIES: i32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerQueueConfig {
@@ -38,6 +39,8 @@ pub struct SamplerQueueConfig {
     pub max_insert_bundle_size: usize,
     pub max_concurrent_insert_tasks: usize,
     pub completed_batch_fetch_limit: usize,
+    #[serde(default = "default_max_batch_retries")]
+    pub max_batch_retries: i32,
 }
 
 impl SamplerQueueConfig {
@@ -131,6 +134,10 @@ const fn default_pending_refill_low_ratio() -> f64 {
 
 const fn default_pending_refill_high_ratio() -> f64 {
     DEFAULT_PENDING_REFILL_HIGH_RATIO
+}
+
+const fn default_max_batch_retries() -> i32 {
+    DEFAULT_MAX_BATCH_RETRIES
 }
 
 struct PendingInsertTask {
@@ -1208,7 +1215,12 @@ mod tests {
             unreachable!("unused in test")
         }
 
-        async fn fail_batch(&self, _batch_id: i64, _last_error: &str) -> Result<(), StoreError> {
+        async fn fail_batch(
+            &self,
+            _batch_id: i64,
+            _last_error: &str,
+            _max_batch_retries: i32,
+        ) -> Result<crate::core::BatchFailOutcome, StoreError> {
             unreachable!("unused in test")
         }
 
@@ -1660,6 +1672,7 @@ mod tests {
                 max_insert_bundle_size: 1,
                 max_concurrent_insert_tasks: 2,
                 completed_batch_fetch_limit: 16,
+                max_batch_retries: 3,
             },
             SamplerQueueCheckpoint::default(),
             128,
@@ -1719,6 +1732,7 @@ mod tests {
                 max_insert_bundle_size: 1,
                 max_concurrent_insert_tasks: 2,
                 completed_batch_fetch_limit: 16,
+                max_batch_retries: 3,
             },
             SamplerQueueCheckpoint::default(),
             128,
