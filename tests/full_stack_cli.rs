@@ -1136,11 +1136,10 @@ count = 128
         .assert()
         .success();
 
-    let run_id: i32 = sqlx::query_scalar(
-        "SELECT id FROM runs WHERE name = 'symbolica-havana-pdf-1d2d-e2e'",
-    )
-    .fetch_one(&harness.pool)
-    .await?;
+    let run_id: i32 =
+        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'symbolica-havana-pdf-1d2d-e2e'")
+            .fetch_one(&harness.pool)
+            .await?;
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
     harness
@@ -1294,6 +1293,17 @@ count = 128
         .latest_task_persisted_observable(run_id, "pdf-2d")
         .await?;
     let output: PdfAdaptationImagePersistedOutput = serde_json::from_value(persisted)?;
+    assert!(
+        output.global_pdf_norm.is_finite() && output.global_pdf_norm > 0.0,
+        "expected positive global pdf norm, got {}",
+        output.global_pdf_norm
+    );
+    assert!(
+        output
+            .global_abs_integrand_norm
+            .is_some_and(|value| value.is_finite() && value > 0.0),
+        "expected positive global integrand norm in persisted output"
+    );
 
     let width = expected_width;
     let height = expected_height;

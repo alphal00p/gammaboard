@@ -49,6 +49,8 @@ pub struct PdfAdaptationRasterPlaneSamplerSnapshot {
     stride: usize,
     ingested_samples: usize,
     output_state: PdfAdaptationImageOutputState,
+    global_abs_integrand_norm: Option<f64>,
+    global_pdf_norm: f64,
     source_sampler_snapshot: SamplerAggregatorSnapshot,
 }
 
@@ -59,6 +61,8 @@ pub struct PdfAdaptationRasterLineSamplerSnapshot {
     stride: usize,
     ingested_samples: usize,
     output_state: PdfAdaptationImageOutputState,
+    global_abs_integrand_norm: Option<f64>,
+    global_pdf_norm: f64,
     source_sampler_snapshot: SamplerAggregatorSnapshot,
 }
 
@@ -75,9 +79,17 @@ pub struct PdfAdaptationImageOutputState {
 pub struct PdfAdaptationImagePersistedOutput {
     pub processed: usize,
     pub abs_integrand_mean: Option<f64>,
+    #[serde(default)]
+    pub global_abs_integrand_norm: Option<f64>,
+    #[serde(default = "default_pdf_global_norm")]
+    pub global_pdf_norm: f64,
     pub signed_integrand_values: Vec<Option<f64>>,
     pub abs_integrand_values: Vec<Option<f64>>,
     pub pdf_values: Vec<Option<f64>>,
+}
+
+fn default_pdf_global_norm() -> f64 {
+    1.0
 }
 
 pub struct RasterPlaneSampler {
@@ -98,6 +110,8 @@ pub struct PdfAdaptationRasterPlaneSampler {
     stride: usize,
     ingested_samples: usize,
     output_state: PdfAdaptationImageOutputState,
+    global_abs_integrand_norm: Option<f64>,
+    global_pdf_norm: f64,
     source_sampler_snapshot: SamplerAggregatorSnapshot,
     source_sampler: Box<dyn SamplerAggregator>,
 }
@@ -108,6 +122,8 @@ pub struct PdfAdaptationRasterLineSampler {
     stride: usize,
     ingested_samples: usize,
     output_state: PdfAdaptationImageOutputState,
+    global_abs_integrand_norm: Option<f64>,
+    global_pdf_norm: f64,
     source_sampler_snapshot: SamplerAggregatorSnapshot,
     source_sampler: Box<dyn SamplerAggregator>,
 }
@@ -194,17 +210,25 @@ impl PdfAdaptationRasterPlaneSampler {
     pub fn from_params_and_snapshot(
         params: PdfAdaptationRasterPlaneSamplerParams,
         source_sampler_snapshot: SamplerAggregatorSnapshot,
+        global_abs_integrand_norm: Option<f64>,
         domain: &Domain,
     ) -> Result<Self, BuildError> {
         validate_plane_geometry(&params.geometry, domain)?;
         let total_samples = params.geometry.nr_points();
-        let source_sampler = source_sampler_snapshot.clone().into_runtime(domain)?;
+        let mut source_sampler = source_sampler_snapshot.clone().into_runtime(domain)?;
+        let global_pdf_norm = source_sampler.global_pdf_norm().map_err(|err| {
+            BuildError::build(format!(
+                "failed to read global pdf normalization from source sampler: {err}"
+            ))
+        })?;
         Ok(Self {
             params,
             next_index: 0,
             stride: coprime_stride(total_samples),
             ingested_samples: 0,
             output_state: PdfAdaptationImageOutputState::new(total_samples),
+            global_abs_integrand_norm,
+            global_pdf_norm,
             source_sampler_snapshot,
             source_sampler,
         })
@@ -217,6 +241,7 @@ impl PdfAdaptationRasterPlaneSampler {
         let sampler = Self::from_params_and_snapshot(
             snapshot.params,
             snapshot.source_sampler_snapshot,
+            snapshot.global_abs_integrand_norm,
             domain,
         )?;
         Ok(Self {
@@ -224,6 +249,7 @@ impl PdfAdaptationRasterPlaneSampler {
             stride: snapshot.stride,
             ingested_samples: snapshot.ingested_samples,
             output_state: snapshot.output_state,
+            global_pdf_norm: snapshot.global_pdf_norm,
             ..sampler
         })
     }
@@ -244,6 +270,8 @@ impl PdfAdaptationRasterPlaneSampler {
         PdfAdaptationImagePersistedOutput {
             processed: self.ingested_samples,
             abs_integrand_mean: self.output_state.abs_integrand_mean(),
+            global_abs_integrand_norm: self.global_abs_integrand_norm,
+            global_pdf_norm: self.global_pdf_norm,
             signed_integrand_values: self.output_state.signed_integrand_values.clone(),
             abs_integrand_values: self.output_state.abs_integrand_values.clone(),
             pdf_values: self.output_state.pdf_values.clone(),
@@ -282,17 +310,25 @@ impl PdfAdaptationRasterLineSampler {
     pub fn from_params_and_snapshot(
         params: PdfAdaptationRasterLineSamplerParams,
         source_sampler_snapshot: SamplerAggregatorSnapshot,
+        global_abs_integrand_norm: Option<f64>,
         domain: &Domain,
     ) -> Result<Self, BuildError> {
         validate_line_geometry(&params.geometry, domain)?;
         let total_samples = params.geometry.nr_points();
-        let source_sampler = source_sampler_snapshot.clone().into_runtime(domain)?;
+        let mut source_sampler = source_sampler_snapshot.clone().into_runtime(domain)?;
+        let global_pdf_norm = source_sampler.global_pdf_norm().map_err(|err| {
+            BuildError::build(format!(
+                "failed to read global pdf normalization from source sampler: {err}"
+            ))
+        })?;
         Ok(Self {
             params,
             next_index: 0,
             stride: coprime_stride(total_samples),
             ingested_samples: 0,
             output_state: PdfAdaptationImageOutputState::new(total_samples),
+            global_abs_integrand_norm,
+            global_pdf_norm,
             source_sampler_snapshot,
             source_sampler,
         })
@@ -305,6 +341,7 @@ impl PdfAdaptationRasterLineSampler {
         let sampler = Self::from_params_and_snapshot(
             snapshot.params,
             snapshot.source_sampler_snapshot,
+            snapshot.global_abs_integrand_norm,
             domain,
         )?;
         Ok(Self {
@@ -312,6 +349,7 @@ impl PdfAdaptationRasterLineSampler {
             stride: snapshot.stride,
             ingested_samples: snapshot.ingested_samples,
             output_state: snapshot.output_state,
+            global_pdf_norm: snapshot.global_pdf_norm,
             ..sampler
         })
     }
@@ -332,6 +370,8 @@ impl PdfAdaptationRasterLineSampler {
         PdfAdaptationImagePersistedOutput {
             processed: self.ingested_samples,
             abs_integrand_mean: self.output_state.abs_integrand_mean(),
+            global_abs_integrand_norm: self.global_abs_integrand_norm,
+            global_pdf_norm: self.global_pdf_norm,
             signed_integrand_values: self.output_state.signed_integrand_values.clone(),
             abs_integrand_values: self.output_state.abs_integrand_values.clone(),
             pdf_values: self.output_state.pdf_values.clone(),
@@ -560,6 +600,8 @@ impl SamplerAggregator for PdfAdaptationRasterPlaneSampler {
                 stride: self.stride,
                 ingested_samples: self.ingested_samples,
                 output_state: self.output_state.clone(),
+                global_abs_integrand_norm: self.global_abs_integrand_norm,
+                global_pdf_norm: self.global_pdf_norm,
                 source_sampler_snapshot: self.source_sampler_snapshot.clone(),
             })
             .map_err(|err| EngineError::engine(err.to_string()))?,
@@ -640,6 +682,8 @@ impl SamplerAggregator for PdfAdaptationRasterLineSampler {
                 stride: self.stride,
                 ingested_samples: self.ingested_samples,
                 output_state: self.output_state.clone(),
+                global_abs_integrand_norm: self.global_abs_integrand_norm,
+                global_pdf_norm: self.global_pdf_norm,
                 source_sampler_snapshot: self.source_sampler_snapshot.clone(),
             })
             .map_err(|err| EngineError::engine(err.to_string()))?,
@@ -828,6 +872,7 @@ mod tests {
                 },
             },
             source_snapshot,
+            None,
             &domain,
         )
         .expect("build pdf adaptation sampler");
@@ -869,6 +914,7 @@ mod tests {
                 },
             },
             source_snapshot,
+            None,
             &domain,
         )
         .expect("build pdf adaptation sampler");
@@ -921,6 +967,7 @@ mod tests {
                 },
             },
             source_snapshot,
+            None,
             &domain,
         )
         .expect("build pdf adaptation sampler");
@@ -973,6 +1020,7 @@ mod tests {
                 },
             },
             source_snapshot,
+            None,
             &domain,
         )
         .expect("build pdf adaptation sampler");

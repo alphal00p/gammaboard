@@ -180,8 +180,7 @@ mod tests {
     #[test]
     fn symbolica_manual_eval_has_two_expected_peaks_with_decimal_centers() {
         let mut evaluator = SymbolicaEngine::from_params(SymbolicaParams {
-            expr: "1/((x-0.25)^2+(y-0.25)^2+1/40) + 1/((x-0.75)^2+(y-0.75)^2+1/40) + z"
-                .to_string(),
+            expr: "1/((x-0.25)^2+(y-0.25)^2+1/40) + 1/((x-0.75)^2+(y-0.75)^2+1/40) + z".to_string(),
             args: vec!["x".to_string(), "y".to_string(), "z".to_string()],
         })
         .expect("build symbolica evaluator");
@@ -231,8 +230,7 @@ mod tests {
     #[test]
     fn symbolica_fraction_literals_match_expected_peak_locations() {
         let mut evaluator = SymbolicaEngine::from_params(SymbolicaParams {
-            expr: "1/((x-1/4)^2+(y-1/4)^2+1/40) + 1/((x-3/4)^2+(y-3/4)^2+1/40) + z"
-                .to_string(),
+            expr: "1/((x-1/4)^2+(y-1/4)^2+1/40) + 1/((x-3/4)^2+(y-3/4)^2+1/40) + z".to_string(),
             args: vec!["x".to_string(), "y".to_string(), "z".to_string()],
         })
         .expect("build symbolica evaluator");
@@ -257,6 +255,9 @@ mod tests {
         let values = result.values.expect("training values present");
 
         assert!(values[1] > values[0], "quarter peak should exceed origin");
-        assert!(values[2] > values[0], "three-quarter peak should exceed origin");
+        assert!(
+            values[2] > values[0],
+            "three-quarter peak should exceed origin"
+        );
     }
 }

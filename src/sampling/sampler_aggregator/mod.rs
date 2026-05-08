@@ -5,6 +5,7 @@ mod raster;
 
 use crate::Materializer;
 use crate::core::{BuildError, SamplerAggregatorConfig};
+use crate::evaluation::AccumulatorState;
 use crate::sampling::materializer::{HavanaInferenceMaterializer, IdentityMaterializer};
 use crate::sampling::{SamplerAggregator, SamplerAggregatorSnapshot, StageHandoff};
 use crate::utils::domain::Domain;
@@ -28,6 +29,17 @@ use self::raster::{
     PdfAdaptationRasterPlaneSampler, PdfAdaptationRasterPlaneSamplerSnapshot, RasterLineSampler,
     RasterLineSamplerSnapshot, RasterPlaneSampler, RasterPlaneSamplerSnapshot,
 };
+
+fn global_abs_integrand_norm_from_handoff(handoff: Option<StageHandoff<'_>>) -> Option<f64> {
+    let observable = handoff.and_then(|value| value.observable_state)?;
+    match observable {
+        AccumulatorState::Scalar(state) => {
+            let value = state.mean_abs();
+            (value.is_finite() && value > 0.0).then_some(value)
+        }
+        _ => None,
+    }
+}
 
 impl SamplerAggregatorSnapshot {
     pub fn into_runtime(self, domain: &Domain) -> Result<Box<dyn SamplerAggregator>, BuildError> {
@@ -175,12 +187,14 @@ impl SamplerAggregatorConfig {
                         "pdf_adaptation_raster_plane sampler requires a persisted sampler snapshot handoff",
                     ));
                 };
+                let global_abs_integrand_norm = global_abs_integrand_norm_from_handoff(handoff);
                 Ok(Box::new(
                     PdfAdaptationRasterPlaneSampler::from_params_and_snapshot(
                         crate::sampling::PdfAdaptationRasterPlaneSamplerParams {
                             geometry: params.geometry.clone(),
                         },
                         snapshot,
+                        global_abs_integrand_norm,
                         &domain,
                     )?,
                 ))
@@ -192,12 +206,14 @@ impl SamplerAggregatorConfig {
                         "pdf_adaptation_raster_line sampler requires a persisted sampler snapshot handoff",
                     ));
                 };
+                let global_abs_integrand_norm = global_abs_integrand_norm_from_handoff(handoff);
                 Ok(Box::new(
                     PdfAdaptationRasterLineSampler::from_params_and_snapshot(
                         crate::sampling::PdfAdaptationRasterLineSamplerParams {
                             geometry: params.geometry.clone(),
                         },
                         snapshot,
+                        global_abs_integrand_norm,
                         &domain,
                     )?,
                 ))

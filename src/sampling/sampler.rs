@@ -76,6 +76,9 @@ pub trait SamplerAggregator: Send {
     fn pdf(&mut self, _point: &PdfPoint) -> Result<Option<f64>, EngineError> {
         Ok(None)
     }
+    fn global_pdf_norm(&mut self) -> Result<f64, EngineError> {
+        Ok(1.0)
+    }
     fn persisted_output(&mut self) -> Result<Option<JsonValue>, EngineError> {
         Ok(None)
     }

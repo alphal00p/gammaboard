@@ -7,7 +7,8 @@ use crate::core::{
 use crate::sampling::PdfAdaptationImagePersistedOutput;
 use crate::server::panels::{
     HistogramBin, ImageColorMode, ImageNormalizationMode, PanelHistoryMode, PanelKind, PanelState,
-    PanelWidth, PlotPoint, panel_spec, progress_panel, scalar_timeseries_panel, with_panel_width,
+    PanelWidth, PlotPoint, key_value, key_value_panel, panel_spec, progress_panel,
+    scalar_timeseries_panel, with_panel_width,
 };
 
 const HISTOGRAM_BIN_COUNT: usize = 31;
@@ -18,6 +19,7 @@ pub(super) fn projectors(
 ) -> Vec<TaskPanelProjector> {
     vec![
         progress_projector(geometry.nr_points(), "Image Progress", "pixels"),
+        plane_oversampling_scalar_projector(),
         image_projector(
             "pdf_adaptation_log_integrand",
             "Normalized integrand",
@@ -71,6 +73,48 @@ pub(super) fn projectors(
             ImageKind::OversamplingPlaneNormalized,
         ),
     ]
+}
+
+fn plane_oversampling_scalar_projector() -> TaskPanelProjector {
+    panel_projector_with_source(
+        with_panel_width(
+            panel_spec(
+                "pdf_adaptation_plane_oversampling_scalar",
+                "Plane Oversampling (Global Norm)",
+                PanelKind::KeyValue,
+                PanelHistoryMode::None,
+            ),
+            PanelWidth::Half,
+        ),
+        TaskPanelCurrentSourcePolicy::PersistedFirst,
+        move |ctx| {
+            let Some(derived) = current_output(ctx)?.map(DerivedValues::from_output) else {
+                return Ok(None);
+            };
+            let mut entries = vec![key_value(
+                "global_pdf_norm",
+                "Global PDF Norm (Z)",
+                derived.output.global_pdf_norm,
+            )];
+            if let Some(global_abs_integrand_norm) = derived.output.global_abs_integrand_norm {
+                entries.push(key_value(
+                    "global_abs_integrand_norm",
+                    "Global Integrand Norm (I)",
+                    global_abs_integrand_norm,
+                ));
+            }
+            if let Some((factor, count)) = derived.global_plane_oversampling_factor() {
+                entries.push(key_value("factor", "Oversampling Factor", factor));
+                entries.push(key_value("log10_factor", "log10(Factor)", factor.log10()));
+                entries.push(key_value("samples", "Finite Samples", count));
+            }
+            Ok(Some(key_value_panel(
+                "pdf_adaptation_plane_oversampling_scalar",
+                entries,
+            )))
+        },
+        |_ctx| Ok(None),
+    )
 }
 
 pub(super) fn line_projectors(
@@ -322,6 +366,35 @@ impl DerivedValues {
             ImageKind::OversamplingPlaneNormalized => &self.oversampling_plane_normalized_log10,
         }
     }
+
+    fn global_plane_oversampling_factor(&self) -> Option<(f64, usize)> {
+        let i = self.output.global_abs_integrand_norm?;
+        let z = self.output.global_pdf_norm;
+        if !i.is_finite() || i <= 0.0 || !z.is_finite() || z <= 0.0 {
+            return None;
+        }
+        let mut sum = 0.0;
+        let mut count = 0usize;
+        for (pdf, abs_integrand) in self
+            .output
+            .pdf_values
+            .iter()
+            .zip(self.output.abs_integrand_values.iter())
+        {
+            let (Some(pdf), Some(abs_integrand)) = (pdf, abs_integrand) else {
+                continue;
+            };
+            if !pdf.is_finite() || !abs_integrand.is_finite() || *abs_integrand <= 0.0 {
+                continue;
+            }
+            let ratio = (pdf / z) / (abs_integrand / i);
+            if ratio.is_finite() && ratio > 0.0 {
+                sum += ratio;
+                count += 1;
+            }
+        }
+        (count > 0).then_some((sum / count as f64, count))
+    }
 }
 
 fn build_image_panel(
@@ -540,10 +613,23 @@ mod tests {
         PdfAdaptationImagePersistedOutput {
             processed: 2,
             abs_integrand_mean: Some(3.0),
+            global_abs_integrand_norm: Some(5.0),
+            global_pdf_norm: 1.0,
             signed_integrand_values: vec![Some(-2.0), Some(4.0)],
             abs_integrand_values: vec![Some(2.0), Some(4.0)],
             pdf_values: vec![Some(1.0), Some(2.0)],
         }
+    }
+
+    #[test]
+    fn global_plane_oversampling_factor_is_computed_from_global_norms() {
+        let derived = DerivedValues::from_output(output());
+        let (factor, count) = derived
+            .global_plane_oversampling_factor()
+            .expect("global oversampling factor");
+        assert_eq!(count, 2);
+        let expected = ((1.0 / 1.0) / (2.0 / 5.0) + (2.0 / 1.0) / (4.0 / 5.0)) / 2.0;
+        assert!((factor - expected).abs() < 1e-12);
     }
 
     fn line_geometry() -> LineRasterGeometry {

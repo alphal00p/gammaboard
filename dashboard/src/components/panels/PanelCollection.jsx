@@ -1802,6 +1802,10 @@ const HistogramPanel = ({
     [bins, effectiveXScale, yScale, isDiscrete],
   );
   const histogramOption = useMemo(() => {
+    const suppressOverlayErrorBars =
+      panelId === "pdf_adaptation_integrand_pdf_histogram_overlay" ||
+      panelId === "pdf_adaptation_oversampling_histogram_overlay";
+    const legendEntries = ["value", ...overlaySeries.map((overlay) => overlay.name)];
     if (isDiscrete) {
       const categoriesData = categories || bins.map((_, idx) => `#${idx}`);
       const barData = bins.map((bin) => {
@@ -1815,6 +1819,12 @@ const HistogramPanel = ({
       const discreteBarSeriesCount = 1 + overlaySeries.length;
       return {
         animation: false,
+        legend: {
+          show: true,
+          top: 0,
+          data: legendEntries,
+          textStyle: { color: "#64748b", fontSize: 12 },
+        },
         grid: baseCartesianGrid,
         xAxis: {
           type: "category",
@@ -1898,7 +1908,11 @@ const HistogramPanel = ({
                 emphasis: { focus: "series" },
               },
             ];
-            if (Array.isArray(overlay.discreteAbsError) && overlay.discreteAbsError.length > 0) {
+            if (
+              !suppressOverlayErrorBars &&
+              Array.isArray(overlay.discreteAbsError) &&
+              overlay.discreteAbsError.length > 0
+            ) {
               series.push(
                 buildDiscreteOffsetErrorBarSeries({
                   name: `${overlay.name} error`,
@@ -1994,6 +2008,12 @@ const HistogramPanel = ({
           ];
     return {
       animation: false,
+      legend: {
+        show: true,
+        top: 0,
+        data: legendEntries,
+        textStyle: { color: "#64748b", fontSize: 12 },
+      },
       grid: baseCartesianGrid,
       xAxis: {
         type: effectiveXScale === "log" ? "log" : "value",
@@ -2050,7 +2070,7 @@ const HistogramPanel = ({
           : []),
         ...valueSeries,
         ...overlaySeries.flatMap((overlay) => [
-          ...(Array.isArray(overlay.absError) && overlay.absError.length > 0
+          ...(!suppressOverlayErrorBars && Array.isArray(overlay.absError) && overlay.absError.length > 0
             ? [buildErrorBarSeries({ name: `${overlay.name} error`, data: overlay.absError, color: overlay.color })]
             : []),
           {
