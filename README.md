@@ -193,6 +193,7 @@ gammaboard run add templates/runs/python-scalar-python-sampler-flake-demo.toml
 ```
 
 Curated run templates:
+- `templates/runs/ghost_bump.toml`: Symbolica + Havana training on a 2D `(x, y)` domain plus `pdf_adaptation_image` for ghost-bump diagnostics.
 - `templates/runs/symbolica-havana-pdf-1d2d.toml`: Symbolica + Havana training + both PDF adaptation task kinds (`pdf_adaptation_image`, `pdf_adaptation_plot_line`).
 - `templates/runs/python-scalar-python-sampler-flake-demo.toml`: Python evaluator and Python sampler integration.
 - `templates/runs/gammaloop.toml`: GammaLoop TTH evaluator config, including optional `post_load_commands`.
