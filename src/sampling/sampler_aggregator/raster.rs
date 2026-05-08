@@ -941,4 +941,63 @@ mod tests {
         assert_eq!(output.abs_integrand_values, vec![None, Some(4.0)]);
         assert_eq!(output.pdf_values, vec![None, Some(1.0)]);
     }
+
+    #[test]
+    fn pdf_adaptation_raster_plane_uses_linspace_parameter_range() {
+        let domain = Domain::rectangular(2, 0);
+        let source_snapshot = SamplerAggregatorConfig::NaiveMonteCarlo {
+            params: crate::sampling::NaiveMonteCarloSamplerParams::default(),
+        }
+        .build(domain.clone(), None, None)
+        .expect("build source sampler")
+        .snapshot()
+        .expect("source snapshot");
+
+        let mut sampler = PdfAdaptationRasterPlaneSampler::from_params_and_snapshot(
+            PdfAdaptationRasterPlaneSamplerParams {
+                geometry: PlaneRasterGeometry {
+                    offset: vec![0.0, 0.0],
+                    u_vector: vec![1.0, 0.0],
+                    v_vector: vec![0.0, 1.0],
+                    u_linspace: Linspace {
+                        start: 0.0,
+                        stop: 1.0,
+                        count: 2,
+                    },
+                    v_linspace: Linspace {
+                        start: 0.0,
+                        stop: 1.0,
+                        count: 2,
+                    },
+                    discrete: Vec::new(),
+                },
+            },
+            source_snapshot,
+            &domain,
+        )
+        .expect("build pdf adaptation sampler");
+
+        let batch_spec = sampler.produce_latent_batch(4).expect("produce batch");
+        let batch = batch_spec.payload.as_batch().expect("decode batch");
+        let mut points = batch
+            .points()
+            .iter()
+            .map(|point| point.continuous.clone())
+            .collect::<Vec<_>>();
+        points.sort_by(|a, b| {
+            a[0].partial_cmp(&b[0])
+                .expect("finite x")
+                .then(a[1].partial_cmp(&b[1]).expect("finite y"))
+        });
+
+        assert_eq!(
+            points,
+            vec![
+                vec![0.0, 0.0],
+                vec![0.0, 1.0],
+                vec![1.0, 0.0],
+                vec![1.0, 1.0],
+            ]
+        );
+    }
 }

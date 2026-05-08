@@ -6,7 +6,9 @@ use assert_cmd::Command;
 use gammaboard::Domain;
 use gammaboard::api::nodes as node_api;
 use gammaboard::config::RuntimeConfig;
-use gammaboard::sampling::{HavanaSamplerParams, SamplerAggregatorSnapshot};
+use gammaboard::sampling::{
+    HavanaSamplerParams, PdfAdaptationImagePersistedOutput, SamplerAggregatorSnapshot,
+};
 use num::complex::Complex64;
 use predicates::prelude::*;
 use rand::SeedableRng;
@@ -490,6 +492,42 @@ impl FullStackHarness {
                 "expected havana sampler snapshot, got {other:?}"
             )),
         }
+    }
+
+    async fn latest_task_persisted_observable(
+        &self,
+        run_id: i32,
+        task_name: &str,
+    ) -> anyhow::Result<JsonValue> {
+        let task_id: i64 = sqlx::query_scalar(
+            r#"
+            SELECT id
+            FROM run_tasks
+            WHERE run_id = $1 AND name = $2
+            "#,
+        )
+        .bind(run_id)
+        .bind(task_name)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let persisted: JsonValue = sqlx::query_scalar(
+            r#"
+            SELECT persisted_observable
+            FROM run_stage_snapshots
+            WHERE run_id = $1
+              AND task_id = $2
+              AND queue_empty = TRUE
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(run_id)
+        .bind(task_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(persisted)
     }
 
     async fn stop_children(&mut self) {
@@ -1005,6 +1043,225 @@ sampler_aggregator = { config = { kind = "havana_inference" } }
     harness.stop_children().await;
     harness.pool.close().await;
     harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_symbolica_havana_pdf_two_bumps_e2e() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+
+    let config = temp_run_add_config(
+        r#"
+name = "symbolica-havana-pdf-1d2d-e2e"
+
+[evaluator]
+kind = "symbolica"
+expr = "1/((x-1/4)^2+(y-1/4)^2+1/40) + 1/((x-3/4)^2+(y-3/4)^2+1/40) + z"
+args = ["x", "y", "z"]
+
+[evaluator_runner_params]
+performance_snapshot_interval_ms = 2000
+min_tick_time_ms = 50
+db_pool_size = 2
+
+[sampler_aggregator_runner_params]
+performance_snapshot_interval_ms = 2000
+min_tick_time_ms = 50
+frontend_sync_interval_ms = 2000
+db_pool_size = 10
+
+[sampler_aggregator_runner_params.queue]
+queue_buffer = 1.0
+target_batch_eval_ms = 500.0
+batch_size_deadband_ratio = 0.15
+batch_size_cooldown_ticks = 3
+pending_refill_low_ratio = 0.85
+pending_refill_high_ratio = 1.15
+max_batch_size = 100000
+local_pending_buffer_multiplier = 0.5
+max_queue_size = 200
+max_batches_per_tick = 100
+max_insert_bundle_size = 5
+max_concurrent_insert_tasks = 8
+completed_batch_fetch_limit = 100
+max_batch_retries = 3
+
+[[task_queue]]
+name = "accumulator"
+kind = "set_accumulator"
+accumulator = "scalar"
+
+[[task_queue]]
+name = "havana-train"
+kind = "sample"
+[task_queue.stop_condition]
+max_samples = 200000
+[task_queue.sampler_aggregator.config]
+kind = "havana_training"
+seed = 0
+bins = 64
+samples_for_update = 16384
+initial_training_rate = 0.1
+final_training_rate = 0.001
+
+[[task_queue]]
+name = "pdf-2d"
+kind = "pdf_adaptation_image"
+batch_transforms = []
+
+[task_queue.geometry]
+offset = [0.0, 0.0, 0.0]
+u_vector = [1.0, 0.0, 0.0]
+v_vector = [0.0, 1.0, 0.0]
+discrete = []
+
+[task_queue.geometry.u_linspace]
+start = 0.0
+stop = 1.0
+count = 128
+
+[task_queue.geometry.v_linspace]
+start = 0.0
+stop = 1.0
+count = 128
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 = sqlx::query_scalar(
+        "SELECT id FROM runs WHERE name = 'symbolica-havana-pdf-1d2d-e2e'",
+    )
+    .fetch_one(&harness.pool)
+    .await?;
+
+    harness.start_nodes(&["w-1", "w-2"]).await?;
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-1",
+            "sampler-aggregator",
+            "symbolica-havana-pdf-1d2d-e2e",
+        ])
+        .assert()
+        .success();
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-2",
+            "evaluator",
+            "symbolica-havana-pdf-1d2d-e2e",
+        ])
+        .assert()
+        .success();
+
+    harness
+        .wait_for("all tasks complete", Duration::from_secs(180), || {
+            let pool = harness.pool.clone();
+            async move {
+                let completed: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM run_tasks WHERE run_id = $1 AND state = 'completed'",
+                )
+                .bind(run_id)
+                .fetch_one(&pool)
+                .await?;
+                Ok(completed == 3)
+            }
+        })
+        .await?;
+
+    let persisted = harness
+        .latest_task_persisted_observable(run_id, "pdf-2d")
+        .await?;
+    let output: PdfAdaptationImagePersistedOutput = serde_json::from_value(persisted)?;
+
+    let width = 128usize;
+    let height = 128usize;
+    assert_eq!(output.abs_integrand_values.len(), width * height);
+
+    let value_at = |u: usize, v: usize| -> f64 {
+        output.abs_integrand_values[v * width + u]
+            .filter(|value| value.is_finite())
+            .unwrap_or(f64::NEG_INFINITY)
+    };
+
+    let mut local_maxima = Vec::<(usize, usize, f64)>::new();
+    for v in 0..height {
+        for u in 0..width {
+            let center = value_at(u, v);
+            if !center.is_finite() {
+                continue;
+            }
+            let mut is_local_max = true;
+            for dv in -1_i32..=1 {
+                for du in -1_i32..=1 {
+                    if du == 0 && dv == 0 {
+                        continue;
+                    }
+                    let nu = u as i32 + du;
+                    let nv = v as i32 + dv;
+                    if nu < 0 || nv < 0 || nu >= width as i32 || nv >= height as i32 {
+                        continue;
+                    }
+                    if value_at(nu as usize, nv as usize) > center {
+                        is_local_max = false;
+                        break;
+                    }
+                }
+                if !is_local_max {
+                    break;
+                }
+            }
+            if is_local_max {
+                local_maxima.push((u, v, center));
+            }
+        }
+    }
+
+    local_maxima.sort_by(|a, b| b.2.partial_cmp(&a.2).expect("finite maxima values"));
+    assert!(
+        local_maxima.len() >= 2,
+        "expected at least two local maxima, got {}",
+        local_maxima.len()
+    );
+
+    let first = local_maxima[0];
+    let second = local_maxima
+        .iter()
+        .copied()
+        .find(|(u, v, _)| {
+            let du = (*u as isize - first.0 as isize).unsigned_abs();
+            let dv = (*v as isize - first.1 as isize).unsigned_abs();
+            du + dv >= 16
+        })
+        .ok_or_else(|| anyhow::anyhow!("failed to find a second distinct peak"))?;
+
+    let to_param = |index: usize| -> f64 { index as f64 / (width - 1) as f64 };
+    let (t1, s1) = (to_param(first.0), to_param(first.1));
+    let (t2, s2) = (to_param(second.0), to_param(second.1));
+
+    let near = |a: f64, b: f64| (a - b).abs() <= 0.08;
+    let first_match = near(t1, 0.25) && near(s1, 0.25);
+    let second_match = near(t2, 0.75) && near(s2, 0.75);
+    let swapped_match = near(t1, 0.75) && near(s1, 0.75) && near(t2, 0.25) && near(s2, 0.25);
+
+    assert!(
+        (first_match && second_match) || swapped_match,
+        "peak positions mismatch: first=({t1:.4},{s1:.4}) second=({t2:.4},{s2:.4})"
+    );
+
+    harness.stop_children().await;
     Ok(())
 }
 
