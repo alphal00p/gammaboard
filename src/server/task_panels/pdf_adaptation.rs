@@ -19,7 +19,6 @@ pub(super) fn projectors(
 ) -> Vec<TaskPanelProjector> {
     vec![
         progress_projector(geometry.nr_points(), "Image Progress", "pixels"),
-        plane_oversampling_scalar_projector(),
         image_projector(
             "pdf_adaptation_log_integrand",
             "Normalized integrand",
@@ -48,30 +47,31 @@ pub(super) fn projectors(
         ),
         image_projector(
             "pdf_adaptation_oversampling",
-            "Sampling Accuracy",
+            "Sampling Accuracy (Plane-Normalized)",
             PanelWidth::Half,
             geometry.clone(),
             ImageKind::OversamplingLegacy,
         ),
         image_projector(
             "pdf_adaptation_oversampling_plane_normalized",
-            "Normalized Sampling Accuracy",
+            "Sampling Accuracy (Global-Normalized)",
             PanelWidth::Half,
             geometry,
             ImageKind::OversamplingPlaneNormalized,
         ),
         histogram_projector(
             "pdf_adaptation_oversampling_histogram",
-            "Histogram: Sampling Accuracy",
+            "Histogram: Sampling Accuracy (Plane-Normalized)",
             PanelWidth::Half,
             ImageKind::OversamplingLegacy,
         ),
         histogram_projector(
             "pdf_adaptation_oversampling_plane_normalized_histogram",
-            "Histogram: Normalized Sampling Accuracy",
+            "Histogram: Sampling Accuracy (Global-Normalized)",
             PanelWidth::Half,
             ImageKind::OversamplingPlaneNormalized,
         ),
+        plane_oversampling_scalar_projector(),
     ]
 }
 
@@ -139,14 +139,14 @@ pub(super) fn line_projectors(
         ),
         line_projector(
             "pdf_adaptation_oversampling_line",
-            "Sampling Accuracy (1D)",
+            "Sampling Accuracy (Plane-Normalized, 1D)",
             PanelWidth::Half,
             geometry.clone(),
             ImageKind::OversamplingLegacy,
         ),
         line_projector(
             "pdf_adaptation_oversampling_plane_normalized_line",
-            "Normalized Sampling Accuracy (1D)",
+            "Sampling Accuracy (Global-Normalized, 1D)",
             PanelWidth::Half,
             geometry,
             ImageKind::OversamplingPlaneNormalized,
@@ -165,13 +165,13 @@ pub(super) fn line_projectors(
         ),
         histogram_projector(
             "pdf_adaptation_oversampling_histogram",
-            "Histogram: Sampling Accuracy",
+            "Histogram: Sampling Accuracy (Plane-Normalized)",
             PanelWidth::Half,
             ImageKind::OversamplingLegacy,
         ),
         histogram_projector(
             "pdf_adaptation_oversampling_plane_normalized_histogram",
-            "Histogram: Normalized Sampling Accuracy",
+            "Histogram: Sampling Accuracy (Global-Normalized)",
             PanelWidth::Half,
             ImageKind::OversamplingPlaneNormalized,
         ),
@@ -333,20 +333,25 @@ impl DerivedValues {
             .iter()
             .map(|value| log10_ratio(*value, mean_pdf))
             .collect::<Vec<_>>();
-        let oversampling_legacy_log10 = output
-            .pdf_values
-            .iter()
-            .zip(output.abs_integrand_values.iter())
-            .map(|(pdf, abs_integrand)| {
-                log10_pdf_over_integrand_over_mean(*pdf, *abs_integrand, output.abs_integrand_mean)
-            })
-            .collect::<Vec<_>>();
-        let oversampling_plane_normalized_log10 = log_plane_normalized_pdf
+        let oversampling_legacy_log10 = log_plane_normalized_pdf
             .iter()
             .zip(log_plane_normalized_integrand.iter())
             .map(|(pdf, integrand)| match (pdf, integrand) {
                 (Some(pdf), Some(integrand)) => Some(pdf - integrand),
                 _ => None,
+            })
+            .collect::<Vec<_>>();
+        let oversampling_plane_normalized_log10 = output
+            .pdf_values
+            .iter()
+            .zip(output.abs_integrand_values.iter())
+            .map(|(pdf, abs_integrand)| {
+                log10_pdf_over_integrand_global_norm(
+                    *pdf,
+                    *abs_integrand,
+                    output.global_abs_integrand_norm,
+                    output.global_pdf_norm,
+                )
             })
             .collect::<Vec<_>>();
         Self {
@@ -433,9 +438,39 @@ fn build_line_panel(
 }
 
 fn histogram_panel(panel_id: &str, derived: &DerivedValues, image_kind: ImageKind) -> PanelState {
+    let bins = match image_kind {
+        ImageKind::LogPlaneNormalizedIntegrand => {
+            histogram_bins_on_shared_edges(
+                &derived.log_plane_normalized_integrand,
+                &derived.log_plane_normalized_pdf,
+            )
+            .0
+        }
+        ImageKind::LogPlaneNormalizedPdf => {
+            histogram_bins_on_shared_edges(
+                &derived.log_plane_normalized_integrand,
+                &derived.log_plane_normalized_pdf,
+            )
+            .1
+        }
+        ImageKind::OversamplingLegacy => {
+            histogram_bins_on_shared_edges(
+                &derived.oversampling_legacy_log10,
+                &derived.oversampling_plane_normalized_log10,
+            )
+            .0
+        }
+        ImageKind::OversamplingPlaneNormalized => {
+            histogram_bins_on_shared_edges(
+                &derived.oversampling_legacy_log10,
+                &derived.oversampling_plane_normalized_log10,
+            )
+            .1
+        }
+    };
     PanelState::Histogram {
         panel_id: panel_id.to_string(),
-        bins: histogram_bins(derived.values(image_kind)),
+        bins,
     }
 }
 
@@ -537,12 +572,106 @@ fn histogram_bins(values: &[Option<f64>]) -> Vec<HistogramBin> {
             } else {
                 start + width
             };
-            let value = count as f64 / total;
+            let value = if width > 0.0 {
+                count as f64 / (total * width)
+            } else {
+                0.0
+            };
+            let error = if width > 0.0 {
+                (count as f64).sqrt() / (total * width)
+            } else {
+                0.0
+            };
             HistogramBin {
                 start,
                 stop,
                 value,
-                error: value.sqrt() / total.sqrt(),
+                error,
+            }
+        })
+        .collect()
+}
+
+fn histogram_bins_on_shared_edges(
+    left: &[Option<f64>],
+    right: &[Option<f64>],
+) -> (Vec<HistogramBin>, Vec<HistogramBin>) {
+    let left_finite = left
+        .iter()
+        .flatten()
+        .copied()
+        .filter(|value| value.is_finite())
+        .collect::<Vec<_>>();
+    let right_finite = right
+        .iter()
+        .flatten()
+        .copied()
+        .filter(|value| value.is_finite())
+        .collect::<Vec<_>>();
+    if left_finite.is_empty() || right_finite.is_empty() {
+        return (histogram_bins(left), histogram_bins(right));
+    }
+    let min = left_finite
+        .iter()
+        .chain(right_finite.iter())
+        .copied()
+        .fold(f64::INFINITY, f64::min);
+    let max = left_finite
+        .iter()
+        .chain(right_finite.iter())
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+    if !min.is_finite() || !max.is_finite() || min == max {
+        return (histogram_bins(left), histogram_bins(right));
+    }
+    let width = (max - min) / HISTOGRAM_BIN_COUNT as f64;
+    if !width.is_finite() || width <= 0.0 {
+        return (histogram_bins(left), histogram_bins(right));
+    }
+    let left_bins = histogram_bins_with_fixed_edges(&left_finite, min, max, HISTOGRAM_BIN_COUNT);
+    let right_bins = histogram_bins_with_fixed_edges(&right_finite, min, max, HISTOGRAM_BIN_COUNT);
+    (left_bins, right_bins)
+}
+
+fn histogram_bins_with_fixed_edges(
+    finite: &[f64],
+    min: f64,
+    max: f64,
+    bin_count: usize,
+) -> Vec<HistogramBin> {
+    if finite.is_empty() || bin_count == 0 || !min.is_finite() || !max.is_finite() || min == max {
+        return Vec::new();
+    }
+    let width = (max - min) / bin_count as f64;
+    if !width.is_finite() || width <= 0.0 {
+        return Vec::new();
+    }
+    let mut counts = vec![0usize; bin_count];
+    for value in finite.iter().copied() {
+        let mut index = ((value - min) / width).floor() as usize;
+        if index >= bin_count {
+            index = bin_count - 1;
+        }
+        counts[index] += 1;
+    }
+    let total = finite.len() as f64;
+    counts
+        .into_iter()
+        .enumerate()
+        .map(|(index, count)| {
+            let start = min + index as f64 * width;
+            let stop = if index + 1 == bin_count {
+                max
+            } else {
+                start + width
+            };
+            let value = count as f64 / (total * width);
+            let error = (count as f64).sqrt() / (total * width);
+            HistogramBin {
+                start,
+                stop,
+                value,
+                error,
             }
         })
         .collect()
@@ -555,16 +684,21 @@ fn log10_ratio(value: Option<f64>, mean: Option<f64>) -> Option<f64> {
     }
 }
 
-fn log10_pdf_over_integrand_over_mean(
+fn log10_pdf_over_integrand_global_norm(
     pdf: Option<f64>,
     abs_integrand: Option<f64>,
-    abs_integrand_mean: Option<f64>,
+    global_abs_integrand_norm: Option<f64>,
+    global_pdf_norm: f64,
 ) -> Option<f64> {
-    match (pdf, abs_integrand, abs_integrand_mean) {
-        (Some(pdf), Some(abs_integrand), Some(mean))
-            if pdf > 0.0 && abs_integrand > 0.0 && mean > 0.0 =>
+    match (pdf, abs_integrand, global_abs_integrand_norm) {
+        (Some(pdf), Some(abs_integrand), Some(i))
+            if pdf > 0.0
+                && abs_integrand > 0.0
+                && i > 0.0
+                && global_pdf_norm.is_finite()
+                && global_pdf_norm > 0.0 =>
         {
-            Some((pdf / (abs_integrand / mean)).log10())
+            Some(((pdf / global_pdf_norm) / (abs_integrand / i)).log10())
         }
         _ => None,
     }
@@ -658,14 +792,11 @@ mod tests {
         );
         assert_eq!(
             derived.oversampling_legacy_log10,
-            vec![
-                Some((1.0_f64 / (2.0 / 3.0)).log10()),
-                Some((2.0_f64 / (4.0 / 3.0)).log10())
-            ]
+            vec![Some(0.0), Some(0.0)]
         );
         assert_eq!(
             derived.oversampling_plane_normalized_log10,
-            vec![Some(0.0), Some(0.0)]
+            vec![Some(2.5_f64.log10()), Some(2.5_f64.log10())]
         );
     }
 
@@ -715,8 +846,11 @@ mod tests {
     fn histogram_bins_cover_finite_values() {
         let bins = histogram_bins(&[Some(-1.0), Some(0.0), Some(1.0), None]);
         assert!(!bins.is_empty());
-        let total_density = bins.iter().map(|bin| bin.value).sum::<f64>();
-        assert!((total_density - 1.0).abs() < 1e-9);
+        let total_mass = bins
+            .iter()
+            .map(|bin| (bin.stop - bin.start) * bin.value)
+            .sum::<f64>();
+        assert!((total_mass - 1.0).abs() < 1e-9);
     }
 
     #[test]

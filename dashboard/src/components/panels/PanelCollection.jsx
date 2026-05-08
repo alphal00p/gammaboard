@@ -346,10 +346,10 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
       "pdf_adaptation_oversampling_plane_normalized_histogram",
       buildPdfHistogramOverlayPanel({
         panelId: "pdf_adaptation_oversampling_histogram_overlay",
-        label: "Histogram: Sampling Accuracy vs Normalized Sampling Accuracy",
+        label: "Histogram: Sampling Accuracy (Plane) vs Sampling Accuracy (Global)",
         primaryPanel: histogramOversamplingPanel,
         overlayPanel: histogramOversamplingNormalizedPanel,
-        overlayName: "Normalized sampling accuracy",
+        overlayName: "Sampling accuracy (global)",
         overlayColor: "#6a994e",
       }),
     );
@@ -491,6 +491,48 @@ const formatCategoryAxisValue = (value) => {
   const text = String(value).trim();
   return text.length > 0 ? text : "";
 };
+
+const EDGE_EPSILON = 1e-9;
+
+const nearlyEqual = (left, right, epsilon = EDGE_EPSILON) => {
+  const a = Number(left);
+  const b = Number(right);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+  return Math.abs(a - b) <= epsilon * Math.max(1, Math.abs(a), Math.abs(b));
+};
+
+const binsShareEdges = (referenceBins, overlayBins) => {
+  if (referenceBins.length !== overlayBins.length) return false;
+  for (let i = 0; i < referenceBins.length; i += 1) {
+    const left = referenceBins[i];
+    const right = overlayBins[i];
+    if (!nearlyEqual(left?.start, right?.start) || !nearlyEqual(left?.stop, right?.stop)) return false;
+  }
+  return true;
+};
+
+const buildOverlaySeriesFromBins = (canonicalBins, yScale, xScale) => ({
+  valueStep: buildHistogramRenderData(canonicalBins, yScale)
+    .map((point) => [Number(point?.x), Number(point?.y)])
+    .filter(([x]) => Number.isFinite(x) && (xScale !== "log" || x > 0)),
+  relativeStep: buildRelativeErrorStepData(canonicalBins)
+    .map((point) => [Number(point?.x), Number(point?.relative_error)])
+    .filter(([x]) => Number.isFinite(x) && (xScale !== "log" || x > 0)),
+  absError: canonicalBins
+    .map((bin) => {
+      const x = Number(bin?.x);
+      const y = Number(bin?.value);
+      const err = Number(bin?.error);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(err) || err <= 0) return null;
+      const yLowRaw = y - Math.abs(err);
+      const yHighRaw = y + Math.abs(err);
+      const yLow = yScale === "log" ? signedLog10(yLowRaw) : yLowRaw;
+      const yHigh = yScale === "log" ? signedLog10(yHighRaw) : yHighRaw;
+      if (xScale === "log" && x <= 0) return null;
+      return [x, yLow, yHigh];
+    })
+    .filter(Boolean),
+});
 
 const clampHeatmapSpread = (candidate, fallback = 1) => {
   const numeric = Number(candidate);
@@ -1470,6 +1512,7 @@ const HistogramPanel = ({
   const figureRef = useRef(null);
   const echartsRef = useRef(null);
   const panelId = state?.panel_id || null;
+  const isPdfPanel = typeof panelId === "string" && panelId.startsWith("pdf_adaptation_");
   const sourcePanelId = state?.source_panel_id || panelId;
   const isBundleControlled = sourcePanelId === "gammaloop_histogram_bundle";
   const currentHistogramName = typeof state?.name === "string" ? state.name : null;
@@ -1729,13 +1772,11 @@ const HistogramPanel = ({
               discreteAbsError: absoluteError.filter(Boolean),
             };
           }
-
-          const projected = projectOverlayHistogramToReferenceBins(
-            bins,
-            overlayBins,
-            yScale,
-            effectiveXScale,
-          );
+          const overlayCanonicalBins = buildHistogramData(overlayBins);
+          const projected =
+            isPdfPanel && binsShareEdges(bins, overlayCanonicalBins)
+              ? buildOverlaySeriesFromBins(overlayCanonicalBins, yScale, effectiveXScale)
+              : projectOverlayHistogramToReferenceBins(bins, overlayBins, yScale, effectiveXScale);
           return {
             id: `embedded-overlay-${overlayIndex}`,
             name: overlayName,
