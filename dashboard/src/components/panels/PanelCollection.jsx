@@ -1809,7 +1809,50 @@ const HistogramPanel = ({
     () => (isDiscrete ? null : visibleXRangeFromZoomWithScale(xDomain, zoomRange, effectiveXScale)),
     [xDomain, effectiveXScale, zoomRange, isDiscrete],
   );
-  const yDomain = useMemo(() => buildHistogramYDomain(bins, yScale, visibleXRange), [bins, yScale, visibleXRange]);
+  const yDomain = useMemo(() => {
+    const baseDomain = buildHistogramYDomain(bins, yScale, visibleXRange);
+    const extraValues = [];
+    for (const overlay of asArray(overlaySeries)) {
+      if (isDiscrete) {
+        for (const y of asArray(overlay?.discreteValues)) {
+          const numeric = Number(y);
+          if (Number.isFinite(numeric)) extraValues.push(numeric);
+        }
+        for (const entry of asArray(overlay?.discreteAbsError)) {
+          const low = Number(entry?.[1]);
+          const high = Number(entry?.[2]);
+          if (Number.isFinite(low)) extraValues.push(low);
+          if (Number.isFinite(high)) extraValues.push(high);
+        }
+        continue;
+      }
+      for (const point of asArray(overlay?.valueStep)) {
+        const x = Number(point?.[0]);
+        const y = Number(point?.[1]);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        if (visibleXRange && (x < visibleXRange.min || x > visibleXRange.max)) continue;
+        extraValues.push(y);
+      }
+      for (const entry of asArray(overlay?.absError)) {
+        const x = Number(entry?.[0]);
+        const low = Number(entry?.[1]);
+        const high = Number(entry?.[2]);
+        if (!Number.isFinite(x)) continue;
+        if (visibleXRange && (x < visibleXRange.min || x > visibleXRange.max)) continue;
+        if (Number.isFinite(low)) extraValues.push(low);
+        if (Number.isFinite(high)) extraValues.push(high);
+      }
+    }
+    if (extraValues.length === 0) return baseDomain;
+    const baseMin = Number(baseDomain?.[0]);
+    const baseMax = Number(baseDomain?.[1]);
+    const candidates = [
+      ...extraValues,
+      ...(Number.isFinite(baseMin) ? [baseMin] : []),
+      ...(Number.isFinite(baseMax) ? [baseMax] : []),
+    ].filter((value) => Number.isFinite(value));
+    return fitDomain(candidates);
+  }, [bins, isDiscrete, overlaySeries, visibleXRange, yScale]);
   const relativeErrorYDomain = useMemo(
     () => buildRelativeErrorYDomain(isDiscrete ? discreteRelativeErrorData : relativeErrorData, visibleXRange),
     [discreteRelativeErrorData, isDiscrete, relativeErrorData, visibleXRange],
