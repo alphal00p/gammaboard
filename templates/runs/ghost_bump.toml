@@ -4,7 +4,7 @@ name = "ghost_bump"
 
 [evaluator]
 kind = "symbolica"
-expr = "1/((x-1/4)^2+(y-1/4)^2+1/20) + 1/((x-3/4)^2+(y-3/4)^2+1/20) + 1"
+expr = "1/((x-1/4)^2+(y-1/4)^2+1/20) + 1/((x-3/4)^2+(y-3/4)^2+1/20) - 1/2"
 args = ["x", "y"]
 
 [evaluator_runner_params]
