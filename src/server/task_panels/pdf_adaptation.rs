@@ -378,7 +378,8 @@ impl DerivedValues {
         if !i.is_finite() || i <= 0.0 || !z.is_finite() || z <= 0.0 {
             return None;
         }
-        let mut sum = 0.0;
+        let mut pdf_mass_sum = 0.0;
+        let mut integrand_mass_sum = 0.0;
         let mut count = 0usize;
         for (pdf, abs_integrand) in self
             .output
@@ -392,13 +393,19 @@ impl DerivedValues {
             if !pdf.is_finite() || !abs_integrand.is_finite() || *abs_integrand <= 0.0 {
                 continue;
             }
-            let ratio = (pdf / z) / (abs_integrand / i);
-            if ratio.is_finite() && ratio > 0.0 {
-                sum += ratio;
+            let pdf_mass = pdf / z;
+            let integrand_mass = abs_integrand / i;
+            if pdf_mass.is_finite() && integrand_mass.is_finite() && pdf_mass > 0.0 && integrand_mass > 0.0
+            {
+                pdf_mass_sum += pdf_mass;
+                integrand_mass_sum += integrand_mass;
                 count += 1;
             }
         }
-        (count > 0).then_some((sum / count as f64, count))
+        if count == 0 || integrand_mass_sum <= 0.0 {
+            return None;
+        }
+        Some((pdf_mass_sum / integrand_mass_sum, count))
     }
 }
 
@@ -762,7 +769,7 @@ mod tests {
             .global_plane_oversampling_factor()
             .expect("global oversampling factor");
         assert_eq!(count, 2);
-        let expected = ((1.0 / 1.0) / (2.0 / 5.0) + (2.0 / 1.0) / (4.0 / 5.0)) / 2.0;
+        let expected = ((1.0 / 1.0) + (2.0 / 1.0)) / ((2.0 / 5.0) + (4.0 / 5.0));
         assert!((factor - expected).abs() < 1e-12);
     }
 
