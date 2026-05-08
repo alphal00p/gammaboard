@@ -70,7 +70,8 @@ impl SymbolicaEngine {
                 &args,
                 OptimizationSettings::default(),
             )
-            .map_err(|err| BuildError::build(err.to_string()))?;
+            .map_err(|err| BuildError::build(err.to_string()))?
+            .map_coeff(&|x| x.to_real().unwrap().to_f64());
 
         let root_artifacts_dir = Path::new("./.evaluators");
         fs::create_dir_all(root_artifacts_dir)?;
@@ -167,5 +168,95 @@ impl Evaluator for SymbolicaEngine {
         } else {
             Ok(BatchResult::new(None, observable_state))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SymbolicaEngine, SymbolicaParams};
+    use crate::core::AccumulatorConfig;
+    use crate::evaluation::{Batch, EvalBatchOptions, Evaluator, Point};
+
+    #[test]
+    fn symbolica_manual_eval_has_two_expected_peaks_with_decimal_centers() {
+        let mut evaluator = SymbolicaEngine::from_params(SymbolicaParams {
+            expr: "1/((x-0.25)^2+(y-0.25)^2+1/40) + 1/((x-0.75)^2+(y-0.75)^2+1/40) + z"
+                .to_string(),
+            args: vec!["x".to_string(), "y".to_string(), "z".to_string()],
+        })
+        .expect("build symbolica evaluator");
+
+        let points = vec![
+            (0.25, 0.25, 0.0), // expected peak 1
+            (0.75, 0.75, 0.0), // expected peak 2
+            (0.25, 0.75, 0.0),
+            (0.75, 0.25, 0.0),
+            (0.50, 0.50, 0.0),
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 0.0),
+        ];
+        let batch = Batch::from_points(
+            points
+                .iter()
+                .map(|(x, y, z)| Point::new(vec![*x, *y, *z], Vec::new(), 1.0)),
+        )
+        .expect("build batch");
+
+        let result = evaluator
+            .eval_batch(
+                &batch,
+                &AccumulatorConfig::scalar(),
+                EvalBatchOptions {
+                    require_training_values: true,
+                },
+            )
+            .expect("evaluate batch");
+        let values = result.values.expect("training values present");
+        assert_eq!(values.len(), points.len());
+
+        let v_peak_1 = values[0];
+        let v_peak_2 = values[1];
+        for (idx, value) in values.iter().enumerate().skip(2) {
+            assert!(
+                v_peak_1 > *value,
+                "expected first peak to dominate sample {idx}: peak={v_peak_1}, sample={value}"
+            );
+            assert!(
+                v_peak_2 > *value,
+                "expected second peak to dominate sample {idx}: peak={v_peak_2}, sample={value}"
+            );
+        }
+    }
+
+    #[test]
+    fn symbolica_fraction_literals_match_expected_peak_locations() {
+        let mut evaluator = SymbolicaEngine::from_params(SymbolicaParams {
+            expr: "1/((x-1/4)^2+(y-1/4)^2+1/40) + 1/((x-3/4)^2+(y-3/4)^2+1/40) + z"
+                .to_string(),
+            args: vec!["x".to_string(), "y".to_string(), "z".to_string()],
+        })
+        .expect("build symbolica evaluator");
+
+        let points = vec![(0.0, 0.0, 0.0), (0.25, 0.25, 0.0), (0.75, 0.75, 0.0)];
+        let batch = Batch::from_points(
+            points
+                .iter()
+                .map(|(x, y, z)| Point::new(vec![*x, *y, *z], Vec::new(), 1.0)),
+        )
+        .expect("build batch");
+
+        let result = evaluator
+            .eval_batch(
+                &batch,
+                &AccumulatorConfig::scalar(),
+                EvalBatchOptions {
+                    require_training_values: true,
+                },
+            )
+            .expect("evaluate batch");
+        let values = result.values.expect("training values present");
+
+        assert!(values[1] > values[0], "quarter peak should exceed origin");
+        assert!(values[2] > values[0], "three-quarter peak should exceed origin");
     }
 }

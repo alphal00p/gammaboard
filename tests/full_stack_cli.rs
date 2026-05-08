@@ -7,7 +7,7 @@ use gammaboard::Domain;
 use gammaboard::api::nodes as node_api;
 use gammaboard::config::RuntimeConfig;
 use gammaboard::sampling::{
-    HavanaSamplerParams, PdfAdaptationImagePersistedOutput, SamplerAggregatorSnapshot,
+    HavanaSamplerParams, LatentBatch, PdfAdaptationImagePersistedOutput, SamplerAggregatorSnapshot,
 };
 use num::complex::Complex64;
 use predicates::prelude::*;
@@ -15,6 +15,7 @@ use rand::SeedableRng;
 use rand_xoshiro::Xoshiro256StarStar;
 use serde_json::{Value as JsonValue, json};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use std::collections::HashSet;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -514,11 +515,10 @@ impl FullStackHarness {
         let persisted: JsonValue = sqlx::query_scalar(
             r#"
             SELECT persisted_observable
-            FROM run_stage_snapshots
+            FROM persisted_observable_snapshots
             WHERE run_id = $1
               AND task_id = $2
-              AND queue_empty = TRUE
-            ORDER BY id DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT 1
             "#,
         )
@@ -1166,6 +1166,115 @@ count = 128
         .assert()
         .success();
 
+    let pdf_task_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM run_tasks WHERE run_id = $1 AND name = 'pdf-2d' LIMIT 1",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+
+    let expected_width = 128usize;
+    let expected_height = 128usize;
+    let expected_points = expected_width * expected_height;
+    let mut seen_batch_ids = HashSet::<i64>::new();
+    let mut seen_grid_points = HashSet::<(usize, usize)>::new();
+    let mut min_x = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    let mut min_z = f64::INFINITY;
+    let mut max_z = f64::NEG_INFINITY;
+    let mut observed_points = 0usize;
+    let mut last_seen_batch_id = 0_i64;
+    let sampling_deadline = Instant::now() + Duration::from_secs(180);
+    while seen_grid_points.len() < expected_points {
+        let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(
+            r#"
+            SELECT b.id, bi.latent_batch
+            FROM batch_inputs bi
+            JOIN batches b ON b.id = bi.batch_id
+            WHERE b.run_id = $1 AND b.task_id = $2 AND b.id > $3
+            ORDER BY b.id ASC
+            "#,
+        )
+        .bind(run_id)
+        .bind(pdf_task_id)
+        .bind(last_seen_batch_id)
+        .fetch_all(&harness.pool)
+        .await?;
+
+        for (batch_id, payload) in rows {
+            last_seen_batch_id = last_seen_batch_id.max(batch_id);
+            if !seen_batch_ids.insert(batch_id) {
+                continue;
+            }
+            let latent = LatentBatch::from_bytes(&payload)?;
+            let batch = latent.payload.as_batch()?;
+            for point in batch.points() {
+                assert_eq!(
+                    point.continuous.len(),
+                    3,
+                    "expected 3 continuous dimensions for symbolica args x,y,z"
+                );
+                let x = point.continuous[0];
+                let y = point.continuous[1];
+                let z = point.continuous[2];
+                assert!(x.is_finite() && y.is_finite() && z.is_finite());
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+                min_y = min_y.min(y);
+                max_y = max_y.max(y);
+                min_z = min_z.min(z);
+                max_z = max_z.max(z);
+                observed_points += 1;
+
+                let u = (x * (expected_width - 1) as f64).round();
+                let v = (y * (expected_height - 1) as f64).round();
+                assert!(
+                    (u - x * (expected_width - 1) as f64).abs() <= 1e-9,
+                    "x={x} is off the 128-point linspace grid"
+                );
+                assert!(
+                    (v - y * (expected_height - 1) as f64).abs() <= 1e-9,
+                    "y={y} is off the 128-point linspace grid"
+                );
+                let u = u as usize;
+                let v = v as usize;
+                assert!(u < expected_width && v < expected_height);
+                seen_grid_points.insert((u, v));
+            }
+        }
+
+        if Instant::now() >= sampling_deadline {
+            anyhow::bail!(
+                "timed out while validating evaluator input points: observed_unique={} expected={} observed_points={} observed_batches={}",
+                seen_grid_points.len(),
+                expected_points,
+                observed_points,
+                seen_batch_ids.len()
+            );
+        }
+        sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(
+        seen_grid_points.len(),
+        expected_points,
+        "did not observe every raster point"
+    );
+    assert!(observed_points > 0, "expected at least one evaluated point");
+    assert!(
+        min_x >= -1e-12 && max_x <= 1.0 + 1e-12,
+        "x outside [0,1]: min={min_x}, max={max_x}"
+    );
+    assert!(
+        min_y >= -1e-12 && max_y <= 1.0 + 1e-12,
+        "y outside [0,1]: min={min_y}, max={max_y}"
+    );
+    assert!(
+        min_z >= -1e-12 && max_z <= 1e-12,
+        "z should be fixed at 0: min={min_z}, max={max_z}"
+    );
+
     harness
         .wait_for("all tasks complete", Duration::from_secs(180), || {
             let pool = harness.pool.clone();
@@ -1186,8 +1295,8 @@ count = 128
         .await?;
     let output: PdfAdaptationImagePersistedOutput = serde_json::from_value(persisted)?;
 
-    let width = 128usize;
-    let height = 128usize;
+    let width = expected_width;
+    let height = expected_height;
     assert_eq!(output.abs_integrand_values.len(), width * height);
 
     let value_at = |u: usize, v: usize| -> f64 {
