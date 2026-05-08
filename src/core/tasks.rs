@@ -880,6 +880,19 @@ impl Linspace {
     pub fn reduce_for_preflight(&mut self, count: usize) {
         self.count = self.count.min(count).max(1);
     }
+
+    pub fn value_at(&self, index: usize) -> f64 {
+        if self.count <= 1 {
+            return self.start;
+        }
+        let clamped_index = index.min(self.count - 1);
+        let t = clamped_index as f64 / (self.count - 1) as f64;
+        self.start + t * (self.stop - self.start)
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = f64> + '_ {
+        (0..self.count).map(|index| self.value_at(index))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -919,6 +932,24 @@ impl PlaneRasterGeometry {
         self.u_linspace.count.saturating_mul(self.v_linspace.count)
     }
 
+    pub fn point_at(&self, index: usize) -> Vec<f64> {
+        let width = self.u_linspace.count.max(1);
+        let u_idx = index % width;
+        let v_idx = index / width;
+        self.point_at_indices(u_idx, v_idx)
+    }
+
+    pub fn point_at_indices(&self, u_idx: usize, v_idx: usize) -> Vec<f64> {
+        let u = self.u_linspace.value_at(u_idx);
+        let v = self.v_linspace.value_at(v_idx);
+        self.offset
+            .iter()
+            .zip(self.u_vector.iter())
+            .zip(self.v_vector.iter())
+            .map(|((offset, basis_u), basis_v)| offset + u * basis_u + v * basis_v)
+            .collect()
+    }
+
     pub fn reduce_for_preflight(&mut self, u_count: usize, v_count: usize) {
         self.u_linspace.reduce_for_preflight(u_count);
         self.v_linspace.reduce_for_preflight(v_count);
@@ -954,6 +985,19 @@ impl LineRasterGeometry {
 
     pub fn nr_points(&self) -> usize {
         self.linspace.count
+    }
+
+    pub fn parameter_at(&self, index: usize) -> f64 {
+        self.linspace.value_at(index)
+    }
+
+    pub fn point_at(&self, index: usize) -> Vec<f64> {
+        let t = self.parameter_at(index);
+        self.offset
+            .iter()
+            .zip(self.direction.iter())
+            .map(|(offset, direction)| offset + t * direction)
+            .collect()
     }
 
     pub fn reduce_for_preflight(&mut self, count: usize) {
@@ -1136,6 +1180,58 @@ mod tests {
             batch_transforms: None,
         };
         assert!(task.validate().is_err());
+    }
+
+    #[test]
+    fn linspace_includes_bounds_and_interpolates_by_count() {
+        let linspace = Linspace {
+            start: 0.0,
+            stop: 1.0,
+            count: 5,
+        };
+
+        assert_eq!(
+            linspace.values().collect::<Vec<_>>(),
+            vec![0.0, 0.25, 0.5, 0.75, 1.0]
+        );
+        assert_eq!(linspace.value_at(100), 1.0);
+    }
+
+    #[test]
+    fn raster_geometries_use_linspace_coordinates() {
+        let plane = PlaneRasterGeometry {
+            offset: vec![0.0, 0.0, 0.0],
+            u_vector: vec![1.0, 0.0, 0.0],
+            v_vector: vec![0.0, 1.0, 0.0],
+            u_linspace: Linspace {
+                start: 0.0,
+                stop: 1.0,
+                count: 3,
+            },
+            v_linspace: Linspace {
+                start: 0.0,
+                stop: 1.0,
+                count: 3,
+            },
+            discrete: Vec::new(),
+        };
+        let line = LineRasterGeometry {
+            offset: vec![0.0, 0.0, 0.0],
+            direction: vec![1.0, 2.0, 3.0],
+            linspace: Linspace {
+                start: 0.0,
+                stop: 1.0,
+                count: 3,
+            },
+            discrete: Vec::new(),
+        };
+
+        assert_eq!(plane.point_at(0), vec![0.0, 0.0, 0.0]);
+        assert_eq!(plane.point_at(4), vec![0.5, 0.5, 0.0]);
+        assert_eq!(plane.point_at(8), vec![1.0, 1.0, 0.0]);
+        assert_eq!(line.point_at(0), vec![0.0, 0.0, 0.0]);
+        assert_eq!(line.point_at(1), vec![0.5, 1.0, 1.5]);
+        assert_eq!(line.point_at(2), vec![1.0, 2.0, 3.0]);
     }
 
     #[test]

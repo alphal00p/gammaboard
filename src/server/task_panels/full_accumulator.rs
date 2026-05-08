@@ -352,9 +352,7 @@ fn line_uses_complex_components(
 }
 
 fn line_xs(geometry: &LineRasterGeometry) -> Vec<f64> {
-    (0..geometry.nr_points())
-        .map(|idx| line_x_value(geometry, idx))
-        .collect()
+    geometry.linspace.values().collect()
 }
 
 fn point((x, y): (f64, f64)) -> PlotPoint {
@@ -470,12 +468,4 @@ fn coprime_stride(total_samples: usize) -> usize {
 fn decode_full_progress(persisted: &JsonValue) -> Result<FullAccumulatorProgress, EngineError> {
     serde_json::from_value(persisted.clone())
         .map_err(|err| EngineError::build(format!("invalid full accumulator progress: {err}")))
-}
-
-fn line_x_value(geometry: &LineRasterGeometry, index: usize) -> f64 {
-    if geometry.linspace.count <= 1 {
-        return geometry.linspace.start;
-    }
-    let t = index as f64 / (geometry.linspace.count - 1) as f64;
-    geometry.linspace.start + t * (geometry.linspace.stop - geometry.linspace.start)
 }

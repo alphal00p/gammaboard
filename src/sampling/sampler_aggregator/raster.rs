@@ -143,7 +143,7 @@ impl RasterPlaneSampler {
     }
 
     fn point_at(&self, index: usize) -> Vec<f64> {
-        raster_plane_point(&self.params.geometry, index)
+        self.params.geometry.point_at(index)
     }
 
     fn permuted_index(&self, index: usize) -> usize {
@@ -182,14 +182,7 @@ impl RasterLineSampler {
     }
 
     fn point_at(&self, index: usize) -> Vec<f64> {
-        let t = linspace_value(&self.params.geometry.linspace, index);
-        self.params
-            .geometry
-            .offset
-            .iter()
-            .zip(self.params.geometry.direction.iter())
-            .map(|(offset, direction)| offset + t * direction)
-            .collect()
+        self.params.geometry.point_at(index)
     }
 
     fn permuted_index(&self, index: usize) -> usize {
@@ -240,7 +233,7 @@ impl PdfAdaptationRasterPlaneSampler {
     }
 
     fn point_at(&self, index: usize) -> Vec<f64> {
-        raster_plane_point(&self.params.geometry, index)
+        self.params.geometry.point_at(index)
     }
 
     fn permuted_index(&self, index: usize) -> usize {
@@ -328,7 +321,7 @@ impl PdfAdaptationRasterLineSampler {
     }
 
     fn point_at(&self, index: usize) -> Vec<f64> {
-        raster_line_point(&self.params.geometry, index)
+        self.params.geometry.point_at(index)
     }
 
     fn permuted_index(&self, index: usize) -> usize {
@@ -654,31 +647,6 @@ impl SamplerAggregator for PdfAdaptationRasterLineSampler {
     }
 }
 
-fn raster_plane_point(geometry: &PlaneRasterGeometry, index: usize) -> Vec<f64> {
-    let width = geometry.u_linspace.count;
-    let u_idx = index % width;
-    let v_idx = index / width;
-    let u = linspace_value(&geometry.u_linspace, u_idx);
-    let v = linspace_value(&geometry.v_linspace, v_idx);
-    geometry
-        .offset
-        .iter()
-        .zip(geometry.u_vector.iter())
-        .zip(geometry.v_vector.iter())
-        .map(|((offset, basis_u), basis_v)| offset + u * basis_u + v * basis_v)
-        .collect()
-}
-
-fn raster_line_point(geometry: &LineRasterGeometry, index: usize) -> Vec<f64> {
-    let t = linspace_value(&geometry.linspace, index);
-    geometry
-        .offset
-        .iter()
-        .zip(geometry.direction.iter())
-        .map(|(offset, direction)| offset + t * direction)
-        .collect()
-}
-
 fn validate_plane_geometry(
     geometry: &PlaneRasterGeometry,
     domain: &Domain,
@@ -727,14 +695,6 @@ fn validate_line_geometry(
         )));
     }
     Ok(())
-}
-
-fn linspace_value(linspace: &crate::core::Linspace, index: usize) -> f64 {
-    if linspace.count <= 1 {
-        return linspace.start;
-    }
-    let t = index as f64 / (linspace.count - 1) as f64;
-    linspace.start + t * (linspace.stop - linspace.start)
 }
 
 fn permuted_raster_index(index: usize, total_samples: usize, stride: usize) -> usize {

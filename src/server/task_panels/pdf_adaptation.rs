@@ -393,7 +393,7 @@ fn line_points(geometry: &LineRasterGeometry, values: &[Option<f64>]) -> Vec<Plo
                 return None;
             }
             Some(PlotPoint {
-                x: line_x_value(geometry, index),
+                x: geometry.parameter_at(index),
                 y,
                 x_sampler_uptime_ms: None,
                 x_completed_samples_total: None,
@@ -402,14 +402,6 @@ fn line_points(geometry: &LineRasterGeometry, values: &[Option<f64>]) -> Vec<Plo
             })
         })
         .collect()
-}
-
-fn line_x_value(geometry: &LineRasterGeometry, index: usize) -> f64 {
-    if geometry.linspace.count <= 1 {
-        return geometry.linspace.start;
-    }
-    let t = index as f64 / (geometry.linspace.count - 1) as f64;
-    geometry.linspace.start + t * (geometry.linspace.stop - geometry.linspace.start)
 }
 
 fn option_values_to_image(values: &[Option<f64>]) -> (Vec<f32>, Option<Vec<usize>>) {
