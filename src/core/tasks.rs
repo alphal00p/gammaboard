@@ -890,6 +890,7 @@ impl Linspace {
         self.start + t * (self.stop - self.start)
     }
 
+    /// Returns the `count` inclusive parameter values used by raster geometry.
     pub fn values(&self) -> impl Iterator<Item = f64> + '_ {
         (0..self.count).map(|index| self.value_at(index))
     }
@@ -932,6 +933,7 @@ impl PlaneRasterGeometry {
         self.u_linspace.count.saturating_mul(self.v_linspace.count)
     }
 
+    /// Maps a raster pixel index to `offset + t * u_vector + s * v_vector`.
     pub fn point_at(&self, index: usize) -> Vec<f64> {
         let width = self.u_linspace.count.max(1);
         let u_idx = index % width;
@@ -991,6 +993,7 @@ impl LineRasterGeometry {
         self.linspace.value_at(index)
     }
 
+    /// Maps a raster line pixel index to `offset + t * direction`.
     pub fn point_at(&self, index: usize) -> Vec<f64> {
         let t = self.parameter_at(index);
         self.offset

@@ -1138,7 +1138,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
   );
 };
 
-const buildLinspaceCoordinates = (range, count) => {
+const buildLinspaceParameters = (range, count) => {
   const [min, max] = asArray(range);
   if (!Number.isFinite(min) || !Number.isFinite(max) || count <= 0) {
     return Array.from({ length: count }, (_, index) => index);
@@ -1167,13 +1167,13 @@ const buildScalarHeatmapScale = (values, normalizationMode, spread = 1) => {
   return { zmin, zmax };
 };
 
-const buildInvalidCellOverlay = (invalidIndices, width, height, xCenters, yCenters) => {
+const buildInvalidCellOverlay = (invalidIndices, width, height) => {
   const points = Array.from(invalidIndices || [])
     .map((index) => {
       const row = Math.floor(index / width);
       const col = index % width;
       if (row < 0 || row >= height || col < 0 || col >= width) return null;
-      return [xCenters[col] ?? col, yCenters[row] ?? row];
+      return [col, row];
     })
     .filter(Boolean);
 
@@ -1196,8 +1196,8 @@ const ScalarImageHeatmapPanel = ({
   const figureRef = useRef(null);
   const echartsRef = useRef(null);
   const [panelWidth, setPanelWidth] = useState(0);
-  const xCoordinates = useMemo(() => buildLinspaceCoordinates(xRange, width), [width, xRange]);
-  const yCoordinates = useMemo(() => buildLinspaceCoordinates(yRange, height), [height, yRange]);
+  const xParameters = useMemo(() => buildLinspaceParameters(xRange, width), [width, xRange]);
+  const yParameters = useMemo(() => buildLinspaceParameters(yRange, height), [height, yRange]);
   const totalCells = Math.max(0, width * height);
   const boundedValues = useMemo(() => values.slice(0, totalCells), [totalCells, values]);
   const isPdfPanel = typeof panelId === "string" && panelId.startsWith("pdf_adaptation_");
@@ -1208,8 +1208,8 @@ const ScalarImageHeatmapPanel = ({
     [boundedValues, normalizationMode, spread],
   );
   const invalidOverlay = useMemo(
-    () => buildInvalidCellOverlay(invalidIndices, width, height, xCoordinates, yCoordinates),
-    [height, invalidIndices, width, xCoordinates, yCoordinates],
+    () => buildInvalidCellOverlay(invalidIndices, width, height),
+    [height, invalidIndices, width],
   );
   const heatmapData = useMemo(() => {
     const points = [];
@@ -1220,11 +1220,11 @@ const ScalarImageHeatmapPanel = ({
         if (invalidIndices?.has(index)) continue;
         const value = Number(boundedValues[index]);
         if (!Number.isFinite(value)) continue;
-        points.push([xCoordinates[col] ?? col, yCoordinates[row] ?? row, value]);
+        points.push([col, row, value]);
       }
     }
     return points;
-  }, [boundedValues, height, invalidIndices, width, xCoordinates, yCoordinates]);
+  }, [boundedValues, height, invalidIndices, width]);
 
   const heatmapMargins = useMemo(() => ({ left: 56, right: 154, top: 16, bottom: 44 }), []);
   const zoomRange = readZoomFromPanelValue(value, FULL_ZOOM);
@@ -1242,38 +1242,51 @@ const ScalarImageHeatmapPanel = ({
       grid: heatmapMargins,
       xAxis: {
         type: "category",
-        data: xCoordinates,
-        name: "x",
+        data: Array.from({ length: width }, (_, index) => index),
+        name: "t",
         axisLine: { show: true, lineStyle: { color: "#94a3b8" } },
         axisTick: { show: true },
         axisLabel: {
           color: "#64748b",
           fontSize: 11,
-          formatter: (value) => formatScientific(Number(value), 2),
+          formatter: (value) => {
+            const index = Number(value);
+            const parameter = Number.isFinite(index) ? xParameters[Math.max(0, Math.min(width - 1, index))] : Number.NaN;
+            return Number.isFinite(parameter) ? formatScientific(parameter, 2) : "";
+          },
+          interval: Math.max(0, Math.ceil(width / 12) - 1),
         },
       },
       yAxis: {
         type: "category",
-        data: yCoordinates,
-        name: "y",
+        data: Array.from({ length: height }, (_, index) => index),
+        name: "s",
         axisLine: { show: true, lineStyle: { color: "#94a3b8" } },
         axisTick: { show: true },
         axisLabel: {
           color: "#64748b",
           fontSize: 11,
-          formatter: (value) => formatScientific(Number(value), 2),
+          formatter: (value) => {
+            const index = Number(value);
+            const parameter = Number.isFinite(index) ? yParameters[Math.max(0, Math.min(height - 1, index))] : Number.NaN;
+            return Number.isFinite(parameter) ? formatScientific(parameter, 2) : "";
+          },
+          interval: Math.max(0, Math.ceil(height / 12) - 1),
         },
-        inverse: true,
       },
       tooltip: {
         trigger: "item",
         formatter: (params) => {
           if (params?.seriesName === "invalid") return "invalid value";
           const data = Array.isArray(params?.data) ? params.data : [];
-          const [x, y, value] = data;
+          const [col, row, value] = data;
+          const x = Number.isFinite(Number(col)) ? xParameters[Math.max(0, Math.min(width - 1, Number(col)))] : Number.NaN;
+          const y = Number.isFinite(Number(row))
+            ? yParameters[Math.max(0, Math.min(height - 1, Number(row)))]
+            : Number.NaN;
           return [
-            `x: ${formatScientific(Number(x), 4)}`,
-            `y: ${formatScientific(Number(y), 4)}`,
+            `t: ${formatScientific(Number(x), 4)}`,
+            `s: ${formatScientific(Number(y), 4)}`,
             `value: ${formatScientific(Number(value), 6)}`,
           ].join("<br/>");
         },
@@ -1318,10 +1331,10 @@ const ScalarImageHeatmapPanel = ({
       height,
       invalidOverlay,
       width,
-      xCoordinates,
+      xParameters,
       zoomRange,
       yZoomRange,
-      yCoordinates,
+      yParameters,
       zmax,
       zmin,
     ],
