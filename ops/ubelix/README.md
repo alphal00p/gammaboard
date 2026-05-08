@@ -11,6 +11,48 @@ Execution context:
 - `python ubelix.py up` prints the SSH tunnel command to run on your local machine
 - run `just --justfile ops/ubelix/justfile sync-ops` and `sync-dashboard` on your local machine
 
+## Python CLI Quickstart
+
+Run these on a UBELIX login node after syncing ops files and frontend artifacts.
+
+Start or reuse a normal control/UI job:
+
+```bash
+python ubelix.py up
+```
+
+`up` waits until Slurm assigns a node and nginx answers on the frontend port, then prints `frontend_ready=true` and an SSH tunnel command. Run the printed tunnel command on your local machine, then open `http://localhost:8080`.
+
+Start a single-node deployment when you want control and local workers inside one Slurm allocation:
+
+```bash
+python ubelix.py up --single-node
+```
+
+Submit with a custom walltime or shifted ports:
+
+```bash
+python ubelix.py up --time 00:45:00
+python ubelix.py up --port-offset 10
+```
+
+When using a port offset, pass the same offset to API/control helper commands for that deployment. The base ports are frontend `8080`, API `4000`, and Postgres `5400`; `--port-offset 10` uses `8090`, `4010`, and `5410`.
+
+```bash
+python ubelix.py watch-requests --port-offset 10
+python ubelix.py submit-workers --count 2 --prefix w --port-offset 10
+python ubelix.py down --port-offset 10
+```
+
+Useful variants:
+
+```bash
+python ubelix.py up --watch
+python ubelix.py up --copy
+python ubelix.py status
+python ubelix.py down
+```
+
 ## Layout
 
 Repo source lives under `ops/ubelix/` and mirrors this server-side layout directly:
@@ -132,12 +174,6 @@ GAMMABOARD_BIND_PATHS=/absolute/path/to/itp_localunitaritydata
 
 ## Single-Node Deploy
 
-Run this on a UBELIX login node:
-
-```bash
-python ubelix.py up --single-node
-```
-
 This starts the same foreground deploy stack as the normal control job, but uses `config/server-single-node.toml`, where `allow_local_node_spawn = true`. Dashboard node-start actions spawn local worker processes inside the same Slurm allocation instead of creating external worker requests.
 
 Direct Slurm submission also works when debugging:
@@ -148,40 +184,10 @@ sbatch ops/slurm/single_node_deploy.sbatch
 
 ## Control/UI Job
 
-Run these on a UBELIX login node.
-
 Prerequisite:
 
 ```bash
 ls /storage/research/itp_localunitaritydata/artifacts/dashboard-build/index.html
-```
-
-Submit:
-
-```bash
-python ubelix.py up
-```
-
-`up` waits until Slurm assigned a node and nginx answers on the frontend port, then prints `frontend_ready=true`. While waiting, it ignores proxy environment variables for the readiness probe and periodically prints the latest control log tail.
-
-To submit a new control job with a custom walltime:
-
-```bash
-python ubelix.py up --time 00:45:00
-```
-
-To run on shifted ports, pass the same offset to all control/API commands for that deployment. The base ports are frontend `8080`, API `4000`, and Postgres `5400`; `--port-offset 10` uses `8090`, `4010`, and `5410`.
-
-```bash
-python ubelix.py up --port-offset 10
-python ubelix.py watch-requests --port-offset 10
-python ubelix.py down --port-offset 10
-```
-
-To also copy the printed tunnel command to your clipboard when the terminal supports OSC 52:
-
-```bash
-python ubelix.py up --copy
 ```
 
 This job starts:
