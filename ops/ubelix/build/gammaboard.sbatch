@@ -7,8 +7,8 @@
 #SBATCH --mem=8G
 #SBATCH --account=gratis
 #SBATCH --partition=epyc2
-#SBATCH --output=/storage/research/itp_localunitaritydata/logs/slurm/build/%x-%j.out
-#SBATCH --error=/storage/research/itp_localunitaritydata/logs/slurm/build/%x-%j.err
+#SBATCH --output=/storage/research/itp_localunitaritydata/gammaboard/logs/slurm/build/%x-%j.out
+#SBATCH --error=/storage/research/itp_localunitaritydata/gammaboard/logs/slurm/build/%x-%j.err
 
 set -euo pipefail
 
@@ -23,14 +23,13 @@ export APPTAINERENV_SYMBOLICA_LICENSE="${SYMBOLICA_LICENSE}"
 export APPTAINERENV_NO_SYMBOLICA_OEM_LICENSE="${NO_SYMBOLICA_OEM_LICENSE}"
 
 # Edit directly on UBELIX when needed.
-WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
+WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata/gammaboard}"
 GAMMABOARD_REPO="${GAMMABOARD_REPO:-https://github.com/SecretGmG/gammaboard.git}"
 GAMMABOARD_DEF_REL="ops/build/gammaboard.def"
 GB_IMAGE_DIR_REL="images/gammaboard"
 GB_SRC_DIR_REL="artifacts/src/gammaboard"
 BIN_DIR_REL="artifacts/bin"
 LIB_DIR_REL="artifacts/bin/lib"
-MIGRATIONS_DIR_REL="artifacts/migrations"
 SCRATCH_BASE="${SCRATCH_BASE:-/scratch/network/users/${USER}/apptainer}"
 
 require_cmd() {
@@ -71,6 +70,7 @@ require_cmd apptainer
 require_cmd git
 require_cmd awk
 require_cmd cargo
+require_cmd npm
 require_cmd stat
 
 TMP_BASE="${SCRATCH_BASE}/tmp"
@@ -83,19 +83,18 @@ GB_IMAGE_DIR="${WORKSPACE_ROOT}/${GB_IMAGE_DIR_REL}"
 GB_SRC_DIR="${WORKSPACE_ROOT}/${GB_SRC_DIR_REL}"
 BIN_DIR="${WORKSPACE_ROOT}/${BIN_DIR_REL}"
 LIB_DIR="${WORKSPACE_ROOT}/${LIB_DIR_REL}"
-MIGRATIONS_DIR="${WORKSPACE_ROOT}/${MIGRATIONS_DIR_REL}"
 SQLX_ROOT_DIR="${WORKSPACE_ROOT}/artifacts/sqlx-root"
+NPM_CACHE_DIR="${WORKSPACE_ROOT}/artifacts/npm-cache"
 RUST_TARGET_BASE="${RUST_TARGET_BASE:-/scratch/network/users/${USER}/gammaboard-target}"
 RUST_TARGET_DIR="${RUST_TARGET_BASE}/target"
 CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-1}"
-GB_LATEST_LINK="${GB_IMAGE_DIR}/gammaboard-latest.sif"
 
 mkdir -p \
   "${WORKSPACE_ROOT}/logs/slurm/build" \
   "${TMP_BASE}" \
   "${CACHE_BASE}" \
   "${GB_IMAGE_DIR}"
-mkdir -p "${BIN_DIR}" "${LIB_DIR}" "${MIGRATIONS_DIR}" "${RUST_TARGET_DIR}" "${SQLX_ROOT_DIR}"
+mkdir -p "${BIN_DIR}" "${LIB_DIR}" "${RUST_TARGET_DIR}" "${SQLX_ROOT_DIR}" "${NPM_CACHE_DIR}"
 
 if [[ ! -f "${GB_DEF_PATH}" ]]; then
   echo "missing def file: ${GB_DEF_PATH}" >&2
@@ -109,12 +108,11 @@ export SYMBOLICA_OEM_LICENSE="${SYMBOLICA_OEM_LICENSE:-SYMBOLICA_OEM_GAMMALOOP}"
 
 GAMMABOARD_SHA="$(git_head_sha "${GAMMABOARD_REPO}")"
 
-GB_OUT_IMAGE="${GB_IMAGE_DIR}/gammaboard-${GAMMABOARD_SHA}.sif"
-GB_TMP_IMAGE="${GB_IMAGE_DIR}/.gammaboard-${GAMMABOARD_SHA}.tmp-${SLURM_JOB_ID:-$$}.sif"
-GB_META_FILE="${GB_IMAGE_DIR}/gammaboard-${GAMMABOARD_SHA}.meta"
+GB_OUT_IMAGE="${GB_IMAGE_DIR}/gammaboard.sif"
+GB_TMP_IMAGE="${GB_IMAGE_DIR}/.gammaboard.tmp-${SLURM_JOB_ID:-$$}.sif"
+GB_META_FILE="${GB_IMAGE_DIR}/gammaboard.meta"
 HOST_GAMMABOARD_BIN="${BIN_DIR}/gammaboard"
 HOST_SQLX_BIN="${BIN_DIR}/sqlx"
-HOST_MIGRATIONS_DIR="${MIGRATIONS_DIR}"
 GB_RUST_PROFILE="release"
 
 echo "host: ${HOSTNAME}"
@@ -124,7 +122,8 @@ echo "gammaboard_source: ${GB_SRC_DIR}"
 echo "target_dir_compile: ${RUST_TARGET_DIR}"
 echo "gammaboard_bin: ${HOST_GAMMABOARD_BIN}"
 echo "sqlx_bin: ${HOST_SQLX_BIN}"
-echo "migrations_dir: ${HOST_MIGRATIONS_DIR}"
+echo "migrations_dir: ${GB_SRC_DIR}/migrations"
+echo "dashboard_build_dir: ${GB_SRC_DIR}/dashboard/build"
 echo "lib_dir: ${LIB_DIR}"
 echo "gammaboard_sha: ${GAMMABOARD_SHA}"
 echo "gammaboard_image: ${GB_OUT_IMAGE}"
@@ -172,14 +171,22 @@ if [[ -n "${PY_LIB_PATH}" ]]; then
   fi
   cp -L "${PY_LIB_PATH}" "${LIB_DIR}/"
 fi
-rm -rf "${MIGRATIONS_DIR}"
-cp -a "${GB_SRC_DIR}/migrations" "${MIGRATIONS_DIR}"
 BIN_STAGE_END="$(date +%s)"
+
+echo "building dashboard frontend"
+DASHBOARD_START="$(date +%s)"
+(
+  cd "${GB_SRC_DIR}/dashboard"
+  NPM_CONFIG_CACHE="${NPM_CACHE_DIR}" npm ci
+  NPM_CONFIG_CACHE="${NPM_CACHE_DIR}" npm run build
+)
+DASHBOARD_END="$(date +%s)"
 
 echo "building image: ${GB_OUT_IMAGE}"
 export APPTAINERENV_GAMMABOARD_BIN="/workspace/${BIN_DIR_REL}/gammaboard"
 export APPTAINERENV_SQLX_BIN="/workspace/${BIN_DIR_REL}/sqlx"
-export APPTAINERENV_MIGRATIONS_DIR="/workspace/${MIGRATIONS_DIR_REL}"
+export APPTAINERENV_MIGRATIONS_DIR="/workspace/${GB_SRC_DIR_REL}/migrations"
+export APPTAINERENV_DASHBOARD_BUILD_DIR="/workspace/${GB_SRC_DIR_REL}/dashboard/build"
 APPTAINER_GB_START="$(date +%s)"
 (
   cd "${GB_DEF_DIR}"
@@ -200,6 +207,7 @@ TOTAL_SECONDS="$(seconds_since "${TOTAL_START}" "${TOTAL_END}")"
 FETCH_SECONDS="$(seconds_since "${FETCH_START}" "${FETCH_END}")"
 CARGO_GB_SECONDS="$(seconds_since "${CARGO_GB_START}" "${CARGO_GB_END}")"
 BIN_STAGE_SECONDS="$(seconds_since "${BIN_STAGE_START}" "${BIN_STAGE_END}")"
+DASHBOARD_SECONDS="$(seconds_since "${DASHBOARD_START}" "${DASHBOARD_END}")"
 APPTAINER_GB_SECONDS="$(seconds_since "${APPTAINER_GB_START}" "${APPTAINER_GB_END}")"
 
 write_meta "${GB_META_FILE}" \
@@ -222,7 +230,5 @@ timing_total_seconds="${TOTAL_SECONDS}" \
 timing_fetch_checkout_seconds="${FETCH_SECONDS}" \
 timing_cargo_gammaboard_seconds="${CARGO_GB_SECONDS}" \
 timing_binary_stage_seconds="${BIN_STAGE_SECONDS}" \
+timing_dashboard_build_seconds="${DASHBOARD_SECONDS}" \
 timing_apptainer_gammaboard_seconds="${APPTAINER_GB_SECONDS}"
-
-ln -sfn "$(basename "${GB_OUT_IMAGE}")" "${GB_LATEST_LINK}"
-echo "updated symlink: ${GB_LATEST_LINK} -> $(readlink "${GB_LATEST_LINK}")"

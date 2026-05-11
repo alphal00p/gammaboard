@@ -3,7 +3,7 @@ target = { kind = "complex", real = 1.563e-3, imag = 0.0 }
 
 [evaluator]
 kind = "gammaloop"
-state_folder = "epem_a_ttxh/LO/state"
+state_folder = "states/epem_a_ttxh/LO/state"
 integrand_name = "LO"
 
 

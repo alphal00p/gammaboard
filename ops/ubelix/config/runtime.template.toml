@@ -8,7 +8,7 @@ db_external_level = "warn"
 
 [resources]
 roots = [
-  "${WORKSPACE_ROOT}/states",
+  "${WORKSPACE_ROOT}/resources",
 ]
 
 [local_postgres]

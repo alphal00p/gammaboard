@@ -7,8 +7,8 @@
 #SBATCH --mem=8G
 #SBATCH --account=gratis
 #SBATCH --partition=epyc2
-#SBATCH --output=/storage/research/itp_localunitaritydata/logs/slurm/build/%x-%j.out
-#SBATCH --error=/storage/research/itp_localunitaritydata/logs/slurm/build/%x-%j.err
+#SBATCH --output=/storage/research/itp_localunitaritydata/gammaboard/logs/slurm/build/%x-%j.out
+#SBATCH --error=/storage/research/itp_localunitaritydata/gammaboard/logs/slurm/build/%x-%j.err
 
 set -euo pipefail
 
@@ -23,7 +23,7 @@ export APPTAINERENV_SYMBOLICA_LICENSE="${SYMBOLICA_LICENSE}"
 export APPTAINERENV_NO_SYMBOLICA_OEM_LICENSE="${NO_SYMBOLICA_OEM_LICENSE}"
 
 # Edit directly on UBELIX when needed.
-WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
+WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata/gammaboard}"
 GAMMALOOP_REPO="${GAMMALOOP_REPO:-https://github.com/alphal00p/gammaloop.git}"
 DEF_REL_PATH="ops/build/gammaloop.def"
 IMAGE_DIR_REL="images/gammaloop"
@@ -84,7 +84,6 @@ LIB_DIR="${WORKSPACE_ROOT}/${LIB_DIR_REL}"
 RUST_TARGET_BASE="${RUST_TARGET_BASE:-/scratch/network/users/${USER}/gammaboard-target}"
 RUST_TARGET_DIR="${RUST_TARGET_BASE}/target"
 CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-1}"
-LATEST_LINK="${IMAGE_DIR}/gammaloop-latest.sif"
 
 mkdir -p "${WORKSPACE_ROOT}/logs/slurm/build" "${TMP_BASE}" "${CACHE_BASE}" "${IMAGE_DIR}" "${BIN_DIR}" "${LIB_DIR}" "${RUST_TARGET_DIR}"
 
@@ -99,9 +98,9 @@ export CARGO_INCREMENTAL
 export SYMBOLICA_OEM_LICENSE="${SYMBOLICA_OEM_LICENSE:-SYMBOLICA_OEM_GAMMALOOP}"
 
 GAMMALOOP_SHA="$(git_head_sha "${GAMMALOOP_REPO}")"
-OUT_IMAGE="${IMAGE_DIR}/gammaloop-${GAMMALOOP_SHA}.sif"
-TMP_IMAGE="${IMAGE_DIR}/.gammaloop-${GAMMALOOP_SHA}.tmp-${SLURM_JOB_ID:-$$}.sif"
-META_FILE="${IMAGE_DIR}/gammaloop-${GAMMALOOP_SHA}.meta"
+OUT_IMAGE="${IMAGE_DIR}/gammaloop.sif"
+TMP_IMAGE="${IMAGE_DIR}/.gammaloop.tmp-${SLURM_JOB_ID:-$$}.sif"
+META_FILE="${IMAGE_DIR}/gammaloop.meta"
 HOST_GAMMALOOP_BIN="${BIN_DIR}/gammaloop"
 RUST_PROFILE="release"
 RUST_FEATURES="ufo_support"
@@ -115,7 +114,6 @@ echo "bin_path: ${HOST_GAMMALOOP_BIN}"
 echo "lib_dir: ${LIB_DIR}"
 echo "gammaloop_sha: ${GAMMALOOP_SHA}"
 echo "out_image: ${OUT_IMAGE}"
-echo "latest_link: ${LATEST_LINK}"
 echo "APPTAINER_TMPDIR: ${APPTAINER_TMPDIR}"
 echo "APPTAINER_CACHEDIR: ${APPTAINER_CACHEDIR}"
 echo "CARGO_INCREMENTAL: ${CARGO_INCREMENTAL}"
@@ -200,6 +198,3 @@ timing_fetch_checkout_seconds="${FETCH_SECONDS}" \
 timing_cargo_gammaloop_seconds="${CARGO_SECONDS}" \
 timing_binary_stage_seconds="${BIN_STAGE_SECONDS}" \
 timing_apptainer_gammaloop_seconds="${APPTAINER_TOTAL_SECONDS}"
-
-ln -sfn "$(basename "${OUT_IMAGE}")" "${LATEST_LINK}"
-echo "updated symlink: ${LATEST_LINK} -> $(readlink "${LATEST_LINK}")"

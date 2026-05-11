@@ -3,7 +3,7 @@
 api_server_config = "server-single-node.toml"
 
 [static_site]
-frontend_build_dir = "../../artifacts/dashboard-build"
+frontend_build_dir = "/usr/local/share/gammaboard/dashboard"
 
 [frontend_http]
 frontend_host = "0.0.0.0"

@@ -15,7 +15,7 @@ from cmd import PROMPT
 from dataclasses import dataclass
 from typing import Callable
 
-WORKSPACE_ROOT = "/storage/research/itp_localunitaritydata"
+WORKSPACE_ROOT = "/storage/research/itp_localunitaritydata/gammaboard"
 JOB_PREFIX = "gb"
 CONTROL_JOB_NAME = f"{JOB_PREFIX}-ctl"
 SINGLE_NODE_JOB_NAME = f"{JOB_PREFIX}-single"
@@ -25,7 +25,7 @@ SINGLE_NODE_SBATCH = f"{WORKSPACE_ROOT}/ops/slurm/single_node_deploy.sbatch"
 WORKER_SBATCH = f"{WORKSPACE_ROOT}/ops/slurm/worker.sbatch"
 GB_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaboard.sbatch"
 GL_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaloop.sbatch"
-IMAGE_PATH = f"{WORKSPACE_ROOT}/images/gammaboard/gammaboard-latest.sif"
+IMAGE_PATH = f"{WORKSPACE_ROOT}/images/gammaboard/gammaboard.sif"
 FRONTEND_PORT = 8080
 DB_PORT = 5400
 DEPLOY_NAME = "default"

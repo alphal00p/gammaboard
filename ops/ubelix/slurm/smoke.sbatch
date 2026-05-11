@@ -30,11 +30,11 @@ require_cmd() {
   }
 }
 
-WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata}"
+WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata/gammaboard}"
 mkdir -p "${WORKSPACE_ROOT}/logs/slurm/build"
 
 # Absolute path to SIF image on UBELIX filesystem.
-IMAGE_PATH="${GAMMABOARD_IMAGE:-${WORKSPACE_ROOT}/images/gammaboard/gammaboard-latest.sif}"
+IMAGE_PATH="${GAMMABOARD_IMAGE:-${WORKSPACE_ROOT}/images/gammaboard/gammaboard.sif}"
 
 # Bind full storage paths (UBELIX scratch/workspace paths are symlinked).
 BIND_PATHS="${GAMMABOARD_BIND_PATHS:-${WORKSPACE_ROOT}}"

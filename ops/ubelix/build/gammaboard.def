@@ -4,7 +4,6 @@ From: rust:1-bookworm
 %setup
     mkdir -p "${APPTAINER_ROOTFS}/workspace/artifacts/bin"
     mkdir -p "${APPTAINER_ROOTFS}/workspace/artifacts/bin/lib"
-    mkdir -p "${APPTAINER_ROOTFS}/workspace/artifacts/migrations"
 
 %post
     set -eux
@@ -31,14 +30,18 @@ From: rust:1-bookworm
 
     GAMMABOARD_BIN="${GAMMABOARD_BIN:-/workspace/artifacts/bin/gammaboard}"
     SQLX_BIN="${SQLX_BIN:-/workspace/artifacts/bin/sqlx}"
-    MIGRATIONS_DIR="${MIGRATIONS_DIR:-/workspace/artifacts/migrations}"
+    MIGRATIONS_DIR="${MIGRATIONS_DIR:-/workspace/artifacts/src/gammaboard/migrations}"
+    DASHBOARD_BUILD_DIR="${DASHBOARD_BUILD_DIR:-/workspace/artifacts/src/gammaboard/dashboard/build}"
     test -x "${GAMMABOARD_BIN}"
     test -x "${SQLX_BIN}"
     test -d "${MIGRATIONS_DIR}"
+    test -f "${DASHBOARD_BUILD_DIR}/index.html"
     install -Dm755 "${GAMMABOARD_BIN}" /usr/local/bin/gammaboard
     install -Dm755 "${SQLX_BIN}" /usr/local/bin/sqlx
     mkdir -p /usr/local/share/gammaboard/migrations
     cp -a "${MIGRATIONS_DIR}/." /usr/local/share/gammaboard/migrations/
+    mkdir -p /usr/local/share/gammaboard/dashboard
+    cp -a "${DASHBOARD_BUILD_DIR}/." /usr/local/share/gammaboard/dashboard/
     mkdir -p /usr/local/lib/gammaboard
     for lib in /workspace/artifacts/bin/lib/*.so*; do
       if [ -e "${lib}" ]; then
@@ -60,3 +63,4 @@ From: rust:1-bookworm
 
 %test
     test -x /usr/local/bin/gammaboard
+    test -f /usr/local/share/gammaboard/dashboard/index.html

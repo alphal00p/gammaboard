@@ -1,305 +1,103 @@
 # UBELIX Deployment
 
-Current model:
-- build `gammaloop` and `gammaboard` as separate Apptainer images
-- run control/UI as one Slurm job
-- run workers as separate Slurm jobs against the control job database
-- access the frontend through one SSH tunnel
+Operator guide for the current UBELIX setup. Local sync commands run from your workstation; `ubelix.py` commands run on a UBELIX login node.
 
-Execution context:
-- run `python ubelix.py up` on an UBELIX login node
-- `python ubelix.py up` prints the SSH tunnel command to run on your local machine
-- run `just --justfile ops/ubelix/justfile sync-ops` and `sync-dashboard` on your local machine
+## Model
 
-## Python CLI Quickstart
+- Workspace: `/storage/research/itp_localunitaritydata/gammaboard`
+- Images: separate Apptainer images for `gammaboard` and `gammaloop`
+- Deploy: one control/UI Slurm job with Postgres, API, nginx, and frontend
+- Workers: separate Slurm jobs connecting to the control job database
+- Access: one SSH tunnel to the frontend port
+- Resources: relative run/task paths resolve under `${WORKSPACE_ROOT}/resources`; GammaLoop states use `states/...`
 
-Run these on a UBELIX login node after syncing ops files and frontend artifacts.
-
-Start or reuse a normal control/UI job:
-
-```bash
-python ubelix.py up
-```
-
-`up` waits until Slurm assigns a node and nginx answers on the frontend port, then prints `frontend_ready=true` and an SSH tunnel command. Run the printed tunnel command on your local machine, then open `http://localhost:8080`.
-
-Start a single-node deployment when you want control and local workers inside one Slurm allocation:
-
-```bash
-python ubelix.py up --single-node
-```
-
-Submit with a custom walltime or shifted ports:
-
-```bash
-python ubelix.py up --time 00:45:00
-python ubelix.py up --port-offset 10
-```
-
-When using a port offset, pass the same offset to API/control helper commands for that deployment. The base ports are frontend `8080`, API `4000`, and Postgres `5400`; `--port-offset 10` uses `8090`, `4010`, and `5410`.
-
-```bash
-python ubelix.py watch-requests --port-offset 10
-python ubelix.py submit-workers --count 2 --prefix w --port-offset 10
-python ubelix.py down --port-offset 10
-```
-
-Useful variants:
-
-```bash
-python ubelix.py up --watch
-python ubelix.py up --copy
-python ubelix.py status
-python ubelix.py down
-```
-
-## Layout
-
-Repo source lives under `ops/ubelix/` and mirrors this server-side layout directly:
-
-```text
-<WORKSPACE_ROOT>/
-  ops/
-    build/
-    config/
-    slurm/
-  ubelix.py
-  justfile
-  README.md
-```
-
-Generated data typically lives here:
-
-```text
-<WORKSPACE_ROOT>/
-  artifacts/
-    bin/
-    dashboard-build/
-    migrations/
-    sqlx-root/
-    src/
-    target/
-  db/
-    <deploy-name>/
-  images/
-    gammaboard/
-    gammaloop/
-  logs/
-    postgres/
-    slurm/
-      build/
-      control/
-      workers/
-  runtime/
-    runtime-<jobid>-<mode>.toml
-  states/
-```
-
-## Important Files
-
-- `build/gammaloop.sbatch`
-- `build/gammaboard.sbatch`
-- `slurm/smoke.sbatch`
-- `slurm/single_node_deploy.sbatch`
-- `slurm/control.sbatch`
-- `slurm/worker.sbatch`
-- `ubelix.py`
-- `config/runtime.template.toml`
-- `config/server.toml`
-- `config/server-single-node.toml`
-- `config/deploy.toml`
-- `config/deploy-single-node.toml`
-
-Notes:
-- UBELIX runtime templates set `resources.roots = ["${WORKSPACE_ROOT}/states"]`.
-- The UBELIX server profile sets `allow_local_node_spawn = false`.
-- Runtime TOML is rendered per job via `envsubst`; control jobs set a loopback database URL, workers receive the control-node database URL from `ubelix.py`.
-- Control and single-node deploy jobs use foreground `exec apptainer ... gammaboard deploy run`, so `gammaboard` receives Slurm termination directly. Worker jobs still supervise a sidecar control-job watcher and trap `SIGTERM`/`SIGINT` for graceful cleanup.
-
-## Sync
-
-Run these on your local machine.
-
-Upload ops files:
+## Sync From Local
 
 ```bash
 just --justfile ops/ubelix/justfile sync-ops
 ```
 
-Build the frontend locally and upload it:
-
-```bash
-just --justfile ops/ubelix/justfile sync-dashboard
-```
-
-All UBELIX sbatch scripts source this file automatically and fail early if `SYMBOLICA_LICENSE` is missing.
+`sync-ops` uploads `ops/`, `ubelix.py`, and this README. The justfile stays local.
 
 ## Build Images
 
-Run these on a UBELIX login node.
-
-Build GammaLoop:
+Run on a UBELIX login node:
 
 ```bash
-mkdir -p logs/slurm/build logs/slurm/control logs/slurm/workers logs/postgres
-sbatch ops/build/gammaloop.sbatch
+python ubelix.py build gammaloop
+python ubelix.py build gammaboard
 ```
 
-Build GammaBoard:
+The GammaBoard build also builds and embeds the dashboard frontend. Each build overwrites `images/<family>/<family>.sif` and writes `images/<family>/<family>.meta`. Build logs go to `logs/slurm/build`.
+
+## Start
+
+Normal multi-job deployment:
 
 ```bash
-mkdir -p logs/slurm/build logs/slurm/control logs/slurm/workers logs/postgres
-sbatch ops/build/gammaboard.sbatch
+python ubelix.py up
 ```
 
-Build behavior:
-- images are commit-named
-- `*-latest.sif` is updated as a symlink
-- Rust build artifacts are reused from `/scratch/network/users/$USER/gammaboard-target/target`
-- build logs go to `logs/slurm/build`
-
-## Smoke Test
+Single-node deployment with local workers in the same Slurm allocation:
 
 ```bash
-sbatch ops/slurm/smoke.sbatch
+python ubelix.py up --single-node
 ```
 
-Optional overrides:
+Useful options:
 
 ```bash
-GAMMABOARD_WORKSPACE_ROOT=/absolute/path/to/itp_localunitaritydata
-GAMMABOARD_IMAGE=/absolute/path/to/itp_localunitaritydata/images/gammaboard/gammaboard-latest.sif
-GAMMABOARD_BIND_PATHS=/absolute/path/to/itp_localunitaritydata
+python ubelix.py up --time 00:45:00
+python ubelix.py up --port-offset 10
+python ubelix.py up --watch
+python ubelix.py up --copy
 ```
 
-## Single-Node Deploy
+`up` waits for Slurm node assignment and frontend readiness, then prints the SSH tunnel command. Run that command locally and open `http://localhost:8080`.
 
-This starts the same foreground deploy stack as the normal control job, but uses `config/server-single-node.toml`, where `allow_local_node_spawn = true`. Dashboard node-start actions spawn local worker processes inside the same Slurm allocation instead of creating external worker requests.
+Port offsets shift frontend/API/Postgres from `8080/4000/5400`; pass the same `--port-offset` to helper commands for that deployment.
 
-Direct Slurm submission also works when debugging:
+## Workers
 
-```bash
-sbatch ops/slurm/single_node_deploy.sbatch
-```
-
-## Control/UI Job
-
-Prerequisite:
-
-```bash
-ls /storage/research/itp_localunitaritydata/artifacts/dashboard-build/index.html
-```
-
-This job starts:
-- local Postgres
-- `gammaboard server`
-- nginx serving the frontend and proxying `/api/*`
-
-Then run the printed tunnel command on your local machine, for example:
-
-```bash
-ssh -N -L 8080:<control-node>:8080 <ubelix-user>@submit03.unibe.ch
-```
-
-The printed target defaults to `${USER}@submit03.unibe.ch` from the UBELIX login node. Override it when needed:
-
-```bash
-SSH_HOST=submit02.unibe.ch python ubelix.py up
-SSH_TARGET=<user>@ubelix python ubelix.py up
-```
-
-Then open:
-
-```text
-http://localhost:8080
-```
-
-## Worker Model
-
-Run these on a UBELIX login node.
-
-Workers are simple:
-
-```bash
-gammaboard --runtime-config <runtime.toml> node run --name <node-name>
-```
-
-For multi-job mode:
-- the control job owns Postgres and the API
-- worker jobs connect using `GAMMABOARD_DATABASE_URL`
-- the database must be reachable from other compute nodes
-- workers launched through `ubelix.py` also watch the owning control Slurm job and stop when it disappears, even if Postgres is still reachable
-
-Submit separate worker jobs:
+Submit manual workers:
 
 ```bash
 python ubelix.py submit-workers --count 2 --prefix w
 ```
 
-If the control job was launched with a port offset, pass the same `--port-offset` when submitting workers manually so they connect to the shifted Postgres port.
-
-Resolve dashboard node-start requests automatically:
+Resolve dashboard node-start requests:
 
 ```bash
 python ubelix.py watch-requests
-```
-
-The dashboard writes grouped startup requests through the API. `watch-requests` claims pending external requests through the API, submits one Slurm worker job per requested node, and reports submitted job ids back through the API. Requests move `pending -> starting` once Slurm accepts jobs; the server marks them `running` after the requested node names have live leases.
-
-One-shot mode for debugging:
-
-```bash
 python ubelix.py watch-requests --once
 ```
 
-If you run the multi-job control launcher in blocking mode, it also resolves requests while watching:
+`up --watch` also resolves dashboard requests while it watches the control job.
+
+## Stop And Inspect
 
 ```bash
-python ubelix.py up --watch
-```
-
-Admin-protected API actions (`up --watch`, `watch-requests`, and `down`) use the dashboard admin password. Provide it explicitly when needed:
-
-```bash
-python ubelix.py up --watch --admin-password '<password>'
-GAMMABOARD_ADMIN_PASSWORD='<password>' python ubelix.py watch-requests
-```
-
-Stop a deployment:
-
-```bash
+python ubelix.py status
 python ubelix.py down
 ```
 
-`down` requests `POST /api/nodes/stop-all`, waits for worker jobs to exit in multi-job mode, then uses `scancel` for remaining workers and finally the deploy job. It handles both `gb-ctl` and `gb-single`, but expects only one active deploy job.
+`down` requests node shutdown through the API, waits briefly for workers, cancels remaining worker jobs, then cancels the control or single-node job.
 
-If a control job exits unexpectedly, its sbatch cleanup also tries to stop the local Postgres daemon before stopping the Apptainer instance. Worker jobs submitted by `ubelix.py` receive the control job id and terminate themselves when that job is no longer active.
+Admin-protected commands accept `--admin-password` or `GAMMABOARD_ADMIN_PASSWORD`.
 
-UBELIX sends `SIGCONT` followed by `SIGTERM` before `scancel` or time-limit cancellation and gives roughly 60 seconds before `SIGKILL`. Control and single-node deploy jobs let `gammaboard deploy run` receive that signal directly, request node shutdown, wait for sampler persistence, and stop local Postgres. Worker jobs use the same window to forward termination to their child node process.
+## Layout
 
-## Config Model
+```text
+<WORKSPACE_ROOT>/
+  ops/{build,config,slurm}/
+  ubelix.py
+  README.md
+  artifacts/{bin,npm-cache,sqlx-root,src}/
+  db/<deploy-name>/
+  images/{gammaboard,gammaloop}/
+  logs/{postgres,slurm}/
+  resources/states/
+  runtime/
+```
 
-Current UBELIX flow is intentionally simple:
-- `WORKSPACE_ROOT` is the main override
-- Slurm job behavior is mostly hardcoded in `slurm/*.sbatch`
-- `ubelix.py` is the main operator CLI
-- `ops/ubelix/justfile` is only for syncing and image pruning
-- PostgreSQL logs go to `${WORKSPACE_ROOT}/logs/postgres`
-- Slurm logs go to `${WORKSPACE_ROOT}/logs/slurm/{build,control,workers}`
-
-## Design Choice
-
-Use one control/UI job plus separate worker jobs.
-
-Why:
-- simple frontend access through one tunnel
-- clean worker scaling via Slurm
-- persistent DB data under workspace
-
-The frontend node-start action creates DB-backed launch requests on UBELIX. `python ubelix.py watch-requests` resolves those requests into Slurm jobs; the control server does not spawn local child processes there.
-
-## Notes
-
-- `gammaboard` and `gammaloop` images are separate by design.
-- The GammaBoard image packages only GammaBoard runtime artifacts.
-- This is an operator guide for the current UBELIX setup, not a generic deployment system.
+Secrets and local overrides live in `${HOME}/.config/gammaboard/slurm.env`; all sbatch scripts source it and require `SYMBOLICA_LICENSE`.
