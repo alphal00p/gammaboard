@@ -816,7 +816,8 @@ def command_nix_build(args: argparse.Namespace) -> None:
         raise SystemExit(f"missing image: {IMAGE_PATH}")
 
     ensure_nix = f"""
-if [ ! -x /nix/var/nix/profiles/default/bin/nix ]; then
+export PATH="$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin:$PATH"
+if ! command -v nix >/dev/null 2>&1; then
   echo "installing Nix {NIX_VERSION} into /nix" >&2
   rm -rf /tmp/gammaboard-nix-installer
   mkdir -p /tmp/gammaboard-nix-installer
@@ -826,7 +827,10 @@ if [ ! -x /nix/var/nix/profiles/default/bin/nix ]; then
   NIX_INSTALLER_NO_MODIFY_PROFILE=1 /tmp/gammaboard-nix-installer/install --no-daemon
   rm -rf /tmp/gammaboard-nix-installer
 fi
-export PATH=/nix/var/nix/profiles/default/bin:$PATH
+if [ -f "$HOME/.nix-profile/etc/profile.d/nix.sh" ]; then
+  . "$HOME/.nix-profile/etc/profile.d/nix.sh"
+fi
+export PATH="$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin:$PATH"
 export NIX_CONFIG="experimental-features = nix-command flakes${{NIX_CONFIG:+
 $NIX_CONFIG}}"
 """
