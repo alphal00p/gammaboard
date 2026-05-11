@@ -50,7 +50,10 @@ From: rust:1-bookworm
     install -Dm755 "${SQLX_BIN}" /usr/local/bin/sqlx
     mkdir -p /usr/local/share/gammaboard/migrations
     cp -a "${MIGRATIONS_DIR}/." /usr/local/share/gammaboard/migrations/
-    cd "${DASHBOARD_SOURCE_DIR}"
+    rm -rf /tmp/gammaboard-dashboard
+    mkdir -p /tmp/gammaboard-dashboard
+    cp -a "${DASHBOARD_SOURCE_DIR}/." /tmp/gammaboard-dashboard/
+    cd /tmp/gammaboard-dashboard
     npm_config_update_notifier=false npm ci
     npm_config_update_notifier=false npm run build
     test -f build/index.html
