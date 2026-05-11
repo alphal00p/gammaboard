@@ -451,6 +451,8 @@ const lineColors = ["#005f73", "#bb3e03", "#0a9396", "#ae2012", "#ca6702"];
 const histogramOverlayColors = ["#9b2226", "#3a86ff", "#ff006e", "#6a994e", "#ff7f11", "#8338ec"];
 
 const scalarHeatmapColors = ["#1d4ed8", "#16a34a", "#dc2626"];
+const HEATMAP_LEGEND_WIDTH = 116;
+const HEATMAP_LEGEND_GAP = 12;
 
 const panelColumnSpan = (descriptor) => {
   switch (descriptor?.width) {
@@ -1319,41 +1321,59 @@ const heatmapTooltipValueLines = (panelId, value) => {
   return lines;
 };
 
-const buildHeatmapAnchorGraphics = (zmin, zmax, normalizationMode) => {
+const HeatmapScaleLegend = ({ zmin, zmax, normalizationMode, panelId }) => {
   const max = Number(zmax);
   const min = Number(zmin);
-  if (!Number.isFinite(min) || !Number.isFinite(max)) return [];
-  const children = [
-    {
-      type: "text",
-      right: 2,
-      top: -4,
-      style: { text: formatScientific(max, 3), fill: "#475569", fontSize: 11, align: "left" },
-    },
-    {
-      type: "text",
-      right: 2,
-      bottom: -4,
-      style: { text: formatScientific(min, 3), fill: "#475569", fontSize: 11, align: "left" },
-    },
-  ];
-  if (normalizationMode === "symmetric" && min < 0 && max > 0) {
-    children.push({
-      type: "text",
-      right: 2,
-      top: 104,
-      style: { text: "0 = 1x", fill: "#166534", fontSize: 11, fontWeight: 600, align: "left" },
-    });
-  }
-  return [
-    {
-      type: "group",
-      right: 6,
-      top: "middle",
-      bounding: "raw",
-      children,
-    },
-  ];
+  const showMidpoint = normalizationMode === "symmetric" && min < 0 && max > 0;
+  const label = heatmapMetricLabel(panelId);
+  return (
+    <Box sx={{ width: HEATMAP_LEGEND_WIDTH, flexShrink: 0, display: "grid", gap: 0.75 }}>
+      <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.15 }}>
+        {label}
+      </Typography>
+      <Box sx={{ display: "grid", gridTemplateColumns: "22px 1fr", gap: 1, alignItems: "stretch", height: 220 }}>
+        <Box
+          sx={{
+            width: 22,
+            height: "100%",
+            borderRadius: 0.75,
+            border: "1px solid rgba(100,116,139,0.35)",
+            background: `linear-gradient(to top, ${scalarHeatmapColors[0]} 0%, ${scalarHeatmapColors[1]} 50%, ${scalarHeatmapColors[2]} 100%)`,
+          }}
+        />
+        <Box sx={{ position: "relative", minWidth: 0 }}>
+          <Typography
+            variant="caption"
+            sx={{ position: "absolute", top: -3, left: 0, color: "#475569", fontFamily: "monospace" }}
+          >
+            {formatScientific(max, 3)}
+          </Typography>
+          {showMidpoint ? (
+            <Typography
+              variant="caption"
+              sx={{
+                position: "absolute",
+                top: "50%",
+                left: 0,
+                transform: "translateY(-50%)",
+                color: "#166534",
+                fontFamily: "monospace",
+                fontWeight: 700,
+              }}
+            >
+              0 = 1x
+            </Typography>
+          ) : null}
+          <Typography
+            variant="caption"
+            sx={{ position: "absolute", bottom: -3, left: 0, color: "#475569", fontFamily: "monospace" }}
+          >
+            {formatScientific(min, 3)}
+          </Typography>
+        </Box>
+      </Box>
+    </Box>
+  );
 };
 
 const ScalarImageHeatmapPanel = ({
@@ -1402,12 +1422,13 @@ const ScalarImageHeatmapPanel = ({
     return points;
   }, [boundedValues, height, invalidIndices, width]);
 
-  const heatmapMargins = useMemo(() => ({ left: 56, right: 154, top: 16, bottom: 44 }), []);
+  const heatmapMargins = useMemo(() => ({ left: 56, right: 24, top: 16, bottom: 44 }), []);
   const zoomRange = readZoomFromPanelValue(value, FULL_ZOOM);
   const yZoomRange = readYZoomFromPanelValue(value, FULL_ZOOM);
   const chartHeight = useMemo(() => {
     if (width <= 0 || height <= 0 || panelWidth <= 0) return 360;
-    const innerWidth = Math.max(1, panelWidth - heatmapMargins.left - heatmapMargins.right);
+    const legendWidth = HEATMAP_LEGEND_WIDTH + HEATMAP_LEGEND_GAP;
+    const innerWidth = Math.max(1, panelWidth - legendWidth - heatmapMargins.left - heatmapMargins.right);
     const innerHeight = (innerWidth * height) / width;
     return Math.max(220, Math.round(innerHeight + heatmapMargins.top + heatmapMargins.bottom));
   }, [heatmapMargins.bottom, heatmapMargins.left, heatmapMargins.right, heatmapMargins.top, height, panelWidth, width]);
@@ -1468,22 +1489,12 @@ const ScalarImageHeatmapPanel = ({
         },
       },
       visualMap: {
-        show: true,
+        show: false,
         min: zmin,
         max: zmax,
         dimension: 2,
-        orient: "vertical",
-        right: 20,
-        top: "middle",
-        itemWidth: 22,
-        itemHeight: 220,
-        calculable: false,
-        text: [formatScientific(zmax, 3), formatScientific(zmin, 3)],
-        formatter: (next) => formatScientific(Number(next), 3),
-        textStyle: { color: "#64748b", fontSize: 12 },
         inRange: { color: scalarHeatmapColors },
       },
-      graphic: buildHeatmapAnchorGraphics(zmin, zmax, normalizationMode),
       dataZoom: buildDataZoom(zoomRange, true, true, yZoomRange, true),
       series: [
         {
@@ -1508,7 +1519,6 @@ const ScalarImageHeatmapPanel = ({
       heatmapMargins,
       height,
       invalidOverlay,
-      normalizationMode,
       panelId,
       width,
       xParameters,
@@ -1622,21 +1632,20 @@ const ScalarImageHeatmapPanel = ({
             height: `${chartHeight}px`,
           }}
         >
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
-            Scale: {formatScientific(zmin, 3)} (blue)
-            {normalizationMode === "symmetric" ? " · 0 / 1x (green)" : ""}
-            {" · "}
-            {formatScientific(zmax, 3)} (red)
-          </Typography>
-          <LazyChart
-            ref={echartsRef}
-            option={option}
-            notMerge={false}
-            onEvents={onDataZoom}
-            lazyUpdate
-            opts={{ renderer: "canvas" }}
-            style={{ width: "100%", height: "calc(100% - 22px)" }}
-          />
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, height: "100%" }}>
+            <Box sx={{ flex: 1, minWidth: 0, height: "100%" }}>
+              <LazyChart
+                ref={echartsRef}
+                option={option}
+                notMerge={false}
+                onEvents={onDataZoom}
+                lazyUpdate
+                opts={{ renderer: "canvas" }}
+                style={{ width: "100%", height: "100%" }}
+              />
+            </Box>
+            <HeatmapScaleLegend zmin={zmin} zmax={zmax} normalizationMode={normalizationMode} panelId={panelId} />
+          </Box>
         </Box>
       </CardContent>
     </Card>
