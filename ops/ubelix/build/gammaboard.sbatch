@@ -70,7 +70,6 @@ require_cmd apptainer
 require_cmd git
 require_cmd awk
 require_cmd cargo
-require_cmd npm
 require_cmd stat
 
 TMP_BASE="${SCRATCH_BASE}/tmp"
@@ -123,7 +122,7 @@ echo "target_dir_compile: ${RUST_TARGET_DIR}"
 echo "gammaboard_bin: ${HOST_GAMMABOARD_BIN}"
 echo "sqlx_bin: ${HOST_SQLX_BIN}"
 echo "migrations_dir: ${GB_SRC_DIR}/migrations"
-echo "dashboard_build_dir: ${GB_SRC_DIR}/dashboard/build"
+echo "dashboard_source_dir: ${GB_SRC_DIR}/dashboard"
 echo "lib_dir: ${LIB_DIR}"
 echo "gammaboard_sha: ${GAMMABOARD_SHA}"
 echo "gammaboard_image: ${GB_OUT_IMAGE}"
@@ -173,20 +172,12 @@ if [[ -n "${PY_LIB_PATH}" ]]; then
 fi
 BIN_STAGE_END="$(date +%s)"
 
-echo "building dashboard frontend"
-DASHBOARD_START="$(date +%s)"
-(
-  cd "${GB_SRC_DIR}/dashboard"
-  NPM_CONFIG_CACHE="${NPM_CACHE_DIR}" npm ci
-  NPM_CONFIG_CACHE="${NPM_CACHE_DIR}" npm run build
-)
-DASHBOARD_END="$(date +%s)"
-
 echo "building image: ${GB_OUT_IMAGE}"
 export APPTAINERENV_GAMMABOARD_BIN="/workspace/${BIN_DIR_REL}/gammaboard"
 export APPTAINERENV_SQLX_BIN="/workspace/${BIN_DIR_REL}/sqlx"
 export APPTAINERENV_MIGRATIONS_DIR="/workspace/${GB_SRC_DIR_REL}/migrations"
-export APPTAINERENV_DASHBOARD_BUILD_DIR="/workspace/${GB_SRC_DIR_REL}/dashboard/build"
+export APPTAINERENV_DASHBOARD_SOURCE_DIR="/workspace/${GB_SRC_DIR_REL}/dashboard"
+export APPTAINERENV_NPM_CONFIG_CACHE="/workspace/artifacts/npm-cache"
 APPTAINER_GB_START="$(date +%s)"
 (
   cd "${GB_DEF_DIR}"
@@ -207,7 +198,6 @@ TOTAL_SECONDS="$(seconds_since "${TOTAL_START}" "${TOTAL_END}")"
 FETCH_SECONDS="$(seconds_since "${FETCH_START}" "${FETCH_END}")"
 CARGO_GB_SECONDS="$(seconds_since "${CARGO_GB_START}" "${CARGO_GB_END}")"
 BIN_STAGE_SECONDS="$(seconds_since "${BIN_STAGE_START}" "${BIN_STAGE_END}")"
-DASHBOARD_SECONDS="$(seconds_since "${DASHBOARD_START}" "${DASHBOARD_END}")"
 APPTAINER_GB_SECONDS="$(seconds_since "${APPTAINER_GB_START}" "${APPTAINER_GB_END}")"
 
 write_meta "${GB_META_FILE}" \
@@ -230,5 +220,4 @@ timing_total_seconds="${TOTAL_SECONDS}" \
 timing_fetch_checkout_seconds="${FETCH_SECONDS}" \
 timing_cargo_gammaboard_seconds="${CARGO_GB_SECONDS}" \
 timing_binary_stage_seconds="${BIN_STAGE_SECONDS}" \
-timing_dashboard_build_seconds="${DASHBOARD_SECONDS}" \
 timing_apptainer_gammaboard_seconds="${APPTAINER_GB_SECONDS}"
