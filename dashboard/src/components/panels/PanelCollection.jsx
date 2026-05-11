@@ -6,8 +6,6 @@ import {
   CardContent,
   Button,
   FormControl,
-  FormControlLabel,
-  Switch,
   MenuItem,
   Stack,
   Select,
@@ -2317,7 +2315,7 @@ const HistogramPanel = ({
       },
       dataZoom: buildDataZoom(zoomRange, false, true, yZoomRange, true),
       series: [
-        ...(showRelativeErrors && Array.isArray(binErrorData) && binErrorData.length > 0
+        ...(Array.isArray(binErrorData) && binErrorData.length > 0
           ? [buildErrorBarSeries({ name: "error", data: binErrorData })]
           : []),
         ...valueSeries,
@@ -2349,7 +2347,6 @@ const HistogramPanel = ({
     isDiscrete,
     overlaySeries,
     panelId,
-    showRelativeErrors,
     stepData,
     xDomain,
     yDomain,
@@ -2794,28 +2791,20 @@ const HistogramPanel = ({
                 </Select>
               </FormControl>
             ) : null}
-            <FormControlLabel
-              control={
-                <Switch
-                  size="small"
-                  checked={Boolean(showRelativeErrors)}
-                  onChange={(event) => {
-                    const next = Boolean(event.target.checked);
-                    if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
-                      onValueChange(
-                        sourcePanelId,
-                        writeHistogramBundlePanelValue(value, { showRelativeError: next }),
-                        false,
-                      );
-                      return;
-                    }
-                    setLocalShowRelativeErrors(next);
-                  }}
-                />
-              }
-              label="Relative Error"
-              sx={{ mr: 1 }}
-            />
+            <Button
+              size="small"
+              variant={showRelativeErrors ? "contained" : "outlined"}
+              onClick={() => {
+                const next = !showRelativeErrors;
+                if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
+                  onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { showRelativeError: next }), false);
+                  return;
+                }
+                setLocalShowRelativeErrors(next);
+              }}
+            >
+              Rel Error
+            </Button>
           </Stack>
         </Box>
         {comparedBundleSelections.length > 0 ? (
