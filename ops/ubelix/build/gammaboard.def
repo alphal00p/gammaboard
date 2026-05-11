@@ -28,7 +28,6 @@ From: rust:1-bookworm
       > /etc/apt/sources.list.d/nodesource.list
     apt-get update
     apt-get install -y --no-install-recommends nodejs
-    npm install -g npm@11.14.1
 
     update-ca-certificates
 
@@ -52,9 +51,8 @@ From: rust:1-bookworm
     mkdir -p /usr/local/share/gammaboard/migrations
     cp -a "${MIGRATIONS_DIR}/." /usr/local/share/gammaboard/migrations/
     cd "${DASHBOARD_SOURCE_DIR}"
-    npm config set update-notifier false
-    npm ci
-    npm run build
+    npm_config_update_notifier=false npm ci
+    npm_config_update_notifier=false npm run build
     test -f build/index.html
     mkdir -p /usr/local/share/gammaboard/dashboard
     cp -a build/. /usr/local/share/gammaboard/dashboard/
