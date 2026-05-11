@@ -34,7 +34,7 @@ The GammaBoard build also builds and embeds the dashboard frontend. Each build o
 Prebuild a Python runtime flake into the persistent Nix store:
 
 ```bash
-python ubelix.py nix-build resources/gammaboard_api#runtime
+python ubelix.py nix-build resources/runtimes/madnis_gammaboard_api#runtime
 ```
 
 ## Start
