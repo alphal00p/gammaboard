@@ -1811,23 +1811,9 @@ async fn export_histogram_bundle(
             "histograms": request.payload,
         })
     };
-    let primary_histogram_name = wrapper
-        .get("primary_histogram_name")
-        .and_then(JsonValue::as_str)
-        .map(str::to_string);
-    let bundle: ObservableSnapshotBundle = serde_json::from_value(wrapper).map_err(|err| {
-        ApiError::BadRequest(format!(
-            "invalid histogram bundle payload for export: {err}"
-        ))
-    })?;
-
     let response = match format.as_str() {
         "json" => {
-            let payload = serde_json::json!({
-                "primary_histogram_name": primary_histogram_name,
-                "histograms": bundle.histograms,
-            });
-            let contents = serde_json::to_string_pretty(&payload).map_err(|err| {
+            let contents = serde_json::to_string_pretty(&wrapper).map_err(|err| {
                 ApiError::Internal(format!("failed to serialize histogram bundle json: {err}"))
             })?;
             HistogramBundleExportResponse {
@@ -1837,6 +1823,12 @@ async fn export_histogram_bundle(
             }
         }
         "hwu" => {
+            let bundle: ObservableSnapshotBundle =
+                serde_json::from_value(wrapper).map_err(|err| {
+                    ApiError::BadRequest(format!(
+                        "invalid histogram bundle payload for export: {err}"
+                    ))
+                })?;
             let file = tempfile::NamedTempFile::new().map_err(|err| {
                 ApiError::Internal(format!("failed to create temporary hwu file: {err}"))
             })?;

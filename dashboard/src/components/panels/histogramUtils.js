@@ -167,6 +167,10 @@ export const normalizeGammaLoopHistogramBins = (histogram) => {
       error: computeGammaLoopBinError(bin, sampleCount),
       label: bin?.label ?? null,
       bin_id: bin?.bin_id ?? null,
+      entry_count: bin?.entry_count ?? null,
+      sum_weights: bin?.sum_weights ?? null,
+      sum_weights_squared: bin?.sum_weights_squared ?? null,
+      mitigated_fill_count: bin?.mitigated_fill_count ?? null,
     };
   });
 };
@@ -389,6 +393,10 @@ const normalizeUploadedHistogram = (name, histogram) => {
           error: Number.isFinite(error) ? Math.abs(error) : 0,
           label: bin?.label ?? null,
           bin_id: bin?.bin_id ?? null,
+          entry_count: bin?.entry_count ?? null,
+          sum_weights: bin?.sum_weights ?? null,
+          sum_weights_squared: bin?.sum_weights_squared ?? null,
+          mitigated_fill_count: bin?.mitigated_fill_count ?? null,
         };
       })
     : (() => {
@@ -428,6 +436,10 @@ const normalizeUploadedHistogram = (name, histogram) => {
       error: Math.abs(Number(bin.error)),
       label: bin?.label ?? null,
       bin_id: bin?.bin_id ?? null,
+      entry_count: bin?.entry_count ?? null,
+      sum_weights: bin?.sum_weights ?? null,
+      sum_weights_squared: bin?.sum_weights_squared ?? null,
+      mitigated_fill_count: bin?.mitigated_fill_count ?? null,
     })),
   };
 };

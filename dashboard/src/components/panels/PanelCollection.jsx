@@ -497,6 +497,12 @@ const formatCategoryAxisValue = (value) => {
   return text.length > 0 ? text : "";
 };
 
+const histogramEntryCountLine = (bin) => {
+  const entryCount = Number(bin?.entry_count);
+  if (!Number.isFinite(entryCount)) return null;
+  return `entries: ${formatScientific(entryCount, 6)}`;
+};
+
 const EDGE_EPSILON = 1e-9;
 
 const nearlyEqual = (left, right, epsilon = EDGE_EPSILON) => {
@@ -2091,8 +2097,9 @@ const HistogramPanel = ({
           formatter: (params) => {
             const idx = params.dataIndex;
             const label = categoriesData[idx] ?? String(idx);
-            const val = Number(bins[idx]?.value);
-            const err = Number(bins[idx]?.error);
+            const bin = bins[idx];
+            const val = Number(bin?.value);
+            const err = Number(bin?.error);
             const absErrorText =
               Number.isFinite(err) && err > 0 ? `±${formatScientific(err, 6)}` : "n/a";
             const relError =
@@ -2104,9 +2111,12 @@ const HistogramPanel = ({
               : "n/a";
             return [
               `${escapeXml(label)}: ${formatScientific(val, 6)}`,
+              histogramEntryCountLine(bin),
               `abs error: ${absErrorText}`,
               `rel error: ${relErrorText}`,
-            ].join("<br/>");
+            ]
+              .filter(Boolean)
+              .join("<br/>");
           },
         },
         dataZoom: buildDataZoom(zoomRange, false, true, yZoomRange, true),
@@ -2297,9 +2307,12 @@ const HistogramPanel = ({
           const relErrorText = Number.isFinite(relError) ? formatScientific(relError, 6) : "n/a";
           return [
             `${escapeXml(`${formatScientific(Number(bin?.start), 6)} → ${formatScientific(Number(bin?.stop), 6)}`)}: ${formatScientific(valueNumeric, 6)}`,
+            histogramEntryCountLine(bin),
             `abs error: ${absErrorText}`,
             `rel error: ${relErrorText}`,
-          ].join("<br/>");
+          ]
+            .filter(Boolean)
+            .join("<br/>");
         },
       },
       dataZoom: buildDataZoom(zoomRange, false, true, yZoomRange, true),
