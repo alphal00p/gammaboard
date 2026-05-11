@@ -14,8 +14,6 @@ From: rust:1-bookworm
         ca-certificates \
         curl \
         gnupg \
-        nix-bin \
-        xz-utils \
         python3 \
         libgfortran5 \
         tzdata \
@@ -74,7 +72,7 @@ From: rust:1-bookworm
     rm -rf /var/lib/apt/lists/*
 
 %environment
-    export PATH=/usr/local/bin:$PATH
+    export PATH=/nix/var/nix/profiles/default/bin:/usr/local/bin:$PATH
     export LD_LIBRARY_PATH=/usr/local/lib/gammaboard:${LD_LIBRARY_PATH:-}
     export TZ=Etc/UTC
     export GAMMABOARD_MIGRATIONS_DIR=/usr/local/share/gammaboard/migrations
@@ -85,5 +83,4 @@ From: rust:1-bookworm
 
 %test
     test -x /usr/local/bin/gammaboard
-    test -x /usr/local/bin/nix
     test -f /usr/local/share/gammaboard/dashboard/index.html

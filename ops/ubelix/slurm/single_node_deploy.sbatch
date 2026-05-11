@@ -26,7 +26,7 @@ export APPTAINERENV_SYMBOLICA_LICENSE="${SYMBOLICA_LICENSE}"
 export APPTAINERENV_NO_SYMBOLICA_OEM_LICENSE="${NO_SYMBOLICA_OEM_LICENSE}"
 
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata/gammaboard}"
-NIX_ROOT="${GAMMABOARD_NIX_ROOT:-${WORKSPACE_ROOT}/nix}"
+NIX_ROOT="/scratch/network/users/${USER}/gammaboard-nix"
 IMAGE_PATH="${WORKSPACE_ROOT}/images/gammaboard/gammaboard.sif"
 RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime.template.toml"
 RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"

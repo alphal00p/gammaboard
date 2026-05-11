@@ -29,11 +29,14 @@ import FigureExportActions, { escapeXml } from "./FigureExportActions";
 import TablePanel from "./TablePanel";
 import {
   HISTOGRAM_NEGATIVE_COLOR,
+  HISTOGRAM_MODE_CDF,
+  HISTOGRAM_MODE_PDF,
   HISTOGRAM_POSITIVE_COLOR,
   HISTOGRAM_SORT_BY_ABS_VALUE,
   HISTOGRAM_SORT_BY_VALUE,
   HISTOGRAM_SORT_CANONICAL,
   HISTOGRAM_ZERO_COLOR,
+  buildCdfBins,
   buildDiscreteRelativeErrorData,
   buildHistogramData,
   buildHistogramRenderData,
@@ -49,6 +52,7 @@ import {
   histogramIsDiscrete,
   histogramSelectionKey,
   histogramSignColorFromRaw,
+  normalizeHistogramMode,
   normalizeGammaLoopHistogramBins,
   normalizeHistogramSelectionState,
   normalizeHistogramSortMode,
@@ -123,6 +127,7 @@ const PANEL_ORDER_RANK = new Map([
   ["imag_estimate_history", 4],
   ["abs_signal_to_noise_history", 5],
   ["gammaloop_histogram_bundle", 20],
+  ["gammaloop_histogram_bundle_selected", 21],
   ["gammaloop_selected_histogram", 21],
   ["gammaloop_evaluation_timing", 22],
   ["gammaloop_evaluation_diagnostics", 23],
@@ -533,6 +538,74 @@ const buildOverlaySeriesFromBins = (canonicalBins, yScale, xScale) => ({
     })
     .filter(Boolean),
 });
+
+const sampleHistogramBinAtX = (bins, x) => {
+  const numericX = Number(x);
+  if (!Number.isFinite(numericX)) return null;
+  for (const bin of asArray(bins)) {
+    const start = Number(bin?.start);
+    const stop = Number(bin?.stop);
+    if (!Number.isFinite(start) || !Number.isFinite(stop)) continue;
+    const contains = numericX >= start - EDGE_EPSILON && numericX <= stop + EDGE_EPSILON;
+    if (contains) return bin;
+  }
+  return null;
+};
+
+const projectBinsToReferenceBins = (referenceBins, overlayBins) =>
+  asArray(referenceBins).map((referenceBin) => {
+    const matched = sampleHistogramBinAtX(overlayBins, referenceBin?.x);
+    if (!matched) return null;
+    return {
+      start: referenceBin.start,
+      stop: referenceBin.stop,
+      x: referenceBin.x,
+      value: Number(matched.value),
+      error: Number.isFinite(Number(matched.error)) ? Math.abs(Number(matched.error)) : 0,
+    };
+  });
+
+const buildCdfBinsPreservingNulls = (bins) => {
+  let cumulativeValue = 0;
+  let cumulativeVariance = 0;
+  return asArray(bins).map((bin) => {
+    if (!bin) return null;
+    const value = Number(bin?.value);
+    const error = Math.abs(Number(bin?.error));
+    if (Number.isFinite(value)) cumulativeValue += value;
+    if (Number.isFinite(error)) cumulativeVariance += error * error;
+    return {
+      ...bin,
+      value: cumulativeValue,
+      error: Math.sqrt(cumulativeVariance),
+    };
+  });
+};
+
+const buildLogRatioPoints = (referenceBins, overlayBins, isDiscrete, xScale) =>
+  asArray(referenceBins)
+    .map((referenceBin, index) => {
+      const overlayBin = asArray(overlayBins)[index];
+      const numerator = Number(referenceBin?.value);
+      const denominator = Number(overlayBin?.value);
+      const numeratorError = Math.abs(Number(referenceBin?.error));
+      const denominatorError = Math.abs(Number(overlayBin?.error));
+      if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || numerator === 0 || denominator === 0) {
+        return null;
+      }
+      const ratio = numerator / denominator;
+      if (!Number.isFinite(ratio) || ratio <= 0) return null;
+      const relativeNumeratorError =
+        Number.isFinite(numeratorError) && numerator !== 0 ? numeratorError / Math.abs(numerator) : 0;
+      const relativeDenominatorError =
+        Number.isFinite(denominatorError) && denominator !== 0 ? denominatorError / Math.abs(denominator) : 0;
+      const logRatio = Math.log10(ratio);
+      const logRatioError = Math.hypot(relativeNumeratorError, relativeDenominatorError) / Math.LN10;
+      const x = isDiscrete ? index : Number(referenceBin?.x);
+      if (!Number.isFinite(x) || (!isDiscrete && xScale === "log" && x <= 0)) return null;
+      return [x, logRatio, logRatio - logRatioError, logRatio + logRatioError];
+    })
+    .filter(Boolean);
 
 const clampHeatmapSpread = (candidate, fallback = 1) => {
   const numeric = Number(candidate);
@@ -1525,6 +1598,8 @@ const HistogramPanel = ({
     const pid = state?.panel_id || "";
     return String(pid).startsWith("pdf_adaptation_") ? false : true;
   });
+  const [localHistogramMode, setLocalHistogramMode] = useState(HISTOGRAM_MODE_PDF);
+  const [localShowRatio, setLocalShowRatio] = useState(false);
   const yScale = isBundleControlled ? readHistogramScaleFromPanelValue(value, "y", defaultYScale) : localYScale;
   const xScale = isBundleControlled ? readHistogramScaleFromPanelValue(value, "x", defaultXScale) : localXScale;
   const zoomRange = isBundleControlled
@@ -1535,6 +1610,8 @@ const HistogramPanel = ({
     : readYZoomFromPanelValue(value, FULL_ZOOM);
   const view = isBundleControlled ? readHistogramBundleView(value) : {};
   const showRelativeErrors = isBundleControlled ? view.show_relative_error !== false : localShowRelativeErrors;
+  const histogramMode = isBundleControlled ? normalizeHistogramMode(view.display_mode) : localHistogramMode;
+  const showRatio = isBundleControlled ? view.show_ratio === true : localShowRatio;
   const requestedSortMode = isBundleControlled
     ? normalizeHistogramSortMode(
         isObject(view?.sort_mode_by_histogram) && currentHistogramName
@@ -1543,12 +1620,18 @@ const HistogramPanel = ({
       )
     : normalizeHistogramSortMode(localSortMode);
   const baseCanonicalBins = useMemo(() => buildHistogramData(state?.bins), [state?.bins]);
-  const bins = useMemo(() => {
+  const sortedBaseBins = useMemo(() => {
     const isDiscreteHistogram = baseCanonicalBins.some((bin) => bin && (bin.label != null || bin.bin_id != null));
-    return isDiscreteHistogram ? sortHistogramBinsByMode(baseCanonicalBins, requestedSortMode) : baseCanonicalBins;
+    return isDiscreteHistogram
+      ? sortHistogramBinsByMode(baseCanonicalBins, requestedSortMode)
+      : baseCanonicalBins.slice().sort((left, right) => Number(left?.start) - Number(right?.start));
   }, [baseCanonicalBins, requestedSortMode]);
-  const stepData = useMemo(() => buildHistogramRenderData(state?.bins, yScale), [state?.bins, yScale]);
-  const relativeErrorData = useMemo(() => buildRelativeErrorStepData(state?.bins), [state?.bins]);
+  const bins = useMemo(
+    () => (histogramMode === HISTOGRAM_MODE_CDF ? buildCdfBins(sortedBaseBins) : sortedBaseBins),
+    [histogramMode, sortedBaseBins],
+  );
+  const stepData = useMemo(() => buildHistogramRenderData(bins, yScale), [bins, yScale]);
+  const relativeErrorData = useMemo(() => buildRelativeErrorStepData(bins), [bins]);
   // Detect discrete histograms: presence of bin labels/bin_id or explicit discrete ordering
   const isDiscrete = useMemo(() => {
     if (!Array.isArray(state?.bins)) return false;
@@ -1585,11 +1668,11 @@ const HistogramPanel = ({
   const discreteBaseSortedCanonicalIndices = useMemo(() => {
     if (!isDiscrete) return [];
     const canonicalIndexByBin = new Map(asArray(baseCanonicalBins).map((bin, index) => [bin, index]));
-    return asArray(bins).map((bin) => {
+    return asArray(sortedBaseBins).map((bin) => {
       const index = canonicalIndexByBin.get(bin);
       return Number.isFinite(index) ? index : -1;
     });
-  }, [baseCanonicalBins, bins, isDiscrete]);
+  }, [baseCanonicalBins, sortedBaseBins, isDiscrete]);
   const comparedBundleSelections = useMemo(
     () =>
       asArray(uploadedBundles).map((bundle) => ({
@@ -1618,56 +1701,38 @@ const HistogramPanel = ({
               const overlayBinByKey = new Map(
                 overlayCanonicalBins.map((bin, index) => [discreteHistogramBinKey(bin, index), bin]),
               );
-              const values =
+              const matchedOverlayBins =
                 discreteMatchMode === "by_index"
                   ? discreteBaseSortedCanonicalIndices.map((sourceIndex) => {
                       const bin = sourceIndex >= 0 ? overlayCanonicalBins[sourceIndex] : null;
-                      if (!bin) return null;
-                      const numeric = Number(bin?.value);
-                      if (!Number.isFinite(numeric)) return null;
-                      return yScale === "log" ? signedLog10(numeric) : numeric;
+                      return bin || null;
                     })
                   : (() => {
                       return discreteBaseKeys.map((key) => {
                         const bin = overlayBinByKey.get(key);
-                        if (!bin) return null;
-                        const numeric = Number(bin?.value);
-                        if (!Number.isFinite(numeric)) return null;
-                        return yScale === "log" ? signedLog10(numeric) : numeric;
+                        return bin || null;
                       });
                     })();
-              const relative =
-                discreteMatchMode === "by_index"
-                  ? discreteBaseSortedCanonicalIndices.map((sourceIndex) => {
-                      const bin = sourceIndex >= 0 ? overlayCanonicalBins[sourceIndex] : null;
-                      if (!bin) return null;
-                      const value = Number(bin?.value);
-                      const error = Number(bin?.error);
-                      if (!Number.isFinite(value) || !Number.isFinite(error) || value === 0) return null;
-                      return Math.abs(error / value);
-                    })
-                  : (() => {
-                      return discreteBaseKeys.map((key) => {
-                        const bin = overlayBinByKey.get(key);
-                        if (!bin) return null;
-                        const value = Number(bin?.value);
-                        const error = Number(bin?.error);
-                        if (!Number.isFinite(value) || !Number.isFinite(error) || value === 0) return null;
-                        return Math.abs(error / value);
-                      });
-                    })();
+              const displayOverlayBins =
+                histogramMode === HISTOGRAM_MODE_CDF
+                  ? buildCdfBinsPreservingNulls(matchedOverlayBins)
+                  : matchedOverlayBins;
+              const values = displayOverlayBins.map((bin) => {
+                if (!bin) return null;
+                const numeric = Number(bin?.value);
+                if (!Number.isFinite(numeric)) return null;
+                return yScale === "log" ? signedLog10(numeric) : numeric;
+              });
+              const relative = displayOverlayBins.map((bin) => {
+                if (!bin) return null;
+                const value = Number(bin?.value);
+                const error = Number(bin?.error);
+                if (!Number.isFinite(value) || !Number.isFinite(error) || value === 0) return null;
+                return Math.abs(error / value);
+              });
               const absoluteError = values.map((value, index) => {
                 if (!Number.isFinite(value)) return null;
-                const sourceBin =
-                  discreteMatchMode === "by_index"
-                    ? (() => {
-                        const sourceIndex = discreteBaseSortedCanonicalIndices[index];
-                        return sourceIndex >= 0 ? overlayCanonicalBins[sourceIndex] : null;
-                      })()
-                    : (() => {
-                        const key = discreteBaseKeys[index];
-                        return key ? overlayBinByKey.get(key) || null : null;
-                      })();
+                const sourceBin = displayOverlayBins[index];
                 const err = Number(sourceBin?.error);
                 if (!Number.isFinite(err) || err <= 0) return null;
                 const sourceValue = Number(sourceBin?.value);
@@ -1685,11 +1750,17 @@ const HistogramPanel = ({
                 discreteValues: values,
                 discreteRelative: relative,
                 discreteAbsError: absoluteError.filter(Boolean),
+                ratioData: buildLogRatioPoints(bins, displayOverlayBins, true, effectiveXScale),
               };
             }
+            const overlayCanonicalBins = buildHistogramData(histogram.bins).sort(
+              (left, right) => Number(left?.start) - Number(right?.start),
+            );
+            const displayOverlayBins =
+              histogramMode === HISTOGRAM_MODE_CDF ? buildCdfBins(overlayCanonicalBins) : overlayCanonicalBins;
             const projected = projectOverlayHistogramToReferenceBins(
               bins,
-              histogram.bins,
+              displayOverlayBins,
               yScale,
               effectiveXScale,
             );
@@ -1700,6 +1771,7 @@ const HistogramPanel = ({
               valueStep: projected.valueStep,
               relativeStep: projected.relativeStep,
               absError: projected.absError,
+              ratioData: buildLogRatioPoints(bins, projectBinsToReferenceBins(bins, displayOverlayBins), false, effectiveXScale),
             };
           });
         })
@@ -1710,6 +1782,7 @@ const HistogramPanel = ({
       discreteBaseKeys,
       discreteBaseSortedCanonicalIndices,
       effectiveXScale,
+      histogramMode,
       isDiscrete,
       yScale,
     ],
@@ -1734,15 +1807,18 @@ const HistogramPanel = ({
             const overlayBinByKey = new Map(
               overlayCanonicalBins.map((bin, index) => [discreteHistogramBinKey(bin, index), bin]),
             );
-            const values = discreteBaseKeys.map((key) => {
-              const bin = overlayBinByKey.get(key);
+            const matchedOverlayBins = discreteBaseKeys.map((key) => overlayBinByKey.get(key) || null);
+            const displayOverlayBins =
+              histogramMode === HISTOGRAM_MODE_CDF
+                ? buildCdfBinsPreservingNulls(matchedOverlayBins)
+                : matchedOverlayBins;
+            const values = displayOverlayBins.map((bin) => {
               if (!bin) return null;
               const numeric = Number(bin?.value);
               if (!Number.isFinite(numeric)) return null;
               return yScale === "log" ? signedLog10(numeric) : numeric;
             });
-            const relative = discreteBaseKeys.map((key) => {
-              const bin = overlayBinByKey.get(key);
+            const relative = displayOverlayBins.map((bin) => {
               if (!bin) return null;
               const value = Number(bin?.value);
               const error = Number(bin?.error);
@@ -1751,8 +1827,7 @@ const HistogramPanel = ({
             });
             const absoluteError = values.map((value, index) => {
               if (!Number.isFinite(value)) return null;
-              const key = discreteBaseKeys[index];
-              const sourceBin = key ? overlayBinByKey.get(key) || null : null;
+              const sourceBin = displayOverlayBins[index];
               const err = Number(sourceBin?.error);
               if (!Number.isFinite(err) || err <= 0) return null;
               const sourceValue = Number(sourceBin?.value);
@@ -1770,13 +1845,18 @@ const HistogramPanel = ({
               discreteValues: values,
               discreteRelative: relative,
               discreteAbsError: absoluteError.filter(Boolean),
+              ratioData: buildLogRatioPoints(bins, displayOverlayBins, true, effectiveXScale),
             };
           }
-          const overlayCanonicalBins = buildHistogramData(overlayBins);
+          const overlayCanonicalBins = buildHistogramData(overlayBins).sort(
+            (left, right) => Number(left?.start) - Number(right?.start),
+          );
+          const displayOverlayBins =
+            histogramMode === HISTOGRAM_MODE_CDF ? buildCdfBins(overlayCanonicalBins) : overlayCanonicalBins;
           const projected =
-            isPdfPanel && binsShareEdges(bins, overlayCanonicalBins)
-              ? buildOverlaySeriesFromBins(overlayCanonicalBins, yScale, effectiveXScale)
-              : projectOverlayHistogramToReferenceBins(bins, overlayBins, yScale, effectiveXScale);
+            isPdfPanel && binsShareEdges(bins, displayOverlayBins)
+              ? buildOverlaySeriesFromBins(displayOverlayBins, yScale, effectiveXScale)
+              : projectOverlayHistogramToReferenceBins(bins, displayOverlayBins, yScale, effectiveXScale);
           return {
             id: `embedded-overlay-${overlayIndex}`,
             name: overlayName,
@@ -1784,10 +1864,18 @@ const HistogramPanel = ({
             valueStep: projected.valueStep,
             relativeStep: projected.relativeStep,
             absError: projected.absError,
+            ratioData: buildLogRatioPoints(
+              bins,
+              isPdfPanel && binsShareEdges(bins, displayOverlayBins)
+                ? displayOverlayBins
+                : projectBinsToReferenceBins(bins, displayOverlayBins),
+              false,
+              effectiveXScale,
+            ),
           };
         })
         .filter(Boolean),
-    [bins, discreteBaseKeys, effectiveXScale, isDiscrete, state?.overlay_histograms, yScale],
+    [bins, discreteBaseKeys, effectiveXScale, histogramMode, isDiscrete, isPdfPanel, state?.overlay_histograms, yScale],
   );
   const overlaySeries = useMemo(
     () => [...comparedOverlaySeries, ...embeddedOverlaySeries],
@@ -2335,6 +2423,141 @@ const HistogramPanel = ({
     zoomRange,
   ]);
 
+  const ratioOption = useMemo(() => {
+    const ratioSeries = overlaySeries
+      .map((overlay) => ({
+        ...overlay,
+        ratioData: asArray(overlay?.ratioData).filter((point) => point && point.every((value) => Number.isFinite(Number(value)))),
+      }))
+      .filter((overlay) => overlay.ratioData.length > 0);
+    if (ratioSeries.length === 0) return null;
+    const ratioValues = ratioSeries.flatMap((overlay) =>
+      overlay.ratioData.flatMap((point) => [Number(point?.[1]), Number(point?.[2]), Number(point?.[3])]),
+    );
+    const ratioYDomain = fitDomain([...ratioValues, 0]);
+    if (isDiscrete) {
+      const categoriesData = categories || bins.map((_, idx) => `#${idx}`);
+      return {
+        animation: false,
+        legend: {
+          show: true,
+          top: 0,
+          data: ratioSeries.map((overlay) => overlay.name),
+          textStyle: { color: "#64748b", fontSize: 12 },
+        },
+        grid: baseCartesianGrid,
+        xAxis: {
+          type: "category",
+          data: categoriesData,
+          name: inferNumericXAxisLabel(panelId),
+          axisLabel: {
+            color: baseAxisLabel.color,
+            fontSize: baseAxisLabel.fontSize,
+            formatter: (axisValue) => formatCategoryAxisValue(axisValue),
+            interval: 0,
+            rotate: categoriesData.length > 6 ? 30 : 0,
+          },
+          splitLine: { show: false },
+          nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
+        },
+        yAxis: {
+          type: "value",
+          min: ratioYDomain[0],
+          max: ratioYDomain[1],
+          name: "log10(value / comparison)",
+          axisLabel: baseAxisLabel,
+          splitLine: { lineStyle: { color: gridColor } },
+        },
+        tooltip: {
+          trigger: "axis",
+          valueFormatter: (value) => (Number.isFinite(Number(value)) ? formatScientific(Number(value), 6) : "n/a"),
+        },
+        dataZoom: buildDataZoom(zoomRange, true, true, yZoomRange, true),
+        series: ratioSeries.flatMap((overlay, index) => [
+          buildDiscreteOffsetErrorBarSeries({
+            name: `${overlay.name} ratio error`,
+            data: overlay.ratioData.map((point) => [point[0], point[2], point[3]]),
+            color: overlay.color,
+            slotIndex: index,
+            slotCount: ratioSeries.length,
+          }),
+          {
+            type: "line",
+            name: overlay.name,
+            data: overlay.ratioData.map((point) => [point[0], point[1]]),
+            showSymbol: true,
+            symbolSize: 4,
+            lineStyle: { width: 1.35, color: overlay.color },
+            itemStyle: { color: overlay.color },
+            markLine: {
+              silent: true,
+              symbol: "none",
+              data: [{ yAxis: 0 }],
+              lineStyle: { color: "#94a3b8", type: "dotted", width: 1 },
+              label: { show: false },
+            },
+          },
+        ]),
+      };
+    }
+    if (!xDomain) return null;
+    return {
+      animation: false,
+      legend: {
+        show: true,
+        top: 0,
+        data: ratioSeries.map((overlay) => overlay.name),
+        textStyle: { color: "#64748b", fontSize: 12 },
+      },
+      grid: baseCartesianGrid,
+      xAxis: {
+        type: effectiveXScale === "log" ? "log" : "value",
+        min: xDomain[0],
+        max: xDomain[1],
+        name: inferNumericXAxisLabel(panelId),
+        axisLabel: baseAxisLabel,
+        splitLine: { show: false },
+        nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
+      },
+      yAxis: {
+        type: "value",
+        min: ratioYDomain[0],
+        max: ratioYDomain[1],
+        name: "log10(value / comparison)",
+        axisLabel: baseAxisLabel,
+        splitLine: { lineStyle: { color: gridColor } },
+      },
+      tooltip: {
+        trigger: "axis",
+        valueFormatter: (value) => (Number.isFinite(Number(value)) ? formatScientific(Number(value), 6) : "n/a"),
+      },
+      dataZoom: buildDataZoom(zoomRange, true, true, yZoomRange, true),
+      series: ratioSeries.flatMap((overlay) => [
+        buildErrorBarSeries({
+          name: `${overlay.name} ratio error`,
+          data: overlay.ratioData.map((point) => [point[0], point[2], point[3]]),
+          color: overlay.color,
+        }),
+        {
+          type: "line",
+          name: overlay.name,
+          data: overlay.ratioData.map((point) => [point[0], point[1]]),
+          showSymbol: false,
+          connectNulls: false,
+          lineStyle: { width: 1.35, color: overlay.color },
+          itemStyle: { color: overlay.color },
+          markLine: {
+            silent: true,
+            symbol: "none",
+            data: [{ yAxis: 0 }],
+            lineStyle: { color: "#94a3b8", type: "dotted", width: 1 },
+            label: { show: false },
+          },
+        },
+      ]),
+    };
+  }, [bins, categories, effectiveXScale, isDiscrete, overlaySeries, panelId, xDomain, yZoomRange, zoomRange]);
+
   const onDataZoom = useMemo(
     () => ({
       datazoom: (event) => {
@@ -2428,6 +2651,35 @@ const HistogramPanel = ({
                 <MenuItem value="log">X Log</MenuItem>
               </Select>
             </FormControl>
+            <Button
+              size="small"
+              variant={histogramMode === HISTOGRAM_MODE_CDF ? "contained" : "outlined"}
+              onClick={() => {
+                const next = histogramMode === HISTOGRAM_MODE_CDF ? HISTOGRAM_MODE_PDF : HISTOGRAM_MODE_CDF;
+                if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
+                  onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { histogramMode: next }), false);
+                  return;
+                }
+                setLocalHistogramMode(next);
+              }}
+            >
+              {histogramMode === HISTOGRAM_MODE_CDF ? "CDF" : "PDF"}
+            </Button>
+            <Button
+              size="small"
+              variant={showRatio ? "contained" : "outlined"}
+              disabled={!ratioOption}
+              onClick={() => {
+                const next = !showRatio;
+                if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
+                  onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { showRatio: next }), false);
+                  return;
+                }
+                setLocalShowRatio(next);
+              }}
+            >
+              Ratio
+            </Button>
             {isDiscrete ? (
               <FormControl size="small" sx={{ minWidth: 156 }}>
                 <Select
@@ -2678,6 +2930,23 @@ const HistogramPanel = ({
               <Box sx={{ width: "100%", height: 168 }}>
                 <LazyChart
                   option={relativeOption}
+                  notMerge
+                  onEvents={onDataZoom}
+                  lazyUpdate
+                  opts={{ renderer: "canvas" }}
+                  style={{ width: "100%", height: "100%" }}
+                />
+              </Box>
+            </Box>
+          ) : null}
+          {showRatio && ratioOption ? (
+            <Box>
+              <Typography variant="caption" color="text.secondary">
+                Histogram Ratio: log10(value / comparison), agreement at 0
+              </Typography>
+              <Box sx={{ width: "100%", height: 188 }}>
+                <LazyChart
+                  option={ratioOption}
                   notMerge
                   onEvents={onDataZoom}
                   lazyUpdate

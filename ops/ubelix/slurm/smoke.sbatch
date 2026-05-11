@@ -31,7 +31,7 @@ require_cmd() {
 }
 
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata/gammaboard}"
-NIX_ROOT="${GAMMABOARD_NIX_ROOT:-${WORKSPACE_ROOT}/nix}"
+NIX_ROOT="/scratch/network/users/${USER}/gammaboard-nix"
 mkdir -p "${WORKSPACE_ROOT}/logs/slurm/build" "${NIX_ROOT}"
 
 # Absolute path to SIF image on UBELIX filesystem.

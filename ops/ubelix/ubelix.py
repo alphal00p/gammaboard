@@ -27,7 +27,9 @@ WORKER_SBATCH = f"{WORKSPACE_ROOT}/ops/slurm/worker.sbatch"
 GB_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaboard.sbatch"
 GL_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaloop.sbatch"
 IMAGE_PATH = f"{WORKSPACE_ROOT}/images/gammaboard/gammaboard.sif"
-NIX_ROOT = os.environ.get("GAMMABOARD_NIX_ROOT", f"{WORKSPACE_ROOT}/nix")
+DEFAULT_NIX_ROOT = f"/scratch/network/users/{os.environ.get('USER', 'unknown')}/gammaboard-nix"
+NIX_ROOT = DEFAULT_NIX_ROOT
+NIX_VERSION = "2.24.11"
 FRONTEND_PORT = 8080
 DB_PORT = 5400
 DEPLOY_NAME = "default"
@@ -813,6 +815,21 @@ def command_nix_build(args: argparse.Namespace) -> None:
     if not os.path.isfile(IMAGE_PATH):
         raise SystemExit(f"missing image: {IMAGE_PATH}")
 
+    ensure_nix = f"""
+if [ ! -x /nix/var/nix/profiles/default/bin/nix ]; then
+  echo "installing Nix {NIX_VERSION} into /nix" >&2
+  rm -rf /tmp/gammaboard-nix-installer
+  mkdir -p /tmp/gammaboard-nix-installer
+  curl -fsSL https://releases.nixos.org/nix/nix-{NIX_VERSION}/nix-{NIX_VERSION}-x86_64-linux.tar.xz \
+    -o /tmp/gammaboard-nix-installer/nix.tar.xz
+  tar -xJf /tmp/gammaboard-nix-installer/nix.tar.xz -C /tmp/gammaboard-nix-installer --strip-components=1
+  NIX_INSTALLER_NO_MODIFY_PROFILE=1 /tmp/gammaboard-nix-installer/install --no-daemon
+  rm -rf /tmp/gammaboard-nix-installer
+fi
+export PATH=/nix/var/nix/profiles/default/bin:$PATH
+export NIX_CONFIG="experimental-features = nix-command flakes${{NIX_CONFIG:+
+$NIX_CONFIG}}"
+"""
     local_flake = local_nix_flake_path(args.flake_ref)
     if local_flake is not None:
         source_path, fragment = local_flake
@@ -822,6 +839,8 @@ def command_nix_build(args: argparse.Namespace) -> None:
         if fragment:
             staged_ref = f"{staged_ref}#{fragment}"
         nix_command = (
+            ensure_nix
+            + "\n"
             "rm -rf /tmp/gammaboard-nix-build-source && "
             "mkdir -p /tmp/gammaboard-nix-build-source && "
             f"cp -R --no-preserve=mode,ownership,timestamps,xattr {shlex.quote(source_path)}/. /tmp/gammaboard-nix-build-source/ && "
@@ -842,6 +861,12 @@ def command_nix_build(args: argparse.Namespace) -> None:
         ]
     else:
         flake_ref = normalize_nix_flake_ref(args.flake_ref)
+        nix_command = (
+            ensure_nix
+            + "\n"
+            + f"nix build {shlex.quote(flake_ref)} "
+            + " ".join(shlex.quote(arg) for arg in args.nix_args)
+        )
         command = [
             "apptainer",
             "exec",
@@ -850,10 +875,9 @@ def command_nix_build(args: argparse.Namespace) -> None:
             "-B",
             f"{NIX_ROOT}:/nix",
             IMAGE_PATH,
-            "nix",
-            "build",
-            flake_ref,
-            *args.nix_args,
+            "sh",
+            "-lc",
+            nix_command,
         ]
     result = subprocess.run(command, text=True)
     if result.returncode != 0:

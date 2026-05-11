@@ -5,6 +5,8 @@ import { FULL_ZOOM, isObject, normalizeZoomRange, readYZoomFromPanelValue, readZ
 export const HISTOGRAM_SORT_CANONICAL = "canonical";
 export const HISTOGRAM_SORT_BY_VALUE = "by_value";
 export const HISTOGRAM_SORT_BY_ABS_VALUE = "by_abs_value";
+export const HISTOGRAM_MODE_PDF = "pdf";
+export const HISTOGRAM_MODE_CDF = "cdf";
 export const HISTOGRAM_POSITIVE_COLOR = "#0a9396";
 export const HISTOGRAM_NEGATIVE_COLOR = "#ca6702";
 export const HISTOGRAM_ZERO_COLOR = "#6b7280";
@@ -90,6 +92,8 @@ export const readHistogramScaleFromPanelValue = (value, axis, fallback = "linear
   return fallback === "log" ? "log" : "linear";
 };
 
+export const normalizeHistogramMode = (value) => (value === HISTOGRAM_MODE_CDF ? HISTOGRAM_MODE_CDF : HISTOGRAM_MODE_PDF);
+
 export const writeHistogramBundlePanelValue = (
   current,
   {
@@ -99,6 +103,8 @@ export const writeHistogramBundlePanelValue = (
     xScale = undefined,
     yScale = undefined,
     showRelativeError = undefined,
+    showRatio = undefined,
+    histogramMode = undefined,
     sortModeByHistogram = undefined,
   } = {},
 ) => {
@@ -110,6 +116,8 @@ export const writeHistogramBundlePanelValue = (
   if (xScale !== undefined) nextView.x_scale = xScale === "log" ? "log" : "linear";
   if (yScale !== undefined) nextView.y_scale = yScale === "log" ? "log" : "linear";
   if (showRelativeError !== undefined) nextView.show_relative_error = Boolean(showRelativeError);
+  if (showRatio !== undefined) nextView.show_ratio = Boolean(showRatio);
+  if (histogramMode !== undefined) nextView.display_mode = normalizeHistogramMode(histogramMode);
   if (isObject(sortModeByHistogram)) {
     const normalizedSortModes = Object.fromEntries(
       Object.entries(sortModeByHistogram)
@@ -185,6 +193,22 @@ export const buildHistogramData = (bins) =>
       };
     })
     .filter((bin) => Number.isFinite(bin.value) && Number.isFinite(bin.x));
+
+export const buildCdfBins = (bins) => {
+  let cumulativeValue = 0;
+  let cumulativeVariance = 0;
+  return asArray(bins).map((bin) => {
+    const value = Number(bin?.value);
+    const error = Math.abs(Number(bin?.error));
+    if (Number.isFinite(value)) cumulativeValue += value;
+    if (Number.isFinite(error)) cumulativeVariance += error * error;
+    return {
+      ...bin,
+      value: cumulativeValue,
+      error: Math.sqrt(cumulativeVariance),
+    };
+  });
+};
 
 const sampleContinuousHistogramAtX = (bins, x) => {
   const numericX = Number(x);
