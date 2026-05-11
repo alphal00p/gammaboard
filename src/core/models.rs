@@ -5,7 +5,9 @@ use crate::sampling::{LatentBatch, SamplerAggregatorSnapshot};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::{fmt, str::FromStr};
+use std::{collections::BTreeMap, fmt, str::FromStr};
+
+pub type NodeCapabilities = BTreeMap<String, u64>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -54,6 +56,7 @@ pub struct DesiredAssignment {
 pub struct RegisteredNode {
     pub name: String,
     pub uuid: String,
+    pub capabilities: NodeCapabilities,
     pub desired_assignment: Option<DesiredAssignment>,
     pub current_assignment: Option<DesiredAssignment>,
     pub last_seen: Option<DateTime<Utc>>,

@@ -100,6 +100,7 @@ const normalizeWorkerEntry = (entry) => {
   return {
     node_name: entry.node_name ?? "",
     node_uuid: entry.node_uuid ?? "",
+    capabilities: entry.capabilities && typeof entry.capabilities === "object" ? entry.capabilities : {},
     desired_run_id: Number.isFinite(Number(entry.desired_run_id)) ? Number(entry.desired_run_id) : null,
     desired_run_name: entry.desired_run_name ?? null,
     desired_role: entry.desired_role ?? null,

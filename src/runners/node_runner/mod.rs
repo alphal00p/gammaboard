@@ -8,7 +8,9 @@ mod active_worker;
 mod reconcile;
 mod role_runner;
 
-use crate::core::{ControlPlaneStore, RunSpecStore, RunTaskStore, StoreError, WorkerRole};
+use crate::core::{
+    ControlPlaneStore, NodeCapabilities, RunSpecStore, RunTaskStore, StoreError, WorkerRole,
+};
 use crate::stores::init_pg_store;
 use rand::Rng;
 use std::time::{Duration, Instant};
@@ -25,6 +27,7 @@ use self::role_runner::RoleRunner;
 
 #[derive(Debug, Clone)]
 pub struct NodeRunnerConfig {
+    pub capabilities: NodeCapabilities,
     pub max_consecutive_start_failures: u32,
     pub reconcile_initial_backoff: Duration,
     pub reconcile_backoff_factor: f64,
@@ -47,6 +50,7 @@ impl<T> NodeRunnerStore for T where
 impl Default for NodeRunnerConfig {
     fn default() -> Self {
         Self {
+            capabilities: NodeCapabilities::default(),
             max_consecutive_start_failures: 3,
             reconcile_initial_backoff: Duration::from_millis(50),
             reconcile_backoff_factor: 2.0,
@@ -190,6 +194,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         let store = self.store.clone();
         let node_name = self.node_name.clone();
         let node_uuid = self.node_uuid.clone();
+        let capabilities = self.config.capabilities.clone();
         let announce_interval = self.config.announce_interval;
         let announce_retry_interval = self.config.announce_retry_interval;
         let announce_failure_timeout = self.config.announce_failure_timeout;
@@ -198,7 +203,10 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             let mut announce_failures = 0u32;
             let mut announce_failed_at: Option<Instant> = None;
             loop {
-                match store.announce_node(&node_name, &node_uuid).await {
+                match store
+                    .announce_node(&node_name, &node_uuid, &capabilities)
+                    .await
+                {
                     Ok(()) => {
                         if announce_failures > 0 {
                             info!(

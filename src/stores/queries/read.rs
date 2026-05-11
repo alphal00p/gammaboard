@@ -205,6 +205,7 @@ impl From<WorkerLogRow> for RuntimeLogEntry {
 struct RegisteredWorkerRow {
     node_name: String,
     node_uuid: String,
+    capabilities: JsonValue,
     desired_run_id: Option<i32>,
     desired_run_name: Option<String>,
     desired_role: Option<String>,
@@ -229,6 +230,7 @@ impl From<RegisteredWorkerRow> for RegisteredWorkerEntry {
         Self {
             node_name: value.node_name,
             node_uuid: value.node_uuid,
+            capabilities: value.capabilities,
             desired_run_id: value.desired_run_id,
             desired_run_name: value.desired_run_name,
             desired_role: value.desired_role,
@@ -658,6 +660,7 @@ pub(crate) async fn get_registered_workers(
                 SELECT
                     n.name AS node_name,
                     n.uuid AS node_uuid,
+                    n.capabilities,
                     n.desired_run_id,
                     dr.name AS desired_run_name,
                     n.desired_role,
@@ -708,6 +711,7 @@ pub(crate) async fn get_registered_workers(
                 SELECT
                     n.name AS node_name,
                     n.uuid AS node_uuid,
+                    n.capabilities,
                     n.desired_run_id,
                     dr.name AS desired_run_name,
                     n.desired_role,
@@ -766,6 +770,7 @@ pub(crate) async fn get_registered_worker_summaries(
                 SELECT
                     n.name AS node_name,
                     n.uuid AS node_uuid,
+                    n.capabilities,
                     n.desired_run_id,
                     dr.name AS desired_run_name,
                     n.desired_role,
@@ -810,6 +815,7 @@ pub(crate) async fn get_registered_worker_summaries(
                 SELECT
                     n.name AS node_name,
                     n.uuid AS node_uuid,
+                    n.capabilities,
                     n.desired_run_id,
                     dr.name AS desired_run_name,
                     n.desired_role,

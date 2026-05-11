@@ -55,7 +55,7 @@ async fn claim_batch_requires_active_assignment() {
     .expect("insert run");
 
     store
-        .announce_node(&node_name, &node_uuid)
+        .announce_node(&node_name, &node_uuid, &Default::default())
         .await
         .expect("announce node");
     store
@@ -133,7 +133,7 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
     .expect("insert run");
 
     store
-        .announce_node(&node_name, &node_uuid)
+        .announce_node(&node_name, &node_uuid, &Default::default())
         .await
         .expect("announce node");
 
@@ -225,7 +225,7 @@ async fn claim_batch_claims_exactly_one_pending_batch() {
     .expect("insert run");
 
     store
-        .announce_node(&node_name, &node_uuid)
+        .announce_node(&node_name, &node_uuid, &Default::default())
         .await
         .expect("announce node");
     store
@@ -338,11 +338,11 @@ async fn sampler_aggregator_desired_assignment_is_unique_per_run() {
     .expect("insert run");
 
     store
-        .announce_node(&node_a, &node_a_uuid)
+        .announce_node(&node_a, &node_a_uuid, &Default::default())
         .await
         .expect("announce first node");
     store
-        .announce_node(&node_b, &node_b_uuid)
+        .announce_node(&node_b, &node_b_uuid, &Default::default())
         .await
         .expect("announce second node");
 
@@ -487,7 +487,7 @@ async fn expired_sampler_assignment_does_not_block_new_sampler_assignment() {
     .expect("insert run");
 
     store
-        .announce_node(&stale_node, &stale_uuid)
+        .announce_node(&stale_node, &stale_uuid, &Default::default())
         .await
         .expect("announce stale node");
     store
@@ -510,7 +510,7 @@ async fn expired_sampler_assignment_does_not_block_new_sampler_assignment() {
     .expect("expire stale node without cleanup");
 
     store
-        .announce_node(&fresh_node, &fresh_uuid)
+        .announce_node(&fresh_node, &fresh_uuid, &Default::default())
         .await
         .expect("announce fresh node");
     store
@@ -580,7 +580,7 @@ async fn assigning_new_role_replaces_existing_desired_assignment_for_node() {
     .expect("insert run b");
 
     store
-        .announce_node(&node_name, &node_uuid)
+        .announce_node(&node_name, &node_uuid, &Default::default())
         .await
         .expect("announce node");
 
@@ -668,7 +668,7 @@ async fn assigning_dead_node_returns_not_found() {
     .expect("insert run");
 
     store
-        .announce_node(&node_name, &node_uuid)
+        .announce_node(&node_name, &node_uuid, &Default::default())
         .await
         .expect("announce node");
     store
@@ -726,7 +726,7 @@ async fn expiring_node_lease_clears_desired_assignment() {
     .expect("insert run");
 
     store
-        .announce_node(&node_name, &node_uuid)
+        .announce_node(&node_name, &node_uuid, &Default::default())
         .await
         .expect("announce node");
     store
@@ -783,7 +783,7 @@ async fn shutdown_request_clears_desired_assignment_but_keeps_current_assignment
     .expect("insert run");
 
     store
-        .announce_node(&node_name, &node_uuid)
+        .announce_node(&node_name, &node_uuid, &Default::default())
         .await
         .expect("announce node");
     store
@@ -847,7 +847,7 @@ async fn expired_shutdown_request_does_not_affect_replacement_node() {
     let new_uuid = unique_id("shutdown-replacement-new");
 
     store
-        .announce_node(&node_name, &old_uuid)
+        .announce_node(&node_name, &old_uuid, &Default::default())
         .await
         .expect("announce old node");
     store
@@ -859,7 +859,7 @@ async fn expired_shutdown_request_does_not_affect_replacement_node() {
         .await
         .expect("expire old node");
     store
-        .announce_node(&node_name, &new_uuid)
+        .announce_node(&node_name, &new_uuid, &Default::default())
         .await
         .expect("announce replacement node");
 
@@ -900,11 +900,11 @@ async fn shutdown_all_nodes_clears_desired_assignments() {
     .expect("insert run");
 
     store
-        .announce_node(&node_a, &uuid_a)
+        .announce_node(&node_a, &uuid_a, &Default::default())
         .await
         .expect("announce node a");
     store
-        .announce_node(&node_b, &uuid_b)
+        .announce_node(&node_b, &uuid_b, &Default::default())
         .await
         .expect("announce node b");
     store
@@ -973,11 +973,11 @@ async fn sampler_aggregator_current_assignment_is_unique_per_run() {
     .expect("insert run");
 
     store
-        .announce_node(&node_a, &uuid_a)
+        .announce_node(&node_a, &uuid_a, &Default::default())
         .await
         .expect("announce node a");
     store
-        .announce_node(&node_b, &uuid_b)
+        .announce_node(&node_b, &uuid_b, &Default::default())
         .await
         .expect("announce node b");
 

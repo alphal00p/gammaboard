@@ -445,8 +445,13 @@ impl ControlPlaneStore for PgStore {
         }
     }
 
-    async fn announce_node(&self, node_name: &str, node_uuid: &str) -> Result<(), StoreError> {
-        queries::announce_node(&self.pool, node_name, node_uuid)
+    async fn announce_node(
+        &self,
+        node_name: &str,
+        node_uuid: &str,
+        capabilities: &crate::core::NodeCapabilities,
+    ) -> Result<(), StoreError> {
+        queries::announce_node(&self.pool, node_name, node_uuid, capabilities)
             .await
             .map_err(map_sqlx)
     }
@@ -553,6 +558,7 @@ impl ControlPlaneStore for PgStore {
             out.push(RegisteredNode {
                 name: row.name,
                 uuid: row.uuid,
+                capabilities: serde_json::from_value(row.capabilities).unwrap_or_default(),
                 desired_assignment,
                 current_assignment,
                 last_seen: row.last_seen,

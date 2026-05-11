@@ -1,5 +1,7 @@
 use crate::api::ApiError;
-use crate::core::{ControlPlaneStore, NodeLaunchRequest, RunReadStore, WorkerRole};
+use crate::core::{
+    ControlPlaneStore, NodeCapabilities, NodeLaunchRequest, RunReadStore, WorkerRole,
+};
 use serde_json::Value as JsonValue;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -364,13 +366,22 @@ pub async fn plan_auto_run_nodes(
 }
 
 /// Builds CLI arguments for launching one node process.
-pub fn node_run_cli_args(node_name: &str, max_start_failures: u32) -> Vec<String> {
-    vec![
+pub fn node_run_cli_args(
+    node_name: &str,
+    max_start_failures: u32,
+    capabilities: &NodeCapabilities,
+) -> Vec<String> {
+    let mut args = vec![
         "node".to_string(),
         "run".to_string(),
         "--name".to_string(),
         node_name.to_string(),
         "--max-start-failures".to_string(),
         max_start_failures.to_string(),
-    ]
+    ];
+    for (key, value) in capabilities {
+        args.push("--capability".to_string());
+        args.push(format!("{key}={value}"));
+    }
+    args
 }

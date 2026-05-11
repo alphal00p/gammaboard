@@ -91,6 +91,7 @@ pub struct RuntimeLogPage {
 pub struct RegisteredWorkerEntry {
     pub node_name: String,
     pub node_uuid: String,
+    pub capabilities: serde_json::Value,
     pub desired_run_id: Option<i32>,
     pub desired_run_name: Option<String>,
     pub desired_role: Option<String>,

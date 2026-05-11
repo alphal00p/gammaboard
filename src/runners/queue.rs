@@ -1422,6 +1422,7 @@ mod tests {
             &self,
             _node_name: &str,
             _node_uuid: &str,
+            _capabilities: &crate::core::NodeCapabilities,
         ) -> Result<(), StoreError> {
             unreachable!("unused in test")
         }

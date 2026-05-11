@@ -49,6 +49,14 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
     if (worker.current_run_name) return worker.current_run_name;
     return "N/A";
   };
+  const displayCapabilities = (worker) => {
+    const entries = Object.entries(worker?.capabilities || {});
+    if (entries.length === 0) return "-";
+    return entries
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => `${key}=${value}`)
+      .join(", ");
+  };
 
   useEffect(() => {
     if (workers.length === 0) {
@@ -205,6 +213,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
                     <TableCell>Node</TableCell>
                     <TableCell>Run</TableCell>
                     <TableCell>Role</TableCell>
+                    <TableCell>Capabilities</TableCell>
                     <TableCell>Last Seen</TableCell>
                   </TableRow>
                 </TableHead>
@@ -228,6 +237,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
                         <TableCell>{nodeName || "unknown"}</TableCell>
                         <TableCell>{displayRun(worker)}</TableCell>
                         <TableCell>{displayRole(worker)}</TableCell>
+                        <TableCell>{displayCapabilities(worker)}</TableCell>
                         <TableCell>{formatDateTime(worker.last_seen, "-")}</TableCell>
                       </TableRow>
                     );

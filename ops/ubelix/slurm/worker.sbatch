@@ -107,8 +107,14 @@ echo "nix_root: ${NIX_ROOT}"
 echo "runtime_config: ${RUNTIME_CONFIG}"
 echo "database_host_port: ${db_host_port}"
 echo "max_start_failures: ${NODE_MAX_START_FAILURES}"
+echo "node_capabilities: ${NODE_CAPABILITIES:-}"
 if [[ -n "${CONTROL_JOB_ID}" ]]; then
   echo "control_job_id: ${CONTROL_JOB_ID}"
+fi
+
+node_capability_args=()
+if [[ -n "${NODE_CAPABILITIES:-}" ]]; then
+  read -r -a node_capability_args <<< "${NODE_CAPABILITIES}"
 fi
 
 # Fail fast if DB is not reachable from this worker allocation.
@@ -126,7 +132,8 @@ APPTAINERENV_TZ="${APPTAINERENV_TZ:-Etc/UTC}" \
 apptainer exec -B "${WORKSPACE_ROOT}" -B "${NIX_ROOT}:/nix" "${IMAGE_PATH}" \
   gammaboard --runtime-config "${RUNTIME_CONFIG}" node run \
     --name "${NODE_NAME}" \
-    --max-start-failures "${NODE_MAX_START_FAILURES}" &
+    --max-start-failures "${NODE_MAX_START_FAILURES}" \
+    "${node_capability_args[@]}" &
 worker_pid="$!"
 
 if [[ -n "${CONTROL_JOB_ID}" ]]; then

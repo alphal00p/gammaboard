@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     desired_role TEXT CHECK (desired_role IN ('evaluator', 'sampler_aggregator')),
     active_run_id INT REFERENCES runs(id) ON DELETE SET NULL,
     active_role TEXT CHECK (active_role IN ('evaluator', 'sampler_aggregator')),
+    capabilities JSONB NOT NULL DEFAULT '{}'::jsonb,
     last_seen TIMESTAMPTZ,
     registered_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),

@@ -1689,7 +1689,11 @@ fn spawn_node_process(
     let mut command = Command::new(binary);
     command
         .args(runtime_cli_args)
-        .args(node_api::node_run_cli_args(node_name, max_start_failures))
+        .args(node_api::node_run_cli_args(
+            node_name,
+            max_start_failures,
+            &Default::default(),
+        ))
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_log))
         .stderr(Stdio::from(stderr_log));

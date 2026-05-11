@@ -1,4 +1,4 @@
-use crate::core::WorkerRole;
+use crate::core::{NodeCapabilities, WorkerRole};
 use serde_json::Value as JsonValue;
 use sqlx::{PgPool, postgres::PgQueryResult};
 
@@ -23,6 +23,7 @@ pub(crate) struct DesiredAssignmentRaw {
 pub(crate) struct NodeRaw {
     pub name: String,
     pub uuid: String,
+    pub capabilities: JsonValue,
     pub desired_role: Option<String>,
     pub desired_run_id: Option<i32>,
     pub desired_run_name: Option<String>,
@@ -96,6 +97,7 @@ fn node_raw(
     (
         name,
         uuid,
+        capabilities,
         desired_role,
         desired_run_id,
         desired_run_name,
@@ -106,6 +108,7 @@ fn node_raw(
     ): (
         String,
         String,
+        JsonValue,
         Option<String>,
         Option<i32>,
         Option<String>,
@@ -118,6 +121,7 @@ fn node_raw(
     NodeRaw {
         name,
         uuid,
+        capabilities,
         desired_role,
         desired_run_id,
         desired_run_name,
@@ -158,18 +162,21 @@ pub(crate) async fn announce_node(
     pool: &PgPool,
     node_name: &str,
     node_uuid: &str,
+    capabilities: &NodeCapabilities,
 ) -> Result<(), sqlx::Error> {
     let row = sqlx::query_scalar::<_, i32>(
         r#"
         INSERT INTO nodes (
             name,
             uuid,
+            capabilities,
             lease_expires_at,
             last_seen,
             updated_at
         ) VALUES (
             $1,
             $2,
+            $3,
             now() + interval '10 seconds',
             now(),
             now()
@@ -177,6 +184,7 @@ pub(crate) async fn announce_node(
         ON CONFLICT (name) DO UPDATE
         SET
             uuid = EXCLUDED.uuid,
+            capabilities = EXCLUDED.capabilities,
             lease_expires_at = EXCLUDED.lease_expires_at,
             last_seen = EXCLUDED.last_seen,
             updated_at = EXCLUDED.updated_at,
@@ -210,6 +218,10 @@ pub(crate) async fn announce_node(
     )
     .bind(node_name)
     .bind(node_uuid)
+    .bind(
+        serde_json::to_value(capabilities)
+            .unwrap_or_else(|_| JsonValue::Object(Default::default())),
+    )
     .fetch_optional(pool)
     .await?;
 
@@ -323,6 +335,7 @@ pub(crate) async fn list_nodes(
         (
             String,
             String,
+            JsonValue,
             Option<String>,
             Option<i32>,
             Option<String>,
@@ -336,6 +349,7 @@ pub(crate) async fn list_nodes(
         SELECT
             n.name,
             n.uuid,
+            n.capabilities,
             n.desired_role,
             n.desired_run_id,
             dr.name AS desired_run_name,

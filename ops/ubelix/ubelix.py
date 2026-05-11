@@ -499,6 +499,40 @@ def node_names_for_request(request: dict) -> list[str]:
     return [f"{prefix}-{request_id}-{i}" for i in range(1, count + 1)]
 
 
+def capabilities_from_args(args: dict) -> dict[str, int]:
+    raw = args.get("capabilities") or {}
+    if not isinstance(raw, dict):
+        raise RuntimeError("launch request args.capabilities must be an object")
+    capabilities: dict[str, int] = {}
+    for key, value in raw.items():
+        key = str(key).strip()
+        if not key:
+            raise RuntimeError("launch request capability key must not be empty")
+        amount = int(value)
+        if amount < 0:
+            raise RuntimeError(f"launch request capability {key} must be non-negative")
+        capabilities[key] = amount
+    return capabilities
+
+
+def parse_capability(raw: str) -> tuple[str, int]:
+    if "=" not in raw:
+        raise argparse.ArgumentTypeError("capability must use KEY=VALUE")
+    key, value = raw.split("=", 1)
+    key = key.strip()
+    if not key:
+        raise argparse.ArgumentTypeError("capability key must not be empty")
+    try:
+        amount = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"capability value must be an integer: {error}"
+        ) from error
+    if amount < 0:
+        raise argparse.ArgumentTypeError("capability value must be non-negative")
+    return key, amount
+
+
 def submit_worker(
     node_name: str,
     control_node: str,
@@ -506,12 +540,16 @@ def submit_worker(
     control_job_id: str,
     port_offset: int | None = None,
     max_start_failures: int = 3,
+    capabilities: dict[str, int] | None = None,
 ) -> str:
     resolved_port_offset = (
         port_offset if port_offset is not None else port_offset_from_env()
     )
     ensure_dirs()
     env = os.environ.copy()
+    capability_args = []
+    for key, value in sorted((capabilities or {}).items()):
+        capability_args.extend(["--capability", f"{key}={int(value)}"])
     env.update(
         {
             "NODE_NAME": node_name,
@@ -524,6 +562,7 @@ def submit_worker(
             "DEPLOY_NAME": DEPLOY_NAME,
             "GAMMABOARD_PORT_OFFSET": str(resolved_port_offset),
             "CONTROL_JOB_ID": control_job_id,
+            "NODE_CAPABILITIES": " ".join(shlex.quote(arg) for arg in capability_args),
         }
     )
     result = run(
@@ -583,6 +622,7 @@ def resolve_launch_requests_with_callback(
         if not isinstance(args, dict):
             args = {}
         max_start_failures = int(args.get("max_start_failures") or 3)
+        capabilities = capabilities_from_args(args)
         submitted: list[dict[str, str]] = []
         try:
             if not node_names:
@@ -594,6 +634,7 @@ def resolve_launch_requests_with_callback(
                     control_job_id=control.id,
                     port_offset=resolved_port_offset,
                     max_start_failures=max_start_failures,
+                    capabilities=capabilities,
                 )
                 submitted.append({"node_name": node_name, "job_id": job_id})
                 message = f"launch_request={request_id}\tnode={node_name}\tjob={job_id}"
@@ -759,6 +800,7 @@ def command_submit_workers(args: argparse.Namespace) -> None:
     control = require_single_control()
     control_node = wait_for_job_node(control.id)
     ensure_dirs()
+    capabilities = capabilities_from_args({"capabilities": dict(args.capabilities)})
     for i in range(1, args.count + 1):
         node_name = f"{args.prefix}-{i}"
         job_id = submit_worker(
@@ -767,6 +809,7 @@ def command_submit_workers(args: argparse.Namespace) -> None:
             control_job_id=control.id,
             port_offset=args.port_offset,
             max_start_failures=args.max_start_failures,
+            capabilities=capabilities,
         )
         print(f"{node_name}\t{job_id}")
 
@@ -956,6 +999,14 @@ def parser() -> argparse.ArgumentParser:
     workers.add_argument("--prefix", default="w")
     workers.add_argument("--port-offset", type=parse_port_offset, default=0)
     workers.add_argument("--max-start-failures", type=int, default=3)
+    workers.add_argument(
+        "--capability",
+        dest="capabilities",
+        action="append",
+        default=[],
+        type=parse_capability,
+        metavar="KEY=VALUE",
+    )
     workers.set_defaults(func=command_submit_workers)
 
     watch_requests = sub.add_parser(

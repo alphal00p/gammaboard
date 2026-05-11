@@ -3,8 +3,9 @@
 use super::errors::StoreError;
 use super::models::{
     BatchClaim, BatchFailOutcome, BatchQueueCounts, CompletedBatch, DesiredAssignment,
-    EvaluatorPerformanceSnapshot, InsertBatchesOutcome, NodeLaunchRequest, RegisteredNode,
-    RunSampleProgress, RunStageSnapshot, RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
+    EvaluatorPerformanceSnapshot, InsertBatchesOutcome, NodeCapabilities, NodeLaunchRequest,
+    RegisteredNode, RunSampleProgress, RunStageSnapshot, RuntimeLogEvent,
+    SamplerAggregatorPerformanceSnapshot,
 };
 use crate::core::{RunSpec, RunTask, RunTaskInput, SamplerQueueTuning};
 use crate::evaluation::BatchResult;
@@ -33,7 +34,12 @@ pub trait ControlPlaneStore: Send + Sync {
         role: super::models::WorkerRole,
         run_id: i32,
     ) -> Result<(), StoreError>;
-    async fn announce_node(&self, node_name: &str, node_uuid: &str) -> Result<(), StoreError>;
+    async fn announce_node(
+        &self,
+        node_name: &str,
+        node_uuid: &str,
+        capabilities: &NodeCapabilities,
+    ) -> Result<(), StoreError>;
     async fn set_current_assignment(
         &self,
         node_uuid: &str,
