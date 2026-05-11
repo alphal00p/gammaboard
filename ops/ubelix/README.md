@@ -31,6 +31,12 @@ python ubelix.py build gammaboard
 
 The GammaBoard build also builds and embeds the dashboard frontend. Each build overwrites `images/<family>/<family>.sif` and writes `images/<family>/<family>.meta`. Build logs go to `logs/slurm/build`.
 
+Prebuild a Python runtime flake into the persistent Nix store:
+
+```bash
+python ubelix.py nix-build resources/gammaboard_api#runtime
+```
+
 ## Start
 
 Normal multi-job deployment:

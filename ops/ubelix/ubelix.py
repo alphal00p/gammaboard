@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -26,6 +27,7 @@ WORKER_SBATCH = f"{WORKSPACE_ROOT}/ops/slurm/worker.sbatch"
 GB_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaboard.sbatch"
 GL_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaloop.sbatch"
 IMAGE_PATH = f"{WORKSPACE_ROOT}/images/gammaboard/gammaboard.sif"
+NIX_ROOT = os.environ.get("GAMMABOARD_NIX_ROOT", f"{WORKSPACE_ROOT}/nix")
 FRONTEND_PORT = 8080
 DB_PORT = 5400
 DEPLOY_NAME = "default"
@@ -780,6 +782,84 @@ def command_build(args: argparse.Namespace) -> None:
     print(result.stdout.strip())
 
 
+def normalize_nix_flake_ref(reference: str) -> str:
+    if "://" in reference or reference.startswith(
+        ("path:", "github:", "git+", "tarball+", "flake:")
+    ):
+        return reference
+    if reference.startswith(("./", "../", "/")):
+        path, sep, fragment = reference.partition("#")
+        absolute = path if os.path.isabs(path) else os.path.join(WORKSPACE_ROOT, path)
+        return f"path:{absolute}{sep}{fragment}"
+    if "/" in reference:
+        path, sep, fragment = reference.partition("#")
+        return f"path:{os.path.join(WORKSPACE_ROOT, path)}{sep}{fragment}"
+    return reference
+
+
+def local_nix_flake_path(reference: str) -> tuple[str, str] | None:
+    if "://" in reference or reference.startswith(("github:", "git+", "tarball+", "flake:")):
+        return None
+    raw = reference.removeprefix("path:")
+    path, _sep, fragment = raw.partition("#")
+    if raw == reference and "/" not in path and not path.startswith((".", "/")):
+        return None
+    absolute = path if os.path.isabs(path) else os.path.join(WORKSPACE_ROOT, path)
+    return absolute, fragment
+
+
+def command_nix_build(args: argparse.Namespace) -> None:
+    os.makedirs(NIX_ROOT, exist_ok=True)
+    if not os.path.isfile(IMAGE_PATH):
+        raise SystemExit(f"missing image: {IMAGE_PATH}")
+
+    local_flake = local_nix_flake_path(args.flake_ref)
+    if local_flake is not None:
+        source_path, fragment = local_flake
+        if not os.path.isdir(source_path):
+            raise SystemExit(f"missing flake source directory: {source_path}")
+        staged_ref = "/tmp/gammaboard-nix-build-source"
+        if fragment:
+            staged_ref = f"{staged_ref}#{fragment}"
+        nix_command = (
+            "rm -rf /tmp/gammaboard-nix-build-source && "
+            "mkdir -p /tmp/gammaboard-nix-build-source && "
+            f"cp -R --no-preserve=mode,ownership,timestamps,xattr {shlex.quote(source_path)}/. /tmp/gammaboard-nix-build-source/ && "
+            f"nix build {shlex.quote(f'path:{staged_ref}')} "
+            + " ".join(shlex.quote(arg) for arg in args.nix_args)
+        )
+        command = [
+            "apptainer",
+            "exec",
+            "-B",
+            WORKSPACE_ROOT,
+            "-B",
+            f"{NIX_ROOT}:/nix",
+            IMAGE_PATH,
+            "sh",
+            "-lc",
+            nix_command,
+        ]
+    else:
+        flake_ref = normalize_nix_flake_ref(args.flake_ref)
+        command = [
+            "apptainer",
+            "exec",
+            "-B",
+            WORKSPACE_ROOT,
+            "-B",
+            f"{NIX_ROOT}:/nix",
+            IMAGE_PATH,
+            "nix",
+            "build",
+            flake_ref,
+            *args.nix_args,
+        ]
+    result = subprocess.run(command, text=True)
+    if result.returncode != 0:
+        raise SystemExit(result.returncode)
+
+
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
@@ -870,6 +950,17 @@ def parser() -> argparse.ArgumentParser:
     build = sub.add_parser("build", help="login node: submit a build job")
     build.add_argument("target", choices=("gammaboard", "gammaloop"))
     build.set_defaults(func=command_build)
+
+    nix_build = sub.add_parser(
+        "nix-build",
+        help="login node: run nix build inside the GammaBoard image with the persistent /nix bind",
+    )
+    nix_build.add_argument(
+        "flake_ref",
+        help="flake output to build; relative paths resolve under the UBELIX workspace",
+    )
+    nix_build.add_argument("nix_args", nargs=argparse.REMAINDER)
+    nix_build.set_defaults(func=command_nix_build)
 
     clear = sub.add_parser(
         "clear-db", help="login node: delete the local SQLite database"
