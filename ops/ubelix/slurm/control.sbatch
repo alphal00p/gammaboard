@@ -26,6 +26,7 @@ export APPTAINERENV_SYMBOLICA_LICENSE="${SYMBOLICA_LICENSE}"
 export APPTAINERENV_NO_SYMBOLICA_OEM_LICENSE="${NO_SYMBOLICA_OEM_LICENSE}"
 
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata/gammaboard}"
+NIX_ROOT="${GAMMABOARD_NIX_ROOT:-${WORKSPACE_ROOT}/nix}"
 IMAGE_PATH="${WORKSPACE_ROOT}/images/gammaboard/gammaboard.sif"
 RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime.template.toml"
 RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
@@ -49,7 +50,7 @@ DB_DEPLOY_DIR="${WORKSPACE_ROOT}/db/${DEPLOY_NAME}"
 DB_DATA_DIR="${DB_DEPLOY_DIR}/data"
 DB_SOCKET_DIR="${DB_DEPLOY_DIR}/socket"
 
-mkdir -p "${RUNTIME_DIR}" "${SLURM_LOG_DIR}" "${DB_DEPLOY_DIR}" "${DB_SOCKET_DIR}"
+mkdir -p "${RUNTIME_DIR}" "${SLURM_LOG_DIR}" "${DB_DEPLOY_DIR}" "${DB_SOCKET_DIR}" "${NIX_ROOT}"
 mkdir -p "${DB_DATA_DIR}"
 chmod 700 "${DB_DATA_DIR}"
 
@@ -78,6 +79,7 @@ envsubst '${WORKSPACE_ROOT} ${LOCAL_TMP} ${DEPLOY_NAME} ${DB_PORT} ${DATABASE_UR
 
 echo "node: ${HOSTNAME}"
 echo "workspace_root: ${WORKSPACE_ROOT}"
+echo "nix_root: ${NIX_ROOT}"
 echo "runtime_config: ${RUNTIME_CONFIG}"
 echo "frontend_url: http://${HOSTNAME}:${FRONTEND_PORT}"
 echo "tunnel_hint_after_frontend_ready: ssh -N -L ${FRONTEND_PORT}:${HOSTNAME}:${FRONTEND_PORT} ${USER}@ubelix"
@@ -86,5 +88,5 @@ exec env -u PGTZ -u PGOPTIONS \
 APPTAINERENV_LANG="${APPTAINERENV_LANG:-C.UTF-8}" \
 APPTAINERENV_LC_ALL="${APPTAINERENV_LC_ALL:-C.UTF-8}" \
 APPTAINERENV_TZ="${APPTAINERENV_TZ:-Etc/UTC}" \
-apptainer exec -B "${WORKSPACE_ROOT}" "${IMAGE_PATH}" \
+apptainer exec -B "${WORKSPACE_ROOT}" -B "${NIX_ROOT}:/nix" "${IMAGE_PATH}" \
   gammaboard --runtime-config "${RUNTIME_CONFIG}" deploy run --deploy-config "${DEPLOY_CFG}" --port-offset "${PORT_OFFSET}"

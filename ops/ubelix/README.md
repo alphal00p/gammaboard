@@ -10,6 +10,7 @@ Operator guide for the current UBELIX setup. Local sync commands run from your w
 - Workers: separate Slurm jobs connecting to the control job database
 - Access: one SSH tunnel to the frontend port
 - Resources: relative run/task paths resolve under `${WORKSPACE_ROOT}/resources`; GammaLoop states use `states/...`
+- Nix: the GammaBoard image includes the Nix CLI and binds `${WORKSPACE_ROOT}/nix` as `/nix`
 
 ## Sync From Local
 
@@ -96,6 +97,7 @@ Admin-protected commands accept `--admin-password` or `GAMMABOARD_ADMIN_PASSWORD
   db/<deploy-name>/
   images/{gammaboard,gammaloop}/
   logs/{postgres,slurm}/
+  nix/
   resources/states/
   runtime/
 ```
