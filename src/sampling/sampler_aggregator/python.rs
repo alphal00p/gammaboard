@@ -126,8 +126,8 @@ impl SamplerAggregator for PythonSampler {
         self.worker_mut()?.ingest_training_values(training_values)
     }
 
-    fn pdf(&mut self, point: &PdfPoint) -> Result<Option<f64>, EngineError> {
-        self.worker_mut()?.pdf(point)
+    fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
+        self.worker_mut()?.pdf_batch(points)
     }
 
     fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
@@ -448,44 +448,62 @@ impl PythonSamplerWorker {
             .ok_or_else(|| EngineError::engine("python sampler response missing 'snapshot'"))
     }
 
-    fn pdf(&mut self, point: &PdfPoint) -> Result<Option<f64>, EngineError> {
-        if point.0.len() != self.discrete_cardinalities.len() {
-            return Err(EngineError::engine(format!(
-                "python sampler pdf discrete dimension mismatch: expected {}, got {}",
-                self.discrete_cardinalities.len(),
-                point.0.len()
-            )));
-        }
-        if point.1.len() != self.continuous_dims {
-            return Err(EngineError::engine(format!(
-                "python sampler pdf continuous dimension mismatch: expected {}, got {}",
-                self.continuous_dims,
-                point.1.len()
-            )));
+    fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
+        let discrete_dims = self.discrete_cardinalities.len();
+        let continuous_dims = self.continuous_dims;
+        let mut xs_discrete_row_major = Vec::with_capacity(points.len() * discrete_dims);
+        let mut xs_continuous_row_major = Vec::with_capacity(points.len() * continuous_dims);
+        for (index, point) in points.iter().enumerate() {
+            if point.0.len() != discrete_dims {
+                return Err(EngineError::engine(format!(
+                    "python sampler pdf discrete dimension mismatch at point {index}: expected {}, got {}",
+                    discrete_dims,
+                    point.0.len()
+                )));
+            }
+            if point.1.len() != continuous_dims {
+                return Err(EngineError::engine(format!(
+                    "python sampler pdf continuous dimension mismatch at point {index}: expected {}, got {}",
+                    continuous_dims,
+                    point.1.len()
+                )));
+            }
+            xs_discrete_row_major.extend_from_slice(&point.0);
+            xs_continuous_row_major.extend_from_slice(&point.1);
         }
         let request = serde_json::json!({
             "id": self.allocate_request_id(),
             "op": "pdf",
-            "nr_samples": 1,
-            "xs_discrete_row_major": point.0,
-            "xs_continuous_row_major": point.1,
+            "nr_samples": points.len(),
+            "xs_discrete_row_major": xs_discrete_row_major,
+            "xs_continuous_row_major": xs_continuous_row_major,
         });
         let response = self.send_request(&request).map_err(EngineError::engine)?;
         Self::expect_ok(response.clone()).map_err(EngineError::engine)?;
         match response.get("values") {
-            Some(Value::Null) | None => Ok(None),
+            Some(Value::Null) | None => Ok(vec![None; points.len()]),
             Some(Value::Array(values)) => {
-                if values.len() != 1 {
+                if values.len() != points.len() {
                     return Err(EngineError::engine(format!(
-                        "python sampler pdf output size mismatch: expected 1, got {}",
+                        "python sampler pdf output size mismatch: expected {}, got {}",
+                        points.len(),
                         values.len()
                     )));
                 }
-                values[0].as_f64().map(Some).ok_or_else(|| {
-                    EngineError::engine(
-                        "python sampler response field 'values[0]' must be f64 or null",
-                    )
-                })
+                values
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        if value.is_null() {
+                            return Ok(None);
+                        }
+                        value.as_f64().map(Some).ok_or_else(|| {
+                            EngineError::engine(format!(
+                                "python sampler response field 'values[{index}]' must be f64 or null"
+                            ))
+                        })
+                    })
+                    .collect()
             }
             Some(_) => Err(EngineError::engine(
                 "python sampler response field 'values' must be an array or null",

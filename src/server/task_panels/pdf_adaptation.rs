@@ -10,6 +10,7 @@ use crate::server::panels::{
     PanelWidth, PlotPoint, key_value, key_value_panel, panel_spec, progress_panel,
     scalar_timeseries_panel, with_panel_width,
 };
+use serde_json::Value as JsonValue;
 
 const HISTOGRAM_BIN_COUNT: usize = 31;
 
@@ -21,7 +22,7 @@ pub(super) fn projectors(
         progress_projector(geometry.nr_points(), "Image Progress", "pixels"),
         image_projector(
             "pdf_adaptation_log_integrand",
-            "Normalized integrand",
+            "Reference-normalized integrand",
             PanelWidth::Half,
             geometry.clone(),
             ImageKind::LogPlaneNormalizedIntegrand,
@@ -35,7 +36,7 @@ pub(super) fn projectors(
         ),
         histogram_projector(
             "pdf_adaptation_log_integrand_histogram",
-            "Histogram: Normalized integrand",
+            "Histogram: Reference-normalized integrand",
             PanelWidth::Half,
             ImageKind::LogPlaneNormalizedIntegrand,
         ),
@@ -88,7 +89,7 @@ fn plane_oversampling_scalar_projector() -> TaskPanelProjector {
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
-            let Some(derived) = current_output(ctx)?.map(DerivedValues::from_output) else {
+            let Some(derived) = current_derived(ctx)? else {
                 return Ok(None);
             };
             let mut entries = vec![key_value(
@@ -101,6 +102,13 @@ fn plane_oversampling_scalar_projector() -> TaskPanelProjector {
                     "global_abs_integrand_norm",
                     "Global Integrand Norm (I)",
                     global_abs_integrand_norm,
+                ));
+            }
+            if let Some(reference_abs_integrand_norm) = derived.reference_abs_integrand_norm {
+                entries.push(key_value(
+                    "reference_abs_integrand_norm",
+                    "Reference Integrand Norm",
+                    reference_abs_integrand_norm,
                 ));
             }
             if let Some((factor, count)) = derived.global_plane_oversampling_factor() {
@@ -125,7 +133,7 @@ pub(super) fn line_projectors(
         progress_projector(geometry.nr_points(), "Line Progress", "points"),
         line_projector(
             "pdf_adaptation_log_integrand_line",
-            "Normalized integrand (1D)",
+            "Reference-normalized integrand (1D)",
             PanelWidth::Half,
             geometry.clone(),
             ImageKind::LogPlaneNormalizedIntegrand,
@@ -153,7 +161,7 @@ pub(super) fn line_projectors(
         ),
         histogram_projector(
             "pdf_adaptation_log_integrand_histogram",
-            "Histogram: Normalized integrand",
+            "Histogram: Reference-normalized integrand",
             PanelWidth::Half,
             ImageKind::LogPlaneNormalizedIntegrand,
         ),
@@ -231,7 +239,7 @@ fn line_projector(
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
-            let Some(derived) = current_output(ctx)?.map(DerivedValues::from_output) else {
+            let Some(derived) = current_derived(ctx)? else {
                 return Ok(None);
             };
             build_line_panel(panel_id, &geometry, &derived, image_kind).map(Some)
@@ -254,7 +262,7 @@ fn image_projector(
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
-            let Some(derived) = current_output(ctx)?.map(DerivedValues::from_output) else {
+            let Some(derived) = current_derived(ctx)? else {
                 return Ok(None);
             };
             build_image_panel(panel_id, &geometry, &derived, image_kind).map(Some)
@@ -281,7 +289,7 @@ fn histogram_projector(
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
-            let Some(derived) = current_output(ctx)?.map(DerivedValues::from_output) else {
+            let Some(derived) = current_derived(ctx)? else {
                 return Ok(None);
             };
             Ok(Some(histogram_panel(panel_id, &derived, image_kind)))
@@ -311,22 +319,78 @@ fn current_output(
     }
 }
 
+fn current_derived(ctx: &TaskPanelContext<'_>) -> Result<Option<DerivedValues>, EngineError> {
+    Ok(current_output(ctx)?
+        .map(|output| DerivedValues::from_output(output, target_abs_from_json(ctx.run_target))))
+}
+
+fn target_abs_from_json(run_target: Option<&JsonValue>) -> Option<f64> {
+    let value = run_target?;
+    if let Some(scalar) = value.as_f64() {
+        return finite_positive_abs(scalar);
+    }
+    let object = value.as_object()?;
+    let kind = object
+        .get("kind")
+        .or_else(|| object.get("type"))
+        .and_then(JsonValue::as_str)
+        .map(|value| value.to_ascii_lowercase());
+    if matches!(kind.as_deref(), Some("scalar") | Some("value")) {
+        return object
+            .get("value")
+            .and_then(JsonValue::as_f64)
+            .and_then(finite_positive_abs);
+    }
+    let source = object
+        .get("value")
+        .and_then(JsonValue::as_object)
+        .unwrap_or(object);
+    let re = source
+        .get("re")
+        .or_else(|| source.get("real"))
+        .and_then(JsonValue::as_f64)?;
+    let im = source
+        .get("im")
+        .or_else(|| source.get("imag"))
+        .and_then(JsonValue::as_f64)
+        .unwrap_or(0.0);
+    finite_positive_abs(re.hypot(im))
+}
+
+fn finite_positive_abs(value: f64) -> Option<f64> {
+    let abs = value.abs();
+    (abs.is_finite() && abs > 0.0).then_some(abs)
+}
+
 struct DerivedValues {
     output: PdfAdaptationImagePersistedOutput,
+    reference_abs_integrand_norm: Option<f64>,
     log_plane_normalized_integrand: Vec<Option<f64>>,
+    log_reference_normalized_integrand: Vec<Option<f64>>,
     log_plane_normalized_pdf: Vec<Option<f64>>,
     oversampling_legacy_log10: Vec<Option<f64>>,
     oversampling_plane_normalized_log10: Vec<Option<f64>>,
 }
 
 impl DerivedValues {
-    fn from_output(output: PdfAdaptationImagePersistedOutput) -> Self {
+    fn from_output(
+        output: PdfAdaptationImagePersistedOutput,
+        target_abs_integrand_norm: Option<f64>,
+    ) -> Self {
         let mean_abs_integrand = finite_mean(output.abs_integrand_values.iter().flatten().copied());
         let mean_pdf = finite_mean(output.pdf_values.iter().flatten().copied());
+        let reference_abs_integrand_norm = target_abs_integrand_norm
+            .or(output.global_abs_integrand_norm)
+            .or(mean_abs_integrand);
         let log_plane_normalized_integrand = output
             .abs_integrand_values
             .iter()
             .map(|value| log10_ratio(*value, mean_abs_integrand))
+            .collect::<Vec<_>>();
+        let log_reference_normalized_integrand = output
+            .abs_integrand_values
+            .iter()
+            .map(|value| log10_ratio(*value, reference_abs_integrand_norm))
             .collect::<Vec<_>>();
         let log_plane_normalized_pdf = output
             .pdf_values
@@ -349,14 +413,16 @@ impl DerivedValues {
                 log10_pdf_over_integrand_global_norm(
                     *pdf,
                     *abs_integrand,
-                    output.global_abs_integrand_norm,
+                    reference_abs_integrand_norm,
                     output.global_pdf_norm,
                 )
             })
             .collect::<Vec<_>>();
         Self {
             output,
+            reference_abs_integrand_norm,
             log_plane_normalized_integrand,
+            log_reference_normalized_integrand,
             log_plane_normalized_pdf,
             oversampling_legacy_log10,
             oversampling_plane_normalized_log10,
@@ -365,7 +431,7 @@ impl DerivedValues {
 
     fn values(&self, image_kind: ImageKind) -> &[Option<f64>] {
         match image_kind {
-            ImageKind::LogPlaneNormalizedIntegrand => &self.log_plane_normalized_integrand,
+            ImageKind::LogPlaneNormalizedIntegrand => &self.log_reference_normalized_integrand,
             ImageKind::LogPlaneNormalizedPdf => &self.log_plane_normalized_pdf,
             ImageKind::OversamplingLegacy => &self.oversampling_legacy_log10,
             ImageKind::OversamplingPlaneNormalized => &self.oversampling_plane_normalized_log10,
@@ -373,7 +439,7 @@ impl DerivedValues {
     }
 
     fn global_plane_oversampling_factor(&self) -> Option<(f64, usize)> {
-        let i = self.output.global_abs_integrand_norm?;
+        let i = self.reference_abs_integrand_norm?;
         let z = self.output.global_pdf_norm;
         if !i.is_finite() || i <= 0.0 || !z.is_finite() || z <= 0.0 {
             return None;
@@ -395,7 +461,10 @@ impl DerivedValues {
             }
             let pdf_mass = pdf / z;
             let integrand_mass = abs_integrand / i;
-            if pdf_mass.is_finite() && integrand_mass.is_finite() && pdf_mass > 0.0 && integrand_mass > 0.0
+            if pdf_mass.is_finite()
+                && integrand_mass.is_finite()
+                && pdf_mass > 0.0
+                && integrand_mass > 0.0
             {
                 pdf_mass_sum += pdf_mass;
                 integrand_mass_sum += integrand_mass;
@@ -764,7 +833,7 @@ mod tests {
 
     #[test]
     fn global_plane_oversampling_factor_is_computed_from_global_norms() {
-        let derived = DerivedValues::from_output(output());
+        let derived = DerivedValues::from_output(output(), None);
         let (factor, count) = derived
             .global_plane_oversampling_factor()
             .expect("global oversampling factor");
@@ -788,7 +857,7 @@ mod tests {
 
     #[test]
     fn derived_values_compute_log_panels() {
-        let derived = DerivedValues::from_output(output());
+        let derived = DerivedValues::from_output(output(), None);
         assert_eq!(
             derived.log_plane_normalized_integrand,
             vec![Some((2.0_f64 / 3.0).log10()), Some((4.0_f64 / 3.0).log10())]
@@ -812,7 +881,7 @@ mod tests {
         let panel = build_image_panel(
             "pdf",
             &geometry(),
-            &DerivedValues::from_output(output()),
+            &DerivedValues::from_output(output(), None),
             ImageKind::LogPlaneNormalizedPdf,
         )
         .expect("build plane normalized pdf panel");
@@ -833,7 +902,7 @@ mod tests {
         let panel = build_image_panel(
             "oversampling",
             &geometry(),
-            &DerivedValues::from_output(output()),
+            &DerivedValues::from_output(output(), None),
             ImageKind::OversamplingLegacy,
         )
         .expect("build oversampling panel");
@@ -865,7 +934,7 @@ mod tests {
         let panel = build_line_panel(
             "pdf_adaptation_log_pdf_line",
             &line_geometry(),
-            &DerivedValues::from_output(output()),
+            &DerivedValues::from_output(output(), None),
             ImageKind::LogPlaneNormalizedPdf,
         )
         .expect("build line panel");

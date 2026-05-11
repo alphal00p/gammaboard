@@ -278,30 +278,43 @@ impl PdfAdaptationRasterPlaneSampler {
         }
     }
 
-    fn record_training_value(
+    fn record_training_values(
         &mut self,
-        canonical_index: usize,
-        training_value: f64,
+        canonical_indices: &[usize],
+        training_values: &[f64],
     ) -> Result<(), EngineError> {
-        if !training_value.is_finite() {
-            self.output_state.signed_integrand_values[canonical_index] = None;
-            self.output_state.abs_integrand_values[canonical_index] = None;
-            self.output_state.pdf_values[canonical_index] = None;
-            return Ok(());
+        let mut pdf_points = Vec::new();
+        let mut pdf_indices = Vec::new();
+        for (&canonical_index, &training_value) in
+            canonical_indices.iter().zip(training_values.iter())
+        {
+            if !training_value.is_finite() {
+                self.output_state.signed_integrand_values[canonical_index] = None;
+                self.output_state.abs_integrand_values[canonical_index] = None;
+                self.output_state.pdf_values[canonical_index] = None;
+                continue;
+            }
+            self.output_state.signed_integrand_values[canonical_index] = Some(training_value);
+            self.output_state.abs_integrand_values[canonical_index] = Some(training_value.abs());
+            self.output_state.abs_integrand_sum += training_value.abs();
+            self.output_state.abs_integrand_count += 1;
+            pdf_indices.push(canonical_index);
+            pdf_points.push((
+                self.params.geometry.discrete.clone(),
+                self.point_at(canonical_index),
+            ));
         }
-
-        let point = (
-            self.params.geometry.discrete.clone(),
-            self.point_at(canonical_index),
-        );
-        self.output_state.signed_integrand_values[canonical_index] = Some(training_value);
-        self.output_state.abs_integrand_values[canonical_index] = Some(training_value.abs());
-        self.output_state.pdf_values[canonical_index] = self
-            .source_sampler
-            .pdf(&point)?
-            .filter(|pdf| pdf.is_finite());
-        self.output_state.abs_integrand_sum += training_value.abs();
-        self.output_state.abs_integrand_count += 1;
+        let pdf_values = self.source_sampler.pdf_batch(&pdf_points)?;
+        if pdf_values.len() != pdf_indices.len() {
+            return Err(EngineError::engine(format!(
+                "pdf adaptation raster plane sampler pdf output size mismatch: expected {}, got {}",
+                pdf_indices.len(),
+                pdf_values.len()
+            )));
+        }
+        for (canonical_index, pdf) in pdf_indices.into_iter().zip(pdf_values.into_iter()) {
+            self.output_state.pdf_values[canonical_index] = pdf.filter(|pdf| pdf.is_finite());
+        }
         Ok(())
     }
 }
@@ -378,30 +391,43 @@ impl PdfAdaptationRasterLineSampler {
         }
     }
 
-    fn record_training_value(
+    fn record_training_values(
         &mut self,
-        canonical_index: usize,
-        training_value: f64,
+        canonical_indices: &[usize],
+        training_values: &[f64],
     ) -> Result<(), EngineError> {
-        if !training_value.is_finite() {
-            self.output_state.signed_integrand_values[canonical_index] = None;
-            self.output_state.abs_integrand_values[canonical_index] = None;
-            self.output_state.pdf_values[canonical_index] = None;
-            return Ok(());
+        let mut pdf_points = Vec::new();
+        let mut pdf_indices = Vec::new();
+        for (&canonical_index, &training_value) in
+            canonical_indices.iter().zip(training_values.iter())
+        {
+            if !training_value.is_finite() {
+                self.output_state.signed_integrand_values[canonical_index] = None;
+                self.output_state.abs_integrand_values[canonical_index] = None;
+                self.output_state.pdf_values[canonical_index] = None;
+                continue;
+            }
+            self.output_state.signed_integrand_values[canonical_index] = Some(training_value);
+            self.output_state.abs_integrand_values[canonical_index] = Some(training_value.abs());
+            self.output_state.abs_integrand_sum += training_value.abs();
+            self.output_state.abs_integrand_count += 1;
+            pdf_indices.push(canonical_index);
+            pdf_points.push((
+                self.params.geometry.discrete.clone(),
+                self.point_at(canonical_index),
+            ));
         }
-
-        let point = (
-            self.params.geometry.discrete.clone(),
-            self.point_at(canonical_index),
-        );
-        self.output_state.signed_integrand_values[canonical_index] = Some(training_value);
-        self.output_state.abs_integrand_values[canonical_index] = Some(training_value.abs());
-        self.output_state.pdf_values[canonical_index] = self
-            .source_sampler
-            .pdf(&point)?
-            .filter(|pdf| pdf.is_finite());
-        self.output_state.abs_integrand_sum += training_value.abs();
-        self.output_state.abs_integrand_count += 1;
+        let pdf_values = self.source_sampler.pdf_batch(&pdf_points)?;
+        if pdf_values.len() != pdf_indices.len() {
+            return Err(EngineError::engine(format!(
+                "pdf adaptation raster line sampler pdf output size mismatch: expected {}, got {}",
+                pdf_indices.len(),
+                pdf_values.len()
+            )));
+        }
+        for (canonical_index, pdf) in pdf_indices.into_iter().zip(pdf_values.into_iter()) {
+            self.output_state.pdf_values[canonical_index] = pdf.filter(|pdf| pdf.is_finite());
+        }
         Ok(())
     }
 }
@@ -573,17 +599,21 @@ impl SamplerAggregator for PdfAdaptationRasterPlaneSampler {
                 total_samples,
             )));
         }
-        for (offset, training_value) in training_values.iter().copied().enumerate() {
-            let shuffled_index = self.ingested_samples + offset;
-            let canonical_index = self.permuted_index(shuffled_index);
-            self.record_training_value(canonical_index, training_value)?;
-        }
+        let canonical_indices = training_values
+            .iter()
+            .enumerate()
+            .map(|(offset, _)| {
+                let shuffled_index = self.ingested_samples + offset;
+                self.permuted_index(shuffled_index)
+            })
+            .collect::<Vec<_>>();
+        self.record_training_values(&canonical_indices, training_values)?;
         self.ingested_samples += training_values.len();
         Ok(())
     }
 
-    fn pdf(&mut self, point: &PdfPoint) -> Result<Option<f64>, EngineError> {
-        self.source_sampler.pdf(point)
+    fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
+        self.source_sampler.pdf_batch(points)
     }
 
     fn persisted_output(&mut self) -> Result<Option<serde_json::Value>, EngineError> {
@@ -655,17 +685,21 @@ impl SamplerAggregator for PdfAdaptationRasterLineSampler {
                 total_samples,
             )));
         }
-        for (offset, training_value) in training_values.iter().copied().enumerate() {
-            let shuffled_index = self.ingested_samples + offset;
-            let canonical_index = self.permuted_index(shuffled_index);
-            self.record_training_value(canonical_index, training_value)?;
-        }
+        let canonical_indices = training_values
+            .iter()
+            .enumerate()
+            .map(|(offset, _)| {
+                let shuffled_index = self.ingested_samples + offset;
+                self.permuted_index(shuffled_index)
+            })
+            .collect::<Vec<_>>();
+        self.record_training_values(&canonical_indices, training_values)?;
         self.ingested_samples += training_values.len();
         Ok(())
     }
 
-    fn pdf(&mut self, point: &PdfPoint) -> Result<Option<f64>, EngineError> {
-        self.source_sampler.pdf(point)
+    fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
+        self.source_sampler.pdf_batch(points)
     }
 
     fn persisted_output(&mut self) -> Result<Option<serde_json::Value>, EngineError> {
@@ -878,8 +912,10 @@ mod tests {
         .expect("build pdf adaptation sampler");
 
         assert_eq!(
-            sampler.pdf(&(Vec::new(), vec![0.25, 0.75])).unwrap(),
-            Some(1.0)
+            sampler
+                .pdf_batch(&[(Vec::new(), vec![0.25, 0.75])])
+                .unwrap(),
+            vec![Some(1.0)]
         );
     }
 

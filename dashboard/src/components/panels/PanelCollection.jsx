@@ -452,7 +452,7 @@ const remapAndSortTimeseriesPoints = (points, mode) =>
 const lineColors = ["#005f73", "#bb3e03", "#0a9396", "#ae2012", "#ca6702"];
 const histogramOverlayColors = ["#9b2226", "#3a86ff", "#ff006e", "#6a994e", "#ff7f11", "#8338ec"];
 
-const scalarHeatmapColors = ["rgb(0,0,255)", "rgb(128,200,128)", "rgb(255,0,0)"];
+const scalarHeatmapColors = ["#1d4ed8", "#16a34a", "#dc2626"];
 
 const panelColumnSpan = (descriptor) => {
   switch (descriptor?.width) {
@@ -610,7 +610,7 @@ const buildLogRatioPoints = (referenceBins, overlayBins, isDiscrete, xScale) =>
 const clampHeatmapSpread = (candidate, fallback = 1) => {
   const numeric = Number(candidate);
   if (!Number.isFinite(numeric)) return fallback;
-  return Math.max(0.25, Math.min(4, numeric));
+  return Math.max(0.05, Math.min(20, numeric));
 };
 const readHeatmapSpreadFromPanelValue = (value, fallback = 1) =>
   clampHeatmapSpread(isObject(value) ? value.spread : null, fallback);
@@ -1295,6 +1295,63 @@ const buildInvalidCellOverlay = (invalidIndices, width, height) => {
   return points;
 };
 
+const heatmapMetricLabel = (panelId) => {
+  if (typeof panelId !== "string") return "value";
+  if (panelId.includes("oversampling")) return "log10(sampling factor)";
+  if (panelId.includes("log_pdf")) return "log10(normalized PDF)";
+  if (panelId.includes("log_integrand")) return "log10(normalized integrand)";
+  return "value";
+};
+
+const heatmapTooltipValueLines = (panelId, value) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return ["value: n/a"];
+  const label = heatmapMetricLabel(panelId);
+  const lines = [`${label}: ${formatScientific(numeric, 6)}`];
+  if (typeof panelId === "string" && panelId.startsWith("pdf_adaptation_")) {
+    const factor = 10 ** numeric;
+    if (Number.isFinite(factor)) lines.push(`linear factor: ${formatScientific(factor, 6)}`);
+  }
+  return lines;
+};
+
+const buildHeatmapAnchorGraphics = (zmin, zmax, normalizationMode) => {
+  const max = Number(zmax);
+  const min = Number(zmin);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return [];
+  const children = [
+    {
+      type: "text",
+      right: 2,
+      top: -4,
+      style: { text: formatScientific(max, 3), fill: "#475569", fontSize: 11, align: "left" },
+    },
+    {
+      type: "text",
+      right: 2,
+      bottom: -4,
+      style: { text: formatScientific(min, 3), fill: "#475569", fontSize: 11, align: "left" },
+    },
+  ];
+  if (normalizationMode === "symmetric" && min < 0 && max > 0) {
+    children.push({
+      type: "text",
+      right: 2,
+      top: 104,
+      style: { text: "0 = 1x", fill: "#166534", fontSize: 11, fontWeight: 600, align: "left" },
+    });
+  }
+  return [
+    {
+      type: "group",
+      right: 6,
+      top: "middle",
+      bounding: "raw",
+      children,
+    },
+  ];
+};
+
 const ScalarImageHeatmapPanel = ({
   title,
   panelId = null,
@@ -1402,7 +1459,7 @@ const ScalarImageHeatmapPanel = ({
           return [
             `t: ${formatScientific(Number(x), 4)}`,
             `s: ${formatScientific(Number(y), 4)}`,
-            `value: ${formatScientific(Number(value), 6)}`,
+            ...heatmapTooltipValueLines(panelId, value),
           ].join("<br/>");
         },
       },
@@ -1417,10 +1474,12 @@ const ScalarImageHeatmapPanel = ({
         itemWidth: 22,
         itemHeight: 220,
         calculable: false,
-        text: ["Value", ""],
+        text: [formatScientific(zmax, 3), formatScientific(zmin, 3)],
+        formatter: (next) => formatScientific(Number(next), 3),
         textStyle: { color: "#64748b", fontSize: 12 },
         inRange: { color: scalarHeatmapColors },
       },
+      graphic: buildHeatmapAnchorGraphics(zmin, zmax, normalizationMode),
       dataZoom: buildDataZoom(zoomRange, true, true, yZoomRange, true),
       series: [
         {
@@ -1445,6 +1504,8 @@ const ScalarImageHeatmapPanel = ({
       heatmapMargins,
       height,
       invalidOverlay,
+      normalizationMode,
+      panelId,
       width,
       xParameters,
       zoomRange,
@@ -1503,8 +1564,8 @@ const ScalarImageHeatmapPanel = ({
                 </Typography>
                 <Slider
                   size="small"
-                  min={0.25}
-                  max={4}
+                  min={0.05}
+                  max={20}
                   step={0.05}
                   value={spread}
                   onChangeCommitted={(_event, next) => {
@@ -1557,6 +1618,12 @@ const ScalarImageHeatmapPanel = ({
             height: `${chartHeight}px`,
           }}
         >
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
+            Scale: {formatScientific(zmin, 3)} (blue)
+            {normalizationMode === "symmetric" ? " · 0 / 1x (green)" : ""}
+            {" · "}
+            {formatScientific(zmax, 3)} (red)
+          </Typography>
           <LazyChart
             ref={echartsRef}
             option={option}
@@ -1564,7 +1631,7 @@ const ScalarImageHeatmapPanel = ({
             onEvents={onDataZoom}
             lazyUpdate
             opts={{ renderer: "canvas" }}
-            style={{ width: "100%", height: "100%" }}
+            style={{ width: "100%", height: "calc(100% - 22px)" }}
           />
         </Box>
       </CardContent>

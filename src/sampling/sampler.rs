@@ -73,8 +73,8 @@ pub trait SamplerAggregator: Send {
     }
     fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError>;
     fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError>;
-    fn pdf(&mut self, _point: &PdfPoint) -> Result<Option<f64>, EngineError> {
-        Ok(None)
+    fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
+        Ok(vec![None; points.len()])
     }
     fn global_pdf_norm(&mut self) -> Result<f64, EngineError> {
         Ok(1.0)

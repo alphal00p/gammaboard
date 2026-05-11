@@ -577,8 +577,11 @@ impl SamplerAggregator for HavanaSampler {
         })
     }
 
-    fn pdf(&mut self, point: &PdfPoint) -> Result<Option<f64>, EngineError> {
-        grid_pdf(&self.grid, point)
+    fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
+        points
+            .iter()
+            .map(|point| grid_pdf(&self.grid, point))
+            .collect()
     }
 }
 
@@ -629,8 +632,11 @@ impl SamplerAggregator for HavanaInferenceSampler {
         })
     }
 
-    fn pdf(&mut self, point: &PdfPoint) -> Result<Option<f64>, EngineError> {
-        grid_pdf(&self.grid, point)
+    fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
+        points
+            .iter()
+            .map(|point| grid_pdf(&self.grid, point))
+            .collect()
     }
 }
 
