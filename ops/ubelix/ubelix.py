@@ -30,6 +30,7 @@ IMAGE_PATH = f"{WORKSPACE_ROOT}/images/gammaboard/gammaboard.sif"
 DEFAULT_NIX_ROOT = f"/scratch/network/users/{os.environ.get('USER', 'unknown')}/gammaboard-nix"
 NIX_ROOT = DEFAULT_NIX_ROOT
 NIX_VERSION = "2.24.11"
+NIX_DOWNLOAD_BUFFER_SIZE = 524288000
 FRONTEND_PORT = 8080
 DB_PORT = 5400
 DEPLOY_NAME = "default"
@@ -1004,12 +1005,8 @@ def local_nix_flake_path(reference: str) -> tuple[str, str] | None:
     return absolute, fragment
 
 
-def command_nix_build(args: argparse.Namespace) -> None:
-    os.makedirs(NIX_ROOT, exist_ok=True)
-    if not os.path.isfile(IMAGE_PATH):
-        raise SystemExit(f"missing image: {IMAGE_PATH}")
-
-    ensure_nix = f"""
+def nix_bootstrap_script() -> str:
+    return f"""
 export PATH="$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin:$PATH"
 if ! command -v nix >/dev/null 2>&1; then
   echo "installing Nix {NIX_VERSION} into /nix" >&2
@@ -1025,10 +1022,15 @@ if [ -f "$HOME/.nix-profile/etc/profile.d/nix.sh" ]; then
   . "$HOME/.nix-profile/etc/profile.d/nix.sh"
 fi
 export PATH="$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin:$PATH"
-export NIX_CONFIG="experimental-features = nix-command flakes${{NIX_CONFIG:+
+export NIX_CONFIG="experimental-features = nix-command flakes
+download-buffer-size = {NIX_DOWNLOAD_BUFFER_SIZE}${{NIX_CONFIG:+
 $NIX_CONFIG}}"
 """
-    local_flake = local_nix_flake_path(args.flake_ref)
+
+
+def nix_build_shell_command(flake_ref: str, nix_args: list[str]) -> str:
+    ensure_nix = nix_bootstrap_script()
+    local_flake = local_nix_flake_path(flake_ref)
     if local_flake is not None:
         source_path, fragment = local_flake
         if not os.path.isdir(source_path):
@@ -1036,47 +1038,82 @@ $NIX_CONFIG}}"
         staged_ref = "/tmp/gammaboard-nix-build-source"
         if fragment:
             staged_ref = f"{staged_ref}#{fragment}"
-        nix_command = (
+        return (
             ensure_nix
             + "\n"
             "rm -rf /tmp/gammaboard-nix-build-source && "
             "mkdir -p /tmp/gammaboard-nix-build-source && "
             f"cp -R --no-preserve=mode,ownership,timestamps,xattr {shlex.quote(source_path)}/. /tmp/gammaboard-nix-build-source/ && "
             f"nix build {shlex.quote(f'path:{staged_ref}')} "
-            + " ".join(shlex.quote(arg) for arg in args.nix_args)
+            + " ".join(shlex.quote(arg) for arg in nix_args)
         )
-        command = [
-            "apptainer",
-            "exec",
-            "-B",
-            WORKSPACE_ROOT,
-            "-B",
-            f"{NIX_ROOT}:/nix",
-            IMAGE_PATH,
-            "sh",
-            "-lc",
-            nix_command,
-        ]
-    else:
-        flake_ref = normalize_nix_flake_ref(args.flake_ref)
-        nix_command = (
-            ensure_nix
-            + "\n"
-            + f"nix build {shlex.quote(flake_ref)} "
-            + " ".join(shlex.quote(arg) for arg in args.nix_args)
-        )
-        command = [
-            "apptainer",
-            "exec",
-            "-B",
-            WORKSPACE_ROOT,
-            "-B",
-            f"{NIX_ROOT}:/nix",
-            IMAGE_PATH,
-            "sh",
-            "-lc",
-            nix_command,
-        ]
+
+    normalized_ref = normalize_nix_flake_ref(flake_ref)
+    return (
+        ensure_nix
+        + "\n"
+        + f"nix build {shlex.quote(normalized_ref)} "
+        + " ".join(shlex.quote(arg) for arg in nix_args)
+    )
+
+
+def nix_build_apptainer_command(nix_command: str) -> list[str]:
+    return [
+        "apptainer",
+        "exec",
+        "-B",
+        WORKSPACE_ROOT,
+        "-B",
+        f"{NIX_ROOT}:/nix",
+        IMAGE_PATH,
+        "sh",
+        "-lc",
+        nix_command,
+    ]
+
+
+def submit_nix_build_slurm(args: argparse.Namespace, nix_command: str) -> None:
+    os.makedirs(os.path.join(WORKSPACE_ROOT, "logs/slurm/build"), exist_ok=True)
+    script = f"""#!/usr/bin/env bash
+#SBATCH --job-name=gb-nix
+#SBATCH --time={args.time}
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task={args.cpus_per_task}
+#SBATCH --mem={args.mem}
+#SBATCH --account={args.account}
+#SBATCH --partition={args.partition}
+#SBATCH --qos={args.qos}
+#SBATCH --output=logs/slurm/build/%x-%j.out
+#SBATCH --error=logs/slurm/build/%x-%j.err
+
+set -euo pipefail
+mkdir -p {shlex.quote(NIX_ROOT)}
+{shlex.join(nix_build_apptainer_command(nix_command))}
+"""
+    result = subprocess.run(
+        ["sbatch", "--chdir", WORKSPACE_ROOT],
+        input=script,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        print(result.stderr, file=sys.stderr, end="")
+        raise SystemExit(result.returncode)
+    print(result.stdout.strip())
+
+
+def command_nix_build(args: argparse.Namespace) -> None:
+    os.makedirs(NIX_ROOT, exist_ok=True)
+    if not os.path.isfile(IMAGE_PATH):
+        raise SystemExit(f"missing image: {IMAGE_PATH}")
+
+    nix_command = nix_build_shell_command(args.flake_ref, args.nix_args)
+    if args.slurm:
+        submit_nix_build_slurm(args, nix_command)
+        return
+
+    command = nix_build_apptainer_command(nix_command)
     result = subprocess.run(command, text=True)
     if result.returncode != 0:
         raise SystemExit(result.returncode)
@@ -1183,8 +1220,19 @@ def parser() -> argparse.ArgumentParser:
 
     nix_build = sub.add_parser(
         "nix-build",
-        help="login node: run nix build inside the GammaBoard image with the persistent /nix bind",
+        help="login node: run or submit nix build inside the GammaBoard image with the persistent /nix bind",
     )
+    nix_build.add_argument(
+        "--slurm",
+        action="store_true",
+        help="submit the nix build as a Slurm job instead of running on the login node",
+    )
+    nix_build.add_argument("--time", default="08:00:00")
+    nix_build.add_argument("--cpus-per-task", type=int, default=4)
+    nix_build.add_argument("--mem", default="16G")
+    nix_build.add_argument("--account", default="gratis")
+    nix_build.add_argument("--partition", default="epyc2")
+    nix_build.add_argument("--qos", default="job_gratis")
     nix_build.add_argument(
         "flake_ref",
         help="flake output to build; relative paths resolve under the UBELIX workspace",

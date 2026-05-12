@@ -37,6 +37,12 @@ Prebuild a Python runtime flake into the persistent Nix store:
 python ubelix.py nix-build resources/runtimes/madnis_gammaboard_api#runtime
 ```
 
+For heavy CUDA runtimes, submit the Nix build as a Slurm job instead of building on the login node:
+
+```bash
+python ubelix.py nix-build --slurm --time 08:00:00 resources/runtimes/madnis_gammaboard_api#runtime
+```
+
 ## Start
 
 Normal multi-job deployment:

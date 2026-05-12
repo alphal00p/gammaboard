@@ -1,6 +1,7 @@
 use crate::api::ApiError;
 use crate::core::{
-    ControlPlaneStore, NodeCapabilities, NodeLaunchRequest, RunReadStore, WorkerRole,
+    CapabilityRequirements, ControlPlaneStore, NodeCapabilities, NodeLaunchRequest, RegisteredNode,
+    RunReadStore, RunSpecStore, WorkerRole,
 };
 use serde_json::Value as JsonValue;
 use std::collections::HashSet;
@@ -281,7 +282,7 @@ async fn wait_for_graceful_node_shutdown(
 
 /// Auto-assigns currently free nodes to sampler/evaluator roles for a run.
 pub async fn auto_assign_run(
-    store: &(impl ControlPlaneStore + RunReadStore),
+    store: &(impl ControlPlaneStore + RunReadStore + RunSpecStore),
     run_id: i32,
     max_evaluators: Option<usize>,
 ) -> Result<AutoAssignResult, ApiError> {
@@ -289,37 +290,43 @@ pub async fn auto_assign_run(
         .get_run_progress(run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
+    let run_spec = store
+        .load_run_spec(run_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("run {run_id} spec not found")))?;
     let nodes = store.list_nodes(None).await?;
-    let free_nodes = nodes
-        .iter()
-        .filter(|node| node.desired_assignment.is_none())
-        .map(|node| node.name.clone())
-        .collect::<Vec<_>>();
     let sampler_already_assigned = nodes.iter().any(|node| {
         node.desired_assignment.as_ref().is_some_and(|assignment| {
             assignment.run_id == run_id && assignment.role == WorkerRole::SamplerAggregator
         })
     });
+    let mut free_nodes = nodes
+        .into_iter()
+        .filter(|node| node.desired_assignment.is_none())
+        .collect::<Vec<_>>();
 
     let evaluator_limit = max_evaluators.unwrap_or(usize::MAX);
     let mut assigned_sampler = None;
     let mut assigned_evaluators = Vec::new();
-    let mut free_iter = free_nodes.into_iter();
 
     if !sampler_already_assigned {
-        if let Some(node_name) = free_iter.next() {
+        if let Some(node) = take_best_node(&mut free_nodes, &run_spec.sampler_requirements) {
             store
-                .upsert_desired_assignment(&node_name, WorkerRole::SamplerAggregator, run_id)
+                .upsert_desired_assignment(&node.name, WorkerRole::SamplerAggregator, run_id)
                 .await?;
-            assigned_sampler = Some(node_name);
+            assigned_sampler = Some(node.name);
         }
     }
 
-    for node_name in free_iter.take(evaluator_limit) {
+    for node in take_best_nodes(
+        &mut free_nodes,
+        &run_spec.evaluator_requirements,
+        evaluator_limit,
+    ) {
         store
-            .upsert_desired_assignment(&node_name, WorkerRole::Evaluator, run_id)
+            .upsert_desired_assignment(&node.name, WorkerRole::Evaluator, run_id)
             .await?;
-        assigned_evaluators.push(node_name);
+        assigned_evaluators.push(node.name);
     }
 
     Ok(AutoAssignResult {
@@ -329,6 +336,85 @@ pub async fn auto_assign_run(
         assigned_sampler,
         assigned_evaluators,
     })
+}
+
+pub fn capabilities_satisfy(
+    capabilities: &NodeCapabilities,
+    requirements: &CapabilityRequirements,
+) -> bool {
+    requirements.iter().all(|(key, required)| {
+        capabilities
+            .get(key)
+            .is_some_and(|available| available >= required)
+    })
+}
+
+fn capability_score(
+    capabilities: &NodeCapabilities,
+    requirements: &CapabilityRequirements,
+) -> (u64, u64, usize, String) {
+    let extra_required = requirements
+        .iter()
+        .map(|(key, required)| capabilities.get(key).copied().unwrap_or(0) - required)
+        .sum::<u64>();
+    let extra_unrequired = capabilities
+        .iter()
+        .filter(|(key, _)| !requirements.contains_key(*key))
+        .map(|(key, value)| capability_weight(key, *value))
+        .sum::<u64>();
+    (
+        extra_required,
+        extra_unrequired,
+        capabilities.len(),
+        String::new(),
+    )
+}
+
+fn capability_weight(key: &str, value: u64) -> u64 {
+    if key.contains("gpu") || key.contains("cuda") || key.contains("madnis") {
+        value.saturating_mul(1_000)
+    } else {
+        value
+    }
+}
+
+fn best_node_index(
+    nodes: &[RegisteredNode],
+    requirements: &CapabilityRequirements,
+) -> Option<usize> {
+    nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, node)| capabilities_satisfy(&node.capabilities, requirements))
+        .min_by_key(|(_, node)| {
+            let mut score = capability_score(&node.capabilities, requirements);
+            score.3 = node.name.clone();
+            score
+        })
+        .map(|(index, _)| index)
+}
+
+fn take_best_node(
+    nodes: &mut Vec<RegisteredNode>,
+    requirements: &CapabilityRequirements,
+) -> Option<RegisteredNode> {
+    let index = best_node_index(nodes, requirements)?;
+    Some(nodes.remove(index))
+}
+
+fn take_best_nodes(
+    nodes: &mut Vec<RegisteredNode>,
+    requirements: &CapabilityRequirements,
+    limit: usize,
+) -> Vec<RegisteredNode> {
+    let mut selected = Vec::new();
+    while selected.len() < limit {
+        let Some(node) = take_best_node(nodes, requirements) else {
+            break;
+        };
+        selected.push(node);
+    }
+    selected
 }
 
 /// Plans `w-N` node names for launching local node processes, skipping existing names.
