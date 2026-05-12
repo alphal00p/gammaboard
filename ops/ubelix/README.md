@@ -79,6 +79,18 @@ python ubelix.py watch-requests
 python ubelix.py watch-requests --once
 ```
 
+Dashboard node-launch TOML uses grouped `config` tables. On UBELIX, the watcher maps supported config keys to `sbatch` options. A GPU group such as:
+
+```toml
+[[groups]]
+count = 1
+name_prefix = "gpu"
+max_start_failures = 6
+config = { gres = "gpu:1" }
+```
+
+submits worker jobs with `--gres=gpu:1 --partition=gpu` and registers `gpu=1` as a worker capability. `config = { gpu = 1 }` is also accepted as a shorthand for `--gres=gpu:1`. Supported `config` keys are `account`, `partition`, `qos`, `gpu`, `gres`, `gpus`, `cpus_per_task`, `mem`, `mem_per_cpu`, `time`, `constraint`, `nodelist`, and `exclude`.
+
 `up --watch` also resolves dashboard requests while it watches the control job.
 
 ## Stop And Inspect

@@ -481,24 +481,6 @@ def update_launch_request(
     )
 
 
-def node_names_for_request(request: dict) -> list[str]:
-    count = int(request.get("requested_count") or 0)
-    args = request.get("args") or {}
-    if not isinstance(args, dict):
-        args = {}
-    requested_names = args.get("node_names")
-    if isinstance(requested_names, list):
-        names = [str(name).strip() for name in requested_names if str(name).strip()]
-        if len(names) >= count:
-            return names[:count]
-
-    prefix = (
-        str(request.get("name_prefix") or args.get("name_prefix") or "w").strip() or "w"
-    )
-    request_id = int(request["id"])
-    return [f"{prefix}-{request_id}-{i}" for i in range(1, count + 1)]
-
-
 def capabilities_from_args(args: dict) -> dict[str, int]:
     raw = args.get("capabilities") or {}
     if not isinstance(raw, dict):
@@ -513,6 +495,168 @@ def capabilities_from_args(args: dict) -> dict[str, int]:
             raise RuntimeError(f"launch request capability {key} must be non-negative")
         capabilities[key] = amount
     return capabilities
+
+
+def gpu_count_from_gres(gres: str) -> int | None:
+    if gres.strip() == "gpu":
+        return 1
+    for raw_segment in gres.split(","):
+        segment = raw_segment.strip()
+        if not segment.startswith("gpu:"):
+            continue
+        parts = segment.split(":")
+        try:
+            return int(parts[-1])
+        except ValueError:
+            return 1
+    return None
+
+
+def derive_capabilities_from_config(config: dict) -> dict[str, int]:
+    capabilities: dict[str, int] = {}
+    for key, value in config.items():
+        if isinstance(value, bool):
+            capabilities[key] = 1 if value else 0
+        elif isinstance(value, int):
+            capabilities[key] = value
+    gres = config.get("gres")
+    if isinstance(gres, str):
+        gpu_count = gpu_count_from_gres(gres)
+        if gpu_count is not None:
+            capabilities["gpu"] = gpu_count
+    if "gpu" not in capabilities:
+        gpus = config.get("gpus")
+        if isinstance(gpus, int) and gpus > 0:
+            capabilities["gpu"] = gpus
+    return {key: value for key, value in capabilities.items() if value >= 0}
+
+
+def capabilities_from_group(group: dict) -> dict[str, int]:
+    config = group.get("config") or {}
+    if not isinstance(config, dict):
+        raise RuntimeError("launch request group config must be an object")
+    capabilities = derive_capabilities_from_config(config)
+    raw = group.get("capabilities")
+    if isinstance(raw, dict):
+        capabilities.update(capabilities_from_args({"capabilities": raw}))
+    return capabilities
+
+
+def launch_groups_for_request(request: dict) -> list[dict]:
+    request_id = int(request["id"])
+    args = request.get("args") or {}
+    if not isinstance(args, dict):
+        args = {}
+    groups = args.get("groups")
+    if isinstance(groups, list) and groups:
+        normalized: list[dict] = []
+        next_index_by_prefix: dict[str, int] = {}
+        for group in groups:
+            if not isinstance(group, dict):
+                raise RuntimeError("launch request args.groups entries must be objects")
+            count = int(group.get("count") or 0)
+            if count <= 0:
+                raise RuntimeError("launch request group count must be positive")
+            prefix = str(group.get("name_prefix") or "w").strip() or "w"
+            max_start_failures = int(group.get("max_start_failures") or 3)
+            config = group.get("config") or {}
+            if not isinstance(config, dict):
+                raise RuntimeError("launch request group config must be an object")
+            capabilities = capabilities_from_group(group)
+            start_index = next_index_by_prefix.get(prefix, 1)
+            node_names = [
+                f"{prefix}-{request_id}-{index}"
+                for index in range(start_index, start_index + count)
+            ]
+            next_index_by_prefix[prefix] = start_index + count
+            for node_name in node_names:
+                normalized.append(
+                    {
+                        "node_name": node_name,
+                        "max_start_failures": max_start_failures,
+                        "config": config,
+                        "capabilities": capabilities,
+                    }
+                )
+        return normalized
+
+    count = int(request.get("requested_count") or 0)
+    if count <= 0:
+        raise RuntimeError("launch request requested zero workers")
+    requested_names = args.get("node_names")
+    if isinstance(requested_names, list):
+        names = [str(name).strip() for name in requested_names if str(name).strip()]
+        if len(names) >= count:
+            node_names = names[:count]
+        else:
+            node_names = []
+    else:
+        node_names = []
+    if not node_names:
+        prefix = (
+            str(request.get("name_prefix") or args.get("name_prefix") or "w").strip()
+            or "w"
+        )
+        node_names = [f"{prefix}-{request_id}-{i}" for i in range(1, count + 1)]
+    max_start_failures = int(args.get("max_start_failures") or 3)
+    return [
+        {
+            "node_name": node_name,
+            "max_start_failures": max_start_failures,
+            "config": {},
+            "capabilities": capabilities_from_args(args),
+        }
+        for node_name in node_names
+    ]
+
+
+SBATCH_CONFIG_OPTIONS = {
+    "account": "--account",
+    "partition": "--partition",
+    "qos": "--qos",
+    "gres": "--gres",
+    "gpus": "--gpus",
+    "cpus_per_task": "--cpus-per-task",
+    "cpus-per-task": "--cpus-per-task",
+    "mem": "--mem",
+    "mem_per_cpu": "--mem-per-cpu",
+    "mem-per-cpu": "--mem-per-cpu",
+    "time": "--time",
+    "constraint": "--constraint",
+    "nodelist": "--nodelist",
+    "exclude": "--exclude",
+}
+
+
+def sbatch_args_from_config(config: dict) -> list[str]:
+    sbatch_args: list[str] = []
+    normalized_config = dict(config)
+    gpu_count = normalized_config.get("gpu")
+    if (
+        isinstance(gpu_count, int)
+        and gpu_count > 0
+        and "gres" not in normalized_config
+        and "gpus" not in normalized_config
+    ):
+        normalized_config["gres"] = f"gpu:{gpu_count}"
+    gres = normalized_config.get("gres")
+    if (
+        isinstance(gres, str)
+        and gpu_count_from_gres(gres) is not None
+        and "partition" not in normalized_config
+    ):
+        normalized_config["partition"] = "gpu"
+    for key, option in SBATCH_CONFIG_OPTIONS.items():
+        if key not in normalized_config:
+            continue
+        value = normalized_config[key]
+        if value is None or value is False:
+            continue
+        if value is True:
+            sbatch_args.append(option)
+        else:
+            sbatch_args.append(f"{option}={value}")
+    return sbatch_args
 
 
 def parse_capability(raw: str) -> tuple[str, int]:
@@ -541,6 +685,7 @@ def submit_worker(
     port_offset: int | None = None,
     max_start_failures: int = 3,
     capabilities: dict[str, int] | None = None,
+    config: dict | None = None,
 ) -> str:
     resolved_port_offset = (
         port_offset if port_offset is not None else port_offset_from_env()
@@ -572,6 +717,7 @@ def submit_worker(
             WORKSPACE_ROOT,
             "--job-name",
             WORKER_JOB_NAME,
+            *sbatch_args_from_config(config or {}),
             WORKER_SBATCH,
         ],
         env=env,
@@ -617,26 +763,30 @@ def resolve_launch_requests_with_callback(
             break
 
         request_id = int(request["id"])
-        node_names = node_names_for_request(request)
-        args = request.get("args") or {}
-        if not isinstance(args, dict):
-            args = {}
-        max_start_failures = int(args.get("max_start_failures") or 3)
-        capabilities = capabilities_from_args(args)
-        submitted: list[dict[str, str]] = []
+        launch_specs = launch_groups_for_request(request)
+        submitted: list[dict] = []
         try:
-            if not node_names:
+            if not launch_specs:
                 raise RuntimeError("launch request requested zero workers")
-            for node_name in node_names:
+            for spec in launch_specs:
+                node_name = spec["node_name"]
                 job_id = submit_worker(
                     node_name,
                     control_node,
                     control_job_id=control.id,
                     port_offset=resolved_port_offset,
-                    max_start_failures=max_start_failures,
-                    capabilities=capabilities,
+                    max_start_failures=spec["max_start_failures"],
+                    capabilities=spec["capabilities"],
+                    config=spec["config"],
                 )
-                submitted.append({"node_name": node_name, "job_id": job_id})
+                submitted.append(
+                    {
+                        "node_name": node_name,
+                        "job_id": job_id,
+                        "config": spec["config"],
+                        "capabilities": spec["capabilities"],
+                    }
+                )
                 message = f"launch_request={request_id}\tnode={node_name}\tjob={job_id}"
                 if on_launch is not None:
                     on_launch(message)
@@ -810,6 +960,7 @@ def command_submit_workers(args: argparse.Namespace) -> None:
             port_offset=args.port_offset,
             max_start_failures=args.max_start_failures,
             capabilities=capabilities,
+            config={},
         )
         print(f"{node_name}\t{job_id}")
 
