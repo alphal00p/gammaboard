@@ -244,6 +244,8 @@ fn run_spec_from_integration_params(
         run_id,
         domain,
         evaluator: params.evaluator,
+        evaluator_requirements: params.evaluator_requirements,
+        sampler_requirements: params.sampler_requirements,
         evaluator_runner_params: params.evaluator_runner_params,
         sampler_aggregator_runner_params: params.sampler_aggregator_runner_params,
     })

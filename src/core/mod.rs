@@ -22,8 +22,8 @@ pub use run_exposed_info::{
     RunExposedInfoEntry, RunExposedInfoScope, RunExposedInfoStatus,
 };
 pub use run_spec::{
-    AccumulatorConfig, BatchTransformConfig, EvaluatorConfig, IntegrationParams, RunSpec,
-    SamplerAggregatorConfig,
+    AccumulatorConfig, BatchTransformConfig, CapabilityRequirements, EvaluatorConfig,
+    IntegrationParams, RunSpec, SamplerAggregatorConfig,
 };
 pub use tasks::{
     AccumulatorSourceSpec, DEFAULT_DISCRETE_HISTOGRAM_MAX_TOTAL_BINS, DiscreteHistogramConfig,

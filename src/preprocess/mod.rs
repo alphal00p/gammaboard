@@ -9,6 +9,10 @@ use serde_json::Value as JsonValue;
 #[derive(Debug, Clone, Deserialize)]
 pub struct RunAddIntegrationParams {
     pub evaluator: EvaluatorConfig,
+    #[serde(default)]
+    pub evaluator_requirements: crate::core::CapabilityRequirements,
+    #[serde(default)]
+    pub sampler_requirements: crate::core::CapabilityRequirements,
     pub evaluator_runner_params: EvaluatorRunnerParams,
     pub sampler_aggregator_runner_params: SamplerAggregatorRunnerParams,
 }
@@ -39,6 +43,8 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
     }
     let resolved_integration_params = IntegrationParams {
         evaluator: config.integration_params.evaluator.clone(),
+        evaluator_requirements: config.integration_params.evaluator_requirements.clone(),
+        sampler_requirements: config.integration_params.sampler_requirements.clone(),
         evaluator_runner_params: config.integration_params.evaluator_runner_params.clone(),
         sampler_aggregator_runner_params: config
             .integration_params

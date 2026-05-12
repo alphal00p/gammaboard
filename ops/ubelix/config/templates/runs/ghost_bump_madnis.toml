@@ -1,6 +1,7 @@
 # Ghost bump with the MADNIS Python sampler runtime deployed under resources/runtimes.
 
 name = "ghost_bump_madnis"
+sampler_requirements = { gpu = 1 }
 
 [evaluator]
 kind = "symbolica"

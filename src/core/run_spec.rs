@@ -14,12 +14,19 @@ use crate::sampling::{
 };
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::BTreeMap;
 use std::fmt;
+
+pub type CapabilityRequirements = BTreeMap<String, u64>;
 
 /// Canonical integration parameters payload stored on `runs.integration_params`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegrationParams {
     pub evaluator: EvaluatorConfig,
+    #[serde(default)]
+    pub evaluator_requirements: CapabilityRequirements,
+    #[serde(default)]
+    pub sampler_requirements: CapabilityRequirements,
     pub evaluator_runner_params: EvaluatorRunnerParams,
     pub sampler_aggregator_runner_params: SamplerAggregatorRunnerParams,
 }
@@ -30,6 +37,8 @@ pub struct RunSpec {
     pub run_id: i32,
     pub domain: Domain,
     pub evaluator: EvaluatorConfig,
+    pub evaluator_requirements: CapabilityRequirements,
+    pub sampler_requirements: CapabilityRequirements,
     pub evaluator_runner_params: EvaluatorRunnerParams,
     pub sampler_aggregator_runner_params: SamplerAggregatorRunnerParams,
 }

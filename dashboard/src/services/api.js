@@ -244,10 +244,11 @@ export const restartDatabase = async (signal) => apiPost("/admin/db/restart", {}
 export const shutdownControlProcess = async (signal) =>
   apiPost("/admin/control/shutdown", {}, "Failed to shut down control process", signal);
 
-export const autoRunNodes = async ({ count, maxStartFailures = null, dbPoolSize = null }, signal) =>
+export const autoRunNodes = async ({ toml, count = null, maxStartFailures = null, dbPoolSize = null }, signal) =>
   apiPost(
     "/nodes/auto-run",
     {
+      toml,
       count,
       max_start_failures: maxStartFailures,
       db_pool_size: dbPoolSize,

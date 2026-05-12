@@ -29,10 +29,23 @@ import { useAuth } from "../auth/AuthProvider";
 import { useNodeLaunchRequests } from "../hooks/useNodeLaunchRequests";
 import { autoRunNodes, restartDatabase, shutdownControlProcess, stopAllNodes } from "../services/api";
 
+const DEFAULT_NODE_LAUNCH_TOML = `[[groups]]
+count = 1
+name_prefix = "gpu"
+max_start_failures = 6
+config = { gres = "gpu:1" }
+
+[[groups]]
+count = 9
+name_prefix = "cpu"
+max_start_failures = 3
+config = {}
+`;
+
 const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => {
   const { authenticated } = useAuth();
   const [selectedNodeName, setSelectedNodeName] = useState(null);
-  const [startCount, setStartCount] = useState("1");
+  const [launchToml, setLaunchToml] = useState(DEFAULT_NODE_LAUNCH_TOML);
   const [startingNodes, setStartingNodes] = useState(false);
   const [stoppingAllNodes, setStoppingAllNodes] = useState(false);
   const [restartDbOpen, setRestartDbOpen] = useState(false);
@@ -99,26 +112,28 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
           Node Management
         </Typography>
         {authenticated ? (
-          <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
+          <Stack spacing={1} sx={{ mb: 2 }}>
             <TextField
-              size="small"
-              label="Count"
-              value={startCount}
-              onChange={(event) => setStartCount(event.target.value)}
-              sx={{ width: 120 }}
+              label="Node Launch TOML"
+              value={launchToml}
+              onChange={(event) => setLaunchToml(event.target.value)}
+              multiline
+              minRows={8}
+              maxRows={16}
+              fullWidth
             />
             <Button
+              sx={{ width: "fit-content" }}
               variant="outlined"
               disabled={startingNodes}
               onClick={async () => {
-                const count = Number.parseInt(String(startCount).trim(), 10);
-                if (!Number.isFinite(count) || count <= 0) {
-                  setSnackbar({ message: "Count must be a positive integer.", severity: "error" });
+                if (!String(launchToml || "").trim()) {
+                  setSnackbar({ message: "Launch TOML must not be empty.", severity: "error" });
                   return;
                 }
                 setStartingNodes(true);
                 try {
-                  const response = await autoRunNodes({ count });
+                  const response = await autoRunNodes({ toml: launchToml });
                   const requestId = response?.request?.id;
                   const started = Number(response?.started ?? 0);
                   setSnackbar({
