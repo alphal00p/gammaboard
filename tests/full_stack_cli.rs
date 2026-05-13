@@ -1441,13 +1441,13 @@ async fn full_stack_cli_python_scalar_flake_e2e() -> anyhow::Result<()> {
     let evaluator_flake_ref = format!(
         "path:{}#runtime",
         manifest_dir
-            .join("python_api/examples/python_scalar_sin")
+            .join("process_api/examples/python_scalar_sin")
             .display()
     );
     let sampler_flake_ref = format!(
         "path:{}#runtime",
         manifest_dir
-            .join("python_api/examples/python_sampler_symbolica_havana")
+            .join("process_api/examples/python_sampler_symbolica_havana")
             .display()
     );
     let config = temp_run_add_config(&format!(

@@ -230,11 +230,10 @@ Gammaboard evaluates GammaLoop runs in x-space so GammaLoop's parameterized obse
 `post_load_commands = ["set ...", ...]` is optional and executes in-memory after loading the GammaLoop state and before integrand selection; commands are not saved back to disk.
 
 For `evaluator.kind = "process_scalar"`, configure:
-- `command`: complete process command, for example `["nix", "shell", "path:./python_api/examples/python_scalar_sin#runtime", "-c", "gammaboard-example-evaluator-worker"]` or `["apptainer", "exec", "--nv", "runtimes/my_runtime/runtime.sif", "python", "-u", "runtimes/my_runtime/evaluator_worker.py"]`
+- `command`: complete process command, for example `["nix", "shell", "path:./process_api/examples/python_scalar_sin#runtime", "-c", "gammaboard-example-evaluator-worker"]` or `["apptainer", "exec", "--nv", "runtimes/my_runtime/runtime.sif", "python", "-u", "runtimes/my_runtime/evaluator_worker.py"]`
 - `continuous_dims`: expected continuous dimension for homogeneous rectangular batches
 - `discrete_cardinalities`: expected per-axis discrete cardinalities for homogeneous rectangular batches (for example `[3, 4, 2]`)
 - optional `args = { ... }`: opaque JSON object passed to the process during initialize
-- Optional evaluator base classes are provided in `python_api.evaluator` (`ScalarBatchIntegrand`, `ComplexBatchIntegrand`) for type-checkable interfaces.
 
 Process scalar construction semantics:
 - GammaBoard only speaks the process protocol; the bundled Python wrapper uses `args.module` and `args.class` to import a class exposing `eval(xs_discrete, xs_continuous)`.
@@ -242,18 +241,17 @@ Process scalar construction semantics:
 - otherwise the worker calls `ClassName(**args)` (or `ClassName()` when `args` is empty)
 
 For `sampler_aggregator.kind = "process_sampler"`, configure:
-- `command`: complete process command, for example `["nix", "shell", "path:./python_api/examples/python_sampler_symbolica_havana#runtime", "-c", "gammaboard-example-sampler-worker"]` or `["apptainer", "exec", "--nv", "runtimes/my_runtime/runtime.sif", "python", "-u", "runtimes/my_runtime/sampler_worker.py"]`
+- `command`: complete process command, for example `["nix", "shell", "path:./process_api/examples/python_sampler_symbolica_havana#runtime", "-c", "gammaboard-example-sampler-worker"]` or `["apptainer", "exec", "--nv", "runtimes/my_runtime/runtime.sif", "python", "-u", "runtimes/my_runtime/sampler_worker.py"]`
 - `continuous_dims`: expected homogeneous continuous dimension
 - `requires_training_values`: set to `true` when the sampler needs evaluator feedback through `ingest_training_values`
 - optional `args = { ... }`: opaque JSON object passed to the process during initialize
-- Optional sampler base class is provided in `python_api.sampler` (`SamplerAggregator`) for a typed contract.
 - Process evaluator and sampler methods are vectorized over fixed rectangular batches:
   `xs_discrete` has shape `(nr_samples, len(discrete_cardinalities))` and `xs_continuous` has shape `(nr_samples, continuous_dims)`.
 - Process samplers receive `discrete_cardinalities` derived from the run domain, not a separate sampler config field.
-- `produce_latent_batch(nr_samples)` returns `SampleBatch(xs_discrete, xs_continuous, weights)` from `python_api.sampler`.
+- `produce_latent_batch(nr_samples)` returns an object with `xs_discrete`, `xs_continuous`, and `weights` attributes when using the Python wrapper.
 - `weights` are the per-sample multipliers stored as the `sampler_weight` factor before accumulation.
 - optional `pdf(xs_discrete, xs_continuous)` returns `(nr_samples,)`.
-- the checked-in Symbolica Havana example lives at `python_api/examples/python_sampler_symbolica_havana` and packages its Symbolica Python wheel in the example flake
+- the checked-in Symbolica Havana example lives at `process_api/examples/python_sampler_symbolica_havana` and packages its Symbolica Python wheel in the example flake
 
 Process sampler construction semantics:
 - GammaBoard only speaks the process protocol; the bundled Python wrapper uses `args.module` and `args.class` to import a class implementing sampler methods (`sample_plan`, `training_samples_remaining`, `produce_latent_batch`, `ingest_training_values`, `snapshot`, optional `pdf`).
@@ -263,7 +261,7 @@ Process sampler construction semantics:
 - Python worker protocol entrypoints are included in each example runtime, but `command` must explicitly start the desired process.
 - Relative command entries that look like paths, such as `runtimes/my_runtime/runtime.sif`, resolve under the resources root.
 - Worker processes speak `gammaboard-jsonrpc-v1`: Content-Length framed JSON-RPC over stdin/stdout, with stderr reserved for logs. The Python wrappers redirect ordinary `print()` output to stderr and keep a private stdout handle for protocol frames.
-- See `python_api/README.md` for the concise process protocol and Python wrapper guide.
+- See `process_api/README.md` for the concise process protocol and Python wrapper guide.
 
 If `task_queue` is omitted, the run is created idle.
 Every run stores an initial root stage snapshot (`sequence_nr = 0`) immediately at creation.
