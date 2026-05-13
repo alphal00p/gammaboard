@@ -1,4 +1,4 @@
-# Apptainer-packaged Rust process evaluator with a built-in Monte Carlo sampler.
+# Apptainer-packaged Rust process evaluator with Gammaboard's built-in Monte Carlo sampler.
 # Build the image first:
 #   cd process_api/examples/rust_breit_wigner_evaluator
 #   apptainer build runtime.sif apptainer.def
@@ -31,3 +31,4 @@ fixed_dims = {}
 name = "sample"
 kind = "sample"
 stop_condition = { max_samples = 100000 }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }

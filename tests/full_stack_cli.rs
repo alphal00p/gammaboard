@@ -1600,6 +1600,7 @@ kind = "scalar"
 name = "sample-a"
 kind = "sample"
 stop_condition = {{ max_samples = 64 }}
+sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo" }} }}
 "#,
         image_path.display()
     ));
