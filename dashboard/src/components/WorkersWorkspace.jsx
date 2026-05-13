@@ -38,16 +38,8 @@ import {
   stopAllNodes,
 } from "../services/api";
 
-const DEFAULT_NODE_LAUNCH_TOML = `[[groups]]
-count = 1
-name_prefix = "gpu"
-max_start_failures = 6
-config = { gpu = "rtx4090:1" }
-
-[[groups]]
-count = 9
-name_prefix = "cpu"
-`;
+const DEFAULT_NODE_LAUNCH_TOML = "";
+const NODE_LAUNCH_TEMPLATE_SELECTION_STORAGE_KEY = "dialogs.node_launch.selected_template";
 
 const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => {
   const { authenticated } = useAuth();
@@ -328,6 +320,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
         label="Node Launch TOML"
         submitLabel="Request Nodes"
         initialValue={DEFAULT_NODE_LAUNCH_TOML}
+        templateSelectionStorageKey={NODE_LAUNCH_TEMPLATE_SELECTION_STORAGE_KEY}
         templates={nodeTemplates}
         loadTemplate={async (name) => {
           const response = await fetchTemplateFile("nodes", name);

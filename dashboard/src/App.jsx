@@ -55,18 +55,11 @@ const TaskQueuePanel = lazy(() => import("./components/TaskQueuePanel"));
 const TomlActionDialog = lazy(() => import("./components/runs/TomlActionDialog"));
 const WorkersWorkspace = lazy(() => import("./components/WorkersWorkspace"));
 
-const DEFAULT_CREATE_RUN_TOML = `name = "new-run"
-
-[[task_queue]]
-kind = "set_accumulator"
-accumulator = "scalar"
-`;
-
-const DEFAULT_ADD_TASKS_TOML = `[[task_queue]]
-kind = "sample"
-stop_condition = { max_samples = 10000 }
-`;
+const DEFAULT_CREATE_RUN_TOML = "";
+const DEFAULT_ADD_TASKS_TOML = "";
 const EVALUATOR_COUNT_STORAGE_KEY = "runs.evaluator_count";
+const CREATE_RUN_TEMPLATE_SELECTION_STORAGE_KEY = "dialogs.create_run.selected_template";
+const ADD_TASKS_TEMPLATE_SELECTION_STORAGE_KEY = "dialogs.add_tasks.selected_template";
 const DEBUG_BATCH_STATUS_OPTIONS = [
   { value: "claimed", label: "Claimed" },
   { value: "pending", label: "Pending" },
@@ -475,6 +468,7 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
           setSnackbar({ message: `Saved task template "${response?.name || name}".`, severity: "success" });
           return response;
         }}
+        templateSelectionStorageKey={ADD_TASKS_TEMPLATE_SELECTION_STORAGE_KEY}
         onDeleteTemplate={async (name) => {
           await deleteTemplateFile("tasks", name);
           await reloadTaskTemplates();
@@ -676,6 +670,7 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, onRunCr
           setSnackbar({ message: `Saved run template "${response?.name || name}".`, severity: "success" });
           return response;
         }}
+        templateSelectionStorageKey={CREATE_RUN_TEMPLATE_SELECTION_STORAGE_KEY}
         busy={createRunBusy}
         error={createRunError}
         onClose={() => {

@@ -25,22 +25,63 @@ const TomlActionDialog = ({
   onDeleteTemplate = null,
   busy = false,
   error = null,
+  templateSelectionStorageKey = null,
   onClose,
   onSubmit,
 }) => {
-  const [value, setValue] = useState(initialValue);
+  const [value, setValue] = useState(initialValue || "");
   const [selectedTemplate, setSelectedTemplate] = useState("");
   const [templateBusy, setTemplateBusy] = useState(false);
   const [templateActionBusy, setTemplateActionBusy] = useState(false);
   const [templateError, setTemplateError] = useState(null);
 
-  useEffect(() => {
-    if (open) {
-      setValue(initialValue);
-      setSelectedTemplate("");
-      setTemplateError(null);
+  const canUseStorage = typeof window !== "undefined" && typeof window.localStorage !== "undefined";
+  const readStoredSelection = () => {
+    if (!templateSelectionStorageKey || !canUseStorage) return "";
+    return window.localStorage.getItem(templateSelectionStorageKey) || "";
+  };
+  const writeStoredSelection = (nextSelection) => {
+    if (!templateSelectionStorageKey || !canUseStorage) return;
+    if (nextSelection) {
+      window.localStorage.setItem(templateSelectionStorageKey, nextSelection);
+    } else {
+      window.localStorage.removeItem(templateSelectionStorageKey);
     }
-  }, [initialValue, open]);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const restore = async () => {
+      const restoredSelection = readStoredSelection();
+      setSelectedTemplate(restoredSelection);
+      setTemplateError(null);
+      if (!restoredSelection || !loadTemplate) {
+        setValue(initialValue || "");
+        return;
+      }
+      setTemplateBusy(true);
+      try {
+        const templateValue = await loadTemplate(restoredSelection);
+        if (!cancelled) {
+          setValue(templateValue || "");
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setTemplateError(err?.message || "Failed to load template.");
+          setValue(initialValue || "");
+        }
+      } finally {
+        if (!cancelled) {
+          setTemplateBusy(false);
+        }
+      }
+    };
+    restore();
+    return () => {
+      cancelled = true;
+    };
+  }, [initialValue, loadTemplate, open, templateSelectionStorageKey, templates]);
 
   const handleClose = () => {
     if (busy || templateActionBusy) return;
@@ -55,9 +96,10 @@ const TomlActionDialog = ({
   const handleTemplateChange = async (event) => {
     const nextTemplate = event.target.value;
     setSelectedTemplate(nextTemplate);
+    writeStoredSelection(nextTemplate);
     setTemplateError(null);
     if (!nextTemplate) {
-      setValue(initialValue);
+      setValue(initialValue || "");
       return;
     }
     if (!loadTemplate) return;
@@ -84,6 +126,7 @@ const TomlActionDialog = ({
       const savedName = String(saved?.name || name).trim();
       if (savedName) {
         setSelectedTemplate(savedName);
+        writeStoredSelection(savedName);
       }
     } catch (err) {
       setTemplateError(err?.message || "Failed to save template.");
@@ -100,6 +143,7 @@ const TomlActionDialog = ({
     try {
       await onDeleteTemplate(selectedTemplate);
       setSelectedTemplate("");
+      writeStoredSelection("");
     } catch (err) {
       setTemplateError(err?.message || "Failed to delete template.");
     } finally {
