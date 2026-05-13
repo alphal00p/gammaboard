@@ -103,14 +103,23 @@ class Job:
 def run(
     args: list[str], *, env: dict[str, str] | None = None, check: bool = True
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    result = subprocess.run(
         args,
-        check=check,
+        check=False,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=env,
     )
+    if check and result.returncode != 0:
+        command = " ".join(shlex.quote(arg) for arg in args)
+        message = f"command failed with exit status {result.returncode}: {command}"
+        if result.stderr.strip():
+            message += f"\nstderr:\n{result.stderr.strip()}"
+        if result.stdout.strip():
+            message += f"\nstdout:\n{result.stdout.strip()}"
+        raise RuntimeError(message)
+    return result
 
 
 def http_opener_without_proxies() -> urllib.request.OpenerDirector:
@@ -513,9 +522,33 @@ def gpu_count_from_gres(gres: str) -> int | None:
     return None
 
 
+def gpu_gres_from_value(value: object) -> str | None:
+    if isinstance(value, bool):
+        return "gpu:rtx3090:1" if value else None
+    if isinstance(value, int):
+        return f"gpu:rtx3090:{value}" if value > 0 else None
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        if raw.startswith("gpu:"):
+            return raw
+        if raw.isdigit():
+            return f"gpu:rtx3090:{raw}"
+        return f"gpu:{raw}"
+    return None
+
+
 def derive_capabilities_from_config(config: dict) -> dict[str, int]:
     capabilities: dict[str, int] = {}
     for key, value in config.items():
+        if key == "gpu":
+            gpu_gres = gpu_gres_from_value(value)
+            if gpu_gres is not None:
+                gpu_count = gpu_count_from_gres(gpu_gres)
+                if gpu_count is not None:
+                    capabilities["gpu"] = gpu_count
+            continue
         if isinstance(value, bool):
             capabilities[key] = 1 if value else 0
         elif isinstance(value, int):
@@ -615,6 +648,8 @@ SBATCH_CONFIG_OPTIONS = {
     "account": "--account",
     "partition": "--partition",
     "qos": "--qos",
+    "wckey": "--wckey",
+    "reservation": "--reservation",
     "gres": "--gres",
     "gpus": "--gpus",
     "cpus_per_task": "--cpus-per-task",
@@ -632,14 +667,10 @@ SBATCH_CONFIG_OPTIONS = {
 def sbatch_args_from_config(config: dict) -> list[str]:
     sbatch_args: list[str] = []
     normalized_config = dict(config)
-    gpu_count = normalized_config.get("gpu")
-    if (
-        isinstance(gpu_count, int)
-        and gpu_count > 0
-        and "gres" not in normalized_config
-        and "gpus" not in normalized_config
-    ):
-        normalized_config["gres"] = f"gpu:{gpu_count}"
+    gpu_value = normalized_config.get("gpu")
+    gpu_gres = gpu_gres_from_value(gpu_value)
+    if gpu_gres is not None and "gres" not in normalized_config and "gpus" not in normalized_config:
+        normalized_config["gres"] = gpu_gres
     gres = normalized_config.get("gres")
     if (
         isinstance(gres, str)

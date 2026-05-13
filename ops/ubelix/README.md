@@ -95,10 +95,10 @@ Dashboard node-launch TOML uses grouped `config` tables. On UBELIX, the watcher 
 count = 1
 name_prefix = "gpu"
 max_start_failures = 6
-config = { gres = "gpu:1" }
+config = { gpu = 1 }
 ```
 
-submits worker jobs with `--gres=gpu:1 --partition=gpu` and registers `gpu=1` as a worker capability. `config = { gpu = 1 }` is also accepted as a shorthand for `--gres=gpu:1`. Supported `config` keys are `account`, `partition`, `qos`, `gpu`, `gres`, `gpus`, `cpus_per_task`, `mem`, `mem_per_cpu`, `time`, `constraint`, `nodelist`, and `exclude`.
+submits worker jobs with `--gres=gpu:rtx3090:1 --partition=gpu` and registers `gpu=1` as a worker capability. Select another UBELIX GPU type with `config = { gpu = "h100:1" }`, `config = { gpu = "a100:1" }`, or an explicit `gres = "gpu:h200:1"`. For paygo or invested GPU resources, pass the documented account fields, for example `config = { account = "paygo", wckey = "<wckey>", gpu = "h100:1" }` or `config = { account = "invest", partition = "gpu-invest", qos = "<investor_qos>", gpu = "h100:1" }`. Supported `config` keys are `account`, `partition`, `qos`, `wckey`, `reservation`, `gpu`, `gres`, `gpus`, `cpus_per_task`, `mem`, `mem_per_cpu`, `time`, `constraint`, `nodelist`, and `exclude`.
 Workers with `gpu > 0` start the GammaBoard image with Apptainer `--nv`, so nested Python Apptainer runtimes can request NVIDIA passthrough with `nv = true`.
 
 `up --watch` also resolves dashboard requests while it watches the control job.
