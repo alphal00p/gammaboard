@@ -1,0 +1,11 @@
+[[groups]]
+count = 1
+name_prefix = "gpu"
+max_start_failures = 6
+config = { gpu = "rtx4090:1" }
+
+[[groups]]
+count = 4
+name_prefix = "cpu"
+max_start_failures = 3
+config = {}

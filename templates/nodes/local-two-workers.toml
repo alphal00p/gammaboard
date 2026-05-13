@@ -1,0 +1,5 @@
+[[groups]]
+count = 2
+name_prefix = "local"
+max_start_failures = 3
+config = {}
