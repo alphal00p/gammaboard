@@ -20,16 +20,17 @@ Run config can then start it with:
 command = ["apptainer", "exec", "process_api/examples/rust_breit_wigner_evaluator/runtime.sif", "breit-wigner-worker"]
 ```
 
-The evaluator expects one discrete channel axis and two continuous coordinates:
+The evaluator expects two continuous coordinates and no discrete axes. Channels
+are configured as a resonance mixture in `args`:
 
 ```toml
 continuous_dims = 2
-discrete_cardinalities = [3]
+discrete_cardinalities = []
 args = { masses = [0.25, 0.5, 0.75], widths = [0.04, 0.06, 0.05], channel_weights = [1.0, 0.7, 1.3] }
 ```
 
 The implemented function is:
 
 ```text
-channel_weight[channel] * exp(-y) / ((x - mass[channel])^2 + width[channel]^2)
+sum_i channel_weight[i] * exp(-y) / ((x - mass[i])^2 + width[i]^2)
 ```

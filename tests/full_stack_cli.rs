@@ -169,6 +169,14 @@ struct ManagedChild {
     child: Child,
 }
 
+struct RemoveFileOnDrop(PathBuf);
+
+impl Drop for RemoveFileOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 impl FullStackHarness {
     async fn new() -> anyhow::Result<Self> {
         let db = TestDatabase::create().await?;
@@ -1559,11 +1567,13 @@ sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", 
 async fn full_stack_cli_rust_apptainer_process_evaluator_e2e() -> anyhow::Result<()> {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let example_dir = manifest_dir.join("process_api/examples/rust_breit_wigner_evaluator");
-    let image_dir = TempDir::new()?;
-    let image_path = image_dir.path().join("runtime.sif");
+    let image_path = example_dir.join("runtime.sif");
+    let _ = std::fs::remove_file(&image_path);
+    let _image_cleanup = RemoveFileOnDrop(image_path.clone());
 
     let build_output = std::process::Command::new("apptainer")
         .arg("build")
+        .arg("--force")
         .arg(&image_path)
         .arg("apptainer.def")
         .current_dir(&example_dir)
@@ -1586,7 +1596,7 @@ name = "rust-apptainer-process-evaluator-e2e"
 kind = "process_scalar"
 command = ["apptainer", "exec", "{}", "breit-wigner-worker"]
 continuous_dims = 2
-discrete_cardinalities = [3]
+discrete_cardinalities = []
 args = {{ masses = [0.25, 0.50, 0.75], widths = [0.04, 0.06, 0.05], channel_weights = [1.0, 0.7, 1.3] }}
 
 [[task_queue]]
@@ -1602,7 +1612,7 @@ kind = "sample"
 stop_condition = {{ max_samples = 64 }}
 sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo" }} }}
 "#,
-        image_path.display()
+        "process_api/examples/rust_breit_wigner_evaluator/runtime.sif"
     ));
 
     harness
@@ -1647,12 +1657,17 @@ sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo" }} }}
             "rust apptainer process evaluator task completes",
             Duration::from_secs(120),
             || async {
-                let state: String = sqlx::query_scalar(
-                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'sample-a'",
+                let (state, failure_reason): (String, Option<String>) = sqlx::query_as(
+                    "SELECT state, failure_reason FROM run_tasks WHERE run_id = $1 AND name = 'sample-a'",
                 )
                 .bind(run_id)
                 .fetch_one(&harness.pool)
                 .await?;
+                anyhow::ensure!(
+                    state != "failed",
+                    "sample-a failed: {}",
+                    failure_reason.unwrap_or_else(|| "no failure_reason".to_string())
+                );
                 Ok(state == "completed")
             },
         )

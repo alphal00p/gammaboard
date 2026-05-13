@@ -9,7 +9,7 @@ name = "process-rust-apptainer-evaluator-demo"
 kind = "process_scalar"
 command = ["apptainer", "exec", "process_api/examples/rust_breit_wigner_evaluator/runtime.sif", "breit-wigner-worker"]
 continuous_dims = 2
-discrete_cardinalities = [3]
+discrete_cardinalities = []
 args = { masses = [0.25, 0.50, 0.75], widths = [0.04, 0.06, 0.05], channel_weights = [1.0, 0.7, 1.3] }
 
 [[task_queue]]
@@ -18,14 +18,6 @@ kind = "set_accumulator"
 
 [task_queue.accumulator]
 kind = "scalar"
-
-[task_queue.accumulator.discrete_histograms]
-max_total_bins = 8
-
-[[task_queue.accumulator.discrete_histograms.items]]
-name = "channel"
-hist_dims = [0]
-fixed_dims = {}
 
 [[task_queue]]
 name = "sample"

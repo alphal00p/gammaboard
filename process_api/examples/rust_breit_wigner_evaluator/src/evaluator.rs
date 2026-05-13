@@ -23,18 +23,18 @@ impl BreitWignerEvaluator {
                 "rust breit-wigner evaluator expects continuous_dims=2, got {continuous_dims}"
             ));
         }
-        if discrete_cardinalities.len() != 1 {
+        if !discrete_cardinalities.is_empty() {
             return Err(format!(
-                "rust breit-wigner evaluator expects one discrete axis, got {}",
+                "rust breit-wigner evaluator expects no discrete axes, got {}",
                 discrete_cardinalities.len()
             ));
         }
-        let channels = discrete_cardinalities[0];
+        let masses = read_required_f64_array(args, "masses")?;
+        let channels = masses.len();
         if channels == 0 {
-            return Err("discrete channel cardinality must be > 0".to_string());
+            return Err("args.masses must not be empty".to_string());
         }
 
-        let masses = read_f64_array(args, "masses", channels, 0.5)?;
         let widths = read_f64_array(args, "widths", channels, 0.05)?;
         let channel_weights = read_f64_array(args, "channel_weights", channels, 1.0)?;
         if widths
@@ -59,9 +59,9 @@ impl BreitWignerEvaluator {
         xs_continuous: &[f64],
         nr_samples: usize,
     ) -> Result<Vec<f64>, String> {
-        if xs_discrete.len() != nr_samples {
+        if !xs_discrete.is_empty() {
             return Err(format!(
-                "expected {nr_samples} discrete entries, got {}",
+                "expected no discrete entries for continuous-only evaluator, got {}",
                 xs_discrete.len()
             ));
         }
@@ -75,21 +75,12 @@ impl BreitWignerEvaluator {
 
         let mut values = Vec::with_capacity(nr_samples);
         for sample_index in 0..nr_samples {
-            let channel = xs_discrete[sample_index];
-            if channel < 0 || channel as usize >= self.config.masses.len() {
-                return Err(format!(
-                    "channel {channel} out of bounds for {} channels",
-                    self.config.masses.len()
-                ));
-            }
-            let channel = channel as usize;
             let x = xs_continuous[2 * sample_index];
             let y = xs_continuous[2 * sample_index + 1];
             if !x.is_finite() || !y.is_finite() {
                 return Err("continuous inputs must be finite".to_string());
             }
-            values.push(breit_wigner_value(
-                channel,
+            values.push(breit_wigner_mixture_value(
                 x,
                 y,
                 &self.config.masses,
@@ -101,16 +92,41 @@ impl BreitWignerEvaluator {
     }
 }
 
-pub fn breit_wigner_value(
-    channel: usize,
+pub fn breit_wigner_mixture_value(
     x: f64,
     y: f64,
     masses: &[f64],
     widths: &[f64],
     channel_weights: &[f64],
 ) -> f64 {
-    let dx = x - masses[channel];
-    channel_weights[channel] * (-y).exp() / (dx * dx + widths[channel] * widths[channel])
+    let envelope = (-y).exp();
+    masses
+        .iter()
+        .zip(widths.iter())
+        .zip(channel_weights.iter())
+        .map(|((mass, width), weight)| {
+            let dx = x - mass;
+            weight * envelope / (dx * dx + width * width)
+        })
+        .sum()
+}
+
+fn read_required_f64_array(args: &Value, key: &str) -> Result<Vec<f64>, String> {
+    let raw = args
+        .get(key)
+        .ok_or_else(|| format!("args.{key} must be provided"))?;
+    let Some(items) = raw.as_array() else {
+        return Err(format!("args.{key} must be an array"));
+    };
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            item.as_f64()
+                .filter(|value| value.is_finite())
+                .ok_or_else(|| format!("args.{key}[{index}] must be a finite number"))
+        })
+        .collect()
 }
 
 fn read_f64_array(
@@ -144,27 +160,27 @@ fn read_f64_array(
 
 #[cfg(test)]
 mod tests {
-    use super::{breit_wigner_value, BreitWignerEvaluator};
+    use super::{breit_wigner_mixture_value, BreitWignerEvaluator};
 
     #[test]
-    fn evaluates_channel_specific_resonance() {
+    fn evaluates_resonance_mixture() {
         let args = serde_json::json!({
             "masses": [0.25, 0.50],
             "widths": [0.05, 0.10],
             "channel_weights": [1.0, 2.0],
         });
-        let evaluator = BreitWignerEvaluator::from_args(&args, &[2], 2).unwrap();
+        let evaluator = BreitWignerEvaluator::from_args(&args, &[], 2).unwrap();
         let values = evaluator
-            .eval_batch(&[0, 1], &[0.25, 0.0, 0.50, 0.0], 2)
+            .eval_batch(&[], &[0.25, 0.0, 0.50, 0.0], 2)
             .unwrap();
 
-        assert!((values[0] - 400.0).abs() < 1e-12);
-        assert!((values[1] - 200.0).abs() < 1e-12);
+        assert!((values[0] - 427.58620689655174).abs() < 1e-12);
+        assert!((values[1] - 215.3846153846154).abs() < 1e-12);
     }
 
     #[test]
     fn pure_function_is_easy_to_copy() {
-        let value = breit_wigner_value(0, 0.25, 0.0, &[0.25], &[0.05], &[1.0]);
+        let value = breit_wigner_mixture_value(0.25, 0.0, &[0.25], &[0.05], &[1.0]);
         assert!((value - 400.0).abs() < 1e-12);
     }
 }
