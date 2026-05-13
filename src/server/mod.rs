@@ -70,6 +70,7 @@ pub struct ServerConfig {
     pub allow_local_node_spawn: bool,
     pub run_templates_dir: String,
     pub task_templates_dir: String,
+    pub node_templates_dir: String,
     pub auth: ServerAuthConfig,
 }
 
@@ -97,6 +98,10 @@ impl ServerConfig {
                 .to_string();
         parsed.task_templates_dir =
             normalize_config_path(&base_dir, parsed.task_templates_dir.as_str())
+                .display()
+                .to_string();
+        parsed.node_templates_dir =
+            normalize_config_path(&base_dir, parsed.node_templates_dir.as_str())
                 .display()
                 .to_string();
         Ok(parsed)
@@ -134,6 +139,7 @@ pub async fn serve(
         allow_local_node_spawn: config.allow_local_node_spawn,
         run_templates_dir: PathBuf::from(&config.run_templates_dir),
         task_templates_dir: PathBuf::from(&config.task_templates_dir),
+        node_templates_dir: PathBuf::from(&config.node_templates_dir),
         runtime_cli_args: runtime_cli_args(&runtime_config_path, &runtime_config),
     };
 
@@ -164,6 +170,7 @@ pub(crate) struct AppState {
     allow_local_node_spawn: bool,
     run_templates_dir: PathBuf,
     task_templates_dir: PathBuf,
+    node_templates_dir: PathBuf,
     runtime_cli_args: Vec<String>,
 }
 
@@ -430,6 +437,8 @@ fn build_app(state: AppState) -> Router {
         .route("/templates/runs/:name", get(get_run_template))
         .route("/templates/tasks", get(list_task_templates))
         .route("/templates/tasks/:name", get(get_task_template))
+        .route("/templates/nodes", get(list_node_templates))
+        .route("/templates/nodes/:name", get(get_node_template))
         .route("/runs/:id/config/evaluator", get(get_run_evaluator_config))
         .route(
             "/runs/:id/config/sampler-aggregator",
@@ -488,8 +497,10 @@ fn build_app(state: AppState) -> Router {
         )
         .route("/templates/runs", post(save_run_template))
         .route("/templates/tasks", post(save_task_template))
+        .route("/templates/nodes", post(save_node_template))
         .route("/templates/runs/:name", delete(delete_run_template))
         .route("/templates/tasks/:name", delete(delete_task_template))
+        .route("/templates/nodes/:name", delete(delete_node_template))
         .route("/admin/db/restart", post(restart_db))
         .route("/admin/control/shutdown", post(shutdown_control_process))
         .route("/runs/:id/debug/batches", get(get_run_debug_batches))
@@ -717,6 +728,25 @@ async fn get_task_template(
     })
 }
 
+async fn list_node_templates(
+    State(state): State<AppState>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    json_response(TemplateListResponse {
+        items: template_api::list_templates(&state.node_templates_dir)?,
+    })
+}
+
+async fn get_node_template(
+    State(state): State<AppState>,
+    AxumPath(name): AxumPath<String>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    let template = template_api::load_template(&state.node_templates_dir, &name)?;
+    json_response(TemplateFileResponse {
+        name: template.name,
+        toml: template.toml,
+    })
+}
+
 async fn save_run_template(
     State(state): State<AppState>,
     AxumJson(payload): AxumJson<TemplateSaveRequest>,
@@ -741,6 +771,18 @@ async fn save_task_template(
     })
 }
 
+async fn save_node_template(
+    State(state): State<AppState>,
+    AxumJson(payload): AxumJson<TemplateSaveRequest>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    let template =
+        template_api::save_template(&state.node_templates_dir, &payload.name, &payload.toml)?;
+    json_response(TemplateFileResponse {
+        name: template.name,
+        toml: template.toml,
+    })
+}
+
 async fn delete_run_template(
     State(state): State<AppState>,
     AxumPath(name): AxumPath<String>,
@@ -754,6 +796,14 @@ async fn delete_task_template(
     AxumPath(name): AxumPath<String>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     template_api::delete_template(&state.task_templates_dir, &name)?;
+    json_response(serde_json::json!({ "deleted": true, "name": name }))
+}
+
+async fn delete_node_template(
+    State(state): State<AppState>,
+    AxumPath(name): AxumPath<String>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    template_api::delete_template(&state.node_templates_dir, &name)?;
     json_response(serde_json::json!({ "deleted": true, "name": name }))
 }
 
@@ -1491,6 +1541,12 @@ fn derive_capabilities_from_config(config: &JsonValue) -> BTreeMap<String, u64> 
         return caps;
     };
     for (key, value) in map {
+        if key == "gpu" {
+            if let Some(count) = gpu_count_from_config_value(value) {
+                caps.insert("gpu".to_string(), count);
+            }
+            continue;
+        }
         if let Some(number) = value.as_u64() {
             caps.insert(key.clone(), number);
         }
@@ -1501,6 +1557,24 @@ fn derive_capabilities_from_config(config: &JsonValue) -> BTreeMap<String, u64> 
         }
     }
     caps
+}
+
+fn gpu_count_from_config_value(value: &JsonValue) -> Option<u64> {
+    if let Some(count) = value.as_u64() {
+        return (count > 0).then_some(count);
+    }
+    let raw = value.as_str()?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if raw.parse::<u64>().is_ok() {
+        return raw.parse::<u64>().ok();
+    }
+    parse_gpu_count_from_gres(if raw.starts_with("gpu:") {
+        raw
+    } else {
+        return parse_gpu_count_from_gres(&format!("gpu:{raw}"));
+    })
 }
 
 fn parse_gpu_count_from_gres(gres: &str) -> Option<u64> {

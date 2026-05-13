@@ -166,7 +166,7 @@ Relative evaluator resources, such as GammaLoop `state_folder`, resolve through 
 - The dashboard currently supports creating runs from raw TOML, cloning runs from a stored stage snapshot, appending tasks from raw TOML, deleting pending tasks, pausing runs, removing runs, auto-assigning free nodes, assigning and unassigning nodes, requesting node shutdown (single or all), creating grouped node launch requests, resetting the local database when `allow_db_admin = true`, and shutting down the control process.
 - When `allow_local_node_spawn = true`, the server resolves node launch requests by spawning local child processes. Otherwise launch requests remain queued for an external launcher. External launchers should use the node-launch-request API; `starting` means workers were submitted, and `running` is reconciled from live node leases.
 - The Performance tab defaults history x-axes to sampler uptime (active sampler runtime, excluding paused intervals) and lets operators switch to wall time or total completed samples.
-- The create-run and add-task dialogs can load `.toml` templates from `run_templates_dir` and `task_templates_dir`; admin users can also save edited TOML back as templates, and task templates can be deleted from the dashboard.
+- The create-run, add-task, and node-request dialogs can load `.toml` templates from `run_templates_dir`, `task_templates_dir`, and `node_templates_dir`; admin users can also save edited TOML back as templates and delete templates from the dashboard.
 - Node shutdown from the dashboard is guarded by a confirmation dialog.
 - Put `auth.admin_password_hash` in your server config to enable dashboard auth.
 - Put `auth.session_secret` in your server config when auth is enabled.
@@ -202,6 +202,9 @@ Curated task bundles:
 - `templates/tasks/sample_monte_carlo_real.toml`: minimal scalar sample task with naive Monte Carlo.
 - `templates/tasks/pdf_adaptation_image.toml`: Havana training followed by PDF adaptation image rasterization.
 - `templates/tasks/train_sample.toml`: GammaLoop TTH train+sample queue with queue tuning and inference stop target (`relative_error = 0.001`, `max_samples = 1_000_000_000`).
+
+Curated node launch templates:
+- `templates/nodes/local-two-workers.toml`: two local workers for local/ITPhlies development. UBELIX-specific node templates live under `ops/ubelix/config/templates/nodes`.
 
 Minimal shape:
 ```toml

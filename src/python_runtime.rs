@@ -88,6 +88,7 @@ fn build_apptainer_worker_command(
             workdir_path.display()
         )));
     }
+    let runtime_project_dir = image_path.parent().map(Path::to_path_buf);
 
     let worker_script = absolute_path(worker_script)?;
     let worker_script_dir = worker_script
@@ -116,6 +117,11 @@ fn build_apptainer_worker_command(
     command.arg("--pwd").arg(&workdir_path);
     if nv {
         command.arg("--nv");
+    }
+    if let Some(pythonpath) = build_apptainer_pythonpath(runtime_project_dir.as_deref()) {
+        command
+            .arg("--env")
+            .arg(format!("PYTHONPATH={}", pythonpath.to_string_lossy()));
     }
     command
         .arg(&image_path)
@@ -200,6 +206,23 @@ fn resolve_python_executable(output_path: &Path) -> Option<PathBuf> {
 
 fn build_worker_pythonpath(runtime_root: &Path) -> Option<OsString> {
     let mut entries: Vec<PathBuf> = vec![runtime_root.to_path_buf(), runtime_root.join("src")];
+    entries.retain(|path| path.is_dir());
+    if let Some(existing) = env::var_os("PYTHONPATH") {
+        entries.extend(env::split_paths(&existing));
+    }
+    if entries.is_empty() {
+        None
+    } else {
+        env::join_paths(entries).ok()
+    }
+}
+
+fn build_apptainer_pythonpath(runtime_project_dir: Option<&Path>) -> Option<OsString> {
+    let mut entries = Vec::new();
+    if let Some(project_dir) = runtime_project_dir {
+        entries.push(project_dir.to_path_buf());
+        entries.push(project_dir.join("src"));
+    }
     entries.retain(|path| path.is_dir());
     if let Some(existing) = env::var_os("PYTHONPATH") {
         entries.extend(env::split_paths(&existing));

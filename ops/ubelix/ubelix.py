@@ -524,9 +524,9 @@ def gpu_count_from_gres(gres: str) -> int | None:
 
 def gpu_gres_from_value(value: object) -> str | None:
     if isinstance(value, bool):
-        return "gpu:rtx3090:1" if value else None
+        return "gpu:rtx4090:1" if value else None
     if isinstance(value, int):
-        return f"gpu:rtx3090:{value}" if value > 0 else None
+        return f"gpu:rtx4090:{value}" if value > 0 else None
     if isinstance(value, str):
         raw = value.strip()
         if not raw:
@@ -534,7 +534,7 @@ def gpu_gres_from_value(value: object) -> str | None:
         if raw.startswith("gpu:"):
             return raw
         if raw.isdigit():
-            return f"gpu:rtx3090:{raw}"
+            return f"gpu:rtx4090:{raw}"
         return f"gpu:{raw}"
     return None
 

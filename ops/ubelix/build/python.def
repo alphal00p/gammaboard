@@ -49,5 +49,6 @@ From: python:3.12-bookworm
     python - <<'PY'
 import madnis
 import madnis_gammaboard_api
+import madnis_gammaboard_api.sampler
 print("python runtime ok")
 PY

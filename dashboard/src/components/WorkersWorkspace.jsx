@@ -17,23 +17,32 @@ import {
   TableContainer,
   TableHead,
   TableRow,
-  TextField,
   Typography,
 } from "@mui/material";
 import ConnectionStatus from "./ConnectionStatus";
+import TomlActionDialog from "./runs/TomlActionDialog";
 import WorkerDetailsPanel from "./WorkerDetailsPanel";
 import EmptyStateCard from "./common/EmptyStateCard";
 import { formatDateTime } from "../utils/formatters";
 import { compareNodesByName, nodeNameOf } from "../utils/nodes";
 import { useAuth } from "../auth/AuthProvider";
 import { useNodeLaunchRequests } from "../hooks/useNodeLaunchRequests";
-import { autoRunNodes, restartDatabase, shutdownControlProcess, stopAllNodes } from "../services/api";
+import {
+  autoRunNodes,
+  deleteTemplateFile,
+  fetchTemplateFile,
+  fetchTemplateList,
+  restartDatabase,
+  saveTemplateFile,
+  shutdownControlProcess,
+  stopAllNodes,
+} from "../services/api";
 
 const DEFAULT_NODE_LAUNCH_TOML = `[[groups]]
 count = 1
 name_prefix = "gpu"
 max_start_failures = 6
-config = { gres = "gpu:1" }
+config = { gpu = "rtx4090:1" }
 
 [[groups]]
 count = 9
@@ -45,8 +54,10 @@ config = {}
 const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => {
   const { authenticated } = useAuth();
   const [selectedNodeName, setSelectedNodeName] = useState(null);
-  const [launchToml, setLaunchToml] = useState(DEFAULT_NODE_LAUNCH_TOML);
+  const [launchOpen, setLaunchOpen] = useState(false);
   const [startingNodes, setStartingNodes] = useState(false);
+  const [startNodesError, setStartNodesError] = useState(null);
+  const [nodeTemplates, setNodeTemplates] = useState([]);
   const [stoppingAllNodes, setStoppingAllNodes] = useState(false);
   const [restartDbOpen, setRestartDbOpen] = useState(false);
   const [restartingDb, setRestartingDb] = useState(false);
@@ -55,6 +66,30 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
   const [snackbar, setSnackbar] = useState(null);
   const launchRequestsData = useNodeLaunchRequests({ enabled: authenticated });
   const sortedWorkers = useMemo(() => [...workers].sort(compareNodesByName), [workers]);
+
+  const reloadNodeTemplates = async () => {
+    try {
+      const items = await fetchTemplateList("nodes");
+      setNodeTemplates(items);
+    } catch (err) {
+      setSnackbar({ message: err?.message || "Failed to fetch node templates.", severity: "error" });
+    }
+  };
+
+  useEffect(() => {
+    if (!authenticated) return;
+    let cancelled = false;
+    fetchTemplateList("nodes")
+      .then((items) => {
+        if (!cancelled) setNodeTemplates(items);
+      })
+      .catch((err) => {
+        if (!cancelled) setSnackbar({ message: err?.message || "Failed to fetch node templates.", severity: "error" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authenticated]);
 
   const displayRole = (worker) => worker.current_role || "None";
   const displayRun = (worker) => {
@@ -108,49 +143,20 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
       ) : null}
 
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
-        <Typography variant="h6" gutterBottom>
-          Node Management
-        </Typography>
-        {authenticated ? (
-          <Stack spacing={1} sx={{ mb: 2 }}>
-            <TextField
-              label="Node Launch TOML"
-              value={launchToml}
-              onChange={(event) => setLaunchToml(event.target.value)}
-              multiline
-              minRows={8}
-              maxRows={16}
-              fullWidth
-            />
-            <Button
-              sx={{ width: "fit-content" }}
-              variant="outlined"
-              disabled={startingNodes}
-              onClick={async () => {
-                if (!String(launchToml || "").trim()) {
-                  setSnackbar({ message: "Launch TOML must not be empty.", severity: "error" });
-                  return;
-                }
-                setStartingNodes(true);
-                try {
-                  const response = await autoRunNodes({ toml: launchToml });
-                  const requestId = response?.request?.id;
-                  const started = Number(response?.started ?? 0);
-                  setSnackbar({
-                    message: `Created node launch request ${requestId ?? ""}; submitted ${started} node${started === 1 ? "" : "s"}.`,
-                    severity: "success",
-                  });
-                } catch (err) {
-                  setSnackbar({ message: err?.message || "Failed to request nodes.", severity: "error" });
-                } finally {
-                  setStartingNodes(false);
-                }
-              }}
-            >
+        <Stack
+          direction={{ xs: "column", sm: "row" }}
+          spacing={1}
+          justifyContent="space-between"
+          alignItems={{ xs: "stretch", sm: "center" }}
+          sx={{ mb: 2 }}
+        >
+          <Typography variant="h6">Node Management</Typography>
+          {authenticated ? (
+            <Button variant="outlined" disabled={startingNodes} onClick={() => setLaunchOpen(true)}>
               Request Nodes
             </Button>
-          </Stack>
-        ) : null}
+          ) : null}
+        </Stack>
 
         <Box sx={{ mb: 3 }}>
           <Typography variant="subtitle1" gutterBottom>
@@ -317,6 +323,54 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
         autoHideDuration={4000}
         onClose={() => setSnackbar(null)}
         message={snackbar?.message || ""}
+      />
+      <TomlActionDialog
+        open={launchOpen}
+        title="Request Nodes"
+        label="Node Launch TOML"
+        submitLabel="Request Nodes"
+        initialValue={DEFAULT_NODE_LAUNCH_TOML}
+        templates={nodeTemplates}
+        loadTemplate={async (name) => {
+          const response = await fetchTemplateFile("nodes", name);
+          return response?.toml || "";
+        }}
+        onSaveTemplate={async (name, toml) => {
+          const response = await saveTemplateFile("nodes", { name, toml });
+          await reloadNodeTemplates();
+          setSnackbar({ message: `Saved node template "${response?.name || name}".`, severity: "success" });
+          return response;
+        }}
+        onDeleteTemplate={async (name) => {
+          await deleteTemplateFile("nodes", name);
+          await reloadNodeTemplates();
+          setSnackbar({ message: `Deleted node template "${name}".`, severity: "success" });
+        }}
+        busy={startingNodes}
+        error={startNodesError}
+        onClose={() => {
+          if (startingNodes) return;
+          setStartNodesError(null);
+          setLaunchOpen(false);
+        }}
+        onSubmit={async (toml) => {
+          setStartingNodes(true);
+          setStartNodesError(null);
+          try {
+            const response = await autoRunNodes({ toml });
+            const requestId = response?.request?.id;
+            const started = Number(response?.started ?? 0);
+            setLaunchOpen(false);
+            setSnackbar({
+              message: `Created node launch request ${requestId ?? ""}; submitted ${started} node${started === 1 ? "" : "s"}.`,
+              severity: "success",
+            });
+          } catch (err) {
+            setStartNodesError(err?.message || "Failed to request nodes.");
+          } finally {
+            setStartingNodes(false);
+          }
+        }}
       />
       <Dialog
         open={restartDbOpen}
