@@ -47,8 +47,6 @@ config = { gpu = "rtx4090:1" }
 [[groups]]
 count = 9
 name_prefix = "cpu"
-max_start_failures = 3
-config = {}
 `;
 
 const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => {

@@ -7,5 +7,3 @@ config = { gpu = "rtx4090:1" }
 [[groups]]
 count = 4
 name_prefix = "cpu"
-max_start_failures = 3
-config = {}

@@ -119,6 +119,7 @@ fn build_apptainer_worker_command(
         command.arg("--nv");
     }
     if let Some(pythonpath) = build_apptainer_pythonpath(runtime_project_dir.as_deref()) {
+        command.env("APPTAINERENV_PYTHONPATH", &pythonpath);
         command
             .arg("--env")
             .arg(format!("PYTHONPATH={}", pythonpath.to_string_lossy()));

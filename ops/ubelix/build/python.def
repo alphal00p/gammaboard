@@ -34,6 +34,17 @@ From: python:3.12-bookworm
     python -m pip install --root-user-action=ignore --no-cache-dir --no-build-isolation \
         "madnis @ git+https://github.com/madgraph-ml/madnis.git@main"
     python -m pip install --root-user-action=ignore --no-cache-dir --no-build-isolation /tmp/gammaboard-python-runtime
+    python - <<'PY'
+import importlib.util
+import shutil
+import site
+from pathlib import Path
+
+project_src = Path("/tmp/gammaboard-python-runtime/src/madnis_gammaboard_api")
+if importlib.util.find_spec("madnis_gammaboard_api") is None and project_src.is_dir():
+    target = Path(site.getsitepackages()[0]) / "madnis_gammaboard_api"
+    shutil.copytree(project_src, target, dirs_exist_ok=True)
+PY
 
     apt-get clean
     rm -rf /var/lib/apt/lists/* /tmp/gammaboard-python-runtime
