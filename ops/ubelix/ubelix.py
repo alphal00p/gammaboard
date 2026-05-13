@@ -1182,6 +1182,58 @@ def command_nix_build(args: argparse.Namespace) -> None:
         raise SystemExit(result.returncode)
 
 
+def command_probe_python_runtime(args: argparse.Namespace) -> None:
+    image = args.image
+    if not os.path.isabs(image):
+        image = os.path.join(WORKSPACE_ROOT, "resources", image)
+    project_dir = os.path.dirname(image)
+    pythonpath = os.pathsep.join(
+        [project_dir, os.path.join(project_dir, "src")]
+        + ([os.environ["PYTHONPATH"]] if os.environ.get("PYTHONPATH") else [])
+    )
+    probe = "\n".join(
+        [
+            "import importlib.util, os, sys",
+            "print('python=' + sys.executable)",
+            "print('version=' + sys.version.replace('\\n', ' '))",
+            "print('cwd=' + os.getcwd())",
+            "print('PYTHONPATH=' + os.environ.get('PYTHONPATH', ''))",
+            "print('sys_path=' + repr(sys.path))",
+            "project = os.environ.get('GAMMABOARD_RUNTIME_PROJECT', '')",
+            "print('runtime_project=' + project)",
+            "for root, dirs, files in os.walk(project):",
+            "    depth = root[len(project):].count(os.sep) if project else 0",
+            "    if depth > 2:",
+            "        dirs[:] = []",
+            "        continue",
+            "    print('tree ' + root + ' dirs=' + repr(sorted(dirs)) + ' files=' + repr(sorted(files)))",
+            "for name in ['madnis', 'madnis_gammaboard_api', 'madnis_gammaboard_api.sampler']:",
+            "    spec = importlib.util.find_spec(name)",
+            "    print(f'{name}={None if spec is None else spec.origin}')",
+            "    if spec is None:",
+            "        raise SystemExit(1)",
+        ]
+    )
+    command = [
+        "apptainer",
+        "exec",
+        "--bind",
+        WORKSPACE_ROOT,
+        "--pwd",
+        os.path.join(WORKSPACE_ROOT, "resources"),
+        "--env",
+        f"PYTHONPATH={pythonpath}",
+        "--env",
+        f"GAMMABOARD_RUNTIME_PROJECT={project_dir}",
+    ]
+    if args.nv:
+        command.append("--nv")
+    command.extend([image, args.python, "-c", probe])
+    result = subprocess.run(command, text=True)
+    if result.returncode != 0:
+        raise SystemExit(result.returncode)
+
+
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
@@ -1302,6 +1354,19 @@ def parser() -> argparse.ArgumentParser:
     )
     nix_build.add_argument("nix_args", nargs=argparse.REMAINDER)
     nix_build.set_defaults(func=command_nix_build)
+
+    probe_python = sub.add_parser(
+        "probe-python-runtime",
+        help="login node: inspect imports inside a Python Apptainer runtime",
+    )
+    probe_python.add_argument(
+        "--image",
+        default="runtimes/madnis_gammaboard_api/runtime.sif",
+        help="runtime image path relative to resources, or absolute path",
+    )
+    probe_python.add_argument("--python", default="python")
+    probe_python.add_argument("--nv", action="store_true")
+    probe_python.set_defaults(func=command_probe_python_runtime)
 
     clear = sub.add_parser(
         "clear-db", help="login node: delete the local SQLite database"
