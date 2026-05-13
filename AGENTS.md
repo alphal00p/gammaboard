@@ -30,6 +30,7 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 
 ## Ops Rules
 - `gammaboard deploy run` is the normal dashboard stack supervisor for nginx/backend/Postgres.
+- GammaLoop support is controlled by the default `gammaloop` Cargo feature. `--no-default-features` builds must compile without `gammalooprs`/`gammaloop_api` and should return explicit unsupported-feature errors for GammaLoop configs.
 
 ## Maintenance
 - No backward compatibility by default; prefer direct current-schema migrations unless requested.

@@ -2,6 +2,7 @@ mod auth;
 mod config_panels;
 mod panels;
 mod performance_panels;
+#[cfg(feature = "gammaloop")]
 mod run_exposed_info;
 mod run_panels;
 mod task_panels;
@@ -37,6 +38,7 @@ use axum::{
     response::{IntoResponse, Json, Response},
     routing::{delete, get, post},
 };
+#[cfg(feature = "gammaloop")]
 use gammalooprs::observables::ObservableSnapshotBundle;
 use serde::Deserialize;
 use serde::Serialize;
@@ -2077,25 +2079,35 @@ async fn export_histogram_bundle(
             }
         }
         "hwu" => {
-            let bundle: ObservableSnapshotBundle =
-                serde_json::from_value(wrapper).map_err(|err| {
-                    ApiError::BadRequest(format!(
-                        "invalid histogram bundle payload for export: {err}"
-                    ))
+            #[cfg(not(feature = "gammaloop"))]
+            {
+                return Err(ApiError::BadRequest(
+                    "HwU histogram bundle export requires a gammaboard build with the default \"gammaloop\" feature enabled"
+                        .to_string(),
+                ));
+            }
+            #[cfg(feature = "gammaloop")]
+            {
+                let bundle: ObservableSnapshotBundle =
+                    serde_json::from_value(wrapper).map_err(|err| {
+                        ApiError::BadRequest(format!(
+                            "invalid histogram bundle payload for export: {err}"
+                        ))
+                    })?;
+                let file = tempfile::NamedTempFile::new().map_err(|err| {
+                    ApiError::Internal(format!("failed to create temporary hwu file: {err}"))
                 })?;
-            let file = tempfile::NamedTempFile::new().map_err(|err| {
-                ApiError::Internal(format!("failed to create temporary hwu file: {err}"))
-            })?;
-            bundle
-                .write_hwu_file(file.path())
-                .map_err(|err| ApiError::Internal(format!("failed to export HwU bundle: {err}")))?;
-            let contents = fs::read_to_string(file.path()).map_err(|err| {
-                ApiError::Internal(format!("failed to read exported HwU bundle: {err}"))
-            })?;
-            HistogramBundleExportResponse {
-                filename: "histogram_bundle.HwU".to_string(),
-                mime_type: "text/plain;charset=utf-8".to_string(),
-                contents,
+                bundle.write_hwu_file(file.path()).map_err(|err| {
+                    ApiError::Internal(format!("failed to export HwU bundle: {err}"))
+                })?;
+                let contents = fs::read_to_string(file.path()).map_err(|err| {
+                    ApiError::Internal(format!("failed to read exported HwU bundle: {err}"))
+                })?;
+                HistogramBundleExportResponse {
+                    filename: "histogram_bundle.HwU".to_string(),
+                    mime_type: "text/plain;charset=utf-8".to_string(),
+                    contents,
+                }
             }
         }
         _ => {

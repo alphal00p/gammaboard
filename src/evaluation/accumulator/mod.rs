@@ -2,6 +2,10 @@ mod complex;
 mod discrete_bins;
 mod empty;
 mod full;
+#[cfg(feature = "gammaloop")]
+mod gammaloop;
+#[cfg(not(feature = "gammaloop"))]
+#[path = "gammaloop_disabled.rs"]
 mod gammaloop;
 mod scalar;
 

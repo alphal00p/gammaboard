@@ -1,3 +1,7 @@
+#[cfg(feature = "gammaloop")]
+pub(crate) mod gammaloop;
+#[cfg(not(feature = "gammaloop"))]
+#[path = "gammaloop_disabled.rs"]
 pub(crate) mod gammaloop;
 pub(crate) mod process;
 mod symbolica;
@@ -118,4 +122,22 @@ fn validate_semantic_accumulator(
 
 fn accumulator_config_str(config: &AccumulatorConfig) -> &'static str {
     config.kind_str()
+}
+
+#[cfg(all(test, not(feature = "gammaloop")))]
+mod no_gammaloop_tests {
+    use super::{GammaLoopEvaluator, GammaLoopParams};
+
+    #[test]
+    fn gammaloop_build_reports_disabled_feature() {
+        let err = match GammaLoopEvaluator::from_params(GammaLoopParams::default()) {
+            Ok(_) => panic!("gammaloop should not build without the feature"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("requires a gammaboard build with the default \"gammaloop\" feature")
+        );
+    }
 }

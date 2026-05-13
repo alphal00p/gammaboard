@@ -18,6 +18,7 @@ use crate::server::panels::{
     scalar_timeseries_panel_with_smoothing, table_panel_with_payload,
     table_panel_with_payload_and_options, tick_breakdown_panel, with_panel_width,
 };
+#[cfg(feature = "gammaloop")]
 use gammalooprs::observables::{ObservablePhase, ObservableValueTransform};
 use serde_json::Value as JsonValue;
 use serde_json::json;
@@ -49,6 +50,7 @@ pub(super) fn projectors(
     }
     projectors.push(rsd_history_projector(&accumulator_config));
     if matches!(accumulator_config, AccumulatorConfig::Gammaloop) {
+        #[cfg(feature = "gammaloop")]
         projectors.push(gammaloop_histogram_bundle_projector());
         projectors.push(gammaloop_evaluation_timing_projector());
         projectors.push(gammaloop_evaluation_diagnostics_projector());
@@ -257,6 +259,7 @@ fn estimate_summary_projector(accumulator_config: &AccumulatorConfig) -> TaskPan
     )
 }
 
+#[cfg(feature = "gammaloop")]
 fn gammaloop_histogram_bundle_projector() -> TaskPanelProjector {
     panel_projector(
         with_panel_width(
@@ -1177,6 +1180,7 @@ fn estimate_eta_seconds(
     etas.into_iter().reduce(f64::min)
 }
 
+#[cfg(feature = "gammaloop")]
 fn gammaloop_histogram_bundle_panel(accumulator: AccumulatorState) -> Option<PanelState> {
     let AccumulatorState::Gammaloop(state) = accumulator else {
         return None;

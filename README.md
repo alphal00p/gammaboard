@@ -182,6 +182,14 @@ Relative evaluator resources, such as GammaLoop `state_folder`, resolve through 
 ## Run Configs
 Run configs are TOML and are deep-merged over the built-in default run config template from `src/config_defaults/run.toml`.
 
+GammaLoop support is behind the default `gammaloop` Cargo feature. Build without the heavy GammaLoop dependency with:
+
+```bash
+cargo build --no-default-features
+```
+
+In that build, `evaluator.kind = "gammaloop"` and HwU histogram export return a clear unsupported-feature error.
+
 Add a run with:
 ```bash
 gammaboard run add templates/runs/gammaloop.toml
