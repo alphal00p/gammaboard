@@ -42,21 +42,23 @@ from pathlib import Path
 
 project_src = Path("/tmp/gammaboard-python-runtime/src/madnis_gammaboard_api")
 project_file = Path("/tmp/gammaboard-python-runtime/src/madnis_gammaboard_api.py")
-if importlib.util.find_spec("madnis_gammaboard_api") is None:
+sampler_file = Path("/tmp/gammaboard-python-runtime/src/madnis_sampler.py")
+if importlib.util.find_spec("madnis_gammaboard_api") is None and importlib.util.find_spec("madnis_sampler") is None:
     target_root = Path(site.getsitepackages()[0])
     if project_src.is_dir():
         shutil.copytree(project_src, target_root / "madnis_gammaboard_api", dirs_exist_ok=True)
     elif project_file.is_file():
         shutil.copy2(project_file, target_root / "madnis_gammaboard_api.py")
+    elif sampler_file.is_file():
+        shutil.copy2(sampler_file, target_root / "madnis_sampler.py")
     else:
         raise SystemExit(
-            "madnis_gammaboard_api was not installed and no src/madnis_gammaboard_api package was found"
+            "runtime sampler module was not installed and no supported src module was found"
         )
 PY
     python - <<'PY'
 import madnis
-import madnis_gammaboard_api
-import madnis_gammaboard_api.sampler
+import madnis_sampler
 print("python runtime import check ok")
 PY
 
@@ -73,7 +75,6 @@ PY
 %test
     python - <<'PY'
 import madnis
-import madnis_gammaboard_api
-import madnis_gammaboard_api.sampler
+import madnis_sampler
 print("python runtime ok")
 PY

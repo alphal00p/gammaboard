@@ -10,8 +10,6 @@ Operator guide for the current UBELIX setup. Local sync commands run from your w
 - Workers: separate Slurm jobs connecting to the control job database
 - Access: one SSH tunnel to the frontend port
 - Resources: relative run/task paths resolve under `${WORKSPACE_ROOT}/resources`; GammaLoop states use `states/...`
-- Nix: the GammaBoard image includes the Nix CLI and binds `/scratch/network/users/$USER/gammaboard-nix` as `/nix`
-- Legacy workspace-local `nix/` directories are unused and can be removed.
 
 ## Sync From Local
 
@@ -33,18 +31,6 @@ python ubelix.py build python
 
 The GammaBoard build also builds and embeds the dashboard frontend. Each build overwrites `images/<family>/<family>.sif` and writes `images/<family>/<family>.meta`. Build logs go to `logs/slurm/build`.
 The Python runtime build writes the MADNIS sampler runtime to `resources/runtimes/madnis_gammaboard_api/runtime.sif`.
-
-Prebuild a Python runtime flake into the persistent Nix store:
-
-```bash
-python ubelix.py nix-build resources/runtimes/madnis_gammaboard_api#runtime
-```
-
-For heavy CUDA runtimes, submit the Nix build as a Slurm job instead of building on the login node:
-
-```bash
-python ubelix.py nix-build --slurm --time 08:00:00 resources/runtimes/madnis_gammaboard_api#runtime
-```
 
 ## Start
 
@@ -132,8 +118,8 @@ Admin-protected commands accept `--admin-password` or `GAMMABOARD_ADMIN_PASSWORD
 
 Secrets and local overrides live in `${HOME}/.config/gammaboard/slurm.env`; all sbatch scripts source it and require `SYMBOLICA_LICENSE`.
 
-Remove obsolete workspace-local Nix state after syncing current ops:
+Remove obsolete Nix state after syncing current ops:
 
 ```bash
-rm -rf /storage/research/itp_localunitaritydata/gammaboard/nix
+rm -rf /storage/research/itp_localunitaritydata/gammaboard/nix /scratch/network/users/$USER/gammaboard-nix
 ```

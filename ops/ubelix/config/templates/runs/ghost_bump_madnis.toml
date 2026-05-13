@@ -50,7 +50,7 @@ max_samples = 200000
 [task_queue.sampler_aggregator.config]
 kind = "python_sampler"
 runtime = { kind = "apptainer", image = "runtimes/madnis_gammaboard_api/runtime.sif", nv = true }
-module = "madnis_gammaboard_api.sampler"
+module = "madnis_sampler"
 class = "MadnisSampler"
 continuous_dims = 2
 requires_training_values = true
@@ -58,6 +58,7 @@ requires_training_values = true
 [task_queue.sampler_aggregator.config.init_args]
 seed = 0
 training_samples = 200000
+save_path = "runtimes/madnis_gammaboard_api/checkpoints/ghost_bump_madnis"
 
 [[task_queue]]
 name = "pdf-2d"

@@ -3,6 +3,7 @@ import json
 import traceback
 import numpy as np
 import sys
+import os
 
 integrand = None
 discrete_cardinalities = None
@@ -14,6 +15,18 @@ def send(payload):
     sys.stdout.flush()
 
 
+def import_configured_module(module_name):
+    try:
+        return importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        if exc.name == module_name or module_name.startswith(f"{exc.name}."):
+            raise ModuleNotFoundError(
+                f"failed to import evaluator module {module_name!r}; "
+                f"PYTHONPATH={os.environ.get('PYTHONPATH', '')!r}; sys.path={sys.path!r}"
+            ) from exc
+        raise
+
+
 for raw in sys.stdin:
     line = raw.strip()
     if not line:
@@ -23,7 +36,7 @@ for raw in sys.stdin:
     try:
         op = req["op"]
         if op == "init":
-            module = importlib.import_module(req["module"])
+            module = import_configured_module(req["module"])
             cls = getattr(module, req["class"])
             discrete_cardinalities = [int(value) for value in req["discrete_cardinalities"]]
             if any(value <= 0 for value in discrete_cardinalities):

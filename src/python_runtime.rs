@@ -21,7 +21,14 @@ pub(crate) fn build_python_worker_command(
             python,
             workdir,
             nv,
-        } => build_apptainer_worker_command(image, python, workdir.as_deref(), *nv, worker_script),
+        } => build_apptainer_worker_command(
+            image,
+            python,
+            workdir.as_deref(),
+            *nv,
+            worker_script,
+            label,
+        ),
     }
 }
 
@@ -30,6 +37,11 @@ fn build_flake_worker_command(
     worker_script: &Path,
     label: &str,
 ) -> Result<Command, BuildError> {
+    if reference.trim().is_empty() {
+        return Err(BuildError::build(
+            "flake runtime reference must not be empty",
+        ));
+    }
     let flake_ref = normalize_flake_ref(reference);
     let output_path = build_nix_output_path(&flake_ref)?;
     let python_executable = resolve_python_executable(&output_path).ok_or_else(|| {
@@ -43,7 +55,9 @@ fn build_flake_worker_command(
         .arg("-u")
         .arg(worker_script)
         .current_dir(&output_path);
-    if let Some(pythonpath) = build_worker_pythonpath(&output_path) {
+    if let Some(pythonpath) =
+        build_pythonpath(vec![output_path.to_path_buf(), output_path.join("src")])
+    {
         command.env("PYTHONPATH", pythonpath);
     }
     command.env("GAMMABOARD_PYTHON_RUNTIME", "flake");
@@ -57,7 +71,19 @@ fn build_apptainer_worker_command(
     workdir: Option<&str>,
     nv: bool,
     worker_script: &Path,
+    label: &str,
 ) -> Result<Command, BuildError> {
+    if image.trim().is_empty() {
+        return Err(BuildError::build(
+            "apptainer runtime image must not be empty",
+        ));
+    }
+    let python = python.trim();
+    if python.is_empty() {
+        return Err(BuildError::build(
+            "apptainer runtime python command must not be empty",
+        ));
+    }
     let image_path = resolve_resource_path(Path::new(image))
         .map_err(|err| BuildError::build(format!("apptainer runtime image: {err}")))?;
     let image_path = absolute_path(&image_path)?;
@@ -71,7 +97,7 @@ fn build_apptainer_worker_command(
     let resources_root = absolute_path(&primary_resource_root().map_err(|err| {
         BuildError::build(format!("apptainer runtime requires a resource root: {err}"))
     })?)?;
-    let workdir_path = match workdir {
+    let workdir_path = match workdir.map(str::trim).filter(|value| !value.is_empty()) {
         Some(path) => {
             let path = Path::new(path);
             if path.is_absolute() {
@@ -118,7 +144,11 @@ fn build_apptainer_worker_command(
     if nv {
         command.arg("--nv");
     }
-    if let Some(pythonpath) = build_apptainer_pythonpath(runtime_project_dir.as_deref()) {
+    let pythonpath_entries = runtime_project_dir
+        .as_deref()
+        .map(|project_dir| vec![project_dir.to_path_buf(), project_dir.join("src")])
+        .unwrap_or_default();
+    if let Some(pythonpath) = build_pythonpath(pythonpath_entries) {
         command.env("APPTAINERENV_PYTHONPATH", &pythonpath);
         command
             .arg("--env")
@@ -130,6 +160,7 @@ fn build_apptainer_worker_command(
         .arg("-u")
         .arg(&worker_script);
     command.env("GAMMABOARD_PYTHON_RUNTIME", "apptainer");
+    command.env("GAMMABOARD_PYTHON_WORKER", label);
     Ok(command)
 }
 
@@ -205,25 +236,7 @@ fn resolve_python_executable(output_path: &Path) -> Option<PathBuf> {
     candidates.into_iter().find(|path| is_executable(path))
 }
 
-fn build_worker_pythonpath(runtime_root: &Path) -> Option<OsString> {
-    let mut entries: Vec<PathBuf> = vec![runtime_root.to_path_buf(), runtime_root.join("src")];
-    entries.retain(|path| path.is_dir());
-    if let Some(existing) = env::var_os("PYTHONPATH") {
-        entries.extend(env::split_paths(&existing));
-    }
-    if entries.is_empty() {
-        None
-    } else {
-        env::join_paths(entries).ok()
-    }
-}
-
-fn build_apptainer_pythonpath(runtime_project_dir: Option<&Path>) -> Option<OsString> {
-    let mut entries = Vec::new();
-    if let Some(project_dir) = runtime_project_dir {
-        entries.push(project_dir.to_path_buf());
-        entries.push(project_dir.join("src"));
-    }
+fn build_pythonpath(mut entries: Vec<PathBuf>) -> Option<OsString> {
     entries.retain(|path| path.is_dir());
     if let Some(existing) = env::var_os("PYTHONPATH") {
         entries.extend(env::split_paths(&existing));

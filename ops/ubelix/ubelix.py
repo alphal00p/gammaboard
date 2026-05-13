@@ -12,7 +12,6 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from cmd import PROMPT
 from dataclasses import dataclass
 from typing import Callable
 
@@ -28,9 +27,6 @@ GB_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaboard.sbatch"
 GL_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaloop.sbatch"
 PY_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/python.sbatch"
 IMAGE_PATH = f"{WORKSPACE_ROOT}/images/gammaboard/gammaboard.sif"
-NIX_ROOT = f"/scratch/network/users/{os.environ.get('USER', 'unknown')}/gammaboard-nix"
-NIX_VERSION = "2.24.11"
-NIX_DOWNLOAD_BUFFER_SIZE = 524288000
 FRONTEND_PORT = 8080
 DB_PORT = 5400
 DEPLOY_NAME = "default"
@@ -534,7 +530,8 @@ def gpu_gres_from_value(value: object) -> str | None:
         if raw.startswith("gpu:"):
             return raw
         if raw.isdigit():
-            return f"gpu:rtx4090:{raw}"
+            count = int(raw)
+            return f"gpu:rtx4090:{count}" if count > 0 else None
         return f"gpu:{raw}"
     return None
 
@@ -569,11 +566,7 @@ def capabilities_from_group(group: dict) -> dict[str, int]:
     config = group.get("config") or {}
     if not isinstance(config, dict):
         raise RuntimeError("launch request group config must be an object")
-    capabilities = derive_capabilities_from_config(config)
-    raw = group.get("capabilities")
-    if isinstance(raw, dict):
-        capabilities.update(capabilities_from_args({"capabilities": raw}))
-    return capabilities
+    return derive_capabilities_from_config(config)
 
 
 def launch_groups_for_request(request: dict) -> list[dict]:
@@ -1015,225 +1008,6 @@ def command_build(args: argparse.Namespace) -> None:
     print(result.stdout.strip())
 
 
-def normalize_nix_flake_ref(reference: str) -> str:
-    if "://" in reference or reference.startswith(
-        ("path:", "github:", "git+", "tarball+", "flake:")
-    ):
-        return reference
-    if reference.startswith(("./", "../", "/")):
-        path, sep, fragment = reference.partition("#")
-        absolute = path if os.path.isabs(path) else os.path.join(WORKSPACE_ROOT, path)
-        return f"path:{absolute}{sep}{fragment}"
-    if "/" in reference:
-        path, sep, fragment = reference.partition("#")
-        return f"path:{os.path.join(WORKSPACE_ROOT, path)}{sep}{fragment}"
-    return reference
-
-
-def local_nix_flake_path(reference: str) -> tuple[str, str] | None:
-    if "://" in reference or reference.startswith(("github:", "git+", "tarball+", "flake:")):
-        return None
-    raw = reference.removeprefix("path:")
-    path, _sep, fragment = raw.partition("#")
-    if raw == reference and "/" not in path and not path.startswith((".", "/")):
-        return None
-    absolute = path if os.path.isabs(path) else os.path.join(WORKSPACE_ROOT, path)
-    return absolute, fragment
-
-
-def nix_bootstrap_script() -> str:
-    return f"""
-export PATH="$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin:$PATH"
-if ! command -v nix >/dev/null 2>&1; then
-  echo "installing Nix {NIX_VERSION} into /nix" >&2
-  rm -rf /tmp/gammaboard-nix-installer
-  mkdir -p /tmp/gammaboard-nix-installer
-  curl -fsSL https://releases.nixos.org/nix/nix-{NIX_VERSION}/nix-{NIX_VERSION}-x86_64-linux.tar.xz \
-    -o /tmp/gammaboard-nix-installer/nix.tar.xz
-  tar -xJf /tmp/gammaboard-nix-installer/nix.tar.xz -C /tmp/gammaboard-nix-installer --strip-components=1
-  NIX_INSTALLER_NO_MODIFY_PROFILE=1 /tmp/gammaboard-nix-installer/install --no-daemon
-  rm -rf /tmp/gammaboard-nix-installer
-fi
-if [ -f "$HOME/.nix-profile/etc/profile.d/nix.sh" ]; then
-  . "$HOME/.nix-profile/etc/profile.d/nix.sh"
-fi
-export PATH="$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin:$PATH"
-export NIX_CONFIG="experimental-features = nix-command flakes
-download-buffer-size = {NIX_DOWNLOAD_BUFFER_SIZE}${{NIX_CONFIG:+
-$NIX_CONFIG}}"
-"""
-
-
-def nix_build_shell_command(flake_ref: str, nix_args: list[str]) -> str:
-    ensure_nix = nix_bootstrap_script()
-    local_flake = local_nix_flake_path(flake_ref)
-    if local_flake is not None:
-        source_path, fragment = local_flake
-        if not os.path.isdir(source_path):
-            raise SystemExit(f"missing flake source directory: {source_path}")
-        staged_ref = "/tmp/gammaboard-nix-build-source"
-        if fragment:
-            staged_ref = f"{staged_ref}#{fragment}"
-        return (
-            ensure_nix
-            + "\n"
-            "rm -rf /tmp/gammaboard-nix-build-source && "
-            "mkdir -p /tmp/gammaboard-nix-build-source && "
-            f"cp -R --no-preserve=mode,ownership,timestamps,xattr {shlex.quote(source_path)}/. /tmp/gammaboard-nix-build-source/ && "
-            f"nix build {shlex.quote(f'path:{staged_ref}')} "
-            + " ".join(shlex.quote(arg) for arg in nix_args)
-        )
-
-    normalized_ref = normalize_nix_flake_ref(flake_ref)
-    return (
-        ensure_nix
-        + "\n"
-        + f"nix build {shlex.quote(normalized_ref)} "
-        + " ".join(shlex.quote(arg) for arg in nix_args)
-    )
-
-
-def nix_build_apptainer_command(nix_command: str) -> list[str]:
-    tmpdir = os.environ.get("TMPDIR", "/tmp")
-    return [
-        "env",
-        f"APPTAINERENV_TMPDIR={tmpdir}",
-        "apptainer",
-        "exec",
-        "-B",
-        WORKSPACE_ROOT,
-        "-B",
-        tmpdir,
-        "-B",
-        f"{NIX_ROOT}:/nix",
-        IMAGE_PATH,
-        "sh",
-        "-lc",
-        nix_command,
-    ]
-
-
-def nix_build_apptainer_shell_command(nix_command: str) -> str:
-    command = [
-        "env",
-        'APPTAINERENV_TMPDIR="$TMPDIR"',
-        "apptainer",
-        "exec",
-        "-B",
-        shlex.quote(WORKSPACE_ROOT),
-        "-B",
-        '"$TMPDIR"',
-        "-B",
-        shlex.quote(f"{NIX_ROOT}:/nix"),
-        shlex.quote(IMAGE_PATH),
-        "sh",
-        "-lc",
-        shlex.quote(nix_command),
-    ]
-    return " ".join(command)
-
-
-def submit_nix_build_slurm(args: argparse.Namespace, nix_command: str) -> None:
-    os.makedirs(os.path.join(WORKSPACE_ROOT, "logs/slurm/build"), exist_ok=True)
-    script = f"""#!/usr/bin/env bash
-#SBATCH --job-name=gb-nix
-#SBATCH --time={args.time}
-#SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task={args.cpus_per_task}
-#SBATCH --mem={args.mem}
-#SBATCH --account={args.account}
-#SBATCH --partition={args.partition}
-#SBATCH --qos={args.qos}
-#SBATCH --output=logs/slurm/build/%x-%j.out
-#SBATCH --error=logs/slurm/build/%x-%j.err
-
-set -euo pipefail
-mkdir -p {shlex.quote(NIX_ROOT)}
-export TMPDIR="${{SLURM_TMPDIR:-/tmp}}"
-mkdir -p "${{TMPDIR}}"
-{nix_build_apptainer_shell_command(nix_command)}
-"""
-    result = subprocess.run(
-        ["sbatch", "--chdir", WORKSPACE_ROOT],
-        input=script,
-        text=True,
-        capture_output=True,
-    )
-    if result.returncode != 0:
-        print(result.stderr, file=sys.stderr, end="")
-        raise SystemExit(result.returncode)
-    print(result.stdout.strip())
-
-
-def command_nix_build(args: argparse.Namespace) -> None:
-    os.makedirs(NIX_ROOT, exist_ok=True)
-    if not os.path.isfile(IMAGE_PATH):
-        raise SystemExit(f"missing image: {IMAGE_PATH}")
-
-    nix_command = nix_build_shell_command(args.flake_ref, args.nix_args)
-    if args.slurm:
-        submit_nix_build_slurm(args, nix_command)
-        return
-
-    command = nix_build_apptainer_command(nix_command)
-    result = subprocess.run(command, text=True)
-    if result.returncode != 0:
-        raise SystemExit(result.returncode)
-
-
-def command_probe_python_runtime(args: argparse.Namespace) -> None:
-    image = args.image
-    if not os.path.isabs(image):
-        image = os.path.join(WORKSPACE_ROOT, "resources", image)
-    project_dir = os.path.dirname(image)
-    pythonpath = os.pathsep.join(
-        [project_dir, os.path.join(project_dir, "src")]
-        + ([os.environ["PYTHONPATH"]] if os.environ.get("PYTHONPATH") else [])
-    )
-    probe = "\n".join(
-        [
-            "import importlib.util, os, sys",
-            "print('python=' + sys.executable)",
-            "print('version=' + sys.version.replace('\\n', ' '))",
-            "print('cwd=' + os.getcwd())",
-            "print('PYTHONPATH=' + os.environ.get('PYTHONPATH', ''))",
-            "print('sys_path=' + repr(sys.path))",
-            "project = os.environ.get('GAMMABOARD_RUNTIME_PROJECT', '')",
-            "print('runtime_project=' + project)",
-            "for root, dirs, files in os.walk(project):",
-            "    depth = root[len(project):].count(os.sep) if project else 0",
-            "    if depth > 2:",
-            "        dirs[:] = []",
-            "        continue",
-            "    print('tree ' + root + ' dirs=' + repr(sorted(dirs)) + ' files=' + repr(sorted(files)))",
-            "for name in ['madnis', 'madnis_gammaboard_api', 'madnis_gammaboard_api.sampler']:",
-            "    spec = importlib.util.find_spec(name)",
-            "    print(f'{name}={None if spec is None else spec.origin}')",
-            "    if spec is None:",
-            "        raise SystemExit(1)",
-        ]
-    )
-    command = [
-        "apptainer",
-        "exec",
-        "--bind",
-        WORKSPACE_ROOT,
-        "--pwd",
-        os.path.join(WORKSPACE_ROOT, "resources"),
-        "--env",
-        f"PYTHONPATH={pythonpath}",
-        "--env",
-        f"GAMMABOARD_RUNTIME_PROJECT={project_dir}",
-    ]
-    if args.nv:
-        command.append("--nv")
-    command.extend([image, args.python, "-c", probe])
-    result = subprocess.run(command, text=True)
-    if result.returncode != 0:
-        raise SystemExit(result.returncode)
-
-
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
@@ -1332,41 +1106,6 @@ def parser() -> argparse.ArgumentParser:
     build = sub.add_parser("build", help="login node: submit a build job")
     build.add_argument("target", choices=("gammaboard", "gammaloop", "python"))
     build.set_defaults(func=command_build)
-
-    nix_build = sub.add_parser(
-        "nix-build",
-        help="login node: run or submit nix build inside the GammaBoard image with scratch-backed /nix",
-    )
-    nix_build.add_argument(
-        "--slurm",
-        action="store_true",
-        help="submit the nix build as a Slurm job instead of running on the login node",
-    )
-    nix_build.add_argument("--time", default="08:00:00")
-    nix_build.add_argument("--cpus-per-task", type=int, default=4)
-    nix_build.add_argument("--mem", default="16G")
-    nix_build.add_argument("--account", default="gratis")
-    nix_build.add_argument("--partition", default="epyc2")
-    nix_build.add_argument("--qos", default="job_gratis")
-    nix_build.add_argument(
-        "flake_ref",
-        help="flake output to build; relative paths resolve under the UBELIX workspace",
-    )
-    nix_build.add_argument("nix_args", nargs=argparse.REMAINDER)
-    nix_build.set_defaults(func=command_nix_build)
-
-    probe_python = sub.add_parser(
-        "probe-python-runtime",
-        help="login node: inspect imports inside a Python Apptainer runtime",
-    )
-    probe_python.add_argument(
-        "--image",
-        default="runtimes/madnis_gammaboard_api/runtime.sif",
-        help="runtime image path relative to resources, or absolute path",
-    )
-    probe_python.add_argument("--python", default="python")
-    probe_python.add_argument("--nv", action="store_true")
-    probe_python.set_defaults(func=command_probe_python_runtime)
 
     clear = sub.add_parser(
         "clear-db", help="login node: delete the local SQLite database"

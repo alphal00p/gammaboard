@@ -1567,8 +1567,8 @@ fn gpu_count_from_config_value(value: &JsonValue) -> Option<u64> {
     if raw.is_empty() {
         return None;
     }
-    if raw.parse::<u64>().is_ok() {
-        return raw.parse::<u64>().ok();
+    if let Ok(count) = raw.parse::<u64>() {
+        return (count > 0).then_some(count);
     }
     parse_gpu_count_from_gres(if raw.starts_with("gpu:") {
         raw
@@ -1714,7 +1714,6 @@ async fn create_and_maybe_resolve_node_launch_request(
                 "name_prefix": group.name_prefix,
                 "max_start_failures": group.max_start_failures,
                 "config": group.config,
-                "capabilities": group.capabilities,
             })
         })
         .collect::<Vec<_>>();

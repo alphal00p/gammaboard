@@ -3,15 +3,29 @@ import json
 import traceback
 import numpy as np
 import sys
+import os
 
 sampler = None
 discrete_cardinalities = None
 continuous_dims = None
+sampler_init_args = {}
 
 
 def send(payload):
     sys.stdout.write(json.dumps(payload) + "\n")
     sys.stdout.flush()
+
+
+def import_configured_module(module_name):
+    try:
+        return importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        if exc.name == module_name or module_name.startswith(f"{exc.name}."):
+            raise ModuleNotFoundError(
+                f"failed to import sampler module {module_name!r}; "
+                f"PYTHONPATH={os.environ.get('PYTHONPATH', '')!r}; sys.path={sys.path!r}"
+            ) from exc
+        raise
 
 
 for raw in sys.stdin:
@@ -23,7 +37,7 @@ for raw in sys.stdin:
     try:
         op = req["op"]
         if op == "init":
-            module = importlib.import_module(req["module"])
+            module = import_configured_module(req["module"])
             cls = getattr(module, req["class"])
             discrete_cardinalities = [int(value) for value in req["discrete_cardinalities"]]
             if any(value <= 0 for value in discrete_cardinalities):
@@ -33,10 +47,13 @@ for raw in sys.stdin:
             init_args = req.get("init_args") or {}
             if not isinstance(init_args, dict):
                 raise TypeError("init_args must be an object")
+            sampler_init_args = init_args
             snapshot = req.get("snapshot")
             if snapshot is not None:
                 if not hasattr(cls, "from_snapshot"):
                     raise TypeError("class must define from_snapshot(...) when restoring from snapshot")
+                if isinstance(snapshot, dict) and "save_path" not in snapshot and "save_path" in init_args:
+                    snapshot = {**snapshot, "save_path": init_args["save_path"]}
                 sampler = cls.from_snapshot(
                     snapshot=snapshot,
                     discrete_cardinalities=discrete_cardinalities,
@@ -148,6 +165,8 @@ for raw in sys.stdin:
             if sampler is None:
                 raise RuntimeError("worker not initialized")
             snapshot = sampler.snapshot()
+            if isinstance(snapshot, dict) and "save_path" not in snapshot and "save_path" in sampler_init_args:
+                snapshot = {**snapshot, "save_path": sampler_init_args["save_path"]}
             send({"id": req_id, "ok": True, "snapshot": snapshot})
         elif op == "get_diagnostics":
             if sampler is None:

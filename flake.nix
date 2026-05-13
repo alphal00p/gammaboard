@@ -127,6 +127,7 @@
           virtualenv
           postgresql
           nginx
+          apptainer
           sqlx-cli
           nodejs
           (pkgs.rustPlatform.buildRustPackage rec {

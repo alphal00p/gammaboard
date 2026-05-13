@@ -31,14 +31,13 @@ require_cmd() {
 }
 
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata/gammaboard}"
-NIX_ROOT="/scratch/network/users/${USER}/gammaboard-nix"
-mkdir -p "${WORKSPACE_ROOT}/logs/slurm/build" "${NIX_ROOT}"
+mkdir -p "${WORKSPACE_ROOT}/logs/slurm/build"
 
 # Absolute path to SIF image on UBELIX filesystem.
 IMAGE_PATH="${GAMMABOARD_IMAGE:-${WORKSPACE_ROOT}/images/gammaboard/gammaboard.sif}"
 
 # Bind full storage paths (UBELIX scratch/workspace paths are symlinked).
-BIND_PATHS="${GAMMABOARD_BIND_PATHS:-${WORKSPACE_ROOT},${NIX_ROOT}:/nix}"
+BIND_PATHS="${GAMMABOARD_BIND_PATHS:-${WORKSPACE_ROOT}}"
 
 require_cmd apptainer
 
@@ -57,7 +56,6 @@ fi
 
 echo "node: ${HOSTNAME}"
 echo "workspace_root: ${WORKSPACE_ROOT}"
-echo "nix_root: ${NIX_ROOT}"
 echo "image: ${IMAGE_PATH}"
 echo "bind: ${BIND_PATHS}"
 
@@ -69,7 +67,6 @@ if apptainer exec -B "${BIND_PATHS}" "${IMAGE_PATH}" ldd /usr/local/bin/gammaboa
 fi
 
 # CLI probes may return non-zero in some builds; run for diagnostics but do not gate smoke on exit code.
-apptainer exec -B "${BIND_PATHS}" "${IMAGE_PATH}" nix --version || true
 apptainer exec -B "${BIND_PATHS}" "${IMAGE_PATH}" gammaboard --version || true
 apptainer exec -B "${BIND_PATHS}" "${IMAGE_PATH}" gammaboard --help >/dev/null || true
 

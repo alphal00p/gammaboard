@@ -79,11 +79,10 @@ From: rust:1-bookworm
     rm -rf /var/lib/apt/lists/*
 
 %environment
-    export PATH=/nix/var/nix/profiles/default/bin:/usr/local/bin:$PATH
+    export PATH=/usr/local/bin:$PATH
     export LD_LIBRARY_PATH=/usr/local/lib/gammaboard:${LD_LIBRARY_PATH:-}
     export TZ=Etc/UTC
     export GAMMABOARD_MIGRATIONS_DIR=/usr/local/share/gammaboard/migrations
-    export NIX_CONFIG="experimental-features = nix-command flakes"
 
 %runscript
     exec "$@"

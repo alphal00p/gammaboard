@@ -26,13 +26,12 @@ export APPTAINERENV_NO_SYMBOLICA_OEM_LICENSE="${NO_SYMBOLICA_OEM_LICENSE}"
 
 IMAGE_PATH="${GAMMABOARD_IMAGE:?set GAMMABOARD_IMAGE to your .sif path}"
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:?set GAMMABOARD_WORKSPACE_ROOT to absolute workspace path}"
-NIX_ROOT="/scratch/network/users/${USER}/gammaboard-nix"
 NODE_NAME="${NODE_NAME:?set NODE_NAME (e.g. w-1)}"
 NODE_MAX_START_FAILURES="${NODE_MAX_START_FAILURES:-3}"
 DATABASE_URL="${GAMMABOARD_DATABASE_URL:?set GAMMABOARD_DATABASE_URL to reachable Postgres URL}"
 DEPLOY_NAME="${DEPLOY_NAME:-default}"
 CONTROL_JOB_ID="${CONTROL_JOB_ID:-}"
-mkdir -p "${WORKSPACE_ROOT}/logs/slurm/workers" "${NIX_ROOT}"
+mkdir -p "${WORKSPACE_ROOT}/logs/slurm/workers"
 
 RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
 mkdir -p "${RUNTIME_DIR}"
@@ -103,7 +102,6 @@ fi
 echo "node: ${HOSTNAME}"
 echo "node name: ${NODE_NAME}"
 echo "workspace_root: ${WORKSPACE_ROOT}"
-echo "nix_root: ${NIX_ROOT}"
 echo "runtime_config: ${RUNTIME_CONFIG}"
 echo "database_host_port: ${db_host_port}"
 echo "max_start_failures: ${NODE_MAX_START_FAILURES}"
@@ -127,14 +125,14 @@ env -u PGTZ -u PGOPTIONS \
 APPTAINERENV_LANG="${APPTAINERENV_LANG:-C.UTF-8}" \
 APPTAINERENV_LC_ALL="${APPTAINERENV_LC_ALL:-C.UTF-8}" \
 APPTAINERENV_TZ="${APPTAINERENV_TZ:-Etc/UTC}" \
-apptainer exec -B "${WORKSPACE_ROOT}" -B "${NIX_ROOT}:/nix" "${IMAGE_PATH}" \
+apptainer exec -B "${WORKSPACE_ROOT}" "${IMAGE_PATH}" \
   psql "${db_url}" -c "SELECT 1;" >/dev/null
 
 env -u PGTZ -u PGOPTIONS \
 APPTAINERENV_LANG="${APPTAINERENV_LANG:-C.UTF-8}" \
 APPTAINERENV_LC_ALL="${APPTAINERENV_LC_ALL:-C.UTF-8}" \
 APPTAINERENV_TZ="${APPTAINERENV_TZ:-Etc/UTC}" \
-apptainer exec "${apptainer_gpu_args[@]}" -B "${WORKSPACE_ROOT}" -B "${NIX_ROOT}:/nix" "${IMAGE_PATH}" \
+apptainer exec "${apptainer_gpu_args[@]}" -B "${WORKSPACE_ROOT}" "${IMAGE_PATH}" \
   gammaboard --runtime-config "${RUNTIME_CONFIG}" node run \
     --name "${NODE_NAME}" \
     --max-start-failures "${NODE_MAX_START_FAILURES}" \
