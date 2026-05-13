@@ -5,6 +5,7 @@ use crate::evaluation::{
 };
 use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 /// Evaluator that returns 1.0 for every sample.
 pub struct UnitEvaluator {
@@ -12,6 +13,7 @@ pub struct UnitEvaluator {
     accumulator_kind: SemanticAccumulatorKind,
     fail_on_batch_nr: Option<usize>,
     fail_on_batch_nrs: Vec<usize>,
+    min_eval_time_per_sample_ms: u64,
     eval_batches_total: usize,
 }
 
@@ -21,12 +23,14 @@ impl UnitEvaluator {
         accumulator_kind: SemanticAccumulatorKind,
         fail_on_batch_nr: Option<usize>,
         fail_on_batch_nrs: Vec<usize>,
+        min_eval_time_per_sample_ms: u64,
     ) -> Self {
         Self {
             domain,
             accumulator_kind,
             fail_on_batch_nr,
             fail_on_batch_nrs,
+            min_eval_time_per_sample_ms,
             eval_batches_total: 0,
         }
     }
@@ -37,7 +41,14 @@ impl UnitEvaluator {
             params.accumulator_kind,
             params.fail_on_batch_nr,
             params.fail_on_batch_nrs,
+            params.min_eval_time_per_sample_ms,
         )
+    }
+
+    fn maybe_sleep(&self) {
+        if self.min_eval_time_per_sample_ms > 0 {
+            std::thread::sleep(Duration::from_millis(self.min_eval_time_per_sample_ms));
+        }
     }
 
     fn scalar_ingestor<'a>(
@@ -88,6 +99,8 @@ pub struct UnitEvaluatorParams {
     pub fail_on_batch_nr: Option<usize>,
     #[serde(default)]
     pub fail_on_batch_nrs: Vec<usize>,
+    #[serde(default)]
+    pub min_eval_time_per_sample_ms: u64,
 }
 
 impl Default for UnitEvaluatorParams {
@@ -98,12 +111,14 @@ impl Default for UnitEvaluatorParams {
             accumulator_kind: SemanticAccumulatorKind::Scalar,
             fail_on_batch_nr: None,
             fail_on_batch_nrs: Vec::new(),
+            min_eval_time_per_sample_ms: 0,
         }
     }
 }
 
 impl ScalarSampleEvaluator for UnitEvaluator {
     fn eval_scalar_sample(&mut self, _batch: &Batch, _sample_idx: usize) -> Result<f64, EvalError> {
+        self.maybe_sleep();
         Ok(1.0)
     }
 }
@@ -114,6 +129,7 @@ impl ComplexSampleEvaluator for UnitEvaluator {
         _batch: &Batch,
         _sample_idx: usize,
     ) -> Result<num::complex::Complex64, EvalError> {
+        self.maybe_sleep();
         Ok(num::complex::Complex64::new(1.0, 0.0))
     }
 }
@@ -171,6 +187,7 @@ mod tests {
             SemanticAccumulatorKind::Scalar,
             None,
             Vec::new(),
+            0,
         );
 
         let result = evaluator
@@ -203,6 +220,7 @@ mod tests {
             SemanticAccumulatorKind::Complex,
             None,
             Vec::new(),
+            0,
         );
 
         let result = evaluator

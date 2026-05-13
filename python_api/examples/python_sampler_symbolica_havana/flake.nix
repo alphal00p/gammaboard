@@ -8,6 +8,7 @@
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
       hostPython = pkgs.writeShellScriptBin "python" ''
+        export PYTHONPATH="${./src}:$PYTHONPATH"
         exec /usr/bin/python "$@"
       '';
     in {

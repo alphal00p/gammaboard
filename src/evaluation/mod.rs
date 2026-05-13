@@ -10,10 +10,7 @@ pub use accumulator::{
     IngestScalar, ScalarAccumulatorState, SemanticAccumulatorKind,
 };
 pub use batch::{Batch, BatchError, BatchResult, Point};
-pub use evaluator::{
-    GammaLoopParams, ProcessScalarParams, SinEvaluatorParams, SincEvaluatorParams, SymbolicaParams,
-    UnitEvaluatorParams,
-};
+pub use evaluator::{GammaLoopParams, ProcessScalarParams, SymbolicaParams, UnitEvaluatorParams};
 pub use traits::{
     BatchTransform, ComplexBatchEvaluator, ComplexSampleEvaluator, ComplexValueEvaluator,
     EvalBatchOptions, Evaluator, Materializer, ScalarBatchEvaluator, ScalarSampleEvaluator,

@@ -85,7 +85,7 @@ cli_example:
     set -euo pipefail
 
     run_gammaloop="gammaloop_tth"
-    run_python="python-scalar-python-sampler-flake-demo"
+    run_python="process-scalar-process-sampler-flake-demo"
     run_symbolica="ghost_bump"
 
     {{bin}} db delete --yes
@@ -96,7 +96,7 @@ cli_example:
 
     {{bin}} run add "templates/runs/gammaloop.toml"
     {{bin}} run task add "$run_gammaloop" "templates/tasks/train_sample.toml"
-    {{bin}} run add "templates/runs/python-scalar-python-sampler-flake-demo.toml"
+    {{bin}} run add "templates/runs/process-scalar-process-sampler-flake-demo.toml"
     {{bin}} run add "templates/runs/ghost_bump.toml"
 
     {{bin}} node assign "w-1" sampler-aggregator "$run_gammaloop"

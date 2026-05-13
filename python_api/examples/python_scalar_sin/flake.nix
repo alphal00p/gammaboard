@@ -8,10 +8,14 @@
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
       pythonEnv = pkgs.python311.withPackages (ps: [ ps.numpy ]);
+      runtimePython = pkgs.writeShellScriptBin "python" ''
+        export PYTHONPATH="${./src}:$PYTHONPATH"
+        exec ${pythonEnv}/bin/python "$@"
+      '';
     in {
       packages.${system}.runtime = pkgs.symlinkJoin {
         name = "python-scalar-sin-runtime";
-        paths = [ pythonEnv ./src ];
+        paths = [ runtimePython pythonEnv ];
       };
     };
 }

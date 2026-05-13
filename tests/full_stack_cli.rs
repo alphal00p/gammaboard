@@ -9,7 +9,6 @@ use gammaboard::config::RuntimeConfig;
 use gammaboard::sampling::{
     HavanaSamplerParams, LatentBatch, PdfAdaptationImagePersistedOutput, SamplerAggregatorSnapshot,
 };
-use num::complex::Complex64;
 use predicates::prelude::*;
 use rand::SeedableRng;
 use rand_xoshiro::Xoshiro256StarStar;
@@ -642,8 +641,10 @@ async fn run_havana_training_then_inference(
 name = "{run_name}"
 
 [evaluator]
-kind = "sinc_evaluator"
-min_eval_time_per_sample_ms = 2
+kind = "unit"
+continuous_dims = 2
+discrete_dims = 0
+accumulator_kind = "complex"
 
 [[task_queue]]
 name = "train-a"
@@ -888,7 +889,10 @@ async fn full_stack_cli_alternating_havana_e2e() -> anyhow::Result<()> {
 name = "havana-alt-e2e"
 
 [evaluator]
-kind = "sinc_evaluator"
+kind = "unit"
+continuous_dims = 2
+discrete_dims = 0
+accumulator_kind = "complex"
 
 [[task_queue]]
 name = "train-a"
@@ -1451,13 +1455,11 @@ async fn full_stack_cli_python_scalar_flake_e2e() -> anyhow::Result<()> {
 name = "python-scalar-flake-e2e"
 
 [evaluator]
-kind = "python_scalar"
-runtime = {{ kind = "flake", ref = "{evaluator_flake_ref}" }}
-module = "demo_integrand"
-class = "SinIntegrand"
+kind = "process_scalar"
+command = ["nix", "shell", "{evaluator_flake_ref}", "-c", "python", "-u", "python_api/python_workers/evaluator_worker.py"]
 continuous_dims = 2
 discrete_cardinalities = [2, 3]
-init_args = {{ scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }}
+args = {{ module = "demo_integrand", class = "SinIntegrand", scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }}
 
 [[task_queue]]
 name = "accumulator"
@@ -1483,7 +1485,7 @@ fixed_dims = {{ "0" = 0 }}
 name = "sample-a"
 kind = "sample"
 stop_condition = {{ max_samples = 64 }}
-sampler_aggregator = {{ config = {{ kind = "python_sampler", runtime = {{ kind = "flake", ref = "{sampler_flake_ref}" }}, module = "demo_sampler", class = "SymbolicaHavanaSampler", continuous_dims = 2, requires_training_values = true, init_args = {{ seed = 0, bins = 8, samples_for_update = 8, stop_training_after_n_samples = 64, initial_training_rate = 0.1, final_training_rate = 0.01 }} }} }}
+sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", "shell", "{sampler_flake_ref}", "-c", "python", "-u", "python_api/python_workers/sampler_worker.py"], continuous_dims = 2, requires_training_values = true, args = {{ module = "demo_sampler", class = "SymbolicaHavanaSampler", seed = 0, bins = 8, samples_for_update = 8, stop_training_after_n_samples = 64, initial_training_rate = 0.1, final_training_rate = 0.01 }} }} }}
 "#
     ));
 
@@ -1564,8 +1566,9 @@ fn temp_server_config(
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let run_templates_dir = manifest_dir.join("templates/runs");
     let task_templates_dir = manifest_dir.join("templates/tasks");
+    let node_templates_dir = manifest_dir.join("templates/nodes");
     let contents = format!(
-        "api_host = {host:?}\napi_port = {port}\nallowed_origins = [{allowed_origin:?}]\nsecure_cookie = {secure_cookie}\nallow_db_admin = true\nallow_local_node_spawn = {allow_local_node_spawn}\nrun_templates_dir = {run_templates_dir:?}\ntask_templates_dir = {task_templates_dir:?}\n\n[auth]\nadmin_password_hash = {admin_password_hash:?}\nsession_secret = {session_secret:?}\n"
+        "api_host = {host:?}\napi_port = {port}\nallowed_origins = [{allowed_origin:?}]\nsecure_cookie = {secure_cookie}\nallow_db_admin = true\nallow_local_node_spawn = {allow_local_node_spawn}\nrun_templates_dir = {run_templates_dir:?}\ntask_templates_dir = {task_templates_dir:?}\nnode_templates_dir = {node_templates_dir:?}\n\n[auth]\nadmin_password_hash = {admin_password_hash:?}\nsession_secret = {session_secret:?}\n"
     );
     let file = NamedTempFile::new().expect("create temp server config");
     std::fs::write(file.path(), contents).expect("write temp server config");
@@ -1677,23 +1680,8 @@ fn build_direct_havana_grid(domain: &Domain, params: &HavanaSamplerParams) -> Gr
     }
 }
 
-fn sample_continuous_coords(sample: &Sample<f64>) -> Vec<f64> {
-    match sample {
-        Sample::Continuous(_, continuous) => continuous.clone(),
-        Sample::Discrete(_, _, maybe_child) => sample_continuous_coords(
-            maybe_child
-                .as_ref()
-                .expect("havana discrete sample should contain nested child"),
-        ),
-        Sample::Uniform(_, _, continuous) => continuous.clone(),
-    }
-}
-
-fn direct_sinc_training_value(sample: &Sample<f64>) -> f64 {
-    let continuous = sample_continuous_coords(sample);
-    let x = continuous[0];
-    let y = continuous[1];
-    Complex64::new(x, y).sin().norm()
+fn direct_unit_training_value(_sample: &Sample<f64>) -> f64 {
+    1.0
 }
 
 fn direct_havana_training_rate(
@@ -1728,7 +1716,7 @@ fn direct_train_havana_grid(
         for _ in 0..nr_samples {
             let mut sample = Sample::new();
             grid.sample(&mut rng, &mut sample);
-            let eval = direct_sinc_training_value(&sample);
+            let eval = direct_unit_training_value(&sample);
             grid.add_training_sample(&sample, eval)
                 .expect("direct havana training sample should be valid");
         }
@@ -2823,7 +2811,10 @@ async fn full_stack_server_queue_tuning_update_applies_to_active_sample_task() -
 name = "queue-tuning-live-update-e2e"
 
 [evaluator]
-kind = "sin_evaluator"
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+accumulator_kind = "scalar"
 min_eval_time_per_sample_ms = 5
 
 [[task_queue]]
@@ -3040,6 +3031,7 @@ kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
 accumulator_kind = "scalar"
+min_eval_time_per_sample_ms = 20
 
 [[task_queue]]
 kind = "sample"
@@ -3441,7 +3433,11 @@ async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled
     assert_eq!(body["request"]["state"].as_str(), Some("pending"));
     assert_eq!(body["request"]["backend"].as_str(), Some("external"));
     assert_eq!(body["request"]["requested_count"].as_u64(), Some(2));
-    assert_eq!(body["request"]["name_prefix"].as_str(), Some("queued-w"));
+    assert_eq!(body["request"]["name_prefix"].as_str(), None);
+    assert_eq!(
+        body["request"]["args"]["groups"][0]["name_prefix"].as_str(),
+        Some("queued-w")
+    );
     assert_eq!(body["request"]["args"]["partition"].as_str(), Some("epyc2"));
 
     let node_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM nodes")
@@ -3450,9 +3446,16 @@ async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled
         .map_err(|err| anyhow::anyhow!("node count query failed: {err}"))?;
     assert_eq!(node_count, 0);
 
+    let request_id = body["request"]["id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing launch request id"))?
+        .to_string();
+    let request_id_i64 = request_id
+        .parse::<i64>()
+        .map_err(|err| anyhow::anyhow!("invalid launch request id: {err}"))?;
     let (state, backend): (String, String) =
-        sqlx::query_as("SELECT state, backend FROM node_launch_requests WHERE name_prefix = $1")
-            .bind("queued-w")
+        sqlx::query_as("SELECT state, backend FROM node_launch_requests WHERE id = $1")
+            .bind(request_id_i64)
             .fetch_one(&harness.pool)
             .await
             .map_err(|err| anyhow::anyhow!("launch request query failed: {err}"))?;
@@ -3468,10 +3471,10 @@ async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled
     .await?;
     assert_eq!(claim_response.status(), reqwest::StatusCode::OK);
     let claim_body: JsonValue = serde_json::from_str(&claim_response.text().await?)?;
-    let request_id = claim_body["request"]["id"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("missing claimed request id"))?
-        .to_string();
+    assert_eq!(
+        claim_body["request"]["id"].as_str(),
+        Some(request_id.as_str())
+    );
     assert_eq!(claim_body["request"]["state"].as_str(), Some("starting"));
 
     let workers = json!([
@@ -3589,8 +3592,11 @@ async fn full_stack_cli_reclaims_claimed_batches_after_worker_death() -> anyhow:
 name = "worker-death-e2e"
 
 [evaluator]
-kind = "sin_evaluator"
-min_eval_time_per_sample_ms = 20
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+accumulator_kind = "scalar"
+min_eval_time_per_sample_ms = 100
 
 [[task_queue]]
 kind = "sample"
@@ -4119,7 +4125,10 @@ async fn full_stack_cli_can_clone_run_from_task_snapshot() -> anyhow::Result<()>
 name = "clone-source-e2e"
 
 [evaluator]
-kind = "sin_evaluator"
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+accumulator_kind = "scalar"
 
 [[task_queue]]
 kind = "sample"

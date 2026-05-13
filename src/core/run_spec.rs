@@ -1,6 +1,5 @@
 use crate::evaluation::{
-    GammaLoopParams, ProcessScalarParams, SinEvaluatorParams, SincEvaluatorParams, SymbolicaParams,
-    UnitEvaluatorParams,
+    GammaLoopParams, ProcessScalarParams, SymbolicaParams, UnitEvaluatorParams,
 };
 use crate::utils::domain::Domain;
 
@@ -341,14 +340,6 @@ pub enum EvaluatorConfig {
     Gammaloop {
         #[serde(flatten)]
         params: GammaLoopParams,
-    },
-    SinEvaluator {
-        #[serde(flatten)]
-        params: SinEvaluatorParams,
-    },
-    SincEvaluator {
-        #[serde(flatten)]
-        params: SincEvaluatorParams,
     },
     Unit {
         #[serde(flatten)]

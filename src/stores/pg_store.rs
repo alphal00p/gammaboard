@@ -1167,8 +1167,10 @@ mod tests {
     fn decode_run_spec_supports_current_schema() {
         let integration_params = json!({
             "evaluator": {
-                "kind": "sin_evaluator",
-                "min_eval_time_per_sample_ms": 1
+                "kind": "unit",
+                "continuous_dims": 1,
+                "discrete_dims": 0,
+                "accumulator_kind": "scalar"
             },
             "evaluator_runner_params": {
                 "performance_snapshot_interval_ms": 5000,
@@ -1209,11 +1211,13 @@ mod tests {
         .expect("decode");
         assert_eq!(spec.run_id, 7);
         assert_eq!(spec.domain, Domain::continuous(1));
-        assert_eq!(spec.evaluator.kind_str(), "sin_evaluator");
+        assert_eq!(spec.evaluator.kind_str(), "unit");
         assert!(matches!(
             &spec.evaluator,
-            crate::core::EvaluatorConfig::SinEvaluator { params }
-                if params.min_eval_time_per_sample_ms == 1
+            crate::core::EvaluatorConfig::Unit { params }
+                if params.continuous_dims == 1
+                && params.discrete_dims == 0
+                && params.accumulator_kind == crate::evaluation::SemanticAccumulatorKind::Scalar
         ));
         assert_eq!(
             spec.evaluator_runner_params,
@@ -1256,7 +1260,7 @@ mod tests {
         let err = decode_run_spec(
             8,
             json!({
-                "evaluator": { "kind": "sin_evaluator" }
+                "evaluator": { "kind": "unit" }
             }),
             json!({
                 "continuous_dims": 1,
@@ -1310,7 +1314,12 @@ mod tests {
         let err = decode_run_spec(
             9,
             json!({
-                "evaluator": { "kind": "sin_evaluator" },
+                "evaluator": {
+                    "kind": "unit",
+                    "continuous_dims": 1,
+                    "discrete_dims": 0,
+                    "accumulator_kind": "scalar"
+                },
                 "sampler_aggregator_runner_params": {
                     "performance_snapshot_interval_ms": 5000,
                     "min_tick_time_ms": 10,
@@ -1359,7 +1368,7 @@ mod tests {
     #[test]
     fn parse_run_create_payload_accepts_kind_model() {
         let sanitized = parse_run_create_payload(&json!({
-            "evaluator": { "kind": "sin_evaluator" },
+            "evaluator": { "kind": "unit" },
             "sampler_aggregator": { "kind": "naive_monte_carlo" },
             "parametrization": { "kind": "identity", "a": 1 }
         }))
@@ -1368,7 +1377,7 @@ mod tests {
         assert_eq!(
             sanitized,
             json!({
-                "evaluator": { "kind": "sin_evaluator" },
+                "evaluator": { "kind": "unit" },
                 "sampler_aggregator": { "kind": "naive_monte_carlo" },
                 "parametrization": { "kind": "identity", "a": 1 }
             })

@@ -118,12 +118,6 @@ fn evaluator_accumulator_kind(
 ) -> Option<crate::evaluation::SemanticAccumulatorKind> {
     match config {
         EvaluatorConfig::Gammaloop { .. } => None,
-        EvaluatorConfig::SinEvaluator { .. } => {
-            Some(crate::evaluation::SemanticAccumulatorKind::Scalar)
-        }
-        EvaluatorConfig::SincEvaluator { .. } => {
-            Some(crate::evaluation::SemanticAccumulatorKind::Complex)
-        }
         EvaluatorConfig::Unit { params } => Some(params.accumulator_kind),
         EvaluatorConfig::Symbolica { .. } => {
             Some(crate::evaluation::SemanticAccumulatorKind::Scalar)

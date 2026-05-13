@@ -1,7 +1,5 @@
 pub(crate) mod gammaloop;
 pub(crate) mod process;
-mod sin_evaluator;
-mod sinc_evaluator;
 mod symbolica;
 pub(crate) mod unit;
 
@@ -11,14 +9,10 @@ use crate::utils::domain::Domain;
 
 use self::gammaloop::GammaLoopEvaluator;
 use self::process::ProcessScalarEvaluator;
-use self::sin_evaluator::SinEvaluator;
-use self::sinc_evaluator::SincEvaluator;
 use self::symbolica::SymbolicaEngine;
 use self::unit::UnitEvaluator;
 pub use gammaloop::GammaLoopParams;
 pub use process::ProcessScalarParams;
-pub use sin_evaluator::SinEvaluatorParams;
-pub use sinc_evaluator::SincEvaluatorParams;
 pub use symbolica::SymbolicaParams;
 pub use unit::UnitEvaluatorParams;
 
@@ -26,8 +20,6 @@ impl EvaluatorConfig {
     pub fn kind_str(&self) -> &'static str {
         match self {
             Self::Gammaloop { .. } => "gammaloop",
-            Self::SinEvaluator { .. } => "sin_evaluator",
-            Self::SincEvaluator { .. } => "sinc_evaluator",
             Self::Unit { .. } => "unit",
             Self::Symbolica { .. } => "symbolica",
             Self::ProcessScalar { .. } => "process_scalar",
@@ -38,12 +30,6 @@ impl EvaluatorConfig {
         match self {
             Self::Gammaloop { params } => {
                 Ok(Box::new(GammaLoopEvaluator::from_params(params.clone())?))
-            }
-            Self::SinEvaluator { params } => {
-                Ok(Box::new(SinEvaluator::from_params(params.clone())))
-            }
-            Self::SincEvaluator { params } => {
-                Ok(Box::new(SincEvaluator::from_params(params.clone())))
             }
             Self::Unit { params } => Ok(Box::new(UnitEvaluator::from_params(params.clone()))),
             Self::Symbolica { params } => {
@@ -60,8 +46,6 @@ impl EvaluatorConfig {
             Self::Gammaloop { params } => {
                 GammaLoopEvaluator::resolve_domain_from_params(params.clone())
             }
-            Self::SinEvaluator { .. } => Ok(Domain::continuous(1)),
-            Self::SincEvaluator { .. } => Ok(Domain::continuous(2)),
             Self::Unit { params } => Ok(Domain::rectangular(
                 params.continuous_dims,
                 params.discrete_dims,
@@ -83,17 +67,10 @@ impl EvaluatorConfig {
         }
 
         match self {
-            Self::ProcessScalar { .. } | Self::SinEvaluator { .. } | Self::Symbolica { .. } => {
-                validate_semantic_accumulator(
-                    self.kind_str(),
-                    config,
-                    SemanticAccumulatorKind::Scalar,
-                )
-            }
-            Self::SincEvaluator { .. } => validate_semantic_accumulator(
+            Self::ProcessScalar { .. } | Self::Symbolica { .. } => validate_semantic_accumulator(
                 self.kind_str(),
                 config,
-                SemanticAccumulatorKind::Complex,
+                SemanticAccumulatorKind::Scalar,
             ),
             Self::Unit { params } => {
                 validate_semantic_accumulator(self.kind_str(), config, params.accumulator_kind)
