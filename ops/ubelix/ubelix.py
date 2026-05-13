@@ -1058,11 +1058,16 @@ def nix_build_shell_command(flake_ref: str, nix_args: list[str]) -> str:
 
 
 def nix_build_apptainer_command(nix_command: str) -> list[str]:
+    tmpdir = os.environ.get("TMPDIR", "/tmp")
     return [
+        "env",
+        f"APPTAINERENV_TMPDIR={tmpdir}",
         "apptainer",
         "exec",
         "-B",
         WORKSPACE_ROOT,
+        "-B",
+        tmpdir,
         "-B",
         f"{NIX_ROOT}:/nix",
         IMAGE_PATH,
@@ -1070,6 +1075,26 @@ def nix_build_apptainer_command(nix_command: str) -> list[str]:
         "-lc",
         nix_command,
     ]
+
+
+def nix_build_apptainer_shell_command(nix_command: str) -> str:
+    command = [
+        "env",
+        'APPTAINERENV_TMPDIR="$TMPDIR"',
+        "apptainer",
+        "exec",
+        "-B",
+        shlex.quote(WORKSPACE_ROOT),
+        "-B",
+        '"$TMPDIR"',
+        "-B",
+        shlex.quote(f"{NIX_ROOT}:/nix"),
+        shlex.quote(IMAGE_PATH),
+        "sh",
+        "-lc",
+        shlex.quote(nix_command),
+    ]
+    return " ".join(command)
 
 
 def submit_nix_build_slurm(args: argparse.Namespace, nix_command: str) -> None:
@@ -1089,7 +1114,9 @@ def submit_nix_build_slurm(args: argparse.Namespace, nix_command: str) -> None:
 
 set -euo pipefail
 mkdir -p {shlex.quote(NIX_ROOT)}
-{shlex.join(nix_build_apptainer_command(nix_command))}
+export TMPDIR="${{SLURM_TMPDIR:-/tmp}}"
+mkdir -p "${{TMPDIR}}"
+{nix_build_apptainer_shell_command(nix_command)}
 """
     result = subprocess.run(
         ["sbatch", "--chdir", WORKSPACE_ROOT],

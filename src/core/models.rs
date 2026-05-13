@@ -9,6 +9,15 @@ use std::{collections::BTreeMap, fmt, str::FromStr};
 
 pub type NodeCapabilities = BTreeMap<String, u64>;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PythonRuntimeConfig {
+    Flake {
+        #[serde(rename = "ref")]
+        reference: String,
+    },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkerRole {

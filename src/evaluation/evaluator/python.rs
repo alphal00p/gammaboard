@@ -7,7 +7,7 @@ use std::{env, ffi::OsString};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::core::{AccumulatorConfig, BuildError, EvalError};
+use crate::core::{AccumulatorConfig, BuildError, EvalError, PythonRuntimeConfig};
 use crate::evaluation::{
     AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator, IngestScalar,
     ScalarBatchEvaluator,
@@ -17,7 +17,7 @@ use crate::utils::domain::Domain;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PythonScalarParams {
-    pub flake_ref: String,
+    pub runtime: PythonRuntimeConfig,
     pub module: String,
     pub class: String,
     pub continuous_dims: usize,
@@ -49,7 +49,8 @@ impl ScalarPythonEvaluator {
                 "python_scalar discrete_cardinalities must contain only positive integers",
             ));
         }
-        let flake_ref = normalize_flake_ref(&params.flake_ref);
+        let PythonRuntimeConfig::Flake { reference } = &params.runtime;
+        let flake_ref = normalize_flake_ref(reference);
         let output_path = build_nix_output_path(&flake_ref)?;
         let python_executable = resolve_python_executable(&output_path).ok_or_else(|| {
             BuildError::build(format!(
