@@ -8,7 +8,7 @@ import os
 sampler = None
 discrete_cardinalities = None
 continuous_dims = None
-sampler_init_args = {}
+sampler_args = {}
 protocol_stdout = os.fdopen(os.dup(1), "wb", buffering=0)
 sys.stdout = sys.stderr
 
@@ -66,6 +66,22 @@ def import_configured_module(module_name):
         raise
 
 
+def parse_python_wrapper_args(params):
+    args = params.get("args") or {}
+    if not isinstance(args, dict):
+        raise TypeError("args must be an object")
+    module_name = args.get("module")
+    class_name = args.get("class")
+    if not isinstance(module_name, str) or not module_name:
+        raise ValueError("python sampler args.module must be a non-empty string")
+    if not isinstance(class_name, str) or not class_name:
+        raise ValueError("python sampler args.class must be a non-empty string")
+    init_args = dict(args)
+    init_args.pop("module", None)
+    init_args.pop("class", None)
+    return module_name, class_name, init_args
+
+
 while True:
     req = read_frame()
     if req is None:
@@ -79,37 +95,35 @@ while True:
                 raise ValueError(f"unsupported protocol: {params.get('protocol')!r}")
             if params.get("role") != "sampler":
                 raise ValueError(f"expected sampler role, got {params.get('role')!r}")
-            module = import_configured_module(params["module"])
-            cls = getattr(module, params["class"])
+            module_name, class_name, init_args = parse_python_wrapper_args(params)
+            module = import_configured_module(module_name)
+            cls = getattr(module, class_name)
             discrete_cardinalities = [int(value) for value in params["discrete_cardinalities"]]
             if any(value <= 0 for value in discrete_cardinalities):
                 raise ValueError("discrete_cardinalities must contain only positive integers")
             discrete_dims = len(discrete_cardinalities)
             continuous_dims = int(params["continuous_dims"])
-            init_args = params.get("init_args") or {}
-            if not isinstance(init_args, dict):
-                raise TypeError("init_args must be an object")
-            sampler_init_args = init_args
+            sampler_args = init_args
             snapshot = params.get("snapshot")
             if snapshot is not None:
                 if not hasattr(cls, "from_snapshot"):
                     raise TypeError("class must define from_snapshot(...) when restoring from snapshot")
-                if isinstance(snapshot, dict) and "save_path" not in snapshot and "save_path" in init_args:
-                    snapshot = {**snapshot, "save_path": init_args["save_path"]}
+                if isinstance(snapshot, dict) and "save_path" not in snapshot and "save_path" in sampler_args:
+                    snapshot = {**snapshot, "save_path": sampler_args["save_path"]}
                 sampler = cls.from_snapshot(
                     snapshot=snapshot,
                     discrete_cardinalities=discrete_cardinalities,
                     continuous_dims=continuous_dims,
-                    init_args=init_args,
+                    init_args=sampler_args,
                 )
             elif hasattr(cls, "from_config"):
                 sampler = cls.from_config(
                     discrete_cardinalities=discrete_cardinalities,
                     continuous_dims=continuous_dims,
-                    init_args=init_args,
+                    init_args=sampler_args,
                 )
-            elif init_args:
-                sampler = cls(**init_args)
+            elif sampler_args:
+                sampler = cls(**sampler_args)
             else:
                 sampler = cls()
             maybe_discrete_cardinalities = getattr(sampler, "discrete_cardinalities", None)
@@ -205,8 +219,8 @@ while True:
             if sampler is None:
                 raise RuntimeError("worker not initialized")
             snapshot = sampler.snapshot()
-            if isinstance(snapshot, dict) and "save_path" not in snapshot and "save_path" in sampler_init_args:
-                snapshot = {**snapshot, "save_path": sampler_init_args["save_path"]}
+            if isinstance(snapshot, dict) and "save_path" not in snapshot and "save_path" in sampler_args:
+                snapshot = {**snapshot, "save_path": sampler_args["save_path"]}
             send_result(req_id, {"snapshot": snapshot})
         elif method == "get_diagnostics":
             if sampler is None:

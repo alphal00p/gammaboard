@@ -17,7 +17,7 @@ pub enum SamplerAggregatorSnapshot {
     PdfAdaptationRasterLine { raw: JsonValue },
     HavanaTraining { raw: JsonValue },
     HavanaInference { raw: JsonValue },
-    PythonSampler { raw: JsonValue },
+    ProcessSampler { raw: JsonValue },
 }
 
 impl SamplerAggregatorSnapshot {
@@ -46,8 +46,8 @@ impl SamplerAggregatorSnapshot {
                 SamplerAggregatorSnapshot::HavanaInference { .. },
                 SamplerAggregatorConfig::HavanaInference { .. }
             ) | (
-                SamplerAggregatorSnapshot::PythonSampler { .. },
-                SamplerAggregatorConfig::PythonSampler { .. }
+                SamplerAggregatorSnapshot::ProcessSampler { .. },
+                SamplerAggregatorConfig::ProcessSampler { .. }
             )
         )
     }

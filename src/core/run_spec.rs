@@ -1,5 +1,5 @@
 use crate::evaluation::{
-    GammaLoopParams, PythonScalarParams, SinEvaluatorParams, SincEvaluatorParams, SymbolicaParams,
+    GammaLoopParams, ProcessScalarParams, SinEvaluatorParams, SincEvaluatorParams, SymbolicaParams,
     UnitEvaluatorParams,
 };
 use crate::utils::domain::Domain;
@@ -8,7 +8,7 @@ use crate::core::tasks::DiscreteHistogramConfig;
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use crate::sampling::HavanaInferenceSamplerParams;
 use crate::sampling::{
-    HavanaSamplerParams, NaiveMonteCarloSamplerParams, PythonSamplerParams,
+    HavanaSamplerParams, NaiveMonteCarloSamplerParams, ProcessSamplerParams,
     RasterLineSamplerParams, RasterPlaneSamplerParams, SphericalBatchTransformParams,
     UnitBallBatchTransformParams,
 };
@@ -358,9 +358,9 @@ pub enum EvaluatorConfig {
         #[serde(flatten)]
         params: SymbolicaParams,
     },
-    PythonScalar {
+    ProcessScalar {
         #[serde(flatten)]
-        params: PythonScalarParams,
+        params: ProcessScalarParams,
     },
 }
 
@@ -397,9 +397,9 @@ pub enum SamplerAggregatorConfig {
         #[serde(flatten)]
         params: HavanaInferenceSamplerParams,
     },
-    PythonSampler {
+    ProcessSampler {
         #[serde(flatten)]
-        params: PythonSamplerParams,
+        params: ProcessSamplerParams,
     },
 }
 

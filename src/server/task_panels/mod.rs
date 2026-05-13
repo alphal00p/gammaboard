@@ -564,7 +564,7 @@ fn sampler_config_label(config: &SamplerAggregatorConfig) -> &'static str {
         SamplerAggregatorConfig::PdfAdaptationRasterLine { .. } => "pdf_adaptation_raster_line",
         SamplerAggregatorConfig::HavanaTraining { .. } => "havana_training",
         SamplerAggregatorConfig::HavanaInference { .. } => "havana_inference",
-        SamplerAggregatorConfig::PythonSampler { .. } => "python_sampler",
+        SamplerAggregatorConfig::ProcessSampler { .. } => "process_sampler",
     }
 }
 

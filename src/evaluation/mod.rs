@@ -11,7 +11,7 @@ pub use accumulator::{
 };
 pub use batch::{Batch, BatchError, BatchResult, Point};
 pub use evaluator::{
-    GammaLoopParams, PythonScalarParams, SinEvaluatorParams, SincEvaluatorParams, SymbolicaParams,
+    GammaLoopParams, ProcessScalarParams, SinEvaluatorParams, SincEvaluatorParams, SymbolicaParams,
     UnitEvaluatorParams,
 };
 pub use traits::{

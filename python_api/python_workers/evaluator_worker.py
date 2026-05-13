@@ -65,6 +65,22 @@ def import_configured_module(module_name):
         raise
 
 
+def parse_python_wrapper_args(params):
+    args = params.get("args") or {}
+    if not isinstance(args, dict):
+        raise TypeError("args must be an object")
+    module_name = args.get("module")
+    class_name = args.get("class")
+    if not isinstance(module_name, str) or not module_name:
+        raise ValueError("python evaluator args.module must be a non-empty string")
+    if not isinstance(class_name, str) or not class_name:
+        raise ValueError("python evaluator args.class must be a non-empty string")
+    init_args = dict(args)
+    init_args.pop("module", None)
+    init_args.pop("class", None)
+    return module_name, class_name, init_args
+
+
 while True:
     req = read_frame()
     if req is None:
@@ -78,8 +94,9 @@ while True:
                 raise ValueError(f"unsupported protocol: {params.get('protocol')!r}")
             if params.get("role") != "evaluator":
                 raise ValueError(f"expected evaluator role, got {params.get('role')!r}")
-            module = import_configured_module(params["module"])
-            cls = getattr(module, params["class"])
+            module_name, class_name, init_args = parse_python_wrapper_args(params)
+            module = import_configured_module(module_name)
+            cls = getattr(module, class_name)
             discrete_cardinalities = [int(value) for value in params["discrete_cardinalities"]]
             if any(value <= 0 for value in discrete_cardinalities):
                 raise ValueError(
@@ -87,9 +104,6 @@ while True:
                 )
             discrete_dims = len(discrete_cardinalities)
             continuous_dims = int(params["continuous_dims"])
-            init_args = params.get("init_args") or {}
-            if not isinstance(init_args, dict):
-                raise TypeError("init_args must be an object")
             if hasattr(cls, "from_config"):
                 integrand = cls.from_config(
                     discrete_cardinalities=discrete_cardinalities,

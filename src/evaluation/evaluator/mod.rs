@@ -1,5 +1,5 @@
 pub(crate) mod gammaloop;
-pub(crate) mod python;
+pub(crate) mod process;
 mod sin_evaluator;
 mod sinc_evaluator;
 mod symbolica;
@@ -10,13 +10,13 @@ use crate::evaluation::{AccumulatorState, Evaluator, SemanticAccumulatorKind};
 use crate::utils::domain::Domain;
 
 use self::gammaloop::GammaLoopEvaluator;
-use self::python::ScalarPythonEvaluator;
+use self::process::ProcessScalarEvaluator;
 use self::sin_evaluator::SinEvaluator;
 use self::sinc_evaluator::SincEvaluator;
 use self::symbolica::SymbolicaEngine;
 use self::unit::UnitEvaluator;
 pub use gammaloop::GammaLoopParams;
-pub use python::PythonScalarParams;
+pub use process::ProcessScalarParams;
 pub use sin_evaluator::SinEvaluatorParams;
 pub use sinc_evaluator::SincEvaluatorParams;
 pub use symbolica::SymbolicaParams;
@@ -30,7 +30,7 @@ impl EvaluatorConfig {
             Self::SincEvaluator { .. } => "sinc_evaluator",
             Self::Unit { .. } => "unit",
             Self::Symbolica { .. } => "symbolica",
-            Self::PythonScalar { .. } => "python_scalar",
+            Self::ProcessScalar { .. } => "process_scalar",
         }
     }
 
@@ -49,7 +49,7 @@ impl EvaluatorConfig {
             Self::Symbolica { params } => {
                 Ok(Box::new(SymbolicaEngine::from_params(params.clone())?))
             }
-            Self::PythonScalar { params } => Ok(Box::new(ScalarPythonEvaluator::from_params(
+            Self::ProcessScalar { params } => Ok(Box::new(ProcessScalarEvaluator::from_params(
                 params.clone(),
             )?)),
         }
@@ -67,7 +67,7 @@ impl EvaluatorConfig {
                 params.discrete_dims,
             )),
             Self::Symbolica { params } => Ok(Domain::continuous(params.args.len())),
-            Self::PythonScalar { params } => Ok(Domain::rectangular_with_cardinalities(
+            Self::ProcessScalar { params } => Ok(Domain::rectangular_with_cardinalities(
                 params.continuous_dims,
                 params.discrete_cardinalities.clone(),
             )),
@@ -83,7 +83,7 @@ impl EvaluatorConfig {
         }
 
         match self {
-            Self::PythonScalar { .. } | Self::SinEvaluator { .. } | Self::Symbolica { .. } => {
+            Self::ProcessScalar { .. } | Self::SinEvaluator { .. } | Self::Symbolica { .. } => {
                 validate_semantic_accumulator(
                     self.kind_str(),
                     config,

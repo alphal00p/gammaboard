@@ -1,6 +1,6 @@
 mod havana;
 mod naive_monte_carlo;
-mod python;
+mod process;
 mod raster;
 
 use crate::Materializer;
@@ -18,8 +18,8 @@ use self::havana::{
 };
 use self::naive_monte_carlo::NaiveMonteCarloSamplerAggregator;
 pub use self::naive_monte_carlo::NaiveMonteCarloSamplerParams;
-pub use self::python::PythonSamplerParams;
-use self::python::{PythonSampler, PythonSamplerSnapshot};
+pub use self::process::ProcessSamplerParams;
+use self::process::{ProcessSampler, ProcessSamplerSnapshot};
 pub use self::raster::{
     PdfAdaptationImagePersistedOutput, PdfAdaptationRasterLineSamplerParams,
     PdfAdaptationRasterPlaneSamplerParams, RasterLineSamplerParams, RasterPlaneSamplerParams,
@@ -119,14 +119,14 @@ impl SamplerAggregatorSnapshot {
                     snapshot, domain,
                 )?))
             }
-            Self::PythonSampler { raw } => {
-                let snapshot: PythonSamplerSnapshot =
+            Self::ProcessSampler { raw } => {
+                let snapshot: ProcessSamplerSnapshot =
                     serde_json::from_value(raw).map_err(|err| {
                         BuildError::build(format!(
-                            "failed to decode python_sampler sampler snapshot: {err}"
+                            "failed to decode process_sampler sampler snapshot: {err}"
                         ))
                     })?;
-                Ok(Box::new(PythonSampler::from_snapshot(snapshot, domain)?))
+                Ok(Box::new(ProcessSampler::from_snapshot(snapshot, domain)?))
             }
         }
     }
@@ -138,7 +138,7 @@ impl SamplerAggregatorConfig {
             Self::HavanaTraining { .. }
             | Self::PdfAdaptationRasterPlane { .. }
             | Self::PdfAdaptationRasterLine { .. } => true,
-            Self::PythonSampler { params } => params.requires_training_values,
+            Self::ProcessSampler { params } => params.requires_training_values,
             _ => false,
         }
     }
@@ -152,7 +152,7 @@ impl SamplerAggregatorConfig {
             Self::PdfAdaptationRasterLine { .. } => "pdf_adaptation_raster_line",
             Self::HavanaTraining { .. } => "havana_training",
             Self::HavanaInference { .. } => "havana_inference",
-            Self::PythonSampler { .. } => "python_sampler",
+            Self::ProcessSampler { .. } => "process_sampler",
         }
     }
 
@@ -242,10 +242,9 @@ impl SamplerAggregatorConfig {
                     &domain,
                 )?))
             }
-            Self::PythonSampler { params } => Ok(Box::new(PythonSampler::from_params_and_domain(
-                params.clone(),
-                &domain,
-            )?)),
+            Self::ProcessSampler { params } => Ok(Box::new(
+                ProcessSampler::from_params_and_domain(params.clone(), &domain)?,
+            )),
         }
     }
     pub fn build_materializer(

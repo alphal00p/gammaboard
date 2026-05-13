@@ -1,4 +1,4 @@
-# Ghost bump with the MADNIS Python sampler runtime deployed under resources/runtimes.
+# Ghost bump with the MADNIS process sampler runtime deployed under resources/runtimes.
 
 name = "ghost_bump_madnis"
 sampler_requirements = { gpu = 1 }
@@ -48,14 +48,14 @@ kind = "sample"
 max_samples = 200000
 
 [task_queue.sampler_aggregator.config]
-kind = "python_sampler"
-runtime = { kind = "apptainer", image = "runtimes/madnis_gammaboard_api/runtime.sif", nv = true }
-module = "madnis_sampler"
-class = "MadnisSampler"
+kind = "process_sampler"
+command = ["apptainer", "exec", "--nv", "runtimes/madnis_gammaboard_api/runtime.sif", "python", "-u", "runtimes/madnis_gammaboard_api/sampler_worker.py"]
 continuous_dims = 2
 requires_training_values = true
 
-[task_queue.sampler_aggregator.config.init_args]
+[task_queue.sampler_aggregator.config.args]
+module = "madnis_sampler"
+class = "MadnisSampler"
 seed = 0
 training_samples = 200000
 save_path = "runtimes/madnis_gammaboard_api/checkpoints/ghost_bump_madnis"

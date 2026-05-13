@@ -128,7 +128,7 @@ fn evaluator_accumulator_kind(
         EvaluatorConfig::Symbolica { .. } => {
             Some(crate::evaluation::SemanticAccumulatorKind::Scalar)
         }
-        EvaluatorConfig::PythonScalar { .. } => {
+        EvaluatorConfig::ProcessScalar { .. } => {
             Some(crate::evaluation::SemanticAccumulatorKind::Scalar)
         }
     }
