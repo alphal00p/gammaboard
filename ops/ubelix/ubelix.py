@@ -27,8 +27,7 @@ WORKER_SBATCH = f"{WORKSPACE_ROOT}/ops/slurm/worker.sbatch"
 GB_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaboard.sbatch"
 GL_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaloop.sbatch"
 IMAGE_PATH = f"{WORKSPACE_ROOT}/images/gammaboard/gammaboard.sif"
-DEFAULT_NIX_ROOT = f"/scratch/network/users/{os.environ.get('USER', 'unknown')}/gammaboard-nix"
-NIX_ROOT = DEFAULT_NIX_ROOT
+NIX_ROOT = f"/scratch/network/users/{os.environ.get('USER', 'unknown')}/gammaboard-nix"
 NIX_VERSION = "2.24.11"
 NIX_DOWNLOAD_BUFFER_SIZE = 524288000
 FRONTEND_PORT = 8080
@@ -1247,7 +1246,7 @@ def parser() -> argparse.ArgumentParser:
 
     nix_build = sub.add_parser(
         "nix-build",
-        help="login node: run or submit nix build inside the GammaBoard image with the persistent /nix bind",
+        help="login node: run or submit nix build inside the GammaBoard image with scratch-backed /nix",
     )
     nix_build.add_argument(
         "--slurm",

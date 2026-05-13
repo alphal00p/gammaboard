@@ -11,6 +11,7 @@ Operator guide for the current UBELIX setup. Local sync commands run from your w
 - Access: one SSH tunnel to the frontend port
 - Resources: relative run/task paths resolve under `${WORKSPACE_ROOT}/resources`; GammaLoop states use `states/...`
 - Nix: the GammaBoard image includes the Nix CLI and binds `/scratch/network/users/$USER/gammaboard-nix` as `/nix`
+- Legacy workspace-local `nix/` directories are unused and can be removed.
 
 ## Sync From Local
 
@@ -126,3 +127,9 @@ Admin-protected commands accept `--admin-password` or `GAMMABOARD_ADMIN_PASSWORD
 ```
 
 Secrets and local overrides live in `${HOME}/.config/gammaboard/slurm.env`; all sbatch scripts source it and require `SYMBOLICA_LICENSE`.
+
+Remove obsolete workspace-local Nix state after syncing current ops:
+
+```bash
+rm -rf /storage/research/itp_localunitaritydata/gammaboard/nix
+```

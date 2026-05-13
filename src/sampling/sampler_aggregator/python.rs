@@ -5,7 +5,7 @@ use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::Mutex;
 use std::{env, ffi::OsString};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::core::{BuildError, EngineError, PythonRuntimeConfig};
@@ -15,8 +15,7 @@ use crate::sampling::{
 };
 use crate::utils::domain::Domain;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct PythonSamplerParams {
     pub runtime: PythonRuntimeConfig,
     pub module: String,
@@ -26,6 +25,47 @@ pub struct PythonSamplerParams {
     pub requires_training_values: bool,
     #[serde(default = "default_init_args")]
     pub init_args: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PythonSamplerParamsRaw {
+    runtime: Option<PythonRuntimeConfig>,
+    flake_ref: Option<String>,
+    module: String,
+    class: String,
+    continuous_dims: usize,
+    #[serde(default)]
+    requires_training_values: bool,
+    #[serde(default = "default_init_args")]
+    init_args: Value,
+}
+
+impl<'de> Deserialize<'de> for PythonSamplerParams {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = PythonSamplerParamsRaw::deserialize(deserializer)?;
+        if let Some(flake_ref) = raw.flake_ref {
+            return Err(serde::de::Error::custom(format!(
+                "python_sampler no longer accepts 'flake_ref'. Replace it with: runtime = {{ kind = \"flake\", ref = \"{flake_ref}\" }}"
+            )));
+        }
+        let runtime = raw.runtime.ok_or_else(|| {
+            serde::de::Error::custom(
+                "python_sampler requires: runtime = { kind = \"flake\", ref = \"...\" }",
+            )
+        })?;
+        Ok(Self {
+            runtime,
+            module: raw.module,
+            class: raw.class,
+            continuous_dims: raw.continuous_dims,
+            requires_training_values: raw.requires_training_values,
+            init_args: raw.init_args,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -746,8 +786,28 @@ fn default_init_args() -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_homogeneous_domain;
+    use super::{PythonSamplerParams, validate_homogeneous_domain};
     use crate::utils::domain::Domain;
+
+    #[test]
+    fn python_sampler_rejects_legacy_flake_ref_with_migration_hint() {
+        let err = toml::from_str::<PythonSamplerParams>(
+            r#"
+flake_ref = "path:./old#runtime"
+module = "my_module"
+class = "MySampler"
+continuous_dims = 2
+"#,
+        )
+        .expect_err("legacy flake_ref should fail")
+        .to_string();
+
+        assert!(err.contains("python_sampler no longer accepts 'flake_ref'"));
+        assert!(
+            err.contains("runtime = { kind = \"flake\", ref = \"path:./old#runtime\" }"),
+            "{err}"
+        );
+    }
 
     #[test]
     fn python_sampler_domain_accepts_fixed_rectangular_mixed_dims() {

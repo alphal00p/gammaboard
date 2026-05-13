@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::{env, ffi::OsString};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::core::{AccumulatorConfig, BuildError, EvalError, PythonRuntimeConfig};
@@ -14,8 +14,7 @@ use crate::evaluation::{
 };
 use crate::utils::domain::Domain;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PythonScalarParams {
     pub runtime: PythonRuntimeConfig,
     pub module: String,
@@ -25,6 +24,47 @@ pub struct PythonScalarParams {
     pub discrete_cardinalities: Vec<usize>,
     #[serde(default = "default_init_args")]
     pub init_args: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PythonScalarParamsRaw {
+    runtime: Option<PythonRuntimeConfig>,
+    flake_ref: Option<String>,
+    module: String,
+    class: String,
+    continuous_dims: usize,
+    #[serde(default)]
+    discrete_cardinalities: Vec<usize>,
+    #[serde(default = "default_init_args")]
+    init_args: Value,
+}
+
+impl<'de> Deserialize<'de> for PythonScalarParams {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = PythonScalarParamsRaw::deserialize(deserializer)?;
+        if let Some(flake_ref) = raw.flake_ref {
+            return Err(serde::de::Error::custom(format!(
+                "python_scalar no longer accepts 'flake_ref'. Replace it with: runtime = {{ kind = \"flake\", ref = \"{flake_ref}\" }}"
+            )));
+        }
+        let runtime = raw.runtime.ok_or_else(|| {
+            serde::de::Error::custom(
+                "python_scalar requires: runtime = { kind = \"flake\", ref = \"...\" }",
+            )
+        })?;
+        Ok(Self {
+            runtime,
+            module: raw.module,
+            class: raw.class,
+            continuous_dims: raw.continuous_dims,
+            discrete_cardinalities: raw.discrete_cardinalities,
+            init_args: raw.init_args,
+        })
+    }
 }
 
 pub struct ScalarPythonEvaluator {
@@ -489,7 +529,27 @@ fn is_executable(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_flake_ref;
+    use super::{PythonScalarParams, normalize_flake_ref};
+
+    #[test]
+    fn python_scalar_rejects_legacy_flake_ref_with_migration_hint() {
+        let err = toml::from_str::<PythonScalarParams>(
+            r#"
+flake_ref = "path:./old#runtime"
+module = "my_module"
+class = "MyEvaluator"
+continuous_dims = 2
+"#,
+        )
+        .expect_err("legacy flake_ref should fail")
+        .to_string();
+
+        assert!(err.contains("python_scalar no longer accepts 'flake_ref'"));
+        assert!(
+            err.contains("runtime = { kind = \"flake\", ref = \"path:./old#runtime\" }"),
+            "{err}"
+        );
+    }
 
     #[test]
     fn normalize_flake_ref_prefixes_local_paths() {
