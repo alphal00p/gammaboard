@@ -1554,6 +1554,122 @@ sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", 
     Ok(())
 }
 
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege, apptainer, and a working unprivileged Apptainer build setup"]
+async fn full_stack_cli_rust_apptainer_process_evaluator_e2e() -> anyhow::Result<()> {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let example_dir = manifest_dir.join("process_api/examples/rust_breit_wigner_evaluator");
+    let image_dir = TempDir::new()?;
+    let image_path = image_dir.path().join("runtime.sif");
+
+    let build_output = std::process::Command::new("apptainer")
+        .arg("build")
+        .arg(&image_path)
+        .arg("apptainer.def")
+        .current_dir(&example_dir)
+        .output()?;
+    anyhow::ensure!(
+        build_output.status.success(),
+        "apptainer build failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&build_output.stdout),
+        String::from_utf8_lossy(&build_output.stderr)
+    );
+
+    let mut harness = FullStackHarness::new().await?;
+    harness.start_nodes(&["w-1", "w-2"]).await?;
+
+    let config = temp_run_add_config(&format!(
+        r#"
+name = "rust-apptainer-process-evaluator-e2e"
+
+[evaluator]
+kind = "process_scalar"
+command = ["apptainer", "exec", "{}", "breit-wigner-worker"]
+continuous_dims = 2
+discrete_cardinalities = [3]
+args = {{ masses = [0.25, 0.50, 0.75], widths = [0.04, 0.06, 0.05], channel_weights = [1.0, 0.7, 1.3] }}
+
+[[task_queue]]
+name = "accumulator"
+kind = "set_accumulator"
+
+[task_queue.accumulator]
+kind = "scalar"
+
+[[task_queue]]
+name = "sample-a"
+kind = "sample"
+stop_condition = {{ max_samples = 64 }}
+"#,
+        image_path.display()
+    ));
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 = sqlx::query_scalar(
+        "SELECT id FROM runs WHERE name = 'rust-apptainer-process-evaluator-e2e'",
+    )
+    .fetch_one(&harness.pool)
+    .await?;
+
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-1",
+            "sampler-aggregator",
+            "rust-apptainer-process-evaluator-e2e",
+        ])
+        .assert()
+        .success();
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-2",
+            "evaluator",
+            "rust-apptainer-process-evaluator-e2e",
+        ])
+        .assert()
+        .success();
+
+    harness
+        .wait_for(
+            "rust apptainer process evaluator task completes",
+            Duration::from_secs(120),
+            || async {
+                let state: String = sqlx::query_scalar(
+                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'sample-a'",
+                )
+                .bind(run_id)
+                .fetch_one(&harness.pool)
+                .await?;
+                Ok(state == "completed")
+            },
+        )
+        .await?;
+
+    let completed_samples: i64 =
+        sqlx::query_scalar("SELECT nr_completed_samples FROM runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_one(&harness.pool)
+            .await?;
+    assert!(completed_samples >= 64);
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
 fn temp_server_config(
     host: &str,
     port: u16,

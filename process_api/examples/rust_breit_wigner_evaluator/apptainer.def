@@ -1,0 +1,20 @@
+Bootstrap: docker
+From: rust:1.87-bookworm
+
+%files
+    Cargo.toml /opt/breit-wigner/Cargo.toml
+    Cargo.lock /opt/breit-wigner/Cargo.lock
+    src /opt/breit-wigner/src
+
+%post
+    set -eux
+    cd /opt/breit-wigner
+    cargo build --release --locked
+    install -Dm755 target/release/breit-wigner-worker /usr/local/bin/breit-wigner-worker
+    rm -rf /opt/breit-wigner/target /usr/local/cargo/registry /usr/local/cargo/git
+
+%runscript
+    exec /usr/local/bin/breit-wigner-worker "$@"
+
+%test
+    /usr/local/bin/breit-wigner-worker --help >/dev/null 2>&1 || true

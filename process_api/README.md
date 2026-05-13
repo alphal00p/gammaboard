@@ -53,3 +53,7 @@ The Python implementation class is intentionally simple:
 `examples/python_sampler_symbolica_havana` packages a Symbolica-backed Havana
 sampler, including the pinned Symbolica Python wheel. It does not rely on a
 host `symbolica` installation.
+
+`examples/rust_breit_wigner_evaluator` packages a non-Python scalar evaluator
+with Apptainer. It is the simplest reference for implementing the protocol
+directly in another language.

@@ -192,10 +192,19 @@ Flake-backed process evaluator + sampler example:
 gammaboard run add templates/runs/process-scalar-process-sampler-flake-demo.toml
 ```
 
+Apptainer-backed Rust process evaluator example:
+```bash
+cd process_api/examples/rust_breit_wigner_evaluator
+apptainer build runtime.sif apptainer.def
+cd ../../..
+gammaboard run add templates/runs/process-rust-apptainer-evaluator-demo.toml
+```
+
 Curated run templates:
 - `templates/runs/ghost_bump.toml`: Symbolica + Havana training on a 2D `(x, y)` domain plus `pdf_adaptation_image` for ghost-bump diagnostics.
 - `templates/runs/symbolica-havana-pdf-1d2d.toml`: Symbolica + Havana training + both PDF adaptation task kinds (`pdf_adaptation_image`, `pdf_adaptation_plot_line`).
 - `templates/runs/process-scalar-process-sampler-flake-demo.toml`: Process evaluator and sampler integration.
+- `templates/runs/process-rust-apptainer-evaluator-demo.toml`: Apptainer-packaged Rust process evaluator integration.
 - `templates/runs/gammaloop.toml`: GammaLoop TTH evaluator config, including optional `post_load_commands`.
 
 Curated task bundles:
