@@ -35,6 +35,23 @@ pub fn resolve_resource_path(path: &Path) -> Result<PathBuf, ResourceResolutionE
     })
 }
 
+pub fn resource_roots() -> Vec<PathBuf> {
+    RESOURCE_ROOTS.get().cloned().unwrap_or_default()
+}
+
+pub fn primary_resource_root() -> Result<PathBuf, ResourceResolutionError> {
+    RESOURCE_ROOTS
+        .get()
+        .and_then(|roots| roots.first().cloned())
+        .map(Ok)
+        .unwrap_or_else(|| {
+            std::env::current_dir().map_err(|_| ResourceResolutionError {
+                relative_path: PathBuf::from("."),
+                attempted: Vec::new(),
+            })
+        })
+}
+
 #[derive(Debug)]
 pub struct ResourceResolutionError {
     pub relative_path: PathBuf,

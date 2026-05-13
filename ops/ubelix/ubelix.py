@@ -26,6 +26,7 @@ SINGLE_NODE_SBATCH = f"{WORKSPACE_ROOT}/ops/slurm/single_node_deploy.sbatch"
 WORKER_SBATCH = f"{WORKSPACE_ROOT}/ops/slurm/worker.sbatch"
 GB_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaboard.sbatch"
 GL_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaloop.sbatch"
+PY_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/python.sbatch"
 IMAGE_PATH = f"{WORKSPACE_ROOT}/images/gammaboard/gammaboard.sif"
 NIX_ROOT = f"/scratch/network/users/{os.environ.get('USER', 'unknown')}/gammaboard-nix"
 NIX_VERSION = "2.24.11"
@@ -973,7 +974,12 @@ def command_watch_requests(args: argparse.Namespace) -> None:
 
 def command_build(args: argparse.Namespace) -> None:
     ensure_dirs()
-    target = GB_BUILD_SBATCH if args.target == "gammaboard" else GL_BUILD_SBATCH
+    targets = {
+        "gammaboard": GB_BUILD_SBATCH,
+        "gammaloop": GL_BUILD_SBATCH,
+        "python": PY_BUILD_SBATCH,
+    }
+    target = targets[args.target]
     result = run(["sbatch", "--chdir", WORKSPACE_ROOT, target])
     print(result.stdout.strip())
 
@@ -1241,7 +1247,7 @@ def parser() -> argparse.ArgumentParser:
     watch_requests.set_defaults(func=command_watch_requests)
 
     build = sub.add_parser("build", help="login node: submit a build job")
-    build.add_argument("target", choices=("gammaboard", "gammaloop"))
+    build.add_argument("target", choices=("gammaboard", "gammaloop", "python"))
     build.set_defaults(func=command_build)
 
     nix_build = sub.add_parser(

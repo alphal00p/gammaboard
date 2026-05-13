@@ -227,7 +227,7 @@ Gammaboard evaluates GammaLoop runs in x-space so GammaLoop's parameterized obse
 `post_load_commands = ["set ...", ...]` is optional and executes in-memory after loading the GammaLoop state and before integrand selection; commands are not saved back to disk.
 
 For `evaluator.kind = "python_scalar"`, configure:
-- `runtime`: Python runtime config. Currently implemented: `{ kind = "flake", ref = "path:./python_api/examples/python_scalar_sin#runtime" }`
+- `runtime`: Python runtime config, for example `{ kind = "flake", ref = "path:./python_api/examples/python_scalar_sin#runtime" }` or `{ kind = "apptainer", image = "runtimes/my_runtime/runtime.sif", nv = true }`
 - `module`: python module name to import
 - `class`: class name to instantiate (must expose `eval(xs_discrete, xs_continuous)`)
 - `continuous_dims`: expected continuous dimension for homogeneous rectangular batches
@@ -240,7 +240,7 @@ Python construction semantics:
 - otherwise the worker calls `ClassName(**init_args)` (or `ClassName()` when `init_args` is empty)
 
 For `sampler_aggregator.kind = "python_sampler"`, configure:
-- `runtime`: Python runtime config. Currently implemented: `{ kind = "flake", ref = "path:./python_api/examples/python_sampler_symbolica_havana#runtime" }`
+- `runtime`: Python runtime config, for example `{ kind = "flake", ref = "path:./python_api/examples/python_sampler_symbolica_havana#runtime" }` or `{ kind = "apptainer", image = "runtimes/my_runtime/runtime.sif", nv = true }`
 - `module`: python module name to import
 - `class`: python class implementing sampler methods (`sample_plan`, `training_samples_remaining`, `produce_latent_batch`, `ingest_training_values`, `snapshot`, optional `pdf`)
 - `continuous_dims`: expected homogeneous continuous dimension

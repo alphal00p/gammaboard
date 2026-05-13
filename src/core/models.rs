@@ -16,6 +16,19 @@ pub enum PythonRuntimeConfig {
         #[serde(rename = "ref")]
         reference: String,
     },
+    Apptainer {
+        image: String,
+        #[serde(default = "default_python_runtime_command")]
+        python: String,
+        #[serde(default)]
+        workdir: Option<String>,
+        #[serde(default)]
+        nv: bool,
+    },
+}
+
+fn default_python_runtime_command() -> String {
+    "python".to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +61,37 @@ impl FromStr for WorkerRole {
             "evaluator" => Ok(Self::Evaluator),
             "sampler_aggregator" | "sampler-aggregator" => Ok(Self::SamplerAggregator),
             other => Err(format!("unknown worker role: {other}")),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PythonRuntimeConfig;
+
+    #[test]
+    fn apptainer_python_runtime_defaults_optional_fields() {
+        let runtime = toml::from_str::<PythonRuntimeConfig>(
+            r#"
+kind = "apptainer"
+image = "runtimes/demo/runtime.sif"
+"#,
+        )
+        .expect("valid apptainer runtime");
+
+        match runtime {
+            PythonRuntimeConfig::Apptainer {
+                image,
+                python,
+                workdir,
+                nv,
+            } => {
+                assert_eq!(image, "runtimes/demo/runtime.sif");
+                assert_eq!(python, "python");
+                assert_eq!(workdir, None);
+                assert!(!nv);
+            }
+            PythonRuntimeConfig::Flake { .. } => panic!("expected apptainer runtime"),
         }
     }
 }

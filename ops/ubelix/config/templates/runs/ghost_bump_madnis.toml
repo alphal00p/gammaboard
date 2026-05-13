@@ -49,7 +49,7 @@ max_samples = 200000
 
 [task_queue.sampler_aggregator.config]
 kind = "python_sampler"
-runtime = { kind = "flake", ref = "path:resources/runtimes/madnis_gammaboard_api#runtime" }
+runtime = { kind = "apptainer", image = "runtimes/madnis_gammaboard_api/runtime.sif", nv = true }
 module = "madnis_gammaboard_api.sampler"
 class = "MadnisSampler"
 continuous_dims = 2

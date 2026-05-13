@@ -9,6 +9,7 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - `src/api`: typed use cases shared by CLI and server.
 - `src/stores`: PostgreSQL queries/read models.
 - `src/evaluation`, `src/sampling`, `src/runners`: engine semantics, queues, workers.
+- `src/python_runtime`: Python worker runtime launchers for Nix flakes and Apptainer images.
 - `src/server`: API and backend-owned panel models.
 - `src/cli`: command parsing/bootstrap.
 - `ops/*/config`: runtime/server/deploy profiles. `src/config_defaults`: embedded defaults.

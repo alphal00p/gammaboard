@@ -5,7 +5,7 @@ Operator guide for the current UBELIX setup. Local sync commands run from your w
 ## Model
 
 - Workspace: `/storage/research/itp_localunitaritydata/gammaboard`
-- Images: separate Apptainer images for `gammaboard` and `gammaloop`
+- Images: separate Apptainer images for `gammaboard`, `gammaloop`, and Python runtimes
 - Deploy: one control/UI Slurm job with Postgres, API, nginx, and frontend
 - Workers: separate Slurm jobs connecting to the control job database
 - Access: one SSH tunnel to the frontend port
@@ -28,9 +28,11 @@ Run on a UBELIX login node:
 ```bash
 python ubelix.py build gammaloop
 python ubelix.py build gammaboard
+python ubelix.py build python
 ```
 
 The GammaBoard build also builds and embeds the dashboard frontend. Each build overwrites `images/<family>/<family>.sif` and writes `images/<family>/<family>.meta`. Build logs go to `logs/slurm/build`.
+The Python runtime build writes the MADNIS sampler runtime to `resources/runtimes/madnis_gammaboard_api/runtime.sif`.
 
 Prebuild a Python runtime flake into the persistent Nix store:
 
@@ -97,6 +99,7 @@ config = { gres = "gpu:1" }
 ```
 
 submits worker jobs with `--gres=gpu:1 --partition=gpu` and registers `gpu=1` as a worker capability. `config = { gpu = 1 }` is also accepted as a shorthand for `--gres=gpu:1`. Supported `config` keys are `account`, `partition`, `qos`, `gpu`, `gres`, `gpus`, `cpus_per_task`, `mem`, `mem_per_cpu`, `time`, `constraint`, `nodelist`, and `exclude`.
+Workers with `gpu > 0` start the GammaBoard image with Apptainer `--nv`, so nested Python Apptainer runtimes can request NVIDIA passthrough with `nv = true`.
 
 `up --watch` also resolves dashboard requests while it watches the control job.
 

@@ -116,6 +116,11 @@ node_capability_args=()
 if [[ -n "${NODE_CAPABILITIES:-}" ]]; then
   read -r -a node_capability_args <<< "${NODE_CAPABILITIES}"
 fi
+apptainer_gpu_args=()
+if [[ " ${NODE_CAPABILITIES:-} " =~ (^|[[:space:]])--capability[[:space:]]+gpu=([1-9][0-9]*)([[:space:]]|$) ]]; then
+  apptainer_gpu_args+=(--nv)
+fi
+echo "apptainer_gpu_args: ${apptainer_gpu_args[*]:-}"
 
 # Fail fast if DB is not reachable from this worker allocation.
 env -u PGTZ -u PGOPTIONS \
@@ -129,7 +134,7 @@ env -u PGTZ -u PGOPTIONS \
 APPTAINERENV_LANG="${APPTAINERENV_LANG:-C.UTF-8}" \
 APPTAINERENV_LC_ALL="${APPTAINERENV_LC_ALL:-C.UTF-8}" \
 APPTAINERENV_TZ="${APPTAINERENV_TZ:-Etc/UTC}" \
-apptainer exec -B "${WORKSPACE_ROOT}" -B "${NIX_ROOT}:/nix" "${IMAGE_PATH}" \
+apptainer exec "${apptainer_gpu_args[@]}" -B "${WORKSPACE_ROOT}" -B "${NIX_ROOT}:/nix" "${IMAGE_PATH}" \
   gammaboard --runtime-config "${RUNTIME_CONFIG}" node run \
     --name "${NODE_NAME}" \
     --max-start-failures "${NODE_MAX_START_FAILURES}" \

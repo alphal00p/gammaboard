@@ -1,8 +1,7 @@
-use std::fs;
+use std::env;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
-use std::{env, ffi::OsString};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Stdio};
 
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -12,6 +11,7 @@ use crate::evaluation::{
     AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator, IngestScalar,
     ScalarBatchEvaluator,
 };
+use crate::python_runtime::build_python_worker_command;
 use crate::utils::domain::Domain;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -53,7 +53,7 @@ impl<'de> Deserialize<'de> for PythonScalarParams {
         }
         let runtime = raw.runtime.ok_or_else(|| {
             serde::de::Error::custom(
-                "python_scalar requires: runtime = { kind = \"flake\", ref = \"...\" }",
+                "python_scalar requires a runtime, for example: runtime = { kind = \"flake\", ref = \"...\" } or runtime = { kind = \"apptainer\", image = \"runtimes/name/runtime.sif\" }",
             )
         })?;
         Ok(Self {
@@ -89,18 +89,8 @@ impl ScalarPythonEvaluator {
                 "python_scalar discrete_cardinalities must contain only positive integers",
             ));
         }
-        let PythonRuntimeConfig::Flake { reference } = &params.runtime;
-        let flake_ref = normalize_flake_ref(reference);
-        let output_path = build_nix_output_path(&flake_ref)?;
-        let python_executable = resolve_python_executable(&output_path).ok_or_else(|| {
-            BuildError::build(format!(
-                "python executable not found under '{}' (expected one of: bin/python, bin/python3)",
-                output_path.display()
-            ))
-        })?;
         let worker = PythonWorker::spawn(
-            &python_executable,
-            &output_path,
+            &params.runtime,
             &params.module,
             &params.class,
             &params.discrete_cardinalities,
@@ -185,32 +175,22 @@ struct PythonWorker {
 
 impl PythonWorker {
     fn spawn(
-        python_executable: &Path,
-        runtime_root: &Path,
+        runtime: &PythonRuntimeConfig,
         module: &str,
         class: &str,
         discrete_cardinalities: &[usize],
         continuous_dims: usize,
         init_args: Value,
     ) -> Result<Self, BuildError> {
-        let mut command = Command::new(python_executable);
         let worker_script = evaluator_worker_script_path()?;
+        let mut command = build_python_worker_command(runtime, &worker_script, "evaluator")?;
         command
-            .arg("-u")
-            .arg(worker_script)
-            .current_dir(runtime_root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        if let Some(pythonpath) = build_worker_pythonpath(runtime_root) {
-            command.env("PYTHONPATH", pythonpath);
-        }
 
         let mut child = command.spawn().map_err(|error| {
-            BuildError::build(format!(
-                "failed to start python worker '{}': {error}",
-                python_executable.display()
-            ))
+            BuildError::build(format!("failed to start python evaluator worker: {error}"))
         })?;
 
         let stdin = child
@@ -406,93 +386,8 @@ impl Drop for PythonWorker {
     }
 }
 
-fn build_nix_output_path(flake_ref: &str) -> Result<PathBuf, BuildError> {
-    let output = Command::new("nix")
-        .arg("build")
-        .arg(flake_ref)
-        .arg("--no-link")
-        .arg("--print-out-paths")
-        .output()
-        .map_err(|error| BuildError::build(format!("failed to start nix build: {error}")))?;
-    if !output.status.success() {
-        return Err(BuildError::build(format!(
-            "nix build failed for '{}': exit={} stderr='{}' stdout='{}'",
-            flake_ref,
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim(),
-            String::from_utf8_lossy(&output.stdout).trim()
-        )));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let output_path = stdout
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .ok_or_else(|| {
-            BuildError::build(format!(
-                "nix build did not return an output path for '{}'",
-                flake_ref
-            ))
-        })?;
-    Ok(PathBuf::from(output_path.trim()))
-}
-
 fn default_init_args() -> Value {
     Value::Object(serde_json::Map::new())
-}
-
-fn normalize_flake_ref(reference: &str) -> String {
-    if reference.contains("://")
-        || reference.starts_with("flake:")
-        || reference.starts_with("path:")
-        || reference.starts_with("github:")
-        || reference.starts_with("git+")
-        || reference.starts_with("tarball+")
-    {
-        return reference.to_string();
-    }
-
-    let maybe_path = Path::new(reference);
-    if maybe_path.is_absolute()
-        || reference.starts_with("./")
-        || reference.starts_with("../")
-        || reference.starts_with('~')
-    {
-        return format!("path:{reference}");
-    }
-
-    if reference.contains('#') {
-        let mut parts = reference.splitn(2, '#');
-        let base = parts.next().unwrap_or_default();
-        let fragment = parts.next().unwrap_or_default();
-        let base_path = Path::new(base);
-        if base_path.is_absolute() || base.starts_with("./") || base.starts_with("../") {
-            return format!("path:{base}#{fragment}");
-        }
-    }
-
-    reference.to_string()
-}
-
-fn resolve_python_executable(output_path: &Path) -> Option<PathBuf> {
-    let candidates = [
-        output_path.join("bin/python"),
-        output_path.join("bin/python3"),
-        output_path.join("python"),
-    ];
-    candidates.into_iter().find(|path| is_executable(path))
-}
-
-fn build_worker_pythonpath(runtime_root: &Path) -> Option<OsString> {
-    let mut entries: Vec<PathBuf> = vec![runtime_root.to_path_buf(), runtime_root.join("src")];
-    entries.retain(|path| path.is_dir());
-    if let Some(existing) = env::var_os("PYTHONPATH") {
-        entries.extend(env::split_paths(&existing));
-    }
-    if entries.is_empty() {
-        None
-    } else {
-        env::join_paths(entries).ok()
-    }
 }
 
 fn evaluator_worker_script_path() -> Result<PathBuf, BuildError> {
@@ -509,27 +404,9 @@ fn evaluator_worker_script_path() -> Result<PathBuf, BuildError> {
     Ok(path)
 }
 
-fn is_executable(path: &Path) -> bool {
-    if !path.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(metadata) = fs::metadata(path) {
-            return metadata.permissions().mode() & 0o111 != 0;
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        return true;
-    }
-    false
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{PythonScalarParams, normalize_flake_ref};
+    use super::PythonScalarParams;
 
     #[test]
     fn python_scalar_rejects_legacy_flake_ref_with_migration_hint() {
@@ -548,34 +425,6 @@ continuous_dims = 2
         assert!(
             err.contains("runtime = { kind = \"flake\", ref = \"path:./old#runtime\" }"),
             "{err}"
-        );
-    }
-
-    #[test]
-    fn normalize_flake_ref_prefixes_local_paths() {
-        assert_eq!(
-            normalize_flake_ref("./myflake#runtime"),
-            "path:./myflake#runtime"
-        );
-        assert_eq!(
-            normalize_flake_ref("../myflake#runtime"),
-            "path:../myflake#runtime"
-        );
-        assert_eq!(
-            normalize_flake_ref("/abs/path/to/flake#runtime"),
-            "path:/abs/path/to/flake#runtime"
-        );
-    }
-
-    #[test]
-    fn normalize_flake_ref_keeps_remote_refs() {
-        assert_eq!(
-            normalize_flake_ref("github:owner/repo#runtime"),
-            "github:owner/repo#runtime"
-        );
-        assert_eq!(
-            normalize_flake_ref("path:./myflake#runtime"),
-            "path:./myflake#runtime"
         );
     }
 }

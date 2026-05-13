@@ -15,6 +15,7 @@ From: rust:1-bookworm
         curl \
         gnupg \
         python3 \
+        apptainer \
         libgfortran5 \
         tzdata \
         nginx \
