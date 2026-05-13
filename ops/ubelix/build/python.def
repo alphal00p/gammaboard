@@ -1,0 +1,50 @@
+Bootstrap: docker
+From: pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
+
+%setup
+    mkdir -p "${APPTAINER_ROOTFS}/workspace/resources/runtimes/madnis_gammaboard_api"
+
+%post
+    set -eux
+
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        zlib1g \
+        libgmp10 \
+        libmpfr6 \
+        libmpc3 \
+        libgfortran5
+
+    update-ca-certificates
+
+    PROJECT_DIR="${PYTHON_PROJECT_DIR:-/workspace/resources/runtimes/madnis_gammaboard_api}"
+    test -f "${PROJECT_DIR}/pyproject.toml"
+    test -d "${PROJECT_DIR}/src"
+    rm -rf /tmp/gammaboard-python-runtime
+    mkdir -p /tmp/gammaboard-python-runtime
+    cp -a "${PROJECT_DIR}/." /tmp/gammaboard-python-runtime/
+
+    python -m pip install --no-cache-dir --upgrade pip setuptools wheel
+    python -m pip install --no-cache-dir --no-build-isolation \
+        "madnis @ git+https://github.com/madgraph-ml/madnis.git@main"
+    python -m pip install --no-cache-dir --no-build-isolation /tmp/gammaboard-python-runtime
+
+    apt-get clean
+    rm -rf /var/lib/apt/lists/* /tmp/gammaboard-python-runtime
+
+%environment
+    export OMP_NUM_THREADS="${OMP_NUM_THREADS:-64}"
+    export PYTHONUNBUFFERED=1
+
+%runscript
+    exec "$@"
+
+%test
+    python - <<'PY'
+import madnis
+import madnis_gammaboard_api
+print("python runtime ok")
+PY
