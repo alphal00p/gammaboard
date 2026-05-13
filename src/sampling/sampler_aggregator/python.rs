@@ -1,7 +1,7 @@
 use std::env;
-use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Stdio};
+use std::process::Stdio;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Deserializer, Serialize};
@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use crate::core::{BuildError, EngineError, PythonRuntimeConfig};
 use crate::evaluation::{Batch, Point};
+use crate::process_worker::ProcessWorker;
 use crate::python_runtime::build_python_worker_command;
 use crate::sampling::{
     LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot,
@@ -227,11 +228,7 @@ struct PythonSampleBatch {
 }
 
 struct PythonSamplerWorker {
-    child: Child,
-    stdin: BufWriter<ChildStdin>,
-    stdout: BufReader<ChildStdout>,
-    stderr: ChildStderr,
-    next_id: u64,
+    process: ProcessWorker,
     discrete_cardinalities: Vec<usize>,
     continuous_dims: usize,
 }
@@ -270,13 +267,10 @@ impl PythonSamplerWorker {
             .stderr
             .take()
             .ok_or_else(|| BuildError::build("python sampler worker stderr not available"))?;
+        pipe_child_stderr("python sampler", stderr);
 
         let mut worker = Self {
-            child,
-            stdin: BufWriter::new(stdin),
-            stdout: BufReader::new(stdout),
-            stderr,
-            next_id: 1,
+            process: ProcessWorker::new("python sampler", child, stdin, stdout),
             discrete_cardinalities: discrete_cardinalities.to_vec(),
             continuous_dims: params.continuous_dims,
         };
@@ -300,27 +294,30 @@ impl PythonSamplerWorker {
         init_args: Value,
         snapshot: Option<Value>,
     ) -> Result<(), BuildError> {
-        let request = serde_json::json!({
-            "id": self.allocate_request_id(),
-            "op": "init",
-            "module": module,
-            "class": class,
-            "discrete_cardinalities": discrete_cardinalities,
-            "continuous_dims": continuous_dims,
-            "init_args": init_args,
-            "snapshot": snapshot,
-        });
-        let response = self.send_request(&request).map_err(BuildError::build)?;
-        Self::expect_ok(response).map_err(BuildError::build)
+        let response = self
+            .process
+            .request(
+                "initialize",
+                serde_json::json!({
+                    "protocol": "gammaboard-jsonrpc-v1",
+                    "role": "sampler",
+                    "module": module,
+                    "class": class,
+                    "discrete_cardinalities": discrete_cardinalities,
+                    "continuous_dims": continuous_dims,
+                    "init_args": init_args,
+                    "snapshot": snapshot,
+                }),
+            )
+            .map_err(BuildError::build)?;
+        Self::expect_ack(response).map_err(BuildError::build)
     }
 
     fn training_samples_remaining(&mut self) -> Result<Option<usize>, EngineError> {
-        let request = serde_json::json!({
-            "id": self.allocate_request_id(),
-            "op": "training_samples_remaining",
-        });
-        let response = self.send_request(&request).map_err(EngineError::engine)?;
-        Self::expect_ok(response.clone()).map_err(EngineError::engine)?;
+        let response = self
+            .process
+            .request("training_samples_remaining", serde_json::json!({}))
+            .map_err(EngineError::engine)?;
         let remaining = match response.get("remaining") {
             Some(Value::Null) | None => None,
             Some(value) => Some(value.as_u64().ok_or_else(|| {
@@ -331,12 +328,10 @@ impl PythonSamplerWorker {
     }
 
     fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
-        let request = serde_json::json!({
-            "id": self.allocate_request_id(),
-            "op": "sample_plan",
-        });
-        let response = self.send_request(&request).map_err(EngineError::engine)?;
-        Self::expect_ok(response.clone()).map_err(EngineError::engine)?;
+        let response = self
+            .process
+            .request("sample_plan", serde_json::json!({}))
+            .map_err(EngineError::engine)?;
         let plan_value = response
             .get("plan")
             .cloned()
@@ -350,13 +345,15 @@ impl PythonSamplerWorker {
         &mut self,
         nr_samples: usize,
     ) -> Result<PythonSampleBatch, EngineError> {
-        let request = serde_json::json!({
-            "id": self.allocate_request_id(),
-            "op": "produce_latent_batch",
-            "nr_samples": nr_samples,
-        });
-        let response = self.send_request(&request).map_err(EngineError::engine)?;
-        Self::expect_ok(response.clone()).map_err(EngineError::engine)?;
+        let response = self
+            .process
+            .request(
+                "produce_latent_batch",
+                serde_json::json!({
+                    "nr_samples": nr_samples,
+                }),
+            )
+            .map_err(EngineError::engine)?;
         let xs_discrete = response
             .get("xs_discrete_row_major")
             .and_then(Value::as_array)
@@ -448,22 +445,23 @@ impl PythonSamplerWorker {
     }
 
     fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
-        let request = serde_json::json!({
-            "id": self.allocate_request_id(),
-            "op": "ingest_training_values",
-            "training_values": training_values,
-        });
-        let response = self.send_request(&request).map_err(EngineError::engine)?;
-        Self::expect_ok(response).map_err(EngineError::engine)
+        let response = self
+            .process
+            .request(
+                "ingest_training_values",
+                serde_json::json!({
+                    "training_values": training_values,
+                }),
+            )
+            .map_err(EngineError::engine)?;
+        Self::expect_ack(response).map_err(EngineError::engine)
     }
 
     fn snapshot(&mut self) -> Result<Value, EngineError> {
-        let request = serde_json::json!({
-            "id": self.allocate_request_id(),
-            "op": "snapshot",
-        });
-        let response = self.send_request(&request).map_err(EngineError::engine)?;
-        Self::expect_ok(response.clone()).map_err(EngineError::engine)?;
+        let response = self
+            .process
+            .request("snapshot", serde_json::json!({}))
+            .map_err(EngineError::engine)?;
         response
             .get("snapshot")
             .cloned()
@@ -493,15 +491,17 @@ impl PythonSamplerWorker {
             xs_discrete_row_major.extend_from_slice(&point.0);
             xs_continuous_row_major.extend_from_slice(&point.1);
         }
-        let request = serde_json::json!({
-            "id": self.allocate_request_id(),
-            "op": "pdf",
-            "nr_samples": points.len(),
-            "xs_discrete_row_major": xs_discrete_row_major,
-            "xs_continuous_row_major": xs_continuous_row_major,
-        });
-        let response = self.send_request(&request).map_err(EngineError::engine)?;
-        Self::expect_ok(response.clone()).map_err(EngineError::engine)?;
+        let response = self
+            .process
+            .request(
+                "pdf",
+                serde_json::json!({
+                    "nr_samples": points.len(),
+                    "xs_discrete_row_major": xs_discrete_row_major,
+                    "xs_continuous_row_major": xs_continuous_row_major,
+                }),
+            )
+            .map_err(EngineError::engine)?;
         match response.get("values") {
             Some(Value::Null) | None => Ok(vec![None; points.len()]),
             Some(Value::Array(values)) => {
@@ -534,113 +534,21 @@ impl PythonSamplerWorker {
     }
 
     fn get_diagnostics(&mut self) -> Result<Value, EngineError> {
-        let request = serde_json::json!({
-            "id": self.allocate_request_id(),
-            "op": "get_diagnostics",
-        });
-        let response = self.send_request(&request).map_err(EngineError::engine)?;
-        Self::expect_ok(response.clone()).map_err(EngineError::engine)?;
+        let response = self
+            .process
+            .request("get_diagnostics", serde_json::json!({}))
+            .map_err(EngineError::engine)?;
         Ok(response
             .get("diagnostics")
             .cloned()
             .unwrap_or_else(|| serde_json::json!({})))
     }
 
-    fn send_request(&mut self, request: &Value) -> Result<Value, String> {
-        let line = serde_json::to_string(request)
-            .map_err(|error| format!("failed to serialize python sampler request: {error}"))?;
-        self.stdin
-            .write_all(line.as_bytes())
-            .map_err(|error| format!("failed writing request to python sampler worker: {error}"))?;
-        self.stdin
-            .write_all(b"\n")
-            .map_err(|error| format!("failed writing newline to python sampler worker: {error}"))?;
-        self.stdin.flush().map_err(|error| {
-            format!("failed flushing request to python sampler worker: {error}")
-        })?;
-
-        let mut response_line = String::new();
-        let read = self
-            .stdout
-            .read_line(&mut response_line)
-            .map_err(|error| format!("failed reading python sampler worker response: {error}"))?;
-        if read == 0 {
-            return Err(self
-                .worker_terminated_message("python sampler worker terminated before responding"));
-        }
-        let response = serde_json::from_str::<Value>(response_line.trim()).map_err(|error| {
-            format!(
-                "failed to parse python sampler response as JSON: {error}; response='{}'",
-                response_line.trim()
-            )
-        })?;
-        let expected_id = request
-            .get("id")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| "python sampler request missing numeric 'id'".to_string())?;
-        let actual_id = response
-            .get("id")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| "python sampler response missing numeric 'id'".to_string())?;
-        if actual_id != expected_id {
-            return Err(format!(
-                "python sampler worker returned mismatched response id: expected {expected_id}, got {actual_id}"
-            ));
-        }
-        Ok(response)
-    }
-
-    fn expect_ok(response: Value) -> Result<(), String> {
-        let ok = response
-            .get("ok")
-            .and_then(Value::as_bool)
-            .ok_or_else(|| "python sampler response missing boolean 'ok'".to_string())?;
-        if ok {
+    fn expect_ack(response: Value) -> Result<(), String> {
+        if response.get("ok").and_then(Value::as_bool).unwrap_or(false) {
             return Ok(());
         }
-        let error = response
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown python sampler worker error");
-        let traceback = response
-            .get("traceback")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        if traceback.is_empty() {
-            Err(format!("python sampler worker error: {error}"))
-        } else {
-            Err(format!("python sampler worker error: {error}\n{traceback}"))
-        }
-    }
-
-    fn allocate_request_id(&mut self) -> u64 {
-        let id = self.next_id;
-        self.next_id = self.next_id.saturating_add(1);
-        id
-    }
-
-    fn worker_terminated_message(&mut self, context: &str) -> String {
-        let mut stderr = String::new();
-        let _ = self.stderr.read_to_string(&mut stderr);
-        let status = self
-            .child
-            .try_wait()
-            .ok()
-            .flatten()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "running".to_string());
-        if stderr.trim().is_empty() {
-            format!("{context}; status={status}; stderr=<empty>")
-        } else {
-            format!("{context}; status={status}; stderr='{}'", stderr.trim())
-        }
-    }
-}
-
-impl Drop for PythonSamplerWorker {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        Err("python sampler initialize result missing ok=true".to_string())
     }
 }
 
@@ -656,6 +564,15 @@ fn sampler_worker_script_path() -> Result<PathBuf, BuildError> {
         )));
     }
     Ok(path)
+}
+
+fn pipe_child_stderr(label: &'static str, stderr: impl std::io::Read + Send + 'static) {
+    std::thread::spawn(move || {
+        let reader = std::io::BufReader::new(stderr);
+        for line in reader.lines().map_while(Result::ok) {
+            eprintln!("[{label} stderr] {line}");
+        }
+    });
 }
 
 fn default_init_args() -> Value {

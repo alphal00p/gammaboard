@@ -262,7 +262,8 @@ Python sampler construction semantics:
 - restore path: `from_snapshot(snapshot=..., discrete_cardinalities=..., continuous_dims=..., init_args=...)` when present
 - fresh path: `from_config(discrete_cardinalities=..., continuous_dims=..., init_args=...)` when present
 - fallback: `ClassName(**init_args)` / `ClassName()`
-- Worker protocol entrypoints are checked in under `python_api/python_workers/` and launched with the flake runtime python executable.
+- Worker protocol entrypoints are checked in under `python_api/python_workers/` and launched through the configured runtime.
+- Worker processes speak `gammaboard-jsonrpc-v1`: Content-Length framed JSON-RPC over stdin/stdout, with stderr reserved for logs. The Python wrappers redirect ordinary `print()` output to stderr and keep a private stdout handle for protocol frames.
 
 If `task_queue` is omitted, the run is created idle.
 Every run stores an initial root stage snapshot (`sequence_nr = 0`) immediately at creation.

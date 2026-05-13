@@ -8,11 +8,49 @@ import os
 integrand = None
 discrete_cardinalities = None
 continuous_dims = None
+protocol_stdout = os.fdopen(os.dup(1), "wb", buffering=0)
+sys.stdout = sys.stderr
 
 
-def send(payload):
-    sys.stdout.write(json.dumps(payload) + "\n")
-    sys.stdout.flush()
+def send_frame(payload):
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    protocol_stdout.write(f"Content-Length: {len(body)}\r\n\r\n".encode("ascii"))
+    protocol_stdout.write(body)
+
+
+def read_frame():
+    content_length = None
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        line = line.decode("ascii", errors="replace").strip()
+        if not line:
+            if content_length is not None:
+                break
+            continue
+        name, sep, value = line.partition(":")
+        if sep and name.lower() == "content-length":
+            content_length = int(value.strip())
+    return json.loads(sys.stdin.buffer.read(content_length).decode("utf-8"))
+
+
+def send_result(req_id, result):
+    send_frame({"jsonrpc": "2.0", "id": req_id, "result": result})
+
+
+def send_error(req_id, exc):
+    send_frame(
+        {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "error": {
+                "code": -32000,
+                "message": f"{type(exc).__name__}: {exc}",
+                "data": {"traceback": traceback.format_exc(limit=8)},
+            },
+        }
+    )
 
 
 def import_configured_module(module_name):
@@ -27,25 +65,29 @@ def import_configured_module(module_name):
         raise
 
 
-for raw in sys.stdin:
-    line = raw.strip()
-    if not line:
-        continue
-    req = json.loads(line)
+while True:
+    req = read_frame()
+    if req is None:
+        break
     req_id = req.get("id")
     try:
-        op = req["op"]
-        if op == "init":
-            module = import_configured_module(req["module"])
-            cls = getattr(module, req["class"])
-            discrete_cardinalities = [int(value) for value in req["discrete_cardinalities"]]
+        method = req["method"]
+        params = req.get("params") or {}
+        if method == "initialize":
+            if params.get("protocol") != "gammaboard-jsonrpc-v1":
+                raise ValueError(f"unsupported protocol: {params.get('protocol')!r}")
+            if params.get("role") != "evaluator":
+                raise ValueError(f"expected evaluator role, got {params.get('role')!r}")
+            module = import_configured_module(params["module"])
+            cls = getattr(module, params["class"])
+            discrete_cardinalities = [int(value) for value in params["discrete_cardinalities"]]
             if any(value <= 0 for value in discrete_cardinalities):
                 raise ValueError(
                     "discrete_cardinalities must contain only positive integers"
                 )
             discrete_dims = len(discrete_cardinalities)
-            continuous_dims = int(req["continuous_dims"])
-            init_args = req.get("init_args") or {}
+            continuous_dims = int(params["continuous_dims"])
+            init_args = params.get("init_args") or {}
             if not isinstance(init_args, dict):
                 raise TypeError("init_args must be an object")
             if hasattr(cls, "from_config"):
@@ -78,20 +120,20 @@ for raw in sys.stdin:
                 raise ValueError(
                     f"integrand continuous_dims mismatch: expected {continuous_dims}, got {int(maybe_continuous_dims)}"
                 )
-            send({"id": req_id, "ok": True})
-        elif op == "eval_scalar":
+            send_result(req_id, {"ok": True})
+        elif method == "eval_scalar":
             if (
                 integrand is None
                 or discrete_cardinalities is None
                 or continuous_dims is None
             ):
                 raise RuntimeError("worker not initialized")
-            nr_samples = int(req["nr_samples"])
+            nr_samples = int(params["nr_samples"])
             req_discrete_cardinalities = [
-                int(value) for value in req["discrete_cardinalities"]
+                int(value) for value in params["discrete_cardinalities"]
             ]
             req_discrete_dims = len(req_discrete_cardinalities)
-            req_continuous_dims = int(req["continuous_dims"])
+            req_continuous_dims = int(params["continuous_dims"])
             if (
                 req_discrete_cardinalities != discrete_cardinalities
                 or req_continuous_dims != continuous_dims
@@ -101,11 +143,11 @@ for raw in sys.stdin:
                     f"worker=({discrete_cardinalities}, {continuous_dims}) "
                     f"request=({req_discrete_cardinalities}, {req_continuous_dims})"
                 )
-            xs_discrete = np.asarray(req["xs_discrete_row_major"], dtype=np.int64).reshape(
+            xs_discrete = np.asarray(params["xs_discrete_row_major"], dtype=np.int64).reshape(
                 (nr_samples, req_discrete_dims)
             )
             xs_continuous = np.asarray(
-                req["xs_continuous_row_major"], dtype=np.float64
+                params["xs_continuous_row_major"], dtype=np.float64
             ).reshape((nr_samples, req_continuous_dims))
             for axis, cardinality in enumerate(discrete_cardinalities):
                 axis_values = xs_discrete[:, axis]
@@ -116,15 +158,8 @@ for raw in sys.stdin:
             ys = np.asarray(
                 integrand.eval(xs_discrete, xs_continuous), dtype=np.float64
             ).reshape((nr_samples,))
-            send({"id": req_id, "ok": True, "values": ys.tolist()})
+            send_result(req_id, {"values": ys.tolist()})
         else:
-            raise ValueError(f"unknown op: {op}")
+            raise ValueError(f"unknown method: {method}")
     except Exception as exc:
-        send(
-            {
-                "id": req_id,
-                "ok": False,
-                "error": f"{type(exc).__name__}: {exc}",
-                "traceback": traceback.format_exc(limit=8),
-            }
-        )
+        send_error(req_id, exc)

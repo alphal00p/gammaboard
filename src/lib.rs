@@ -8,6 +8,7 @@ pub mod config;
 pub mod core;
 pub mod evaluation;
 pub mod preprocess;
+mod process_worker;
 mod python_runtime;
 pub mod resources;
 pub mod runners;

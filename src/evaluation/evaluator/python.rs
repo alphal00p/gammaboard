@@ -1,7 +1,7 @@
 use std::env;
-use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Stdio};
+use std::process::Stdio;
 
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -11,6 +11,7 @@ use crate::evaluation::{
     AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator, IngestScalar,
     ScalarBatchEvaluator,
 };
+use crate::process_worker::ProcessWorker;
 use crate::python_runtime::build_python_worker_command;
 use crate::utils::domain::Domain;
 
@@ -164,11 +165,7 @@ impl Evaluator for ScalarPythonEvaluator {
 }
 
 struct PythonWorker {
-    child: Child,
-    stdin: BufWriter<ChildStdin>,
-    stdout: BufReader<ChildStdout>,
-    stderr: ChildStderr,
-    next_id: u64,
+    process: ProcessWorker,
     discrete_cardinalities: Vec<usize>,
     continuous_dims: usize,
 }
@@ -205,13 +202,10 @@ impl PythonWorker {
             .stderr
             .take()
             .ok_or_else(|| BuildError::build("python worker stderr not available"))?;
+        pipe_child_stderr("python evaluator", stderr);
 
         let mut worker = Self {
-            child,
-            stdin: BufWriter::new(stdin),
-            stdout: BufReader::new(stdout),
-            stderr,
-            next_id: 1,
+            process: ProcessWorker::new("python evaluator", child, stdin, stdout),
             discrete_cardinalities: discrete_cardinalities.to_vec(),
             continuous_dims,
         };
@@ -233,17 +227,22 @@ impl PythonWorker {
         continuous_dims: usize,
         init_args: Value,
     ) -> Result<(), BuildError> {
-        let request = serde_json::json!({
-            "id": self.allocate_request_id(),
-            "op": "init",
-            "module": module,
-            "class": class,
-            "discrete_cardinalities": discrete_cardinalities,
-            "continuous_dims": continuous_dims,
-            "init_args": init_args,
-        });
-        let response = self.send_request(&request).map_err(BuildError::build)?;
-        Self::expect_ok(response).map_err(BuildError::build)
+        let response = self
+            .process
+            .request(
+                "initialize",
+                serde_json::json!({
+                    "protocol": "gammaboard-jsonrpc-v1",
+                    "role": "evaluator",
+                    "module": module,
+                    "class": class,
+                    "discrete_cardinalities": discrete_cardinalities,
+                    "continuous_dims": continuous_dims,
+                    "init_args": init_args,
+                }),
+            )
+            .map_err(BuildError::build)?;
+        Self::expect_ack(response).map_err(BuildError::build)
     }
 
     fn eval_scalar(
@@ -252,17 +251,19 @@ impl PythonWorker {
         xs_continuous_row_major: &[f64],
         nr_samples: usize,
     ) -> Result<Vec<f64>, EvalError> {
-        let request = serde_json::json!({
-            "id": self.allocate_request_id(),
-            "op": "eval_scalar",
-            "nr_samples": nr_samples,
-            "discrete_cardinalities": self.discrete_cardinalities,
-            "continuous_dims": self.continuous_dims,
-            "xs_discrete_row_major": xs_discrete_row_major,
-            "xs_continuous_row_major": xs_continuous_row_major,
-        });
-        let response = self.send_request(&request).map_err(EvalError::eval)?;
-        Self::expect_ok(response.clone()).map_err(EvalError::eval)?;
+        let response = self
+            .process
+            .request(
+                "eval_scalar",
+                serde_json::json!({
+                    "nr_samples": nr_samples,
+                    "discrete_cardinalities": self.discrete_cardinalities,
+                    "continuous_dims": self.continuous_dims,
+                    "xs_discrete_row_major": xs_discrete_row_major,
+                    "xs_continuous_row_major": xs_continuous_row_major,
+                }),
+            )
+            .map_err(EvalError::eval)?;
         let values = response
             .get("values")
             .and_then(Value::as_array)
@@ -287,107 +288,25 @@ impl PythonWorker {
             .collect()
     }
 
-    fn send_request(&mut self, request: &Value) -> Result<Value, String> {
-        let line = serde_json::to_string(request)
-            .map_err(|error| format!("failed to serialize python request: {error}"))?;
-        self.stdin
-            .write_all(line.as_bytes())
-            .map_err(|error| format!("failed writing request to python worker: {error}"))?;
-        self.stdin
-            .write_all(b"\n")
-            .map_err(|error| format!("failed writing newline to python worker: {error}"))?;
-        self.stdin
-            .flush()
-            .map_err(|error| format!("failed flushing request to python worker: {error}"))?;
-
-        let mut response_line = String::new();
-        let read = self
-            .stdout
-            .read_line(&mut response_line)
-            .map_err(|error| format!("failed reading python worker response: {error}"))?;
-        if read == 0 {
-            return Err(
-                self.worker_terminated_message("python worker terminated before responding")
-            );
-        }
-        let response = serde_json::from_str::<Value>(response_line.trim()).map_err(|error| {
-            format!(
-                "failed to parse python worker response as JSON: {error}; response='{}'",
-                response_line.trim()
-            )
-        })?;
-        let expected_id = request
-            .get("id")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| "python request missing numeric 'id'".to_string())?;
-        let actual_id = response
-            .get("id")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| "python response missing numeric 'id'".to_string())?;
-        if actual_id != expected_id {
-            return Err(format!(
-                "python worker returned mismatched response id: expected {expected_id}, got {actual_id}"
-            ));
-        }
-        Ok(response)
-    }
-
-    fn expect_ok(response: Value) -> Result<(), String> {
-        let ok = response
-            .get("ok")
-            .and_then(Value::as_bool)
-            .ok_or_else(|| "python worker response missing boolean 'ok'".to_string())?;
-        if ok {
+    fn expect_ack(response: Value) -> Result<(), String> {
+        if response.get("ok").and_then(Value::as_bool).unwrap_or(false) {
             return Ok(());
         }
-        let error = response
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown python worker error");
-        let traceback = response
-            .get("traceback")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        if traceback.is_empty() {
-            Err(format!("python worker error: {error}"))
-        } else {
-            Err(format!("python worker error: {error}\n{traceback}"))
-        }
-    }
-
-    fn allocate_request_id(&mut self) -> u64 {
-        let id = self.next_id;
-        self.next_id = self.next_id.saturating_add(1);
-        id
-    }
-
-    fn worker_terminated_message(&mut self, context: &str) -> String {
-        let mut stderr = String::new();
-        let _ = self.stderr.read_to_string(&mut stderr);
-        let status = self
-            .child
-            .try_wait()
-            .ok()
-            .flatten()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "running".to_string());
-        if stderr.trim().is_empty() {
-            format!("{context}; status={status}; stderr=<empty>")
-        } else {
-            format!("{context}; status={status}; stderr='{}'", stderr.trim())
-        }
-    }
-}
-
-impl Drop for PythonWorker {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        Err("python worker initialize result missing ok=true".to_string())
     }
 }
 
 fn default_init_args() -> Value {
     Value::Object(serde_json::Map::new())
+}
+
+fn pipe_child_stderr(label: &'static str, stderr: impl std::io::Read + Send + 'static) {
+    std::thread::spawn(move || {
+        let reader = std::io::BufReader::new(stderr);
+        for line in reader.lines().map_while(Result::ok) {
+            eprintln!("[{label} stderr] {line}");
+        }
+    });
 }
 
 fn evaluator_worker_script_path() -> Result<PathBuf, BuildError> {
