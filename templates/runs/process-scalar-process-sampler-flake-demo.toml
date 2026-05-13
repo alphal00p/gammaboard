@@ -3,7 +3,7 @@ name = "process-scalar-process-sampler-flake-demo"
 
 [evaluator]
 kind = "process_scalar"
-command = ["nix", "shell", "path:./python_api/examples/python_scalar_sin#runtime", "-c", "python", "-u", "python_api/python_workers/evaluator_worker.py"]
+command = ["nix", "shell", "path:./python_api/examples/python_scalar_sin#runtime", "-c", "gammaboard-example-evaluator-worker"]
 continuous_dims = 2
 discrete_cardinalities = [2, 3]
 args = { module = "demo_integrand", class = "SinIntegrand", scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }
@@ -37,4 +37,4 @@ fixed_dims = { "0" = 1 }
 name = "sample-a"
 kind = "sample"
 stop_condition = { max_samples = 1000 }
-sampler_aggregator = { config = { kind = "process_sampler", command = ["nix", "shell", "path:./python_api/examples/python_sampler_symbolica_havana#runtime", "-c", "python", "-u", "python_api/python_workers/sampler_worker.py"], continuous_dims = 2, requires_training_values = true, args = { module = "demo_sampler", class = "SymbolicaHavanaSampler", seed = 0, bins = 8, samples_for_update = 16, stop_training_after_n_samples = 1000, initial_training_rate = 0.1, final_training_rate = 0.01 } } }
+sampler_aggregator = { config = { kind = "process_sampler", command = ["nix", "shell", "path:./python_api/examples/python_sampler_symbolica_havana#runtime", "-c", "gammaboard-example-sampler-worker"], continuous_dims = 2, requires_training_values = true, args = { module = "demo_sampler", class = "SymbolicaHavanaSampler", seed = 0, bins = 8, samples_for_update = 16, stop_training_after_n_samples = 1000, initial_training_rate = 0.1, final_training_rate = 0.01 } } }

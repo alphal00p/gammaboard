@@ -12,10 +12,14 @@
         export PYTHONPATH="${./src}:$PYTHONPATH"
         exec ${pythonEnv}/bin/python "$@"
       '';
+      evaluatorWorker = pkgs.writeShellScriptBin "gammaboard-example-evaluator-worker" ''
+        export PYTHONPATH="${./src}:$PYTHONPATH"
+        exec ${pythonEnv}/bin/python -u ${./evaluator_worker.py} "$@"
+      '';
     in {
       packages.${system}.runtime = pkgs.symlinkJoin {
         name = "python-scalar-sin-runtime";
-        paths = [ runtimePython pythonEnv ];
+        paths = [ runtimePython evaluatorWorker pythonEnv ];
       };
     };
 }
