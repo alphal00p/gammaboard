@@ -68,10 +68,25 @@ pub struct ServerConfig {
     pub secure_cookie: bool,
     pub allow_db_admin: bool,
     pub allow_local_node_spawn: bool,
+    #[serde(default = "default_run_templates_dir")]
     pub run_templates_dir: String,
+    #[serde(default = "default_task_templates_dir")]
     pub task_templates_dir: String,
+    #[serde(default = "default_node_templates_dir")]
     pub node_templates_dir: String,
     pub auth: ServerAuthConfig,
+}
+
+fn default_run_templates_dir() -> String {
+    "templates/runs".to_string()
+}
+
+fn default_task_templates_dir() -> String {
+    "templates/tasks".to_string()
+}
+
+fn default_node_templates_dir() -> String {
+    "templates/nodes".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]
