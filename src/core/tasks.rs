@@ -1083,6 +1083,7 @@ pub fn canonical_task_toml(task: &RunTaskInput) -> Result<String, toml::ser::Err
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::TrainingProjection;
     use crate::sampling::{HavanaSamplerParams, NaiveMonteCarloSamplerParams};
 
     #[test]
@@ -1107,15 +1108,19 @@ mod tests {
 
     #[test]
     fn set_accumulator_task_requests_fresh_accumulator_state() {
+        let accumulator = AccumulatorConfig::vector(
+            vec!["real".to_string(), "imag".to_string()],
+            TrainingProjection::AbsComplex {
+                real: "real".to_string(),
+                imag: "imag".to_string(),
+            },
+        );
         let task = RunTaskSpec::SetAccumulator {
-            accumulator: AccumulatorConfig::complex(),
+            accumulator: accumulator.clone(),
         };
 
         assert_eq!(task.kind_str(), "set_accumulator");
-        assert_eq!(
-            task.new_accumulator_config().unwrap(),
-            Some(AccumulatorConfig::complex())
-        );
+        assert_eq!(task.new_accumulator_config().unwrap(), Some(accumulator));
         assert_eq!(task.sample_stop_condition(), None);
     }
 

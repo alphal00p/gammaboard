@@ -652,13 +652,13 @@ name = "{run_name}"
 kind = "unit"
 continuous_dims = 2
 discrete_dims = 0
-accumulator_kind = "complex"
+accumulator_kind = "scalar"
 
 [[task_queue]]
 name = "train-a"
 kind = "sample"
 stop_condition = {{ max_samples = {training_samples} }}
-accumulator = {{ config = "complex" }}
+accumulator = {{ config = "scalar" }}
 sampler_aggregator = {{ config = {{ kind = "havana_training", seed = 0, bins = 8, samples_for_update = 8, initial_training_rate = 0.1, final_training_rate = 0.01 }} }}
 "#,
     ));
@@ -900,13 +900,13 @@ name = "havana-alt-e2e"
 kind = "unit"
 continuous_dims = 2
 discrete_dims = 0
-accumulator_kind = "complex"
+accumulator_kind = "scalar"
 
 [[task_queue]]
 name = "train-a"
 kind = "sample"
 stop_condition = { max_samples = 128 }
-accumulator = { config = "complex" }
+accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 8, samples_for_update = 8 } }
 
 [[task_queue]]
@@ -923,7 +923,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 [[task_queue]]
 kind = "image"
-accumulator = "complex"
+accumulator = "scalar"
 [task_queue.geometry]
 offset = [0.0, 0.0]
 u_vector = [1.0, 0.0]

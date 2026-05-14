@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-use super::{Accumulator, ComplexAccumulatorState};
-use crate::core::{EngineError, RunSpec};
+use super::{Accumulator, VectorAccumulatorState};
+use crate::core::{EngineError, RunSpec, TrainingProjection};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GammaLoopAccumulatorState {
-    pub estimate: ComplexAccumulatorState,
+    pub estimate: VectorAccumulatorState,
     #[serde(default)]
     pub diagnostics: GammaLoopDiagnostics,
 }
@@ -55,27 +55,39 @@ impl GammaLoopAccumulatorState {
     }
 
     pub fn real_mean(&self) -> f64 {
-        self.estimate.real_mean()
+        self.estimate
+            .component("real")
+            .map(|component| component.state.mean())
+            .unwrap_or_default()
     }
 
     pub fn imag_mean(&self) -> f64 {
-        self.estimate.imag_mean()
+        self.estimate
+            .component("imag")
+            .map(|component| component.state.mean())
+            .unwrap_or_default()
     }
 
     pub fn abs_mean(&self) -> f64 {
-        self.estimate.abs_mean()
+        self.estimate.projection.state.mean()
     }
 
     pub fn real_stderr(&self) -> f64 {
-        self.estimate.real_stderr()
+        self.estimate
+            .component("real")
+            .map(|component| component.state.stderr())
+            .unwrap_or_default()
     }
 
     pub fn imag_stderr(&self) -> f64 {
-        self.estimate.imag_stderr()
+        self.estimate
+            .component("imag")
+            .map(|component| component.state.stderr())
+            .unwrap_or_default()
     }
 
     pub fn abs_stderr(&self) -> f64 {
-        self.estimate.abs_stderr()
+        self.estimate.projection.state.stderr()
     }
 }
 
@@ -149,13 +161,29 @@ impl From<GammaLoopAccumulatorState> for GammaLoopAccumulatorDigest {
     fn from(state: GammaLoopAccumulatorState) -> Self {
         Self {
             histogram_count: 0,
-            sample_count: state.estimate.count,
+            sample_count: state.estimate.sample_count(),
             primary_histogram_name: None,
             primary_histogram_title: None,
             real_mean: state.estimate.real_mean(),
             imag_mean: state.estimate.imag_mean(),
             real_error: state.estimate.real_stderr(),
             imag_error: state.estimate.imag_stderr(),
+        }
+    }
+}
+
+impl Default for GammaLoopAccumulatorState {
+    fn default() -> Self {
+        Self {
+            estimate: VectorAccumulatorState::from_config(
+                vec!["real".to_string(), "imag".to_string()],
+                TrainingProjection::AbsComplex {
+                    real: "real".to_string(),
+                    imag: "imag".to_string(),
+                },
+                None,
+            ),
+            diagnostics: GammaLoopDiagnostics::default(),
         }
     }
 }

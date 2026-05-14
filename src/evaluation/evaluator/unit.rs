@@ -1,7 +1,7 @@
 use crate::core::{AccumulatorConfig, EvalError};
 use crate::evaluation::{
-    AccumulatorState, Batch, BatchResult, ComplexSampleEvaluator, EvalBatchOptions, Evaluator,
-    IngestComplex, IngestScalar, ScalarSampleEvaluator, SemanticAccumulatorKind,
+    AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator, IngestScalar,
+    ScalarSampleEvaluator, SemanticAccumulatorKind,
 };
 use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
@@ -65,20 +65,6 @@ impl UnitEvaluator {
         }
     }
 
-    fn complex_ingestor<'a>(
-        state: &'a mut AccumulatorState,
-    ) -> Result<&'a mut dyn IngestComplex, EvalError> {
-        match state {
-            AccumulatorState::Empty(accumulator) => Ok(accumulator),
-            AccumulatorState::Complex(accumulator) => Ok(accumulator),
-            AccumulatorState::FullComplex(accumulator) => Ok(accumulator),
-            other => Err(EvalError::eval(format!(
-                "unit evaluator complex mode does not support accumulator kind {}",
-                other.kind_str()
-            ))),
-        }
-    }
-
     fn should_fail_on_batch(&self, batch_nr: usize) -> bool {
         self.fail_on_batch_nr
             .is_some_and(|n| n > 0 && n == batch_nr)
@@ -123,17 +109,6 @@ impl ScalarSampleEvaluator for UnitEvaluator {
     }
 }
 
-impl ComplexSampleEvaluator for UnitEvaluator {
-    fn eval_complex_sample(
-        &mut self,
-        _batch: &Batch,
-        _sample_idx: usize,
-    ) -> Result<num::complex::Complex64, EvalError> {
-        self.maybe_sleep();
-        Ok(num::complex::Complex64::new(1.0, 0.0))
-    }
-}
-
 impl Evaluator for UnitEvaluator {
     fn get_domain(&self) -> Domain {
         self.domain.clone()
@@ -153,19 +128,16 @@ impl Evaluator for UnitEvaluator {
             )));
         }
         let mut observable_state = AccumulatorState::from_config(accumulator);
-        let weighted_values = match self.accumulator_kind {
-            SemanticAccumulatorKind::Scalar => self.eval_scalar_into(
-                batch,
-                Self::scalar_ingestor(&mut observable_state)?,
-                options.require_training_values,
-            )?,
-            SemanticAccumulatorKind::Complex => self.eval_complex_into(
-                batch,
-                Self::complex_ingestor(&mut observable_state)?,
-                options.require_training_values,
-                |v| v.re,
-            )?,
-        };
+        if self.accumulator_kind != SemanticAccumulatorKind::Scalar {
+            return Err(EvalError::eval(
+                "unit evaluator only supports scalar accumulator_kind; use process_evaluator for vector outputs",
+            ));
+        }
+        let weighted_values = self.eval_scalar_into(
+            batch,
+            Self::scalar_ingestor(&mut observable_state)?,
+            options.require_training_values,
+        )?;
         Ok(BatchResult::new(weighted_values, observable_state))
     }
 }
@@ -206,39 +178,5 @@ mod tests {
         };
         assert_eq!(accumulator.count, 2);
         assert_eq!(accumulator.sum_weighted_value, 5.0);
-    }
-
-    #[test]
-    fn eval_batch_supports_complex_accumulator_via_scalar_cast() {
-        let batch = Batch::from_points([
-            Point::new(vec![0.0], Vec::new(), 2.0),
-            Point::new(vec![1.0], Vec::new(), 3.0),
-        ])
-        .expect("batch");
-        let mut evaluator = UnitEvaluator::new(
-            Domain::continuous(1),
-            SemanticAccumulatorKind::Complex,
-            None,
-            Vec::new(),
-            0,
-        );
-
-        let result = evaluator
-            .eval_batch(
-                &batch,
-                &AccumulatorConfig::complex(),
-                EvalBatchOptions {
-                    require_training_values: true,
-                },
-            )
-            .expect("result");
-
-        assert_eq!(result.values, Some(vec![2.0, 3.0]));
-        let AccumulatorState::Complex(accumulator) = result.accumulator else {
-            panic!("expected complex accumulator");
-        };
-        assert_eq!(accumulator.count, 2);
-        assert_eq!(accumulator.real_sum, 5.0);
-        assert_eq!(accumulator.imag_sum, 0.0);
     }
 }

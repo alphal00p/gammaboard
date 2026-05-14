@@ -19,10 +19,10 @@ use symbolica::numerical_integration::Sample;
 
 use crate::{
     Batch, BatchResult, BuildError, Domain, DomainBranch, EvalError,
-    core::AccumulatorConfig,
+    core::{AccumulatorConfig, TrainingProjection as AccumulatorTrainingProjection},
     evaluation::{
-        AccumulatorState, ComplexAccumulatorState, ComplexValueEvaluator, EvalBatchOptions,
-        Evaluator, GammaLoopAccumulatorState, ScalarValueEvaluator,
+        AccumulatorState, ComplexValueEvaluator, EvalBatchOptions, Evaluator,
+        GammaLoopAccumulatorState, ScalarValueEvaluator, VectorAccumulatorState,
     },
     resources::resolve_resource_path,
 };
@@ -431,7 +431,14 @@ impl GammaLoopEvaluator {
         evaluation_results: &[EvaluationResult],
         points: &[crate::evaluation::Point],
     ) -> GammaLoopAccumulatorState {
-        let mut estimate = ComplexAccumulatorState::default();
+        let mut estimate = VectorAccumulatorState::from_config(
+            vec!["real".to_string(), "imag".to_string()],
+            AccumulatorTrainingProjection::AbsComplex {
+                real: "real".to_string(),
+                imag: "imag".to_string(),
+            },
+            None,
+        );
         for (result, point) in evaluation_results.iter().zip(points.iter()) {
             let mut debug_point = point.clone();
             debug_point.integrand_value_re = Some(result.integrand_result.re.0);
@@ -442,7 +449,10 @@ impl GammaLoopEvaluator {
             }
             // Keep jacobian as an explicit weight factor on the point so max-weight
             // diagnostics can report integrand/jacobian contributions separately.
-            estimate.add_sample(Self::raw_result_value(result), &debug_point);
+            let value = Self::raw_result_value(result);
+            estimate
+                .ingest_vector(&[value.re, value.im], &debug_point)
+                .expect("gammaloop estimate vector components should match");
         }
         GammaLoopAccumulatorState {
             bundle: self
@@ -652,6 +662,27 @@ impl Evaluator for GammaLoopEvaluator {
                     None
                 }
             }
+            AccumulatorConfig::Vector { .. } => {
+                let AccumulatorState::Vector(accumulator) = &mut observable_state else {
+                    return Err(EvalError::eval(format!(
+                        "gammaloop vector mode does not support accumulator kind {}",
+                        observable_state.kind_str()
+                    )));
+                };
+                let mut training_values = options
+                    .require_training_values
+                    .then(|| Vec::with_capacity(evaluation_results.len()));
+                for (result, point) in evaluation_results.iter().zip(points.iter()) {
+                    let value = Self::project_result_value(result);
+                    let projected = accumulator
+                        .ingest_vector(&[value.re, value.im], point)
+                        .map_err(EvalError::eval)?;
+                    if let Some(training_values) = training_values.as_mut() {
+                        training_values.push(projected * point.total_weight());
+                    }
+                }
+                training_values
+            }
             _ => match accumulator.semantic_kind() {
                 crate::evaluation::SemanticAccumulatorKind::Scalar => match &mut observable_state {
                     AccumulatorState::Scalar(accumulator) => self.ingest_scalar_values(
@@ -687,16 +718,6 @@ impl Evaluator for GammaLoopEvaluator {
                 },
                 crate::evaluation::SemanticAccumulatorKind::Complex => {
                     match &mut observable_state {
-                        AccumulatorState::Complex(accumulator) => self.ingest_complex_values(
-                            &evaluation_results
-                                .iter()
-                                .map(Self::project_result_value)
-                                .collect::<Vec<_>>(),
-                            points,
-                            options.require_training_values,
-                            accumulator,
-                            |value| self.training_projection.project(value),
-                        )?,
                         AccumulatorState::FullComplex(accumulator) => self.ingest_complex_values(
                             &evaluation_results
                                 .iter()

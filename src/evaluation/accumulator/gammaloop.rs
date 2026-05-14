@@ -1,16 +1,33 @@
-use super::{Accumulator, ComplexAccumulatorState};
+use super::{Accumulator, VectorAccumulatorState};
 use crate::core::{EngineError, RunSpec};
 use gammalooprs::integrands::evaluation::{EvaluationResult, StabilityStatus};
 use gammalooprs::observables::{HistogramSnapshot, ObservableSnapshotBundle};
 use gammalooprs::settings::runtime::Precision;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GammaLoopAccumulatorState {
     pub bundle: ObservableSnapshotBundle,
-    pub estimate: ComplexAccumulatorState,
+    pub estimate: VectorAccumulatorState,
     #[serde(default)]
     pub diagnostics: GammaLoopDiagnostics,
+}
+
+impl Default for GammaLoopAccumulatorState {
+    fn default() -> Self {
+        Self {
+            bundle: ObservableSnapshotBundle::default(),
+            estimate: VectorAccumulatorState::from_config(
+                vec!["real".to_string(), "imag".to_string()],
+                crate::core::TrainingProjection::AbsComplex {
+                    real: "real".to_string(),
+                    imag: "imag".to_string(),
+                },
+                None,
+            ),
+            diagnostics: GammaLoopDiagnostics::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -179,27 +196,39 @@ impl GammaLoopAccumulatorState {
     }
 
     pub fn real_mean(&self) -> f64 {
-        self.estimate.real_mean()
+        self.estimate
+            .component("real")
+            .map(|component| component.state.mean())
+            .unwrap_or_default()
     }
 
     pub fn imag_mean(&self) -> f64 {
-        self.estimate.imag_mean()
+        self.estimate
+            .component("imag")
+            .map(|component| component.state.mean())
+            .unwrap_or_default()
     }
 
     pub fn abs_mean(&self) -> f64 {
-        self.estimate.abs_mean()
+        self.estimate.projection.state.mean()
     }
 
     pub fn real_stderr(&self) -> f64 {
-        self.estimate.real_stderr()
+        self.estimate
+            .component("real")
+            .map(|component| component.state.stderr())
+            .unwrap_or_default()
     }
 
     pub fn imag_stderr(&self) -> f64 {
-        self.estimate.imag_stderr()
+        self.estimate
+            .component("imag")
+            .map(|component| component.state.stderr())
+            .unwrap_or_default()
     }
 
     pub fn abs_stderr(&self) -> f64 {
-        self.estimate.abs_stderr()
+        self.estimate.projection.state.stderr()
     }
 
     pub fn signal_to_noise(&self) -> f64 {
@@ -355,7 +384,7 @@ impl From<GammaLoopAccumulatorState> for GammaLoopAccumulatorDigest {
 #[cfg(test)]
 mod tests {
     use super::{GammaLoopAccumulatorState, GammaLoopDiagnostics};
-    use crate::evaluation::{Accumulator, ComplexAccumulatorState};
+    use crate::evaluation::{Accumulator, VectorAccumulatorState};
     use gammalooprs::observables::{
         HistogramBinSnapshot, HistogramSnapshot, HistogramStatisticsSnapshot, ObservablePhase,
         ObservableSnapshotBundle, ObservableValueTransform,
@@ -426,20 +455,30 @@ mod tests {
                     },
                 )]),
             },
-            estimate: ComplexAccumulatorState {
-                count: estimate_count,
-                real_sum: estimate_real_sum,
-                imag_sum: 0.0,
-                abs_sum: estimate_real_sum.abs(),
-                abs_sq_sum: estimate_real_sq_sum,
-                real_sq_sum: estimate_real_sq_sum,
-                imag_sq_sum: 0.0,
-                weight_sum: estimate_count as f64,
-                nan_count: 0,
-                ..Default::default()
-            },
+            estimate: test_estimate(estimate_real_sum, estimate_real_sq_sum, estimate_count),
             diagnostics: GammaLoopDiagnostics::default(),
         }
+    }
+
+    fn test_estimate(sum: f64, sum_sq: f64, count: i64) -> VectorAccumulatorState {
+        let mut estimate = VectorAccumulatorState::from_config(
+            vec!["real".to_string(), "imag".to_string()],
+            crate::core::TrainingProjection::AbsComplex {
+                real: "real".to_string(),
+                imag: "imag".to_string(),
+            },
+            None,
+        );
+        estimate.components[0].state.count = count;
+        estimate.components[0].state.sum_weighted_value = sum;
+        estimate.components[0].state.sum_abs = sum.abs();
+        estimate.components[0].state.sum_sq = sum_sq;
+        estimate.components[1].state.count = count;
+        estimate.projection.state.count = count;
+        estimate.projection.state.sum_weighted_value = sum.abs();
+        estimate.projection.state.sum_abs = sum.abs();
+        estimate.projection.state.sum_sq = sum_sq;
+        estimate
     }
 
     #[test]

@@ -27,13 +27,12 @@ pub use core::{
 pub use core::{BatchRecord, BatchStatus};
 pub use core::{BuildError, EngineError, EvalError, StoreError};
 pub use evaluation::{
-    Accumulator, AccumulatorState, Batch, BatchError, BatchResult, BatchTransform,
-    ComplexAccumulatorState, ComplexSampleEvaluator, ComplexValue, ComplexValueEvaluator,
-    EmptyAccumulatorState, EvalBatchOptions, Evaluator, FullAccumulatorProgress,
-    FullComplexAccumulatorState, FullScalarAccumulatorState, GammaLoopAccumulatorDigest,
-    GammaLoopAccumulatorState, IngestComplex, IngestScalar, IngestVector, Materializer,
-    NamedScalarAccumulator, Point, ScalarAccumulatorState, ScalarSampleEvaluator,
-    ScalarValueEvaluator, SemanticAccumulatorKind, VectorAccumulatorState,
+    Accumulator, AccumulatorState, Batch, BatchError, BatchResult, BatchTransform, ComplexValue,
+    ComplexValueEvaluator, EmptyAccumulatorState, EvalBatchOptions, Evaluator,
+    FullAccumulatorProgress, FullComplexAccumulatorState, FullScalarAccumulatorState,
+    GammaLoopAccumulatorDigest, GammaLoopAccumulatorState, IngestComplex, IngestScalar,
+    IngestVector, Materializer, NamedScalarAccumulator, Point, ScalarAccumulatorState,
+    ScalarSampleEvaluator, ScalarValueEvaluator, SemanticAccumulatorKind, VectorAccumulatorState,
 };
 pub use sampling::{
     LatentBatch, LatentBatchPayload, LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator,

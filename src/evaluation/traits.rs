@@ -41,32 +41,6 @@ pub trait ScalarSampleEvaluator {
     }
 }
 
-pub trait ComplexSampleEvaluator {
-    fn eval_complex_sample(
-        &mut self,
-        batch: &Batch,
-        sample_idx: usize,
-    ) -> Result<Complex64, EvalError>;
-
-    fn eval_complex_into<O: IngestComplex + ?Sized>(
-        &mut self,
-        batch: &Batch,
-        accumulator: &mut O,
-        require_training_values: bool,
-        training_projection: impl Fn(Complex64) -> f64,
-    ) -> Result<Option<Vec<f64>>, EvalError> {
-        let mut training_values = require_training_values.then(|| Vec::with_capacity(batch.size()));
-        for (sample_idx, point) in batch.points().iter().enumerate() {
-            let value = self.eval_complex_sample(batch, sample_idx)?;
-            accumulator.ingest_complex(value, point);
-            if let Some(values) = training_values.as_mut() {
-                values.push(training_projection(value) * point.total_weight());
-            }
-        }
-        Ok(training_values)
-    }
-}
-
 pub trait ScalarValueEvaluator {
     fn ingest_scalar_values<O: IngestScalar + ?Sized>(
         &self,
@@ -186,50 +160,6 @@ pub trait ScalarBatchEvaluator: ScalarValueEvaluator {
             batch.points(),
             require_training_values,
             accumulator,
-        )
-    }
-}
-
-pub trait ComplexBatchEvaluator: ComplexValueEvaluator {
-    fn discrete_dims(&self) -> usize;
-    fn continuous_dims(&self) -> usize;
-    fn eval_complex_rectangular_batch(
-        &mut self,
-        xs_discrete_row_major: &[i64],
-        xs_continuous_row_major: &[f64],
-        nr_samples: usize,
-    ) -> Result<Vec<Complex64>, EvalError>;
-
-    fn eval_complex_batch(&mut self, batch: &Batch) -> Result<Vec<Complex64>, EvalError> {
-        let nr_samples = batch.size();
-        let (xs_discrete, xs_continuous) =
-            dense_rectangular_inputs(batch, self.discrete_dims(), self.continuous_dims())?;
-        let values =
-            self.eval_complex_rectangular_batch(&xs_discrete, &xs_continuous, nr_samples)?;
-        if values.len() != nr_samples {
-            return Err(EvalError::eval(format!(
-                "complex batch evaluator produced {} values for {} samples",
-                values.len(),
-                nr_samples
-            )));
-        }
-        Ok(values)
-    }
-
-    fn eval_complex_batch_into<O: IngestComplex + ?Sized>(
-        &mut self,
-        batch: &Batch,
-        accumulator: &mut O,
-        require_training_values: bool,
-        training_projection: impl Fn(Complex64) -> f64,
-    ) -> Result<Option<Vec<f64>>, EvalError> {
-        let values = self.eval_complex_batch(batch)?;
-        self.ingest_complex_values(
-            values.as_slice(),
-            batch.points(),
-            require_training_values,
-            accumulator,
-            training_projection,
         )
     }
 }

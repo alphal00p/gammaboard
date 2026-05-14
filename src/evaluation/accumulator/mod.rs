@@ -1,4 +1,3 @@
-mod complex;
 mod discrete_bins;
 mod empty;
 mod full;
@@ -16,10 +15,7 @@ use num::complex::Complex64;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value as JsonValue;
 
-pub use self::complex::ComplexAccumulatorState;
-pub use self::discrete_bins::{
-    ComplexDiscreteBinStats, ComplexDiscreteProjection, ScalarDiscreteBinStats, discrete_bin_key,
-};
+pub use self::discrete_bins::{ScalarDiscreteBinStats, discrete_bin_key};
 pub use self::empty::EmptyAccumulatorState;
 pub use self::full::{
     ComplexValue, FullAccumulatorProgress, FullComplexAccumulatorState, FullScalarAccumulatorState,
@@ -92,7 +88,6 @@ pub enum AccumulatorState {
     Empty(EmptyAccumulatorState),
     Scalar(ScalarAccumulatorState),
     Vector(VectorAccumulatorState),
-    Complex(ComplexAccumulatorState),
     Gammaloop(GammaLoopAccumulatorState),
     FullScalar(FullScalarAccumulatorState),
     FullComplex(FullComplexAccumulatorState),
@@ -110,7 +105,13 @@ impl SemanticAccumulatorKind {
     pub fn aggregate_accumulator_config(self) -> AccumulatorConfig {
         match self {
             Self::Scalar => AccumulatorConfig::scalar(),
-            Self::Complex => AccumulatorConfig::complex(),
+            Self::Complex => AccumulatorConfig::vector(
+                vec!["real".to_string(), "imag".to_string()],
+                crate::core::TrainingProjection::AbsComplex {
+                    real: "real".to_string(),
+                    imag: "imag".to_string(),
+                },
+            ),
         }
     }
 
@@ -136,10 +137,10 @@ impl AccumulatorState {
                     ))
                 }),
             SemanticAccumulatorKind::Complex => serde_json::from_value(value.clone())
-                .map(Self::Complex)
+                .map(Self::Vector)
                 .map_err(|err| {
                     EngineError::build(format!(
-                        "invalid complex persistent accumulator payload: {err}"
+                        "invalid vector persistent accumulator payload: {err}"
                     ))
                 }),
         }
@@ -182,11 +183,6 @@ impl AccumulatorState {
                 training_projection.clone(),
                 discrete_histograms.clone(),
             )),
-            AccumulatorConfig::Complex {
-                discrete_histograms,
-            } => Self::Complex(ComplexAccumulatorState::from_config(
-                discrete_histograms.clone(),
-            )),
             AccumulatorConfig::Gammaloop => Self::empty_gammaloop(),
             AccumulatorConfig::FullScalar => Self::empty_full_scalar(),
             AccumulatorConfig::FullComplex => Self::empty_full_complex(),
@@ -199,10 +195,6 @@ impl AccumulatorState {
 
     pub fn empty_scalar() -> Self {
         Self::Scalar(ScalarAccumulatorState::default())
-    }
-
-    pub fn empty_complex() -> Self {
-        Self::Complex(ComplexAccumulatorState::default())
     }
 
     pub fn empty_vector() -> Self {
@@ -230,7 +222,6 @@ impl AccumulatorState {
             Self::Empty(_) => "empty",
             Self::Scalar(_) => "scalar",
             Self::Vector(_) => "vector",
-            Self::Complex(_) => "complex",
             Self::Gammaloop(_) => "gammaloop",
             Self::FullScalar(_) => "full_scalar",
             Self::FullComplex(_) => "full_complex",
@@ -255,9 +246,6 @@ impl AccumulatorState {
                     .first()
                     .and_then(|component| component.state.discrete_histograms.clone()),
             },
-            Self::Complex(state) => AccumulatorConfig::Complex {
-                discrete_histograms: state.discrete_histograms.clone(),
-            },
             Self::Gammaloop(_) => AccumulatorConfig::Gammaloop,
             Self::FullScalar(_) => AccumulatorConfig::FullScalar,
             Self::FullComplex(_) => AccumulatorConfig::FullComplex,
@@ -275,10 +263,6 @@ impl AccumulatorState {
                 Ok(())
             }
             (Self::Vector(left), Self::Vector(right)) => {
-                Accumulator::merge(left, right);
-                Ok(())
-            }
-            (Self::Complex(left), Self::Complex(right)) => {
                 Accumulator::merge(left, right);
                 Ok(())
             }
@@ -304,7 +288,6 @@ impl AccumulatorState {
             Self::Empty(accumulator) => accumulator.sample_count(),
             Self::Scalar(accumulator) => accumulator.sample_count(),
             Self::Vector(accumulator) => accumulator.sample_count(),
-            Self::Complex(accumulator) => accumulator.sample_count(),
             Self::Gammaloop(accumulator) => accumulator.sample_count(),
             Self::FullScalar(accumulator) => accumulator.sample_count(),
             Self::FullComplex(accumulator) => accumulator.sample_count(),
@@ -316,7 +299,6 @@ impl AccumulatorState {
             Self::Empty(_) => 0.0,
             Self::Scalar(accumulator) => accumulator.signal_to_noise(),
             Self::Vector(accumulator) => accumulator.signal_to_noise(),
-            Self::Complex(accumulator) => accumulator.signal_to_noise(),
             Self::Gammaloop(accumulator) => accumulator.signal_to_noise(),
             Self::FullScalar(_) | Self::FullComplex(_) => 0.0,
         }
@@ -337,7 +319,6 @@ impl AccumulatorState {
             Self::Empty(accumulator) => accumulator.to_persistent_json(),
             Self::Scalar(accumulator) => accumulator.to_persistent_json(),
             Self::Vector(accumulator) => accumulator.to_persistent_json(),
-            Self::Complex(accumulator) => accumulator.to_persistent_json(),
             Self::Gammaloop(accumulator) => accumulator.to_persistent_json(),
             Self::FullScalar(accumulator) => accumulator.to_persistent_json(),
             Self::FullComplex(accumulator) => accumulator.to_persistent_json(),
@@ -349,7 +330,6 @@ impl AccumulatorState {
             Self::Empty(accumulator) => accumulator.to_digest_json(run_spec),
             Self::Scalar(accumulator) => accumulator.to_digest_json(run_spec),
             Self::Vector(accumulator) => accumulator.to_digest_json(run_spec),
-            Self::Complex(accumulator) => accumulator.to_digest_json(run_spec),
             Self::Gammaloop(accumulator) => accumulator.to_digest_json(run_spec),
             Self::FullScalar(accumulator) => accumulator.to_digest_json(run_spec),
             Self::FullComplex(accumulator) => accumulator.to_digest_json(run_spec),

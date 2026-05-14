@@ -6,9 +6,7 @@ use crate::core::{
     AccumulatorConfig, DiscreteHistogramConfig, DiscreteHistogramNormalization, EngineError,
     NamedDiscreteHistogram, SampleErrorProjection, SampleStopCondition,
 };
-use crate::evaluation::accumulator::{
-    ComplexDiscreteBinStats, ComplexDiscreteProjection, ScalarDiscreteBinStats,
-};
+use crate::evaluation::accumulator::ScalarDiscreteBinStats;
 use crate::evaluation::{
     Accumulator, AccumulatorState, GammaLoopDiagnostics, Point, SemanticAccumulatorKind,
 };
@@ -33,17 +31,13 @@ pub(super) fn projectors(
         estimate_summary_projector(&accumulator_config),
         real_estimate_history_projector(&accumulator_config),
     ];
-    if matches!(
-        accumulator_config,
-        AccumulatorConfig::Complex { .. } | AccumulatorConfig::Gammaloop
-    ) {
+    if matches!(accumulator_config, AccumulatorConfig::Gammaloop) {
         projectors.push(imag_estimate_history_projector(&accumulator_config));
     }
     if matches!(
         accumulator_config,
         AccumulatorConfig::Scalar { .. }
             | AccumulatorConfig::Vector { .. }
-            | AccumulatorConfig::Complex { .. }
             | AccumulatorConfig::Gammaloop
     ) {
         projectors.push(max_weight_summary_projector(&accumulator_config));
@@ -58,9 +52,7 @@ pub(super) fn projectors(
     } else if let Some(histogram_config) = accumulator_config.discrete_histograms().cloned()
         && matches!(
             accumulator_config,
-            AccumulatorConfig::Scalar { .. }
-                | AccumulatorConfig::Vector { .. }
-                | AccumulatorConfig::Complex { .. }
+            AccumulatorConfig::Scalar { .. } | AccumulatorConfig::Vector { .. }
         )
     {
         projectors.push(discrete_histogram_bundle_projector(
@@ -145,10 +137,7 @@ fn sample_progress_projector(accumulator_config: &AccumulatorConfig) -> TaskPane
 fn real_estimate_history_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
     let current_config = accumulator_config.clone();
     let history_config = accumulator_config.clone();
-    let width = if matches!(
-        accumulator_config,
-        AccumulatorConfig::Complex { .. } | AccumulatorConfig::Gammaloop
-    ) {
+    let width = if matches!(accumulator_config, AccumulatorConfig::Gammaloop) {
         PanelWidth::Half
     } else {
         PanelWidth::Full
@@ -411,10 +400,6 @@ fn accumulator_matches_requested_config(
             AccumulatorState::Scalar(_) | AccumulatorState::FullScalar(_)
         ),
         AccumulatorConfig::Vector { .. } => matches!(accumulator, AccumulatorState::Vector(_)),
-        AccumulatorConfig::Complex { .. } => matches!(
-            accumulator,
-            AccumulatorState::Complex(_) | AccumulatorState::FullComplex(_)
-        ),
         AccumulatorConfig::Gammaloop => matches!(accumulator, AccumulatorState::Gammaloop(_)),
         AccumulatorConfig::FullScalar => matches!(accumulator, AccumulatorState::FullScalar(_)),
         AccumulatorConfig::FullComplex => matches!(accumulator, AccumulatorState::FullComplex(_)),
@@ -444,10 +429,6 @@ fn decode_aggregate_persisted_accumulator(
         AccumulatorConfig::Vector { .. } => {
             AccumulatorState::from_vector_persistent_json(persisted)
         }
-        AccumulatorConfig::Complex { .. } => AccumulatorState::from_aggregate_persistent_json(
-            SemanticAccumulatorKind::Complex,
-            persisted,
-        ),
         AccumulatorConfig::Gammaloop => AccumulatorState::from_gammaloop_persistent_json(persisted),
         AccumulatorConfig::FullScalar | AccumulatorConfig::FullComplex => {
             Err(EngineError::build(format!(
@@ -463,7 +444,6 @@ fn estimate_label(accumulator_config: &AccumulatorConfig) -> &'static str {
         AccumulatorConfig::Empty => "Estimate",
         AccumulatorConfig::Scalar { .. } => "Mean",
         AccumulatorConfig::Vector { .. } => "Projection Mean",
-        AccumulatorConfig::Complex { .. } => "Real Mean",
         AccumulatorConfig::Gammaloop => "Real Mean",
         AccumulatorConfig::FullScalar | AccumulatorConfig::FullComplex => "Estimate",
     }
@@ -474,7 +454,6 @@ fn config_label(config: &AccumulatorConfig) -> &'static str {
         AccumulatorConfig::Empty => "empty",
         AccumulatorConfig::Scalar { .. } => "scalar",
         AccumulatorConfig::Vector { .. } => "vector",
-        AccumulatorConfig::Complex { .. } => "complex",
         AccumulatorConfig::Gammaloop => "gammaloop",
         AccumulatorConfig::FullScalar => "full_scalar",
         AccumulatorConfig::FullComplex => "full_complex",
@@ -511,18 +490,6 @@ fn real_estimate_history_panel(accumulator: AccumulatorState) -> PanelState {
                 smooth,
             )
         }
-        AccumulatorState::Complex(state) => scalar_timeseries_panel_with_smoothing(
-            "real_estimate_history",
-            vec![PlotPoint {
-                x: state.count as f64,
-                y: state.real_mean(),
-                x_sampler_uptime_ms: None,
-                x_completed_samples_total: None,
-                y_min: Some(state.real_mean() - state.real_stderr()),
-                y_max: Some(state.real_mean() + state.real_stderr()),
-            }],
-            smooth,
-        ),
         AccumulatorState::Gammaloop(state) => scalar_timeseries_panel_with_smoothing(
             "real_estimate_history",
             vec![PlotPoint {
@@ -542,18 +509,6 @@ fn real_estimate_history_panel(accumulator: AccumulatorState) -> PanelState {
 fn imag_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
     let smooth = Some(true);
     match accumulator {
-        AccumulatorState::Complex(state) => Some(scalar_timeseries_panel_with_smoothing(
-            "imag_estimate_history",
-            vec![PlotPoint {
-                x: state.count as f64,
-                y: state.imag_mean(),
-                x_sampler_uptime_ms: None,
-                x_completed_samples_total: None,
-                y_min: Some(state.imag_mean() - state.imag_stderr()),
-                y_max: Some(state.imag_mean() + state.imag_stderr()),
-            }],
-            smooth,
-        )),
         AccumulatorState::Gammaloop(state) => Some(scalar_timeseries_panel_with_smoothing(
             "imag_estimate_history",
             vec![PlotPoint {
@@ -574,7 +529,6 @@ fn rsd_history_panel(accumulator: AccumulatorState) -> PanelState {
     let rsd = match &accumulator {
         AccumulatorState::Scalar(state) => state.rsd(),
         AccumulatorState::Vector(state) => state.rsd(),
-        AccumulatorState::Complex(state) => state.rsd(),
         AccumulatorState::Gammaloop(state) => state.rsd(),
         _ => 0.0,
     };
@@ -634,72 +588,22 @@ fn max_weight_summary_panel(accumulator: AccumulatorState) -> Option<PanelState>
                 state.projection.state.max_weighted_negative,
             ),
         ],
-        AccumulatorState::Complex(state) => vec![
-            key_value("max_weight_impact", "Impact", state.max_weight_impact()),
-            key_value(
-                "max_weight_impact_real",
-                "Impact Re",
-                state.real_max_weight_impact(),
-            ),
-            key_value(
-                "max_weight_impact_imag",
-                "Impact Im",
-                state.imag_max_weight_impact(),
-            ),
-            key_value(
-                "max_real_weighted_positive",
-                "Max Re +",
-                state.max_real_weighted_positive,
-            ),
-            key_value(
-                "max_real_weighted_negative",
-                "Max Re -",
-                state.max_real_weighted_negative,
-            ),
-            key_value(
-                "max_imag_weighted_positive",
-                "Max Im +",
-                state.max_imag_weighted_positive,
-            ),
-            key_value(
-                "max_imag_weighted_negative",
-                "Max Im -",
-                state.max_imag_weighted_negative,
-            ),
-        ],
         AccumulatorState::Gammaloop(state) => {
-            let estimate = &state.estimate;
             vec![
-                key_value("max_weight_impact", "Impact", estimate.max_weight_impact()),
                 key_value(
-                    "max_weight_impact_real",
-                    "Impact Re",
-                    estimate.real_max_weight_impact(),
+                    "max_weight_impact",
+                    "Projection Impact",
+                    state.estimate.projection.state.max_weight_impact(),
                 ),
                 key_value(
-                    "max_weight_impact_imag",
-                    "Impact Im",
-                    estimate.imag_max_weight_impact(),
+                    "max_weighted_positive",
+                    "Projection Max +",
+                    state.estimate.projection.state.max_weighted_positive,
                 ),
                 key_value(
-                    "max_real_weighted_positive",
-                    "Max Re +",
-                    estimate.max_real_weighted_positive,
-                ),
-                key_value(
-                    "max_real_weighted_negative",
-                    "Max Re -",
-                    estimate.max_real_weighted_negative,
-                ),
-                key_value(
-                    "max_imag_weighted_positive",
-                    "Max Im +",
-                    estimate.max_imag_weighted_positive,
-                ),
-                key_value(
-                    "max_imag_weighted_negative",
-                    "Max Im -",
-                    estimate.max_imag_weighted_negative,
+                    "max_weighted_negative",
+                    "Projection Max -",
+                    state.estimate.projection.state.max_weighted_negative,
                 ),
             ]
         }
@@ -763,77 +667,28 @@ fn max_weight_points_panel(accumulator: AccumulatorState) -> Option<PanelState> 
             }
             rows
         }
-        AccumulatorState::Complex(state) => {
-            let mut rows = Vec::new();
-            push_max_weight_row(
-                &mut rows,
-                "re",
-                "+",
-                state.max_real_weighted_positive,
-                state.real_max_weight_impact(),
-                state.max_real_weighted_positive_point.as_ref(),
-            );
-            push_max_weight_row(
-                &mut rows,
-                "re",
-                "-",
-                state.max_real_weighted_negative,
-                state.real_max_weight_impact(),
-                state.max_real_weighted_negative_point.as_ref(),
-            );
-            push_max_weight_row(
-                &mut rows,
-                "im",
-                "+",
-                state.max_imag_weighted_positive,
-                state.imag_max_weight_impact(),
-                state.max_imag_weighted_positive_point.as_ref(),
-            );
-            push_max_weight_row(
-                &mut rows,
-                "im",
-                "-",
-                state.max_imag_weighted_negative,
-                state.imag_max_weight_impact(),
-                state.max_imag_weighted_negative_point.as_ref(),
-            );
-            rows
-        }
         AccumulatorState::Gammaloop(state) => {
             let estimate = &state.estimate;
             let mut rows = Vec::new();
-            push_max_weight_row(
-                &mut rows,
-                "re",
-                "+",
-                estimate.max_real_weighted_positive,
-                estimate.real_max_weight_impact(),
-                estimate.max_real_weighted_positive_point.as_ref(),
-            );
-            push_max_weight_row(
-                &mut rows,
-                "re",
-                "-",
-                estimate.max_real_weighted_negative,
-                estimate.real_max_weight_impact(),
-                estimate.max_real_weighted_negative_point.as_ref(),
-            );
-            push_max_weight_row(
-                &mut rows,
-                "im",
-                "+",
-                estimate.max_imag_weighted_positive,
-                estimate.imag_max_weight_impact(),
-                estimate.max_imag_weighted_positive_point.as_ref(),
-            );
-            push_max_weight_row(
-                &mut rows,
-                "im",
-                "-",
-                estimate.max_imag_weighted_negative,
-                estimate.imag_max_weight_impact(),
-                estimate.max_imag_weighted_negative_point.as_ref(),
-            );
+            for component in &estimate.components {
+                let impact = component.state.max_weight_impact();
+                push_max_weight_row(
+                    &mut rows,
+                    &component.name,
+                    "+",
+                    component.state.max_weighted_positive,
+                    impact,
+                    component.state.max_weighted_positive_point.as_ref(),
+                );
+                push_max_weight_row(
+                    &mut rows,
+                    &component.name,
+                    "-",
+                    component.state.max_weighted_negative,
+                    impact,
+                    component.state.max_weighted_negative_point.as_ref(),
+                );
+            }
             rows
         }
         _ => return None,
@@ -966,30 +821,6 @@ fn base_estimate_summary_entries(
             }
             entries
         }
-        AccumulatorState::Complex(state) => vec![
-            key_value("count", "Count", state.count),
-            key_value("rsd", "RSD", state.rsd()),
-            key_value(
-                "real_mean",
-                "Real Mean",
-                json!({"kind":"estimate","value":state.real_mean(),"error":state.real_stderr()}),
-            ),
-            key_value(
-                "imag_mean",
-                "Imag Mean",
-                json!({"kind":"estimate","value":state.imag_mean(),"error":state.imag_stderr()}),
-            ),
-            key_value(
-                "abs_mean",
-                "Abs Mean",
-                json!({"kind":"estimate","value":state.abs_mean(),"error":state.abs_stderr()}),
-            ),
-            key_value(
-                "signal_to_noise",
-                "Mean(|x|)^2 / abs_err^2",
-                state.signal_to_noise(),
-            ),
-        ],
         AccumulatorState::Gammaloop(state) => {
             let mut entries = vec![
                 key_value("count", "Count", state.sample_count()),
@@ -1166,9 +997,7 @@ fn sample_eta_seconds(
     let projection = stop_condition
         .projection
         .unwrap_or_else(|| match accumulator {
-            Some(AccumulatorState::Complex(_) | AccumulatorState::Gammaloop(_)) => {
-                SampleErrorProjection::Abs
-            }
+            Some(AccumulatorState::Gammaloop(_)) => SampleErrorProjection::Abs,
             _ => SampleErrorProjection::Real,
         });
     let projected = accumulator
@@ -1205,20 +1034,6 @@ fn projected_estimate(
             value: state.projection.state.mean(),
             error: state.projection.state.stderr(),
         }),
-        AccumulatorState::Complex(state) => match projection {
-            SampleErrorProjection::Real => Some(ProjectedEstimate {
-                value: state.real_mean(),
-                error: state.real_stderr(),
-            }),
-            SampleErrorProjection::Imag => Some(ProjectedEstimate {
-                value: state.imag_mean(),
-                error: state.imag_stderr(),
-            }),
-            SampleErrorProjection::Abs => Some(ProjectedEstimate {
-                value: state.abs_mean(),
-                error: state.abs_stderr(),
-            }),
-        },
         AccumulatorState::Gammaloop(state) => match projection {
             SampleErrorProjection::Real => Some(ProjectedEstimate {
                 value: state.real_mean(),
@@ -1396,9 +1211,7 @@ fn discrete_histogram_bundle_panel(
         AccumulatorState::Scalar(state) => {
             scalar_discrete_histogram_payload(&state.discrete_bins, state.count, config)
         }
-        AccumulatorState::Complex(state) => {
-            complex_discrete_histogram_payload(&state.discrete_bins, state.count, config)
-        }
+        AccumulatorState::Vector(state) => vector_discrete_histogram_payload(state, config),
         _ => return None,
     };
     let payload = match payload {
@@ -1479,30 +1292,28 @@ fn scalar_discrete_histogram_payload(
     }))
 }
 
-fn complex_discrete_histogram_payload(
-    bins: &BTreeMap<String, ComplexDiscreteBinStats>,
-    total_count: i64,
+fn vector_discrete_histogram_payload(
+    state: &crate::evaluation::VectorAccumulatorState,
     config: &DiscreteHistogramConfig,
 ) -> Result<JsonValue, String> {
     let mut histograms = serde_json::Map::new();
-    for item in &config.items {
-        for (suffix, projection) in [
-            ("real", ComplexDiscreteProjection::Real),
-            ("imag", ComplexDiscreteProjection::Imag),
-            ("abs", ComplexDiscreteProjection::Abs),
-        ] {
-            let name = format!("{}.{}", item.name, suffix);
+    for component in state
+        .components
+        .iter()
+        .chain(std::iter::once(&state.projection))
+    {
+        for item in &config.items {
+            let name = format!("{}.{}", item.name, component.name);
             histograms.insert(
                 name.clone(),
                 json!({
                     "title": name,
                     "type_description": discrete_histogram_description(item),
-                    "bins": complex_projected_bins(
-                        bins,
+                    "bins": scalar_projected_bins(
+                        &component.state.discrete_bins,
                         item,
-                        projection,
                         config.normalization,
-                        total_count,
+                        component.state.count,
                         config.max_total_bins_or_default()
                     )?,
                 }),
@@ -1553,45 +1364,6 @@ fn scalar_projected_bins(
         .collect())
 }
 
-fn complex_projected_bins(
-    bins: &BTreeMap<String, ComplexDiscreteBinStats>,
-    item: &NamedDiscreteHistogram,
-    projection: ComplexDiscreteProjection,
-    normalization: DiscreteHistogramNormalization,
-    total_count: i64,
-    max_total_bins: usize,
-) -> Result<Vec<JsonValue>, String> {
-    let mut projected = BTreeMap::<Vec<i64>, ComplexDiscreteBinStats>::new();
-    for bin in bins.values() {
-        if !matches_fixed_dims(&bin.discrete, item)? {
-            continue;
-        }
-        let key = histogram_key(&bin.discrete, item)?;
-        projected
-            .entry(key.clone())
-            .and_modify(|current| current.merge_in_place(bin.clone()))
-            .or_insert_with(|| ComplexDiscreteBinStats {
-                discrete: key,
-                ..bin.clone()
-            });
-        reject_bin_explosion(projected.len(), max_total_bins, &item.name)?;
-    }
-    Ok(projected
-        .values()
-        .enumerate()
-        .map(|(index, bin)| {
-            json!({
-                "start": index as f64,
-                "stop": index as f64 + 1.0,
-                "value": complex_bin_value(bin, projection, normalization, total_count),
-                "error": complex_bin_error(bin, projection, normalization, total_count),
-                "label": histogram_key_label(&bin.discrete),
-                "bin_id": index as i64,
-            })
-        })
-        .collect())
-}
-
 fn scalar_bin_value(
     bin: &ScalarDiscreteBinStats,
     normalization: DiscreteHistogramNormalization,
@@ -1611,34 +1383,6 @@ fn scalar_bin_error(
     match normalization {
         DiscreteHistogramNormalization::Contribution => bin.contribution_stderr(total_count),
         DiscreteHistogramNormalization::ConditionalMean => bin.stderr(),
-    }
-}
-
-fn complex_bin_value(
-    bin: &ComplexDiscreteBinStats,
-    projection: ComplexDiscreteProjection,
-    normalization: DiscreteHistogramNormalization,
-    total_count: i64,
-) -> f64 {
-    match normalization {
-        DiscreteHistogramNormalization::Contribution => {
-            bin.projected_contribution_mean(projection, total_count)
-        }
-        DiscreteHistogramNormalization::ConditionalMean => bin.projected_mean(projection),
-    }
-}
-
-fn complex_bin_error(
-    bin: &ComplexDiscreteBinStats,
-    projection: ComplexDiscreteProjection,
-    normalization: DiscreteHistogramNormalization,
-    total_count: i64,
-) -> f64 {
-    match normalization {
-        DiscreteHistogramNormalization::Contribution => {
-            bin.projected_contribution_stderr(projection, total_count)
-        }
-        DiscreteHistogramNormalization::ConditionalMean => bin.projected_stderr(projection),
     }
 }
 

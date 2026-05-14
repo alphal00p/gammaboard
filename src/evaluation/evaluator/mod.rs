@@ -135,7 +135,7 @@ fn validate_semantic_accumulator(
         ),
         SemanticAccumulatorKind::Complex => matches!(
             config,
-            AccumulatorConfig::Complex { .. } | AccumulatorConfig::FullComplex
+            AccumulatorConfig::Vector { .. } | AccumulatorConfig::FullComplex
         ),
     };
     if supported {

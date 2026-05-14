@@ -53,9 +53,6 @@ pub enum AccumulatorConfig {
         training_projection: TrainingProjection,
         discrete_histograms: Option<DiscreteHistogramConfig>,
     },
-    Complex {
-        discrete_histograms: Option<DiscreteHistogramConfig>,
-    },
     Gammaloop,
     FullScalar,
     FullComplex,
@@ -121,7 +118,6 @@ enum AccumulatorConfigKind {
     Empty,
     Scalar,
     Vector,
-    Complex,
     Gammaloop,
     FullScalar,
     FullComplex,
@@ -158,12 +154,6 @@ impl AccumulatorConfig {
         }
     }
 
-    pub fn complex() -> Self {
-        Self::Complex {
-            discrete_histograms: None,
-        }
-    }
-
     pub fn vector(components: Vec<String>, training_projection: TrainingProjection) -> Self {
         Self::Vector {
             components,
@@ -177,7 +167,6 @@ impl AccumulatorConfig {
             Self::Empty => "empty",
             Self::Scalar { .. } => "scalar",
             Self::Vector { .. } => "vector",
-            Self::Complex { .. } => "complex",
             Self::Gammaloop => "gammaloop",
             Self::FullScalar => "full_scalar",
             Self::FullComplex => "full_complex",
@@ -189,7 +178,6 @@ impl AccumulatorConfig {
             Self::Empty => AccumulatorConfigKind::Empty,
             Self::Scalar { .. } => AccumulatorConfigKind::Scalar,
             Self::Vector { .. } => AccumulatorConfigKind::Vector,
-            Self::Complex { .. } => AccumulatorConfigKind::Complex,
             Self::Gammaloop => AccumulatorConfigKind::Gammaloop,
             Self::FullScalar => AccumulatorConfigKind::FullScalar,
             Self::FullComplex => AccumulatorConfigKind::FullComplex,
@@ -235,9 +223,6 @@ impl AccumulatorConfig {
                     discrete_histograms,
                 }
             }
-            AccumulatorConfigKind::Complex => Self::Complex {
-                discrete_histograms,
-            },
             AccumulatorConfigKind::Gammaloop => Self::Gammaloop,
             AccumulatorConfigKind::FullScalar => Self::FullScalar,
             AccumulatorConfigKind::FullComplex => Self::FullComplex,
@@ -247,9 +232,7 @@ impl AccumulatorConfig {
     fn kind_accepts_discrete_histograms(kind: AccumulatorConfigKind) -> bool {
         matches!(
             kind,
-            AccumulatorConfigKind::Scalar
-                | AccumulatorConfigKind::Vector
-                | AccumulatorConfigKind::Complex
+            AccumulatorConfigKind::Scalar | AccumulatorConfigKind::Vector
         )
     }
 
@@ -261,9 +244,6 @@ impl AccumulatorConfig {
             | Self::Vector {
                 discrete_histograms,
                 ..
-            }
-            | Self::Complex {
-                discrete_histograms,
             } => discrete_histograms.as_ref(),
             Self::Empty | Self::Gammaloop | Self::FullScalar | Self::FullComplex => None,
         }
@@ -289,7 +269,7 @@ impl AccumulatorConfig {
             Self::Empty | Self::Scalar { .. } | Self::FullScalar => {
                 crate::evaluation::SemanticAccumulatorKind::Scalar
             }
-            Self::Vector { .. } | Self::Complex { .. } | Self::FullComplex => {
+            Self::Vector { .. } | Self::FullComplex => {
                 crate::evaluation::SemanticAccumulatorKind::Complex
             }
             Self::Gammaloop => crate::evaluation::SemanticAccumulatorKind::Scalar,
@@ -330,9 +310,6 @@ impl Serialize for AccumulatorConfig {
             }
             .serialize(serializer),
             Self::Scalar {
-                discrete_histograms: Some(discrete_histograms),
-            }
-            | Self::Complex {
                 discrete_histograms: Some(discrete_histograms),
             } => Rich {
                 kind: self.kind_str(),
@@ -478,9 +455,6 @@ where
                 discrete_histograms,
             })
         }
-        "complex" => Ok(AccumulatorConfig::Complex {
-            discrete_histograms,
-        }),
         "gammaloop" => {
             reject_discrete_histograms(AccumulatorConfigKind::Gammaloop, discrete_histograms)
                 .map(|_| AccumulatorConfig::Gammaloop)
@@ -499,7 +473,6 @@ where
                 "empty",
                 "scalar",
                 "vector",
-                "complex",
                 "gammaloop",
                 "full_scalar",
                 "full_complex",

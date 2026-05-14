@@ -537,9 +537,7 @@ where
             .sample_stop_condition()
             .and_then(|condition| condition.projection)
             .unwrap_or_else(|| match self.observable_state {
-                AccumulatorState::Complex(_) | AccumulatorState::Gammaloop(_) => {
-                    SampleErrorProjection::Abs
-                }
+                AccumulatorState::Gammaloop(_) => SampleErrorProjection::Abs,
                 _ => SampleErrorProjection::Real,
             })
     }
@@ -560,12 +558,6 @@ where
                 value: state.projection.state.mean(),
                 error: state.projection.state.stderr(),
             }),
-            AccumulatorState::Complex(state) => Self::project_complex_like(
-                projection,
-                (state.real_mean(), state.real_stderr()),
-                (state.imag_mean(), state.imag_stderr()),
-                (state.abs_mean(), state.abs_stderr()),
-            ),
             AccumulatorState::Gammaloop(state) => Self::project_complex_like(
                 projection,
                 (state.real_mean(), state.real_stderr()),

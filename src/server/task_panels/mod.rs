@@ -967,9 +967,9 @@ mod tests {
     }
 
     #[test]
-    fn inherited_complex_sample_uses_imag_panel() {
+    fn gammaloop_sample_uses_imag_panel() {
         let task = inherited_complex_sample_task();
-        let descriptors = TaskPanelSource::new(&task, Some(AccumulatorConfig::complex()))
+        let descriptors = TaskPanelSource::new(&task, Some(AccumulatorConfig::Gammaloop))
             .expect("panel source")
             .panel_specs();
         assert!(
@@ -1044,8 +1044,8 @@ mod tests {
         let task = inherited_complex_sample_task();
         let run_task = run_task(task.clone());
         let accumulator = complex_observable();
-        let source =
-            TaskPanelSource::new(&task, Some(AccumulatorConfig::complex())).expect("panel source");
+        let source = TaskPanelSource::new(&task, Some(AccumulatorConfig::FullComplex))
+            .expect("panel source");
 
         let response = source
             .build_response(
