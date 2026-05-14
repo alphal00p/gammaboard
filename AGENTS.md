@@ -22,7 +22,8 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - Run layout uses `Domain`; concrete evaluator batches are `Vec<Point>`.
 - Process evaluators use `kind = "process_evaluator"` and the
   `gammaboard-jsonrpc-v1` `eval_batch` method. Responses use
-  `values_row_major`; current accumulators consume the single-component case.
+  `values_row_major`; process evaluator tasks should use a vector accumulator
+  with matching components.
 
 ## Design Rules
 - Keep adapters thin; put reusable behavior in `src/api` or lower layers.

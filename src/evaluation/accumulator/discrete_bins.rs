@@ -2,7 +2,7 @@ use crate::core::DEFAULT_DISCRETE_HISTOGRAM_MAX_TOTAL_BINS;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct ScalarDiscreteBinStats {
     pub discrete: Vec<i64>,
     pub count: i64,

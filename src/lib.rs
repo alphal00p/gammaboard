@@ -31,8 +31,9 @@ pub use evaluation::{
     ComplexAccumulatorState, ComplexSampleEvaluator, ComplexValue, ComplexValueEvaluator,
     EmptyAccumulatorState, EvalBatchOptions, Evaluator, FullAccumulatorProgress,
     FullComplexAccumulatorState, FullScalarAccumulatorState, GammaLoopAccumulatorDigest,
-    GammaLoopAccumulatorState, IngestComplex, IngestScalar, Materializer, Point,
-    ScalarAccumulatorState, ScalarSampleEvaluator, ScalarValueEvaluator, SemanticAccumulatorKind,
+    GammaLoopAccumulatorState, IngestComplex, IngestScalar, IngestVector, Materializer,
+    NamedScalarAccumulator, Point, ScalarAccumulatorState, ScalarSampleEvaluator,
+    ScalarValueEvaluator, SemanticAccumulatorKind, VectorAccumulatorState,
 };
 pub use sampling::{
     LatentBatch, LatentBatchPayload, LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator,

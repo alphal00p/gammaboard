@@ -250,13 +250,14 @@ For `evaluator.kind = "process_evaluator"`, configure:
 - `command`: complete process command, for example `["nix", "shell", "path:./process_api/examples/python_scalar_sin#runtime", "-c", "gammaboard-example-evaluator-worker"]` or `["apptainer", "exec", "--nv", "runtimes/my_runtime/runtime.sif", "python", "-u", "runtimes/my_runtime/evaluator_worker.py"]`
 - `continuous_dims`: expected continuous dimension for homogeneous rectangular batches
 - `discrete_cardinalities`: expected per-axis discrete cardinalities for homogeneous rectangular batches (for example `[3, 4, 2]`)
-- `components`: observable component names; currently exactly one component is supported by the scalar accumulator path and defaults to `["value"]`
+- `components`: observable component names; defaults to `["value"]` and must match the vector accumulator components
 - optional `args = { ... }`: opaque JSON object passed to the process during initialize
 
 Process evaluator construction semantics:
 - GammaBoard only speaks the process protocol; the bundled Python wrapper uses `args.module` and `args.class` to import a class exposing `eval(xs_discrete, xs_continuous)`.
 - if the Python class defines `from_config(discrete_cardinalities=..., continuous_dims=..., init_args=...)`, that is called with `args` excluding `module` and `class`
 - otherwise the worker calls `ClassName(**args)` (or `ClassName()` when `args` is empty)
+- process evaluators require a `kind = "vector"` accumulator; the training projection is stored as its own scalar aggregate and is used for sampler feedback
 
 For `sampler_aggregator.kind = "process_sampler"`, configure:
 - `command`: complete process command, for example `["nix", "shell", "path:./process_api/examples/python_sampler_symbolica_havana#runtime", "-c", "gammaboard-example-sampler-worker"]` or `["apptainer", "exec", "--nv", "runtimes/my_runtime/runtime.sif", "python", "-u", "runtimes/my_runtime/sampler_worker.py"]`

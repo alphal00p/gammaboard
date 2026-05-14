@@ -556,6 +556,10 @@ where
                 }),
                 SampleErrorProjection::Imag | SampleErrorProjection::Abs => None,
             },
+            AccumulatorState::Vector(state) => Some(ProjectedEstimate {
+                value: state.projection.state.mean(),
+                error: state.projection.state.stderr(),
+            }),
             AccumulatorState::Complex(state) => Self::project_complex_like(
                 projection,
                 (state.real_mean(), state.real_stderr()),

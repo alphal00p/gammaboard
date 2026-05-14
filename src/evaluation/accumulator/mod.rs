@@ -8,6 +8,7 @@ mod gammaloop;
 #[path = "gammaloop_disabled.rs"]
 mod gammaloop;
 mod scalar;
+mod vector;
 
 use crate::core::{AccumulatorConfig, EngineError, RunSpec};
 use crate::evaluation::batch::Point;
@@ -27,6 +28,7 @@ pub use self::gammaloop::{
     GammaLoopAccumulatorDigest, GammaLoopAccumulatorState, GammaLoopDiagnostics,
 };
 pub use self::scalar::ScalarAccumulatorState;
+pub use self::vector::{NamedScalarAccumulator, VectorAccumulatorState};
 
 /// Accumulator payloads are persisted and served through JSON-facing APIs.
 /// Implementations must therefore keep their serialized state JSON-safe and
@@ -38,6 +40,16 @@ pub trait IngestScalar {
 
 pub trait IngestComplex {
     fn ingest_complex(&mut self, value: Complex64, point: &Point);
+}
+
+pub trait IngestVector {
+    fn ingest_vector(&mut self, values: &[f64], point: &Point) -> Result<f64, String>;
+}
+
+impl IngestVector for VectorAccumulatorState {
+    fn ingest_vector(&mut self, values: &[f64], point: &Point) -> Result<f64, String> {
+        VectorAccumulatorState::ingest_vector(self, values, point)
+    }
 }
 
 pub trait Accumulator: Clone + Serialize + DeserializeOwned {
@@ -79,6 +91,7 @@ pub trait Accumulator: Clone + Serialize + DeserializeOwned {
 pub enum AccumulatorState {
     Empty(EmptyAccumulatorState),
     Scalar(ScalarAccumulatorState),
+    Vector(VectorAccumulatorState),
     Complex(ComplexAccumulatorState),
     Gammaloop(GammaLoopAccumulatorState),
     FullScalar(FullScalarAccumulatorState),
@@ -142,12 +155,31 @@ impl AccumulatorState {
             })
     }
 
+    pub fn from_vector_persistent_json(value: &JsonValue) -> Result<Self, EngineError> {
+        serde_json::from_value(value.clone())
+            .map(Self::Vector)
+            .map_err(|err| {
+                EngineError::build(format!(
+                    "invalid vector persistent accumulator payload: {err}"
+                ))
+            })
+    }
+
     pub fn from_config(config: &AccumulatorConfig) -> Self {
         match config {
             AccumulatorConfig::Empty => Self::empty(),
             AccumulatorConfig::Scalar {
                 discrete_histograms,
             } => Self::Scalar(ScalarAccumulatorState::from_config(
+                discrete_histograms.clone(),
+            )),
+            AccumulatorConfig::Vector {
+                components,
+                training_projection,
+                discrete_histograms,
+            } => Self::Vector(VectorAccumulatorState::from_config(
+                components.clone(),
+                training_projection.clone(),
                 discrete_histograms.clone(),
             )),
             AccumulatorConfig::Complex {
@@ -173,6 +205,14 @@ impl AccumulatorState {
         Self::Complex(ComplexAccumulatorState::default())
     }
 
+    pub fn empty_vector() -> Self {
+        Self::Vector(VectorAccumulatorState::from_config(
+            vec!["value".to_string()],
+            crate::core::TrainingProjection::component("value"),
+            None,
+        ))
+    }
+
     pub fn empty_gammaloop() -> Self {
         Self::Gammaloop(GammaLoopAccumulatorState::default())
     }
@@ -189,6 +229,7 @@ impl AccumulatorState {
         match self {
             Self::Empty(_) => "empty",
             Self::Scalar(_) => "scalar",
+            Self::Vector(_) => "vector",
             Self::Complex(_) => "complex",
             Self::Gammaloop(_) => "gammaloop",
             Self::FullScalar(_) => "full_scalar",
@@ -201,6 +242,18 @@ impl AccumulatorState {
             Self::Empty(_) => AccumulatorConfig::Empty,
             Self::Scalar(state) => AccumulatorConfig::Scalar {
                 discrete_histograms: state.discrete_histograms.clone(),
+            },
+            Self::Vector(state) => AccumulatorConfig::Vector {
+                components: state
+                    .components
+                    .iter()
+                    .map(|component| component.name.clone())
+                    .collect(),
+                training_projection: state.projection_spec.clone(),
+                discrete_histograms: state
+                    .components
+                    .first()
+                    .and_then(|component| component.state.discrete_histograms.clone()),
             },
             Self::Complex(state) => AccumulatorConfig::Complex {
                 discrete_histograms: state.discrete_histograms.clone(),
@@ -218,6 +271,10 @@ impl AccumulatorState {
                 Ok(())
             }
             (Self::Scalar(left), Self::Scalar(right)) => {
+                Accumulator::merge(left, right);
+                Ok(())
+            }
+            (Self::Vector(left), Self::Vector(right)) => {
                 Accumulator::merge(left, right);
                 Ok(())
             }
@@ -246,6 +303,7 @@ impl AccumulatorState {
         match self {
             Self::Empty(accumulator) => accumulator.sample_count(),
             Self::Scalar(accumulator) => accumulator.sample_count(),
+            Self::Vector(accumulator) => accumulator.sample_count(),
             Self::Complex(accumulator) => accumulator.sample_count(),
             Self::Gammaloop(accumulator) => accumulator.sample_count(),
             Self::FullScalar(accumulator) => accumulator.sample_count(),
@@ -257,6 +315,7 @@ impl AccumulatorState {
         match self {
             Self::Empty(_) => 0.0,
             Self::Scalar(accumulator) => accumulator.signal_to_noise(),
+            Self::Vector(accumulator) => accumulator.signal_to_noise(),
             Self::Complex(accumulator) => accumulator.signal_to_noise(),
             Self::Gammaloop(accumulator) => accumulator.signal_to_noise(),
             Self::FullScalar(_) | Self::FullComplex(_) => 0.0,
@@ -277,6 +336,7 @@ impl AccumulatorState {
         match self {
             Self::Empty(accumulator) => accumulator.to_persistent_json(),
             Self::Scalar(accumulator) => accumulator.to_persistent_json(),
+            Self::Vector(accumulator) => accumulator.to_persistent_json(),
             Self::Complex(accumulator) => accumulator.to_persistent_json(),
             Self::Gammaloop(accumulator) => accumulator.to_persistent_json(),
             Self::FullScalar(accumulator) => accumulator.to_persistent_json(),
@@ -288,6 +348,7 @@ impl AccumulatorState {
         match self {
             Self::Empty(accumulator) => accumulator.to_digest_json(run_spec),
             Self::Scalar(accumulator) => accumulator.to_digest_json(run_spec),
+            Self::Vector(accumulator) => accumulator.to_digest_json(run_spec),
             Self::Complex(accumulator) => accumulator.to_digest_json(run_spec),
             Self::Gammaloop(accumulator) => accumulator.to_digest_json(run_spec),
             Self::FullScalar(accumulator) => accumulator.to_digest_json(run_spec),

@@ -42,6 +42,7 @@ pub(super) fn projectors(
     if matches!(
         accumulator_config,
         AccumulatorConfig::Scalar { .. }
+            | AccumulatorConfig::Vector { .. }
             | AccumulatorConfig::Complex { .. }
             | AccumulatorConfig::Gammaloop
     ) {
@@ -57,7 +58,9 @@ pub(super) fn projectors(
     } else if let Some(histogram_config) = accumulator_config.discrete_histograms().cloned()
         && matches!(
             accumulator_config,
-            AccumulatorConfig::Scalar { .. } | AccumulatorConfig::Complex { .. }
+            AccumulatorConfig::Scalar { .. }
+                | AccumulatorConfig::Vector { .. }
+                | AccumulatorConfig::Complex { .. }
         )
     {
         projectors.push(discrete_histogram_bundle_projector(
@@ -407,6 +410,7 @@ fn accumulator_matches_requested_config(
             accumulator,
             AccumulatorState::Scalar(_) | AccumulatorState::FullScalar(_)
         ),
+        AccumulatorConfig::Vector { .. } => matches!(accumulator, AccumulatorState::Vector(_)),
         AccumulatorConfig::Complex { .. } => matches!(
             accumulator,
             AccumulatorState::Complex(_) | AccumulatorState::FullComplex(_)
@@ -437,6 +441,9 @@ fn decode_aggregate_persisted_accumulator(
             SemanticAccumulatorKind::Scalar,
             persisted,
         ),
+        AccumulatorConfig::Vector { .. } => {
+            AccumulatorState::from_vector_persistent_json(persisted)
+        }
         AccumulatorConfig::Complex { .. } => AccumulatorState::from_aggregate_persistent_json(
             SemanticAccumulatorKind::Complex,
             persisted,
@@ -455,6 +462,7 @@ fn estimate_label(accumulator_config: &AccumulatorConfig) -> &'static str {
     match accumulator_config {
         AccumulatorConfig::Empty => "Estimate",
         AccumulatorConfig::Scalar { .. } => "Mean",
+        AccumulatorConfig::Vector { .. } => "Projection Mean",
         AccumulatorConfig::Complex { .. } => "Real Mean",
         AccumulatorConfig::Gammaloop => "Real Mean",
         AccumulatorConfig::FullScalar | AccumulatorConfig::FullComplex => "Estimate",
@@ -465,6 +473,7 @@ fn config_label(config: &AccumulatorConfig) -> &'static str {
     match config {
         AccumulatorConfig::Empty => "empty",
         AccumulatorConfig::Scalar { .. } => "scalar",
+        AccumulatorConfig::Vector { .. } => "vector",
         AccumulatorConfig::Complex { .. } => "complex",
         AccumulatorConfig::Gammaloop => "gammaloop",
         AccumulatorConfig::FullScalar => "full_scalar",
@@ -487,6 +496,21 @@ fn real_estimate_history_panel(accumulator: AccumulatorState) -> PanelState {
             }],
             smooth,
         ),
+        AccumulatorState::Vector(state) => {
+            let projection = &state.projection.state;
+            scalar_timeseries_panel_with_smoothing(
+                "real_estimate_history",
+                vec![PlotPoint {
+                    x: projection.count as f64,
+                    y: projection.mean(),
+                    x_sampler_uptime_ms: None,
+                    x_completed_samples_total: None,
+                    y_min: Some(projection.mean() - projection.stderr()),
+                    y_max: Some(projection.mean() + projection.stderr()),
+                }],
+                smooth,
+            )
+        }
         AccumulatorState::Complex(state) => scalar_timeseries_panel_with_smoothing(
             "real_estimate_history",
             vec![PlotPoint {
@@ -549,6 +573,7 @@ fn imag_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelSta
 fn rsd_history_panel(accumulator: AccumulatorState) -> PanelState {
     let rsd = match &accumulator {
         AccumulatorState::Scalar(state) => state.rsd(),
+        AccumulatorState::Vector(state) => state.rsd(),
         AccumulatorState::Complex(state) => state.rsd(),
         AccumulatorState::Gammaloop(state) => state.rsd(),
         _ => 0.0,
@@ -590,6 +615,23 @@ fn max_weight_summary_panel(accumulator: AccumulatorState) -> Option<PanelState>
                 "max_weighted_negative",
                 "Max -",
                 state.max_weighted_negative,
+            ),
+        ],
+        AccumulatorState::Vector(state) => vec![
+            key_value(
+                "max_weight_impact",
+                "Projection Impact",
+                state.projection.state.max_weight_impact(),
+            ),
+            key_value(
+                "max_weighted_positive",
+                "Projection Max +",
+                state.projection.state.max_weighted_positive,
+            ),
+            key_value(
+                "max_weighted_negative",
+                "Projection Max -",
+                state.projection.state.max_weighted_negative,
             ),
         ],
         AccumulatorState::Complex(state) => vec![
@@ -696,6 +738,29 @@ fn max_weight_points_panel(accumulator: AccumulatorState) -> Option<PanelState> 
                 impact,
                 state.max_weighted_negative_point.as_ref(),
             );
+            rows
+        }
+        AccumulatorState::Vector(state) => {
+            let mut rows = Vec::new();
+            for component in &state.components {
+                let impact = component.state.max_weight_impact();
+                push_max_weight_row(
+                    &mut rows,
+                    &component.name,
+                    "+",
+                    component.state.max_weighted_positive,
+                    impact,
+                    component.state.max_weighted_positive_point.as_ref(),
+                );
+                push_max_weight_row(
+                    &mut rows,
+                    &component.name,
+                    "-",
+                    component.state.max_weighted_negative,
+                    impact,
+                    component.state.max_weighted_negative_point.as_ref(),
+                );
+            }
             rows
         }
         AccumulatorState::Complex(state) => {
@@ -867,6 +932,40 @@ fn base_estimate_summary_entries(
                 state.signal_to_noise(),
             ),
         ],
+        AccumulatorState::Vector(state) => {
+            let mut entries = vec![
+                key_value("count", "Count", state.sample_count()),
+                key_value("projection_rsd", "Projection RSD", state.rsd()),
+                key_value(
+                    "projection_mean",
+                    "Projection Mean",
+                    json!({
+                        "kind":"estimate",
+                        "value":state.projection.state.mean(),
+                        "error":state.projection.state.stderr()
+                    }),
+                ),
+                key_value(
+                    "projection_signal_to_noise",
+                    "Projection Mean(|x|)^2 / abs_err^2",
+                    state.signal_to_noise(),
+                ),
+            ];
+            for component in &state.components {
+                let key = format!("component_{}_mean", component.name);
+                let label = format!("{} Mean", component.name);
+                entries.push(key_value(
+                    &key,
+                    &label,
+                    json!({
+                        "kind":"estimate",
+                        "value":component.state.mean(),
+                        "error":component.state.stderr()
+                    }),
+                ));
+            }
+            entries
+        }
         AccumulatorState::Complex(state) => vec![
             key_value("count", "Count", state.count),
             key_value("rsd", "RSD", state.rsd()),
@@ -1102,6 +1201,10 @@ fn projected_estimate(
             }),
             SampleErrorProjection::Imag | SampleErrorProjection::Abs => None,
         },
+        AccumulatorState::Vector(state) => Some(ProjectedEstimate {
+            value: state.projection.state.mean(),
+            error: state.projection.state.stderr(),
+        }),
         AccumulatorState::Complex(state) => match projection {
             SampleErrorProjection::Real => Some(ProjectedEstimate {
                 value: state.real_mean(),

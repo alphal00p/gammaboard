@@ -48,6 +48,11 @@ pub enum AccumulatorConfig {
     Scalar {
         discrete_histograms: Option<DiscreteHistogramConfig>,
     },
+    Vector {
+        components: Vec<String>,
+        training_projection: TrainingProjection,
+        discrete_histograms: Option<DiscreteHistogramConfig>,
+    },
     Complex {
         discrete_histograms: Option<DiscreteHistogramConfig>,
     },
@@ -56,11 +61,66 @@ pub enum AccumulatorConfig {
     FullComplex,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TrainingProjection {
+    Component { name: String },
+    Norm,
+    AbsComplex { real: String, imag: String },
+}
+
+impl TrainingProjection {
+    pub fn component(name: impl Into<String>) -> Self {
+        Self::Component { name: name.into() }
+    }
+}
+
+impl From<TrainingProjection> for BinaryTrainingProjection {
+    fn from(value: TrainingProjection) -> Self {
+        match value {
+            TrainingProjection::Component { name } => Self {
+                kind: BinaryTrainingProjectionKind::Component,
+                name: Some(name),
+                real: None,
+                imag: None,
+            },
+            TrainingProjection::Norm => Self {
+                kind: BinaryTrainingProjectionKind::Norm,
+                name: None,
+                real: None,
+                imag: None,
+            },
+            TrainingProjection::AbsComplex { real, imag } => Self {
+                kind: BinaryTrainingProjectionKind::AbsComplex,
+                name: None,
+                real: Some(real),
+                imag: Some(imag),
+            },
+        }
+    }
+}
+
+impl From<BinaryTrainingProjection> for TrainingProjection {
+    fn from(value: BinaryTrainingProjection) -> Self {
+        match value.kind {
+            BinaryTrainingProjectionKind::Component => {
+                TrainingProjection::component(value.name.unwrap_or_else(|| "value".to_string()))
+            }
+            BinaryTrainingProjectionKind::Norm => TrainingProjection::Norm,
+            BinaryTrainingProjectionKind::AbsComplex => TrainingProjection::AbsComplex {
+                real: value.real.unwrap_or_else(|| "real".to_string()),
+                imag: value.imag.unwrap_or_else(|| "imag".to_string()),
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum AccumulatorConfigKind {
     Empty,
     Scalar,
+    Vector,
     Complex,
     Gammaloop,
     FullScalar,
@@ -71,6 +131,24 @@ enum AccumulatorConfigKind {
 struct BinaryAccumulatorConfig {
     kind: AccumulatorConfigKind,
     discrete_histograms: Option<DiscreteHistogramConfig>,
+    components: Option<Vec<String>>,
+    training_projection: Option<BinaryTrainingProjection>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum BinaryTrainingProjectionKind {
+    Component,
+    Norm,
+    AbsComplex,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BinaryTrainingProjection {
+    kind: BinaryTrainingProjectionKind,
+    name: Option<String>,
+    real: Option<String>,
+    imag: Option<String>,
 }
 
 impl AccumulatorConfig {
@@ -86,10 +164,19 @@ impl AccumulatorConfig {
         }
     }
 
+    pub fn vector(components: Vec<String>, training_projection: TrainingProjection) -> Self {
+        Self::Vector {
+            components,
+            training_projection,
+            discrete_histograms: None,
+        }
+    }
+
     pub fn kind_str(&self) -> &'static str {
         match self {
             Self::Empty => "empty",
             Self::Scalar { .. } => "scalar",
+            Self::Vector { .. } => "vector",
             Self::Complex { .. } => "complex",
             Self::Gammaloop => "gammaloop",
             Self::FullScalar => "full_scalar",
@@ -101,6 +188,7 @@ impl AccumulatorConfig {
         match self {
             Self::Empty => AccumulatorConfigKind::Empty,
             Self::Scalar { .. } => AccumulatorConfigKind::Scalar,
+            Self::Vector { .. } => AccumulatorConfigKind::Vector,
             Self::Complex { .. } => AccumulatorConfigKind::Complex,
             Self::Gammaloop => AccumulatorConfigKind::Gammaloop,
             Self::FullScalar => AccumulatorConfigKind::FullScalar,
@@ -112,18 +200,41 @@ impl AccumulatorConfig {
         BinaryAccumulatorConfig {
             kind: self.kind(),
             discrete_histograms: self.discrete_histograms().cloned(),
+            components: match self {
+                Self::Vector { components, .. } => Some(components.clone()),
+                _ => None,
+            },
+            training_projection: match self {
+                Self::Vector {
+                    training_projection,
+                    ..
+                } => Some(BinaryTrainingProjection::from(training_projection.clone())),
+                _ => None,
+            },
         }
     }
 
     fn from_parts(
         kind: AccumulatorConfigKind,
         discrete_histograms: Option<DiscreteHistogramConfig>,
+        components: Option<Vec<String>>,
+        training_projection: Option<TrainingProjection>,
     ) -> Self {
         match kind {
             AccumulatorConfigKind::Empty => Self::Empty,
             AccumulatorConfigKind::Scalar => Self::Scalar {
                 discrete_histograms,
             },
+            AccumulatorConfigKind::Vector => {
+                let components = components.unwrap_or_else(|| vec!["value".to_string()]);
+                let training_projection = training_projection
+                    .unwrap_or_else(|| TrainingProjection::component(components[0].clone()));
+                Self::Vector {
+                    components,
+                    training_projection,
+                    discrete_histograms,
+                }
+            }
             AccumulatorConfigKind::Complex => Self::Complex {
                 discrete_histograms,
             },
@@ -136,7 +247,9 @@ impl AccumulatorConfig {
     fn kind_accepts_discrete_histograms(kind: AccumulatorConfigKind) -> bool {
         matches!(
             kind,
-            AccumulatorConfigKind::Scalar | AccumulatorConfigKind::Complex
+            AccumulatorConfigKind::Scalar
+                | AccumulatorConfigKind::Vector
+                | AccumulatorConfigKind::Complex
         )
     }
 
@@ -144,6 +257,10 @@ impl AccumulatorConfig {
         match self {
             Self::Scalar {
                 discrete_histograms,
+            }
+            | Self::Vector {
+                discrete_histograms,
+                ..
             }
             | Self::Complex {
                 discrete_histograms,
@@ -156,6 +273,14 @@ impl AccumulatorConfig {
         if let Some(config) = self.discrete_histograms() {
             config.validate()?;
         }
+        if let Self::Vector {
+            components,
+            training_projection,
+            ..
+        } = self
+        {
+            validate_vector_accumulator(components, training_projection)?;
+        }
         Ok(())
     }
 
@@ -164,7 +289,7 @@ impl AccumulatorConfig {
             Self::Empty | Self::Scalar { .. } | Self::FullScalar => {
                 crate::evaluation::SemanticAccumulatorKind::Scalar
             }
-            Self::Complex { .. } | Self::FullComplex => {
+            Self::Vector { .. } | Self::Complex { .. } | Self::FullComplex => {
                 crate::evaluation::SemanticAccumulatorKind::Complex
             }
             Self::Gammaloop => crate::evaluation::SemanticAccumulatorKind::Scalar,
@@ -186,9 +311,24 @@ impl Serialize for AccumulatorConfig {
             kind: &'static str,
             #[serde(skip_serializing_if = "Option::is_none")]
             discrete_histograms: Option<&'a DiscreteHistogramConfig>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            components: Option<&'a [String]>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            training_projection: Option<&'a TrainingProjection>,
         }
 
         match self {
+            Self::Vector {
+                components,
+                training_projection,
+                discrete_histograms,
+            } => Rich {
+                kind: self.kind_str(),
+                discrete_histograms: discrete_histograms.as_ref(),
+                components: Some(components.as_slice()),
+                training_projection: Some(training_projection),
+            }
+            .serialize(serializer),
             Self::Scalar {
                 discrete_histograms: Some(discrete_histograms),
             }
@@ -197,6 +337,8 @@ impl Serialize for AccumulatorConfig {
             } => Rich {
                 kind: self.kind_str(),
                 discrete_histograms: Some(discrete_histograms),
+                components: None,
+                training_projection: None,
             }
             .serialize(serializer),
             _ => serializer.serialize_str(self.kind_str()),
@@ -218,7 +360,12 @@ impl<'de> Deserialize<'de> for AccumulatorConfig {
                     "discrete_histograms is only valid for scalar and complex accumulators",
                 ));
             }
-            return Ok(Self::from_parts(binary.kind, binary.discrete_histograms));
+            return Ok(Self::from_parts(
+                binary.kind,
+                binary.discrete_histograms,
+                binary.components,
+                binary.training_projection.map(TrainingProjection::from),
+            ));
         }
 
         struct AccumulatorConfigVisitor;
@@ -234,7 +381,7 @@ impl<'de> Deserialize<'de> for AccumulatorConfig {
             where
                 E: serde::de::Error,
             {
-                accumulator_from_kind_str(value, None)
+                accumulator_from_kind_str(value, None, None, None)
             }
 
             fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
@@ -243,6 +390,8 @@ impl<'de> Deserialize<'de> for AccumulatorConfig {
             {
                 let mut kind = None::<String>;
                 let mut discrete_histograms = None::<DiscreteHistogramConfig>;
+                let mut components = None::<Vec<String>>;
+                let mut training_projection = None::<TrainingProjection>;
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "kind" => {
@@ -259,16 +408,40 @@ impl<'de> Deserialize<'de> for AccumulatorConfig {
                             }
                             discrete_histograms = Some(map.next_value()?);
                         }
+                        "components" => {
+                            if components.is_some() {
+                                return Err(serde::de::Error::duplicate_field("components"));
+                            }
+                            components = Some(map.next_value()?);
+                        }
+                        "training_projection" => {
+                            if training_projection.is_some() {
+                                return Err(serde::de::Error::duplicate_field(
+                                    "training_projection",
+                                ));
+                            }
+                            training_projection = Some(map.next_value()?);
+                        }
                         other => {
                             return Err(serde::de::Error::unknown_field(
                                 other,
-                                &["kind", "discrete_histograms"],
+                                &[
+                                    "kind",
+                                    "discrete_histograms",
+                                    "components",
+                                    "training_projection",
+                                ],
                             ));
                         }
                     }
                 }
                 let kind = kind.ok_or_else(|| serde::de::Error::missing_field("kind"))?;
-                accumulator_from_kind_str(&kind, discrete_histograms)
+                accumulator_from_kind_str(
+                    &kind,
+                    discrete_histograms,
+                    components,
+                    training_projection,
+                )
             }
         }
 
@@ -279,6 +452,8 @@ impl<'de> Deserialize<'de> for AccumulatorConfig {
 fn accumulator_from_kind_str<E>(
     kind: &str,
     discrete_histograms: Option<DiscreteHistogramConfig>,
+    components: Option<Vec<String>>,
+    training_projection: Option<TrainingProjection>,
 ) -> Result<AccumulatorConfig, E>
 where
     E: serde::de::Error,
@@ -289,6 +464,20 @@ where
         "scalar" => Ok(AccumulatorConfig::Scalar {
             discrete_histograms,
         }),
+        "vector" => {
+            let components = components.unwrap_or_else(|| vec!["value".to_string()]);
+            if components.is_empty() {
+                return Err(E::custom("vector accumulator components must not be empty"));
+            }
+            let training_projection = training_projection
+                .unwrap_or_else(|| TrainingProjection::component(components[0].clone()));
+            validate_vector_accumulator(&components, &training_projection).map_err(E::custom)?;
+            Ok(AccumulatorConfig::Vector {
+                components,
+                training_projection,
+                discrete_histograms,
+            })
+        }
         "complex" => Ok(AccumulatorConfig::Complex {
             discrete_histograms,
         }),
@@ -309,6 +498,7 @@ where
             &[
                 "empty",
                 "scalar",
+                "vector",
                 "complex",
                 "gammaloop",
                 "full_scalar",
@@ -316,6 +506,41 @@ where
             ],
         )),
     }
+}
+
+fn validate_vector_accumulator(
+    components: &[String],
+    training_projection: &TrainingProjection,
+) -> Result<(), String> {
+    if components.is_empty() {
+        return Err("vector accumulator components must not be empty".to_string());
+    }
+    if components
+        .iter()
+        .any(|component| component.trim().is_empty())
+    {
+        return Err("vector accumulator components must not contain empty names".to_string());
+    }
+    match training_projection {
+        TrainingProjection::Component { name } => {
+            if !components.iter().any(|component| component == name) {
+                return Err(format!(
+                    "vector accumulator training projection references unknown component {name:?}"
+                ));
+            }
+        }
+        TrainingProjection::AbsComplex { real, imag } => {
+            for name in [real, imag] {
+                if !components.iter().any(|component| component == name) {
+                    return Err(format!(
+                        "vector accumulator training projection references unknown component {name:?}"
+                    ));
+                }
+            }
+        }
+        TrainingProjection::Norm => {}
+    }
+    Ok(())
 }
 
 fn reject_discrete_histograms<E>(

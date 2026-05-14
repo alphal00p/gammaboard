@@ -7,7 +7,8 @@ pub use accumulator::{
     Accumulator, AccumulatorState, ComplexAccumulatorState, ComplexValue, EmptyAccumulatorState,
     FullAccumulatorProgress, FullComplexAccumulatorState, FullScalarAccumulatorState,
     GammaLoopAccumulatorDigest, GammaLoopAccumulatorState, GammaLoopDiagnostics, IngestComplex,
-    IngestScalar, ScalarAccumulatorState, SemanticAccumulatorKind,
+    IngestScalar, IngestVector, NamedScalarAccumulator, ScalarAccumulatorState,
+    SemanticAccumulatorKind, VectorAccumulatorState,
 };
 pub use batch::{Batch, BatchError, BatchResult, Point};
 pub use evaluator::{

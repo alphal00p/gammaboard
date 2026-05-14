@@ -71,13 +71,14 @@ impl EvaluatorConfig {
         }
 
         match self {
-            Self::ProcessEvaluator { .. } | Self::Symbolica { .. } => {
-                validate_semantic_accumulator(
-                    self.kind_str(),
-                    config,
-                    SemanticAccumulatorKind::Scalar,
-                )
+            Self::ProcessEvaluator { params } => {
+                validate_process_accumulator(self.kind_str(), config, &params.components)
             }
+            Self::Symbolica { .. } => validate_semantic_accumulator(
+                self.kind_str(),
+                config,
+                SemanticAccumulatorKind::Scalar,
+            ),
             Self::Unit { params } => {
                 validate_semantic_accumulator(self.kind_str(), config, params.accumulator_kind)
             }
@@ -90,6 +91,31 @@ impl EvaluatorConfig {
         config: &AccumulatorConfig,
     ) -> Result<AccumulatorState, BuildError> {
         Ok(AccumulatorState::from_config(config))
+    }
+}
+
+fn validate_process_accumulator(
+    evaluator_kind: &str,
+    config: &AccumulatorConfig,
+    components: &[String],
+) -> Result<(), BuildError> {
+    match config {
+        AccumulatorConfig::Empty => Ok(()),
+        AccumulatorConfig::Vector {
+            components: accumulator_components,
+            ..
+        } if accumulator_components == components => Ok(()),
+        AccumulatorConfig::Vector {
+            components: accumulator_components,
+            ..
+        } => Err(BuildError::invalid_input(format!(
+            "evaluator.kind = \"{evaluator_kind}\" components {:?} do not match accumulator components {:?}",
+            components, accumulator_components
+        ))),
+        other => Err(BuildError::invalid_input(format!(
+            "evaluator.kind = \"{evaluator_kind}\" requires accumulator config \"vector\", got \"{}\"",
+            accumulator_config_str(other)
+        ))),
     }
 }
 

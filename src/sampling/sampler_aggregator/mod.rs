@@ -37,6 +37,10 @@ fn global_abs_integrand_norm_from_handoff(handoff: Option<StageHandoff<'_>>) -> 
             let value = state.mean_abs();
             (value.is_finite() && value > 0.0).then_some(value)
         }
+        AccumulatorState::Vector(state) => {
+            let value = state.projection.state.mean_abs();
+            (value.is_finite() && value > 0.0).then_some(value)
+        }
         _ => None,
     }
 }

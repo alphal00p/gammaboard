@@ -1474,7 +1474,9 @@ name = "accumulator"
 kind = "set_accumulator"
 
 [task_queue.accumulator]
-kind = "scalar"
+kind = "vector"
+components = ["value"]
+training_projection = {{ kind = "component", name = "value" }}
 
 [task_queue.accumulator.discrete_histograms]
 max_total_bins = 16
@@ -1623,7 +1625,9 @@ name = "accumulator"
 kind = "set_accumulator"
 
 [task_queue.accumulator]
-kind = "scalar"
+kind = "vector"
+components = ["value"]
+training_projection = {{ kind = "component", name = "value" }}
 
 [[task_queue]]
 name = "sample-a"

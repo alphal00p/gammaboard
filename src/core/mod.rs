@@ -23,7 +23,7 @@ pub use run_exposed_info::{
 };
 pub use run_spec::{
     AccumulatorConfig, BatchTransformConfig, CapabilityRequirements, EvaluatorConfig,
-    IntegrationParams, RunSpec, SamplerAggregatorConfig,
+    IntegrationParams, RunSpec, SamplerAggregatorConfig, TrainingProjection,
 };
 pub use tasks::{
     AccumulatorSourceSpec, DEFAULT_DISCRETE_HISTOGRAM_MAX_TOTAL_BINS, DiscreteHistogramConfig,

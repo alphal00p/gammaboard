@@ -27,10 +27,10 @@ Gammaboard does not append worker scripts or assume Python. The command must
 start the process that speaks the protocol.
 
 Evaluator workers receive `initialize` once, then batched `eval_batch`
-requests. `eval_batch` returns `values_row_major`; for the current
-single-component accumulator path this is one `f64` per sample. The protocol
-already names observable `components` so vector-valued evaluators can use the
-same row-major response shape once vector accumulators are enabled.
+requests. `eval_batch` returns `values_row_major` in sample-major,
+component-minor order. Process evaluators use a `kind = "vector"` accumulator
+with matching `components`; the configured training projection is also stored
+as a scalar aggregate and is used for sampler feedback.
 
 ## Python Wrapper Pattern
 

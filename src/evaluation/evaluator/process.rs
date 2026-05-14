@@ -5,10 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::core::{AccumulatorConfig, BuildError, EvalError};
-use crate::evaluation::{
-    AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator, IngestScalar,
-    ScalarBatchEvaluator,
-};
+use crate::evaluation::{AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator};
 use crate::process_runtime::build_process_worker_command;
 use crate::process_worker::ProcessWorker;
 use crate::utils::domain::Domain;
@@ -49,11 +46,6 @@ impl ProcessEvaluator {
                 "process_evaluator components must not be empty",
             ));
         }
-        if params.components.len() != 1 {
-            return Err(BuildError::build(
-                "process_evaluator currently supports exactly one component until vector accumulators are enabled",
-            ));
-        }
         if params
             .discrete_cardinalities
             .iter()
@@ -77,47 +69,6 @@ impl ProcessEvaluator {
             worker,
         })
     }
-
-    fn scalar_ingestor<'a>(
-        state: &'a mut AccumulatorState,
-    ) -> Result<&'a mut dyn IngestScalar, EvalError> {
-        match state {
-            AccumulatorState::Empty(accumulator) => Ok(accumulator),
-            AccumulatorState::Scalar(accumulator) => Ok(accumulator),
-            AccumulatorState::FullScalar(accumulator) => Ok(accumulator),
-            other => Err(EvalError::eval(format!(
-                "process_evaluator does not support accumulator kind {}",
-                other.kind_str()
-            ))),
-        }
-    }
-}
-
-impl ScalarBatchEvaluator for ProcessEvaluator {
-    fn discrete_dims(&self) -> usize {
-        self.discrete_cardinalities.len()
-    }
-
-    fn continuous_dims(&self) -> usize {
-        self.continuous_dims
-    }
-
-    fn eval_scalar_rectangular_batch(
-        &mut self,
-        xs_discrete_row_major: &[i64],
-        xs_continuous_row_major: &[f64],
-        nr_samples: usize,
-    ) -> Result<Vec<f64>, EvalError> {
-        let values =
-            self.worker
-                .eval_batch(xs_discrete_row_major, xs_continuous_row_major, nr_samples)?;
-        if self.components.len() != 1 {
-            return Err(EvalError::eval(
-                "process_evaluator scalar accumulator path requires exactly one component",
-            ));
-        }
-        Ok(values)
-    }
 }
 
 impl Evaluator for ProcessEvaluator {
@@ -135,13 +86,61 @@ impl Evaluator for ProcessEvaluator {
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
         let mut observable_state = AccumulatorState::from_config(accumulator);
-        let weighted_values = self.eval_scalar_batch_into(
+        let AccumulatorState::Vector(vector_state) = &mut observable_state else {
+            return Err(EvalError::eval(format!(
+                "process_evaluator requires vector accumulator config, got {}",
+                observable_state.kind_str()
+            )));
+        };
+        let (xs_discrete, xs_continuous) = dense_rectangular_inputs(
             batch,
-            Self::scalar_ingestor(&mut observable_state)?,
-            options.require_training_values,
+            self.discrete_cardinalities.len(),
+            self.continuous_dims,
         )?;
-        Ok(BatchResult::new(weighted_values, observable_state))
+        let values = self
+            .worker
+            .eval_batch(&xs_discrete, &xs_continuous, batch.size())?;
+        let mut training_values = options
+            .require_training_values
+            .then(|| Vec::with_capacity(batch.size()));
+        for (sample_idx, point) in batch.points().iter().enumerate() {
+            let start = sample_idx * self.components.len();
+            let end = start + self.components.len();
+            let projected = vector_state
+                .ingest_vector(&values[start..end], point)
+                .map_err(EvalError::eval)?;
+            if let Some(training_values) = training_values.as_mut() {
+                training_values.push(projected * point.total_weight());
+            }
+        }
+        Ok(BatchResult::new(training_values, observable_state))
     }
+}
+
+fn dense_rectangular_inputs(
+    batch: &Batch,
+    discrete_dims: usize,
+    continuous_dims: usize,
+) -> Result<(Vec<i64>, Vec<f64>), EvalError> {
+    let mut xs_discrete = Vec::with_capacity(batch.size().saturating_mul(discrete_dims));
+    let mut xs_continuous = Vec::with_capacity(batch.size().saturating_mul(continuous_dims));
+    for (sample_idx, point) in batch.points().iter().enumerate() {
+        if point.discrete.len() != discrete_dims {
+            return Err(EvalError::eval(format!(
+                "process_evaluator expected {discrete_dims} discrete dimensions, sample {sample_idx} has {}",
+                point.discrete.len(),
+            )));
+        }
+        if point.continuous.len() != continuous_dims {
+            return Err(EvalError::eval(format!(
+                "process_evaluator expected {continuous_dims} continuous dimensions, sample {sample_idx} has {}",
+                point.continuous.len(),
+            )));
+        }
+        xs_discrete.extend_from_slice(&point.discrete);
+        xs_continuous.extend_from_slice(&point.continuous);
+    }
+    Ok((xs_discrete, xs_continuous))
 }
 
 struct ProcessRuntimeWorker {

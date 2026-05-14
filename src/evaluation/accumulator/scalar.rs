@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use super::discrete_bins::{ScalarDiscreteBinStats, upsert_scalar_discrete_bin};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct ScalarAccumulatorState {
     #[serde(default)]
     pub discrete_histograms: Option<DiscreteHistogramConfig>,
