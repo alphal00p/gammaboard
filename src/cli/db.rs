@@ -33,6 +33,10 @@ pub enum DbCommand {
     },
     /// Dump the configured database as SQL
     DumpSql,
+    Reset {
+        #[arg(short = 'y', long, action = clap::ArgAction::SetTrue)]
+        yes: bool,
+    },
 }
 
 pub fn run_db_command(args: DbArgs, config: &RuntimeConfig) -> Result<()> {
@@ -43,7 +47,15 @@ pub fn run_db_command(args: DbArgs, config: &RuntimeConfig) -> Result<()> {
         DbCommand::Stop => stop_db(local),
         DbCommand::Delete { yes } => delete_db(local, yes),
         DbCommand::DumpSql => dump_db_sql(local, &config.database.url),
+        DbCommand::Reset { yes } => reset_db(local, yes, &config.database.url),
     }
+}
+
+fn reset_db(local: &LocalPostgresConfig, assume_yes: bool, database_url: &str) -> Result<()> {
+    stop_db(local)?;
+    delete_db(local, assume_yes)?;
+    start_db(local, database_url)?;
+    Ok(())
 }
 
 fn status_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {

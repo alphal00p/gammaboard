@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${repo_root}"
+
+profile="${GAMMABOARD_PROFILE:-dev-optim}"
+case "${profile}" in
+    dev-optim)
+        build_args=(--profile dev-optim)
+        bin="${repo_root}/target/dev-optim/gammaboard"
+        ;;
+    release)
+        build_args=(--release)
+        bin="${repo_root}/target/release/gammaboard"
+        ;;
+    debug)
+        build_args=()
+        bin="${repo_root}/target/debug/gammaboard"
+        ;;
+    *)
+        echo "unsupported GAMMABOARD_PROFILE=${profile}; expected dev-optim, release, or debug" >&2
+        exit 2
+        ;;
+esac
+
+uses_deploy_run=false
+for ((i = 1; i < $#; i++)); do
+    if [[ "${!i}" == "deploy" ]]; then
+        next_index=$((i + 1))
+        if ((next_index <= $#)) && [[ "${!next_index}" == "run" ]]; then
+            uses_deploy_run=true
+            break
+        fi
+    fi
+done
+
+if [[ "${uses_deploy_run}" == true ]]; then
+    cd "${repo_root}/dashboard"
+    if [[ ! -x node_modules/.bin/vite ]]; then
+        npm ci
+    fi
+
+    npm run build
+    cd "${repo_root}"
+fi
+
+cargo build "${build_args[@]}"
+exec "${bin}" "$@"
