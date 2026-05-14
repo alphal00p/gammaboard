@@ -78,7 +78,7 @@ impl RuntimeContext {
 
     pub fn deploy_tmp_dir(&self, frontend_port: u16) -> PathBuf {
         self.primary_resource_root
-            .join(format!("tmp/deploy/{frontend_port}"))
+            .join(format!("nginx/{frontend_port}"))
     }
 
     pub fn evaluator_tmp_dir(&self, kind: &str) -> PathBuf {

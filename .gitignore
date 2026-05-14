@@ -2,6 +2,7 @@ __pycache__/
 resources/db/*
 resources/tmp/*
 resources/logs/*
+resources/nginx/*
 nginx.conf
 /dump/
 /target

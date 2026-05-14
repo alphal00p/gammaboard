@@ -119,10 +119,8 @@ impl RuntimeConfig {
             DEFAULT_RUNTIME_CONFIG_TOML,
             "runtime config",
         )?;
-        let mut parsed: Self = toml::from_str(&raw)
-            .with_context(|| format!("failed parsing runtime config {}", path.display()))?;
-        normalize_local_postgres_paths(&mut parsed.local_postgres, &parsed.resources.roots);
-        Ok(parsed)
+        toml::from_str(&raw)
+            .with_context(|| format!("failed parsing runtime config {}", path.display()))
     }
 
     pub fn primary_resource_root(&self) -> PathBuf {

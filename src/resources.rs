@@ -40,16 +40,13 @@ pub fn resource_roots() -> Vec<PathBuf> {
 }
 
 pub fn primary_resource_root() -> Result<PathBuf, ResourceResolutionError> {
-    RESOURCE_ROOTS
+    if let Some(root) = RESOURCE_ROOTS
         .get()
         .and_then(|roots| roots.first().cloned())
-        .map(Ok)
-        .unwrap_or_else(|| {
-            std::env::current_dir().map_err(|_| ResourceResolutionError {
-                relative_path: PathBuf::from("."),
-                attempted: Vec::new(),
-            })
-        })
+    {
+        return Ok(root);
+    }
+    Ok(PathBuf::from("resources"))
 }
 
 #[derive(Debug)]
