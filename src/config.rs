@@ -119,8 +119,22 @@ impl RuntimeConfig {
             DEFAULT_RUNTIME_CONFIG_TOML,
             "runtime config",
         )?;
-        toml::from_str(&raw)
-            .with_context(|| format!("failed parsing runtime config {}", path.display()))
+        let mut parsed: Self = toml::from_str(&raw)
+            .with_context(|| format!("failed parsing runtime config {}", path.display()))?;
+        let resource_root = primary_resource_root_from_config(&parsed.resources.roots);
+        parsed.local_postgres.data_dir =
+            normalize_config_path(&resource_root, &parsed.local_postgres.data_dir)
+                .display()
+                .to_string();
+        parsed.local_postgres.socket_dir =
+            normalize_config_path(&resource_root, &parsed.local_postgres.socket_dir)
+                .display()
+                .to_string();
+        parsed.local_postgres.log_file =
+            normalize_config_path(&resource_root, &parsed.local_postgres.log_file)
+                .display()
+                .to_string();
+        Ok(parsed)
     }
 }
 
@@ -250,4 +264,13 @@ fn default_wal_compression() -> bool {
 
 fn default_synchronous_commit() -> bool {
     false
+}
+
+fn primary_resource_root_from_config(roots: &[String]) -> PathBuf {
+    roots
+        .iter()
+        .map(|root| root.trim())
+        .find(|root| !root.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("resources"))
 }

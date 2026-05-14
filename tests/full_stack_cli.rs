@@ -1756,7 +1756,7 @@ fn temp_frontend_build() -> TempDir {
 
 fn temp_cli_config(database_url: &str, persist_runtime_logs: bool) -> NamedTempFile {
     let contents = format!(
-        "[database]\nurl = {database_url:?}\n\n[tracing]\npersist_runtime_logs = {persist_runtime_logs}\ndb_gammaboard_level = \"info\"\ndb_external_level = \"warn\"\n\n[local_postgres]\ndata_dir = \".postgres\"\nsocket_dir = \".postgres-socket\"\nlog_file = \".postgres/logfile\"\nmax_connections = 512\n"
+        "[database]\nurl = {database_url:?}\n\n[tracing]\npersist_runtime_logs = {persist_runtime_logs}\ndb_gammaboard_level = \"info\"\ndb_external_level = \"warn\"\n\n[local_postgres]\ndata_dir = \".postgres\"\nsocket_dir = \"/tmp/gammaboard-postgres-socket\"\nlog_file = \".postgres/logfile\"\nmax_connections = 512\n"
     );
     let file = NamedTempFile::new().expect("create temp cli config");
     std::fs::write(file.path(), contents).expect("write temp cli config");

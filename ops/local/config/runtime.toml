@@ -9,12 +9,12 @@ db_gammaboard_level = "info"
 db_external_level = "warn"
 
 [resources]
-roots = []
+roots = ["resources"]
 
 [local_postgres]
-data_dir = ".postgres"
-socket_dir = ".postgres-socket"
-log_file = ".postgres/logfile"
+data_dir = "db/postgres"
+socket_dir = "/tmp/gammaboard-postgres-socket"
+log_file = "db/postgres/logfile"
 max_connections = 512
 shared_buffers = "4GB"
 effective_cache_size = "32GB"
