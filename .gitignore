@@ -1,9 +1,7 @@
 __pycache__/
-resources/db/*
-resources/tmp/*
-resources/logs/*
-resources/nginx/*
-resources/states
+/resources/*
+!/resources/templates/
+!/resources/templates/**
 nginx.conf
 /dump/
 /target

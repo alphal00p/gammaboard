@@ -27,11 +27,11 @@ Run on a UBELIX login node:
 ```bash
 python ubelix.py build gammaloop
 python ubelix.py build gammaboard
-python ubelix.py build apptainer resources/runtimes/madnis_gammaboard_api/runtime.sif ops/build/python.def
+python ubelix.py build apptainer resources/runtimes/madnis_gammaboard_api/runtime.sif resources/runtimes/madnis_gammaboard_api/apptainer.def
 ```
 
 The GammaBoard build also builds and embeds the dashboard frontend. Each build overwrites `images/<family>/<family>.sif` and writes `images/<family>/<family>.meta`. Build logs go to `logs/slurm/build`.
-The Python runtime build writes the MADNIS sampler runtime to `resources/runtimes/madnis_gammaboard_api/runtime.sif`.
+The Python runtime build writes the MADNIS sampler runtime to `resources/runtimes/madnis_gammaboard_api/runtime.sif`. The runtime definition lives with the MADNIS GammaBoard API checkout so it can also be built outside this deploy repository.
 
 ## Start
 

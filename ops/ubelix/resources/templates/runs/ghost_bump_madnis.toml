@@ -22,7 +22,9 @@ max_samples = 200000
 
 [task_queue.sampler_aggregator.config]
 kind = "process_sampler"
-command = ["apptainer", "exec", "--nv", "runtimes/madnis_gammaboard_api/runtime.sif", "python", "-u", "runtimes/madnis_gammaboard_api/sampler_worker.py"]
+command = ["apptainer", "exec", "--nv", "runtimes/madnis_gammaboard_api/runtime.sif", "python", "-u", "/opt/madnis_gammaboard_api/sampler_worker.py"]
+# Alternative with the Nix runtime when Nix is available:
+# command = ["runtimes/madnis_gammaboard_api/result/bin/python", "-u", "runtimes/madnis_gammaboard_api/sampler_worker.py"]
 continuous_dims = 2
 requires_training_values = true
 
