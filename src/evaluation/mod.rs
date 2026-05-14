@@ -6,7 +6,7 @@ pub mod traits;
 pub use accumulator::{
     Accumulator, AccumulatorState, EmptyAccumulatorState, FullAccumulatorProgress,
     FullVectorAccumulatorState, GammaLoopAccumulatorDigest, GammaLoopAccumulatorState,
-    GammaLoopDiagnostics, IngestComplex, IngestScalar, IngestVector, NamedScalarAccumulator,
+    GammaLoopDiagnostics, IngestScalar, IngestVector, NamedScalarAccumulator,
     ScalarAccumulatorState, SemanticAccumulatorKind, VectorAccumulatorState,
 };
 pub use batch::{Batch, BatchError, BatchResult, Point};

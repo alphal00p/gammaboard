@@ -31,7 +31,7 @@ pub use evaluation::{
     Accumulator, AccumulatorState, Batch, BatchError, BatchResult, BatchTransform,
     EmptyAccumulatorState, EvalBatchOptions, Evaluator, FullAccumulatorProgress,
     FullVectorAccumulatorState, GammaLoopAccumulatorDigest, GammaLoopAccumulatorState,
-    IngestComplex, IngestScalar, IngestVector, Materializer, NamedScalarAccumulator, Point,
+    IngestScalar, IngestVector, Materializer, NamedScalarAccumulator, Point,
     ScalarAccumulatorState, ScalarSampleEvaluator, ScalarValueEvaluator, SemanticAccumulatorKind,
     VectorAccumulatorState,
 };

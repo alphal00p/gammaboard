@@ -19,10 +19,7 @@ impl Default for GammaLoopAccumulatorState {
             bundle: ObservableSnapshotBundle::default(),
             estimate: VectorAccumulatorState::from_config(
                 vec!["real".to_string(), "imag".to_string()],
-                crate::core::TrainingProjection::AbsComplex {
-                    real: "real".to_string(),
-                    imag: "imag".to_string(),
-                },
+                crate::core::TrainingProjection::Norm,
                 None,
             ),
             diagnostics: GammaLoopDiagnostics::default(),
@@ -463,10 +460,7 @@ mod tests {
     fn test_estimate(sum: f64, sum_sq: f64, count: i64) -> VectorAccumulatorState {
         let mut estimate = VectorAccumulatorState::from_config(
             vec!["real".to_string(), "imag".to_string()],
-            crate::core::TrainingProjection::AbsComplex {
-                real: "real".to_string(),
-                imag: "imag".to_string(),
-            },
+            crate::core::TrainingProjection::Norm,
             None,
         );
         estimate.components[0].state.count = count;

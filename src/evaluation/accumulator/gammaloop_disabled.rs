@@ -177,10 +177,7 @@ impl Default for GammaLoopAccumulatorState {
         Self {
             estimate: VectorAccumulatorState::from_config(
                 vec!["real".to_string(), "imag".to_string()],
-                TrainingProjection::AbsComplex {
-                    real: "real".to_string(),
-                    imag: "imag".to_string(),
-                },
+                TrainingProjection::Norm,
                 None,
             ),
             diagnostics: GammaLoopDiagnostics::default(),

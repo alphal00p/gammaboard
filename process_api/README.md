@@ -6,9 +6,9 @@ For the stable process protocol, see [../docs/process-runtime.md](../docs/proces
 
 ## Examples
 
-- `examples/python_scalar_sin`: NumPy scalar evaluator packaged with Nix.
-- `examples/python_sampler_symbolica_havana`: Symbolica-backed Havana sampler packaged with Nix and a pinned Symbolica wheel.
 - `examples/rust_breit_wigner_evaluator`: non-Python evaluator packaged with Apptainer. This is the simplest direct protocol implementation.
+- `examples/python_scalar_sin`: NumPy scalar evaluator. The included flake is one optional way to provide its dependencies.
+- `examples/python_sampler_symbolica_havana`: Symbolica-backed Havana sampler. The included flake pins the Python dependencies for reproducibility.
 
 ## Python Wrapper Pattern
 

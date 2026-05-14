@@ -575,7 +575,7 @@ fn accumulator_label(config: &AccumulatorConfig) -> &'static str {
 fn plot_accumulator_label(kind: crate::core::PlotAccumulatorKind) -> &'static str {
     match kind {
         crate::core::PlotAccumulatorKind::Scalar => "scalar",
-        crate::core::PlotAccumulatorKind::Complex => "complex",
+        crate::core::PlotAccumulatorKind::Vector => "vector",
     }
 }
 
@@ -917,7 +917,7 @@ mod tests {
     };
     use chrono::Utc;
 
-    fn inherited_complex_sample_task() -> RunTaskSpec {
+    fn inherited_vector_sample_task() -> RunTaskSpec {
         RunTaskSpec::Sample {
             stop_condition: crate::core::SampleStopCondition {
                 max_samples: Some(10),
@@ -955,7 +955,7 @@ mod tests {
         }
     }
 
-    fn complex_observable() -> AccumulatorState {
+    fn vector_observable() -> AccumulatorState {
         AccumulatorState::FullVector(FullVectorAccumulatorState {
             components: vec!["real".to_string(), "imag".to_string()],
             values_row_major: vec![1.0, -1.0, 2.0, -2.0, 3.0, -3.0],
@@ -965,7 +965,7 @@ mod tests {
 
     #[test]
     fn gammaloop_sample_uses_imag_panel() {
-        let task = inherited_complex_sample_task();
+        let task = inherited_vector_sample_task();
         let descriptors = TaskPanelSource::new(&task, Some(AccumulatorConfig::Gammaloop))
             .expect("panel source")
             .panel_specs();
@@ -978,7 +978,7 @@ mod tests {
 
     #[test]
     fn pending_sample_without_effective_accumulator_still_has_summary_panel() {
-        let task = inherited_complex_sample_task();
+        let task = inherited_vector_sample_task();
         let descriptors = TaskPanelSource::new(&task, None)
             .expect("panel source")
             .panel_specs();
@@ -1038,9 +1038,9 @@ mod tests {
 
     #[test]
     fn build_response_emits_non_null_cursor_for_append_history_without_persisted_snapshots() {
-        let task = inherited_complex_sample_task();
+        let task = inherited_vector_sample_task();
         let run_task = run_task(task.clone());
-        let accumulator = complex_observable();
+        let accumulator = vector_observable();
         let source = TaskPanelSource::new(
             &task,
             Some(AccumulatorConfig::FullVector {

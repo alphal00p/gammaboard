@@ -21,7 +21,7 @@ pub enum PanelKind {
 #[serde(rename_all = "snake_case")]
 pub enum ImageColorMode {
     ScalarHeatmap,
-    ComplexHueIntensity,
+    VectorMagnitude,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

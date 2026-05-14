@@ -1,6 +1,5 @@
-use super::{Accumulator, IngestComplex, IngestScalar};
+use super::{Accumulator, IngestScalar};
 use crate::evaluation::batch::Point;
-use num::complex::Complex64;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -8,10 +7,6 @@ pub struct EmptyAccumulatorState {}
 
 impl IngestScalar for EmptyAccumulatorState {
     fn ingest_scalar(&mut self, _value: f64, _point: &Point) {}
-}
-
-impl IngestComplex for EmptyAccumulatorState {
-    fn ingest_complex(&mut self, _value: Complex64, _point: &Point) {}
 }
 
 impl Accumulator for EmptyAccumulatorState {

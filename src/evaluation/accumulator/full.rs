@@ -1,6 +1,5 @@
-use super::{Accumulator, IngestComplex, IngestScalar};
+use super::{Accumulator, IngestScalar};
 use crate::evaluation::batch::Point;
-use num::complex::Complex64;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -59,13 +58,6 @@ impl IngestScalar for FullVectorAccumulatorState {
     }
 }
 
-impl IngestComplex for FullVectorAccumulatorState {
-    fn ingest_complex(&mut self, value: Complex64, point: &Point) {
-        let weight = point.total_weight().abs();
-        self.push_vector(&[value.re * weight, value.im * weight]);
-    }
-}
-
 impl Accumulator for FullVectorAccumulatorState {
     type Persistent = FullAccumulatorProgress;
     type Digest = Self;
@@ -99,8 +91,7 @@ impl Accumulator for FullVectorAccumulatorState {
 #[cfg(test)]
 mod tests {
     use super::FullVectorAccumulatorState;
-    use crate::evaluation::{Accumulator, IngestComplex, IngestScalar, Point};
-    use num::complex::Complex64;
+    use crate::evaluation::{Accumulator, IngestScalar, Point};
 
     #[test]
     fn full_vector_preserves_scalar_positions_for_non_finite_values() {
@@ -128,9 +119,10 @@ mod tests {
         let finite_point = Point::new(vec![], vec![], 3.0);
         let nan_point = Point::new(vec![], vec![], 1.0);
         let inf_point = Point::new(vec![], vec![], f64::INFINITY);
-        accumulator.ingest_complex(Complex64::new(1.0, -2.0), &finite_point);
-        accumulator.ingest_complex(Complex64::new(f64::NAN, 0.0), &nan_point);
-        accumulator.ingest_complex(Complex64::new(1.0, 0.0), &inf_point);
+        let weight = finite_point.total_weight().abs();
+        accumulator.push_vector(&[1.0 * weight, -2.0 * weight]);
+        accumulator.push_vector(&[f64::NAN, 0.0 * nan_point.total_weight().abs()]);
+        accumulator.push_vector(&[1.0 * inf_point.total_weight().abs(), 0.0]);
 
         assert_eq!(
             accumulator.values_row_major,

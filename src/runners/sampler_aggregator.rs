@@ -558,7 +558,7 @@ where
                 value: state.projection.state.mean(),
                 error: state.projection.state.stderr(),
             }),
-            AccumulatorState::Gammaloop(state) => Self::project_complex_like(
+            AccumulatorState::Gammaloop(state) => Self::project_component_estimate(
                 projection,
                 (state.real_mean(), state.real_stderr()),
                 (state.imag_mean(), state.imag_stderr()),
@@ -568,7 +568,7 @@ where
         }
     }
 
-    fn project_complex_like(
+    fn project_component_estimate(
         projection: SampleErrorProjection,
         real: (f64, f64),
         imag: (f64, f64),

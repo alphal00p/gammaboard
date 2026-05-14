@@ -11,7 +11,6 @@ mod vector;
 
 use crate::core::{AccumulatorConfig, EngineError, RunSpec};
 use crate::evaluation::batch::Point;
-use num::complex::Complex64;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value as JsonValue;
 
@@ -30,10 +29,6 @@ pub use self::vector::{NamedScalarAccumulator, VectorAccumulatorState};
 /// letting serialization degrade them into `null`.
 pub trait IngestScalar {
     fn ingest_scalar(&mut self, value: f64, point: &Point);
-}
-
-pub trait IngestComplex {
-    fn ingest_complex(&mut self, value: Complex64, point: &Point);
 }
 
 pub trait IngestVector {
@@ -104,10 +99,7 @@ impl SemanticAccumulatorKind {
             Self::Scalar => AccumulatorConfig::scalar(),
             Self::Vector => AccumulatorConfig::vector(
                 vec!["real".to_string(), "imag".to_string()],
-                crate::core::TrainingProjection::AbsComplex {
-                    real: "real".to_string(),
-                    imag: "imag".to_string(),
-                },
+                crate::core::TrainingProjection::Norm,
             ),
         }
     }

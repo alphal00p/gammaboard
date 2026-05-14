@@ -70,11 +70,6 @@ impl VectorAccumulatorState {
             TrainingProjection::Norm => {
                 Ok(values.iter().map(|value| value * value).sum::<f64>().sqrt())
             }
-            TrainingProjection::AbsComplex { real, imag } => {
-                let real = self.component_value(values, real)?;
-                let imag = self.component_value(values, imag)?;
-                Ok((real * real + imag * imag).sqrt())
-            }
         }
     }
 
@@ -94,15 +89,6 @@ impl VectorAccumulatorState {
 
     pub fn signal_to_noise(&self) -> f64 {
         self.projection.state.signal_to_noise()
-    }
-
-    fn component_value(&self, values: &[f64], name: &str) -> Result<f64, String> {
-        let index = self
-            .components
-            .iter()
-            .position(|component| component.name == name)
-            .ok_or_else(|| format!("training projection references unknown component {name:?}"))?;
-        Ok(values[index])
     }
 }
 

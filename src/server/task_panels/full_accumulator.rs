@@ -32,7 +32,7 @@ pub(super) fn image_projectors(
 enum ImageViewMode {
     ScalarHeatmapMinMax,
     ScalarHeatmapSymmetric,
-    ComplexHueIntensity,
+    VectorMagnitude,
 }
 
 impl ImageViewMode {
@@ -40,7 +40,7 @@ impl ImageViewMode {
         match self {
             Self::ScalarHeatmapMinMax => "scalar_heatmap_min_max",
             Self::ScalarHeatmapSymmetric => "scalar_heatmap_symmetric",
-            Self::ComplexHueIntensity => "complex_hue_intensity",
+            Self::VectorMagnitude => "vector_magnitude",
         }
     }
 
@@ -58,11 +58,11 @@ impl ImageViewMode {
         ];
         if matches!(
             display,
-            ImageDisplayMode::Auto | ImageDisplayMode::ComplexHueIntensity
+            ImageDisplayMode::Auto | ImageDisplayMode::VectorMagnitude
         ) {
             options.push(state_option(
-                Self::ComplexHueIntensity.as_str(),
-                "Complex Hue / Intensity",
+                Self::VectorMagnitude.as_str(),
+                "Vector Magnitude",
             ));
         }
         spec.state = Some(select_state_spec(
@@ -85,11 +85,11 @@ pub(super) fn line_projectors(
         geometry.nr_points(),
         "points",
     )];
-    if line_uses_complex_components(display, accumulator) {
+    if line_uses_vector_components(display, accumulator) {
         projectors.push(line_components_projector(geometry));
     } else {
-        let label = if matches!(accumulator, PlotAccumulatorKind::Complex) {
-            "Real Part"
+        let label = if matches!(accumulator, PlotAccumulatorKind::Vector) {
+            "Primary Component"
         } else {
             "Value"
         };
@@ -163,7 +163,7 @@ fn line_components_projector(geometry: LineRasterGeometry) -> TaskPanelProjector
         with_panel_width(
             panel_spec(
                 "line_components",
-                "Complex Components",
+                "Components",
                 PanelKind::MultiTimeseries,
                 PanelHistoryMode::None,
             ),
@@ -246,7 +246,7 @@ fn image_view_panel(
 
 fn default_image_view_mode(display: ImageDisplayMode) -> ImageViewMode {
     match display {
-        ImageDisplayMode::ComplexHueIntensity => ImageViewMode::ComplexHueIntensity,
+        ImageDisplayMode::VectorMagnitude => ImageViewMode::VectorMagnitude,
         ImageDisplayMode::Auto | ImageDisplayMode::ScalarHeatmap => {
             ImageViewMode::ScalarHeatmapMinMax
         }
@@ -259,7 +259,7 @@ fn selected_image_view_mode(
 ) -> ImageViewMode {
     match ctx.selected_value("image_view_mode") {
         Some("scalar_heatmap_symmetric") => ImageViewMode::ScalarHeatmapSymmetric,
-        Some("complex_hue_intensity") => ImageViewMode::ComplexHueIntensity,
+        Some("vector_magnitude") => ImageViewMode::VectorMagnitude,
         Some("scalar_heatmap_min_max") => ImageViewMode::ScalarHeatmapMinMax,
         _ => default_image_view_mode(display),
     }
@@ -267,7 +267,7 @@ fn selected_image_view_mode(
 
 fn image_color_mode(mode: ImageViewMode) -> ImageColorMode {
     match mode {
-        ImageViewMode::ComplexHueIntensity => ImageColorMode::ComplexHueIntensity,
+        ImageViewMode::VectorMagnitude => ImageColorMode::VectorMagnitude,
         ImageViewMode::ScalarHeatmapMinMax | ImageViewMode::ScalarHeatmapSymmetric => {
             ImageColorMode::ScalarHeatmap
         }
@@ -277,7 +277,7 @@ fn image_color_mode(mode: ImageViewMode) -> ImageColorMode {
 fn image_normalization_mode(mode: ImageViewMode) -> ImageNormalizationMode {
     match mode {
         ImageViewMode::ScalarHeatmapSymmetric => ImageNormalizationMode::Symmetric,
-        ImageViewMode::ScalarHeatmapMinMax | ImageViewMode::ComplexHueIntensity => {
+        ImageViewMode::ScalarHeatmapMinMax | ImageViewMode::VectorMagnitude => {
             ImageNormalizationMode::MinMax
         }
     }
@@ -345,15 +345,9 @@ fn line_real_panel(
     }
 }
 
-fn line_uses_complex_components(
-    display: LineDisplayMode,
-    accumulator: PlotAccumulatorKind,
-) -> bool {
-    matches!(accumulator, PlotAccumulatorKind::Complex)
-        && matches!(
-            display,
-            LineDisplayMode::Auto | LineDisplayMode::ComplexComponents
-        )
+fn line_uses_vector_components(display: LineDisplayMode, accumulator: PlotAccumulatorKind) -> bool {
+    matches!(accumulator, PlotAccumulatorKind::Vector)
+        && matches!(display, LineDisplayMode::Auto | LineDisplayMode::Components)
 }
 
 fn line_xs(geometry: &LineRasterGeometry) -> Vec<f64> {

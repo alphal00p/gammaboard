@@ -173,6 +173,7 @@ Useful deploy options:
 ```bash
 ./gammaboard run pause -a
 ./gammaboard node stop -a
+./gammaboard db reset --yes
 cargo test -q --test full_stack_cli -- --ignored --nocapture --test-threads=1
 cargo test -q process_evaluator_eval_batch_protocol_benchmark -- --ignored --nocapture
 ```

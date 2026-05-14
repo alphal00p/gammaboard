@@ -831,7 +831,7 @@ pub enum ImageDisplayMode {
     #[default]
     Auto,
     ScalarHeatmap,
-    ComplexHueIntensity,
+    VectorMagnitude,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -840,21 +840,21 @@ pub enum LineDisplayMode {
     #[default]
     Auto,
     ScalarCurve,
-    ComplexComponents,
+    Components,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PlotAccumulatorKind {
     Scalar,
-    Complex,
+    Vector,
 }
 
 impl PlotAccumulatorKind {
     pub fn components(self) -> Vec<String> {
         match self {
             Self::Scalar => vec!["value".to_string()],
-            Self::Complex => vec!["real".to_string(), "imag".to_string()],
+            Self::Vector => vec!["real".to_string(), "imag".to_string()],
         }
     }
 
@@ -1116,10 +1116,7 @@ mod tests {
     fn set_accumulator_task_requests_fresh_accumulator_state() {
         let accumulator = AccumulatorConfig::vector(
             vec!["real".to_string(), "imag".to_string()],
-            TrainingProjection::AbsComplex {
-                real: "real".to_string(),
-                imag: "imag".to_string(),
-            },
+            TrainingProjection::Norm,
         );
         let task = RunTaskSpec::SetAccumulator {
             accumulator: accumulator.clone(),
@@ -1267,7 +1264,7 @@ mod tests {
                 },
                 discrete: Vec::new(),
             },
-            accumulator: PlotAccumulatorKind::Complex,
+            accumulator: PlotAccumulatorKind::Vector,
             display: ImageDisplayMode::Auto,
             batch_transforms: None,
         };

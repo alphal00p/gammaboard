@@ -111,7 +111,7 @@ Gammaboard evaluates GammaLoop runs in x-space so GammaLoop's parameterized obse
 
 For `evaluator.kind = "process_evaluator"`, configure:
 
-- `command`: complete process command, for example `["nix", "shell", "path:./process_api/examples/python_scalar_sin#runtime", "-c", "gammaboard-example-evaluator-worker"]` or `["apptainer", "exec", "--nv", "runtimes/my_runtime/runtime.sif", "python", "-u", "runtimes/my_runtime/evaluator_worker.py"]`.
+- `command`: complete process command, for example `["python", "-u", "runtimes/my_runtime/evaluator_worker.py"]` or `["apptainer", "exec", "--nv", "runtimes/my_runtime/runtime.sif", "python", "-u", "runtimes/my_runtime/evaluator_worker.py"]`.
 - `continuous_dims`: expected continuous dimension for homogeneous rectangular batches.
 - `discrete_cardinalities`: expected per-axis discrete cardinalities for homogeneous rectangular batches, for example `[3, 4, 2]`.
 - `components`: observable component names; defaults to `["value"]` and must match the vector accumulator components.
@@ -131,7 +131,7 @@ See [process-runtime.md](process-runtime.md) for the protocol contract.
 
 For `sampler_aggregator.kind = "process_sampler"`, configure:
 
-- `command`: complete process command, for example `["nix", "shell", "path:./process_api/examples/python_sampler_symbolica_havana#runtime", "-c", "gammaboard-example-sampler-worker"]` or `["apptainer", "exec", "--nv", "runtimes/my_runtime/runtime.sif", "python", "-u", "runtimes/my_runtime/sampler_worker.py"]`.
+- `command`: complete process command, for example `["python", "-u", "runtimes/my_runtime/sampler_worker.py"]` or `["apptainer", "exec", "--nv", "runtimes/my_runtime/runtime.sif", "python", "-u", "runtimes/my_runtime/sampler_worker.py"]`.
 - `continuous_dims`: expected homogeneous continuous dimension.
 - `requires_training_values`: set to `true` when the sampler needs evaluator feedback through `ingest_training_values`.
 - `args = { ... }`: optional opaque JSON object passed to the process during `initialize`.
@@ -245,8 +245,8 @@ Curated run templates:
 
 - `resources/templates/runs/ghost_bump.toml`: Symbolica + Havana training on a 2D `(x, y)` domain plus `pdf_adaptation_image`.
 - `resources/templates/runs/symbolica-havana-pdf-1d2d.toml`: Symbolica + Havana training + both PDF adaptation task kinds.
-- `resources/templates/runs/process-evaluator-process-sampler-flake-demo.toml`: Process evaluator and sampler integration.
 - `resources/templates/runs/process-rust-apptainer-evaluator-demo.toml`: Apptainer-packaged Rust process evaluator integration.
+- `resources/templates/runs/process-evaluator-process-sampler-demo.toml`: Process evaluator and sampler integration using Nix as one packaging option.
 - `resources/templates/runs/gammaloop.toml`: GammaLoop TTH evaluator config.
 
 Curated task bundles:

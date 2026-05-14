@@ -64,7 +64,6 @@ pub enum AccumulatorConfig {
 pub enum TrainingProjection {
     Component { name: String },
     Norm,
-    AbsComplex { real: String, imag: String },
 }
 
 impl TrainingProjection {
@@ -79,20 +78,10 @@ impl From<TrainingProjection> for BinaryTrainingProjection {
             TrainingProjection::Component { name } => Self {
                 kind: BinaryTrainingProjectionKind::Component,
                 name: Some(name),
-                real: None,
-                imag: None,
             },
             TrainingProjection::Norm => Self {
                 kind: BinaryTrainingProjectionKind::Norm,
                 name: None,
-                real: None,
-                imag: None,
-            },
-            TrainingProjection::AbsComplex { real, imag } => Self {
-                kind: BinaryTrainingProjectionKind::AbsComplex,
-                name: None,
-                real: Some(real),
-                imag: Some(imag),
             },
         }
     }
@@ -105,10 +94,6 @@ impl From<BinaryTrainingProjection> for TrainingProjection {
                 TrainingProjection::component(value.name.unwrap_or_else(|| "value".to_string()))
             }
             BinaryTrainingProjectionKind::Norm => TrainingProjection::Norm,
-            BinaryTrainingProjectionKind::AbsComplex => TrainingProjection::AbsComplex {
-                real: value.real.unwrap_or_else(|| "real".to_string()),
-                imag: value.imag.unwrap_or_else(|| "imag".to_string()),
-            },
         }
     }
 }
@@ -136,15 +121,12 @@ struct BinaryAccumulatorConfig {
 enum BinaryTrainingProjectionKind {
     Component,
     Norm,
-    AbsComplex,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BinaryTrainingProjection {
     kind: BinaryTrainingProjectionKind,
     name: Option<String>,
-    real: Option<String>,
-    imag: Option<String>,
 }
 
 impl AccumulatorConfig {
@@ -508,15 +490,6 @@ fn validate_vector_accumulator(
                 return Err(format!(
                     "vector accumulator training projection references unknown component {name:?}"
                 ));
-            }
-        }
-        TrainingProjection::AbsComplex { real, imag } => {
-            for name in [real, imag] {
-                if !components.iter().any(|component| component == name) {
-                    return Err(format!(
-                        "vector accumulator training projection references unknown component {name:?}"
-                    ));
-                }
             }
         }
         TrainingProjection::Norm => {}

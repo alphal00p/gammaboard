@@ -47,7 +47,7 @@ pub enum TrainingProjection {
 }
 
 impl TrainingProjection {
-    fn project(self, value: num::complex::Complex64) -> f64 {
+    fn project(self, value: num::Complex<f64>) -> f64 {
         match self {
             Self::Real => value.re,
             Self::Imag => value.im,
@@ -410,11 +410,11 @@ impl GammaLoopEvaluator {
         }
     }
 
-    fn raw_result_value(result: &EvaluationResult) -> num::complex::Complex64 {
-        num::complex::Complex64::new(result.integrand_result.re.0, result.integrand_result.im.0)
+    fn raw_result_value(result: &EvaluationResult) -> num::Complex<f64> {
+        num::Complex::new(result.integrand_result.re.0, result.integrand_result.im.0)
     }
 
-    fn project_result_value(result: &EvaluationResult) -> num::complex::Complex64 {
+    fn project_result_value(result: &EvaluationResult) -> num::Complex<f64> {
         let mut value = Self::raw_result_value(result);
         if let Some(jac) = result.parameterization_jacobian {
             value *= jac.0;
@@ -433,10 +433,7 @@ impl GammaLoopEvaluator {
     ) -> GammaLoopAccumulatorState {
         let mut estimate = VectorAccumulatorState::from_config(
             vec!["real".to_string(), "imag".to_string()],
-            AccumulatorTrainingProjection::AbsComplex {
-                real: "real".to_string(),
-                imag: "imag".to_string(),
-            },
+            AccumulatorTrainingProjection::Norm,
             None,
         );
         for (result, point) in evaluation_results.iter().zip(points.iter()) {
@@ -724,7 +721,7 @@ impl Evaluator for GammaLoopEvaluator {
                     }
                     other => {
                         return Err(EvalError::eval(format!(
-                            "gammaloop complex mode does not support accumulator kind {}",
+                            "gammaloop vector mode does not support accumulator kind {}",
                             other.kind_str()
                         )));
                     }

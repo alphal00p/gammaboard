@@ -51,7 +51,8 @@ Older image generations are intentionally not retained.
 ## Nested Runtimes
 
 Process tasks run explicit commands from their config. A command may directly
-start a local binary, enter a Nix shell, or execute an Apptainer runtime image.
+start a local binary or script, execute an Apptainer runtime image, or use any
+other packaging tool that can start a protocol-speaking process.
 For nested Apptainer runtimes, the outer worker image launches the inner runtime
 with normal bind paths. GPU-capable workers add NVIDIA passthrough with `--nv`.
 

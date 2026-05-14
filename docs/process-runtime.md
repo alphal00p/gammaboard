@@ -190,7 +190,7 @@ The process command is explicit in run config. GammaBoard does not append worker
 
 ```toml
 kind = "process_evaluator"
-command = ["nix", "shell", "path:./process_api/examples/python_scalar_sin#runtime", "-c", "gammaboard-example-evaluator-worker"]
+command = ["python", "-u", "runtimes/my_runtime/evaluator_worker.py"]
 continuous_dims = 2
 discrete_cardinalities = [2, 3]
 components = ["value"]
@@ -198,6 +198,7 @@ args = { module = "demo_integrand", class = "SinIntegrand" }
 ```
 
 Relative command entries that look like paths are resolved below the resources root. Absolute paths are used as-is.
+Nix, Apptainer, virtualenvs, and system packages are all just ways to make this command available.
 
 ## Python Wrapper Pattern
 

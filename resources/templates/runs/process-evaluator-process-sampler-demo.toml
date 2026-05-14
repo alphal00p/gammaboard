@@ -1,5 +1,5 @@
-# Process evaluator + process sampler flake demo.
-name = "process-evaluator-process-sampler-flake-demo"
+# Process evaluator + process sampler demo using Nix as one packaging option.
+name = "process-evaluator-process-sampler-demo"
 
 [evaluator]
 kind = "process_evaluator"
