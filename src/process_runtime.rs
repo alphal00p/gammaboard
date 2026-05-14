@@ -93,6 +93,9 @@ fn resolve_program(raw: &str) -> Result<PathBuf, BuildError> {
 }
 
 fn resolve_command_arg(raw: &str) -> Result<String, BuildError> {
+    if Path::new(raw).is_absolute() {
+        return Ok(raw.to_string());
+    }
     if looks_like_resource_path(raw) {
         return Ok(resolve_runtime_path(raw)?.display().to_string());
     }
@@ -131,5 +134,18 @@ fn absolute_path(path: &Path) -> Result<PathBuf, BuildError> {
         env::current_dir()
             .map(|cwd| cwd.join(path))
             .map_err(|error| BuildError::build(format!("failed to resolve current dir: {error}")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_command_arg;
+
+    #[test]
+    fn absolute_command_args_are_not_resource_paths() {
+        let resolved = resolve_command_arg("/opt/madnis_gammaboard_api/sampler_worker.py")
+            .expect("absolute container path should pass through");
+
+        assert_eq!(resolved, "/opt/madnis_gammaboard_api/sampler_worker.py");
     }
 }
