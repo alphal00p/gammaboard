@@ -7,15 +7,21 @@ Gammaboard runs distributed numerical integration jobs with PostgreSQL as the sh
 Local development from the repo root:
 
 ```bash
-just deploy local dev
+./gammaboard \
+  --runtime-config ops/local/config/runtime.toml \
+  deploy run \
+  --deploy-config ops/local/config/deploy.toml
 ```
 
-This builds the dashboard when needed, starts local Postgres, starts the backend, and serves the dashboard through nginx at `http://localhost:8080`. Stop with `Ctrl-C`.
+This builds the Rust CLI, rebuilds the dashboard, starts local Postgres, starts the backend, and serves the dashboard through nginx at `http://localhost:8080`. Stop with `Ctrl-C`.
 
 ITPhlies release deploy from the repo root on ITPhlies:
 
 ```bash
-just deploy itphlies release
+GAMMABOARD_PROFILE=release ./gammaboard \
+  --runtime-config ops/itphlies/config/runtime.toml \
+  deploy run \
+  --deploy-config ops/itphlies/config/deploy.toml
 ```
 
 Open `http://itphlies:8080` on the LAN, or tunnel:
@@ -27,8 +33,17 @@ ssh -N -L 8080:127.0.0.1:8080 ITPhliesTails
 Run an isolated second instance with a port offset:
 
 ```bash
-just deploy local dev 1
-just deploy itphlies release 1
+./gammaboard \
+  --runtime-config ops/local/config/runtime.toml \
+  deploy run \
+  --deploy-config ops/local/config/deploy.toml \
+  --port-offset 1
+
+GAMMABOARD_PROFILE=release ./gammaboard \
+  --runtime-config ops/itphlies/config/runtime.toml \
+  deploy run \
+  --deploy-config ops/itphlies/config/deploy.toml \
+  --port-offset 1
 ```
 
 `--port-offset 1` shifts frontend/API/Postgres from `8080/4000/5400` to `8081/4001/5401` and suffixes local Postgres state paths.
@@ -45,6 +60,12 @@ For UBELIX Slurm/Apptainer operation, use [ops/ubelix/README.md](ops/ubelix/READ
 
 The dashboard shows runs, task output, nodes, performance, and logs.
 
+The repo-root `./gammaboard` helper builds the current CLI before forwarding
+arguments to it. It uses the `dev-optim` Cargo profile by default. Set
+`GAMMABOARD_PROFILE=release` for release builds or `GAMMABOARD_PROFILE=debug`
+for plain debug builds. When the forwarded command is `deploy run`, it also
+builds the dashboard frontend.
+
 ## Prerequisites
 
 - Rust
@@ -52,67 +73,69 @@ The dashboard shows runs, task output, nodes, performance, and logs.
 - `sqlx` CLI: `cargo install sqlx-cli --no-default-features --features postgres`
 - Node.js + npm for building the dashboard frontend
 - nginx for `gammaboard deploy run`
-- `just` for checked-in wrapper commands
 
 ## Common Workflow
 
 Create a run:
 
 ```bash
-gammaboard run add resources/templates/runs/gammaloop.toml
+./gammaboard run add resources/templates/runs/gammaloop.toml
 ```
 
 Start local workers and assign them:
 
 ```bash
-gammaboard node auto-run 2
-gammaboard node assign w-1 sampler-aggregator gammaloop_tth
-gammaboard node assign w-2 evaluator gammaloop_tth
+./gammaboard node auto-run 2
+./gammaboard node assign w-1 sampler-aggregator gammaloop_tth
+./gammaboard node assign w-2 evaluator gammaloop_tth
 ```
 
 Inspect, pause, and stop:
 
 ```bash
-gammaboard run list
-gammaboard run task list gammaloop_tth
-gammaboard run pause gammaloop_tth
-gammaboard node stop -a
+./gammaboard run list
+./gammaboard run task list gammaloop_tth
+./gammaboard run pause gammaloop_tth
+./gammaboard node stop -a
 ```
 
 Useful run/node commands:
 
 ```bash
-gammaboard run list [RUN_NAME]
-gammaboard run pause <RUN>
-gammaboard run clone <SOURCE_RUN> <FROM_SNAPSHOT_ID> <NEW_NAME>
-gammaboard run task add <RUN> <TASK_FILE.toml>
-gammaboard run task remove <RUN> <TASK_ID>
-gammaboard run remove <RUN>
+./gammaboard run list [RUN_NAME]
+./gammaboard run pause <RUN>
+./gammaboard run clone <SOURCE_RUN> <FROM_SNAPSHOT_ID> <NEW_NAME>
+./gammaboard run task add <RUN> <TASK_FILE.toml>
+./gammaboard run task remove <RUN> <TASK_ID>
+./gammaboard run remove <RUN>
 
-gammaboard node list
-gammaboard node run --name <NODE_NAME>
-gammaboard node auto-run <COUNT>
-gammaboard node assign <NODE_NAME> <ROLE> <RUN>
-gammaboard node unassign <NODE_NAME>
-gammaboard node stop <NODE_NAME>
+./gammaboard node list
+./gammaboard node run --name <NODE_NAME>
+./gammaboard node auto-run <COUNT>
+./gammaboard node assign <NODE_NAME> <ROLE> <RUN>
+./gammaboard node unassign <NODE_NAME>
+./gammaboard node stop <NODE_NAME>
 ```
 
 ## Manual Deploy
 
-Use the deploy helper directly when you do not want the `just` wrappers.
+Use the built binary directly when you do not want the root `./gammaboard` helper.
 
 Local dev profile:
 
 ```bash
-just build-frontend
+cd dashboard && npm ci && npm run build && cd ..
 cargo build --profile dev-optim
-./target/dev-optim/gammaboard deploy run --deploy-config ops/local/config/deploy.toml
+./target/dev-optim/gammaboard \
+  --runtime-config ops/local/config/runtime.toml \
+  deploy run \
+  --deploy-config ops/local/config/deploy.toml
 ```
 
 ITPhlies release profile:
 
 ```bash
-just build-frontend
+cd dashboard && npm ci && npm run build && cd ..
 cargo build --release
 ./target/release/gammaboard \
   --runtime-config ops/itphlies/config/runtime.toml \
@@ -148,8 +171,8 @@ Useful deploy options:
 ## Useful Local Commands
 
 ```bash
-gammaboard run pause -a
-gammaboard node stop -a
+./gammaboard run pause -a
+./gammaboard node stop -a
 cargo test -q --test full_stack_cli -- --ignored --nocapture --test-threads=1
 cargo test -q process_evaluator_eval_batch_protocol_benchmark -- --ignored --nocapture
 ```
