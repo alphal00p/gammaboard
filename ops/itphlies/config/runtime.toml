@@ -13,8 +13,8 @@ roots = ["resources"]
 
 [local_postgres]
 data_dir = "db/postgres"
-socket_dir = "/tmp/gammaboard-postgres-socket"
-log_file = "db/postgres/logfile"
+socket_dir = "db/socket"
+log_file = "db/logfile"
 max_connections = 512
 shared_buffers = "4GB"
 effective_cache_size = "32GB"

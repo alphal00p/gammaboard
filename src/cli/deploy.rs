@@ -1,7 +1,10 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use gammaboard::api::nodes as node_api;
-use gammaboard::config::{DEFAULT_DEPLOY_CONFIG_PATH, DeployConfig, RuntimeConfig};
+use gammaboard::config::{
+    DEFAULT_DEPLOY_CONFIG_PATH, DeployConfig, RuntimeConfig, normalize_config_path,
+    primary_resource_root_from_config,
+};
 use gammaboard::server::ServerConfig;
 use std::{
     fs,
@@ -58,6 +61,7 @@ async fn deploy_run(
     let mut server_config = ServerConfig::load(&deploy_config.api_server.api_server_config)?;
     let runtime_config = runtime_config.clone();
     let mut runtime_config = runtime_config;
+    resolve_local_postgres_paths_against_resources(&mut runtime_config);
     apply_port_offset(
         &mut deploy_config,
         &mut server_config,
@@ -222,6 +226,22 @@ fn append_suffix_to_path(path: &Path, suffix: &str) -> Result<PathBuf> {
     let mut updated = file_name.to_os_string();
     updated.push(suffix);
     Ok(path.with_file_name(updated))
+}
+
+fn resolve_local_postgres_paths_against_resources(runtime_config: &mut RuntimeConfig) {
+    let resource_root = primary_resource_root_from_config(&runtime_config.resources.roots);
+    runtime_config.local_postgres.data_dir =
+        normalize_config_path(&resource_root, &runtime_config.local_postgres.data_dir)
+            .display()
+            .to_string();
+    runtime_config.local_postgres.socket_dir =
+        normalize_config_path(&resource_root, &runtime_config.local_postgres.socket_dir)
+            .display()
+            .to_string();
+    runtime_config.local_postgres.log_file =
+        normalize_config_path(&resource_root, &runtime_config.local_postgres.log_file)
+            .display()
+            .to_string();
 }
 
 async fn cleanup_deploy(

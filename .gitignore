@@ -1,10 +1,5 @@
 __pycache__/
-tmp
-.build-input.hash
-.evaluators
-.direnv/
-.postgres*/
-.postgres-socket*/
+resources/db/*
 /dump/
 /target
 .env

@@ -266,7 +266,7 @@ fn default_synchronous_commit() -> bool {
     false
 }
 
-fn primary_resource_root_from_config(roots: &[String]) -> PathBuf {
+pub fn primary_resource_root_from_config(roots: &[String]) -> PathBuf {
     roots
         .iter()
         .map(|root| root.trim())
