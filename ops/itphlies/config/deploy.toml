@@ -11,3 +11,6 @@ frontend_host = "0.0.0.0"
 frontend_port = 8080
 frontend_server_name = "_"
 frontend_advertise_hosts = ["localhost", "itphlies"]
+
+[database]
+ensure_started = true

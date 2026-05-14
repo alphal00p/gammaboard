@@ -9,3 +9,6 @@ frontend_build_dir = "/usr/local/share/gammaboard/dashboard"
 frontend_host = "0.0.0.0"
 frontend_port = 8080
 frontend_server_name = "_"
+
+[database]
+ensure_started = true

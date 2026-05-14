@@ -10,3 +10,6 @@ frontend_build_dir = "../../../dashboard/build"
 frontend_host = "127.0.0.1"
 frontend_port = 8080
 frontend_server_name = "localhost"
+
+[database]
+ensure_started = true
