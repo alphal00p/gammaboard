@@ -1,0 +1,6 @@
+# Real-valued Monte Carlo sampling.
+
+[[task_queue]]
+kind = "sample"
+stop_condition = { max_samples = 1_000 }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
