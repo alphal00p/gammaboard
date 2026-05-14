@@ -1,6 +1,6 @@
 # Gammaboard Dashboard
 
-React dashboard for monitoring Monte Carlo simulation runs.
+React/Vite frontend for the GammaBoard dashboard.
 
 ## Quick Start
 
@@ -11,52 +11,6 @@ npm start
 
 Opens at the URL printed by Vite, usually http://localhost:5173.
 
-## Structure
-
-```
-src/
-├── components/       # UI components (ConnectionStatus, RunSelector, etc.)
-├── hooks/           # shared polling hooks and read-only log browser state
-├── services/        # API client (runs, node inventory, history, logs)
-├── utils/           # formatting and viewmodel helpers
-└── App.jsx          # Main app
-```
-
-## Configuration
-
-**API URL:** `src/services/api.js`
-```javascript
-const API_BASE_URL = "/api";
-```
-
-**Dev API proxy:** `vite.config.js`
-```javascript
-server: {
-  proxy: {
-    "/api": "http://127.0.0.1:4000",
-  },
-}
-```
-
-**Refresh Intervals:** `src/App.jsx`
-```javascript
-useRuns(2000)           // Poll runs every 2 seconds
-useWorkersData(3000)    // Poll node inventory once app-wide every 3 seconds
-```
-
-**Logs Tab:** `GET /api/runs/:id/logs`
-- Server-side filters: `node_name`, `level`, `q`
-- Cursor pagination: `before_id`
-- Response shape: `{ items, next_before_id, has_more_older }`
-- UI model: read-only table with `Refresh` and `Load older`
-
-## Tech Stack
-
-- React 19.2.4
-- Vite
-- Material UI 7.x
-- ECharts
-
 ## Scripts
 
 ```bash
@@ -64,3 +18,5 @@ npm start       # Development server
 npm run build   # Production build
 npm test        # Run tests
 ```
+
+Architecture and data-flow notes live in [../docs/frontend.md](../docs/frontend.md).

@@ -3,10 +3,11 @@ sync-ops host="ubelix" remote_root="/storage/research/itp_localunitaritydata/gam
     set -euo pipefail
     REPO_ROOT="$(git rev-parse --show-toplevel)"
     cd "${REPO_ROOT}"
-    ssh "{{host}}" "mkdir -p '{{remote_root}}/ops/build' '{{remote_root}}/ops/config' '{{remote_root}}/ops/slurm' '{{remote_root}}/resources'"
+    ssh "{{host}}" "mkdir -p '{{remote_root}}/ops/build' '{{remote_root}}/ops/config' '{{remote_root}}/ops/slurm' '{{remote_root}}/resources' '{{remote_root}}/docs'"
     scp -r ops/ubelix/build/* "{{host}}:{{remote_root}}/ops/build/"
     scp -r ops/ubelix/config/* "{{host}}:{{remote_root}}/ops/config/"
     scp -r ops/ubelix/slurm/* "{{host}}:{{remote_root}}/ops/slurm/"
     scp -r ops/ubelix/resources/* "{{host}}:{{remote_root}}/resources/"
+    scp -r docs/* "{{host}}:{{remote_root}}/docs/"
     scp ops/ubelix/ubelix.py "{{host}}:{{remote_root}}/ubelix.py"
     scp ops/ubelix/README.md "{{host}}:{{remote_root}}/README.md"

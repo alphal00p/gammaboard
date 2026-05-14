@@ -2,14 +2,15 @@
 
 Operator guide for the current UBELIX setup. Local sync commands run from your workstation; `ubelix.py` commands run on a UBELIX login node.
 
-## Model
+Shared docs live in repo-root `docs/`: `docs/deployment.md`, `docs/config.md`, and `docs/operations.md`.
+
+## UBELIX Model
 
 - Workspace: `/storage/research/itp_localunitaritydata/gammaboard`
-- Images: separate Apptainer images for `gammaboard`, `gammaloop`, and Python runtimes
 - Deploy: one control/UI Slurm job with Postgres, API, nginx, and frontend
 - Workers: separate Slurm jobs connecting to the control job database
 - Access: one SSH tunnel to the frontend port
-- Resources: UBELIX template paths resolve under `${WORKSPACE_ROOT}/ops/resources`; shared runtime assets still resolve under `${WORKSPACE_ROOT}/resources` (e.g. `states/...`, `runtimes/...`)
+- Resources: UBELIX template paths resolve under `${WORKSPACE_ROOT}/ops/resources`; shared runtime assets resolve under `${WORKSPACE_ROOT}/resources`
 
 ## Sync From Local
 
@@ -17,7 +18,7 @@ Operator guide for the current UBELIX setup. Local sync commands run from your w
 just --justfile ops/ubelix/justfile sync-ops
 ```
 
-`sync-ops` uploads `ops/`, `ubelix.py`, and this README. The justfile stays local.
+`sync-ops` uploads `ops/`, `docs/`, `ubelix.py`, and this README. The justfile stays local.
 
 ## Build Images
 
@@ -101,7 +102,7 @@ python ubelix.py down
 
 Admin-protected commands accept `--admin-password` or `GAMMABOARD_ADMIN_PASSWORD`.
 
-## Layout
+## UBELIX Layout
 
 ```text
 <WORKSPACE_ROOT>/

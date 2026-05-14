@@ -137,6 +137,9 @@ Useful deploy options:
 ## Documentation
 
 - [docs/config.md](docs/config.md): deploy/runtime/server/run/task/node config reference.
+- [docs/deployment.md](docs/deployment.md): shared deploy model, profiles, paths, images, and ports.
+- [docs/frontend.md](docs/frontend.md): dashboard architecture, panel data flow, hooks, and API routing.
+- [docs/operations.md](docs/operations.md): auth, node/run lifecycle, logs, and recovery notes.
 - [docs/process-runtime.md](docs/process-runtime.md): external process evaluator/sampler protocol.
 - [process_api/README.md](process_api/README.md): process API examples and wrappers.
 - [ops/ubelix/README.md](ops/ubelix/README.md): UBELIX operator workflow.

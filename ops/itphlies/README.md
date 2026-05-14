@@ -1,6 +1,7 @@
 # ITPhlies Deploy
 
 This folder contains ITPhlies-specific deploy configuration and wrappers.
+Shared deployment and operations notes live in [../../docs/deployment.md](../../docs/deployment.md) and [../../docs/operations.md](../../docs/operations.md).
 
 ## Files
 
