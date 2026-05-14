@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::core::{BuildError, EngineError};
 use crate::evaluation::{Batch, Point};
 use crate::process_runtime::build_process_worker_command;
-use crate::process_worker::ProcessWorker;
+use crate::process_worker::{PROCESS_PROTOCOL, ProcessWorker};
 use crate::sampling::{
     LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot,
 };
@@ -260,7 +260,7 @@ impl ProcessSamplerWorker {
             .request(
                 "initialize",
                 serde_json::json!({
-                    "protocol": "gammaboard-jsonrpc-v1",
+                    "protocol": PROCESS_PROTOCOL,
                     "role": "sampler",
                     "domain": {
                         "continuous_dims": continuous_dims,

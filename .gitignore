@@ -3,6 +3,7 @@ resources/db/*
 resources/tmp/*
 resources/logs/*
 resources/nginx/*
+resources/states
 nginx.conf
 /dump/
 /target

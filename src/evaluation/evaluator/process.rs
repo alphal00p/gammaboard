@@ -7,7 +7,7 @@ use serde_json::Value;
 use crate::core::{AccumulatorConfig, BuildError, EvalError};
 use crate::evaluation::{AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator};
 use crate::process_runtime::build_process_worker_command;
-use crate::process_worker::ProcessWorker;
+use crate::process_worker::{PROCESS_PROTOCOL, ProcessWorker};
 use crate::utils::domain::Domain;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -221,7 +221,7 @@ impl ProcessRuntimeWorker {
             .request(
                 "initialize",
                 serde_json::json!({
-                    "protocol": "gammaboard-jsonrpc-v1",
+                    "protocol": PROCESS_PROTOCOL,
                     "role": "evaluator",
                     "components": components,
                     "observable": {

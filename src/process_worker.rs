@@ -3,6 +3,8 @@ use std::process::{Child, ChildStdin, ChildStdout};
 
 use serde_json::Value;
 
+pub(crate) const PROCESS_PROTOCOL: &str = "gammaboard-jsonrpc-v1";
+const JSON_RPC_VERSION: &str = "2.0";
 const MAX_STDOUT_LOG_BYTES_BEFORE_FRAME: usize = 64 * 1024;
 
 pub(crate) struct ProcessWorker {
@@ -34,7 +36,7 @@ impl ProcessWorker {
     pub(crate) fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let id = self.allocate_request_id();
         let request = serde_json::json!({
-            "jsonrpc": "2.0",
+            "jsonrpc": JSON_RPC_VERSION,
             "id": id,
             "method": method,
             "params": params,
@@ -85,16 +87,7 @@ impl ProcessWorker {
                     String::from_utf8_lossy(&payload)
                 )
             })?;
-            let actual_id = response
-                .get("id")
-                .and_then(Value::as_u64)
-                .ok_or_else(|| format!("{} response missing numeric 'id'", self.label))?;
-            if actual_id != expected_id {
-                return Err(format!(
-                    "{} worker returned mismatched response id: expected {expected_id}, got {actual_id}",
-                    self.label
-                ));
-            }
+            validate_response_envelope(&self.label, &response, expected_id)?;
             return Ok(response);
         }
     }
@@ -202,4 +195,85 @@ fn format_json_rpc_error(error: &Value) -> String {
         return format!("process worker error: {message}");
     }
     format!("process worker error: {error}")
+}
+
+fn validate_response_envelope(
+    label: &str,
+    response: &Value,
+    expected_id: u64,
+) -> Result<(), String> {
+    if !response.is_object() {
+        return Err(format!(
+            "{label} response frame must be a JSON object, got {response}"
+        ));
+    }
+    let jsonrpc = response
+        .get("jsonrpc")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{label} response missing string 'jsonrpc'"))?;
+    if jsonrpc != JSON_RPC_VERSION {
+        return Err(format!(
+            "{label} response uses unsupported jsonrpc version: expected {JSON_RPC_VERSION:?}, got {jsonrpc:?}",
+        ));
+    }
+    let actual_id = response
+        .get("id")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("{label} response missing numeric 'id'"))?;
+    if actual_id != expected_id {
+        return Err(format!(
+            "{label} worker returned mismatched response id: expected {expected_id}, got {actual_id}",
+        ));
+    }
+    if response.get("result").is_some() == response.get("error").is_some() {
+        return Err(format!(
+            "{label} response must contain exactly one of 'result' or 'error'",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{JSON_RPC_VERSION, format_json_rpc_error, validate_response_envelope};
+    use serde_json::json;
+
+    #[test]
+    fn json_rpc_error_prefers_traceback_data() {
+        let error = json!({
+            "code": -32000,
+            "message": "ValueError: bad input",
+            "data": { "traceback": "Traceback line" },
+        });
+
+        assert_eq!(
+            format_json_rpc_error(&error),
+            "process worker error: ValueError: bad input\nTraceback line"
+        );
+    }
+
+    #[test]
+    fn protocol_version_constant_matches_json_rpc_2() {
+        assert_eq!(JSON_RPC_VERSION, "2.0");
+    }
+
+    #[test]
+    fn validates_json_rpc_response_envelope() {
+        validate_response_envelope(
+            "test worker",
+            &json!({"jsonrpc": "2.0", "id": 3, "result": {"ok": true}}),
+            3,
+        )
+        .expect("valid response should pass");
+
+        assert!(
+            validate_response_envelope(
+                "test worker",
+                &json!({"jsonrpc": "2.0", "id": 3, "result": {}, "error": {}}),
+                3,
+            )
+            .expect_err("result+error should fail")
+            .contains("exactly one")
+        );
+    }
 }
