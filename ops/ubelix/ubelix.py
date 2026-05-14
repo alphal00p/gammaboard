@@ -25,7 +25,7 @@ SINGLE_NODE_SBATCH = f"{WORKSPACE_ROOT}/ops/slurm/single_node_deploy.sbatch"
 WORKER_SBATCH = f"{WORKSPACE_ROOT}/ops/slurm/worker.sbatch"
 GB_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaboard.sbatch"
 GL_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaloop.sbatch"
-PY_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/python.sbatch"
+APPTAINER_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/build.sbatch"
 IMAGE_PATH = f"{WORKSPACE_ROOT}/images/gammaboard/gammaboard.sif"
 FRONTEND_PORT = 8080
 DB_PORT = 5400
@@ -998,13 +998,23 @@ def command_watch_requests(args: argparse.Namespace) -> None:
 
 def command_build(args: argparse.Namespace) -> None:
     ensure_dirs()
-    targets = {
-        "gammaboard": GB_BUILD_SBATCH,
-        "gammaloop": GL_BUILD_SBATCH,
-        "python": PY_BUILD_SBATCH,
-    }
-    target = targets[args.target]
-    result = run(["sbatch", "--chdir", WORKSPACE_ROOT, target])
+    if args.build_kind == "gammaboard":
+        result = run(["sbatch", "--chdir", WORKSPACE_ROOT, GB_BUILD_SBATCH])
+    elif args.build_kind == "gammaloop":
+        result = run(["sbatch", "--chdir", WORKSPACE_ROOT, GL_BUILD_SBATCH])
+    elif args.build_kind == "apptainer":
+        result = run(
+            [
+                "sbatch",
+                "--chdir",
+                WORKSPACE_ROOT,
+                APPTAINER_BUILD_SBATCH,
+                args.output,
+                args.def_file,
+            ]
+        )
+    else:
+        raise SystemExit(f"unknown build kind: {args.build_kind}")
     print(result.stdout.strip())
 
 
@@ -1104,8 +1114,24 @@ def parser() -> argparse.ArgumentParser:
     watch_requests.set_defaults(func=command_watch_requests)
 
     build = sub.add_parser("build", help="login node: submit a build job")
-    build.add_argument("target", choices=("gammaboard", "gammaloop", "python"))
-    build.set_defaults(func=command_build)
+    build_sub = build.add_subparsers(dest="build_kind", required=True)
+
+    build_gammaboard = build_sub.add_parser(
+        "gammaboard", help="submit the GammaBoard image build"
+    )
+    build_gammaboard.set_defaults(func=command_build)
+
+    build_gammaloop = build_sub.add_parser(
+        "gammaloop", help="submit the GammaLoop image build"
+    )
+    build_gammaloop.set_defaults(func=command_build)
+
+    build_apptainer = build_sub.add_parser(
+        "apptainer", help="submit a generic Apptainer build"
+    )
+    build_apptainer.add_argument("output", help="output .sif path")
+    build_apptainer.add_argument("def_file", help="Apptainer definition file")
+    build_apptainer.set_defaults(func=command_build)
 
     clear = sub.add_parser(
         "clear-db", help="login node: delete the local SQLite database"

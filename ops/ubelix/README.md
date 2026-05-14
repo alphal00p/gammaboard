@@ -27,7 +27,7 @@ Run on a UBELIX login node:
 ```bash
 python ubelix.py build gammaloop
 python ubelix.py build gammaboard
-python ubelix.py build python
+python ubelix.py build apptainer resources/runtimes/madnis_gammaboard_api/runtime.sif ops/build/python.def
 ```
 
 The GammaBoard build also builds and embeds the dashboard frontend. Each build overwrites `images/<family>/<family>.sif` and writes `images/<family>/<family>.meta`. Build logs go to `logs/slurm/build`.
