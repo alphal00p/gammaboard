@@ -62,6 +62,7 @@ use crate::runtime_context::RuntimeContext;
 const DEFAULT_SERVER_CONFIG_TOML: &str = include_str!("../config_defaults/server.toml");
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     pub api_host: IpAddr,
     pub api_port: u16,
@@ -91,6 +92,7 @@ fn default_node_templates_dir() -> String {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServerAuthConfig {
     pub admin_password_hash: String,
     pub session_secret: String,
@@ -314,26 +316,36 @@ struct AutoRunNodesRequest {
     count: Option<usize>,
     #[serde(default)]
     max_start_failures: Option<u32>,
-    #[serde(default)]
+    #[serde(default = "empty_json_object")]
     args: JsonValue,
     #[serde(default)]
     name_prefix: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct NodeLaunchToml {
     groups: Vec<NodeLaunchTomlGroup>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct NodeLaunchTomlGroup {
     count: usize,
     #[serde(default)]
     name_prefix: Option<String>,
-    #[serde(default)]
-    max_start_failures: Option<u32>,
-    #[serde(default)]
+    #[serde(default = "default_node_launch_max_start_failures")]
+    max_start_failures: u32,
+    #[serde(default = "empty_json_object")]
     config: JsonValue,
+}
+
+fn default_node_launch_max_start_failures() -> u32 {
+    3
+}
+
+fn empty_json_object() -> JsonValue {
+    JsonValue::Object(Default::default())
 }
 
 #[derive(Debug, Clone)]
@@ -1627,12 +1639,11 @@ fn resolve_node_launch_groups(
                     .filter(|value| !value.is_empty())
                     .unwrap_or("w")
                     .to_string();
-                let max_start_failures = group.max_start_failures.unwrap_or(3);
                 let capabilities = derive_capabilities_from_config(&group.config);
                 Ok(ResolvedNodeLaunchGroup {
                     count: group.count,
                     name_prefix,
-                    max_start_failures,
+                    max_start_failures: group.max_start_failures,
                     config: group.config,
                     capabilities,
                 })

@@ -10,13 +10,3 @@ frontend_build_dir = "../../../dashboard/build"
 frontend_host = "127.0.0.1"
 frontend_port = 8080
 frontend_server_name = "localhost"
-frontend_advertise_hosts = ["localhost"]
-access_log = false
-
-[database]
-ensure_started = true
-
-[cleanup]
-sampler_drain_timeout_seconds = 60
-node_stop_timeout_seconds = 15
-poll_interval_ms = 250

@@ -13,6 +13,7 @@ const DEFAULT_RUNTIME_CONFIG_TOML: &str = include_str!("config_defaults/runtime.
 const DEFAULT_DEPLOY_CONFIG_TOML: &str = include_str!("../ops/local/config/deploy.toml");
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
     pub database: DatabaseConfig,
     pub tracing: TracingConfig,
@@ -22,11 +23,13 @@ pub struct RuntimeConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DatabaseConfig {
     pub url: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TracingConfig {
     pub persist_runtime_logs: bool,
     pub db_gammaboard_level: String,
@@ -34,12 +37,14 @@ pub struct TracingConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ResourceConfig {
     #[serde(default)]
     pub roots: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LocalPostgresConfig {
     pub data_dir: String,
     pub socket_dir: String,
@@ -66,25 +71,31 @@ pub struct LocalPostgresConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeployConfig {
     pub api_server: DeployApiServerConfig,
     pub static_site: DeployStaticSiteConfig,
     pub frontend_http: DeployFrontendHttpConfig,
+    #[serde(default)]
     pub database: DeployDatabaseConfig,
+    #[serde(default)]
     pub cleanup: DeployCleanupConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeployApiServerConfig {
     pub api_server_config: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeployStaticSiteConfig {
     pub frontend_build_dir: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeployFrontendHttpConfig {
     pub frontend_host: String,
     pub frontend_port: u16,
@@ -96,11 +107,14 @@ pub struct DeployFrontendHttpConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeployDatabaseConfig {
+    #[serde(default = "default_database_ensure_started")]
     pub ensure_started: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeployCleanupConfig {
     #[serde(default = "default_sampler_drain_timeout_seconds")]
     pub sampler_drain_timeout_seconds: u64,
@@ -108,6 +122,28 @@ pub struct DeployCleanupConfig {
     pub node_stop_timeout_seconds: u64,
     #[serde(default = "default_cleanup_poll_interval_ms")]
     pub poll_interval_ms: u64,
+}
+
+impl Default for DeployDatabaseConfig {
+    fn default() -> Self {
+        Self {
+            ensure_started: default_database_ensure_started(),
+        }
+    }
+}
+
+fn default_database_ensure_started() -> bool {
+    true
+}
+
+impl Default for DeployCleanupConfig {
+    fn default() -> Self {
+        Self {
+            sampler_drain_timeout_seconds: default_sampler_drain_timeout_seconds(),
+            node_stop_timeout_seconds: default_node_stop_timeout_seconds(),
+            poll_interval_ms: default_cleanup_poll_interval_ms(),
+        }
+    }
 }
 
 impl RuntimeConfig {
