@@ -55,8 +55,9 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::Instrument;
 
 use self::auth::{AuthConfig, SessionStatus, login, logout, require_admin_session};
-use crate::config::{DEFAULT_SERVER_CONFIG_PATH, RuntimeConfig, read_toml_with_default_fallback};
+use crate::config::{DEFAULT_SERVER_CONFIG_PATH, read_toml_with_default_fallback};
 use crate::resources::primary_resource_root;
+use crate::runtime_context::RuntimeContext;
 
 const DEFAULT_SERVER_CONFIG_TOML: &str = include_str!("../config_defaults/server.toml");
 
@@ -136,8 +137,7 @@ fn normalize_templates_dir(path: &str) -> anyhow::Result<PathBuf> {
 pub async fn serve(
     store: PgStore,
     config: ServerConfig,
-    runtime_config_path: PathBuf,
-    runtime_config: RuntimeConfig,
+    runtime: RuntimeContext,
 ) -> anyhow::Result<()> {
     let bind = config.bind_addr();
     let allowed_origins = config
@@ -161,7 +161,7 @@ pub async fn serve(
         run_templates_dir: PathBuf::from(&config.run_templates_dir),
         task_templates_dir: PathBuf::from(&config.task_templates_dir),
         node_templates_dir: PathBuf::from(&config.node_templates_dir),
-        runtime_cli_args: runtime_cli_args(&runtime_config_path, &runtime_config),
+        runtime: runtime.clone(),
     };
 
     let app = build_app(state);
@@ -192,22 +192,7 @@ pub(crate) struct AppState {
     run_templates_dir: PathBuf,
     task_templates_dir: PathBuf,
     node_templates_dir: PathBuf,
-    runtime_cli_args: Vec<String>,
-}
-
-fn runtime_cli_args(runtime_config_path: &Path, runtime_config: &RuntimeConfig) -> Vec<String> {
-    vec![
-        "--runtime-config".to_string(),
-        runtime_config_path.display().to_string(),
-        "--database-url".to_string(),
-        runtime_config.database.url.clone(),
-        "--postgres-data-dir".to_string(),
-        runtime_config.local_postgres.data_dir.clone(),
-        "--postgres-socket-dir".to_string(),
-        runtime_config.local_postgres.socket_dir.clone(),
-        "--postgres-log-file".to_string(),
-        runtime_config.local_postgres.log_file.clone(),
-    ]
+    runtime: RuntimeContext,
 }
 
 #[derive(Deserialize)]
@@ -1785,11 +1770,13 @@ async fn create_and_maybe_resolve_node_launch_request(
         ApiError::Internal(format!("failed to resolve current executable: {err}"))
     })?;
 
+    let runtime_cli_args = state.runtime.runtime_cli_args();
     let mut started_node_names = Vec::new();
     for planned in &planned_nodes {
         if let Err(err) = spawn_node_process(
             &binary,
-            &state.runtime_cli_args,
+            &runtime_cli_args,
+            &state.runtime,
             &planned.node_name,
             planned.max_start_failures,
             &planned.capabilities,
@@ -1859,11 +1846,11 @@ async fn restart_db(State(state): State<AppState>) -> Result<Json<serde_json::Va
     let binary = std::env::current_exe().map_err(|err| {
         ApiError::Internal(format!("failed to resolve current executable: {err}"))
     })?;
-    let result =
-        db_api::restart_local_database(&binary, &state.runtime_cli_args).map_err(|err| {
-            log_control_api_error("db_restart", &err);
-            err
-        })?;
+    let runtime_cli_args = state.runtime.runtime_cli_args();
+    let result = db_api::restart_local_database(&binary, &runtime_cli_args).map_err(|err| {
+        log_control_api_error("db_restart", &err);
+        err
+    })?;
 
     tracing::info!(
         source = "control",
@@ -1936,6 +1923,7 @@ async fn shutdown_control_process(
 fn spawn_node_process(
     binary: &Path,
     runtime_cli_args: &[String],
+    runtime: &RuntimeContext,
     node_name: &str,
     max_start_failures: u32,
     capabilities: &BTreeMap<String, u64>,
@@ -1943,7 +1931,7 @@ fn spawn_node_process(
     use std::process::Stdio;
     use tokio::process::Command;
 
-    let (stdout_log_path, stderr_log_path) = node_process_log_paths(node_name)?;
+    let (stdout_log_path, stderr_log_path) = node_process_log_paths(runtime, node_name)?;
     let stdout_log = File::create(&stdout_log_path).map_err(|err| {
         ApiError::Internal(format!(
             "failed to open stdout log for node {node_name} at {}: {err}",
@@ -1999,18 +1987,13 @@ fn spawn_node_process(
     Ok(())
 }
 
-fn node_process_log_paths(node_name: &str) -> Result<(PathBuf, PathBuf), ApiError> {
-    let dir = PathBuf::from("logs").join("nodes");
-    fs::create_dir_all(&dir).map_err(|err| {
-        ApiError::Internal(format!(
-            "failed to create node log directory {}: {err}",
-            dir.display()
-        ))
-    })?;
-    Ok((
-        dir.join(format!("{node_name}.stdout.log")),
-        dir.join(format!("{node_name}.stderr.log")),
-    ))
+fn node_process_log_paths(
+    runtime: &RuntimeContext,
+    node_name: &str,
+) -> Result<(PathBuf, PathBuf), ApiError> {
+    runtime
+        .node_log_paths(node_name)
+        .map_err(|err| ApiError::Internal(format!("failed resolving node log paths: {err}")))
 }
 
 async fn get_run_evaluator_performance_history(

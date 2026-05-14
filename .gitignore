@@ -1,5 +1,8 @@
 __pycache__/
 resources/db/*
+resources/tmp/*
+resources/logs/*
+nginx.conf
 /dump/
 /target
 .env

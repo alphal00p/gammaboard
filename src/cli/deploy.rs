@@ -1,10 +1,8 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use gammaboard::api::nodes as node_api;
-use gammaboard::config::{
-    DEFAULT_DEPLOY_CONFIG_PATH, DeployConfig, RuntimeConfig, normalize_config_path,
-    primary_resource_root_from_config,
-};
+use gammaboard::config::{DEFAULT_DEPLOY_CONFIG_PATH, DeployConfig, RuntimeConfig};
+use gammaboard::runtime_context::RuntimeContext;
 use gammaboard::server::ServerConfig;
 use std::{
     fs,
@@ -41,27 +39,17 @@ pub struct DeployRunArgs {
     allowed_origins: Vec<String>,
 }
 
-pub async fn run_deploy_command(
-    args: DeployArgs,
-    runtime_config: &RuntimeConfig,
-    runtime_config_path: &Path,
-) -> Result<()> {
+pub async fn run_deploy_command(args: DeployArgs, runtime: &RuntimeContext) -> Result<()> {
     match args.command {
-        DeployCommand::Run(args) => deploy_run(args, runtime_config, runtime_config_path).await,
+        DeployCommand::Run(args) => deploy_run(args, runtime).await,
     }
 }
 
-async fn deploy_run(
-    args: DeployRunArgs,
-    runtime_config: &RuntimeConfig,
-    runtime_config_path: &Path,
-) -> Result<()> {
+async fn deploy_run(args: DeployRunArgs, runtime: &RuntimeContext) -> Result<()> {
     let deploy_config = DeployConfig::load(&args.deploy_config)?;
     let mut deploy_config = deploy_config;
     let mut server_config = ServerConfig::load(&deploy_config.api_server.api_server_config)?;
-    let runtime_config = runtime_config.clone();
-    let mut runtime_config = runtime_config;
-    resolve_local_postgres_paths_against_resources(&mut runtime_config);
+    let mut runtime_config = runtime.runtime_config().clone();
     apply_port_offset(
         &mut deploy_config,
         &mut server_config,
@@ -81,14 +69,14 @@ async fn deploy_run(
         db::start_db(&runtime_config.local_postgres, &runtime_config.database.url)?;
     }
 
-    let deploy_paths = DeployRuntimePaths::new(frontend_port);
+    let deploy_paths = DeployRuntimePaths::new(frontend_port, runtime);
     prepare_runtime_dirs(&deploy_paths)?;
     write_nginx_config(&deploy_config, &server_config, frontend_port, &deploy_paths)?;
 
     let mut backend = start_backend(
         &deploy_config,
         &server_config,
-        runtime_config_path,
+        runtime.runtime_config_path(),
         &runtime_config,
     )?;
     let mut nginx = start_nginx(&deploy_config, &deploy_paths)?;
@@ -228,22 +216,6 @@ fn append_suffix_to_path(path: &Path, suffix: &str) -> Result<PathBuf> {
     Ok(path.with_file_name(updated))
 }
 
-fn resolve_local_postgres_paths_against_resources(runtime_config: &mut RuntimeConfig) {
-    let resource_root = primary_resource_root_from_config(&runtime_config.resources.roots);
-    runtime_config.local_postgres.data_dir =
-        normalize_config_path(&resource_root, &runtime_config.local_postgres.data_dir)
-            .display()
-            .to_string();
-    runtime_config.local_postgres.socket_dir =
-        normalize_config_path(&resource_root, &runtime_config.local_postgres.socket_dir)
-            .display()
-            .to_string();
-    runtime_config.local_postgres.log_file =
-        normalize_config_path(&resource_root, &runtime_config.local_postgres.log_file)
-            .display()
-            .to_string();
-}
-
 async fn cleanup_deploy(
     deploy_config: &DeployConfig,
     runtime_config: &RuntimeConfig,
@@ -377,8 +349,8 @@ struct DeployRuntimePaths {
 }
 
 impl DeployRuntimePaths {
-    fn new(frontend_port: u16) -> Self {
-        let root = PathBuf::from(format!("tmp/deploy/{frontend_port}"));
+    fn new(frontend_port: u16, runtime: &RuntimeContext) -> Self {
+        let root = runtime.deploy_tmp_dir(frontend_port);
         Self {
             nginx_config: root.join("nginx.conf"),
             nginx_pid: root.join("nginx.pid"),

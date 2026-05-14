@@ -7,12 +7,8 @@ use gammaboard::api::nodes as node_api;
 use gammaboard::config::RuntimeConfig;
 use gammaboard::core::{ControlPlaneStore, NodeCapabilities, RegisteredNode, WorkerRole};
 use gammaboard::runners::{NodeRunner, NodeRunnerConfig};
-use std::{
-    fs,
-    fs::File,
-    path::{Path, PathBuf},
-    process::Stdio,
-};
+use gammaboard::runtime_context::RuntimeContext;
+use std::{fs::File, process::Stdio};
 
 #[derive(Debug, Args)]
 pub struct NodeArgs {
@@ -92,16 +88,16 @@ fn capabilities_from_pairs(pairs: Vec<(String, u64)>) -> Result<NodeCapabilities
 
 pub async fn run_node_commands(
     command: NodeCommand,
-    config: &RuntimeConfig,
-    runtime_config_path: &Path,
+    runtime: &RuntimeContext,
     quiet: bool,
 ) -> Result<()> {
+    let config = runtime.runtime_config();
     if let NodeCommand::Run(args) = command {
         return run_node(args, config, quiet).await;
     }
 
     if let NodeCommand::AutoRun(args) = command {
-        return run_auto_run_command(args, config, runtime_config_path, quiet).await;
+        return run_auto_run_command(args, runtime, quiet).await;
     }
 
     with_control_store(
@@ -184,10 +180,10 @@ async fn run_node(args: NodeRunArgs, config: &RuntimeConfig, quiet: bool) -> Res
 
 async fn run_auto_run_command(
     args: AutoRunArgs,
-    config: &RuntimeConfig,
-    runtime_config_path: &Path,
+    runtime: &RuntimeContext,
     quiet: bool,
 ) -> Result<()> {
+    let config = runtime.runtime_config();
     let planned = with_control_store(config, 10, quiet, "node_auto_run", |store| async move {
         Ok(node_api::plan_auto_run_nodes(&store, args.count).await?)
     })
@@ -195,13 +191,13 @@ async fn run_auto_run_command(
 
     let binary = std::env::current_exe()?;
     for node_name in &planned.node_names {
-        let (stdout_log_path, stderr_log_path) = node_process_log_paths(node_name)?;
+        let (stdout_log_path, stderr_log_path) = runtime.node_log_paths(node_name)?;
         let stdout_log = File::create(&stdout_log_path)?;
         let stderr_log = File::create(&stderr_log_path)?;
         let mut command = std::process::Command::new(&binary);
         command
             .arg("--runtime-config")
-            .arg(runtime_config_path)
+            .arg(runtime.runtime_config_path())
             .args(node_api::node_run_cli_args(
                 node_name,
                 args.max_start_failures,
@@ -242,15 +238,6 @@ async fn run_auto_run_command(
         planned.node_names.join(",")
     );
     Ok(())
-}
-
-fn node_process_log_paths(node_name: &str) -> Result<(PathBuf, PathBuf)> {
-    let dir = PathBuf::from("logs").join("nodes");
-    fs::create_dir_all(&dir)?;
-    Ok((
-        dir.join(format!("{node_name}.stdout.log")),
-        dir.join(format!("{node_name}.stderr.log")),
-    ))
 }
 
 async fn stop_nodes(store: &PgStore, selection: NodeSelection) -> Result<()> {

@@ -121,20 +121,12 @@ impl RuntimeConfig {
         )?;
         let mut parsed: Self = toml::from_str(&raw)
             .with_context(|| format!("failed parsing runtime config {}", path.display()))?;
-        let resource_root = primary_resource_root_from_config(&parsed.resources.roots);
-        parsed.local_postgres.data_dir =
-            normalize_config_path(&resource_root, &parsed.local_postgres.data_dir)
-                .display()
-                .to_string();
-        parsed.local_postgres.socket_dir =
-            normalize_config_path(&resource_root, &parsed.local_postgres.socket_dir)
-                .display()
-                .to_string();
-        parsed.local_postgres.log_file =
-            normalize_config_path(&resource_root, &parsed.local_postgres.log_file)
-                .display()
-                .to_string();
+        normalize_local_postgres_paths(&mut parsed.local_postgres, &parsed.resources.roots);
         Ok(parsed)
+    }
+
+    pub fn primary_resource_root(&self) -> PathBuf {
+        primary_resource_root_from_config(&self.resources.roots)
     }
 }
 
@@ -273,4 +265,17 @@ pub fn primary_resource_root_from_config(roots: &[String]) -> PathBuf {
         .find(|root| !root.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("resources"))
+}
+
+pub fn normalize_local_postgres_paths(local_postgres: &mut LocalPostgresConfig, roots: &[String]) {
+    let resource_root = primary_resource_root_from_config(roots);
+    local_postgres.data_dir = normalize_config_path(&resource_root, &local_postgres.data_dir)
+        .display()
+        .to_string();
+    local_postgres.socket_dir = normalize_config_path(&resource_root, &local_postgres.socket_dir)
+        .display()
+        .to_string();
+    local_postgres.log_file = normalize_config_path(&resource_root, &local_postgres.log_file)
+        .display()
+        .to_string();
 }

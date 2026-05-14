@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::fs;
 
 use crate::utils::domain::Domain;
 use crate::{
@@ -6,6 +6,7 @@ use crate::{
     core::AccumulatorConfig,
     evaluation::{AccumulatorState, IngestScalar},
     evaluation::{EvalBatchOptions, Evaluator},
+    runtime_context::evaluator_tmp_dir,
 };
 use serde::{Deserialize, Serialize};
 use symbolica::evaluate::{
@@ -73,13 +74,15 @@ impl SymbolicaEngine {
             .map_err(|err| BuildError::build(err.to_string()))?
             .map_coeff(&|x| x.to_real().unwrap().to_f64());
 
-        let root_artifacts_dir = Path::new("./.evaluators");
-        fs::create_dir_all(root_artifacts_dir)?;
+        let root_artifacts_dir = evaluator_tmp_dir("symbolica").map_err(|err| {
+            BuildError::build(format!("failed to resolve evaluator tmp dir: {err}"))
+        })?;
+        fs::create_dir_all(&root_artifacts_dir)?;
 
         let artifacts_dir = tempfile::Builder::new()
             .prefix("symbolica-eval-")
             .rand_bytes(8)
-            .tempdir_in(root_artifacts_dir)
+            .tempdir_in(&root_artifacts_dir)
             .map_err(|err| BuildError::io(err.to_string()))?;
         let stem = "eval";
         let path = artifacts_dir.path().join(stem);
