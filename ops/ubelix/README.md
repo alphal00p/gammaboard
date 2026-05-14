@@ -9,7 +9,7 @@ Operator guide for the current UBELIX setup. Local sync commands run from your w
 - Deploy: one control/UI Slurm job with Postgres, API, nginx, and frontend
 - Workers: separate Slurm jobs connecting to the control job database
 - Access: one SSH tunnel to the frontend port
-- Resources: relative run/task paths resolve under `${WORKSPACE_ROOT}/resources`; GammaLoop states use `states/...`
+- Resources: UBELIX template paths resolve under `${WORKSPACE_ROOT}/ops/resources`; shared runtime assets still resolve under `${WORKSPACE_ROOT}/resources` (e.g. `states/...`, `runtimes/...`)
 
 ## Sync From Local
 
@@ -84,7 +84,7 @@ max_start_failures = 6
 config = { gpu = "rtx4090:1" }
 ```
 
-submits worker jobs with `--gres=gpu:rtx4090:1 --partition=gpu` and registers `gpu=1` as a worker capability. Select another free-tier GPU type with `config = { gpu = "h100:1" }` when available. The dashboard template root is `resources/templates`, and UBELIX-specific node launch templates are checked in under `ops/ubelix/config/templates/nodes`. Supported `config` keys are `account`, `partition`, `qos`, `wckey`, `reservation`, `gpu`, `gres`, `gpus`, `cpus_per_task`, `mem`, `mem_per_cpu`, `time`, `constraint`, `nodelist`, and `exclude`.
+submits worker jobs with `--gres=gpu:rtx4090:1 --partition=gpu` and registers `gpu=1` as a worker capability. Select another free-tier GPU type with `config = { gpu = "h100:1" }` when available. The dashboard template root is `ops/resources/templates`, and UBELIX-specific node launch templates are checked in under `ops/ubelix/resources/templates/nodes`. Supported `config` keys are `account`, `partition`, `qos`, `wckey`, `reservation`, `gpu`, `gres`, `gpus`, `cpus_per_task`, `mem`, `mem_per_cpu`, `time`, `constraint`, `nodelist`, and `exclude`.
 Omitted group `config` defaults to `{}` and omitted `max_start_failures` defaults to `3`.
 Workers with `gpu > 0` start the GammaBoard image with Apptainer `--nv`, so nested Python Apptainer runtimes can request NVIDIA passthrough with `nv = true`.
 
@@ -105,7 +105,7 @@ Admin-protected commands accept `--admin-password` or `GAMMABOARD_ADMIN_PASSWORD
 
 ```text
 <WORKSPACE_ROOT>/
-  ops/{build,config,slurm}/
+  ops/{build,config,resources,slurm}/
   ubelix.py
   README.md
   artifacts/{bin,npm-cache,sqlx-root,src}/

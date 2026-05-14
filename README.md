@@ -221,7 +221,7 @@ Curated task bundles:
 - `resources/templates/tasks/train_sample.toml`: GammaLoop TTH train+sample queue with queue tuning and inference stop target (`relative_error = 0.001`, `max_samples = 1_000_000_000`).
 
 Curated node launch templates:
-- `resources/templates/nodes/local-two-workers.toml`: two local workers for local/ITPhlies development. UBELIX-specific node templates live under `ops/ubelix/config/templates/nodes`.
+- `resources/templates/nodes/local-two-workers.toml`: two local workers for local/ITPhlies development. UBELIX-specific node templates live under `ops/ubelix/resources/templates/nodes`.
 
 Minimal shape:
 ```toml
