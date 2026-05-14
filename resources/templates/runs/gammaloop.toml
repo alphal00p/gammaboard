@@ -6,7 +6,7 @@ target = { kind = "vector", components = { real = 1.563e-3, imag = 0.0 } }
 [evaluator]
 kind = "gammaloop"
 # Assumes `gammaloop` is a sister folder of `gammaboard`.
-state_folder = "../gammaloop/examples/cli/epem_a_ttxh/LO/state"
+state_folder = "states/epem_a_ttxh/LO/state"
 integrand_name = "LO"
 # In-memory override only (not persisted to state on disk):
 # post_load_commands = ["set process kv kinematics.e_cm=14000.0"]

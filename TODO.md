@@ -5,11 +5,6 @@
 - [ ] right now scattered READMES, come up with better solution for docs, that is also deployable to the gammaloop wiki
 - [ ] discuss with agent what else to change before moving to version 0.2.0 by then we should be confident in api shape and process tasks (we should also add a benchmark for the jsonrpc protocol just to be sure)
 
-1. Fix flickering of toml editors in frontend
-
-2. Add a small protocol benchmark/test
-   Not for premature performance work, but to know whether stdio framing is “obviously fine”. Add one benchmark or ignored e2e that measures `eval_batch` overhead for small/medium/large batches.
-
 3. Decide auth/no-password mode
    The README still assumes an admin password. For UBELIX behind SSH tunnel, a `no auth / trusted local deployment` mode may be simpler. If we add it, do it before `0.2.0` because it affects server config semantics.
 
