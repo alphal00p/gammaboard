@@ -18,13 +18,19 @@ The process speaks `gammaboard-jsonrpc-v1`: JSON-RPC messages framed with
 The process command is explicit in run config:
 
 ```toml
-kind = "process_scalar"
+kind = "process_evaluator"
 command = ["nix", "shell", "path:./process_api/examples/python_scalar_sin#runtime", "-c", "gammaboard-example-evaluator-worker"]
 args = { module = "demo_integrand", class = "SinIntegrand" }
 ```
 
 Gammaboard does not append worker scripts or assume Python. The command must
 start the process that speaks the protocol.
+
+Evaluator workers receive `initialize` once, then batched `eval_batch`
+requests. `eval_batch` returns `values_row_major`; for the current
+single-component accumulator path this is one `f64` per sample. The protocol
+already names observable `components` so vector-valued evaluators can use the
+same row-major response shape once vector accumulators are enabled.
 
 ## Python Wrapper Pattern
 
@@ -40,7 +46,8 @@ Python wrapper shape.
 
 The Python implementation class is intentionally simple:
 
-- evaluators implement `eval(xs_discrete, xs_continuous)`
+- evaluators implement `eval(xs_discrete, xs_continuous)` and return one value
+  per sample for the default single-component observable
 - samplers implement `sample_plan`, `produce_latent_batch`, training hooks, and
   optional `pdf`
 - optional `from_config(...)` and `from_snapshot(...)` constructors receive the

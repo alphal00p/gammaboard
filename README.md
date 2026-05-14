@@ -197,7 +197,7 @@ gammaboard run add resources/templates/runs/gammaloop.toml
 
 Flake-backed process evaluator + sampler example:
 ```bash
-gammaboard run add resources/templates/runs/process-scalar-process-sampler-flake-demo.toml
+gammaboard run add resources/templates/runs/process-evaluator-process-sampler-flake-demo.toml
 ```
 
 Apptainer-backed Rust process evaluator example:
@@ -211,7 +211,7 @@ gammaboard run add resources/templates/runs/process-rust-apptainer-evaluator-dem
 Curated run templates:
 - `resources/templates/runs/ghost_bump.toml`: Symbolica + Havana training on a 2D `(x, y)` domain plus `pdf_adaptation_image` for ghost-bump diagnostics.
 - `resources/templates/runs/symbolica-havana-pdf-1d2d.toml`: Symbolica + Havana training + both PDF adaptation task kinds (`pdf_adaptation_image`, `pdf_adaptation_plot_line`).
-- `resources/templates/runs/process-scalar-process-sampler-flake-demo.toml`: Process evaluator and sampler integration.
+- `resources/templates/runs/process-evaluator-process-sampler-flake-demo.toml`: Process evaluator and sampler integration.
 - `resources/templates/runs/process-rust-apptainer-evaluator-demo.toml`: Apptainer-packaged Rust process evaluator integration.
 - `resources/templates/runs/gammaloop.toml`: GammaLoop TTH evaluator config, including optional `post_load_commands`.
 
@@ -246,13 +246,14 @@ For `evaluator.kind = "gammaloop"`, `continuous_dims` and `discrete_dims` are in
 Gammaboard evaluates GammaLoop runs in x-space so GammaLoop's parameterized observable and histogram path is used.
 `post_load_commands = ["set ...", ...]` is optional and executes in-memory after loading the GammaLoop state and before integrand selection; commands are not saved back to disk.
 
-For `evaluator.kind = "process_scalar"`, configure:
+For `evaluator.kind = "process_evaluator"`, configure:
 - `command`: complete process command, for example `["nix", "shell", "path:./process_api/examples/python_scalar_sin#runtime", "-c", "gammaboard-example-evaluator-worker"]` or `["apptainer", "exec", "--nv", "runtimes/my_runtime/runtime.sif", "python", "-u", "runtimes/my_runtime/evaluator_worker.py"]`
 - `continuous_dims`: expected continuous dimension for homogeneous rectangular batches
 - `discrete_cardinalities`: expected per-axis discrete cardinalities for homogeneous rectangular batches (for example `[3, 4, 2]`)
+- `components`: observable component names; currently exactly one component is supported by the scalar accumulator path and defaults to `["value"]`
 - optional `args = { ... }`: opaque JSON object passed to the process during initialize
 
-Process scalar construction semantics:
+Process evaluator construction semantics:
 - GammaBoard only speaks the process protocol; the bundled Python wrapper uses `args.module` and `args.class` to import a class exposing `eval(xs_discrete, xs_continuous)`.
 - if the Python class defines `from_config(discrete_cardinalities=..., continuous_dims=..., init_args=...)`, that is called with `args` excluding `module` and `class`
 - otherwise the worker calls `ClassName(**args)` (or `ClassName()` when `args` is empty)

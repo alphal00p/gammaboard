@@ -9,6 +9,7 @@ import numpy as np
 integrand = None
 discrete_cardinalities = None
 continuous_dims = None
+components = ["value"]
 protocol_stdout = os.fdopen(os.dup(1), "wb", buffering=0)
 sys.stdout = sys.stderr
 
@@ -105,6 +106,11 @@ while True:
                 raise ValueError("discrete_cardinalities must contain only positive integers")
             discrete_dims = len(discrete_cardinalities)
             continuous_dims = int(params["continuous_dims"])
+            components = [str(value) for value in params.get("components", ["value"])]
+            if len(components) != 1:
+                raise ValueError(
+                    "python_scalar_sin example currently returns exactly one component"
+                )
             if hasattr(cls, "from_config"):
                 integrand = cls.from_config(
                     discrete_cardinalities=discrete_cardinalities,
@@ -139,7 +145,7 @@ while True:
                     f"integrand continuous_dims mismatch: expected {continuous_dims}, got {int(maybe_continuous_dims)}"
                 )
             send_result(req_id, {"ok": True})
-        elif method == "eval_scalar":
+        elif method == "eval_batch":
             if (
                 integrand is None
                 or discrete_cardinalities is None
@@ -176,7 +182,7 @@ while True:
             ys = np.asarray(
                 integrand.eval(xs_discrete, xs_continuous), dtype=np.float64
             ).reshape((nr_samples,))
-            send_result(req_id, {"values": ys.tolist()})
+            send_result(req_id, {"values_row_major": ys.tolist()})
         else:
             raise ValueError(f"unknown method: {method}")
     except Exception as exc:

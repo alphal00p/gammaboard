@@ -6,7 +6,7 @@
 name = "process-rust-apptainer-evaluator-demo"
 
 [evaluator]
-kind = "process_scalar"
+kind = "process_evaluator"
 command = ["apptainer", "exec", "process_api/examples/rust_breit_wigner_evaluator/runtime.sif", "breit-wigner-worker"]
 continuous_dims = 2
 discrete_cardinalities = []

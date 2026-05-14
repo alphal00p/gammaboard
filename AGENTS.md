@@ -20,6 +20,9 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - Run names are human-facing and not unique; ambiguous CLI name references must fail.
 - Node identity is `name` plus live-process `uuid`; desired/current assignments live on `nodes`.
 - Run layout uses `Domain`; concrete evaluator batches are `Vec<Point>`.
+- Process evaluators use `kind = "process_evaluator"` and the
+  `gammaboard-jsonrpc-v1` `eval_batch` method. Responses use
+  `values_row_major`; current accumulators consume the single-component case.
 
 ## Design Rules
 - Keep adapters thin; put reusable behavior in `src/api` or lower layers.

@@ -14,31 +14,44 @@ use crate::process_worker::ProcessWorker;
 use crate::utils::domain::Domain;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ProcessScalarParams {
+pub struct ProcessEvaluatorParams {
     pub command: Vec<String>,
     pub continuous_dims: usize,
     #[serde(default)]
     pub discrete_cardinalities: Vec<usize>,
+    #[serde(default = "default_components")]
+    pub components: Vec<String>,
     #[serde(default = "default_args")]
     pub args: Value,
 }
 
-pub struct ProcessScalarEvaluator {
+pub struct ProcessEvaluator {
     continuous_dims: usize,
     discrete_cardinalities: Vec<usize>,
+    components: Vec<String>,
     worker: ProcessRuntimeWorker,
 }
 
-impl ProcessScalarEvaluator {
-    pub fn from_params(params: ProcessScalarParams) -> Result<Self, BuildError> {
+impl ProcessEvaluator {
+    pub fn from_params(params: ProcessEvaluatorParams) -> Result<Self, BuildError> {
         if params.command.is_empty() {
             return Err(BuildError::build(
-                "process_scalar command must not be empty",
+                "process_evaluator command must not be empty",
             ));
         }
         if !params.args.is_object() {
             return Err(BuildError::build(
-                "process_scalar args must be a TOML table / JSON object",
+                "process_evaluator args must be a TOML table / JSON object",
+            ));
+        }
+        if params.components.is_empty() {
+            return Err(BuildError::build(
+                "process_evaluator components must not be empty",
+            ));
+        }
+        if params.components.len() != 1 {
+            return Err(BuildError::build(
+                "process_evaluator currently supports exactly one component until vector accumulators are enabled",
             ));
         }
         if params
@@ -47,18 +60,20 @@ impl ProcessScalarEvaluator {
             .any(|value| *value == 0)
         {
             return Err(BuildError::build(
-                "process_scalar discrete_cardinalities must contain only positive integers",
+                "process_evaluator discrete_cardinalities must contain only positive integers",
             ));
         }
         let worker = ProcessRuntimeWorker::spawn(
             &params.command,
             &params.discrete_cardinalities,
             params.continuous_dims,
+            &params.components,
             params.args,
         )?;
         Ok(Self {
             continuous_dims: params.continuous_dims,
             discrete_cardinalities: params.discrete_cardinalities,
+            components: params.components,
             worker,
         })
     }
@@ -71,14 +86,14 @@ impl ProcessScalarEvaluator {
             AccumulatorState::Scalar(accumulator) => Ok(accumulator),
             AccumulatorState::FullScalar(accumulator) => Ok(accumulator),
             other => Err(EvalError::eval(format!(
-                "process_scalar evaluator does not support accumulator kind {}",
+                "process_evaluator does not support accumulator kind {}",
                 other.kind_str()
             ))),
         }
     }
 }
 
-impl ScalarBatchEvaluator for ProcessScalarEvaluator {
+impl ScalarBatchEvaluator for ProcessEvaluator {
     fn discrete_dims(&self) -> usize {
         self.discrete_cardinalities.len()
     }
@@ -93,12 +108,19 @@ impl ScalarBatchEvaluator for ProcessScalarEvaluator {
         xs_continuous_row_major: &[f64],
         nr_samples: usize,
     ) -> Result<Vec<f64>, EvalError> {
-        self.worker
-            .eval_scalar(xs_discrete_row_major, xs_continuous_row_major, nr_samples)
+        let values =
+            self.worker
+                .eval_batch(xs_discrete_row_major, xs_continuous_row_major, nr_samples)?;
+        if self.components.len() != 1 {
+            return Err(EvalError::eval(
+                "process_evaluator scalar accumulator path requires exactly one component",
+            ));
+        }
+        Ok(values)
     }
 }
 
-impl Evaluator for ProcessScalarEvaluator {
+impl Evaluator for ProcessEvaluator {
     fn get_domain(&self) -> Domain {
         Domain::rectangular_with_cardinalities(
             self.continuous_dims,
@@ -126,6 +148,7 @@ struct ProcessRuntimeWorker {
     process: ProcessWorker,
     discrete_cardinalities: Vec<usize>,
     continuous_dims: usize,
+    components: Vec<String>,
 }
 
 impl ProcessRuntimeWorker {
@@ -133,6 +156,7 @@ impl ProcessRuntimeWorker {
         command: &[String],
         discrete_cardinalities: &[usize],
         continuous_dims: usize,
+        components: &[String],
         args: Value,
     ) -> Result<Self, BuildError> {
         let mut command = build_process_worker_command(command, "evaluator")?;
@@ -163,8 +187,9 @@ impl ProcessRuntimeWorker {
             process: ProcessWorker::new("process evaluator", child, stdin, stdout),
             discrete_cardinalities: discrete_cardinalities.to_vec(),
             continuous_dims,
+            components: components.to_vec(),
         };
-        worker.send_init(discrete_cardinalities, continuous_dims, args)?;
+        worker.send_init(discrete_cardinalities, continuous_dims, components, args)?;
         Ok(worker)
     }
 
@@ -172,6 +197,7 @@ impl ProcessRuntimeWorker {
         &mut self,
         discrete_cardinalities: &[usize],
         continuous_dims: usize,
+        components: &[String],
         args: Value,
     ) -> Result<(), BuildError> {
         let response = self
@@ -181,6 +207,10 @@ impl ProcessRuntimeWorker {
                 serde_json::json!({
                     "protocol": "gammaboard-jsonrpc-v1",
                     "role": "evaluator",
+                    "components": components,
+                    "observable": {
+                        "components": components,
+                    },
                     "domain": {
                         "continuous_dims": continuous_dims,
                         "discrete_cardinalities": discrete_cardinalities,
@@ -194,7 +224,7 @@ impl ProcessRuntimeWorker {
         Self::expect_ack(response).map_err(BuildError::build)
     }
 
-    fn eval_scalar(
+    fn eval_batch(
         &mut self,
         xs_discrete_row_major: &[i64],
         xs_continuous_row_major: &[f64],
@@ -203,24 +233,26 @@ impl ProcessRuntimeWorker {
         let response = self
             .process
             .request(
-                "eval_scalar",
+                "eval_batch",
                 serde_json::json!({
                     "nr_samples": nr_samples,
                     "discrete_cardinalities": self.discrete_cardinalities,
                     "continuous_dims": self.continuous_dims,
+                    "components": self.components,
                     "xs_discrete_row_major": xs_discrete_row_major,
                     "xs_continuous_row_major": xs_continuous_row_major,
                 }),
             )
             .map_err(EvalError::eval)?;
         let values = response
-            .get("values")
+            .get("values_row_major")
             .and_then(Value::as_array)
-            .ok_or_else(|| EvalError::eval("process worker response missing 'values'"))?;
-        if values.len() != nr_samples {
+            .ok_or_else(|| EvalError::eval("process worker response missing 'values_row_major'"))?;
+        let expected_len = nr_samples.saturating_mul(self.components.len());
+        if values.len() != expected_len {
             return Err(EvalError::eval(format!(
                 "process evaluator output size mismatch: expected {}, got {}",
-                nr_samples,
+                expected_len,
                 values.len()
             )));
         }
@@ -249,6 +281,10 @@ fn default_args() -> Value {
     Value::Object(serde_json::Map::new())
 }
 
+fn default_components() -> Vec<String> {
+    vec!["value".to_string()]
+}
+
 fn pipe_child_stderr(label: &'static str, stderr: impl std::io::Read + Send + 'static) {
     std::thread::spawn(move || {
         let reader = std::io::BufReader::new(stderr);
@@ -263,11 +299,11 @@ fn pipe_child_stderr(label: &'static str, stderr: impl std::io::Read + Send + 's
 
 #[cfg(test)]
 mod tests {
-    use super::ProcessScalarParams;
+    use super::ProcessEvaluatorParams;
 
     #[test]
-    fn process_scalar_deserializes_command_and_args() {
-        let params = toml::from_str::<ProcessScalarParams>(
+    fn process_evaluator_deserializes_command_and_args() {
+        let params = toml::from_str::<ProcessEvaluatorParams>(
             r#"
 command = ["python", "-u", "worker.py"]
 continuous_dims = 2
@@ -280,6 +316,7 @@ args = { module = "my_module", class = "MyEvaluator", scale = 1.0 }
         assert_eq!(params.command, ["python", "-u", "worker.py"]);
         assert_eq!(params.continuous_dims, 2);
         assert_eq!(params.discrete_cardinalities, [2, 3]);
+        assert_eq!(params.components, ["value"]);
         assert!(params.args.is_object());
     }
 }

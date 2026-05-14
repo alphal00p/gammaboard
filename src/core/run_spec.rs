@@ -1,5 +1,5 @@
 use crate::evaluation::{
-    GammaLoopParams, ProcessScalarParams, SymbolicaParams, UnitEvaluatorParams,
+    GammaLoopParams, ProcessEvaluatorParams, SymbolicaParams, UnitEvaluatorParams,
 };
 use crate::utils::domain::Domain;
 
@@ -349,9 +349,9 @@ pub enum EvaluatorConfig {
         #[serde(flatten)]
         params: SymbolicaParams,
     },
-    ProcessScalar {
+    ProcessEvaluator {
         #[serde(flatten)]
-        params: ProcessScalarParams,
+        params: ProcessEvaluatorParams,
     },
 }
 

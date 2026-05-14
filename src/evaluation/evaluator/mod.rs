@@ -12,11 +12,11 @@ use crate::evaluation::{AccumulatorState, Evaluator, SemanticAccumulatorKind};
 use crate::utils::domain::Domain;
 
 use self::gammaloop::GammaLoopEvaluator;
-use self::process::ProcessScalarEvaluator;
+use self::process::ProcessEvaluator;
 use self::symbolica::SymbolicaEngine;
 use self::unit::UnitEvaluator;
 pub use gammaloop::GammaLoopParams;
-pub use process::ProcessScalarParams;
+pub use process::ProcessEvaluatorParams;
 pub use symbolica::SymbolicaParams;
 pub use unit::UnitEvaluatorParams;
 
@@ -26,7 +26,7 @@ impl EvaluatorConfig {
             Self::Gammaloop { .. } => "gammaloop",
             Self::Unit { .. } => "unit",
             Self::Symbolica { .. } => "symbolica",
-            Self::ProcessScalar { .. } => "process_scalar",
+            Self::ProcessEvaluator { .. } => "process_evaluator",
         }
     }
 
@@ -39,9 +39,9 @@ impl EvaluatorConfig {
             Self::Symbolica { params } => {
                 Ok(Box::new(SymbolicaEngine::from_params(params.clone())?))
             }
-            Self::ProcessScalar { params } => Ok(Box::new(ProcessScalarEvaluator::from_params(
-                params.clone(),
-            )?)),
+            Self::ProcessEvaluator { params } => {
+                Ok(Box::new(ProcessEvaluator::from_params(params.clone())?))
+            }
         }
     }
 
@@ -55,7 +55,7 @@ impl EvaluatorConfig {
                 params.discrete_dims,
             )),
             Self::Symbolica { params } => Ok(Domain::continuous(params.args.len())),
-            Self::ProcessScalar { params } => Ok(Domain::rectangular_with_cardinalities(
+            Self::ProcessEvaluator { params } => Ok(Domain::rectangular_with_cardinalities(
                 params.continuous_dims,
                 params.discrete_cardinalities.clone(),
             )),
@@ -71,11 +71,13 @@ impl EvaluatorConfig {
         }
 
         match self {
-            Self::ProcessScalar { .. } | Self::Symbolica { .. } => validate_semantic_accumulator(
-                self.kind_str(),
-                config,
-                SemanticAccumulatorKind::Scalar,
-            ),
+            Self::ProcessEvaluator { .. } | Self::Symbolica { .. } => {
+                validate_semantic_accumulator(
+                    self.kind_str(),
+                    config,
+                    SemanticAccumulatorKind::Scalar,
+                )
+            }
             Self::Unit { params } => {
                 validate_semantic_accumulator(self.kind_str(), config, params.accumulator_kind)
             }

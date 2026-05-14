@@ -17,12 +17,14 @@ pub struct InitializeParams {
     pub role: String,
     #[serde(default)]
     pub args: Value,
+    #[serde(default)]
+    pub components: Vec<String>,
     pub discrete_cardinalities: Vec<usize>,
     pub continuous_dims: usize,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct EvalScalarParams {
+pub struct EvalBatchParams {
     pub nr_samples: usize,
     pub xs_discrete_row_major: Vec<i64>,
     pub xs_continuous_row_major: Vec<f64>,

@@ -1463,7 +1463,7 @@ async fn full_stack_cli_python_scalar_flake_e2e() -> anyhow::Result<()> {
 name = "python-scalar-flake-e2e"
 
 [evaluator]
-kind = "process_scalar"
+kind = "process_evaluator"
 command = ["nix", "shell", "{evaluator_flake_ref}", "-c", "gammaboard-example-evaluator-worker"]
 continuous_dims = 2
 discrete_cardinalities = [2, 3]
@@ -1612,7 +1612,7 @@ async fn full_stack_cli_rust_apptainer_process_evaluator_e2e() -> anyhow::Result
 name = "rust-apptainer-process-evaluator-e2e"
 
 [evaluator]
-kind = "process_scalar"
+kind = "process_evaluator"
 command = ["apptainer", "exec", "{}", "breit-wigner-worker"]
 continuous_dims = 2
 discrete_cardinalities = []

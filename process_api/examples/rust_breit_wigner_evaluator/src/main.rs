@@ -2,7 +2,7 @@ mod evaluator;
 mod protocol;
 
 use evaluator::BreitWignerEvaluator;
-use protocol::{read_request, send_error, send_result, EvalScalarParams, InitializeParams};
+use protocol::{read_request, send_error, send_result, EvalBatchParams, InitializeParams};
 
 fn main() {
     let mut evaluator: Option<BreitWignerEvaluator> = None;
@@ -33,6 +33,12 @@ fn main() {
                             format!("expected evaluator role, got {}", params.role),
                         )));
                     }
+                    if params.components.len() > 1 {
+                        return Err(serde_json::Error::io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "rust_breit_wigner_evaluator example returns exactly one component",
+                        )));
+                    }
                     evaluator = Some(
                         BreitWignerEvaluator::from_args(
                             &params.args,
@@ -52,8 +58,8 @@ fn main() {
                     Err(error) => Err(error.to_string()),
                 }
             }
-            "eval_scalar" => {
-                let params: Result<EvalScalarParams, _> = serde_json::from_value(request.params);
+            "eval_batch" => {
+                let params: Result<EvalBatchParams, _> = serde_json::from_value(request.params);
                 match (evaluator.as_ref(), params) {
                     (None, _) => Err("worker not initialized".to_string()),
                     (Some(evaluator), Ok(params)) => evaluator
@@ -62,7 +68,7 @@ fn main() {
                             &params.xs_continuous_row_major,
                             params.nr_samples,
                         )
-                        .map(|values| serde_json::json!({ "values": values })),
+                        .map(|values| serde_json::json!({ "values_row_major": values })),
                     (_, Err(error)) => Err(error.to_string()),
                 }
             }
