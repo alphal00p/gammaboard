@@ -1,9 +1,7 @@
+use super::{Batch, BatchResult, IngestScalar, Point};
 use crate::core::{AccumulatorConfig, BuildError, EngineError, EvalError};
-use crate::utils::domain::Domain;
-use num::complex::Complex64;
-
-use super::{Batch, BatchResult, IngestComplex, IngestScalar, Point};
 use crate::sampling::LatentBatch;
+use crate::utils::domain::Domain;
 
 #[derive(Debug, Clone, Copy)]
 pub struct EvalBatchOptions {
@@ -68,33 +66,6 @@ pub trait ScalarValueEvaluator {
 }
 
 impl<T> ScalarValueEvaluator for T {}
-
-pub trait ComplexValueEvaluator {
-    fn ingest_complex_values<O: IngestComplex + ?Sized>(
-        &self,
-        values: &[Complex64],
-        points: &[Point],
-        require_training_values: bool,
-        accumulator: &mut O,
-        training_projection: impl Fn(Complex64) -> f64,
-    ) -> Result<Option<Vec<f64>>, EvalError> {
-        if values.len() != points.len() {
-            return Err(EvalError::eval(format!(
-                "cannot ingest complex values: values length {} does not match points length {}",
-                values.len(),
-                points.len()
-            )));
-        }
-        let mut training_values = require_training_values.then(|| Vec::with_capacity(values.len()));
-        for (value, point) in values.iter().zip(points.iter()) {
-            accumulator.ingest_complex(*value, point);
-            if let Some(training_values) = training_values.as_mut() {
-                training_values.push(training_projection(*value) * point.total_weight());
-            }
-        }
-        Ok(training_values)
-    }
-}
 
 fn dense_rectangular_inputs(
     batch: &Batch,
@@ -163,8 +134,6 @@ pub trait ScalarBatchEvaluator: ScalarValueEvaluator {
         )
     }
 }
-
-impl<T> ComplexValueEvaluator for T {}
 
 pub trait Materializer: Send {
     fn validate_domain(&self, _domain: &Domain) -> Result<(), BuildError> {

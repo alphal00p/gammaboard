@@ -92,7 +92,7 @@ impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
                     "Accumulator Kind",
                     match accumulator_kind {
                         crate::evaluation::SemanticAccumulatorKind::Scalar => "scalar",
-                        crate::evaluation::SemanticAccumulatorKind::Complex => "complex",
+                        crate::evaluation::SemanticAccumulatorKind::Vector => "vector",
                     },
                 ),
             );

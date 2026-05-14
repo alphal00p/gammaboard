@@ -373,6 +373,16 @@ fn target_summary(target: Option<&JsonValue>) -> String {
                 .map(|value| format!("scalar({value})"))
                 .unwrap_or_else(|| "scalar".to_string())
         }
+        Some(JsonValue::Object(value))
+            if value.get("kind").and_then(JsonValue::as_str) == Some("vector") =>
+        {
+            value
+                .get("components")
+                .or_else(|| value.get("values"))
+                .map(JsonValue::to_string)
+                .map(|value| format!("vector({value})"))
+                .unwrap_or_else(|| "vector".to_string())
+        }
         Some(value) => serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string()),
     }
 }

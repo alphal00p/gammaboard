@@ -17,9 +17,7 @@ use serde_json::Value as JsonValue;
 
 pub use self::discrete_bins::{ScalarDiscreteBinStats, discrete_bin_key};
 pub use self::empty::EmptyAccumulatorState;
-pub use self::full::{
-    ComplexValue, FullAccumulatorProgress, FullComplexAccumulatorState, FullScalarAccumulatorState,
-};
+pub use self::full::{FullAccumulatorProgress, FullVectorAccumulatorState};
 pub use self::gammaloop::{
     GammaLoopAccumulatorDigest, GammaLoopAccumulatorState, GammaLoopDiagnostics,
 };
@@ -89,8 +87,7 @@ pub enum AccumulatorState {
     Scalar(ScalarAccumulatorState),
     Vector(VectorAccumulatorState),
     Gammaloop(GammaLoopAccumulatorState),
-    FullScalar(FullScalarAccumulatorState),
-    FullComplex(FullComplexAccumulatorState),
+    FullVector(FullVectorAccumulatorState),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -98,14 +95,14 @@ pub enum AccumulatorState {
 pub enum SemanticAccumulatorKind {
     #[default]
     Scalar,
-    Complex,
+    Vector,
 }
 
 impl SemanticAccumulatorKind {
     pub fn aggregate_accumulator_config(self) -> AccumulatorConfig {
         match self {
             Self::Scalar => AccumulatorConfig::scalar(),
-            Self::Complex => AccumulatorConfig::vector(
+            Self::Vector => AccumulatorConfig::vector(
                 vec!["real".to_string(), "imag".to_string()],
                 crate::core::TrainingProjection::AbsComplex {
                     real: "real".to_string(),
@@ -117,8 +114,12 @@ impl SemanticAccumulatorKind {
 
     pub fn full_accumulator_config(self) -> AccumulatorConfig {
         match self {
-            Self::Scalar => AccumulatorConfig::FullScalar,
-            Self::Complex => AccumulatorConfig::FullComplex,
+            Self::Scalar => AccumulatorConfig::FullVector {
+                components: vec!["value".to_string()],
+            },
+            Self::Vector => AccumulatorConfig::FullVector {
+                components: vec!["real".to_string(), "imag".to_string()],
+            },
         }
     }
 }
@@ -136,7 +137,7 @@ impl AccumulatorState {
                         "invalid scalar persistent accumulator payload: {err}"
                     ))
                 }),
-            SemanticAccumulatorKind::Complex => serde_json::from_value(value.clone())
+            SemanticAccumulatorKind::Vector => serde_json::from_value(value.clone())
                 .map(Self::Vector)
                 .map_err(|err| {
                     EngineError::build(format!(
@@ -184,8 +185,9 @@ impl AccumulatorState {
                 discrete_histograms.clone(),
             )),
             AccumulatorConfig::Gammaloop => Self::empty_gammaloop(),
-            AccumulatorConfig::FullScalar => Self::empty_full_scalar(),
-            AccumulatorConfig::FullComplex => Self::empty_full_complex(),
+            AccumulatorConfig::FullVector { components } => Self::FullVector(
+                FullVectorAccumulatorState::from_components(components.clone()),
+            ),
         }
     }
 
@@ -209,22 +211,13 @@ impl AccumulatorState {
         Self::Gammaloop(GammaLoopAccumulatorState::default())
     }
 
-    pub fn empty_full_scalar() -> Self {
-        Self::FullScalar(FullScalarAccumulatorState::default())
-    }
-
-    pub fn empty_full_complex() -> Self {
-        Self::FullComplex(FullComplexAccumulatorState::default())
-    }
-
     pub fn kind_str(&self) -> &'static str {
         match self {
             Self::Empty(_) => "empty",
             Self::Scalar(_) => "scalar",
             Self::Vector(_) => "vector",
             Self::Gammaloop(_) => "gammaloop",
-            Self::FullScalar(_) => "full_scalar",
-            Self::FullComplex(_) => "full_complex",
+            Self::FullVector(_) => "full_vector",
         }
     }
 
@@ -247,8 +240,9 @@ impl AccumulatorState {
                     .and_then(|component| component.state.discrete_histograms.clone()),
             },
             Self::Gammaloop(_) => AccumulatorConfig::Gammaloop,
-            Self::FullScalar(_) => AccumulatorConfig::FullScalar,
-            Self::FullComplex(_) => AccumulatorConfig::FullComplex,
+            Self::FullVector(state) => AccumulatorConfig::FullVector {
+                components: state.components.clone(),
+            },
         }
     }
 
@@ -267,11 +261,7 @@ impl AccumulatorState {
                 Ok(())
             }
             (Self::Gammaloop(left), Self::Gammaloop(right)) => left.merge_in_place(right),
-            (Self::FullScalar(left), Self::FullScalar(right)) => {
-                Accumulator::merge(left, right);
-                Ok(())
-            }
-            (Self::FullComplex(left), Self::FullComplex(right)) => {
+            (Self::FullVector(left), Self::FullVector(right)) => {
                 Accumulator::merge(left, right);
                 Ok(())
             }
@@ -289,8 +279,7 @@ impl AccumulatorState {
             Self::Scalar(accumulator) => accumulator.sample_count(),
             Self::Vector(accumulator) => accumulator.sample_count(),
             Self::Gammaloop(accumulator) => accumulator.sample_count(),
-            Self::FullScalar(accumulator) => accumulator.sample_count(),
-            Self::FullComplex(accumulator) => accumulator.sample_count(),
+            Self::FullVector(accumulator) => accumulator.sample_count(),
         }
     }
 
@@ -300,7 +289,7 @@ impl AccumulatorState {
             Self::Scalar(accumulator) => accumulator.signal_to_noise(),
             Self::Vector(accumulator) => accumulator.signal_to_noise(),
             Self::Gammaloop(accumulator) => accumulator.signal_to_noise(),
-            Self::FullScalar(_) | Self::FullComplex(_) => 0.0,
+            Self::FullVector(_) => 0.0,
         }
     }
 
@@ -320,8 +309,7 @@ impl AccumulatorState {
             Self::Scalar(accumulator) => accumulator.to_persistent_json(),
             Self::Vector(accumulator) => accumulator.to_persistent_json(),
             Self::Gammaloop(accumulator) => accumulator.to_persistent_json(),
-            Self::FullScalar(accumulator) => accumulator.to_persistent_json(),
-            Self::FullComplex(accumulator) => accumulator.to_persistent_json(),
+            Self::FullVector(accumulator) => accumulator.to_persistent_json(),
         }
     }
 
@@ -331,8 +319,7 @@ impl AccumulatorState {
             Self::Scalar(accumulator) => accumulator.to_digest_json(run_spec),
             Self::Vector(accumulator) => accumulator.to_digest_json(run_spec),
             Self::Gammaloop(accumulator) => accumulator.to_digest_json(run_spec),
-            Self::FullScalar(accumulator) => accumulator.to_digest_json(run_spec),
-            Self::FullComplex(accumulator) => accumulator.to_digest_json(run_spec),
+            Self::FullVector(accumulator) => accumulator.to_digest_json(run_spec),
         }
     }
 }

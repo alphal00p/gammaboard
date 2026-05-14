@@ -150,7 +150,7 @@ impl Evaluator for SymbolicaEngine {
         let scalar_accumulator: &mut dyn IngestScalar = match &mut observable_state {
             AccumulatorState::Empty(accumulator) => accumulator,
             AccumulatorState::Scalar(accumulator) => accumulator,
-            AccumulatorState::FullScalar(accumulator) => accumulator,
+            AccumulatorState::FullVector(accumulator) => accumulator,
             other => {
                 return Err(EvalError::eval(format!(
                     "symbolica evaluator does not support accumulator kind {}",

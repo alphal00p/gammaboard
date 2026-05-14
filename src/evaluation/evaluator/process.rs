@@ -86,12 +86,6 @@ impl Evaluator for ProcessEvaluator {
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
         let mut observable_state = AccumulatorState::from_config(accumulator);
-        let AccumulatorState::Vector(vector_state) = &mut observable_state else {
-            return Err(EvalError::eval(format!(
-                "process_evaluator requires vector accumulator config, got {}",
-                observable_state.kind_str()
-            )));
-        };
         let (xs_discrete, xs_continuous) = dense_rectangular_inputs(
             batch,
             self.discrete_cardinalities.len(),
@@ -103,14 +97,37 @@ impl Evaluator for ProcessEvaluator {
         let mut training_values = options
             .require_training_values
             .then(|| Vec::with_capacity(batch.size()));
-        for (sample_idx, point) in batch.points().iter().enumerate() {
-            let start = sample_idx * self.components.len();
-            let end = start + self.components.len();
-            let projected = vector_state
-                .ingest_vector(&values[start..end], point)
-                .map_err(EvalError::eval)?;
-            if let Some(training_values) = training_values.as_mut() {
-                training_values.push(projected * point.total_weight());
+        match &mut observable_state {
+            AccumulatorState::Vector(vector_state) => {
+                for (sample_idx, point) in batch.points().iter().enumerate() {
+                    let start = sample_idx * self.components.len();
+                    let end = start + self.components.len();
+                    let projected = vector_state
+                        .ingest_vector(&values[start..end], point)
+                        .map_err(EvalError::eval)?;
+                    if let Some(training_values) = training_values.as_mut() {
+                        training_values.push(projected * point.total_weight());
+                    }
+                }
+            }
+            AccumulatorState::FullVector(full_state) => {
+                for (sample_idx, point) in batch.points().iter().enumerate() {
+                    let start = sample_idx * self.components.len();
+                    let end = start + self.components.len();
+                    let weight = point.total_weight().abs();
+                    let weighted = values[start..end]
+                        .iter()
+                        .map(|value| value * weight)
+                        .collect::<Vec<_>>();
+                    full_state.push_vector(&weighted);
+                }
+                training_values = None;
+            }
+            other => {
+                return Err(EvalError::eval(format!(
+                    "process_evaluator requires vector or full_vector accumulator config, got {}",
+                    other.kind_str()
+                )));
             }
         }
         Ok(BatchResult::new(training_values, observable_state))

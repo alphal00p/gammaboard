@@ -154,7 +154,8 @@ fn real_estimate_history_projector(accumulator_config: &AccumulatorConfig) -> Ta
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
-            let target = run_target_from_json(ctx.run_target).map(|target| target.re);
+            let target = run_target_from_json(ctx.run_target)
+                .and_then(|target| target.component(&["real", "value"]));
             Ok(sample_accumulator(ctx, &current_config)?
                 .and_then(|accumulator| Some(real_estimate_history_panel(accumulator)))
                 .map(|panel| with_scalar_target(panel, target)))
@@ -181,7 +182,8 @@ fn imag_estimate_history_projector(accumulator_config: &AccumulatorConfig) -> Ta
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
-            let target = run_target_from_json(ctx.run_target).map(|target| target.im);
+            let target =
+                run_target_from_json(ctx.run_target).and_then(|target| target.component(&["imag"]));
             Ok(sample_accumulator(ctx, &current_config)?
                 .and_then(imag_estimate_history_panel)
                 .map(|panel| with_scalar_target(panel, target)))
@@ -397,12 +399,13 @@ fn accumulator_matches_requested_config(
         AccumulatorConfig::Empty => matches!(accumulator, AccumulatorState::Empty(_)),
         AccumulatorConfig::Scalar { .. } => matches!(
             accumulator,
-            AccumulatorState::Scalar(_) | AccumulatorState::FullScalar(_)
+            AccumulatorState::Scalar(_) | AccumulatorState::FullVector(_)
         ),
         AccumulatorConfig::Vector { .. } => matches!(accumulator, AccumulatorState::Vector(_)),
         AccumulatorConfig::Gammaloop => matches!(accumulator, AccumulatorState::Gammaloop(_)),
-        AccumulatorConfig::FullScalar => matches!(accumulator, AccumulatorState::FullScalar(_)),
-        AccumulatorConfig::FullComplex => matches!(accumulator, AccumulatorState::FullComplex(_)),
+        AccumulatorConfig::FullVector { .. } => {
+            matches!(accumulator, AccumulatorState::FullVector(_))
+        }
     }
 }
 
@@ -430,12 +433,10 @@ fn decode_aggregate_persisted_accumulator(
             AccumulatorState::from_vector_persistent_json(persisted)
         }
         AccumulatorConfig::Gammaloop => AccumulatorState::from_gammaloop_persistent_json(persisted),
-        AccumulatorConfig::FullScalar | AccumulatorConfig::FullComplex => {
-            Err(EngineError::build(format!(
-                "sample task expected aggregate accumulator, got {}",
-                config_label(config)
-            )))
-        }
+        AccumulatorConfig::FullVector { .. } => Err(EngineError::build(format!(
+            "sample task expected aggregate accumulator, got {}",
+            config_label(config)
+        ))),
     }
 }
 
@@ -445,7 +446,7 @@ fn estimate_label(accumulator_config: &AccumulatorConfig) -> &'static str {
         AccumulatorConfig::Scalar { .. } => "Mean",
         AccumulatorConfig::Vector { .. } => "Projection Mean",
         AccumulatorConfig::Gammaloop => "Real Mean",
-        AccumulatorConfig::FullScalar | AccumulatorConfig::FullComplex => "Estimate",
+        AccumulatorConfig::FullVector { .. } => "Estimate",
     }
 }
 
@@ -455,8 +456,7 @@ fn config_label(config: &AccumulatorConfig) -> &'static str {
         AccumulatorConfig::Scalar { .. } => "scalar",
         AccumulatorConfig::Vector { .. } => "vector",
         AccumulatorConfig::Gammaloop => "gammaloop",
-        AccumulatorConfig::FullScalar => "full_scalar",
-        AccumulatorConfig::FullComplex => "full_complex",
+        AccumulatorConfig::FullVector { .. } => "full_vector",
     }
 }
 
@@ -548,7 +548,7 @@ fn rsd_history_panel(accumulator: AccumulatorState) -> PanelState {
 
 fn estimate_summary_panel(
     accumulator: AccumulatorState,
-    run_target: Option<RunTarget>,
+    run_target: Option<VectorTarget>,
 ) -> PanelState {
     key_value_panel(
         "estimate_summary",
@@ -764,7 +764,7 @@ fn format_point(point: Option<&Point>) -> String {
 
 fn base_estimate_summary_entries(
     accumulator: &AccumulatorState,
-    run_target: Option<RunTarget>,
+    run_target: Option<VectorTarget>,
 ) -> Vec<crate::server::panels::KeyValueEntry> {
     match accumulator {
         AccumulatorState::Empty(_) => vec![key_value("count", "Count", 0)],
@@ -837,30 +837,34 @@ fn base_estimate_summary_entries(
                 ),
             ];
             if let Some(target) = run_target {
-                entries.push(key_value(
-                    "target_comparison_real",
-                    "Real vs Target",
-                    json!({
-                        "kind":"target_comparison",
-                        "value": state.real_mean(),
-                        "error": state.real_stderr(),
-                        "target": target.re,
-                        "delta_percent": delta_percent(state.real_mean(), target.re),
-                        "delta_sigma": delta_sigma(state.real_mean(), state.real_stderr(), target.re),
-                    }),
-                ));
-                entries.push(key_value(
-                    "target_comparison_imag",
-                    "Imag vs Target",
-                    json!({
-                        "kind":"target_comparison",
-                        "value": state.imag_mean(),
-                        "error": state.imag_stderr(),
-                        "target": target.im,
-                        "delta_percent": delta_percent(state.imag_mean(), target.im),
-                        "delta_sigma": delta_sigma(state.imag_mean(), state.imag_stderr(), target.im),
-                    }),
-                ));
+                if let Some(real_target) = target.component(&["real", "value"]) {
+                    entries.push(key_value(
+                        "target_comparison_real",
+                        "Real vs Target",
+                        json!({
+                            "kind":"target_comparison",
+                            "value": state.real_mean(),
+                            "error": state.real_stderr(),
+                            "target": real_target,
+                            "delta_percent": delta_percent(state.real_mean(), real_target),
+                            "delta_sigma": delta_sigma(state.real_mean(), state.real_stderr(), real_target),
+                        }),
+                    ));
+                }
+                if let Some(imag_target) = target.component(&["imag"]) {
+                    entries.push(key_value(
+                        "target_comparison_imag",
+                        "Imag vs Target",
+                        json!({
+                            "kind":"target_comparison",
+                            "value": state.imag_mean(),
+                            "error": state.imag_stderr(),
+                            "target": imag_target,
+                            "delta_percent": delta_percent(state.imag_mean(), imag_target),
+                            "delta_sigma": delta_sigma(state.imag_mean(), state.imag_stderr(), imag_target),
+                        }),
+                    ));
+                }
             }
             entries.push(key_value(
                 "abs_mean",
@@ -869,51 +873,35 @@ fn base_estimate_summary_entries(
             ));
             entries
         }
-        AccumulatorState::FullScalar(state) => vec![
-            key_value("count", "Count", state.values.len()),
-            key_value(
-                "min",
-                "Min",
-                state.values.iter().copied().fold(f64::INFINITY, f64::min),
-            ),
-            key_value(
-                "max",
-                "Max",
-                state
-                    .values
-                    .iter()
-                    .copied()
-                    .fold(f64::NEG_INFINITY, f64::max),
-            ),
-        ],
-        AccumulatorState::FullComplex(state) => vec![
-            key_value("count", "Count", state.values.len()),
-            key_value(
-                "max_abs",
-                "Max |z|",
-                state
-                    .values
-                    .iter()
-                    .map(|value| (value.re * value.re + value.im * value.im).sqrt())
-                    .fold(0.0, f64::max),
-            ),
-        ],
+        AccumulatorState::FullVector(state) => {
+            let mut entries = vec![key_value("count", "Count", state.sample_count())];
+            for component in &state.components {
+                let values = state.component_values(component).unwrap_or_default();
+                entries.push(key_value(
+                    &format!("{component}_min"),
+                    &format!("{component} Min"),
+                    values.iter().copied().fold(f64::INFINITY, f64::min),
+                ));
+                entries.push(key_value(
+                    &format!("{component}_max"),
+                    &format!("{component} Max"),
+                    values.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                ));
+            }
+            entries
+        }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct RunTarget {
-    re: f64,
-    im: f64,
+#[derive(Debug, Clone)]
+struct VectorTarget {
+    components: BTreeMap<String, f64>,
 }
 
-fn run_target_from_json(run_target: Option<&JsonValue>) -> Option<RunTarget> {
+fn run_target_from_json(run_target: Option<&JsonValue>) -> Option<VectorTarget> {
     let value = run_target?;
     if let Some(scalar) = value.as_f64() {
-        return Some(RunTarget {
-            re: scalar,
-            im: 0.0,
-        });
+        return Some(VectorTarget::single("value", scalar));
     }
     let object = value.as_object()?;
     let kind = object
@@ -923,25 +911,31 @@ fn run_target_from_json(run_target: Option<&JsonValue>) -> Option<RunTarget> {
         .map(|value| value.to_ascii_lowercase());
     if matches!(kind.as_deref(), Some("scalar") | Some("value")) {
         let scalar = object.get("value").and_then(JsonValue::as_f64)?;
-        return Some(RunTarget {
-            re: scalar,
-            im: 0.0,
-        });
+        return Some(VectorTarget::single("value", scalar));
     }
     let source = object
-        .get("value")
-        .and_then(JsonValue::as_object)
-        .unwrap_or(object);
-    let re = source
-        .get("re")
-        .or_else(|| source.get("real"))
-        .and_then(JsonValue::as_f64)?;
-    let im = source
-        .get("im")
-        .or_else(|| source.get("imag"))
-        .and_then(JsonValue::as_f64)
-        .unwrap_or(0.0);
-    Some(RunTarget { re, im })
+        .get("components")
+        .or_else(|| object.get("values"))
+        .and_then(JsonValue::as_object)?;
+    let components = source
+        .iter()
+        .filter_map(|(name, value)| Some((name.clone(), value.as_f64()?)))
+        .collect::<BTreeMap<_, _>>();
+    (!components.is_empty()).then_some(VectorTarget { components })
+}
+
+impl VectorTarget {
+    fn single(name: &str, value: f64) -> Self {
+        Self {
+            components: BTreeMap::from([(name.to_string(), value)]),
+        }
+    }
+
+    fn component(&self, names: &[&str]) -> Option<f64> {
+        names
+            .iter()
+            .find_map(|name| self.components.get(*name).copied())
+    }
 }
 
 fn with_scalar_target(panel: PanelState, target: Option<f64>) -> PanelState {
@@ -1048,9 +1042,7 @@ fn projected_estimate(
                 error: state.abs_stderr(),
             }),
         },
-        AccumulatorState::Empty(_)
-        | AccumulatorState::FullScalar(_)
-        | AccumulatorState::FullComplex(_) => None,
+        AccumulatorState::Empty(_) | AccumulatorState::FullVector(_) => None,
     }
 }
 

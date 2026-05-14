@@ -21,8 +21,8 @@ use crate::{
     Batch, BatchResult, BuildError, Domain, DomainBranch, EvalError,
     core::{AccumulatorConfig, TrainingProjection as AccumulatorTrainingProjection},
     evaluation::{
-        AccumulatorState, ComplexValueEvaluator, EvalBatchOptions, Evaluator,
-        GammaLoopAccumulatorState, ScalarValueEvaluator, VectorAccumulatorState,
+        AccumulatorState, EvalBatchOptions, Evaluator, GammaLoopAccumulatorState,
+        ScalarValueEvaluator, VectorAccumulatorState,
     },
     resources::resolve_resource_path,
 };
@@ -697,18 +697,15 @@ impl Evaluator for GammaLoopEvaluator {
                         options.require_training_values,
                         accumulator,
                     )?,
-                    AccumulatorState::FullScalar(accumulator) => self.ingest_scalar_values(
-                        &evaluation_results
-                            .iter()
-                            .map(|result| {
-                                self.training_projection
-                                    .project(Self::project_result_value(result))
-                            })
-                            .collect::<Vec<_>>(),
-                        points,
-                        options.require_training_values,
-                        accumulator,
-                    )?,
+                    AccumulatorState::FullVector(accumulator) => {
+                        for (result, point) in evaluation_results.iter().zip(points.iter()) {
+                            let value = self
+                                .training_projection
+                                .project(Self::project_result_value(result));
+                            accumulator.push_vector(&[value * point.total_weight().abs()]);
+                        }
+                        None
+                    }
                     other => {
                         return Err(EvalError::eval(format!(
                             "gammaloop scalar mode does not support accumulator kind {}",
@@ -716,26 +713,22 @@ impl Evaluator for GammaLoopEvaluator {
                         )));
                     }
                 },
-                crate::evaluation::SemanticAccumulatorKind::Complex => {
-                    match &mut observable_state {
-                        AccumulatorState::FullComplex(accumulator) => self.ingest_complex_values(
-                            &evaluation_results
-                                .iter()
-                                .map(Self::project_result_value)
-                                .collect::<Vec<_>>(),
-                            points,
-                            options.require_training_values,
-                            accumulator,
-                            |value| self.training_projection.project(value),
-                        )?,
-                        other => {
-                            return Err(EvalError::eval(format!(
-                                "gammaloop complex mode does not support accumulator kind {}",
-                                other.kind_str()
-                            )));
+                crate::evaluation::SemanticAccumulatorKind::Vector => match &mut observable_state {
+                    AccumulatorState::FullVector(accumulator) => {
+                        for (result, point) in evaluation_results.iter().zip(points.iter()) {
+                            let value = Self::project_result_value(result);
+                            let weight = point.total_weight().abs();
+                            accumulator.push_vector(&[value.re * weight, value.im * weight]);
                         }
+                        None
                     }
-                }
+                    other => {
+                        return Err(EvalError::eval(format!(
+                            "gammaloop complex mode does not support accumulator kind {}",
+                            other.kind_str()
+                        )));
+                    }
+                },
             },
         };
         Ok(BatchResult::new(weighted_values, observable_state))

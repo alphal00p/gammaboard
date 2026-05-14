@@ -227,7 +227,7 @@ Minimal shape:
 ```toml
 name = "example"
 target = { kind = "scalar", value = 1.23 } # optional
-# or: target = { kind = "complex", re = 1.23, im = 0.0 }
+# or: target = { kind = "vector", components = { real = 1.23, imag = 0.0 } }
 
 [evaluator]
 kind = "unit"

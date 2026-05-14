@@ -268,15 +268,16 @@ impl BatchResult {
 #[cfg(test)]
 mod tests {
     use super::BatchResult;
-    use crate::evaluation::{AccumulatorState, FullScalarAccumulatorState};
+    use crate::evaluation::{AccumulatorState, FullVectorAccumulatorState};
 
     #[test]
     fn validate_json_safe_rejects_non_finite_full_accumulator_values() {
         let result = BatchResult::new(
             None,
-            AccumulatorState::FullScalar(FullScalarAccumulatorState {
-                values: vec![1.0, f64::NAN],
-                nan_entries: vec![],
+            AccumulatorState::FullVector(FullVectorAccumulatorState {
+                components: vec!["value".to_string()],
+                values_row_major: vec![1.0, f64::NAN],
+                invalid_entries: vec![],
             }),
         );
 

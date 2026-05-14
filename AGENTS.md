@@ -24,9 +24,8 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   `gammaboard-jsonrpc-v1` `eval_batch` method. Responses use
   `values_row_major`; process evaluator tasks should use a vector accumulator
   with matching components.
-- Multi-component aggregate observables use `VectorAccumulatorState`; complex
-  aggregate evaluators/accumulators are intentionally not a separate path.
-  Full complex accumulators remain only for deterministic image/line outputs.
+- Multi-component observables use vector accumulator models. Full raster
+  outputs use `FullVectorAccumulatorState` with named components.
 
 ## Design Rules
 - Keep adapters thin; put reusable behavior in `src/api` or lower layers.

@@ -851,10 +851,16 @@ pub enum PlotAccumulatorKind {
 }
 
 impl PlotAccumulatorKind {
-    pub const fn full_config(self) -> AccumulatorConfig {
+    pub fn components(self) -> Vec<String> {
         match self {
-            Self::Scalar => AccumulatorConfig::FullScalar,
-            Self::Complex => AccumulatorConfig::FullComplex,
+            Self::Scalar => vec!["value".to_string()],
+            Self::Complex => vec!["real".to_string(), "imag".to_string()],
+        }
+    }
+
+    pub fn full_config(self) -> AccumulatorConfig {
+        AccumulatorConfig::FullVector {
+            components: self.components(),
         }
     }
 }
@@ -1283,11 +1289,15 @@ mod tests {
 
         assert_eq!(
             image.new_accumulator_config().unwrap(),
-            Some(AccumulatorConfig::FullComplex)
+            Some(AccumulatorConfig::FullVector {
+                components: vec!["real".to_string(), "imag".to_string()]
+            })
         );
         assert_eq!(
             line.new_accumulator_config().unwrap(),
-            Some(AccumulatorConfig::FullScalar)
+            Some(AccumulatorConfig::FullVector {
+                components: vec!["value".to_string()]
+            })
         );
     }
 

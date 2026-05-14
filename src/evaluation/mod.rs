@@ -4,17 +4,16 @@ pub mod evaluator;
 pub mod traits;
 
 pub use accumulator::{
-    Accumulator, AccumulatorState, ComplexValue, EmptyAccumulatorState, FullAccumulatorProgress,
-    FullComplexAccumulatorState, FullScalarAccumulatorState, GammaLoopAccumulatorDigest,
-    GammaLoopAccumulatorState, GammaLoopDiagnostics, IngestComplex, IngestScalar, IngestVector,
-    NamedScalarAccumulator, ScalarAccumulatorState, SemanticAccumulatorKind,
-    VectorAccumulatorState,
+    Accumulator, AccumulatorState, EmptyAccumulatorState, FullAccumulatorProgress,
+    FullVectorAccumulatorState, GammaLoopAccumulatorDigest, GammaLoopAccumulatorState,
+    GammaLoopDiagnostics, IngestComplex, IngestScalar, IngestVector, NamedScalarAccumulator,
+    ScalarAccumulatorState, SemanticAccumulatorKind, VectorAccumulatorState,
 };
 pub use batch::{Batch, BatchError, BatchResult, Point};
 pub use evaluator::{
     GammaLoopParams, ProcessEvaluatorParams, SymbolicaParams, UnitEvaluatorParams,
 };
 pub use traits::{
-    BatchTransform, ComplexValueEvaluator, EvalBatchOptions, Evaluator, Materializer,
-    ScalarBatchEvaluator, ScalarSampleEvaluator, ScalarValueEvaluator,
+    BatchTransform, EvalBatchOptions, Evaluator, Materializer, ScalarBatchEvaluator,
+    ScalarSampleEvaluator, ScalarValueEvaluator,
 };

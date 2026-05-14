@@ -54,8 +54,9 @@ pub enum AccumulatorConfig {
         discrete_histograms: Option<DiscreteHistogramConfig>,
     },
     Gammaloop,
-    FullScalar,
-    FullComplex,
+    FullVector {
+        components: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -119,8 +120,7 @@ enum AccumulatorConfigKind {
     Scalar,
     Vector,
     Gammaloop,
-    FullScalar,
-    FullComplex,
+    FullVector,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,8 +168,7 @@ impl AccumulatorConfig {
             Self::Scalar { .. } => "scalar",
             Self::Vector { .. } => "vector",
             Self::Gammaloop => "gammaloop",
-            Self::FullScalar => "full_scalar",
-            Self::FullComplex => "full_complex",
+            Self::FullVector { .. } => "full_vector",
         }
     }
 
@@ -179,8 +178,7 @@ impl AccumulatorConfig {
             Self::Scalar { .. } => AccumulatorConfigKind::Scalar,
             Self::Vector { .. } => AccumulatorConfigKind::Vector,
             Self::Gammaloop => AccumulatorConfigKind::Gammaloop,
-            Self::FullScalar => AccumulatorConfigKind::FullScalar,
-            Self::FullComplex => AccumulatorConfigKind::FullComplex,
+            Self::FullVector { .. } => AccumulatorConfigKind::FullVector,
         }
     }
 
@@ -189,7 +187,9 @@ impl AccumulatorConfig {
             kind: self.kind(),
             discrete_histograms: self.discrete_histograms().cloned(),
             components: match self {
-                Self::Vector { components, .. } => Some(components.clone()),
+                Self::Vector { components, .. } | Self::FullVector { components } => {
+                    Some(components.clone())
+                }
                 _ => None,
             },
             training_projection: match self {
@@ -224,8 +224,9 @@ impl AccumulatorConfig {
                 }
             }
             AccumulatorConfigKind::Gammaloop => Self::Gammaloop,
-            AccumulatorConfigKind::FullScalar => Self::FullScalar,
-            AccumulatorConfigKind::FullComplex => Self::FullComplex,
+            AccumulatorConfigKind::FullVector => Self::FullVector {
+                components: components.unwrap_or_else(|| vec!["value".to_string()]),
+            },
         }
     }
 
@@ -245,7 +246,7 @@ impl AccumulatorConfig {
                 discrete_histograms,
                 ..
             } => discrete_histograms.as_ref(),
-            Self::Empty | Self::Gammaloop | Self::FullScalar | Self::FullComplex => None,
+            Self::Empty | Self::Gammaloop | Self::FullVector { .. } => None,
         }
     }
 
@@ -261,17 +262,22 @@ impl AccumulatorConfig {
         {
             validate_vector_accumulator(components, training_projection)?;
         }
+        if let Self::FullVector { components } = self
+            && components.is_empty()
+        {
+            return Err("full_vector accumulator components must not be empty".to_string());
+        }
         Ok(())
     }
 
     pub fn semantic_kind(&self) -> crate::evaluation::SemanticAccumulatorKind {
         match self {
-            Self::Empty | Self::Scalar { .. } | Self::FullScalar => {
+            Self::Empty | Self::Scalar { .. } => crate::evaluation::SemanticAccumulatorKind::Scalar,
+            Self::Vector { .. } => crate::evaluation::SemanticAccumulatorKind::Vector,
+            Self::FullVector { components } if components == &["value".to_string()] => {
                 crate::evaluation::SemanticAccumulatorKind::Scalar
             }
-            Self::Vector { .. } | Self::FullComplex => {
-                crate::evaluation::SemanticAccumulatorKind::Complex
-            }
+            Self::FullVector { .. } => crate::evaluation::SemanticAccumulatorKind::Vector,
             Self::Gammaloop => crate::evaluation::SemanticAccumulatorKind::Scalar,
         }
     }
@@ -309,6 +315,13 @@ impl Serialize for AccumulatorConfig {
                 training_projection: Some(training_projection),
             }
             .serialize(serializer),
+            Self::FullVector { components } => Rich {
+                kind: self.kind_str(),
+                discrete_histograms: None,
+                components: Some(components.as_slice()),
+                training_projection: None,
+            }
+            .serialize(serializer),
             Self::Scalar {
                 discrete_histograms: Some(discrete_histograms),
             } => Rich {
@@ -334,7 +347,7 @@ impl<'de> Deserialize<'de> for AccumulatorConfig {
                 && !Self::kind_accepts_discrete_histograms(binary.kind)
             {
                 return Err(serde::de::Error::custom(
-                    "discrete_histograms is only valid for scalar and complex accumulators",
+                    "discrete_histograms is only valid for scalar and vector accumulators",
                 ));
             }
             return Ok(Self::from_parts(
@@ -459,24 +472,19 @@ where
             reject_discrete_histograms(AccumulatorConfigKind::Gammaloop, discrete_histograms)
                 .map(|_| AccumulatorConfig::Gammaloop)
         }
-        "full_scalar" => {
-            reject_discrete_histograms(AccumulatorConfigKind::FullScalar, discrete_histograms)
-                .map(|_| AccumulatorConfig::FullScalar)
-        }
-        "full_complex" => {
-            reject_discrete_histograms(AccumulatorConfigKind::FullComplex, discrete_histograms)
-                .map(|_| AccumulatorConfig::FullComplex)
+        "full_vector" => {
+            reject_discrete_histograms(AccumulatorConfigKind::FullVector, discrete_histograms)?;
+            let components = components.unwrap_or_else(|| vec!["value".to_string()]);
+            if components.is_empty() {
+                return Err(E::custom(
+                    "full_vector accumulator components must not be empty",
+                ));
+            }
+            Ok(AccumulatorConfig::FullVector { components })
         }
         other => Err(serde::de::Error::unknown_variant(
             other,
-            &[
-                "empty",
-                "scalar",
-                "vector",
-                "gammaloop",
-                "full_scalar",
-                "full_complex",
-            ],
+            &["empty", "scalar", "vector", "gammaloop", "full_vector"],
         )),
     }
 }
@@ -525,7 +533,7 @@ where
 {
     if discrete_histograms.is_some() && !AccumulatorConfig::kind_accepts_discrete_histograms(kind) {
         Err(E::custom(
-            "discrete_histograms is only valid for scalar and complex accumulators",
+            "discrete_histograms is only valid for scalar and vector accumulators",
         ))
     } else {
         Ok(())

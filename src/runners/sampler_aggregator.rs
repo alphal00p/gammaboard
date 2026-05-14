@@ -564,9 +564,7 @@ where
                 (state.imag_mean(), state.imag_stderr()),
                 (state.abs_mean(), state.abs_stderr()),
             ),
-            AccumulatorState::Empty(_)
-            | AccumulatorState::FullScalar(_)
-            | AccumulatorState::FullComplex(_) => None,
+            AccumulatorState::Empty(_) | AccumulatorState::FullVector(_) => None,
         }
     }
 

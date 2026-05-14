@@ -104,16 +104,22 @@ fn validate_process_accumulator(
         AccumulatorConfig::Vector {
             components: accumulator_components,
             ..
+        }
+        | AccumulatorConfig::FullVector {
+            components: accumulator_components,
         } if accumulator_components == components => Ok(()),
         AccumulatorConfig::Vector {
             components: accumulator_components,
             ..
+        }
+        | AccumulatorConfig::FullVector {
+            components: accumulator_components,
         } => Err(BuildError::invalid_input(format!(
             "evaluator.kind = \"{evaluator_kind}\" components {:?} do not match accumulator components {:?}",
             components, accumulator_components
         ))),
         other => Err(BuildError::invalid_input(format!(
-            "evaluator.kind = \"{evaluator_kind}\" requires accumulator config \"vector\", got \"{}\"",
+            "evaluator.kind = \"{evaluator_kind}\" requires accumulator config \"vector\" or \"full_vector\", got \"{}\"",
             accumulator_config_str(other)
         ))),
     }
@@ -129,14 +135,18 @@ fn validate_semantic_accumulator(
     }
 
     let supported = match semantic_kind {
-        SemanticAccumulatorKind::Scalar => matches!(
-            config,
-            AccumulatorConfig::Scalar { .. } | AccumulatorConfig::FullScalar
-        ),
-        SemanticAccumulatorKind::Complex => matches!(
-            config,
-            AccumulatorConfig::Vector { .. } | AccumulatorConfig::FullComplex
-        ),
+        SemanticAccumulatorKind::Scalar => match config {
+            AccumulatorConfig::Scalar { .. } => true,
+            AccumulatorConfig::FullVector { components } => components == &["value".to_string()],
+            _ => false,
+        },
+        SemanticAccumulatorKind::Vector => match config {
+            AccumulatorConfig::Vector { .. } => true,
+            AccumulatorConfig::FullVector { components } => {
+                components == &["real".to_string(), "imag".to_string()]
+            }
+            _ => false,
+        },
     };
     if supported {
         Ok(())

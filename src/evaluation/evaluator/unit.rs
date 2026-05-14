@@ -57,7 +57,7 @@ impl UnitEvaluator {
         match state {
             AccumulatorState::Empty(accumulator) => Ok(accumulator),
             AccumulatorState::Scalar(accumulator) => Ok(accumulator),
-            AccumulatorState::FullScalar(accumulator) => Ok(accumulator),
+            AccumulatorState::FullVector(accumulator) => Ok(accumulator),
             other => Err(EvalError::eval(format!(
                 "unit evaluator scalar mode does not support accumulator kind {}",
                 other.kind_str()

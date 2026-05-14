@@ -3,6 +3,7 @@
 ## Consistency check
 - [ ] make target spec consistent with scalar / vector aggregators
 - [ ] maek full aggregators and image / pdf tasks consistent with aggregators, maybe remove vector version completely, or require selecting a component to plot (this should include the ability to plot the training weight, if we only allow plotting scalar values we can also simplify to not use the full observables at all and instead use the requires training path, which is another huge simplification)
+- [ ] maybe add no-pw flag that allows to deploy without an admin password, could be used on ubelix as ssh tunnel is needed to access frontend
 - [ ] scan configs for unnecessary args and inconcistencies
 - [ ] right now scattered READMES, come up with better solution for docs, that is also deployable to the gammaloop wiki
 - [ ] scan frontend for dead features

@@ -212,34 +212,31 @@ fn image_view_panel(
     let height = geometry.v_linspace.count;
     let total = geometry.nr_points();
     match accumulator {
-        AccumulatorState::FullScalar(state) => Ok(PanelState::Image2d {
-            panel_id: "image_view".to_string(),
-            width,
-            height,
-            values: reorder_scalar_values(&state.values, total),
-            imag_values: None,
-            invalid_indices: reordered_invalid_indices(&state.nan_entries, total),
-            x_range: [geometry.u_linspace.start, geometry.u_linspace.stop],
-            y_range: [geometry.v_linspace.start, geometry.v_linspace.stop],
-            color_mode: image_color_mode(mode),
-            normalization_mode: image_normalization_mode(mode),
-        }),
-        AccumulatorState::FullComplex(state) => Ok(PanelState::Image2d {
-            panel_id: "image_view".to_string(),
-            width,
-            height,
-            values: reorder_complex_component_values(&state.values, total, |value| value.re),
-            imag_values: Some(reorder_complex_component_values(
-                &state.values,
-                total,
-                |value| value.im,
-            )),
-            invalid_indices: reordered_invalid_indices(&state.nan_entries, total),
-            x_range: [geometry.u_linspace.start, geometry.u_linspace.stop],
-            y_range: [geometry.v_linspace.start, geometry.v_linspace.stop],
-            color_mode: image_color_mode(mode),
-            normalization_mode: image_normalization_mode(mode),
-        }),
+        AccumulatorState::FullVector(state) => {
+            let real_values = state
+                .component_values("real")
+                .or_else(|| state.component_values("value"))
+                .or_else(|| {
+                    state
+                        .components
+                        .first()
+                        .and_then(|name| state.component_values(name))
+                })
+                .unwrap_or_default();
+            let imag_values = state.component_values("imag");
+            Ok(PanelState::Image2d {
+                panel_id: "image_view".to_string(),
+                width,
+                height,
+                values: reorder_scalar_values(&real_values, total),
+                imag_values: imag_values.map(|values| reorder_scalar_values(&values, total)),
+                invalid_indices: reordered_invalid_indices(&state.invalid_entries, total),
+                x_range: [geometry.u_linspace.start, geometry.u_linspace.stop],
+                y_range: [geometry.v_linspace.start, geometry.v_linspace.stop],
+                color_mode: image_color_mode(mode),
+                normalization_mode: image_normalization_mode(mode),
+            })
+        }
         other => Err(EngineError::engine(format!(
             "image task expected full accumulator, got {}",
             other.kind_str()
@@ -292,26 +289,26 @@ fn line_components_panel(
 ) -> Result<Option<PanelState>, EngineError> {
     let xs = line_xs(geometry);
     match accumulator {
-        AccumulatorState::FullComplex(state) => Ok(Some(multi_timeseries_panel(
-            "line_components",
-            vec![
-                PlotSeries {
-                    id: "real".to_string(),
-                    label: "Real Part".to_string(),
-                    color: None,
-                    smooth: None,
-                    points: reordered_line_points(&xs, &state.values, |value| value.re),
-                },
-                PlotSeries {
-                    id: "imag".to_string(),
-                    label: "Imaginary Part".to_string(),
-                    color: None,
-                    smooth: None,
-                    points: reordered_line_points(&xs, &state.values, |value| value.im),
-                },
-            ],
-        ))),
-        AccumulatorState::FullScalar(_) => Ok(None),
+        AccumulatorState::FullVector(state) if state.components.len() > 1 => {
+            Ok(Some(multi_timeseries_panel(
+                "line_components",
+                state
+                    .components
+                    .iter()
+                    .filter_map(|component| {
+                        let values = state.component_values(component)?;
+                        Some(PlotSeries {
+                            id: component.clone(),
+                            label: component.clone(),
+                            color: None,
+                            smooth: None,
+                            points: reordered_line_scalar_points(&xs, &values),
+                        })
+                    })
+                    .collect(),
+            )))
+        }
+        AccumulatorState::FullVector(_) => Ok(None),
         other => Err(EngineError::engine(format!(
             "line task expected full accumulator, got {}",
             other.kind_str()
@@ -325,14 +322,22 @@ fn line_real_panel(
 ) -> Result<Option<PanelState>, EngineError> {
     let xs = line_xs(geometry);
     match accumulator {
-        AccumulatorState::FullScalar(state) => Ok(Some(scalar_timeseries_panel(
-            "line_real",
-            reordered_line_scalar_points(&xs, &state.values),
-        ))),
-        AccumulatorState::FullComplex(state) => Ok(Some(scalar_timeseries_panel(
-            "line_real",
-            reordered_line_points(&xs, &state.values, |value| value.re),
-        ))),
+        AccumulatorState::FullVector(state) => {
+            let values = state
+                .component_values("real")
+                .or_else(|| state.component_values("value"))
+                .or_else(|| {
+                    state
+                        .components
+                        .first()
+                        .and_then(|name| state.component_values(name))
+                })
+                .unwrap_or_default();
+            Ok(Some(scalar_timeseries_panel(
+                "line_real",
+                reordered_line_scalar_points(&xs, &values),
+            )))
+        }
         other => Err(EngineError::engine(format!(
             "line task expected full accumulator, got {}",
             other.kind_str()
@@ -380,25 +385,6 @@ fn reordered_line_scalar_points(xs: &[f64], values: &[f64]) -> Vec<PlotPoint> {
         .collect()
 }
 
-fn reordered_line_points<T>(
-    xs: &[f64],
-    values: &[T],
-    component: impl Fn(&T) -> f64,
-) -> Vec<PlotPoint> {
-    let total = xs.len();
-    let stride = coprime_stride(total);
-    values
-        .iter()
-        .enumerate()
-        .filter_map(|(shuffled_index, value)| {
-            let canonical_index = permuted_raster_index(shuffled_index, total, stride);
-            xs.get(canonical_index)
-                .copied()
-                .map(|x| point((x, component(value))))
-        })
-        .collect()
-}
-
 fn reorder_scalar_values(values: &[f64], total: usize) -> Vec<f32> {
     let stride = coprime_stride(total);
     let mut reordered = vec![f32::NAN; total];
@@ -406,22 +392,6 @@ fn reorder_scalar_values(values: &[f64], total: usize) -> Vec<f32> {
         let canonical_index = permuted_raster_index(shuffled_index, total, stride);
         if let Some(slot) = reordered.get_mut(canonical_index) {
             *slot = value as f32;
-        }
-    }
-    reordered
-}
-
-fn reorder_complex_component_values<T>(
-    values: &[T],
-    total: usize,
-    component: impl Fn(&T) -> f64,
-) -> Vec<f32> {
-    let stride = coprime_stride(total);
-    let mut reordered = vec![f32::NAN; total];
-    for (shuffled_index, value) in values.iter().enumerate() {
-        let canonical_index = permuted_raster_index(shuffled_index, total, stride);
-        if let Some(slot) = reordered.get_mut(canonical_index) {
-            *slot = component(value) as f32;
         }
     }
     reordered

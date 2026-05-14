@@ -911,7 +911,7 @@ fn format_cursor(cursor: TaskPanelCursor) -> Option<String> {
 mod tests {
     use super::*;
     use crate::core::{AccumulatorConfig, RunTaskInput, RunTaskState, canonical_task_toml};
-    use crate::evaluation::{AccumulatorState, ComplexValue, FullComplexAccumulatorState};
+    use crate::evaluation::{AccumulatorState, FullVectorAccumulatorState};
     use crate::server::panels::{
         PanelKind, PanelUpdateMode, PlotPoint, panel_spec, scalar_timeseries_panel,
     };
@@ -956,13 +956,10 @@ mod tests {
     }
 
     fn complex_observable() -> AccumulatorState {
-        AccumulatorState::FullComplex(FullComplexAccumulatorState {
-            values: vec![
-                ComplexValue { re: 1.0, im: -1.0 },
-                ComplexValue { re: 2.0, im: -2.0 },
-                ComplexValue { re: 3.0, im: -3.0 },
-            ],
-            nan_entries: vec![],
+        AccumulatorState::FullVector(FullVectorAccumulatorState {
+            components: vec!["real".to_string(), "imag".to_string()],
+            values_row_major: vec![1.0, -1.0, 2.0, -2.0, 3.0, -3.0],
+            invalid_entries: vec![],
         })
     }
 
@@ -1044,8 +1041,13 @@ mod tests {
         let task = inherited_complex_sample_task();
         let run_task = run_task(task.clone());
         let accumulator = complex_observable();
-        let source = TaskPanelSource::new(&task, Some(AccumulatorConfig::FullComplex))
-            .expect("panel source");
+        let source = TaskPanelSource::new(
+            &task,
+            Some(AccumulatorConfig::FullVector {
+                components: vec!["real".to_string(), "imag".to_string()],
+            }),
+        )
+        .expect("panel source");
 
         let response = source
             .build_response(
