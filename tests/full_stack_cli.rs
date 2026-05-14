@@ -1549,6 +1549,25 @@ sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", 
         )
         .await?;
 
+    harness
+        .wait_for(
+            "python sampler startup log is persisted",
+            Duration::from_secs(30),
+            || async {
+                let persisted: Option<i64> = sqlx::query_scalar(
+                    "SELECT 1::bigint
+                     FROM runtime_logs
+                     WHERE source = 'worker'
+                       AND message LIKE '%GB_E2E_PY_SAMPLER_INIT symbolica_havana%'
+                     LIMIT 1",
+                )
+                .fetch_optional(&harness.pool)
+                .await?;
+                Ok(persisted.is_some())
+            },
+        )
+        .await?;
+
     let completed_samples: i64 =
         sqlx::query_scalar("SELECT nr_completed_samples FROM runs WHERE id = $1")
             .bind(run_id)

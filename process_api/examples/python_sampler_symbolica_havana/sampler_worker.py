@@ -96,6 +96,7 @@ while True:
                 raise ValueError(f"unsupported protocol: {params.get('protocol')!r}")
             if params.get("role") != "sampler":
                 raise ValueError(f"expected sampler role, got {params.get('role')!r}")
+            print("GB_E2E_PY_SAMPLER_INIT symbolica_havana", flush=True)
             module_name, class_name, init_args = parse_python_wrapper_args(params)
             module = import_configured_module(module_name)
             cls = getattr(module, class_name)

@@ -253,7 +253,10 @@ fn pipe_child_stderr(label: &'static str, stderr: impl std::io::Read + Send + 's
     std::thread::spawn(move || {
         let reader = std::io::BufReader::new(stderr);
         for line in reader.lines().map_while(Result::ok) {
-            eprintln!("[{label} stderr] {line}");
+            tracing::warn!(
+                source = "worker",
+                message = format!("[{label} stderr] {line}")
+            );
         }
     });
 }
