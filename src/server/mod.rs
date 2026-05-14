@@ -2,8 +2,6 @@ mod auth;
 mod config_panels;
 mod panels;
 mod performance_panels;
-#[cfg(feature = "gammaloop")]
-mod run_exposed_info;
 mod run_panels;
 mod task_panels;
 mod worker_panels;
@@ -44,8 +42,9 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, HashMap, HashSet};
+#[cfg(feature = "gammaloop")]
+use std::fs;
 use std::{
-    fs,
     fs::File,
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
@@ -678,11 +677,10 @@ async fn get_run_panels(
         .load_run_spec(run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
-    let exposed_info = crate::core::RunExposedInfoCache::default();
     let tasks = state.store.list_run_tasks(run_id).await?;
     let workers = state.store.get_registered_workers(Some(run_id)).await?;
     json_response(
-        build_run_panel_response(&run, &run_spec, &tasks, &workers, &exposed_info)
+        build_run_panel_response(&run, &run_spec, &tasks, &workers)
             .map_err(|err| ApiError::Internal(err.to_string()))?,
     )
 }

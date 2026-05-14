@@ -1,7 +1,6 @@
 pub mod batch_ids;
 pub mod errors;
 pub mod models;
-pub mod run_exposed_info;
 pub mod run_spec;
 pub mod tasks;
 pub mod traits;
@@ -16,10 +15,6 @@ pub use models::{
     RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot, SamplerPerformanceMetrics,
     SamplerQueueRollingAverages, SamplerQueueRuntimeMetrics, SamplerRuntimeMetrics,
     SamplerWorkRollingAverages, WorkerRole,
-};
-pub use run_exposed_info::{
-    NamedRunExposedArtifact, RunExposedArtifact, RunExposedInfoCache, RunExposedInfoContent,
-    RunExposedInfoEntry, RunExposedInfoScope, RunExposedInfoStatus,
 };
 pub use run_spec::{
     AccumulatorConfig, BatchTransformConfig, CapabilityRequirements, EvaluatorConfig,

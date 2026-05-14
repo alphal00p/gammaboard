@@ -401,19 +401,6 @@ pub(crate) fn tick_breakdown_panel(
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn svg_panel(
-    panel_id: &str,
-    svg: Option<String>,
-    message: Option<String>,
-) -> PanelState {
-    PanelState::Svg {
-        panel_id: panel_id.to_string(),
-        svg,
-        message,
-    }
-}
-
 pub(crate) fn table_panel_with_payload(
     panel_id: &str,
     columns: Vec<String>,

@@ -344,7 +344,7 @@ Deterministic scan tasks are supported:
 ```toml
 [[task_queue]]
 kind = "image"
-accumulator = "complex"
+accumulator = "scalar"
 [task_queue.geometry]
 offset = [0.0, 0.0]
 u_vector = [1.0, 0.0]
@@ -354,7 +354,7 @@ v_linspace = { start = -2.0, stop = 2.0, count = 128 }
 
 [[task_queue]]
 kind = "plot_line"
-accumulator = "complex"
+accumulator = "scalar"
 [task_queue.geometry]
 offset = [0.0, 0.0]
 direction = [1.0, 0.0]

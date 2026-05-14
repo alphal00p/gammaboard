@@ -1,4 +1,4 @@
-use crate::core::{EngineError, RunExposedInfoCache, RunSpec, RunTask};
+use crate::core::{EngineError, RunSpec, RunTask};
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelWidth, key_value,
     key_value_panel, panel_spec, replace_panel, text_panel, with_panel_width,
@@ -11,11 +11,10 @@ pub fn build_run_panel_response(
     run_spec: &RunSpec,
     tasks: &[RunTask],
     workers: &[RegisteredWorkerEntry],
-    exposed_info: &RunExposedInfoCache,
 ) -> Result<PanelResponse, EngineError> {
     let source_id = format!("run:{}:summary", run.run_id);
     let panels = panel_specs(run_spec);
-    let updates = panel_states(run, run_spec, tasks, workers, exposed_info)?
+    let updates = panel_states(run, run_spec, tasks, workers)?
         .into_iter()
         .map(replace_panel)
         .collect();
@@ -102,7 +101,6 @@ fn panel_states(
     run_spec: &RunSpec,
     tasks: &[RunTask],
     workers: &[RegisteredWorkerEntry],
-    _exposed_info: &RunExposedInfoCache,
 ) -> Result<Vec<PanelState>, EngineError> {
     let current_task = tasks.iter().find(|task| task.state.as_str() == "active");
     let active_sampler = workers.iter().find(|worker| {

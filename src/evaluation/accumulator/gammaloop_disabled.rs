@@ -164,10 +164,10 @@ impl From<GammaLoopAccumulatorState> for GammaLoopAccumulatorDigest {
             sample_count: state.estimate.sample_count(),
             primary_histogram_name: None,
             primary_histogram_title: None,
-            real_mean: state.estimate.real_mean(),
-            imag_mean: state.estimate.imag_mean(),
-            real_error: state.estimate.real_stderr(),
-            imag_error: state.estimate.imag_stderr(),
+            real_mean: state.real_mean(),
+            imag_mean: state.imag_mean(),
+            real_error: state.real_stderr(),
+            imag_error: state.imag_stderr(),
         }
     }
 }
