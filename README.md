@@ -97,8 +97,8 @@ gammaboard server --server-config ops/local/config/server.toml
 Create a run, append tasks, and inspect state:
 
 ```bash
-gammaboard run add templates/runs/gammaloop.toml
-gammaboard run task add gammaloop_tth templates/tasks/train_sample.toml
+gammaboard run add resources/templates/runs/gammaloop.toml
+gammaboard run task add gammaloop_tth resources/templates/tasks/train_sample.toml
 gammaboard run list
 gammaboard run task list gammaloop_tth
 ```
@@ -124,7 +124,7 @@ gammaboard node stop -a
 - [ops/local/config](ops/local/config): local development profiles.
 - [ops/itphlies/config](ops/itphlies/config): ITPhlies profiles.
 - `ops/ubelix/config/*`: UBELIX profiles rendered/submitted by the UBELIX launcher.
-- `templates/{runs,tasks}/`: shared run/task templates served by the backend.
+- `resources/templates/{runs,tasks,nodes}/`: shared templates served by the backend.
 
 All commands load runtime config from [ops/local/config/runtime.toml](ops/local/config/runtime.toml) by default. Override it with:
 
@@ -192,12 +192,12 @@ In that build, `evaluator.kind = "gammaloop"` and HwU histogram export return a 
 
 Add a run with:
 ```bash
-gammaboard run add templates/runs/gammaloop.toml
+gammaboard run add resources/templates/runs/gammaloop.toml
 ```
 
 Flake-backed process evaluator + sampler example:
 ```bash
-gammaboard run add templates/runs/process-scalar-process-sampler-flake-demo.toml
+gammaboard run add resources/templates/runs/process-scalar-process-sampler-flake-demo.toml
 ```
 
 Apptainer-backed Rust process evaluator example:
@@ -205,23 +205,23 @@ Apptainer-backed Rust process evaluator example:
 cd process_api/examples/rust_breit_wigner_evaluator
 apptainer build runtime.sif apptainer.def
 cd ../../..
-gammaboard run add templates/runs/process-rust-apptainer-evaluator-demo.toml
+gammaboard run add resources/templates/runs/process-rust-apptainer-evaluator-demo.toml
 ```
 
 Curated run templates:
-- `templates/runs/ghost_bump.toml`: Symbolica + Havana training on a 2D `(x, y)` domain plus `pdf_adaptation_image` for ghost-bump diagnostics.
-- `templates/runs/symbolica-havana-pdf-1d2d.toml`: Symbolica + Havana training + both PDF adaptation task kinds (`pdf_adaptation_image`, `pdf_adaptation_plot_line`).
-- `templates/runs/process-scalar-process-sampler-flake-demo.toml`: Process evaluator and sampler integration.
-- `templates/runs/process-rust-apptainer-evaluator-demo.toml`: Apptainer-packaged Rust process evaluator integration.
-- `templates/runs/gammaloop.toml`: GammaLoop TTH evaluator config, including optional `post_load_commands`.
+- `resources/templates/runs/ghost_bump.toml`: Symbolica + Havana training on a 2D `(x, y)` domain plus `pdf_adaptation_image` for ghost-bump diagnostics.
+- `resources/templates/runs/symbolica-havana-pdf-1d2d.toml`: Symbolica + Havana training + both PDF adaptation task kinds (`pdf_adaptation_image`, `pdf_adaptation_plot_line`).
+- `resources/templates/runs/process-scalar-process-sampler-flake-demo.toml`: Process evaluator and sampler integration.
+- `resources/templates/runs/process-rust-apptainer-evaluator-demo.toml`: Apptainer-packaged Rust process evaluator integration.
+- `resources/templates/runs/gammaloop.toml`: GammaLoop TTH evaluator config, including optional `post_load_commands`.
 
 Curated task bundles:
-- `templates/tasks/sample_monte_carlo_real.toml`: minimal scalar sample task with naive Monte Carlo.
-- `templates/tasks/pdf_adaptation_image.toml`: Havana training followed by PDF adaptation image rasterization.
-- `templates/tasks/train_sample.toml`: GammaLoop TTH train+sample queue with queue tuning and inference stop target (`relative_error = 0.001`, `max_samples = 1_000_000_000`).
+- `resources/templates/tasks/sample_monte_carlo_real.toml`: minimal scalar sample task with naive Monte Carlo.
+- `resources/templates/tasks/pdf_adaptation_image.toml`: Havana training followed by PDF adaptation image rasterization.
+- `resources/templates/tasks/train_sample.toml`: GammaLoop TTH train+sample queue with queue tuning and inference stop target (`relative_error = 0.001`, `max_samples = 1_000_000_000`).
 
 Curated node launch templates:
-- `templates/nodes/local-two-workers.toml`: two local workers for local/ITPhlies development. UBELIX-specific node templates live under `ops/ubelix/config/templates/nodes`.
+- `resources/templates/nodes/local-two-workers.toml`: two local workers for local/ITPhlies development. UBELIX-specific node templates live under `ops/ubelix/config/templates/nodes`.
 
 Minimal shape:
 ```toml

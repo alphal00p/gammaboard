@@ -55,10 +55,8 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::Instrument;
 
 use self::auth::{AuthConfig, SessionStatus, login, logout, require_admin_session};
-use crate::config::{
-    DEFAULT_SERVER_CONFIG_PATH, RuntimeConfig, config_base_dir, normalize_config_path,
-    read_toml_with_default_fallback,
-};
+use crate::config::{DEFAULT_SERVER_CONFIG_PATH, RuntimeConfig, read_toml_with_default_fallback};
+use crate::resources::primary_resource_root;
 
 const DEFAULT_SERVER_CONFIG_TOML: &str = include_str!("../config_defaults/server.toml");
 
@@ -93,25 +91,31 @@ impl ServerConfig {
         )?;
         let mut parsed: Self = toml::from_str(&raw)
             .with_context(|| format!("failed parsing server config {}", path.display()))?;
-        let base_dir = config_base_dir(path)?;
-        parsed.run_templates_dir =
-            normalize_config_path(&base_dir, parsed.run_templates_dir.as_str())
-                .display()
-                .to_string();
-        parsed.task_templates_dir =
-            normalize_config_path(&base_dir, parsed.task_templates_dir.as_str())
-                .display()
-                .to_string();
-        parsed.node_templates_dir =
-            normalize_config_path(&base_dir, parsed.node_templates_dir.as_str())
-                .display()
-                .to_string();
+        parsed.run_templates_dir = normalize_templates_dir(parsed.run_templates_dir.as_str())?
+            .display()
+            .to_string();
+        parsed.task_templates_dir = normalize_templates_dir(parsed.task_templates_dir.as_str())?
+            .display()
+            .to_string();
+        parsed.node_templates_dir = normalize_templates_dir(parsed.node_templates_dir.as_str())?
+            .display()
+            .to_string();
         Ok(parsed)
     }
 
     pub fn bind_addr(&self) -> SocketAddr {
         SocketAddr::new(self.api_host, self.api_port)
     }
+}
+
+fn normalize_templates_dir(path: &str) -> anyhow::Result<PathBuf> {
+    let template_dir = PathBuf::from(path);
+    if template_dir.is_absolute() {
+        return Ok(template_dir);
+    }
+    let resources_root = primary_resource_root()
+        .context("failed resolving primary resource root for template directories")?;
+    Ok(resources_root.join(template_dir))
 }
 
 pub async fn serve(
