@@ -10,7 +10,7 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const TomlActionDialog = ({
   open,
@@ -34,6 +34,8 @@ const TomlActionDialog = ({
   const [templateBusy, setTemplateBusy] = useState(false);
   const [templateActionBusy, setTemplateActionBusy] = useState(false);
   const [templateError, setTemplateError] = useState(null);
+  const wasOpenRef = useRef(false);
+  const restoreGenerationRef = useRef(0);
 
   const canUseStorage = typeof window !== "undefined" && typeof window.localStorage !== "undefined";
   const readStoredSelection = () => {
@@ -50,8 +52,16 @@ const TomlActionDialog = ({
   };
 
   useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
+    if (!open) {
+      wasOpenRef.current = false;
+      restoreGenerationRef.current += 1;
+      return;
+    }
+    if (wasOpenRef.current) return;
+    wasOpenRef.current = true;
+
+    const restoreGeneration = restoreGenerationRef.current;
+    const canApplyRestore = () => restoreGenerationRef.current === restoreGeneration;
     const restore = async () => {
       const restoredSelection = readStoredSelection();
       setSelectedTemplate(restoredSelection);
@@ -63,25 +73,22 @@ const TomlActionDialog = ({
       setTemplateBusy(true);
       try {
         const templateValue = await loadTemplate(restoredSelection);
-        if (!cancelled) {
+        if (canApplyRestore()) {
           setValue(templateValue || "");
         }
       } catch (err) {
-        if (!cancelled) {
+        if (canApplyRestore()) {
           setTemplateError(err?.message || "Failed to load template.");
           setValue(initialValue || "");
         }
       } finally {
-        if (!cancelled) {
+        if (canApplyRestore()) {
           setTemplateBusy(false);
         }
       }
     };
     restore();
-    return () => {
-      cancelled = true;
-    };
-  }, [initialValue, loadTemplate, open, templateSelectionStorageKey, templates]);
+  }, [open]);
 
   const handleClose = () => {
     if (busy || templateActionBusy) return;
