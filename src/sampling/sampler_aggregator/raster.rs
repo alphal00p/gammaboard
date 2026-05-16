@@ -729,22 +729,20 @@ fn validate_plane_geometry(
     geometry: &PlaneRasterGeometry,
     domain: &Domain,
 ) -> Result<(), BuildError> {
-    let (continuous_dims, discrete_dims) = domain.fixed_rectangular_dims().ok_or_else(|| {
-        BuildError::incompatible("plane geometry requires a fixed rectangular domain")
-    })?;
     geometry.validate().map_err(BuildError::invalid_input)?;
+    let continuous_dims = domain
+        .continuous_dims_at_discrete_path(&geometry.discrete)
+        .map_err(|err| {
+            BuildError::incompatible(format!(
+                "plane geometry discrete path {:?} is not valid for domain: {err}",
+                geometry.discrete
+            ))
+        })?;
     if geometry.offset.len() != continuous_dims {
         return Err(BuildError::incompatible(format!(
             "plane geometry continuous dimension mismatch: expected {}, got {}",
             continuous_dims,
             geometry.offset.len()
-        )));
-    }
-    if geometry.discrete.len() != discrete_dims {
-        return Err(BuildError::incompatible(format!(
-            "plane geometry discrete dimension mismatch: expected {}, got {}",
-            discrete_dims,
-            geometry.discrete.len()
         )));
     }
     Ok(())
@@ -754,22 +752,20 @@ fn validate_line_geometry(
     geometry: &LineRasterGeometry,
     domain: &Domain,
 ) -> Result<(), BuildError> {
-    let (continuous_dims, discrete_dims) = domain.fixed_rectangular_dims().ok_or_else(|| {
-        BuildError::incompatible("line geometry requires a fixed rectangular domain")
-    })?;
     geometry.validate().map_err(BuildError::invalid_input)?;
+    let continuous_dims = domain
+        .continuous_dims_at_discrete_path(&geometry.discrete)
+        .map_err(|err| {
+            BuildError::incompatible(format!(
+                "line geometry discrete path {:?} is not valid for domain: {err}",
+                geometry.discrete
+            ))
+        })?;
     if geometry.offset.len() != continuous_dims {
         return Err(BuildError::incompatible(format!(
             "line geometry continuous dimension mismatch: expected {}, got {}",
             continuous_dims,
             geometry.offset.len()
-        )));
-    }
-    if geometry.discrete.len() != discrete_dims {
-        return Err(BuildError::incompatible(format!(
-            "line geometry discrete dimension mismatch: expected {}, got {}",
-            discrete_dims,
-            geometry.discrete.len()
         )));
     }
     Ok(())
@@ -803,11 +799,12 @@ fn coprime_stride(total_samples: usize) -> usize {
 mod tests {
     use super::{
         PdfAdaptationRasterPlaneSampler, PdfAdaptationRasterPlaneSamplerParams, RasterLineSampler,
-        RasterLineSamplerParams, coprime_stride, permuted_raster_index,
+        RasterLineSamplerParams, RasterPlaneSampler, RasterPlaneSamplerParams, coprime_stride,
+        permuted_raster_index,
     };
     use crate::core::{LineRasterGeometry, Linspace, PlaneRasterGeometry, SamplerAggregatorConfig};
     use crate::sampling::SamplerAggregator;
-    use crate::utils::domain::Domain;
+    use crate::utils::domain::{Domain, DomainBranch};
     use num::Integer;
 
     #[test]
@@ -873,6 +870,100 @@ mod tests {
 
         assert_eq!(first_points, vec![0.0, 3.0]);
         assert_eq!(second_points, vec![1.0, 4.0, 2.0]);
+    }
+
+    fn inhomogeneous_domain() -> Domain {
+        Domain::discrete(
+            None,
+            [
+                DomainBranch::new(0, Domain::continuous(3)),
+                DomainBranch::new(
+                    1,
+                    Domain::discrete(
+                        None,
+                        [
+                            DomainBranch::new(0, Domain::continuous(1)),
+                            DomainBranch::new(
+                                1,
+                                Domain::discrete(
+                                    None,
+                                    (0..5).map(|index| {
+                                        DomainBranch::new(index, Domain::continuous(5))
+                                    }),
+                                ),
+                            ),
+                        ],
+                    ),
+                ),
+            ],
+        )
+    }
+
+    #[test]
+    fn raster_geometry_uses_discrete_path_to_select_continuous_dims() {
+        let domain = inhomogeneous_domain();
+        RasterPlaneSampler::from_params_and_domain(
+            RasterPlaneSamplerParams {
+                geometry: PlaneRasterGeometry {
+                    offset: vec![0.0; 5],
+                    u_vector: vec![1.0, 0.0, 0.0, 0.0, 0.0],
+                    v_vector: vec![0.0, 1.0, 0.0, 0.0, 0.0],
+                    u_linspace: Linspace {
+                        start: 0.0,
+                        stop: 1.0,
+                        count: 2,
+                    },
+                    v_linspace: Linspace {
+                        start: 0.0,
+                        stop: 1.0,
+                        count: 2,
+                    },
+                    discrete: vec![1, 1, 3],
+                },
+            },
+            &domain,
+        )
+        .expect("build plane sampler on selected leaf");
+
+        RasterLineSampler::from_params_and_domain(
+            RasterLineSamplerParams {
+                geometry: LineRasterGeometry {
+                    offset: vec![0.0],
+                    direction: vec![1.0],
+                    linspace: Linspace {
+                        start: 0.0,
+                        stop: 1.0,
+                        count: 2,
+                    },
+                    discrete: vec![1, 0],
+                },
+            },
+            &domain,
+        )
+        .expect("build line sampler on selected leaf");
+    }
+
+    #[test]
+    fn raster_geometry_rejects_continuous_dims_not_matching_selected_path() {
+        let domain = inhomogeneous_domain();
+        let result = RasterLineSampler::from_params_and_domain(
+            RasterLineSamplerParams {
+                geometry: LineRasterGeometry {
+                    offset: vec![0.0, 0.0],
+                    direction: vec![1.0, 0.0],
+                    linspace: Linspace {
+                        start: 0.0,
+                        stop: 1.0,
+                        count: 2,
+                    },
+                    discrete: vec![1, 0],
+                },
+            },
+            &domain,
+        )
+        .map(|_| ());
+        let err = result.expect_err("reject wrong continuous dimension");
+        assert!(err.to_string().contains("continuous dimension mismatch"));
     }
 
     #[test]

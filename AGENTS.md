@@ -20,6 +20,8 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - Run names are human-facing and not unique; ambiguous CLI name references must fail.
 - Node identity is `name` plus live-process `uuid`; desired/current assignments live on `nodes`.
 - Run layout uses `Domain`; concrete evaluator batches are `Vec<Point>`.
+- Raster geometry uses its `discrete` path to select a domain branch with a
+  unique continuous dimensionality; it does not require globally rectangular domains.
 - Process evaluators use `kind = "process_evaluator"` and the
   `gammaboard-jsonrpc-v1` `eval_batch` method. Requests use ragged row-major
   coordinate arrays plus offsets; responses use `values_row_major`. Process

@@ -1465,8 +1465,18 @@ name = "python-scalar-flake-e2e"
 [evaluator]
 kind = "process_evaluator"
 command = ["nix", "shell", "{evaluator_flake_ref}", "-c", "gammaboard-example-evaluator-worker"]
-continuous_dims = 2
-discrete_cardinalities = [2, 3]
+domain = {{ Discrete = {{ axis_label = "spin", branches = [
+  {{ index = 0, domain = {{ Discrete = {{ axis_label = "channel", branches = [
+    {{ index = 0, domain = {{ Continuous = {{ dims = 2 }} }} }},
+    {{ index = 1, domain = {{ Continuous = {{ dims = 2 }} }} }},
+    {{ index = 2, domain = {{ Continuous = {{ dims = 2 }} }} }},
+  ] }} }} }},
+  {{ index = 1, domain = {{ Discrete = {{ axis_label = "channel", branches = [
+    {{ index = 0, domain = {{ Continuous = {{ dims = 2 }} }} }},
+    {{ index = 1, domain = {{ Continuous = {{ dims = 2 }} }} }},
+    {{ index = 2, domain = {{ Continuous = {{ dims = 2 }} }} }},
+  ] }} }} }},
+] }} }}
 args = {{ module = "demo_integrand", class = "SinIntegrand", scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }}
 
 [[task_queue]]
@@ -1616,8 +1626,19 @@ name = "rust-apptainer-process-evaluator-e2e"
 [evaluator]
 kind = "process_evaluator"
 command = ["apptainer", "exec", "{}", "breit-wigner-worker"]
-continuous_dims = 2
-discrete_cardinalities = []
+domain = {{ Discrete = {{ axis_label = "d0", branches = [
+  {{ index = 0, domain = {{ Continuous = {{ dims = 3 }} }} }},
+  {{ index = 1, domain = {{ Discrete = {{ axis_label = "d1", branches = [
+    {{ index = 0, domain = {{ Continuous = {{ dims = 1 }} }} }},
+    {{ index = 1, domain = {{ Discrete = {{ axis_label = "d2", branches = [
+      {{ index = 0, domain = {{ Continuous = {{ dims = 5 }} }} }},
+      {{ index = 1, domain = {{ Continuous = {{ dims = 5 }} }} }},
+      {{ index = 2, domain = {{ Continuous = {{ dims = 5 }} }} }},
+      {{ index = 3, domain = {{ Continuous = {{ dims = 5 }} }} }},
+      {{ index = 4, domain = {{ Continuous = {{ dims = 5 }} }} }},
+    ] }} }} }},
+  ] }} }} }},
+] }} }}
 args = {{ masses = [0.25, 0.50, 0.75], widths = [0.04, 0.06, 0.05], channel_weights = [1.0, 0.7, 1.3] }}
 
 [[task_queue]]

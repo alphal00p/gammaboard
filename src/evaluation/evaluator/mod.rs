@@ -55,12 +55,7 @@ impl EvaluatorConfig {
                 params.discrete_dims,
             )),
             Self::Symbolica { params } => Ok(Domain::continuous(params.args.len())),
-            Self::ProcessEvaluator { params } => Ok(params.domain.clone().unwrap_or_else(|| {
-                Domain::rectangular_with_cardinalities(
-                    params.continuous_dims,
-                    params.discrete_cardinalities.clone(),
-                )
-            })),
+            Self::ProcessEvaluator { params } => Ok(params.domain.clone()),
         }
     }
 

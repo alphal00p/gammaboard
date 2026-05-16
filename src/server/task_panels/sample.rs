@@ -1330,7 +1330,9 @@ fn scalar_projected_bins(
         if !matches_fixed_dims(&bin.discrete, item)? {
             continue;
         }
-        let key = histogram_key(&bin.discrete, item)?;
+        let Some(key) = histogram_key(&bin.discrete, item)? else {
+            continue;
+        };
         projected
             .entry(key.clone())
             .and_modify(|current| current.merge_in_place(bin.clone()))
@@ -1386,14 +1388,9 @@ fn matches_fixed_dims(discrete: &[i64], item: &NamedDiscreteHistogram) -> Result
                 item.name, raw_dim
             )
         })?;
-        let actual = discrete.get(dim).ok_or_else(|| {
-            format!(
-                "discrete histogram '{}' fixed dimension {} is out of range for sample with {} discrete dimensions",
-                item.name,
-                dim,
-                discrete.len()
-            )
-        })?;
+        let Some(actual) = discrete.get(dim) else {
+            return Ok(false);
+        };
         if actual != fixed_value {
             return Ok(false);
         }
@@ -1401,20 +1398,18 @@ fn matches_fixed_dims(discrete: &[i64], item: &NamedDiscreteHistogram) -> Result
     Ok(true)
 }
 
-fn histogram_key(discrete: &[i64], item: &NamedDiscreteHistogram) -> Result<Vec<i64>, String> {
-    item.hist_dims
-        .iter()
-        .map(|dim| {
-            discrete.get(*dim).copied().ok_or_else(|| {
-                format!(
-                    "discrete histogram '{}' axis dimension {} is out of range for sample with {} discrete dimensions",
-                    item.name,
-                    dim,
-                    discrete.len()
-                )
-            })
-        })
-        .collect()
+fn histogram_key(
+    discrete: &[i64],
+    item: &NamedDiscreteHistogram,
+) -> Result<Option<Vec<i64>>, String> {
+    let mut key = Vec::with_capacity(item.hist_dims.len());
+    for dim in &item.hist_dims {
+        let Some(value) = discrete.get(*dim) else {
+            return Ok(None);
+        };
+        key.push(*value);
+    }
+    Ok(Some(key))
 }
 
 fn reject_bin_explosion(count: usize, max_total_bins: usize, name: &str) -> Result<(), String> {
@@ -1666,5 +1661,55 @@ mod tests {
         assert!((values[0] - 3.0).abs() < f64::EPSILON);
         assert!((values[1] + 3.0).abs() < f64::EPSILON);
         assert!((values.iter().sum::<f64>()).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn discrete_histogram_skips_samples_outside_variable_depth_path() {
+        let mut bins = BTreeMap::new();
+        bins.insert(
+            "0".to_string(),
+            ScalarDiscreteBinStats {
+                discrete: vec![0],
+                count: 10,
+                sum_weighted_value: 10.0,
+                sum_sq: 10.0,
+            },
+        );
+        bins.insert(
+            "1/0".to_string(),
+            ScalarDiscreteBinStats {
+                discrete: vec![1, 0],
+                count: 10,
+                sum_weighted_value: 20.0,
+                sum_sq: 40.0,
+            },
+        );
+        bins.insert(
+            "1/1/3".to_string(),
+            ScalarDiscreteBinStats {
+                discrete: vec![1, 1, 3],
+                count: 2,
+                sum_weighted_value: 6.0,
+                sum_sq: 20.0,
+            },
+        );
+        let item = NamedDiscreteHistogram {
+            name: "leaf".to_string(),
+            hist_dims: vec![2],
+            fixed_dims: BTreeMap::from([("0".to_string(), 1), ("1".to_string(), 1)]),
+        };
+
+        let projected = scalar_projected_bins(
+            &bins,
+            &item,
+            DiscreteHistogramNormalization::ConditionalMean,
+            22,
+            16,
+        )
+        .expect("project variable-depth bins");
+
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0]["label"], "3");
+        assert_eq!(projected[0]["value"], 3.0);
     }
 }

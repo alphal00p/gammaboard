@@ -12,12 +12,7 @@ use crate::utils::domain::Domain;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProcessEvaluatorParams {
     pub command: Vec<String>,
-    #[serde(default)]
-    pub continuous_dims: usize,
-    #[serde(default)]
-    pub discrete_cardinalities: Vec<usize>,
-    #[serde(default)]
-    pub domain: Option<Domain>,
+    pub domain: Domain,
     #[serde(default = "default_components")]
     pub components: Vec<String>,
     #[serde(default = "default_args")]
@@ -47,21 +42,7 @@ impl ProcessEvaluator {
                 "process_evaluator components must not be empty",
             ));
         }
-        if params
-            .discrete_cardinalities
-            .iter()
-            .any(|value| *value == 0)
-        {
-            return Err(BuildError::build(
-                "process_evaluator discrete_cardinalities must contain only positive integers",
-            ));
-        }
-        let domain = params.domain.clone().unwrap_or_else(|| {
-            Domain::rectangular_with_cardinalities(
-                params.continuous_dims,
-                params.discrete_cardinalities.clone(),
-            )
-        });
+        let domain = params.domain.clone();
         let worker = ProcessRuntimeWorker::spawn(&params, domain.clone())?;
         Ok(Self {
             domain,
@@ -331,16 +312,29 @@ while True:
         let params = toml::from_str::<ProcessEvaluatorParams>(
             r#"
 command = ["python", "-u", "worker.py"]
-continuous_dims = 2
-discrete_cardinalities = [2, 3]
+domain = { Discrete = { axis_label = "d0", branches = [
+  { index = 0, domain = { Discrete = { axis_label = "d1", branches = [
+    { index = 0, domain = { Continuous = { dims = 2 } } },
+    { index = 1, domain = { Continuous = { dims = 2 } } },
+    { index = 2, domain = { Continuous = { dims = 2 } } },
+  ] } } },
+  { index = 1, domain = { Discrete = { axis_label = "d1", branches = [
+    { index = 0, domain = { Continuous = { dims = 2 } } },
+    { index = 1, domain = { Continuous = { dims = 2 } } },
+    { index = 2, domain = { Continuous = { dims = 2 } } },
+  ] } } },
+] } }
 args = { module = "my_module", class = "MyEvaluator", scale = 1.0 }
 "#,
         )
         .expect("process scalar config should parse");
 
         assert_eq!(params.command, ["python", "-u", "worker.py"]);
-        assert_eq!(params.continuous_dims, 2);
-        assert_eq!(params.discrete_cardinalities, [2, 3]);
+        assert_eq!(params.domain.fixed_rectangular_dims(), Some((2, 2)));
+        assert_eq!(
+            params.domain.fixed_discrete_cardinalities(),
+            Some(vec![2, 3])
+        );
         assert_eq!(params.components, ["value"]);
         assert!(params.args.is_object());
     }
@@ -367,8 +361,7 @@ domain = { Discrete = { axis_label = "d0", branches = [
         )
         .expect("process evaluator config should parse inhomogeneous domain");
 
-        let domain = params.domain.expect("domain");
-        assert_eq!(domain.fixed_rectangular_dims(), None);
+        assert_eq!(params.domain.fixed_rectangular_dims(), None);
     }
 
     #[test]
@@ -384,15 +377,13 @@ domain = { Discrete = { axis_label = "d0", branches = [
         ];
         let params = ProcessEvaluatorParams {
             command,
-            continuous_dims: 2,
-            discrete_cardinalities: Vec::new(),
-            domain: None,
+            domain: crate::utils::domain::Domain::continuous(2),
             components: vec!["value".to_string()],
             args: json!({}),
         };
         let components = params.components.clone();
-        let continuous_dims = params.continuous_dims;
-        let domain = crate::utils::domain::Domain::rectangular(continuous_dims, 0);
+        let continuous_dims = 2;
+        let domain = params.domain.clone();
         let mut worker = ProcessRuntimeWorker::spawn(&params, domain)?;
 
         let cases = [(1_usize, 2_000_usize), (1_024, 500), (65_536, 20)];

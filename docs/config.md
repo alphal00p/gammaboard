@@ -112,9 +112,7 @@ Gammaboard evaluates GammaLoop runs in x-space so GammaLoop's parameterized obse
 For `evaluator.kind = "process_evaluator"`, configure:
 
 - `command`: complete process command, for example `["python", "-u", "runtimes/my_runtime/evaluator_worker.py"]` or `["apptainer", "exec", "--nv", "runtimes/my_runtime/runtime.sif", "python", "-u", "runtimes/my_runtime/evaluator_worker.py"]`.
-- `domain`: optional explicit `Domain` tree. Use this for inhomogeneous layouts.
-- `continuous_dims`: expected continuous dimension for homogeneous rectangular batches.
-- `discrete_cardinalities`: expected per-axis discrete cardinalities for homogeneous rectangular batches, for example `[3, 4, 2]`.
+- `domain`: explicit `Domain` tree. This is the authoritative coordinate layout for homogeneous and inhomogeneous runs.
 - `components`: observable component names; defaults to `["value"]` and must match the vector accumulator components.
 - `args = { ... }`: optional opaque JSON object passed to the process during `initialize`.
 
@@ -122,7 +120,7 @@ Process evaluator construction semantics:
 
 - GammaBoard only speaks the process protocol.
 - The bundled Python wrapper uses `args.module` and `args.class` to import a class exposing `eval(xs_discrete, xs_continuous)`.
-- If the Python class defines `from_config(discrete_cardinalities=..., continuous_dims=..., init_args=...)`, that is called with `args` excluding `module` and `class`.
+- If the Python class defines `from_config(discrete_cardinalities=..., continuous_dims=..., init_args=...)`, the bundled homogeneous Python wrapper derives those values from `domain` and calls it with `args` excluding `module` and `class`.
 - Otherwise the worker calls `ClassName(**args)` or `ClassName()` when `args` is empty.
 - Process evaluators require a `kind = "vector"` accumulator; the training projection is stored as its own scalar aggregate and is used for sampler feedback.
 
@@ -166,6 +164,8 @@ Task names are unique per run and can be referenced by `from_name`.
 
 When raster `image`/`plot_line`/`pdf_adaptation_image`/`pdf_adaptation_plot_line` tasks should evaluate directly in declared geometry coordinates after transformed sampling stages, set `batch_transforms = []` on those raster tasks.
 
+Raster geometry `discrete` selects the domain branch to scan. The selected branch, or remaining subtree if the path is a prefix, must determine a unique continuous dimensionality matching `offset` and direction vectors.
+
 `set_accumulator` is the explicit no-work task for changing accumulator state. Sample tasks may omit `accumulator`, but only if a prior task in the run already established an effective accumulator state.
 
 Task files used with `gammaboard run task add` may contain either a single `task = { ... }`, a `[[task_queue]]` array, or both. When both are present, `task` is appended first.
@@ -195,6 +195,8 @@ kind = "sample"
 stop_condition = { max_samples = 10000, absolute_error = 1e-3, relative_error = 1e-2, projection = "real" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 ```
+
+Discrete histogram dimensions address the discrete coordinate path. For inhomogeneous domains, samples where a configured fixed or histogram dimension does not exist are ignored, so `fixed_dims` can select a subtree before histogramming a deeper branch.
 
 Deterministic scan tasks:
 

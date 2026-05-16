@@ -4,8 +4,18 @@ name = "process-evaluator-process-sampler-demo"
 [evaluator]
 kind = "process_evaluator"
 command = ["nix", "shell", "path:./process_api/examples/python_scalar_sin#runtime", "-c", "gammaboard-example-evaluator-worker"]
-continuous_dims = 2
-discrete_cardinalities = [2, 3]
+domain = { Discrete = { axis_label = "spin", branches = [
+  { index = 0, domain = { Discrete = { axis_label = "channel", branches = [
+    { index = 0, domain = { Continuous = { dims = 2 } } },
+    { index = 1, domain = { Continuous = { dims = 2 } } },
+    { index = 2, domain = { Continuous = { dims = 2 } } },
+  ] } } },
+  { index = 1, domain = { Discrete = { axis_label = "channel", branches = [
+    { index = 0, domain = { Continuous = { dims = 2 } } },
+    { index = 1, domain = { Continuous = { dims = 2 } } },
+    { index = 2, domain = { Continuous = { dims = 2 } } },
+  ] } } },
+] } }
 args = { module = "demo_integrand", class = "SinIntegrand", scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }
 
 [[task_queue]]

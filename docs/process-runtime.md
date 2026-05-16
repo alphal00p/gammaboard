@@ -185,13 +185,12 @@ The process command is explicit in run config. GammaBoard does not append worker
 ```toml
 kind = "process_evaluator"
 command = ["python", "-u", "runtimes/my_runtime/evaluator_worker.py"]
-continuous_dims = 2
-discrete_cardinalities = [2, 3]
+domain = { Continuous = { dims = 2 } }
 components = ["value"]
 args = { module = "demo_integrand", class = "SinIntegrand" }
 ```
 
-The protocol itself uses `domain`. `continuous_dims` and `discrete_cardinalities` are only homogeneous config sugar for process evaluators that do not set `domain`.
+The protocol uses `domain` as the authoritative coordinate layout. Homogeneous wrappers may derive fixed dimensions from it internally, but run config should not define separate shape hints.
 
 Relative command entries that look like paths are resolved below the resources root. Absolute paths are used as-is.
 Nix, Apptainer, virtualenvs, and system packages are all just ways to make this command available.

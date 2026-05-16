@@ -25,7 +25,6 @@ kind = "process_sampler"
 command = ["apptainer", "exec", "--no-mount", "/etc/localtime", "--nv", "runtimes/madnis_gammaboard_api/runtime.sif", "python", "-u", "/opt/madnis_gammaboard_api/sampler_worker.py"]
 # Alternative with the Nix runtime when Nix is available:
 # command = ["runtimes/madnis_gammaboard_api/result/bin/python", "-u", "runtimes/madnis_gammaboard_api/sampler_worker.py"]
-continuous_dims = 2
 requires_training_values = true
 
 [task_queue.sampler_aggregator.config.args]

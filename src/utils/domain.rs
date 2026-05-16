@@ -92,6 +92,37 @@ impl Domain {
         Some((self.fixed_continuous_dims()?, self.fixed_discrete_depth()?))
     }
 
+    pub fn continuous_dims_at_discrete_path(&self, discrete: &[i64]) -> Result<usize, String> {
+        if discrete.is_empty() {
+            return self.fixed_continuous_dims().ok_or_else(|| {
+                "discrete path does not determine a unique continuous dimensionality".to_string()
+            });
+        }
+        match self {
+            Self::Continuous { .. } => Err(format!(
+                "discrete path {:?} continues beyond a continuous leaf",
+                discrete
+            )),
+            Self::Discrete { branches, .. } => {
+                let branch_index = usize::try_from(discrete[0]).map_err(|_| {
+                    format!(
+                        "discrete branch index {} is negative and cannot select a domain branch",
+                        discrete[0]
+                    )
+                })?;
+                let branch = branches
+                    .iter()
+                    .find(|branch| branch.index == branch_index)
+                    .ok_or_else(|| {
+                        format!("discrete branch index {branch_index} does not exist in domain")
+                    })?;
+                branch
+                    .domain
+                    .continuous_dims_at_discrete_path(&discrete[1..])
+            }
+        }
+    }
+
     pub fn fixed_discrete_cardinalities(&self) -> Option<Vec<usize>> {
         match self {
             Self::Continuous { .. } => Some(Vec::new()),
@@ -124,7 +155,7 @@ impl DomainBranch {
 
 #[cfg(test)]
 mod tests {
-    use super::Domain;
+    use super::{Domain, DomainBranch};
 
     #[test]
     fn rectangular_with_cardinalities_preserves_exact_shape() {
@@ -139,5 +170,40 @@ mod tests {
         let a = Domain::rectangular(1, 2);
         let b = Domain::rectangular_with_cardinalities(1, [1, 1]);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn discrete_path_selects_inhomogeneous_continuous_leaf() {
+        let domain = Domain::discrete(
+            None,
+            [
+                DomainBranch::new(0, Domain::continuous(3)),
+                DomainBranch::new(
+                    1,
+                    Domain::discrete(
+                        None,
+                        [
+                            DomainBranch::new(0, Domain::continuous(1)),
+                            DomainBranch::new(
+                                1,
+                                Domain::discrete(
+                                    None,
+                                    (0..5).map(|index| {
+                                        DomainBranch::new(index, Domain::continuous(5))
+                                    }),
+                                ),
+                            ),
+                        ],
+                    ),
+                ),
+            ],
+        );
+
+        assert_eq!(domain.continuous_dims_at_discrete_path(&[0]), Ok(3));
+        assert_eq!(domain.continuous_dims_at_discrete_path(&[1, 0]), Ok(1));
+        assert_eq!(domain.continuous_dims_at_discrete_path(&[1, 1]), Ok(5));
+        assert_eq!(domain.continuous_dims_at_discrete_path(&[1, 1, 4]), Ok(5));
+        assert!(domain.continuous_dims_at_discrete_path(&[1, 1, 5]).is_err());
+        assert!(domain.continuous_dims_at_discrete_path(&[0, 0]).is_err());
     }
 }

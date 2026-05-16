@@ -105,7 +105,9 @@ def fixed_domain_shape(domain):
         raise ValueError(f"unsupported domain shape: {domain!r}")
     branches = domain["Discrete"].get("branches") or []
     if not branches:
-        raise ValueError("homogeneous Python wrapper requires non-empty discrete branches")
+        raise ValueError(
+            "homogeneous Python wrapper requires non-empty discrete branches"
+        )
     tail_cardinalities = None
     tail_continuous_dims = None
     for branch in branches:
@@ -114,7 +116,9 @@ def fixed_domain_shape(domain):
             tail_cardinalities = cardinalities
             tail_continuous_dims = continuous
         elif cardinalities != tail_cardinalities or continuous != tail_continuous_dims:
-            raise ValueError("homogeneous Python wrapper does not support inhomogeneous domains")
+            raise ValueError(
+                "homogeneous Python wrapper does not support inhomogeneous domains"
+            )
     return [len(branches), *tail_cardinalities], tail_continuous_dims
 
 
@@ -135,9 +139,13 @@ while True:
             module_name, class_name, init_args = parse_python_wrapper_args(params)
             module = import_configured_module(module_name)
             cls = getattr(module, class_name)
-            discrete_cardinalities, continuous_dims = fixed_domain_shape(params["domain"])
+            discrete_cardinalities, continuous_dims = fixed_domain_shape(
+                params["domain"]
+            )
             if any(value <= 0 for value in discrete_cardinalities):
-                raise ValueError("discrete_cardinalities must contain only positive integers")
+                raise ValueError(
+                    "discrete_cardinalities must contain only positive integers"
+                )
             discrete_dims = len(discrete_cardinalities)
             sampler_args = init_args
             snapshot = params.get("snapshot")
@@ -180,7 +188,10 @@ while True:
                     f"sampler discrete_cardinalities mismatch: expected {discrete_cardinalities}, got {maybe_discrete_cardinalities}"
                 )
             maybe_continuous_dims = getattr(sampler, "continuous_dims", None)
-            if maybe_continuous_dims is not None and int(maybe_continuous_dims) != continuous_dims:
+            if (
+                maybe_continuous_dims is not None
+                and int(maybe_continuous_dims) != continuous_dims
+            ):
                 raise ValueError(
                     f"sampler continuous_dims mismatch: expected {continuous_dims}, got {int(maybe_continuous_dims)}"
                 )
@@ -198,7 +209,11 @@ while True:
                 remaining = int(remaining)
             send_result(req_id, {"remaining": remaining})
         elif method == "produce_latent_batch":
-            if sampler is None or discrete_cardinalities is None or continuous_dims is None:
+            if (
+                sampler is None
+                or discrete_cardinalities is None
+                or continuous_dims is None
+            ):
                 raise RuntimeError("worker not initialized")
             nr_samples = int(params["nr_samples"])
             batch = sampler.produce_latent_batch(nr_samples)
@@ -219,7 +234,9 @@ while True:
                     f"produce_latent_batch returned continuous shape {xs_continuous.shape}, expected ({nr_samples}, {continuous_dims})"
                 )
             if not np.isfinite(xs_continuous).all():
-                raise ValueError("produce_latent_batch returned non-finite continuous values")
+                raise ValueError(
+                    "produce_latent_batch returned non-finite continuous values"
+                )
             if not np.isfinite(weights).all():
                 raise ValueError("produce_latent_batch returned non-finite weights")
             if (weights <= 0.0).any():
@@ -257,7 +274,11 @@ while True:
             sampler.ingest_training_values(training_values)
             send_result(req_id, {"ok": True})
         elif method == "pdf":
-            if sampler is None or discrete_cardinalities is None or continuous_dims is None:
+            if (
+                sampler is None
+                or discrete_cardinalities is None
+                or continuous_dims is None
+            ):
                 raise RuntimeError("worker not initialized")
             nr_samples = int(params["nr_samples"])
             discrete_dims = len(discrete_cardinalities)
@@ -273,7 +294,11 @@ while True:
             xs_continuous = np.asarray(
                 params["xs_continuous_row_major"], dtype=np.float64
             ).reshape((nr_samples, continuous_dims))
-            pdf = sampler.pdf(xs_discrete, xs_continuous) if hasattr(sampler, "pdf") else None
+            pdf = (
+                sampler.pdf(xs_discrete, xs_continuous)
+                if hasattr(sampler, "pdf")
+                else None
+            )
             if pdf is None:
                 send_result(req_id, {"values": None})
                 continue
