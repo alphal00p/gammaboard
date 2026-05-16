@@ -74,30 +74,28 @@ impl ProcessWorker {
     }
 
     fn read_response(&mut self, expected_id: u64) -> Result<Value, String> {
-        loop {
-            let Some(content_len) = self.read_frame_header()? else {
-                return Err(self.worker_terminated_message(&format!(
-                    "{} worker terminated before responding",
-                    self.label
-                )));
-            };
-            let mut payload = vec![0_u8; content_len];
-            self.stdout.read_exact(&mut payload).map_err(|error| {
-                self.worker_terminated_message(&format!(
-                    "failed reading {} frame payload: {error}",
-                    self.label
-                ))
-            })?;
-            let response = serde_json::from_slice::<Value>(&payload).map_err(|error| {
-                format!(
-                    "failed to parse {} response frame as JSON: {error}; payload='{}'",
-                    self.label,
-                    String::from_utf8_lossy(&payload)
-                )
-            })?;
-            validate_response_envelope(&self.label, &response, expected_id)?;
-            return Ok(response);
-        }
+        let Some(content_len) = self.read_frame_header()? else {
+            return Err(self.worker_terminated_message(&format!(
+                "{} worker terminated before responding",
+                self.label
+            )));
+        };
+        let mut payload = vec![0_u8; content_len];
+        self.stdout.read_exact(&mut payload).map_err(|error| {
+            self.worker_terminated_message(&format!(
+                "failed reading {} frame payload: {error}",
+                self.label
+            ))
+        })?;
+        let response = serde_json::from_slice::<Value>(&payload).map_err(|error| {
+            format!(
+                "failed to parse {} response frame as JSON: {error}; payload='{}'",
+                self.label,
+                String::from_utf8_lossy(&payload)
+            )
+        })?;
+        validate_response_envelope(&self.label, &response, expected_id)?;
+        Ok(response)
     }
 
     fn read_frame_header(&mut self) -> Result<Option<usize>, String> {

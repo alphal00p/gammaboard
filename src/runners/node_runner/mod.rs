@@ -295,54 +295,48 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         >,
         #[cfg(unix)] sigterm: &mut tokio::signal::unix::Signal,
     ) -> Result<bool, StoreError> {
-        loop {
-            #[cfg(unix)]
-            tokio::select! {
-                _ = shutdown.as_mut() => {
-                    info!("stopping node-runner");
-                    return Ok(false);
-                }
-                _ = sigterm.recv() => {
-                    info!("stopping node-runner (SIGTERM)");
-                    return Ok(false);
-                }
-                event = lease_events.recv() => {
-                    match event {
-                        Some(LeaseEvent::Ready) => return Ok(true),
-                        Some(LeaseEvent::Fatal { startup, retries, last_error }) => {
-                            warn!(
-                                startup,
-                                retries,
-                                last_error = %last_error,
-                                "node announce failed for too long; shutting down node-runner"
-                            );
-                            return Ok(false);
-                        }
-                        None => return Err(StoreError::store("lease renewal task exited before startup completed")),
-                    }
-                }
+        #[cfg(unix)]
+        tokio::select! {
+            _ = shutdown.as_mut() => {
+                info!("stopping node-runner");
+                Ok(false)
             }
-            #[cfg(not(unix))]
-            tokio::select! {
-                _ = shutdown.as_mut() => {
-                    info!("stopping node-runner");
-                    return Ok(false);
+            _ = sigterm.recv() => {
+                info!("stopping node-runner (SIGTERM)");
+                Ok(false)
+            }
+            event = lease_events.recv() => match event {
+                Some(LeaseEvent::Ready) => Ok(true),
+                Some(LeaseEvent::Fatal { startup, retries, last_error }) => {
+                    warn!(
+                        startup,
+                        retries,
+                        last_error = %last_error,
+                        "node announce failed for too long; shutting down node-runner"
+                    );
+                    Ok(false)
                 }
-                event = lease_events.recv() => {
-                    match event {
-                        Some(LeaseEvent::Ready) => return Ok(true),
-                        Some(LeaseEvent::Fatal { startup, retries, last_error }) => {
-                            warn!(
-                                startup,
-                                retries,
-                                last_error = %last_error,
-                                "node announce failed for too long; shutting down node-runner"
-                            );
-                            return Ok(false);
-                        }
-                        None => return Err(StoreError::store("lease renewal task exited before startup completed")),
-                    }
+                None => Err(StoreError::store("lease renewal task exited before startup completed")),
+            }
+        }
+        #[cfg(not(unix))]
+        tokio::select! {
+            _ = shutdown.as_mut() => {
+                info!("stopping node-runner");
+                Ok(false)
+            }
+            event = lease_events.recv() => match event {
+                Some(LeaseEvent::Ready) => Ok(true),
+                Some(LeaseEvent::Fatal { startup, retries, last_error }) => {
+                    warn!(
+                        startup,
+                        retries,
+                        last_error = %last_error,
+                        "node announce failed for too long; shutting down node-runner"
+                    );
+                    Ok(false)
                 }
+                None => Err(StoreError::store("lease renewal task exited before startup completed")),
             }
         }
     }
