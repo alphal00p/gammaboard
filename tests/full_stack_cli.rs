@@ -2729,28 +2729,28 @@ async fn full_stack_deploy_can_run_two_port_isolated_instances() -> anyhow::Resu
     let base_a = format!("http://127.0.0.1:{frontend_port_a}");
     let base_b = format!("http://127.0.0.1:{frontend_port_b}");
     harness
-        .wait_for("first deploy frontend", Duration::from_secs(20), || {
+        .wait_for("first deploy API health", Duration::from_secs(20), || {
             let base = base_a.clone();
-            async move { Ok(http_get(&base, "/").await.is_ok()) }
+            async move {
+                Ok(http_get(&base, "/api/health")
+                    .await
+                    .is_ok_and(|response| response.contains("\"status\":\"ok\"")))
+            }
         })
         .await?;
     harness
-        .wait_for("second deploy frontend", Duration::from_secs(20), || {
+        .wait_for("second deploy API health", Duration::from_secs(20), || {
             let base = base_b.clone();
-            async move { Ok(http_get(&base, "/").await.is_ok()) }
+            async move {
+                Ok(http_get(&base, "/api/health")
+                    .await
+                    .is_ok_and(|response| response.contains("\"status\":\"ok\"")))
+            }
         })
         .await?;
 
-    assert!(
-        http_get(&base_a, "/api/health")
-            .await?
-            .contains("\"status\":\"ok\"")
-    );
-    assert!(
-        http_get(&base_b, "/api/health")
-            .await?
-            .contains("\"status\":\"ok\"")
-    );
+    assert!(http_get(&base_a, "/").await?.contains("gammaboard e2e"));
+    assert!(http_get(&base_b, "/").await?.contains("gammaboard e2e"));
 
     harness.terminate_child("deploy-a").await?;
     harness.terminate_child("deploy-b").await?;

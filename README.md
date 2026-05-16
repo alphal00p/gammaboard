@@ -174,8 +174,15 @@ Useful deploy options:
 ./gammaboard run pause -a
 ./gammaboard node stop -a
 ./gammaboard db reset --yes
-cargo test -q --test full_stack_cli -- --ignored --nocapture --test-threads=1
+just test-e2e
 cargo test -q process_evaluator_eval_batch_protocol_benchmark -- --ignored --nocapture
+```
+
+`just test-e2e` uses `cargo nextest` so full-stack tests run in isolated test
+processes with useful timing output. For serial debugging without `nextest`, use:
+
+```bash
+cargo test -q --test full_stack_cli -- --ignored --nocapture --test-threads=1
 ```
 
 GammaLoop support is behind the default `gammaloop` Cargo feature. Build without the heavy GammaLoop dependency with:

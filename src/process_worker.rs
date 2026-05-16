@@ -1,11 +1,16 @@
+use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout};
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
 pub(crate) const PROCESS_PROTOCOL: &str = "gammaboard-jsonrpc-v1";
 const JSON_RPC_VERSION: &str = "2.0";
 const MAX_STDOUT_LOG_BYTES_BEFORE_FRAME: usize = 64 * 1024;
+const MAX_STDERR_TAIL_LINES: usize = 40;
+
+pub(crate) type ProcessStderrTail = Arc<Mutex<VecDeque<String>>>;
 
 pub(crate) struct ProcessWorker {
     label: String,
@@ -14,6 +19,7 @@ pub(crate) struct ProcessWorker {
     stdout: BufReader<ChildStdout>,
     next_id: u64,
     stdout_log_bytes_before_frame: usize,
+    stderr_tail: ProcessStderrTail,
 }
 
 impl ProcessWorker {
@@ -22,6 +28,7 @@ impl ProcessWorker {
         child: Child,
         stdin: ChildStdin,
         stdout: ChildStdout,
+        stderr_tail: ProcessStderrTail,
     ) -> Self {
         Self {
             label: label.into(),
@@ -30,6 +37,7 @@ impl ProcessWorker {
             stdout: BufReader::new(stdout),
             next_id: 1,
             stdout_log_bytes_before_frame: 0,
+            stderr_tail,
         }
     }
 
@@ -172,7 +180,19 @@ impl ProcessWorker {
             .flatten()
             .map(|s| s.to_string())
             .unwrap_or_else(|| "running".to_string());
-        format!("{context}; status={status}")
+        let stderr_tail = self.stderr_tail();
+        if stderr_tail.is_empty() {
+            format!("{context}; status={status}")
+        } else {
+            format!("{context}; status={status}; recent stderr:\n{stderr_tail}")
+        }
+    }
+
+    fn stderr_tail(&self) -> String {
+        let Ok(lines) = self.stderr_tail.lock() else {
+            return "<stderr tail unavailable: lock poisoned>".to_string();
+        };
+        lines.iter().cloned().collect::<Vec<_>>().join("\n")
     }
 }
 
@@ -195,6 +215,30 @@ fn format_json_rpc_error(error: &Value) -> String {
         return format!("process worker error: {message}");
     }
     format!("process worker error: {error}")
+}
+
+pub(crate) fn pipe_process_stderr(
+    label: &'static str,
+    stderr: impl std::io::Read + Send + 'static,
+) -> ProcessStderrTail {
+    let tail = Arc::new(Mutex::new(VecDeque::with_capacity(MAX_STDERR_TAIL_LINES)));
+    let tail_for_thread = Arc::clone(&tail);
+    std::thread::spawn(move || {
+        let reader = std::io::BufReader::new(stderr);
+        for line in reader.lines().map_while(Result::ok) {
+            if let Ok(mut lines) = tail_for_thread.lock() {
+                if lines.len() == MAX_STDERR_TAIL_LINES {
+                    lines.pop_front();
+                }
+                lines.push_back(line.clone());
+            }
+            tracing::warn!(
+                source = "worker",
+                message = format!("[{label} stderr] {line}")
+            );
+        }
+    });
+    tail
 }
 
 fn validate_response_envelope(

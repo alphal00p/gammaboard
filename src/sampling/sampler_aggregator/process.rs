@@ -1,4 +1,3 @@
-use std::io::BufRead;
 use std::process::Stdio;
 use std::sync::Mutex;
 
@@ -8,7 +7,7 @@ use serde_json::Value;
 use crate::core::{BuildError, EngineError};
 use crate::evaluation::{Batch, Point};
 use crate::process_runtime::build_process_worker_command;
-use crate::process_worker::{PROCESS_PROTOCOL, ProcessWorker};
+use crate::process_worker::{PROCESS_PROTOCOL, ProcessWorker, pipe_process_stderr};
 use crate::sampling::{
     LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot,
 };
@@ -232,10 +231,10 @@ impl ProcessSamplerWorker {
             .stderr
             .take()
             .ok_or_else(|| BuildError::build("process sampler worker stderr not available"))?;
-        pipe_child_stderr("process sampler", stderr);
+        let stderr_tail = pipe_process_stderr("process sampler", stderr);
 
         let mut worker = Self {
-            process: ProcessWorker::new("process sampler", child, stdin, stdout),
+            process: ProcessWorker::new("process sampler", child, stdin, stdout, stderr_tail),
             discrete_cardinalities: discrete_cardinalities.to_vec(),
             continuous_dims: params.continuous_dims,
         };
@@ -517,18 +516,6 @@ impl ProcessSamplerWorker {
         }
         Err("process sampler initialize result missing ok=true".to_string())
     }
-}
-
-fn pipe_child_stderr(label: &'static str, stderr: impl std::io::Read + Send + 'static) {
-    std::thread::spawn(move || {
-        let reader = std::io::BufReader::new(stderr);
-        for line in reader.lines().map_while(Result::ok) {
-            tracing::warn!(
-                source = "worker",
-                message = format!("[{label} stderr] {line}")
-            );
-        }
-    });
 }
 
 fn default_args() -> Value {

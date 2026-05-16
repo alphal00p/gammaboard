@@ -1,4 +1,3 @@
-use std::io::BufRead;
 use std::process::Stdio;
 
 use serde::{Deserialize, Serialize};
@@ -7,7 +6,7 @@ use serde_json::Value;
 use crate::core::{AccumulatorConfig, BuildError, EvalError};
 use crate::evaluation::{AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator};
 use crate::process_runtime::build_process_worker_command;
-use crate::process_worker::{PROCESS_PROTOCOL, ProcessWorker};
+use crate::process_worker::{PROCESS_PROTOCOL, ProcessWorker, pipe_process_stderr};
 use crate::utils::domain::Domain;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -197,10 +196,10 @@ impl ProcessRuntimeWorker {
             .stderr
             .take()
             .ok_or_else(|| BuildError::build("process worker stderr not available"))?;
-        pipe_child_stderr("process evaluator", stderr);
+        let stderr_tail = pipe_process_stderr("process evaluator", stderr);
 
         let mut worker = Self {
-            process: ProcessWorker::new("process evaluator", child, stdin, stdout),
+            process: ProcessWorker::new("process evaluator", child, stdin, stdout, stderr_tail),
             discrete_cardinalities: discrete_cardinalities.to_vec(),
             continuous_dims,
             components: components.to_vec(),
@@ -299,18 +298,6 @@ fn default_args() -> Value {
 
 fn default_components() -> Vec<String> {
     vec!["value".to_string()]
-}
-
-fn pipe_child_stderr(label: &'static str, stderr: impl std::io::Read + Send + 'static) {
-    std::thread::spawn(move || {
-        let reader = std::io::BufReader::new(stderr);
-        for line in reader.lines().map_while(Result::ok) {
-            tracing::warn!(
-                source = "worker",
-                message = format!("[{label} stderr] {line}")
-            );
-        }
-    });
 }
 
 #[cfg(test)]

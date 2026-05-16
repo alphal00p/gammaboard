@@ -34,6 +34,8 @@ const TomlActionDialog = ({
   const [templateBusy, setTemplateBusy] = useState(false);
   const [templateActionBusy, setTemplateActionBusy] = useState(false);
   const [templateError, setTemplateError] = useState(null);
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [saveTemplateName, setSaveTemplateName] = useState("");
   const wasOpenRef = useRef(false);
   const restoreGenerationRef = useRef(0);
 
@@ -55,6 +57,7 @@ const TomlActionDialog = ({
     if (!open) {
       wasOpenRef.current = false;
       restoreGenerationRef.current += 1;
+      setSaveDialogOpen(false);
       return;
     }
     if (wasOpenRef.current) return;
@@ -91,7 +94,7 @@ const TomlActionDialog = ({
   }, [open]);
 
   const handleClose = () => {
-    if (busy || templateActionBusy) return;
+    if (busy || templateActionBusy || saveDialogOpen) return;
     onClose();
   };
 
@@ -124,7 +127,19 @@ const TomlActionDialog = ({
   const handleSaveTemplate = async () => {
     if (!onSaveTemplate) return;
     const suggested = selectedTemplate || "new-template.toml";
-    const name = window.prompt("Template file name (.toml)", suggested);
+    setSaveTemplateName(suggested);
+    setSaveDialogOpen(true);
+  };
+
+  const handleSaveDialogClose = () => {
+    if (templateActionBusy) return;
+    setSaveDialogOpen(false);
+  };
+
+  const handleSaveTemplateSubmit = async (event) => {
+    event.preventDefault();
+    if (!onSaveTemplate) return;
+    const name = saveTemplateName.trim();
     if (!name) return;
     setTemplateError(null);
     setTemplateActionBusy(true);
@@ -135,6 +150,7 @@ const TomlActionDialog = ({
         setSelectedTemplate(savedName);
         writeStoredSelection(savedName);
       }
+      setSaveDialogOpen(false);
     } catch (err) {
       setTemplateError(err?.message || "Failed to save template.");
     } finally {
@@ -159,75 +175,107 @@ const TomlActionDialog = ({
   };
 
   return (
-    <Dialog open={open} onClose={handleClose} fullWidth maxWidth="md">
-      <form onSubmit={handleSubmit}>
-        <DialogTitle>{title}</DialogTitle>
-        <DialogContent>
-          <Stack spacing={2} sx={{ pt: 1 }}>
-            {helperText ? (
-              <Typography variant="body2" color="text.secondary">
-                {helperText}
-              </Typography>
-            ) : null}
-            {templates.length > 0 ? (
-              <Stack direction={{ xs: "column", md: "row" }} spacing={1} alignItems={{ md: "center" }}>
-                <TextField
-                  select
-                  fullWidth
-                  label="Template"
-                  value={selectedTemplate}
-                  onChange={handleTemplateChange}
-                  disabled={templateActionBusy}
-                >
-                  <MenuItem value="">Custom</MenuItem>
-                  {templates.map((template) => (
-                    <MenuItem key={template} value={template}>
-                      {template}
-                    </MenuItem>
-                  ))}
-                </TextField>
-                {onSaveTemplate ? (
-                  <Button variant="outlined" onClick={handleSaveTemplate} disabled={templateActionBusy || templateBusy}>
-                    Save as Template
-                  </Button>
-                ) : null}
-                {onDeleteTemplate ? (
-                  <Button
-                    variant="outlined"
-                    color="error"
-                    onClick={handleDeleteTemplate}
-                    disabled={templateActionBusy || templateBusy || !selectedTemplate}
+    <>
+      <Dialog open={open} onClose={handleClose} fullWidth maxWidth="md">
+        <form onSubmit={handleSubmit}>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogContent>
+            <Stack spacing={2} sx={{ pt: 1 }}>
+              {helperText ? (
+                <Typography variant="body2" color="text.secondary">
+                  {helperText}
+                </Typography>
+              ) : null}
+              {templates.length > 0 ? (
+                <Stack direction={{ xs: "column", md: "row" }} spacing={1} alignItems={{ md: "center" }}>
+                  <TextField
+                    select
+                    fullWidth
+                    label="Template"
+                    value={selectedTemplate}
+                    onChange={handleTemplateChange}
+                    disabled={templateActionBusy}
                   >
-                    Delete Template
-                  </Button>
-                ) : null}
-              </Stack>
-            ) : null}
-            <TextField
-              autoFocus
-              fullWidth
-              multiline
-              minRows={14}
-              label={label}
-              value={value}
-              onChange={(event) => setValue(event.target.value)}
-              disabled={templateBusy || templateActionBusy}
-              InputLabelProps={{ shrink: true }}
-            />
-            {templateError ? <Alert severity="error">{templateError}</Alert> : null}
-            {error ? <Alert severity="error">{error}</Alert> : null}
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleClose} disabled={busy || templateActionBusy}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="contained" disabled={busy || templateBusy || templateActionBusy || !value.trim()}>
-            {submitLabel}
-          </Button>
-        </DialogActions>
-      </form>
-    </Dialog>
+                    <MenuItem value="">Custom</MenuItem>
+                    {templates.map((template) => (
+                      <MenuItem key={template} value={template}>
+                        {template}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                  {onSaveTemplate ? (
+                    <Button variant="outlined" onClick={handleSaveTemplate} disabled={templateActionBusy || templateBusy}>
+                      Save as Template
+                    </Button>
+                  ) : null}
+                  {onDeleteTemplate ? (
+                    <Button
+                      variant="outlined"
+                      color="error"
+                      onClick={handleDeleteTemplate}
+                      disabled={templateActionBusy || templateBusy || !selectedTemplate}
+                    >
+                      Delete Template
+                    </Button>
+                  ) : null}
+                </Stack>
+              ) : null}
+              <TextField
+                autoFocus
+                fullWidth
+                multiline
+                minRows={14}
+                label={label}
+                value={value}
+                onChange={(event) => setValue(event.target.value)}
+                disabled={templateBusy || templateActionBusy}
+                InputLabelProps={{ shrink: true }}
+              />
+              {templateError ? <Alert severity="error">{templateError}</Alert> : null}
+              {error ? <Alert severity="error">{error}</Alert> : null}
+            </Stack>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={handleClose} disabled={busy || templateActionBusy}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="contained" disabled={busy || templateBusy || templateActionBusy || !value.trim()}>
+              {submitLabel}
+            </Button>
+          </DialogActions>
+        </form>
+      </Dialog>
+
+      <Dialog open={saveDialogOpen} onClose={handleSaveDialogClose} fullWidth maxWidth="xs">
+        <form onSubmit={handleSaveTemplateSubmit}>
+          <DialogTitle>Save Template</DialogTitle>
+          <DialogContent>
+            <Stack spacing={2} sx={{ pt: 1 }}>
+              <Typography variant="body2" color="text.secondary">
+                Save the current TOML as a reusable template.
+              </Typography>
+              <TextField
+                autoFocus
+                fullWidth
+                label="Template file name"
+                value={saveTemplateName}
+                onChange={(event) => setSaveTemplateName(event.target.value)}
+                disabled={templateActionBusy}
+                helperText="Use a concise .toml file name."
+              />
+            </Stack>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={handleSaveDialogClose} disabled={templateActionBusy}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="contained" disabled={templateActionBusy || !saveTemplateName.trim()}>
+              Save
+            </Button>
+          </DialogActions>
+        </form>
+      </Dialog>
+    </>
   );
 };
 
