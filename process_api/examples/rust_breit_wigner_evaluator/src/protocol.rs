@@ -19,15 +19,17 @@ pub struct InitializeParams {
     pub args: Value,
     #[serde(default)]
     pub components: Vec<String>,
-    pub discrete_cardinalities: Vec<usize>,
-    pub continuous_dims: usize,
+    #[serde(default)]
+    pub domain: Value,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct EvalBatchParams {
     pub nr_samples: usize,
     pub xs_discrete_row_major: Vec<i64>,
+    pub xs_discrete_offsets: Vec<usize>,
     pub xs_continuous_row_major: Vec<f64>,
+    pub xs_continuous_offsets: Vec<usize>,
 }
 
 pub fn read_request() -> Result<Option<Request>, String> {

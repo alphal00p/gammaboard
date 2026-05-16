@@ -1495,7 +1495,7 @@ fixed_dims = {{ "0" = 0 }}
 name = "sample-a"
 kind = "sample"
 stop_condition = {{ max_samples = 64 }}
-sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", "shell", "{sampler_flake_ref}", "-c", "gammaboard-example-sampler-worker"], continuous_dims = 2, requires_training_values = true, args = {{ module = "demo_sampler", class = "SymbolicaHavanaSampler", seed = 0, bins = 8, samples_for_update = 8, stop_training_after_n_samples = 64, initial_training_rate = 0.1, final_training_rate = 0.01 }} }} }}
+sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", "shell", "{sampler_flake_ref}", "-c", "gammaboard-example-sampler-worker"], requires_training_values = true, args = {{ module = "demo_sampler", class = "SymbolicaHavanaSampler", seed = 0, bins = 8, samples_for_update = 8, stop_training_after_n_samples = 64, initial_training_rate = 0.1, final_training_rate = 0.01 }} }} }}
 "#
     ));
 

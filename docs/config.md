@@ -112,6 +112,7 @@ Gammaboard evaluates GammaLoop runs in x-space so GammaLoop's parameterized obse
 For `evaluator.kind = "process_evaluator"`, configure:
 
 - `command`: complete process command, for example `["python", "-u", "runtimes/my_runtime/evaluator_worker.py"]` or `["apptainer", "exec", "--nv", "runtimes/my_runtime/runtime.sif", "python", "-u", "runtimes/my_runtime/evaluator_worker.py"]`.
+- `domain`: optional explicit `Domain` tree. Use this for inhomogeneous layouts.
 - `continuous_dims`: expected continuous dimension for homogeneous rectangular batches.
 - `discrete_cardinalities`: expected per-axis discrete cardinalities for homogeneous rectangular batches, for example `[3, 4, 2]`.
 - `components`: observable component names; defaults to `["value"]` and must match the vector accumulator components.
@@ -132,13 +133,12 @@ See [process-runtime.md](process-runtime.md) for the protocol contract.
 For `sampler_aggregator.kind = "process_sampler"`, configure:
 
 - `command`: complete process command, for example `["python", "-u", "runtimes/my_runtime/sampler_worker.py"]` or `["apptainer", "exec", "--nv", "runtimes/my_runtime/runtime.sif", "python", "-u", "runtimes/my_runtime/sampler_worker.py"]`.
-- `continuous_dims`: expected homogeneous continuous dimension.
 - `requires_training_values`: set to `true` when the sampler needs evaluator feedback through `ingest_training_values`.
 - `args = { ... }`: optional opaque JSON object passed to the process during `initialize`.
 
-Process evaluator and sampler methods are vectorized over fixed rectangular batches. `xs_discrete` has shape `(nr_samples, len(discrete_cardinalities))` and `xs_continuous` has shape `(nr_samples, continuous_dims)`.
+Process evaluator and sampler methods use ragged row-major arrays plus offsets. Homogeneous wrappers may validate that offsets match the fixed-width shape derived from `domain` and reject inhomogeneous batches.
 
-Process samplers receive `discrete_cardinalities` derived from the run domain, not a separate sampler config field.
+Process samplers receive the authoritative run `domain`; sampler configs do not define coordinate shape separately.
 
 Process sampler construction semantics:
 

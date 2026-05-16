@@ -2,185 +2,142 @@ use serde_json::Value;
 
 #[derive(Clone, Debug)]
 pub struct EvaluatorConfig {
-    pub masses: Vec<f64>,
-    pub widths: Vec<f64>,
-    pub channel_weights: Vec<f64>,
+    pub scale: f64,
 }
 
 #[derive(Clone, Debug)]
-pub struct BreitWignerEvaluator {
+pub struct BranchingDomainEvaluator {
     config: EvaluatorConfig,
 }
 
-impl BreitWignerEvaluator {
-    pub fn from_args(
-        args: &Value,
-        discrete_cardinalities: &[usize],
-        continuous_dims: usize,
-    ) -> Result<Self, String> {
-        if continuous_dims != 2 {
-            return Err(format!(
-                "rust breit-wigner evaluator expects continuous_dims=2, got {continuous_dims}"
-            ));
+impl BranchingDomainEvaluator {
+    pub fn from_args(args: &Value) -> Result<Self, String> {
+        let scale = args.get("scale").and_then(Value::as_f64).unwrap_or(1.0);
+        if !scale.is_finite() {
+            return Err("args.scale must be finite".to_string());
         }
-        if !discrete_cardinalities.is_empty() {
-            return Err(format!(
-                "rust breit-wigner evaluator expects no discrete axes, got {}",
-                discrete_cardinalities.len()
-            ));
-        }
-        let masses = read_required_f64_array(args, "masses")?;
-        let channels = masses.len();
-        if channels == 0 {
-            return Err("args.masses must not be empty".to_string());
-        }
-
-        let widths = read_f64_array(args, "widths", channels, 0.05)?;
-        let channel_weights = read_f64_array(args, "channel_weights", channels, 1.0)?;
-        if widths
-            .iter()
-            .any(|value| !value.is_finite() || *value <= 0.0)
-        {
-            return Err("widths must be finite and > 0".to_string());
-        }
-
         Ok(Self {
-            config: EvaluatorConfig {
-                masses,
-                widths,
-                channel_weights,
-            },
+            config: EvaluatorConfig { scale },
         })
     }
 
     pub fn eval_batch(
         &self,
         xs_discrete: &[i64],
+        xs_discrete_offsets: &[usize],
         xs_continuous: &[f64],
+        xs_continuous_offsets: &[usize],
         nr_samples: usize,
     ) -> Result<Vec<f64>, String> {
-        if !xs_discrete.is_empty() {
-            return Err(format!(
-                "expected no discrete entries for continuous-only evaluator, got {}",
-                xs_discrete.len()
-            ));
-        }
-        if xs_continuous.len() != nr_samples * 2 {
-            return Err(format!(
-                "expected {} continuous entries, got {}",
-                nr_samples * 2,
-                xs_continuous.len()
-            ));
-        }
+        validate_offsets("xs_discrete_offsets", xs_discrete_offsets, nr_samples, xs_discrete.len())?;
+        validate_offsets(
+            "xs_continuous_offsets",
+            xs_continuous_offsets,
+            nr_samples,
+            xs_continuous.len(),
+        )?;
 
         let mut values = Vec::with_capacity(nr_samples);
         for sample_index in 0..nr_samples {
-            let x = xs_continuous[2 * sample_index];
-            let y = xs_continuous[2 * sample_index + 1];
-            if !x.is_finite() || !y.is_finite() {
-                return Err("continuous inputs must be finite".to_string());
-            }
-            values.push(breit_wigner_mixture_value(
-                x,
-                y,
-                &self.config.masses,
-                &self.config.widths,
-                &self.config.channel_weights,
-            ));
+            let discrete =
+                &xs_discrete[xs_discrete_offsets[sample_index]..xs_discrete_offsets[sample_index + 1]];
+            let continuous = &xs_continuous
+                [xs_continuous_offsets[sample_index]..xs_continuous_offsets[sample_index + 1]];
+            values.push(self.config.scale * branching_domain_value(discrete, continuous)?);
         }
         Ok(values)
     }
 }
 
-pub fn breit_wigner_mixture_value(
-    x: f64,
-    y: f64,
-    masses: &[f64],
-    widths: &[f64],
-    channel_weights: &[f64],
-) -> f64 {
-    let envelope = (-y).exp();
-    masses
-        .iter()
-        .zip(widths.iter())
-        .zip(channel_weights.iter())
-        .map(|((mass, width), weight)| {
-            let dx = x - mass;
-            weight * envelope / (dx * dx + width * width)
-        })
-        .sum()
+pub fn branching_domain_value(discrete: &[i64], continuous: &[f64]) -> Result<f64, String> {
+    if continuous.iter().any(|value| !value.is_finite()) {
+        return Err("continuous inputs must be finite".to_string());
+    }
+    match discrete {
+        [0] => {
+            require_continuous_dims(continuous, 3, discrete)?;
+            Ok(continuous[0] + 2.0 * continuous[1] + 3.0 * continuous[2])
+        }
+        [1, 0] => {
+            require_continuous_dims(continuous, 1, discrete)?;
+            Ok(10.0 + continuous[0] * continuous[0])
+        }
+        [1, 1, d2] if (0..=4).contains(d2) => {
+            require_continuous_dims(continuous, 5, discrete)?;
+            let branch_shift = 20.0 + *d2 as f64;
+            Ok(branch_shift
+                + continuous
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| (index as f64 + 1.0) * value)
+                    .sum::<f64>())
+        }
+        other => Err(format!("unsupported discrete path {other:?}")),
+    }
 }
 
-fn read_required_f64_array(args: &Value, key: &str) -> Result<Vec<f64>, String> {
-    let raw = args
-        .get(key)
-        .ok_or_else(|| format!("args.{key} must be provided"))?;
-    let Some(items) = raw.as_array() else {
-        return Err(format!("args.{key} must be an array"));
-    };
-    items
-        .iter()
-        .enumerate()
-        .map(|(index, item)| {
-            item.as_f64()
-                .filter(|value| value.is_finite())
-                .ok_or_else(|| format!("args.{key}[{index}] must be a finite number"))
-        })
-        .collect()
-}
-
-fn read_f64_array(
-    args: &Value,
-    key: &str,
-    expected_len: usize,
-    default: f64,
-) -> Result<Vec<f64>, String> {
-    let Some(raw) = args.get(key) else {
-        return Ok(vec![default; expected_len]);
-    };
-    let Some(items) = raw.as_array() else {
-        return Err(format!("args.{key} must be an array"));
-    };
-    if items.len() != expected_len {
+fn require_continuous_dims(
+    continuous: &[f64],
+    expected: usize,
+    discrete: &[i64],
+) -> Result<(), String> {
+    if continuous.len() != expected {
         return Err(format!(
-            "args.{key} must have length {expected_len}, got {}",
-            items.len()
+            "discrete path {discrete:?} expects {expected} continuous dimensions, got {}",
+            continuous.len()
         ));
     }
-    items
-        .iter()
-        .enumerate()
-        .map(|(index, item)| {
-            item.as_f64()
-                .filter(|value| value.is_finite())
-                .ok_or_else(|| format!("args.{key}[{index}] must be a finite number"))
-        })
-        .collect()
+    Ok(())
+}
+
+fn validate_offsets(
+    label: &str,
+    offsets: &[usize],
+    nr_samples: usize,
+    values_len: usize,
+) -> Result<(), String> {
+    if offsets.len() != nr_samples + 1 {
+        return Err(format!("{label} must contain nr_samples + 1 entries"));
+    }
+    if offsets.first().copied() != Some(0) {
+        return Err(format!("{label} must start at 0"));
+    }
+    if offsets.last().copied() != Some(values_len) {
+        return Err(format!("{label} must end at value length {values_len}"));
+    }
+    if offsets.windows(2).any(|pair| pair[0] > pair[1]) {
+        return Err(format!("{label} must be non-decreasing"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{breit_wigner_mixture_value, BreitWignerEvaluator};
+    use super::{branching_domain_value, BranchingDomainEvaluator};
 
     #[test]
-    fn evaluates_resonance_mixture() {
-        let args = serde_json::json!({
-            "masses": [0.25, 0.50],
-            "widths": [0.05, 0.10],
-            "channel_weights": [1.0, 2.0],
-        });
-        let evaluator = BreitWignerEvaluator::from_args(&args, &[], 2).unwrap();
-        let values = evaluator
-            .eval_batch(&[], &[0.25, 0.0, 0.50, 0.0], 2)
-            .unwrap();
-
-        assert!((values[0] - 427.58620689655174).abs() < 1e-12);
-        assert!((values[1] - 215.3846153846154).abs() < 1e-12);
+    fn evaluates_all_branch_shapes() {
+        assert_eq!(branching_domain_value(&[0], &[1.0, 2.0, 3.0]).unwrap(), 14.0);
+        assert_eq!(branching_domain_value(&[1, 0], &[4.0]).unwrap(), 26.0);
+        assert_eq!(
+            branching_domain_value(&[1, 1, 3], &[1.0, 1.0, 1.0, 1.0, 1.0]).unwrap(),
+            38.0
+        );
     }
 
     #[test]
-    fn pure_function_is_easy_to_copy() {
-        let value = breit_wigner_mixture_value(0.25, 0.0, &[0.25], &[0.05], &[1.0]);
-        assert!((value - 400.0).abs() < 1e-12);
+    fn evaluator_consumes_ragged_row_major_batches() {
+        let evaluator = BranchingDomainEvaluator::from_args(&serde_json::json!({"scale": 2.0}))
+            .expect("evaluator");
+        let values = evaluator
+            .eval_batch(
+                &[0, 1, 0, 1, 1, 4],
+                &[0, 1, 3, 6],
+                &[1.0, 2.0, 3.0, 4.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+                &[0, 3, 4, 9],
+                3,
+            )
+            .expect("values");
+        assert_eq!(values, [28.0, 52.0, 78.0]);
     }
 }

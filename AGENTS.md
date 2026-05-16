@@ -21,9 +21,9 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - Node identity is `name` plus live-process `uuid`; desired/current assignments live on `nodes`.
 - Run layout uses `Domain`; concrete evaluator batches are `Vec<Point>`.
 - Process evaluators use `kind = "process_evaluator"` and the
-  `gammaboard-jsonrpc-v1` `eval_batch` method. Responses use
-  `values_row_major`; process evaluator tasks should use a vector accumulator
-  with matching components.
+  `gammaboard-jsonrpc-v1` `eval_batch` method. Requests use ragged row-major
+  coordinate arrays plus offsets; responses use `values_row_major`. Process
+  evaluator tasks should use a vector accumulator with matching components.
 - Multi-component observables use vector accumulator models. Full raster
   outputs use `FullVectorAccumulatorState` with named components.
 

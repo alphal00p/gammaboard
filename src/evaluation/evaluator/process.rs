@@ -12,9 +12,12 @@ use crate::utils::domain::Domain;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProcessEvaluatorParams {
     pub command: Vec<String>,
+    #[serde(default)]
     pub continuous_dims: usize,
     #[serde(default)]
     pub discrete_cardinalities: Vec<usize>,
+    #[serde(default)]
+    pub domain: Option<Domain>,
     #[serde(default = "default_components")]
     pub components: Vec<String>,
     #[serde(default = "default_args")]
@@ -22,8 +25,7 @@ pub struct ProcessEvaluatorParams {
 }
 
 pub struct ProcessEvaluator {
-    continuous_dims: usize,
-    discrete_cardinalities: Vec<usize>,
+    domain: Domain,
     components: Vec<String>,
     worker: ProcessRuntimeWorker,
 }
@@ -54,16 +56,15 @@ impl ProcessEvaluator {
                 "process_evaluator discrete_cardinalities must contain only positive integers",
             ));
         }
-        let worker = ProcessRuntimeWorker::spawn(
-            &params.command,
-            &params.discrete_cardinalities,
-            params.continuous_dims,
-            &params.components,
-            params.args,
-        )?;
+        let domain = params.domain.clone().unwrap_or_else(|| {
+            Domain::rectangular_with_cardinalities(
+                params.continuous_dims,
+                params.discrete_cardinalities.clone(),
+            )
+        });
+        let worker = ProcessRuntimeWorker::spawn(&params, domain.clone())?;
         Ok(Self {
-            continuous_dims: params.continuous_dims,
-            discrete_cardinalities: params.discrete_cardinalities,
+            domain,
             components: params.components,
             worker,
         })
@@ -72,10 +73,7 @@ impl ProcessEvaluator {
 
 impl Evaluator for ProcessEvaluator {
     fn get_domain(&self) -> Domain {
-        Domain::rectangular_with_cardinalities(
-            self.continuous_dims,
-            self.discrete_cardinalities.clone(),
-        )
+        self.domain.clone()
     }
 
     fn eval_batch(
@@ -85,14 +83,8 @@ impl Evaluator for ProcessEvaluator {
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
         let mut observable_state = AccumulatorState::from_config(accumulator);
-        let (xs_discrete, xs_continuous) = dense_rectangular_inputs(
-            batch,
-            self.discrete_cardinalities.len(),
-            self.continuous_dims,
-        )?;
-        let values = self
-            .worker
-            .eval_batch(&xs_discrete, &xs_continuous, batch.size())?;
+        let inputs = ragged_row_major_inputs(batch);
+        let values = self.worker.eval_batch(&inputs, batch.size())?;
         let mut training_values = options
             .require_training_values
             .then(|| Vec::with_capacity(batch.size()));
@@ -133,48 +125,44 @@ impl Evaluator for ProcessEvaluator {
     }
 }
 
-fn dense_rectangular_inputs(
-    batch: &Batch,
-    discrete_dims: usize,
-    continuous_dims: usize,
-) -> Result<(Vec<i64>, Vec<f64>), EvalError> {
-    let mut xs_discrete = Vec::with_capacity(batch.size().saturating_mul(discrete_dims));
-    let mut xs_continuous = Vec::with_capacity(batch.size().saturating_mul(continuous_dims));
-    for (sample_idx, point) in batch.points().iter().enumerate() {
-        if point.discrete.len() != discrete_dims {
-            return Err(EvalError::eval(format!(
-                "process_evaluator expected {discrete_dims} discrete dimensions, sample {sample_idx} has {}",
-                point.discrete.len(),
-            )));
-        }
-        if point.continuous.len() != continuous_dims {
-            return Err(EvalError::eval(format!(
-                "process_evaluator expected {continuous_dims} continuous dimensions, sample {sample_idx} has {}",
-                point.continuous.len(),
-            )));
-        }
+#[derive(Debug, Clone)]
+struct RaggedRowMajorInputs {
+    xs_discrete_row_major: Vec<i64>,
+    xs_discrete_offsets: Vec<usize>,
+    xs_continuous_row_major: Vec<f64>,
+    xs_continuous_offsets: Vec<usize>,
+}
+
+fn ragged_row_major_inputs(batch: &Batch) -> RaggedRowMajorInputs {
+    let mut xs_discrete = Vec::new();
+    let mut xs_discrete_offsets = Vec::with_capacity(batch.size() + 1);
+    let mut xs_continuous = Vec::new();
+    let mut xs_continuous_offsets = Vec::with_capacity(batch.size() + 1);
+    xs_discrete_offsets.push(0);
+    xs_continuous_offsets.push(0);
+    for point in batch.points() {
         xs_discrete.extend_from_slice(&point.discrete);
+        xs_discrete_offsets.push(xs_discrete.len());
         xs_continuous.extend_from_slice(&point.continuous);
+        xs_continuous_offsets.push(xs_continuous.len());
     }
-    Ok((xs_discrete, xs_continuous))
+    RaggedRowMajorInputs {
+        xs_discrete_row_major: xs_discrete,
+        xs_discrete_offsets,
+        xs_continuous_row_major: xs_continuous,
+        xs_continuous_offsets,
+    }
 }
 
 struct ProcessRuntimeWorker {
     process: ProcessWorker,
-    discrete_cardinalities: Vec<usize>,
-    continuous_dims: usize,
+    domain: Domain,
     components: Vec<String>,
 }
 
 impl ProcessRuntimeWorker {
-    fn spawn(
-        command: &[String],
-        discrete_cardinalities: &[usize],
-        continuous_dims: usize,
-        components: &[String],
-        args: Value,
-    ) -> Result<Self, BuildError> {
-        let mut command = build_process_worker_command(command, "evaluator")?;
+    fn spawn(params: &ProcessEvaluatorParams, domain: Domain) -> Result<Self, BuildError> {
+        let mut command = build_process_worker_command(&params.command, "evaluator")?;
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -200,21 +188,14 @@ impl ProcessRuntimeWorker {
 
         let mut worker = Self {
             process: ProcessWorker::new("process evaluator", child, stdin, stdout, stderr_tail),
-            discrete_cardinalities: discrete_cardinalities.to_vec(),
-            continuous_dims,
-            components: components.to_vec(),
+            domain,
+            components: params.components.clone(),
         };
-        worker.send_init(discrete_cardinalities, continuous_dims, components, args)?;
+        worker.send_init(params.args.clone())?;
         Ok(worker)
     }
 
-    fn send_init(
-        &mut self,
-        discrete_cardinalities: &[usize],
-        continuous_dims: usize,
-        components: &[String],
-        args: Value,
-    ) -> Result<(), BuildError> {
+    fn send_init(&mut self, args: Value) -> Result<(), BuildError> {
         let response = self
             .process
             .request(
@@ -222,16 +203,11 @@ impl ProcessRuntimeWorker {
                 serde_json::json!({
                     "protocol": PROCESS_PROTOCOL,
                     "role": "evaluator",
-                    "components": components,
+                    "components": self.components,
                     "observable": {
-                        "components": components,
+                        "components": self.components,
                     },
-                    "domain": {
-                        "continuous_dims": continuous_dims,
-                        "discrete_cardinalities": discrete_cardinalities,
-                    },
-                    "discrete_cardinalities": discrete_cardinalities,
-                    "continuous_dims": continuous_dims,
+                    "domain": self.domain,
                     "args": args,
                 }),
             )
@@ -241,8 +217,7 @@ impl ProcessRuntimeWorker {
 
     fn eval_batch(
         &mut self,
-        xs_discrete_row_major: &[i64],
-        xs_continuous_row_major: &[f64],
+        inputs: &RaggedRowMajorInputs,
         nr_samples: usize,
     ) -> Result<Vec<f64>, EvalError> {
         let response = self
@@ -251,11 +226,11 @@ impl ProcessRuntimeWorker {
                 "eval_batch",
                 serde_json::json!({
                     "nr_samples": nr_samples,
-                    "discrete_cardinalities": self.discrete_cardinalities,
-                    "continuous_dims": self.continuous_dims,
                     "components": self.components,
-                    "xs_discrete_row_major": xs_discrete_row_major,
-                    "xs_continuous_row_major": xs_continuous_row_major,
+                    "xs_discrete_row_major": inputs.xs_discrete_row_major,
+                    "xs_discrete_offsets": inputs.xs_discrete_offsets,
+                    "xs_continuous_row_major": inputs.xs_continuous_row_major,
+                    "xs_continuous_offsets": inputs.xs_continuous_offsets,
                 }),
             )
             .map_err(EvalError::eval)?;
@@ -302,7 +277,7 @@ fn default_components() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProcessEvaluatorParams, ProcessRuntimeWorker};
+    use super::{ProcessEvaluatorParams, ProcessRuntimeWorker, RaggedRowMajorInputs};
     use serde_json::json;
     use std::error::Error;
     use std::time::Instant;
@@ -371,6 +346,32 @@ args = { module = "my_module", class = "MyEvaluator", scale = 1.0 }
     }
 
     #[test]
+    fn process_evaluator_deserializes_inhomogeneous_domain() {
+        let params = toml::from_str::<ProcessEvaluatorParams>(
+            r#"
+command = ["worker"]
+domain = { Discrete = { axis_label = "d0", branches = [
+  { index = 0, domain = { Continuous = { dims = 3 } } },
+  { index = 1, domain = { Discrete = { axis_label = "d1", branches = [
+    { index = 0, domain = { Continuous = { dims = 1 } } },
+    { index = 1, domain = { Discrete = { axis_label = "d2", branches = [
+      { index = 0, domain = { Continuous = { dims = 5 } } },
+      { index = 1, domain = { Continuous = { dims = 5 } } },
+      { index = 2, domain = { Continuous = { dims = 5 } } },
+      { index = 3, domain = { Continuous = { dims = 5 } } },
+      { index = 4, domain = { Continuous = { dims = 5 } } },
+    ] } } },
+  ] } } },
+] } }
+"#,
+        )
+        .expect("process evaluator config should parse inhomogeneous domain");
+
+        let domain = params.domain.expect("domain");
+        assert_eq!(domain.fixed_rectangular_dims(), None);
+    }
+
+    #[test]
     #[ignore = "manual protocol overhead benchmark; run with --ignored --nocapture"]
     fn process_evaluator_eval_batch_protocol_benchmark() -> Result<(), Box<dyn Error>> {
         let python = std::env::var("GAMMABOARD_PROTOCOL_BENCH_PYTHON")
@@ -381,37 +382,39 @@ args = { module = "my_module", class = "MyEvaluator", scale = 1.0 }
             "-c".to_string(),
             ECHO_EVALUATOR_WORKER.to_string(),
         ];
-        let components = vec!["value".to_string()];
-        let discrete_cardinalities = Vec::new();
-        let continuous_dims = 2;
-        let mut worker = ProcessRuntimeWorker::spawn(
-            &command,
-            &discrete_cardinalities,
-            continuous_dims,
-            &components,
-            json!({}),
-        )?;
+        let params = ProcessEvaluatorParams {
+            command,
+            continuous_dims: 2,
+            discrete_cardinalities: Vec::new(),
+            domain: None,
+            components: vec!["value".to_string()],
+            args: json!({}),
+        };
+        let components = params.components.clone();
+        let continuous_dims = params.continuous_dims;
+        let domain = crate::utils::domain::Domain::rectangular(continuous_dims, 0);
+        let mut worker = ProcessRuntimeWorker::spawn(&params, domain)?;
 
         let cases = [(1_usize, 2_000_usize), (1_024, 500), (65_536, 20)];
         for (nr_samples, repetitions) in cases {
             let xs_discrete_row_major = Vec::new();
             let xs_continuous_row_major = vec![0.5; nr_samples * continuous_dims];
+            let inputs = RaggedRowMajorInputs {
+                xs_discrete_row_major,
+                xs_discrete_offsets: vec![0; nr_samples + 1],
+                xs_continuous_row_major,
+                xs_continuous_offsets: (0..=nr_samples)
+                    .map(|index| index * continuous_dims)
+                    .collect(),
+            };
             for _ in 0..5 {
-                let values = worker.eval_batch(
-                    &xs_discrete_row_major,
-                    &xs_continuous_row_major,
-                    nr_samples,
-                )?;
+                let values = worker.eval_batch(&inputs, nr_samples)?;
                 assert_eq!(values.len(), nr_samples * components.len());
             }
 
             let started = Instant::now();
             for _ in 0..repetitions {
-                let values = worker.eval_batch(
-                    &xs_discrete_row_major,
-                    &xs_continuous_row_major,
-                    nr_samples,
-                )?;
+                let values = worker.eval_batch(&inputs, nr_samples)?;
                 assert_eq!(values.len(), nr_samples * components.len());
             }
             let elapsed = started.elapsed();

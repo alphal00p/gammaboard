@@ -1,11 +1,11 @@
 mod evaluator;
 mod protocol;
 
-use evaluator::BreitWignerEvaluator;
+use evaluator::BranchingDomainEvaluator;
 use protocol::{read_request, send_error, send_result, EvalBatchParams, InitializeParams};
 
 fn main() {
-    let mut evaluator: Option<BreitWignerEvaluator> = None;
+    let mut evaluator: Option<BranchingDomainEvaluator> = None;
 
     loop {
         let request = match read_request() {
@@ -36,22 +36,18 @@ fn main() {
                     if params.components.len() > 1 {
                         return Err(serde_json::Error::io(std::io::Error::new(
                             std::io::ErrorKind::InvalidInput,
-                            "rust_breit_wigner_evaluator example returns exactly one component",
+                            "rust ragged-domain evaluator example returns exactly one component",
                         )));
                     }
-                    evaluator = Some(
-                        BreitWignerEvaluator::from_args(
-                            &params.args,
-                            &params.discrete_cardinalities,
-                            params.continuous_dims,
-                        )
-                        .map_err(|error| {
+                    let _domain = params.domain;
+                    evaluator = Some(BranchingDomainEvaluator::from_args(&params.args).map_err(
+                        |error| {
                             serde_json::Error::io(std::io::Error::new(
                                 std::io::ErrorKind::InvalidInput,
                                 error,
                             ))
-                        })?,
-                    );
+                        },
+                    )?);
                     Ok(serde_json::json!({ "ok": true }))
                 }) {
                     Ok(value) => Ok(value),
@@ -65,7 +61,9 @@ fn main() {
                     (Some(evaluator), Ok(params)) => evaluator
                         .eval_batch(
                             &params.xs_discrete_row_major,
+                            &params.xs_discrete_offsets,
                             &params.xs_continuous_row_major,
+                            &params.xs_continuous_offsets,
                             params.nr_samples,
                         )
                         .map(|values| serde_json::json!({ "values_row_major": values })),

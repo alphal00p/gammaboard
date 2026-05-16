@@ -11,8 +11,7 @@ use std::{thread, time::Duration};
 /// Test-only sampler-aggregator engine with simple random batch generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NaiveMonteCarloSamplerAggregator {
-    continuous_dims: usize,
-    discrete_dims: usize,
+    domain: Domain,
     training_target_samples: usize,
     training_delay_per_sample_ms: u64,
     trained_samples: usize,
@@ -27,15 +26,13 @@ pub struct NaiveMonteCarloSamplerAggregator {
 
 impl NaiveMonteCarloSamplerAggregator {
     pub fn new(
-        continuous_dims: usize,
-        discrete_dims: usize,
+        domain: Domain,
         training_target_samples: usize,
         training_delay_per_sample_ms: u64,
         fail_on_produce_batch_nr: Option<usize>,
     ) -> Self {
         Self {
-            continuous_dims,
-            discrete_dims,
+            domain,
             training_target_samples,
             training_delay_per_sample_ms,
             trained_samples: 0,
@@ -76,13 +73,8 @@ impl NaiveMonteCarloSamplerAggregator {
         params: NaiveMonteCarloSamplerParams,
         domain: &Domain,
     ) -> Result<Self, BuildError> {
-        let (continuous_dims, discrete_dims) =
-            domain.fixed_rectangular_dims().ok_or_else(|| {
-                BuildError::build("naive_monte_carlo sampler requires a fixed rectangular domain")
-            })?;
         Ok(Self::new(
-            continuous_dims,
-            discrete_dims,
+            domain.clone(),
             params.training_target_samples,
             params.training_delay_per_sample_ms,
             params.fail_on_produce_batch_nr,
@@ -98,20 +90,10 @@ impl NaiveMonteCarloSamplerAggregator {
 
 impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
     fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
-        let (continuous_dims, discrete_dims) =
-            domain.fixed_rectangular_dims().ok_or_else(|| {
-                BuildError::build("naive_monte_carlo sampler requires a fixed rectangular domain")
-            })?;
-        if continuous_dims != self.continuous_dims {
+        if domain != &self.domain {
             return Err(BuildError::build(format!(
-                "naive_monte_carlo sampler expects continuous_dims={}, got {}",
-                self.continuous_dims, continuous_dims
-            )));
-        }
-        if discrete_dims != self.discrete_dims {
-            return Err(BuildError::build(format!(
-                "naive_monte_carlo sampler expects discrete_dims={}, got {}",
-                self.discrete_dims, discrete_dims
+                "naive_monte_carlo sampler domain mismatch: expected {:?}, got {:?}",
+                self.domain, domain
             )));
         }
         Ok(())
@@ -161,15 +143,8 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
         let mut rng = rand::rng();
         let mut points = Vec::with_capacity(nr_samples);
         for _ in 0..nr_samples {
-            points.push(Point::new(
-                (0..self.continuous_dims)
-                    .map(|_| rng.random::<f64>())
-                    .collect(),
-                (0..self.discrete_dims)
-                    .map(|_| rng.random::<u32>() as i64)
-                    .collect(),
-                1.0,
-            ));
+            let (discrete, continuous) = sample_domain_point(&self.domain, &mut rng)?;
+            points.push(Point::new(continuous, discrete, 1.0));
         }
 
         let batch = Batch::new(points).map_err(|err| EngineError::engine(err.to_string()))?;
@@ -214,22 +189,45 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
     }
 
     fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
-        Ok(points
-            .iter()
-            .map(|(discrete, continuous)| {
-                if self.discrete_dims > 0
-                    || !discrete.is_empty()
-                    || continuous.len() != self.continuous_dims
-                {
-                    return None;
-                }
-                if continuous.iter().all(|value| (0.0..=1.0).contains(value)) {
-                    Some(1.0)
-                } else {
-                    Some(0.0)
-                }
-            })
-            .collect())
+        if let Some((continuous_dims, 0)) = self.domain.fixed_rectangular_dims() {
+            return Ok(points
+                .iter()
+                .map(|(discrete, continuous)| {
+                    if !discrete.is_empty() || continuous.len() != continuous_dims {
+                        return None;
+                    }
+                    if continuous.iter().all(|value| (0.0..=1.0).contains(value)) {
+                        Some(1.0)
+                    } else {
+                        Some(0.0)
+                    }
+                })
+                .collect());
+        }
+        Ok(vec![None; points.len()])
+    }
+}
+
+fn sample_domain_point(
+    domain: &Domain,
+    rng: &mut impl Rng,
+) -> Result<(Vec<i64>, Vec<f64>), EngineError> {
+    match domain {
+        Domain::Continuous { dims } => Ok((
+            Vec::new(),
+            (0..*dims).map(|_| rng.random::<f64>()).collect(),
+        )),
+        Domain::Discrete { branches, .. } => {
+            if branches.is_empty() {
+                return Err(EngineError::engine(
+                    "naive_monte_carlo cannot sample a discrete domain with no branches",
+                ));
+            }
+            let branch = &branches[rng.random_range(0..branches.len())];
+            let (mut discrete, continuous) = sample_domain_point(&branch.domain, rng)?;
+            discrete.insert(0, branch.index as i64);
+            Ok((discrete, continuous))
+        }
     }
 }
 
@@ -240,7 +238,7 @@ mod tests {
     #[test]
     fn snapshot_roundtrip_restores_naive_runtime_state() {
         let domain = Domain::rectangular(2, 1);
-        let mut sampler = NaiveMonteCarloSamplerAggregator::new(2, 1, 100, 7, None);
+        let mut sampler = NaiveMonteCarloSamplerAggregator::new(domain.clone(), 100, 7, None);
         sampler.trained_samples = 13;
         sampler.nr_batches = 5;
         sampler.nr_samples = 29;
@@ -255,8 +253,7 @@ mod tests {
         };
         let state: NaiveMonteCarloSamplerAggregator =
             serde_json::from_value(raw).expect("decode snapshot");
-        assert_eq!(state.continuous_dims, 2);
-        assert_eq!(state.discrete_dims, 1);
+        assert_eq!(state.domain, domain);
         assert_eq!(state.training_target_samples, 100);
         assert_eq!(state.training_delay_per_sample_ms, 7);
         assert_eq!(state.trained_samples, 13);

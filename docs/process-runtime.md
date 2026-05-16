@@ -52,12 +52,7 @@ GammaBoard requires exactly one of `result` or `error`.
 {
   "protocol": "gammaboard-jsonrpc-v1",
   "role": "evaluator",
-  "domain": {
-    "continuous_dims": 2,
-    "discrete_cardinalities": [2, 3]
-  },
-  "continuous_dims": 2,
-  "discrete_cardinalities": [2, 3],
+  "domain": { "Continuous": { "dims": 2 } },
   "components": ["value"],
   "observable": { "components": ["value"] },
   "args": {}
@@ -70,16 +65,16 @@ Return:
 { "ok": true }
 ```
 
-`eval_batch` evaluates a fixed rectangular batch:
+`eval_batch` evaluates a batch in ragged row-major form. The offset arrays have length `nr_samples + 1`; sample `i` uses `row_major[offsets[i]..offsets[i + 1]]`.
 
 ```json
 {
   "nr_samples": 2,
-  "continuous_dims": 2,
-  "discrete_cardinalities": [2, 3],
   "components": ["value"],
   "xs_discrete_row_major": [0, 1, 1, 2],
-  "xs_continuous_row_major": [0.1, 0.2, 0.3, 0.4]
+  "xs_discrete_offsets": [0, 2, 4],
+  "xs_continuous_row_major": [0.1, 0.2, 0.3, 0.4],
+  "xs_continuous_offsets": [0, 2, 4]
 }
 ```
 
@@ -99,12 +94,7 @@ Process evaluators should use a `kind = "vector"` accumulator with matching `com
 {
   "protocol": "gammaboard-jsonrpc-v1",
   "role": "sampler",
-  "domain": {
-    "continuous_dims": 2,
-    "discrete_cardinalities": []
-  },
-  "continuous_dims": 2,
-  "discrete_cardinalities": [],
+  "domain": { "Continuous": { "dims": 2 } },
   "args": {},
   "snapshot": null
 }
@@ -139,7 +129,9 @@ Use `{ "plan": { "kind": "pause" } }` when the sampler cannot produce work yet.
 ```json
 {
   "xs_discrete_row_major": [],
+  "xs_discrete_offsets": [0, 0, 0],
   "xs_continuous_row_major": [0.1, 0.2, 0.3, 0.4],
+  "xs_continuous_offsets": [0, 2, 4],
   "weights": [1.0, 1.0]
 }
 ```
@@ -162,7 +154,9 @@ Return:
 {
   "nr_samples": 2,
   "xs_discrete_row_major": [],
-  "xs_continuous_row_major": [0.1, 0.2, 0.3, 0.4]
+  "xs_discrete_offsets": [0, 0, 0],
+  "xs_continuous_row_major": [0.1, 0.2, 0.3, 0.4],
+  "xs_continuous_offsets": [0, 2, 4]
 }
 ```
 
@@ -197,6 +191,8 @@ components = ["value"]
 args = { module = "demo_integrand", class = "SinIntegrand" }
 ```
 
+The protocol itself uses `domain`. `continuous_dims` and `discrete_cardinalities` are only homogeneous config sugar for process evaluators that do not set `domain`.
+
 Relative command entries that look like paths are resolved below the resources root. Absolute paths are used as-is.
 Nix, Apptainer, virtualenvs, and system packages are all just ways to make this command available.
 
@@ -211,7 +207,7 @@ Evaluator classes implement `eval(xs_discrete, xs_continuous)`.
 
 Sampler classes implement `sample_plan`, `produce_latent_batch`, `training_samples_remaining`, `ingest_training_values`, `snapshot`, and optional `pdf` / `get_diagnostics`.
 
-Optional `from_config(...)` and `from_snapshot(...)` constructors receive `discrete_cardinalities`, `continuous_dims`, and the TOML `args` without the wrapper-only `module` and `class` fields.
+Optional `from_config(...)` and `from_snapshot(...)` constructors receive homogeneous dimensions derived from `domain` plus the TOML `args` without the wrapper-only `module` and `class` fields.
 
 ## Benchmark
 

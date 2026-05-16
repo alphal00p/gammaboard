@@ -6,7 +6,7 @@ For the stable process protocol, see [../docs/process-runtime.md](../docs/proces
 
 ## Examples
 
-- `examples/rust_breit_wigner_evaluator`: non-Python evaluator packaged with Apptainer. This is the simplest direct protocol implementation.
+- `examples/rust_breit_wigner_evaluator`: non-Python evaluator packaged with Apptainer. This direct protocol implementation demonstrates ragged row-major batches for inhomogeneous domains.
 - `examples/python_scalar_sin`: NumPy scalar evaluator. The included flake is one optional way to provide its dependencies.
 - `examples/python_sampler_symbolica_havana`: Symbolica-backed Havana sampler. The included flake pins the Python dependencies for reproducibility.
 
@@ -39,4 +39,6 @@ from_config(discrete_cardinalities, continuous_dims, init_args)
 from_snapshot(snapshot, discrete_cardinalities, continuous_dims, init_args)
 ```
 
+These homogeneous dimensions are derived from the protocol `domain`.
 This wrapper shape is only a convenience layer. Non-Python runtimes can implement the protocol directly.
+The bundled Python wrappers intentionally support only homogeneous fixed-width batches and reject ragged offset layouts with a clear error.

@@ -83,6 +83,41 @@ def parse_python_wrapper_args(params):
     return module_name, class_name, init_args
 
 
+def require_homogeneous_offsets(params, field, nr_samples, width):
+    expected = [index * width for index in range(nr_samples + 1)]
+    raw = params.get(field)
+    if raw is None:
+        return
+    offsets = [int(value) for value in raw]
+    if offsets != expected:
+        raise ValueError(
+            "python sampler wrapper only supports homogeneous batches; "
+            f"{field}={offsets} does not match fixed width {width}"
+        )
+
+
+def fixed_domain_shape(domain):
+    if not isinstance(domain, dict):
+        raise ValueError("domain must be an object")
+    if "Continuous" in domain:
+        return [], int(domain["Continuous"]["dims"])
+    if "Discrete" not in domain:
+        raise ValueError(f"unsupported domain shape: {domain!r}")
+    branches = domain["Discrete"].get("branches") or []
+    if not branches:
+        raise ValueError("homogeneous Python wrapper requires non-empty discrete branches")
+    tail_cardinalities = None
+    tail_continuous_dims = None
+    for branch in branches:
+        cardinalities, continuous = fixed_domain_shape(branch["domain"])
+        if tail_cardinalities is None:
+            tail_cardinalities = cardinalities
+            tail_continuous_dims = continuous
+        elif cardinalities != tail_cardinalities or continuous != tail_continuous_dims:
+            raise ValueError("homogeneous Python wrapper does not support inhomogeneous domains")
+    return [len(branches), *tail_cardinalities], tail_continuous_dims
+
+
 while True:
     req = read_frame()
     if req is None:
@@ -100,13 +135,10 @@ while True:
             module_name, class_name, init_args = parse_python_wrapper_args(params)
             module = import_configured_module(module_name)
             cls = getattr(module, class_name)
-            discrete_cardinalities = [
-                int(value) for value in params["discrete_cardinalities"]
-            ]
+            discrete_cardinalities, continuous_dims = fixed_domain_shape(params["domain"])
             if any(value <= 0 for value in discrete_cardinalities):
                 raise ValueError("discrete_cardinalities must contain only positive integers")
             discrete_dims = len(discrete_cardinalities)
-            continuous_dims = int(params["continuous_dims"])
             sampler_args = init_args
             snapshot = params.get("snapshot")
             if snapshot is not None:
@@ -204,9 +236,15 @@ while True:
                     "xs_discrete_row_major": xs_discrete.reshape(
                         (nr_samples * discrete_dims,)
                     ).tolist(),
+                    "xs_discrete_offsets": [
+                        index * discrete_dims for index in range(nr_samples + 1)
+                    ],
                     "xs_continuous_row_major": xs_continuous.reshape(
                         (nr_samples * continuous_dims,)
                     ).tolist(),
+                    "xs_continuous_offsets": [
+                        index * continuous_dims for index in range(nr_samples + 1)
+                    ],
                     "weights": weights.tolist(),
                 },
             )
@@ -223,6 +261,12 @@ while True:
                 raise RuntimeError("worker not initialized")
             nr_samples = int(params["nr_samples"])
             discrete_dims = len(discrete_cardinalities)
+            require_homogeneous_offsets(
+                params, "xs_discrete_offsets", nr_samples, discrete_dims
+            )
+            require_homogeneous_offsets(
+                params, "xs_continuous_offsets", nr_samples, continuous_dims
+            )
             xs_discrete = np.asarray(
                 params["xs_discrete_row_major"], dtype=np.int64
             ).reshape((nr_samples, discrete_dims))

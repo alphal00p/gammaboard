@@ -16,7 +16,6 @@ use crate::utils::domain::Domain;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProcessSamplerParams {
     pub command: Vec<String>,
-    pub continuous_dims: usize,
     #[serde(default)]
     pub requires_training_values: bool,
     #[serde(default = "default_args")]
@@ -31,7 +30,7 @@ pub(crate) struct ProcessSamplerSnapshot {
 
 pub struct ProcessSampler {
     params: ProcessSamplerParams,
-    discrete_cardinalities: Vec<usize>,
+    domain: Domain,
     worker: Mutex<ProcessSamplerWorker>,
 }
 
@@ -41,11 +40,10 @@ impl ProcessSampler {
         domain: &Domain,
     ) -> Result<Self, BuildError> {
         validate_params(&params)?;
-        let discrete_cardinalities = validate_homogeneous_domain(domain, params.continuous_dims)?;
-        let worker = ProcessSamplerWorker::spawn(&params, &discrete_cardinalities, None)?;
+        let worker = ProcessSamplerWorker::spawn(&params, domain.clone(), None)?;
         Ok(Self {
             params,
-            discrete_cardinalities,
+            domain: domain.clone(),
             worker: Mutex::new(worker),
         })
     }
@@ -55,16 +53,14 @@ impl ProcessSampler {
         domain: &Domain,
     ) -> Result<Self, BuildError> {
         validate_params(&snapshot.params)?;
-        let discrete_cardinalities =
-            validate_homogeneous_domain(domain, snapshot.params.continuous_dims)?;
         let worker = ProcessSamplerWorker::spawn(
             &snapshot.params,
-            &discrete_cardinalities,
+            domain.clone(),
             Some(snapshot.sampler_state),
         )?;
         Ok(Self {
             params: snapshot.params,
-            discrete_cardinalities,
+            domain: domain.clone(),
             worker: Mutex::new(worker),
         })
     }
@@ -86,12 +82,10 @@ fn validate_params(params: &ProcessSamplerParams) -> Result<(), BuildError> {
 
 impl SamplerAggregator for ProcessSampler {
     fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
-        let discrete_cardinalities =
-            validate_homogeneous_domain(domain, self.params.continuous_dims)?;
-        if discrete_cardinalities != self.discrete_cardinalities {
+        if domain != &self.domain {
             return Err(BuildError::build(format!(
-                "process_sampler expects discrete_cardinalities={:?}, got {:?} from domain",
-                self.discrete_cardinalities, discrete_cardinalities
+                "process_sampler domain mismatch: expected {:?}, got {:?}",
+                self.domain, domain
             )));
         }
         Ok(())
@@ -117,12 +111,11 @@ impl SamplerAggregator for ProcessSampler {
         }
         let sample_batch = self.worker_mut()?.produce_latent_batch(nr_samples)?;
         let mut points = Vec::with_capacity(nr_samples);
-        let discrete_dims = self.discrete_cardinalities.len();
         for sample_idx in 0..nr_samples {
-            let discrete_start = sample_idx * discrete_dims;
-            let discrete_end = discrete_start + discrete_dims;
-            let continuous_start = sample_idx * self.params.continuous_dims;
-            let continuous_end = continuous_start + self.params.continuous_dims;
+            let discrete_start = sample_batch.xs_discrete_offsets[sample_idx];
+            let discrete_end = sample_batch.xs_discrete_offsets[sample_idx + 1];
+            let continuous_start = sample_batch.xs_continuous_offsets[sample_idx];
+            let continuous_end = sample_batch.xs_continuous_offsets[sample_idx + 1];
             points.push(Point::new(
                 sample_batch.xs_continuous_row_major[continuous_start..continuous_end].to_vec(),
                 sample_batch.xs_discrete_row_major[discrete_start..discrete_end].to_vec(),
@@ -166,47 +159,23 @@ impl ProcessSampler {
     }
 }
 
-fn validate_homogeneous_domain(
-    domain: &Domain,
-    expected_continuous_dims: usize,
-) -> Result<Vec<usize>, BuildError> {
-    let (actual_continuous_dims, actual_discrete_dims) = domain
-        .fixed_rectangular_dims()
-        .ok_or_else(|| BuildError::build("process_sampler requires a fixed rectangular domain"))?;
-    if actual_continuous_dims != expected_continuous_dims {
-        return Err(BuildError::build(format!(
-            "process_sampler expects continuous_dims={}, got {} from domain",
-            expected_continuous_dims, actual_continuous_dims
-        )));
-    }
-    let discrete_cardinalities = domain.fixed_discrete_cardinalities().ok_or_else(|| {
-        BuildError::build("process_sampler requires fixed discrete cardinalities")
-    })?;
-    if discrete_cardinalities.len() != actual_discrete_dims {
-        return Err(BuildError::build(format!(
-            "process_sampler domain cardinality mismatch: depth={}, cardinalities={:?}",
-            actual_discrete_dims, discrete_cardinalities
-        )));
-    }
-    Ok(discrete_cardinalities)
-}
-
 struct ProcessSampleBatch {
     xs_discrete_row_major: Vec<i64>,
+    xs_discrete_offsets: Vec<usize>,
     xs_continuous_row_major: Vec<f64>,
+    xs_continuous_offsets: Vec<usize>,
     weights: Vec<f64>,
 }
 
 struct ProcessSamplerWorker {
     process: ProcessWorker,
-    discrete_cardinalities: Vec<usize>,
-    continuous_dims: usize,
+    domain: Domain,
 }
 
 impl ProcessSamplerWorker {
     fn spawn(
         params: &ProcessSamplerParams,
-        discrete_cardinalities: &[usize],
+        domain: Domain,
         snapshot: Option<Value>,
     ) -> Result<Self, BuildError> {
         let mut command = build_process_worker_command(&params.command, "sampler")?;
@@ -235,25 +204,13 @@ impl ProcessSamplerWorker {
 
         let mut worker = Self {
             process: ProcessWorker::new("process sampler", child, stdin, stdout, stderr_tail),
-            discrete_cardinalities: discrete_cardinalities.to_vec(),
-            continuous_dims: params.continuous_dims,
+            domain,
         };
-        worker.send_init(
-            discrete_cardinalities,
-            params.continuous_dims,
-            params.args.clone(),
-            snapshot,
-        )?;
+        worker.send_init(params.args.clone(), snapshot)?;
         Ok(worker)
     }
 
-    fn send_init(
-        &mut self,
-        discrete_cardinalities: &[usize],
-        continuous_dims: usize,
-        args: Value,
-        snapshot: Option<Value>,
-    ) -> Result<(), BuildError> {
+    fn send_init(&mut self, args: Value, snapshot: Option<Value>) -> Result<(), BuildError> {
         let response = self
             .process
             .request(
@@ -261,12 +218,7 @@ impl ProcessSamplerWorker {
                 serde_json::json!({
                     "protocol": PROCESS_PROTOCOL,
                     "role": "sampler",
-                    "domain": {
-                        "continuous_dims": continuous_dims,
-                        "discrete_cardinalities": discrete_cardinalities,
-                    },
-                    "discrete_cardinalities": discrete_cardinalities,
-                    "continuous_dims": continuous_dims,
+                    "domain": self.domain,
                     "args": args,
                     "snapshot": snapshot,
                 }),
@@ -326,15 +278,14 @@ impl ProcessSamplerWorker {
                     "process sampler response missing 'xs_discrete_row_major' array",
                 )
             })?;
-        let discrete_dims = self.discrete_cardinalities.len();
-        let expected_discrete_len = nr_samples.saturating_mul(discrete_dims);
-        if xs_discrete.len() != expected_discrete_len {
-            return Err(EngineError::engine(format!(
-                "process sampler discrete output size mismatch: expected {} values, got {}",
-                expected_discrete_len,
-                xs_discrete.len()
-            )));
-        }
+        let discrete_dims = self.domain.fixed_discrete_depth().unwrap_or(0);
+        let xs_discrete_offsets = parse_offsets_or_fixed(
+            &response,
+            "xs_discrete_offsets",
+            nr_samples,
+            discrete_dims,
+            xs_discrete.len(),
+        )?;
         let xs_continuous = response
             .get("xs_continuous_row_major")
             .and_then(Value::as_array)
@@ -343,14 +294,13 @@ impl ProcessSamplerWorker {
                     "process sampler response missing 'xs_continuous_row_major' array",
                 )
             })?;
-        let expected_continuous_len = nr_samples.saturating_mul(self.continuous_dims);
-        if xs_continuous.len() != expected_continuous_len {
-            return Err(EngineError::engine(format!(
-                "process sampler continuous output size mismatch: expected {} values, got {}",
-                expected_continuous_len,
-                xs_continuous.len()
-            )));
-        }
+        let xs_continuous_offsets = parse_offsets_or_fixed(
+            &response,
+            "xs_continuous_offsets",
+            nr_samples,
+            self.domain.fixed_continuous_dims().unwrap_or(0),
+            xs_continuous.len(),
+        )?;
         let xs_discrete_row_major = xs_discrete
             .iter()
             .enumerate()
@@ -405,7 +355,9 @@ impl ProcessSamplerWorker {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(ProcessSampleBatch {
             xs_discrete_row_major,
+            xs_discrete_offsets,
             xs_continuous_row_major,
+            xs_continuous_offsets,
             weights,
         })
     }
@@ -435,27 +387,17 @@ impl ProcessSamplerWorker {
     }
 
     fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
-        let discrete_dims = self.discrete_cardinalities.len();
-        let continuous_dims = self.continuous_dims;
-        let mut xs_discrete_row_major = Vec::with_capacity(points.len() * discrete_dims);
-        let mut xs_continuous_row_major = Vec::with_capacity(points.len() * continuous_dims);
-        for (index, point) in points.iter().enumerate() {
-            if point.0.len() != discrete_dims {
-                return Err(EngineError::engine(format!(
-                    "process sampler pdf discrete dimension mismatch at point {index}: expected {}, got {}",
-                    discrete_dims,
-                    point.0.len()
-                )));
-            }
-            if point.1.len() != continuous_dims {
-                return Err(EngineError::engine(format!(
-                    "process sampler pdf continuous dimension mismatch at point {index}: expected {}, got {}",
-                    continuous_dims,
-                    point.1.len()
-                )));
-            }
+        let mut xs_discrete_row_major = Vec::new();
+        let mut xs_discrete_offsets = Vec::with_capacity(points.len() + 1);
+        let mut xs_continuous_row_major = Vec::new();
+        let mut xs_continuous_offsets = Vec::with_capacity(points.len() + 1);
+        xs_discrete_offsets.push(0);
+        xs_continuous_offsets.push(0);
+        for point in points {
             xs_discrete_row_major.extend_from_slice(&point.0);
+            xs_discrete_offsets.push(xs_discrete_row_major.len());
             xs_continuous_row_major.extend_from_slice(&point.1);
+            xs_continuous_offsets.push(xs_continuous_row_major.len());
         }
         let response = self
             .process
@@ -464,7 +406,9 @@ impl ProcessSamplerWorker {
                 serde_json::json!({
                     "nr_samples": points.len(),
                     "xs_discrete_row_major": xs_discrete_row_major,
+                    "xs_discrete_offsets": xs_discrete_offsets,
                     "xs_continuous_row_major": xs_continuous_row_major,
+                    "xs_continuous_offsets": xs_continuous_offsets,
                 }),
             )
             .map_err(EngineError::engine)?;
@@ -522,9 +466,69 @@ fn default_args() -> Value {
     Value::Object(serde_json::Map::new())
 }
 
+fn parse_offsets_or_fixed(
+    response: &Value,
+    field: &str,
+    nr_samples: usize,
+    fixed_width: usize,
+    values_len: usize,
+) -> Result<Vec<usize>, EngineError> {
+    let Some(raw) = response.get(field) else {
+        let expected_len = nr_samples.saturating_mul(fixed_width);
+        if values_len != expected_len {
+            return Err(EngineError::engine(format!(
+                "process sampler response missing '{field}' for ragged output with {values_len} values; fixed-width fallback expected {expected_len}"
+            )));
+        }
+        return Ok((0..=nr_samples).map(|index| index * fixed_width).collect());
+    };
+    let offsets = raw.as_array().ok_or_else(|| {
+        EngineError::engine(format!(
+            "process sampler response field '{field}' must be an array"
+        ))
+    })?;
+    if offsets.len() != nr_samples + 1 {
+        return Err(EngineError::engine(format!(
+            "process sampler response field '{field}' must contain nr_samples + 1 offsets"
+        )));
+    }
+    let mut parsed = Vec::with_capacity(offsets.len());
+    let mut previous = 0_usize;
+    for (index, value) in offsets.iter().enumerate() {
+        let offset = value.as_u64().ok_or_else(|| {
+            EngineError::engine(format!(
+                "process sampler response field '{field}[{index}]' must be a non-negative integer"
+            ))
+        })? as usize;
+        if index == 0 && offset != 0 {
+            return Err(EngineError::engine(format!(
+                "process sampler response field '{field}' must start at 0"
+            )));
+        }
+        if offset < previous {
+            return Err(EngineError::engine(format!(
+                "process sampler response field '{field}' must be non-decreasing"
+            )));
+        }
+        if offset > values_len {
+            return Err(EngineError::engine(format!(
+                "process sampler response field '{field}[{index}]' exceeds row-major value length {values_len}"
+            )));
+        }
+        previous = offset;
+        parsed.push(offset);
+    }
+    if parsed.last().copied() != Some(values_len) {
+        return Err(EngineError::engine(format!(
+            "process sampler response field '{field}' must end at row-major value length {values_len}"
+        )));
+    }
+    Ok(parsed)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ProcessSamplerParams, validate_homogeneous_domain};
+    use super::ProcessSamplerParams;
     use crate::utils::domain::Domain;
 
     #[test]
@@ -532,7 +536,6 @@ mod tests {
         let params = toml::from_str::<ProcessSamplerParams>(
             r#"
 command = ["python", "-u", "worker.py"]
-continuous_dims = 2
 requires_training_values = true
 args = { module = "my_module", class = "MySampler", seed = 0 }
 "#,
@@ -540,23 +543,25 @@ args = { module = "my_module", class = "MySampler", seed = 0 }
         .expect("process sampler config should parse");
 
         assert_eq!(params.command, ["python", "-u", "worker.py"]);
-        assert_eq!(params.continuous_dims, 2);
         assert!(params.requires_training_values);
         assert!(params.args.is_object());
     }
 
     #[test]
-    fn process_sampler_domain_accepts_fixed_rectangular_mixed_dims() {
-        assert_eq!(
-            validate_homogeneous_domain(&Domain::rectangular(3, 2), 3).expect("valid domain"),
-            vec![1, 1]
+    fn process_sampler_params_no_longer_define_domain_shape() {
+        let params = ProcessSamplerParams {
+            command: vec!["worker".to_string()],
+            requires_training_values: false,
+            args: serde_json::json!({}),
+        };
+        assert_eq!(params.command, ["worker"]);
+        let domain = Domain::discrete(
+            Some("branch".to_string()),
+            [
+                crate::utils::domain::DomainBranch::new(0, Domain::continuous(1)),
+                crate::utils::domain::DomainBranch::new(1, Domain::continuous(3)),
+            ],
         );
-    }
-
-    #[test]
-    fn process_sampler_domain_rejects_continuous_dim_mismatch() {
-        let err = validate_homogeneous_domain(&Domain::rectangular(3, 1), 2)
-            .expect_err("expected mismatch");
-        assert!(err.to_string().contains("continuous_dims=2"));
+        assert_eq!(domain.fixed_rectangular_dims(), None);
     }
 }
