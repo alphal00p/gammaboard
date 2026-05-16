@@ -178,8 +178,8 @@ just test-e2e
 cargo test -q process_evaluator_eval_batch_protocol_benchmark -- --ignored --nocapture
 ```
 
-`just test-e2e` uses `cargo nextest` so full-stack tests run in isolated test
-processes with useful timing output. For serial debugging without `nextest`, use:
+`just test-e2e` runs the ignored full-stack CLI tests with Cargo's default test
+parallelism. For serial debugging, use:
 
 ```bash
 cargo test -q --test full_stack_cli -- --ignored --nocapture --test-threads=1

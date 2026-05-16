@@ -1,2 +1,2 @@
 test-e2e:
-    cargo nextest run --test full_stack_cli --run-ignored only
+    cargo test -q --test full_stack_cli -- --ignored
