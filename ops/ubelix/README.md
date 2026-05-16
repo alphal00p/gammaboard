@@ -117,7 +117,7 @@ Admin-protected commands accept `--admin-password` or `GAMMABOARD_ADMIN_PASSWORD
   runtime/
 ```
 
-Secrets and local overrides live in `${HOME}/.config/gammaboard/slurm.env`; all sbatch scripts source it and require `SYMBOLICA_LICENSE`.
+Local overrides live in `${HOME}/.config/gammaboard/slurm.env`; all sbatch scripts source it when present. GammaBoard/GammaLoop use the Symbolica OEM license compiled during the build jobs, so runtime Slurm jobs do not require `SYMBOLICA_LICENSE`.
 
 Remove obsolete Nix state after syncing current ops:
 

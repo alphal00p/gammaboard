@@ -48,6 +48,22 @@ UBELIX uses Apptainer images for deployable services:
 Current image builds overwrite the latest image and write a small `.meta` file.
 Older image generations are intentionally not retained.
 
+## Symbolica OEM License
+
+GammaBoard and GammaLoop use Symbolica's OEM activation path on UBELIX. This is
+a build-time setting, not a runtime secret:
+
+- Build jobs set `SYMBOLICA_OEM_LICENSE=SYMBOLICA_OEM_GAMMALOOP` while compiling
+  the Rust binaries.
+- The binaries call `symbolica::activate_oem_license!(...)` at startup.
+- Runtime Slurm jobs do not need `SYMBOLICA_LICENSE`.
+
+`SYMBOLICA_OEM_LICENSE` is the OEM license name compiled into the binary and
+must match the `SYMBOLICA_OEM_KEY_...` literal used by the binary. To opt out of
+OEM activation for a local/custom build, set `NO_SYMBOLICA_OEM_LICENSE=1` while
+building and provide a regular Symbolica license through Symbolica's normal
+runtime mechanism instead.
+
 ## Nested Runtimes
 
 Process tasks run explicit commands from their config. A command may directly

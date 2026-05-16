@@ -17,10 +17,9 @@ if [[ -f "${PRIVATE_ENV}" ]]; then
   # Load per-user secrets and cluster-local overrides without tracking them in git.
   source "${PRIVATE_ENV}"
 fi
-: "${SYMBOLICA_LICENSE:?set SYMBOLICA_LICENSE in \$HOME/.config/gammaboard/slurm.env}"
-export NO_SYMBOLICA_OEM_LICENSE="${NO_SYMBOLICA_OEM_LICENSE:-1}"
-export APPTAINERENV_SYMBOLICA_LICENSE="${SYMBOLICA_LICENSE}"
-export APPTAINERENV_NO_SYMBOLICA_OEM_LICENSE="${NO_SYMBOLICA_OEM_LICENSE}"
+unset NO_SYMBOLICA_OEM_LICENSE
+unset APPTAINERENV_NO_SYMBOLICA_OEM_LICENSE
+unset APPTAINERENV_SYMBOLICA_LICENSE
 
 # Edit directly on UBELIX when needed.
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata/gammaboard}"
@@ -104,6 +103,10 @@ export APPTAINER_TMPDIR="${TMP_BASE}"
 export APPTAINER_CACHEDIR="${CACHE_BASE}"
 export CARGO_INCREMENTAL
 export SYMBOLICA_OEM_LICENSE="${SYMBOLICA_OEM_LICENSE:-SYMBOLICA_OEM_GAMMALOOP}"
+if [[ ! "${SYMBOLICA_OEM_LICENSE}" == SYMBOLICA_OEM_* ]]; then
+  echo "SYMBOLICA_OEM_LICENSE must start with SYMBOLICA_OEM_; got '${SYMBOLICA_OEM_LICENSE}'" >&2
+  exit 1
+fi
 
 GAMMABOARD_SHA="$(git_head_sha "${GAMMABOARD_REPO}")"
 

@@ -19,10 +19,6 @@ if [[ -f "${PRIVATE_ENV}" ]]; then
   # Load per-user secrets and cluster-local overrides without tracking them in git.
   source "${PRIVATE_ENV}"
 fi
-: "${SYMBOLICA_LICENSE:?set SYMBOLICA_LICENSE in \$HOME/.config/gammaboard/slurm.env}"
-export NO_SYMBOLICA_OEM_LICENSE="${NO_SYMBOLICA_OEM_LICENSE:-1}"
-export APPTAINERENV_SYMBOLICA_LICENSE="${SYMBOLICA_LICENSE}"
-export APPTAINERENV_NO_SYMBOLICA_OEM_LICENSE="${NO_SYMBOLICA_OEM_LICENSE}"
 
 IMAGE_PATH="${GAMMABOARD_IMAGE:?set GAMMABOARD_IMAGE to your .sif path}"
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:?set GAMMABOARD_WORKSPACE_ROOT to absolute workspace path}"
