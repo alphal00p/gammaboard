@@ -4,7 +4,7 @@ use crate::evaluation::batch::Point;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use super::discrete_bins::{ScalarDiscreteBinStats, upsert_scalar_discrete_bin};
+use super::discrete_bins::{DiscreteProjectionBinState, upsert_scalar_discrete_bin};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct ScalarAccumulatorState {
@@ -25,7 +25,7 @@ pub struct ScalarAccumulatorState {
     #[serde(default)]
     pub max_weighted_negative_point: Option<Point>,
     #[serde(default)]
-    pub discrete_bins: BTreeMap<String, ScalarDiscreteBinStats>,
+    pub discrete_bins: BTreeMap<String, DiscreteProjectionBinState>,
     #[serde(default)]
     pub discrete_bins_overflow_count: usize,
 }
@@ -38,7 +38,24 @@ impl ScalarAccumulatorState {
         }
     }
 
+    pub fn plain() -> Self {
+        Self::default()
+    }
+
     pub fn add_sample(&mut self, value: f64, point: &Point) {
+        self.add_sample_without_discrete_projection(value, point);
+        if !point.discrete.is_empty() {
+            upsert_scalar_discrete_bin(
+                &mut self.discrete_bins,
+                &mut self.discrete_bins_overflow_count,
+                &point.discrete,
+                value,
+                point,
+            );
+        }
+    }
+
+    pub fn add_sample_without_discrete_projection(&mut self, value: f64, point: &Point) {
         let weight = point.total_weight().abs();
         let weighted_value = value * weight;
         let weighted_sq = weighted_value * weighted_value;
@@ -51,14 +68,6 @@ impl ScalarAccumulatorState {
         self.sum_abs += weighted_value.abs();
         self.sum_sq += weighted_sq;
         self.update_extrema(weighted_value, point);
-        if !point.discrete.is_empty() {
-            upsert_scalar_discrete_bin(
-                &mut self.discrete_bins,
-                &mut self.discrete_bins_overflow_count,
-                &point.discrete,
-                weighted_value,
-            );
-        }
     }
 
     pub fn mean(&self) -> f64 {
@@ -119,23 +128,8 @@ impl ScalarAccumulatorState {
             self.max_weighted_negative_point = Some(point.clone());
         }
     }
-}
 
-impl IngestScalar for ScalarAccumulatorState {
-    fn ingest_scalar(&mut self, value: f64, point: &Point) {
-        self.add_sample(value, point);
-    }
-}
-
-impl Accumulator for ScalarAccumulatorState {
-    type Persistent = Self;
-    type Digest = Self;
-
-    fn sample_count(&self) -> i64 {
-        self.count
-    }
-
-    fn merge(&mut self, other: Self) {
+    pub fn merge_plain(&mut self, other: Self) {
         self.count += other.count;
         self.sum_weighted_value += other.sum_weighted_value;
         self.sum_abs += other.sum_abs;
@@ -153,15 +147,41 @@ impl Accumulator for ScalarAccumulatorState {
             other.max_weighted_negative,
             other.max_weighted_negative_point,
         );
-        for (key, candidate) in other.discrete_bins {
+    }
+}
+
+impl IngestScalar for ScalarAccumulatorState {
+    fn ingest_scalar(&mut self, value: f64, point: &Point) {
+        self.add_sample(value, point);
+    }
+}
+
+impl Accumulator for ScalarAccumulatorState {
+    type Persistent = Self;
+    type Digest = Self;
+
+    fn sample_count(&self) -> i64 {
+        self.count
+    }
+
+    fn merge(&mut self, other: Self) {
+        let other_discrete_bins = other.discrete_bins;
+        let other_discrete_bins_overflow_count = other.discrete_bins_overflow_count;
+        let other_discrete_histograms = other.discrete_histograms.clone();
+        self.merge_plain(Self {
+            discrete_bins: BTreeMap::new(),
+            discrete_bins_overflow_count: 0,
+            ..other
+        });
+        for (key, candidate) in other_discrete_bins {
             self.discrete_bins
                 .entry(key)
                 .and_modify(|current| current.merge_in_place(candidate.clone()))
                 .or_insert(candidate);
         }
-        self.discrete_bins_overflow_count += other.discrete_bins_overflow_count;
+        self.discrete_bins_overflow_count += other_discrete_bins_overflow_count;
         if self.discrete_histograms.is_none() {
-            self.discrete_histograms = other.discrete_histograms;
+            self.discrete_histograms = other_discrete_histograms;
         }
     }
 

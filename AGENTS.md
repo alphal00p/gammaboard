@@ -20,6 +20,8 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - Run names are human-facing and not unique; ambiguous CLI name references must fail.
 - Node identity is `name` plus live-process `uuid`; desired/current assignments live on `nodes`.
 - Run layout uses `Domain`; concrete evaluator batches are `Vec<Point>`.
+- `Domain::Rectangular` is a compact first-class domain for fixed-cardinality
+  discrete grids with fixed continuous dimensionality; do not expand it into a branch tree.
 - Raster geometry uses its `discrete` path to select a domain branch with a
   unique continuous dimensionality; it does not require globally rectangular domains.
 - Process evaluators use `kind = "process_evaluator"` and the

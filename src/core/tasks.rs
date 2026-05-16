@@ -57,12 +57,13 @@ impl DiscreteHistogramConfig {
             && limit == 0
         {
             return Err(
-                "accumulator.discrete_histograms.max_total_bins must be > 0 when set".to_string(),
+                "accumulator.discrete_projections.max_total_bins must be > 0 when set".to_string(),
             );
         }
         if self.items.is_empty() {
             return Err(
-                "accumulator.discrete_histograms.items must contain at least one entry".to_string(),
+                "accumulator.discrete_projections.items must contain at least one entry"
+                    .to_string(),
             );
         }
         let mut names = BTreeSet::new();
@@ -70,7 +71,7 @@ impl DiscreteHistogramConfig {
             item.validate()?;
             if !names.insert(item.name.clone()) {
                 return Err(format!(
-                    "accumulator.discrete_histograms.items contains duplicate name '{}'",
+                    "accumulator.discrete_projections.items contains duplicate name '{}'",
                     item.name
                 ));
             }
@@ -114,17 +115,19 @@ impl NamedDiscreteHistogram {
     pub fn validate(&self) -> Result<(), String> {
         let trimmed = self.name.trim();
         if trimmed.is_empty() {
-            return Err("accumulator.discrete_histograms.items.name must be non-empty".to_string());
+            return Err(
+                "accumulator.discrete_projections.items.name must be non-empty".to_string(),
+            );
         }
         if trimmed != self.name {
             return Err(
-                "accumulator.discrete_histograms.items.name cannot have leading/trailing whitespace"
+                "accumulator.discrete_projections.items.name cannot have leading/trailing whitespace"
                     .to_string(),
             );
         }
         if self.hist_dims.is_empty() {
             return Err(
-                "accumulator.discrete_histograms.items.hist_dims must contain at least one dimension"
+                "accumulator.discrete_projections.items.hist_dims must contain at least one dimension"
                     .to_string(),
             );
         }
@@ -132,7 +135,7 @@ impl NamedDiscreteHistogram {
         for dim in &self.hist_dims {
             if !seen.insert(*dim) {
                 return Err(format!(
-                    "accumulator.discrete_histograms.items '{}' repeats hist_dims entry {}",
+                    "accumulator.discrete_projections.items '{}' repeats hist_dims entry {}",
                     self.name, dim
                 ));
             }
@@ -140,13 +143,13 @@ impl NamedDiscreteHistogram {
         for raw_dim in self.fixed_dims.keys() {
             let dim = raw_dim.parse::<usize>().map_err(|_| {
                 format!(
-                    "accumulator.discrete_histograms.items '{}' fixed_dims key '{}' is not a non-negative integer dimension index",
+                    "accumulator.discrete_projections.items '{}' fixed_dims key '{}' is not a non-negative integer dimension index",
                     self.name, raw_dim
                 )
             })?;
             if seen.contains(&dim) {
                 return Err(format!(
-                    "accumulator.discrete_histograms.items '{}' uses dimension {} in both hist_dims and fixed_dims",
+                    "accumulator.discrete_projections.items '{}' uses dimension {} in both hist_dims and fixed_dims",
                     self.name, dim
                 ));
             }

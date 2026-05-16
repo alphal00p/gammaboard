@@ -1167,7 +1167,7 @@ mod tests {
             7,
             integration_params.clone(),
             json!({
-                "Continuous": {
+                "continuous": {
                     "dims": 1
                 }
             }),

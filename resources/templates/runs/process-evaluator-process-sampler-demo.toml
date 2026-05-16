@@ -4,18 +4,7 @@ name = "process-evaluator-process-sampler-demo"
 [evaluator]
 kind = "process_evaluator"
 command = ["nix", "shell", "path:./process_api/examples/python_scalar_sin#runtime", "-c", "gammaboard-example-evaluator-worker"]
-domain = { Discrete = { axis_label = "spin", branches = [
-  { index = 0, domain = { Discrete = { axis_label = "channel", branches = [
-    { index = 0, domain = { Continuous = { dims = 2 } } },
-    { index = 1, domain = { Continuous = { dims = 2 } } },
-    { index = 2, domain = { Continuous = { dims = 2 } } },
-  ] } } },
-  { index = 1, domain = { Discrete = { axis_label = "channel", branches = [
-    { index = 0, domain = { Continuous = { dims = 2 } } },
-    { index = 1, domain = { Continuous = { dims = 2 } } },
-    { index = 2, domain = { Continuous = { dims = 2 } } },
-  ] } } },
-] } }
+domain = { rectangular = { discrete_cardinalities = [2, 3], continuous_dims = 2 } }
 args = { module = "demo_integrand", class = "SinIntegrand", scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }
 
 [[task_queue]]
@@ -27,20 +16,20 @@ kind = "vector"
 components = ["value"]
 training_projection = { kind = "component", name = "value" }
 
-[task_queue.accumulator.discrete_histograms]
+[task_queue.accumulator.discrete_projections]
 max_total_bins = 16
 
-[[task_queue.accumulator.discrete_histograms.items]]
+[[task_queue.accumulator.discrete_projections.items]]
 name = "spin"
 hist_dims = [0]
 fixed_dims = {}
 
-[[task_queue.accumulator.discrete_histograms.items]]
+[[task_queue.accumulator.discrete_projections.items]]
 name = "channel_for_spin_0"
 hist_dims = [1]
 fixed_dims = { "0" = 0 }
 
-[[task_queue.accumulator.discrete_histograms.items]]
+[[task_queue.accumulator.discrete_projections.items]]
 name = "channel_for_spin_1"
 hist_dims = [1]
 fixed_dims = { "0" = 1 }

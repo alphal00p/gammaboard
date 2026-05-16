@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 /// This mirrors the shape of nested discrete/continuous grids without carrying
 /// any sampler-specific adaptation or training state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Domain {
     Continuous {
         dims: usize,
@@ -12,6 +13,10 @@ pub enum Domain {
     Discrete {
         axis_label: Option<String>,
         branches: Vec<DomainBranch>,
+    },
+    Rectangular {
+        discrete_cardinalities: Vec<usize>,
+        continuous_dims: usize,
     },
 }
 
@@ -34,14 +39,10 @@ impl Domain {
         continuous_dims: usize,
         discrete_cardinalities: impl IntoIterator<Item = usize>,
     ) -> Self {
-        let mut domain = Self::continuous(continuous_dims);
-        let cardinalities: Vec<usize> = discrete_cardinalities.into_iter().collect();
-        for cardinality in cardinalities.into_iter().rev() {
-            let child = domain;
-            let branches = (0..cardinality).map(|index| DomainBranch::new(index, child.clone()));
-            domain = Self::discrete(None, branches);
+        Self::Rectangular {
+            discrete_cardinalities: discrete_cardinalities.into_iter().collect(),
+            continuous_dims,
         }
-        domain
     }
 
     pub fn discrete(
@@ -57,6 +58,9 @@ impl Domain {
     pub fn fixed_continuous_dims(&self) -> Option<usize> {
         match self {
             Self::Continuous { dims } => Some(*dims),
+            Self::Rectangular {
+                continuous_dims, ..
+            } => Some(*continuous_dims),
             Self::Discrete { branches, .. } => {
                 if branches.is_empty() {
                     None
@@ -74,6 +78,10 @@ impl Domain {
     pub fn fixed_discrete_depth(&self) -> Option<usize> {
         match self {
             Self::Continuous { .. } => Some(0),
+            Self::Rectangular {
+                discrete_cardinalities,
+                ..
+            } => Some(discrete_cardinalities.len()),
             Self::Discrete { branches, .. } => {
                 if branches.is_empty() {
                     Some(1)
@@ -103,6 +111,35 @@ impl Domain {
                 "discrete path {:?} continues beyond a continuous leaf",
                 discrete
             )),
+            Self::Rectangular {
+                discrete_cardinalities,
+                continuous_dims,
+            } => {
+                if discrete.len() > discrete_cardinalities.len() {
+                    return Err(format!(
+                        "discrete path {:?} continues beyond rectangular domain depth {}",
+                        discrete,
+                        discrete_cardinalities.len()
+                    ));
+                }
+                for (axis, (&branch, &cardinality)) in discrete
+                    .iter()
+                    .zip(discrete_cardinalities.iter())
+                    .enumerate()
+                {
+                    let branch = usize::try_from(branch).map_err(|_| {
+                        format!(
+                            "discrete branch index {branch} at axis {axis} is negative and cannot select a domain branch"
+                        )
+                    })?;
+                    if branch >= cardinality {
+                        return Err(format!(
+                            "discrete branch index {branch} at axis {axis} is outside rectangular cardinality {cardinality}"
+                        ));
+                    }
+                }
+                Ok(*continuous_dims)
+            }
             Self::Discrete { branches, .. } => {
                 let branch_index = usize::try_from(discrete[0]).map_err(|_| {
                     format!(
@@ -126,6 +163,10 @@ impl Domain {
     pub fn fixed_discrete_cardinalities(&self) -> Option<Vec<usize>> {
         match self {
             Self::Continuous { .. } => Some(Vec::new()),
+            Self::Rectangular {
+                discrete_cardinalities,
+                ..
+            } => Some(discrete_cardinalities.clone()),
             Self::Discrete { branches, .. } => {
                 let first_tail = branches.first()?.domain.fixed_discrete_cardinalities()?;
                 branches

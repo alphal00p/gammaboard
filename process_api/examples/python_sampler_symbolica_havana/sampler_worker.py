@@ -99,11 +99,17 @@ def require_homogeneous_offsets(params, field, nr_samples, width):
 def fixed_domain_shape(domain):
     if not isinstance(domain, dict):
         raise ValueError("domain must be an object")
-    if "Continuous" in domain:
-        return [], int(domain["Continuous"]["dims"])
-    if "Discrete" not in domain:
+    if "continuous" in domain:
+        return [], int(domain["continuous"]["dims"])
+    if "rectangular" in domain:
+        rectangular = domain["rectangular"]
+        return (
+            [int(value) for value in rectangular.get("discrete_cardinalities", [])],
+            int(rectangular["continuous_dims"]),
+        )
+    if "discrete" not in domain:
         raise ValueError(f"unsupported domain shape: {domain!r}")
-    branches = domain["Discrete"].get("branches") or []
+    branches = domain["discrete"].get("branches") or []
     if not branches:
         raise ValueError(
             "homogeneous Python wrapper requires non-empty discrete branches"

@@ -32,17 +32,11 @@ Configure it through `evaluator.domain`; `args.scale` is optional:
 
 ```toml
 args = { scale = 1.0 }
-domain = { Discrete = { axis_label = "d0", branches = [
-  { index = 0, domain = { Continuous = { dims = 3 } } },
-  { index = 1, domain = { Discrete = { axis_label = "d1", branches = [
-    { index = 0, domain = { Continuous = { dims = 1 } } },
-    { index = 1, domain = { Discrete = { axis_label = "d2", branches = [
-      { index = 0, domain = { Continuous = { dims = 5 } } },
-      { index = 1, domain = { Continuous = { dims = 5 } } },
-      { index = 2, domain = { Continuous = { dims = 5 } } },
-      { index = 3, domain = { Continuous = { dims = 5 } } },
-      { index = 4, domain = { Continuous = { dims = 5 } } },
-    ] } } },
+domain = { discrete = { axis_label = "d0", branches = [
+  { index = 0, domain = { continuous = { dims = 3 } } },
+  { index = 1, domain = { discrete = { axis_label = "d1", branches = [
+    { index = 0, domain = { continuous = { dims = 1 } } },
+    { index = 1, domain = { rectangular = { discrete_cardinalities = [5], continuous_dims = 5 } } },
   ] } } },
 ] } }
 ```

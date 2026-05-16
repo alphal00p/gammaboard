@@ -26,6 +26,10 @@ pub(crate) fn build_havana_grid(
                 false,
             )))
         }
+        Domain::Rectangular {
+            discrete_cardinalities,
+            continuous_dims,
+        } => build_rectangular_havana_grid(*continuous_dims, discrete_cardinalities, params),
         Domain::Discrete { branches, .. } => {
             if branches.is_empty() {
                 return Err(BuildError::build(
@@ -45,6 +49,29 @@ pub(crate) fn build_havana_grid(
     }
 }
 
+fn build_rectangular_havana_grid(
+    continuous_dims: usize,
+    discrete_cardinalities: &[usize],
+    params: &HavanaSamplerParams,
+) -> Result<Grid<f64>, BuildError> {
+    if let Some((&cardinality, tail)) = discrete_cardinalities.split_first() {
+        if cardinality == 0 {
+            return Err(BuildError::build(
+                "havana sampler requires rectangular discrete cardinalities > 0",
+            ));
+        }
+        let bins = (0..cardinality)
+            .map(|_| build_rectangular_havana_grid(continuous_dims, tail, params).map(Some))
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok(Grid::Discrete(DiscreteGrid::new(
+            bins,
+            DEFAULT_DISCRETE_MAX_PROB_RATIO,
+            false,
+        )));
+    }
+    build_havana_grid(&Domain::continuous(continuous_dims), params)
+}
+
 pub(crate) fn validate_havana_grid_domain(
     grid: &Grid<f64>,
     domain: &Domain,
@@ -60,6 +87,18 @@ pub(crate) fn validate_havana_grid_domain(
             }
             Ok(())
         }
+        (
+            grid,
+            Domain::Rectangular {
+                discrete_cardinalities,
+                continuous_dims,
+            },
+        ) => validate_rectangular_havana_grid(
+            grid,
+            *continuous_dims,
+            discrete_cardinalities,
+            context,
+        ),
         (Grid::Discrete(grid), Domain::Discrete { branches, .. }) => {
             if grid.bins.len() != branches.len() {
                 return Err(BuildError::build(format!(
@@ -89,6 +128,37 @@ pub(crate) fn validate_havana_grid_domain(
             "{context} expects a continuous domain, got a discrete grid"
         ))),
     }
+}
+
+fn validate_rectangular_havana_grid(
+    grid: &Grid<f64>,
+    continuous_dims: usize,
+    discrete_cardinalities: &[usize],
+    context: &str,
+) -> Result<(), BuildError> {
+    if let Some((&cardinality, tail)) = discrete_cardinalities.split_first() {
+        let Grid::Discrete(grid) = grid else {
+            return Err(BuildError::build(format!(
+                "{context} expects rectangular discrete dimensions, got a continuous grid"
+            )));
+        };
+        if grid.bins.len() != cardinality {
+            return Err(BuildError::build(format!(
+                "{context} expects {cardinality} rectangular discrete branches, got {}",
+                grid.bins.len()
+            )));
+        }
+        for bin in &grid.bins {
+            let Some(sub_grid) = bin.sub_grid.as_ref() else {
+                return Err(BuildError::build(format!(
+                    "{context} is missing a nested grid for a rectangular discrete branch",
+                )));
+            };
+            validate_rectangular_havana_grid(sub_grid, continuous_dims, tail, context)?;
+        }
+        return Ok(());
+    }
+    validate_havana_grid_domain(grid, &Domain::continuous(continuous_dims), context)
 }
 
 pub(crate) fn sample_to_point(sample: &Sample<f64>) -> Result<Point, EngineError> {

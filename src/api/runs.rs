@@ -674,7 +674,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_run_add_accepts_accumulator_discrete_histograms() {
+    fn parse_run_add_accepts_accumulator_discrete_projections() {
         let config = parse_run_add_config_toml(
             r#"
 name = "histogram-config"
@@ -691,11 +691,11 @@ kind = "set_accumulator"
 [task_queue.accumulator]
 kind = "scalar"
 
-[task_queue.accumulator.discrete_histograms]
+[task_queue.accumulator.discrete_projections]
 max_total_bins = 16
 normalization = "conditional_mean"
 
-[[task_queue.accumulator.discrete_histograms.items]]
+[[task_queue.accumulator.discrete_projections.items]]
 name = "channel_for_spin_0"
 hist_dims = [1]
 fixed_dims = { "0" = 0 }

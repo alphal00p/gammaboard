@@ -277,7 +277,10 @@ impl Serialize for AccumulatorConfig {
         #[derive(Serialize)]
         struct Rich<'a> {
             kind: &'static str,
-            #[serde(skip_serializing_if = "Option::is_none")]
+            #[serde(
+                rename = "discrete_projections",
+                skip_serializing_if = "Option::is_none"
+            )]
             discrete_histograms: Option<&'a DiscreteHistogramConfig>,
             #[serde(skip_serializing_if = "Option::is_none")]
             components: Option<&'a [String]>,
@@ -372,10 +375,10 @@ impl<'de> Deserialize<'de> for AccumulatorConfig {
                             }
                             kind = Some(map.next_value()?);
                         }
-                        "discrete_histograms" => {
+                        "discrete_projections" => {
                             if discrete_histograms.is_some() {
                                 return Err(serde::de::Error::duplicate_field(
-                                    "discrete_histograms",
+                                    "discrete_projections",
                                 ));
                             }
                             discrete_histograms = Some(map.next_value()?);
@@ -399,7 +402,7 @@ impl<'de> Deserialize<'de> for AccumulatorConfig {
                                 other,
                                 &[
                                     "kind",
-                                    "discrete_histograms",
+                                    "discrete_projections",
                                     "components",
                                     "training_projection",
                                 ],
@@ -578,16 +581,16 @@ mod tests {
     use super::AccumulatorConfig;
 
     #[test]
-    fn accumulator_config_parses_discrete_histograms() {
+    fn accumulator_config_parses_discrete_projections() {
         let config: AccumulatorConfig = toml::from_str(
             r#"
 kind = "scalar"
 
-[discrete_histograms]
+[discrete_projections]
 max_total_bins = 16
 normalization = "conditional_mean"
 
-[[discrete_histograms.items]]
+[[discrete_projections.items]]
 name = "channel_for_spin_0"
 hist_dims = [1]
 fixed_dims = { "0" = 0 }

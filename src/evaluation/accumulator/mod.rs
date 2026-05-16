@@ -14,7 +14,7 @@ use crate::evaluation::batch::Point;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value as JsonValue;
 
-pub use self::discrete_bins::{ScalarDiscreteBinStats, discrete_bin_key};
+pub use self::discrete_bins::{DiscreteProjectionBinState, discrete_bin_key};
 pub use self::empty::EmptyAccumulatorState;
 pub use self::full::{FullAccumulatorProgress, FullVectorAccumulatorState};
 pub use self::gammaloop::{

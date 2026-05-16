@@ -203,6 +203,10 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
 fn summarize_domain(domain: &Domain) -> String {
     match domain {
         Domain::Continuous { dims } => format!("continuous({dims})"),
+        Domain::Rectangular {
+            discrete_cardinalities,
+            continuous_dims,
+        } => format!("rectangular({discrete_cardinalities:?}; continuous={continuous_dims})"),
         Domain::Discrete {
             axis_label,
             branches,

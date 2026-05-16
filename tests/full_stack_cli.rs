@@ -1465,18 +1465,7 @@ name = "python-scalar-flake-e2e"
 [evaluator]
 kind = "process_evaluator"
 command = ["nix", "shell", "{evaluator_flake_ref}", "-c", "gammaboard-example-evaluator-worker"]
-domain = {{ Discrete = {{ axis_label = "spin", branches = [
-  {{ index = 0, domain = {{ Discrete = {{ axis_label = "channel", branches = [
-    {{ index = 0, domain = {{ Continuous = {{ dims = 2 }} }} }},
-    {{ index = 1, domain = {{ Continuous = {{ dims = 2 }} }} }},
-    {{ index = 2, domain = {{ Continuous = {{ dims = 2 }} }} }},
-  ] }} }} }},
-  {{ index = 1, domain = {{ Discrete = {{ axis_label = "channel", branches = [
-    {{ index = 0, domain = {{ Continuous = {{ dims = 2 }} }} }},
-    {{ index = 1, domain = {{ Continuous = {{ dims = 2 }} }} }},
-    {{ index = 2, domain = {{ Continuous = {{ dims = 2 }} }} }},
-  ] }} }} }},
-] }} }}
+domain = {{ rectangular = {{ discrete_cardinalities = [2, 3], continuous_dims = 2 }} }}
 args = {{ module = "demo_integrand", class = "SinIntegrand", scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }}
 
 [[task_queue]]
@@ -1488,15 +1477,15 @@ kind = "vector"
 components = ["value"]
 training_projection = {{ kind = "component", name = "value" }}
 
-[task_queue.accumulator.discrete_histograms]
+[task_queue.accumulator.discrete_projections]
 max_total_bins = 16
 
-[[task_queue.accumulator.discrete_histograms.items]]
+[[task_queue.accumulator.discrete_projections.items]]
 name = "spin"
 hist_dims = [0]
 fixed_dims = {{}}
 
-[[task_queue.accumulator.discrete_histograms.items]]
+[[task_queue.accumulator.discrete_projections.items]]
 name = "channel_for_spin_0"
 hist_dims = [1]
 fixed_dims = {{ "0" = 0 }}
@@ -1626,17 +1615,11 @@ name = "rust-apptainer-process-evaluator-e2e"
 [evaluator]
 kind = "process_evaluator"
 command = ["apptainer", "exec", "{}", "breit-wigner-worker"]
-domain = {{ Discrete = {{ axis_label = "d0", branches = [
-  {{ index = 0, domain = {{ Continuous = {{ dims = 3 }} }} }},
-  {{ index = 1, domain = {{ Discrete = {{ axis_label = "d1", branches = [
-    {{ index = 0, domain = {{ Continuous = {{ dims = 1 }} }} }},
-    {{ index = 1, domain = {{ Discrete = {{ axis_label = "d2", branches = [
-      {{ index = 0, domain = {{ Continuous = {{ dims = 5 }} }} }},
-      {{ index = 1, domain = {{ Continuous = {{ dims = 5 }} }} }},
-      {{ index = 2, domain = {{ Continuous = {{ dims = 5 }} }} }},
-      {{ index = 3, domain = {{ Continuous = {{ dims = 5 }} }} }},
-      {{ index = 4, domain = {{ Continuous = {{ dims = 5 }} }} }},
-    ] }} }} }},
+domain = {{ discrete = {{ axis_label = "d0", branches = [
+  {{ index = 0, domain = {{ continuous = {{ dims = 3 }} }} }},
+  {{ index = 1, domain = {{ discrete = {{ axis_label = "d1", branches = [
+    {{ index = 0, domain = {{ continuous = {{ dims = 1 }} }} }},
+    {{ index = 1, domain = {{ rectangular = {{ discrete_cardinalities = [5], continuous_dims = 5 }} }} }},
   ] }} }} }},
 ] }} }}
 args = {{ masses = [0.25, 0.50, 0.75], widths = [0.04, 0.06, 0.05], channel_weights = [1.0, 0.7, 1.3] }}
@@ -1842,6 +1825,10 @@ fn build_direct_havana_grid(domain: &Domain, params: &HavanaSamplerParams) -> Gr
             None,
             false,
         )),
+        Domain::Rectangular {
+            discrete_cardinalities,
+            continuous_dims,
+        } => build_direct_rectangular_havana_grid(*continuous_dims, discrete_cardinalities, params),
         Domain::Discrete { branches, .. } => {
             let bins = branches
                 .iter()
@@ -1854,6 +1841,37 @@ fn build_direct_havana_grid(domain: &Domain, params: &HavanaSamplerParams) -> Gr
             ))
         }
     }
+}
+
+fn build_direct_rectangular_havana_grid(
+    continuous_dims: usize,
+    discrete_cardinalities: &[usize],
+    params: &HavanaSamplerParams,
+) -> Grid<f64> {
+    const DEFAULT_DISCRETE_MAX_PROB_RATIO: f64 = 30.0;
+    if let Some((&cardinality, tail)) = discrete_cardinalities.split_first() {
+        let bins = (0..cardinality)
+            .map(|_| {
+                Some(build_direct_rectangular_havana_grid(
+                    continuous_dims,
+                    tail,
+                    params,
+                ))
+            })
+            .collect();
+        return Grid::Discrete(DiscreteGrid::new(
+            bins,
+            DEFAULT_DISCRETE_MAX_PROB_RATIO,
+            false,
+        ));
+    }
+    Grid::Continuous(ContinuousGrid::new(
+        continuous_dims,
+        params.bins,
+        params.samples_for_update,
+        None,
+        false,
+    ))
 }
 
 fn direct_unit_training_value(_sample: &Sample<f64>) -> f64 {

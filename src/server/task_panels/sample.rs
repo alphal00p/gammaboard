@@ -6,7 +6,7 @@ use crate::core::{
     AccumulatorConfig, DiscreteHistogramConfig, DiscreteHistogramNormalization, EngineError,
     NamedDiscreteHistogram, SampleErrorProjection, SampleStopCondition,
 };
-use crate::evaluation::accumulator::ScalarDiscreteBinStats;
+use crate::evaluation::accumulator::DiscreteProjectionBinState;
 use crate::evaluation::{
     Accumulator, AccumulatorState, GammaLoopDiagnostics, Point, SemanticAccumulatorKind,
 };
@@ -290,7 +290,7 @@ fn discrete_histogram_bundle_projector(
         with_panel_width(
             panel_spec(
                 "discrete_histogram_bundle",
-                "Discrete Histograms",
+                "Discrete Projections",
                 PanelKind::Table,
                 PanelHistoryMode::None,
             ),
@@ -1254,7 +1254,7 @@ fn discrete_histogram_bundle_panel(
 }
 
 fn scalar_discrete_histogram_payload(
-    bins: &BTreeMap<String, ScalarDiscreteBinStats>,
+    bins: &BTreeMap<String, DiscreteProjectionBinState>,
     total_count: i64,
     config: &DiscreteHistogramConfig,
 ) -> Result<JsonValue, String> {
@@ -1319,13 +1319,13 @@ fn vector_discrete_histogram_payload(
 }
 
 fn scalar_projected_bins(
-    bins: &BTreeMap<String, ScalarDiscreteBinStats>,
+    bins: &BTreeMap<String, DiscreteProjectionBinState>,
     item: &NamedDiscreteHistogram,
     normalization: DiscreteHistogramNormalization,
     total_count: i64,
     max_total_bins: usize,
 ) -> Result<Vec<JsonValue>, String> {
-    let mut projected = BTreeMap::<Vec<i64>, ScalarDiscreteBinStats>::new();
+    let mut projected = BTreeMap::<Vec<i64>, DiscreteProjectionBinState>::new();
     for bin in bins.values() {
         if !matches_fixed_dims(&bin.discrete, item)? {
             continue;
@@ -1336,9 +1336,9 @@ fn scalar_projected_bins(
         projected
             .entry(key.clone())
             .and_modify(|current| current.merge_in_place(bin.clone()))
-            .or_insert_with(|| ScalarDiscreteBinStats {
+            .or_insert_with(|| DiscreteProjectionBinState {
                 discrete: key,
-                ..bin.clone()
+                state: bin.state.clone(),
             });
         reject_bin_explosion(projected.len(), max_total_bins, &item.name)?;
     }
@@ -1359,7 +1359,7 @@ fn scalar_projected_bins(
 }
 
 fn scalar_bin_value(
-    bin: &ScalarDiscreteBinStats,
+    bin: &DiscreteProjectionBinState,
     normalization: DiscreteHistogramNormalization,
     total_count: i64,
 ) -> f64 {
@@ -1370,7 +1370,7 @@ fn scalar_bin_value(
 }
 
 fn scalar_bin_error(
-    bin: &ScalarDiscreteBinStats,
+    bin: &DiscreteProjectionBinState,
     normalization: DiscreteHistogramNormalization,
     total_count: i64,
 ) -> f64 {
@@ -1384,7 +1384,7 @@ fn matches_fixed_dims(discrete: &[i64], item: &NamedDiscreteHistogram) -> Result
     for (raw_dim, fixed_value) in &item.fixed_dims {
         let dim = raw_dim.parse::<usize>().map_err(|_| {
             format!(
-                "discrete histogram '{}' fixed dimension '{}' is not a non-negative integer dimension index",
+                "discrete projection '{}' fixed dimension '{}' is not a non-negative integer dimension index",
                 item.name, raw_dim
             )
         })?;
@@ -1415,7 +1415,7 @@ fn histogram_key(
 fn reject_bin_explosion(count: usize, max_total_bins: usize, name: &str) -> Result<(), String> {
     if count > max_total_bins {
         Err(format!(
-            "discrete histogram '{name}' exceeds max_total_bins={max_total_bins}"
+            "discrete projection '{name}' exceeds max_total_bins={max_total_bins}"
         ))
     } else {
         Ok(())
@@ -1601,30 +1601,32 @@ fn timing_segment(key: &str, label: &str, value_ms: f64, color: &str) -> TickBre
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::evaluation::ScalarAccumulatorState;
+
+    fn discrete_bin(
+        discrete: Vec<i64>,
+        count: i64,
+        sum_weighted_value: f64,
+        sum_sq: f64,
+    ) -> DiscreteProjectionBinState {
+        DiscreteProjectionBinState {
+            discrete,
+            state: ScalarAccumulatorState {
+                count,
+                sum_weighted_value,
+                sum_sq,
+                ..ScalarAccumulatorState::plain()
+            },
+        }
+    }
 
     fn scalar_histogram_fixture() -> (
-        BTreeMap<String, ScalarDiscreteBinStats>,
+        BTreeMap<String, DiscreteProjectionBinState>,
         NamedDiscreteHistogram,
     ) {
         let mut bins = BTreeMap::new();
-        bins.insert(
-            "0".to_string(),
-            ScalarDiscreteBinStats {
-                discrete: vec![0],
-                count: 2,
-                sum_weighted_value: 6.0,
-                sum_sq: 20.0,
-            },
-        );
-        bins.insert(
-            "1".to_string(),
-            ScalarDiscreteBinStats {
-                discrete: vec![1],
-                count: 1,
-                sum_weighted_value: -3.0,
-                sum_sq: 9.0,
-            },
-        );
+        bins.insert("0".to_string(), discrete_bin(vec![0], 2, 6.0, 20.0));
+        bins.insert("1".to_string(), discrete_bin(vec![1], 1, -3.0, 9.0));
 
         let item = NamedDiscreteHistogram {
             name: "channel".to_string(),
@@ -1666,32 +1668,11 @@ mod tests {
     #[test]
     fn discrete_histogram_skips_samples_outside_variable_depth_path() {
         let mut bins = BTreeMap::new();
-        bins.insert(
-            "0".to_string(),
-            ScalarDiscreteBinStats {
-                discrete: vec![0],
-                count: 10,
-                sum_weighted_value: 10.0,
-                sum_sq: 10.0,
-            },
-        );
-        bins.insert(
-            "1/0".to_string(),
-            ScalarDiscreteBinStats {
-                discrete: vec![1, 0],
-                count: 10,
-                sum_weighted_value: 20.0,
-                sum_sq: 40.0,
-            },
-        );
+        bins.insert("0".to_string(), discrete_bin(vec![0], 10, 10.0, 10.0));
+        bins.insert("1/0".to_string(), discrete_bin(vec![1, 0], 10, 20.0, 40.0));
         bins.insert(
             "1/1/3".to_string(),
-            ScalarDiscreteBinStats {
-                discrete: vec![1, 1, 3],
-                count: 2,
-                sum_weighted_value: 6.0,
-                sum_sq: 20.0,
-            },
+            discrete_bin(vec![1, 1, 3], 2, 6.0, 20.0),
         );
         let item = NamedDiscreteHistogram {
             name: "leaf".to_string(),

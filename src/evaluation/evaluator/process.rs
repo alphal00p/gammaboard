@@ -312,18 +312,7 @@ while True:
         let params = toml::from_str::<ProcessEvaluatorParams>(
             r#"
 command = ["python", "-u", "worker.py"]
-domain = { Discrete = { axis_label = "d0", branches = [
-  { index = 0, domain = { Discrete = { axis_label = "d1", branches = [
-    { index = 0, domain = { Continuous = { dims = 2 } } },
-    { index = 1, domain = { Continuous = { dims = 2 } } },
-    { index = 2, domain = { Continuous = { dims = 2 } } },
-  ] } } },
-  { index = 1, domain = { Discrete = { axis_label = "d1", branches = [
-    { index = 0, domain = { Continuous = { dims = 2 } } },
-    { index = 1, domain = { Continuous = { dims = 2 } } },
-    { index = 2, domain = { Continuous = { dims = 2 } } },
-  ] } } },
-] } }
+domain = { rectangular = { discrete_cardinalities = [2, 3], continuous_dims = 2 } }
 args = { module = "my_module", class = "MyEvaluator", scale = 1.0 }
 "#,
         )
@@ -344,17 +333,11 @@ args = { module = "my_module", class = "MyEvaluator", scale = 1.0 }
         let params = toml::from_str::<ProcessEvaluatorParams>(
             r#"
 command = ["worker"]
-domain = { Discrete = { axis_label = "d0", branches = [
-  { index = 0, domain = { Continuous = { dims = 3 } } },
-  { index = 1, domain = { Discrete = { axis_label = "d1", branches = [
-    { index = 0, domain = { Continuous = { dims = 1 } } },
-    { index = 1, domain = { Discrete = { axis_label = "d2", branches = [
-      { index = 0, domain = { Continuous = { dims = 5 } } },
-      { index = 1, domain = { Continuous = { dims = 5 } } },
-      { index = 2, domain = { Continuous = { dims = 5 } } },
-      { index = 3, domain = { Continuous = { dims = 5 } } },
-      { index = 4, domain = { Continuous = { dims = 5 } } },
-    ] } } },
+domain = { discrete = { axis_label = "d0", branches = [
+  { index = 0, domain = { continuous = { dims = 3 } } },
+  { index = 1, domain = { discrete = { axis_label = "d1", branches = [
+    { index = 0, domain = { continuous = { dims = 1 } } },
+    { index = 1, domain = { rectangular = { discrete_cardinalities = [5], continuous_dims = 5 } } },
   ] } } },
 ] } }
 "#,

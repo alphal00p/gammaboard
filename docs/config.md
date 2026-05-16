@@ -116,6 +116,21 @@ For `evaluator.kind = "process_evaluator"`, configure:
 - `components`: observable component names; defaults to `["value"]` and must match the vector accumulator components.
 - `args = { ... }`: optional opaque JSON object passed to the process during `initialize`.
 
+Domain config uses snake_case variants. Use `rectangular` for fixed-cardinality grids instead of expanding large branch trees:
+
+```toml
+domain = { rectangular = { discrete_cardinalities = [5, 5, 5], continuous_dims = 10 } }
+```
+
+It can be nested inside a discrete branch:
+
+```toml
+domain = { discrete = { axis_label = "channel", branches = [
+  { index = 0, domain = { continuous = { dims = 3 } } },
+  { index = 1, domain = { rectangular = { discrete_cardinalities = [5], continuous_dims = 5 } } },
+] } }
+```
+
 Process evaluator construction semantics:
 
 - GammaBoard only speaks the process protocol.
@@ -180,11 +195,11 @@ kind = "set_accumulator"
 [task_queue.accumulator]
 kind = "scalar"
 
-[task_queue.accumulator.discrete_histograms]
+[task_queue.accumulator.discrete_projections]
 max_total_bins = 4096
 normalization = "contribution" # default; use "conditional_mean" for per-bin means
 
-[[task_queue.accumulator.discrete_histograms.items]]
+[[task_queue.accumulator.discrete_projections.items]]
 name = "summed"
 hist_dims = [0]
 fixed_dims = {}
@@ -196,7 +211,7 @@ stop_condition = { max_samples = 10000, absolute_error = 1e-3, relative_error = 
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 ```
 
-Discrete histogram dimensions address the discrete coordinate path. For inhomogeneous domains, samples where a configured fixed or histogram dimension does not exist are ignored, so `fixed_dims` can select a subtree before histogramming a deeper branch.
+Discrete projection dimensions address the discrete coordinate path. For inhomogeneous domains, samples where a configured fixed or projected dimension does not exist are ignored, so `fixed_dims` can select a subtree before projecting a deeper branch. The backend renders these projected scalar accumulators as histograms.
 
 Deterministic scan tasks:
 

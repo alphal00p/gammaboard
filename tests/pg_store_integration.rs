@@ -45,7 +45,7 @@ async fn claim_batch_requires_active_assignment() {
         ) VALUES (
             'claim-batch-active',
             '{}'::jsonb,
-            '{"Continuous":{"dims":1}}'::jsonb
+            '{"continuous":{"dims":1}}'::jsonb
         )
         RETURNING id
         "#,
@@ -123,7 +123,7 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
         ) VALUES (
             'claim-batch-inactive',
             '{}'::jsonb,
-            '{"Continuous":{"dims":1}}'::jsonb
+            '{"continuous":{"dims":1}}'::jsonb
         )
         RETURNING id
         "#,
@@ -215,7 +215,7 @@ async fn claim_batch_claims_exactly_one_pending_batch() {
         ) VALUES (
             'claim-batch-single-row',
             '{}'::jsonb,
-            '{"Continuous":{"dims":1}}'::jsonb
+            '{"continuous":{"dims":1}}'::jsonb
         )
         RETURNING id
         "#,
@@ -328,7 +328,7 @@ async fn sampler_aggregator_desired_assignment_is_unique_per_run() {
         ) VALUES (
             'test-run',
             '{}'::jsonb,
-            '{"Continuous":{"dims":0}}'::jsonb
+            '{"continuous":{"dims":0}}'::jsonb
         )
         RETURNING id
         "#,
@@ -389,7 +389,7 @@ async fn cleanup_consumed_completed_batches_does_not_remove_failed_batches() {
         ) VALUES (
             'cleanup-failed-batches',
             '{}'::jsonb,
-            '{"Continuous":{"dims":1}}'::jsonb
+            '{"continuous":{"dims":1}}'::jsonb
         )
         RETURNING id
         "#,

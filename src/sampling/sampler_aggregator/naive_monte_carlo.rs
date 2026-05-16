@@ -217,6 +217,23 @@ fn sample_domain_point(
             Vec::new(),
             (0..*dims).map(|_| rng.random::<f64>()).collect(),
         )),
+        Domain::Rectangular {
+            discrete_cardinalities,
+            continuous_dims,
+        } => {
+            if discrete_cardinalities.contains(&0) {
+                return Err(EngineError::engine(
+                    "naive_monte_carlo cannot sample rectangular domains with zero-cardinality discrete axes",
+                ));
+            }
+            Ok((
+                discrete_cardinalities
+                    .iter()
+                    .map(|cardinality| rng.random_range(0..*cardinality) as i64)
+                    .collect(),
+                (0..*continuous_dims).map(|_| rng.random::<f64>()).collect(),
+            ))
+        }
         Domain::Discrete { branches, .. } => {
             if branches.is_empty() {
                 return Err(EngineError::engine(

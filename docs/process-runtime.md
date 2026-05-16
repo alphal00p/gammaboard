@@ -52,7 +52,7 @@ GammaBoard requires exactly one of `result` or `error`.
 {
   "protocol": "gammaboard-jsonrpc-v1",
   "role": "evaluator",
-  "domain": { "Continuous": { "dims": 2 } },
+  "domain": { "continuous": { "dims": 2 } },
   "components": ["value"],
   "observable": { "components": ["value"] },
   "args": {}
@@ -94,7 +94,7 @@ Process evaluators should use a `kind = "vector"` accumulator with matching `com
 {
   "protocol": "gammaboard-jsonrpc-v1",
   "role": "sampler",
-  "domain": { "Continuous": { "dims": 2 } },
+  "domain": { "continuous": { "dims": 2 } },
   "args": {},
   "snapshot": null
 }
@@ -185,12 +185,18 @@ The process command is explicit in run config. GammaBoard does not append worker
 ```toml
 kind = "process_evaluator"
 command = ["python", "-u", "runtimes/my_runtime/evaluator_worker.py"]
-domain = { Continuous = { dims = 2 } }
+domain = { continuous = { dims = 2 } }
 components = ["value"]
 args = { module = "demo_integrand", class = "SinIntegrand" }
 ```
 
 The protocol uses `domain` as the authoritative coordinate layout. Homogeneous wrappers may derive fixed dimensions from it internally, but run config should not define separate shape hints.
+
+Domain variants are snake_case. `rectangular` is the compact form for fixed-cardinality discrete grids:
+
+```toml
+domain = { rectangular = { discrete_cardinalities = [2, 3], continuous_dims = 2 } }
+```
 
 Relative command entries that look like paths are resolved below the resources root. Absolute paths are used as-is.
 Nix, Apptainer, virtualenvs, and system packages are all just ways to make this command available.
