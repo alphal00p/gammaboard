@@ -76,9 +76,11 @@ impl EvaluatorConfig {
                 config,
                 SemanticAccumulatorKind::Scalar,
             ),
-            Self::Unit { params } => {
-                validate_semantic_accumulator(self.kind_str(), config, params.accumulator_kind)
-            }
+            Self::Unit { .. } => validate_semantic_accumulator(
+                self.kind_str(),
+                config,
+                SemanticAccumulatorKind::Scalar,
+            ),
             Self::Gammaloop { .. } => Ok(()),
         }
     }

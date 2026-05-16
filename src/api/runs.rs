@@ -697,7 +697,7 @@ normalization = "conditional_mean"
 
 [[task_queue.accumulator.discrete_projections.items]]
 name = "channel_for_spin_0"
-hist_dims = [1]
+dims = [1]
 fixed_dims = { "0" = 0 }
 "#,
         )
@@ -707,10 +707,12 @@ fixed_dims = { "0" = 0 }
         else {
             panic!("expected set_accumulator");
         };
-        let histograms = accumulator.discrete_histograms().expect("histogram config");
+        let projections = accumulator
+            .discrete_projections()
+            .expect("projection config");
         assert_eq!(
-            histograms.normalization,
-            crate::core::DiscreteHistogramNormalization::ConditionalMean
+            projections.normalization,
+            crate::core::DiscreteProjectionNormalization::ConditionalMean
         );
     }
 

@@ -1,5 +1,5 @@
 use super::{Accumulator, ScalarAccumulatorState};
-use crate::core::{DiscreteHistogramConfig, TrainingProjection};
+use crate::core::{DiscreteProjectionConfig, TrainingProjection};
 use crate::evaluation::batch::Point;
 use serde::{Deserialize, Serialize};
 
@@ -20,20 +20,20 @@ impl VectorAccumulatorState {
     pub fn from_config(
         components: Vec<String>,
         projection_spec: TrainingProjection,
-        discrete_histograms: Option<DiscreteHistogramConfig>,
+        discrete_projections: Option<DiscreteProjectionConfig>,
     ) -> Self {
         let components = components
             .into_iter()
             .map(|name| NamedScalarAccumulator {
                 name,
-                state: ScalarAccumulatorState::from_config(discrete_histograms.clone()),
+                state: ScalarAccumulatorState::from_config(discrete_projections.clone()),
             })
             .collect();
         Self {
             components,
             projection: NamedScalarAccumulator {
                 name: "training_projection".to_string(),
-                state: ScalarAccumulatorState::from_config(discrete_histograms),
+                state: ScalarAccumulatorState::from_config(discrete_projections),
             },
             projection_spec,
         }

@@ -163,18 +163,18 @@ impl AccumulatorState {
         match config {
             AccumulatorConfig::Empty => Self::empty(),
             AccumulatorConfig::Scalar {
-                discrete_histograms,
+                discrete_projections,
             } => Self::Scalar(ScalarAccumulatorState::from_config(
-                discrete_histograms.clone(),
+                discrete_projections.clone(),
             )),
             AccumulatorConfig::Vector {
                 components,
                 training_projection,
-                discrete_histograms,
+                discrete_projections,
             } => Self::Vector(VectorAccumulatorState::from_config(
                 components.clone(),
                 training_projection.clone(),
-                discrete_histograms.clone(),
+                discrete_projections.clone(),
             )),
             AccumulatorConfig::Gammaloop => Self::empty_gammaloop(),
             AccumulatorConfig::FullVector { components } => Self::FullVector(
@@ -217,7 +217,7 @@ impl AccumulatorState {
         match self {
             Self::Empty(_) => AccumulatorConfig::Empty,
             Self::Scalar(state) => AccumulatorConfig::Scalar {
-                discrete_histograms: state.discrete_histograms.clone(),
+                discrete_projections: state.discrete_projections.clone(),
             },
             Self::Vector(state) => AccumulatorConfig::Vector {
                 components: state
@@ -226,10 +226,10 @@ impl AccumulatorState {
                     .map(|component| component.name.clone())
                     .collect(),
                 training_projection: state.projection_spec.clone(),
-                discrete_histograms: state
+                discrete_projections: state
                     .components
                     .first()
-                    .and_then(|component| component.state.discrete_histograms.clone()),
+                    .and_then(|component| component.state.discrete_projections.clone()),
             },
             Self::Gammaloop(_) => AccumulatorConfig::Gammaloop,
             Self::FullVector(state) => AccumulatorConfig::FullVector {
@@ -320,8 +320,8 @@ impl AccumulatorState {
 mod tests {
     use super::{AccumulatorState, ScalarAccumulatorState};
     use crate::core::{
-        AccumulatorConfig, DiscreteHistogramConfig, DiscreteHistogramNormalization,
-        NamedDiscreteHistogram,
+        AccumulatorConfig, DiscreteProjectionConfig, DiscreteProjectionNormalization,
+        NamedDiscreteProjection,
     };
 
     #[test]
@@ -341,14 +341,14 @@ mod tests {
     }
 
     #[test]
-    fn scalar_state_config_preserves_discrete_histograms() {
+    fn scalar_state_config_preserves_discrete_projections() {
         let config = AccumulatorConfig::Scalar {
-            discrete_histograms: Some(DiscreteHistogramConfig {
+            discrete_projections: Some(DiscreteProjectionConfig {
                 max_total_bins: Some(16),
-                normalization: DiscreteHistogramNormalization::Contribution,
-                items: vec![NamedDiscreteHistogram {
+                normalization: DiscreteProjectionNormalization::Contribution,
+                items: vec![NamedDiscreteProjection {
                     name: "spin".to_string(),
-                    hist_dims: vec![0],
+                    dims: vec![0],
                     fixed_dims: Default::default(),
                 }],
             }),

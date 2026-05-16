@@ -1,5 +1,5 @@
 use super::{Accumulator, IngestScalar};
-use crate::core::DiscreteHistogramConfig;
+use crate::core::DiscreteProjectionConfig;
 use crate::evaluation::batch::Point;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -9,7 +9,7 @@ use super::discrete_bins::{DiscreteProjectionBinState, upsert_scalar_discrete_bi
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct ScalarAccumulatorState {
     #[serde(default)]
-    pub discrete_histograms: Option<DiscreteHistogramConfig>,
+    pub discrete_projections: Option<DiscreteProjectionConfig>,
     pub count: i64,
     pub sum_weighted_value: f64,
     pub sum_abs: f64,
@@ -31,9 +31,9 @@ pub struct ScalarAccumulatorState {
 }
 
 impl ScalarAccumulatorState {
-    pub fn from_config(discrete_histograms: Option<DiscreteHistogramConfig>) -> Self {
+    pub fn from_config(discrete_projections: Option<DiscreteProjectionConfig>) -> Self {
         Self {
-            discrete_histograms,
+            discrete_projections,
             ..Self::default()
         }
     }
@@ -167,7 +167,7 @@ impl Accumulator for ScalarAccumulatorState {
     fn merge(&mut self, other: Self) {
         let other_discrete_bins = other.discrete_bins;
         let other_discrete_bins_overflow_count = other.discrete_bins_overflow_count;
-        let other_discrete_histograms = other.discrete_histograms.clone();
+        let other_discrete_projections = other.discrete_projections.clone();
         self.merge_plain(Self {
             discrete_bins: BTreeMap::new(),
             discrete_bins_overflow_count: 0,
@@ -180,8 +180,8 @@ impl Accumulator for ScalarAccumulatorState {
                 .or_insert(candidate);
         }
         self.discrete_bins_overflow_count += other_discrete_bins_overflow_count;
-        if self.discrete_histograms.is_none() {
-            self.discrete_histograms = other_discrete_histograms;
+        if self.discrete_projections.is_none() {
+            self.discrete_projections = other_discrete_projections;
         }
     }
 

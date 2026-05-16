@@ -3,8 +3,8 @@ use super::{
     panel_projector, panel_projector_with_source,
 };
 use crate::core::{
-    AccumulatorConfig, DiscreteHistogramConfig, DiscreteHistogramNormalization, EngineError,
-    NamedDiscreteHistogram, SampleErrorProjection, SampleStopCondition,
+    AccumulatorConfig, DiscreteProjectionConfig, DiscreteProjectionNormalization, EngineError,
+    NamedDiscreteProjection, SampleErrorProjection, SampleStopCondition,
 };
 use crate::evaluation::accumulator::DiscreteProjectionBinState;
 use crate::evaluation::{
@@ -49,15 +49,15 @@ pub(super) fn projectors(
         projectors.push(gammaloop_histogram_bundle_projector());
         projectors.push(gammaloop_evaluation_timing_projector());
         projectors.push(gammaloop_evaluation_diagnostics_projector());
-    } else if let Some(histogram_config) = accumulator_config.discrete_histograms().cloned()
+    } else if let Some(projection_config) = accumulator_config.discrete_projections().cloned()
         && matches!(
             accumulator_config,
             AccumulatorConfig::Scalar { .. } | AccumulatorConfig::Vector { .. }
         )
     {
-        projectors.push(discrete_histogram_bundle_projector(
+        projectors.push(discrete_projection_bundle_projector(
             accumulator_config,
-            histogram_config,
+            projection_config,
         ));
     }
     projectors
@@ -259,7 +259,7 @@ fn gammaloop_histogram_bundle_projector() -> TaskPanelProjector {
         with_panel_width(
             panel_spec(
                 "gammaloop_histogram_bundle",
-                "Histogram Bundle",
+                "GammaLoop Histograms",
                 PanelKind::Table,
                 PanelHistoryMode::None,
             ),
@@ -278,18 +278,18 @@ fn gammaloop_histogram_bundle_projector() -> TaskPanelProjector {
     )
 }
 
-fn discrete_histogram_bundle_projector(
+fn discrete_projection_bundle_projector(
     accumulator_config: AccumulatorConfig,
-    histogram_config: DiscreteHistogramConfig,
+    projection_config: DiscreteProjectionConfig,
 ) -> TaskPanelProjector {
     let current_accumulator_config = accumulator_config.clone();
     let history_accumulator_config = accumulator_config;
-    let current_histogram_config = histogram_config.clone();
-    let history_histogram_config = histogram_config;
+    let current_projection_config = projection_config.clone();
+    let history_projection_config = projection_config;
     panel_projector(
         with_panel_width(
             panel_spec(
-                "discrete_histogram_bundle",
+                "discrete_projection_bundle",
                 "Discrete Projections",
                 PanelKind::Table,
                 PanelHistoryMode::None,
@@ -299,7 +299,7 @@ fn discrete_histogram_bundle_projector(
         move |ctx| {
             Ok(
                 sample_accumulator(ctx, &current_accumulator_config)?.and_then(|accumulator| {
-                    discrete_histogram_bundle_panel(accumulator, &current_histogram_config)
+                    discrete_projection_bundle_panel(accumulator, &current_projection_config)
                 }),
             )
         },
@@ -307,7 +307,7 @@ fn discrete_histogram_bundle_projector(
             Ok(
                 decode_history_observable(ctx, &history_accumulator_config)?.and_then(
                     |accumulator| {
-                        discrete_histogram_bundle_panel(accumulator, &history_histogram_config)
+                        discrete_projection_bundle_panel(accumulator, &history_projection_config)
                     },
                 ),
             )
@@ -1118,46 +1118,46 @@ fn gammaloop_histogram_bundle_panel(accumulator: AccumulatorState) -> Option<Pan
         .bundle
         .histograms
         .iter()
-        .map(|(name, histogram)| {
+        .map(|(name, projection)| {
             vec![
                 JsonValue::String(name.clone()),
-                JsonValue::String(histogram.title.clone()),
-                JsonValue::String(match histogram.phase {
+                JsonValue::String(projection.title.clone()),
+                JsonValue::String(match projection.phase {
                     ObservablePhase::Real => "real".to_string(),
                     ObservablePhase::Imag => "imag".to_string(),
                 }),
-                JsonValue::String(match histogram.value_transform {
+                JsonValue::String(match projection.value_transform {
                     ObservableValueTransform::Identity => "identity".to_string(),
                     ObservableValueTransform::Log10 => "log10".to_string(),
                 }),
-                JsonValue::from(histogram.sample_count as i64),
-                JsonValue::from(histogram.bins.len() as i64),
-                JsonValue::String(match histogram.kind {
+                JsonValue::from(projection.sample_count as i64),
+                JsonValue::from(projection.bins.len() as i64),
+                JsonValue::String(match projection.kind {
                     gammalooprs::observables::HistogramSnapshotKind::Continuous => {
-                        match (histogram.x_min, histogram.x_max) {
+                        match (projection.x_min, projection.x_max) {
                             (Some(x_min), Some(x_max)) => format!("[{}, {}]", x_min, x_max),
                             _ => "continuous".to_string(),
                         }
                     }
-                    gammalooprs::observables::HistogramSnapshotKind::Discrete => histogram
+                    gammalooprs::observables::HistogramSnapshotKind::Discrete => projection
                         .discrete_min_bin_id
                         .map(|min_bin_id| {
                             format!(
                                 "[{}, {}]",
                                 min_bin_id,
-                                min_bin_id + histogram.bins.len() as isize
+                                min_bin_id + projection.bins.len() as isize
                             )
                         })
                         .unwrap_or_else(|| "discrete".to_string()),
                 }),
-                JsonValue::from(histogram.statistics.in_range_entry_count as i64),
-                JsonValue::from(histogram.underflow_bin.entry_count as i64),
-                JsonValue::from(histogram.overflow_bin.entry_count as i64),
-                JsonValue::from(histogram.statistics.nan_value_count as i64),
-                JsonValue::from(histogram.statistics.mitigated_pair_count as i64),
-                JsonValue::from(histogram.supports_misbinning_mitigation),
-                JsonValue::from(histogram.log_x_axis),
-                JsonValue::from(histogram.log_y_axis),
+                JsonValue::from(projection.statistics.in_range_entry_count as i64),
+                JsonValue::from(projection.underflow_bin.entry_count as i64),
+                JsonValue::from(projection.overflow_bin.entry_count as i64),
+                JsonValue::from(projection.statistics.nan_value_count as i64),
+                JsonValue::from(projection.statistics.mitigated_pair_count as i64),
+                JsonValue::from(projection.supports_misbinning_mitigation),
+                JsonValue::from(projection.log_x_axis),
+                JsonValue::from(projection.log_y_axis),
             ]
         })
         .collect::<Vec<_>>();
@@ -1195,42 +1195,42 @@ fn gammaloop_histogram_bundle_panel(accumulator: AccumulatorState) -> Option<Pan
     ))
 }
 
-fn discrete_histogram_bundle_panel(
+fn discrete_projection_bundle_panel(
     accumulator: AccumulatorState,
-    config: &DiscreteHistogramConfig,
+    config: &DiscreteProjectionConfig,
 ) -> Option<PanelState> {
     let payload = match &accumulator {
         AccumulatorState::Scalar(state) => {
-            scalar_discrete_histogram_payload(&state.discrete_bins, state.count, config)
+            scalar_discrete_projection_payload(&state.discrete_bins, state.count, config)
         }
-        AccumulatorState::Vector(state) => vector_discrete_histogram_payload(state, config),
+        AccumulatorState::Vector(state) => vector_discrete_projection_payload(state, config),
         _ => return None,
     };
     let payload = match payload {
         Ok(payload) => payload,
         Err(err) => {
             return Some(key_value_panel(
-                "discrete_histogram_bundle",
+                "discrete_projection_bundle",
                 vec![key_value("error", "Error", err)],
             ));
         }
     };
-    let histograms = payload
+    let projections = payload
         .get("histograms")
         .and_then(JsonValue::as_object)
         .cloned()
         .unwrap_or_default();
-    let rows = histograms
+    let rows = projections
         .iter()
-        .map(|(name, histogram)| {
-            let bins = histogram
+        .map(|(name, projection)| {
+            let bins = projection
                 .get("bins")
                 .and_then(JsonValue::as_array)
                 .map(|bins| bins.len())
                 .unwrap_or_default();
             vec![
                 JsonValue::String(name.clone()),
-                histogram
+                projection
                     .get("title")
                     .and_then(JsonValue::as_str)
                     .map(JsonValue::from)
@@ -1240,9 +1240,9 @@ fn discrete_histogram_bundle_panel(
         })
         .collect::<Vec<_>>();
 
-    let row_keys = histograms.keys().cloned().collect::<Vec<_>>();
+    let row_keys = projections.keys().cloned().collect::<Vec<_>>();
     Some(table_panel_with_payload_and_options(
-        "discrete_histogram_bundle",
+        "discrete_projection_bundle",
         vec!["Name".to_string(), "Title".to_string(), "Bins".to_string()],
         rows,
         Some(payload),
@@ -1253,12 +1253,12 @@ fn discrete_histogram_bundle_panel(
     ))
 }
 
-fn scalar_discrete_histogram_payload(
+fn scalar_discrete_projection_payload(
     bins: &BTreeMap<String, DiscreteProjectionBinState>,
     total_count: i64,
-    config: &DiscreteHistogramConfig,
+    config: &DiscreteProjectionConfig,
 ) -> Result<JsonValue, String> {
-    let histograms = config
+    let projections = config
         .items
         .iter()
         .map(|item| {
@@ -1266,7 +1266,7 @@ fn scalar_discrete_histogram_payload(
                 item.name.clone(),
                 json!({
                     "title": item.name,
-                    "type_description": discrete_histogram_description(item),
+                    "type_description": discrete_projection_description(item),
                     "bins": scalar_projected_bins(
                         bins,
                         item,
@@ -1280,15 +1280,15 @@ fn scalar_discrete_histogram_payload(
         .collect::<Result<serde_json::Map<String, JsonValue>, String>>()?;
     Ok(json!({
         "primary_histogram_name": config.items.first().map(|item| item.name.clone()),
-        "histograms": histograms,
+        "histograms": projections,
     }))
 }
 
-fn vector_discrete_histogram_payload(
+fn vector_discrete_projection_payload(
     state: &crate::evaluation::VectorAccumulatorState,
-    config: &DiscreteHistogramConfig,
+    config: &DiscreteProjectionConfig,
 ) -> Result<JsonValue, String> {
-    let mut histograms = serde_json::Map::new();
+    let mut projections = serde_json::Map::new();
     for component in state
         .components
         .iter()
@@ -1296,11 +1296,11 @@ fn vector_discrete_histogram_payload(
     {
         for item in &config.items {
             let name = format!("{}.{}", item.name, component.name);
-            histograms.insert(
+            projections.insert(
                 name.clone(),
                 json!({
                     "title": name,
-                    "type_description": discrete_histogram_description(item),
+                    "type_description": discrete_projection_description(item),
                     "bins": scalar_projected_bins(
                         &component.state.discrete_bins,
                         item,
@@ -1313,15 +1313,15 @@ fn vector_discrete_histogram_payload(
         }
     }
     Ok(json!({
-        "primary_histogram_name": histograms.keys().next().cloned(),
-        "histograms": histograms,
+        "primary_histogram_name": projections.keys().next().cloned(),
+        "histograms": projections,
     }))
 }
 
 fn scalar_projected_bins(
     bins: &BTreeMap<String, DiscreteProjectionBinState>,
-    item: &NamedDiscreteHistogram,
-    normalization: DiscreteHistogramNormalization,
+    item: &NamedDiscreteProjection,
+    normalization: DiscreteProjectionNormalization,
     total_count: i64,
     max_total_bins: usize,
 ) -> Result<Vec<JsonValue>, String> {
@@ -1330,7 +1330,7 @@ fn scalar_projected_bins(
         if !matches_fixed_dims(&bin.discrete, item)? {
             continue;
         }
-        let Some(key) = histogram_key(&bin.discrete, item)? else {
+        let Some(key) = projection_key(&bin.discrete, item)? else {
             continue;
         };
         projected
@@ -1351,7 +1351,7 @@ fn scalar_projected_bins(
                 "stop": index as f64 + 1.0,
                 "value": scalar_bin_value(bin, normalization, total_count),
                 "error": scalar_bin_error(bin, normalization, total_count),
-                "label": histogram_key_label(&bin.discrete),
+                "label": projection_key_label(&bin.discrete),
                 "bin_id": index as i64,
             })
         })
@@ -1360,27 +1360,27 @@ fn scalar_projected_bins(
 
 fn scalar_bin_value(
     bin: &DiscreteProjectionBinState,
-    normalization: DiscreteHistogramNormalization,
+    normalization: DiscreteProjectionNormalization,
     total_count: i64,
 ) -> f64 {
     match normalization {
-        DiscreteHistogramNormalization::Contribution => bin.contribution_mean(total_count),
-        DiscreteHistogramNormalization::ConditionalMean => bin.mean(),
+        DiscreteProjectionNormalization::Contribution => bin.contribution_mean(total_count),
+        DiscreteProjectionNormalization::ConditionalMean => bin.mean(),
     }
 }
 
 fn scalar_bin_error(
     bin: &DiscreteProjectionBinState,
-    normalization: DiscreteHistogramNormalization,
+    normalization: DiscreteProjectionNormalization,
     total_count: i64,
 ) -> f64 {
     match normalization {
-        DiscreteHistogramNormalization::Contribution => bin.contribution_stderr(total_count),
-        DiscreteHistogramNormalization::ConditionalMean => bin.stderr(),
+        DiscreteProjectionNormalization::Contribution => bin.contribution_stderr(total_count),
+        DiscreteProjectionNormalization::ConditionalMean => bin.stderr(),
     }
 }
 
-fn matches_fixed_dims(discrete: &[i64], item: &NamedDiscreteHistogram) -> Result<bool, String> {
+fn matches_fixed_dims(discrete: &[i64], item: &NamedDiscreteProjection) -> Result<bool, String> {
     for (raw_dim, fixed_value) in &item.fixed_dims {
         let dim = raw_dim.parse::<usize>().map_err(|_| {
             format!(
@@ -1398,12 +1398,12 @@ fn matches_fixed_dims(discrete: &[i64], item: &NamedDiscreteHistogram) -> Result
     Ok(true)
 }
 
-fn histogram_key(
+fn projection_key(
     discrete: &[i64],
-    item: &NamedDiscreteHistogram,
+    item: &NamedDiscreteProjection,
 ) -> Result<Option<Vec<i64>>, String> {
-    let mut key = Vec::with_capacity(item.hist_dims.len());
-    for dim in &item.hist_dims {
+    let mut key = Vec::with_capacity(item.dims.len());
+    for dim in &item.dims {
         let Some(value) = discrete.get(*dim) else {
             return Ok(None);
         };
@@ -1422,7 +1422,7 @@ fn reject_bin_explosion(count: usize, max_total_bins: usize, name: &str) -> Resu
     }
 }
 
-fn discrete_histogram_description(item: &NamedDiscreteHistogram) -> String {
+fn discrete_projection_description(item: &NamedDiscreteProjection) -> String {
     let fixed = item
         .fixed_dims
         .iter()
@@ -1430,13 +1430,13 @@ fn discrete_histogram_description(item: &NamedDiscreteHistogram) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     if fixed.is_empty() {
-        format!("hist_dims={:?}", item.hist_dims)
+        format!("dims={:?}", item.dims)
     } else {
-        format!("hist_dims={:?}; fixed {}", item.hist_dims, fixed)
+        format!("dims={:?}; fixed {}", item.dims, fixed)
     }
 }
 
-fn histogram_key_label(key: &[i64]) -> String {
+fn projection_key_label(key: &[i64]) -> String {
     match key {
         [] => "all".to_string(),
         [value] => value.to_string(),
@@ -1620,25 +1620,25 @@ mod tests {
         }
     }
 
-    fn scalar_histogram_fixture() -> (
+    fn scalar_projection_fixture() -> (
         BTreeMap<String, DiscreteProjectionBinState>,
-        NamedDiscreteHistogram,
+        NamedDiscreteProjection,
     ) {
         let mut bins = BTreeMap::new();
         bins.insert("0".to_string(), discrete_bin(vec![0], 2, 6.0, 20.0));
         bins.insert("1".to_string(), discrete_bin(vec![1], 1, -3.0, 9.0));
 
-        let item = NamedDiscreteHistogram {
+        let item = NamedDiscreteProjection {
             name: "channel".to_string(),
-            hist_dims: vec![0],
+            dims: vec![0],
             fixed_dims: BTreeMap::new(),
         };
 
         (bins, item)
     }
 
-    fn projected_values(normalization: DiscreteHistogramNormalization) -> Vec<f64> {
-        let (bins, item) = scalar_histogram_fixture();
+    fn projected_values(normalization: DiscreteProjectionNormalization) -> Vec<f64> {
+        let (bins, item) = scalar_projection_fixture();
         let projected =
             scalar_projected_bins(&bins, &item, normalization, 3, 16).expect("project bins");
         assert_eq!(projected.len(), 2);
@@ -1650,23 +1650,23 @@ mod tests {
     }
 
     #[test]
-    fn scalar_discrete_histogram_contribution_bins_sum_to_integral() {
-        let values = projected_values(DiscreteHistogramNormalization::Contribution);
+    fn scalar_discrete_projection_contribution_bins_sum_to_integral() {
+        let values = projected_values(DiscreteProjectionNormalization::Contribution);
         assert!((values[0] - 2.0).abs() < f64::EPSILON);
         assert!((values[1] + 1.0).abs() < f64::EPSILON);
         assert!((values.iter().sum::<f64>() - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
-    fn scalar_discrete_histogram_conditional_mean_bins_use_bin_counts() {
-        let values = projected_values(DiscreteHistogramNormalization::ConditionalMean);
+    fn scalar_discrete_projection_conditional_mean_bins_use_bin_counts() {
+        let values = projected_values(DiscreteProjectionNormalization::ConditionalMean);
         assert!((values[0] - 3.0).abs() < f64::EPSILON);
         assert!((values[1] + 3.0).abs() < f64::EPSILON);
         assert!((values.iter().sum::<f64>()).abs() < f64::EPSILON);
     }
 
     #[test]
-    fn discrete_histogram_skips_samples_outside_variable_depth_path() {
+    fn discrete_projection_skips_samples_outside_variable_depth_path() {
         let mut bins = BTreeMap::new();
         bins.insert("0".to_string(), discrete_bin(vec![0], 10, 10.0, 10.0));
         bins.insert("1/0".to_string(), discrete_bin(vec![1, 0], 10, 20.0, 40.0));
@@ -1674,16 +1674,16 @@ mod tests {
             "1/1/3".to_string(),
             discrete_bin(vec![1, 1, 3], 2, 6.0, 20.0),
         );
-        let item = NamedDiscreteHistogram {
+        let item = NamedDiscreteProjection {
             name: "leaf".to_string(),
-            hist_dims: vec![2],
+            dims: vec![2],
             fixed_dims: BTreeMap::from([("0".to_string(), 1), ("1".to_string(), 1)]),
         };
 
         let projected = scalar_projected_bins(
             &bins,
             &item,
-            DiscreteHistogramNormalization::ConditionalMean,
+            DiscreteProjectionNormalization::ConditionalMean,
             22,
             16,
         )

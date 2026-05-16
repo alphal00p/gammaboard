@@ -223,10 +223,9 @@ impl SamplerAggregatorConfig {
                 ))
             }
             Self::HavanaTraining { params } => {
-                // Minimal in-place behavior: if no explicit sample_budget is provided,
-                // default to a small positive budget (1) so initial-stage construction can proceed.
-                // This preserves simplicity and avoids forcing callers to always supply a budget.
-                let sample_budget = sample_budget.unwrap_or(1);
+                let sample_budget = sample_budget.ok_or_else(|| {
+                    BuildError::build("havana_training sampler requires a sample budget")
+                })?;
                 Ok(Box::new(HavanaSampler::from_params_and_domain(
                     params.clone(),
                     &domain,

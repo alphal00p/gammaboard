@@ -21,9 +21,9 @@ pub use run_spec::{
     IntegrationParams, RunSpec, SamplerAggregatorConfig, TrainingProjection,
 };
 pub use tasks::{
-    AccumulatorSourceSpec, DEFAULT_DISCRETE_HISTOGRAM_MAX_TOTAL_BINS, DiscreteHistogramConfig,
-    DiscreteHistogramNormalization, ImageDisplayMode, LineDisplayMode, LineRasterGeometry,
-    Linspace, NamedDiscreteHistogram, PlaneRasterGeometry, PlotAccumulatorKind, RunTask,
+    AccumulatorSourceSpec, DEFAULT_DISCRETE_PROJECTION_MAX_TOTAL_BINS, DiscreteProjectionConfig,
+    DiscreteProjectionNormalization, ImageDisplayMode, LineDisplayMode, LineRasterGeometry,
+    Linspace, NamedDiscreteProjection, PlaneRasterGeometry, PlotAccumulatorKind, RunTask,
     RunTaskInput, RunTaskSpec, RunTaskState, SampleErrorProjection, SampleStopCondition,
     SampleTaskConfig, SamplerAggregatorSourceSpec, SamplerQueueTuning, SourceRefSpec,
     canonical_task_toml, generated_task_name,

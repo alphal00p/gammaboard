@@ -65,7 +65,7 @@ impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
         &self,
         ctx: &EvaluatorPanelContext<'_>,
     ) -> Result<Vec<PanelState>, EngineError> {
-        let mut summary = vec![
+        let summary = vec![
             key_value("implementation", "Implementation", self.kind_str()),
             key_value("domain", "Domain", summarize_domain(ctx.domain)),
             key_value(
@@ -84,19 +84,6 @@ impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
                 ctx.runner_params.db_pool_size,
             ),
         ];
-        if let Some(accumulator_kind) = evaluator_accumulator_kind(self) {
-            summary.insert(
-                3,
-                key_value(
-                    "accumulator_kind",
-                    "Accumulator Kind",
-                    match accumulator_kind {
-                        crate::evaluation::SemanticAccumulatorKind::Scalar => "scalar",
-                        crate::evaluation::SemanticAccumulatorKind::Vector => "vector",
-                    },
-                ),
-            );
-        }
         let config_payload = json!({
             "evaluator": self,
             "runner": {
@@ -110,21 +97,6 @@ impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
             panels.push(config_panel);
         }
         Ok(panels)
-    }
-}
-
-fn evaluator_accumulator_kind(
-    config: &EvaluatorConfig,
-) -> Option<crate::evaluation::SemanticAccumulatorKind> {
-    match config {
-        EvaluatorConfig::Gammaloop { .. } => None,
-        EvaluatorConfig::Unit { params } => Some(params.accumulator_kind),
-        EvaluatorConfig::Symbolica { .. } => {
-            Some(crate::evaluation::SemanticAccumulatorKind::Scalar)
-        }
-        EvaluatorConfig::ProcessEvaluator { .. } => {
-            Some(crate::evaluation::SemanticAccumulatorKind::Scalar)
-        }
     }
 }
 

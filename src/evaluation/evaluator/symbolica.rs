@@ -5,7 +5,7 @@ use crate::{
     Batch, BatchResult, BuildError, EngineError, EvalError,
     core::AccumulatorConfig,
     evaluation::{AccumulatorState, IngestScalar},
-    evaluation::{EvalBatchOptions, Evaluator},
+    evaluation::{EvalBatchOptions, Evaluator, ingest_scalar_values},
     runtime_context::evaluator_tmp_dir,
 };
 use serde::{Deserialize, Serialize};
@@ -158,19 +158,13 @@ impl Evaluator for SymbolicaEngine {
                 )));
             }
         };
-        for (value, point) in out.iter().zip(batch.points().iter()) {
-            scalar_accumulator.ingest_scalar(*value, point);
-        }
-        if options.require_training_values {
-            let weighted_values = out
-                .into_iter()
-                .zip(batch.points().iter())
-                .map(|(value, point)| value * point.total_weight())
-                .collect();
-            Ok(BatchResult::new(Some(weighted_values), observable_state))
-        } else {
-            Ok(BatchResult::new(None, observable_state))
-        }
+        let weighted_values = ingest_scalar_values(
+            &out,
+            batch.points(),
+            options.require_training_values,
+            scalar_accumulator,
+        )?;
+        Ok(BatchResult::new(weighted_values, observable_state))
     }
 }
 

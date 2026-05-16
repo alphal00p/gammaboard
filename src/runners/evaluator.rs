@@ -606,6 +606,18 @@ where
                 }
             };
         }
+        if let Err(err) = self.domain.validate_batch(&transformed_batch) {
+            return self
+                .fail_tick(
+                    loop_started,
+                    claimed.batch_id,
+                    materialization_time_ms,
+                    EngineError::engine(format!(
+                        "materialized batch does not match run domain: {err}"
+                    )),
+                )
+                .await;
+        }
         let started = Instant::now();
         let eval_result = Self::call_with_panic_guard("evaluator.eval_batch", || {
             self.evaluator

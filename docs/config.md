@@ -201,7 +201,7 @@ normalization = "contribution" # default; use "conditional_mean" for per-bin mea
 
 [[task_queue.accumulator.discrete_projections.items]]
 name = "summed"
-hist_dims = [0]
+dims = [0]
 fixed_dims = {}
 
 [[task_queue]]

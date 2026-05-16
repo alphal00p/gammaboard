@@ -160,6 +160,81 @@ impl Domain {
         }
     }
 
+    pub fn validate_point(&self, point: &crate::evaluation::Point) -> Result<(), String> {
+        self.validate_point_parts(&point.discrete, &point.continuous)
+    }
+
+    pub fn validate_batch(&self, batch: &crate::evaluation::Batch) -> Result<(), String> {
+        for (sample_idx, point) in batch.points().iter().enumerate() {
+            self.validate_point(point)
+                .map_err(|err| format!("sample {sample_idx}: {err}"))?;
+        }
+        Ok(())
+    }
+
+    pub fn validate_point_parts(&self, discrete: &[i64], continuous: &[f64]) -> Result<(), String> {
+        let expected_continuous_dims = self.continuous_dims_at_leaf_path(discrete)?;
+        if continuous.len() != expected_continuous_dims {
+            return Err(format!(
+                "discrete path {:?} expects {} continuous coordinates, got {}",
+                discrete,
+                expected_continuous_dims,
+                continuous.len()
+            ));
+        }
+        Ok(())
+    }
+
+    fn continuous_dims_at_leaf_path(&self, discrete: &[i64]) -> Result<usize, String> {
+        match self {
+            Self::Continuous { dims } => {
+                if discrete.is_empty() {
+                    Ok(*dims)
+                } else {
+                    Err(format!(
+                        "discrete path {:?} continues beyond a continuous leaf",
+                        discrete
+                    ))
+                }
+            }
+            Self::Rectangular {
+                discrete_cardinalities,
+                continuous_dims,
+            } => {
+                if discrete.len() != discrete_cardinalities.len() {
+                    return Err(format!(
+                        "discrete path {:?} must have rectangular domain depth {}, got {}",
+                        discrete,
+                        discrete_cardinalities.len(),
+                        discrete.len()
+                    ));
+                }
+                self.continuous_dims_at_discrete_path(discrete)?;
+                Ok(*continuous_dims)
+            }
+            Self::Discrete { branches, .. } => {
+                let Some((&head, tail)) = discrete.split_first() else {
+                    return Err(
+                        "discrete path does not reach a concrete discrete domain branch"
+                            .to_string(),
+                    );
+                };
+                let branch_index = usize::try_from(head).map_err(|_| {
+                    format!(
+                        "discrete branch index {head} is negative and cannot select a domain branch"
+                    )
+                })?;
+                let branch = branches
+                    .iter()
+                    .find(|branch| branch.index == branch_index)
+                    .ok_or_else(|| {
+                        format!("discrete branch index {branch_index} does not exist in domain")
+                    })?;
+                branch.domain.continuous_dims_at_leaf_path(tail)
+            }
+        }
+    }
+
     pub fn fixed_discrete_cardinalities(&self) -> Option<Vec<usize>> {
         match self {
             Self::Continuous { .. } => Some(Vec::new()),
@@ -246,5 +321,28 @@ mod tests {
         assert_eq!(domain.continuous_dims_at_discrete_path(&[1, 1, 4]), Ok(5));
         assert!(domain.continuous_dims_at_discrete_path(&[1, 1, 5]).is_err());
         assert!(domain.continuous_dims_at_discrete_path(&[0, 0]).is_err());
+    }
+
+    #[test]
+    fn validate_point_accepts_rectangular_cardinality_and_width() {
+        let domain = Domain::rectangular_with_cardinalities(2, [3, 4]);
+        assert!(domain.validate_point_parts(&[2, 3], &[0.1, 0.2]).is_ok());
+        assert!(domain.validate_point_parts(&[3, 0], &[0.1, 0.2]).is_err());
+        assert!(domain.validate_point_parts(&[2], &[0.1, 0.2]).is_err());
+        assert!(domain.validate_point_parts(&[2, 3], &[0.1]).is_err());
+    }
+
+    #[test]
+    fn validate_point_accepts_inhomogeneous_branch_widths() {
+        let domain = Domain::discrete(
+            None,
+            [
+                DomainBranch::new(0, Domain::continuous(1)),
+                DomainBranch::new(1, Domain::continuous(3)),
+            ],
+        );
+        assert!(domain.validate_point_parts(&[0], &[0.1]).is_ok());
+        assert!(domain.validate_point_parts(&[1], &[0.1, 0.2, 0.3]).is_ok());
+        assert!(domain.validate_point_parts(&[1], &[0.1]).is_err());
     }
 }

@@ -652,7 +652,6 @@ name = "{run_name}"
 kind = "unit"
 continuous_dims = 2
 discrete_dims = 0
-accumulator_kind = "scalar"
 
 [[task_queue]]
 name = "train-a"
@@ -900,7 +899,6 @@ name = "havana-alt-e2e"
 kind = "unit"
 continuous_dims = 2
 discrete_dims = 0
-accumulator_kind = "scalar"
 
 [[task_queue]]
 name = "train-a"
@@ -1482,12 +1480,12 @@ max_total_bins = 16
 
 [[task_queue.accumulator.discrete_projections.items]]
 name = "spin"
-hist_dims = [0]
+dims = [0]
 fixed_dims = {{}}
 
 [[task_queue.accumulator.discrete_projections.items]]
 name = "channel_for_spin_0"
-hist_dims = [1]
+dims = [1]
 fixed_dims = {{ "0" = 0 }}
 
 [[task_queue]]
@@ -2812,7 +2810,6 @@ name = "sampler-checkpoint-e2e"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-accumulator_kind = "scalar"
 
 [[task_queue]]
 name = "train-a"
@@ -3008,7 +3005,6 @@ name = "queue-tuning-live-update-e2e"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-accumulator_kind = "scalar"
 min_eval_time_per_sample_ms = 5
 
 [[task_queue]]
@@ -3224,7 +3220,6 @@ name = "delete-assigned-run-e2e"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-accumulator_kind = "scalar"
 min_eval_time_per_sample_ms = 20
 
 [[task_queue]]
@@ -3328,7 +3323,6 @@ name = "graceful-node-shutdown-e2e"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-accumulator_kind = "scalar"
 
 [[task_queue]]
 kind = "sample"
@@ -3789,7 +3783,6 @@ name = "worker-death-e2e"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-accumulator_kind = "scalar"
 min_eval_time_per_sample_ms = 100
 
 [[task_queue]]
@@ -3943,7 +3936,6 @@ name = "sampler-error-e2e"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-accumulator_kind = "scalar"
 
 [[task_queue]]
 kind = "sample"
@@ -4005,7 +3997,6 @@ name = "materializer-error-e2e"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-accumulator_kind = "scalar"
 
 [[task_queue]]
 kind = "sample"
@@ -4075,8 +4066,7 @@ name = "evaluator-error-e2e"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-accumulator_kind = "scalar"
-fail_on_batch_nr = 1
+fail_on_batch_nrs = [1]
 
 [[task_queue]]
 kind = "sample"
@@ -4139,7 +4129,6 @@ name = "evaluator-retry-twice-then-recover-e2e"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-accumulator_kind = "scalar"
 fail_on_batch_nrs = [1, 2]
 
 [sampler_aggregator_runner_params.queue]
@@ -4224,7 +4213,6 @@ name = "evaluator-retry-three-then-fail-e2e"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-accumulator_kind = "scalar"
 fail_on_batch_nrs = [1, 2, 3]
 
 [sampler_aggregator_runner_params.queue]
@@ -4322,7 +4310,6 @@ name = "clone-source-e2e"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-accumulator_kind = "scalar"
 
 [[task_queue]]
 kind = "sample"

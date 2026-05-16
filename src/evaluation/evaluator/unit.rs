@@ -1,7 +1,7 @@
 use crate::core::{AccumulatorConfig, EvalError};
 use crate::evaluation::{
     AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator, IngestScalar,
-    ScalarSampleEvaluator, SemanticAccumulatorKind,
+    ingest_scalar_values,
 };
 use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
@@ -10,8 +10,6 @@ use std::time::Duration;
 /// Evaluator that returns 1.0 for every sample.
 pub struct UnitEvaluator {
     domain: Domain,
-    accumulator_kind: SemanticAccumulatorKind,
-    fail_on_batch_nr: Option<usize>,
     fail_on_batch_nrs: Vec<usize>,
     min_eval_time_per_sample_ms: u64,
     eval_batches_total: usize,
@@ -20,15 +18,11 @@ pub struct UnitEvaluator {
 impl UnitEvaluator {
     pub fn new(
         domain: Domain,
-        accumulator_kind: SemanticAccumulatorKind,
-        fail_on_batch_nr: Option<usize>,
         fail_on_batch_nrs: Vec<usize>,
         min_eval_time_per_sample_ms: u64,
     ) -> Self {
         Self {
             domain,
-            accumulator_kind,
-            fail_on_batch_nr,
             fail_on_batch_nrs,
             min_eval_time_per_sample_ms,
             eval_batches_total: 0,
@@ -38,16 +32,17 @@ impl UnitEvaluator {
     pub fn from_params(params: UnitEvaluatorParams) -> Self {
         Self::new(
             Domain::rectangular(params.continuous_dims, params.discrete_dims),
-            params.accumulator_kind,
-            params.fail_on_batch_nr,
             params.fail_on_batch_nrs,
             params.min_eval_time_per_sample_ms,
         )
     }
 
-    fn maybe_sleep(&self) {
+    fn maybe_sleep(&self, samples: usize) {
         if self.min_eval_time_per_sample_ms > 0 {
-            std::thread::sleep(Duration::from_millis(self.min_eval_time_per_sample_ms));
+            std::thread::sleep(Duration::from_millis(
+                self.min_eval_time_per_sample_ms
+                    .saturating_mul(samples as u64),
+            ));
         }
     }
 
@@ -66,12 +61,9 @@ impl UnitEvaluator {
     }
 
     fn should_fail_on_batch(&self, batch_nr: usize) -> bool {
-        self.fail_on_batch_nr
-            .is_some_and(|n| n > 0 && n == batch_nr)
-            || self
-                .fail_on_batch_nrs
-                .iter()
-                .any(|n| *n > 0 && *n == batch_nr)
+        self.fail_on_batch_nrs
+            .iter()
+            .any(|n| *n > 0 && *n == batch_nr)
     }
 }
 
@@ -80,9 +72,6 @@ impl UnitEvaluator {
 pub struct UnitEvaluatorParams {
     pub continuous_dims: usize,
     pub discrete_dims: usize,
-    pub accumulator_kind: SemanticAccumulatorKind,
-    #[serde(default)]
-    pub fail_on_batch_nr: Option<usize>,
     #[serde(default)]
     pub fail_on_batch_nrs: Vec<usize>,
     #[serde(default)]
@@ -94,18 +83,9 @@ impl Default for UnitEvaluatorParams {
         Self {
             continuous_dims: 1,
             discrete_dims: 0,
-            accumulator_kind: SemanticAccumulatorKind::Scalar,
-            fail_on_batch_nr: None,
             fail_on_batch_nrs: Vec::new(),
             min_eval_time_per_sample_ms: 0,
         }
-    }
-}
-
-impl ScalarSampleEvaluator for UnitEvaluator {
-    fn eval_scalar_sample(&mut self, _batch: &Batch, _sample_idx: usize) -> Result<f64, EvalError> {
-        self.maybe_sleep();
-        Ok(1.0)
     }
 }
 
@@ -128,15 +108,13 @@ impl Evaluator for UnitEvaluator {
             )));
         }
         let mut observable_state = AccumulatorState::from_config(accumulator);
-        if self.accumulator_kind != SemanticAccumulatorKind::Scalar {
-            return Err(EvalError::eval(
-                "unit evaluator only supports scalar accumulator_kind; use process_evaluator for vector outputs",
-            ));
-        }
-        let weighted_values = self.eval_scalar_into(
-            batch,
-            Self::scalar_ingestor(&mut observable_state)?,
+        self.maybe_sleep(batch.size());
+        let values = vec![1.0; batch.size()];
+        let weighted_values = ingest_scalar_values(
+            &values,
+            batch.points(),
             options.require_training_values,
+            Self::scalar_ingestor(&mut observable_state)?,
         )?;
         Ok(BatchResult::new(weighted_values, observable_state))
     }
@@ -154,13 +132,7 @@ mod tests {
             Point::new(vec![1.0], Vec::new(), 3.0),
         ])
         .expect("batch");
-        let mut evaluator = UnitEvaluator::new(
-            Domain::continuous(1),
-            SemanticAccumulatorKind::Scalar,
-            None,
-            Vec::new(),
-            0,
-        );
+        let mut evaluator = UnitEvaluator::new(Domain::continuous(1), Vec::new(), 0);
 
         let result = evaluator
             .eval_batch(

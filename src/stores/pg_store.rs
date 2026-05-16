@@ -1133,8 +1133,7 @@ mod tests {
             "evaluator": {
                 "kind": "unit",
                 "continuous_dims": 1,
-                "discrete_dims": 0,
-                "accumulator_kind": "scalar"
+                "discrete_dims": 0
             },
             "evaluator_runner_params": {
                 "performance_snapshot_interval_ms": 5000,
@@ -1181,7 +1180,6 @@ mod tests {
             crate::core::EvaluatorConfig::Unit { params }
                 if params.continuous_dims == 1
                 && params.discrete_dims == 0
-                && params.accumulator_kind == crate::evaluation::SemanticAccumulatorKind::Scalar
         ));
         assert_eq!(
             spec.evaluator_runner_params,
@@ -1281,8 +1279,7 @@ mod tests {
                 "evaluator": {
                     "kind": "unit",
                     "continuous_dims": 1,
-                    "discrete_dims": 0,
-                    "accumulator_kind": "scalar"
+                    "discrete_dims": 0
                 },
                 "sampler_aggregator_runner_params": {
                     "performance_snapshot_interval_ms": 5000,

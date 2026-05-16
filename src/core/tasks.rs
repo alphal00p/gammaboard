@@ -31,27 +31,27 @@ pub struct SampleTaskConfig {
     pub batch_transforms: Option<Vec<BatchTransformConfig>>,
 }
 
-pub const DEFAULT_DISCRETE_HISTOGRAM_MAX_TOTAL_BINS: usize = 4096;
+pub const DEFAULT_DISCRETE_PROJECTION_MAX_TOTAL_BINS: usize = 4096;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
-pub struct DiscreteHistogramConfig {
+pub struct DiscreteProjectionConfig {
     pub max_total_bins: Option<usize>,
-    pub normalization: DiscreteHistogramNormalization,
-    pub items: Vec<NamedDiscreteHistogram>,
+    pub normalization: DiscreteProjectionNormalization,
+    pub items: Vec<NamedDiscreteProjection>,
 }
 
-impl Default for DiscreteHistogramConfig {
+impl Default for DiscreteProjectionConfig {
     fn default() -> Self {
         Self {
             max_total_bins: None,
-            normalization: DiscreteHistogramNormalization::Contribution,
+            normalization: DiscreteProjectionNormalization::Contribution,
             items: Vec::new(),
         }
     }
 }
 
-impl DiscreteHistogramConfig {
+impl DiscreteProjectionConfig {
     pub fn validate(&self) -> Result<(), String> {
         if let Some(limit) = self.max_total_bins
             && limit == 0
@@ -81,13 +81,13 @@ impl DiscreteHistogramConfig {
 
     pub fn max_total_bins_or_default(&self) -> usize {
         self.max_total_bins
-            .unwrap_or(DEFAULT_DISCRETE_HISTOGRAM_MAX_TOTAL_BINS)
+            .unwrap_or(DEFAULT_DISCRETE_PROJECTION_MAX_TOTAL_BINS)
     }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum DiscreteHistogramNormalization {
+pub enum DiscreteProjectionNormalization {
     #[default]
     Contribution,
     ConditionalMean,
@@ -95,23 +95,23 @@ pub enum DiscreteHistogramNormalization {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
-pub struct NamedDiscreteHistogram {
+pub struct NamedDiscreteProjection {
     pub name: String,
-    pub hist_dims: Vec<usize>,
+    pub dims: Vec<usize>,
     pub fixed_dims: BTreeMap<String, i64>,
 }
 
-impl Default for NamedDiscreteHistogram {
+impl Default for NamedDiscreteProjection {
     fn default() -> Self {
         Self {
             name: String::new(),
-            hist_dims: Vec::new(),
+            dims: Vec::new(),
             fixed_dims: BTreeMap::new(),
         }
     }
 }
 
-impl NamedDiscreteHistogram {
+impl NamedDiscreteProjection {
     pub fn validate(&self) -> Result<(), String> {
         let trimmed = self.name.trim();
         if trimmed.is_empty() {
@@ -125,17 +125,17 @@ impl NamedDiscreteHistogram {
                     .to_string(),
             );
         }
-        if self.hist_dims.is_empty() {
+        if self.dims.is_empty() {
             return Err(
-                "accumulator.discrete_projections.items.hist_dims must contain at least one dimension"
+                "accumulator.discrete_projections.items.dims must contain at least one dimension"
                     .to_string(),
             );
         }
         let mut seen = BTreeSet::new();
-        for dim in &self.hist_dims {
+        for dim in &self.dims {
             if !seen.insert(*dim) {
                 return Err(format!(
-                    "accumulator.discrete_projections.items '{}' repeats hist_dims entry {}",
+                    "accumulator.discrete_projections.items '{}' repeats dims entry {}",
                     self.name, dim
                 ));
             }
@@ -149,7 +149,7 @@ impl NamedDiscreteHistogram {
             })?;
             if seen.contains(&dim) {
                 return Err(format!(
-                    "accumulator.discrete_projections.items '{}' uses dimension {} in both hist_dims and fixed_dims",
+                    "accumulator.discrete_projections.items '{}' uses dimension {} in both dims and fixed_dims",
                     self.name, dim
                 ));
             }

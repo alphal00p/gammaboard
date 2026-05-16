@@ -1,4 +1,4 @@
-use crate::core::DEFAULT_DISCRETE_HISTOGRAM_MAX_TOTAL_BINS;
+use crate::core::DEFAULT_DISCRETE_PROJECTION_MAX_TOTAL_BINS;
 use crate::evaluation::accumulator::ScalarAccumulatorState;
 use crate::evaluation::batch::Point;
 use serde::{Deserialize, Serialize};
@@ -58,7 +58,7 @@ pub fn upsert_scalar_discrete_bin(
     point: &Point,
 ) {
     let key = discrete_bin_key(discrete);
-    if !bins.contains_key(&key) && bins.len() >= DEFAULT_DISCRETE_HISTOGRAM_MAX_TOTAL_BINS {
+    if !bins.contains_key(&key) && bins.len() >= DEFAULT_DISCRETE_PROJECTION_MAX_TOTAL_BINS {
         *overflow_count += 1;
         return;
     }

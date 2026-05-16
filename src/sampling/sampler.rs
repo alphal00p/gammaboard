@@ -84,6 +84,6 @@ pub trait SamplerAggregator: Send {
     }
     fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError>;
     fn get_diagnostics(&mut self) -> JsonValue {
-        json!("{}")
+        json!({})
     }
 }

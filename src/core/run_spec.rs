@@ -3,7 +3,7 @@ use crate::evaluation::{
 };
 use crate::utils::domain::Domain;
 
-use crate::core::tasks::DiscreteHistogramConfig;
+use crate::core::tasks::DiscreteProjectionConfig;
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use crate::sampling::HavanaInferenceSamplerParams;
 use crate::sampling::{
@@ -46,12 +46,12 @@ pub struct RunSpec {
 pub enum AccumulatorConfig {
     Empty,
     Scalar {
-        discrete_histograms: Option<DiscreteHistogramConfig>,
+        discrete_projections: Option<DiscreteProjectionConfig>,
     },
     Vector {
         components: Vec<String>,
         training_projection: TrainingProjection,
-        discrete_histograms: Option<DiscreteHistogramConfig>,
+        discrete_projections: Option<DiscreteProjectionConfig>,
     },
     Gammaloop,
     FullVector {
@@ -111,7 +111,7 @@ enum AccumulatorConfigKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BinaryAccumulatorConfig {
     kind: AccumulatorConfigKind,
-    discrete_histograms: Option<DiscreteHistogramConfig>,
+    discrete_projections: Option<DiscreteProjectionConfig>,
     components: Option<Vec<String>>,
     training_projection: Option<BinaryTrainingProjection>,
 }
@@ -132,7 +132,7 @@ struct BinaryTrainingProjection {
 impl AccumulatorConfig {
     pub fn scalar() -> Self {
         Self::Scalar {
-            discrete_histograms: None,
+            discrete_projections: None,
         }
     }
 
@@ -140,7 +140,7 @@ impl AccumulatorConfig {
         Self::Vector {
             components,
             training_projection,
-            discrete_histograms: None,
+            discrete_projections: None,
         }
     }
 
@@ -167,7 +167,7 @@ impl AccumulatorConfig {
     fn to_binary(&self) -> BinaryAccumulatorConfig {
         BinaryAccumulatorConfig {
             kind: self.kind(),
-            discrete_histograms: self.discrete_histograms().cloned(),
+            discrete_projections: self.discrete_projections().cloned(),
             components: match self {
                 Self::Vector { components, .. } | Self::FullVector { components } => {
                     Some(components.clone())
@@ -186,14 +186,14 @@ impl AccumulatorConfig {
 
     fn from_parts(
         kind: AccumulatorConfigKind,
-        discrete_histograms: Option<DiscreteHistogramConfig>,
+        discrete_projections: Option<DiscreteProjectionConfig>,
         components: Option<Vec<String>>,
         training_projection: Option<TrainingProjection>,
     ) -> Self {
         match kind {
             AccumulatorConfigKind::Empty => Self::Empty,
             AccumulatorConfigKind::Scalar => Self::Scalar {
-                discrete_histograms,
+                discrete_projections,
             },
             AccumulatorConfigKind::Vector => {
                 let components = components.unwrap_or_else(|| vec!["value".to_string()]);
@@ -202,7 +202,7 @@ impl AccumulatorConfig {
                 Self::Vector {
                     components,
                     training_projection,
-                    discrete_histograms,
+                    discrete_projections,
                 }
             }
             AccumulatorConfigKind::Gammaloop => Self::Gammaloop,
@@ -212,28 +212,28 @@ impl AccumulatorConfig {
         }
     }
 
-    fn kind_accepts_discrete_histograms(kind: AccumulatorConfigKind) -> bool {
+    fn kind_accepts_discrete_projections(kind: AccumulatorConfigKind) -> bool {
         matches!(
             kind,
             AccumulatorConfigKind::Scalar | AccumulatorConfigKind::Vector
         )
     }
 
-    pub fn discrete_histograms(&self) -> Option<&DiscreteHistogramConfig> {
+    pub fn discrete_projections(&self) -> Option<&DiscreteProjectionConfig> {
         match self {
             Self::Scalar {
-                discrete_histograms,
+                discrete_projections,
             }
             | Self::Vector {
-                discrete_histograms,
+                discrete_projections,
                 ..
-            } => discrete_histograms.as_ref(),
+            } => discrete_projections.as_ref(),
             Self::Empty | Self::Gammaloop | Self::FullVector { .. } => None,
         }
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        if let Some(config) = self.discrete_histograms() {
+        if let Some(config) = self.discrete_projections() {
             config.validate()?;
         }
         if let Self::Vector {
@@ -281,7 +281,7 @@ impl Serialize for AccumulatorConfig {
                 rename = "discrete_projections",
                 skip_serializing_if = "Option::is_none"
             )]
-            discrete_histograms: Option<&'a DiscreteHistogramConfig>,
+            discrete_projections: Option<&'a DiscreteProjectionConfig>,
             #[serde(skip_serializing_if = "Option::is_none")]
             components: Option<&'a [String]>,
             #[serde(skip_serializing_if = "Option::is_none")]
@@ -292,26 +292,26 @@ impl Serialize for AccumulatorConfig {
             Self::Vector {
                 components,
                 training_projection,
-                discrete_histograms,
+                discrete_projections,
             } => Rich {
                 kind: self.kind_str(),
-                discrete_histograms: discrete_histograms.as_ref(),
+                discrete_projections: discrete_projections.as_ref(),
                 components: Some(components.as_slice()),
                 training_projection: Some(training_projection),
             }
             .serialize(serializer),
             Self::FullVector { components } => Rich {
                 kind: self.kind_str(),
-                discrete_histograms: None,
+                discrete_projections: None,
                 components: Some(components.as_slice()),
                 training_projection: None,
             }
             .serialize(serializer),
             Self::Scalar {
-                discrete_histograms: Some(discrete_histograms),
+                discrete_projections: Some(discrete_projections),
             } => Rich {
                 kind: self.kind_str(),
-                discrete_histograms: Some(discrete_histograms),
+                discrete_projections: Some(discrete_projections),
                 components: None,
                 training_projection: None,
             }
@@ -328,16 +328,16 @@ impl<'de> Deserialize<'de> for AccumulatorConfig {
     {
         if !deserializer.is_human_readable() {
             let binary = BinaryAccumulatorConfig::deserialize(deserializer)?;
-            if binary.discrete_histograms.is_some()
-                && !Self::kind_accepts_discrete_histograms(binary.kind)
+            if binary.discrete_projections.is_some()
+                && !Self::kind_accepts_discrete_projections(binary.kind)
             {
                 return Err(serde::de::Error::custom(
-                    "discrete_histograms is only valid for scalar and vector accumulators",
+                    "discrete_projections is only valid for scalar and vector accumulators",
                 ));
             }
             return Ok(Self::from_parts(
                 binary.kind,
-                binary.discrete_histograms,
+                binary.discrete_projections,
                 binary.components,
                 binary.training_projection.map(TrainingProjection::from),
             ));
@@ -364,7 +364,7 @@ impl<'de> Deserialize<'de> for AccumulatorConfig {
                 A: MapAccess<'de>,
             {
                 let mut kind = None::<String>;
-                let mut discrete_histograms = None::<DiscreteHistogramConfig>;
+                let mut discrete_projections = None::<DiscreteProjectionConfig>;
                 let mut components = None::<Vec<String>>;
                 let mut training_projection = None::<TrainingProjection>;
                 while let Some(key) = map.next_key::<String>()? {
@@ -376,12 +376,12 @@ impl<'de> Deserialize<'de> for AccumulatorConfig {
                             kind = Some(map.next_value()?);
                         }
                         "discrete_projections" => {
-                            if discrete_histograms.is_some() {
+                            if discrete_projections.is_some() {
                                 return Err(serde::de::Error::duplicate_field(
                                     "discrete_projections",
                                 ));
                             }
-                            discrete_histograms = Some(map.next_value()?);
+                            discrete_projections = Some(map.next_value()?);
                         }
                         "components" => {
                             if components.is_some() {
@@ -413,7 +413,7 @@ impl<'de> Deserialize<'de> for AccumulatorConfig {
                 let kind = kind.ok_or_else(|| serde::de::Error::missing_field("kind"))?;
                 accumulator_from_kind_str(
                     &kind,
-                    discrete_histograms,
+                    discrete_projections,
                     components,
                     training_projection,
                 )
@@ -426,7 +426,7 @@ impl<'de> Deserialize<'de> for AccumulatorConfig {
 
 fn accumulator_from_kind_str<E>(
     kind: &str,
-    discrete_histograms: Option<DiscreteHistogramConfig>,
+    discrete_projections: Option<DiscreteProjectionConfig>,
     components: Option<Vec<String>>,
     training_projection: Option<TrainingProjection>,
 ) -> Result<AccumulatorConfig, E>
@@ -434,10 +434,10 @@ where
     E: serde::de::Error,
 {
     match kind {
-        "empty" => reject_discrete_histograms(AccumulatorConfigKind::Empty, discrete_histograms)
+        "empty" => reject_discrete_projections(AccumulatorConfigKind::Empty, discrete_projections)
             .map(|_| AccumulatorConfig::Empty),
         "scalar" => Ok(AccumulatorConfig::Scalar {
-            discrete_histograms,
+            discrete_projections,
         }),
         "vector" => {
             let components = components.unwrap_or_else(|| vec!["value".to_string()]);
@@ -450,15 +450,15 @@ where
             Ok(AccumulatorConfig::Vector {
                 components,
                 training_projection,
-                discrete_histograms,
+                discrete_projections,
             })
         }
         "gammaloop" => {
-            reject_discrete_histograms(AccumulatorConfigKind::Gammaloop, discrete_histograms)
+            reject_discrete_projections(AccumulatorConfigKind::Gammaloop, discrete_projections)
                 .map(|_| AccumulatorConfig::Gammaloop)
         }
         "full_vector" => {
-            reject_discrete_histograms(AccumulatorConfigKind::FullVector, discrete_histograms)?;
+            reject_discrete_projections(AccumulatorConfigKind::FullVector, discrete_projections)?;
             let components = components.unwrap_or_else(|| vec!["value".to_string()]);
             if components.is_empty() {
                 return Err(E::custom(
@@ -500,16 +500,17 @@ fn validate_vector_accumulator(
     Ok(())
 }
 
-fn reject_discrete_histograms<E>(
+fn reject_discrete_projections<E>(
     kind: AccumulatorConfigKind,
-    discrete_histograms: Option<DiscreteHistogramConfig>,
+    discrete_projections: Option<DiscreteProjectionConfig>,
 ) -> Result<(), E>
 where
     E: serde::de::Error,
 {
-    if discrete_histograms.is_some() && !AccumulatorConfig::kind_accepts_discrete_histograms(kind) {
+    if discrete_projections.is_some() && !AccumulatorConfig::kind_accepts_discrete_projections(kind)
+    {
         Err(E::custom(
-            "discrete_histograms is only valid for scalar and vector accumulators",
+            "discrete_projections is only valid for scalar and vector accumulators",
         ))
     } else {
         Ok(())
@@ -592,22 +593,22 @@ normalization = "conditional_mean"
 
 [[discrete_projections.items]]
 name = "channel_for_spin_0"
-hist_dims = [1]
+dims = [1]
 fixed_dims = { "0" = 0 }
 "#,
         )
         .expect("accumulator config");
 
         let AccumulatorConfig::Scalar {
-            discrete_histograms: Some(histograms),
+            discrete_projections: Some(projections),
         } = config
         else {
-            panic!("expected scalar histogram config");
+            panic!("expected scalar projection config");
         };
-        assert_eq!(histograms.items[0].fixed_dims.get("0"), Some(&0));
+        assert_eq!(projections.items[0].fixed_dims.get("0"), Some(&0));
         assert_eq!(
-            histograms.normalization,
-            crate::core::DiscreteHistogramNormalization::ConditionalMean
+            projections.normalization,
+            crate::core::DiscreteProjectionNormalization::ConditionalMean
         );
     }
 }

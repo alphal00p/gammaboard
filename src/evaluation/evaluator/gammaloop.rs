@@ -22,7 +22,7 @@ use crate::{
     core::{AccumulatorConfig, TrainingProjection as AccumulatorTrainingProjection},
     evaluation::{
         AccumulatorState, EvalBatchOptions, Evaluator, GammaLoopAccumulatorState,
-        ScalarValueEvaluator, VectorAccumulatorState,
+        VectorAccumulatorState, ingest_scalar_values,
     },
     resources::resolve_resource_path,
 };
@@ -682,18 +682,21 @@ impl Evaluator for GammaLoopEvaluator {
             }
             _ => match accumulator.semantic_kind() {
                 crate::evaluation::SemanticAccumulatorKind::Scalar => match &mut observable_state {
-                    AccumulatorState::Scalar(accumulator) => self.ingest_scalar_values(
-                        &evaluation_results
+                    AccumulatorState::Scalar(accumulator) => {
+                        let values = evaluation_results
                             .iter()
                             .map(|result| {
                                 self.training_projection
                                     .project(Self::project_result_value(result))
                             })
-                            .collect::<Vec<_>>(),
-                        points,
-                        options.require_training_values,
-                        accumulator,
-                    )?,
+                            .collect::<Vec<_>>();
+                        ingest_scalar_values(
+                            &values,
+                            points,
+                            options.require_training_values,
+                            accumulator,
+                        )?
+                    }
                     AccumulatorState::FullVector(accumulator) => {
                         for (result, point) in evaluation_results.iter().zip(points.iter()) {
                             let value = self
