@@ -28,8 +28,24 @@ pub struct GammaLoopParams {
     pub momentum_space: bool,
     pub use_f128: bool,
     pub training_projection: TrainingProjection,
+    pub preprocessing: GammaLoopPreprocessing,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct GammaLoopPreprocessing {
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub post_load_commands: Vec<String>,
+    pub commands: Vec<String>,
+    pub read_only: bool,
+}
+
+impl Default for GammaLoopPreprocessing {
+    fn default() -> Self {
+        Self {
+            commands: Vec::new(),
+            read_only: true,
+        }
+    }
 }
 
 impl Default for GammaLoopParams {
@@ -38,10 +54,10 @@ impl Default for GammaLoopParams {
             state_folder: PathBuf::from("./gammaloop_state"),
             process_id: None,
             integrand_name: None,
-            post_load_commands: Vec::new(),
             momentum_space: false,
             use_f128: false,
             training_projection: TrainingProjection::default(),
+            preprocessing: GammaLoopPreprocessing::default(),
         }
     }
 }

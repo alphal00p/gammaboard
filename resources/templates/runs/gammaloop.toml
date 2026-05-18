@@ -9,7 +9,9 @@ kind = "gammaloop"
 state_folder = "states/epem_a_ttxh/LO/state"
 integrand_name = "LO"
 # In-memory override only (not persisted to state on disk):
-# post_load_commands = ["set process kv kinematics.e_cm=14000.0"]
+# [evaluator.preprocessing]
+# commands = ["set process kv kinematics.e_cm=14000.0"]
+# read_only = true
 
 [[task_queue]]
 name = "accumulator"

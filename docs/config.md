@@ -105,7 +105,11 @@ For `evaluator.kind = "gammaloop"`, `continuous_dims` and `discrete_dims` are in
 
 Gammaboard evaluates GammaLoop runs in x-space so GammaLoop's parameterized observable and histogram path is used.
 
-`post_load_commands = ["set ...", ...]` is optional and executes in-memory after loading the GammaLoop state and before integrand selection; commands are not saved back to disk.
+`[evaluator.preprocessing]` is optional and runs GammaLoop commands after loading
+the state and before integrand selection. `read_only = true` is the default and
+documents the intended mode; once GammaLoop exposes read-only state loading,
+GammaBoard will pass this flag to the state loader. Commands are executed in
+order and may be any GammaLoop command.
 
 ### Process Evaluator
 

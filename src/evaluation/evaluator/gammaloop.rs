@@ -2,7 +2,6 @@ use std::{any::Any, ops::ControlFlow, panic::AssertUnwindSafe, path::PathBuf};
 
 use gammaloop_api::{
     CLISettings,
-    commands::Commands,
     state::{CommandHistory, ProcessRef, RunHistory, State},
 };
 use gammalooprs::graph::GroupId;
@@ -66,8 +65,24 @@ pub struct GammaLoopParams {
     pub momentum_space: bool,
     pub use_f128: bool,
     pub training_projection: TrainingProjection,
+    pub preprocessing: GammaLoopPreprocessing,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct GammaLoopPreprocessing {
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub post_load_commands: Vec<String>,
+    pub commands: Vec<String>,
+    pub read_only: bool,
+}
+
+impl Default for GammaLoopPreprocessing {
+    fn default() -> Self {
+        Self {
+            commands: Vec::new(),
+            read_only: true,
+        }
+    }
 }
 
 impl Default for GammaLoopParams {
@@ -76,10 +91,10 @@ impl Default for GammaLoopParams {
             state_folder: PathBuf::from("./gammaloop_state"),
             process_id: None,
             integrand_name: None,
-            post_load_commands: Vec::new(),
             momentum_space: false,
             use_f128: false,
             training_projection: TrainingProjection::default(),
+            preprocessing: GammaLoopPreprocessing::default(),
         }
     }
 }
@@ -95,13 +110,16 @@ impl GammaLoopEvaluator {
             ))
         })?;
         _ = initialise();
+        // TODO: once GammaLoop exposes read-only state loading, pass
+        // params.preprocessing.read_only here instead of treating it as
+        // documentation of the intended preprocessing mode.
         let mut state = State::load(params.state_folder.clone(), None, None).map_err(|err| {
             BuildError::build(format!(
                 "failed to load state from {}: {err}",
                 params.state_folder.display()
             ))
         })?;
-        Self::run_post_load_commands(&params, &mut state)?;
+        Self::run_preprocessing(&params, &mut state)?;
 
         let (process_id, integrand_name) = state
             .find_integrand_ref(params.process_id.as_ref(), params.integrand_name.as_ref())
@@ -310,7 +328,7 @@ impl GammaLoopEvaluator {
         }
     }
 
-    pub fn run_post_load_commands(
+    pub fn run_preprocessing(
         params: &GammaLoopParams,
         state: &mut State,
     ) -> Result<(), BuildError> {
@@ -319,19 +337,19 @@ impl GammaLoopEvaluator {
         cli_settings.state.folder = params.state_folder.clone();
         let mut default_runtime_settings = RuntimeSettings::default();
 
-        for (index, raw_command) in params.post_load_commands.iter().enumerate() {
+        for (index, raw_command) in params.preprocessing.commands.iter().enumerate() {
             let command = CommandHistory::from_raw_string(raw_command).map_err(|err| {
                 BuildError::build(format!(
-                    "failed to parse post_load_commands[{index}] '{raw_command}': {err}"
+                    "failed to parse preprocessing.commands[{index}] '{raw_command}': {err}"
                 ))
             })?;
 
-            if !matches!(command.command, Commands::Set(_)) {
-                return Err(BuildError::build(format!(
-                    "post_load_commands[{index}] must be a 'set' command to keep the state in-memory; got '{}'",
-                    raw_command
-                )));
-            }
+            tracing::info!(
+                index,
+                command = raw_command,
+                read_only = params.preprocessing.read_only,
+                "running gammaloop preprocessing command"
+            );
 
             let execution = command
                 .command
@@ -343,13 +361,13 @@ impl GammaLoopEvaluator {
                 )
                 .map_err(|err| {
                     BuildError::build(format!(
-                        "failed to execute post_load_commands[{index}] '{raw_command}': {err}"
+                        "failed to execute preprocessing.commands[{index}] '{raw_command}': {err}"
                     ))
                 })?;
 
             if let ControlFlow::Break(_) = execution.flow {
                 return Err(BuildError::build(format!(
-                    "post_load_commands[{index}] triggered flow break and is not supported: '{}'",
+                    "preprocessing.commands[{index}] triggered flow break and is not supported: '{}'",
                     raw_command
                 )));
             }
