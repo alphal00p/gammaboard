@@ -68,3 +68,15 @@ Build without the heavy GammaLoop dependency:
 ```bash
 cargo build --no-default-features
 ```
+
+## License
+
+Gammaboard is intended to be distributed under the MIT License.
+
+GammaLoop support depends on GammaLoop and Symbolica. GammaLoop has no usage
+restrictions, but Symbolica has its own license terms:
+https://symbolica.io/license.html
+
+Builds without the default `gammaloop` feature do not link GammaLoop, but
+Gammaboard still depends directly on Symbolica for built-in Symbolica
+evaluators.
