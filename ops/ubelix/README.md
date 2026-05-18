@@ -30,8 +30,8 @@ python ubelix.py build gammaboard
 python ubelix.py build apptainer resources/runtimes/madnis_gammaboard_api/runtime.sif resources/runtimes/madnis_gammaboard_api/apptainer.def
 ```
 
-The GammaBoard build also builds and embeds the dashboard frontend. Each build overwrites `images/<family>/<family>.sif` and writes `images/<family>/<family>.meta`. Build logs go to `logs/slurm/build`.
-The Python runtime build writes the MADNIS sampler runtime to `resources/runtimes/madnis_gammaboard_api/runtime.sif`. The runtime definition lives with the MADNIS GammaBoard API checkout so it can also be built outside this deploy repository.
+GammaBoard and GammaLoop are service images under `images/`; each build overwrites `images/<family>/<family>.sif` and writes `images/<family>/<family>.meta`. Build logs go to `logs/slurm/build`.
+The MADNIS sampler is a process runtime image under `resources/runtimes/`; the generic Apptainer build writes `resources/runtimes/madnis_gammaboard_api/runtime.sif`. The runtime definition lives with the MADNIS GammaBoard API checkout so it can also be built outside this deploy repository.
 
 ## Start
 
@@ -111,8 +111,9 @@ Admin-protected commands accept `--admin-password` or `GAMMABOARD_ADMIN_PASSWORD
   README.md
   artifacts/{bin,npm-cache,sqlx-root,src}/
   db/<deploy-name>/
-  images/{gammaboard,gammaloop}/
+  images/{gammaboard,gammaloop}/      # service images
   logs/{postgres,slurm}/
+  resources/runtimes/                 # process evaluator/sampler runtimes
   resources/states/
   runtime/
 ```

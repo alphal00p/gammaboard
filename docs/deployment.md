@@ -20,7 +20,7 @@ absolute. The default resource layout is:
 
 ```text
 resources/
-  runtimes/          Process runtime projects and packaged images
+  runtimes/          Process evaluator/sampler runtime projects and images
   states/            Shared model/integrator/checkpoint state
   templates/         Run, task, and node launch TOML templates
 ```
@@ -30,23 +30,32 @@ Deployment artifacts are separate from user resources:
 ```text
 artifacts/           Build inputs, compiled binaries, package caches
 db/                  Local Postgres state
-images/              Deploy images such as gammaboard.sif and gammaloop.sif
+images/              Deployment/service images such as gammaboard.sif and gammaloop.sif
 logs/                Postgres, Slurm, and deployment logs
 runtime/             Runtime sockets/pids/transient control files
 ```
 
 ## Image Model
 
-UBELIX uses Apptainer images for deployable services:
+There are two different image/artifact roles:
 
-- `gammaboard.sif`: Rust backend, nginx/Postgres dependencies, embedded
-  frontend build, and process runtime launcher support.
-- `gammaloop.sif`: GammaLoop execution image.
-- Python or other process runtime images: task-specific evaluator/sampler
-  environments under `resources/runtimes/...`.
+- Service images run GammaBoard infrastructure. `gammaboard.sif` contains the
+  Rust backend, nginx/Postgres dependencies, embedded frontend build, and enough
+  tooling to launch process workers. `gammaloop.sif` is the GammaLoop execution
+  service image.
+- Process runtime images run task code. They are task-specific evaluator or
+  sampler environments, for example a Python MADNIS sampler image under
+  `resources/runtimes/...`.
 
-Current image builds overwrite the latest image and write a small `.meta` file.
-Older image generations are intentionally not retained.
+The service image should be updated when GammaBoard itself changes. A process
+runtime image should be updated when the evaluator/sampler implementation or
+its dependencies change. The process protocol is the boundary between them, so
+multiple runtime images can be used with the same GammaBoard service image.
+
+Current service image builds overwrite the latest image and write a small
+`.meta` file. Generic process runtime image builds simply overwrite the
+requested runtime `.sif`. Older image generations are intentionally not
+retained.
 
 ## Symbolica OEM License
 
@@ -74,6 +83,16 @@ with normal bind paths. GPU-capable workers add NVIDIA passthrough with `--nv`.
 
 The process protocol itself is packaging-agnostic. See
 [process-runtime.md](process-runtime.md).
+
+## Nix
+
+The repository flake is a development/operator shell for local work. It provides
+compilers and service tools such as Rust, Node.js, PostgreSQL, nginx, Apptainer,
+and `sqlx`.
+
+It is not the deployment mechanism. Deployments should be described in terms of
+the `gammaboard` binary, runtime/server/deploy config files, and, for UBELIX,
+Slurm plus Apptainer service/runtime images.
 
 ## Ports
 

@@ -31,6 +31,11 @@ GAMMABOARD_PROFILE=release ./gammaboard \
 
 For UBELIX Slurm/Apptainer operation, use [ops/ubelix/README.md](ops/ubelix/README.md).
 
+If you use Nix, the repository flake provides a development/operator shell with
+Rust, Node.js, PostgreSQL, nginx, Apptainer, and helper tools. It is not the
+deployment mechanism; production runs use the `gammaboard` binary, ops configs,
+and, on UBELIX, Apptainer/Slurm images.
+
 ## Core Commands
 
 - `gammaboard deploy run`: supervise local Postgres, backend API, and nginx/frontend in one foreground process.

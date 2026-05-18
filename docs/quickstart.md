@@ -16,6 +16,18 @@ cargo install sqlx-cli --no-default-features --features postgres
 - Node.js and npm for building the dashboard frontend
 - nginx for `gammaboard deploy run`
 
+Optional Nix users can enter the repository flake dev shell to get these
+operator tools from one environment:
+
+```bash
+nix develop
+```
+
+The flake is only a development/operator shell. It is not required at runtime
+and is not the deployment mechanism. Deployments run the `gammaboard` binary
+with the selected ops configs; UBELIX additionally uses Slurm and Apptainer
+images.
+
 ## Start The Dashboard
 
 Local development:
@@ -184,7 +196,7 @@ The default resources root is `resources/`.
 
 ```text
 resources/
-  runtimes/          Process runtime projects and packaged images
+  runtimes/          Process evaluator/sampler runtime projects and images
   states/            Shared model, integrator, and checkpoint state
   templates/         Run, task, and node launch TOML templates
 ```
@@ -194,7 +206,7 @@ Deployment artifacts are separate:
 ```text
 artifacts/           Build inputs, compiled binaries, package caches
 db/                  Local Postgres state
-images/              Deploy images such as gammaboard.sif and gammaloop.sif
+images/              Deployment/service images such as gammaboard.sif and gammaloop.sif
 logs/                Postgres, Slurm, and deployment logs
 runtime/             Runtime sockets, pids, and transient control files
 ```

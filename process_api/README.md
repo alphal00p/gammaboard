@@ -7,8 +7,8 @@ For the stable process protocol, see [../docs/process-runtime.md](../docs/proces
 ## Examples
 
 - `examples/rust_breit_wigner_evaluator`: non-Python evaluator packaged with Apptainer. This direct protocol implementation demonstrates ragged row-major batches for inhomogeneous domains.
-- `examples/python_scalar_sin`: NumPy scalar evaluator. The included flake is one optional way to provide its dependencies.
-- `examples/python_sampler_symbolica_havana`: Symbolica-backed Havana sampler. The included flake pins the Python dependencies for reproducibility.
+- `examples/python_scalar_sin`: NumPy scalar evaluator. The included flake is one optional dev/runtime packaging helper for the example, not a required deployment mechanism.
+- `examples/python_sampler_symbolica_havana`: Symbolica-backed Havana sampler. The included flake pins the Python dependencies for reproducible local/example runs, but the process protocol also works with Apptainer, virtualenvs, system packages, or any other command.
 
 ## Python Wrapper Pattern
 
