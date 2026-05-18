@@ -111,10 +111,11 @@ Gammaboard evaluates GammaLoop runs in x-space so GammaLoop's parameterized obse
 
 For `evaluator.kind = "process_evaluator"`, configure:
 
-- `command`: complete process command, for example `["python", "-u", "runtimes/my_runtime/evaluator_worker.py"]` or `["apptainer", "exec", "--nv", "runtimes/my_runtime/runtime.sif", "python", "-u", "runtimes/my_runtime/evaluator_worker.py"]`.
+- `command`: exact process argv after `$resources` expansion, for example `["python", "-u", "$resources/runtimes/my_runtime/evaluator_worker.py"]` or `["apptainer", "exec", "--nv", "--bind", "$resources:$resources", "$resources/runtimes/my_runtime/runtime.sif", "python", "-u", "/opt/my_runtime/evaluator_worker.py"]`.
+- `cwd`: optional working directory; defaults to `$resources`.
 - `domain`: explicit `Domain` tree. This is the authoritative coordinate layout for homogeneous and inhomogeneous runs.
 - `components`: observable component names; defaults to `["value"]` and must match the vector accumulator components.
-- `args = { ... }`: optional opaque JSON object passed to the process during `initialize`.
+- `args = { ... }`: optional opaque JSON object passed to the process during `initialize`; GammaBoard does not expand placeholders inside `args`.
 
 Domain config uses snake_case variants. Use `rectangular` for fixed-cardinality grids instead of expanding large branch trees:
 
@@ -145,9 +146,10 @@ See [process-runtime.md](process-runtime.md) for the protocol contract.
 
 For `sampler_aggregator.kind = "process_sampler"`, configure:
 
-- `command`: complete process command, for example `["python", "-u", "runtimes/my_runtime/sampler_worker.py"]` or `["apptainer", "exec", "--nv", "runtimes/my_runtime/runtime.sif", "python", "-u", "runtimes/my_runtime/sampler_worker.py"]`.
+- `command`: exact process argv after `$resources` expansion, for example `["python", "-u", "$resources/runtimes/my_runtime/sampler_worker.py"]` or `["apptainer", "exec", "--nv", "--bind", "$resources:$resources", "$resources/runtimes/my_runtime/runtime.sif", "python", "-u", "/opt/my_runtime/sampler_worker.py"]`.
+- `cwd`: optional working directory; defaults to `$resources`.
 - `requires_training_values`: set to `true` when the sampler needs evaluator feedback through `ingest_training_values`.
-- `args = { ... }`: optional opaque JSON object passed to the process during `initialize`.
+- `args = { ... }`: optional opaque JSON object passed to the process during `initialize`; GammaBoard does not expand placeholders inside `args`.
 
 Process evaluator and sampler methods use ragged row-major arrays plus offsets. Homogeneous wrappers may validate that offsets match the fixed-width shape derived from `domain` and reject inhomogeneous batches.
 
@@ -161,7 +163,7 @@ Process sampler construction semantics:
 - Fresh path: `from_config(discrete_cardinalities=..., continuous_dims=..., init_args=...)` when present, with `args` excluding `module` and `class`.
 - Fallback: `ClassName(**args)` / `ClassName()`.
 - Python worker protocol entrypoints are included in each example runtime, but `command` must explicitly start the desired process.
-- Relative command entries that look like paths, such as `runtimes/my_runtime/runtime.sif`, resolve under the resources root.
+- GammaBoard does not infer paths, append worker scripts, or inject Apptainer binds. Use `$resources` explicitly where the host resources path is needed.
 
 ## Task Queue
 

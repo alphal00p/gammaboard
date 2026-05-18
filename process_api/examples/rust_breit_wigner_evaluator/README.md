@@ -17,7 +17,8 @@ apptainer build runtime.sif apptainer.def
 Run config can then start it with:
 
 ```toml
-command = ["apptainer", "exec", "process_api/examples/rust_breit_wigner_evaluator/runtime.sif", "breit-wigner-worker"]
+command = ["apptainer", "exec", "$resources/../process_api/examples/rust_breit_wigner_evaluator/runtime.sif", "breit-wigner-worker"]
+cwd = "$resources"
 ```
 
 The evaluator consumes ragged row-major batches. The demo domain is:

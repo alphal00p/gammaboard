@@ -184,7 +184,8 @@ The process command is explicit in run config. GammaBoard does not append worker
 
 ```toml
 kind = "process_evaluator"
-command = ["python", "-u", "runtimes/my_runtime/evaluator_worker.py"]
+command = ["python", "-u", "$resources/runtimes/my_runtime/evaluator_worker.py"]
+cwd = "$resources"
 domain = { continuous = { dims = 2 } }
 components = ["value"]
 args = { module = "demo_integrand", class = "SinIntegrand" }
@@ -198,7 +199,10 @@ Domain variants are snake_case. `rectangular` is the compact form for fixed-card
 domain = { rectangular = { discrete_cardinalities = [2, 3], continuous_dims = 2 } }
 ```
 
-Relative command entries that look like paths are resolved below the resources root. Absolute paths are used as-is.
+`command` is literal argv after `$resources` expansion. `cwd` defaults to `$resources`.
+GammaBoard does not infer paths, append worker scripts, or inject Apptainer binds.
+For Apptainer, spell out binds explicitly, for example `--bind`, `$resources:$resources`.
+`args` is protocol payload and is passed through unchanged.
 Nix, Apptainer, virtualenvs, and system packages are all just ways to make this command available.
 
 ## Python Wrapper Pattern

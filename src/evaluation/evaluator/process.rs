@@ -12,6 +12,8 @@ use crate::utils::domain::Domain;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProcessEvaluatorParams {
     pub command: Vec<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
     pub domain: Domain,
     #[serde(default = "default_components")]
     pub components: Vec<String>,
@@ -143,7 +145,8 @@ struct ProcessRuntimeWorker {
 
 impl ProcessRuntimeWorker {
     fn spawn(params: &ProcessEvaluatorParams, domain: Domain) -> Result<Self, BuildError> {
-        let mut command = build_process_worker_command(&params.command, "evaluator")?;
+        let mut command =
+            build_process_worker_command(&params.command, params.cwd.as_deref(), "evaluator")?;
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -312,6 +315,7 @@ while True:
         let params = toml::from_str::<ProcessEvaluatorParams>(
             r#"
 command = ["python", "-u", "worker.py"]
+cwd = "$resources"
 domain = { rectangular = { discrete_cardinalities = [2, 3], continuous_dims = 2 } }
 args = { module = "my_module", class = "MyEvaluator", scale = 1.0 }
 "#,
@@ -319,6 +323,7 @@ args = { module = "my_module", class = "MyEvaluator", scale = 1.0 }
         .expect("process scalar config should parse");
 
         assert_eq!(params.command, ["python", "-u", "worker.py"]);
+        assert_eq!(params.cwd.as_deref(), Some("$resources"));
         assert_eq!(params.domain.fixed_rectangular_dims(), Some((2, 2)));
         assert_eq!(
             params.domain.fixed_discrete_cardinalities(),
@@ -360,6 +365,7 @@ domain = { discrete = { axis_label = "d0", branches = [
         ];
         let params = ProcessEvaluatorParams {
             command,
+            cwd: None,
             domain: crate::utils::domain::Domain::continuous(2),
             components: vec!["value".to_string()],
             args: json!({}),

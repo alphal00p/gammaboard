@@ -7,7 +7,8 @@ name = "process-rust-apptainer-evaluator-demo"
 
 [evaluator]
 kind = "process_evaluator"
-command = ["apptainer", "exec", "process_api/examples/rust_breit_wigner_evaluator/runtime.sif", "breit-wigner-worker"]
+command = ["apptainer", "exec", "$resources/../process_api/examples/rust_breit_wigner_evaluator/runtime.sif", "breit-wigner-worker"]
+cwd = "$resources"
 args = { scale = 1.0 }
 domain = { discrete = { axis_label = "d0", branches = [
   { index = 0, domain = { continuous = { dims = 3 } } },

@@ -17,6 +17,8 @@ use crate::utils::domain::Domain;
 pub struct ProcessSamplerParams {
     pub command: Vec<String>,
     #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
     pub requires_training_values: bool,
     #[serde(default = "default_args")]
     pub args: Value,
@@ -178,7 +180,8 @@ impl ProcessSamplerWorker {
         domain: Domain,
         snapshot: Option<Value>,
     ) -> Result<Self, BuildError> {
-        let mut command = build_process_worker_command(&params.command, "sampler")?;
+        let mut command =
+            build_process_worker_command(&params.command, params.cwd.as_deref(), "sampler")?;
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -536,6 +539,7 @@ mod tests {
         let params = toml::from_str::<ProcessSamplerParams>(
             r#"
 command = ["python", "-u", "worker.py"]
+cwd = "$resources"
 requires_training_values = true
 args = { module = "my_module", class = "MySampler", seed = 0 }
 "#,
@@ -543,6 +547,7 @@ args = { module = "my_module", class = "MySampler", seed = 0 }
         .expect("process sampler config should parse");
 
         assert_eq!(params.command, ["python", "-u", "worker.py"]);
+        assert_eq!(params.cwd.as_deref(), Some("$resources"));
         assert!(params.requires_training_values);
         assert!(params.args.is_object());
     }
@@ -551,6 +556,7 @@ args = { module = "my_module", class = "MySampler", seed = 0 }
     fn process_sampler_params_no_longer_define_domain_shape() {
         let params = ProcessSamplerParams {
             command: vec!["worker".to_string()],
+            cwd: None,
             requires_training_values: false,
             args: serde_json::json!({}),
         };
