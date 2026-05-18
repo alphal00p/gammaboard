@@ -193,6 +193,8 @@ export const fetchRuns = async (signal) => {
 
 export const fetchSession = async (signal) => apiGet("/auth/session", "Failed to fetch session", signal);
 
+export const fetchSettingsOverview = async (signal) => apiGet("/settings", "Failed to fetch settings", signal);
+
 export const login = async (password, signal) => apiPost("/auth/login", { password }, "Failed to log in", signal);
 
 export const logout = async (signal) => apiPost("/auth/logout", {}, "Failed to log out", signal);
@@ -233,6 +235,9 @@ export const assignNode = async (nodeName, { runId, role }, signal) =>
 
 export const unassignNode = async (nodeName, signal) =>
   apiPost(`/nodes/${nodeName}/unassign`, {}, "Failed to unassign node", signal);
+
+export const unassignAllNodes = async (signal) =>
+  apiPost("/nodes/unassign-all", {}, "Failed to unassign all nodes", signal);
 
 export const stopNode = async (nodeName, signal) =>
   apiPost(`/nodes/${nodeName}/stop`, {}, "Failed to stop node", signal);

@@ -3,11 +3,6 @@ import {
   Alert,
   Box,
   Button,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  Divider,
   Paper,
   Snackbar,
   Stack,
@@ -32,9 +27,8 @@ import {
   deleteTemplateFile,
   fetchTemplateFile,
   fetchTemplateList,
-  restartDatabase,
   saveTemplateFile,
-  shutdownControlProcess,
+  unassignAllNodes,
   stopAllNodes,
 } from "../services/api";
 
@@ -48,11 +42,8 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
   const [startingNodes, setStartingNodes] = useState(false);
   const [startNodesError, setStartNodesError] = useState(null);
   const [nodeTemplates, setNodeTemplates] = useState([]);
+  const [unassigningAllNodes, setUnassigningAllNodes] = useState(false);
   const [stoppingAllNodes, setStoppingAllNodes] = useState(false);
-  const [restartDbOpen, setRestartDbOpen] = useState(false);
-  const [restartingDb, setRestartingDb] = useState(false);
-  const [shutdownControlOpen, setShutdownControlOpen] = useState(false);
-  const [shuttingDownControl, setShuttingDownControl] = useState(false);
   const [snackbar, setSnackbar] = useState(null);
   const launchRequestsData = useNodeLaunchRequests({ enabled: authenticated });
   const sortedWorkers = useMemo(() => [...workers].sort(compareNodesByName), [workers]);
@@ -142,9 +133,54 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
         >
           <Typography variant="h6">Node Management</Typography>
           {authenticated ? (
-            <Button variant="outlined" disabled={startingNodes} onClick={() => setLaunchOpen(true)}>
-              Request Nodes
-            </Button>
+            <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+              <Button variant="outlined" disabled={startingNodes} onClick={() => setLaunchOpen(true)}>
+                Request Nodes
+              </Button>
+              <Button
+                variant="outlined"
+                disabled={unassigningAllNodes || workers.length === 0}
+                onClick={async () => {
+                  setUnassigningAllNodes(true);
+                  try {
+                    const response = await unassignAllNodes();
+                    const rows = Number(response?.rows_updated ?? 0);
+                    setSnackbar({
+                      message: `Unassigned ${rows} node${rows === 1 ? "" : "s"}.`,
+                      severity: "success",
+                    });
+                  } catch (err) {
+                    setSnackbar({ message: err?.message || "Failed to unassign all nodes.", severity: "error" });
+                  } finally {
+                    setUnassigningAllNodes(false);
+                  }
+                }}
+              >
+                Unassign All
+              </Button>
+              <Button
+                color="warning"
+                variant="outlined"
+                disabled={stoppingAllNodes || workers.length === 0}
+                onClick={async () => {
+                  setStoppingAllNodes(true);
+                  try {
+                    const response = await stopAllNodes();
+                    const rows = Number(response?.rows_updated ?? 0);
+                    setSnackbar({
+                      message: `Requested shutdown for ${rows} node${rows === 1 ? "" : "s"}.`,
+                      severity: "success",
+                    });
+                  } catch (err) {
+                    setSnackbar({ message: err?.message || "Failed to stop all nodes.", severity: "error" });
+                  } finally {
+                    setStoppingAllNodes(false);
+                  }
+                }}
+              >
+                Stop All Nodes
+              </Button>
+            </Stack>
           ) : null}
         </Stack>
 
@@ -265,49 +301,6 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
       ) : (
         <Alert severity="info">Select a node to view assignment and heartbeat details.</Alert>
       )}
-      {authenticated ? (
-        <Paper variant="outlined" sx={{ p: 2, mt: 3, borderColor: "error.light" }}>
-          <Typography variant="h6" color="error" gutterBottom>
-            Danger Zone
-          </Typography>
-          <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", gap: 1 }}>
-            <Button
-              color="error"
-              variant="outlined"
-              disabled={stoppingAllNodes}
-              onClick={async () => {
-                setStoppingAllNodes(true);
-                try {
-                  const response = await stopAllNodes();
-                  const rows = Number(response?.rows_updated ?? 0);
-                  setSnackbar({
-                    message: `Requested shutdown for ${rows} node${rows === 1 ? "" : "s"}.`,
-                    severity: "success",
-                  });
-                } catch (err) {
-                  setSnackbar({ message: err?.message || "Failed to stop all nodes.", severity: "error" });
-                } finally {
-                  setStoppingAllNodes(false);
-                }
-              }}
-            >
-              Stop All Nodes
-            </Button>
-            <Button color="warning" variant="outlined" disabled={restartingDb} onClick={() => setRestartDbOpen(true)}>
-              Reset DB
-            </Button>
-            <Button
-              color="error"
-              variant="contained"
-              disabled={shuttingDownControl}
-              onClick={() => setShutdownControlOpen(true)}
-            >
-              Kill Control Process
-            </Button>
-          </Stack>
-          <Divider sx={{ mt: 2 }} />
-        </Paper>
-      ) : null}
       <Snackbar
         open={Boolean(snackbar)}
         autoHideDuration={4000}
@@ -363,77 +356,6 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
           }
         }}
       />
-      <Dialog
-        open={restartDbOpen}
-        onClose={() => (restartingDb ? null : setRestartDbOpen(false))}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle>Reset Database?</DialogTitle>
-        <DialogContent>
-          This will delete local database state and recreate it from migrations. Running nodes and run execution will be
-          interrupted and existing local runs/data will be lost. Do you want to continue?
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setRestartDbOpen(false)} disabled={restartingDb}>
-            Cancel
-          </Button>
-          <Button
-            color="warning"
-            variant="contained"
-            disabled={restartingDb}
-            onClick={async () => {
-              setRestartingDb(true);
-              try {
-                await restartDatabase();
-                setRestartDbOpen(false);
-                setSnackbar({ message: "Database reset.", severity: "success" });
-              } catch (err) {
-                setSnackbar({ message: err?.message || "Failed to reset database.", severity: "error" });
-              } finally {
-                setRestartingDb(false);
-              }
-            }}
-          >
-            Confirm Reset
-          </Button>
-        </DialogActions>
-      </Dialog>
-      <Dialog
-        open={shutdownControlOpen}
-        onClose={() => (shuttingDownControl ? null : setShutdownControlOpen(false))}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle>Kill Control Process?</DialogTitle>
-        <DialogContent>
-          This will ask the running backend process to exit. The dashboard and API will go offline until the deployment is
-          restarted.
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setShutdownControlOpen(false)} disabled={shuttingDownControl}>
-            Cancel
-          </Button>
-          <Button
-            color="error"
-            variant="contained"
-            disabled={shuttingDownControl}
-            onClick={async () => {
-              setShuttingDownControl(true);
-              try {
-                await shutdownControlProcess();
-                setShutdownControlOpen(false);
-                setSnackbar({ message: "Control shutdown requested.", severity: "success" });
-              } catch (err) {
-                setSnackbar({ message: err?.message || "Failed to shut down control process.", severity: "error" });
-                setShuttingDownControl(false);
-              }
-            }}
-          >
-            Kill Control Process
-          </Button>
-        </DialogActions>
-      </Dialog>
     </>
   );
 };

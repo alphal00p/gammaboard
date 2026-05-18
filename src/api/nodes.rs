@@ -190,6 +190,13 @@ pub async fn unassign_node(
     Ok(())
 }
 
+pub async fn unassign_all_nodes(store: &impl ControlPlaneStore) -> Result<u64, ApiError> {
+    store
+        .clear_all_desired_assignments()
+        .await
+        .map_err(Into::into)
+}
+
 /// Requests shutdown for a specific node name.
 pub async fn stop_node(
     store: &impl ControlPlaneStore,

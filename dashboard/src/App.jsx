@@ -50,6 +50,7 @@ const RunInfo = lazy(() => import("./components/RunInfo"));
 const SamplerAggregatorPanel = lazy(() => import("./components/SamplerAggregatorPanel"));
 const SelectedRunTomlPanel = lazy(() => import("./components/SelectedRunTomlPanel"));
 const SelectedTaskTomlPanel = lazy(() => import("./components/SelectedTaskTomlPanel"));
+const SettingsWorkspace = lazy(() => import("./components/SettingsWorkspace"));
 const TaskOutputPanel = lazy(() => import("./components/TaskOutputPanel"));
 const TaskQueuePanel = lazy(() => import("./components/TaskQueuePanel"));
 const TomlActionDialog = lazy(() => import("./components/runs/TomlActionDialog"));
@@ -751,6 +752,7 @@ function AppContent() {
         <Tab value="workers" label="Management" />
         <Tab value="performance" label="Performance" />
         <Tab value="logs" label="Logs" />
+        <Tab value="settings" label="Settings" />
       </Tabs>
 
       <Suspense fallback={<LoadingPanel label="Loading workspace..." />}>
@@ -778,7 +780,7 @@ function AppContent() {
             setSelectedRun={setSelectedRun}
             isConnected={isConnected}
           />
-        ) : (
+        ) : mode === "logs" ? (
           <LogsWorkspace
             runs={runList}
             workers={workersData.workers}
@@ -786,6 +788,8 @@ function AppContent() {
             setSelectedRun={setSelectedLogRun}
             isConnected={isConnected}
           />
+        ) : (
+          <SettingsWorkspace />
         )}
       </Suspense>
     </Container>

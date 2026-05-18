@@ -59,10 +59,13 @@ use crate::resources::primary_resource_root;
 use crate::runtime_context::RuntimeContext;
 
 const DEFAULT_SERVER_CONFIG_TOML: &str = include_str!("../config_defaults/server.toml");
+const REPOSITORY_URL: &str = "https://github.com/alphal00p/gammaboard";
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
+    #[serde(skip)]
+    pub server_config_path: PathBuf,
     pub api_host: IpAddr,
     pub api_port: u16,
     pub allowed_origins: Vec<String>,
@@ -108,6 +111,7 @@ impl ServerConfig {
         )?;
         let mut parsed: Self = toml::from_str(&raw)
             .with_context(|| format!("failed parsing server config {}", path.display()))?;
+        parsed.server_config_path = path.to_path_buf();
         parsed.run_templates_dir = normalize_templates_dir(parsed.run_templates_dir.as_str())?
             .display()
             .to_string();
@@ -159,6 +163,8 @@ pub async fn serve(
         secure_cookie: config.secure_cookie,
         allow_db_admin: config.allow_db_admin,
         allow_local_node_spawn: config.allow_local_node_spawn,
+        api_bind: bind.to_string(),
+        server_config_path: config.server_config_path.clone(),
         run_templates_dir: PathBuf::from(&config.run_templates_dir),
         task_templates_dir: PathBuf::from(&config.task_templates_dir),
         node_templates_dir: PathBuf::from(&config.node_templates_dir),
@@ -190,6 +196,8 @@ pub(crate) struct AppState {
     secure_cookie: bool,
     allow_db_admin: bool,
     allow_local_node_spawn: bool,
+    api_bind: String,
+    server_config_path: PathBuf,
     run_templates_dir: PathBuf,
     task_templates_dir: PathBuf,
     node_templates_dir: PathBuf,
@@ -440,6 +448,7 @@ struct HistogramBundleExportResponse {
 fn build_app(state: AppState) -> Router {
     let public_api_routes = Router::new()
         .route("/health", get(health_check))
+        .route("/settings", get(get_settings_overview))
         .route("/auth/session", get(get_session_status))
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
@@ -497,6 +506,7 @@ fn build_app(state: AppState) -> Router {
         .route("/runs/:id/auto-assign", post(auto_assign_run))
         .route("/nodes/:id/assign", post(assign_node))
         .route("/nodes/:id/unassign", post(unassign_node))
+        .route("/nodes/unassign-all", post(unassign_all_nodes))
         .route("/nodes/:id/stop", post(stop_node))
         .route("/nodes/stop-all", post(stop_all_nodes))
         .route("/nodes/auto-run", post(auto_run_nodes))
@@ -578,6 +588,80 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
         )
             .into_response(),
     }
+}
+
+async fn get_settings_overview(
+    State(state): State<AppState>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    let runtime_config = state.runtime.runtime_config();
+    json_response(serde_json::json!({
+        "repository": {
+            "url": REPOSITORY_URL,
+        },
+        "paths": {
+            "runtime_config": display_absolute_path(state.runtime.runtime_config_path()),
+            "server_config": display_absolute_path(&state.server_config_path),
+            "resources_root": display_absolute_path(state.runtime.primary_resource_root()),
+            "run_templates_dir": display_absolute_path(&state.run_templates_dir),
+            "task_templates_dir": display_absolute_path(&state.task_templates_dir),
+            "node_templates_dir": display_absolute_path(&state.node_templates_dir),
+            "postgres_data_dir": display_absolute_path(Path::new(&runtime_config.local_postgres.data_dir)),
+            "postgres_socket_dir": display_absolute_path(Path::new(&runtime_config.local_postgres.socket_dir)),
+            "postgres_log_file": display_absolute_path(Path::new(&runtime_config.local_postgres.log_file)),
+        },
+        "runtime": {
+            "database_url": redact_database_url(&runtime_config.database.url),
+            "resource_roots": runtime_config.resources.roots,
+            "tracing": {
+                "persist_runtime_logs": runtime_config.tracing.persist_runtime_logs,
+                "db_gammaboard_level": runtime_config.tracing.db_gammaboard_level,
+                "db_external_level": runtime_config.tracing.db_external_level,
+            },
+            "local_postgres": {
+                "max_connections": runtime_config.local_postgres.max_connections,
+                "listen_addresses": runtime_config.local_postgres.listen_addresses,
+                "host_auth_cidr": runtime_config.local_postgres.host_auth_cidr,
+                "shared_buffers": runtime_config.local_postgres.shared_buffers,
+                "effective_cache_size": runtime_config.local_postgres.effective_cache_size,
+                "work_mem": runtime_config.local_postgres.work_mem,
+                "checkpoint_timeout": runtime_config.local_postgres.checkpoint_timeout,
+                "max_wal_size": runtime_config.local_postgres.max_wal_size,
+                "wal_compression": runtime_config.local_postgres.wal_compression,
+                "synchronous_commit": runtime_config.local_postgres.synchronous_commit,
+            },
+        },
+        "server": {
+            "api_bind": state.api_bind,
+            "secure_cookie": state.secure_cookie,
+            "allow_db_admin": state.allow_db_admin,
+            "allow_local_node_spawn": state.allow_local_node_spawn,
+            "allowed_origins": state
+                .allowed_origins
+                .iter()
+                .filter_map(|origin| origin.to_str().ok())
+                .collect::<Vec<_>>(),
+        },
+    }))
+}
+
+fn display_absolute_path(path: &Path) -> String {
+    if path.is_absolute() {
+        path.display().to_string()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path).display().to_string())
+            .unwrap_or_else(|_| path.display().to_string())
+    }
+}
+
+fn redact_database_url(raw: &str) -> String {
+    let Ok(mut parsed) = url::Url::parse(raw) else {
+        return raw.to_string();
+    };
+    if parsed.password().is_some() {
+        let _ = parsed.set_password(Some("*****"));
+    }
+    parsed.to_string()
 }
 
 async fn get_session_status(
@@ -1389,6 +1473,27 @@ async fn unassign_node(
     );
     json_response(serde_json::json!({
         "node_name": node_name,
+    }))
+}
+
+async fn unassign_all_nodes(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let rows_updated = node_api::unassign_all_nodes(&state.store)
+        .await
+        .map_err(|err| {
+            log_control_api_error("node_unassign_all", &err);
+            err
+        })?;
+    tracing::info!(
+        source = "control",
+        control_surface = "dashboard",
+        action = "node_unassign_all",
+        rows_updated,
+        "dashboard action completed"
+    );
+    json_response(serde_json::json!({
+        "rows_updated": rows_updated,
     }))
 }
 
