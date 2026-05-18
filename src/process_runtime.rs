@@ -30,7 +30,17 @@ pub(crate) fn build_process_worker_command(
         .iter()
         .map(|arg| resolve_command_arg(arg))
         .collect::<Result<Vec<_>, _>>()?;
-    maybe_inject_apptainer_binds(runtime_command, &mut resolved_args, &resources_root)?;
+    let injected_apptainer_binds =
+        maybe_inject_apptainer_binds(runtime_command, &mut resolved_args, &resources_root)?;
+
+    tracing::info!(
+        worker = label,
+        program = %program.display(),
+        args = ?resolved_args,
+        workdir = %workdir.display(),
+        injected_apptainer_binds = ?injected_apptainer_binds,
+        "resolved process runtime command"
+    );
 
     let mut command = Command::new(program);
     command.current_dir(&workdir);
@@ -44,16 +54,16 @@ fn maybe_inject_apptainer_binds(
     raw_command: &[String],
     resolved_args: &mut Vec<String>,
     resources_root: &Path,
-) -> Result<(), BuildError> {
+) -> Result<Vec<String>, BuildError> {
     let Some(program) = raw_command.first() else {
-        return Ok(());
+        return Ok(Vec::new());
     };
     let program_name = Path::new(program)
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or(program);
     if program_name != "apptainer" {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let insert_pos = raw_command
@@ -74,8 +84,8 @@ fn maybe_inject_apptainer_binds(
         }
     }
     let arg_insert_pos = insert_pos.min(resolved_args.len());
-    resolved_args.splice(arg_insert_pos..arg_insert_pos, injected);
-    Ok(())
+    resolved_args.splice(arg_insert_pos..arg_insert_pos, injected.clone());
+    Ok(injected)
 }
 
 fn resolve_program(raw: &str) -> Result<PathBuf, BuildError> {

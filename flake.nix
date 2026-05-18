@@ -1,5 +1,5 @@
 {
-  description = "Gammaloop";
+  description = "Gammaboard development shell";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -17,10 +17,6 @@
 
     flake-utils.url = "github:numtide/flake-utils";
 
-    advisory-db = {
-      url = "github:rustsec/advisory-db";
-      flake = false;
-    };
   };
 
   outputs = {
@@ -29,7 +25,6 @@
     crane,
     fenix,
     flake-utils,
-    advisory-db,
     ...
   }:
     flake-utils.lib.eachDefaultSystem (system: let
@@ -39,8 +34,6 @@
       craneLib =
         (crane.mkLib nixpkgs.legacyPackages.${system}).overrideToolchain
         fenix.packages.${system}.stable.toolchain;
-
-      src = craneLib.cleanCargoSource (craneLib.path ./.);
 
       # Host Rust target triple, e.g. x86_64-unknown-linux-gnu
       rustTarget = pkgs.stdenv.hostPlatform.rust.rustcTarget;
@@ -52,8 +45,7 @@
       nixCc = "${pkgs.stdenv.cc}/bin/cc";
       nixCxx = "${pkgs.stdenv.cc}/bin/c++";
 
-      # Runtime library search path for locally-built binaries and for maturin/auditwheel
-      # (so it can locate libpython and libs like libmpfr at repair time).
+      # Runtime library search path for locally-built binaries.
       runtimeLibPath = lib.makeLibraryPath [
         pkgs.python313
         pkgs.gmp
@@ -61,8 +53,8 @@
         pkgs.libmpc
         pkgs.openssl
         pkgs.stdenv.cc.cc.lib
-	pkgs.zlib
-	"/run/opengl-driver"
+        pkgs.zlib
+        "/run/opengl-driver"
       ];
 
       # Common arguments can be set here to avoid repeating them later
@@ -78,52 +70,23 @@
         "${cargoLinkerVar}" = nixCc;
         RUSTFLAGS = "-C linker=${nixCc}";
 
-        # Make libpython + libgmp/libmpfr/libmpc visible to:
-        # - target/debug/stub_gen (runtime)
-        # - maturin/auditwheel (wheel repair step)
+        # Make libpython + libgmp/libmpfr/libmpc visible to local binaries.
         LD_LIBRARY_PATH = runtimeLibPath;
         DYLD_LIBRARY_PATH = runtimeLibPath;
 
         packages = with pkgs; [
-          tdf
-          cargo-flamegraph
-          yaml-language-server
-          zellij
-          vim
-          helix
-          jujutsu
           just
-          dot-language-server
-          cargo-insta
-          cargo-udeps
-          cargo-machete
           openssl
-          pyright
           gmp
           mpfr
           libmpc
-          form
-          gnum4
-          nickel
-          nls
-          typst
           cargo-nextest
           pkg-config
-          cargo-deny
-          cargo-edit
           cargo-watch
-          bacon
           gfortran
           gcc
           uv
-          ghostscript
-          graphviz
-          mupdf
-          tinymist
-          typstyle
-          poppler-utils
           rust-analyzer
-          maturin
           virtualenv
           postgresql
           nginx

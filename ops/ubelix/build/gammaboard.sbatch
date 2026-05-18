@@ -23,7 +23,7 @@ unset APPTAINERENV_SYMBOLICA_LICENSE
 
 # Edit directly on UBELIX when needed.
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata/gammaboard}"
-GAMMABOARD_REPO="${GAMMABOARD_REPO:-https://github.com/SecretGmG/gammaboard.git}"
+GAMMABOARD_REPO="${GAMMABOARD_REPO:-https://github.com/alphal00p/gammaboard.git}"
 GAMMABOARD_DEF_REL="ops/build/gammaboard.def"
 GB_IMAGE_DIR_REL="images/gammaboard"
 GB_SRC_DIR_REL="artifacts/src/gammaboard"

@@ -74,7 +74,7 @@ def command_clear_db(*_) -> None:
     import shutil
 
     print(
-        f"are you sure you want to delete the local SQLite database at {DB_PATH}? [y/N]",
+        f"are you sure you want to delete the local PostgreSQL data directory at {DB_PATH}? [y/N]",
         file=sys.stderr,
     )
     response = input().strip().lower()
@@ -1134,7 +1134,7 @@ def parser() -> argparse.ArgumentParser:
     build_apptainer.set_defaults(func=command_build)
 
     clear = sub.add_parser(
-        "clear-db", help="login node: delete the local SQLite database"
+        "clear-db", help="login node: delete the local PostgreSQL data directory"
     )
     clear.set_defaults(func=command_clear_db)
 
