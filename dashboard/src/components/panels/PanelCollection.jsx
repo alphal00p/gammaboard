@@ -618,11 +618,28 @@ const clampHeatmapSpread = (candidate, fallback = 1) => {
   if (!Number.isFinite(numeric)) return fallback;
   return Math.max(0.05, Math.min(20, numeric));
 };
+const HEATMAP_SPREAD_MIN = 0.05;
+const HEATMAP_SPREAD_MAX = 20;
+const HEATMAP_SPREAD_LOG_MIN = Math.log10(HEATMAP_SPREAD_MIN);
+const HEATMAP_SPREAD_LOG_MAX = Math.log10(HEATMAP_SPREAD_MAX);
 const readHeatmapSpreadFromPanelValue = (value, fallback = 1) =>
   clampHeatmapSpread(isObject(value) ? value.spread : null, fallback);
 const writeHeatmapSpreadPanelValue = (current, spread) => {
   const next = isObject(current) ? { ...current } : {};
   next.spread = clampHeatmapSpread(spread, 1);
+  return next;
+};
+const extractSharedPdfImageView = (value) => {
+  if (!isObject(value)) return null;
+  const shared = {};
+  const zoom = extractSharedImageZoom(value);
+  if (zoom?.zoom) shared.zoom = zoom.zoom;
+  if (Number.isFinite(Number(value.spread))) shared.spread = clampHeatmapSpread(value.spread, 1);
+  return Object.keys(shared).length > 0 ? shared : null;
+};
+const mergeSharedPdfImageView = (current, sharedView) => {
+  const next = mergeSharedImageZoom(current, sharedView);
+  if (Number.isFinite(Number(sharedView?.spread))) next.spread = clampHeatmapSpread(sharedView.spread, 1);
   return next;
 };
 
@@ -1399,6 +1416,7 @@ const ScalarImageHeatmapPanel = ({
   const isPdfPanel = typeof panelId === "string" && panelId.startsWith("pdf_adaptation_");
   const supportsSpreadControl = normalizationMode === "symmetric" && isPdfPanel && panelId && typeof onValueChange === "function";
   const spread = supportsSpreadControl ? readHeatmapSpreadFromPanelValue(value, 1) : 1;
+  const spreadSliderValue = Math.log10(clampHeatmapSpread(spread, 1));
   const { zmin, zmax } = useMemo(
     () => buildScalarHeatmapScale(boundedValues, normalizationMode, spread),
     [boundedValues, normalizationMode, spread],
@@ -1578,16 +1596,16 @@ const ScalarImageHeatmapPanel = ({
                 </Typography>
                 <Slider
                   size="small"
-                  min={0.05}
-                  max={20}
-                  step={0.05}
-                  value={spread}
-                  onChangeCommitted={(_event, next) => {
+                  min={HEATMAP_SPREAD_LOG_MIN}
+                  max={HEATMAP_SPREAD_LOG_MAX}
+                  step={0.01}
+                  value={spreadSliderValue}
+                  onChange={(_event, next) => {
                     const numeric = Array.isArray(next) ? next[0] : next;
-                    onValueChange(panelId, writeHeatmapSpreadPanelValue(value, numeric), false);
+                    onValueChange(panelId, writeHeatmapSpreadPanelValue(value, 10 ** Number(numeric)), false);
                   }}
                   valueLabelDisplay="auto"
-                  valueLabelFormat={(next) => `${Number(next).toFixed(2)}x`}
+                  valueLabelFormat={(next) => `${(10 ** Number(next)).toFixed(2)}x`}
                   sx={{ width: 140 }}
                 />
                 <Button
@@ -3349,7 +3367,7 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
     (panelId, nextValue, shouldTriggerPoll = true) => {
       if (typeof onPanelValueChange !== "function") return;
       if (sharedPdfImagePanelIdSet.has(panelId)) {
-        const sharedImageView = extractSharedImageZoom(nextValue);
+        const sharedImageView = extractSharedPdfImageView(nextValue);
         if (!sharedImageView) {
           onPanelValueChange(panelId, nextValue, shouldTriggerPoll);
           return;
@@ -3361,7 +3379,7 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
         }
         targetIds.forEach((targetId, index) => {
           const sourceValue = targetId === panelId ? nextValue : panelValues?.[targetId];
-          const mergedValue = mergeSharedImageZoom(sourceValue, sharedImageView);
+          const mergedValue = mergeSharedPdfImageView(sourceValue, sharedImageView);
           const trigger = shouldTriggerPoll && index === targetIds.length - 1;
           onPanelValueChange(targetId, mergedValue, trigger);
         });
