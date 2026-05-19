@@ -147,6 +147,7 @@ const SettingsWorkspace = () => {
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <SettingsCard title="Server">
             <Stack spacing={1.5}>
+              <PathValue label="Name" value={server.name} />
               <PathValue label="API bind" value={server.api_bind} />
               <PathValue label="Allowed origins" value={(server.allowed_origins || []).join(", ")} />
               <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">

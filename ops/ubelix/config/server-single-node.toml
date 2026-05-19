@@ -1,4 +1,5 @@
 # Backend API/dashboard and deploy settings for a single-node UBELIX deploy.
+name = "ubelix"
 [frontend]
 build_dir = "/usr/local/share/gammaboard/dashboard"
 host = "0.0.0.0"

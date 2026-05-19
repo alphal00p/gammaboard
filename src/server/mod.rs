@@ -69,6 +69,8 @@ const REPOSITORY_URL: &str = "https://github.com/alphal00p/gammaboard";
 pub struct ServerConfig {
     #[serde(skip)]
     pub server_config_path: PathBuf,
+    #[serde(default = "default_server_name")]
+    pub name: String,
     #[serde(default = "default_api_host")]
     pub api_host: IpAddr,
     #[serde(default = "default_api_port")]
@@ -111,14 +113,18 @@ fn default_api_host() -> IpAddr {
     "127.0.0.1".parse().expect("valid default API host")
 }
 
+fn default_server_name() -> String {
+    "local".to_string()
+}
+
 fn default_api_port() -> u16 {
     4000
 }
 
 fn default_allowed_origins() -> Vec<String> {
     vec![
-        "http://localhost:3000".to_string(),
         "http://localhost:8080".to_string(),
+        "http://127.0.0.1:8080".to_string(),
     ]
 }
 
@@ -312,6 +318,7 @@ pub async fn serve(
     let state = AppState {
         store,
         auth: config.auth.as_ref().map(AuthConfig::from_server_config),
+        server_name: config.name.clone(),
         allowed_origins,
         secure_cookie: config.secure_cookie,
         allow_local_node_spawn: config.allow_local_node_spawn,
@@ -344,6 +351,7 @@ pub async fn serve(
 pub(crate) struct AppState {
     store: PgStore,
     pub(crate) auth: Option<AuthConfig>,
+    server_name: String,
     allowed_origins: Vec<axum::http::HeaderValue>,
     secure_cookie: bool,
     allow_local_node_spawn: bool,
@@ -726,7 +734,8 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
             StatusCode::OK,
             Json(serde_json::json!({
                 "status": "ok",
-                "database": "connected"
+                "database": "connected",
+                "server_name": state.server_name,
             })),
         )
             .into_response(),
@@ -734,7 +743,8 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({
                 "status": "error",
-                "database": "disconnected"
+                "database": "disconnected",
+                "server_name": state.server_name,
             })),
         )
             .into_response(),
@@ -782,6 +792,7 @@ async fn get_settings_overview(
             },
         },
         "server": {
+            "name": state.server_name,
             "api_bind": state.api_bind,
             "secure_cookie": state.secure_cookie,
             "auth_enabled": state.auth.is_some(),

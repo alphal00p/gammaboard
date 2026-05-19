@@ -1,4 +1,5 @@
 # Backend API/dashboard and deploy settings for the UBELIX profile.
+name = "ubelix"
 allow_local_node_spawn = false
 
 [frontend]

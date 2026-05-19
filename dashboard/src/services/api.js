@@ -191,6 +191,8 @@ export const fetchRuns = async (signal) => {
   return asArray(data).map(normalizeRunEntry).filter(Boolean);
 };
 
+export const fetchServerStatus = async (signal) => apiGet("/health", "Failed to fetch server status", signal);
+
 export const fetchSession = async (signal) => apiGet("/auth/session", "Failed to fetch session", signal);
 
 export const fetchSettingsOverview = async (signal) => apiGet("/settings", "Failed to fetch settings", signal);

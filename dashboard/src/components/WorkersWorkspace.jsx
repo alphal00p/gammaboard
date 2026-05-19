@@ -35,7 +35,7 @@ import {
 const DEFAULT_NODE_LAUNCH_TOML = "";
 const NODE_LAUNCH_TEMPLATE_SELECTION_STORAGE_KEY = "dialogs.node_launch.selected_template";
 
-const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => {
+const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serverName }) => {
   const { authenticated } = useAuth();
   const [selectedNodeName, setSelectedNodeName] = useState(null);
   const [launchOpen, setLaunchOpen] = useState(false);
@@ -116,7 +116,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error }) => 
 
   return (
     <>
-      <ConnectionStatus isConnected={isConnected} lastUpdate={lastUpdate} />
+      <ConnectionStatus isConnected={isConnected} lastUpdate={lastUpdate} serverName={serverName} />
       {error ? (
         <Alert severity="error" sx={{ mb: 2 }}>
           Failed to fetch workers.

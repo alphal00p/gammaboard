@@ -3,7 +3,7 @@ import WorkerLogsPanel from "./WorkerLogsPanel";
 import RunScopedWorkspace from "./common/RunScopedWorkspace";
 import { useWorkerLogs } from "../hooks/useWorkerLogs";
 
-const LogsWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isConnected }) => {
+const LogsWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isConnected, serverName }) => {
   const logReader = useWorkerLogs({
     runId: selectedRun,
     workers,
@@ -16,6 +16,7 @@ const LogsWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isConnected
       selectedRun={selectedRun}
       setSelectedRun={setSelectedRun}
       isConnected={isConnected}
+      serverName={serverName}
       noRunsMessage="Create a run to inspect logs."
       noSelectionMessage="Pick a run to inspect its logs."
     >

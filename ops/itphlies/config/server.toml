@@ -1,4 +1,5 @@
 # Backend API/dashboard and deploy settings for the ITPhlies profile.
+name = "itphlies"
 api_host = "127.0.0.1"
 api_port = 4000
 allowed_origins = [

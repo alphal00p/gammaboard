@@ -30,6 +30,7 @@ vi.mock("./services/api", () => ({
     updates: [],
   })),
   fetchNodeLaunchRequests: vi.fn(async () => []),
+  fetchServerStatus: vi.fn(async () => ({ status: "ok", database: "connected", server_name: "local" })),
   shutdownControlProcess: vi.fn(async () => ({ shutdown_requested: true })),
 }));
 
@@ -75,6 +76,7 @@ describe("App Component", () => {
       updates: [],
     });
     api.fetchNodeLaunchRequests.mockResolvedValue([]);
+    api.fetchServerStatus.mockResolvedValue({ status: "ok", database: "connected", server_name: "local" });
     api.shutdownControlProcess.mockResolvedValue({ shutdown_requested: true });
   });
 
@@ -96,7 +98,7 @@ describe("App Component", () => {
 
   test("renders connection status component", async () => {
     await renderApp();
-    const statusElement = screen.getByText(/Connected/i);
+    const statusElement = screen.getByText(/Connected to local/i);
     expect(statusElement).toBeInTheDocument();
   });
 

@@ -19,6 +19,7 @@ import LoginDialog from "./components/auth/LoginDialog";
 import RunScopedWorkspace from "./components/common/RunScopedWorkspace";
 import { useRunConfigPanels } from "./hooks/useRunConfigPanels";
 import { useRuns } from "./hooks/useRuns";
+import { useServerStatus } from "./hooks/useServerStatus";
 import { useRunTasks } from "./hooks/useRunTasks";
 import { useWorkersData } from "./hooks/useWorkersData";
 import {
@@ -505,7 +506,7 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
   );
 };
 
-const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, onRunCreated }) => {
+const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, serverName, onRunCreated }) => {
   const { authenticated } = useAuth();
   const [createRunOpen, setCreateRunOpen] = useState(false);
   const [createRunBusy, setCreateRunBusy] = useState(false);
@@ -574,6 +575,7 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, onRunCr
         selectedRun={selectedRun}
         setSelectedRun={setSelectedRun}
         isConnected={isConnected}
+        serverName={serverName}
         noRunsMessage="Create a run to start monitoring task output and engine configuration."
         noSelectionMessage="Pick a run to view task-scoped output and run configuration."
         headerActions={
@@ -710,7 +712,8 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, onRunCr
 };
 
 function AppContent() {
-  const { runs, isConnected } = useRuns();
+  const { runs } = useRuns();
+  const serverStatus = useServerStatus(3000);
   const workersData = useWorkersData({ runId: null, pollMs: 3000 });
   const [mode, setMode] = useState("runs");
   const [selectedRun, setSelectedRun] = useState(null);
@@ -761,16 +764,18 @@ function AppContent() {
             runs={runList}
             selectedRun={selectedRun}
             setSelectedRun={setSelectedRun}
-            isConnected={isConnected}
+            isConnected={serverStatus.isConnected}
+            serverName={serverStatus.serverName}
             onRunCreated={setPendingRunSelection}
           />
         ) : mode === "workers" ? (
           <WorkersWorkspace
             workers={workersData.workers}
             runs={runList}
-            isConnected={workersData.isConnected}
+            isConnected={serverStatus.isConnected}
             lastUpdate={workersData.lastUpdate}
             error={workersData.error}
+            serverName={serverStatus.serverName}
           />
         ) : mode === "performance" ? (
           <PerformanceWorkspace
@@ -778,7 +783,8 @@ function AppContent() {
             workers={workersData.workers}
             selectedRun={selectedRun}
             setSelectedRun={setSelectedRun}
-            isConnected={isConnected}
+            isConnected={serverStatus.isConnected}
+            serverName={serverStatus.serverName}
           />
         ) : mode === "logs" ? (
           <LogsWorkspace
@@ -786,7 +792,8 @@ function AppContent() {
             workers={workersData.workers}
             selectedRun={selectedLogRun}
             setSelectedRun={setSelectedLogRun}
-            isConnected={isConnected}
+            isConnected={serverStatus.isConnected}
+            serverName={serverStatus.serverName}
           />
         ) : (
           <SettingsWorkspace />
