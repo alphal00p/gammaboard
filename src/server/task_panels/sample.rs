@@ -1376,7 +1376,15 @@ fn scalar_projected_bins(
         .values()
         .enumerate()
         .map(|(index, bin)| {
+            let pdf_cache_available = discrete_pdf.is_some();
             let pdf = discrete_pdf.and_then(|cache| cache.get(projection_name, &bin.discrete));
+            let pdf_status = if pdf.is_some() {
+                "available"
+            } else if pdf_cache_available {
+                "missing_bin"
+            } else {
+                "unavailable"
+            };
             let value = scalar_bin_value(bin, normalization, total_count);
             let error = scalar_bin_error(bin, normalization, total_count);
             let relative_error = if value != 0.0 {
@@ -1391,6 +1399,7 @@ fn scalar_projected_bins(
                 "value": value,
                 "error": error,
                 "pdf": pdf,
+                "pdf_status": pdf_status,
                 "relative_error": relative_error,
                 "error_contribution": error_contribution,
                 "metrics": {

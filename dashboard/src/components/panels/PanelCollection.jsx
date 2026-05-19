@@ -503,29 +503,35 @@ const histogramEntryCountLine = (bin) => {
   return `entries: ${formatScientific(entryCount, 6)}`;
 };
 
+const finiteNumberOrNull = (value) =>
+  typeof value === "number" && Number.isFinite(value) ? value : null;
+
 const discreteBinInfoLines = (bin) => {
-  const pdf = Number(bin?.pdf);
-  const relativeError = Number(bin?.relative_error);
-  const errorContribution = Number(bin?.error_contribution);
+  const pdf = finiteNumberOrNull(bin?.pdf);
+  const relativeError = finiteNumberOrNull(bin?.relative_error);
+  const errorContribution = finiteNumberOrNull(bin?.error_contribution);
   const conditional = bin?.metrics?.conditional_mean;
   const contribution = bin?.metrics?.contribution;
   const lines = [];
-  if (Number.isFinite(pdf)) lines.push(`pdf: ${formatScientific(pdf, 6)}`);
-  if (Number.isFinite(relativeError)) lines.push(`rel error: ${formatScientific(relativeError, 6)}`);
-  if (Number.isFinite(errorContribution)) lines.push(`error contribution: ${formatScientific(errorContribution, 6)}`);
-  if (conditional && Number.isFinite(Number(conditional.value))) {
-    const error = Number(conditional.error);
+  if (pdf != null) lines.push(`pdf: ${formatScientific(pdf, 6)}`);
+  else if (typeof bin?.pdf_status === "string" && bin.pdf_status !== "available") lines.push(`pdf: ${bin.pdf_status}`);
+  if (relativeError != null) lines.push(`rel error: ${formatScientific(relativeError, 6)}`);
+  if (errorContribution != null) lines.push(`error contribution: ${formatScientific(errorContribution, 6)}`);
+  const conditionalValue = finiteNumberOrNull(conditional?.value);
+  if (conditionalValue != null) {
+    const error = finiteNumberOrNull(conditional?.error);
     lines.push(
-      `conditional mean: ${formatScientific(Number(conditional.value), 6)}${
-        Number.isFinite(error) ? ` ±${formatScientific(error, 6)}` : ""
+      `conditional mean: ${formatScientific(conditionalValue, 6)}${
+        error != null ? ` ±${formatScientific(error, 6)}` : ""
       }`,
     );
   }
-  if (contribution && Number.isFinite(Number(contribution.value))) {
-    const error = Number(contribution.error);
+  const contributionValue = finiteNumberOrNull(contribution?.value);
+  if (contributionValue != null) {
+    const error = finiteNumberOrNull(contribution?.error);
     lines.push(
-      `contribution: ${formatScientific(Number(contribution.value), 6)}${
-        Number.isFinite(error) ? ` ±${formatScientific(error, 6)}` : ""
+      `contribution: ${formatScientific(contributionValue, 6)}${
+        error != null ? ` ±${formatScientific(error, 6)}` : ""
       }`,
     );
   }
