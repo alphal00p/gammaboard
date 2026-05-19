@@ -1637,7 +1637,7 @@ kind = "sample"
 stop_condition = {{ max_samples = 64 }}
 sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo" }} }}
 "#,
-        "process_api/examples/rust_breit_wigner_evaluator/runtime.sif"
+        "../process_api/examples/rust_breit_wigner_evaluator/runtime.sif"
     ));
 
     harness
