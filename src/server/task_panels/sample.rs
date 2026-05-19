@@ -1372,6 +1372,10 @@ fn scalar_projected_bins(
             });
         reject_bin_explosion(projected.len(), max_total_bins, &item.name)?;
     }
+    let total_abs_contribution = projected
+        .values()
+        .map(|bin| bin.contribution_mean(total_count).abs())
+        .sum::<f64>();
     Ok(projected
         .values()
         .enumerate()
@@ -1393,6 +1397,18 @@ fn scalar_projected_bins(
                 None
             };
             let error_contribution = error * error;
+            let contribution = bin.contribution_mean(total_count);
+            let contribution_error = bin.contribution_stderr(total_count);
+            let pdf_scaled_value = pdf.map(|pdf| pdf * total_abs_contribution);
+            let value_pdf_mismatch = pdf_scaled_value.map(|scaled| value - scaled);
+            let value_pdf_mismatch_abs = value_pdf_mismatch.map(f64::abs);
+            let contribution_fraction = if total_abs_contribution > 0.0 {
+                Some(contribution / total_abs_contribution)
+            } else {
+                None
+            };
+            let fraction_pdf_mismatch =
+                contribution_fraction.and_then(|fraction| pdf.map(|pdf| fraction - pdf));
             json!({
                 "start": index as f64,
                 "stop": index as f64 + 1.0,
@@ -1400,12 +1416,18 @@ fn scalar_projected_bins(
                 "error": error,
                 "pdf": pdf,
                 "pdf_status": pdf_status,
+                "pdf_scaled_value": pdf_scaled_value,
+                "value_pdf_mismatch": value_pdf_mismatch,
                 "relative_error": relative_error,
                 "error_contribution": error_contribution,
                 "metrics": {
+                    "value": {
+                        "value": value,
+                        "error": error,
+                    },
                     "contribution": {
-                        "value": bin.contribution_mean(total_count),
-                        "error": bin.contribution_stderr(total_count),
+                        "value": contribution,
+                        "error": contribution_error,
                     },
                     "conditional_mean": {
                         "value": bin.mean(),
@@ -1413,6 +1435,21 @@ fn scalar_projected_bins(
                     },
                     "pdf": {
                         "value": pdf,
+                    },
+                    "pdf_scaled_value": {
+                        "value": pdf_scaled_value,
+                    },
+                    "value_pdf_mismatch": {
+                        "value": value_pdf_mismatch,
+                    },
+                    "value_pdf_mismatch_abs": {
+                        "value": value_pdf_mismatch_abs,
+                    },
+                    "contribution_fraction": {
+                        "value": contribution_fraction,
+                    },
+                    "fraction_pdf_mismatch": {
+                        "value": fraction_pdf_mismatch,
                     },
                     "error_contribution": {
                         "value": error_contribution,

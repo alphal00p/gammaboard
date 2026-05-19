@@ -508,6 +508,10 @@ const finiteNumberOrNull = (value) =>
 
 const discreteBinInfoLines = (bin) => {
   const pdf = finiteNumberOrNull(bin?.pdf);
+  const pdfScaled = finiteNumberOrNull(bin?.pdf_scaled_value ?? bin?.metrics?.pdf_scaled_value?.value);
+  const valuePdfMismatch = finiteNumberOrNull(bin?.value_pdf_mismatch ?? bin?.metrics?.value_pdf_mismatch?.value);
+  const contributionFraction = finiteNumberOrNull(bin?.metrics?.contribution_fraction?.value);
+  const fractionPdfMismatch = finiteNumberOrNull(bin?.metrics?.fraction_pdf_mismatch?.value);
   const relativeError = finiteNumberOrNull(bin?.relative_error);
   const errorContribution = finiteNumberOrNull(bin?.error_contribution);
   const conditional = bin?.metrics?.conditional_mean;
@@ -515,6 +519,10 @@ const discreteBinInfoLines = (bin) => {
   const lines = [];
   if (pdf != null) lines.push(`pdf: ${formatScientific(pdf, 6)}`);
   else if (typeof bin?.pdf_status === "string" && bin.pdf_status !== "available") lines.push(`pdf: ${bin.pdf_status}`);
+  if (pdfScaled != null) lines.push(`pdf × <|I|>: ${formatScientific(pdfScaled, 6)}`);
+  if (valuePdfMismatch != null) lines.push(`value - pdf × <|I|>: ${formatScientific(valuePdfMismatch, 6)}`);
+  if (contributionFraction != null) lines.push(`contribution / <|I|>: ${formatScientific(contributionFraction, 6)}`);
+  if (fractionPdfMismatch != null) lines.push(`contribution / <|I|> - pdf: ${formatScientific(fractionPdfMismatch, 6)}`);
   if (relativeError != null) lines.push(`rel error: ${formatScientific(relativeError, 6)}`);
   if (errorContribution != null) lines.push(`error contribution: ${formatScientific(errorContribution, 6)}`);
   const conditionalValue = finiteNumberOrNull(conditional?.value);
@@ -1733,6 +1741,7 @@ const HistogramPanel = ({
   });
   const [localHistogramMode, setLocalHistogramMode] = useState(HISTOGRAM_MODE_PDF);
   const [localShowRatio, setLocalShowRatio] = useState(false);
+  const [localShowPdfComparison, setLocalShowPdfComparison] = useState(false);
   const yScale = isBundleControlled ? readHistogramScaleFromPanelValue(value, "y", defaultYScale) : localYScale;
   const xScale = isBundleControlled ? readHistogramScaleFromPanelValue(value, "x", defaultXScale) : localXScale;
   const zoomRange = isBundleControlled
@@ -1745,6 +1754,7 @@ const HistogramPanel = ({
   const showRelativeErrors = isBundleControlled ? view.show_relative_error !== false : localShowRelativeErrors;
   const histogramMode = isBundleControlled ? normalizeHistogramMode(view.display_mode) : localHistogramMode;
   const showRatio = isBundleControlled ? view.show_ratio === true : localShowRatio;
+  const showPdfComparison = isBundleControlled ? view.show_pdf_comparison === true : localShowPdfComparison;
   const requestedSortMode = isBundleControlled
     ? normalizeHistogramSortMode(
         isObject(view?.sort_mode_by_histogram) && currentHistogramName
@@ -1786,6 +1796,31 @@ const HistogramPanel = ({
     });
   }, [isDiscrete, bins]);
   const discreteRelativeErrorData = useMemo(() => buildDiscreteRelativeErrorData(bins), [bins]);
+  const pdfComparisonData = useMemo(() => {
+    if (!isDiscrete || histogramMode === HISTOGRAM_MODE_CDF) return null;
+    const markerData = bins.map((bin) => {
+      const raw = Number(bin?.pdf_scaled_value ?? bin?.metrics?.pdf_scaled_value?.value);
+      if (!Number.isFinite(raw)) return null;
+      return {
+        value: yScale === "log" ? signedLog10(raw) : raw,
+        rawValue: raw,
+      };
+    });
+    const deltaData = bins
+      .map((bin, index) => {
+        const rawValue = Number(bin?.value);
+        const rawPdf = Number(bin?.pdf_scaled_value ?? bin?.metrics?.pdf_scaled_value?.value);
+        if (!Number.isFinite(rawValue) || !Number.isFinite(rawPdf)) return null;
+        const value = yScale === "log" ? signedLog10(rawValue) : rawValue;
+        const pdf = yScale === "log" ? signedLog10(rawPdf) : rawPdf;
+        if (!Number.isFinite(value) || !Number.isFinite(pdf)) return null;
+        return [index, Math.min(value, pdf), Math.max(value, pdf)];
+      })
+      .filter(Boolean);
+    if (!markerData.some((entry) => entry != null)) return null;
+    return { markerData, deltaData };
+  }, [bins, histogramMode, isDiscrete, yScale]);
+  const hasPdfComparison = Boolean(pdfComparisonData);
   const hasPositiveContinuousEdges = useMemo(
     () =>
       asArray(bins).some((bin) => {
@@ -2064,6 +2099,18 @@ const HistogramPanel = ({
         if (Number.isFinite(high)) extraValues.push(high);
       }
     }
+    if (isDiscrete && pdfComparisonData) {
+      for (const entry of asArray(pdfComparisonData.markerData)) {
+        const numeric = Number(entry?.value);
+        if (Number.isFinite(numeric)) extraValues.push(numeric);
+      }
+      for (const entry of asArray(pdfComparisonData.deltaData)) {
+        const low = Number(entry?.[1]);
+        const high = Number(entry?.[2]);
+        if (Number.isFinite(low)) extraValues.push(low);
+        if (Number.isFinite(high)) extraValues.push(high);
+      }
+    }
     if (extraValues.length === 0) return baseDomain;
     const baseMin = Number(baseDomain?.[0]);
     const baseMax = Number(baseDomain?.[1]);
@@ -2073,7 +2120,7 @@ const HistogramPanel = ({
       ...(Number.isFinite(baseMax) ? [baseMax] : []),
     ].filter((value) => Number.isFinite(value));
     return fitDomain(candidates);
-  }, [bins, isDiscrete, overlaySeries, visibleXRange, yScale]);
+  }, [bins, isDiscrete, overlaySeries, pdfComparisonData, visibleXRange, yScale]);
   const relativeErrorYDomain = useMemo(
     () => buildRelativeErrorYDomain(isDiscrete ? discreteRelativeErrorData : relativeErrorData, visibleXRange),
     [discreteRelativeErrorData, isDiscrete, relativeErrorData, visibleXRange],
@@ -2110,7 +2157,12 @@ const HistogramPanel = ({
     const suppressOverlayErrorBars =
       panelId === "pdf_adaptation_integrand_pdf_histogram_overlay" ||
       panelId === "pdf_adaptation_oversampling_histogram_overlay";
-    const legendEntries = ["value", ...overlaySeries.map((overlay) => overlay.name)];
+    const pdfComparisonVisible = isDiscrete && showPdfComparison && pdfComparisonData;
+    const legendEntries = [
+      "value",
+      ...overlaySeries.map((overlay) => overlay.name),
+      ...(pdfComparisonVisible ? ["pdf × <|I|>", "pdf delta"] : []),
+    ];
     if (isDiscrete) {
       const categoriesData = categories || bins.map((_, idx) => `#${idx}`);
       const barData = bins.map((bin) => {
@@ -2235,6 +2287,31 @@ const HistogramPanel = ({
             }
             return series;
           }),
+          ...(pdfComparisonVisible
+            ? [
+                buildDiscreteOffsetErrorBarSeries({
+                  name: "pdf delta",
+                  data: pdfComparisonData.deltaData,
+                  color: "#475569",
+                  slotIndex: 0,
+                  slotCount: discreteBarSeriesCount,
+                  barWidthRatio: 0.32,
+                }),
+                {
+                  type: "scatter",
+                  name: "pdf × <|I|>",
+                  data: pdfComparisonData.markerData,
+                  symbol: "diamond",
+                  symbolSize: 9,
+                  itemStyle: { color: "#0f172a", borderColor: "#ffffff", borderWidth: 1 },
+                  z: 8,
+                  tooltip: {
+                    valueFormatter: (value) =>
+                      Number.isFinite(Number(value)) ? formatScientific(Number(value), 6) : "n/a",
+                  },
+                },
+              ]
+            : []),
         ],
       };
     }
@@ -2410,6 +2487,8 @@ const HistogramPanel = ({
     isDiscrete,
     overlaySeries,
     panelId,
+    pdfComparisonData,
+    showPdfComparison,
     stepData,
     xDomain,
     yDomain,
@@ -2820,6 +2899,23 @@ const HistogramPanel = ({
             >
               Ratio
             </Button>
+            {isDiscrete ? (
+              <Button
+                size="small"
+                variant={showPdfComparison ? "contained" : "outlined"}
+                disabled={!hasPdfComparison}
+                onClick={() => {
+                  const next = !showPdfComparison;
+                  if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
+                    onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { showPdfComparison: next }), false);
+                    return;
+                  }
+                  setLocalShowPdfComparison(next);
+                }}
+              >
+                Compare PDF
+              </Button>
+            ) : null}
             {isDiscrete ? (
               <FormControl size="small" sx={{ minWidth: 156 }}>
                 <Select

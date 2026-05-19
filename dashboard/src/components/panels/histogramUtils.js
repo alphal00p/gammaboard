@@ -104,6 +104,7 @@ export const writeHistogramBundlePanelValue = (
     yScale = undefined,
     showRelativeError = undefined,
     showRatio = undefined,
+    showPdfComparison = undefined,
     histogramMode = undefined,
     sortModeByHistogram = undefined,
   } = {},
@@ -117,6 +118,7 @@ export const writeHistogramBundlePanelValue = (
   if (yScale !== undefined) nextView.y_scale = yScale === "log" ? "log" : "linear";
   if (showRelativeError !== undefined) nextView.show_relative_error = Boolean(showRelativeError);
   if (showRatio !== undefined) nextView.show_ratio = Boolean(showRatio);
+  if (showPdfComparison !== undefined) nextView.show_pdf_comparison = Boolean(showPdfComparison);
   if (histogramMode !== undefined) nextView.display_mode = normalizeHistogramMode(histogramMode);
   if (isObject(sortModeByHistogram)) {
     const normalizedSortModes = Object.fromEntries(
