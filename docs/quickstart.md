@@ -76,8 +76,8 @@ Use a port offset for a second local or ITPhlies instance:
 
 ```bash
 ./gammaboard \
-  deploy run \
-  --port-offset 1
+  --port-offset 1 \
+  deploy run
 ```
 
 `--port-offset 1` shifts frontend/API/Postgres from `8080/4000/5400` to
@@ -178,8 +178,10 @@ Useful deploy options:
 
 - `--port-offset <N>` offsets frontend, API, and Postgres ports.
 - `--api-port <PORT>` overrides the private backend API port for one launch.
-- `--database-url`, `--postgres-data-dir`, `--postgres-socket-dir`, and
-  `--postgres-log-file` isolate runtime state without editing TOML files.
+- `--database-url` and `--resource-root` are the normal runtime overrides for
+  manual or shared deployments.
+- `--postgres-public` allows remote workers to connect to the local Postgres
+  instance; keep the default local-only mode unless this is needed.
 
 ## Where Things Live
 

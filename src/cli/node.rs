@@ -196,8 +196,7 @@ async fn run_auto_run_command(
         let stderr_log = File::create(&stderr_log_path)?;
         let mut command = std::process::Command::new(&binary);
         command
-            .arg("--runtime-config")
-            .arg(runtime.runtime_config_path())
+            .args(runtime.runtime_cli_args())
             .args(node_api::node_run_cli_args(
                 node_name,
                 args.max_start_failures,

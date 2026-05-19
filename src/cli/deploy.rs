@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use gammaboard::api::nodes as node_api;
 use gammaboard::config::{DEFAULT_SERVER_CONFIG_PATH, RuntimeConfig};
-use gammaboard::runtime_context::RuntimeContext;
+use gammaboard::runtime_context::{RuntimeContext, checked_add_port};
 use gammaboard::server::ServerConfig;
 use std::{
     fs,
@@ -31,8 +31,6 @@ pub enum DeployCommand {
 pub struct DeployRunArgs {
     #[arg(long = "server-config", default_value = DEFAULT_SERVER_CONFIG_PATH, value_name = "PATH")]
     server_config: PathBuf,
-    #[arg(long, default_value_t = 0)]
-    port_offset: u16,
     #[arg(long)]
     api_port: Option<u16>,
     #[arg(long = "allowed-origin", value_name = "ORIGIN")]
@@ -47,8 +45,8 @@ pub async fn run_deploy_command(args: DeployArgs, runtime: &RuntimeContext) -> R
 
 async fn deploy_run(args: DeployRunArgs, runtime: &RuntimeContext) -> Result<()> {
     let mut server_config = ServerConfig::load(&args.server_config)?;
-    let mut runtime_config = runtime.runtime_config().clone();
-    apply_port_offset(&mut server_config, &mut runtime_config, args.port_offset)?;
+    let runtime_config = runtime.runtime_config();
+    apply_port_offset(&mut server_config, runtime.port_offset())?;
     let frontend_port = server_config.frontend.port;
     if let Some(api_port) = args.api_port {
         server_config.api_port = api_port;
@@ -66,11 +64,7 @@ async fn deploy_run(args: DeployRunArgs, runtime: &RuntimeContext) -> Result<()>
     prepare_runtime_dirs(&deploy_paths)?;
     write_nginx_config(&server_config, frontend_port, &deploy_paths)?;
 
-    let mut backend = start_backend(
-        &server_config,
-        runtime.runtime_config_path(),
-        &runtime_config,
-    )?;
+    let mut backend = start_backend(&server_config, runtime)?;
     let mut nginx = start_nginx(&deploy_paths)?;
 
     println!("deploy running");
@@ -114,11 +108,7 @@ fn validate_frontend_build(server_config: &ServerConfig) -> Result<()> {
     Ok(())
 }
 
-fn apply_port_offset(
-    server_config: &mut ServerConfig,
-    runtime_config: &mut RuntimeConfig,
-    port_offset: u16,
-) -> Result<()> {
+fn apply_port_offset(server_config: &mut ServerConfig, port_offset: u16) -> Result<()> {
     if port_offset == 0 {
         return Ok(());
     }
@@ -142,59 +132,7 @@ fn apply_port_offset(
         *origin = updated.origin().ascii_serialization();
     }
 
-    let mut database_url = Url::parse(&runtime_config.database.url).with_context(|| {
-        format!(
-            "invalid runtime database URL: {}",
-            runtime_config.database.url
-        )
-    })?;
-    let base_db_port = database_url
-        .port()
-        .ok_or_else(|| anyhow::anyhow!("runtime database URL must include an explicit port"))?;
-    let shifted_db_port = checked_add_port(base_db_port, port_offset, "postgres port")?;
-    database_url
-        .set_port(Some(shifted_db_port))
-        .map_err(|_| anyhow::anyhow!("failed setting shifted postgres port"))?;
-    runtime_config.database.url = database_url.to_string();
-
-    let old_data_dir = PathBuf::from(&runtime_config.local_postgres.data_dir);
-    let old_log_file = PathBuf::from(&runtime_config.local_postgres.log_file);
-    let suffix = format!("-{port_offset}");
-    let new_data_dir = append_suffix_to_path(&old_data_dir, &suffix)?;
-    runtime_config.local_postgres.data_dir = new_data_dir.display().to_string();
-    runtime_config.local_postgres.socket_dir = append_suffix_to_path(
-        Path::new(&runtime_config.local_postgres.socket_dir),
-        &suffix,
-    )?
-    .display()
-    .to_string();
-    let new_log_file = if old_log_file.starts_with(&old_data_dir) {
-        let relative = old_log_file
-            .strip_prefix(&old_data_dir)
-            .map_err(|err| anyhow::anyhow!("failed deriving shifted postgres log path: {err}"))?;
-        new_data_dir.join(relative)
-    } else {
-        append_suffix_to_path(&old_log_file, &suffix)?
-    };
-    runtime_config.local_postgres.log_file = new_log_file.display().to_string();
     Ok(())
-}
-
-fn checked_add_port(base: u16, offset: u16, label: &str) -> Result<u16> {
-    base.checked_add(offset)
-        .ok_or_else(|| anyhow::anyhow!("{label} overflow with port_offset={offset} (base={base})"))
-}
-
-fn append_suffix_to_path(path: &Path, suffix: &str) -> Result<PathBuf> {
-    let file_name = path.file_name().ok_or_else(|| {
-        anyhow::anyhow!(
-            "cannot append suffix to path without file name: {}",
-            path.display()
-        )
-    })?;
-    let mut updated = file_name.to_os_string();
-    updated.push(suffix);
-    Ok(path.with_file_name(updated))
 }
 
 async fn cleanup_deploy(
@@ -359,23 +297,10 @@ fn prepare_runtime_dirs(paths: &DeployRuntimePaths) -> Result<()> {
     Ok(())
 }
 
-fn start_backend(
-    server_config: &ServerConfig,
-    runtime_config_path: &Path,
-    runtime_config: &RuntimeConfig,
-) -> Result<Child> {
+fn start_backend(server_config: &ServerConfig, runtime: &RuntimeContext) -> Result<Child> {
     let binary = std::env::current_exe().context("failed to resolve current executable path")?;
     let mut command = Command::new(&binary);
-    command.arg("--runtime-config").arg(runtime_config_path);
-    command
-        .arg("--database-url")
-        .arg(&runtime_config.database.url)
-        .arg("--postgres-data-dir")
-        .arg(&runtime_config.local_postgres.data_dir)
-        .arg("--postgres-socket-dir")
-        .arg(&runtime_config.local_postgres.socket_dir)
-        .arg("--postgres-log-file")
-        .arg(&runtime_config.local_postgres.log_file);
+    command.args(runtime.runtime_cli_args());
     command
         .arg("server")
         .arg("--server-config")

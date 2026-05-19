@@ -27,6 +27,9 @@ gammaboard \
   <COMMAND>
 ```
 
+Use `--postgres-public` only when workers on other machines or Slurm nodes must
+connect to the local Postgres instance.
+
 Relative evaluator resources, such as GammaLoop `state_folder`, resolve through `resources.roots` in order. Absolute paths are used as-is.
 
 ## Server Config
@@ -59,7 +62,7 @@ session_secret = "..."
 
 ## Runtime Config
 
-Runtime config owns the database URL, resource roots, tracing, and local Postgres settings. The checked-in default Postgres port is `5400`; `deploy run --port-offset <N>` shifts it at launch time.
+Runtime config owns the database URL, resource roots, tracing, and local Postgres settings. The checked-in default Postgres port is `5400`; global `--port-offset <N>` shifts frontend/API/Postgres ports and local Postgres state paths for all child processes.
 
 ## Auth And Templates
 

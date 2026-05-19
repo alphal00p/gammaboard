@@ -64,6 +64,5 @@ APPTAINERENV_LC_ALL="${APPTAINERENV_LC_ALL:-C.UTF-8}" \
 APPTAINERENV_TZ="${APPTAINERENV_TZ:-Etc/UTC}" \
 apptainer exec -B "${WORKSPACE_ROOT}" "${IMAGE_PATH}" \
   gammaboard --resource-root "${WORKSPACE_ROOT}/resources" \
-  --postgres-listen-addresses "0.0.0.0" \
-  --postgres-host-auth-cidr "0.0.0.0/0" \
-  deploy run --server-config "${SERVER_CFG}" --port-offset "${PORT_OFFSET}"
+  --port-offset "${PORT_OFFSET}" \
+  deploy run --server-config "${SERVER_CFG}"
