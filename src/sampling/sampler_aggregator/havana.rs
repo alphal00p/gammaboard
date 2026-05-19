@@ -473,6 +473,30 @@ fn grid_discrete_subspace_pdf(
             }
         }
         Grid::Discrete(grid) => {
+            let bin_probability = |index: usize| -> f64 {
+                let pdf_sum = grid
+                    .bins
+                    .iter()
+                    .map(|bin| bin.pdf)
+                    .filter(|pdf| pdf.is_finite() && *pdf > 0.0)
+                    .sum::<f64>();
+                if pdf_sum > 0.0 {
+                    grid.bins
+                        .get(index)
+                        .map(|bin| {
+                            if bin.pdf.is_finite() && bin.pdf > 0.0 {
+                                bin.pdf / pdf_sum
+                            } else {
+                                0.0
+                            }
+                        })
+                        .unwrap_or(0.0)
+                } else if grid.bins.is_empty() {
+                    0.0
+                } else {
+                    1.0 / grid.bins.len() as f64
+                }
+            };
             if let Some(value) = fixed_dims.get(&depth) {
                 let value = usize::try_from(*value).map_err(|_| {
                     EngineError::engine(format!(
@@ -482,6 +506,7 @@ fn grid_discrete_subspace_pdf(
                 let Some(bin) = grid.bins.get(value) else {
                     return Ok(0.0);
                 };
+                let pdf = bin_probability(value);
                 let child_pdf = match bin.sub_grid.as_ref() {
                     Some(sub_grid) => grid_discrete_subspace_pdf(sub_grid, fixed_dims, depth + 1)?,
                     None => {
@@ -492,11 +517,11 @@ fn grid_discrete_subspace_pdf(
                         }
                     }
                 };
-                return Ok(bin.pdf * child_pdf);
+                return Ok(pdf * child_pdf);
             }
 
             let mut pdf = 0.0;
-            for bin in &grid.bins {
+            for (index, bin) in grid.bins.iter().enumerate() {
                 let child_pdf = match bin.sub_grid.as_ref() {
                     Some(sub_grid) => grid_discrete_subspace_pdf(sub_grid, fixed_dims, depth + 1)?,
                     None => {
@@ -507,7 +532,7 @@ fn grid_discrete_subspace_pdf(
                         }
                     }
                 };
-                pdf += bin.pdf * child_pdf;
+                pdf += bin_probability(index) * child_pdf;
             }
             Ok(pdf)
         }
@@ -1037,6 +1062,45 @@ mod tests {
         assert!((values[1].unwrap() - 0.5).abs() < 1e-12);
         assert!((values[2].unwrap() - 0.05).abs() < 1e-12);
         assert_eq!(values[3], Some(0.0));
+    }
+
+    #[test]
+    fn havana_discrete_pdf_falls_back_to_uniform_for_all_zero_grid_probabilities() {
+        let domain = Domain::discrete(
+            Some("d0".to_string()),
+            [
+                crate::DomainBranch::new(0, Domain::continuous(1)),
+                crate::DomainBranch::new(1, Domain::continuous(1)),
+            ],
+        );
+        let params = HavanaSamplerParams {
+            seed: 7,
+            bins: 8,
+            samples_for_update: 16,
+            initial_training_rate: 0.1,
+            final_training_rate: 0.01,
+        };
+        let mut sampler = HavanaSampler::from_params_and_domain(params, &domain, 16)
+            .expect("build havana sampler");
+        let Grid::Discrete(grid) = &mut sampler.grid else {
+            panic!("expected discrete grid");
+        };
+        for bin in &mut grid.bins {
+            bin.pdf = 0.0;
+        }
+
+        let values = sampler
+            .discrete_pdf_batch(&[
+                DiscreteSubspace {
+                    fixed_dims: BTreeMap::from([(0, 0)]),
+                },
+                DiscreteSubspace {
+                    fixed_dims: BTreeMap::from([(0, 1)]),
+                },
+            ])
+            .expect("discrete pdf");
+
+        assert_eq!(values, vec![Some(0.5), Some(0.5)]);
     }
 
     #[test]
