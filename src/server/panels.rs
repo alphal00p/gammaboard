@@ -269,6 +269,7 @@ pub struct PanelResponse {
     pub reset_required: bool,
     pub panels: Vec<PanelSpec>,
     pub updates: Vec<PanelUpdate>,
+    pub poll_after_ms: Option<u64>,
 }
 
 pub(crate) fn panel_spec(

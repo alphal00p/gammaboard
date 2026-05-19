@@ -1210,6 +1210,28 @@ async fn get_run_task_output(
     };
     let panel_source = TaskPanelSource::new(&task.task, effective_accumulator_config)
         .map_err(|err| ApiError::Internal(err.to_string()))?;
+    if !matches!(task.state, crate::core::RunTaskState::Active)
+        && request.request.panel_actions.is_empty()
+        && request
+            .request
+            .panel_state
+            .as_object()
+            .is_none_or(|object| object.is_empty())
+        && cursor.snapshot_id.is_some()
+        && latest_persisted_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.id.parse::<i64>().ok())
+            == cursor.snapshot_id
+    {
+        return json_response(crate::server::panels::PanelResponse {
+            source_id: format!("run:{run_id}:task:{}", task.id),
+            cursor: request.request.cursor.clone(),
+            reset_required: false,
+            panels: Vec::new(),
+            updates: Vec::new(),
+            poll_after_ms: None,
+        });
+    }
     let delta_history_snapshots = if panel_source.needs_history() && cursor.snapshot_id.is_some() {
         state
             .store
@@ -1226,16 +1248,24 @@ async fn get_run_task_output(
     } else {
         Vec::new()
     };
-    let (completed_samples_per_second, smoothed_eta_seconds, sampler_engine_diagnostics) =
+    let latest_sampler_performance = if matches!(task.task, crate::core::RunTaskSpec::Sample { .. })
+    {
+        state
+            .store
+            .get_sampler_performance_history(run_id, 1, None)
+            .await?
+            .into_iter()
+            .next()
+    } else {
+        None
+    };
+    let sampler_engine_diagnostics = latest_sampler_performance
+        .as_ref()
+        .map(|entry| entry.engine_diagnostics.clone());
+    let (completed_samples_per_second, smoothed_eta_seconds) =
         if matches!(task.task, crate::core::RunTaskSpec::Sample { .. })
             && matches!(task.state, crate::core::RunTaskState::Active)
         {
-            let latest_sampler_performance = state
-                .store
-                .get_sampler_performance_history(run_id, 1, None)
-                .await?
-                .into_iter()
-                .next();
             let metrics = latest_sampler_performance.as_ref().and_then(|entry| {
                 serde_json::from_value::<crate::core::SamplerRuntimeMetrics>(
                     entry.runtime_metrics.clone(),
@@ -1258,13 +1288,9 @@ async fn get_run_task_output(
                 .as_ref()
                 .and_then(|metrics| metrics.eta_seconds_smoothed)
                 .filter(|value| value.is_finite() && *value >= 0.0);
-            (
-                completed_samples_per_second,
-                smoothed_eta_seconds,
-                latest_sampler_performance.map(|entry| entry.engine_diagnostics),
-            )
+            (completed_samples_per_second, smoothed_eta_seconds)
         } else {
-            (None, None, None)
+            (None, None)
         };
 
     let payload = panel_source

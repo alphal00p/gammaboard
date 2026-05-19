@@ -24,6 +24,7 @@ pub fn build_run_panel_response(
         reset_required: false,
         panels,
         updates,
+        poll_after_ms: Some(5000),
     })
 }
 

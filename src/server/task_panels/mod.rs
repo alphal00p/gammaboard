@@ -661,8 +661,17 @@ impl TaskPanelSource {
             source_id,
             cursor,
             reset_required: false,
-            panels,
+            panels: if requested_cursor.snapshot_id.is_some() {
+                Vec::new()
+            } else {
+                panels
+            },
             updates,
+            poll_after_ms: if matches!(task.state, crate::core::RunTaskState::Active) {
+                Some(3000)
+            } else {
+                None
+            },
         })
     }
 }

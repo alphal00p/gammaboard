@@ -33,6 +33,7 @@ pub fn build_evaluator_performance_response(
         reset_required: false,
         panels,
         updates,
+        poll_after_ms: Some(5000),
     }
 }
 
@@ -89,6 +90,7 @@ fn build_performance_response<T>(
         reset_required: false,
         panels,
         updates: state_by_id.into_values().map(replace_panel).collect(),
+        poll_after_ms: Some(5000),
     }
 }
 

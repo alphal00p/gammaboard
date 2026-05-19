@@ -19,6 +19,7 @@ pub fn build_worker_panel_response(worker: &RegisteredWorkerEntry) -> PanelRespo
         reset_required: false,
         panels,
         updates,
+        poll_after_ms: Some(3000),
     }
 }
 

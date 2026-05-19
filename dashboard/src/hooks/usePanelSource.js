@@ -176,6 +176,10 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
           signal,
         );
         pendingActionsRef.current = [];
+        const nextPollAfterMs =
+          response && Object.prototype.hasOwnProperty.call(response, "poll_after_ms")
+            ? response.poll_after_ms
+            : undefined;
 
         setState((previous) => {
           const nextSourceId = response?.source_id ?? previous.sourceId;
@@ -183,7 +187,8 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
             previous.sourceId != null && response?.source_id != null && previous.sourceId !== response.source_id;
           const shouldSeedFromStorage = sourceChanged || (previous.sourceId == null && nextSourceId != null);
           const resetRequired = response?.reset_required === true || sourceChanged;
-          const panelSpecs = asArray(response?.panels);
+          const incomingPanelSpecs = asArray(response?.panels);
+          const panelSpecs = incomingPanelSpecs.length > 0 ? incomingPanelSpecs : previous.panelSpecs;
           const seededPanelValues = shouldSeedFromStorage
             ? readStoredPanelValues(nextSourceId)
             : panelValuesRef.current;
@@ -198,6 +203,9 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
             error: null,
           };
         });
+        if (nextPollAfterMs === null) return null;
+        if (Number.isFinite(Number(nextPollAfterMs)) && Number(nextPollAfterMs) > 0) return Number(nextPollAfterMs);
+        return undefined;
       } catch (err) {
         if (err?.name === "AbortError") return;
         setState((previous) => ({

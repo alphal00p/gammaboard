@@ -23,6 +23,7 @@ pub trait PanelRenderer<C> {
                 .into_iter()
                 .map(replace_panel)
                 .collect(),
+            poll_after_ms: None,
         })
     }
 }
