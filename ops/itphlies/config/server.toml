@@ -1,5 +1,4 @@
-# Backend API/dashboard settings for the ITPhlies deploy profile.
-# Public HTTP exposure, generated nginx config, and deploy cleanup live in `ops/itphlies/config/deploy.toml`.
+# Backend API/dashboard and deploy settings for the ITPhlies profile.
 api_host = "127.0.0.1"
 api_port = 4000
 allowed_origins = [
@@ -8,8 +7,16 @@ allowed_origins = [
     "http://itphlies.tailb3264.ts.net:8080",
 ]
 secure_cookie = false
-allow_db_admin = true
 allow_local_node_spawn = true
+
+[frontend]
+build_dir = "../../../dashboard/build"
+host = "0.0.0.0"
+port = 8080
+advertise_hosts = ["localhost", "itphlies"]
+
+[database]
+ensure_started = true
 
 [auth]
 admin_password_hash = "$argon2id$v=19$m=19456,t=2,p=1$IlJKLA7MFGA5iaXoS0KnGQ$ukiPLlZKlWme0artScJVv7dfc/mslAB2Cy9MbM1mDjk"

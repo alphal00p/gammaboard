@@ -5,8 +5,7 @@ Shared deployment and operations notes live in [../../docs/deployment.md](../../
 
 ## Files
 
-- `config/server.toml`: backend API config for ITPhlies deploy.
-- `config/deploy.toml`: deploy profile for nginx/frontend exposure and cleanup policy.
+- `config/server.toml`: backend API, frontend exposure, and deploy cleanup profile.
 
 ## Commands
 
@@ -14,14 +13,12 @@ From repo root:
 
 ```bash
 GAMMABOARD_PROFILE=release ./gammaboard \
-  --runtime-config ops/itphlies/config/runtime.toml \
   deploy run \
-  --deploy-config ops/itphlies/config/deploy.toml
+  --server-config ops/itphlies/config/server.toml
 
 GAMMABOARD_PROFILE=release ./gammaboard \
-  --runtime-config ops/itphlies/config/runtime.toml \
   deploy run \
-  --deploy-config ops/itphlies/config/deploy.toml \
+  --server-config ops/itphlies/config/server.toml \
   --port-offset 1
 ```
 
@@ -30,7 +27,7 @@ Nginx access logs are disabled in the checked-in ITPhlies deploy profile so the 
 
 ## Notes
 
-- Runtime config comes from `ops/itphlies/config/runtime.toml` and is passed explicitly.
+- Runtime config uses the embedded default. Pass `--runtime-config` only for custom database/resource/Postgres settings.
 - `--port-offset 1` shifts frontend/API/Postgres from `8080/4000/5400` to `8081/4001/5401` and suffixes local Postgres state paths with `-1`.
 - If deploy fails with `Address already in use`, free the conflicting frontend, API, or Postgres port and retry.
 - If deploy fails during DB start, inspect the Postgres log from repo root:

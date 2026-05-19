@@ -12,7 +12,7 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - `src/process_runtime`, `src/process_worker`: process command launchers and framed JSON-RPC worker protocol.
 - `src/server`: API and backend-owned panel models.
 - `src/cli`: command parsing/bootstrap.
-- `ops/*/config`: runtime/server/deploy profiles. `src/config_defaults`: embedded defaults.
+- `ops/*/config`: runtime/server profiles. `src/config_defaults`: embedded defaults.
 
 ## Model
 - PostgreSQL is the source of truth for runs, tasks, batches, nodes, logs, checkpoints, and snapshots.
@@ -42,6 +42,7 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 
 ## Ops Rules
 - `gammaboard deploy run` is the normal dashboard stack supervisor for nginx/backend/Postgres.
+- `server.toml` owns both backend API settings and deploy exposure/cleanup settings; there is no separate deploy config.
 - GammaLoop support is controlled by the default `gammaloop` Cargo feature. `--no-default-features` builds must compile without `gammalooprs`/`gammaloop_api` and should return explicit unsupported-feature errors for GammaLoop configs.
 
 ## Maintenance

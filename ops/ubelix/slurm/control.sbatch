@@ -23,13 +23,9 @@ fi
 
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata/gammaboard}"
 IMAGE_PATH="${WORKSPACE_ROOT}/images/gammaboard/gammaboard.sif"
-RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime.template.toml"
-RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
 SLURM_LOG_DIR="${WORKSPACE_ROOT}/logs/slurm/control"
-RUNTIME_CONFIG="${RUNTIME_DIR}/runtime-${SLURM_JOB_ID}-ctl.toml"
-DEPLOY_CFG="${WORKSPACE_ROOT}/ops/config/deploy.toml"
+SERVER_CFG="${WORKSPACE_ROOT}/ops/config/server.toml"
 DB_PORT="5400"
-DEPLOY_NAME="default"
 FRONTEND_PORT="8080"
 PORT_OFFSET="${GAMMABOARD_PORT_OFFSET:-0}"
 if ! [[ "${PORT_OFFSET}" =~ ^[0-9]+$ ]]; then
@@ -41,40 +37,23 @@ if (( DB_PORT + PORT_OFFSET > 65535 || FRONTEND_PORT > 65535 )); then
   echo "port offset overflows frontend or Postgres port: ${PORT_OFFSET}" >&2
   exit 1
 fi
-DB_DEPLOY_DIR="${WORKSPACE_ROOT}/db/${DEPLOY_NAME}"
-DB_DATA_DIR="${DB_DEPLOY_DIR}/data"
-DB_SOCKET_DIR="${DB_DEPLOY_DIR}/socket"
+DB_DATA_DIR="${WORKSPACE_ROOT}/resources/db/postgres"
+DB_SOCKET_DIR="${WORKSPACE_ROOT}/resources/db/socket"
 
-mkdir -p "${RUNTIME_DIR}" "${SLURM_LOG_DIR}" "${DB_DEPLOY_DIR}" "${DB_SOCKET_DIR}"
+mkdir -p "${SLURM_LOG_DIR}" "${DB_SOCKET_DIR}"
 mkdir -p "${DB_DATA_DIR}"
 chmod 700 "${DB_DATA_DIR}"
 
-if [[ ! -f "${RUNTIME_TEMPLATE}" ]]; then
-  echo "missing runtime template: ${RUNTIME_TEMPLATE}" >&2
-  exit 1
-fi
 if [[ ! -f "${IMAGE_PATH}" ]]; then
   echo "missing image: ${IMAGE_PATH}" >&2
   exit 1
 fi
-if [[ ! -f "${DEPLOY_CFG}" ]]; then
-  echo "missing deploy config: ${DEPLOY_CFG}" >&2
+if [[ ! -f "${SERVER_CFG}" ]]; then
+  echo "missing server config: ${SERVER_CFG}" >&2
   exit 1
 fi
-if ! command -v envsubst >/dev/null 2>&1; then
-  echo "missing required command: envsubst" >&2
-  exit 1
-fi
-
-LOCAL_TMP="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
-DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:${DB_PORT}/gammaboard_db"
-export WORKSPACE_ROOT LOCAL_TMP DEPLOY_NAME DB_PORT DATABASE_URL
-envsubst '${WORKSPACE_ROOT} ${LOCAL_TMP} ${DEPLOY_NAME} ${DB_PORT} ${DATABASE_URL}' \
-  <"${RUNTIME_TEMPLATE}" >"${RUNTIME_CONFIG}"
-
 echo "node: ${HOSTNAME}"
 echo "workspace_root: ${WORKSPACE_ROOT}"
-echo "runtime_config: ${RUNTIME_CONFIG}"
 echo "frontend_url: http://${HOSTNAME}:${FRONTEND_PORT}"
 echo "tunnel_hint_after_frontend_ready: ssh -N -L ${FRONTEND_PORT}:${HOSTNAME}:${FRONTEND_PORT} ${USER}@ubelix"
 
@@ -83,4 +62,7 @@ APPTAINERENV_LANG="${APPTAINERENV_LANG:-C.UTF-8}" \
 APPTAINERENV_LC_ALL="${APPTAINERENV_LC_ALL:-C.UTF-8}" \
 APPTAINERENV_TZ="${APPTAINERENV_TZ:-Etc/UTC}" \
 apptainer exec -B "${WORKSPACE_ROOT}" "${IMAGE_PATH}" \
-  gammaboard --runtime-config "${RUNTIME_CONFIG}" deploy run --deploy-config "${DEPLOY_CFG}" --port-offset "${PORT_OFFSET}"
+  gammaboard --resource-root "${WORKSPACE_ROOT}/resources" \
+  --postgres-listen-addresses "0.0.0.0" \
+  --postgres-host-auth-cidr "0.0.0.0/0" \
+  deploy run --server-config "${SERVER_CFG}" --port-offset "${PORT_OFFSET}"

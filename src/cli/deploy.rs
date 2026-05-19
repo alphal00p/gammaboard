@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use gammaboard::api::nodes as node_api;
-use gammaboard::config::{DEFAULT_DEPLOY_CONFIG_PATH, DeployConfig, RuntimeConfig};
+use gammaboard::config::{DEFAULT_SERVER_CONFIG_PATH, RuntimeConfig};
 use gammaboard::runtime_context::RuntimeContext;
 use gammaboard::server::ServerConfig;
 use std::{
@@ -29,8 +29,8 @@ pub enum DeployCommand {
 
 #[derive(Debug, Args)]
 pub struct DeployRunArgs {
-    #[arg(long = "deploy-config", default_value = DEFAULT_DEPLOY_CONFIG_PATH, value_name = "PATH")]
-    deploy_config: PathBuf,
+    #[arg(long = "server-config", default_value = DEFAULT_SERVER_CONFIG_PATH, value_name = "PATH")]
+    server_config: PathBuf,
     #[arg(long, default_value_t = 0)]
     port_offset: u16,
     #[arg(long)]
@@ -46,61 +46,46 @@ pub async fn run_deploy_command(args: DeployArgs, runtime: &RuntimeContext) -> R
 }
 
 async fn deploy_run(args: DeployRunArgs, runtime: &RuntimeContext) -> Result<()> {
-    let deploy_config = DeployConfig::load(&args.deploy_config)?;
-    let mut deploy_config = deploy_config;
-    let mut server_config = ServerConfig::load(&deploy_config.api_server.api_server_config)?;
+    let mut server_config = ServerConfig::load(&args.server_config)?;
     let mut runtime_config = runtime.runtime_config().clone();
-    apply_port_offset(
-        &mut deploy_config,
-        &mut server_config,
-        &mut runtime_config,
-        args.port_offset,
-    )?;
-    let frontend_port = deploy_config.frontend_http.frontend_port;
+    apply_port_offset(&mut server_config, &mut runtime_config, args.port_offset)?;
+    let frontend_port = server_config.frontend.port;
     if let Some(api_port) = args.api_port {
         server_config.api_port = api_port;
     }
     server_config
         .allowed_origins
         .extend(args.allowed_origins.clone());
-    validate_frontend_build(&deploy_config)?;
+    validate_frontend_build(&server_config)?;
 
-    if deploy_config.database.ensure_started {
+    if server_config.database.ensure_started {
         db::start_db(&runtime_config.local_postgres, &runtime_config.database.url)?;
     }
 
     let deploy_paths = DeployRuntimePaths::new(frontend_port, runtime);
     prepare_runtime_dirs(&deploy_paths)?;
-    write_nginx_config(&deploy_config, &server_config, frontend_port, &deploy_paths)?;
+    write_nginx_config(&server_config, frontend_port, &deploy_paths)?;
 
     let mut backend = start_backend(
-        &deploy_config,
         &server_config,
         runtime.runtime_config_path(),
         &runtime_config,
     )?;
-    let mut nginx = start_nginx(&deploy_config, &deploy_paths)?;
+    let mut nginx = start_nginx(&deploy_paths)?;
 
     println!("deploy running");
-    println!("deploy_config: {}", args.deploy_config.display());
-    println!(
-        "api_server_config: {}",
-        deploy_config.api_server.api_server_config
-    );
-    println!(
-        "frontend_build_dir: {}",
-        deploy_config.static_site.frontend_build_dir
-    );
+    println!("server_config: {}", args.server_config.display());
+    println!("frontend_build_dir: {}", server_config.frontend.build_dir);
     println!(
         "frontend_bind: {}:{}",
-        deploy_config.frontend_http.frontend_host, frontend_port
+        server_config.frontend.host, frontend_port
     );
-    for url in deploy_config.advertised_urls(frontend_port) {
+    for url in server_config.advertised_urls(frontend_port) {
         println!("open: {url}");
     }
 
     let result = supervise_children(&mut backend, &mut nginx).await;
-    let cleanup_result = cleanup_deploy(&deploy_config, &runtime_config, &mut backend, &mut nginx)
+    let cleanup_result = cleanup_deploy(&server_config, &runtime_config, &mut backend, &mut nginx)
         .await
         .context("deploy cleanup failed");
 
@@ -111,8 +96,8 @@ async fn deploy_run(args: DeployRunArgs, runtime: &RuntimeContext) -> Result<()>
     }
 }
 
-fn validate_frontend_build(deploy_config: &DeployConfig) -> Result<()> {
-    let frontend_dir = Path::new(&deploy_config.static_site.frontend_build_dir);
+fn validate_frontend_build(server_config: &ServerConfig) -> Result<()> {
+    let frontend_dir = Path::new(&server_config.frontend.build_dir);
     if !frontend_dir.is_dir() {
         bail!(
             "frontend build dir does not exist or is not a directory: {}",
@@ -122,7 +107,7 @@ fn validate_frontend_build(deploy_config: &DeployConfig) -> Result<()> {
     let index = frontend_dir.join("index.html");
     if !index.is_file() {
         bail!(
-            "frontend build is missing index.html at {}; check static_site.frontend_build_dir and rebuild/sync frontend artifacts",
+            "frontend build is missing index.html at {}; check frontend.build_dir and rebuild/sync frontend artifacts",
             index.display()
         );
     }
@@ -130,7 +115,6 @@ fn validate_frontend_build(deploy_config: &DeployConfig) -> Result<()> {
 }
 
 fn apply_port_offset(
-    deploy_config: &mut DeployConfig,
     server_config: &mut ServerConfig,
     runtime_config: &mut RuntimeConfig,
     port_offset: u16,
@@ -139,11 +123,8 @@ fn apply_port_offset(
         return Ok(());
     }
 
-    deploy_config.frontend_http.frontend_port = checked_add_port(
-        deploy_config.frontend_http.frontend_port,
-        port_offset,
-        "frontend port",
-    )?;
+    server_config.frontend.port =
+        checked_add_port(server_config.frontend.port, port_offset, "frontend port")?;
     server_config.api_port = checked_add_port(server_config.api_port, port_offset, "api port")?;
 
     for origin in &mut server_config.allowed_origins {
@@ -217,7 +198,7 @@ fn append_suffix_to_path(path: &Path, suffix: &str) -> Result<PathBuf> {
 }
 
 async fn cleanup_deploy(
-    deploy_config: &DeployConfig,
+    server_config: &ServerConfig,
     runtime_config: &RuntimeConfig,
     backend: &mut Child,
     nginx: &mut Child,
@@ -232,12 +213,12 @@ async fn cleanup_deploy(
                 &store,
                 node_api::GracefulNodeShutdownParams {
                     sampler_drain_timeout: Duration::from_secs(
-                        deploy_config.cleanup.sampler_drain_timeout_seconds,
+                        server_config.cleanup.sampler_drain_timeout_seconds,
                     ),
                     node_stop_timeout: Duration::from_secs(
-                        deploy_config.cleanup.node_stop_timeout_seconds,
+                        server_config.cleanup.node_stop_timeout_seconds,
                     ),
-                    poll_interval: Duration::from_millis(deploy_config.cleanup.poll_interval_ms),
+                    poll_interval: Duration::from_millis(server_config.cleanup.poll_interval_ms),
                 },
             )
             .await?;
@@ -269,7 +250,7 @@ async fn cleanup_deploy(
         return Err(err.context("database left running because sampler shutdown did not complete"));
     }
 
-    if deploy_config.database.ensure_started {
+    if server_config.database.ensure_started {
         db::stop_db(&runtime_config.local_postgres)?;
     }
     Ok(())
@@ -379,7 +360,6 @@ fn prepare_runtime_dirs(paths: &DeployRuntimePaths) -> Result<()> {
 }
 
 fn start_backend(
-    deploy_config: &DeployConfig,
     server_config: &ServerConfig,
     runtime_config_path: &Path,
     runtime_config: &RuntimeConfig,
@@ -399,7 +379,7 @@ fn start_backend(
     command
         .arg("server")
         .arg("--server-config")
-        .arg(&deploy_config.api_server.api_server_config);
+        .arg(&server_config.server_config_path);
     command
         .arg("--api-port")
         .arg(server_config.api_port.to_string());
@@ -414,7 +394,7 @@ fn start_backend(
         .with_context(|| format!("failed to spawn backend {}", binary.display()))
 }
 
-fn start_nginx(_deploy_config: &DeployConfig, paths: &DeployRuntimePaths) -> Result<Child> {
+fn start_nginx(paths: &DeployRuntimePaths) -> Result<Child> {
     Command::new("nginx")
         .arg("-e")
         .arg("/dev/stderr")
@@ -456,13 +436,12 @@ fn terminate_child(child: &mut Child, label: &str) -> Result<()> {
 }
 
 fn write_nginx_config(
-    deploy_config: &DeployConfig,
     server_config: &ServerConfig,
     frontend_port: u16,
     paths: &DeployRuntimePaths,
 ) -> Result<()> {
     let backend = server_config.bind_addr();
-    let access_log = if deploy_config.frontend_http.access_log {
+    let access_log = if server_config.frontend.access_log {
         "access_log /dev/stdout;"
     } else {
         "access_log off;"
@@ -502,7 +481,7 @@ http {{\n\
 \n\
     server {{\n\
         listen {listen_host}:{listen_port};\n\
-        server_name {server_name};\n\
+        server_name _;\n\
 \n\
         root {static_dir};\n\
         index index.html;\n\
@@ -519,10 +498,9 @@ http {{\n\
         }}\n\
     }}\n\
 }}\n",
-        listen_host = deploy_config.frontend_http.frontend_host,
+        listen_host = server_config.frontend.host,
         listen_port = frontend_port,
-        server_name = deploy_config.frontend_http.frontend_server_name,
-        static_dir = deploy_config.static_site.frontend_build_dir,
+        static_dir = server_config.frontend.build_dir,
         backend = backend,
         access_log = access_log,
         pid_file = paths.nginx_pid.display(),

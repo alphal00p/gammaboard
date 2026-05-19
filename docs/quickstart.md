@@ -33,10 +33,7 @@ images.
 Local development:
 
 ```bash
-./gammaboard \
-  --runtime-config ops/local/config/runtime.toml \
-  deploy run \
-  --deploy-config ops/local/config/deploy.toml
+./gammaboard deploy run
 ```
 
 This builds the current Rust CLI, rebuilds the dashboard frontend, starts local
@@ -47,9 +44,8 @@ ITPhlies release deployment:
 
 ```bash
 GAMMABOARD_PROFILE=release ./gammaboard \
-  --runtime-config ops/itphlies/config/runtime.toml \
   deploy run \
-  --deploy-config ops/itphlies/config/deploy.toml
+  --server-config ops/itphlies/config/server.toml
 ```
 
 Open `http://itphlies:8080` on the LAN, or tunnel from a workstation:
@@ -80,9 +76,7 @@ Use a port offset for a second local or ITPhlies instance:
 
 ```bash
 ./gammaboard \
-  --runtime-config ops/local/config/runtime.toml \
   deploy run \
-  --deploy-config ops/local/config/deploy.toml \
   --port-offset 1
 ```
 
@@ -164,9 +158,7 @@ npm run build
 cd ..
 cargo build --profile dev-optim
 ./target/dev-optim/gammaboard \
-  --runtime-config ops/local/config/runtime.toml \
-  deploy run \
-  --deploy-config ops/local/config/deploy.toml
+  deploy run
 ```
 
 ITPhlies release profile:
@@ -178,9 +170,8 @@ npm run build
 cd ..
 cargo build --release
 ./target/release/gammaboard \
-  --runtime-config ops/itphlies/config/runtime.toml \
   deploy run \
-  --deploy-config ops/itphlies/config/deploy.toml
+  --server-config ops/itphlies/config/server.toml
 ```
 
 Useful deploy options:

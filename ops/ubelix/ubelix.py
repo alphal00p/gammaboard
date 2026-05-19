@@ -29,11 +29,11 @@ APPTAINER_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/build.sbatch"
 IMAGE_PATH = f"{WORKSPACE_ROOT}/images/gammaboard/gammaboard.sif"
 FRONTEND_PORT = 8080
 DB_PORT = 5400
-DEPLOY_NAME = "default"
+DB_PASSWORD = "NqVj2yt5WsCE5nYCOx01MkeFD8n8awoZ"
 DEFAULT_SSH_HOST = "submit03.unibe.ch"
 DEFAULT_ADMIN_PASSWORD = "admin"
 DEFAULT_CONTROL_TIME = "00:20:00"
-DB_PATH = os.path.join(WORKSPACE_ROOT, "db/default")
+DB_PATH = os.path.join(WORKSPACE_ROOT, "resources/db")
 
 
 def shifted_port(base: int, port_offset: int, label: str) -> int:
@@ -127,7 +127,6 @@ def ensure_dirs() -> None:
         "logs/slurm/build",
         "logs/slurm/control",
         "logs/slurm/workers",
-        "logs/postgres",
     ):
         os.makedirs(os.path.join(WORKSPACE_ROOT, rel), exist_ok=True)
 
@@ -322,7 +321,7 @@ def copy_to_clipboard_osc52(text: str) -> bool:
 
 
 def database_url(control_node: str, *, port_offset: int | None = None) -> str:
-    return f"postgresql://postgres:postgres@{control_node}:{db_port(port_offset)}/gammaboard_db"
+    return f"postgresql://postgres:{DB_PASSWORD}@{control_node}:{db_port(port_offset)}/gammaboard_db"
 
 
 def login(control_node: str, admin_password: str, *, port_offset: int | None = None) -> str:
@@ -729,7 +728,6 @@ def submit_worker(
             ),
             "GAMMABOARD_IMAGE": IMAGE_PATH,
             "GAMMABOARD_WORKSPACE_ROOT": WORKSPACE_ROOT,
-            "DEPLOY_NAME": DEPLOY_NAME,
             "GAMMABOARD_PORT_OFFSET": str(resolved_port_offset),
             "CONTROL_JOB_ID": control_job_id,
             "NODE_CAPABILITIES": " ".join(shlex.quote(arg) for arg in capability_args),

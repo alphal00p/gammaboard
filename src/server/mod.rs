@@ -54,7 +54,10 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::Instrument;
 
 use self::auth::{AuthConfig, SessionStatus, login, logout, require_admin_session};
-use crate::config::{DEFAULT_SERVER_CONFIG_PATH, read_toml_with_default_fallback};
+use crate::config::{
+    DEFAULT_SERVER_CONFIG_PATH, config_base_dir, normalize_config_path,
+    read_toml_with_default_fallback,
+};
 use crate::resources::primary_resource_root;
 use crate::runtime_context::RuntimeContext;
 
@@ -66,11 +69,15 @@ const REPOSITORY_URL: &str = "https://github.com/alphal00p/gammaboard";
 pub struct ServerConfig {
     #[serde(skip)]
     pub server_config_path: PathBuf,
+    #[serde(default = "default_api_host")]
     pub api_host: IpAddr,
+    #[serde(default = "default_api_port")]
     pub api_port: u16,
+    #[serde(default = "default_allowed_origins")]
     pub allowed_origins: Vec<String>,
+    #[serde(default)]
     pub secure_cookie: bool,
-    pub allow_db_admin: bool,
+    #[serde(default = "default_allow_local_node_spawn")]
     pub allow_local_node_spawn: bool,
     #[serde(default = "default_run_templates_dir")]
     pub run_templates_dir: String,
@@ -78,7 +85,14 @@ pub struct ServerConfig {
     pub task_templates_dir: String,
     #[serde(default = "default_node_templates_dir")]
     pub node_templates_dir: String,
-    pub auth: ServerAuthConfig,
+    #[serde(default)]
+    pub frontend: ServerFrontendConfig,
+    #[serde(default)]
+    pub database: ServerDatabaseConfig,
+    #[serde(default)]
+    pub cleanup: ServerCleanupConfig,
+    #[serde(default)]
+    pub auth: Option<ServerAuthConfig>,
 }
 
 fn default_run_templates_dir() -> String {
@@ -93,6 +107,37 @@ fn default_node_templates_dir() -> String {
     "templates/nodes".to_string()
 }
 
+fn default_api_host() -> IpAddr {
+    "127.0.0.1".parse().expect("valid default API host")
+}
+
+fn default_api_port() -> u16 {
+    4000
+}
+
+fn default_allowed_origins() -> Vec<String> {
+    vec![
+        "http://localhost:3000".to_string(),
+        "http://localhost:8080".to_string(),
+    ]
+}
+
+fn default_allow_local_node_spawn() -> bool {
+    true
+}
+
+fn default_frontend_build_dir() -> String {
+    "../../../dashboard/build".to_string()
+}
+
+fn default_frontend_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_frontend_port() -> u16 {
+    8080
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerAuthConfig {
@@ -100,9 +145,89 @@ pub struct ServerAuthConfig {
     pub session_secret: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerFrontendConfig {
+    #[serde(default = "default_frontend_build_dir")]
+    pub build_dir: String,
+    #[serde(default = "default_frontend_host")]
+    pub host: String,
+    #[serde(default = "default_frontend_port")]
+    pub port: u16,
+    #[serde(default)]
+    pub advertise_hosts: Vec<String>,
+    #[serde(default)]
+    pub access_log: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerDatabaseConfig {
+    #[serde(default = "default_database_ensure_started")]
+    pub ensure_started: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerCleanupConfig {
+    #[serde(default = "default_sampler_drain_timeout_seconds")]
+    pub sampler_drain_timeout_seconds: u64,
+    #[serde(default = "default_node_stop_timeout_seconds")]
+    pub node_stop_timeout_seconds: u64,
+    #[serde(default = "default_cleanup_poll_interval_ms")]
+    pub poll_interval_ms: u64,
+}
+
+impl Default for ServerFrontendConfig {
+    fn default() -> Self {
+        Self {
+            build_dir: default_frontend_build_dir(),
+            host: default_frontend_host(),
+            port: default_frontend_port(),
+            advertise_hosts: Vec::new(),
+            access_log: false,
+        }
+    }
+}
+
+impl Default for ServerDatabaseConfig {
+    fn default() -> Self {
+        Self {
+            ensure_started: default_database_ensure_started(),
+        }
+    }
+}
+
+impl Default for ServerCleanupConfig {
+    fn default() -> Self {
+        Self {
+            sampler_drain_timeout_seconds: default_sampler_drain_timeout_seconds(),
+            node_stop_timeout_seconds: default_node_stop_timeout_seconds(),
+            poll_interval_ms: default_cleanup_poll_interval_ms(),
+        }
+    }
+}
+
+fn default_database_ensure_started() -> bool {
+    true
+}
+
+fn default_sampler_drain_timeout_seconds() -> u64 {
+    60
+}
+
+fn default_node_stop_timeout_seconds() -> u64 {
+    15
+}
+
+fn default_cleanup_poll_interval_ms() -> u64 {
+    250
+}
+
 impl ServerConfig {
     pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let path = path.as_ref();
+        let uses_embedded_default = path == Path::new(DEFAULT_SERVER_CONFIG_PATH) && !path.exists();
         let raw = read_toml_with_default_fallback(
             path,
             DEFAULT_SERVER_CONFIG_PATH,
@@ -121,11 +246,39 @@ impl ServerConfig {
         parsed.node_templates_dir = normalize_templates_dir(parsed.node_templates_dir.as_str())?
             .display()
             .to_string();
+        let base_dir = if uses_embedded_default {
+            std::env::current_dir().context("failed resolving current working directory")?
+        } else {
+            config_base_dir(path)?
+        };
+        parsed.frontend.build_dir = normalize_config_path(&base_dir, &parsed.frontend.build_dir)
+            .display()
+            .to_string();
         Ok(parsed)
     }
 
     pub fn bind_addr(&self) -> SocketAddr {
         SocketAddr::new(self.api_host, self.api_port)
+    }
+
+    pub fn advertised_urls(&self, port: u16) -> Vec<String> {
+        let hosts = if self.frontend.advertise_hosts.is_empty() {
+            vec![default_advertise_host(&self.frontend.host)]
+        } else {
+            self.frontend.advertise_hosts.clone()
+        };
+        hosts
+            .into_iter()
+            .map(|host| format!("http://{host}:{port}"))
+            .collect()
+    }
+}
+
+fn default_advertise_host(host: &str) -> String {
+    if host == "0.0.0.0" {
+        "localhost".to_string()
+    } else {
+        host.to_string()
     }
 }
 
@@ -158,10 +311,9 @@ pub async fn serve(
     }
     let state = AppState {
         store,
-        auth: AuthConfig::from_server_config(&config.auth),
+        auth: config.auth.as_ref().map(AuthConfig::from_server_config),
         allowed_origins,
         secure_cookie: config.secure_cookie,
-        allow_db_admin: config.allow_db_admin,
         allow_local_node_spawn: config.allow_local_node_spawn,
         api_bind: bind.to_string(),
         server_config_path: config.server_config_path.clone(),
@@ -191,10 +343,9 @@ pub async fn serve(
 #[derive(Clone)]
 pub(crate) struct AppState {
     store: PgStore,
-    auth: AuthConfig,
+    pub(crate) auth: Option<AuthConfig>,
     allowed_origins: Vec<axum::http::HeaderValue>,
     secure_cookie: bool,
-    allow_db_admin: bool,
     allow_local_node_spawn: bool,
     api_bind: String,
     server_config_path: PathBuf,
@@ -633,7 +784,7 @@ async fn get_settings_overview(
         "server": {
             "api_bind": state.api_bind,
             "secure_cookie": state.secure_cookie,
-            "allow_db_admin": state.allow_db_admin,
+            "auth_enabled": state.auth.is_some(),
             "allow_local_node_spawn": state.allow_local_node_spawn,
             "allowed_origins": state
                 .allowed_origins
@@ -1951,12 +2102,6 @@ async fn create_and_maybe_resolve_node_launch_request(
 }
 
 async fn restart_db(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
-    if !state.allow_db_admin {
-        return Err(ApiError::BadRequest(
-            "database admin endpoints are disabled by server config".to_string(),
-        ));
-    }
-
     let binary = std::env::current_exe().map_err(|err| {
         ApiError::Internal(format!("failed to resolve current executable: {err}"))
     })?;
@@ -1984,12 +2129,6 @@ async fn restart_db(State(state): State<AppState>) -> Result<Json<serde_json::Va
 async fn shutdown_control_process(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    if !state.allow_db_admin {
-        return Err(ApiError::BadRequest(
-            "control admin endpoints are disabled by server config".to_string(),
-        ));
-    }
-
     tracing::warn!(
         source = "control",
         control_surface = "dashboard",

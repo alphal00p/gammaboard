@@ -151,7 +151,7 @@ const SettingsWorkspace = () => {
               <PathValue label="Allowed origins" value={(server.allowed_origins || []).join(", ")} />
               <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
                 <BoolChip label="secure cookie" value={server.secure_cookie} />
-                <BoolChip label="db admin" value={server.allow_db_admin} />
+                <BoolChip label="auth enabled" value={server.auth_enabled} />
                 <BoolChip label="local node spawn" value={server.allow_local_node_spawn} />
               </Stack>
             </Stack>

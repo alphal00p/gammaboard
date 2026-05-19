@@ -8,31 +8,36 @@ use std::{
 
 pub const DEFAULT_RUNTIME_CONFIG_PATH: &str = "ops/local/config/runtime.toml";
 pub const DEFAULT_SERVER_CONFIG_PATH: &str = "ops/local/config/server.toml";
-pub const DEFAULT_DEPLOY_CONFIG_PATH: &str = "ops/local/config/deploy.toml";
 const DEFAULT_RUNTIME_CONFIG_TOML: &str = include_str!("config_defaults/runtime.toml");
-const DEFAULT_DEPLOY_CONFIG_TOML: &str = include_str!("../ops/local/config/deploy.toml");
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
+    #[serde(default)]
     pub database: DatabaseConfig,
+    #[serde(default)]
     pub tracing: TracingConfig,
     #[serde(default)]
     pub resources: ResourceConfig,
+    #[serde(default)]
     pub local_postgres: LocalPostgresConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DatabaseConfig {
+    #[serde(default = "default_database_url")]
     pub url: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TracingConfig {
+    #[serde(default = "default_persist_runtime_logs")]
     pub persist_runtime_logs: bool,
+    #[serde(default = "default_db_gammaboard_level")]
     pub db_gammaboard_level: String,
+    #[serde(default = "default_db_external_level")]
     pub db_external_level: String,
 }
 
@@ -46,9 +51,13 @@ pub struct ResourceConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LocalPostgresConfig {
+    #[serde(default = "default_postgres_data_dir")]
     pub data_dir: String,
+    #[serde(default = "default_postgres_socket_dir")]
     pub socket_dir: String,
+    #[serde(default = "default_postgres_log_file")]
     pub log_file: String,
+    #[serde(default = "default_max_connections")]
     pub max_connections: u32,
     #[serde(default = "default_listen_addresses")]
     pub listen_addresses: String,
@@ -70,78 +79,40 @@ pub struct LocalPostgresConfig {
     pub synchronous_commit: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DeployConfig {
-    pub api_server: DeployApiServerConfig,
-    pub static_site: DeployStaticSiteConfig,
-    pub frontend_http: DeployFrontendHttpConfig,
-    #[serde(default)]
-    pub database: DeployDatabaseConfig,
-    #[serde(default)]
-    pub cleanup: DeployCleanupConfig,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DeployApiServerConfig {
-    pub api_server_config: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DeployStaticSiteConfig {
-    pub frontend_build_dir: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DeployFrontendHttpConfig {
-    pub frontend_host: String,
-    pub frontend_port: u16,
-    pub frontend_server_name: String,
-    #[serde(default)]
-    pub frontend_advertise_hosts: Vec<String>,
-    #[serde(default)]
-    pub access_log: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DeployDatabaseConfig {
-    #[serde(default = "default_database_ensure_started")]
-    pub ensure_started: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DeployCleanupConfig {
-    #[serde(default = "default_sampler_drain_timeout_seconds")]
-    pub sampler_drain_timeout_seconds: u64,
-    #[serde(default = "default_node_stop_timeout_seconds")]
-    pub node_stop_timeout_seconds: u64,
-    #[serde(default = "default_cleanup_poll_interval_ms")]
-    pub poll_interval_ms: u64,
-}
-
-impl Default for DeployDatabaseConfig {
+impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
-            ensure_started: default_database_ensure_started(),
+            url: default_database_url(),
         }
     }
 }
 
-fn default_database_ensure_started() -> bool {
-    true
-}
-
-impl Default for DeployCleanupConfig {
+impl Default for TracingConfig {
     fn default() -> Self {
         Self {
-            sampler_drain_timeout_seconds: default_sampler_drain_timeout_seconds(),
-            node_stop_timeout_seconds: default_node_stop_timeout_seconds(),
-            poll_interval_ms: default_cleanup_poll_interval_ms(),
+            persist_runtime_logs: default_persist_runtime_logs(),
+            db_gammaboard_level: default_db_gammaboard_level(),
+            db_external_level: default_db_external_level(),
+        }
+    }
+}
+
+impl Default for LocalPostgresConfig {
+    fn default() -> Self {
+        Self {
+            data_dir: default_postgres_data_dir(),
+            socket_dir: default_postgres_socket_dir(),
+            log_file: default_postgres_log_file(),
+            max_connections: default_max_connections(),
+            listen_addresses: default_listen_addresses(),
+            host_auth_cidr: default_host_auth_cidr(),
+            shared_buffers: default_shared_buffers(),
+            effective_cache_size: default_effective_cache_size(),
+            work_mem: default_work_mem(),
+            checkpoint_timeout: default_checkpoint_timeout(),
+            max_wal_size: default_max_wal_size(),
+            wal_compression: default_wal_compression(),
+            synchronous_commit: default_synchronous_commit(),
         }
     }
 }
@@ -161,45 +132,6 @@ impl RuntimeConfig {
 
     pub fn primary_resource_root(&self) -> PathBuf {
         primary_resource_root_from_config(&self.resources.roots)
-    }
-}
-
-impl DeployConfig {
-    pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
-        let path = path.as_ref();
-        let raw = read_toml_with_default_fallback(
-            path,
-            DEFAULT_DEPLOY_CONFIG_PATH,
-            DEFAULT_DEPLOY_CONFIG_TOML,
-            "deploy config",
-        )?;
-        let mut parsed: Self = toml::from_str(&raw)
-            .with_context(|| format!("failed parsing deploy config {}", path.display()))?;
-        let base_dir = config_base_dir(path)?;
-        parsed.api_server.api_server_config =
-            normalize_config_path(&base_dir, &parsed.api_server.api_server_config)
-                .display()
-                .to_string();
-        parsed.static_site.frontend_build_dir =
-            normalize_config_path(&base_dir, &parsed.static_site.frontend_build_dir)
-                .display()
-                .to_string();
-        Ok(parsed)
-    }
-
-    pub fn advertised_urls(&self, port: u16) -> Vec<String> {
-        let hosts = if self.frontend_http.frontend_advertise_hosts.is_empty() {
-            vec![default_advertise_host(
-                &self.frontend_http.frontend_host,
-                &self.frontend_http.frontend_server_name,
-            )]
-        } else {
-            self.frontend_http.frontend_advertise_hosts.clone()
-        };
-        hosts
-            .into_iter()
-            .map(|host| format!("http://{host}:{port}"))
-            .collect()
     }
 }
 
@@ -234,18 +166,41 @@ pub fn read_toml_with_default_fallback(
     }
 }
 
-fn default_advertise_host(host: &str, server_name: &str) -> String {
-    if !server_name.trim().is_empty() && server_name != "_" {
-        server_name.to_string()
-    } else if host == "0.0.0.0" {
-        "localhost".to_string()
-    } else {
-        host.to_string()
-    }
+fn default_database_url() -> String {
+    "postgresql://postgres:NqVj2yt5WsCE5nYCOx01MkeFD8n8awoZ@127.0.0.1:5400/gammaboard_db"
+        .to_string()
+}
+
+fn default_persist_runtime_logs() -> bool {
+    true
+}
+
+fn default_db_gammaboard_level() -> String {
+    "info".to_string()
+}
+
+fn default_db_external_level() -> String {
+    "warn".to_string()
+}
+
+fn default_postgres_data_dir() -> String {
+    "db/postgres".to_string()
+}
+
+fn default_postgres_socket_dir() -> String {
+    "db/socket".to_string()
+}
+
+fn default_postgres_log_file() -> String {
+    "db/logfile".to_string()
+}
+
+fn default_max_connections() -> u32 {
+    128
 }
 
 fn default_shared_buffers() -> String {
-    "4GB".to_string()
+    "256MB".to_string()
 }
 
 fn default_listen_addresses() -> String {
@@ -257,27 +212,15 @@ fn default_host_auth_cidr() -> String {
 }
 
 fn default_effective_cache_size() -> String {
-    "32GB".to_string()
+    "2GB".to_string()
 }
 
 fn default_work_mem() -> String {
-    "64MB".to_string()
+    "16MB".to_string()
 }
 
 fn default_checkpoint_timeout() -> String {
     "30min".to_string()
-}
-
-fn default_sampler_drain_timeout_seconds() -> u64 {
-    60
-}
-
-fn default_node_stop_timeout_seconds() -> u64 {
-    15
-}
-
-fn default_cleanup_poll_interval_ms() -> u64 {
-    250
 }
 
 fn default_max_wal_size() -> String {

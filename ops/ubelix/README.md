@@ -110,9 +110,9 @@ Admin-protected commands accept `--admin-password` or `GAMMABOARD_ADMIN_PASSWORD
   ubelix.py
   README.md
   artifacts/{bin,npm-cache,sqlx-root,src}/
-  db/<deploy-name>/
   images/{gammaboard,gammaloop}/      # service images
-  logs/{postgres,slurm}/
+  logs/slurm/
+  resources/db/{postgres,socket,logfile}
   resources/runtimes/                 # process evaluator/sampler runtimes
   resources/states/
   runtime/

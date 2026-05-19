@@ -3,9 +3,12 @@ api_host = "127.0.0.1"
 api_port = 4000
 allowed_origins = ["http://localhost:3000", "http://localhost:8080"]
 secure_cookie = false
-allow_db_admin = true
 allow_local_node_spawn = true
 
-[auth]
-admin_password_hash = "$argon2id$v=19$m=19456,t=2,p=1$IlJKLA7MFGA5iaXoS0KnGQ$ukiPLlZKlWme0artScJVv7dfc/mslAB2Cy9MbM1mDjk"
-session_secret = "VU8l2fh4VKEhWLtxAT4s"
+[frontend]
+build_dir = "../../../dashboard/build"
+host = "127.0.0.1"
+port = 8080
+
+[database]
+ensure_started = true

@@ -1,10 +1,9 @@
-# Backend API/dashboard settings for the UBELIX deploy profile.
-api_host = "127.0.0.1"
-api_port = 4000
-allowed_origins = ["http://localhost:8080"]
-secure_cookie = false
-allow_db_admin = true
+# Backend API/dashboard and deploy settings for the UBELIX profile.
 allow_local_node_spawn = false
+
+[frontend]
+build_dir = "/usr/local/share/gammaboard/dashboard"
+host = "0.0.0.0"
 
 [auth]
 admin_password_hash = "$argon2id$v=19$m=19456,t=2,p=1$IlJKLA7MFGA5iaXoS0KnGQ$ukiPLlZKlWme0artScJVv7dfc/mslAB2Cy9MbM1mDjk"

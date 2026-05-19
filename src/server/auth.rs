@@ -62,11 +62,14 @@ pub async fn require_admin_session(
     if !origin_allowed(request.headers(), &state.allowed_origins) {
         return ApiError::Unauthorized("invalid origin".to_string()).into_response();
     }
+    let Some(auth) = &state.auth else {
+        return next.run(request).await;
+    };
 
     let Some(token) = cookie_value(request.headers(), COOKIE_NAME) else {
         return ApiError::Unauthorized("admin login required".to_string()).into_response();
     };
-    if verify_session_token(&state.auth, &token).is_none() {
+    if verify_session_token(auth, &token).is_none() {
         return ApiError::Unauthorized("admin login required".to_string()).into_response();
     }
 
@@ -81,11 +84,18 @@ pub async fn login(
     if !origin_allowed(&headers, &state.allowed_origins) {
         return Err(ApiError::Unauthorized("invalid origin".to_string()));
     }
-    if !verify_password_hash(&state.auth.password_hash, &payload.password) {
+    let Some(auth) = &state.auth else {
+        return Ok(Json(SessionStatus {
+            authenticated: true,
+            allow_local_node_spawn: state.allow_local_node_spawn,
+        })
+        .into_response());
+    };
+    if !verify_password_hash(&auth.password_hash, &payload.password) {
         return Err(ApiError::Unauthorized("invalid password".to_string()));
     }
 
-    let token = sign_session_token(&state.auth)?;
+    let token = sign_session_token(auth)?;
     Ok(response_with_cookie(
         session_cookie(&token, SESSION_TTL_SECS, state.secure_cookie),
         SessionStatus {
@@ -102,19 +112,23 @@ pub async fn logout(
     if !origin_allowed(&headers, &state.allowed_origins) {
         return Err(ApiError::Unauthorized("invalid origin".to_string()));
     }
+    let authenticated = state.auth.is_none();
     Ok(response_with_cookie(
         session_cookie("", 0, state.secure_cookie),
         SessionStatus {
-            authenticated: false,
+            authenticated,
             allow_local_node_spawn: state.allow_local_node_spawn,
         },
     ))
 }
 
 pub fn auth_status_from_headers(state: &AppState, headers: &HeaderMap) -> SessionStatus {
-    let authenticated = cookie_value(headers, COOKIE_NAME)
-        .and_then(|value| verify_session_token(&state.auth, &value))
-        .is_some();
+    let authenticated = match &state.auth {
+        Some(auth) => cookie_value(headers, COOKIE_NAME)
+            .and_then(|value| verify_session_token(auth, &value))
+            .is_some(),
+        None => true,
+    };
     SessionStatus {
         authenticated,
         allow_local_node_spawn: state.allow_local_node_spawn,

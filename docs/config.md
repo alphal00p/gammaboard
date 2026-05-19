@@ -5,37 +5,54 @@ This document covers the operator-facing config shapes. Checked-in templates liv
 ## Layout
 
 - `src/config_defaults/*.toml`: built-in fallback defaults embedded into the Rust binary.
-- `ops/local/config`: local development profiles.
+- Local development uses the embedded runtime/server defaults.
 - `ops/itphlies/config`: ITPhlies profiles.
 - `ops/ubelix/config/*`: UBELIX profiles rendered/submitted by the UBELIX launcher.
 - `resources/templates/{runs,tasks,nodes}/`: shared templates served by the backend.
 
-All commands load runtime config from `ops/local/config/runtime.toml` by default. Override it with:
+All commands use the embedded runtime default unless `--runtime-config` points
+at a custom file:
 
 ```bash
 gammaboard --runtime-config path/to/runtime.toml <COMMAND>
 ```
 
+For common deployment differences, prefer CLI overrides over a nearly-default
+runtime file:
+
+```bash
+gammaboard \
+  --database-url postgresql://... \
+  --resource-root /shared/gammaboard/resources \
+  <COMMAND>
+```
+
 Relative evaluator resources, such as GammaLoop `state_folder`, resolve through `resources.roots` in order. Absolute paths are used as-is.
 
-## Deploy Config
+## Server Config
 
-Deploy config points at the server config and frontend build path:
+Server config owns both the backend API settings and the foreground deploy
+settings used by `gammaboard deploy run`:
 
 ```toml
-[api_server]
-api_server_config = "server.toml"
+api_host = "127.0.0.1"
+api_port = 4000
+allowed_origins = ["http://localhost:8080"]
+secure_cookie = false
+allow_local_node_spawn = true
 
-[static_site]
-frontend_build_dir = "../../../dashboard/build"
-
-[frontend_http]
-frontend_host = "127.0.0.1"
-frontend_port = 8080
-frontend_advertise_hosts = ["localhost"]
+[frontend]
+build_dir = "../../../dashboard/build"
+host = "127.0.0.1"
+port = 8080
 
 [database]
 ensure_started = true
+
+# Optional. Omit this section for passwordless local control.
+[auth]
+admin_password_hash = "..."
+session_secret = "..."
 ```
 
 `gammaboard deploy run` validates the frontend build, optionally starts local Postgres, starts `gammaboard server` as a supervised child, generates nginx config, runs nginx in the foreground, and on `Ctrl-C`/`SIGTERM` requests graceful node shutdown before stopping nginx, backend, and local Postgres.
@@ -44,12 +61,12 @@ ensure_started = true
 
 Runtime config owns the database URL, resource roots, tracing, and local Postgres settings. The checked-in default Postgres port is `5400`; `deploy run --port-offset <N>` shifts it at launch time.
 
-## Server Config And Auth
+## Auth And Templates
 
 - Read-only dashboard endpoints stay open.
-- Steering actions currently require admin login and are backed by a signed session cookie.
-- Put `auth.admin_password_hash` in your server config to enable dashboard auth.
-- Put `auth.session_secret` in your server config when auth is enabled.
+- Steering actions require admin login only when `[auth]` is configured.
+- Omit `[auth]` for passwordless local control.
+- Put `auth.admin_password_hash` and `auth.session_secret` in your server config to enable dashboard auth.
 - Set `allowed_origins` in your server config if the frontend is served from origins other than `http://localhost:3000`.
 - Deploy this behind HTTPS for real use and set `secure_cookie = true` in your server config.
 

@@ -1725,24 +1725,25 @@ fn temp_server_config(
     let task_templates_dir = manifest_dir.join("resources/templates/tasks");
     let node_templates_dir = manifest_dir.join("resources/templates/nodes");
     let contents = format!(
-        "api_host = {host:?}\napi_port = {port}\nallowed_origins = [{allowed_origin:?}]\nsecure_cookie = {secure_cookie}\nallow_db_admin = true\nallow_local_node_spawn = {allow_local_node_spawn}\nrun_templates_dir = {run_templates_dir:?}\ntask_templates_dir = {task_templates_dir:?}\nnode_templates_dir = {node_templates_dir:?}\n\n[auth]\nadmin_password_hash = {admin_password_hash:?}\nsession_secret = {session_secret:?}\n"
+        "api_host = {host:?}\napi_port = {port}\nallowed_origins = [{allowed_origin:?}]\nsecure_cookie = {secure_cookie}\nallow_local_node_spawn = {allow_local_node_spawn}\nrun_templates_dir = {run_templates_dir:?}\ntask_templates_dir = {task_templates_dir:?}\nnode_templates_dir = {node_templates_dir:?}\n\n[auth]\nadmin_password_hash = {admin_password_hash:?}\nsession_secret = {session_secret:?}\n"
     );
     let file = NamedTempFile::new().expect("create temp server config");
     std::fs::write(file.path(), contents).expect("write temp server config");
     file
 }
 
-fn temp_deploy_config(
+fn temp_deploy_server_config(
     frontend_build_dir: &std::path::Path,
     server_config: &std::path::Path,
     frontend_port: u16,
 ) -> NamedTempFile {
+    let contents = std::fs::read_to_string(server_config).expect("read temp server config");
     let contents = format!(
-        "[api_server]\napi_server_config = {:?}\n\n[static_site]\nfrontend_build_dir = {:?}\n\n[frontend_http]\nfrontend_host = \"127.0.0.1\"\nfrontend_port = {frontend_port}\nfrontend_server_name = \"_\"\nfrontend_advertise_hosts = [\"localhost\"]\naccess_log = false\n\n[database]\nensure_started = false\n\n[cleanup]\nsampler_drain_timeout_seconds = 5\nnode_stop_timeout_seconds = 5\npoll_interval_ms = 100\n",
-        server_config, frontend_build_dir,
+        "{contents}\n[frontend]\nbuild_dir = {:?}\nhost = \"127.0.0.1\"\nport = {frontend_port}\nadvertise_hosts = [\"localhost\"]\naccess_log = false\n\n[database]\nensure_started = false\n\n[cleanup]\nsampler_drain_timeout_seconds = 5\nnode_stop_timeout_seconds = 5\npoll_interval_ms = 100\n",
+        frontend_build_dir,
     );
-    let file = NamedTempFile::new().expect("create temp deploy config");
-    std::fs::write(file.path(), contents).expect("write temp deploy config");
+    let file = NamedTempFile::new().expect("create temp deploy server config");
+    std::fs::write(file.path(), contents).expect("write temp deploy server config");
     file
 }
 
@@ -2718,9 +2719,9 @@ async fn full_stack_deploy_can_run_two_port_isolated_instances() -> anyhow::Resu
     let frontend_port_a = unused_local_port()?;
     let frontend_port_b = unused_local_port()?;
     let deploy_config_a =
-        temp_deploy_config(frontend_build.path(), server_config.path(), frontend_port_a);
+        temp_deploy_server_config(frontend_build.path(), server_config.path(), frontend_port_a);
     let deploy_config_b =
-        temp_deploy_config(frontend_build.path(), server_config.path(), frontend_port_b);
+        temp_deploy_server_config(frontend_build.path(), server_config.path(), frontend_port_b);
     let api_port_a = unused_local_port()?;
     let api_port_b = unused_local_port()?;
 
@@ -2748,7 +2749,7 @@ async fn full_stack_deploy_can_run_two_port_isolated_instances() -> anyhow::Resu
             .arg(database_url)
             .arg("deploy")
             .arg("run")
-            .arg("--deploy-config")
+            .arg("--server-config")
             .arg(deploy_config_path)
             .arg("--api-port")
             .arg(api_port.to_string())

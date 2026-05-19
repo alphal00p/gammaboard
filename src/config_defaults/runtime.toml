@@ -14,11 +14,11 @@ roots = ["resources"]
 [local_postgres]
 data_dir = "db/postgres"
 socket_dir = "db/socket"
-log_file = "db/postgres/logfile"
-max_connections = 512
-shared_buffers = "4GB"
-effective_cache_size = "32GB"
-work_mem = "64MB"
+log_file = "db/logfile"
+max_connections = 128
+shared_buffers = "256MB"
+effective_cache_size = "2GB"
+work_mem = "16MB"
 checkpoint_timeout = "30min"
 max_wal_size = "8GB"
 wal_compression = true

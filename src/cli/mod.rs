@@ -30,12 +30,22 @@ pub struct Cli {
     runtime_config: PathBuf,
     #[arg(long = "database-url", global = true, value_name = "URL")]
     database_url: Option<String>,
+    #[arg(long = "resource-root", global = true, value_name = "PATH")]
+    resource_roots: Vec<String>,
     #[arg(long = "postgres-data-dir", global = true, value_name = "PATH")]
     postgres_data_dir: Option<String>,
     #[arg(long = "postgres-socket-dir", global = true, value_name = "PATH")]
     postgres_socket_dir: Option<String>,
     #[arg(long = "postgres-log-file", global = true, value_name = "PATH")]
     postgres_log_file: Option<String>,
+    #[arg(
+        long = "postgres-listen-addresses",
+        global = true,
+        value_name = "ADDRS"
+    )]
+    postgres_listen_addresses: Option<String>,
+    #[arg(long = "postgres-host-auth-cidr", global = true, value_name = "CIDR")]
+    postgres_host_auth_cidr: Option<String>,
     #[arg(short = 'q', long, global = true, action = ArgAction::SetTrue)]
     quiet: bool,
     #[command(subcommand)]
@@ -68,9 +78,12 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         &cli.runtime_config,
         RuntimeOverrides {
             database_url: cli.database_url,
+            resource_roots: cli.resource_roots,
             postgres_data_dir: cli.postgres_data_dir,
             postgres_socket_dir: cli.postgres_socket_dir,
             postgres_log_file: cli.postgres_log_file,
+            postgres_listen_addresses: cli.postgres_listen_addresses,
+            postgres_host_auth_cidr: cli.postgres_host_auth_cidr,
         },
     )?;
     let config = runtime.runtime_config();

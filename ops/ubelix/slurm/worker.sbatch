@@ -25,14 +25,8 @@ WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:?set GAMMABOARD_WORKSPACE_ROOT to ab
 NODE_NAME="${NODE_NAME:?set NODE_NAME (e.g. w-1)}"
 NODE_MAX_START_FAILURES="${NODE_MAX_START_FAILURES:-3}"
 DATABASE_URL="${GAMMABOARD_DATABASE_URL:?set GAMMABOARD_DATABASE_URL to reachable Postgres URL}"
-DEPLOY_NAME="${DEPLOY_NAME:-default}"
 CONTROL_JOB_ID="${CONTROL_JOB_ID:-}"
 mkdir -p "${WORKSPACE_ROOT}/logs/slurm/workers"
-
-RUNTIME_DIR="${WORKSPACE_ROOT}/runtime"
-mkdir -p "${RUNTIME_DIR}"
-RUNTIME_CONFIG="${RUNTIME_DIR}/runtime-${SLURM_JOB_ID}-${NODE_NAME}.toml"
-RUNTIME_TEMPLATE="${WORKSPACE_ROOT}/ops/config/runtime.template.toml"
 
 worker_pid=""
 monitor_pid=""
@@ -57,7 +51,6 @@ stop_worker() {
     fi
     wait "${worker_pid}" >/dev/null 2>&1 || true
   fi
-  rm -f "${RUNTIME_CONFIG}"
 }
 
 handle_term() {
@@ -67,25 +60,7 @@ handle_term() {
 }
 
 trap handle_term TERM INT
-trap 'rm -f "${RUNTIME_CONFIG}"' EXIT
-if [[ ! -f "${RUNTIME_TEMPLATE}" ]]; then
-  echo "missing runtime template: ${RUNTIME_TEMPLATE}" >&2
-  exit 1
-fi
-if ! command -v envsubst >/dev/null 2>&1; then
-  echo "missing required command: envsubst (install gettext)" >&2
-  exit 1
-fi
-LOCAL_TMP="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
-export DATABASE_URL WORKSPACE_ROOT LOCAL_TMP DEPLOY_NAME
-envsubst '${DATABASE_URL} ${WORKSPACE_ROOT} ${LOCAL_TMP} ${DEPLOY_NAME}' \
-  <"${RUNTIME_TEMPLATE}" >"${RUNTIME_CONFIG}"
-
-db_url="$(awk -F' *= *' '/^url *=/{gsub(/"/,"",$2); print $2; exit}' "${RUNTIME_CONFIG}")"
-if [[ -z "${db_url}" ]]; then
-  echo "missing [database].url in runtime config: ${RUNTIME_CONFIG}" >&2
-  exit 1
-fi
+db_url="${DATABASE_URL}"
 db_host_port="$(echo "${db_url}" | sed -E 's#^[^@]*@##; s#/.*$##')"
 db_host="${db_host_port%%:*}"
 
@@ -98,7 +73,6 @@ fi
 echo "node: ${HOSTNAME}"
 echo "node name: ${NODE_NAME}"
 echo "workspace_root: ${WORKSPACE_ROOT}"
-echo "runtime_config: ${RUNTIME_CONFIG}"
 echo "database_host_port: ${db_host_port}"
 echo "max_start_failures: ${NODE_MAX_START_FAILURES}"
 echo "node_capabilities: ${NODE_CAPABILITIES:-}"
@@ -129,7 +103,9 @@ APPTAINERENV_LANG="${APPTAINERENV_LANG:-C.UTF-8}" \
 APPTAINERENV_LC_ALL="${APPTAINERENV_LC_ALL:-C.UTF-8}" \
 APPTAINERENV_TZ="${APPTAINERENV_TZ:-Etc/UTC}" \
 apptainer exec "${apptainer_gpu_args[@]}" -B "${WORKSPACE_ROOT}" "${IMAGE_PATH}" \
-  gammaboard --runtime-config "${RUNTIME_CONFIG}" node run \
+  gammaboard --database-url "${db_url}" \
+    --resource-root "${WORKSPACE_ROOT}/resources" \
+    node run \
     --name "${NODE_NAME}" \
     --max-start-failures "${NODE_MAX_START_FAILURES}" \
     "${node_capability_args[@]}" &

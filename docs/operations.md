@@ -5,8 +5,9 @@ wrappers live in `ops/*/README.md`.
 
 ## Authentication
 
-Read-only dashboard/API endpoints are open. Steering actions require admin
-login and use a signed session cookie.
+Read-only dashboard/API endpoints are open. If `[auth]` is configured in the
+server config, steering actions require admin login and use a signed session
+cookie. If `[auth]` is omitted, local control is passwordless.
 
 Generate an admin password hash:
 
@@ -18,8 +19,8 @@ Relevant server config keys:
 
 - `auth.admin_password_hash`
 - `auth.session_secret`
-- `auth.secure_cookie`
-- `auth.allowed_origins`
+- `secure_cookie`
+- `allowed_origins`
 
 UBELIX helpers accept `--admin-password` or `GAMMABOARD_ADMIN_PASSWORD` for
 admin-protected shutdown and worker-management operations.

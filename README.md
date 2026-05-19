@@ -14,19 +14,15 @@ Use the self-contained docs quickstart for setup and operator workflows:
 Minimal local launch from the repo root:
 
 ```bash
-./gammaboard \
-  --runtime-config ops/local/config/runtime.toml \
-  deploy run \
-  --deploy-config ops/local/config/deploy.toml
+./gammaboard deploy run
 ```
 
 Minimal ITPhlies release launch:
 
 ```bash
 GAMMABOARD_PROFILE=release ./gammaboard \
-  --runtime-config ops/itphlies/config/runtime.toml \
   deploy run \
-  --deploy-config ops/itphlies/config/deploy.toml
+  --server-config ops/itphlies/config/server.toml
 ```
 
 For UBELIX Slurm/Apptainer operation, use [ops/ubelix/README.md](ops/ubelix/README.md).
