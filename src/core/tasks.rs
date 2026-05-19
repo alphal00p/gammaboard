@@ -38,6 +38,7 @@ pub const DEFAULT_DISCRETE_PROJECTION_MAX_TOTAL_BINS: usize = 4096;
 pub struct DiscreteProjectionConfig {
     pub max_total_bins: Option<usize>,
     pub normalization: DiscreteProjectionNormalization,
+    pub streams: Vec<String>,
     pub items: Vec<NamedDiscreteProjection>,
 }
 
@@ -46,6 +47,7 @@ impl Default for DiscreteProjectionConfig {
         Self {
             max_total_bins: None,
             normalization: DiscreteProjectionNormalization::Contribution,
+            streams: Vec::new(),
             items: Vec::new(),
         }
     }
@@ -67,6 +69,27 @@ impl DiscreteProjectionConfig {
             );
         }
         let mut names = BTreeSet::new();
+        let mut streams = BTreeSet::new();
+        for stream in &self.streams {
+            let trimmed = stream.trim();
+            if trimmed.is_empty() {
+                return Err(
+                    "accumulator.discrete_projections.streams must not contain empty names"
+                        .to_string(),
+                );
+            }
+            if trimmed != stream {
+                return Err(
+                    "accumulator.discrete_projections.streams entries cannot have leading/trailing whitespace"
+                        .to_string(),
+                );
+            }
+            if !streams.insert(stream.clone()) {
+                return Err(format!(
+                    "accumulator.discrete_projections.streams contains duplicate name '{stream}'"
+                ));
+            }
+        }
         for item in &self.items {
             item.validate()?;
             if !names.insert(item.name.clone()) {

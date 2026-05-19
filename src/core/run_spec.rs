@@ -236,13 +236,25 @@ impl AccumulatorConfig {
         if let Some(config) = self.discrete_projections() {
             config.validate()?;
         }
+        if let Self::Scalar {
+            discrete_projections: Some(config),
+        } = self
+            && !config.streams.is_empty()
+        {
+            return Err(
+                "discrete_projections.streams is only valid for vector accumulators".to_string(),
+            );
+        }
         if let Self::Vector {
             components,
             training_projection,
-            ..
+            discrete_projections,
         } = self
         {
             validate_vector_accumulator(components, training_projection)?;
+            if let Some(config) = discrete_projections {
+                validate_discrete_projection_streams(components, config)?;
+            }
         }
         if let Self::FullVector { components } = self
             && components.is_empty()
@@ -263,6 +275,22 @@ impl AccumulatorConfig {
             Self::Gammaloop => crate::evaluation::SemanticAccumulatorKind::Scalar,
         }
     }
+}
+
+fn validate_discrete_projection_streams(
+    components: &[String],
+    config: &DiscreteProjectionConfig,
+) -> Result<(), String> {
+    for stream in &config.streams {
+        if stream == "training_projection" || components.iter().any(|component| component == stream)
+        {
+            continue;
+        }
+        return Err(format!(
+            "discrete_projections.streams references unknown vector stream '{stream}'"
+        ));
+    }
+    Ok(())
 }
 
 impl Serialize for AccumulatorConfig {

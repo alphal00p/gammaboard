@@ -1313,6 +1313,9 @@ fn vector_discrete_projection_payload(
         .iter()
         .chain(std::iter::once(&state.projection))
     {
+        if !discrete_projection_includes_stream(config, &component.name) {
+            continue;
+        }
         for item in &config.items {
             let name = format!("{}.{}", item.name, component.name);
             projections.insert(
@@ -1337,6 +1340,10 @@ fn vector_discrete_projection_payload(
         "primary_histogram_name": projections.keys().next().cloned(),
         "histograms": projections,
     }))
+}
+
+fn discrete_projection_includes_stream(config: &DiscreteProjectionConfig, stream: &str) -> bool {
+    config.streams.is_empty() || config.streams.iter().any(|candidate| candidate == stream)
 }
 
 fn scalar_projected_bins(

@@ -28,7 +28,7 @@ components = ["value"]
 training_projection = { kind = "component", name = "value" }
 
 [task_queue.accumulator.discrete_projections]
-max_total_bins = 16
+streams = ["value"]
 
 [[task_queue.accumulator.discrete_projections.items]]
 name = "top_level"
@@ -44,4 +44,4 @@ fixed_dims = { "0" = 1 }
 name = "sample"
 kind = "sample"
 stop_condition = { max_samples = 100000 }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 32, samples_for_update = 4096, initial_training_rate = 0.1, final_training_rate = 0.01 } }

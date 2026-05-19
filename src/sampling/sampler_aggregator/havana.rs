@@ -9,7 +9,10 @@ use crate::{
     Batch, EngineError, LatentBatchSpec, Point, SamplePlan,
     core::BuildError,
     sampling::havana_grid::{build_havana_grid, sample_to_point, validate_havana_grid_domain},
-    sampling::{LatentBatchPayload, PdfPoint, SamplerAggregator, SamplerAggregatorSnapshot},
+    sampling::{
+        DiscreteSubspace, LatentBatchPayload, PdfPoint, SamplerAggregator,
+        SamplerAggregatorSnapshot,
+    },
     utils::rng::SerializableMonteCarloRng,
 };
 
@@ -456,6 +459,88 @@ fn grid_pdf(grid: &Grid<f64>, point: &PdfPoint) -> Result<Option<f64>, EngineErr
     Ok(Some(pdf))
 }
 
+fn grid_discrete_subspace_pdf(
+    grid: &Grid<f64>,
+    fixed_dims: &std::collections::BTreeMap<usize, i64>,
+    depth: usize,
+) -> Result<f64, EngineError> {
+    match grid {
+        Grid::Continuous(_) => {
+            if fixed_dims.keys().any(|dim| *dim >= depth) {
+                Ok(0.0)
+            } else {
+                Ok(1.0)
+            }
+        }
+        Grid::Discrete(grid) => {
+            if let Some(value) = fixed_dims.get(&depth) {
+                let value = usize::try_from(*value).map_err(|_| {
+                    EngineError::engine(format!(
+                        "negative discrete index {value} in havana discrete_pdf query"
+                    ))
+                })?;
+                let Some(bin) = grid.bins.get(value) else {
+                    return Ok(0.0);
+                };
+                let child_pdf = match bin.sub_grid.as_ref() {
+                    Some(sub_grid) => grid_discrete_subspace_pdf(sub_grid, fixed_dims, depth + 1)?,
+                    None => {
+                        if fixed_dims.keys().any(|dim| *dim > depth) {
+                            0.0
+                        } else {
+                            1.0
+                        }
+                    }
+                };
+                return Ok(bin.pdf * child_pdf);
+            }
+
+            let mut pdf = 0.0;
+            for bin in &grid.bins {
+                let child_pdf = match bin.sub_grid.as_ref() {
+                    Some(sub_grid) => grid_discrete_subspace_pdf(sub_grid, fixed_dims, depth + 1)?,
+                    None => {
+                        if fixed_dims.keys().any(|dim| *dim > depth) {
+                            0.0
+                        } else {
+                            1.0
+                        }
+                    }
+                };
+                pdf += bin.pdf * child_pdf;
+            }
+            Ok(pdf)
+        }
+        Grid::Uniform(discrete_bins, _) => {
+            let mut pdf = 1.0;
+            for (axis, nr_bins) in discrete_bins.iter().enumerate() {
+                if *nr_bins == 0 {
+                    return Ok(0.0);
+                }
+                if let Some(value) = fixed_dims.get(&(depth + axis)) {
+                    let value = usize::try_from(*value).map_err(|_| {
+                        EngineError::engine(format!(
+                            "negative discrete index {value} in havana uniform discrete_pdf query"
+                        ))
+                    })?;
+                    if value >= *nr_bins {
+                        return Ok(0.0);
+                    }
+                    pdf /= *nr_bins as f64;
+                }
+            }
+            if fixed_dims
+                .keys()
+                .any(|dim| *dim >= depth + discrete_bins.len())
+            {
+                Ok(0.0)
+            } else {
+                Ok(pdf)
+            }
+        }
+    }
+}
+
 impl SamplerAggregator for HavanaSampler {
     fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
         validate_havana_grid_domain(&self.grid, domain, "havana sampler")
@@ -583,6 +668,18 @@ impl SamplerAggregator for HavanaSampler {
             .map(|point| grid_pdf(&self.grid, point))
             .collect()
     }
+
+    fn discrete_pdf_batch(
+        &mut self,
+        subspaces: &[DiscreteSubspace],
+    ) -> Result<Vec<Option<f64>>, EngineError> {
+        subspaces
+            .iter()
+            .map(|subspace| {
+                grid_discrete_subspace_pdf(&self.grid, &subspace.fixed_dims, 0).map(Some)
+            })
+            .collect()
+    }
 }
 
 impl SamplerAggregator for HavanaInferenceSampler {
@@ -638,6 +735,18 @@ impl SamplerAggregator for HavanaInferenceSampler {
             .map(|point| grid_pdf(&self.grid, point))
             .collect()
     }
+
+    fn discrete_pdf_batch(
+        &mut self,
+        subspaces: &[DiscreteSubspace],
+    ) -> Result<Vec<Option<f64>>, EngineError> {
+        subspaces
+            .iter()
+            .map(|subspace| {
+                grid_discrete_subspace_pdf(&self.grid, &subspace.fixed_dims, 0).map(Some)
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -646,8 +755,9 @@ mod tests {
     use crate::core::AccumulatorConfig;
     use crate::evaluation::Materializer;
     use crate::sampling::materializer::HavanaInferenceMaterializer;
-    use crate::sampling::{LatentBatch, StageHandoffOwned};
+    use crate::sampling::{DiscreteSubspace, LatentBatch, StageHandoffOwned};
     use rand::RngCore;
+    use std::collections::BTreeMap;
 
     #[test]
     fn snapshot_roundtrip_restores_havana_runtime_state() {
@@ -872,6 +982,61 @@ mod tests {
                 .iter()
                 .all(|point| point.discrete[0] == 0 || point.discrete[0] == 1)
         );
+    }
+
+    #[test]
+    fn havana_discrete_pdf_handles_ragged_subspaces() {
+        let domain = Domain::discrete(
+            Some("d0".to_string()),
+            [
+                crate::DomainBranch::new(0, Domain::continuous(3)),
+                crate::DomainBranch::new(
+                    1,
+                    Domain::discrete(
+                        Some("d1".to_string()),
+                        [
+                            crate::DomainBranch::new(0, Domain::continuous(1)),
+                            crate::DomainBranch::new(
+                                1,
+                                Domain::rectangular_with_cardinalities(5, [5]),
+                            ),
+                        ],
+                    ),
+                ),
+            ],
+        );
+        let params = HavanaSamplerParams {
+            seed: 7,
+            bins: 8,
+            samples_for_update: 16,
+            initial_training_rate: 0.1,
+            final_training_rate: 0.01,
+        };
+        let mut sampler = HavanaSampler::from_params_and_domain(params, &domain, 16)
+            .expect("build havana sampler");
+
+        let values = sampler
+            .discrete_pdf_batch(&[
+                DiscreteSubspace {
+                    fixed_dims: BTreeMap::from([(0, 0)]),
+                },
+                DiscreteSubspace {
+                    fixed_dims: BTreeMap::from([(0, 1)]),
+                },
+                DiscreteSubspace {
+                    fixed_dims: BTreeMap::from([(0, 1), (1, 1), (2, 3)]),
+                },
+                DiscreteSubspace {
+                    fixed_dims: BTreeMap::from([(0, 0), (1, 0)]),
+                },
+            ])
+            .expect("discrete pdf");
+
+        assert_eq!(values.len(), 4);
+        assert!((values[0].unwrap() - 0.5).abs() < 1e-12);
+        assert!((values[1].unwrap() - 0.5).abs() < 1e-12);
+        assert!((values[2].unwrap() - 0.05).abs() < 1e-12);
+        assert_eq!(values[3], Some(0.0));
     }
 
     #[test]

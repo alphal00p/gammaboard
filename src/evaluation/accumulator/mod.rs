@@ -346,6 +346,7 @@ mod tests {
             discrete_projections: Some(DiscreteProjectionConfig {
                 max_total_bins: Some(16),
                 normalization: DiscreteProjectionNormalization::Contribution,
+                streams: Vec::new(),
                 items: vec![NamedDiscreteProjection {
                     name: "spin".to_string(),
                     dims: vec![0],

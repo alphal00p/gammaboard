@@ -1,7 +1,7 @@
 # Backend API/dashboard settings for local runs and local deploys.
 api_host = "127.0.0.1"
 api_port = 4000
-allowed_origins = ["http://localhost:3000", "http://localhost:8080"]
+allowed_origins = ["http://localhost:8080", "http://127.0.0.1:8080"]
 secure_cookie = false
 allow_local_node_spawn = true
 

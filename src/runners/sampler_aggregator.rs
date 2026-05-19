@@ -251,6 +251,9 @@ fn collect_discrete_pdf_subspaces(
                 .iter()
                 .chain(std::iter::once(&state.projection))
             {
+                if !discrete_projection_includes_stream(config, &component.name) {
+                    continue;
+                }
                 collect_discrete_pdf_subspaces_from_bins(
                     &component.state.discrete_bins,
                     config,
@@ -263,6 +266,13 @@ fn collect_discrete_pdf_subspaces(
         _ => {}
     }
     Ok(out)
+}
+
+fn discrete_projection_includes_stream(
+    config: &crate::core::DiscreteProjectionConfig,
+    stream: &str,
+) -> bool {
+    config.streams.is_empty() || config.streams.iter().any(|candidate| candidate == stream)
 }
 
 fn collect_discrete_pdf_subspaces_from_bins(
