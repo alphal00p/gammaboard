@@ -56,6 +56,7 @@ import {
   normalizeHistogramSortMode,
   parseUploadedHistogramBundle,
   readHistogramBundleView,
+  readHistogramViewIdFromPanelValue,
   projectOverlayHistogramToReferenceBins,
   readHistogramBundleSelectedValue,
   readHistogramScaleFromPanelValue,
@@ -294,6 +295,8 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
           discrete_ordering: selectedHistogram.discrete_ordering,
           log_x_axis: selectedHistogram.log_x_axis,
           log_y_axis: selectedHistogram.log_y_axis,
+          views: selectedHistogram.views,
+          controls: selectedHistogram.controls,
           bins: normalizedBins,
         },
         value: bundlePanel.value ?? null,
@@ -506,27 +509,84 @@ const histogramEntryCountLine = (bin) => {
 const finiteNumberOrNull = (value) =>
   typeof value === "number" && Number.isFinite(value) ? value : null;
 
-const discreteBinInfoLines = (bin) => {
+const metricNumber = (bin, metricName) => {
+  if (typeof metricName !== "string" || metricName.length === 0) return null;
+  if (metricName === "error") return finiteNumberOrNull(bin?.error);
+  const topLevel = finiteNumberOrNull(bin?.[metricName]);
+  if (topLevel != null) return topLevel;
+  return finiteNumberOrNull(bin?.metrics?.[metricName]?.value);
+};
+
+const metricError = (bin, metricName) => {
+  if (metricName === "value") return finiteNumberOrNull(bin?.error);
+  return finiteNumberOrNull(bin?.metrics?.[metricName]?.error);
+};
+
+const normalizeHistogramViews = (views) =>
+  asArray(views)
+    .filter((view) => isObject(view) && typeof view.id === "string" && typeof view.label === "string")
+    .map((view) => ({
+      ...view,
+      kind:
+        view.kind === "bar_with_marker" || view.kind === "bar"
+          ? view.kind
+          : "bar",
+      value_metric: typeof view.value_metric === "string" ? view.value_metric : "value",
+      error_metric: typeof view.error_metric === "string" ? view.error_metric : null,
+      marker_metric: typeof view.marker_metric === "string" ? view.marker_metric : null,
+      delta_metric: typeof view.delta_metric === "string" ? view.delta_metric : null,
+    }));
+
+const resolveHistogramView = (views, selectedId) => {
+  const normalized = normalizeHistogramViews(views);
+  if (normalized.length === 0) {
+    return {
+      id: "value",
+      label: "Value",
+      kind: "bar",
+      value_metric: "value",
+      error_metric: "error",
+    };
+  }
+  return (
+    normalized.find((view) => view.id === selectedId) ||
+    normalized.find((view) => view.default === true) ||
+    normalized[0]
+  );
+};
+
+const histogramControlEnabled = (controls, key, fallback) => {
+  if (!isObject(controls)) return fallback;
+  return controls[key] === true;
+};
+
+const discreteBinInfoLines = (bin, selectedView = null) => {
   const pdf = finiteNumberOrNull(bin?.pdf);
-  const pdfScaled = finiteNumberOrNull(bin?.pdf_scaled_value ?? bin?.metrics?.pdf_scaled_value?.value);
-  const valuePdfMismatch = finiteNumberOrNull(bin?.value_pdf_mismatch ?? bin?.metrics?.value_pdf_mismatch?.value);
-  const contributionFraction = finiteNumberOrNull(bin?.metrics?.contribution_fraction?.value);
-  const fractionPdfMismatch = finiteNumberOrNull(bin?.metrics?.fraction_pdf_mismatch?.value);
+  const pdfScaled = metricNumber(bin, "pdf_scaled_value");
+  const valuePdfMismatch = metricNumber(bin, "value_pdf_mismatch");
+  const contributionFraction = metricNumber(bin, "contribution_fraction");
+  const fractionPdfMismatch = metricNumber(bin, "fraction_pdf_mismatch");
   const relativeError = finiteNumberOrNull(bin?.relative_error);
   const errorContribution = finiteNumberOrNull(bin?.error_contribution);
   const conditional = bin?.metrics?.conditional_mean;
   const contribution = bin?.metrics?.contribution;
   const lines = [];
-  if (pdf != null) lines.push(`pdf: ${formatScientific(pdf, 6)}`);
-  else if (typeof bin?.pdf_status === "string" && bin.pdf_status !== "available") lines.push(`pdf: ${bin.pdf_status}`);
-  if (pdfScaled != null) lines.push(`pdf × <|I|>: ${formatScientific(pdfScaled, 6)}`);
-  if (valuePdfMismatch != null) lines.push(`value - pdf × <|I|>: ${formatScientific(valuePdfMismatch, 6)}`);
-  if (contributionFraction != null) lines.push(`contribution / <|I|>: ${formatScientific(contributionFraction, 6)}`);
-  if (fractionPdfMismatch != null) lines.push(`contribution / <|I|> - pdf: ${formatScientific(fractionPdfMismatch, 6)}`);
-  if (relativeError != null) lines.push(`rel error: ${formatScientific(relativeError, 6)}`);
-  if (errorContribution != null) lines.push(`error contribution: ${formatScientific(errorContribution, 6)}`);
+  const viewId = selectedView?.id || "value";
+  if (viewId === "pdf_compare") {
+    if (pdfScaled != null) lines.push(`pdf x <|I|>: ${formatScientific(pdfScaled, 6)}`);
+    if (valuePdfMismatch != null) lines.push(`delta: ${formatScientific(valuePdfMismatch, 6)}`);
+    if (pdf != null) lines.push(`pdf: ${formatScientific(pdf, 6)}`);
+  } else if (viewId === "share") {
+    if (contributionFraction != null) lines.push(`contribution / <|I|>: ${formatScientific(contributionFraction, 6)}`);
+    if (pdf != null) lines.push(`pdf: ${formatScientific(pdf, 6)}`);
+    if (fractionPdfMismatch != null) lines.push(`delta: ${formatScientific(fractionPdfMismatch, 6)}`);
+  } else if (viewId === "pdf_mismatch") {
+    if (valuePdfMismatch != null) lines.push(`value - pdf x <|I|>: ${formatScientific(valuePdfMismatch, 6)}`);
+  } else if (typeof bin?.pdf_status === "string" && bin.pdf_status !== "available") {
+    lines.push(`pdf: ${bin.pdf_status}`);
+  }
   const conditionalValue = finiteNumberOrNull(conditional?.value);
-  if (conditionalValue != null) {
+  if (viewId !== "value" && conditionalValue != null) {
     const error = finiteNumberOrNull(conditional?.error);
     lines.push(
       `conditional mean: ${formatScientific(conditionalValue, 6)}${
@@ -535,13 +595,17 @@ const discreteBinInfoLines = (bin) => {
     );
   }
   const contributionValue = finiteNumberOrNull(contribution?.value);
-  if (contributionValue != null) {
+  if (viewId !== "value" && contributionValue != null) {
     const error = finiteNumberOrNull(contribution?.error);
     lines.push(
       `contribution: ${formatScientific(contributionValue, 6)}${
         error != null ? ` ±${formatScientific(error, 6)}` : ""
       }`,
     );
+  }
+  if (viewId !== "value" && relativeError != null) lines.push(`rel error: ${formatScientific(relativeError, 6)}`);
+  if (viewId !== "value" && errorContribution != null) {
+    lines.push(`error contribution: ${formatScientific(errorContribution, 6)}`);
   }
   return lines;
 };
@@ -1728,10 +1792,21 @@ const HistogramPanel = ({
   const panelId = state?.panel_id || null;
   const isPdfPanel = typeof panelId === "string" && panelId.startsWith("pdf_adaptation_");
   const sourcePanelId = state?.source_panel_id || panelId;
-  const isBundleControlled = sourcePanelId === "gammaloop_histogram_bundle";
+  const isBundleControlled = Boolean(sourcePanelId && sourcePanelId !== panelId);
   const currentHistogramName = typeof state?.name === "string" ? state.name : null;
   const defaultYScale = inferDefaultHistogramYScale(state);
   const defaultXScale = inferDefaultHistogramXScale(state);
+  const declaredViews = useMemo(() => normalizeHistogramViews(state?.views), [state?.views]);
+  const [localSelectedViewId, setLocalSelectedViewId] = useState(null);
+  const selectedViewId = isBundleControlled
+    ? readHistogramViewIdFromPanelValue(value, currentHistogramName)
+    : localSelectedViewId;
+  const selectedView = useMemo(
+    () => resolveHistogramView(declaredViews, selectedViewId),
+    [declaredViews, selectedViewId],
+  );
+  const hasDeclaredViews = declaredViews.length > 0;
+  const controls = isObject(state?.controls) ? state.controls : null;
   const [localYScale, setLocalYScale] = useState("linear");
   const [localXScale, setLocalXScale] = useState("linear");
   const [localSortMode, setLocalSortMode] = useState(HISTOGRAM_SORT_CANONICAL);
@@ -1741,7 +1816,6 @@ const HistogramPanel = ({
   });
   const [localHistogramMode, setLocalHistogramMode] = useState(HISTOGRAM_MODE_PDF);
   const [localShowRatio, setLocalShowRatio] = useState(false);
-  const [localShowPdfComparison, setLocalShowPdfComparison] = useState(false);
   const yScale = isBundleControlled ? readHistogramScaleFromPanelValue(value, "y", defaultYScale) : localYScale;
   const xScale = isBundleControlled ? readHistogramScaleFromPanelValue(value, "x", defaultXScale) : localXScale;
   const zoomRange = isBundleControlled
@@ -1754,7 +1828,12 @@ const HistogramPanel = ({
   const showRelativeErrors = isBundleControlled ? view.show_relative_error !== false : localShowRelativeErrors;
   const histogramMode = isBundleControlled ? normalizeHistogramMode(view.display_mode) : localHistogramMode;
   const showRatio = isBundleControlled ? view.show_ratio === true : localShowRatio;
-  const showPdfComparison = isBundleControlled ? view.show_pdf_comparison === true : localShowPdfComparison;
+  const showScaleControls = histogramControlEnabled(controls, "scale", true);
+  const showXScaleControl = histogramControlEnabled(controls, "x_scale", true);
+  const showPdfCdfControl = histogramControlEnabled(controls, "pdf_cdf", true);
+  const showRatioControl = histogramControlEnabled(controls, "ratio", true);
+  const showRelativeErrorControl = histogramControlEnabled(controls, "relative_error", true);
+  const showSortControl = histogramControlEnabled(controls, "sort", true);
   const requestedSortMode = isBundleControlled
     ? normalizeHistogramSortMode(
         isObject(view?.sort_mode_by_histogram) && currentHistogramName
@@ -1762,7 +1841,27 @@ const HistogramPanel = ({
           : HISTOGRAM_SORT_CANONICAL,
       )
     : normalizeHistogramSortMode(localSortMode);
-  const baseCanonicalBins = useMemo(() => buildHistogramData(state?.bins), [state?.bins]);
+  const baseCanonicalBins = useMemo(() => {
+    const rawBins = buildHistogramData(state?.bins);
+    if (!hasDeclaredViews) return rawBins;
+    return rawBins
+      .map((bin) => {
+        const nextValue = metricNumber(bin, selectedView.value_metric);
+        if (nextValue == null) return null;
+        const nextError =
+          selectedView.error_metric != null
+            ? (metricNumber(bin, selectedView.error_metric) ?? metricError(bin, selectedView.value_metric) ?? 0)
+            : 0;
+        return {
+          ...bin,
+          value: nextValue,
+          error: Math.abs(nextError),
+          source_value: bin.value,
+          source_error: bin.error,
+        };
+      })
+      .filter(Boolean);
+  }, [hasDeclaredViews, selectedView, state?.bins]);
   const sortedBaseBins = useMemo(() => {
     const isDiscreteHistogram = baseCanonicalBins.some((bin) => bin && (bin.label != null || bin.bin_id != null));
     return isDiscreteHistogram
@@ -1797,9 +1896,17 @@ const HistogramPanel = ({
   }, [isDiscrete, bins]);
   const discreteRelativeErrorData = useMemo(() => buildDiscreteRelativeErrorData(bins), [bins]);
   const pdfComparisonData = useMemo(() => {
-    if (!isDiscrete || histogramMode === HISTOGRAM_MODE_CDF) return null;
+    if (!isDiscrete || histogramMode === HISTOGRAM_MODE_CDF || selectedView.kind !== "bar_with_marker") return null;
+    const markerLabel =
+      typeof selectedView.marker_label === "string" && selectedView.marker_label.trim()
+        ? selectedView.marker_label.trim()
+        : "marker";
+    const deltaLabel =
+      typeof selectedView.delta_label === "string" && selectedView.delta_label.trim()
+        ? selectedView.delta_label.trim()
+        : "delta";
     const markerData = bins.map((bin) => {
-      const raw = Number(bin?.pdf_scaled_value ?? bin?.metrics?.pdf_scaled_value?.value);
+      const raw = metricNumber(bin, selectedView.marker_metric);
       if (!Number.isFinite(raw)) return null;
       return {
         value: yScale === "log" ? signedLog10(raw) : raw,
@@ -1809,18 +1916,17 @@ const HistogramPanel = ({
     const deltaData = bins
       .map((bin, index) => {
         const rawValue = Number(bin?.value);
-        const rawPdf = Number(bin?.pdf_scaled_value ?? bin?.metrics?.pdf_scaled_value?.value);
-        if (!Number.isFinite(rawValue) || !Number.isFinite(rawPdf)) return null;
+        const rawMarker = metricNumber(bin, selectedView.marker_metric);
+        if (!Number.isFinite(rawValue) || !Number.isFinite(rawMarker)) return null;
         const value = yScale === "log" ? signedLog10(rawValue) : rawValue;
-        const pdf = yScale === "log" ? signedLog10(rawPdf) : rawPdf;
-        if (!Number.isFinite(value) || !Number.isFinite(pdf)) return null;
-        return [index, Math.min(value, pdf), Math.max(value, pdf)];
+        const marker = yScale === "log" ? signedLog10(rawMarker) : rawMarker;
+        if (!Number.isFinite(value) || !Number.isFinite(marker)) return null;
+        return [index, Math.min(value, marker), Math.max(value, marker)];
       })
       .filter(Boolean);
     if (!markerData.some((entry) => entry != null)) return null;
-    return { markerData, deltaData };
-  }, [bins, histogramMode, isDiscrete, yScale]);
-  const hasPdfComparison = Boolean(pdfComparisonData);
+    return { markerData, deltaData, markerLabel, deltaLabel };
+  }, [bins, histogramMode, isDiscrete, selectedView, yScale]);
   const hasPositiveContinuousEdges = useMemo(
     () =>
       asArray(bins).some((bin) => {
@@ -2157,11 +2263,11 @@ const HistogramPanel = ({
     const suppressOverlayErrorBars =
       panelId === "pdf_adaptation_integrand_pdf_histogram_overlay" ||
       panelId === "pdf_adaptation_oversampling_histogram_overlay";
-    const pdfComparisonVisible = isDiscrete && showPdfComparison && pdfComparisonData;
+    const pdfComparisonVisible = isDiscrete && pdfComparisonData;
     const legendEntries = [
       "value",
       ...overlaySeries.map((overlay) => overlay.name),
-      ...(pdfComparisonVisible ? ["pdf × <|I|>", "pdf delta"] : []),
+      ...(pdfComparisonVisible ? [pdfComparisonData.markerLabel, pdfComparisonData.deltaLabel] : []),
     ];
     if (isDiscrete) {
       const categoriesData = categories || bins.map((_, idx) => `#${idx}`);
@@ -2226,7 +2332,7 @@ const HistogramPanel = ({
               histogramEntryCountLine(bin),
               `abs error: ${absErrorText}`,
               `rel error: ${relErrorText}`,
-              ...discreteBinInfoLines(bin),
+              ...discreteBinInfoLines(bin, selectedView),
             ]
               .filter(Boolean)
               .join("<br/>");
@@ -2290,7 +2396,7 @@ const HistogramPanel = ({
           ...(pdfComparisonVisible
             ? [
                 buildDiscreteOffsetErrorBarSeries({
-                  name: "pdf delta",
+                  name: pdfComparisonData.deltaLabel,
                   data: pdfComparisonData.deltaData,
                   color: "#475569",
                   slotIndex: 0,
@@ -2299,7 +2405,7 @@ const HistogramPanel = ({
                 }),
                 {
                   type: "scatter",
-                  name: "pdf × <|I|>",
+                  name: pdfComparisonData.markerLabel,
                   data: pdfComparisonData.markerData,
                   symbol: "diamond",
                   symbolSize: 9,
@@ -2488,7 +2594,6 @@ const HistogramPanel = ({
     overlaySeries,
     panelId,
     pdfComparisonData,
-    showPdfComparison,
     stepData,
     xDomain,
     yDomain,
@@ -2823,9 +2928,41 @@ const HistogramPanel = ({
                           : writeZoomPanelValue(value, FULL_ZOOM, null, FULL_ZOOM),
                         false,
                       )
-                  : null
+                : null
               }
             />
+            {declaredViews.length > 1 ? (
+              <FormControl size="small" sx={{ minWidth: 152 }}>
+                <Select
+                  value={selectedView.id}
+                  onChange={(event) => {
+                    const next = String(event.target.value || "");
+                    if (isBundleControlled && sourcePanelId && typeof onValueChange === "function" && currentHistogramName) {
+                      onValueChange(
+                        sourcePanelId,
+                        writeHistogramBundlePanelValue(value, {
+                          selectedViewByHistogram: { [currentHistogramName]: next },
+                        }),
+                        false,
+                      );
+                      return;
+                    }
+                    setLocalSelectedViewId(next);
+                  }}
+                  sx={{
+                    fontSize: "0.875rem",
+                    ".MuiSelect-select": { py: 0.75 },
+                  }}
+                >
+                  {declaredViews.map((view) => (
+                    <MenuItem key={view.id} value={view.id}>
+                      {view.label}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            ) : null}
+            {showScaleControls ? (
             <FormControl size="small" sx={{ minWidth: 128 }}>
               <Select
                 value={yScale}
@@ -2846,6 +2983,8 @@ const HistogramPanel = ({
                 <MenuItem value="log">Y Log</MenuItem>
               </Select>
             </FormControl>
+            ) : null}
+            {showXScaleControl ? (
             <FormControl size="small" sx={{ minWidth: 128 }}>
               <Select
                 value={effectiveXScale}
@@ -2870,6 +3009,8 @@ const HistogramPanel = ({
                 <MenuItem value="log">X Log</MenuItem>
               </Select>
             </FormControl>
+            ) : null}
+            {showPdfCdfControl ? (
             <Button
               size="small"
               variant={histogramMode === HISTOGRAM_MODE_CDF ? "contained" : "outlined"}
@@ -2884,10 +3025,11 @@ const HistogramPanel = ({
             >
               {histogramMode === HISTOGRAM_MODE_CDF ? "CDF" : "PDF"}
             </Button>
+            ) : null}
+            {showRatioControl && ratioOption ? (
             <Button
               size="small"
               variant={showRatio ? "contained" : "outlined"}
-              disabled={!ratioOption}
               onClick={() => {
                 const next = !showRatio;
                 if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
@@ -2899,24 +3041,8 @@ const HistogramPanel = ({
             >
               Ratio
             </Button>
-            {isDiscrete ? (
-              <Button
-                size="small"
-                variant={showPdfComparison ? "contained" : "outlined"}
-                disabled={!hasPdfComparison}
-                onClick={() => {
-                  const next = !showPdfComparison;
-                  if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
-                    onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { showPdfComparison: next }), false);
-                    return;
-                  }
-                  setLocalShowPdfComparison(next);
-                }}
-              >
-                Compare PDF
-              </Button>
             ) : null}
-            {isDiscrete ? (
+            {isDiscrete && showSortControl ? (
               <FormControl size="small" sx={{ minWidth: 156 }}>
                 <Select
                   value={requestedSortMode}
@@ -2950,6 +3076,7 @@ const HistogramPanel = ({
                 </Select>
               </FormControl>
             ) : null}
+            {showRelativeErrorControl ? (
             <Button
               size="small"
               variant={showRelativeErrors ? "contained" : "outlined"}
@@ -2964,6 +3091,7 @@ const HistogramPanel = ({
             >
               Rel Error
             </Button>
+            ) : null}
           </Stack>
         </Box>
         {comparedBundleSelections.length > 0 ? (

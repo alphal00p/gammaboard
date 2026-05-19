@@ -1283,6 +1283,8 @@ fn scalar_discrete_projection_payload(
                 json!({
                     "title": item.name,
                     "type_description": discrete_projection_description(item),
+                    "views": discrete_projection_histogram_views(discrete_pdf.is_some()),
+                    "controls": discrete_projection_histogram_controls(),
                     "bins": scalar_projected_bins(
                         bins,
                         item,
@@ -1323,6 +1325,8 @@ fn vector_discrete_projection_payload(
                 json!({
                     "title": name,
                     "type_description": discrete_projection_description(item),
+                    "views": discrete_projection_histogram_views(discrete_pdf.is_some()),
+                    "controls": discrete_projection_histogram_controls(),
                     "bins": scalar_projected_bins(
                         &component.state.discrete_bins,
                         item,
@@ -1344,6 +1348,61 @@ fn vector_discrete_projection_payload(
 
 fn discrete_projection_includes_stream(config: &DiscreteProjectionConfig, stream: &str) -> bool {
     config.streams.is_empty() || config.streams.iter().any(|candidate| candidate == stream)
+}
+
+fn discrete_projection_histogram_controls() -> JsonValue {
+    json!({
+        "scale": true,
+        "x_scale": false,
+        "pdf_cdf": false,
+        "ratio": false,
+        "relative_error": true,
+        "sort": true,
+    })
+}
+
+fn discrete_projection_histogram_views(include_pdf_views: bool) -> Vec<JsonValue> {
+    let mut views = vec![json!({
+        "id": "value",
+        "label": "Value",
+        "kind": "bar",
+        "value_metric": "value",
+        "error_metric": "error",
+        "default": true,
+    })];
+    if include_pdf_views {
+        views.extend([
+            json!({
+                "id": "pdf_compare",
+                "label": "Compare PDF",
+                "kind": "bar_with_marker",
+                "value_metric": "value",
+                "error_metric": "error",
+                "marker_metric": "pdf_scaled_value",
+                "delta_metric": "value_pdf_mismatch",
+                "marker_label": "pdf x <|I|>",
+                "delta_label": "delta",
+            }),
+            json!({
+                "id": "pdf_mismatch",
+                "label": "PDF Mismatch",
+                "kind": "bar",
+                "value_metric": "value_pdf_mismatch",
+                "label_metric": "value_pdf_mismatch",
+            }),
+            json!({
+                "id": "share",
+                "label": "Share vs PDF",
+                "kind": "bar_with_marker",
+                "value_metric": "contribution_fraction",
+                "marker_metric": "pdf",
+                "delta_metric": "fraction_pdf_mismatch",
+                "marker_label": "pdf",
+                "delta_label": "delta",
+            }),
+        ]);
+    }
+    views
 }
 
 fn scalar_projected_bins(

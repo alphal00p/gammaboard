@@ -92,6 +92,15 @@ export const readHistogramScaleFromPanelValue = (value, axis, fallback = "linear
   return fallback === "log" ? "log" : "linear";
 };
 
+export const readHistogramViewIdFromPanelValue = (value, histogramName = null) => {
+  const view = readHistogramBundleView(value);
+  const byHistogram = isObject(view.selected_view_by_histogram) ? view.selected_view_by_histogram : {};
+  if (typeof histogramName === "string" && typeof byHistogram[histogramName] === "string") {
+    return byHistogram[histogramName];
+  }
+  return typeof view.selected_view === "string" ? view.selected_view : null;
+};
+
 export const normalizeHistogramMode = (value) => (value === HISTOGRAM_MODE_CDF ? HISTOGRAM_MODE_CDF : HISTOGRAM_MODE_PDF);
 
 export const writeHistogramBundlePanelValue = (
@@ -104,7 +113,8 @@ export const writeHistogramBundlePanelValue = (
     yScale = undefined,
     showRelativeError = undefined,
     showRatio = undefined,
-    showPdfComparison = undefined,
+    selectedView = undefined,
+    selectedViewByHistogram = undefined,
     histogramMode = undefined,
     sortModeByHistogram = undefined,
   } = {},
@@ -118,7 +128,17 @@ export const writeHistogramBundlePanelValue = (
   if (yScale !== undefined) nextView.y_scale = yScale === "log" ? "log" : "linear";
   if (showRelativeError !== undefined) nextView.show_relative_error = Boolean(showRelativeError);
   if (showRatio !== undefined) nextView.show_ratio = Boolean(showRatio);
-  if (showPdfComparison !== undefined) nextView.show_pdf_comparison = Boolean(showPdfComparison);
+  if (selectedView !== undefined) nextView.selected_view = typeof selectedView === "string" ? selectedView : null;
+  if (isObject(selectedViewByHistogram)) {
+    nextView.selected_view_by_histogram = {
+      ...(isObject(nextView.selected_view_by_histogram) ? nextView.selected_view_by_histogram : {}),
+      ...Object.fromEntries(
+        Object.entries(selectedViewByHistogram).filter(
+          ([name, selected]) => typeof name === "string" && typeof selected === "string",
+        ),
+      ),
+    };
+  }
   if (histogramMode !== undefined) nextView.display_mode = normalizeHistogramMode(histogramMode);
   if (isObject(sortModeByHistogram)) {
     const normalizedSortModes = Object.fromEntries(
