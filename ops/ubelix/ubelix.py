@@ -1021,13 +1021,12 @@ def command_build(args: argparse.Namespace) -> None:
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
-            "UBELIX launcher for Gammaboard. Run all commands on a UBELIX login node. "
-            "'up' prints the manual SSH tunnel command for your local machine."
+            "UBELIX launcher for Gammaboard. Run all commands on a UBELIX login node."
         )
     )
     sub = p.add_subparsers(dest="command", required=True)
 
-    up = sub.add_parser("up", help="login node: submit or reuse a deploy job")
+    up = sub.add_parser("up", help="submit or reuse a deploy job")
     up.add_argument(
         "--watch",
         action="store_true",
@@ -1060,9 +1059,7 @@ def parser() -> argparse.ArgumentParser:
     )
     up.set_defaults(func=command_up)
 
-    down = sub.add_parser(
-        "down", help="login node: gracefully stop nodes, then cancel remaining jobs"
-    )
+    down = sub.add_parser("down", help="gracefully stop nodes, then cancel remaining jobs")
     down.add_argument("--startup-timeout", type=int, default=60)
     down.add_argument("--port-offset", type=parse_port_offset, default=0)
     down.add_argument("--worker-timeout", type=int, default=60)
@@ -1074,14 +1071,10 @@ def parser() -> argparse.ArgumentParser:
     )
     down.set_defaults(func=command_down)
 
-    status = sub.add_parser(
-        "status", help="login node: show active deploy and worker jobs"
-    )
+    status = sub.add_parser("status", help="show active deploy and worker jobs")
     status.set_defaults(func=command_status)
 
-    workers = sub.add_parser(
-        "submit-workers", help="login node: submit N separate worker jobs"
-    )
+    workers = sub.add_parser("submit-workers", help="submit N separate worker jobs")
     workers.add_argument("--count", type=int, required=True)
     workers.add_argument("--prefix", default="w")
     workers.add_argument("--port-offset", type=parse_port_offset, default=0)
@@ -1098,7 +1091,7 @@ def parser() -> argparse.ArgumentParser:
 
     watch_requests = sub.add_parser(
         "watch-requests",
-        help="login node: resolve pending DB node launch requests into Slurm worker jobs",
+        help="resolve pending DB node launch requests into Slurm worker jobs",
     )
     watch_requests.add_argument(
         "--once", action="store_true", help="resolve current pending requests and exit"
@@ -1113,7 +1106,7 @@ def parser() -> argparse.ArgumentParser:
     )
     watch_requests.set_defaults(func=command_watch_requests)
 
-    build = sub.add_parser("build", help="login node: submit a build job")
+    build = sub.add_parser("build", help="submit a build job")
     build_sub = build.add_subparsers(dest="build_kind", required=True)
 
     build_gammaboard = build_sub.add_parser(
@@ -1133,9 +1126,7 @@ def parser() -> argparse.ArgumentParser:
     build_apptainer.add_argument("def_file", help="Apptainer definition file")
     build_apptainer.set_defaults(func=command_build)
 
-    clear = sub.add_parser(
-        "clear-db", help="login node: delete the local PostgreSQL data directory"
-    )
+    clear = sub.add_parser("clear-db", help="delete the local PostgreSQL data directory")
     clear.set_defaults(func=command_clear_db)
 
     return p
