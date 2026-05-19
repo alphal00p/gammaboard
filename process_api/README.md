@@ -30,7 +30,17 @@ ingest_training_values(training_values)
 snapshot()
 ```
 
-Samplers may also implement `pdf(xs_discrete, xs_continuous)` and `get_diagnostics()`.
+Samplers may also implement `pdf(xs_discrete, xs_continuous)`,
+`discrete_pdf(subspaces)`, and `get_diagnostics()`.
+
+`discrete_pdf(subspaces)` receives a list of subspace objects:
+
+```json
+{"fixed_dims": [{"dim": 0, "value": 2}]}
+```
+
+It should return one marginal discrete PDF value per subspace, or `None` when
+unsupported.
 
 Optional constructors:
 

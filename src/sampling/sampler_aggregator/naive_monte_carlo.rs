@@ -1,7 +1,8 @@
 use crate::core::{BuildError, EngineError};
 use crate::evaluation::{Batch, Point};
 use crate::sampling::{
-    LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot,
+    DiscreteSubspace, LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator,
+    SamplerAggregatorSnapshot,
 };
 use crate::utils::domain::Domain;
 use rand::Rng;
@@ -205,6 +206,34 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
                 .collect());
         }
         Ok(vec![None; points.len()])
+    }
+
+    fn discrete_pdf_batch(
+        &mut self,
+        subspaces: &[DiscreteSubspace],
+    ) -> Result<Vec<Option<f64>>, EngineError> {
+        let Some(cardinalities) = self.domain.fixed_discrete_cardinalities() else {
+            return Ok(vec![None; subspaces.len()]);
+        };
+        let total = cardinalities.iter().product::<usize>();
+        if total == 0 {
+            return Ok(vec![None; subspaces.len()]);
+        }
+        Ok(subspaces
+            .iter()
+            .map(|subspace| {
+                let mut fixed_probability = 1.0;
+                for (dim, value) in &subspace.fixed_dims {
+                    let cardinality = *cardinalities.get(*dim)?;
+                    let value = usize::try_from(*value).ok()?;
+                    if value >= cardinality {
+                        return Some(0.0);
+                    }
+                    fixed_probability /= cardinality as f64;
+                }
+                Some(fixed_probability)
+            })
+            .collect())
     }
 }
 

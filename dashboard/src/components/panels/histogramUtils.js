@@ -455,7 +455,15 @@ export const normalizeHistogramSortMode = (value) => {
 
 export const sortHistogramBinsByMode = (bins, sortMode) => {
   const normalizedMode = normalizeHistogramSortMode(sortMode);
-  if (normalizedMode === HISTOGRAM_SORT_CANONICAL) return asArray(bins);
+  if (normalizedMode === HISTOGRAM_SORT_CANONICAL) {
+    return asArray(bins)
+      .map((bin, index) => ({ bin, index, key: String(bin?.label ?? bin?.bin_id ?? index) }))
+      .sort((left, right) => {
+        const compared = left.key.localeCompare(right.key, undefined, { numeric: true });
+        return compared || left.index - right.index;
+      })
+      .map((entry) => entry.bin);
+  }
   return asArray(bins)
     .map((bin, index) => ({ bin, index, value: Number(bin?.value) }))
     .sort((left, right) => {

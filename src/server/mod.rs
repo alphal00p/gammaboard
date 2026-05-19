@@ -1226,21 +1226,22 @@ async fn get_run_task_output(
     } else {
         Vec::new()
     };
-    let (completed_samples_per_second, smoothed_eta_seconds) =
+    let (completed_samples_per_second, smoothed_eta_seconds, sampler_engine_diagnostics) =
         if matches!(task.task, crate::core::RunTaskSpec::Sample { .. })
             && matches!(task.state, crate::core::RunTaskState::Active)
         {
-            let metrics = state
+            let latest_sampler_performance = state
                 .store
                 .get_sampler_performance_history(run_id, 1, None)
                 .await?
-                .first()
-                .and_then(|entry| {
-                    serde_json::from_value::<crate::core::SamplerRuntimeMetrics>(
-                        entry.runtime_metrics.clone(),
-                    )
-                    .ok()
-                });
+                .into_iter()
+                .next();
+            let metrics = latest_sampler_performance.as_ref().and_then(|entry| {
+                serde_json::from_value::<crate::core::SamplerRuntimeMetrics>(
+                    entry.runtime_metrics.clone(),
+                )
+                .ok()
+            });
             let completed_samples_per_second = metrics
                 .as_ref()
                 .map(|metrics| {
@@ -1257,9 +1258,13 @@ async fn get_run_task_output(
                 .as_ref()
                 .and_then(|metrics| metrics.eta_seconds_smoothed)
                 .filter(|value| value.is_finite() && *value >= 0.0);
-            (completed_samples_per_second, smoothed_eta_seconds)
+            (
+                completed_samples_per_second,
+                smoothed_eta_seconds,
+                latest_sampler_performance.map(|entry| entry.engine_diagnostics),
+            )
         } else {
-            (None, None)
+            (None, None, None)
         };
 
     let payload = panel_source
@@ -1271,6 +1276,7 @@ async fn get_run_task_output(
             run.target.as_ref(),
             completed_samples_per_second,
             smoothed_eta_seconds,
+            sampler_engine_diagnostics.as_ref(),
             current_accumulator.as_ref(),
             latest_stage_snapshot.as_ref(),
             latest_persisted_snapshot.as_ref(),

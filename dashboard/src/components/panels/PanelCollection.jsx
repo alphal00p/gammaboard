@@ -503,6 +503,35 @@ const histogramEntryCountLine = (bin) => {
   return `entries: ${formatScientific(entryCount, 6)}`;
 };
 
+const discreteBinInfoLines = (bin) => {
+  const pdf = Number(bin?.pdf);
+  const relativeError = Number(bin?.relative_error);
+  const errorContribution = Number(bin?.error_contribution);
+  const conditional = bin?.metrics?.conditional_mean;
+  const contribution = bin?.metrics?.contribution;
+  const lines = [];
+  if (Number.isFinite(pdf)) lines.push(`pdf: ${formatScientific(pdf, 6)}`);
+  if (Number.isFinite(relativeError)) lines.push(`rel error: ${formatScientific(relativeError, 6)}`);
+  if (Number.isFinite(errorContribution)) lines.push(`error contribution: ${formatScientific(errorContribution, 6)}`);
+  if (conditional && Number.isFinite(Number(conditional.value))) {
+    const error = Number(conditional.error);
+    lines.push(
+      `conditional mean: ${formatScientific(Number(conditional.value), 6)}${
+        Number.isFinite(error) ? ` ±${formatScientific(error, 6)}` : ""
+      }`,
+    );
+  }
+  if (contribution && Number.isFinite(Number(contribution.value))) {
+    const error = Number(contribution.error);
+    lines.push(
+      `contribution: ${formatScientific(Number(contribution.value), 6)}${
+        Number.isFinite(error) ? ` ±${formatScientific(error, 6)}` : ""
+      }`,
+    );
+  }
+  return lines;
+};
+
 const EDGE_EPSILON = 1e-9;
 
 const nearlyEqual = (left, right, epsilon = EDGE_EPSILON) => {
@@ -2139,6 +2168,7 @@ const HistogramPanel = ({
               histogramEntryCountLine(bin),
               `abs error: ${absErrorText}`,
               `rel error: ${relErrorText}`,
+              ...discreteBinInfoLines(bin),
             ]
               .filter(Boolean)
               .join("<br/>");
@@ -2812,7 +2842,7 @@ const HistogramPanel = ({
                     ".MuiSelect-select": { py: 0.75 },
                   }}
                 >
-                  <MenuItem value={HISTOGRAM_SORT_CANONICAL}>Default</MenuItem>
+                  <MenuItem value={HISTOGRAM_SORT_CANONICAL}>Lexicographic</MenuItem>
                   <MenuItem value={HISTOGRAM_SORT_BY_VALUE}>By Value</MenuItem>
                   <MenuItem value={HISTOGRAM_SORT_BY_ABS_VALUE}>By |Value|</MenuItem>
                 </Select>

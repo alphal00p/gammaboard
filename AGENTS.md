@@ -30,6 +30,10 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   `gammaboard-jsonrpc-v1` `eval_batch` method. Requests use ragged row-major
   coordinate arrays plus offsets; responses use `values_row_major`. Process
   evaluator tasks should use a vector accumulator with matching components.
+- Process samplers may expose `discrete_pdf` for batched marginal PDFs over
+  discrete subspaces. The live sampler runner probes it during performance
+  snapshots and exposes the latest values through sampler diagnostics; panel
+  projection must not rebuild large samplers to fetch these values.
 - Multi-component observables use vector accumulator models. Full raster
   outputs use `FullVectorAccumulatorState` with named components.
 

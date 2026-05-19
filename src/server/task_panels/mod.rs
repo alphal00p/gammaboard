@@ -71,6 +71,7 @@ pub struct TaskPanelContext<'a> {
     pub run_target: Option<&'a JsonValue>,
     pub completed_samples_per_second: Option<f64>,
     pub smoothed_eta_seconds: Option<f64>,
+    pub sampler_engine_diagnostics: Option<&'a JsonValue>,
 }
 
 impl TaskPanelContext<'_> {
@@ -163,6 +164,7 @@ fn project_current_panels(
     run_target: Option<&JsonValue>,
     completed_samples_per_second: Option<f64>,
     smoothed_eta_seconds: Option<f64>,
+    sampler_engine_diagnostics: Option<&JsonValue>,
     current_accumulator: Option<&AccumulatorState>,
     latest_stage_snapshot: Option<&TaskStageSnapshot>,
     latest_persisted_snapshot: Option<&TaskOutputSnapshot>,
@@ -185,6 +187,7 @@ fn project_current_panels(
                     run_target,
                     completed_samples_per_second,
                     smoothed_eta_seconds,
+                    sampler_engine_diagnostics,
                 })
                 .transpose()
         })
@@ -611,6 +614,7 @@ impl TaskPanelSource {
         run_target: Option<&JsonValue>,
         completed_samples_per_second: Option<f64>,
         smoothed_eta_seconds: Option<f64>,
+        sampler_engine_diagnostics: Option<&JsonValue>,
         current_accumulator: Option<&AccumulatorState>,
         latest_stage_snapshot: Option<&TaskStageSnapshot>,
         latest_persisted_snapshot: Option<&TaskOutputSnapshot>,
@@ -624,6 +628,7 @@ impl TaskPanelSource {
             run_target,
             completed_samples_per_second,
             smoothed_eta_seconds,
+            sampler_engine_diagnostics,
             current_accumulator,
             latest_stage_snapshot,
             latest_persisted_snapshot,
@@ -1055,6 +1060,7 @@ mod tests {
                 TaskPanelCursor::default(),
                 &run_task,
                 &JsonValue::Object(Default::default()),
+                None,
                 None,
                 None,
                 None,

@@ -19,9 +19,11 @@ use crate::runners::queue::QueueUtilizationSnapshot;
 use crate::runners::rolling_metric::RollingMetric;
 use crate::runners::window_metric::WindowMetric;
 use crate::runners::{QueueTickResult, SamplerQueue, SamplerQueueCheckpoint, SamplerQueueConfig};
+use crate::sampling::DiscreteSubspace;
 use crate::sampling::{SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
@@ -225,6 +227,125 @@ pub struct SamplerAggregatorRunner<S> {
 struct CompletedIngestStats {
     completed_batches: usize,
     completed_samples_delta: i64,
+}
+
+fn collect_discrete_pdf_subspaces(
+    state: &AccumulatorState,
+    config: &crate::core::DiscreteProjectionConfig,
+    max_total_bins: usize,
+) -> Result<Vec<(String, Vec<i64>, DiscreteSubspace)>, EngineError> {
+    let mut out = Vec::new();
+    match state {
+        AccumulatorState::Scalar(state) => {
+            collect_discrete_pdf_subspaces_from_bins(
+                &state.discrete_bins,
+                config,
+                max_total_bins,
+                None,
+                &mut out,
+            )?;
+        }
+        AccumulatorState::Vector(state) => {
+            for component in state
+                .components
+                .iter()
+                .chain(std::iter::once(&state.projection))
+            {
+                collect_discrete_pdf_subspaces_from_bins(
+                    &component.state.discrete_bins,
+                    config,
+                    max_total_bins,
+                    Some(&component.name),
+                    &mut out,
+                )?;
+            }
+        }
+        _ => {}
+    }
+    Ok(out)
+}
+
+fn collect_discrete_pdf_subspaces_from_bins(
+    bins: &BTreeMap<String, crate::evaluation::accumulator::DiscreteProjectionBinState>,
+    config: &crate::core::DiscreteProjectionConfig,
+    max_total_bins: usize,
+    component_name: Option<&str>,
+    out: &mut Vec<(String, Vec<i64>, DiscreteSubspace)>,
+) -> Result<(), EngineError> {
+    for item in &config.items {
+        let projection_name = component_name
+            .map(|component| format!("{}.{}", item.name, component))
+            .unwrap_or_else(|| item.name.clone());
+        let mut seen = BTreeSet::<Vec<i64>>::new();
+        for bin in bins.values() {
+            if !discrete_matches_fixed_dims(&bin.discrete, item)? {
+                continue;
+            }
+            let Some(key) = discrete_projection_key(&bin.discrete, item) else {
+                continue;
+            };
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            if seen.len() > max_total_bins {
+                break;
+            }
+            let mut fixed_dims = BTreeMap::new();
+            for (raw_dim, value) in &item.fixed_dims {
+                let dim = raw_dim.parse::<usize>().map_err(|_| {
+                    EngineError::engine(format!(
+                        "discrete projection '{}' fixed dimension '{}' is not a non-negative integer dimension index",
+                        item.name, raw_dim
+                    ))
+                })?;
+                fixed_dims.insert(dim, *value);
+            }
+            for (dim, value) in item.dims.iter().zip(key.iter()) {
+                fixed_dims.insert(*dim, *value);
+            }
+            out.push((
+                projection_name.clone(),
+                key,
+                DiscreteSubspace { fixed_dims },
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn discrete_matches_fixed_dims(
+    discrete: &[i64],
+    item: &crate::core::NamedDiscreteProjection,
+) -> Result<bool, EngineError> {
+    for (raw_dim, fixed_value) in &item.fixed_dims {
+        let dim = raw_dim.parse::<usize>().map_err(|_| {
+            EngineError::engine(format!(
+                "discrete projection '{}' fixed dimension '{}' is not a non-negative integer dimension index",
+                item.name, raw_dim
+            ))
+        })?;
+        let Some(actual) = discrete.get(dim) else {
+            return Ok(false);
+        };
+        if actual != fixed_value {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn discrete_projection_key(
+    discrete: &[i64],
+    item: &crate::core::NamedDiscreteProjection,
+) -> Option<Vec<i64>> {
+    item.dims
+        .iter()
+        .map(|dim| discrete.get(*dim).copied())
+        .collect()
+}
+
+fn discrete_key_label(key: &[i64]) -> String {
+    serde_json::to_string(key).unwrap_or_else(|_| "[]".to_string())
 }
 
 struct PendingAggregationFlushTask {
@@ -1352,6 +1473,19 @@ where
             completed_fetch_utilization,
         } = self.queue.take_utilization_snapshot();
         let mut engine_diagnostics = self.sampler.get_diagnostics();
+        if let Some(discrete_pdf) = self.discrete_pdf_diagnostics()? {
+            match &mut engine_diagnostics {
+                JsonValue::Object(object) => {
+                    object.insert("discrete_pdf".to_string(), discrete_pdf);
+                }
+                other => {
+                    engine_diagnostics = json!({
+                        "sampler": other.clone(),
+                        "discrete_pdf": discrete_pdf,
+                    });
+                }
+            }
+        }
         match &mut engine_diagnostics {
             JsonValue::Object(object) => {
                 object.insert("runner".to_string(), self.current_runner_diagnostics());
@@ -1389,6 +1523,46 @@ where
             .await?;
         self.last_snapshot_at = Instant::now();
         Ok(())
+    }
+
+    fn discrete_pdf_diagnostics(&mut self) -> Result<Option<JsonValue>, RunnerError> {
+        let Some(config) = self
+            .observable_state
+            .config()
+            .discrete_projections()
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let projected = collect_discrete_pdf_subspaces(
+            &self.observable_state,
+            &config,
+            config.max_total_bins_or_default(),
+        )?;
+        if projected.is_empty() {
+            return Ok(None);
+        }
+        let subspaces = projected
+            .iter()
+            .map(|(_, _, subspace)| subspace.clone())
+            .collect::<Vec<_>>();
+        let values = self.sampler.discrete_pdf_batch(&subspaces)?;
+        let mut projections = serde_json::Map::new();
+        for ((projection_name, key, _), value) in projected.into_iter().zip(values) {
+            let entry = projections
+                .entry(projection_name)
+                .or_insert_with(|| JsonValue::Object(serde_json::Map::new()));
+            if let JsonValue::Object(object) = entry {
+                object.insert(
+                    discrete_key_label(&key),
+                    value.map(JsonValue::from).unwrap_or(JsonValue::Null),
+                );
+            }
+        }
+        Ok(Some(json!({
+            "schema": "gammaboard-discrete-pdf-v1",
+            "projections": projections,
+        })))
     }
 
     async fn evaluator_fleet_snapshot(&self) -> Result<EvaluatorFleetSnapshot, RunnerError> {

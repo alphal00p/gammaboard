@@ -2,7 +2,8 @@ use crate::core::{BuildError, EngineError};
 use crate::core::{LineRasterGeometry, PlaneRasterGeometry};
 use crate::evaluation::{Batch, Point};
 use crate::sampling::{
-    LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot,
+    DiscreteSubspace, LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator,
+    SamplerAggregatorSnapshot,
 };
 use crate::utils::domain::Domain;
 use num::Integer;
@@ -616,6 +617,13 @@ impl SamplerAggregator for PdfAdaptationRasterPlaneSampler {
         self.source_sampler.pdf_batch(points)
     }
 
+    fn discrete_pdf_batch(
+        &mut self,
+        subspaces: &[DiscreteSubspace],
+    ) -> Result<Vec<Option<f64>>, EngineError> {
+        self.source_sampler.discrete_pdf_batch(subspaces)
+    }
+
     fn persisted_output(&mut self) -> Result<Option<serde_json::Value>, EngineError> {
         serde_json::to_value(self.output_for_frontend())
             .map(Some)
@@ -700,6 +708,13 @@ impl SamplerAggregator for PdfAdaptationRasterLineSampler {
 
     fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
         self.source_sampler.pdf_batch(points)
+    }
+
+    fn discrete_pdf_batch(
+        &mut self,
+        subspaces: &[DiscreteSubspace],
+    ) -> Result<Vec<Option<f64>>, EngineError> {
+        self.source_sampler.discrete_pdf_batch(subspaces)
     }
 
     fn persisted_output(&mut self) -> Result<Option<serde_json::Value>, EngineError> {

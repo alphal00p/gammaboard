@@ -10,7 +10,7 @@ use crate::{core::RunStageSnapshot, runners::sampler_aggregator::SamplerAggregat
 
 pub use batch_transform::{SphericalBatchTransformParams, UnitBallBatchTransformParams};
 pub use latent_batch::{LatentBatch, LatentBatchPayload, LatentBatchSpec, SamplePlan};
-pub use sampler::{PdfPoint, SamplerAggregator, SamplerAggregatorSnapshot};
+pub use sampler::{DiscreteSubspace, PdfPoint, SamplerAggregator, SamplerAggregatorSnapshot};
 pub use sampler_aggregator::{
     HavanaInferenceSamplerParams, HavanaInferenceSource, HavanaSamplerParams,
     NaiveMonteCarloSamplerParams, PdfAdaptationImagePersistedOutput,

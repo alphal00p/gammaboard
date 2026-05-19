@@ -6,7 +6,7 @@ secure_cookie = false
 allow_local_node_spawn = true
 
 [frontend]
-build_dir = "../../../dashboard/build"
+build_dir = "dashboard/build"
 host = "127.0.0.1"
 port = 8080
 

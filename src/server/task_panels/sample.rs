@@ -299,7 +299,11 @@ fn discrete_projection_bundle_projector(
         move |ctx| {
             Ok(
                 sample_accumulator(ctx, &current_accumulator_config)?.and_then(|accumulator| {
-                    discrete_projection_bundle_panel(accumulator, &current_projection_config)
+                    discrete_projection_bundle_panel(
+                        accumulator,
+                        &current_projection_config,
+                        ctx.sampler_engine_diagnostics,
+                    )
                 }),
             )
         },
@@ -307,7 +311,11 @@ fn discrete_projection_bundle_projector(
             Ok(
                 decode_history_observable(ctx, &history_accumulator_config)?.and_then(
                     |accumulator| {
-                        discrete_projection_bundle_panel(accumulator, &history_projection_config)
+                        discrete_projection_bundle_panel(
+                            accumulator,
+                            &history_projection_config,
+                            None,
+                        )
                     },
                 ),
             )
@@ -1198,12 +1206,19 @@ fn gammaloop_histogram_bundle_panel(accumulator: AccumulatorState) -> Option<Pan
 fn discrete_projection_bundle_panel(
     accumulator: AccumulatorState,
     config: &DiscreteProjectionConfig,
+    sampler_engine_diagnostics: Option<&JsonValue>,
 ) -> Option<PanelState> {
+    let discrete_pdf = sampler_engine_diagnostics.and_then(discrete_pdf_cache);
     let payload = match &accumulator {
-        AccumulatorState::Scalar(state) => {
-            scalar_discrete_projection_payload(&state.discrete_bins, state.count, config)
+        AccumulatorState::Scalar(state) => scalar_discrete_projection_payload(
+            &state.discrete_bins,
+            state.count,
+            config,
+            discrete_pdf.as_ref(),
+        ),
+        AccumulatorState::Vector(state) => {
+            vector_discrete_projection_payload(state, config, discrete_pdf.as_ref())
         }
-        AccumulatorState::Vector(state) => vector_discrete_projection_payload(state, config),
         _ => return None,
     };
     let payload = match payload {
@@ -1257,6 +1272,7 @@ fn scalar_discrete_projection_payload(
     bins: &BTreeMap<String, DiscreteProjectionBinState>,
     total_count: i64,
     config: &DiscreteProjectionConfig,
+    discrete_pdf: Option<&DiscretePdfCache>,
 ) -> Result<JsonValue, String> {
     let projections = config
         .items
@@ -1270,9 +1286,11 @@ fn scalar_discrete_projection_payload(
                     "bins": scalar_projected_bins(
                         bins,
                         item,
+                        &item.name,
                         config.normalization,
                         total_count,
-                        config.max_total_bins_or_default()
+                        config.max_total_bins_or_default(),
+                        discrete_pdf
                     )?,
                 }),
             ))
@@ -1287,6 +1305,7 @@ fn scalar_discrete_projection_payload(
 fn vector_discrete_projection_payload(
     state: &crate::evaluation::VectorAccumulatorState,
     config: &DiscreteProjectionConfig,
+    discrete_pdf: Option<&DiscretePdfCache>,
 ) -> Result<JsonValue, String> {
     let mut projections = serde_json::Map::new();
     for component in state
@@ -1304,9 +1323,11 @@ fn vector_discrete_projection_payload(
                     "bins": scalar_projected_bins(
                         &component.state.discrete_bins,
                         item,
+                        &name,
                         config.normalization,
                         component.state.count,
-                        config.max_total_bins_or_default()
+                        config.max_total_bins_or_default(),
+                        discrete_pdf
                     )?,
                 }),
             );
@@ -1321,9 +1342,11 @@ fn vector_discrete_projection_payload(
 fn scalar_projected_bins(
     bins: &BTreeMap<String, DiscreteProjectionBinState>,
     item: &NamedDiscreteProjection,
+    projection_name: &str,
     normalization: DiscreteProjectionNormalization,
     total_count: i64,
     max_total_bins: usize,
+    discrete_pdf: Option<&DiscretePdfCache>,
 ) -> Result<Vec<JsonValue>, String> {
     let mut projected = BTreeMap::<Vec<i64>, DiscreteProjectionBinState>::new();
     for bin in bins.values() {
@@ -1346,11 +1369,39 @@ fn scalar_projected_bins(
         .values()
         .enumerate()
         .map(|(index, bin)| {
+            let pdf = discrete_pdf.and_then(|cache| cache.get(projection_name, &bin.discrete));
+            let value = scalar_bin_value(bin, normalization, total_count);
+            let error = scalar_bin_error(bin, normalization, total_count);
+            let relative_error = if value != 0.0 {
+                Some((error / value).abs())
+            } else {
+                None
+            };
+            let error_contribution = error * error;
             json!({
                 "start": index as f64,
                 "stop": index as f64 + 1.0,
-                "value": scalar_bin_value(bin, normalization, total_count),
-                "error": scalar_bin_error(bin, normalization, total_count),
+                "value": value,
+                "error": error,
+                "pdf": pdf,
+                "relative_error": relative_error,
+                "error_contribution": error_contribution,
+                "metrics": {
+                    "contribution": {
+                        "value": bin.contribution_mean(total_count),
+                        "error": bin.contribution_stderr(total_count),
+                    },
+                    "conditional_mean": {
+                        "value": bin.mean(),
+                        "error": bin.stderr(),
+                    },
+                    "pdf": {
+                        "value": pdf,
+                    },
+                    "error_contribution": {
+                        "value": error_contribution,
+                    },
+                },
                 "label": projection_key_label(&bin.discrete),
                 "bin_id": index as i64,
             })
@@ -1442,6 +1493,35 @@ fn projection_key_label(key: &[i64]) -> String {
         [value] => value.to_string(),
         values => format!("{values:?}"),
     }
+}
+
+struct DiscretePdfCache<'a> {
+    projections: &'a serde_json::Map<String, JsonValue>,
+}
+
+impl DiscretePdfCache<'_> {
+    fn get(&self, projection_name: &str, key: &[i64]) -> Option<f64> {
+        self.projections
+            .get(projection_name)
+            .and_then(JsonValue::as_object)
+            .and_then(|projection| projection.get(&discrete_pdf_key(key)))
+            .and_then(JsonValue::as_f64)
+            .filter(|value| value.is_finite())
+    }
+}
+
+fn discrete_pdf_cache(diagnostics: &JsonValue) -> Option<DiscretePdfCache<'_>> {
+    let cache = diagnostics.get("discrete_pdf")?;
+    if cache.get("schema").and_then(JsonValue::as_str) != Some("gammaboard-discrete-pdf-v1") {
+        return None;
+    }
+    Some(DiscretePdfCache {
+        projections: cache.get("projections")?.as_object()?,
+    })
+}
+
+fn discrete_pdf_key(key: &[i64]) -> String {
+    serde_json::to_string(key).unwrap_or_else(|_| "[]".to_string())
 }
 
 fn gammaloop_evaluation_diagnostics_panel(accumulator: AccumulatorState) -> Option<PanelState> {
@@ -1639,8 +1719,8 @@ mod tests {
 
     fn projected_values(normalization: DiscreteProjectionNormalization) -> Vec<f64> {
         let (bins, item) = scalar_projection_fixture();
-        let projected =
-            scalar_projected_bins(&bins, &item, normalization, 3, 16).expect("project bins");
+        let projected = scalar_projected_bins(&bins, &item, &item.name, normalization, 3, 16, None)
+            .expect("project bins");
         assert_eq!(projected.len(), 2);
         let values = projected
             .iter()
@@ -1683,9 +1763,11 @@ mod tests {
         let projected = scalar_projected_bins(
             &bins,
             &item,
+            &item.name,
             DiscreteProjectionNormalization::ConditionalMean,
             22,
             16,
+            None,
         )
         .expect("project variable-depth bins");
 

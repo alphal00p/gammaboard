@@ -2,10 +2,16 @@ use crate::core::{BuildError, EngineError, SamplerAggregatorConfig};
 use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
+use std::collections::BTreeMap;
 
 use super::{LatentBatchSpec, SamplePlan};
 
 pub type PdfPoint = (Vec<i64>, Vec<f64>);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscreteSubspace {
+    pub fixed_dims: BTreeMap<usize, i64>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -75,6 +81,12 @@ pub trait SamplerAggregator: Send {
     fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError>;
     fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
         Ok(vec![None; points.len()])
+    }
+    fn discrete_pdf_batch(
+        &mut self,
+        subspaces: &[DiscreteSubspace],
+    ) -> Result<Vec<Option<f64>>, EngineError> {
+        Ok(vec![None; subspaces.len()])
     }
     fn global_pdf_norm(&mut self) -> Result<f64, EngineError> {
         Ok(1.0)

@@ -166,6 +166,22 @@ Return either an array of `f64 | null` values or `null` when unsupported:
 { "values": [0.5, 0.25] }
 ```
 
+`discrete_pdf` probes marginal PDFs for discrete subspaces:
+
+```json
+{
+  "subspaces": [
+    { "fixed_dims": [{ "dim": 0, "value": 2 }] }
+  ]
+}
+```
+
+Return either an array of `f64 | null` values or `null` when unsupported:
+
+```json
+{ "values": [0.125] }
+```
+
 `snapshot` returns any JSON-safe state needed to restore the sampler:
 
 ```json
@@ -214,7 +230,7 @@ The Python examples include worker scripts that implement this protocol and then
 
 Evaluator classes implement `eval(xs_discrete, xs_continuous)`.
 
-Sampler classes implement `sample_plan`, `produce_latent_batch`, `training_samples_remaining`, `ingest_training_values`, `snapshot`, and optional `pdf` / `get_diagnostics`.
+Sampler classes implement `sample_plan`, `produce_latent_batch`, `training_samples_remaining`, `ingest_training_values`, `snapshot`, and optional `pdf` / `discrete_pdf` / `get_diagnostics`.
 
 Optional `from_config(...)` and `from_snapshot(...)` constructors receive homogeneous dimensions derived from `domain` plus the TOML `args` without the wrapper-only `module` and `class` fields.
 

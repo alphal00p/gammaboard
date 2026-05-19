@@ -310,6 +310,31 @@ while True:
                 continue
             pdf = np.asarray(pdf, dtype=np.float64).reshape((nr_samples,))
             send_result(req_id, {"values": pdf.tolist()})
+        elif method == "discrete_pdf":
+            if sampler is None:
+                raise RuntimeError("worker not initialized")
+            subspaces = params.get("subspaces", [])
+            values = (
+                sampler.discrete_pdf(subspaces)
+                if hasattr(sampler, "discrete_pdf")
+                else None
+            )
+            if values is None:
+                send_result(req_id, {"values": None})
+                continue
+            if len(values) != len(subspaces):
+                raise ValueError(
+                    f"discrete_pdf returned {len(values)} values for {len(subspaces)} subspaces"
+                )
+            send_result(
+                req_id,
+                {
+                    "values": [
+                        None if value is None else float(value)
+                        for value in values
+                    ]
+                },
+            )
         elif method == "snapshot":
             if sampler is None:
                 raise RuntimeError("worker not initialized")

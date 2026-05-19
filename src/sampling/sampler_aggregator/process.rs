@@ -9,7 +9,8 @@ use crate::evaluation::{Batch, Point};
 use crate::process_runtime::build_process_worker_command;
 use crate::process_worker::{PROCESS_PROTOCOL, ProcessWorker, pipe_process_stderr};
 use crate::sampling::{
-    LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot,
+    DiscreteSubspace, LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator,
+    SamplerAggregatorSnapshot,
 };
 use crate::utils::domain::Domain;
 
@@ -134,6 +135,13 @@ impl SamplerAggregator for ProcessSampler {
 
     fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
         self.worker_mut()?.pdf_batch(points)
+    }
+
+    fn discrete_pdf_batch(
+        &mut self,
+        subspaces: &[DiscreteSubspace],
+    ) -> Result<Vec<Option<f64>>, EngineError> {
+        self.worker_mut()?.discrete_pdf_batch(subspaces)
     }
 
     fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
@@ -422,6 +430,63 @@ impl ProcessSamplerWorker {
                     return Err(EngineError::engine(format!(
                         "process sampler pdf output size mismatch: expected {}, got {}",
                         points.len(),
+                        values.len()
+                    )));
+                }
+                values
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        if value.is_null() {
+                            return Ok(None);
+                        }
+                        value.as_f64().map(Some).ok_or_else(|| {
+                            EngineError::engine(format!(
+                                "process sampler response field 'values[{index}]' must be f64 or null"
+                            ))
+                        })
+                    })
+                    .collect()
+            }
+            Some(_) => Err(EngineError::engine(
+                "process sampler response field 'values' must be an array or null",
+            )),
+        }
+    }
+
+    fn discrete_pdf_batch(
+        &mut self,
+        subspaces: &[DiscreteSubspace],
+    ) -> Result<Vec<Option<f64>>, EngineError> {
+        let response = match self.process.request(
+            "discrete_pdf",
+            serde_json::json!({
+                "subspaces": subspaces.iter().map(|subspace| {
+                    serde_json::json!({
+                        "fixed_dims": subspace.fixed_dims.iter().map(|(dim, value)| {
+                            serde_json::json!({"dim": dim, "value": value})
+                        }).collect::<Vec<_>>(),
+                    })
+                }).collect::<Vec<_>>(),
+            }),
+        ) {
+            Ok(response) => response,
+            Err(err)
+                if err.contains("unknown method")
+                    || err.contains("method not found")
+                    || err.contains("Method not found") =>
+            {
+                return Ok(vec![None; subspaces.len()]);
+            }
+            Err(err) => return Err(EngineError::engine(err)),
+        };
+        match response.get("values") {
+            Some(Value::Null) | None => Ok(vec![None; subspaces.len()]),
+            Some(Value::Array(values)) => {
+                if values.len() != subspaces.len() {
+                    return Err(EngineError::engine(format!(
+                        "process sampler discrete_pdf output size mismatch: expected {}, got {}",
+                        subspaces.len(),
                         values.len()
                     )));
                 }
