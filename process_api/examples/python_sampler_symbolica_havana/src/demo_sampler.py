@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import base64
+import itertools
+import math
 from typing import Any
 
-from symbolica import NumericalIntegrator, Sample
+from symbolica import NumericalIntegrator, Probe, Sample
 
 
 class SampleBatch:
@@ -35,6 +37,13 @@ def sample_weight(sample: Sample) -> float:
     if not sample.weights:
         raise ValueError("symbolica sample did not expose weights")
     return float(sample.weights[0])
+
+
+def pdf_from_probe_weight(weight: float) -> float:
+    weight = float(weight)
+    if not math.isfinite(weight) or weight <= 0.0:
+        return 0.0
+    return 1.0 / weight
 
 
 class SymbolicaHavanaSampler:
@@ -220,6 +229,62 @@ class SymbolicaHavanaSampler:
             rate = self.current_training_rate()
             self.integrator.update(rate, rate)
 
+    def pdf(self, xs_discrete: Any, xs_continuous: Any) -> list[float]:
+        values: list[float] = []
+        for discrete, continuous in zip(xs_discrete, xs_continuous):
+            d = [int(value) for value in discrete]
+            c = [float(value) for value in continuous]
+            if len(d) != len(self.discrete_cardinalities):
+                raise ValueError(
+                    f"pdf discrete dimension mismatch: expected {len(self.discrete_cardinalities)}, got {len(d)}"
+                )
+            if len(c) != self.continuous_dims:
+                raise ValueError(
+                    f"pdf continuous dimension mismatch: expected {self.continuous_dims}, got {len(c)}"
+                )
+            if any(
+                value < 0 or value >= cardinality
+                for value, cardinality in zip(d, self.discrete_cardinalities)
+            ):
+                values.append(0.0)
+                continue
+            if any(not math.isfinite(value) or value < 0.0 or value > 1.0 for value in c):
+                values.append(0.0)
+                continue
+
+            probe = Probe.continuous(c) if not d else Probe.discrete(d, c)
+            values.append(pdf_from_probe_weight(self.integrator.probe(probe)))
+        return values
+
+    def discrete_pdf(self, subspaces: list[dict[str, Any]]) -> list[float]:
+        values: list[float] = []
+        for subspace in subspaces:
+            fixed_dims = parse_fixed_dims(subspace)
+            if any(dim < 0 or dim >= len(self.discrete_cardinalities) for dim in fixed_dims):
+                values.append(0.0)
+                continue
+            if any(
+                value < 0 or value >= self.discrete_cardinalities[dim]
+                for dim, value in fixed_dims.items()
+            ):
+                values.append(0.0)
+                continue
+            if not self.discrete_cardinalities:
+                values.append(1.0 if not fixed_dims else 0.0)
+                continue
+
+            total = 0.0
+            ranges = [
+                [fixed_dims[dim]]
+                if dim in fixed_dims
+                else range(self.discrete_cardinalities[dim])
+                for dim in range(len(self.discrete_cardinalities))
+            ]
+            for path in itertools.product(*ranges):
+                total += pdf_from_probe_weight(self.integrator.probe(Probe.discrete(list(path))))
+            values.append(total)
+        return values
+
     def snapshot(self) -> dict[str, Any]:
         return {
             "seed": self.seed,
@@ -245,3 +310,13 @@ class SymbolicaHavanaSampler:
             "training_window_samples_remaining": self.training_window_samples_remaining(),
             "training_rate": self.current_training_rate(),
         }
+
+
+def parse_fixed_dims(subspace: dict[str, Any]) -> dict[int, int]:
+    raw = subspace.get("fixed_dims", [])
+    if isinstance(raw, dict):
+        return {int(dim): int(value) for dim, value in raw.items()}
+    fixed_dims: dict[int, int] = {}
+    for entry in raw:
+        fixed_dims[int(entry["dim"])] = int(entry["value"])
+    return fixed_dims

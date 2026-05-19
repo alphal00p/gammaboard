@@ -96,6 +96,31 @@ def require_homogeneous_offsets(params, field, nr_samples, width):
         )
 
 
+def normalize_discrete_subspaces(params):
+    raw_subspaces = params.get("subspaces", [])
+    if not isinstance(raw_subspaces, list):
+        raise TypeError("subspaces must be an array")
+    normalized = []
+    for subspace in raw_subspaces:
+        if not isinstance(subspace, dict):
+            raise TypeError("each subspace must be an object")
+        fixed_dims = subspace.get("fixed_dims", [])
+        if isinstance(fixed_dims, dict):
+            entries = [
+                {"dim": int(dim), "value": int(value)}
+                for dim, value in fixed_dims.items()
+            ]
+        elif isinstance(fixed_dims, list):
+            entries = [
+                {"dim": int(entry["dim"]), "value": int(entry["value"])}
+                for entry in fixed_dims
+            ]
+        else:
+            raise TypeError("subspace.fixed_dims must be an array or object")
+        normalized.append({"fixed_dims": entries})
+    return normalized
+
+
 def fixed_domain_shape(domain):
     if not isinstance(domain, dict):
         raise ValueError("domain must be an object")
@@ -313,7 +338,7 @@ while True:
         elif method == "discrete_pdf":
             if sampler is None:
                 raise RuntimeError("worker not initialized")
-            subspaces = params.get("subspaces", [])
+            subspaces = normalize_discrete_subspaces(params)
             values = (
                 sampler.discrete_pdf(subspaces)
                 if hasattr(sampler, "discrete_pdf")
