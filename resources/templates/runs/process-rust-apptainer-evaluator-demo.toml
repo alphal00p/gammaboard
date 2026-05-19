@@ -27,6 +27,19 @@ kind = "vector"
 components = ["value"]
 training_projection = { kind = "component", name = "value" }
 
+[task_queue.accumulator.discrete_projections]
+max_total_bins = 16
+
+[[task_queue.accumulator.discrete_projections.items]]
+name = "top_level"
+dims = [0]
+fixed_dims = {}
+
+[[task_queue.accumulator.discrete_projections.items]]
+name = "d0_1_subspace"
+dims = [1, 2]
+fixed_dims = { "0" = 1 }
+
 [[task_queue]]
 name = "sample"
 kind = "sample"

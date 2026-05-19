@@ -212,28 +212,80 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
         &mut self,
         subspaces: &[DiscreteSubspace],
     ) -> Result<Vec<Option<f64>>, EngineError> {
-        let Some(cardinalities) = self.domain.fixed_discrete_cardinalities() else {
-            return Ok(vec![None; subspaces.len()]);
-        };
-        let total = cardinalities.iter().product::<usize>();
-        if total == 0 {
-            return Ok(vec![None; subspaces.len()]);
-        }
-        Ok(subspaces
+        subspaces
             .iter()
             .map(|subspace| {
-                let mut fixed_probability = 1.0;
-                for (dim, value) in &subspace.fixed_dims {
-                    let cardinality = *cardinalities.get(*dim)?;
-                    let value = usize::try_from(*value).ok()?;
-                    if value >= cardinality {
-                        return Some(0.0);
-                    }
-                    fixed_probability /= cardinality as f64;
-                }
-                Some(fixed_probability)
+                discrete_subspace_probability(&self.domain, &subspace.fixed_dims, 0).map(Some)
             })
-            .collect())
+            .collect()
+    }
+}
+
+fn discrete_subspace_probability(
+    domain: &Domain,
+    fixed_dims: &std::collections::BTreeMap<usize, i64>,
+    depth: usize,
+) -> Result<f64, EngineError> {
+    match domain {
+        Domain::Continuous { .. } => {
+            if fixed_dims.keys().any(|dim| *dim >= depth) {
+                Ok(0.0)
+            } else {
+                Ok(1.0)
+            }
+        }
+        Domain::Rectangular {
+            discrete_cardinalities,
+            ..
+        } => {
+            let mut probability = 1.0;
+            for (axis, cardinality) in discrete_cardinalities.iter().enumerate() {
+                if *cardinality == 0 {
+                    return Ok(0.0);
+                }
+                if let Some(value) = fixed_dims.get(&(depth + axis)) {
+                    let Ok(value) = usize::try_from(*value) else {
+                        return Ok(0.0);
+                    };
+                    if value >= *cardinality {
+                        return Ok(0.0);
+                    }
+                    probability /= *cardinality as f64;
+                }
+            }
+            if fixed_dims
+                .keys()
+                .any(|dim| *dim >= depth + discrete_cardinalities.len())
+            {
+                Ok(0.0)
+            } else {
+                Ok(probability)
+            }
+        }
+        Domain::Discrete { branches, .. } => {
+            if branches.is_empty() {
+                return Ok(0.0);
+            }
+            if let Some(value) = fixed_dims.get(&depth) {
+                let Ok(value) = usize::try_from(*value) else {
+                    return Ok(0.0);
+                };
+                let Some(branch) = branches.iter().find(|branch| branch.index == value) else {
+                    return Ok(0.0);
+                };
+                return Ok(
+                    discrete_subspace_probability(&branch.domain, fixed_dims, depth + 1)?
+                        / branches.len() as f64,
+                );
+            }
+            let mut probability = 0.0;
+            for branch in branches {
+                probability +=
+                    discrete_subspace_probability(&branch.domain, fixed_dims, depth + 1)?
+                        / branches.len() as f64;
+            }
+            Ok(probability)
+        }
     }
 }
 
