@@ -89,6 +89,14 @@ import {
   writeZoomPanelValue,
   zoomRangeChanged,
 } from "./panelView";
+import {
+  discreteBinInfoLines,
+  histogramControlEnabled,
+  metricNumber,
+  normalizeHistogramViews,
+  projectBinsForHistogramView,
+  resolveHistogramView,
+} from "./histogramViews";
 
 const ReactECharts = lazy(() =>
   Promise.all([import("echarts-for-react"), import("../../lib/echarts")]).then(([module]) => ({
@@ -504,110 +512,6 @@ const histogramEntryCountLine = (bin) => {
   const entryCount = Number(bin?.entry_count);
   if (!Number.isFinite(entryCount)) return null;
   return `entries: ${formatScientific(entryCount, 6)}`;
-};
-
-const finiteNumberOrNull = (value) =>
-  typeof value === "number" && Number.isFinite(value) ? value : null;
-
-const metricNumber = (bin, metricName) => {
-  if (typeof metricName !== "string" || metricName.length === 0) return null;
-  if (metricName === "error") return finiteNumberOrNull(bin?.error);
-  const topLevel = finiteNumberOrNull(bin?.[metricName]);
-  if (topLevel != null) return topLevel;
-  return finiteNumberOrNull(bin?.metrics?.[metricName]?.value);
-};
-
-const metricError = (bin, metricName) => {
-  if (metricName === "value") return finiteNumberOrNull(bin?.error);
-  return finiteNumberOrNull(bin?.metrics?.[metricName]?.error);
-};
-
-const normalizeHistogramViews = (views) =>
-  asArray(views)
-    .filter((view) => isObject(view) && typeof view.id === "string" && typeof view.label === "string")
-    .map((view) => ({
-      ...view,
-      kind:
-        view.kind === "bar_with_marker" || view.kind === "bar"
-          ? view.kind
-          : "bar",
-      value_metric: typeof view.value_metric === "string" ? view.value_metric : "value",
-      error_metric: typeof view.error_metric === "string" ? view.error_metric : null,
-      marker_metric: typeof view.marker_metric === "string" ? view.marker_metric : null,
-      delta_metric: typeof view.delta_metric === "string" ? view.delta_metric : null,
-    }));
-
-const resolveHistogramView = (views, selectedId) => {
-  const normalized = normalizeHistogramViews(views);
-  if (normalized.length === 0) {
-    return {
-      id: "value",
-      label: "Value",
-      kind: "bar",
-      value_metric: "value",
-      error_metric: "error",
-    };
-  }
-  return (
-    normalized.find((view) => view.id === selectedId) ||
-    normalized.find((view) => view.default === true) ||
-    normalized[0]
-  );
-};
-
-const histogramControlEnabled = (controls, key, fallback) => {
-  if (!isObject(controls)) return fallback;
-  return controls[key] === true;
-};
-
-const discreteBinInfoLines = (bin, selectedView = null) => {
-  const pdf = finiteNumberOrNull(bin?.pdf);
-  const pdfScaled = metricNumber(bin, "pdf_scaled_value");
-  const valuePdfMismatch = metricNumber(bin, "value_pdf_mismatch");
-  const contributionFraction = metricNumber(bin, "contribution_fraction");
-  const fractionPdfMismatch = metricNumber(bin, "fraction_pdf_mismatch");
-  const relativeError = finiteNumberOrNull(bin?.relative_error);
-  const errorContribution = finiteNumberOrNull(bin?.error_contribution);
-  const conditional = bin?.metrics?.conditional_mean;
-  const contribution = bin?.metrics?.contribution;
-  const lines = [];
-  const viewId = selectedView?.id || "value";
-  if (viewId === "pdf_compare") {
-    if (pdfScaled != null) lines.push(`pdf x <|I|>: ${formatScientific(pdfScaled, 6)}`);
-    if (valuePdfMismatch != null) lines.push(`delta: ${formatScientific(valuePdfMismatch, 6)}`);
-    if (pdf != null) lines.push(`pdf: ${formatScientific(pdf, 6)}`);
-  } else if (viewId === "share") {
-    if (contributionFraction != null) lines.push(`contribution / <|I|>: ${formatScientific(contributionFraction, 6)}`);
-    if (pdf != null) lines.push(`pdf: ${formatScientific(pdf, 6)}`);
-    if (fractionPdfMismatch != null) lines.push(`delta: ${formatScientific(fractionPdfMismatch, 6)}`);
-  } else if (viewId === "pdf_mismatch") {
-    if (valuePdfMismatch != null) lines.push(`value - pdf x <|I|>: ${formatScientific(valuePdfMismatch, 6)}`);
-  } else if (typeof bin?.pdf_status === "string" && bin.pdf_status !== "available") {
-    lines.push(`pdf: ${bin.pdf_status}`);
-  }
-  const conditionalValue = finiteNumberOrNull(conditional?.value);
-  if (viewId !== "value" && conditionalValue != null) {
-    const error = finiteNumberOrNull(conditional?.error);
-    lines.push(
-      `conditional mean: ${formatScientific(conditionalValue, 6)}${
-        error != null ? ` ±${formatScientific(error, 6)}` : ""
-      }`,
-    );
-  }
-  const contributionValue = finiteNumberOrNull(contribution?.value);
-  if (viewId !== "value" && contributionValue != null) {
-    const error = finiteNumberOrNull(contribution?.error);
-    lines.push(
-      `contribution: ${formatScientific(contributionValue, 6)}${
-        error != null ? ` ±${formatScientific(error, 6)}` : ""
-      }`,
-    );
-  }
-  if (viewId !== "value" && relativeError != null) lines.push(`rel error: ${formatScientific(relativeError, 6)}`);
-  if (viewId !== "value" && errorContribution != null) {
-    lines.push(`error contribution: ${formatScientific(errorContribution, 6)}`);
-  }
-  return lines;
 };
 
 const EDGE_EPSILON = 1e-9;
@@ -1844,23 +1748,7 @@ const HistogramPanel = ({
   const baseCanonicalBins = useMemo(() => {
     const rawBins = buildHistogramData(state?.bins);
     if (!hasDeclaredViews) return rawBins;
-    return rawBins
-      .map((bin) => {
-        const nextValue = metricNumber(bin, selectedView.value_metric);
-        if (nextValue == null) return null;
-        const nextError =
-          selectedView.error_metric != null
-            ? (metricNumber(bin, selectedView.error_metric) ?? metricError(bin, selectedView.value_metric) ?? 0)
-            : 0;
-        return {
-          ...bin,
-          value: nextValue,
-          error: Math.abs(nextError),
-          source_value: bin.value,
-          source_error: bin.error,
-        };
-      })
-      .filter(Boolean);
+    return projectBinsForHistogramView(rawBins, selectedView);
   }, [hasDeclaredViews, selectedView, state?.bins]);
   const sortedBaseBins = useMemo(() => {
     const isDiscreteHistogram = baseCanonicalBins.some((bin) => bin && (bin.label != null || bin.bin_id != null));
