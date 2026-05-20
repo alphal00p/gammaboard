@@ -18,10 +18,26 @@ const gridColor = "rgba(148,163,184,0.18)";
 const DISCRETE_BAR_CATEGORY_GAP = "30%";
 const DISCRETE_BAR_GAP = "30%";
 
+const baseCartesianGrid = {
+  left: 56,
+  right: 20,
+  top: 12,
+  bottom: 48,
+};
+
 const formatAxisValue = (value) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? formatScientific(numeric, 3) : "";
 };
+
+const baseAxisLabel = {
+  color: "#64748b",
+  fontSize: 12,
+  formatter: (value) => formatAxisValue(value),
+};
+
+const inferXAxisLabel = (panelId) => (String(panelId || "").includes("_history") ? "Nr samples" : null);
+const inferNumericXAxisLabel = (panelId) => inferXAxisLabel(panelId) || "x";
 
 const formatCategoryAxisValue = (value) => {
   if (value == null) return "";
@@ -144,6 +160,60 @@ const buildLogRatioPoints = (referenceBins, overlayBins, isDiscrete, xScale) =>
       return [x, logRatio, logRatio - logRatioError, logRatio + logRatioError];
     })
     .filter(Boolean);
+
+const buildErrorBarSeries = ({ name = "error", data, color = "#7c8a96", capPx = 4 }) => ({
+  type: "custom",
+  name,
+  data,
+  clip: true,
+  silent: true,
+  z: 5,
+  tooltip: { show: false },
+  renderItem: (params, api) => {
+    const xValue = Number(api.value(0));
+    const yLowValue = Number(api.value(1));
+    const yHighValue = Number(api.value(2));
+    if (!Number.isFinite(xValue) || !Number.isFinite(yLowValue) || !Number.isFinite(yHighValue)) return null;
+    const [xPx, yLowPx] = api.coord([xValue, yLowValue]);
+    const [, yHighPx] = api.coord([xValue, yHighValue]);
+    if (!Number.isFinite(xPx) || !Number.isFinite(yLowPx) || !Number.isFinite(yHighPx)) return null;
+    const coordSys = params?.coordSys;
+    if (!coordSys) return null;
+    const left = Number(coordSys.x);
+    const right = Number(coordSys.x) + Number(coordSys.width);
+    const top = Number(coordSys.y);
+    const bottom = Number(coordSys.y) + Number(coordSys.height);
+    if (!Number.isFinite(left) || !Number.isFinite(right) || !Number.isFinite(top) || !Number.isFinite(bottom)) {
+      return null;
+    }
+    if (xPx < left || xPx > right) return null;
+    if ((yLowPx < top && yHighPx < top) || (yLowPx > bottom && yHighPx > bottom)) return null;
+    const y1 = Math.max(top, Math.min(bottom, yLowPx));
+    const y2 = Math.max(top, Math.min(bottom, yHighPx));
+    const capLeft = Math.max(left, xPx - capPx);
+    const capRight = Math.min(right, xPx + capPx);
+    return {
+      type: "group",
+      children: [
+        {
+          type: "line",
+          shape: { x1: xPx, y1, x2: xPx, y2 },
+          style: { stroke: color, lineWidth: 1.2 },
+        },
+        {
+          type: "line",
+          shape: { x1: capLeft, y1, x2: capRight, y2: y1 },
+          style: { stroke: color, lineWidth: 1.2 },
+        },
+        {
+          type: "line",
+          shape: { x1: capLeft, y1: y2, x2: capRight, y2 },
+          style: { stroke: color, lineWidth: 1.2 },
+        },
+      ],
+    };
+  },
+});
 
 export const buildHistogramOption = ({
   binErrorData,
