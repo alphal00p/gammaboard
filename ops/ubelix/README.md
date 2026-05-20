@@ -27,11 +27,11 @@ Run on a UBELIX login node:
 ```bash
 python ubelix.py build gammaloop
 python ubelix.py build gammaboard
-python ubelix.py build apptainer resources/runtimes/madnis_gammaboard_api/runtime.sif resources/runtimes/madnis_gammaboard_api/apptainer.def
+python ubelix.py build apptainer resources/processes/madnis_gammaboard_api/madnis.sif resources/processes/madnis_gammaboard_api/apptainer.def
 ```
 
 GammaBoard and GammaLoop are service images under `images/`; each build overwrites `images/<family>/<family>.sif` and writes `images/<family>/<family>.meta`. Build logs go to `logs/slurm/build`.
-The MADNIS sampler is a process runtime image under `resources/runtimes/`; the generic Apptainer build writes `resources/runtimes/madnis_gammaboard_api/runtime.sif`. The runtime definition lives with the MADNIS GammaBoard API checkout so it can also be built outside this deploy repository.
+The MADNIS sampler is a process runtime image under `resources/processes/`; the generic Apptainer build writes `resources/processes/madnis_gammaboard_api/madnis.sif`. The runtime definition lives with the MADNIS GammaBoard API checkout so it can also be built outside this deploy repository.
 
 ## Start
 
@@ -113,7 +113,7 @@ Admin-protected commands accept `--admin-password` or `GAMMABOARD_ADMIN_PASSWORD
   images/{gammaboard,gammaloop}/      # service images
   logs/slurm/
   resources/db/{postgres,socket,logfile}
-  resources/runtimes/                 # process evaluator/sampler runtimes
+  resources/processes/                # process evaluator/sampler runtimes
   resources/states/
   runtime/
 ```
