@@ -1,0 +1,52 @@
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import Any
+
+
+class Evaluator(ABC):
+    """Optional base class for process evaluators.
+
+    Inheritance is not required. ``run_evaluator`` accepts any class or object
+    with a compatible ``eval`` method.
+    """
+
+    @abstractmethod
+    def eval(self, xs_discrete: Any, xs_continuous: Any) -> Any:
+        """Return values with shape ``(nr_samples,)`` or ``(nr_samples, nr_components)``."""
+
+
+class Sampler(ABC):
+    """Optional base class for process samplers.
+
+    Inheritance is not required. ``run_sampler`` accepts any class or object
+    with the required sampler methods.
+    """
+
+    @abstractmethod
+    def sample_plan(self) -> dict[str, Any]:
+        """Return a sampler plan, e.g. ``{"kind": "produce", "nr_samples": 1024}``."""
+
+    @abstractmethod
+    def produce_latent_batch(self, nr_samples: int) -> Any:
+        """Return a ``SampleBatch`` or compatible object."""
+
+    @abstractmethod
+    def ingest_training_values(self, training_values: Any) -> None:
+        """Ingest one scalar training value per produced training sample."""
+
+    @abstractmethod
+    def snapshot(self) -> Any:
+        """Return JSON-safe sampler state."""
+
+    def training_samples_remaining(self) -> int | None:
+        return None
+
+    def pdf(self, xs_discrete: Any, xs_continuous: Any) -> Any:
+        return None
+
+    def discrete_pdf(self, subspaces: list[dict[int, int]]) -> Any:
+        return None
+
+    def get_diagnostics(self) -> dict[str, Any]:
+        return {}
