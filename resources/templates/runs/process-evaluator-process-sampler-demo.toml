@@ -1,9 +1,9 @@
-# Process evaluator + process sampler demo using Nix as one packaging option.
+# Process evaluator + process sampler demo using a venv evaluator and Nix sampler.
 name = "process-evaluator-process-sampler-demo"
 
 [evaluator]
 kind = "process_evaluator"
-command = ["nix", "shell", "path:$resources/../process_api/examples/python_scalar_sin#runtime", "-c", "gammaboard-example-evaluator-worker"]
+command = ["$resources/../process_api/examples/python_scalar_sin/.venv/bin/python", "-u", "$resources/../process_api/examples/python_scalar_sin/evaluator_worker.py"]
 cwd = "$resources"
 domain = { rectangular = { discrete_cardinalities = [2, 3], continuous_dims = 2 } }
 args = { scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }

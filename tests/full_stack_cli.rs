@@ -1438,18 +1438,15 @@ async fn full_stack_cli_havana_pause_resume_matches_direct_baseline() -> anyhow:
 }
 
 #[tokio::test]
-#[ignore = "requires local postgres with CREATE DATABASE privilege, nix, and python+numpy"]
-async fn full_stack_cli_python_scalar_flake_e2e() -> anyhow::Result<()> {
+#[ignore = "requires local postgres with CREATE DATABASE privilege, scalar-sin .venv, nix, and python+numpy"]
+async fn full_stack_cli_python_scalar_venv_e2e() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let evaluator_flake_ref = format!(
-        "path:{}#runtime",
-        manifest_dir
-            .join("process_api/examples/python_scalar_sin")
-            .display()
-    );
+    let evaluator_dir = manifest_dir.join("process_api/examples/python_scalar_sin");
+    let evaluator_python = evaluator_dir.join(".venv/bin/python");
+    let evaluator_worker = evaluator_dir.join("evaluator_worker.py");
     let sampler_flake_ref = format!(
         "path:{}#runtime",
         manifest_dir
@@ -1458,11 +1455,11 @@ async fn full_stack_cli_python_scalar_flake_e2e() -> anyhow::Result<()> {
     );
     let config = temp_run_add_config(&format!(
         r#"
-name = "python-scalar-flake-e2e"
+name = "python-scalar-venv-e2e"
 
 [evaluator]
 kind = "process_evaluator"
-command = ["nix", "shell", "{evaluator_flake_ref}", "-c", "gammaboard-example-evaluator-worker"]
+command = ["{}", "-u", "{}"]
 domain = {{ rectangular = {{ discrete_cardinalities = [2, 3], continuous_dims = 2 }} }}
 args = {{ scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }}
 
@@ -1493,7 +1490,9 @@ name = "sample-a"
 kind = "sample"
 stop_condition = {{ max_samples = 64 }}
 sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", "shell", "{sampler_flake_ref}", "-c", "gammaboard-example-sampler-worker"], requires_training_values = true, args = {{ seed = 0, bins = 8, samples_for_update = 8, stop_training_after_n_samples = 64, initial_training_rate = 0.1, final_training_rate = 0.01 }} }} }}
-"#
+"#,
+        evaluator_python.display(),
+        evaluator_worker.display(),
     ));
 
     harness
@@ -1505,7 +1504,7 @@ sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", 
         .success();
 
     let run_id: i32 =
-        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'python-scalar-flake-e2e'")
+        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'python-scalar-venv-e2e'")
             .fetch_one(&harness.pool)
             .await?;
 
@@ -1516,7 +1515,7 @@ sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", 
             "assign",
             "w-1",
             "sampler-aggregator",
-            "python-scalar-flake-e2e",
+            "python-scalar-venv-e2e",
         ])
         .assert()
         .success();
@@ -1527,14 +1526,14 @@ sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", 
             "assign",
             "w-2",
             "evaluator",
-            "python-scalar-flake-e2e",
+            "python-scalar-venv-e2e",
         ])
         .assert()
         .success();
 
     harness
         .wait_for(
-            "python scalar flake task completes",
+            "python scalar venv task completes",
             Duration::from_secs(120),
             || async {
                 let state: String = sqlx::query_scalar(

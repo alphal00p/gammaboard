@@ -289,7 +289,7 @@ Curated run templates:
 - `resources/templates/runs/ghost_bump.toml`: Symbolica + Havana training on a 2D `(x, y)` domain plus `pdf_adaptation_image`.
 - `resources/templates/runs/symbolica-havana-pdf-1d2d.toml`: Symbolica + Havana training + both PDF adaptation task kinds.
 - `resources/templates/runs/process-rust-apptainer-evaluator-demo.toml`: Apptainer-packaged Rust process evaluator integration.
-- `resources/templates/runs/process-evaluator-process-sampler-demo.toml`: Process evaluator and sampler integration using Nix as one packaging option.
+- `resources/templates/runs/process-evaluator-process-sampler-demo.toml`: Process evaluator and sampler integration using a `.venv` evaluator and Nix sampler.
 - `resources/templates/runs/gammaloop.toml`: GammaLoop TTH evaluator config.
 
 Curated task bundles:
