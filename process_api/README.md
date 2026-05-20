@@ -8,7 +8,7 @@ For the stable process protocol, see [../docs/process-runtime.md](../docs/proces
 
 - `examples/rust_breit_wigner_evaluator`: non-Python evaluator packaged with Apptainer. This direct protocol implementation demonstrates ragged row-major batches for inhomogeneous domains.
 - `examples/python_scalar_sin`: NumPy scalar evaluator using a plain `.venv`.
-- `examples/python_sampler_symbolica_havana`: Symbolica-backed Havana sampler. The included flake pins the Python dependencies for reproducible local/example runs, but the process protocol also works with Apptainer, virtualenvs, system packages, or any other command.
+- `examples/python_sampler_symbolica_havana`: Symbolica-backed Havana sampler using a Nix-pinned runtime.
 
 ## Python Package
 
@@ -18,7 +18,7 @@ The Python helpers live in `python/` and can be installed into any runtime:
 pip install "gammaboard-process @ git+https://github.com/alphal00p/gammaboard.git@main#subdirectory=process_api/python"
 ```
 
-Example worker scripts should be tiny entrypoints:
+Example entrypoint modules should be tiny:
 
 ```python
 from demo_integrand import SinIntegrand
