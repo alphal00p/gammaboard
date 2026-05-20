@@ -1,2 +1,2 @@
 numpy
-../../python
+gammaboard-process @ git+https://github.com/alphal00p/gammaboard.git@main#subdirectory=process_api/python

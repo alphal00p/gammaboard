@@ -15,7 +15,7 @@ For the stable process protocol, see [../docs/process-runtime.md](../docs/proces
 The Python helpers live in `python/` and can be installed into any runtime:
 
 ```bash
-pip install process_api/python
+pip install "gammaboard-process @ git+https://github.com/alphal00p/gammaboard.git@main#subdirectory=process_api/python"
 ```
 
 Example worker scripts should be tiny entrypoints:

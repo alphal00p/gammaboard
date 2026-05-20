@@ -52,6 +52,57 @@ for release builds, and also builds the dashboard frontend for `deploy run`.
 - Node identity is a human-facing `name` plus a live-process `uuid`.
 - Process evaluators and samplers are external commands speaking `gammaboard-jsonrpc-v1`.
 
+## Process API
+
+Custom evaluators and samplers can run as ordinary child processes. GammaBoard
+sends framed JSON-RPC requests on stdin and reads responses from stdout; stderr
+is used for logs. See [docs/process-runtime.md](docs/process-runtime.md) for
+the full protocol.
+
+For Python runtimes, install the small helper package:
+
+```bash
+pip install "gammaboard-process @ git+https://github.com/alphal00p/gammaboard.git@main#subdirectory=process_api/python"
+```
+
+Minimal evaluator:
+
+```python
+from gammaboard_process import Evaluator, run_evaluator
+
+class MyEvaluator(Evaluator):  # ABC inheritance is optional.
+    def eval(self, xs_discrete, xs_continuous):
+        return xs_continuous[:, 0]
+
+run_evaluator(MyEvaluator)
+```
+
+Minimal sampler:
+
+```python
+from gammaboard_process import SampleBatch, Sampler, run_sampler
+
+class MySampler(Sampler):  # ABC inheritance is optional.
+    def sample_plan(self):
+        return {"kind": "produce", "nr_samples": 1024}
+
+    def produce_latent_batch(self, nr_samples):
+        return SampleBatch(xs_discrete, xs_continuous, weights)
+
+    def ingest_training_values(self, training_values):
+        pass
+
+    def snapshot(self):
+        return {}
+
+run_sampler(MySampler)
+```
+
+Use `from_config(discrete_cardinalities=..., continuous_dims=..., init_args=...)`
+or `from_snapshot(snapshot=..., ...)` when construction depends on the run
+domain or persisted sampler state. Examples live in
+[process_api/examples](process_api/examples).
+
 ## Development
 
 ```bash

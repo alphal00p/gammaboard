@@ -226,7 +226,7 @@ Nix, Apptainer, virtualenvs, and system packages are all just ways to make this 
 The Python helpers live in `process_api/python` and can be installed into a runtime:
 
 ```bash
-pip install process_api/python
+pip install "gammaboard-process @ git+https://github.com/alphal00p/gammaboard.git@main#subdirectory=process_api/python"
 ```
 
 Worker scripts are ordinary Python entrypoints:

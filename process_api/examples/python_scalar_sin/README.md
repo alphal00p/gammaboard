@@ -9,6 +9,9 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+`requirements.txt` installs the GammaBoard Python process wrapper from the
+repository, the same way an external user runtime can depend on it.
+
 The worker entrypoint is:
 
 ```bash
