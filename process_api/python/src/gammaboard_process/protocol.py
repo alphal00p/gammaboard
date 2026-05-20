@@ -96,13 +96,22 @@ def require_homogeneous_offsets(
         )
 
 
-def instantiate_user_object(target: Any, *, discrete_cardinalities: list[int], continuous_dims: int, init_args: dict[str, Any], snapshot: Any = None) -> Any:
+def instantiate_user_object(
+    target: Any,
+    *,
+    discrete_cardinalities: list[int],
+    continuous_dims: int,
+    init_args: dict[str, Any],
+    snapshot: Any = None,
+) -> Any:
     if not isinstance(init_args, dict):
         raise TypeError("args must be an object")
     if not isinstance(target, type):
-        if snapshot is not None:
-            raise TypeError("snapshot restore requires passing a sampler class to run_sampler, not an instance")
-        return target
+        raise TypeError("run_evaluator(...) and run_sampler(...) require passing a class, not an instance")
+    if "discrete_cardinalities" in init_args or "continuous_dims" in init_args:
+        raise TypeError(
+            "process args must not define reserved keys 'discrete_cardinalities' or 'continuous_dims'"
+        )
     if snapshot is not None:
         if isinstance(snapshot, dict) and "save_path" not in snapshot and "save_path" in init_args:
             snapshot = {**snapshot, "save_path": init_args["save_path"]}
@@ -118,34 +127,11 @@ def instantiate_user_object(target: Any, *, discrete_cardinalities: list[int], c
             )
         except NotImplementedError as exc:
             raise TypeError("class must override from_snapshot(...) when restoring from snapshot") from exc
-    from_config = getattr(target, "from_config", None)
-    if from_config is not None:
-        return from_config(
-            discrete_cardinalities=discrete_cardinalities,
-            continuous_dims=continuous_dims,
-            init_args=init_args,
-        )
-    return target(**init_args) if init_args else target()
-
-
-def validate_declared_shape(obj: Any, discrete_cardinalities: list[int], continuous_dims: int, role: str) -> None:
-    maybe_discrete_cardinalities = getattr(obj, "discrete_cardinalities", None)
-    if maybe_discrete_cardinalities is not None:
-        parsed = [int(value) for value in maybe_discrete_cardinalities]
-        if parsed != discrete_cardinalities:
-            raise ValueError(
-                f"{role} discrete_cardinalities mismatch: expected {discrete_cardinalities}, got {maybe_discrete_cardinalities}"
-            )
-    maybe_discrete_dims = getattr(obj, "discrete_dims", None)
-    if maybe_discrete_dims is not None and int(maybe_discrete_dims) != len(discrete_cardinalities):
-        raise ValueError(
-            f"{role} discrete_dims mismatch: expected {len(discrete_cardinalities)}, got {int(maybe_discrete_dims)}"
-        )
-    maybe_continuous_dims = getattr(obj, "continuous_dims", None)
-    if maybe_continuous_dims is not None and int(maybe_continuous_dims) != continuous_dims:
-        raise ValueError(
-            f"{role} continuous_dims mismatch: expected {continuous_dims}, got {int(maybe_continuous_dims)}"
-        )
+    return target(
+        discrete_cardinalities=discrete_cardinalities,
+        continuous_dims=continuous_dims,
+        **init_args,
+    )
 
 
 def normalize_discrete_subspaces(params: dict[str, Any]) -> list[dict[int, int]]:

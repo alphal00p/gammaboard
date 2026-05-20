@@ -37,7 +37,7 @@ run_sampler(MySampler)
 ```
 
 The `Evaluator` and `Sampler` ABCs are optional documentation/type-hint helpers.
-`run_evaluator(...)` and `run_sampler(...)` accept any compatible class or object.
+`run_evaluator(...)` and `run_sampler(...)` accept any compatible class.
 
 Evaluator classes implement:
 
@@ -67,16 +67,20 @@ Samplers may also implement `training_samples_remaining()`,
 It should return one marginal discrete PDF value per subspace, or `None` when
 unsupported.
 
-Optional constructors:
+Fresh initialization always uses:
 
 ```python
-from_config(*, discrete_cardinalities, continuous_dims, init_args)
+ClassName(discrete_cardinalities=..., continuous_dims=..., **init_args)
+```
+
+Sampler restore may additionally implement:
+
+```python
 from_snapshot(*, snapshot, discrete_cardinalities, continuous_dims, init_args)
 ```
 
 These homogeneous dimensions are derived from the protocol `domain`; `init_args`
-is the process config `args` table unchanged. If `from_config` is not defined,
-the wrapper initializes with `ClassName(**init_args)` or `ClassName()`.
+is the process config `args` table unchanged.
 This wrapper shape is only a convenience layer. Non-Python runtimes can implement
 the protocol directly. The bundled Python wrappers intentionally support only
 homogeneous fixed-width batches and reject ragged offset layouts with a clear

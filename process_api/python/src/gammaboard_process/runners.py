@@ -12,7 +12,6 @@ from .protocol import (
     instantiate_user_object,
     normalize_discrete_subspaces,
     require_homogeneous_offsets,
-    validate_declared_shape,
 )
 
 
@@ -65,7 +64,6 @@ class _EvaluatorWorker:
                 continuous_dims=continuous_dims,
                 init_args=params.get("args") or {},
             )
-            validate_declared_shape(self.evaluator, discrete_cardinalities, continuous_dims, "evaluator")
             self.discrete_cardinalities = discrete_cardinalities
             self.continuous_dims = continuous_dims
             return {"ok": True}
@@ -135,7 +133,6 @@ class _SamplerWorker:
                 init_args=self.sampler_args,
                 snapshot=params.get("snapshot"),
             )
-            validate_declared_shape(self.sampler, discrete_cardinalities, continuous_dims, "sampler")
             self.discrete_cardinalities = discrete_cardinalities
             self.continuous_dims = continuous_dims
             return {"ok": True}

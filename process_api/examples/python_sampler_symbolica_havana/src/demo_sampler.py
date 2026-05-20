@@ -87,20 +87,6 @@ class SymbolicaHavanaSampler(Sampler):
         self.samples_ingested = 0
 
     @classmethod
-    def from_config(
-        cls,
-        *,
-        discrete_cardinalities: list[int],
-        continuous_dims: int,
-        init_args: dict[str, Any],
-    ) -> "SymbolicaHavanaSampler":
-        return cls(
-            discrete_cardinalities=discrete_cardinalities,
-            continuous_dims=continuous_dims,
-            **(init_args or {}),
-        )
-
-    @classmethod
     def from_snapshot(
         cls,
         *,

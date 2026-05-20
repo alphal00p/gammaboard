@@ -7,35 +7,22 @@ from typing import Any
 class Evaluator(ABC):
     """Optional base class for process evaluators.
 
-    Inheritance is not required. ``run_evaluator`` accepts any class or object
-    with a compatible ``eval`` method.
+    Inheritance is not required. ``run_evaluator`` accepts any class with a
+    compatible ``eval`` method. Fresh workers construct evaluators as
+    ``ClassName(discrete_cardinalities=..., continuous_dims=..., **args)``.
     """
 
     @abstractmethod
     def eval(self, xs_discrete: Any, xs_continuous: Any) -> Any:
         """Return values with shape ``(nr_samples,)`` or ``(nr_samples, nr_components)``."""
 
-    @classmethod
-    def from_config(
-        cls,
-        *,
-        discrete_cardinalities: list[int],
-        continuous_dims: int,
-        init_args: dict[str, Any],
-    ) -> Any:
-        """Optional constructor used by ``run_evaluator``.
-
-        Override this when construction needs the run domain. The default path
-        is equivalent to ``cls(**init_args)``.
-        """
-        return cls(**(init_args or {}))
-
 
 class Sampler(ABC):
     """Optional base class for process samplers.
 
-    Inheritance is not required. ``run_sampler`` accepts any class or object
-    with the required sampler methods.
+    Inheritance is not required. ``run_sampler`` accepts any class with the
+    required sampler methods. Fresh workers construct samplers as
+    ``ClassName(discrete_cardinalities=..., continuous_dims=..., **args)``.
     """
 
     @abstractmethod
@@ -53,17 +40,6 @@ class Sampler(ABC):
     @abstractmethod
     def snapshot(self) -> Any:
         """Return JSON-safe sampler state."""
-
-    @classmethod
-    def from_config(
-        cls,
-        *,
-        discrete_cardinalities: list[int],
-        continuous_dims: int,
-        init_args: dict[str, Any],
-    ) -> Any:
-        """Optional constructor used for fresh sampler processes."""
-        return cls(**(init_args or {}))
 
     @classmethod
     def from_snapshot(

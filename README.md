@@ -98,9 +98,10 @@ class MySampler(Sampler):  # ABC inheritance is optional.
 run_sampler(MySampler)
 ```
 
-Use `from_config(*, discrete_cardinalities=..., continuous_dims=..., init_args=...)`
-or `from_snapshot(snapshot=..., ...)` when construction depends on the run
-domain or persisted sampler state. Otherwise `args` are passed to `__init__`.
+GammaBoard derives `discrete_cardinalities` and `continuous_dims` from the run
+domain and passes them as keyword arguments together with the process config
+`args`. Sampler restore may additionally implement
+`from_snapshot(snapshot=..., discrete_cardinalities=..., continuous_dims=..., init_args=...)`.
 Examples live in
 [process_api/examples](process_api/examples).
 

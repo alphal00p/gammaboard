@@ -247,14 +247,16 @@ run_sampler(SymbolicaHavanaSampler)
 
 The `Evaluator` and `Sampler` ABCs are optional documentation/type-hint helpers.
 Inheritance is not required; `run_evaluator(...)` and `run_sampler(...)` accept
-any compatible class or object.
+any compatible class.
 
 Evaluator classes implement `eval(xs_discrete, xs_continuous)`.
 
 Sampler classes implement `sample_plan`, `produce_latent_batch`, `ingest_training_values`, `snapshot`, and optional `training_samples_remaining` / `pdf` / `discrete_pdf` / `get_diagnostics`.
 
-Optional `from_config(...)` and `from_snapshot(...)` constructors receive homogeneous dimensions derived from `domain` plus the TOML `args`.
-Without `from_config`, the wrapper initializes with `ClassName(**args)` or `ClassName()`.
+Fresh initialization uses
+`ClassName(discrete_cardinalities=..., continuous_dims=..., **args)`.
+Sampler restore may instead implement
+`from_snapshot(snapshot=..., discrete_cardinalities=..., continuous_dims=..., init_args=...)`.
 
 ## Benchmark
 

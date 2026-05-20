@@ -15,11 +15,11 @@ class SinIntegrand(Evaluator):
       - u, v
     """
 
-    discrete_cardinalities: list[int] = [2, 3]
-    continuous_dims = 2
-
     def __init__(
         self,
+        *,
+        discrete_cardinalities: list[int],
+        continuous_dims: int,
         scale: float = 1.0,
         bias: float = 0.0,
         freq_u: float = 2.0,
@@ -27,6 +27,10 @@ class SinIntegrand(Evaluator):
         branch_weights: list[list[float]] | None = None,
         phase_offsets: list[list[float]] | None = None,
     ) -> None:
+        if [int(value) for value in discrete_cardinalities] != [2, 3] or int(continuous_dims) != 2:
+            raise ValueError(
+                "SinIntegrand expects discrete_cardinalities=[2, 3] and continuous_dims=2"
+            )
         self.scale = float(scale)
         self.bias = float(bias)
         self.freq_u = float(freq_u)
