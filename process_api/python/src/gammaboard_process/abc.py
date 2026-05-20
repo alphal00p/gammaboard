@@ -3,6 +3,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+import numpy as np
+
 
 class Evaluator(ABC):
     """Optional base class for process evaluators.
@@ -13,7 +15,7 @@ class Evaluator(ABC):
     """
 
     @abstractmethod
-    def eval(self, xs_discrete: Any, xs_continuous: Any) -> Any:
+    def eval(self, xs_discrete: np.ndarray, xs_continuous: np.ndarray) -> Any:
         """Return values with shape ``(nr_samples,)`` or ``(nr_samples, nr_components)``."""
 
 
@@ -34,7 +36,7 @@ class Sampler(ABC):
         """Return a ``SampleBatch`` or compatible object."""
 
     @abstractmethod
-    def ingest_training_values(self, training_values: Any) -> None:
+    def ingest_training_values(self, training_values: np.ndarray) -> None:
         """Ingest one scalar training value per produced training sample."""
 
     @abstractmethod
@@ -56,7 +58,7 @@ class Sampler(ABC):
     def training_samples_remaining(self) -> int | None:
         return None
 
-    def pdf(self, xs_discrete: Any, xs_continuous: Any) -> Any:
+    def pdf(self, xs_discrete: np.ndarray, xs_continuous: np.ndarray) -> Any:
         return None
 
     def discrete_pdf(self, subspaces: list[dict[int, int]]) -> Any:
