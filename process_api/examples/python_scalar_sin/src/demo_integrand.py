@@ -36,19 +36,6 @@ class SinIntegrand(Evaluator):
         self.branch_weights = self._read_2x3(weights, "branch_weights")
         self.phase_offsets = self._read_2x3(phases, "phase_offsets")
 
-    @classmethod
-    def from_config(
-        cls, *, discrete_cardinalities: list[int], continuous_dims: int, init_args: dict
-    ):
-        if (
-            [int(value) for value in discrete_cardinalities] != cls.discrete_cardinalities
-            or continuous_dims != cls.continuous_dims
-        ):
-            raise ValueError(
-                "SinIntegrand expects discrete_cardinalities=[2, 3] and continuous_dims=2"
-            )
-        return cls(**(init_args or {}))
-
     @staticmethod
     def _read_2x3(values: list[list[float]], name: str) -> np.ndarray:
         array = np.asarray(values, dtype=np.float64)

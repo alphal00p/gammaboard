@@ -15,9 +15,9 @@ repository, the same way an external user runtime can depend on it.
 The worker entrypoint is:
 
 ```bash
-.venv/bin/python -u evaluator_worker.py
+.venv/bin/python -u -m run_evaluator
 ```
 
-`evaluator_worker.py` imports `SinIntegrand` and hands it to
+`src/run_evaluator.py` imports `SinIntegrand` and hands it to
 `gammaboard_process.run_evaluator(...)`. Custom evaluators should follow the
 same shape: implement the class, then call `run_evaluator(MyEvaluator)`.

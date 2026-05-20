@@ -15,6 +15,21 @@ class Evaluator(ABC):
     def eval(self, xs_discrete: Any, xs_continuous: Any) -> Any:
         """Return values with shape ``(nr_samples,)`` or ``(nr_samples, nr_components)``."""
 
+    @classmethod
+    def from_config(
+        cls,
+        *,
+        discrete_cardinalities: list[int],
+        continuous_dims: int,
+        init_args: dict[str, Any],
+    ) -> Any:
+        """Optional constructor used by ``run_evaluator``.
+
+        Override this when construction needs the run domain. The default path
+        is equivalent to ``cls(**init_args)``.
+        """
+        return cls(**(init_args or {}))
+
 
 class Sampler(ABC):
     """Optional base class for process samplers.
@@ -38,6 +53,29 @@ class Sampler(ABC):
     @abstractmethod
     def snapshot(self) -> Any:
         """Return JSON-safe sampler state."""
+
+    @classmethod
+    def from_config(
+        cls,
+        *,
+        discrete_cardinalities: list[int],
+        continuous_dims: int,
+        init_args: dict[str, Any],
+    ) -> Any:
+        """Optional constructor used for fresh sampler processes."""
+        return cls(**(init_args or {}))
+
+    @classmethod
+    def from_snapshot(
+        cls,
+        *,
+        snapshot: Any,
+        discrete_cardinalities: list[int],
+        continuous_dims: int,
+        init_args: dict[str, Any],
+    ) -> Any:
+        """Optional constructor used when restoring a persisted sampler snapshot."""
+        raise NotImplementedError("override from_snapshot(...) to support sampler restore")
 
     def training_samples_remaining(self) -> int | None:
         return None

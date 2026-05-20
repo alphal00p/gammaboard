@@ -160,7 +160,7 @@ Process evaluator construction semantics:
 
 - GammaBoard only speaks the process protocol.
 - The bundled Python package exposes `run_evaluator(MyEvaluator)`, where the worker module imports the user class explicitly.
-- If the Python class defines `from_config(discrete_cardinalities=..., continuous_dims=..., init_args=...)`, the bundled homogeneous Python wrapper derives those values from `domain` and calls it with `args`.
+- If the Python class defines `from_config(*, discrete_cardinalities=..., continuous_dims=..., init_args=...)`, the bundled homogeneous Python wrapper derives those values from `domain` and calls it with `args`.
 - Otherwise the worker calls `ClassName(**args)` or `ClassName()` when `args` is empty.
 - Process evaluators require a `kind = "vector"` accumulator; the training projection is stored as its own scalar aggregate and is used for sampler feedback.
 
@@ -183,8 +183,8 @@ Process sampler construction semantics:
 
 - GammaBoard only speaks the process protocol.
 - The bundled Python package exposes `run_sampler(MySampler)`, where the worker module imports the user class explicitly.
-- Restore path: `from_snapshot(snapshot=..., discrete_cardinalities=..., continuous_dims=..., init_args=...)` when present.
-- Fresh path: `from_config(discrete_cardinalities=..., continuous_dims=..., init_args=...)` when present.
+- Restore path: `from_snapshot(*, snapshot=..., discrete_cardinalities=..., continuous_dims=..., init_args=...)` when present.
+- Fresh path: `from_config(*, discrete_cardinalities=..., continuous_dims=..., init_args=...)` when present.
 - Fallback: `ClassName(**args)` / `ClassName()`.
 - Python worker protocol entrypoints are included in each example runtime, but `command` must explicitly start the desired process.
 - GammaBoard does not infer paths, append worker scripts, or inject Apptainer binds. Use `$resources` explicitly where the host resources path is needed.

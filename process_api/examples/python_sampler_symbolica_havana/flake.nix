@@ -32,7 +32,7 @@
       '';
       samplerWorker = pkgs.writeShellScriptBin "gammaboard-example-sampler-worker" ''
         export PYTHONPATH="${./src}:${gammaboardProcess}/src:$PYTHONPATH"
-        exec ${pythonEnv}/bin/python -u ${./sampler_worker.py} "$@"
+        exec ${pythonEnv}/bin/python -u -m run_sampler "$@"
       '';
     in {
       packages.${system}.runtime = pkgs.symlinkJoin {

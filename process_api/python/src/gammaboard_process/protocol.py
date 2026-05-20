@@ -104,18 +104,23 @@ def instantiate_user_object(target: Any, *, discrete_cardinalities: list[int], c
             raise TypeError("snapshot restore requires passing a sampler class to run_sampler, not an instance")
         return target
     if snapshot is not None:
-        if not hasattr(target, "from_snapshot"):
-            raise TypeError("class must define from_snapshot(...) when restoring from snapshot")
         if isinstance(snapshot, dict) and "save_path" not in snapshot and "save_path" in init_args:
             snapshot = {**snapshot, "save_path": init_args["save_path"]}
-        return target.from_snapshot(
-            snapshot=snapshot,
-            discrete_cardinalities=discrete_cardinalities,
-            continuous_dims=continuous_dims,
-            init_args=init_args,
-        )
-    if hasattr(target, "from_config"):
-        return target.from_config(
+        from_snapshot = getattr(target, "from_snapshot", None)
+        if from_snapshot is None:
+            raise TypeError("class must define from_snapshot(...) when restoring from snapshot")
+        try:
+            return from_snapshot(
+                snapshot=snapshot,
+                discrete_cardinalities=discrete_cardinalities,
+                continuous_dims=continuous_dims,
+                init_args=init_args,
+            )
+        except NotImplementedError as exc:
+            raise TypeError("class must override from_snapshot(...) when restoring from snapshot") from exc
+    from_config = getattr(target, "from_config", None)
+    if from_config is not None:
+        return from_config(
             discrete_cardinalities=discrete_cardinalities,
             continuous_dims=continuous_dims,
             init_args=init_args,

@@ -70,12 +70,13 @@ unsupported.
 Optional constructors:
 
 ```python
-from_config(discrete_cardinalities, continuous_dims, init_args)
-from_snapshot(snapshot, discrete_cardinalities, continuous_dims, init_args)
+from_config(*, discrete_cardinalities, continuous_dims, init_args)
+from_snapshot(*, snapshot, discrete_cardinalities, continuous_dims, init_args)
 ```
 
 These homogeneous dimensions are derived from the protocol `domain`; `init_args`
-is the process config `args` table unchanged.
+is the process config `args` table unchanged. If `from_config` is not defined,
+the wrapper initializes with `ClassName(**init_args)` or `ClassName()`.
 This wrapper shape is only a convenience layer. Non-Python runtimes can implement
 the protocol directly. The bundled Python wrappers intentionally support only
 homogeneous fixed-width batches and reject ragged offset layouts with a clear

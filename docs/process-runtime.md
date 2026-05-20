@@ -229,7 +229,7 @@ The Python helpers live in `process_api/python` and can be installed into a runt
 pip install "gammaboard-process @ git+https://github.com/alphal00p/gammaboard.git@main#subdirectory=process_api/python"
 ```
 
-Worker scripts are ordinary Python entrypoints:
+Worker modules are ordinary Python entrypoints:
 
 ```python
 from demo_integrand import SinIntegrand
@@ -254,6 +254,7 @@ Evaluator classes implement `eval(xs_discrete, xs_continuous)`.
 Sampler classes implement `sample_plan`, `produce_latent_batch`, `ingest_training_values`, `snapshot`, and optional `training_samples_remaining` / `pdf` / `discrete_pdf` / `get_diagnostics`.
 
 Optional `from_config(...)` and `from_snapshot(...)` constructors receive homogeneous dimensions derived from `domain` plus the TOML `args`.
+Without `from_config`, the wrapper initializes with `ClassName(**args)` or `ClassName()`.
 
 ## Benchmark
 

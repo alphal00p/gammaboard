@@ -98,9 +98,10 @@ class MySampler(Sampler):  # ABC inheritance is optional.
 run_sampler(MySampler)
 ```
 
-Use `from_config(discrete_cardinalities=..., continuous_dims=..., init_args=...)`
+Use `from_config(*, discrete_cardinalities=..., continuous_dims=..., init_args=...)`
 or `from_snapshot(snapshot=..., ...)` when construction depends on the run
-domain or persisted sampler state. Examples live in
+domain or persisted sampler state. Otherwise `args` are passed to `__init__`.
+Examples live in
 [process_api/examples](process_api/examples).
 
 ## Development

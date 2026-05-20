@@ -3,8 +3,8 @@ name = "process-evaluator-process-sampler-demo"
 
 [evaluator]
 kind = "process_evaluator"
-command = ["$resources/../process_api/examples/python_scalar_sin/.venv/bin/python", "-u", "$resources/../process_api/examples/python_scalar_sin/evaluator_worker.py"]
-cwd = "$resources"
+command = ["$resources/../process_api/examples/python_scalar_sin/.venv/bin/python", "-u", "-m", "run_evaluator"]
+cwd = "$resources/../process_api/examples/python_scalar_sin/src"
 domain = { rectangular = { discrete_cardinalities = [2, 3], continuous_dims = 2 } }
 args = { scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }
 

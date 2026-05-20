@@ -1,9 +1,0 @@
-Metadata-Version: 2.4
-Name: gammaboard-process
-Version: 0.1.0
-Summary: Python helpers for GammaBoard process evaluators and samplers
-Requires-Python: >=3.11
-Requires-Dist: numpy
-Dynamic: requires-dist
-Dynamic: requires-python
-Dynamic: summary
