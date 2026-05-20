@@ -741,6 +741,7 @@ where
                 .saturating_add(self.local_unpersisted_batches() as i64),
             claimed: queue_counts.claimed,
             completed: queue_counts.completed,
+            failed: queue_counts.failed,
         }
     }
 

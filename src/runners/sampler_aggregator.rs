@@ -912,6 +912,7 @@ where
             completed: queue_before_tick
                 .completed
                 .saturating_sub(ingest_stats.completed_batches as i64),
+            failed: queue_before_tick.failed,
         };
         self.update_completed_samples_per_second(
             tick_started.elapsed(),
@@ -978,6 +979,7 @@ where
         let stop_status = self.stop_condition_status()?;
         if !stop_status.reached
             && open_batch_count == 0
+            && queue_before_produce.failed == 0
             && completed_batches == 0
             && produced_batches == 0
         {

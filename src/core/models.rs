@@ -102,6 +102,7 @@ pub struct BatchQueueCounts {
     pub pending: i64,
     pub claimed: i64,
     pub completed: i64,
+    pub failed: i64,
 }
 
 impl BatchQueueCounts {

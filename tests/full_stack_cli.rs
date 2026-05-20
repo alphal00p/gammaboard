@@ -1446,6 +1446,7 @@ async fn full_stack_cli_python_scalar_venv_e2e() -> anyhow::Result<()> {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let evaluator_dir = manifest_dir.join("process_api/examples/python_scalar_sin");
     let evaluator_python = evaluator_dir.join(".venv/bin/python");
+    let process_api_python = manifest_dir.join("process_api/python/src");
     let sampler_flake_ref = format!(
         "path:{}#runtime",
         manifest_dir
@@ -1458,7 +1459,7 @@ name = "python-scalar-venv-e2e"
 
 [evaluator]
 kind = "process_evaluator"
-command = ["{}", "-u", "-m", "run_evaluator"]
+command = ["env", "PYTHONPATH={}", "{}", "-u", "-m", "run_evaluator"]
 cwd = "{}"
 domain = {{ rectangular = {{ discrete_cardinalities = [2, 3], continuous_dims = 2 }} }}
 args = {{ scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }}
@@ -1491,6 +1492,7 @@ kind = "sample"
 stop_condition = {{ max_samples = 64 }}
 sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", "shell", "{sampler_flake_ref}", "-c", "gammaboard-example-sampler-worker"], requires_training_values = true, args = {{ seed = 0, bins = 8, samples_for_update = 8, stop_training_after_n_samples = 64, initial_training_rate = 0.1, final_training_rate = 0.01 }} }} }}
 "#,
+        process_api_python.display(),
         evaluator_python.display(),
         evaluator_dir.join("src").display(),
     ));
@@ -1549,20 +1551,9 @@ sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", 
 
     harness
         .wait_for(
-            "python sampler startup log is persisted",
+            "python symbolica havana sampler checkpoint is persisted",
             Duration::from_secs(30),
-            || async {
-                let persisted: Option<i64> = sqlx::query_scalar(
-                    "SELECT 1::bigint
-                     FROM runtime_logs
-                     WHERE source = 'worker'
-                       AND message LIKE '%GB_E2E_PY_SAMPLER_INIT symbolica_havana%'
-                     LIMIT 1",
-                )
-                .fetch_optional(&harness.pool)
-                .await?;
-                Ok(persisted.is_some())
-            },
+            || async { Ok(harness.run_sampler_checkpoint(run_id).await?.is_some()) },
         )
         .await?;
 

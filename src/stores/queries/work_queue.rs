@@ -184,12 +184,13 @@ pub(crate) async fn get_batch_queue_counts(
     completed_after_batch_id: Option<i64>,
 ) -> Result<BatchQueueCounts, sqlx::Error> {
     let completed_after_batch_id = completed_after_batch_id.unwrap_or(0);
-    let (pending, claimed, completed) = sqlx::query_as::<_, (i64, i64, i64)>(
+    let (pending, claimed, completed, failed) = sqlx::query_as::<_, (i64, i64, i64, i64)>(
         r#"
         SELECT
             COUNT(*) FILTER (WHERE status = 'pending') AS pending,
             COUNT(*) FILTER (WHERE status = 'claimed') AS claimed,
-            COUNT(*) FILTER (WHERE status = 'completed' AND id > $2) AS completed
+            COUNT(*) FILTER (WHERE status = 'completed' AND id > $2) AS completed,
+            COUNT(*) FILTER (WHERE status = 'failed') AS failed
         FROM batches
         WHERE run_id = $1
         "#,
@@ -202,6 +203,7 @@ pub(crate) async fn get_batch_queue_counts(
         pending,
         claimed,
         completed,
+        failed,
     })
 }
 
