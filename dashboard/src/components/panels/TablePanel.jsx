@@ -82,7 +82,9 @@ const TablePanel = ({
   const rows = asArray(state?.rows);
   const payload = state?.payload;
   const isHistogramBundle = payload?.histograms && typeof payload.histograms === "object" && !Array.isArray(payload.histograms);
-  const supportsBundleFileActions = state?.panel_id === "gammaloop_histogram_bundle";
+  const actions = payload?.actions && typeof payload.actions === "object" ? payload.actions : {};
+  const supportsBundleExport = actions.export === true || actions.export_json === true;
+  const supportsBundleUpload = actions.upload_bundle === true;
   if (columns.length === 0 || rows.length === 0) {
     if (!isHistogramBundle) return null;
     return (
@@ -91,7 +93,7 @@ const TablePanel = ({
           <Typography variant="subtitle1" sx={{ mb: 1 }}>
             {title}
           </Typography>
-          {supportsBundleFileActions ? (
+          {supportsBundleUpload ? (
             <BundleUploadControls
               state={state}
               uploadedBundles={uploadedBundles}
@@ -164,18 +166,22 @@ const TablePanel = ({
       <CardContent>
         <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, mb: 2 }}>
           <Typography variant="subtitle1">{title}</Typography>
-          {supportsBundleFileActions ? (
+          {supportsBundleExport ? (
             <Stack direction="row" spacing={1} alignItems="center">
+              {actions.export_json !== false ? (
               <Button size="small" variant="outlined" onClick={() => handleDownload("json")}>
                 JSON
               </Button>
+              ) : null}
+              {actions.export_hwu !== false ? (
               <Button size="small" variant="outlined" onClick={() => handleDownload("hwu")}>
                 HwU
               </Button>
+              ) : null}
             </Stack>
           ) : null}
         </Box>
-        {supportsBundleFileActions ? (
+        {supportsBundleUpload ? (
           <BundleUploadControls
             state={state}
             uploadedBundles={uploadedBundles}

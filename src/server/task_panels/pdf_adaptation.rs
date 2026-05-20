@@ -10,7 +10,7 @@ use crate::server::panels::{
     PanelWidth, PlotPoint, key_value, key_value_panel, panel_spec, progress_panel,
     scalar_timeseries_panel, with_panel_width,
 };
-use serde_json::Value as JsonValue;
+use serde_json::{Value as JsonValue, json};
 
 const HISTOGRAM_BIN_COUNT: usize = 31;
 
@@ -547,7 +547,22 @@ fn histogram_panel(panel_id: &str, derived: &DerivedValues, image_kind: ImageKin
     PanelState::Histogram {
         panel_id: panel_id.to_string(),
         bins,
+        controls: Some(pdf_adaptation_histogram_controls()),
     }
+}
+
+fn pdf_adaptation_histogram_controls() -> serde_json::Value {
+    json!({
+        "scale": true,
+        "x_scale": true,
+        "pdf_cdf": true,
+        "ratio": true,
+        "relative_error": true,
+        "export": true,
+        "reset_view": true,
+        "sort": true,
+        "default_relative_error": false,
+    })
 }
 
 fn validate_output_length(

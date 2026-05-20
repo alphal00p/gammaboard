@@ -242,6 +242,8 @@ pub enum PanelState {
     Histogram {
         panel_id: String,
         bins: Vec<HistogramBin>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        controls: Option<JsonValue>,
     },
     Text {
         panel_id: String,

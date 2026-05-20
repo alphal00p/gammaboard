@@ -1103,7 +1103,23 @@ fn gammaloop_histogram_bundle_panel(accumulator: AccumulatorState) -> Option<Pan
     let AccumulatorState::Gammaloop(state) = accumulator else {
         return None;
     };
-    let payload = serde_json::to_value(&state.bundle).unwrap_or(JsonValue::Null);
+    let mut payload = serde_json::to_value(&state.bundle).unwrap_or(JsonValue::Null);
+    if let JsonValue::Object(payload) = &mut payload {
+        payload.insert(
+            "expands_to".to_string(),
+            json!({
+                "kind": "histogram",
+                "source": "selected_row",
+            }),
+        );
+        payload.insert(
+            "actions".to_string(),
+            json!({
+                "export": true,
+                "upload_bundle": true,
+            }),
+        );
+    }
 
     let columns = vec![
         "Name".to_string(),
@@ -1283,6 +1299,7 @@ fn scalar_discrete_projection_payload(
                 json!({
                     "title": item.name,
                     "type_description": discrete_projection_description(item),
+                    "metric_descriptors": discrete_projection_metric_descriptors(),
                     "views": discrete_projection_histogram_views(discrete_pdf.is_some()),
                     "controls": discrete_projection_histogram_controls(),
                     "bins": scalar_projected_bins(
@@ -1300,6 +1317,14 @@ fn scalar_discrete_projection_payload(
         .collect::<Result<serde_json::Map<String, JsonValue>, String>>()?;
     Ok(json!({
         "primary_histogram_name": config.items.first().map(|item| item.name.clone()),
+        "expands_to": {
+            "kind": "histogram",
+            "source": "selected_row",
+        },
+        "actions": {
+            "export": false,
+            "upload_bundle": false,
+        },
         "histograms": projections,
     }))
 }
@@ -1325,6 +1350,7 @@ fn vector_discrete_projection_payload(
                 json!({
                     "title": name,
                     "type_description": discrete_projection_description(item),
+                    "metric_descriptors": discrete_projection_metric_descriptors(),
                     "views": discrete_projection_histogram_views(discrete_pdf.is_some()),
                     "controls": discrete_projection_histogram_controls(),
                     "bins": scalar_projected_bins(
@@ -1342,6 +1368,14 @@ fn vector_discrete_projection_payload(
     }
     Ok(json!({
         "primary_histogram_name": projections.keys().next().cloned(),
+        "expands_to": {
+            "kind": "histogram",
+            "source": "selected_row",
+        },
+        "actions": {
+            "export": false,
+            "upload_bundle": false,
+        },
         "histograms": projections,
     }))
 }
@@ -1357,7 +1391,76 @@ fn discrete_projection_histogram_controls() -> JsonValue {
         "pdf_cdf": false,
         "ratio": false,
         "relative_error": true,
+        "export": true,
+        "reset_view": true,
+        "upload_bundle": false,
+        "compare_bundles": false,
         "sort": true,
+    })
+}
+
+fn discrete_projection_metric_descriptors() -> JsonValue {
+    json!({
+        "value": {
+            "label": "Value",
+            "short_label": "value",
+            "format": "scientific",
+        },
+        "error": {
+            "label": "Absolute Error",
+            "short_label": "abs error",
+            "format": "scientific",
+        },
+        "relative_error": {
+            "label": "Relative Error",
+            "short_label": "rel error",
+            "format": "scientific",
+        },
+        "pdf": {
+            "label": "PDF",
+            "short_label": "pdf",
+            "format": "scientific",
+        },
+        "pdf_scaled_value": {
+            "label": "PDF x <|I|>",
+            "short_label": "pdf x <|I|>",
+            "format": "scientific",
+        },
+        "value_pdf_mismatch": {
+            "label": "Value - PDF x <|I|>",
+            "short_label": "delta",
+            "format": "scientific",
+        },
+        "value_pdf_mismatch_abs": {
+            "label": "|Value - PDF x <|I|>|",
+            "short_label": "|delta|",
+            "format": "scientific",
+        },
+        "contribution": {
+            "label": "Contribution",
+            "short_label": "contribution",
+            "format": "scientific",
+        },
+        "conditional_mean": {
+            "label": "Conditional Mean",
+            "short_label": "conditional mean",
+            "format": "scientific",
+        },
+        "contribution_fraction": {
+            "label": "Contribution / <|I|>",
+            "short_label": "contribution / <|I|>",
+            "format": "scientific",
+        },
+        "fraction_pdf_mismatch": {
+            "label": "Contribution / <|I|> - PDF",
+            "short_label": "delta",
+            "format": "scientific",
+        },
+        "error_contribution": {
+            "label": "Error Contribution",
+            "short_label": "error contribution",
+            "format": "scientific",
+        }
     })
 }
 
@@ -1368,6 +1471,7 @@ fn discrete_projection_histogram_views(include_pdf_views: bool) -> Vec<JsonValue
         "kind": "bar",
         "value_metric": "value",
         "error_metric": "error",
+        "tooltip_metrics": ["value", "error"],
         "default": true,
     })];
     if include_pdf_views {
@@ -1380,8 +1484,7 @@ fn discrete_projection_histogram_views(include_pdf_views: bool) -> Vec<JsonValue
                 "error_metric": "error",
                 "marker_metric": "pdf_scaled_value",
                 "delta_metric": "value_pdf_mismatch",
-                "marker_label": "pdf x <|I|>",
-                "delta_label": "delta",
+                "tooltip_metrics": ["value", "error", "pdf_scaled_value", "value_pdf_mismatch", "pdf"],
             }),
             json!({
                 "id": "pdf_mismatch",
@@ -1389,6 +1492,7 @@ fn discrete_projection_histogram_views(include_pdf_views: bool) -> Vec<JsonValue
                 "kind": "bar",
                 "value_metric": "value_pdf_mismatch",
                 "label_metric": "value_pdf_mismatch",
+                "tooltip_metrics": ["value_pdf_mismatch", "pdf_scaled_value", "value", "pdf"],
             }),
             json!({
                 "id": "share",
@@ -1397,8 +1501,7 @@ fn discrete_projection_histogram_views(include_pdf_views: bool) -> Vec<JsonValue
                 "value_metric": "contribution_fraction",
                 "marker_metric": "pdf",
                 "delta_metric": "fraction_pdf_mismatch",
-                "marker_label": "pdf",
-                "delta_label": "delta",
+                "tooltip_metrics": ["contribution_fraction", "pdf", "fraction_pdf_mismatch"],
             }),
         ]);
     }
