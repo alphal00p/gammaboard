@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import numpy as np
 
+from gammaboard_process import Evaluator
 
-class SinIntegrand:
+
+class SinIntegrand(Evaluator):
     """Demo integrand with mixed discrete/continuous structure.
 
     Discrete axes:
@@ -43,7 +45,7 @@ class SinIntegrand:
             or continuous_dims != cls.continuous_dims
         ):
             raise ValueError(
-                "SinIntegrand expects discrete_cardinalities=[] and continuous_dims=1"
+                "SinIntegrand expects discrete_cardinalities=[2, 3] and continuous_dims=2"
             )
         return cls(**(init_args or {}))
 

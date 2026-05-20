@@ -7,13 +7,17 @@
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
+      gammaboardProcess = builtins.path {
+        path = ../../python;
+        name = "gammaboard-process-python";
+      };
       pythonEnv = pkgs.python311.withPackages (ps: [ ps.numpy ]);
       runtimePython = pkgs.writeShellScriptBin "python" ''
-        export PYTHONPATH="${./src}:$PYTHONPATH"
+        export PYTHONPATH="${./src}:${gammaboardProcess}/src:$PYTHONPATH"
         exec ${pythonEnv}/bin/python "$@"
       '';
       evaluatorWorker = pkgs.writeShellScriptBin "gammaboard-example-evaluator-worker" ''
-        export PYTHONPATH="${./src}:$PYTHONPATH"
+        export PYTHONPATH="${./src}:${gammaboardProcess}/src:$PYTHONPATH"
         exec ${pythonEnv}/bin/python -u ${./evaluator_worker.py} "$@"
       '';
     in {

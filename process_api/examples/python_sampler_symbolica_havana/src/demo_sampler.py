@@ -5,14 +5,8 @@ import itertools
 import math
 from typing import Any
 
+from gammaboard_process import SampleBatch, Sampler
 from symbolica import NumericalIntegrator, Probe, Sample
-
-
-class SampleBatch:
-    def __init__(self, xs_discrete, xs_continuous, weights) -> None:
-        self.xs_discrete = xs_discrete
-        self.xs_continuous = xs_continuous
-        self.weights = weights
 
 
 def build_integrator(
@@ -46,7 +40,7 @@ def pdf_from_probe_weight(weight: float) -> float:
     return 1.0 / weight
 
 
-class SymbolicaHavanaSampler:
+class SymbolicaHavanaSampler(Sampler):
     def __init__(
         self,
         *,
@@ -313,6 +307,8 @@ class SymbolicaHavanaSampler:
 
 
 def parse_fixed_dims(subspace: dict[str, Any]) -> dict[int, int]:
+    if all(isinstance(key, int) for key in subspace):
+        return {int(dim): int(value) for dim, value in subspace.items()}
     raw = subspace.get("fixed_dims", [])
     if isinstance(raw, dict):
         return {int(dim): int(value) for dim, value in raw.items()}

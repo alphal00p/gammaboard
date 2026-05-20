@@ -6,7 +6,7 @@ kind = "process_evaluator"
 command = ["nix", "shell", "path:$resources/../process_api/examples/python_scalar_sin#runtime", "-c", "gammaboard-example-evaluator-worker"]
 cwd = "$resources"
 domain = { rectangular = { discrete_cardinalities = [2, 3], continuous_dims = 2 } }
-args = { module = "demo_integrand", class = "SinIntegrand", scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }
+args = { scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }
 
 [[task_queue]]
 name = "accumulator"
@@ -39,4 +39,4 @@ fixed_dims = { "0" = 1 }
 name = "sample-a"
 kind = "sample"
 stop_condition = { max_samples = 1000 }
-sampler_aggregator = { config = { kind = "process_sampler", command = ["nix", "shell", "path:$resources/../process_api/examples/python_sampler_symbolica_havana#runtime", "-c", "gammaboard-example-sampler-worker"], cwd = "$resources", requires_training_values = true, args = { module = "demo_sampler", class = "SymbolicaHavanaSampler", seed = 0, bins = 8, samples_for_update = 16, stop_training_after_n_samples = 1000, initial_training_rate = 0.1, final_training_rate = 0.01 } } }
+sampler_aggregator = { config = { kind = "process_sampler", command = ["nix", "shell", "path:$resources/../process_api/examples/python_sampler_symbolica_havana#runtime", "-c", "gammaboard-example-sampler-worker"], cwd = "$resources", requires_training_values = true, args = { seed = 0, bins = 8, samples_for_update = 16, stop_training_after_n_samples = 1000, initial_training_rate = 0.1, final_training_rate = 0.01 } } }

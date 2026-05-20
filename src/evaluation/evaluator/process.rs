@@ -317,7 +317,7 @@ while True:
 command = ["python", "-u", "worker.py"]
 cwd = "$resources"
 domain = { rectangular = { discrete_cardinalities = [2, 3], continuous_dims = 2 } }
-args = { module = "my_module", class = "MyEvaluator", scale = 1.0 }
+args = { scale = 1.0 }
 "#,
         )
         .expect("process scalar config should parse");

@@ -10,9 +10,34 @@ For the stable process protocol, see [../docs/process-runtime.md](../docs/proces
 - `examples/python_scalar_sin`: NumPy scalar evaluator. The included flake is one optional dev/runtime packaging helper for the example, not a required deployment mechanism.
 - `examples/python_sampler_symbolica_havana`: Symbolica-backed Havana sampler. The included flake pins the Python dependencies for reproducible local/example runs, but the process protocol also works with Apptainer, virtualenvs, system packages, or any other command.
 
-## Python Wrapper Pattern
+## Python Package
 
-The Python examples include worker scripts that implement `gammaboard-jsonrpc-v1` and then load a normal Python class from `args.module` and `args.class`.
+The Python helpers live in `python/` and can be installed into any runtime:
+
+```bash
+pip install process_api/python
+```
+
+Example worker scripts should be tiny entrypoints:
+
+```python
+from demo_integrand import SinIntegrand
+from gammaboard_process import run_evaluator
+
+run_evaluator(SinIntegrand)
+```
+
+or:
+
+```python
+from demo_sampler import MySampler
+from gammaboard_process import run_sampler
+
+run_sampler(MySampler)
+```
+
+The `Evaluator` and `Sampler` ABCs are optional documentation/type-hint helpers.
+`run_evaluator(...)` and `run_sampler(...)` accept any compatible class or object.
 
 Evaluator classes implement:
 
@@ -24,19 +49,19 @@ Sampler classes implement:
 
 ```python
 sample_plan()
-training_samples_remaining()
 produce_latent_batch(nr_samples)
 ingest_training_values(training_values)
 snapshot()
 ```
 
-Samplers may also implement `pdf(xs_discrete, xs_continuous)`,
-`discrete_pdf(subspaces)`, and `get_diagnostics()`.
+Samplers may also implement `training_samples_remaining()`,
+`pdf(xs_discrete, xs_continuous)`, `discrete_pdf(subspaces)`, and
+`get_diagnostics()`.
 
-`discrete_pdf(subspaces)` receives a list of subspace objects:
+`discrete_pdf(subspaces)` receives a list of fixed-dimension maps:
 
-```json
-{"fixed_dims": [{"dim": 0, "value": 2}]}
+```python
+[{0: 2}]
 ```
 
 It should return one marginal discrete PDF value per subspace, or `None` when
@@ -49,6 +74,9 @@ from_config(discrete_cardinalities, continuous_dims, init_args)
 from_snapshot(snapshot, discrete_cardinalities, continuous_dims, init_args)
 ```
 
-These homogeneous dimensions are derived from the protocol `domain`.
-This wrapper shape is only a convenience layer. Non-Python runtimes can implement the protocol directly.
-The bundled Python wrappers intentionally support only homogeneous fixed-width batches and reject ragged offset layouts with a clear error.
+These homogeneous dimensions are derived from the protocol `domain`; `init_args`
+is the process config `args` table unchanged.
+This wrapper shape is only a convenience layer. Non-Python runtimes can implement
+the protocol directly. The bundled Python wrappers intentionally support only
+homogeneous fixed-width batches and reject ragged offset layouts with a clear
+error.

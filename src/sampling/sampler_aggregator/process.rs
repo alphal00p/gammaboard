@@ -606,7 +606,7 @@ mod tests {
 command = ["python", "-u", "worker.py"]
 cwd = "$resources"
 requires_training_values = true
-args = { module = "my_module", class = "MySampler", seed = 0 }
+args = { seed = 0 }
 "#,
         )
         .expect("process sampler config should parse");

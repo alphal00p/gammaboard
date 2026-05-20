@@ -200,11 +200,11 @@ The process command is explicit in run config. GammaBoard does not append worker
 
 ```toml
 kind = "process_evaluator"
-command = ["python", "-u", "$resources/runtimes/my_runtime/evaluator_worker.py"]
+command = ["python", "-m", "my_runtime.evaluator_worker"]
 cwd = "$resources"
 domain = { continuous = { dims = 2 } }
 components = ["value"]
-args = { module = "demo_integrand", class = "SinIntegrand" }
+args = { scale = 1.0 }
 ```
 
 The protocol uses `domain` as the authoritative coordinate layout. Homogeneous wrappers may derive fixed dimensions from it internally, but run config should not define separate shape hints.
@@ -221,18 +221,39 @@ For Apptainer, spell out binds explicitly, for example `--bind`, `$resources:$re
 `args` is protocol payload and is passed through unchanged.
 Nix, Apptainer, virtualenvs, and system packages are all just ways to make this command available.
 
-## Python Wrapper Pattern
+## Python Package
 
-The Python examples include worker scripts that implement this protocol and then load a normal Python class from `args.module` and `args.class`. This is only a convenience layer.
+The Python helpers live in `process_api/python` and can be installed into a runtime:
 
-- `process_api/examples/python_scalar_sin/evaluator_worker.py`
-- `process_api/examples/python_sampler_symbolica_havana/sampler_worker.py`
+```bash
+pip install process_api/python
+```
+
+Worker scripts are ordinary Python entrypoints:
+
+```python
+from demo_integrand import SinIntegrand
+from gammaboard_process import run_evaluator
+
+run_evaluator(SinIntegrand)
+```
+
+```python
+from demo_sampler import SymbolicaHavanaSampler
+from gammaboard_process import run_sampler
+
+run_sampler(SymbolicaHavanaSampler)
+```
+
+The `Evaluator` and `Sampler` ABCs are optional documentation/type-hint helpers.
+Inheritance is not required; `run_evaluator(...)` and `run_sampler(...)` accept
+any compatible class or object.
 
 Evaluator classes implement `eval(xs_discrete, xs_continuous)`.
 
-Sampler classes implement `sample_plan`, `produce_latent_batch`, `training_samples_remaining`, `ingest_training_values`, `snapshot`, and optional `pdf` / `discrete_pdf` / `get_diagnostics`.
+Sampler classes implement `sample_plan`, `produce_latent_batch`, `ingest_training_values`, `snapshot`, and optional `training_samples_remaining` / `pdf` / `discrete_pdf` / `get_diagnostics`.
 
-Optional `from_config(...)` and `from_snapshot(...)` constructors receive homogeneous dimensions derived from `domain` plus the TOML `args` without the wrapper-only `module` and `class` fields.
+Optional `from_config(...)` and `from_snapshot(...)` constructors receive homogeneous dimensions derived from `domain` plus the TOML `args`.
 
 ## Benchmark
 
