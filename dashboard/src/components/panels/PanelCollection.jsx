@@ -444,6 +444,7 @@ const histogramOverlayColors = ["#9b2226", "#3a86ff", "#ff006e", "#6a994e", "#ff
 const scalarHeatmapColors = ["#1d4ed8", "#16a34a", "#dc2626"];
 const HEATMAP_LEGEND_WIDTH = 116;
 const HEATMAP_LEGEND_GAP = 12;
+const HEATMAP_PROGRESSIVE_THRESHOLD = 256 * 256;
 
 const panelColumnSpan = (descriptor) => {
   switch (descriptor?.width) {
@@ -1179,6 +1180,7 @@ const ScalarImageHeatmapPanel = ({
   const chartHeight = useMemo(() => {
     return estimateHeatmapChartHeight(width, height, panelWidth, heatmapMargins);
   }, [heatmapMargins.bottom, heatmapMargins.left, heatmapMargins.right, heatmapMargins.top, height, panelWidth, width]);
+  const useProgressiveHeatmap = totalCells > HEATMAP_PROGRESSIVE_THRESHOLD;
 
   const option = useMemo(
     () => ({
@@ -1249,9 +1251,8 @@ const ScalarImageHeatmapPanel = ({
           type: "heatmap",
           name: "value",
           data: heatmapData,
-          progressive: 5000,
-          progressiveThreshold: 3000,
-          progressiveChunkMode: "mod",
+          progressive: useProgressiveHeatmap ? 5000 : 0,
+          progressiveThreshold: HEATMAP_PROGRESSIVE_THRESHOLD,
           emphasis: { disabled: true },
         },
         {
@@ -1278,6 +1279,7 @@ const ScalarImageHeatmapPanel = ({
       yParameters,
       zmax,
       zmin,
+      useProgressiveHeatmap,
     ],
   );
   useEffect(() => {
