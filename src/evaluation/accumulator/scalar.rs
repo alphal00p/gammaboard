@@ -1,5 +1,5 @@
 use super::{Accumulator, IngestScalar};
-use crate::core::DiscreteProjectionConfig;
+use crate::core::{AccumulatorMomentConfig, DiscreteProjectionConfig};
 use crate::evaluation::batch::Point;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -10,10 +10,16 @@ use super::discrete_bins::{DiscreteProjectionBinState, upsert_scalar_discrete_bi
 pub struct ScalarAccumulatorState {
     #[serde(default)]
     pub discrete_projections: Option<DiscreteProjectionConfig>,
+    #[serde(default)]
+    pub moments: AccumulatorMomentConfig,
     pub count: i64,
     pub sum_weighted_value: f64,
     pub sum_abs: f64,
     pub sum_sq: f64,
+    #[serde(default)]
+    pub sum_cu: f64,
+    #[serde(default)]
+    pub sum_four: f64,
     #[serde(default)]
     pub nan_count: usize,
     #[serde(default)]
@@ -31,9 +37,13 @@ pub struct ScalarAccumulatorState {
 }
 
 impl ScalarAccumulatorState {
-    pub fn from_config(discrete_projections: Option<DiscreteProjectionConfig>) -> Self {
+    pub fn from_config(
+        discrete_projections: Option<DiscreteProjectionConfig>,
+        moments: AccumulatorMomentConfig,
+    ) -> Self {
         Self {
             discrete_projections,
+            moments,
             ..Self::default()
         }
     }
@@ -67,6 +77,10 @@ impl ScalarAccumulatorState {
         self.sum_weighted_value += weighted_value;
         self.sum_abs += weighted_value.abs();
         self.sum_sq += weighted_sq;
+        if self.moments.max_order() >= 4 {
+            self.sum_cu += weighted_sq * weighted_value;
+            self.sum_four += weighted_sq * weighted_sq;
+        }
         self.update_extrema(weighted_value, point);
     }
 
@@ -84,6 +98,16 @@ impl ScalarAccumulatorState {
 
     pub fn stderr(&self) -> f64 {
         stderr_from_sums(self.sum_weighted_value, self.sum_sq, self.count)
+    }
+
+    pub fn variance_stderr(&self) -> Option<f64> {
+        variance_stderr_from_sums(
+            self.sum_weighted_value,
+            self.sum_sq,
+            self.sum_cu,
+            self.sum_four,
+            self.count,
+        )
     }
 
     pub fn signal_to_noise(&self) -> f64 {
@@ -134,6 +158,11 @@ impl ScalarAccumulatorState {
         self.sum_weighted_value += other.sum_weighted_value;
         self.sum_abs += other.sum_abs;
         self.sum_sq += other.sum_sq;
+        self.sum_cu += other.sum_cu;
+        self.sum_four += other.sum_four;
+        if other.moments.max_order() > self.moments.max_order() {
+            self.moments = other.moments;
+        }
         self.nan_count += other.nan_count;
         merge_positive_extrema(
             &mut self.max_weighted_positive,
@@ -210,6 +239,29 @@ fn stderr_from_sums(sum: f64, sum_sq: f64, count: i64) -> f64 {
     } else {
         (variance_from_sums(sum, sum_sq, count) / count as f64).sqrt()
     }
+}
+
+fn variance_stderr_from_sums(
+    sum: f64,
+    sum_sq: f64,
+    sum_cu: f64,
+    sum_four: f64,
+    count: i64,
+) -> Option<f64> {
+    if count <= 1 || sum_four == 0.0 {
+        return None;
+    }
+    let count_f = count as f64;
+    let mean = sum / count_f;
+    let second = sum_sq / count_f;
+    let third = sum_cu / count_f;
+    let fourth = sum_four / count_f;
+    let variance = (second - mean * mean).max(0.0);
+    let centered_fourth =
+        fourth - 4.0 * mean * third + 6.0 * mean * mean * second - 3.0 * mean.powi(4);
+    let variance_of_variance = (centered_fourth - variance * variance).max(0.0) / count_f;
+    let stderr = variance_of_variance.sqrt();
+    stderr.is_finite().then_some(stderr)
 }
 
 fn signal_to_noise_ratio(mean_abs: f64, abs_err: f64) -> f64 {

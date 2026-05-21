@@ -937,6 +937,7 @@ mod tests {
                 max_samples: Some(10),
                 ..crate::core::SampleStopCondition::default()
             },
+            evaluator: None,
             sampler_aggregator: None,
             accumulator: None,
             queue_tuning: None,

@@ -20,19 +20,20 @@ pub mod tracing;
 pub mod utils;
 
 pub use core::{
-    AccumulatorSourceSpec, ImageDisplayMode, LineDisplayMode, LineRasterGeometry, Linspace,
-    PlaneRasterGeometry, PlotAccumulatorKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState,
-    SampleErrorProjection, SampleStopCondition, SampleTaskConfig, SamplerAggregatorSourceSpec,
-    SourceRefSpec, canonical_task_toml,
+    AccumulatorMetricName, AccumulatorMetricSelector, AccumulatorSourceSpec, ImageDisplayMode,
+    LineDisplayMode, LineRasterGeometry, Linspace, PlaneRasterGeometry, PlotAccumulatorKind,
+    RunTask, RunTaskInput, RunTaskSpec, RunTaskState, SampleErrorProjection, SampleStopCondition,
+    SampleTaskConfig, SamplerAggregatorSourceSpec, SourceRefSpec, canonical_task_toml,
 };
 pub use core::{BatchRecord, BatchStatus};
 pub use core::{BuildError, EngineError, EvalError, StoreError};
 pub use evaluation::{
-    Accumulator, AccumulatorState, Batch, BatchError, BatchResult, BatchTransform,
-    EmptyAccumulatorState, EvalBatchOptions, Evaluator, FullAccumulatorProgress,
+    Accumulator, AccumulatorMetricValue, AccumulatorState, Batch, BatchError, BatchResult,
+    BatchTransform, EmptyAccumulatorState, EvalBatchOptions, Evaluator, FullAccumulatorProgress,
     FullVectorAccumulatorState, GammaLoopAccumulatorDigest, GammaLoopAccumulatorState,
     IngestScalar, IngestVector, Materializer, NamedScalarAccumulator, Point,
-    ScalarAccumulatorState, SemanticAccumulatorKind, VectorAccumulatorState, ingest_scalar_values,
+    ScalarAccumulatorState, SemanticAccumulatorKind, VectorAccumulatorState,
+    extract_accumulator_metric, ingest_scalar_values,
 };
 pub use sampling::{
     LatentBatch, LatentBatchPayload, LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator,

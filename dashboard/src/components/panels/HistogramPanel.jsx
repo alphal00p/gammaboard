@@ -52,7 +52,16 @@ import {
   writeZoomPanelValue,
   zoomRangeChanged,
 } from "./panelView";
-import { buildHistogramOption, buildRatioHistogramOption, buildRelativeHistogramOption } from "./histogramOptions";
+import {
+  binsShareEdges,
+  buildCdfBinsPreservingNulls,
+  buildHistogramOption,
+  buildLogRatioPoints,
+  buildOverlaySeriesFromBins,
+  buildRatioHistogramOption,
+  buildRelativeHistogramOption,
+  projectBinsToReferenceBins,
+} from "./histogramOptions";
 
 const ReactECharts = lazy(() =>
   Promise.all([import("echarts-for-react"), import("../../lib/echarts")]).then(([module]) => ({

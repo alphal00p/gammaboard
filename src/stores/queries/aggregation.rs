@@ -2,7 +2,9 @@ use serde_json::Value as JsonValue;
 use sqlx::{Executor, PgPool, Postgres};
 use std::collections::HashMap;
 
-use crate::core::{BatchTransformConfig, RunStageSnapshot, SamplerAggregatorConfig};
+use crate::core::{
+    BatchTransformConfig, EvaluatorConfig, RunStageSnapshot, SamplerAggregatorConfig,
+};
 use crate::evaluation::AccumulatorState;
 use crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint;
 use crate::sampling::SamplerAggregatorSnapshot;
@@ -17,6 +19,7 @@ struct RunStageSnapshotRow {
     queue_empty: bool,
     sampler_snapshot: Option<JsonValue>,
     observable_state: Option<JsonValue>,
+    evaluator: Option<JsonValue>,
     sampler_aggregator: Option<JsonValue>,
     batch_transforms: JsonValue,
 }
@@ -58,6 +61,13 @@ impl TryFrom<RunStageSnapshotRow> for RunStageSnapshot {
                             "failed to decode observable_state from run_stage_snapshots: {err}"
                         ))
                     })
+                })
+                .transpose()?,
+            evaluator: value
+                .evaluator
+                .map(|payload| {
+                    serde_json::from_value::<EvaluatorConfig>(payload)
+                        .map_err(|err| decode("evaluator", err))
                 })
                 .transpose()?,
             sampler_aggregator: value
@@ -145,6 +155,7 @@ pub(crate) async fn get_latest_stage_snapshot_before_sequence(
             queue_empty,
             sampler_snapshot,
             observable_state,
+            evaluator,
             sampler_aggregator,
             batch_transforms
         FROM run_stage_snapshots
@@ -177,6 +188,7 @@ pub(crate) async fn get_stage_snapshot(
             queue_empty,
             sampler_snapshot,
             observable_state,
+            evaluator,
             sampler_aggregator,
             batch_transforms
         FROM run_stage_snapshots
@@ -246,6 +258,7 @@ pub(crate) async fn get_task_activation_stage_snapshot(
             queue_empty,
             sampler_snapshot,
             observable_state,
+            evaluator,
             sampler_aggregator,
             batch_transforms
         FROM run_stage_snapshots
@@ -394,10 +407,11 @@ where
             queue_empty,
             sampler_snapshot,
             observable_state,
+            evaluator,
             sampler_aggregator,
             batch_transforms
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         "#,
     )
     .bind(snapshot.run_id)
@@ -426,6 +440,19 @@ where
                 accumulator.to_json().map_err(|err| {
                     sqlx::Error::Protocol(format!(
                         "failed to encode observable_state for run_stage_snapshots: {err}"
+                    ))
+                })
+            })
+            .transpose()?,
+    )
+    .bind(
+        snapshot
+            .evaluator
+            .as_ref()
+            .map(|evaluator| {
+                serde_json::to_value(evaluator).map_err(|err| {
+                    sqlx::Error::Protocol(format!(
+                        "failed to encode evaluator for run_stage_snapshots: {err}"
                     ))
                 })
             })

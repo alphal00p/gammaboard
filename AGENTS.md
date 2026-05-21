@@ -36,10 +36,18 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   projection must not rebuild large samplers to fetch these values.
 - Multi-component observables use vector accumulator models. Full raster
   outputs use `FullVectorAccumulatorState` with named components.
+- Scalar/vector accumulators may opt into higher moments with
+  `moments = { max_order = 4 }`. Generic accumulator metric extraction returns
+  JSON-safe metric values plus optional uncertainty; sample stop conditions may
+  target these metrics.
 - Run, task-append, and node-launch TOML may use a top-level `replacements`
   table plus placeholders `$(name:default)`. Exact full-string placeholders are
   typed TOML replacements; embedded placeholders interpolate as strings. Server
   and runtime configs are not templated.
+- Evaluator config is stage state. The run-global evaluator is the root/default;
+  sample/image/plot-line tasks may set `evaluator = "latest"`,
+  `{ from_name = "..." }`, or `{ config = ... }`. Task-level evaluators must
+  resolve to the run root domain.
 
 ## Design Rules
 - Keep adapters thin; put reusable behavior in `src/api` or lower layers.

@@ -10,6 +10,7 @@ pub(super) fn build_initial_stage() -> Result<RunStageSnapshot, BuildError> {
         queue_empty: true,
         sampler_snapshot: None,
         observable_state: None,
+        evaluator: None,
         sampler_aggregator: None,
         batch_transforms: Vec::new(),
     })

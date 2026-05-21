@@ -8,12 +8,12 @@
 //! - persist lightweight UI sync snapshots and full resume checkpoints
 
 use crate::core::{
-    BatchTransformConfig, EngineError, RunSampleProgress, RunStageSnapshot, RunTask,
-    SampleErrorProjection, SamplerAggregatorConfig, SamplerAggregatorPerformanceSnapshot,
-    SamplerQueueTuning, SamplerRuntimeMetrics, SamplerWorkRollingAverages, SamplerWorkerStore,
-    StoreError,
+    AccumulatorMetricSelector, BatchTransformConfig, EngineError, EvaluatorConfig,
+    RunSampleProgress, RunStageSnapshot, RunTask, SampleErrorProjection, SamplerAggregatorConfig,
+    SamplerAggregatorPerformanceSnapshot, SamplerQueueTuning, SamplerRuntimeMetrics,
+    SamplerWorkRollingAverages, SamplerWorkerStore, StoreError,
 };
-use crate::evaluation::AccumulatorState;
+use crate::evaluation::{AccumulatorState, extract_accumulator_metric, relative_error};
 use crate::runners::process_memory::current_rss_bytes;
 use crate::runners::queue::QueueUtilizationSnapshot;
 use crate::runners::rolling_metric::RollingMetric;
@@ -202,6 +202,7 @@ pub struct SamplerAggregatorRunner<S> {
     task: RunTask,
     sampler: Box<dyn SamplerAggregator>,
     observable_state: AccumulatorState,
+    evaluator_config: EvaluatorConfig,
     sampler_config: SamplerAggregatorConfig,
     batch_transforms: Vec<BatchTransformConfig>,
     store: S,
@@ -358,6 +359,13 @@ fn discrete_key_label(key: &[i64]) -> String {
     serde_json::to_string(key).unwrap_or_else(|_| "[]".to_string())
 }
 
+fn metric_selector_label(selector: &AccumulatorMetricSelector) -> String {
+    match &selector.component {
+        Some(component) => format!("{component}.{:?}", selector.name),
+        None => format!("{:?}", selector.name),
+    }
+}
+
 struct PendingAggregationFlushTask {
     started_at: Instant,
     flushed_completed_batches: i32,
@@ -377,6 +385,7 @@ struct StopConditionStatus {
     max_samples_reached: bool,
     absolute_error_reached: bool,
     relative_error_reached: bool,
+    min_samples_reached: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -398,6 +407,7 @@ where
         task: RunTask,
         sampler: Box<dyn SamplerAggregator>,
         observable_state: AccumulatorState,
+        evaluator_config: EvaluatorConfig,
         sampler_config: SamplerAggregatorConfig,
         batch_transforms: Vec<BatchTransformConfig>,
         params: SamplerAggregatorRunnerParams,
@@ -456,6 +466,7 @@ where
             task,
             sampler,
             observable_state,
+            evaluator_config,
             sampler_config,
             batch_transforms,
             store,
@@ -713,13 +724,22 @@ where
         Some(ProjectedEstimate { value, error })
     }
 
-    fn relative_error(value: f64, abs_error: f64) -> f64 {
-        let denominator = value.abs();
-        if denominator == 0.0 {
-            if abs_error == 0.0 { 0.0 } else { f64::INFINITY }
-        } else {
-            abs_error.abs() / denominator
-        }
+    fn metric_estimate_for_stop(
+        &self,
+        selector: &AccumulatorMetricSelector,
+    ) -> Result<Option<ProjectedEstimate>, RunnerError> {
+        let Some(metric) = extract_accumulator_metric(&self.observable_state, selector)
+            .map_err(RunnerError::Engine)?
+        else {
+            return Ok(None);
+        };
+        let Some(error) = metric.uncertainty else {
+            return Ok(None);
+        };
+        Ok(Some(ProjectedEstimate {
+            value: metric.value,
+            error,
+        }))
     }
 
     fn stop_condition_status(&self) -> Result<StopConditionStatus, RunnerError> {
@@ -734,6 +754,7 @@ where
                 max_samples_reached: reached,
                 absolute_error_reached: false,
                 relative_error_reached: false,
+                min_samples_reached: true,
             });
         }
         let stop_condition = self.task.task.sample_stop_condition().ok_or_else(|| {
@@ -742,24 +763,40 @@ where
                 self.run_id, self.task.id
             )))
         })?;
-        let projection = self.effective_stop_projection();
-        let projected = self.projected_estimate_for_stop(projection);
+        let projected = if let Some(metric) = &stop_condition.metric {
+            self.metric_estimate_for_stop(metric)?
+        } else {
+            let projection = self.effective_stop_projection();
+            self.projected_estimate_for_stop(projection)
+        };
         if (stop_condition.absolute_error.is_some() || stop_condition.relative_error.is_some())
             && projected.is_none()
         {
+            let target = stop_condition
+                .metric
+                .as_ref()
+                .map(metric_selector_label)
+                .unwrap_or_else(|| {
+                    let projection = self.effective_stop_projection();
+                    match projection {
+                        SampleErrorProjection::Real => "real",
+                        SampleErrorProjection::Imag => "imag",
+                        SampleErrorProjection::Abs => "abs",
+                    }
+                    .to_string()
+                });
             return Err(RunnerError::Engine(EngineError::engine(format!(
-                "run {} task {} stop_condition.projection={} is incompatible with accumulator {}",
+                "run {} task {} stop_condition target {} is incompatible with accumulator {} or has no uncertainty",
                 self.run_id,
                 self.task.id,
-                match projection {
-                    SampleErrorProjection::Real => "real",
-                    SampleErrorProjection::Imag => "imag",
-                    SampleErrorProjection::Abs => "abs",
-                },
+                target,
                 self.observable_state.kind_str()
             ))));
         }
 
+        let min_samples_reached = stop_condition
+            .min_samples
+            .is_none_or(|target| self.task.nr_completed_samples >= target);
         let max_samples_reached = stop_condition
             .max_samples
             .is_some_and(|target| self.task.nr_completed_samples >= target);
@@ -768,21 +805,22 @@ where
                 .absolute_error
                 .zip(projected)
                 .is_some_and(|(target, estimate)| {
-                    estimate.error.is_finite() && estimate.error <= target
+                    min_samples_reached && estimate.error.is_finite() && estimate.error <= target
                 });
         let relative_error_reached =
             stop_condition
                 .relative_error
                 .zip(projected)
                 .is_some_and(|(target, estimate)| {
-                    let relative = Self::relative_error(estimate.value, estimate.error);
-                    relative.is_finite() && relative <= target
+                    let relative = relative_error(estimate.value, estimate.error);
+                    min_samples_reached && relative.is_finite() && relative <= target
                 });
         Ok(StopConditionStatus {
             reached: max_samples_reached || absolute_error_reached || relative_error_reached,
             max_samples_reached,
             absolute_error_reached,
             relative_error_reached,
+            min_samples_reached,
         })
     }
 
@@ -794,8 +832,12 @@ where
         if !completed_samples_per_second.is_finite() || completed_samples_per_second <= 0.0 {
             return None;
         }
-        let projection = self.effective_stop_projection();
-        let projected = self.projected_estimate_for_stop(projection);
+        let projected = if let Some(metric) = &stop_condition.metric {
+            self.metric_estimate_for_stop(metric).ok().flatten()
+        } else {
+            let projection = self.effective_stop_projection();
+            self.projected_estimate_for_stop(projection)
+        };
         let completed_samples = self.task.nr_completed_samples.max(0) as f64;
         let mut etas = Vec::new();
         if let Some(max_samples) = stop_condition.max_samples {
@@ -816,7 +858,7 @@ where
             }
         }
         if let (Some(target), Some(projected)) = (stop_condition.relative_error, projected) {
-            let current_relative = Self::relative_error(projected.value, projected.error);
+            let current_relative = relative_error(projected.value, projected.error);
             if current_relative <= target {
                 etas.push(0.0);
             } else if completed_samples > 0.0
@@ -984,9 +1026,10 @@ where
             && produced_batches == 0
         {
             return Err(RunnerError::Engine(EngineError::engine(format!(
-                "run {} task {} cannot make further progress: stop condition not reached (max_samples_reached={}, absolute_error_reached={}, relative_error_reached={}) and sampler produced no new batches",
+                "run {} task {} cannot make further progress: stop condition not reached (min_samples_reached={}, max_samples_reached={}, absolute_error_reached={}, relative_error_reached={}) and sampler produced no new batches",
                 self.run_id,
                 self.task.id,
+                stop_status.min_samples_reached,
                 stop_status.max_samples_reached,
                 stop_status.absolute_error_reached,
                 stop_status.relative_error_reached
@@ -1010,6 +1053,7 @@ where
                 queue_empty,
                 sampler_snapshot: Some(self.sampler.snapshot().map_err(RunnerError::Engine)?),
                 observable_state: Some(self.observable_state.clone()),
+                evaluator: Some(self.evaluator_config.clone()),
                 sampler_aggregator: Some(self.sampler_config.clone()),
                 batch_transforms: self.batch_transforms.clone(),
             })

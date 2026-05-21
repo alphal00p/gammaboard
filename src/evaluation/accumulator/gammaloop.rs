@@ -21,6 +21,7 @@ impl Default for GammaLoopAccumulatorState {
                 vec!["real".to_string(), "imag".to_string()],
                 crate::core::TrainingProjection::Norm,
                 None,
+                Default::default(),
             ),
             diagnostics: GammaLoopDiagnostics::default(),
         }
@@ -462,6 +463,7 @@ mod tests {
             vec!["real".to_string(), "imag".to_string()],
             crate::core::TrainingProjection::Norm,
             None,
+            Default::default(),
         );
         estimate.components[0].state.count = count;
         estimate.components[0].state.sum_weighted_value = sum;

@@ -42,16 +42,138 @@ pub struct RunSpec {
     pub sampler_aggregator_runner_params: SamplerAggregatorRunnerParams,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccumulatorMomentConfig {
+    Default,
+    MaxOrder2,
+    MaxOrder4,
+}
+
+impl Default for AccumulatorMomentConfig {
+    fn default() -> Self {
+        Self::Default
+    }
+}
+
+impl AccumulatorMomentConfig {
+    pub fn max_order(self) -> u8 {
+        match self {
+            Self::Default | Self::MaxOrder2 => 2,
+            Self::MaxOrder4 => 4,
+        }
+    }
+
+    pub fn validate(self) -> Result<(), String> {
+        match self {
+            Self::Default | Self::MaxOrder2 | Self::MaxOrder4 => Ok(()),
+        }
+    }
+}
+
+impl Serialize for AccumulatorMomentConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if !serializer.is_human_readable() {
+            let encoded = match self {
+                Self::Default => 0,
+                Self::MaxOrder2 => 2,
+                Self::MaxOrder4 => 4,
+            };
+            return serializer.serialize_u8(encoded);
+        }
+        if *self == Self::Default {
+            serializer.serialize_str("default")
+        } else {
+            #[derive(Serialize)]
+            struct MomentTable {
+                max_order: u8,
+            }
+            MomentTable {
+                max_order: self.max_order(),
+            }
+            .serialize(serializer)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AccumulatorMomentConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        if !deserializer.is_human_readable() {
+            let max_order = u8::deserialize(deserializer)?;
+            return match max_order {
+                0 => Ok(Self::Default),
+                2 => Ok(Self::MaxOrder2),
+                4 => Ok(Self::MaxOrder4),
+                other => Err(serde::de::Error::custom(format!(
+                    "accumulator moment max_order must be 2 or 4, got {other}"
+                ))),
+            };
+        }
+        struct MomentVisitor;
+
+        impl<'de> Visitor<'de> for MomentVisitor {
+            type Value = AccumulatorMomentConfig;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str(r#""default" or a table like { max_order = 4 }"#)
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "default" => Ok(AccumulatorMomentConfig::Default),
+                    other => Err(E::unknown_variant(other, &["default"])),
+                }
+            }
+
+            fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct MomentTable {
+                    max_order: u8,
+                }
+                match MomentTable::deserialize(serde::de::value::MapAccessDeserializer::new(map))?
+                    .max_order
+                {
+                    2 => Ok(AccumulatorMomentConfig::MaxOrder2),
+                    4 => Ok(AccumulatorMomentConfig::MaxOrder4),
+                    other => Err(serde::de::Error::custom(format!(
+                        "accumulator moments.max_order must be 2 or 4, got {other}"
+                    ))),
+                }
+            }
+        }
+
+        deserializer.deserialize_any(MomentVisitor)
+    }
+}
+
+fn is_default_moment_config(value: &AccumulatorMomentConfig) -> bool {
+    *value == AccumulatorMomentConfig::default()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccumulatorConfig {
     Empty,
     Scalar {
         discrete_projections: Option<DiscreteProjectionConfig>,
+        moments: AccumulatorMomentConfig,
     },
     Vector {
         components: Vec<String>,
         training_projection: TrainingProjection,
         discrete_projections: Option<DiscreteProjectionConfig>,
+        moments: AccumulatorMomentConfig,
     },
     Gammaloop,
     FullVector {
@@ -112,6 +234,8 @@ enum AccumulatorConfigKind {
 struct BinaryAccumulatorConfig {
     kind: AccumulatorConfigKind,
     discrete_projections: Option<DiscreteProjectionConfig>,
+    #[serde(default)]
+    moments: AccumulatorMomentConfig,
     components: Option<Vec<String>>,
     training_projection: Option<BinaryTrainingProjection>,
 }
@@ -133,6 +257,7 @@ impl AccumulatorConfig {
     pub fn scalar() -> Self {
         Self::Scalar {
             discrete_projections: None,
+            moments: AccumulatorMomentConfig::default(),
         }
     }
 
@@ -141,6 +266,7 @@ impl AccumulatorConfig {
             components,
             training_projection,
             discrete_projections: None,
+            moments: AccumulatorMomentConfig::default(),
         }
     }
 
@@ -168,6 +294,7 @@ impl AccumulatorConfig {
         BinaryAccumulatorConfig {
             kind: self.kind(),
             discrete_projections: self.discrete_projections().cloned(),
+            moments: self.moments(),
             components: match self {
                 Self::Vector { components, .. } | Self::FullVector { components } => {
                     Some(components.clone())
@@ -187,6 +314,7 @@ impl AccumulatorConfig {
     fn from_parts(
         kind: AccumulatorConfigKind,
         discrete_projections: Option<DiscreteProjectionConfig>,
+        moments: AccumulatorMomentConfig,
         components: Option<Vec<String>>,
         training_projection: Option<TrainingProjection>,
     ) -> Self {
@@ -194,6 +322,7 @@ impl AccumulatorConfig {
             AccumulatorConfigKind::Empty => Self::Empty,
             AccumulatorConfigKind::Scalar => Self::Scalar {
                 discrete_projections,
+                moments,
             },
             AccumulatorConfigKind::Vector => {
                 let components = components.unwrap_or_else(|| vec!["value".to_string()]);
@@ -203,6 +332,7 @@ impl AccumulatorConfig {
                     components,
                     training_projection,
                     discrete_projections,
+                    moments,
                 }
             }
             AccumulatorConfigKind::Gammaloop => Self::Gammaloop,
@@ -223,6 +353,7 @@ impl AccumulatorConfig {
         match self {
             Self::Scalar {
                 discrete_projections,
+                ..
             }
             | Self::Vector {
                 discrete_projections,
@@ -232,12 +363,23 @@ impl AccumulatorConfig {
         }
     }
 
+    pub fn moments(&self) -> AccumulatorMomentConfig {
+        match self {
+            Self::Scalar { moments, .. } | Self::Vector { moments, .. } => *moments,
+            Self::Empty | Self::Gammaloop | Self::FullVector { .. } => {
+                AccumulatorMomentConfig::default()
+            }
+        }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if let Some(config) = self.discrete_projections() {
             config.validate()?;
         }
+        self.moments().validate()?;
         if let Self::Scalar {
             discrete_projections: Some(config),
+            ..
         } = self
             && !config.streams.is_empty()
         {
@@ -249,6 +391,7 @@ impl AccumulatorConfig {
             components,
             training_projection,
             discrete_projections,
+            ..
         } = self
         {
             validate_vector_accumulator(components, training_projection)?;
@@ -314,6 +457,8 @@ impl Serialize for AccumulatorConfig {
             components: Option<&'a [String]>,
             #[serde(skip_serializing_if = "Option::is_none")]
             training_projection: Option<&'a TrainingProjection>,
+            #[serde(skip_serializing_if = "is_default_moment_config")]
+            moments: AccumulatorMomentConfig,
         }
 
         match self {
@@ -321,11 +466,13 @@ impl Serialize for AccumulatorConfig {
                 components,
                 training_projection,
                 discrete_projections,
+                moments,
             } => Rich {
                 kind: self.kind_str(),
                 discrete_projections: discrete_projections.as_ref(),
                 components: Some(components.as_slice()),
                 training_projection: Some(training_projection),
+                moments: *moments,
             }
             .serialize(serializer),
             Self::FullVector { components } => Rich {
@@ -333,17 +480,30 @@ impl Serialize for AccumulatorConfig {
                 discrete_projections: None,
                 components: Some(components.as_slice()),
                 training_projection: None,
+                moments: AccumulatorMomentConfig::default(),
             }
             .serialize(serializer),
             Self::Scalar {
                 discrete_projections: Some(discrete_projections),
+                moments,
             } => Rich {
                 kind: self.kind_str(),
                 discrete_projections: Some(discrete_projections),
                 components: None,
                 training_projection: None,
+                moments: *moments,
             }
             .serialize(serializer),
+            Self::Scalar { moments, .. } if *moments != AccumulatorMomentConfig::default() => {
+                Rich {
+                    kind: self.kind_str(),
+                    discrete_projections: None,
+                    components: None,
+                    training_projection: None,
+                    moments: *moments,
+                }
+                .serialize(serializer)
+            }
             _ => serializer.serialize_str(self.kind_str()),
         }
     }
@@ -366,6 +526,7 @@ impl<'de> Deserialize<'de> for AccumulatorConfig {
             return Ok(Self::from_parts(
                 binary.kind,
                 binary.discrete_projections,
+                binary.moments,
                 binary.components,
                 binary.training_projection.map(TrainingProjection::from),
             ));
@@ -384,7 +545,13 @@ impl<'de> Deserialize<'de> for AccumulatorConfig {
             where
                 E: serde::de::Error,
             {
-                accumulator_from_kind_str(value, None, None, None)
+                accumulator_from_kind_str(
+                    value,
+                    None,
+                    AccumulatorMomentConfig::default(),
+                    None,
+                    None,
+                )
             }
 
             fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
@@ -393,6 +560,7 @@ impl<'de> Deserialize<'de> for AccumulatorConfig {
             {
                 let mut kind = None::<String>;
                 let mut discrete_projections = None::<DiscreteProjectionConfig>;
+                let mut moments = None::<AccumulatorMomentConfig>;
                 let mut components = None::<Vec<String>>;
                 let mut training_projection = None::<TrainingProjection>;
                 while let Some(key) = map.next_key::<String>()? {
@@ -417,6 +585,12 @@ impl<'de> Deserialize<'de> for AccumulatorConfig {
                             }
                             components = Some(map.next_value()?);
                         }
+                        "moments" => {
+                            if moments.is_some() {
+                                return Err(serde::de::Error::duplicate_field("moments"));
+                            }
+                            moments = Some(map.next_value()?);
+                        }
                         "training_projection" => {
                             if training_projection.is_some() {
                                 return Err(serde::de::Error::duplicate_field(
@@ -431,6 +605,7 @@ impl<'de> Deserialize<'de> for AccumulatorConfig {
                                 &[
                                     "kind",
                                     "discrete_projections",
+                                    "moments",
                                     "components",
                                     "training_projection",
                                 ],
@@ -442,6 +617,7 @@ impl<'de> Deserialize<'de> for AccumulatorConfig {
                 accumulator_from_kind_str(
                     &kind,
                     discrete_projections,
+                    moments.unwrap_or_default(),
                     components,
                     training_projection,
                 )
@@ -455,6 +631,7 @@ impl<'de> Deserialize<'de> for AccumulatorConfig {
 fn accumulator_from_kind_str<E>(
     kind: &str,
     discrete_projections: Option<DiscreteProjectionConfig>,
+    moments: AccumulatorMomentConfig,
     components: Option<Vec<String>>,
     training_projection: Option<TrainingProjection>,
 ) -> Result<AccumulatorConfig, E>
@@ -466,6 +643,7 @@ where
             .map(|_| AccumulatorConfig::Empty),
         "scalar" => Ok(AccumulatorConfig::Scalar {
             discrete_projections,
+            moments,
         }),
         "vector" => {
             let components = components.unwrap_or_else(|| vec!["value".to_string()]);
@@ -479,6 +657,7 @@ where
                 components,
                 training_projection,
                 discrete_projections,
+                moments,
             })
         }
         "gammaloop" => {
@@ -545,7 +724,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EvaluatorConfig {
     Gammaloop {
@@ -607,7 +786,7 @@ pub enum SamplerAggregatorConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::AccumulatorConfig;
+    use super::{AccumulatorConfig, AccumulatorMomentConfig};
 
     #[test]
     fn accumulator_config_parses_discrete_projections() {
@@ -629,6 +808,7 @@ fixed_dims = { "0" = 0 }
 
         let AccumulatorConfig::Scalar {
             discrete_projections: Some(projections),
+            ..
         } = config
         else {
             panic!("expected scalar projection config");
@@ -638,6 +818,19 @@ fixed_dims = { "0" = 0 }
             projections.normalization,
             crate::core::DiscreteProjectionNormalization::ConditionalMean
         );
+    }
+
+    #[test]
+    fn accumulator_config_parses_moment_config() {
+        let config: AccumulatorConfig = toml::from_str(
+            r#"
+kind = "scalar"
+moments = { max_order = 4 }
+"#,
+        )
+        .expect("accumulator config");
+
+        assert_eq!(config.moments(), AccumulatorMomentConfig::MaxOrder4);
     }
 }
 

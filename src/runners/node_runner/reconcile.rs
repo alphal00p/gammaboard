@@ -96,6 +96,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         task: &RunTask,
     ) -> Result<
         (
+            crate::core::EvaluatorConfig,
             crate::core::SamplerAggregatorConfig,
             Vec<BatchTransformConfig>,
             Option<StageHandoffOwned>,
@@ -110,6 +111,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         match resolve_stage_context(store, run_id, task, task.sequence_nr, restored_snapshot).await
         {
             Ok(resolved) => Ok((
+                resolved.evaluator_config,
                 resolved.sampler_config,
                 resolved.batch_transforms,
                 resolved.handoff,
@@ -255,6 +257,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             target.run_id,
             self.node_name.clone(),
             self.node_uuid.clone(),
+            spec.evaluator.clone(),
             evaluator,
             spec.domain.clone(),
             spec.evaluator_runner_params.clone(),
@@ -330,6 +333,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                 observable_state: Some(crate::evaluation::AccumulatorState::from_config(
                     accumulator,
                 )),
+                evaluator: base_stage_snapshot.evaluator,
                 sampler_aggregator: base_stage_snapshot.sampler_aggregator,
                 batch_transforms: base_stage_snapshot.batch_transforms,
             })
@@ -403,9 +407,25 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             .filter(|snapshot| snapshot.task_id == task.id)
             .cloned();
 
-        let (sampler_config, batch_transforms, handoff) = self
+        let (evaluator_config, sampler_config, batch_transforms, handoff) = self
             .resolve_effective_sampler_context_with_store(&role_store, worker.run_id, &task)
             .await?;
+        let evaluator_domain = evaluator_config.resolve_domain().map_err(|err| {
+            StoreError::store(format!("failed to resolve evaluator domain: {err}"))
+        })?;
+        if evaluator_domain != spec.domain {
+            self.fail_task_activation_and_pause_run(
+                worker.run_id,
+                task.id,
+                &format!(
+                    "task evaluator domain {:?} does not match run domain {:?}",
+                    evaluator_domain, spec.domain
+                ),
+                "task activation failed during evaluator resolution",
+            )
+            .await;
+            return Ok(None);
+        }
         let base_stage_snapshot = role_store
             .load_latest_stage_snapshot_before_sequence(worker.run_id, task.sequence_nr)
             .await?;
@@ -480,6 +500,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             task_for_runner,
             sampler,
             observable_state,
+            evaluator_config,
             sampler_config,
             batch_transforms,
             effective_sampler_runner_params,

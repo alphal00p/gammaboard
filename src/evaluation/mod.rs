@@ -4,10 +4,11 @@ pub mod evaluator;
 pub mod traits;
 
 pub use accumulator::{
-    Accumulator, AccumulatorState, EmptyAccumulatorState, FullAccumulatorProgress,
-    FullVectorAccumulatorState, GammaLoopAccumulatorDigest, GammaLoopAccumulatorState,
-    GammaLoopDiagnostics, IngestScalar, IngestVector, NamedScalarAccumulator,
-    ScalarAccumulatorState, SemanticAccumulatorKind, VectorAccumulatorState,
+    Accumulator, AccumulatorMetricValue, AccumulatorState, EmptyAccumulatorState,
+    FullAccumulatorProgress, FullVectorAccumulatorState, GammaLoopAccumulatorDigest,
+    GammaLoopAccumulatorState, GammaLoopDiagnostics, IngestScalar, IngestVector,
+    NamedScalarAccumulator, ScalarAccumulatorState, SemanticAccumulatorKind,
+    VectorAccumulatorState, extract_accumulator_metric, relative_error,
 };
 pub use batch::{Batch, BatchError, BatchResult, Point};
 pub use evaluator::{

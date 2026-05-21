@@ -1,5 +1,5 @@
 use crate::core::BatchTransformConfig;
-use crate::core::SamplerAggregatorConfig;
+use crate::core::{EvaluatorConfig, SamplerAggregatorConfig};
 use crate::evaluation::{AccumulatorState, Batch, BatchResult};
 use crate::sampling::{LatentBatch, SamplerAggregatorSnapshot};
 use chrono::{DateTime, Utc};
@@ -401,6 +401,7 @@ pub struct RunStageSnapshot {
     pub queue_empty: bool,
     pub sampler_snapshot: Option<SamplerAggregatorSnapshot>,
     pub observable_state: Option<AccumulatorState>,
+    pub evaluator: Option<EvaluatorConfig>,
     pub sampler_aggregator: Option<SamplerAggregatorConfig>,
     pub batch_transforms: Vec<BatchTransformConfig>,
 }

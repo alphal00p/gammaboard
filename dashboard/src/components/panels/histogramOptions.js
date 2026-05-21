@@ -60,7 +60,7 @@ const nearlyEqual = (left, right, epsilon = EDGE_EPSILON) => {
   return Math.abs(a - b) <= epsilon * Math.max(1, Math.abs(a), Math.abs(b));
 };
 
-const binsShareEdges = (referenceBins, overlayBins) => {
+export const binsShareEdges = (referenceBins, overlayBins) => {
   if (referenceBins.length !== overlayBins.length) return false;
   for (let i = 0; i < referenceBins.length; i += 1) {
     const left = referenceBins[i];
@@ -70,7 +70,7 @@ const binsShareEdges = (referenceBins, overlayBins) => {
   return true;
 };
 
-const buildOverlaySeriesFromBins = (canonicalBins, yScale, xScale) => ({
+export const buildOverlaySeriesFromBins = (canonicalBins, yScale, xScale) => ({
   valueStep: buildHistogramRenderData(canonicalBins, yScale)
     .map((point) => [Number(point?.x), Number(point?.y)])
     .filter(([x]) => Number.isFinite(x) && (xScale !== "log" || x > 0)),
@@ -106,7 +106,7 @@ const sampleHistogramBinAtX = (bins, x) => {
   return null;
 };
 
-const projectBinsToReferenceBins = (referenceBins, overlayBins) =>
+export const projectBinsToReferenceBins = (referenceBins, overlayBins) =>
   asArray(referenceBins).map((referenceBin) => {
     const matched = sampleHistogramBinAtX(overlayBins, referenceBin?.x);
     if (!matched) return null;
@@ -119,7 +119,7 @@ const projectBinsToReferenceBins = (referenceBins, overlayBins) =>
     };
   });
 
-const buildCdfBinsPreservingNulls = (bins) => {
+export const buildCdfBinsPreservingNulls = (bins) => {
   let cumulativeValue = 0;
   let cumulativeVariance = 0;
   return asArray(bins).map((bin) => {
@@ -136,7 +136,7 @@ const buildCdfBinsPreservingNulls = (bins) => {
   });
 };
 
-const buildLogRatioPoints = (referenceBins, overlayBins, isDiscrete, xScale) =>
+export const buildLogRatioPoints = (referenceBins, overlayBins, isDiscrete, xScale) =>
   asArray(referenceBins)
     .map((referenceBin, index) => {
       const overlayBin = asArray(overlayBins)[index];

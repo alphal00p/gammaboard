@@ -453,6 +453,7 @@ impl GammaLoopEvaluator {
             vec!["real".to_string(), "imag".to_string()],
             AccumulatorTrainingProjection::Norm,
             None,
+            Default::default(),
         );
         for (result, point) in evaluation_results.iter().zip(points.iter()) {
             let mut debug_point = point.clone();

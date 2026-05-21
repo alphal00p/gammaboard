@@ -1,7 +1,7 @@
 //! Evaluator worker runner orchestration.
 
 use crate::core::{
-    BatchClaim, BatchFailOutcome, BatchTransformConfig, EngineError, EvalError,
+    BatchClaim, BatchFailOutcome, BatchTransformConfig, EngineError, EvalError, EvaluatorConfig,
     EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot,
     EvaluatorWorkerStore, StoreError,
 };
@@ -46,6 +46,7 @@ pub struct EvaluatorRunner<S> {
     run_id: i32,
     node_name: String,
     evaluator: Box<dyn Evaluator>,
+    evaluator_config: EvaluatorConfig,
     domain: Domain,
     params: EvaluatorRunnerParams,
     current_task_id: Option<i64>,
@@ -65,6 +66,7 @@ pub struct EvaluatorRunner<S> {
 }
 
 struct TaskRuntimeContext {
+    evaluator_config: EvaluatorConfig,
     materializer: Box<dyn Materializer>,
     batch_transforms: Vec<Box<dyn crate::evaluation::BatchTransform>>,
 }
@@ -364,6 +366,7 @@ where
         run_id: i32,
         node_name: impl Into<String>,
         node_uuid: impl Into<String>,
+        evaluator_config: EvaluatorConfig,
         evaluator: Box<dyn Evaluator>,
         domain: Domain,
         params: EvaluatorRunnerParams,
@@ -377,6 +380,7 @@ where
             run_id,
             node_name,
             evaluator,
+            evaluator_config,
             domain,
             params,
             current_task_id: None,
@@ -428,9 +432,21 @@ where
         }
 
         let TaskRuntimeContext {
+            evaluator_config,
             materializer,
             batch_transforms,
         } = self.load_task_context(task_id).await?;
+
+        if evaluator_config != self.evaluator_config {
+            let evaluator = evaluator_config.build().map_err(|err| {
+                EvaluatorRunnerError::Store(StoreError::store(format!(
+                    "failed to build evaluator for task {}: {err}",
+                    task_id
+                )))
+            })?;
+            self.evaluator = evaluator;
+            self.evaluator_config = evaluator_config;
+        }
 
         self.current_task_id = Some(task_id);
         self.materializer = Some(materializer);
@@ -459,6 +475,18 @@ where
                 .map_err(EvaluatorRunnerError::Store)?;
         let batch_transforms =
             Self::build_batch_transforms(&resolved.batch_transforms, &self.domain)?;
+        let evaluator_domain = resolved.evaluator_config.resolve_domain().map_err(|err| {
+            EvaluatorRunnerError::Store(StoreError::store(format!(
+                "failed to resolve evaluator domain for task {}: {err}",
+                task_id
+            )))
+        })?;
+        if evaluator_domain != self.domain {
+            return Err(EvaluatorRunnerError::Store(StoreError::store(format!(
+                "task {} evaluator domain {:?} does not match run domain {:?}",
+                task_id, evaluator_domain, self.domain
+            ))));
+        }
         let materializer = resolved
             .sampler_config
             .build_materializer(resolved.handoff.as_ref().map(|handoff| handoff.as_ref()))
@@ -475,6 +503,7 @@ where
             )))
         })?;
         Ok(TaskRuntimeContext {
+            evaluator_config: resolved.evaluator_config,
             materializer,
             batch_transforms,
         })

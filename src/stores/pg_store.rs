@@ -675,6 +675,7 @@ impl ControlPlaneStore for PgStore {
                 queue_empty: initial_stage_snapshot.queue_empty,
                 sampler_snapshot: initial_stage_snapshot.sampler_snapshot.clone(),
                 observable_state: initial_stage_snapshot.observable_state.clone(),
+                evaluator: initial_stage_snapshot.evaluator.clone(),
                 sampler_aggregator: initial_stage_snapshot.sampler_aggregator.clone(),
                 batch_transforms: initial_stage_snapshot.batch_transforms.clone(),
             },

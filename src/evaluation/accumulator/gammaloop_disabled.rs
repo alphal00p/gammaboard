@@ -179,6 +179,7 @@ impl Default for GammaLoopAccumulatorState {
                 vec!["real".to_string(), "imag".to_string()],
                 TrainingProjection::Norm,
                 None,
+                Default::default(),
             ),
             diagnostics: GammaLoopDiagnostics::default(),
         }

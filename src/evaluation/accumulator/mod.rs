@@ -6,6 +6,7 @@ mod gammaloop;
 #[cfg(not(feature = "gammaloop"))]
 #[path = "gammaloop_disabled.rs"]
 mod gammaloop;
+mod metrics;
 mod scalar;
 mod vector;
 
@@ -20,6 +21,7 @@ pub use self::full::{FullAccumulatorProgress, FullVectorAccumulatorState};
 pub use self::gammaloop::{
     GammaLoopAccumulatorDigest, GammaLoopAccumulatorState, GammaLoopDiagnostics,
 };
+pub use self::metrics::{AccumulatorMetricValue, extract_accumulator_metric, relative_error};
 pub use self::scalar::ScalarAccumulatorState;
 pub use self::vector::{NamedScalarAccumulator, VectorAccumulatorState};
 
@@ -164,17 +166,21 @@ impl AccumulatorState {
             AccumulatorConfig::Empty => Self::empty(),
             AccumulatorConfig::Scalar {
                 discrete_projections,
+                moments,
             } => Self::Scalar(ScalarAccumulatorState::from_config(
                 discrete_projections.clone(),
+                *moments,
             )),
             AccumulatorConfig::Vector {
                 components,
                 training_projection,
                 discrete_projections,
+                moments,
             } => Self::Vector(VectorAccumulatorState::from_config(
                 components.clone(),
                 training_projection.clone(),
                 discrete_projections.clone(),
+                *moments,
             )),
             AccumulatorConfig::Gammaloop => Self::empty_gammaloop(),
             AccumulatorConfig::FullVector { components } => Self::FullVector(
@@ -196,6 +202,7 @@ impl AccumulatorState {
             vec!["value".to_string()],
             crate::core::TrainingProjection::component("value"),
             None,
+            Default::default(),
         ))
     }
 
@@ -218,6 +225,7 @@ impl AccumulatorState {
             Self::Empty(_) => AccumulatorConfig::Empty,
             Self::Scalar(state) => AccumulatorConfig::Scalar {
                 discrete_projections: state.discrete_projections.clone(),
+                moments: state.moments,
             },
             Self::Vector(state) => AccumulatorConfig::Vector {
                 components: state
@@ -230,6 +238,7 @@ impl AccumulatorState {
                     .components
                     .first()
                     .and_then(|component| component.state.discrete_projections.clone()),
+                moments: state.projection.state.moments,
             },
             Self::Gammaloop(_) => AccumulatorConfig::Gammaloop,
             Self::FullVector(state) => AccumulatorConfig::FullVector {
@@ -318,11 +327,12 @@ impl AccumulatorState {
 
 #[cfg(test)]
 mod tests {
-    use super::{AccumulatorState, ScalarAccumulatorState};
+    use super::{AccumulatorState, ScalarAccumulatorState, extract_accumulator_metric};
     use crate::core::{
-        AccumulatorConfig, DiscreteProjectionConfig, DiscreteProjectionNormalization,
-        NamedDiscreteProjection,
+        AccumulatorConfig, AccumulatorMetricName, AccumulatorMetricSelector,
+        DiscreteProjectionConfig, DiscreteProjectionNormalization, NamedDiscreteProjection,
     };
+    use crate::evaluation::Point;
 
     #[test]
     fn persistent_json_roundtrips_without_enum_tag() {
@@ -353,10 +363,41 @@ mod tests {
                     fixed_dims: Default::default(),
                 }],
             }),
+            moments: Default::default(),
         };
 
         let state = AccumulatorState::from_config(&config);
 
         assert_eq!(state.config(), config);
+    }
+
+    #[test]
+    fn scalar_metric_extraction_reports_variance_uncertainty_with_fourth_moment() {
+        let config = AccumulatorConfig::Scalar {
+            discrete_projections: None,
+            moments: crate::core::AccumulatorMomentConfig::MaxOrder4,
+        };
+        let AccumulatorState::Scalar(mut state) = AccumulatorState::from_config(&config) else {
+            panic!("expected scalar accumulator");
+        };
+
+        let point = Point::new(vec![], vec![], 1.0);
+        for value in [1.0, 2.0, 4.0, 8.0] {
+            state.add_sample(value, &point);
+        }
+
+        let metric = extract_accumulator_metric(
+            &AccumulatorState::Scalar(state),
+            &AccumulatorMetricSelector {
+                name: AccumulatorMetricName::Variance,
+                component: None,
+            },
+        )
+        .expect("metric extraction")
+        .expect("variance metric");
+
+        assert!(metric.value > 0.0);
+        assert!(metric.uncertainty.is_some_and(|value| value > 0.0));
+        assert_eq!(metric.sample_count, 4);
     }
 }

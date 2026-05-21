@@ -214,6 +214,9 @@ Process sampler construction semantics:
 
 Sample tasks use direct source specs:
 
+- Omit `evaluator` or use `evaluator = "latest"` to use the latest effective evaluator.
+- Use `evaluator = { from_name = "..." }` to load the evaluator from a prior task snapshot.
+- Use `evaluator = { config = ... }` to set an explicit task-local evaluator.
 - Omit `sampler_aggregator` or `accumulator` to use `latest`.
 - Use `kind = "set_accumulator"` when you want to establish or reset accumulator state explicitly before later sample tasks.
 - Use `{ from_name = "..." }` to load from a prior task name.
@@ -221,6 +224,8 @@ Sample tasks use direct source specs:
 - `accumulator = { config = "gammaloop" }` is available for GammaLoop runs and persists GammaLoop's native histogram snapshot bundle.
 
 Task names are unique per run and can be referenced by `from_name`.
+
+Task-level evaluator configs must resolve to the same domain as the run root evaluator. This keeps batches, materializers, and accumulator state compatible while still allowing evaluator parameters, expressions, process commands, and implementation kind to vary per task.
 
 `batch_transforms` is stage state for tasks. Omitted inherits; `batch_transforms = []` explicitly clears inherited transforms.
 

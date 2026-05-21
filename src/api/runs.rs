@@ -160,9 +160,14 @@ pub async fn create_run(
         ApiError::Internal(format!("failed to serialize integration_params: {err}"))
     })?;
     let initial_tasks = processed.resolved_task_queue.clone().unwrap_or_default();
-    let initial_stage_snapshot = processed.initial_stage_snapshot.as_ref().ok_or_else(|| {
-        ApiError::Internal("preprocessing did not build initial stage snapshot".to_string())
-    })?;
+    let mut initial_stage_snapshot = processed
+        .initial_stage_snapshot
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| {
+            ApiError::Internal("preprocessing did not build initial stage snapshot".to_string())
+        })?;
+    initial_stage_snapshot.evaluator = Some(resolved_integration_params.evaluator.clone());
 
     preflight_task_batch(
         store,
@@ -186,7 +191,7 @@ pub async fn create_run(
             &integration_params,
             processed.target.as_ref(),
             domain,
-            initial_stage_snapshot,
+            &initial_stage_snapshot,
             &initial_tasks,
         )
         .await?;
@@ -268,6 +273,7 @@ pub async fn clone_run(
                 queue_empty: snapshot.queue_empty,
                 sampler_snapshot: snapshot.sampler_snapshot.clone(),
                 observable_state: snapshot.observable_state.clone(),
+                evaluator: snapshot.evaluator.clone(),
                 sampler_aggregator: snapshot.sampler_aggregator.clone(),
                 batch_transforms: snapshot.batch_transforms.clone(),
             },
@@ -437,9 +443,11 @@ struct TaskPreflightContext {
     known_names: BTreeSet<String>,
     prior_sourceable_names: BTreeSet<String>,
     effective_accumulator_by_name: BTreeMap<String, AccumulatorConfig>,
+    effective_evaluator_by_name: BTreeMap<String, EvaluatorConfig>,
     current_accumulator: Option<AccumulatorConfig>,
+    current_evaluator: Option<EvaluatorConfig>,
     next_sequence: i32,
-    evaluator: Option<EvaluatorConfig>,
+    root_evaluator: Option<EvaluatorConfig>,
 }
 
 impl TaskPreflightContext {
@@ -466,9 +474,11 @@ impl TaskPreflightContext {
             known_names,
             prior_sourceable_names,
             effective_accumulator_by_name: BTreeMap::new(),
+            effective_evaluator_by_name: BTreeMap::new(),
             current_accumulator: None,
+            current_evaluator: evaluator.clone(),
             next_sequence,
-            evaluator,
+            root_evaluator: evaluator,
         };
         let mut ordered_tasks = existing_tasks.iter().collect::<Vec<_>>();
         ordered_tasks.sort_by_key(|task| (task.sequence_nr, task.id));
@@ -507,12 +517,17 @@ impl TaskPreflightContext {
             )));
         }
         let effective_accumulator = self.resolve_effective_accumulator(task)?;
+        let effective_evaluator = self.resolve_effective_evaluator(task)?;
+        self.validate_evaluator_domain(&effective_evaluator)?;
         if let Some(config) = effective_accumulator.as_ref() {
-            self.validate_accumulator_against_evaluator(&config)?;
+            self.validate_accumulator_against_evaluator(&effective_evaluator, &config)?;
         }
         if task.task.is_sourceable() {
             self.prior_sourceable_names.insert(task_name.clone());
         }
+        self.effective_evaluator_by_name
+            .insert(task_name.clone(), effective_evaluator.clone());
+        self.current_evaluator = Some(effective_evaluator);
         if let Some(config) = effective_accumulator {
             self.effective_accumulator_by_name
                 .insert(task_name, config.clone());
@@ -527,6 +542,10 @@ impl TaskPreflightContext {
             name: Some(task.name.clone()),
             task: task.task.clone(),
         };
+        let effective_evaluator = self.resolve_effective_evaluator(&input)?;
+        self.effective_evaluator_by_name
+            .insert(task.name.clone(), effective_evaluator.clone());
+        self.current_evaluator = Some(effective_evaluator);
         let effective_accumulator = self.resolve_effective_accumulator(&input)?;
         if let Some(config) = effective_accumulator {
             self.effective_accumulator_by_name
@@ -534,6 +553,34 @@ impl TaskPreflightContext {
             self.current_accumulator = Some(config);
         }
         Ok(())
+    }
+
+    fn resolve_effective_evaluator(
+        &self,
+        task: &RunTaskInput,
+    ) -> Result<EvaluatorConfig, ApiError> {
+        if let Some(config) = task.task.evaluator_config() {
+            return Ok(config);
+        }
+
+        match task.task.evaluator_source() {
+            Some(SourceRefSpec::Latest) | None => self.current_evaluator.clone().ok_or_else(|| {
+                ApiError::BadRequest(
+                    "task has no effective evaluator configuration; set one explicitly first"
+                        .to_string(),
+                )
+            }),
+            Some(SourceRefSpec::FromName(source_name)) => self
+                .effective_evaluator_by_name
+                .get(&source_name)
+                .cloned()
+                .ok_or_else(|| {
+                    ApiError::BadRequest(format!(
+                        "task references evaluator source task '{}' but no effective evaluator is available from it",
+                        source_name
+                    ))
+                }),
+        }
     }
 
     fn resolve_effective_accumulator(
@@ -574,12 +621,30 @@ impl TaskPreflightContext {
 
     fn validate_accumulator_against_evaluator(
         &self,
+        evaluator: &EvaluatorConfig,
         config: &AccumulatorConfig,
     ) -> Result<(), ApiError> {
-        if let Some(evaluator) = self.evaluator.as_ref() {
-            evaluator
-                .validate_accumulator_config(config)
-                .map_err(|err| ApiError::BadRequest(err.to_string()))?;
+        evaluator
+            .validate_accumulator_config(config)
+            .map_err(|err| ApiError::BadRequest(err.to_string()))?;
+        Ok(())
+    }
+
+    fn validate_evaluator_domain(&self, evaluator: &EvaluatorConfig) -> Result<(), ApiError> {
+        let Some(root_evaluator) = self.root_evaluator.as_ref() else {
+            return Ok(());
+        };
+        let root_domain = root_evaluator
+            .resolve_domain()
+            .map_err(|err| ApiError::BadRequest(err.to_string()))?;
+        let evaluator_domain = evaluator
+            .resolve_domain()
+            .map_err(|err| ApiError::BadRequest(err.to_string()))?;
+        if evaluator_domain != root_domain {
+            return Err(ApiError::BadRequest(format!(
+                "task evaluator domain {:?} does not match run domain {:?}",
+                evaluator_domain, root_domain
+            )));
         }
         Ok(())
     }
@@ -795,6 +860,76 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
     }
 
     #[test]
+    fn parse_run_add_accepts_task_level_evaluator_sources() {
+        let config = parse_run_add_config_toml(
+            r#"
+name = "task-evaluators"
+
+[evaluator]
+kind = "symbolica"
+expr = "1"
+args = ["x"]
+
+[[task_queue]]
+name = "accumulator"
+kind = "set_accumulator"
+accumulator = "scalar"
+
+[[task_queue]]
+name = "sample-a"
+kind = "sample"
+stop_condition = { max_samples = 8 }
+evaluator = { config = { kind = "symbolica", expr = "x", args = ["x"] } }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+accumulator = "latest"
+
+[[task_queue]]
+name = "sample-b"
+kind = "sample"
+stop_condition = { max_samples = 8 }
+evaluator = { from_name = "sample-a" }
+sampler_aggregator = "latest"
+accumulator = "latest"
+"#,
+        )
+        .expect("task-level evaluator config");
+
+        assert_eq!(config.task_queue.expect("tasks").len(), 3);
+    }
+
+    #[test]
+    fn parse_run_add_rejects_task_level_evaluator_domain_changes() {
+        let config = parse_run_add_config_toml(
+            r#"
+name = "bad-task-evaluator-domain"
+
+[evaluator]
+kind = "symbolica"
+expr = "1"
+args = ["x"]
+
+[[task_queue]]
+kind = "sample"
+stop_condition = { max_samples = 8 }
+evaluator = { config = { kind = "symbolica", expr = "x + y", args = ["x", "y"] } }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+accumulator = { config = "scalar" }
+"#,
+        )
+        .expect("run config");
+        let mut context = TaskPreflightContext::from_existing_tasks(
+            &[],
+            Some(config.integration_params.evaluator.clone()),
+        )
+        .expect("context");
+        let err = context
+            .validate_batch(config.task_queue.as_ref().expect("tasks"))
+            .expect_err("domain-changing evaluator should fail");
+
+        assert!(err.to_string().contains("does not match run domain"));
+    }
+
+    #[test]
     fn bundled_run_and_task_templates_parse_after_replacement_expansion() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         for relative_path in [
@@ -944,6 +1079,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
                     max_samples: Some(10),
                     ..SampleStopCondition::default()
                 },
+                evaluator: None,
                 sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
                     config: SamplerAggregatorConfig::NaiveMonteCarlo {
                         params: NaiveMonteCarloSamplerParams::default(),

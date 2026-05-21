@@ -1578,6 +1578,141 @@ sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", 
 }
 
 #[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_task_level_evaluator_switch_e2e() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    harness.start_nodes(&["w-1", "w-2"]).await?;
+
+    let config = temp_run_add_config(
+        r#"
+name = "task-level-evaluator-switch-e2e"
+
+[evaluator]
+kind = "symbolica"
+expr = "1"
+args = ["x"]
+
+[[task_queue]]
+name = "accumulator-a"
+kind = "set_accumulator"
+accumulator = "scalar"
+
+[[task_queue]]
+name = "sample-a"
+kind = "sample"
+stop_condition = { max_samples = 32 }
+evaluator = { config = { kind = "symbolica", expr = "1", args = ["x"] } }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+accumulator = "latest"
+
+[[task_queue]]
+name = "accumulator-b"
+kind = "set_accumulator"
+accumulator = "scalar"
+
+[[task_queue]]
+name = "sample-b"
+kind = "sample"
+stop_condition = { max_samples = 32 }
+evaluator = { config = { kind = "symbolica", expr = "2", args = ["x"] } }
+sampler_aggregator = "latest"
+accumulator = "latest"
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 =
+        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'task-level-evaluator-switch-e2e'")
+            .fetch_one(&harness.pool)
+            .await?;
+
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-1",
+            "sampler-aggregator",
+            "task-level-evaluator-switch-e2e",
+        ])
+        .assert()
+        .success();
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-2",
+            "evaluator",
+            "task-level-evaluator-switch-e2e",
+        ])
+        .assert()
+        .success();
+
+    harness
+        .wait_for(
+            "task-level evaluator tasks complete",
+            Duration::from_secs(60),
+            || async {
+                let completed: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM run_tasks WHERE run_id = $1 AND state = 'completed'",
+                )
+                .bind(run_id)
+                .fetch_one(&harness.pool)
+                .await?;
+                Ok(completed == 4)
+            },
+        )
+        .await?;
+
+    let rows: Vec<(String, JsonValue, JsonValue)> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT ON (t.name) t.name, s.evaluator, s.observable_state
+        FROM run_stage_snapshots s
+        JOIN run_tasks t ON t.id = s.task_id
+        WHERE s.run_id = $1
+          AND t.name IN ('sample-a', 'sample-b')
+          AND s.queue_empty = TRUE
+        ORDER BY t.name, s.id DESC
+        "#,
+    )
+    .bind(run_id)
+    .fetch_all(&harness.pool)
+    .await?;
+
+    assert_eq!(rows.len(), 2);
+    let mean = |state: &JsonValue| -> f64 {
+        let sum = state
+            .get("sum_weighted_value")
+            .and_then(JsonValue::as_f64)
+            .expect("sum_weighted_value");
+        let count = state
+            .get("count")
+            .and_then(JsonValue::as_i64)
+            .expect("count") as f64;
+        sum / count
+    };
+    assert_eq!(rows[0].0, "sample-a");
+    assert_eq!(rows[0].1.get("expr").and_then(JsonValue::as_str), Some("1"));
+    assert!((mean(&rows[0].2) - 1.0).abs() < 1e-12);
+    assert_eq!(rows[1].0, "sample-b");
+    assert_eq!(rows[1].1.get("expr").and_then(JsonValue::as_str), Some("2"));
+    assert!((mean(&rows[1].2) - 2.0).abs() < 1e-12);
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege, apptainer, and a working unprivileged Apptainer build setup"]
 async fn full_stack_cli_rust_apptainer_process_evaluator_e2e() -> anyhow::Result<()> {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));

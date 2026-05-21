@@ -1,5 +1,7 @@
 use crate::api::stage::resolve_task_source_snapshot;
-use crate::core::{AggregationStore, BatchTransformConfig, RunTask, RunTaskStore, StoreError};
+use crate::core::{
+    AggregationStore, BatchTransformConfig, EvaluatorConfig, RunTask, RunTaskStore, StoreError,
+};
 use crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint;
 use crate::sampling::StageHandoffOwned;
 
@@ -9,6 +11,7 @@ pub(crate) const PDF_ADAPTATION_HANDOFF_REQUIRED_ERROR: &str =
     "pdf_adaptation sampler requires a persisted sampler snapshot handoff";
 
 pub(crate) struct ResolvedStageContext {
+    pub(crate) evaluator_config: EvaluatorConfig,
     pub(crate) sampler_config: crate::core::SamplerAggregatorConfig,
     pub(crate) batch_transforms: Vec<BatchTransformConfig>,
     pub(crate) handoff: Option<StageHandoffOwned>,
@@ -65,19 +68,41 @@ where
     let explicit_sampler_config =
         task.task.sampler_config().is_some() || task.task.sample_sampler_config().is_some();
     let restoring_active_task = restored_snapshot.is_some();
-    let source_snapshot =
+    let sampler_source_snapshot =
         resolve_task_source_snapshot(store, run_id, task, task.task.sample_sampler_source())
             .await?;
+    let evaluator_source_snapshot =
+        resolve_task_source_snapshot(store, run_id, task, task.task.evaluator_source()).await?;
     let base_stage_snapshot = store
         .load_latest_stage_snapshot_before_sequence(run_id, fallback_sequence_nr)
         .await?;
+
+    let evaluator_config = task
+        .task
+        .evaluator_config()
+        .or_else(|| {
+            evaluator_source_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.evaluator.clone())
+        })
+        .or_else(|| {
+            base_stage_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.evaluator.clone())
+        })
+        .ok_or_else(|| {
+            StoreError::store(format!(
+                "run {} task {} has no evaluator configuration",
+                run_id, task.id
+            ))
+        })?;
 
     let sampler_config = task
         .task
         .sampler_config()
         .or_else(|| task.task.sample_sampler_config())
         .or_else(|| {
-            source_snapshot
+            sampler_source_snapshot
                 .as_ref()
                 .and_then(|snapshot| snapshot.sampler_aggregator.clone())
         })
@@ -97,7 +122,7 @@ where
         .task
         .batch_transforms_config()
         .or_else(|| {
-            source_snapshot
+            sampler_source_snapshot
                 .as_ref()
                 .map(|snapshot| snapshot.batch_transforms.clone())
         })
@@ -110,7 +135,7 @@ where
 
     let handoff = if let Some(snapshot) = restored_snapshot {
         Some(snapshot.into())
-    } else if let Some(snapshot) = source_snapshot {
+    } else if let Some(snapshot) = sampler_source_snapshot {
         Some(snapshot.into())
     } else {
         match &sampler_config {
@@ -171,6 +196,7 @@ where
     };
 
     Ok(ResolvedStageContext {
+        evaluator_config,
         sampler_config,
         batch_transforms,
         handoff,

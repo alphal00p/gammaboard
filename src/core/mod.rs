@@ -17,16 +17,17 @@ pub use models::{
     SamplerWorkRollingAverages, WorkerRole,
 };
 pub use run_spec::{
-    AccumulatorConfig, BatchTransformConfig, CapabilityRequirements, EvaluatorConfig,
-    IntegrationParams, RunSpec, SamplerAggregatorConfig, TrainingProjection,
+    AccumulatorConfig, AccumulatorMomentConfig, BatchTransformConfig, CapabilityRequirements,
+    EvaluatorConfig, IntegrationParams, RunSpec, SamplerAggregatorConfig, TrainingProjection,
 };
 pub use tasks::{
-    AccumulatorSourceSpec, DEFAULT_DISCRETE_PROJECTION_MAX_TOTAL_BINS, DiscreteProjectionConfig,
-    DiscreteProjectionNormalization, ImageDisplayMode, LineDisplayMode, LineRasterGeometry,
-    Linspace, NamedDiscreteProjection, PlaneRasterGeometry, PlotAccumulatorKind, RunTask,
-    RunTaskInput, RunTaskSpec, RunTaskState, SampleErrorProjection, SampleStopCondition,
-    SampleTaskConfig, SamplerAggregatorSourceSpec, SamplerQueueTuning, SourceRefSpec,
-    canonical_task_toml, generated_task_name,
+    AccumulatorMetricName, AccumulatorMetricSelector, AccumulatorSourceSpec,
+    DEFAULT_DISCRETE_PROJECTION_MAX_TOTAL_BINS, DiscreteProjectionConfig,
+    DiscreteProjectionNormalization, EvaluatorSourceSpec, ImageDisplayMode, LineDisplayMode,
+    LineRasterGeometry, Linspace, NamedDiscreteProjection, PlaneRasterGeometry,
+    PlotAccumulatorKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState, SampleErrorProjection,
+    SampleStopCondition, SampleTaskConfig, SamplerAggregatorSourceSpec, SamplerQueueTuning,
+    SourceRefSpec, canonical_task_toml, generated_task_name,
 };
 pub use traits::{
     AggregationStore, ControlPlaneStore, EvaluatorWorkerStore, RunReadStore, RunSpecStore,

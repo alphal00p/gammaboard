@@ -2,7 +2,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::core::{AccumulatorConfig, BatchTransformConfig, BuildError, SamplerAggregatorConfig};
+use crate::core::{
+    AccumulatorConfig, BatchTransformConfig, BuildError, EvaluatorConfig, SamplerAggregatorConfig,
+};
 use crate::sampling::{RasterLineSamplerParams, RasterPlaneSamplerParams};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,31 +191,69 @@ pub enum SampleErrorProjection {
     Abs,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AccumulatorMetricName {
+    Mean,
+    AbsMean,
+    Error,
+    RelativeError,
+    Variance,
+    RelativeVarianceError,
+    RelativeSquaredDispersion,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AccumulatorMetricSelector {
+    pub name: AccumulatorMetricName,
+    #[serde(default)]
+    pub component: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct SampleStopCondition {
+    pub min_samples: Option<i64>,
     pub max_samples: Option<i64>,
     pub absolute_error: Option<f64>,
     pub relative_error: Option<f64>,
     pub projection: Option<SampleErrorProjection>,
+    pub metric: Option<AccumulatorMetricSelector>,
 }
 
 impl Default for SampleStopCondition {
     fn default() -> Self {
         Self {
+            min_samples: None,
             max_samples: None,
             absolute_error: None,
             relative_error: None,
             projection: None,
+            metric: None,
         }
     }
 }
 
 impl SampleStopCondition {
     pub fn validate(&self) -> Result<(), String> {
+        if self.min_samples.is_some_and(|value| value < 0) {
+            return Err(
+                "sample.stop_condition.min_samples must be a non-negative integer when set"
+                    .to_string(),
+            );
+        }
         if self.max_samples.is_some_and(|value| value < 0) {
             return Err(
                 "sample.stop_condition.max_samples must be a non-negative integer when set"
+                    .to_string(),
+            );
+        }
+        if let (Some(min), Some(max)) = (self.min_samples, self.max_samples)
+            && min > max
+        {
+            return Err(
+                "sample.stop_condition.min_samples must be <= max_samples when both are set"
                     .to_string(),
             );
         }
@@ -238,6 +278,11 @@ impl SampleStopCondition {
             return Err(
                 "sample.stop_condition must set at least one of: max_samples, absolute_error, relative_error"
                     .to_string(),
+            );
+        }
+        if self.metric.is_some() && self.projection.is_some() {
+            return Err(
+                "sample.stop_condition.metric and projection are mutually exclusive".to_string(),
             );
         }
         if self.projection.is_some()
@@ -369,6 +414,14 @@ pub enum SamplerAggregatorSourceSpec {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
+pub enum EvaluatorSourceSpec {
+    Latest(String),
+    FromName { from_name: String },
+    Config { config: EvaluatorConfig },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum AccumulatorSourceSpec {
     Latest(String),
     FromName { from_name: String },
@@ -404,6 +457,22 @@ impl SamplerAggregatorSourceSpec {
     }
 }
 
+impl EvaluatorSourceSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Latest(value) => {
+                if value == "latest" {
+                    Ok(())
+                } else {
+                    Err("evaluator must be one of: \"latest\", { from_name = ... }, { config = ... }".to_string())
+                }
+            }
+            Self::FromName { from_name } => validate_source_name("evaluator", from_name),
+            Self::Config { .. } => Ok(()),
+        }
+    }
+}
+
 impl AccumulatorSourceSpec {
     pub fn validate(&self) -> Result<(), String> {
         match self {
@@ -429,6 +498,8 @@ pub enum RunTaskSpec {
     Sample {
         stop_condition: SampleStopCondition,
         #[serde(default)]
+        evaluator: Option<EvaluatorSourceSpec>,
+        #[serde(default)]
         sampler_aggregator: Option<SamplerAggregatorSourceSpec>,
         #[serde(default)]
         accumulator: Option<AccumulatorSourceSpec>,
@@ -440,6 +511,8 @@ pub enum RunTaskSpec {
     Image {
         geometry: PlaneRasterGeometry,
         accumulator: PlotAccumulatorKind,
+        #[serde(default)]
+        evaluator: Option<EvaluatorSourceSpec>,
         #[serde(default)]
         display: ImageDisplayMode,
         #[serde(default)]
@@ -462,6 +535,8 @@ pub enum RunTaskSpec {
     PlotLine {
         geometry: LineRasterGeometry,
         accumulator: PlotAccumulatorKind,
+        #[serde(default)]
+        evaluator: Option<EvaluatorSourceSpec>,
         #[serde(default)]
         display: LineDisplayMode,
         #[serde(default)]
@@ -486,12 +561,16 @@ impl RunTaskSpec {
             ),
             Self::Sample {
                 stop_condition,
+                evaluator,
                 sampler_aggregator,
                 accumulator,
                 queue_tuning,
                 ..
             } => {
                 stop_condition.validate()?;
+                if let Some(source) = evaluator {
+                    source.validate()?;
+                }
                 if let Some(source) = sampler_aggregator {
                     source.validate()?;
                 }
@@ -503,7 +582,15 @@ impl RunTaskSpec {
                 }
                 Ok(())
             }
-            Self::Image { geometry, .. } => geometry.validate(),
+            Self::Image {
+                geometry, evaluator, ..
+            } => {
+                geometry.validate()?;
+                if let Some(source) = evaluator {
+                    source.validate()?;
+                }
+                Ok(())
+            }
             Self::PdfAdaptationImage {
                 geometry,
                 sampler_aggregator,
@@ -542,7 +629,15 @@ impl RunTaskSpec {
                 }
                 Ok(())
             }
-            Self::PlotLine { geometry, .. } => geometry.validate(),
+            Self::PlotLine {
+                geometry, evaluator, ..
+            } => {
+                geometry.validate()?;
+                if let Some(source) = evaluator {
+                    source.validate()?;
+                }
+                Ok(())
+            }
         }
     }
 
@@ -637,6 +732,41 @@ impl RunTaskSpec {
         }
     }
 
+    pub fn evaluator_source(&self) -> Option<SourceRefSpec> {
+        match self {
+            Self::SetAccumulator { .. }
+            | Self::PdfAdaptationImage { .. }
+            | Self::PdfAdaptationPlotLine { .. } => None,
+            Self::Sample { evaluator, .. }
+            | Self::Image { evaluator, .. }
+            | Self::PlotLine { evaluator, .. } => match evaluator {
+                None | Some(EvaluatorSourceSpec::Latest(_)) => Some(SourceRefSpec::Latest),
+                Some(EvaluatorSourceSpec::FromName { from_name }) => {
+                    Some(SourceRefSpec::FromName(from_name.clone()))
+                }
+                Some(EvaluatorSourceSpec::Config { .. }) => None,
+            },
+        }
+    }
+
+    pub fn evaluator_config(&self) -> Option<EvaluatorConfig> {
+        match self {
+            Self::Sample {
+                evaluator: Some(EvaluatorSourceSpec::Config { config }),
+                ..
+            }
+            | Self::Image {
+                evaluator: Some(EvaluatorSourceSpec::Config { config }),
+                ..
+            }
+            | Self::PlotLine {
+                evaluator: Some(EvaluatorSourceSpec::Config { config }),
+                ..
+            } => Some(config.clone()),
+            _ => None,
+        }
+    }
+
     pub fn batch_transforms_config(&self) -> Option<Vec<BatchTransformConfig>> {
         match self {
             Self::SetAccumulator { .. } => None,
@@ -678,6 +808,9 @@ impl RunTaskSpec {
     pub fn source_task_names(&self) -> Vec<String> {
         let mut out = Vec::new();
         if let Some(SourceRefSpec::FromName(name)) = self.sample_sampler_source() {
+            out.push(name);
+        }
+        if let Some(SourceRefSpec::FromName(name)) = self.evaluator_source() {
             out.push(name);
         }
         if let Some(SourceRefSpec::FromName(name)) = self.sample_accumulator_source() {
@@ -775,12 +908,14 @@ impl IntoPreflightTask for RunTaskSpec {
             Self::SetAccumulator { accumulator } => Ok(Some(Self::SetAccumulator { accumulator })),
             Self::Sample {
                 mut stop_condition,
+                evaluator,
                 sampler_aggregator,
                 accumulator,
                 queue_tuning,
                 batch_transforms,
             } => Ok(Some(Self::Sample {
                 stop_condition: SampleStopCondition {
+                    min_samples: stop_condition.min_samples.take(),
                     max_samples: Some(if stop_condition.max_samples == Some(0) {
                         0
                     } else {
@@ -789,7 +924,9 @@ impl IntoPreflightTask for RunTaskSpec {
                     absolute_error: stop_condition.absolute_error.take(),
                     relative_error: stop_condition.relative_error.take(),
                     projection: stop_condition.projection.take(),
+                    metric: stop_condition.metric.take(),
                 },
+                evaluator,
                 sampler_aggregator,
                 accumulator,
                 queue_tuning,
@@ -798,6 +935,7 @@ impl IntoPreflightTask for RunTaskSpec {
             Self::Image {
                 mut geometry,
                 accumulator,
+                evaluator,
                 display,
                 batch_transforms,
             } => {
@@ -805,6 +943,7 @@ impl IntoPreflightTask for RunTaskSpec {
                 Ok(Some(Self::Image {
                     geometry,
                     accumulator,
+                    evaluator,
                     display,
                     batch_transforms,
                 }))
@@ -836,6 +975,7 @@ impl IntoPreflightTask for RunTaskSpec {
             Self::PlotLine {
                 mut geometry,
                 accumulator,
+                evaluator,
                 display,
                 batch_transforms,
             } => {
@@ -843,6 +983,7 @@ impl IntoPreflightTask for RunTaskSpec {
                 Ok(Some(Self::PlotLine {
                     geometry,
                     accumulator,
+                    evaluator,
                     display,
                     batch_transforms,
                 }))
@@ -1125,6 +1266,7 @@ mod tests {
                 max_samples: Some(10),
                 ..SampleStopCondition::default()
             },
+            evaluator: None,
             sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
                 config: SamplerAggregatorConfig::NaiveMonteCarlo {
                     params: NaiveMonteCarloSamplerParams::default(),
@@ -1136,6 +1278,25 @@ mod tests {
         };
 
         assert_eq!(task.new_accumulator_config().unwrap(), None);
+    }
+
+    #[test]
+    fn sample_stop_condition_accepts_metric_target() {
+        let stop_condition: SampleStopCondition = toml::from_str(
+            r#"
+min_samples = 100
+relative_error = 0.1
+metric = { name = "variance", component = "real" }
+"#,
+        )
+        .expect("stop condition");
+
+        stop_condition.validate().expect("valid stop condition");
+        assert_eq!(stop_condition.min_samples, Some(100));
+        assert_eq!(
+            stop_condition.metric.as_ref().map(|metric| metric.name),
+            Some(AccumulatorMetricName::Variance)
+        );
     }
 
     #[test]
@@ -1162,6 +1323,7 @@ mod tests {
                     max_samples: Some(10),
                     ..SampleStopCondition::default()
                 },
+                evaluator: None,
                 sampler_aggregator: None,
                 accumulator: None,
                 queue_tuning: None,
@@ -1183,6 +1345,7 @@ mod tests {
                 max_samples: Some(0),
                 ..SampleStopCondition::default()
             },
+            evaluator: None,
             sampler_aggregator: None,
             accumulator: None,
             queue_tuning: None,
@@ -1195,6 +1358,7 @@ mod tests {
                 max_samples: Some(0),
                 ..SampleStopCondition::default()
             },
+            evaluator: None,
             sampler_aggregator: Some(SamplerAggregatorSourceSpec::Latest("latest".to_string())),
             accumulator: None,
             queue_tuning: None,
@@ -1207,6 +1371,7 @@ mod tests {
     fn sample_task_with_havana_training_requires_budget_in_config_mode() {
         let task = RunTaskSpec::Sample {
             stop_condition: SampleStopCondition::default(),
+            evaluator: None,
             sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
                 config: SamplerAggregatorConfig::HavanaTraining {
                     params: HavanaSamplerParams::default(),
@@ -1291,6 +1456,7 @@ mod tests {
                 discrete: Vec::new(),
             },
             accumulator: PlotAccumulatorKind::Vector,
+            evaluator: None,
             display: ImageDisplayMode::Auto,
             batch_transforms: None,
         };
@@ -1306,6 +1472,7 @@ mod tests {
                 discrete: Vec::new(),
             },
             accumulator: PlotAccumulatorKind::Scalar,
+            evaluator: None,
             display: LineDisplayMode::Auto,
             batch_transforms: None,
         };
