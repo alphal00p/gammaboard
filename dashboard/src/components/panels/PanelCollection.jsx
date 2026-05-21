@@ -1,4 +1,4 @@
-import { Suspense, forwardRef, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, forwardRef, lazy, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Box,
@@ -866,8 +866,8 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
     ),
   );
   const xDomain = fitXDomain(data.map((row) => row.x));
-  const zoomRange = readZoomFromPanelValue(value, FULL_ZOOM);
-  const yZoomRange = readYZoomFromPanelValue(value, FULL_ZOOM);
+  const zoomRange = useMemo(() => readZoomFromPanelValue(value, FULL_ZOOM), [value]);
+  const yZoomRange = useMemo(() => readYZoomFromPanelValue(value, FULL_ZOOM), [value]);
   const tailPinned = readTailPinnedFromPanelValue(value, isHistoryPanel);
   const usesTimestampXAxis = useMemo(
     () => historyXAxisMode === HISTORY_X_AXIS_MODE_WALL_TIME && isTimestampDomain(xDomain),
@@ -1110,7 +1110,7 @@ const HeatmapScaleLegend = ({ zmin, zmax, normalizationMode, panelId }) => {
                 fontWeight: 700,
               }}
             >
-              0 = 1x
+              0
             </Typography>
           ) : null}
           <Typography
@@ -1174,8 +1174,8 @@ const ScalarImageHeatmapPanel = ({
   }, [boundedValues, height, invalidIndices, width]);
 
   const heatmapMargins = useMemo(() => ({ left: 56, right: 24, top: 16, bottom: 44 }), []);
-  const zoomRange = readZoomFromPanelValue(value, FULL_ZOOM);
-  const yZoomRange = readYZoomFromPanelValue(value, FULL_ZOOM);
+  const zoomRange = useMemo(() => readZoomFromPanelValue(value, FULL_ZOOM), [value]);
+  const yZoomRange = useMemo(() => readYZoomFromPanelValue(value, FULL_ZOOM), [value]);
   const chartHeight = useMemo(() => {
     return estimateHeatmapChartHeight(width, height, panelWidth, heatmapMargins);
   }, [heatmapMargins.bottom, heatmapMargins.left, heatmapMargins.right, heatmapMargins.top, height, panelWidth, width]);
@@ -1251,6 +1251,7 @@ const ScalarImageHeatmapPanel = ({
           data: heatmapData,
           progressive: 5000,
           progressiveThreshold: 3000,
+          progressiveChunkMode: "mod",
           emphasis: { disabled: true },
         },
         {
@@ -1427,7 +1428,22 @@ const ScalarImageHeatmapPanel = ({
 };
 
 
-const Image2dPanel = ({ title, state, value = undefined, onValueChange = null }) => {
+const imagePanelPropsEqual = (left, right) =>
+  left.title === right.title &&
+  left.value === right.value &&
+  left.onValueChange === right.onValueChange &&
+  left.state?.panel_id === right.state?.panel_id &&
+  left.state?.width === right.state?.width &&
+  left.state?.height === right.state?.height &&
+  left.state?.color_mode === right.state?.color_mode &&
+  left.state?.normalization_mode === right.state?.normalization_mode &&
+  left.state?.x_range === right.state?.x_range &&
+  left.state?.y_range === right.state?.y_range &&
+  left.state?.values === right.state?.values &&
+  left.state?.imag_values === right.state?.imag_values &&
+  left.state?.invalid_indices === right.state?.invalid_indices;
+
+const Image2dPanel = memo(({ title, state, value = undefined, onValueChange = null }) => {
   const width = Number(state?.width) || 0;
   const height = Number(state?.height) || 0;
   const values = useMemo(() => asArray(state?.values), [state?.values]);
@@ -1463,7 +1479,8 @@ const Image2dPanel = ({ title, state, value = undefined, onValueChange = null })
       onValueChange={onValueChange}
     />
   );
-};
+}, imagePanelPropsEqual);
+Image2dPanel.displayName = "Image2dPanel";
 
 const PanelRenderer = ({
   descriptor,
