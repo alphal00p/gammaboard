@@ -18,6 +18,35 @@ const gridColor = "rgba(148,163,184,0.18)";
 const DISCRETE_BAR_CATEGORY_GAP = "30%";
 const DISCRETE_BAR_GAP = "30%";
 
+const parsePercent = (value, fallback) => {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.endsWith("%")) {
+      const numeric = Number(trimmed.slice(0, -1));
+      return Number.isFinite(numeric) ? numeric / 100 : fallback;
+    }
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+};
+
+const resolveDiscreteBarLayout = (api, slotIndex, slotCount, barWidthRatio = 1) => {
+  const bandWidth = Math.abs(Number(api.size([1, 0])[0]));
+  if (!Number.isFinite(bandWidth) || bandWidth <= 0 || slotCount <= 0) {
+    return { offsetPx: 0, baseBarWidth: 0, barWidth: 0 };
+  }
+  const categoryGap = Math.min(Math.max(parsePercent(DISCRETE_BAR_CATEGORY_GAP, 0.3), 0), 0.95);
+  const barGap = Math.min(Math.max(parsePercent(DISCRETE_BAR_GAP, 0.3), 0), 1);
+  const available = bandWidth * (1 - categoryGap);
+  const denom = slotCount + barGap * Math.max(0, slotCount - 1);
+  const baseBarWidth = denom > 0 ? available / denom : available;
+  const stride = baseBarWidth * (1 + barGap);
+  const clampedIndex = Math.min(Math.max(Number(slotIndex) || 0, 0), Math.max(slotCount - 1, 0));
+  const offsetPx = (clampedIndex - (slotCount - 1) / 2) * stride;
+  const ratio = Number.isFinite(barWidthRatio) ? barWidthRatio : 1;
+  return { offsetPx, baseBarWidth, barWidth: baseBarWidth * ratio };
+};
+
 const baseCartesianGrid = {
   left: 56,
   right: 20,
@@ -211,6 +240,124 @@ const buildErrorBarSeries = ({ name = "error", data, color = "#7c8a96", capPx = 
           style: { stroke: color, lineWidth: 1.2 },
         },
       ],
+    };
+  },
+});
+
+const buildDiscreteOffsetErrorBarSeries = ({
+  name = "error",
+  data,
+  color = "#7c8a96",
+  capPx = 4,
+  slotIndex = 0,
+  slotCount = 1,
+  barWidthRatio = 1,
+}) => ({
+  type: "custom",
+  name,
+  data,
+  clip: true,
+  silent: true,
+  z: 6,
+  tooltip: { show: false },
+  renderItem: (params, api) => {
+    const index = Number(api.value(0));
+    const yLowValue = Number(api.value(1));
+    const yHighValue = Number(api.value(2));
+    if (!Number.isFinite(index) || !Number.isFinite(yLowValue) || !Number.isFinite(yHighValue)) return null;
+    const [xPx, yLowPx] = api.coord([index, yLowValue]);
+    const [, yHighPx] = api.coord([index, yHighValue]);
+    if (!Number.isFinite(xPx) || !Number.isFinite(yLowPx) || !Number.isFinite(yHighPx)) return null;
+    const coordSys = params?.coordSys;
+    if (!coordSys) return null;
+    const left = Number(coordSys.x);
+    const right = Number(coordSys.x) + Number(coordSys.width);
+    const top = Number(coordSys.y);
+    const bottom = Number(coordSys.y) + Number(coordSys.height);
+    if (!Number.isFinite(left) || !Number.isFinite(right) || !Number.isFinite(top) || !Number.isFinite(bottom)) {
+      return null;
+    }
+    const layout = resolveDiscreteBarLayout(api, slotIndex, slotCount, barWidthRatio);
+    const x = xPx + layout.offsetPx;
+    if (x < left || x > right) return null;
+    if ((yLowPx < top && yHighPx < top) || (yLowPx > bottom && yHighPx > bottom)) return null;
+    const y1 = Math.max(top, Math.min(bottom, yLowPx));
+    const y2 = Math.max(top, Math.min(bottom, yHighPx));
+    const capWidth =
+      layout.barWidth > 0 ? Math.min(capPx, Math.max(2, Math.abs(layout.barWidth) * 0.45)) : capPx;
+    const capLeft = Math.max(left, x - capWidth);
+    const capRight = Math.min(right, x + capWidth);
+    return {
+      type: "group",
+      children: [
+        {
+          type: "line",
+          shape: { x1: x, y1, x2: x, y2 },
+          style: { stroke: color, lineWidth: 1.2 },
+        },
+        {
+          type: "line",
+          shape: { x1: capLeft, y1, x2: capRight, y2: y1 },
+          style: { stroke: color, lineWidth: 1.2 },
+        },
+        {
+          type: "line",
+          shape: { x1: capLeft, y1: y2, x2: capRight, y2 },
+          style: { stroke: color, lineWidth: 1.2 },
+        },
+      ],
+    };
+  },
+});
+
+const buildDiscreteOffsetRangeBarSeries = ({
+  name = "range",
+  data,
+  color = "#7c8a96",
+  slotIndex = 0,
+  slotCount = 1,
+  barWidthRatio = 1,
+}) => ({
+  type: "custom",
+  name,
+  data,
+  clip: true,
+  silent: true,
+  z: 5,
+  tooltip: { show: false },
+  renderItem: (params, api) => {
+    const index = Number(api.value(0));
+    const yLowValue = Number(api.value(1));
+    const yHighValue = Number(api.value(2));
+    if (!Number.isFinite(index) || !Number.isFinite(yLowValue) || !Number.isFinite(yHighValue)) return null;
+    const [xPx, yLowPx] = api.coord([index, yLowValue]);
+    const [, yHighPx] = api.coord([index, yHighValue]);
+    if (!Number.isFinite(xPx) || !Number.isFinite(yLowPx) || !Number.isFinite(yHighPx)) return null;
+    const coordSys = params?.coordSys;
+    if (!coordSys) return null;
+    const left = Number(coordSys.x);
+    const right = Number(coordSys.x) + Number(coordSys.width);
+    const top = Number(coordSys.y);
+    const bottom = Number(coordSys.y) + Number(coordSys.height);
+    if (!Number.isFinite(left) || !Number.isFinite(right) || !Number.isFinite(top) || !Number.isFinite(bottom)) {
+      return null;
+    }
+    const layout = resolveDiscreteBarLayout(api, slotIndex, slotCount, barWidthRatio);
+    const width = Math.max(1, Math.abs(layout.barWidth));
+    const x = xPx + layout.offsetPx - width / 2;
+    const y = Math.min(yLowPx, yHighPx);
+    const height = Math.abs(yHighPx - yLowPx);
+    if (x > right || x + width < left) return null;
+    if (y > bottom || y + height < top) return null;
+    const clippedX = Math.max(left, x);
+    const clippedY = Math.max(top, y);
+    const clippedW = Math.min(right, x + width) - clippedX;
+    const clippedH = Math.min(bottom, y + height) - clippedY;
+    if (clippedW <= 0 || clippedH <= 0) return null;
+    return {
+      type: "rect",
+      shape: { x: clippedX, y: clippedY, width: clippedW, height: clippedH },
+      style: { fill: color },
     };
   },
 });
