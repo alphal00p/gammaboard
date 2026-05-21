@@ -56,7 +56,7 @@ import {
   binsShareEdges,
   buildCdfBinsPreservingNulls,
   buildHistogramOption,
-  buildLogRatioPoints,
+  buildOneMinusRatioPoints,
   buildOverlaySeriesFromBins,
   buildRatioHistogramOption,
   buildRelativeHistogramOption,
@@ -324,7 +324,7 @@ const HistogramPanel = ({
                 discreteValues: values,
                 discreteRelative: relative,
                 discreteAbsError: absoluteError.filter(Boolean),
-                ratioData: buildLogRatioPoints(bins, displayOverlayBins, true, effectiveXScale),
+                ratioData: buildOneMinusRatioPoints(bins, displayOverlayBins, true, effectiveXScale),
               };
             }
             const overlayCanonicalBins = buildHistogramData(histogram.bins).sort(
@@ -345,7 +345,12 @@ const HistogramPanel = ({
               valueStep: projected.valueStep,
               relativeStep: projected.relativeStep,
               absError: projected.absError,
-              ratioData: buildLogRatioPoints(bins, projectBinsToReferenceBins(bins, displayOverlayBins), false, effectiveXScale),
+              ratioData: buildOneMinusRatioPoints(
+                bins,
+                projectBinsToReferenceBins(bins, displayOverlayBins),
+                false,
+                effectiveXScale,
+              ),
             };
           });
         })
@@ -419,7 +424,7 @@ const HistogramPanel = ({
               discreteValues: values,
               discreteRelative: relative,
               discreteAbsError: absoluteError.filter(Boolean),
-              ratioData: buildLogRatioPoints(bins, displayOverlayBins, true, effectiveXScale),
+              ratioData: buildOneMinusRatioPoints(bins, displayOverlayBins, true, effectiveXScale),
             };
           }
           const overlayCanonicalBins = buildHistogramData(overlayBins).sort(
@@ -427,24 +432,21 @@ const HistogramPanel = ({
           );
           const displayOverlayBins =
             histogramMode === HISTOGRAM_MODE_CDF ? buildCdfBins(overlayCanonicalBins) : overlayCanonicalBins;
-              const useSharedEdges = state?.overlay_alignment === "shared_edges" && binsShareEdges(bins, displayOverlayBins);
-              const projected =
-                useSharedEdges
-                  ? buildOverlaySeriesFromBins(displayOverlayBins, yScale, effectiveXScale)
-                  : projectOverlayHistogramToReferenceBins(bins, displayOverlayBins, yScale, effectiveXScale);
+          const useSharedEdges = state?.overlay_alignment === "shared_edges" && binsShareEdges(bins, displayOverlayBins);
+          const projected = useSharedEdges
+            ? buildOverlaySeriesFromBins(displayOverlayBins, yScale, effectiveXScale)
+            : projectOverlayHistogramToReferenceBins(bins, displayOverlayBins, yScale, effectiveXScale);
           return {
             id: `embedded-overlay-${overlayIndex}`,
-              name: overlayName,
-              color: overlayColor,
-              suppressErrorBars: overlay?.suppress_error_bars === true,
-              valueStep: projected.valueStep,
-              relativeStep: projected.relativeStep,
-              absError: projected.absError,
-              ratioData: buildLogRatioPoints(
-                bins,
-                useSharedEdges
-                  ? displayOverlayBins
-                  : projectBinsToReferenceBins(bins, displayOverlayBins),
+            name: overlayName,
+            color: overlayColor,
+            suppressErrorBars: overlay?.suppress_error_bars === true,
+            valueStep: projected.valueStep,
+            relativeStep: projected.relativeStep,
+            absError: projected.absError,
+            ratioData: buildOneMinusRatioPoints(
+              bins,
+              useSharedEdges ? displayOverlayBins : projectBinsToReferenceBins(bins, displayOverlayBins),
               false,
               effectiveXScale,
             ),
@@ -1068,7 +1070,7 @@ const HistogramPanel = ({
           {showRatio && ratioOption ? (
             <Box>
               <Typography variant="caption" color="text.secondary">
-                Histogram Ratio: log10(value / comparison), agreement at 0
+                Histogram Mismatch: 1 - value / comparison, agreement at 0
               </Typography>
               <Box sx={{ width: "100%", height: 188 }}>
                 <LazyChart

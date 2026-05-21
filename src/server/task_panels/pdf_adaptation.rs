@@ -368,8 +368,8 @@ struct DerivedValues {
     log_plane_normalized_integrand: Vec<Option<f64>>,
     log_reference_normalized_integrand: Vec<Option<f64>>,
     log_plane_normalized_pdf: Vec<Option<f64>>,
-    oversampling_legacy_log10: Vec<Option<f64>>,
-    oversampling_plane_normalized_log10: Vec<Option<f64>>,
+    oversampling_legacy_mismatch: Vec<Option<f64>>,
+    oversampling_plane_normalized_mismatch: Vec<Option<f64>>,
 }
 
 impl DerivedValues {
@@ -397,20 +397,25 @@ impl DerivedValues {
             .iter()
             .map(|value| log10_ratio(*value, mean_pdf))
             .collect::<Vec<_>>();
-        let oversampling_legacy_log10 = log_plane_normalized_pdf
-            .iter()
-            .zip(log_plane_normalized_integrand.iter())
-            .map(|(pdf, integrand)| match (pdf, integrand) {
-                (Some(pdf), Some(integrand)) => Some(pdf - integrand),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let oversampling_plane_normalized_log10 = output
+        let oversampling_legacy_mismatch = output
             .pdf_values
             .iter()
             .zip(output.abs_integrand_values.iter())
             .map(|(pdf, abs_integrand)| {
-                log10_pdf_over_integrand_global_norm(
+                one_minus_plane_normalized_pdf_over_integrand(
+                    *pdf,
+                    *abs_integrand,
+                    mean_abs_integrand,
+                    mean_pdf,
+                )
+            })
+            .collect::<Vec<_>>();
+        let oversampling_plane_normalized_mismatch = output
+            .pdf_values
+            .iter()
+            .zip(output.abs_integrand_values.iter())
+            .map(|(pdf, abs_integrand)| {
+                one_minus_pdf_over_integrand_global_norm(
                     *pdf,
                     *abs_integrand,
                     reference_abs_integrand_norm,
@@ -424,8 +429,8 @@ impl DerivedValues {
             log_plane_normalized_integrand,
             log_reference_normalized_integrand,
             log_plane_normalized_pdf,
-            oversampling_legacy_log10,
-            oversampling_plane_normalized_log10,
+            oversampling_legacy_mismatch,
+            oversampling_plane_normalized_mismatch,
         }
     }
 
@@ -433,8 +438,8 @@ impl DerivedValues {
         match image_kind {
             ImageKind::LogPlaneNormalizedIntegrand => &self.log_reference_normalized_integrand,
             ImageKind::LogPlaneNormalizedPdf => &self.log_plane_normalized_pdf,
-            ImageKind::OversamplingLegacy => &self.oversampling_legacy_log10,
-            ImageKind::OversamplingPlaneNormalized => &self.oversampling_plane_normalized_log10,
+            ImageKind::OversamplingLegacy => &self.oversampling_legacy_mismatch,
+            ImageKind::OversamplingPlaneNormalized => &self.oversampling_plane_normalized_mismatch,
         }
     }
 
@@ -531,15 +536,15 @@ fn histogram_panel(panel_id: &str, derived: &DerivedValues, image_kind: ImageKin
         }
         ImageKind::OversamplingLegacy => {
             histogram_bins_on_shared_edges(
-                &derived.oversampling_legacy_log10,
-                &derived.oversampling_plane_normalized_log10,
+                &derived.oversampling_legacy_mismatch,
+                &derived.oversampling_plane_normalized_mismatch,
             )
             .0
         }
         ImageKind::OversamplingPlaneNormalized => {
             histogram_bins_on_shared_edges(
-                &derived.oversampling_legacy_log10,
-                &derived.oversampling_plane_normalized_log10,
+                &derived.oversampling_legacy_mismatch,
+                &derived.oversampling_plane_normalized_mismatch,
             )
             .1
         }
@@ -775,7 +780,30 @@ fn log10_ratio(value: Option<f64>, mean: Option<f64>) -> Option<f64> {
     }
 }
 
-fn log10_pdf_over_integrand_global_norm(
+fn one_minus_plane_normalized_pdf_over_integrand(
+    pdf: Option<f64>,
+    abs_integrand: Option<f64>,
+    mean_abs_integrand: Option<f64>,
+    mean_pdf: Option<f64>,
+) -> Option<f64> {
+    match (pdf, abs_integrand, mean_abs_integrand, mean_pdf) {
+        (Some(pdf), Some(abs_integrand), Some(i), Some(z))
+            if pdf.is_finite()
+                && abs_integrand.is_finite()
+                && i.is_finite()
+                && z.is_finite()
+                && abs_integrand > 0.0
+                && i > 0.0
+                && z > 0.0 =>
+        {
+            let ratio = (pdf / z) / (abs_integrand / i);
+            ratio.is_finite().then_some(1.0 - ratio)
+        }
+        _ => None,
+    }
+}
+
+fn one_minus_pdf_over_integrand_global_norm(
     pdf: Option<f64>,
     abs_integrand: Option<f64>,
     global_abs_integrand_norm: Option<f64>,
@@ -789,7 +817,8 @@ fn log10_pdf_over_integrand_global_norm(
                 && global_pdf_norm.is_finite()
                 && global_pdf_norm > 0.0 =>
         {
-            Some(((pdf / global_pdf_norm) / (abs_integrand / i)).log10())
+            let ratio = (pdf / global_pdf_norm) / (abs_integrand / i);
+            ratio.is_finite().then_some(1.0 - ratio)
         }
         _ => None,
     }
@@ -882,12 +911,12 @@ mod tests {
             vec![Some((1.0_f64 / 1.5).log10()), Some((2.0_f64 / 1.5).log10())]
         );
         assert_eq!(
-            derived.oversampling_legacy_log10,
+            derived.oversampling_legacy_mismatch,
             vec![Some(0.0), Some(0.0)]
         );
         assert_eq!(
-            derived.oversampling_plane_normalized_log10,
-            vec![Some(2.5_f64.log10()), Some(2.5_f64.log10())]
+            derived.oversampling_plane_normalized_mismatch,
+            vec![Some(1.0 - 2.5), Some(1.0 - 2.5)]
         );
     }
 

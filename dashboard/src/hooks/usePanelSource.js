@@ -77,6 +77,47 @@ const mergePanelState = (previous, incoming) => {
   return incoming;
 };
 
+const arraysEqual = (left, right) => {
+  if (left === right) return true;
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (!Object.is(left[index], right[index])) return false;
+  }
+  return true;
+};
+
+const panelStateEquals = (left, right) => {
+  if (left === right) return true;
+  if (!isPlainObject(left) || !isPlainObject(right)) return false;
+  if (left.kind !== right.kind || panelIdOf(left) !== panelIdOf(right)) return false;
+  if (left.kind === "image2d" && right.kind === "image2d") {
+    return (
+      left.width === right.width &&
+      left.height === right.height &&
+      left.color_mode === right.color_mode &&
+      left.normalization_mode === right.normalization_mode &&
+      arraysEqual(left.x_range, right.x_range) &&
+      arraysEqual(left.y_range, right.y_range) &&
+      arraysEqual(left.values, right.values) &&
+      arraysEqual(left.imag_values, right.imag_values) &&
+      arraysEqual(left.invalid_indices, right.invalid_indices)
+    );
+  }
+  if (left.kind === "progress" && right.kind === "progress") {
+    return left.value === right.value && left.total === right.total && left.unit === right.unit && left.label === right.label;
+  }
+  return false;
+};
+
+const panelStateArraysEqual = (left, right) => {
+  if (left === right) return true;
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (!panelStateEquals(left[index], right[index])) return false;
+  }
+  return true;
+};
+
 const applyUpdates = (previousStates, updates, resetRequired) => {
   if (!resetRequired && asArray(updates).length === 0) return previousStates;
   const next = resetRequired
@@ -94,11 +135,13 @@ const applyUpdates = (previousStates, updates, resetRequired) => {
     if (update?.mode === "append") {
       next.set(panelId, mergePanelState(next.get(panelId), panel));
     } else {
-      next.set(panelId, panel);
+      const previousPanel = next.get(panelId);
+      next.set(panelId, panelStateEquals(previousPanel, panel) ? previousPanel : panel);
     }
   }
 
-  return Array.from(next.values());
+  const nextStates = Array.from(next.values());
+  return panelStateArraysEqual(previousStates, nextStates) ? previousStates : nextStates;
 };
 
 const defaultPanelValue = (spec) => {
@@ -194,12 +237,24 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
             : panelValuesRef.current;
           const panelValues = reconcilePanelValues(seededPanelValues, panelSpecs, resetRequired && !sourceChanged);
           panelValuesRef.current = panelValues;
+          const panelStates = applyUpdates(previous.panelStates, response?.updates, resetRequired);
+          const cursor = response?.cursor ?? previous.cursor;
+          if (
+            previous.sourceId === nextSourceId &&
+            previous.panelSpecs === panelSpecs &&
+            previous.panelStates === panelStates &&
+            previous.panelValues === panelValues &&
+            previous.cursor === cursor &&
+            previous.error == null
+          ) {
+            return previous;
+          }
           return {
             sourceId: nextSourceId,
             panelSpecs,
-            panelStates: applyUpdates(previous.panelStates, response?.updates, resetRequired),
+            panelStates,
             panelValues,
-            cursor: response?.cursor ?? previous.cursor,
+            cursor,
             error: null,
           };
         });

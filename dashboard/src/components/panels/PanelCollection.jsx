@@ -482,7 +482,7 @@ const formatAxisValue = (value) => {
 
 const clampHeatmapSpread = (candidate, fallback = 1) => {
   const numeric = Number(candidate);
-  if (!Number.isFinite(numeric)) return fallback;
+  if (!Number.isFinite(numeric) || numeric <= 0) return fallback;
   return Math.max(0.05, Math.min(20, numeric));
 };
 const HEATMAP_SPREAD_MIN = 0.05;
@@ -1035,9 +1035,21 @@ const buildInvalidCellOverlay = (invalidIndices, width, height) => {
   return points;
 };
 
+const estimateHeatmapChartHeight = (width, height, panelWidth, margins) => {
+  if (width <= 0 || height <= 0) return 360;
+  const availableWidth =
+    panelWidth > 0
+      ? panelWidth
+      : Math.min(920, Math.max(320, typeof window !== "undefined" ? window.innerWidth - 64 : 920));
+  const legendWidth = HEATMAP_LEGEND_WIDTH + HEATMAP_LEGEND_GAP;
+  const innerWidth = Math.max(1, availableWidth - legendWidth - margins.left - margins.right);
+  const innerHeight = (innerWidth * height) / width;
+  return Math.max(220, Math.round(innerHeight + margins.top + margins.bottom));
+};
+
 const heatmapMetricLabel = (panelId) => {
   if (typeof panelId !== "string") return "value";
-  if (panelId.includes("oversampling")) return "log10(sampling factor)";
+  if (panelId.includes("oversampling")) return "1 - PDF / integrand";
   if (panelId.includes("log_pdf")) return "log10(normalized PDF)";
   if (panelId.includes("log_integrand")) return "log10(normalized integrand)";
   return "value";
@@ -1048,7 +1060,10 @@ const heatmapTooltipValueLines = (panelId, value) => {
   if (!Number.isFinite(numeric)) return ["value: n/a"];
   const label = heatmapMetricLabel(panelId);
   const lines = [`${label}: ${formatScientific(numeric, 6)}`];
-  if (typeof panelId === "string" && panelId.startsWith("pdf_adaptation_")) {
+  if (typeof panelId === "string" && panelId.includes("oversampling")) {
+    const ratio = 1 - numeric;
+    if (Number.isFinite(ratio)) lines.push(`PDF / integrand: ${formatScientific(ratio, 6)}`);
+  } else if (typeof panelId === "string" && panelId.startsWith("pdf_adaptation_")) {
     const factor = 10 ** numeric;
     if (Number.isFinite(factor)) lines.push(`linear factor: ${formatScientific(factor, 6)}`);
   }
@@ -1161,11 +1176,7 @@ const ScalarImageHeatmapPanel = ({
   const zoomRange = readZoomFromPanelValue(value, FULL_ZOOM);
   const yZoomRange = readYZoomFromPanelValue(value, FULL_ZOOM);
   const chartHeight = useMemo(() => {
-    if (width <= 0 || height <= 0 || panelWidth <= 0) return 360;
-    const legendWidth = HEATMAP_LEGEND_WIDTH + HEATMAP_LEGEND_GAP;
-    const innerWidth = Math.max(1, panelWidth - legendWidth - heatmapMargins.left - heatmapMargins.right);
-    const innerHeight = (innerWidth * height) / width;
-    return Math.max(220, Math.round(innerHeight + heatmapMargins.top + heatmapMargins.bottom));
+    return estimateHeatmapChartHeight(width, height, panelWidth, heatmapMargins);
   }, [heatmapMargins.bottom, heatmapMargins.left, heatmapMargins.right, heatmapMargins.top, height, panelWidth, width]);
 
   const option = useMemo(
@@ -1208,6 +1219,7 @@ const ScalarImageHeatmapPanel = ({
       },
       tooltip: {
         trigger: "item",
+        confine: true,
         formatter: (params) => {
           if (params?.seriesName === "invalid") return "invalid value";
           const data = Array.isArray(params?.data) ? params.data : [];
@@ -1236,7 +1248,9 @@ const ScalarImageHeatmapPanel = ({
           type: "heatmap",
           name: "value",
           data: heatmapData,
-          progressive: 0,
+          progressive: 5000,
+          progressiveThreshold: 3000,
+          emphasis: { disabled: true },
         },
         {
           type: "scatter",
@@ -1279,6 +1293,12 @@ const ScalarImageHeatmapPanel = ({
     }),
     [onValueChange, panelId, value, yZoomRange, zoomRange],
   );
+  useEffect(() => {
+    const chart = echartsRef.current?.getEchartsInstance?.();
+    if (!chart) return undefined;
+    const rafId = requestAnimationFrame(() => chart.resize());
+    return () => cancelAnimationFrame(rafId);
+  }, [chartHeight, panelWidth]);
   useEffect(() => {
     const element = figureRef.current;
     if (!element || typeof ResizeObserver === "undefined") return undefined;

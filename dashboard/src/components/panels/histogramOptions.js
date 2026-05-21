@@ -165,7 +165,7 @@ export const buildCdfBinsPreservingNulls = (bins) => {
   });
 };
 
-export const buildLogRatioPoints = (referenceBins, overlayBins, isDiscrete, xScale) =>
+export const buildOneMinusRatioPoints = (referenceBins, overlayBins, isDiscrete, xScale) =>
   asArray(referenceBins)
     .map((referenceBin, index) => {
       const overlayBin = asArray(overlayBins)[index];
@@ -173,20 +173,20 @@ export const buildLogRatioPoints = (referenceBins, overlayBins, isDiscrete, xSca
       const denominator = Number(overlayBin?.value);
       const numeratorError = Math.abs(Number(referenceBin?.error));
       const denominatorError = Math.abs(Number(overlayBin?.error));
-      if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || numerator === 0 || denominator === 0) {
+      if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) {
         return null;
       }
       const ratio = numerator / denominator;
-      if (!Number.isFinite(ratio) || ratio <= 0) return null;
-      const relativeNumeratorError =
-        Number.isFinite(numeratorError) && numerator !== 0 ? numeratorError / Math.abs(numerator) : 0;
-      const relativeDenominatorError =
-        Number.isFinite(denominatorError) && denominator !== 0 ? denominatorError / Math.abs(denominator) : 0;
-      const logRatio = Math.log10(ratio);
-      const logRatioError = Math.hypot(relativeNumeratorError, relativeDenominatorError) / Math.LN10;
+      if (!Number.isFinite(ratio)) return null;
+      const numeratorContribution = Number.isFinite(numeratorError) ? numeratorError / denominator : 0;
+      const denominatorContribution = Number.isFinite(denominatorError)
+        ? (numerator * denominatorError) / (denominator * denominator)
+        : 0;
+      const oneMinusRatio = 1 - ratio;
+      const ratioError = Math.hypot(numeratorContribution, denominatorContribution);
       const x = isDiscrete ? index : Number(referenceBin?.x);
       if (!Number.isFinite(x) || (!isDiscrete && xScale === "log" && x <= 0)) return null;
-      return [x, logRatio, logRatio - logRatioError, logRatio + logRatioError];
+      return [x, oneMinusRatio, oneMinusRatio - ratioError, oneMinusRatio + ratioError];
     })
     .filter(Boolean);
 
@@ -901,7 +901,7 @@ export const buildRatioHistogramOption = ({
           type: "value",
           min: ratioYDomain[0],
           max: ratioYDomain[1],
-          name: "log10(value / comparison)",
+        name: "1 - value / comparison",
           axisLabel: baseAxisLabel,
           splitLine: { lineStyle: { color: gridColor } },
         },
@@ -960,7 +960,7 @@ export const buildRatioHistogramOption = ({
         type: "value",
         min: ratioYDomain[0],
         max: ratioYDomain[1],
-        name: "log10(value / comparison)",
+          name: "1 - value / comparison",
         axisLabel: baseAxisLabel,
         splitLine: { lineStyle: { color: gridColor } },
       },
