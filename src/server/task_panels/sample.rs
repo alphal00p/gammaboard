@@ -9,6 +9,7 @@ use crate::core::{
 use crate::evaluation::accumulator::DiscreteProjectionBinState;
 use crate::evaluation::{
     Accumulator, AccumulatorState, GammaLoopDiagnostics, Point, SemanticAccumulatorKind,
+    extract_accumulator_metric_with_runtime,
 };
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, TableStateOptions,
@@ -996,15 +997,33 @@ fn sample_eta_seconds(
         return Ok(Some(smoothed_eta_seconds));
     }
     let accumulator = sample_accumulator(ctx, accumulator_config)?;
-    let projection = stop_condition
-        .projection
-        .unwrap_or_else(|| match accumulator {
-            Some(AccumulatorState::Gammaloop(_)) => SampleErrorProjection::Abs,
-            _ => SampleErrorProjection::Real,
-        });
-    let projected = accumulator
-        .as_ref()
-        .and_then(|accumulator| projected_estimate(accumulator, projection));
+    let projected = if let Some(selector) = &stop_condition.metric {
+        accumulator.as_ref().and_then(|accumulator| {
+            extract_accumulator_metric_with_runtime(
+                accumulator,
+                selector,
+                ctx.completed_samples_per_second,
+            )
+            .ok()
+            .flatten()
+            .and_then(|metric| {
+                metric.uncertainty.map(|error| ProjectedEstimate {
+                    value: metric.value,
+                    error,
+                })
+            })
+        })
+    } else {
+        let projection = stop_condition
+            .projection
+            .unwrap_or_else(|| match accumulator {
+                Some(AccumulatorState::Gammaloop(_)) => SampleErrorProjection::Abs,
+                _ => SampleErrorProjection::Real,
+            });
+        accumulator
+            .as_ref()
+            .and_then(|accumulator| projected_estimate(accumulator, projection))
+    };
     let eta_seconds = estimate_eta_seconds(
         stop_condition,
         projected,

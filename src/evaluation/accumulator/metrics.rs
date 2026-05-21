@@ -18,6 +18,9 @@ pub fn extract_accumulator_metric(
     state: &AccumulatorState,
     selector: &AccumulatorMetricSelector,
 ) -> Result<Option<AccumulatorMetricValue>, EngineError> {
+    if selector.name == AccumulatorMetricName::TimeNormalizedVariance {
+        return Ok(None);
+    }
     match state {
         AccumulatorState::Scalar(scalar) => {
             if selector.component.is_some() {
@@ -29,6 +32,34 @@ pub fn extract_accumulator_metric(
         AccumulatorState::Gammaloop(gammaloop) => Ok(metric_for_gammaloop(gammaloop, selector)),
         AccumulatorState::Empty(_) | AccumulatorState::FullVector(_) => Ok(None),
     }
+}
+
+pub fn extract_accumulator_metric_with_runtime(
+    state: &AccumulatorState,
+    selector: &AccumulatorMetricSelector,
+    completed_samples_per_second: Option<f64>,
+) -> Result<Option<AccumulatorMetricValue>, EngineError> {
+    if selector.name != AccumulatorMetricName::TimeNormalizedVariance {
+        return extract_accumulator_metric(state, selector);
+    }
+    let Some(rate) = completed_samples_per_second.filter(|value| value.is_finite() && *value > 0.0)
+    else {
+        return Ok(None);
+    };
+    let variance_selector = AccumulatorMetricSelector {
+        name: AccumulatorMetricName::Variance,
+        component: selector.component.clone(),
+    };
+    let Some(variance) = extract_accumulator_metric(state, &variance_selector)? else {
+        return Ok(None);
+    };
+    Ok(Some(AccumulatorMetricValue {
+        name: AccumulatorMetricName::TimeNormalizedVariance,
+        component: variance.component,
+        value: variance.value / rate,
+        uncertainty: variance.uncertainty.map(|uncertainty| uncertainty / rate),
+        sample_count: variance.sample_count,
+    }))
 }
 
 fn metric_for_vector(
@@ -76,6 +107,9 @@ fn metric_for_scalar(
             .map(|error| relative_error(variance, error))
             .unwrap_or(f64::INFINITY),
         AccumulatorMetricName::RelativeSquaredDispersion => state.rsd(),
+        AccumulatorMetricName::TimeNormalizedVariance => unreachable!(
+            "time-normalized variance requires runtime throughput and is handled before scalar extraction"
+        ),
     };
     let uncertainty = match name {
         AccumulatorMetricName::Mean | AccumulatorMetricName::AbsMean => Some(mean_error),
@@ -83,7 +117,8 @@ fn metric_for_scalar(
         AccumulatorMetricName::Error
         | AccumulatorMetricName::RelativeError
         | AccumulatorMetricName::RelativeVarianceError
-        | AccumulatorMetricName::RelativeSquaredDispersion => None,
+        | AccumulatorMetricName::RelativeSquaredDispersion
+        | AccumulatorMetricName::TimeNormalizedVariance => None,
     };
     AccumulatorMetricValue {
         name,

@@ -201,6 +201,7 @@ pub enum AccumulatorMetricName {
     Variance,
     RelativeVarianceError,
     RelativeSquaredDispersion,
+    TimeNormalizedVariance,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1296,6 +1297,24 @@ metric = { name = "variance", component = "real" }
         assert_eq!(
             stop_condition.metric.as_ref().map(|metric| metric.name),
             Some(AccumulatorMetricName::Variance)
+        );
+    }
+
+    #[test]
+    fn sample_stop_condition_accepts_time_normalized_variance_metric_target() {
+        let stop_condition: SampleStopCondition = toml::from_str(
+            r#"
+min_samples = 100
+relative_error = 0.1
+metric = { name = "time_normalized_variance", component = "real" }
+"#,
+        )
+        .expect("stop condition");
+
+        stop_condition.validate().expect("valid stop condition");
+        assert_eq!(
+            stop_condition.metric.as_ref().map(|metric| metric.name),
+            Some(AccumulatorMetricName::TimeNormalizedVariance)
         );
     }
 

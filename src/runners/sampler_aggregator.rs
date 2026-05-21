@@ -13,7 +13,9 @@ use crate::core::{
     SamplerAggregatorPerformanceSnapshot, SamplerQueueTuning, SamplerRuntimeMetrics,
     SamplerWorkRollingAverages, SamplerWorkerStore, StoreError,
 };
-use crate::evaluation::{AccumulatorState, extract_accumulator_metric, relative_error};
+use crate::evaluation::{
+    AccumulatorState, extract_accumulator_metric_with_runtime, relative_error,
+};
 use crate::runners::process_memory::current_rss_bytes;
 use crate::runners::queue::QueueUtilizationSnapshot;
 use crate::runners::rolling_metric::RollingMetric;
@@ -728,8 +730,20 @@ where
         &self,
         selector: &AccumulatorMetricSelector,
     ) -> Result<Option<ProjectedEstimate>, RunnerError> {
-        let Some(metric) = extract_accumulator_metric(&self.observable_state, selector)
-            .map_err(RunnerError::Engine)?
+        let completed_samples_per_second =
+            if self.runtime_state.completed_samples_per_second.is_finite()
+                && self.runtime_state.completed_samples_per_second > 0.0
+            {
+                Some(self.runtime_state.completed_samples_per_second)
+            } else {
+                None
+            };
+        let Some(metric) = extract_accumulator_metric_with_runtime(
+            &self.observable_state,
+            selector,
+            completed_samples_per_second,
+        )
+        .map_err(RunnerError::Engine)?
         else {
             return Ok(None);
         };

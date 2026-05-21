@@ -21,7 +21,10 @@ pub use self::full::{FullAccumulatorProgress, FullVectorAccumulatorState};
 pub use self::gammaloop::{
     GammaLoopAccumulatorDigest, GammaLoopAccumulatorState, GammaLoopDiagnostics,
 };
-pub use self::metrics::{AccumulatorMetricValue, extract_accumulator_metric, relative_error};
+pub use self::metrics::{
+    AccumulatorMetricValue, extract_accumulator_metric, extract_accumulator_metric_with_runtime,
+    relative_error,
+};
 pub use self::scalar::ScalarAccumulatorState;
 pub use self::vector::{NamedScalarAccumulator, VectorAccumulatorState};
 
@@ -327,7 +330,10 @@ impl AccumulatorState {
 
 #[cfg(test)]
 mod tests {
-    use super::{AccumulatorState, ScalarAccumulatorState, extract_accumulator_metric};
+    use super::{
+        AccumulatorState, ScalarAccumulatorState, extract_accumulator_metric,
+        extract_accumulator_metric_with_runtime,
+    };
     use crate::core::{
         AccumulatorConfig, AccumulatorMetricName, AccumulatorMetricSelector,
         DiscreteProjectionConfig, DiscreteProjectionNormalization, NamedDiscreteProjection,
@@ -398,6 +404,51 @@ mod tests {
 
         assert!(metric.value > 0.0);
         assert!(metric.uncertainty.is_some_and(|value| value > 0.0));
+        assert_eq!(metric.sample_count, 4);
+    }
+
+    #[test]
+    fn scalar_metric_extraction_reports_time_normalized_variance_with_runtime_rate() {
+        let config = AccumulatorConfig::Scalar {
+            discrete_projections: None,
+            moments: crate::core::AccumulatorMomentConfig::MaxOrder4,
+        };
+        let AccumulatorState::Scalar(mut state) = AccumulatorState::from_config(&config) else {
+            panic!("expected scalar accumulator");
+        };
+
+        let point = Point::new(vec![], vec![], 1.0);
+        for value in [1.0, 2.0, 4.0, 8.0] {
+            state.add_sample(value, &point);
+        }
+        let state = AccumulatorState::Scalar(state);
+        let variance = extract_accumulator_metric(
+            &state,
+            &AccumulatorMetricSelector {
+                name: AccumulatorMetricName::Variance,
+                component: None,
+            },
+        )
+        .expect("variance extraction")
+        .expect("variance metric");
+
+        let metric = extract_accumulator_metric_with_runtime(
+            &state,
+            &AccumulatorMetricSelector {
+                name: AccumulatorMetricName::TimeNormalizedVariance,
+                component: None,
+            },
+            Some(2.0),
+        )
+        .expect("metric extraction")
+        .expect("time-normalized variance metric");
+
+        assert_eq!(metric.name, AccumulatorMetricName::TimeNormalizedVariance);
+        assert_eq!(metric.value, variance.value / 2.0);
+        assert_eq!(
+            metric.uncertainty,
+            variance.uncertainty.map(|value| value / 2.0)
+        );
         assert_eq!(metric.sample_count, 4);
     }
 }

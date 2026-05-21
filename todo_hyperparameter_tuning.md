@@ -50,6 +50,16 @@ Initial generic metrics:
 - `relative_variance_error`
 - `relative_squared_dispersion`
 
+Initial runtime-composed measurement metrics:
+
+- `time_normalized_variance = variance / completed_samples_per_second`
+
+`time_normalized_variance` is the preferred first objective for sampler
+hyperparameter tuning when wall-clock cost matters. It penalizes settings that
+reduce variance per sample but make sampling/evaluation significantly slower.
+It should be treated as a measurement metric, not a pure accumulator metric,
+because it depends on both accumulator state and sampler runtime throughput.
+
 The tuning task should be built on this layer. Otherwise the optimizer would
 need ad-hoc logic for extracting losses and deciding whether a trial measurement
 is precise enough.
@@ -86,11 +96,17 @@ Do not scrape frontend panels.
 Required work:
 
 - Extract scalar/vector accumulator metrics from task queue-empty snapshots.
+- Extract runtime-composed metrics from accumulator state plus sampler runtime
+  metrics when the selected metric requires throughput.
 - Define uncertainty for variance estimates before allowing
   `measurement.stop_condition.relative_error` on `variance`.
+- Define uncertainty for `time_normalized_variance` as variance uncertainty
+  divided by the measured throughput, initially ignoring throughput uncertainty.
 - Support fallback sample-budget stops for metrics whose own uncertainty is not
   available yet.
 - Store measurement value, uncertainty, sample count, source task id, and status.
+- Store the throughput used by runtime-composed metrics so tuning objectives are
+  auditable.
 
 Important constraint:
 
@@ -263,11 +279,11 @@ Defer:
 ## Open Questions
 
 - Should child runs be visually grouped under the tuning task or remain normal
-  top-level runs with naming conventions?
+  top-level runs with naming conventions? I think they should either be grouped or not shown at all.
 - Should a tuning task be allowed to create child runs that require different
-  worker capabilities?
+  worker capabilities? No, keep it simple for the first version.
 - Should optimizing central value be allowed by default, or require an explicit
-  `allow_biased_objective = true` style flag?
+  `allow_biased_objective = true` style flag?  Allow by default
 - Do we need trial pruning/early stopping, or is measurement stop condition
   enough for the first version?
 - Should variance-relative-error require fourth moments, replicate trials, or

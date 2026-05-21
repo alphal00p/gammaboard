@@ -8,7 +8,8 @@ pub use accumulator::{
     FullAccumulatorProgress, FullVectorAccumulatorState, GammaLoopAccumulatorDigest,
     GammaLoopAccumulatorState, GammaLoopDiagnostics, IngestScalar, IngestVector,
     NamedScalarAccumulator, ScalarAccumulatorState, SemanticAccumulatorKind,
-    VectorAccumulatorState, extract_accumulator_metric, relative_error,
+    VectorAccumulatorState, extract_accumulator_metric, extract_accumulator_metric_with_runtime,
+    relative_error,
 };
 pub use batch::{Batch, BatchError, BatchResult, Point};
 pub use evaluator::{
