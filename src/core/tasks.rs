@@ -212,6 +212,88 @@ pub struct AccumulatorMetricSelector {
     pub component: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum MeasurementMetricSpec {
+    Name(AccumulatorMetricName),
+    Selector(AccumulatorMetricSelector),
+}
+
+impl MeasurementMetricSpec {
+    pub fn selector(&self) -> AccumulatorMetricSelector {
+        match self {
+            Self::Name(name) => AccumulatorMetricSelector {
+                name: *name,
+                component: None,
+            },
+            Self::Selector(selector) => selector.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MeasurementMode {
+    #[default]
+    Minimize,
+    Maximize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct MeasurementStopCondition {
+    pub min_samples: Option<i64>,
+    pub max_samples: Option<i64>,
+    pub absolute_error: Option<f64>,
+    pub relative_error: Option<f64>,
+}
+
+impl MeasurementStopCondition {
+    pub fn validate_for_metric(&self, metric: &AccumulatorMetricSelector) -> Result<(), String> {
+        SampleStopCondition {
+            min_samples: self.min_samples,
+            max_samples: self.max_samples,
+            absolute_error: self.absolute_error,
+            relative_error: self.relative_error,
+            projection: None,
+            metric: Some(metric.clone()),
+        }
+        .validate()
+    }
+
+    pub fn as_sample_stop_condition(
+        &self,
+        metric: &AccumulatorMetricSelector,
+    ) -> SampleStopCondition {
+        SampleStopCondition {
+            min_samples: self.min_samples,
+            max_samples: self.max_samples,
+            absolute_error: self.absolute_error,
+            relative_error: self.relative_error,
+            projection: None,
+            metric: Some(metric.clone()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct MeasurementSpec {
+    pub source_task: String,
+    pub metric: MeasurementMetricSpec,
+    #[serde(default)]
+    pub mode: MeasurementMode,
+    pub stop_condition: MeasurementStopCondition,
+}
+
+impl MeasurementSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_source_name("measurement.source_task", &self.source_task)?;
+        self.stop_condition
+            .validate_for_metric(&self.metric.selector())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct SampleStopCondition {
@@ -1316,6 +1398,67 @@ metric = { name = "time_normalized_variance", component = "real" }
             stop_condition.metric.as_ref().map(|metric| metric.name),
             Some(AccumulatorMetricName::TimeNormalizedVariance)
         );
+    }
+
+    #[test]
+    fn measurement_spec_parses_string_metric_and_builds_metric_stop_condition() {
+        #[derive(Debug, Deserialize)]
+        struct Wrapper {
+            measurement: MeasurementSpec,
+        }
+
+        let wrapper: Wrapper = toml::from_str(
+            r#"
+[measurement]
+source_task = "sample"
+metric = "time_normalized_variance"
+mode = "minimize"
+
+[measurement.stop_condition]
+relative_error = 0.01
+max_samples = 100000
+"#,
+        )
+        .expect("measurement spec");
+
+        wrapper.measurement.validate().expect("valid measurement");
+        let selector = wrapper.measurement.metric.selector();
+        assert_eq!(selector.name, AccumulatorMetricName::TimeNormalizedVariance);
+        assert_eq!(wrapper.measurement.mode, MeasurementMode::Minimize);
+        let stop = wrapper
+            .measurement
+            .stop_condition
+            .as_sample_stop_condition(&selector);
+        assert_eq!(
+            stop.metric.as_ref().map(|value| value.name),
+            Some(selector.name)
+        );
+        assert_eq!(stop.max_samples, Some(100000));
+    }
+
+    #[test]
+    fn measurement_spec_parses_component_qualified_metric() {
+        #[derive(Debug, Deserialize)]
+        struct Wrapper {
+            measurement: MeasurementSpec,
+        }
+
+        let wrapper: Wrapper = toml::from_str(
+            r#"
+[measurement]
+source_task = "sample"
+metric = { component = "real", name = "variance" }
+
+[measurement.stop_condition]
+relative_error = 0.02
+"#,
+        )
+        .expect("measurement spec");
+
+        wrapper.measurement.validate().expect("valid measurement");
+        let selector = wrapper.measurement.metric.selector();
+        assert_eq!(selector.name, AccumulatorMetricName::Variance);
+        assert_eq!(selector.component.as_deref(), Some("real"));
     }
 
     #[test]

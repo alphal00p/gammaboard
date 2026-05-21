@@ -1,5 +1,5 @@
 use crate::core::BatchTransformConfig;
-use crate::core::{EvaluatorConfig, SamplerAggregatorConfig};
+use crate::core::{AccumulatorMetricName, EvaluatorConfig, SamplerAggregatorConfig};
 use crate::evaluation::{AccumulatorState, Batch, BatchResult};
 use crate::sampling::{LatentBatch, SamplerAggregatorSnapshot};
 use chrono::{DateTime, Utc};
@@ -157,6 +157,19 @@ pub struct RuntimeLogEvent {
     pub target: String,
     pub message: String,
     pub fields: JsonValue,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MeasurementResult {
+    pub name: AccumulatorMetricName,
+    #[serde(default)]
+    pub component: Option<String>,
+    pub value: f64,
+    #[serde(default)]
+    pub uncertainty: Option<f64>,
+    pub sample_count: i64,
+    #[serde(default)]
+    pub completed_samples_per_second: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

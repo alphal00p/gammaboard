@@ -10,11 +10,11 @@ pub use errors::{BuildError, EngineError, EvalError, StoreError};
 pub use models::{
     BatchClaim, BatchFailOutcome, BatchQueueCounts, BatchRecord, BatchStatus, CompletedBatch,
     DesiredAssignment, EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics,
-    EvaluatorPerformanceSnapshot, InsertBatchesMetrics, InsertBatchesOutcome, NodeCapabilities,
-    NodeLaunchRequest, RegisteredNode, RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot,
-    RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot, SamplerPerformanceMetrics,
-    SamplerQueueRollingAverages, SamplerQueueRuntimeMetrics, SamplerRuntimeMetrics,
-    SamplerWorkRollingAverages, WorkerRole,
+    EvaluatorPerformanceSnapshot, InsertBatchesMetrics, InsertBatchesOutcome, MeasurementResult,
+    NodeCapabilities, NodeLaunchRequest, RegisteredNode, RollingMetricSnapshot, RunSampleProgress,
+    RunStageSnapshot, RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
+    SamplerPerformanceMetrics, SamplerQueueRollingAverages, SamplerQueueRuntimeMetrics,
+    SamplerRuntimeMetrics, SamplerWorkRollingAverages, WorkerRole,
 };
 pub use run_spec::{
     AccumulatorConfig, AccumulatorMomentConfig, BatchTransformConfig, CapabilityRequirements,
@@ -24,10 +24,11 @@ pub use tasks::{
     AccumulatorMetricName, AccumulatorMetricSelector, AccumulatorSourceSpec,
     DEFAULT_DISCRETE_PROJECTION_MAX_TOTAL_BINS, DiscreteProjectionConfig,
     DiscreteProjectionNormalization, EvaluatorSourceSpec, ImageDisplayMode, LineDisplayMode,
-    LineRasterGeometry, Linspace, NamedDiscreteProjection, PlaneRasterGeometry,
-    PlotAccumulatorKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState, SampleErrorProjection,
-    SampleStopCondition, SampleTaskConfig, SamplerAggregatorSourceSpec, SamplerQueueTuning,
-    SourceRefSpec, canonical_task_toml, generated_task_name,
+    LineRasterGeometry, Linspace, MeasurementMetricSpec, MeasurementMode, MeasurementSpec,
+    MeasurementStopCondition, NamedDiscreteProjection, PlaneRasterGeometry, PlotAccumulatorKind,
+    RunTask, RunTaskInput, RunTaskSpec, RunTaskState, SampleErrorProjection, SampleStopCondition,
+    SampleTaskConfig, SamplerAggregatorSourceSpec, SamplerQueueTuning, SourceRefSpec,
+    canonical_task_toml, generated_task_name,
 };
 pub use traits::{
     AggregationStore, ControlPlaneStore, EvaluatorWorkerStore, RunReadStore, RunSpecStore,
