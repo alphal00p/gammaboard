@@ -1223,11 +1223,6 @@ async fn get_run_task_output(
         .map_err(|err| ApiError::Internal(err.to_string()))?;
     if !matches!(task.state, crate::core::RunTaskState::Active)
         && request.request.panel_actions.is_empty()
-        && request
-            .request
-            .panel_state
-            .as_object()
-            .is_none_or(|object| object.is_empty())
         && cursor.snapshot_id.is_some()
         && latest_persisted_snapshot
             .as_ref()

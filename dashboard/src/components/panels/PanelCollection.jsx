@@ -1140,6 +1140,7 @@ const ScalarImageHeatmapPanel = ({
 }) => {
   const figureRef = useRef(null);
   const echartsRef = useRef(null);
+  const suppressChartEventsRef = useRef(false);
   const [panelWidth, setPanelWidth] = useState(0);
   const xParameters = useMemo(() => buildLinspaceParameters(xRange, width), [width, xRange]);
   const yParameters = useMemo(() => buildLinspaceParameters(yRange, height), [height, yRange]);
@@ -1278,9 +1279,17 @@ const ScalarImageHeatmapPanel = ({
       zmin,
     ],
   );
+  useEffect(() => {
+    suppressChartEventsRef.current = true;
+    const rafId = requestAnimationFrame(() => {
+      suppressChartEventsRef.current = false;
+    });
+    return () => cancelAnimationFrame(rafId);
+  }, [option]);
   const onDataZoom = useMemo(
     () => ({
       datazoom: (event) => {
+        if (suppressChartEventsRef.current) return;
         if (typeof onValueChange !== "function" || !panelId) return;
         const next = readDataZoomRanges(event);
         const nextX = next?.x || zoomRange;
@@ -1296,8 +1305,18 @@ const ScalarImageHeatmapPanel = ({
   useEffect(() => {
     const chart = echartsRef.current?.getEchartsInstance?.();
     if (!chart) return undefined;
-    const rafId = requestAnimationFrame(() => chart.resize());
-    return () => cancelAnimationFrame(rafId);
+    suppressChartEventsRef.current = true;
+    let settleRafId = null;
+    const rafId = requestAnimationFrame(() => {
+      chart.resize();
+      settleRafId = requestAnimationFrame(() => {
+        suppressChartEventsRef.current = false;
+      });
+    });
+    return () => {
+      cancelAnimationFrame(rafId);
+      if (settleRafId != null) cancelAnimationFrame(settleRafId);
+    };
   }, [chartHeight, panelWidth]);
   useEffect(() => {
     const element = figureRef.current;
