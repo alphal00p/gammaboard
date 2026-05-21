@@ -7,10 +7,6 @@
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
-      gammaboardProcess = builtins.path {
-        path = ../../python;
-        name = "gammaboard-process-python";
-      };
       python = pkgs.python311;
       symbolica = python.pkgs.buildPythonPackage rec {
         pname = "symbolica";
@@ -27,11 +23,11 @@
         symbolica
       ]);
       runtimePython = pkgs.writeShellScriptBin "python" ''
-        export PYTHONPATH="${./src}:${gammaboardProcess}/src:$PYTHONPATH"
+        export PYTHONPATH="${./src}:$PYTHONPATH"
         exec ${pythonEnv}/bin/python "$@"
       '';
       samplerWorker = pkgs.writeShellScriptBin "gammaboard-example-sampler-worker" ''
-        export PYTHONPATH="${./src}:${gammaboardProcess}/src:$PYTHONPATH"
+        export PYTHONPATH="${./src}:$PYTHONPATH"
         exec ${pythonEnv}/bin/python -u -m run_sampler "$@"
       '';
     in {

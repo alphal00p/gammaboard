@@ -5,7 +5,7 @@ runtime.
 
 ```bash
 cd process_api/examples/python_sampler_symbolica_havana
-nix shell .#runtime -c gammaboard-example-sampler-worker
+PYTHONPATH=../../python/src:src nix shell .#runtime -c python -u -m run_sampler
 ```
 
 The worker entrypoint is `src/run_sampler.py`. It imports

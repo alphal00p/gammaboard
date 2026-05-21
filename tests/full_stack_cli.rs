@@ -1447,6 +1447,8 @@ async fn full_stack_cli_python_scalar_venv_e2e() -> anyhow::Result<()> {
     let evaluator_dir = manifest_dir.join("process_api/examples/python_scalar_sin");
     let evaluator_python = evaluator_dir.join(".venv/bin/python");
     let process_api_python = manifest_dir.join("process_api/python/src");
+    let sampler_src = manifest_dir.join("process_api/examples/python_sampler_symbolica_havana/src");
+    let sampler_pythonpath = format!("{}:{}", process_api_python.display(), sampler_src.display());
     let sampler_flake_ref = format!(
         "path:{}#runtime",
         manifest_dir
@@ -1490,7 +1492,7 @@ fixed_dims = {{ "0" = 0 }}
 name = "sample-a"
 kind = "sample"
 stop_condition = {{ max_samples = 64 }}
-sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", "shell", "{sampler_flake_ref}", "-c", "gammaboard-example-sampler-worker"], requires_training_values = true, args = {{ seed = 0, bins = 8, samples_for_update = 8, stop_training_after_n_samples = 64, initial_training_rate = 0.1, final_training_rate = 0.01 }} }} }}
+sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", "shell", "{sampler_flake_ref}", "-c", "env", "PYTHONPATH={sampler_pythonpath}", "python", "-u", "-m", "run_sampler"], requires_training_values = true, args = {{ seed = 0, bins = 8, samples_for_update = 8, stop_training_after_n_samples = 64, initial_training_rate = 0.1, final_training_rate = 0.01 }} }} }}
 "#,
         process_api_python.display(),
         evaluator_python.display(),
@@ -1538,12 +1540,17 @@ sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", 
             "python scalar venv task completes",
             Duration::from_secs(120),
             || async {
-                let state: String = sqlx::query_scalar(
-                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'sample-a'",
+                let (state, failure_reason): (String, Option<String>) = sqlx::query_as(
+                    "SELECT state, failure_reason FROM run_tasks WHERE run_id = $1 AND name = 'sample-a'",
                 )
                 .bind(run_id)
                 .fetch_one(&harness.pool)
                 .await?;
+                anyhow::ensure!(
+                    state != "failed",
+                    "sample-a failed: {}",
+                    failure_reason.unwrap_or_else(|| "no failure_reason".to_string())
+                );
                 Ok(state == "completed")
             },
         )

@@ -41,4 +41,4 @@ fixed_dims = { "0" = 1 }
 name = "sample-a"
 kind = "sample"
 stop_condition = { max_samples = "$(sample_a_samples:1000)" }
-sampler_aggregator = { config = { kind = "process_sampler", command = ["nix", "shell", "path:$resources/../process_api/examples/python_sampler_symbolica_havana#runtime", "-c", "gammaboard-example-sampler-worker"], cwd = "$resources", requires_training_values = true, args = { seed = 0, bins = "$(sampler_bins:8)", samples_for_update = 16, stop_training_after_n_samples = "$(sample_a_samples:1000)", initial_training_rate = 0.1, final_training_rate = 0.01 } } }
+sampler_aggregator = { config = { kind = "process_sampler", command = ["nix", "shell", "path:$resources/../process_api/examples/python_sampler_symbolica_havana#runtime", "-c", "env", "PYTHONPATH=$resources/../process_api/python/src:$resources/../process_api/examples/python_sampler_symbolica_havana/src", "python", "-u", "-m", "run_sampler"], cwd = "$resources", requires_training_values = true, args = { seed = 0, bins = "$(sampler_bins:8)", samples_for_update = 16, stop_training_after_n_samples = "$(sample_a_samples:1000)", initial_training_rate = 0.1, final_training_rate = 0.01 } } }
