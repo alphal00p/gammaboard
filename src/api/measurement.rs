@@ -1,7 +1,7 @@
 use crate::api::ApiError;
 use crate::core::{
-    AccumulatorMetricName, AggregationStore, MeasurementResult, MeasurementSpec, RunReadStore,
-    RunTask, RunTaskState, RunTaskStore, SamplerRuntimeMetrics,
+    AccumulatorMetricName, AccumulatorMetricSelector, AggregationStore, MeasurementResult,
+    MeasurementSpec, RunReadStore, RunTask, RunTaskState, RunTaskStore, SamplerRuntimeMetrics,
 };
 use crate::evaluation::{
     AccumulatorMetricValue, AccumulatorState, extract_accumulator_metric_with_runtime,
@@ -12,7 +12,7 @@ use crate::stores::SamplerPerformanceHistoryEntry;
 pub struct ExtractedMeasurement {
     pub source_task_id: i64,
     pub source_task_name: String,
-    pub result: MeasurementResult,
+    pub results: Vec<MeasurementResult>,
 }
 
 pub async fn extract_measurement(
@@ -26,21 +26,14 @@ pub async fn extract_measurement(
     let accumulator = load_measurement_accumulator(store, run_id, source_task).await?;
     let throughput =
         load_measurement_throughput(store, run_id, &tasks, source_task, measurement).await?;
-    let selector = measurement.metric.selector();
-    let metric = extract_accumulator_metric_with_runtime(&accumulator, &selector, throughput)
-        .map_err(|err| ApiError::Internal(err.to_string()))?
-        .ok_or_else(|| {
-            ApiError::BadRequest(format!(
-                "measurement metric {:?} is unavailable for task '{}' in state {}",
-                selector.name,
-                source_task.name,
-                source_task.state.as_str()
-            ))
-        })?;
+    let metrics = extract_measurement_metrics(&accumulator, measurement, throughput, source_task)?;
     Ok(ExtractedMeasurement {
         source_task_id: source_task.id,
         source_task_name: source_task.name.clone(),
-        result: measurement_result_from_metric(metric, throughput),
+        results: metrics
+            .into_iter()
+            .map(|metric| measurement_result_from_metric(metric, throughput))
+            .collect(),
     })
 }
 
@@ -95,7 +88,7 @@ async fn load_measurement_throughput(
     source_task: &RunTask,
     measurement: &MeasurementSpec,
 ) -> Result<Option<f64>, ApiError> {
-    let selector = measurement.metric.selector();
+    let selector = measurement.stop_metric_selector();
     if selector.name != AccumulatorMetricName::TimeNormalizedVariance {
         return Ok(None);
     }
@@ -165,6 +158,89 @@ fn measurement_result_from_metric(
     }
 }
 
+fn extract_measurement_metrics(
+    accumulator: &AccumulatorState,
+    measurement: &MeasurementSpec,
+    completed_samples_per_second: Option<f64>,
+    source_task: &RunTask,
+) -> Result<Vec<AccumulatorMetricValue>, ApiError> {
+    if let Some(selector) = measurement.explicit_metric_selector() {
+        return extract_single_metric(
+            accumulator,
+            &selector,
+            completed_samples_per_second,
+            source_task,
+        )
+        .map(|metric| vec![metric]);
+    }
+    extract_central_value_metrics(accumulator, source_task)
+}
+
+fn extract_single_metric(
+    accumulator: &AccumulatorState,
+    selector: &AccumulatorMetricSelector,
+    completed_samples_per_second: Option<f64>,
+    source_task: &RunTask,
+) -> Result<AccumulatorMetricValue, ApiError> {
+    extract_accumulator_metric_with_runtime(accumulator, selector, completed_samples_per_second)
+        .map_err(|err| ApiError::Internal(err.to_string()))?
+        .ok_or_else(|| {
+            ApiError::BadRequest(format!(
+                "measurement metric {:?} is unavailable for task '{}' in state {}",
+                selector.name,
+                source_task.name,
+                source_task.state.as_str()
+            ))
+        })
+}
+
+fn extract_central_value_metrics(
+    accumulator: &AccumulatorState,
+    source_task: &RunTask,
+) -> Result<Vec<AccumulatorMetricValue>, ApiError> {
+    let selectors = match accumulator {
+        AccumulatorState::Scalar(_) => vec![AccumulatorMetricSelector {
+            name: AccumulatorMetricName::Mean,
+            component: None,
+        }],
+        AccumulatorState::Vector(vector) => vector
+            .components
+            .iter()
+            .map(|component| AccumulatorMetricSelector {
+                name: AccumulatorMetricName::Mean,
+                component: Some(component.name.clone()),
+            })
+            .collect(),
+        AccumulatorState::Gammaloop(gammaloop) => gammaloop
+            .estimate
+            .components
+            .iter()
+            .map(|component| AccumulatorMetricSelector {
+                name: AccumulatorMetricName::Mean,
+                component: Some(component.name.clone()),
+            })
+            .collect(),
+        AccumulatorState::Empty(_) | AccumulatorState::FullVector(_) => Vec::new(),
+    };
+    let mut metrics = Vec::new();
+    for selector in selectors {
+        metrics.push(extract_single_metric(
+            accumulator,
+            &selector,
+            None,
+            source_task,
+        )?);
+    }
+    if metrics.is_empty() {
+        return Err(ApiError::BadRequest(format!(
+            "central_value measurement is unavailable for task '{}' accumulator {}",
+            source_task.name,
+            accumulator.kind_str()
+        )));
+    }
+    Ok(metrics)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,8 +248,9 @@ mod tests {
         AggregationStore, ControlPlaneStore, RunReadStore, RunSpecStore, RunTaskStore,
     };
     use crate::core::{
-        AccumulatorConfig, MeasurementMetricSpec, MeasurementMode, MeasurementStopCondition,
-        RunTaskInput, RunTaskSpec, SampleStopCondition, SamplerPerformanceMetrics,
+        AccumulatorConfig, MeasurementMetricSpec, MeasurementMode, MeasurementQuantitySpec,
+        MeasurementStopCondition, RunTaskInput, RunTaskSpec, SampleStopCondition,
+        SamplerPerformanceMetrics, TrainingProjection,
     };
     use crate::evaluation::Point;
     use crate::stores::{
@@ -627,10 +704,39 @@ mod tests {
         AccumulatorState::Scalar(state)
     }
 
+    fn vector_state() -> AccumulatorState {
+        let mut state = crate::evaluation::VectorAccumulatorState::from_config(
+            vec!["real".to_string(), "imag".to_string()],
+            TrainingProjection::Norm,
+            None,
+            crate::core::AccumulatorMomentConfig::MaxOrder4,
+        );
+        let point = Point::new(vec![], vec![], 1.0);
+        for values in [[1.0, 0.5], [2.0, 1.0], [4.0, 2.0], [8.0, 4.0]] {
+            state.ingest_vector(&values, &point).expect("vector ingest");
+        }
+        AccumulatorState::Vector(state)
+    }
+
+    fn central_value_measurement_spec() -> MeasurementSpec {
+        MeasurementSpec {
+            source_task: "sample".to_string(),
+            quantity: MeasurementQuantitySpec::default(),
+            metric: None,
+            mode: MeasurementMode::Minimize,
+            stop_condition: MeasurementStopCondition {
+                relative_error: Some(0.01),
+                max_samples: Some(1000),
+                ..MeasurementStopCondition::default()
+            },
+        }
+    }
+
     fn measurement_spec(metric: MeasurementMetricSpec) -> MeasurementSpec {
         MeasurementSpec {
             source_task: "sample".to_string(),
-            metric,
+            quantity: MeasurementQuantitySpec::default(),
+            metric: Some(metric),
             mode: MeasurementMode::Minimize,
             stop_condition: MeasurementStopCondition {
                 relative_error: Some(0.01),
@@ -664,10 +770,37 @@ mod tests {
 
         assert_eq!(extracted.source_task_id, 7);
         assert_eq!(extracted.source_task_name, "sample");
-        assert_eq!(extracted.result.name, AccumulatorMetricName::Variance);
-        assert!(extracted.result.value > 0.0);
-        assert!(extracted.result.uncertainty.is_some());
-        assert_eq!(extracted.result.completed_samples_per_second, None);
+        assert_eq!(extracted.results.len(), 1);
+        let result = &extracted.results[0];
+        assert_eq!(result.name, AccumulatorMetricName::Variance);
+        assert!(result.value > 0.0);
+        assert!(result.uncertainty.is_some());
+        assert_eq!(result.completed_samples_per_second, None);
+    }
+
+    #[tokio::test]
+    async fn extracts_default_central_values_for_vector_accumulator() {
+        let store = TestStore {
+            tasks: Arc::new(vec![sample_task(7, "sample", 1)]),
+            latest_stage_snapshot: Some(TaskStageSnapshot {
+                id: "1".to_string(),
+                run_id: 1,
+                task_id: "7".to_string(),
+                observable_state: vector_state(),
+                created_at: Some(Utc::now()),
+            }),
+            ..TestStore::default()
+        };
+
+        let extracted = extract_measurement(&store, 1, &central_value_measurement_spec())
+            .await
+            .expect("measurement");
+
+        assert_eq!(extracted.results.len(), 2);
+        assert_eq!(extracted.results[0].name, AccumulatorMetricName::Mean);
+        assert_eq!(extracted.results[0].component.as_deref(), Some("real"));
+        assert_eq!(extracted.results[1].name, AccumulatorMetricName::Mean);
+        assert_eq!(extracted.results[1].component.as_deref(), Some("imag"));
     }
 
     #[tokio::test]
@@ -724,11 +857,11 @@ mod tests {
         .expect("measurement");
 
         assert_eq!(
-            extracted.result.name,
+            extracted.results[0].name,
             AccumulatorMetricName::TimeNormalizedVariance
         );
-        assert_eq!(extracted.result.completed_samples_per_second, Some(2.0));
-        assert!(extracted.result.value > 0.0);
-        assert!(extracted.result.uncertainty.is_some());
+        assert_eq!(extracted.results[0].completed_samples_per_second, Some(2.0));
+        assert!(extracted.results[0].value > 0.0);
+        assert!(extracted.results[0].uncertainty.is_some());
     }
 }

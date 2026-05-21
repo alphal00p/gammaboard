@@ -74,7 +74,7 @@ Example:
 ```toml
 [measurement]
 source_task = "sample"
-metric = "variance"
+quantity = { metric = "variance" }
 mode = "minimize"
 
 [measurement.stop_condition]
@@ -85,8 +85,13 @@ max_samples = 1_000_000
 For vector accumulators, use component-qualified metrics:
 
 ```toml
-metric = { component = "real", name = "variance" }
+quantity = { component = "real", metric = "variance" }
 ```
+
+If `quantity` is omitted, it defaults to `central_value`. Scalar accumulators
+produce one measurement, and vector accumulators produce one measurement per
+component. This is the default for parameter scans and visualization-oriented
+measurements.
 
 ### 3. Measurement Runtime
 
@@ -141,7 +146,7 @@ values = ["auto", "none"]
 
 [task_queue.measurement]
 source_task = "sample"
-metric = "variance"
+quantity = { metric = "variance" }
 mode = "minimize"
 stop_condition = { relative_error = 0.01, max_samples = 1_000_000 }
 
@@ -247,7 +252,7 @@ Defer:
    - Keep current run/task behavior as the default when no metric target is set.
 
 2. Add measurement specs on top of the generic metric layer.
-   - Define `measurement.metric`, `measurement.source_task`, and
+   - Define `measurement.quantity`, `measurement.source_task`, and
      `measurement.mode`.
    - Make measurement stop conditions use the generalized stop evaluator.
    - Store measurement value, uncertainty, sample count, source task id, and

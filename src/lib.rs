@@ -21,7 +21,8 @@ pub mod utils;
 
 pub use core::{
     AccumulatorMetricName, AccumulatorMetricSelector, AccumulatorSourceSpec, ImageDisplayMode,
-    LineDisplayMode, LineRasterGeometry, Linspace, MeasurementMetricSpec, MeasurementMode,
+    LineDisplayMode, LineRasterGeometry, Linspace, MeasurementMetricQuantity,
+    MeasurementMetricSpec, MeasurementMode, MeasurementQuantityName, MeasurementQuantitySpec,
     MeasurementResult, MeasurementSpec, MeasurementStopCondition, PlaneRasterGeometry,
     PlotAccumulatorKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState, SampleErrorProjection,
     SampleStopCondition, SampleTaskConfig, SamplerAggregatorSourceSpec, SourceRefSpec,
