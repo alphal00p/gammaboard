@@ -502,6 +502,7 @@ const extractSharedPdfImageView = (value) => {
   const shared = {};
   const zoom = extractSharedImageZoom(value);
   if (zoom?.zoom) shared.zoom = zoom.zoom;
+  if (zoom?.yZoom) shared.yZoom = zoom.yZoom;
   if (Number.isFinite(Number(value.spread))) shared.spread = clampHeatmapSpread(value.spread, 1);
   return Object.keys(shared).length > 0 ? shared : null;
 };

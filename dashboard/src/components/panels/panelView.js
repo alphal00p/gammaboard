@@ -78,12 +78,18 @@ export const mergeSharedHistoryView = (current, sharedView) => {
 export const extractSharedImageZoom = (value) => {
   if (!isObject(value)) return null;
   const zoom = normalizeZoomRange(value.zoom);
-  return zoom ? { zoom } : null;
+  const yZoom = normalizeZoomRange(value.yZoom);
+  if (!zoom && !yZoom) return null;
+  return {
+    ...(zoom ? { zoom } : {}),
+    ...(yZoom ? { yZoom } : {}),
+  };
 };
 
 export const mergeSharedImageZoom = (current, sharedView) => {
   const next = isObject(current) ? { ...current } : {};
   if (sharedView.zoom) next.zoom = sharedView.zoom;
+  if (sharedView.yZoom) next.yZoom = sharedView.yZoom;
   return next;
 };
 
