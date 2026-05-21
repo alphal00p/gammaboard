@@ -5,7 +5,9 @@ use gammaboard::config::{DEFAULT_SERVER_CONFIG_PATH, RuntimeConfig};
 use gammaboard::runtime_context::{RuntimeContext, checked_add_port};
 use gammaboard::server::ServerConfig;
 use std::{
+    collections::BTreeMap,
     fs,
+    net::TcpListener,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
@@ -54,6 +56,7 @@ async fn deploy_run(args: DeployRunArgs, runtime: &RuntimeContext) -> Result<()>
     server_config
         .allowed_origins
         .extend(args.allowed_origins.clone());
+    preflight_deploy_ports(&server_config)?;
     validate_frontend_build(&server_config)?;
 
     if server_config.database.ensure_started {
@@ -106,6 +109,128 @@ fn validate_frontend_build(server_config: &ServerConfig) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn preflight_deploy_ports(server_config: &ServerConfig) -> Result<()> {
+    let checks = vec![
+        (
+            "frontend",
+            server_config.frontend.host.clone(),
+            server_config.frontend.port,
+        ),
+        (
+            "api",
+            server_config.api_host.to_string(),
+            server_config.api_port,
+        ),
+    ];
+
+    let mut failures = Vec::new();
+    for (label, host, port) in checks {
+        if let Err(err) = TcpListener::bind((host.as_str(), port)) {
+            if err.kind() == std::io::ErrorKind::AddrInUse {
+                failures.push(format_port_in_use(label, &host, port));
+            } else {
+                failures.push(format!(
+                    "{label} bind check failed for {host}:{port}: {err}"
+                ));
+            }
+        }
+    }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        bail!("deploy port preflight failed:\n\n{}", failures.join("\n\n"));
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PortHolder {
+    pid: u32,
+    command: Option<String>,
+}
+
+fn format_port_in_use(label: &str, host: &str, port: u16) -> String {
+    let holders = find_port_holders(port);
+    format_port_in_use_with_holders(label, host, port, holders)
+}
+
+fn format_port_in_use_with_holders(
+    label: &str,
+    host: &str,
+    port: u16,
+    holders: Vec<PortHolder>,
+) -> String {
+    if holders.is_empty() {
+        return format!(
+            "{label} port {host}:{port} is already in use.\n\
+             Inspect the listener with:\n  ss -ltnp 'sport = :{port}'"
+        );
+    }
+
+    let mut lines = vec![format!("{label} port {host}:{port} is already in use by:")];
+    for holder in holders {
+        match holder.command {
+            Some(command) => {
+                lines.push(format!("  {command} (pid {})", holder.pid));
+            }
+            None => {
+                lines.push(format!("  pid {}", holder.pid));
+            }
+        }
+        lines.push(format!("  stop it with: kill -TERM {}", holder.pid));
+        lines.push(format!("  force it if needed: kill -KILL {}", holder.pid));
+    }
+    lines.push(format!(
+        "Inspect listeners with: ss -ltnp 'sport = :{port}'"
+    ));
+    lines.join("\n")
+}
+
+fn find_port_holders(port: u16) -> Vec<PortHolder> {
+    let filter = format!("sport = :{port}");
+    let Ok(output) = Command::new("ss").args(["-ltnp", &filter]).output() else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    parse_ss_listeners(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_ss_listeners(output: &str) -> Vec<PortHolder> {
+    let mut holders = BTreeMap::new();
+    for line in output.lines() {
+        for holder in parse_ss_listener_line(line) {
+            holders.entry(holder.pid).or_insert(holder);
+        }
+    }
+    holders.into_values().collect()
+}
+
+fn parse_ss_listener_line(line: &str) -> Vec<PortHolder> {
+    line.split("(\"")
+        .skip(1)
+        .filter_map(|entry| {
+            let quote_end = entry.find('"')?;
+            let command = entry[..quote_end].to_string();
+            let pid = parse_ss_pid(entry)?;
+            Some(PortHolder {
+                pid,
+                command: Some(command),
+            })
+        })
+        .collect()
+}
+
+fn parse_ss_pid(entry: &str) -> Option<u32> {
+    let pid_start = entry.find("pid=")? + "pid=".len();
+    let digits: String = entry[pid_start..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
 }
 
 fn apply_port_offset(server_config: &mut ServerConfig, port_offset: u16) -> Result<()> {
@@ -437,4 +562,62 @@ http {{\n\
     );
     fs::write(&paths.nginx_config, config)
         .with_context(|| format!("failed writing {}", paths.nginx_config.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_ss_listener_processes() {
+        let output = r#"State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+LISTEN 0      511        127.0.0.1:8080      0.0.0.0:*    users:(("nginx",pid=419163,fd=5),("nginx",pid=419164,fd=5))
+LISTEN 0      128        127.0.0.1:4000      0.0.0.0:*    users:(("gammaboard",pid=42,fd=9))
+"#;
+
+        let holders = parse_ss_listeners(output);
+
+        assert_eq!(
+            holders,
+            vec![
+                PortHolder {
+                    pid: 42,
+                    command: Some("gammaboard".to_string()),
+                },
+                PortHolder {
+                    pid: 419163,
+                    command: Some("nginx".to_string()),
+                },
+                PortHolder {
+                    pid: 419164,
+                    command: Some("nginx".to_string()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn port_in_use_message_shows_manual_inspection_when_pid_is_unknown() {
+        let message = format_port_in_use_with_holders("frontend", "127.0.0.1", 8080, Vec::new());
+
+        assert!(message.contains("frontend port 127.0.0.1:8080 is already in use"));
+        assert!(message.contains("ss -ltnp 'sport = :8080'"));
+    }
+
+    #[test]
+    fn port_in_use_message_shows_kill_command_when_pid_is_known() {
+        let message = format_port_in_use_with_holders(
+            "frontend",
+            "127.0.0.1",
+            8080,
+            vec![PortHolder {
+                pid: 419163,
+                command: Some("nginx".to_string()),
+            }],
+        );
+
+        assert!(message.contains("nginx (pid 419163)"));
+        assert!(message.contains("stop it with: kill -TERM 419163"));
+        assert!(message.contains("force it if needed: kill -KILL 419163"));
+    }
 }
