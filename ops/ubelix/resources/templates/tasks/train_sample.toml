@@ -1,10 +1,12 @@
 # GammaLoop TTH training + inference sample workflow.
 
+replacements = { train_samples = 100_000_000, sample_samples = 1_000_000_000, relative_error = 0.001, havana_bins = 128, samples_for_update = 10_000_000, max_batch_size = 100_000 }
+
 [[task_queue]]
 name = "train"
 kind = "sample"
-stop_condition = { max_samples = 100_000_000 }
-sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 128, samples_for_update = 10_000_000, initial_training_rate = 0.05, final_training_rate = 0.005 } }
+stop_condition = { max_samples = "$(train_samples:100_000_000)" }
+sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = "$(havana_bins:128)", samples_for_update = "$(samples_for_update:10_000_000)", initial_training_rate = 0.05, final_training_rate = 0.005 } }
 
 [task_queue.queue_tuning]
 queue_buffer = 1
@@ -13,7 +15,7 @@ batch_size_deadband_ratio = 0.15
 batch_size_cooldown_ticks = 3
 pending_refill_low_ratio = 0.85
 pending_refill_high_ratio = 1.15
-max_batch_size = 100_000
+max_batch_size = "$(max_batch_size:100_000)"
 local_pending_buffer_multiplier = 0.5
 max_queue_size = 200
 max_batches_per_tick = 100
@@ -24,5 +26,5 @@ completed_batch_fetch_limit = 100
 [[task_queue]]
 name = "sample"
 kind = "sample"
-stop_condition = { max_samples = 1_000_000_000, relative_error = 0.001 }
+stop_condition = { max_samples = "$(sample_samples:1_000_000_000)", relative_error = "$(relative_error:0.001)" }
 sampler_aggregator = { config = { kind = "havana_inference", source = "latest_training_sampler_aggregator" } }

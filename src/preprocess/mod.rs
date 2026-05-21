@@ -25,6 +25,8 @@ pub struct RunAddConfig {
     pub integration_params: RunAddIntegrationParams,
     pub target: Option<JsonValue>,
     #[serde(skip)]
+    pub original_toml: Option<String>,
+    #[serde(skip)]
     pub domain: Option<Domain>,
     #[serde(skip)]
     pub resolved_integration_params: Option<IntegrationParams>,

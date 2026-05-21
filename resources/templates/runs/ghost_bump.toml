@@ -1,6 +1,8 @@
 # Symbolica + Havana training, then 2D PDF adaptation on a pure (x,y) domain.
 
-name = "ghost_bump"
+replacements = { run_name = "ghost_bump", train_samples = 200000, havana_bins = 64, samples_for_update = 16384, image_bins = 128 }
+
+name = '$(run_name:"ghost_bump")'
 
 [evaluator]
 kind = "symbolica"
@@ -17,13 +19,13 @@ name = "havana-train"
 kind = "sample"
 
 [task_queue.stop_condition]
-max_samples = 200000
+max_samples = "$(train_samples:200000)"
 
 [task_queue.sampler_aggregator.config]
 kind = "havana_training"
 seed = 0
-bins = 64
-samples_for_update = 16384
+bins = "$(havana_bins:64)"
+samples_for_update = "$(samples_for_update:16384)"
 initial_training_rate = 0.1
 final_training_rate = 0.001
 
@@ -39,9 +41,9 @@ v_vector = [0.0, 1.0]
 [task_queue.geometry.u_linspace]
 start = 0.0
 stop = 1.0
-count = 128
+count = "$(image_bins:128)"
 
 [task_queue.geometry.v_linspace]
 start = 0.0
 stop = 1.0
-count = 128
+count = "$(image_bins:128)"

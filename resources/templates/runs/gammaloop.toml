@@ -1,6 +1,8 @@
 # Full GammaLoop + Havana training/inference example with task-level queue tuning.
 
-name = "gammaloop_tth"
+replacements = { run_name = "gammaloop_tth" }
+
+name = '$(run_name:"gammaloop_tth")'
 target = { kind = "vector", components = { real = 1.563e-3, imag = 0.0 } }
 
 [evaluator]

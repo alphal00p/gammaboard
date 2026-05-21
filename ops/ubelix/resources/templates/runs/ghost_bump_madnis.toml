@@ -1,6 +1,8 @@
 # Ghost bump with the MADNIS process sampler runtime deployed under resources/processes.
 
-name = "ghost_bump_madnis"
+replacements = { run_name = "ghost_bump_madnis", train_samples = 200000, training_steps = 200, training_batch_size = 1000, save_path = "processes/madnis_gammaboard_api/checkpoints/ghost_bump_madnis", image_bins = 128 }
+
+name = '$(run_name:"ghost_bump_madnis")'
 sampler_requirements = { gpu = 1 }
 
 [evaluator]
@@ -18,7 +20,7 @@ name = "madnis-train"
 kind = "sample"
 
 [task_queue.stop_condition]
-max_samples = 200000
+max_samples = "$(train_samples:200000)"
 
 [task_queue.sampler_aggregator.config]
 kind = "process_sampler"
@@ -30,9 +32,9 @@ requires_training_values = true
 
 [task_queue.sampler_aggregator.config.args]
 seed = 0
-training_steps = 200
-training_batch_size = 1000
-save_path = "processes/madnis_gammaboard_api/checkpoints/ghost_bump_madnis"
+training_steps = "$(training_steps:200)"
+training_batch_size = "$(training_batch_size:1000)"
+save_path = '$(save_path:"processes/madnis_gammaboard_api/checkpoints/ghost_bump_madnis")'
 
 [[task_queue]]
 name = "pdf-2d"
@@ -47,9 +49,9 @@ v_vector = [0.0, 1.0]
 [task_queue.geometry.u_linspace]
 start = 0.0
 stop = 1.0
-count = 128
+count = "$(image_bins:128)"
 
 [task_queue.geometry.v_linspace]
 start = 0.0
 stop = 1.0
-count = 128
+count = "$(image_bins:128)"

@@ -3,7 +3,9 @@
 # f(x,y,z) = 1 + x + 2*y^2 + 3*z^3 + x*y + 2*y*z + 3*x*z^2
 # Integral = 25/6.
 
-name = "symbolica-havana-pdf-1d2d"
+replacements = { run_name = "symbolica-havana-pdf-1d2d", train_samples = 200_000, havana_bins = 64, samples_for_update = 16_384, image_bins = 128, line_bins = 512 }
+
+name = '$(run_name:"symbolica-havana-pdf-1d2d")'
 target = { kind = "scalar", value = 4.166666666666667 }
 
 [evaluator]
@@ -19,8 +21,8 @@ accumulator = "scalar"
 [[task_queue]]
 name = "havana-train"
 kind = "sample"
-stop_condition = { max_samples = 200_000 }
-sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 64, samples_for_update = 16_384, initial_training_rate = 0.1, final_training_rate = 0.001 } }
+stop_condition = { max_samples = "$(train_samples:200_000)" }
+sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = "$(havana_bins:64)", samples_for_update = "$(samples_for_update:16_384)", initial_training_rate = 0.1, final_training_rate = 0.001 } }
 
 [[task_queue]]
 name = "pdf-2d"
@@ -30,8 +32,8 @@ kind = "pdf_adaptation_image"
 offset = [0.0, 0.0, 0.2]
 u_vector = [0.85, 0.1, 0.25]
 v_vector = [0.15, 0.75, 0.35]
-u_linspace = { start = 0.0, stop = 1.0, count = 128 }
-v_linspace = { start = 0.0, stop = 1.0, count = 128 }
+u_linspace = { start = 0.0, stop = 1.0, count = "$(image_bins:128)" }
+v_linspace = { start = 0.0, stop = 1.0, count = "$(image_bins:128)" }
 
 [[task_queue]]
 name = "pdf-1d"
@@ -40,4 +42,4 @@ kind = "pdf_adaptation_plot_line"
 [task_queue.geometry]
 offset = [0.05, 0.15, 0.2]
 direction = [0.9, 0.7, 0.6]
-linspace = { start = 0.0, stop = 1.0, count = 512 }
+linspace = { start = 0.0, stop = 1.0, count = "$(line_bins:512)" }

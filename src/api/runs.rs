@@ -1,4 +1,4 @@
-use crate::api::ApiError;
+use crate::api::{ApiError, toml_template};
 use crate::core::IntegrationParams;
 use crate::core::{
     AccumulatorConfig, AggregationStore, ControlPlaneStore, EvaluatorConfig, RunStageSnapshot,
@@ -98,28 +98,45 @@ pub fn parse_run_add_config_toml(raw: &str) -> Result<RunAddConfig, ApiError> {
     let overlay = toml::from_str(raw)
         .map_err(|err| ApiError::BadRequest(format!("failed parsing run TOML: {err}")))?;
     merge_toml(&mut merged, overlay);
-    parse_run_add_config_value(merged)
+    let expanded = toml_template::expand_toml_template(merged)?;
+    let mut config = parse_run_add_config_value(expanded.value)?;
+    config.original_toml = Some(raw.to_string());
+    Ok(config)
 }
 
 /// Loads a run-add TOML file and merges it over the built-in default run template.
 pub fn load_run_add_config_file(path: &Path) -> Result<RunAddConfig, ApiError> {
+    let raw = fs::read_to_string(path).map_err(|err| {
+        ApiError::Internal(format!(
+            "failed reading run-add TOML {}: {err}",
+            path.display()
+        ))
+    })?;
     let mut merged = read_default_run_add_toml()?;
-    let overlay = read_toml_file(path, "run-add TOML")?;
+    let overlay = toml::from_str(&raw).map_err(|err| {
+        ApiError::BadRequest(format!("failed parsing TOML {}: {err}", path.display()))
+    })?;
     merge_toml(&mut merged, overlay);
-    parse_run_add_config_value(merged)
+    let expanded = toml_template::expand_toml_template(merged)?;
+    let mut config = parse_run_add_config_value(expanded.value)?;
+    config.original_toml = Some(raw);
+    Ok(config)
 }
 
 /// Parses task-append TOML supporting `task`, `task_queue`, or both.
 pub fn parse_task_queue_toml(raw: &str) -> Result<TaskQueueFile, ApiError> {
-    toml::from_str(raw)
-        .map_err(|err| ApiError::BadRequest(format!("invalid run-task payload: {err}")))
+    toml_template::parse_templated_toml(raw, "run-task payload")
 }
 
 /// Loads and parses a task file from disk.
 pub fn load_task_queue_file(path: &Path) -> Result<TaskQueueFile, ApiError> {
-    read_toml_file(path, "run-task TOML")?
-        .try_into()
-        .map_err(|err| ApiError::BadRequest(format!("invalid run-task payload: {err}")))
+    let raw = fs::read_to_string(path).map_err(|err| {
+        ApiError::Internal(format!(
+            "failed reading run-task TOML {}: {err}",
+            path.display()
+        ))
+    })?;
+    parse_task_queue_toml(&raw)
 }
 
 /// Creates a run, persists the root stage snapshot, and appends initial tasks if provided.
@@ -155,15 +172,17 @@ pub async fn create_run(
     )
     .await?;
 
+    let run_toml = stored_run_toml(
+        &processed,
+        resolved_integration_params,
+        processed.target.as_ref(),
+        &initial_tasks,
+    )?;
+
     let run_id = store
         .create_run(
             &processed.name,
-            &canonical_run_toml(
-                &processed.name,
-                resolved_integration_params,
-                processed.target.as_ref(),
-                &initial_tasks,
-            )?,
+            &run_toml,
             &integration_params,
             processed.target.as_ref(),
             domain,
@@ -609,15 +628,6 @@ fn read_default_run_add_toml() -> Result<toml::Value, ApiError> {
     })
 }
 
-fn read_toml_file(path: &Path, label: &str) -> Result<toml::Value, ApiError> {
-    let raw = fs::read_to_string(path).map_err(|err| {
-        ApiError::Internal(format!("failed reading {label} {}: {err}", path.display()))
-    })?;
-    toml::from_str(&raw).map_err(|err| {
-        ApiError::BadRequest(format!("failed parsing TOML {}: {err}", path.display()))
-    })
-}
-
 fn parse_run_add_config_value(merged: toml::Value) -> Result<RunAddConfig, ApiError> {
     if merged
         .as_table()
@@ -639,6 +649,18 @@ fn parse_run_add_config_value(merged: toml::Value) -> Result<RunAddConfig, ApiEr
         ));
     }
     Ok(RunAddConfig { name, ..parsed })
+}
+
+fn stored_run_toml(
+    processed: &RunAddConfig,
+    integration_params: &IntegrationParams,
+    target: Option<&serde_json::Value>,
+    task_queue: &[RunTaskInput],
+) -> Result<String, ApiError> {
+    if let Some(original_toml) = processed.original_toml.as_ref() {
+        return Ok(original_toml.clone());
+    }
+    canonical_run_toml(&processed.name, integration_params, target, task_queue)
 }
 
 fn merge_toml(base: &mut toml::Value, overlay: toml::Value) {
@@ -670,6 +692,141 @@ mod tests {
     fn scalar_unit_evaluator() -> EvaluatorConfig {
         EvaluatorConfig::Unit {
             params: UnitEvaluatorParams::default(),
+        }
+    }
+
+    #[test]
+    fn parse_run_add_expands_typed_top_level_replacements() {
+        let raw = r#"
+replacements = { run_name = "templated-run", samples = 12, enabled_failures = [1, 2] }
+
+name = '$(run_name:"fallback-run")'
+
+[evaluator]
+kind = "unit"
+continuous_dims = "$(continuous_dims:1)"
+discrete_dims = 0
+fail_on_batch_nrs = "$(enabled_failures:[])"
+
+[[task_queue]]
+kind = "sample"
+stop_condition = { max_samples = "$(samples:8)" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"#;
+        let config = parse_run_add_config_toml(raw).expect("templated run config");
+
+        assert_eq!(config.name, "templated-run");
+        assert_eq!(config.original_toml.as_deref(), Some(raw));
+        let EvaluatorConfig::Unit { params } = config.integration_params.evaluator else {
+            panic!("expected unit evaluator");
+        };
+        assert_eq!(params.continuous_dims, 1);
+        assert_eq!(params.fail_on_batch_nrs, vec![1, 2]);
+        let Some(tasks) = config.task_queue else {
+            panic!("missing task queue");
+        };
+        let RunTaskSpec::Sample { stop_condition, .. } = &tasks[0].task else {
+            panic!("expected sample task");
+        };
+        assert_eq!(stop_condition.max_samples, Some(12));
+    }
+
+    #[test]
+    fn stored_run_toml_preserves_original_submitted_text() {
+        let raw = r#"
+
+replacements = { run_name = "stored-template", samples = 12 }
+
+name = '$(run_name:"fallback-run")'
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[task_queue]]
+kind = "sample"
+stop_condition = { max_samples = "$(samples:8)" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"#;
+        let processed = preprocess_run_add(parse_run_add_config_toml(raw).expect("run config"))
+            .expect("preprocess");
+        let integration_params = processed
+            .resolved_integration_params
+            .as_ref()
+            .expect("resolved integration params");
+        let tasks = processed.resolved_task_queue.clone().unwrap_or_default();
+
+        let stored = stored_run_toml(
+            &processed,
+            integration_params,
+            processed.target.as_ref(),
+            &tasks,
+        )
+        .expect("stored run toml");
+
+        assert_eq!(stored, raw);
+    }
+
+    #[test]
+    fn parse_task_queue_expands_typed_top_level_replacements() {
+        let tasks = parse_task_queue_toml(
+            r#"
+replacements = { task_name = "templated-sample", samples = 16 }
+
+[task]
+name = '$(task_name:"fallback-sample")'
+kind = "sample"
+stop_condition = { max_samples = "$(samples:8)" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"#,
+        )
+        .expect("templated task config")
+        .into_tasks();
+
+        assert_eq!(tasks[0].name.as_deref(), Some("templated-sample"));
+        let RunTaskSpec::Sample { stop_condition, .. } = &tasks[0].task else {
+            panic!("expected sample task");
+        };
+        assert_eq!(stop_condition.max_samples, Some(16));
+    }
+
+    #[test]
+    fn bundled_run_and_task_templates_parse_after_replacement_expansion() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        for relative_path in [
+            "resources/templates/runs/ghost_bump.toml",
+            "resources/templates/runs/process-evaluator-process-sampler-demo.toml",
+            "resources/templates/runs/process-rust-apptainer-evaluator-demo.toml",
+            "resources/templates/runs/symbolica-havana-pdf-1d2d.toml",
+            "resources/templates/tasks/pdf_adaptation_image.toml",
+            "resources/templates/tasks/sample_monte_carlo_real.toml",
+            "resources/templates/tasks/train_sample.toml",
+            "ops/ubelix/resources/templates/runs/ghost_bump_madnis.toml",
+            "ops/ubelix/resources/templates/tasks/train_sample.toml",
+        ] {
+            let raw = fs::read_to_string(root.join(relative_path)).expect("template file");
+            if relative_path.contains("/tasks/") {
+                parse_task_queue_toml(&raw)
+                    .unwrap_or_else(|err| panic!("{relative_path} should parse: {err}"));
+            } else {
+                parse_run_add_config_toml(&raw)
+                    .unwrap_or_else(|err| panic!("{relative_path} should parse: {err}"));
+            }
+        }
+
+        if cfg!(feature = "gammaloop") {
+            for relative_path in [
+                "resources/templates/runs/gammaloop.toml",
+                "ops/ubelix/resources/templates/runs/epem_a_tth.toml",
+            ] {
+                let raw = fs::read_to_string(root.join(relative_path)).expect("template file");
+                parse_run_add_config_toml(&raw)
+                    .unwrap_or_else(|err| panic!("{relative_path} should parse: {err}"));
+            }
         }
     }
 

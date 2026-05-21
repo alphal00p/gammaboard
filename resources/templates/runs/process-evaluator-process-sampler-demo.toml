@@ -1,12 +1,14 @@
 # Process evaluator + process sampler demo using a venv evaluator and Nix sampler.
-name = "process-evaluator-process-sampler-demo"
+replacements = { run_name = "process-evaluator-process-sampler-demo", scale = 1.0, sample_a_samples = 1000, sampler_bins = 8 }
+
+name = '$(run_name:"process-evaluator-process-sampler-demo")'
 
 [evaluator]
 kind = "process_evaluator"
 command = ["$resources/../process_api/examples/python_scalar_sin/.venv/bin/python", "-u", "-m", "run_evaluator"]
 cwd = "$resources/../process_api/examples/python_scalar_sin/src"
 domain = { rectangular = { discrete_cardinalities = [2, 3], continuous_dims = 2 } }
-args = { scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }
+args = { scale = "$(scale:1.0)", bias = 0.0, freq_u = 2.0, freq_v = 1.25 }
 
 [[task_queue]]
 name = "accumulator"
@@ -38,5 +40,5 @@ fixed_dims = { "0" = 1 }
 [[task_queue]]
 name = "sample-a"
 kind = "sample"
-stop_condition = { max_samples = 1000 }
-sampler_aggregator = { config = { kind = "process_sampler", command = ["nix", "shell", "path:$resources/../process_api/examples/python_sampler_symbolica_havana#runtime", "-c", "gammaboard-example-sampler-worker"], cwd = "$resources", requires_training_values = true, args = { seed = 0, bins = 8, samples_for_update = 16, stop_training_after_n_samples = 1000, initial_training_rate = 0.1, final_training_rate = 0.01 } } }
+stop_condition = { max_samples = "$(sample_a_samples:1000)" }
+sampler_aggregator = { config = { kind = "process_sampler", command = ["nix", "shell", "path:$resources/../process_api/examples/python_sampler_symbolica_havana#runtime", "-c", "gammaboard-example-sampler-worker"], cwd = "$resources", requires_training_values = true, args = { seed = 0, bins = "$(sampler_bins:8)", samples_for_update = 16, stop_training_after_n_samples = "$(sample_a_samples:1000)", initial_training_rate = 0.1, final_training_rate = 0.01 } } }

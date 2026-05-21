@@ -1,3 +1,5 @@
+replacements = { workers = 4, prefix = "cpu" }
+
 [[groups]]
-count = 4
-name_prefix = "cpu"
+count = "$(workers:4)"
+name_prefix = '$(prefix:"cpu")'

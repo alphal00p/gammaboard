@@ -1,9 +1,11 @@
-[[groups]]
-count = 1
-name_prefix = "gpu"
-max_start_failures = 6
-config = { gpu = "rtx4090:1" }
+replacements = { gpu_workers = 1, gpu_prefix = "gpu", gpu_kind = "rtx4090:1", cpu_workers = 4, cpu_prefix = "cpu" }
 
 [[groups]]
-count = 4
-name_prefix = "cpu"
+count = "$(gpu_workers:1)"
+name_prefix = '$(gpu_prefix:"gpu")'
+max_start_failures = 6
+config = { gpu = '$(gpu_kind:"rtx4090:1")' }
+
+[[groups]]
+count = "$(cpu_workers:4)"
+name_prefix = '$(cpu_prefix:"cpu")'

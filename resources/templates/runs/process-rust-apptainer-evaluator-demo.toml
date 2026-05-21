@@ -3,7 +3,9 @@
 #   cd process_api/examples/rust_breit_wigner_evaluator
 #   apptainer build runtime.sif apptainer.def
 
-name = "process-rust-apptainer-evaluator-demo"
+replacements = { run_name = "process-rust-apptainer-evaluator-demo", samples = 100000, havana_bins = 32 }
+
+name = '$(run_name:"process-rust-apptainer-evaluator-demo")'
 
 [evaluator]
 kind = "process_evaluator"
@@ -43,5 +45,5 @@ fixed_dims = { "0" = 1 }
 [[task_queue]]
 name = "sample"
 kind = "sample"
-stop_condition = { max_samples = 100000 }
-sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 32, samples_for_update = 4096, initial_training_rate = 0.1, final_training_rate = 0.01 } }
+stop_condition = { max_samples = "$(samples:100000)" }
+sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = "$(havana_bins:32)", samples_for_update = 4096, initial_training_rate = 0.1, final_training_rate = 0.01 } }

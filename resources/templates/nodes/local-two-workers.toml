@@ -1,3 +1,5 @@
+replacements = { workers = 2, prefix = "local" }
+
 [[groups]]
-count = 2
-name_prefix = "local"
+count = "$(workers:2)"
+name_prefix = '$(prefix:"local")'

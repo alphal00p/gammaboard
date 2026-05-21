@@ -1,10 +1,12 @@
 # Train a Havana sampler, then rasterize its PDF.
 
+replacements = { train_samples = 100_000, havana_bins = 64, samples_for_update = 16384, image_bins = 128 }
+
 [[task_queue]]
 name = "train"
 kind = "sample"
-stop_condition = { max_samples = 100_000 }
-sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 64, samples_for_update = 16384, initial_training_rate = 0.1, final_training_rate = 0.001 } }
+stop_condition = { max_samples = "$(train_samples:100_000)" }
+sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = "$(havana_bins:64)", samples_for_update = "$(samples_for_update:16384)", initial_training_rate = 0.1, final_training_rate = 0.001 } }
 
 [[task_queue]]
 name = "pdf"
@@ -14,5 +16,5 @@ kind = "pdf_adaptation_image"
 offset = [0.0, 0.0]
 u_vector = [1.0, 0.0]
 v_vector = [0.0, 1.0]
-u_linspace = { start = 0.0, stop = 1.0, count = 128 }
-v_linspace = { start = 0.0, stop = 1.0, count = 128 }
+u_linspace = { start = 0.0, stop = 1.0, count = "$(image_bins:128)" }
+v_linspace = { start = 0.0, stop = 1.0, count = "$(image_bins:128)" }

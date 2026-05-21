@@ -1,4 +1,6 @@
-name = "epem_a_tth"
+replacements = { run_name = "epem_a_tth" }
+
+name = '$(run_name:"epem_a_tth")'
 target = { kind = "vector", components = { real = 1.563e-3, imag = 0.0 } }
 
 [evaluator]

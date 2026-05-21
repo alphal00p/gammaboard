@@ -36,6 +36,10 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   projection must not rebuild large samplers to fetch these values.
 - Multi-component observables use vector accumulator models. Full raster
   outputs use `FullVectorAccumulatorState` with named components.
+- Run, task-append, and node-launch TOML may use a top-level `replacements`
+  table plus placeholders `$(name:default)`. Exact full-string placeholders are
+  typed TOML replacements; embedded placeholders interpolate as strings. Server
+  and runtime configs are not templated.
 
 ## Design Rules
 - Keep adapters thin; put reusable behavior in `src/api` or lower layers.

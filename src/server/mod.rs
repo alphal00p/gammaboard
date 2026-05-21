@@ -8,7 +8,7 @@ mod worker_panels;
 
 use crate::api::{
     ApiError, db as db_api, nodes as node_api, runs as run_api, stage as stage_api,
-    templates as template_api,
+    templates as template_api, toml_template,
 };
 use crate::core::{
     AggregationStore, ControlPlaneStore, RunReadStore, RunSpecStore, RunTask, RunTaskStore,
@@ -1401,7 +1401,7 @@ async fn create_run(
     State(state): State<AppState>,
     AxumJson(payload): AxumJson<CreateRunRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let config = run_api::parse_run_add_config_toml(payload.toml.trim()).map_err(|err| {
+    let config = run_api::parse_run_add_config_toml(&payload.toml).map_err(|err| {
         log_control_api_error("run_create", &err);
         err
     })?;
@@ -1912,8 +1912,8 @@ fn resolve_node_launch_groups(
     payload: &AutoRunNodesRequest,
 ) -> Result<Vec<ResolvedNodeLaunchGroup>, ApiError> {
     if let Some(toml_text) = payload.toml.as_ref() {
-        let parsed: NodeLaunchToml = toml::from_str(toml_text)
-            .map_err(|err| ApiError::BadRequest(format!("invalid node launch TOML: {err}")))?;
+        let parsed: NodeLaunchToml =
+            toml_template::parse_templated_toml(toml_text, "node launch TOML")?;
         if parsed.groups.is_empty() {
             return Err(ApiError::BadRequest(
                 "node launch TOML requires at least one [[groups]] entry".to_string(),
@@ -2142,6 +2142,69 @@ async fn create_and_maybe_resolve_node_launch_request(
         "started": started_node_names.len(),
         "node_names": started_node_names,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_node_launch_groups_expands_typed_top_level_replacements() {
+        let payload = AutoRunNodesRequest {
+            toml: Some(
+                r#"
+replacements = { count = 2, prefix = "cpu", cpus = 4 }
+
+[[groups]]
+count = "$(count:1)"
+name_prefix = '$(prefix:"worker")'
+config = { cpus = "$(cpus:1)" }
+"#
+                .to_string(),
+            ),
+            count: None,
+            max_start_failures: None,
+            args: empty_json_object(),
+            name_prefix: None,
+        };
+
+        let groups = resolve_node_launch_groups(&payload).expect("node launch groups");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].count, 2);
+        assert_eq!(groups[0].name_prefix, "cpu");
+        assert_eq!(groups[0].capabilities.get("cpus"), Some(&4));
+    }
+
+    #[test]
+    fn bundled_node_templates_parse_after_replacement_expansion() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        for relative_path in [
+            "resources/templates/nodes/local-two-workers.toml",
+            "ops/ubelix/resources/templates/nodes/cpu-workers.toml",
+            "ops/ubelix/resources/templates/nodes/free-gpu-plus-cpu.toml",
+        ] {
+            let toml = std::fs::read_to_string(root.join(relative_path)).expect("template file");
+            let payload = AutoRunNodesRequest {
+                toml: Some(toml),
+                count: None,
+                max_start_failures: None,
+                args: empty_json_object(),
+                name_prefix: None,
+            };
+            resolve_node_launch_groups(&payload)
+                .unwrap_or_else(|err| panic!("{relative_path} should parse: {err}"));
+        }
+    }
+
+    #[test]
+    fn server_config_does_not_expand_placeholders() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("server.toml");
+        std::fs::write(&path, r#"name = '$(server_name:"local")'"#).expect("write server config");
+
+        let config = ServerConfig::load(&path).expect("server config");
+        assert_eq!(config.name, r#"$(server_name:"local")"#);
+    }
 }
 
 async fn restart_db(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {

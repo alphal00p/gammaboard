@@ -85,6 +85,29 @@ When `allow_local_node_spawn = true`, the server resolves node launch requests b
 
 The create-run, add-task, and node-request dialogs can load `.toml` templates from `run_templates_dir`, `task_templates_dir`, and `node_templates_dir`; admin users can also save edited TOML back as templates and delete templates from the dashboard.
 
+## Template Replacements
+
+Run configs, task-append configs, and node-launch configs support an optional top-level `replacements` table. This is intentionally not supported for server or runtime config.
+
+Placeholders use `$(name:default)`. When the complete TOML string value is exactly one placeholder, the replacement value, or the default when no replacement is provided, is parsed as standalone TOML before the final config is deserialized:
+
+```toml
+replacements = { run_name = "scan-a", samples = 100_000, mode = "auto" }
+
+name = '$(run_name:"fallback")'
+stop_condition = { max_samples = "$(samples:10_000)" }
+args = { subtraction_mode = '$(mode:"none")' }
+```
+
+If a placeholder appears inside a larger TOML string, it is interpolated as text instead:
+
+```toml
+expr = "1 / ((x - $(mu:0.5))^2 + $(width:0.1))"
+label = "mode=$(mode:auto)"
+```
+
+Defaults are parsed as TOML when possible, otherwise they are treated as raw strings. Numeric, boolean, array, table, and string replacements keep their TOML types for exact full-value placeholders; embedded placeholders always stringify the selected value. Prefer the inline `replacements = { ... }` form when the config also has top-level keys after it; a TOML `[replacements]` header keeps following keys in that table until the next table header.
+
 ## Run Configs
 
 Run configs are TOML and are deep-merged over the built-in default run config template from `src/config_defaults/run.toml`.
@@ -139,7 +162,7 @@ For `evaluator.kind = "process_evaluator"`, configure:
 - `cwd`: optional working directory; defaults to `$resources`.
 - `domain`: explicit `Domain` tree. This is the authoritative coordinate layout for homogeneous and inhomogeneous runs.
 - `components`: observable component names; defaults to `["value"]` and must match the vector accumulator components.
-- `args = { ... }`: optional opaque JSON object passed to the process during `initialize`; GammaBoard does not expand placeholders inside `args`.
+- `args = { ... }`: optional opaque JSON object passed to the process during `initialize`.
 
 Domain config uses snake_case variants. Use `rectangular` for fixed-cardinality grids instead of expanding large branch trees:
 
@@ -172,7 +195,7 @@ For `sampler_aggregator.kind = "process_sampler"`, configure:
 - `command`: exact process argv after `$resources` expansion, for example `["python", "-m", "my_runtime.sampler_worker"]` or `["apptainer", "exec", "--nv", "--bind", "$resources:$resources", "$resources/runtimes/my_runtime/runtime.sif", "python", "-m", "my_runtime.sampler_worker"]`.
 - `cwd`: optional working directory; defaults to `$resources`.
 - `requires_training_values`: set to `true` when the sampler needs evaluator feedback through `ingest_training_values`.
-- `args = { ... }`: optional opaque JSON object passed to the process during `initialize`; GammaBoard does not expand placeholders inside `args`.
+- `args = { ... }`: optional opaque JSON object passed to the process during `initialize`.
 
 Process evaluator and sampler methods use ragged row-major arrays plus offsets. Homogeneous wrappers may validate that offsets match the fixed-width shape derived from `domain` and reject inhomogeneous batches.
 
