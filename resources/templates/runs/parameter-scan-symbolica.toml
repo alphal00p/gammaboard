@@ -1,0 +1,45 @@
+# Parameter scan demo: sweep a Symbolica parameter that changes the integral.
+#
+# Each child run integrates f(x) = scale * x + 1 on [0,1].
+# The exact central value is 1 + scale / 2, so the scan should increase
+# monotonically with `scale`.
+
+replacements = { run_name = "parameter-scan-symbolica", scan_samples = 4096, max_concurrent_runs = 2 }
+
+name = '$(run_name:"parameter-scan-symbolica")'
+
+# The parent scan task only orchestrates child runs. This evaluator defines the
+# parent run domain and is intentionally cheap.
+[evaluator]
+kind = "symbolica"
+expr = "1"
+args = ["x"]
+
+[[task_queue]]
+name = "scale-scan"
+kind = "parameter_scan"
+max_concurrent_runs = "$(max_concurrent_runs:2)"
+trial_run_toml = """
+name = "scale-$(scale:1.0)"
+target = { kind = "scalar", value = "$(target:1.5)" }
+
+[evaluator]
+kind = "symbolica"
+expr = "$(scale:1.0) * x + 1"
+args = ["x"]
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+measurement = { quantity = "central_value" }
+stop_condition = { max_samples = "$(scan_samples:4096)" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
+"""
+
+[task_queue.parameter]
+name = "scale"
+values = [0.0, 0.5, 1.0, 1.5, 2.0]
+
+[task_queue.measurement]
+source_task = "sample"
