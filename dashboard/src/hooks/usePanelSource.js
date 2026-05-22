@@ -104,7 +104,12 @@ const panelStateEquals = (left, right) => {
     );
   }
   if (left.kind === "progress" && right.kind === "progress") {
-    return left.value === right.value && left.total === right.total && left.unit === right.unit && left.label === right.label;
+    return (
+      left.current === right.current &&
+      left.total === right.total &&
+      left.unit === right.unit &&
+      left.eta_seconds === right.eta_seconds
+    );
   }
   return false;
 };

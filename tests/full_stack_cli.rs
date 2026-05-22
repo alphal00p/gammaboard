@@ -2521,18 +2521,22 @@ name = "full-stack-e2e"
         .success();
 
     harness
-        .wait_for("two active evaluators", Duration::from_secs(10), || async {
-            let w1 = harness.node_state("w-1").await?;
-            let w2 = harness.node_state("w-2").await?;
-            Ok(w1.0 == Some(run_id)
-                && w1.1.as_deref() == Some("evaluator")
-                && w1.2 == Some(run_id)
-                && w1.3.as_deref() == Some("evaluator")
-                && w2.0 == Some(run_id)
-                && w2.1.as_deref() == Some("evaluator")
-                && w2.2 == Some(run_id)
-                && w2.3.as_deref() == Some("evaluator"))
-        })
+        .wait_for(
+            "idle evaluator assignments are cleared",
+            Duration::from_secs(10),
+            || async {
+                let w1 = harness.node_state("w-1").await?;
+                let w2 = harness.node_state("w-2").await?;
+                Ok(w1.0.is_none()
+                    && w1.1.is_none()
+                    && w1.2.is_none()
+                    && w1.3.is_none()
+                    && w2.0.is_none()
+                    && w2.1.is_none()
+                    && w2.2.is_none()
+                    && w2.3.is_none())
+            },
+        )
         .await?;
 
     harness
@@ -2605,19 +2609,19 @@ name = "full-stack-e2e"
 
     harness
         .wait_for(
-            "reassigned evaluators become active",
+            "idle control loop clears reassigned evaluators",
             Duration::from_secs(10),
             || async {
                 let w1 = harness.node_state("w-1").await?;
                 let w2 = harness.node_state("w-2").await?;
-                Ok(w1.0 == Some(run_id)
-                    && w1.1.as_deref() == Some("evaluator")
-                    && w1.2 == Some(run_id)
-                    && w1.3.as_deref() == Some("evaluator")
-                    && w2.0 == Some(run_id)
-                    && w2.1.as_deref() == Some("evaluator")
-                    && w2.2 == Some(run_id)
-                    && w2.3.as_deref() == Some("evaluator"))
+                Ok(w1.0.is_none()
+                    && w1.1.is_none()
+                    && w1.2.is_none()
+                    && w1.3.is_none()
+                    && w2.0.is_none()
+                    && w2.1.is_none()
+                    && w2.2.is_none()
+                    && w2.3.is_none())
             },
         )
         .await?;
@@ -2660,15 +2664,19 @@ name = "full-stack-e2e"
 
     harness
         .wait_for(
-            "resumed run becomes active again",
+            "paused idle run clears reassigned evaluators",
             Duration::from_secs(10),
             || async {
                 let w1 = harness.node_state("w-1").await?;
                 let w2 = harness.node_state("w-2").await?;
-                Ok(w1.2 == Some(run_id)
-                    && w1.3.as_deref() == Some("evaluator")
-                    && w2.2 == Some(run_id)
-                    && w2.3.as_deref() == Some("evaluator"))
+                Ok(w1.0.is_none()
+                    && w1.1.is_none()
+                    && w1.2.is_none()
+                    && w1.3.is_none()
+                    && w2.0.is_none()
+                    && w2.1.is_none()
+                    && w2.2.is_none()
+                    && w2.3.is_none())
             },
         )
         .await?;

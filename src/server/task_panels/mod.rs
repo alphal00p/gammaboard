@@ -682,13 +682,20 @@ impl TaskPanelSource {
                 panels
             },
             updates,
-            poll_after_ms: if matches!(task.state, crate::core::RunTaskState::Active) {
+            poll_after_ms: if should_poll_task_output(task.state) {
                 Some(3000)
             } else {
                 None
             },
         })
     }
+}
+
+fn should_poll_task_output(state: crate::core::RunTaskState) -> bool {
+    matches!(
+        state,
+        crate::core::RunTaskState::Pending | crate::core::RunTaskState::Active
+    )
 }
 
 fn resolve_current_source<'a>(
@@ -961,7 +968,7 @@ mod tests {
         }
     }
 
-    fn run_task(task: RunTaskSpec) -> RunTask {
+    fn run_task_with_state(task: RunTaskSpec, state: RunTaskState) -> RunTask {
         let name = "plot_line-1".to_string();
         RunTask {
             id: 1,
@@ -970,7 +977,7 @@ mod tests {
             sequence_nr: 1,
             task: task.clone(),
             spawned_from_snapshot_id: None,
-            state: RunTaskState::Active,
+            state,
             nr_produced_samples: 3,
             nr_completed_samples: 3,
             failure_reason: None,
@@ -986,6 +993,10 @@ mod tests {
             measurement_output: None,
             controller_output: None,
         }
+    }
+
+    fn run_task(task: RunTaskSpec) -> RunTask {
+        run_task_with_state(task, RunTaskState::Active)
     }
 
     fn vector_observable() -> AccumulatorState {
@@ -1101,5 +1112,71 @@ mod tests {
             .expect("build response");
 
         assert_eq!(response.cursor.as_deref(), Some("0:0"));
+    }
+
+    #[test]
+    fn build_response_keeps_polling_pending_tasks() {
+        let task = inherited_vector_sample_task();
+        let run_task = run_task_with_state(task.clone(), RunTaskState::Pending);
+        let source = TaskPanelSource::new(
+            &task,
+            Some(AccumulatorConfig::FullVector {
+                components: vec!["real".to_string(), "imag".to_string()],
+            }),
+        )
+        .expect("panel source");
+
+        let response = source
+            .build_response(
+                "run:1:task:1".to_string(),
+                TaskPanelCursor::default(),
+                &run_task,
+                &JsonValue::Object(Default::default()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &[],
+                &[],
+            )
+            .expect("build response");
+
+        assert_eq!(response.poll_after_ms, Some(3000));
+    }
+
+    #[test]
+    fn build_response_stops_polling_completed_tasks() {
+        let task = inherited_vector_sample_task();
+        let run_task = run_task_with_state(task.clone(), RunTaskState::Completed);
+        let source = TaskPanelSource::new(
+            &task,
+            Some(AccumulatorConfig::FullVector {
+                components: vec!["real".to_string(), "imag".to_string()],
+            }),
+        )
+        .expect("panel source");
+
+        let response = source
+            .build_response(
+                "run:1:task:1".to_string(),
+                TaskPanelCursor::default(),
+                &run_task,
+                &JsonValue::Object(Default::default()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &[],
+                &[],
+            )
+            .expect("build response");
+
+        assert_eq!(response.poll_after_ms, None);
     }
 }

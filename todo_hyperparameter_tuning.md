@@ -1,305 +1,188 @@
 # TODO: Hyperparameter Tuning
 
-Goal: add first-class hyperparameter tuning while keeping trials transparent.
-The optimizer should orchestrate ordinary GammaBoard runs/tasks, not hide work
-inside opaque runner state.
+Goal: add first-class hyperparameter tuning by reusing the now-existing
+controller-task and child-run machinery. Trials should remain ordinary grouped
+GammaBoard runs with normal tasks, snapshots, logs, measurements, and panels.
 
-## Current Assumptions
+## Current State
 
-- Config templating is available for run/task/node TOML.
-- Task-level evaluator selection is available.
-- Inner-loop parallelism should use the existing GammaBoard run/task/node system.
-- The outer-loop optimizer should only decide parameter points and consume
-  completed sample-task measurement results.
-- Trial execution should be reproducible from persisted submitted TOML plus
-  replacement values embedded in that TOML.
+Implemented building blocks:
 
-## Proposed Shape
+- TOML templating for run/task/node-launch configs via top-level
+  `replacements` and `$(name:default)` placeholders.
+- Task-level evaluator selection.
+- Optional accumulator moments through `moments = { max_order = 2|4 }`.
+- Generic accumulator metric extraction.
+- Metric-targeted sample stop conditions through `stop_condition.metric`.
+- Task-local sample measurements through `measurement = { quantity = ..., mode = ... }`.
+- Persisted `run_tasks.measurement_output` for completed sample tasks.
+- Runtime-composed `time_normalized_variance`, using variance and sampler
+  throughput.
+- Controller tasks that run in the control plane and do not consume a worker
+  assignment.
+- Grouped child runs via `parent_run_id`, `parent_task_id`, `spawn_kind`, and
+  `spawn_label`.
+- `parameter_scan`, which spawns child runs from `trial_run_toml`, injects one
+  1D parameter, reads child measurement output, and exposes progress/table/plot
+  panels.
+- Frontend grouping of child runs under parent runs, plus basic scan panels.
 
-### 1. Generic Metrics And Stop Conditions
+This means hyperparameter tuning should be an incremental controller task, not a
+new execution model.
 
-Before implementing a tuning task, add a generic measurement layer that can be
-used by normal tasks and later by hyperparameter trials.
+## Before Tuning
 
-First milestone: done.
+Do these small polish items first if they are not already done in the current
+branch:
 
-- Extend existing accumulators with optional higher-moment storage.
-- Keep defaults compatible with current behavior and storage cost.
-- Add backend-owned metric extraction from completed/current task state.
-- Return metric values in one uniform shape: value, optional uncertainty,
-  sample count, component name if vector-valued, and metric name.
-- Generalize stop-condition evaluation so it can stop on a metric precision,
-  not only on the integral estimate.
-- Reuse this generalized stop logic for future measurement tasks and tuning
-  trials.
+- Verify selected pending task output keeps polling until the task becomes
+  terminal.
+- Verify progress panels update through normal panel replacement without page
+  reloads.
+- Keep child runs hidden/collapsed by default under their parent in run
+  selection.
+- Make sure `parameter_scan` e2e covers worker redistribution and live progress.
+- Update `AGENTS.md` if controller-task wording still mentions sampler-role
+  execution.
 
-Initial accumulator extension:
+## Recommended First Version
 
-- `moments = "default"` keeps current behavior.
-- `moments = { max_order = 2 }` supports mean/variance extraction.
-- `moments = { max_order = 4 }` supports uncertainty estimates for variance.
-- Vector accumulators apply the same moment policy per component.
-
-Initial generic metrics:
-
-- `mean`
-- `abs_mean`
-- `error`
-- `relative_error`
-- `variance`
-- `relative_variance_error`
-- `relative_squared_dispersion`
-
-Initial runtime-composed measurement metrics:
-
-- `time_normalized_variance = variance / completed_samples_per_second`
-
-`time_normalized_variance` is the preferred first objective for sampler
-hyperparameter tuning when wall-clock cost matters. It penalizes settings that
-reduce variance per sample but make sampling/evaluation significantly slower.
-It should be treated as a measurement metric, not a pure accumulator metric,
-because it depends on both accumulator state and sampler runtime throughput.
-
-The tuning task should be built on this layer. Otherwise the optimizer would
-need ad-hoc logic for extracting losses and deciding whether a trial measurement
-is precise enough.
-
-### 2. Measurement Config
-
-Status: first version done.
-
-Add an explicit task-local measurement spec that defines what a sample task is
-trying to estimate. The sample task's normal `stop_condition` remains the only
-stop condition.
-
-Example:
-
-```toml
-[[task_queue]]
-name = "sample"
-kind = "sample"
-
-[task_queue.measurement]
-quantity = { metric = "variance" }
-mode = "minimize"
-
-[task_queue.stop_condition]
-relative_error = 0.01
-metric = { name = "variance" }
-max_samples = 1_000_000
-```
-
-For vector accumulators, use component-qualified metrics:
-
-```toml
-quantity = { component = "real", metric = "variance" }
-```
-
-If `quantity` is omitted, it defaults to `central_value`. Scalar accumulators
-produce one measurement, and vector accumulators produce one measurement per
-component. This is the default for parameter scans and visualization-oriented
-measurements.
-
-External orchestrators that need to refer to another task should use a thin
-wrapper with `source_task` plus the same source-less measurement fields. This
-keeps the measurement payload reusable without duplicating task stop-condition
-semantics.
-
-### 3. Measurement Runtime
-
-Status: first version done for completed sample tasks.
-
-Implement measurement as backend-owned extraction from completed task state.
-Do not scrape frontend panels.
-
-Required work:
-
-- Extract scalar/vector accumulator metrics from task queue-empty snapshots.
-- Extract runtime-composed metrics from accumulator state plus sampler runtime
-  metrics when the selected metric requires throughput.
-- Define uncertainty for variance estimates before allowing
-  `task_queue.stop_condition.relative_error` on `variance`.
-- Define uncertainty for `time_normalized_variance` as variance uncertainty
-  divided by the measured throughput, initially ignoring throughput uncertainty.
-- Support fallback sample-budget stops for metrics whose own uncertainty is not
-  available yet.
-- Store measurement value, uncertainty, sample count, source task id, and status.
-- Store the throughput used by runtime-composed metrics so tuning objectives are
-  auditable.
-
-Important constraint:
-
-- A measurement is a result of a trial run/task, not a new sampler/evaluator
-  execution mechanism.
-
-### 4. Trial Run Template
-
-A hyperparameter tuning task contains a nested run TOML template. Each trial
-materializes one normal child run by applying replacements.
-
-Example:
+Add a new controller task:
 
 ```toml
 [[task_queue]]
 name = "tune"
 kind = "hyperparameter_tuning"
+max_concurrent_trials = 4
+max_failed_trials = 2
 
 [task_queue.optimizer]
 kind = "random_search"
 seed = 1
 max_trials = 64
 
+[task_queue.objective]
+source_task = "sample"
+mode = "minimize"
+quantity = { metric = "time_normalized_variance" }
+
 [task_queue.parameters.mu_scale]
 kind = "float"
 min = 0.0
 max = 1.0
+
+[task_queue.parameters.bins]
+kind = "integer"
+min = 16
+max = 128
 
 [task_queue.parameters.subtraction_mode]
 kind = "categorical"
 values = ["auto", "none"]
 
 trial_run_toml = """
-name = "trial-mu-$(mu_scale:0.5)-$(subtraction_mode:auto)"
-replacements = { mu_scale = "$(mu_scale:0.5)", subtraction_mode = '$(subtraction_mode:"auto")' }
-
-[evaluator]
-kind = "symbolica"
-expr = "..."
-args = ["x"]
+name = "trial-mu-$(mu_scale:0.5)-bins-$(bins:64)-$(subtraction_mode:\"auto\")"
 
 [[task_queue]]
 name = "accumulator"
 kind = "set_accumulator"
-accumulator = "scalar"
+accumulator = { kind = "scalar", moments = { max_order = 4 } }
 
 [[task_queue]]
 name = "sample"
 kind = "sample"
-measurement = { quantity = { metric = "variance" }, mode = "minimize" }
-stop_condition = { max_samples = "$(inner_max_samples:1000000)", relative_error = 0.01, metric = { name = "variance" } }
+measurement = { quantity = { metric = "time_normalized_variance" }, mode = "minimize" }
+stop_condition = { max_samples = 1_000_000, relative_error = 0.01, metric = { name = "variance" } }
 sampler_aggregator = { config = { kind = "havana_training", bins = "$(bins:64)" } }
-accumulator = "latest"
 """
 ```
 
-### 5. Trial Persistence
+Shape decisions:
 
-Add explicit trial persistence rather than encoding optimizer state only in task
-logs.
+- The objective references the child task measurement via `source_task`.
+- Trial precision/budget stays inside the child sample task `stop_condition`.
+- `max_concurrent_trials` controls how many child runs the controller keeps
+  active.
+- The tuning controller consumes completed child measurements only.
+- Failed child runs become failed trials and are not optimizer observations by
+  default.
+- Optimizing central value is allowed; users are responsible for choosing a
+  meaningful objective.
 
-Required data:
+## Implementation Steps
 
-- tuning task id
-- trial id / sequence number
-- trial run id
-- parameters as JSON
-- submitted trial TOML
-- expanded/canonical trial identity if useful for display
-- measurement value and uncertainty
-- status: `planned`, `running`, `completed`, `failed`, `canceled`
-- failure reason
+1. Factor shared controller utilities.
+   - Extract reusable child-run listing, child-run creation, assignment
+     redistribution, and measurement loading from `parameter_scan`.
+   - Keep the abstraction small; avoid a generic framework until the tuning task
+     needs it.
 
-Trials should link to normal run/task records so existing panels, logs, and
-snapshots remain usable.
+2. Add tuning core types.
+   - `HyperparameterTuning` task spec.
+   - Parameter domains: `float`, `integer`, `categorical`.
+   - Optimizer configs: `grid_search`, `random_search`.
+   - Objective spec: same source-task wrapper shape as parameter scan, but with
+     explicit `quantity` and `mode`.
+   - Validate finite bounds, non-empty categorical values, positive
+     `max_trials`, positive `max_concurrent_trials`, and non-empty
+     `trial_run_toml`.
 
-### 6. Optimizer Loop
+3. Add trial state persistence.
+   - Prefer a real `hyperparameter_trials` table over only storing JSON in
+     `controller_output`.
+   - Store: tuning task id, sequence number, child run id, parameters JSON,
+     status, measurement output, objective value, uncertainty, failure reason,
+     created/updated timestamps.
+   - Keep `controller_output` as a compact panel/read-model summary.
 
-Start with simple optimizers:
+4. Implement random/grid orchestration.
+   - Generate parameter points deterministically from optimizer config.
+   - Create child runs with replacement values.
+   - Reassign parent-held workers to active child runs.
+   - Read child `measurement_output`.
+   - Update trial status and best-so-far.
+   - Complete when optimizer budget is exhausted and all active trials are
+     terminal.
+   - Fail when failed trials exceed `max_failed_trials`.
 
-- `grid_search`
-- `random_search`
+5. Add backend panels.
+   - Progress: completed/running/failed/total trials.
+   - Trial table: trial id, status, parameters, child run link, objective,
+     uncertainty, samples, failure reason.
+   - Best-so-far plot: trial sequence on x-axis, best objective on y-axis.
+   - Objective scatter/line plot for 1D numeric searches when applicable.
 
-Do not add `egobox` until trial lifecycle, measurement extraction, and failure
-semantics are stable.
+6. Add tests.
+   - Unit tests for parameter domain parsing and deterministic point generation.
+   - Store tests for trial persistence.
+   - Controller tests for trial lifecycle and failure thresholds.
+   - E2E random/grid tuning over a cheap Symbolica example.
+   - E2E worker redistribution: assigning workers to the parent tuning task
+     must move useful work to child runs and update progress live.
 
-Outer-loop behavior:
+7. Add an example config.
+   - Cheap Symbolica objective whose optimum is obvious.
+   - Use `time_normalized_variance` in one example and central value in another
+     only if it clarifies the API.
 
-- The tuning task proposes one or more parameter points.
-- It creates child runs for those points.
-- Existing node/task execution evaluates the child runs.
-- The tuning task consumes completed child sample-task measurements.
-- The optimizer proposes more points until its stop condition is reached.
+## Deferred
 
-Parallelism:
+- Bayesian/global optimizers such as `egobox`.
+- Trial pruning or early stopping beyond the child task stop condition.
+- Penalized failed-trial observations via `failure_value`.
+- Replicate trials per parameter point.
+- Parameter-importance plots.
+- 2D response surfaces.
+- Heatmaps over vector components or histogram bins.
+- Worker capability routing per trial.
 
-- Support `max_concurrent_trials`.
-- Parallelism means multiple child runs active at once.
-- Do not parallelize inside the optimizer crate directly.
+## Open Checks
 
-### 7. Failure Semantics
-
-Initial policy:
-
-- Failed child run means failed trial.
-- Failed trial is not an optimizer observation by default.
-- Tuning task fails if failed trials exceed `max_failed_trials`.
-- Add `failure_value` later if a specific optimizer needs penalized failures.
-
-### 8. Frontend
-
-Minimal first view:
-
-- Trial table: status, parameters, objective, uncertainty, run link.
-- Best-so-far scalar plot.
-- Active/failed trial counts.
-
-Defer:
-
-- Parameter importance.
-- Multi-dimensional response surfaces.
-- Optimizer-specific diagnostics.
-
-## Implementation Plan
-
-1. Generalize metrics and stop conditions.
-   - Add optional higher-moment storage to existing scalar/vector accumulators.
-   - Add one backend metric extractor for accumulator state.
-   - Add a JSON-safe metric result shape with value, optional uncertainty,
-     sample count, component, and metric name.
-   - Extend stop-condition evaluation so it can target any extracted metric
-     with `absolute_error`, `relative_error`, `min_samples`, and `max_samples`.
-   - Keep current run/task behavior as the default when no metric target is set.
-
-2. Add measurement specs on top of the generic metric layer. Done.
-   - Define task-local `measurement.quantity` and `measurement.mode`.
-   - Keep stopping on the existing sample `stop_condition`.
-   - Keep `source_task` only as an external wrapper for orchestrators that
-     measure another task.
-   - Store measurement value, uncertainty, sample count, source task id, and
-     status.
-
-3. Add trial persistence tables.
-   - Store tuning task id, trial run id, parameters, submitted TOML, status, and
-     measurement result.
-
-4. Add `hyperparameter_tuning` task spec.
-   - Parameter domains: float, integer, categorical.
-   - Optimizer config: grid/random, seed, max trials, max concurrent trials.
-   - Measurement config.
-   - Nested trial run TOML.
-
-5. Implement random/grid trial orchestration.
-   - Generate trial TOML by injecting replacements.
-   - Create normal child runs.
-   - Poll child run/task completion through persisted state.
-   - Persist observations.
-
-6. Add e2e tests.
-   - Random/grid search over a cheap Symbolica/unit example.
-   - Verify child runs are created and linked.
-   - Verify objective values are extracted.
-   - Verify best-so-far updates.
-   - Verify failure threshold behavior.
-
-## Open Questions
-
-- Should child runs be visually grouped under the tuning task or remain normal
-  top-level runs with naming conventions? I think they should either be grouped or not shown at all.
-- Should a tuning task be allowed to create child runs that require different
-  worker capabilities? No, keep it simple for the first version.
-- Should optimizing central value be allowed by default, or require an explicit
-  `allow_biased_objective = true` style flag?  Allow by default
-- Do we need trial pruning/early stopping, or is measurement stop condition
-  enough for the first version?
-- Should variance-relative-error require fourth moments, replicate trials, or
-  both?
+- Confirm whether `relative_error` on variance always requires
+  `moments = { max_order = 4 }` and fails clearly otherwise.
+- Confirm `time_normalized_variance` has acceptable semantics when the latest
+  sampler performance snapshot is missing or stale.
+- Decide whether trial state must survive task spec edits, or whether tuning
+  tasks are immutable once active like current run tasks.
+- Decide whether `parameter_scan` and `hyperparameter_tuning` should eventually
+  share a public `trial_run_toml` vocabulary, or stay separate but similar.
