@@ -35,15 +35,17 @@ pub struct ParameterScanOutput {
 pub struct ParameterScanRunner<S> {
     store: S,
     run_id: i32,
+    node_name: String,
     task: RunTask,
     tick_ms: u64,
 }
 
 impl<S> ParameterScanRunner<S> {
-    pub fn new(store: S, run_id: i32, task: RunTask) -> Self {
+    pub fn new(store: S, run_id: i32, node_name: String, task: RunTask) -> Self {
         Self {
             store,
             run_id,
+            node_name,
             task,
             tick_ms: 500,
         }
@@ -61,6 +63,10 @@ where
         + Sync,
 {
     pub async fn tick(&mut self) -> Result<bool, StoreError> {
+        self.store
+            .clear_desired_assignments_for_run_except_node(self.run_id, &self.node_name)
+            .await?;
+
         let RunTaskSpec::ParameterScan {
             parameter,
             measurement,

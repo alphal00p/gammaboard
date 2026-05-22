@@ -272,6 +272,28 @@ pub(crate) async fn clear_desired_assignments_for_run(
     Ok(result.rows_affected())
 }
 
+pub(crate) async fn clear_desired_assignments_for_run_except_node(
+    pool: &PgPool,
+    run_id: i32,
+    keep_node_name: &str,
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(&format!(
+        r#"
+        UPDATE nodes
+        SET
+            {set_clause}
+        WHERE desired_run_id = $1
+          AND name <> $2
+        "#,
+        set_clause = CLEAR_DESIRED_ASSIGNMENT_SET
+    ))
+    .bind(run_id)
+    .bind(keep_node_name)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 pub(crate) async fn clear_all_desired_assignments(pool: &PgPool) -> Result<u64, sqlx::Error> {
     let result = sqlx::query(&format!(
         r#"

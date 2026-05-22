@@ -4498,13 +4498,7 @@ source_task = "sample"
 
     harness
         .cli()
-        .args([
-            "node",
-            "assign",
-            "scan-parent",
-            "sampler-aggregator",
-            "parameter-scan-e2e",
-        ])
+        .args(["auto-assign", &run_id.to_string()])
         .assert()
         .success();
 
@@ -4579,6 +4573,22 @@ source_task = "sample"
     .fetch_one(&harness.pool)
     .await?;
     assert_eq!(measured_children, 3);
+
+    let parent_assignments: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT name, desired_role FROM nodes WHERE desired_run_id = $1 ORDER BY name",
+    )
+    .bind(run_id)
+    .fetch_all(&harness.pool)
+    .await?;
+    assert_eq!(
+        parent_assignments.len(),
+        1,
+        "scan should keep only its orchestrator node assigned to parent"
+    );
+    assert_eq!(
+        parent_assignments[0].1.as_deref(),
+        Some("sampler_aggregator")
+    );
 
     harness.stop_children().await;
     harness.pool.close().await;

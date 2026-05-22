@@ -451,6 +451,16 @@ impl ControlPlaneStore for PgStore {
             .map_err(map_sqlx)
     }
 
+    async fn clear_desired_assignments_for_run_except_node(
+        &self,
+        run_id: i32,
+        keep_node_name: &str,
+    ) -> Result<u64, StoreError> {
+        queries::clear_desired_assignments_for_run_except_node(&self.pool, run_id, keep_node_name)
+            .await
+            .map_err(map_sqlx)
+    }
+
     async fn clear_all_desired_assignments(&self) -> Result<u64, StoreError> {
         queries::clear_all_desired_assignments(&self.pool)
             .await

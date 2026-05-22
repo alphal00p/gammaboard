@@ -398,6 +398,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             return Ok(Some(Box::new(ParameterScanRunner::new(
                 role_store,
                 worker.run_id,
+                self.node_name.clone(),
                 task,
             ))));
         }

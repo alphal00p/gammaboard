@@ -49,6 +49,11 @@ pub trait ControlPlaneStore: Send + Sync {
     async fn clear_current_assignment(&self, node_uuid: &str) -> Result<(), StoreError>;
     async fn clear_desired_assignment(&self, node_name: &str) -> Result<(), StoreError>;
     async fn clear_desired_assignments_for_run(&self, run_id: i32) -> Result<u64, StoreError>;
+    async fn clear_desired_assignments_for_run_except_node(
+        &self,
+        run_id: i32,
+        keep_node_name: &str,
+    ) -> Result<u64, StoreError>;
     async fn clear_all_desired_assignments(&self) -> Result<u64, StoreError>;
     async fn get_desired_assignment(
         &self,

@@ -634,6 +634,13 @@ mod tests {
         ) -> Result<u64, crate::core::StoreError> {
             unreachable!("unused")
         }
+        async fn clear_desired_assignments_for_run_except_node(
+            &self,
+            _run_id: i32,
+            _keep_node_name: &str,
+        ) -> Result<u64, crate::core::StoreError> {
+            unreachable!("unused")
+        }
         async fn clear_all_desired_assignments(&self) -> Result<u64, crate::core::StoreError> {
             unreachable!("unused")
         }

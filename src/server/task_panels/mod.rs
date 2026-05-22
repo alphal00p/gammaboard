@@ -1,4 +1,5 @@
 mod full_accumulator;
+mod parameter_scan;
 mod pdf_adaptation;
 mod sample;
 
@@ -242,7 +243,7 @@ impl RunTaskSpec {
                 accumulator,
                 ..
             } => full_accumulator::line_projectors(geometry.clone(), *display, *accumulator),
-            Self::ParameterScan { .. } => Vec::new(),
+            Self::ParameterScan { .. } => parameter_scan::projectors(),
         });
         Ok(projectors)
     }
