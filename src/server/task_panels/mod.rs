@@ -242,6 +242,7 @@ impl RunTaskSpec {
                 accumulator,
                 ..
             } => full_accumulator::line_projectors(geometry.clone(), *display, *accumulator),
+            Self::ParameterScan { .. } => Vec::new(),
         });
         Ok(projectors)
     }
@@ -436,6 +437,19 @@ fn build_task_summary_entries(
             if let Some(label) = batch_transforms_label(batch_transforms.as_deref()) {
                 entries.push(key_value("batch_transforms", "Transforms", label));
             }
+        }
+        RunTaskSpec::ParameterScan {
+            parameter,
+            max_concurrent_runs,
+            ..
+        } => {
+            entries.push(key_value("parameter", "Parameter", parameter.name.clone()));
+            entries.push(key_value("points", "Points", parameter.values.len()));
+            entries.push(key_value(
+                "max_concurrent_runs",
+                "Concurrency",
+                *max_concurrent_runs,
+            ));
         }
     }
 
@@ -969,6 +983,7 @@ mod tests {
             })
             .expect("task toml"),
             measurement_output: None,
+            controller_output: None,
         }
     }
 

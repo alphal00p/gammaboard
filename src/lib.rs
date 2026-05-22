@@ -23,10 +23,10 @@ pub use core::{
     AccumulatorMetricName, AccumulatorMetricSelector, AccumulatorSourceSpec, ImageDisplayMode,
     LineDisplayMode, LineRasterGeometry, Linspace, MeasurementMetricQuantity,
     MeasurementMetricSpec, MeasurementMode, MeasurementQuantityName, MeasurementQuantitySpec,
-    MeasurementResult, MeasurementSpec, PlaneRasterGeometry, PlotAccumulatorKind, RunTask,
-    RunTaskInput, RunTaskSpec, RunTaskState, SampleErrorProjection, SampleStopCondition,
-    SampleTaskConfig, SamplerAggregatorSourceSpec, SourceRefSpec, TaskMeasurementOutput,
-    TaskMeasurementSpec, canonical_task_toml,
+    MeasurementResult, MeasurementSpec, ParameterScanMeasurementSpec, ParameterScanParameterSpec,
+    PlaneRasterGeometry, PlotAccumulatorKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState,
+    SampleErrorProjection, SampleStopCondition, SampleTaskConfig, SamplerAggregatorSourceSpec,
+    SourceRefSpec, TaskMeasurementOutput, TaskMeasurementSpec, canonical_task_toml,
 };
 pub use core::{BatchRecord, BatchStatus};
 pub use core::{BuildError, EngineError, EvalError, StoreError};

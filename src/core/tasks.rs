@@ -377,6 +377,43 @@ impl MeasurementSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ParameterScanParameterSpec {
+    pub name: String,
+    pub values: Vec<toml::Value>,
+}
+
+impl ParameterScanParameterSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_source_name("parameter", &self.name)?;
+        if self.values.is_empty() {
+            return Err("parameter_scan.parameter.values must not be empty".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ParameterScanMeasurementSpec {
+    pub source_task: String,
+}
+
+impl Default for ParameterScanMeasurementSpec {
+    fn default() -> Self {
+        Self {
+            source_task: "sample".to_string(),
+        }
+    }
+}
+
+impl ParameterScanMeasurementSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_source_name("measurement.source_task", &self.source_task)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct SampleStopCondition {
     pub min_samples: Option<i64>,
@@ -709,6 +746,18 @@ pub enum RunTaskSpec {
         #[serde(default)]
         batch_transforms: Option<Vec<BatchTransformConfig>>,
     },
+    ParameterScan {
+        parameter: ParameterScanParameterSpec,
+        #[serde(default)]
+        measurement: ParameterScanMeasurementSpec,
+        trial_run_toml: String,
+        #[serde(default = "default_parameter_scan_max_concurrent_runs")]
+        max_concurrent_runs: usize,
+    },
+}
+
+fn default_parameter_scan_max_concurrent_runs() -> usize {
+    1
 }
 
 impl RunTaskSpec {
@@ -809,6 +858,22 @@ impl RunTaskSpec {
                 }
                 Ok(())
             }
+            Self::ParameterScan {
+                parameter,
+                measurement,
+                trial_run_toml,
+                max_concurrent_runs,
+            } => {
+                parameter.validate()?;
+                measurement.validate()?;
+                if trial_run_toml.trim().is_empty() {
+                    return Err("parameter_scan.trial_run_toml must be non-empty".to_string());
+                }
+                if *max_concurrent_runs == 0 {
+                    return Err("parameter_scan.max_concurrent_runs must be > 0".to_string());
+                }
+                Ok(())
+            }
         }
     }
 
@@ -820,6 +885,7 @@ impl RunTaskSpec {
             Self::PdfAdaptationImage { .. } => "pdf_adaptation_image",
             Self::PdfAdaptationPlotLine { .. } => "pdf_adaptation_plot_line",
             Self::PlotLine { .. } => "plot_line",
+            Self::ParameterScan { .. } => "parameter_scan",
         }
     }
 
@@ -851,6 +917,7 @@ impl RunTaskSpec {
                     geometry: geometry.clone(),
                 },
             }),
+            Self::ParameterScan { .. } => None,
         }
     }
 
@@ -884,7 +951,7 @@ impl RunTaskSpec {
                 }
                 Some(SamplerAggregatorSourceSpec::Config { .. }) => None,
             },
-            Self::Image { .. } | Self::PlotLine { .. } => None,
+            Self::Image { .. } | Self::PlotLine { .. } | Self::ParameterScan { .. } => None,
         }
     }
 
@@ -899,7 +966,8 @@ impl RunTaskSpec {
             Self::Image { .. }
             | Self::PdfAdaptationImage { .. }
             | Self::PdfAdaptationPlotLine { .. }
-            | Self::PlotLine { .. } => None,
+            | Self::PlotLine { .. }
+            | Self::ParameterScan { .. } => None,
         }
     }
 
@@ -907,7 +975,8 @@ impl RunTaskSpec {
         match self {
             Self::SetAccumulator { .. }
             | Self::PdfAdaptationImage { .. }
-            | Self::PdfAdaptationPlotLine { .. } => None,
+            | Self::PdfAdaptationPlotLine { .. }
+            | Self::ParameterScan { .. } => None,
             Self::Sample { evaluator, .. }
             | Self::Image { evaluator, .. }
             | Self::PlotLine { evaluator, .. } => match evaluator {
@@ -956,6 +1025,7 @@ impl RunTaskSpec {
             | Self::PlotLine {
                 batch_transforms, ..
             } => batch_transforms.clone(),
+            Self::ParameterScan { .. } => None,
         }
     }
 
@@ -972,7 +1042,8 @@ impl RunTaskSpec {
             Self::Image { .. }
             | Self::PdfAdaptationImage { .. }
             | Self::PdfAdaptationPlotLine { .. }
-            | Self::PlotLine { .. } => None,
+            | Self::PlotLine { .. }
+            | Self::ParameterScan { .. } => None,
         }
     }
 
@@ -1008,6 +1079,7 @@ impl RunTaskSpec {
             Self::Image { accumulator, .. } | Self::PlotLine { accumulator, .. } => {
                 Ok(Some(accumulator.full_config()))
             }
+            Self::ParameterScan { .. } => Ok(None),
         }
     }
 
@@ -1019,6 +1091,7 @@ impl RunTaskSpec {
             Self::PdfAdaptationImage { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::PdfAdaptationPlotLine { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::PlotLine { geometry, .. } => Some(geometry.nr_points() as i64),
+            Self::ParameterScan { parameter, .. } => Some(parameter.values.len() as i64),
         }
     }
 
@@ -1029,7 +1102,8 @@ impl RunTaskSpec {
             Self::Image { .. }
             | Self::PdfAdaptationImage { .. }
             | Self::PdfAdaptationPlotLine { .. }
-            | Self::PlotLine { .. } => None,
+            | Self::PlotLine { .. }
+            | Self::ParameterScan { .. } => None,
         }
     }
 
@@ -1040,7 +1114,8 @@ impl RunTaskSpec {
             | Self::Image { .. }
             | Self::PdfAdaptationImage { .. }
             | Self::PdfAdaptationPlotLine { .. }
-            | Self::PlotLine { .. } => None,
+            | Self::PlotLine { .. }
+            | Self::ParameterScan { .. } => None,
         }
     }
 
@@ -1051,7 +1126,8 @@ impl RunTaskSpec {
             | Self::Image { .. }
             | Self::PdfAdaptationImage { .. }
             | Self::PdfAdaptationPlotLine { .. }
-            | Self::PlotLine { .. } => None,
+            | Self::PlotLine { .. }
+            | Self::ParameterScan { .. } => None,
         }
     }
 
@@ -1062,7 +1138,8 @@ impl RunTaskSpec {
             Self::Image { .. }
             | Self::PdfAdaptationImage { .. }
             | Self::PdfAdaptationPlotLine { .. }
-            | Self::PlotLine { .. } => None,
+            | Self::PlotLine { .. }
+            | Self::ParameterScan { .. } => None,
         }
     }
 
@@ -1183,6 +1260,17 @@ impl IntoPreflightTask for RunTaskSpec {
                     batch_transforms,
                 }))
             }
+            Self::ParameterScan {
+                parameter,
+                measurement,
+                trial_run_toml,
+                max_concurrent_runs,
+            } => Ok(Some(Self::ParameterScan {
+                parameter,
+                measurement,
+                trial_run_toml,
+                max_concurrent_runs,
+            })),
         }
     }
 }
@@ -1415,6 +1503,7 @@ pub struct RunTask {
     pub created_at: DateTime<Utc>,
     pub task_toml: String,
     pub measurement_output: Option<TaskMeasurementOutput>,
+    pub controller_output: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

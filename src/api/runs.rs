@@ -983,6 +983,61 @@ accumulator = "latest"
     }
 
     #[test]
+    fn parse_run_add_accepts_parameter_scan_task() {
+        let config = parse_run_add_config_toml(
+            r#"
+name = "scan-parent"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[task_queue]]
+name = "scan"
+kind = "parameter_scan"
+max_concurrent_runs = 2
+trial_run_toml = """
+name = "child-$(scale:1)"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 4 }
+measurement = { quantity = "central_value" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"""
+
+[task_queue.parameter]
+name = "scale"
+values = [1, 2, 3]
+
+[task_queue.measurement]
+source_task = "sample"
+"#,
+        )
+        .expect("run config");
+
+        let RunTaskSpec::ParameterScan {
+            parameter,
+            max_concurrent_runs,
+            ..
+        } = &config.task_queue.expect("tasks")[0].task
+        else {
+            panic!("expected parameter scan task");
+        };
+        assert_eq!(parameter.name, "scale");
+        assert_eq!(parameter.values.len(), 3);
+        assert_eq!(*max_concurrent_runs, 2);
+    }
+
+    #[test]
     fn parse_run_add_rejects_task_level_evaluator_domain_changes() {
         let config = parse_run_add_config_toml(
             r#"
@@ -1019,6 +1074,7 @@ accumulator = { config = "scalar" }
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         for relative_path in [
             "resources/templates/runs/ghost_bump.toml",
+            "resources/templates/runs/parameter-scan-symbolica.toml",
             "resources/templates/runs/process-evaluator-process-sampler-demo.toml",
             "resources/templates/runs/process-rust-apptainer-evaluator-demo.toml",
             "resources/templates/runs/symbolica-havana-pdf-1d2d.toml",

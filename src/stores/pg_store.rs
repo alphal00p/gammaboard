@@ -1144,6 +1144,16 @@ impl RunTaskStore for PgStore {
             .map_err(map_sqlx)
     }
 
+    async fn persist_task_controller_output(
+        &self,
+        task_id: i64,
+        output: &JsonValue,
+    ) -> Result<(), StoreError> {
+        queries::persist_task_controller_output(&self.pool, task_id, output)
+            .await
+            .map_err(map_sqlx)
+    }
+
     async fn fail_run_task(&self, task_id: i64, reason: &str) -> Result<(), StoreError> {
         queries::fail_run_task(&self.pool, task_id, reason)
             .await

@@ -6,24 +6,26 @@ use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 
-type RunTaskRow = (
-    i64,
-    i32,
-    String,
-    i32,
-    JsonValue,
-    String,
-    Option<i64>,
-    String,
-    i64,
-    i64,
-    Option<String>,
-    Option<DateTime<Utc>>,
-    Option<DateTime<Utc>>,
-    Option<DateTime<Utc>>,
-    DateTime<Utc>,
-    Option<JsonValue>,
-);
+#[derive(sqlx::FromRow)]
+struct RunTaskRow {
+    id: i64,
+    run_id: i32,
+    name: String,
+    sequence_nr: i32,
+    task: JsonValue,
+    task_toml: String,
+    spawned_from_snapshot_id: Option<i64>,
+    state: String,
+    nr_produced_samples: i64,
+    nr_completed_samples: i64,
+    failure_reason: Option<String>,
+    started_at: Option<DateTime<Utc>>,
+    completed_at: Option<DateTime<Utc>>,
+    failed_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+    measurement_output: Option<JsonValue>,
+    controller_output: Option<JsonValue>,
+}
 
 const RUN_TASK_COLUMNS: &str = r#"
     id,
@@ -41,7 +43,8 @@ const RUN_TASK_COLUMNS: &str = r#"
     completed_at,
     failed_at,
     created_at,
-    measurement_output
+    measurement_output,
+    controller_output
 "#;
 
 fn encode_task(task: &RunTaskSpec) -> Result<JsonValue, sqlx::Error> {
@@ -50,27 +53,9 @@ fn encode_task(task: &RunTaskSpec) -> Result<JsonValue, sqlx::Error> {
 }
 
 fn decode_task_row(row: RunTaskRow) -> Result<RunTask, sqlx::Error> {
-    let (
-        id,
-        run_id,
-        name,
-        sequence_nr,
-        task,
-        task_toml,
-        spawned_from_snapshot_id,
-        state,
-        nr_produced_samples,
-        nr_completed_samples,
-        failure_reason,
-        started_at,
-        completed_at,
-        failed_at,
-        created_at,
-        measurement_output,
-    ) = row;
     let task: RunTaskSpec =
-        serde_json::from_value(task).map_err(|err| sqlx::Error::Decode(Box::new(err)))?;
-    let state = match state.as_str() {
+        serde_json::from_value(row.task).map_err(|err| sqlx::Error::Decode(Box::new(err)))?;
+    let state = match row.state.as_str() {
         "pending" => RunTaskState::Pending,
         "active" => RunTaskState::Active,
         "completed" => RunTaskState::Completed,
@@ -82,25 +67,27 @@ fn decode_task_row(row: RunTaskRow) -> Result<RunTask, sqlx::Error> {
         }
     };
     Ok(RunTask {
-        id,
-        run_id,
-        name,
-        sequence_nr,
+        id: row.id,
+        run_id: row.run_id,
+        name: row.name,
+        sequence_nr: row.sequence_nr,
         task,
-        spawned_from_snapshot_id,
+        spawned_from_snapshot_id: row.spawned_from_snapshot_id,
         state,
-        nr_produced_samples,
-        nr_completed_samples,
-        failure_reason,
-        started_at,
-        completed_at,
-        failed_at,
-        created_at,
-        task_toml,
-        measurement_output: measurement_output
+        nr_produced_samples: row.nr_produced_samples,
+        nr_completed_samples: row.nr_completed_samples,
+        failure_reason: row.failure_reason,
+        started_at: row.started_at,
+        completed_at: row.completed_at,
+        failed_at: row.failed_at,
+        created_at: row.created_at,
+        task_toml: row.task_toml,
+        measurement_output: row
+            .measurement_output
             .map(serde_json::from_value)
             .transpose()
             .map_err(|err| sqlx::Error::Decode(Box::new(err)))?,
+        controller_output: row.controller_output,
     })
 }
 
@@ -403,6 +390,25 @@ pub(crate) async fn persist_task_measurement_output(
         r#"
         UPDATE run_tasks
         SET measurement_output = $2
+        WHERE id = $1
+        "#,
+    )
+    .bind(task_id)
+    .bind(output)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn persist_task_controller_output(
+    pool: &PgPool,
+    task_id: i64,
+    output: &JsonValue,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        UPDATE run_tasks
+        SET controller_output = $2
         WHERE id = $1
         "#,
     )

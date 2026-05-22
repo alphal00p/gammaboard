@@ -477,6 +477,13 @@ mod tests {
         ) -> Result<(), crate::core::StoreError> {
             unreachable!("unused")
         }
+        async fn persist_task_controller_output(
+            &self,
+            _task_id: i64,
+            _output: &JsonValue,
+        ) -> Result<(), crate::core::StoreError> {
+            unreachable!("unused")
+        }
         async fn fail_run_task(
             &self,
             _task_id: i64,
@@ -762,6 +769,7 @@ mod tests {
             created_at: Utc::now(),
             task_toml: String::new(),
             measurement_output: None,
+            controller_output: None,
         }
     }
 

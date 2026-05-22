@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS run_tasks (
     nr_produced_samples BIGINT NOT NULL DEFAULT 0,
     nr_completed_samples BIGINT NOT NULL DEFAULT 0,
     measurement_output JSONB,
+    controller_output JSONB,
     failure_reason TEXT,
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,

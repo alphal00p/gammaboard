@@ -4432,6 +4432,162 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_parameter_scan_creates_child_runs_and_collects_measurements()
+-> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    harness
+        .start_nodes(&["scan-parent", "scan-s1", "scan-e1"])
+        .await?;
+
+    let config = temp_run_add_config(
+        r#"
+name = "parameter-scan-e2e"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[evaluator_runner_params]
+min_tick_time_ms = 50
+
+[sampler_aggregator_runner_params]
+min_tick_time_ms = 10
+
+[[task_queue]]
+name = "scan"
+kind = "parameter_scan"
+max_concurrent_runs = 1
+trial_run_toml = """
+name = "parameter-scan-child-$(scale:1)"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 16 }
+measurement = { quantity = "central_value" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"""
+
+[task_queue.parameter]
+name = "scale"
+values = [1, 2, 3]
+
+[task_queue.measurement]
+source_task = "sample"
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = 'parameter-scan-e2e'")
+        .fetch_one(&harness.pool)
+        .await?;
+
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "scan-parent",
+            "sampler-aggregator",
+            "parameter-scan-e2e",
+        ])
+        .assert()
+        .success();
+
+    if let Err(err) = harness
+        .wait_for(
+            "parameter scan completes",
+            Duration::from_secs(90),
+            || async {
+                let state: Option<String> = sqlx::query_scalar(
+                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'scan'",
+                )
+                .bind(run_id)
+                .fetch_optional(&harness.pool)
+                .await?;
+                Ok(state.as_deref() == Some("completed"))
+            },
+        )
+        .await
+    {
+        let runs: Vec<(i32, String, Option<i32>, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT id, name, parent_run_id, spawn_kind, spawn_label FROM runs ORDER BY id",
+        )
+        .fetch_all(&harness.pool)
+        .await?;
+        let tasks: Vec<(i32, String, String, Option<JsonValue>)> = sqlx::query_as(
+            "SELECT run_id, name, state, measurement_output FROM run_tasks ORDER BY run_id, sequence_nr",
+        )
+        .fetch_all(&harness.pool)
+        .await?;
+        let nodes: Vec<(String, Option<i32>, Option<String>, Option<i32>, Option<String>)> =
+            sqlx::query_as(
+                "SELECT name, desired_run_id, desired_role, active_run_id, active_role FROM nodes ORDER BY name",
+            )
+            .fetch_all(&harness.pool)
+            .await?;
+        let logs: Vec<(String, String, JsonValue)> = sqlx::query_as(
+            "SELECT level, message, fields FROM runtime_logs ORDER BY id DESC LIMIT 20",
+        )
+        .fetch_all(&harness.pool)
+        .await?;
+        anyhow::bail!("{err}; runs={runs:?}; tasks={tasks:?}; nodes={nodes:?}; logs={logs:?}");
+    }
+
+    let child_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE parent_run_id = $1")
+        .bind(run_id)
+        .fetch_one(&harness.pool)
+        .await?;
+    assert_eq!(child_count, 3);
+
+    let output: JsonValue = sqlx::query_scalar(
+        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'scan'",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(output["completed_points"], json!(3));
+    assert_eq!(output["total_points"], json!(3));
+    assert_eq!(output["points"].as_array().map(Vec::len), Some(3));
+
+    let measured_children: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM runs r
+        JOIN run_tasks t ON t.run_id = r.id
+        WHERE r.parent_run_id = $1
+          AND r.spawn_kind = 'parameter_scan'
+          AND t.name = 'sample'
+          AND t.measurement_output IS NOT NULL
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(measured_children, 3);
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_can_clone_run_from_task_snapshot() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 

@@ -1411,6 +1411,14 @@ mod tests {
             unreachable!("unused in test")
         }
 
+        async fn persist_task_controller_output(
+            &self,
+            _task_id: i64,
+            _output: &JsonValue,
+        ) -> Result<(), StoreError> {
+            unreachable!("unused in test")
+        }
+
         async fn fail_run_task(&self, _task_id: i64, _reason: &str) -> Result<(), StoreError> {
             unreachable!("unused in test")
         }

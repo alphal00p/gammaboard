@@ -1,5 +1,8 @@
 use crate::core::StoreError;
-use crate::runners::{EvaluatorRunner, EvaluatorRunnerError, RunnerError, SamplerAggregatorRunner};
+use crate::runners::{
+    EvaluatorRunner, EvaluatorRunnerError, RunnerError, SamplerAggregatorRunner,
+    parameter_scan::ParameterScanRunner,
+};
 use async_trait::async_trait;
 use std::time::Duration;
 
@@ -73,5 +76,30 @@ impl<S: crate::core::SamplerWorkerStore + Clone + Send + Sync + 'static> RoleRun
 
     fn min_tick_time(&self) -> Duration {
         Duration::from_millis(self.params().min_tick_time_ms)
+    }
+}
+
+#[async_trait(?Send)]
+impl<S> RoleRunner for ParameterScanRunner<S>
+where
+    S: crate::core::ControlPlaneStore
+        + crate::core::AggregationStore
+        + crate::core::RunReadStore
+        + crate::core::RunSpecStore
+        + crate::core::RunTaskStore
+        + Send
+        + Sync
+        + 'static,
+{
+    async fn tick(&mut self) -> Result<bool, StoreError> {
+        ParameterScanRunner::tick(self).await
+    }
+
+    async fn stop(&mut self) -> Result<(), StoreError> {
+        ParameterScanRunner::stop(self).await
+    }
+
+    fn min_tick_time(&self) -> Duration {
+        ParameterScanRunner::min_tick_time(self)
     }
 }

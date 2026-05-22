@@ -1,5 +1,6 @@
 pub mod evaluator;
 pub mod node_runner;
+pub mod parameter_scan;
 pub(crate) mod process_memory;
 pub mod queue;
 pub(crate) mod rolling_metric;

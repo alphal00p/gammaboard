@@ -131,6 +131,9 @@ fn expand_value(
                 if path == "$" && key == "replacements" {
                     continue;
                 }
+                if key == "trial_run_toml" {
+                    continue;
+                }
                 expand_value(
                     item,
                     replacements,
@@ -361,5 +364,31 @@ value = "$(x:1)"
             expanded.get("value").and_then(toml::Value::as_str),
             Some("$(other:5)")
         );
+    }
+
+    #[test]
+    fn leaves_nested_trial_run_toml_unexpanded() {
+        let expanded = expand(
+            r#"
+replacements = { samples = 32 }
+
+[[task_queue]]
+kind = "parameter_scan"
+trial_run_toml = """
+name = "child-$(scale:1.0)"
+stop_condition = { max_samples = "$(samples:8)" }
+"""
+"#,
+        );
+
+        let trial_run_toml = expanded
+            .get("task_queue")
+            .and_then(toml::Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|task| task.get("trial_run_toml"))
+            .and_then(toml::Value::as_str)
+            .expect("trial_run_toml");
+        assert!(trial_run_toml.contains("$(scale:1.0)"));
+        assert!(trial_run_toml.contains("\"$(samples:8)\""));
     }
 }

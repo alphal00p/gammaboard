@@ -10,6 +10,7 @@ use crate::core::{
 };
 use crate::runners::{
     EvaluatorRunner, SamplerAggregatorRunner,
+    parameter_scan::ParameterScanRunner,
     stage_context::{HAVANA_HANDOFF_REQUIRED_ERROR, resolve_stage_context},
 };
 use crate::sampling::StageHandoffOwned;
@@ -392,6 +393,14 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             }
             return Ok(None);
         };
+
+        if matches!(task.task, crate::core::RunTaskSpec::ParameterScan { .. }) {
+            return Ok(Some(Box::new(ParameterScanRunner::new(
+                role_store,
+                worker.run_id,
+                task,
+            ))));
+        }
 
         let latest_snapshot = role_store.load_sampler_checkpoint(worker.run_id).await?;
         let initial_batch_size_hint = latest_snapshot
