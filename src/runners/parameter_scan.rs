@@ -10,7 +10,7 @@ use crate::core::{
 use crate::stores::RunProgress;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::{collections::BTreeMap, time::Duration};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParameterScanPointOutput {
@@ -35,19 +35,15 @@ pub struct ParameterScanOutput {
 pub struct ParameterScanRunner<S> {
     store: S,
     run_id: i32,
-    node_name: String,
     task: RunTask,
-    tick_ms: u64,
 }
 
 impl<S> ParameterScanRunner<S> {
-    pub fn new(store: S, run_id: i32, node_name: String, task: RunTask) -> Self {
+    pub fn new(store: S, run_id: i32, task: RunTask) -> Self {
         Self {
             store,
             run_id,
-            node_name,
             task,
-            tick_ms: 500,
         }
     }
 }
@@ -64,7 +60,7 @@ where
 {
     pub async fn tick(&mut self) -> Result<bool, StoreError> {
         self.store
-            .clear_desired_assignments_for_run_except_node(self.run_id, &self.node_name)
+            .clear_desired_assignments_for_run(self.run_id)
             .await?;
 
         let RunTaskSpec::ParameterScan {
@@ -228,13 +224,5 @@ where
         self.store
             .persist_task_controller_output(self.task.id, &output)
             .await
-    }
-
-    pub async fn stop(&mut self) -> Result<(), StoreError> {
-        Ok(())
-    }
-
-    pub fn min_tick_time(&self) -> Duration {
-        Duration::from_millis(self.tick_ms)
     }
 }

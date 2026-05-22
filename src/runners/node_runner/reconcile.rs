@@ -6,11 +6,9 @@ use super::{
 use crate::api::stage::resolve_task_source_snapshot;
 use crate::core::{
     AggregationStore, BatchTransformConfig, RunStageSnapshot, RunTask, RunTaskStore, StoreError,
-    WorkQueueStore,
 };
 use crate::runners::{
     EvaluatorRunner, SamplerAggregatorRunner,
-    parameter_scan::ParameterScanRunner,
     stage_context::{HAVANA_HANDOFF_REQUIRED_ERROR, resolve_stage_context},
 };
 use crate::sampling::StageHandoffOwned;
@@ -270,84 +268,19 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         Ok(Some(Box::new(runner)))
     }
 
-    async fn load_or_activate_sampler_task(
+    async fn load_active_sampler_task(
         &self,
         store: &crate::PgStore,
         run_id: i32,
-        open_batch_count: usize,
     ) -> Result<Option<RunTask>, StoreError> {
-        loop {
-            if let Some(task) = store.load_active_run_task(run_id).await? {
-                if self
-                    .apply_immediate_stage_update_task(store, run_id, &task)
-                    .await?
-                {
-                    continue;
-                }
-                return Ok(Some(task));
-            }
-            if open_batch_count > 0 {
-                return Ok(None);
-            }
-            let Some(task) = store.activate_next_run_task(run_id).await? else {
-                return Ok(None);
-            };
-            if self
-                .apply_immediate_stage_update_task(store, run_id, &task)
-                .await?
-            {
-                continue;
-            }
-            return Ok(Some(task));
-        }
-    }
-
-    async fn apply_immediate_stage_update_task(
-        &self,
-        store: &crate::PgStore,
-        run_id: i32,
-        task: &RunTask,
-    ) -> Result<bool, StoreError> {
-        let crate::core::RunTaskSpec::SetAccumulator { accumulator } = &task.task else {
-            return Ok(false);
+        let Some(task) = store.load_active_run_task(run_id).await? else {
+            return Ok(None);
         };
-
-        let base_stage_snapshot = store
-            .load_latest_stage_snapshot_before_sequence(run_id, task.sequence_nr)
-            .await?;
-        let base_stage_snapshot = base_stage_snapshot.ok_or_else(|| {
-            StoreError::store(format!(
-                "run {} task {} cannot resolve base stage snapshot",
-                run_id, task.id
-            ))
-        })?;
-
-        store
-            .save_run_stage_snapshot(&RunStageSnapshot {
-                id: None,
-                run_id,
-                task_id: Some(task.id),
-                name: task.name.clone(),
-                sequence_nr: Some(task.sequence_nr),
-                queue_empty: true,
-                sampler_snapshot: base_stage_snapshot.sampler_snapshot,
-                observable_state: Some(crate::evaluation::AccumulatorState::from_config(
-                    accumulator,
-                )),
-                evaluator: base_stage_snapshot.evaluator,
-                sampler_aggregator: base_stage_snapshot.sampler_aggregator,
-                batch_transforms: base_stage_snapshot.batch_transforms,
-            })
-            .await?;
-        store.complete_run_task(task.id).await?;
-        info!(
-            run_id,
-            task_id = task.id,
-            task_name = %task.name,
-            accumulator = ?accumulator,
-            "applied set_accumulator task"
-        );
-        Ok(true)
+        if task.task.runs_on_sampler_worker() {
+            Ok(Some(task))
+        } else {
+            Ok(None)
+        }
     }
 
     async fn build_sampler_runner(
@@ -369,39 +302,12 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             target.run_id,
         );
 
-        let queue_counts = role_store
-            .get_batch_queue_counts(worker.run_id, None)
-            .await?;
-        let unfinished_batch_count = queue_counts
-            .pending
-            .saturating_add(queue_counts.claimed)
-            .max(0) as usize;
         let Some(task) = self
-            .load_or_activate_sampler_task(&role_store, worker.run_id, unfinished_batch_count)
+            .load_active_sampler_task(&role_store, worker.run_id)
             .await?
         else {
-            if unfinished_batch_count == 0 {
-                let cleared = self
-                    .store
-                    .clear_desired_assignments_for_run(worker.run_id)
-                    .await?;
-                info!(
-                    run_id = worker.run_id,
-                    assignments_cleared = cleared,
-                    "run task queue exhausted; desired assignments cleared"
-                );
-            }
             return Ok(None);
         };
-
-        if matches!(task.task, crate::core::RunTaskSpec::ParameterScan { .. }) {
-            return Ok(Some(Box::new(ParameterScanRunner::new(
-                role_store,
-                worker.run_id,
-                self.node_name.clone(),
-                task,
-            ))));
-        }
 
         let latest_snapshot = role_store.load_sampler_checkpoint(worker.run_id).await?;
         let initial_batch_size_hint = latest_snapshot

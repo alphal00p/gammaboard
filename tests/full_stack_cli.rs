@@ -4580,14 +4580,9 @@ source_task = "sample"
     .bind(run_id)
     .fetch_all(&harness.pool)
     .await?;
-    assert_eq!(
-        parent_assignments.len(),
-        1,
-        "scan should keep only its orchestrator node assigned to parent"
-    );
-    assert_eq!(
-        parent_assignments[0].1.as_deref(),
-        Some("sampler_aggregator")
+    assert!(
+        parent_assignments.is_empty(),
+        "server-side scan controller should release parent compute assignments"
     );
 
     harness.stop_children().await;

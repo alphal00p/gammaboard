@@ -48,6 +48,7 @@ for release builds, and also builds the dashboard frontend for `deploy run`.
 
 - PostgreSQL is the source of truth for runs, tasks, batches, nodes, logs, checkpoints, and snapshots.
 - Runs are driven by persisted `run_tasks`; snapshots are the branchable state timeline.
+- The node supervisor leader advances task state and controller tasks in the control plane; sampler/evaluator assignments are reserved for compute work.
 - Run names are human-facing and not unique. Ambiguous CLI name references fail.
 - Node identity is a human-facing `name` plus a live-process `uuid`.
 - Process evaluators and samplers are external commands speaking `gammaboard-jsonrpc-v1`.

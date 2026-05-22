@@ -889,6 +889,24 @@ impl RunTaskSpec {
         }
     }
 
+    pub fn runs_in_control_plane(&self) -> bool {
+        matches!(
+            self,
+            Self::SetAccumulator { .. } | Self::ParameterScan { .. }
+        )
+    }
+
+    pub fn runs_on_sampler_worker(&self) -> bool {
+        matches!(
+            self,
+            Self::Sample { .. }
+                | Self::Image { .. }
+                | Self::PdfAdaptationImage { .. }
+                | Self::PdfAdaptationPlotLine { .. }
+                | Self::PlotLine { .. }
+        )
+    }
+
     pub fn sampler_config(&self) -> Option<SamplerAggregatorConfig> {
         match self {
             Self::SetAccumulator { .. } => None,

@@ -9,8 +9,10 @@ mod reconcile;
 mod role_runner;
 
 use crate::core::{
-    ControlPlaneStore, NodeCapabilities, RunSpecStore, RunTaskStore, StoreError, WorkerRole,
+    AggregationStore, ControlPlaneStore, NodeCapabilities, RunReadStore, RunSpecStore,
+    RunTaskStore, StoreError, WorkQueueStore, WorkerRole,
 };
+use crate::runners::{TaskControlLoop, TaskControlLoopConfig};
 use crate::stores::init_pg_store;
 use rand::Rng;
 use std::time::{Duration, Instant};
@@ -38,12 +40,30 @@ pub struct NodeRunnerConfig {
 }
 
 pub trait NodeRunnerStore:
-    RunSpecStore + RunTaskStore + ControlPlaneStore + Clone + Send + Sync + 'static
+    RunSpecStore
+    + RunTaskStore
+    + ControlPlaneStore
+    + AggregationStore
+    + RunReadStore
+    + WorkQueueStore
+    + Clone
+    + Send
+    + Sync
+    + 'static
 {
 }
 
 impl<T> NodeRunnerStore for T where
-    T: RunSpecStore + RunTaskStore + ControlPlaneStore + Clone + Send + Sync + 'static
+    T: RunSpecStore
+        + RunTaskStore
+        + ControlPlaneStore
+        + AggregationStore
+        + RunReadStore
+        + WorkQueueStore
+        + Clone
+        + Send
+        + Sync
+        + 'static
 {
 }
 
@@ -390,6 +410,15 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                     |err| StoreError::store(format!("failed to install SIGTERM handler: {err}")),
                 )?;
             let mut lease_renewal = self.spawn_lease_renewal_task();
+            let (task_control_shutdown, task_control_rx) = watch::channel(false);
+            let task_control = tokio::spawn(
+                TaskControlLoop::new(
+                    self.store.clone(),
+                    TaskControlLoopConfig::default(),
+                    self.node_name.clone(),
+                )
+                .run(task_control_rx),
+            );
 
             #[cfg(unix)]
             let startup_announced = Self::wait_for_initial_lease(
@@ -404,6 +433,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
             if !startup_announced {
                 Self::stop_lease_renewal_task(lease_renewal).await;
+                let _ = task_control_shutdown.send(true);
+                let _ = task_control.await;
                 if let Err(err) = self.store.expire_node_lease(&self.node_uuid).await {
                     warn!("failed to expire node lease on shutdown: {err}");
                 }
@@ -539,6 +570,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
             self.stop_current().await;
             Self::stop_lease_renewal_task(lease_renewal).await;
+            let _ = task_control_shutdown.send(true);
+            let _ = task_control.await;
             if let Err(err) = self.store.expire_node_lease(&self.node_uuid).await {
                 warn!("failed to expire node lease on shutdown: {err}");
             }

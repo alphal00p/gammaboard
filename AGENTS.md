@@ -60,6 +60,10 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - Keep adapters thin; put reusable behavior in `src/api` or lower layers.
 - Keep `RunSpec` run-global and immutable. Task-varying sampler/materializer/transform/accumulator choices belong on tasks or persisted stage defaults.
 - Restore task transitions from persisted snapshots/checkpoints, not in-memory handoff.
+- Run task activation and controller tasks are control-plane work. The node
+  supervisor leader advances tasks and runs controller tasks without consuming a
+  sampler/evaluator assignment; sampler workers only execute already-active
+  compute tasks.
 - Persist/API payloads must be JSON-safe
 - Backend owns panel/read-model semantics; frontend should render generic panel payloads.
 
