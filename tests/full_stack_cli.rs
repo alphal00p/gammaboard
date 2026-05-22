@@ -181,7 +181,7 @@ impl FullStackHarness {
     async fn new() -> anyhow::Result<Self> {
         let db = TestDatabase::create().await?;
         let pool = PgPoolOptions::new()
-            .max_connections(5)
+            .max_connections(10)
             .connect(&db.database_url)
             .await?;
         let bin_path = resolve_bin_path()?;
@@ -4450,9 +4450,11 @@ discrete_dims = 0
 
 [evaluator_runner_params]
 min_tick_time_ms = 50
+db_pool_size = 1
 
 [sampler_aggregator_runner_params]
 min_tick_time_ms = 10
+db_pool_size = 1
 
 [[task_queue]]
 name = "scan"
@@ -4584,6 +4586,178 @@ source_task = "sample"
         parent_assignments.is_empty(),
         "server-side scan controller should release parent compute assignments"
     );
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_parameter_scan_redistributes_parent_assignments_and_updates_progress()
+-> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    harness
+        .start_nodes(&["scan-owned-s", "scan-owned-e1", "scan-owned-e2"])
+        .await?;
+
+    let config = temp_run_add_config(
+        r#"
+name = "parameter-scan-redistribute-e2e"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[evaluator_runner_params]
+min_tick_time_ms = 50
+db_pool_size = 1
+
+[sampler_aggregator_runner_params]
+min_tick_time_ms = 10
+db_pool_size = 1
+
+[[task_queue]]
+name = "scan"
+kind = "parameter_scan"
+max_concurrent_runs = 2
+trial_run_toml = """
+name = "parameter-scan-redistribute-child-$(scale:1)"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 512 }
+measurement = { quantity = "central_value" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"""
+
+[task_queue.parameter]
+name = "scale"
+values = [1, 2, 3, 4, 5]
+
+[task_queue.measurement]
+source_task = "sample"
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 =
+        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'parameter-scan-redistribute-e2e'")
+            .fetch_one(&harness.pool)
+            .await?;
+
+    for (node, role) in [
+        ("scan-owned-s", "sampler-aggregator"),
+        ("scan-owned-e1", "evaluator"),
+        ("scan-owned-e2", "evaluator"),
+    ] {
+        harness
+            .cli()
+            .args([
+                "node",
+                "assign",
+                node,
+                role,
+                "parameter-scan-redistribute-e2e",
+            ])
+            .assert()
+            .success();
+    }
+
+    harness
+        .wait_for(
+            "scan redistributes parent assignments to child runs",
+            Duration::from_secs(30),
+            || async {
+                let parent_desired: i64 =
+                    sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE desired_run_id = $1")
+                        .bind(run_id)
+                        .fetch_one(&harness.pool)
+                        .await?;
+                let child_desired: i64 = sqlx::query_scalar(
+                    r#"
+                    SELECT COUNT(*)
+                    FROM nodes n
+                    JOIN runs r ON r.id = n.desired_run_id
+                    WHERE r.parent_run_id = $1
+                      AND r.spawn_kind = 'parameter_scan'
+                    "#,
+                )
+                .bind(run_id)
+                .fetch_one(&harness.pool)
+                .await?;
+                Ok(parent_desired == 0 && child_desired > 0)
+            },
+        )
+        .await?;
+
+    harness
+        .wait_for(
+            "scan controller progress updates before completion",
+            Duration::from_secs(60),
+            || async {
+                let output: Option<JsonValue> = sqlx::query_scalar::<_, Option<JsonValue>>(
+                    "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'scan'",
+                )
+                .bind(run_id)
+                .fetch_optional(&harness.pool)
+                .await?
+                .flatten();
+                let completed = output
+                    .as_ref()
+                    .and_then(|value| value.get("completed_points"))
+                    .and_then(JsonValue::as_i64)
+                    .unwrap_or(0);
+                let total = output
+                    .as_ref()
+                    .and_then(|value| value.get("total_points"))
+                    .and_then(JsonValue::as_i64)
+                    .unwrap_or(0);
+                Ok(completed > 0 && completed < total)
+            },
+        )
+        .await?;
+
+    harness
+        .wait_for(
+            "redistribution scan completes",
+            Duration::from_secs(90),
+            || async {
+                let state: Option<String> = sqlx::query_scalar(
+                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'scan'",
+                )
+                .bind(run_id)
+                .fetch_optional(&harness.pool)
+                .await?;
+                Ok(state.as_deref() == Some("completed"))
+            },
+        )
+        .await?;
+
+    let output: JsonValue = sqlx::query_scalar(
+        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'scan'",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(output["completed_points"], json!(5));
+    assert_eq!(output["total_points"], json!(5));
 
     harness.stop_children().await;
     harness.pool.close().await;
