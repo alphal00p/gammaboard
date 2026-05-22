@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::{
-    AccumulatorConfig, BatchTransformConfig, BuildError, EvaluatorConfig, SamplerAggregatorConfig,
+    AccumulatorConfig, BatchTransformConfig, BuildError, EvaluatorConfig, MeasurementResult,
+    SamplerAggregatorConfig,
 };
 use crate::sampling::{RasterLineSamplerParams, RasterPlaneSamplerParams};
 
@@ -276,79 +277,36 @@ pub enum MeasurementMode {
     Maximize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(default, deny_unknown_fields)]
-pub struct MeasurementStopCondition {
-    pub min_samples: Option<i64>,
-    pub max_samples: Option<i64>,
-    pub absolute_error: Option<f64>,
-    pub relative_error: Option<f64>,
-}
-
-impl MeasurementStopCondition {
-    pub fn validate_for_metric(&self, metric: &AccumulatorMetricSelector) -> Result<(), String> {
-        SampleStopCondition {
-            min_samples: self.min_samples,
-            max_samples: self.max_samples,
-            absolute_error: self.absolute_error,
-            relative_error: self.relative_error,
-            projection: None,
-            metric: Some(metric.clone()),
-        }
-        .validate()
-    }
-
-    pub fn as_sample_stop_condition(
-        &self,
-        metric: &AccumulatorMetricSelector,
-    ) -> SampleStopCondition {
-        SampleStopCondition {
-            min_samples: self.min_samples,
-            max_samples: self.max_samples,
-            absolute_error: self.absolute_error,
-            relative_error: self.relative_error,
-            projection: None,
-            metric: Some(metric.clone()),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
-pub struct MeasurementSpec {
-    pub source_task: String,
+pub struct TaskMeasurementSpec {
     pub quantity: MeasurementQuantitySpec,
     pub metric: Option<MeasurementMetricSpec>,
     #[serde(default)]
     pub mode: MeasurementMode,
-    pub stop_condition: MeasurementStopCondition,
 }
 
-impl Default for MeasurementSpec {
+impl Default for TaskMeasurementSpec {
     fn default() -> Self {
         Self {
-            source_task: String::new(),
             quantity: MeasurementQuantitySpec::default(),
             metric: None,
             mode: MeasurementMode::default(),
-            stop_condition: MeasurementStopCondition::default(),
         }
     }
 }
 
-impl MeasurementSpec {
+impl TaskMeasurementSpec {
     pub fn validate(&self) -> Result<(), String> {
-        validate_source_name("measurement.source_task", &self.source_task)?;
         if self.metric.is_some()
             && self.quantity != MeasurementQuantitySpec::Name(MeasurementQuantityName::CentralValue)
         {
             return Err("measurement cannot set both metric and quantity".to_string());
         }
-        self.stop_condition
-            .validate_for_metric(&self.stop_metric_selector())
+        Ok(())
     }
 
-    pub fn stop_metric_selector(&self) -> AccumulatorMetricSelector {
+    pub fn metric_selector(&self) -> AccumulatorMetricSelector {
         match self.metric.as_ref() {
             Some(metric) => metric.selector(),
             None => match &self.quantity {
@@ -371,6 +329,50 @@ impl MeasurementSpec {
                 MeasurementQuantitySpec::Metric(metric) => Some(metric.selector()),
             },
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct MeasurementSpec {
+    pub source_task: String,
+    pub quantity: MeasurementQuantitySpec,
+    pub metric: Option<MeasurementMetricSpec>,
+    #[serde(default)]
+    pub mode: MeasurementMode,
+}
+
+impl Default for MeasurementSpec {
+    fn default() -> Self {
+        Self {
+            source_task: String::new(),
+            quantity: MeasurementQuantitySpec::default(),
+            metric: None,
+            mode: MeasurementMode::default(),
+        }
+    }
+}
+
+impl MeasurementSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_source_name("measurement.source_task", &self.source_task)?;
+        self.task_measurement().validate()
+    }
+
+    pub fn task_measurement(&self) -> TaskMeasurementSpec {
+        TaskMeasurementSpec {
+            quantity: self.quantity.clone(),
+            metric: self.metric.clone(),
+            mode: self.mode,
+        }
+    }
+
+    pub fn metric_selector(&self) -> AccumulatorMetricSelector {
+        self.task_measurement().metric_selector()
+    }
+
+    pub fn explicit_metric_selector(&self) -> Option<AccumulatorMetricSelector> {
+        self.task_measurement().explicit_metric_selector()
     }
 }
 
@@ -661,6 +663,8 @@ pub enum RunTaskSpec {
     Sample {
         stop_condition: SampleStopCondition,
         #[serde(default)]
+        measurement: Option<TaskMeasurementSpec>,
+        #[serde(default)]
         evaluator: Option<EvaluatorSourceSpec>,
         #[serde(default)]
         sampler_aggregator: Option<SamplerAggregatorSourceSpec>,
@@ -724,6 +728,7 @@ impl RunTaskSpec {
             ),
             Self::Sample {
                 stop_condition,
+                measurement,
                 evaluator,
                 sampler_aggregator,
                 accumulator,
@@ -731,6 +736,9 @@ impl RunTaskSpec {
                 ..
             } => {
                 stop_condition.validate()?;
+                if let Some(measurement) = measurement {
+                    measurement.validate()?;
+                }
                 if let Some(source) = evaluator {
                     source.validate()?;
                 }
@@ -1025,6 +1033,28 @@ impl RunTaskSpec {
         }
     }
 
+    pub fn sample_measurement(&self) -> Option<&TaskMeasurementSpec> {
+        match self {
+            Self::Sample { measurement, .. } => measurement.as_ref(),
+            Self::SetAccumulator { .. }
+            | Self::Image { .. }
+            | Self::PdfAdaptationImage { .. }
+            | Self::PdfAdaptationPlotLine { .. }
+            | Self::PlotLine { .. } => None,
+        }
+    }
+
+    pub fn effective_sample_measurement(&self) -> Option<TaskMeasurementSpec> {
+        match self {
+            Self::Sample { measurement, .. } => Some(measurement.clone().unwrap_or_default()),
+            Self::SetAccumulator { .. }
+            | Self::Image { .. }
+            | Self::PdfAdaptationImage { .. }
+            | Self::PdfAdaptationPlotLine { .. }
+            | Self::PlotLine { .. } => None,
+        }
+    }
+
     pub fn sample_queue_tuning(&self) -> Option<&SamplerQueueTuning> {
         match self {
             Self::SetAccumulator { .. } => None,
@@ -1071,6 +1101,7 @@ impl IntoPreflightTask for RunTaskSpec {
             Self::SetAccumulator { accumulator } => Ok(Some(Self::SetAccumulator { accumulator })),
             Self::Sample {
                 mut stop_condition,
+                measurement,
                 evaluator,
                 sampler_aggregator,
                 accumulator,
@@ -1089,6 +1120,7 @@ impl IntoPreflightTask for RunTaskSpec {
                     projection: stop_condition.projection.take(),
                     metric: stop_condition.metric.take(),
                 },
+                measurement,
                 evaluator,
                 sampler_aggregator,
                 accumulator,
@@ -1382,6 +1414,14 @@ pub struct RunTask {
     pub failed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub task_toml: String,
+    pub measurement_output: Option<TaskMeasurementOutput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum TaskMeasurementOutput {
+    Completed { results: Vec<MeasurementResult> },
+    Failed { reason: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1429,6 +1469,7 @@ mod tests {
                 max_samples: Some(10),
                 ..SampleStopCondition::default()
             },
+            measurement: None,
             evaluator: None,
             sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
                 config: SamplerAggregatorConfig::NaiveMonteCarlo {
@@ -1481,7 +1522,7 @@ metric = { name = "time_normalized_variance", component = "real" }
     }
 
     #[test]
-    fn measurement_spec_defaults_to_central_value_and_builds_mean_stop_condition() {
+    fn measurement_spec_defaults_to_central_value() {
         #[derive(Debug, Deserialize)]
         struct Wrapper {
             measurement: MeasurementSpec,
@@ -1491,35 +1532,57 @@ metric = { name = "time_normalized_variance", component = "real" }
             r#"
 [measurement]
 source_task = "sample"
-
-[measurement.stop_condition]
-relative_error = 0.01
-max_samples = 100000
 "#,
         )
         .expect("measurement spec");
 
         wrapper.measurement.validate().expect("valid measurement");
-        let selector = wrapper.measurement.stop_metric_selector();
+        let selector = wrapper.measurement.metric_selector();
         assert_eq!(selector.name, AccumulatorMetricName::Mean);
         assert_eq!(wrapper.measurement.explicit_metric_selector(), None);
         assert_eq!(
             wrapper.measurement.quantity,
             MeasurementQuantitySpec::Name(MeasurementQuantityName::CentralValue)
         );
-        let stop = wrapper
-            .measurement
-            .stop_condition
-            .as_sample_stop_condition(&selector);
-        assert_eq!(
-            stop.metric.as_ref().map(|value| value.name),
-            Some(selector.name)
-        );
-        assert_eq!(stop.max_samples, Some(100000));
     }
 
     #[test]
-    fn measurement_spec_parses_metric_alias_and_builds_metric_stop_condition() {
+    fn sample_task_parses_task_local_measurement() {
+        #[derive(Debug, Deserialize)]
+        struct Wrapper {
+            task: RunTaskSpec,
+        }
+
+        let wrapper: Wrapper = toml::from_str(
+            r#"
+[task]
+kind = "sample"
+
+[task.stop_condition]
+max_samples = 100000
+metric = { name = "time_normalized_variance" }
+
+[task.measurement]
+quantity = { metric = "time_normalized_variance" }
+mode = "minimize"
+"#,
+        )
+        .expect("sample task");
+
+        wrapper.task.validate().expect("valid sample task");
+        let measurement = wrapper
+            .task
+            .sample_measurement()
+            .expect("task-local measurement");
+        assert_eq!(
+            measurement.metric_selector().name,
+            AccumulatorMetricName::TimeNormalizedVariance
+        );
+        assert_eq!(measurement.mode, MeasurementMode::Minimize);
+    }
+
+    #[test]
+    fn measurement_spec_parses_metric_alias() {
         #[derive(Debug, Deserialize)]
         struct Wrapper {
             measurement: MeasurementSpec,
@@ -1531,27 +1594,14 @@ max_samples = 100000
 source_task = "sample"
 metric = "time_normalized_variance"
 mode = "minimize"
-
-[measurement.stop_condition]
-relative_error = 0.01
-max_samples = 100000
 "#,
         )
         .expect("measurement spec");
 
         wrapper.measurement.validate().expect("valid measurement");
-        let selector = wrapper.measurement.stop_metric_selector();
+        let selector = wrapper.measurement.metric_selector();
         assert_eq!(selector.name, AccumulatorMetricName::TimeNormalizedVariance);
         assert_eq!(wrapper.measurement.mode, MeasurementMode::Minimize);
-        let stop = wrapper
-            .measurement
-            .stop_condition
-            .as_sample_stop_condition(&selector);
-        assert_eq!(
-            stop.metric.as_ref().map(|value| value.name),
-            Some(selector.name)
-        );
-        assert_eq!(stop.max_samples, Some(100000));
     }
 
     #[test]
@@ -1566,9 +1616,6 @@ max_samples = 100000
 [measurement]
 source_task = "sample"
 metric = { component = "real", name = "variance" }
-
-[measurement.stop_condition]
-relative_error = 0.02
 "#,
         )
         .expect("measurement spec");
@@ -1594,9 +1641,6 @@ relative_error = 0.02
 [measurement]
 source_task = "sample"
 quantity = { component = "real", metric = "time_normalized_variance" }
-
-[measurement.stop_condition]
-relative_error = 0.02
 "#,
         )
         .expect("measurement spec");
@@ -1634,6 +1678,7 @@ relative_error = 0.02
                     max_samples: Some(10),
                     ..SampleStopCondition::default()
                 },
+                measurement: None,
                 evaluator: None,
                 sampler_aggregator: None,
                 accumulator: None,
@@ -1656,6 +1701,7 @@ relative_error = 0.02
                 max_samples: Some(0),
                 ..SampleStopCondition::default()
             },
+            measurement: None,
             evaluator: None,
             sampler_aggregator: None,
             accumulator: None,
@@ -1669,6 +1715,7 @@ relative_error = 0.02
                 max_samples: Some(0),
                 ..SampleStopCondition::default()
             },
+            measurement: None,
             evaluator: None,
             sampler_aggregator: Some(SamplerAggregatorSourceSpec::Latest("latest".to_string())),
             accumulator: None,
@@ -1682,6 +1729,7 @@ relative_error = 0.02
     fn sample_task_with_havana_training_requires_budget_in_config_mode() {
         let task = RunTaskSpec::Sample {
             stop_condition: SampleStopCondition::default(),
+            measurement: None,
             evaluator: None,
             sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
                 config: SamplerAggregatorConfig::HavanaTraining {

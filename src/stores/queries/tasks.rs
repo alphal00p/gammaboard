@@ -1,6 +1,6 @@
 use crate::core::{
-    RunTask, RunTaskInput, RunTaskSpec, RunTaskState, SamplerQueueTuning, canonical_task_toml,
-    generated_task_name,
+    RunTask, RunTaskInput, RunTaskSpec, RunTaskState, SamplerQueueTuning, TaskMeasurementOutput,
+    canonical_task_toml, generated_task_name,
 };
 use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
@@ -22,6 +22,7 @@ type RunTaskRow = (
     Option<DateTime<Utc>>,
     Option<DateTime<Utc>>,
     DateTime<Utc>,
+    Option<JsonValue>,
 );
 
 const RUN_TASK_COLUMNS: &str = r#"
@@ -39,7 +40,8 @@ const RUN_TASK_COLUMNS: &str = r#"
     started_at,
     completed_at,
     failed_at,
-    created_at
+    created_at,
+    measurement_output
 "#;
 
 fn encode_task(task: &RunTaskSpec) -> Result<JsonValue, sqlx::Error> {
@@ -64,6 +66,7 @@ fn decode_task_row(row: RunTaskRow) -> Result<RunTask, sqlx::Error> {
         completed_at,
         failed_at,
         created_at,
+        measurement_output,
     ) = row;
     let task: RunTaskSpec =
         serde_json::from_value(task).map_err(|err| sqlx::Error::Decode(Box::new(err)))?;
@@ -94,6 +97,10 @@ fn decode_task_row(row: RunTaskRow) -> Result<RunTask, sqlx::Error> {
         failed_at,
         created_at,
         task_toml,
+        measurement_output: measurement_output
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|err| sqlx::Error::Decode(Box::new(err)))?,
     })
 }
 
@@ -377,6 +384,30 @@ pub(crate) async fn complete_run_task(pool: &PgPool, task_id: i64) -> Result<(),
         "#,
     )
     .bind(task_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn persist_task_measurement_output(
+    pool: &PgPool,
+    task_id: i64,
+    output: &TaskMeasurementOutput,
+) -> Result<(), sqlx::Error> {
+    let output = serde_json::to_value(output).map_err(|err| {
+        sqlx::Error::Protocol(format!(
+            "failed to serialize task measurement output: {err}"
+        ))
+    })?;
+    sqlx::query(
+        r#"
+        UPDATE run_tasks
+        SET measurement_output = $2
+        WHERE id = $1
+        "#,
+    )
+    .bind(task_id)
+    .bind(output)
     .execute(pool)
     .await?;
     Ok(())

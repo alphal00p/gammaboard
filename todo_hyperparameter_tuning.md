@@ -10,7 +10,7 @@ inside opaque runner state.
 - Task-level evaluator selection is available.
 - Inner-loop parallelism should use the existing GammaBoard run/task/node system.
 - The outer-loop optimizer should only decide parameter points and consume
-  completed measurement results.
+  completed sample-task measurement results.
 - Trial execution should be reproducible from persisted submitted TOML plus
   replacement values embedded in that TOML.
 
@@ -66,19 +66,26 @@ is precise enough.
 
 ### 2. Measurement Config
 
-Add an explicit measurement spec that defines what a trial is trying to estimate
-and when that estimate is good enough.
+Status: first version done.
+
+Add an explicit task-local measurement spec that defines what a sample task is
+trying to estimate. The sample task's normal `stop_condition` remains the only
+stop condition.
 
 Example:
 
 ```toml
-[measurement]
-source_task = "sample"
+[[task_queue]]
+name = "sample"
+kind = "sample"
+
+[task_queue.measurement]
 quantity = { metric = "variance" }
 mode = "minimize"
 
-[measurement.stop_condition]
+[task_queue.stop_condition]
 relative_error = 0.01
+metric = { name = "variance" }
 max_samples = 1_000_000
 ```
 
@@ -93,7 +100,14 @@ produce one measurement, and vector accumulators produce one measurement per
 component. This is the default for parameter scans and visualization-oriented
 measurements.
 
+External orchestrators that need to refer to another task should use a thin
+wrapper with `source_task` plus the same source-less measurement fields. This
+keeps the measurement payload reusable without duplicating task stop-condition
+semantics.
+
 ### 3. Measurement Runtime
+
+Status: first version done for completed sample tasks.
 
 Implement measurement as backend-owned extraction from completed task state.
 Do not scrape frontend panels.
@@ -104,7 +118,7 @@ Required work:
 - Extract runtime-composed metrics from accumulator state plus sampler runtime
   metrics when the selected metric requires throughput.
 - Define uncertainty for variance estimates before allowing
-  `measurement.stop_condition.relative_error` on `variance`.
+  `task_queue.stop_condition.relative_error` on `variance`.
 - Define uncertainty for `time_normalized_variance` as variance uncertainty
   divided by the measured throughput, initially ignoring throughput uncertainty.
 - Support fallback sample-budget stops for metrics whose own uncertainty is not
@@ -144,12 +158,6 @@ max = 1.0
 kind = "categorical"
 values = ["auto", "none"]
 
-[task_queue.measurement]
-source_task = "sample"
-quantity = { metric = "variance" }
-mode = "minimize"
-stop_condition = { relative_error = 0.01, max_samples = 1_000_000 }
-
 trial_run_toml = """
 name = "trial-mu-$(mu_scale:0.5)-$(subtraction_mode:auto)"
 replacements = { mu_scale = "$(mu_scale:0.5)", subtraction_mode = '$(subtraction_mode:"auto")' }
@@ -167,7 +175,8 @@ accumulator = "scalar"
 [[task_queue]]
 name = "sample"
 kind = "sample"
-stop_condition = { max_samples = "$(inner_max_samples:1000000)" }
+measurement = { quantity = { metric = "variance" }, mode = "minimize" }
+stop_condition = { max_samples = "$(inner_max_samples:1000000)", relative_error = 0.01, metric = { name = "variance" } }
 sampler_aggregator = { config = { kind = "havana_training", bins = "$(bins:64)" } }
 accumulator = "latest"
 """
@@ -208,7 +217,7 @@ Outer-loop behavior:
 - The tuning task proposes one or more parameter points.
 - It creates child runs for those points.
 - Existing node/task execution evaluates the child runs.
-- The tuning task consumes completed measurements.
+- The tuning task consumes completed child sample-task measurements.
 - The optimizer proposes more points until its stop condition is reached.
 
 Parallelism:
@@ -251,10 +260,11 @@ Defer:
      with `absolute_error`, `relative_error`, `min_samples`, and `max_samples`.
    - Keep current run/task behavior as the default when no metric target is set.
 
-2. Add measurement specs on top of the generic metric layer.
-   - Define `measurement.quantity`, `measurement.source_task`, and
-     `measurement.mode`.
-   - Make measurement stop conditions use the generalized stop evaluator.
+2. Add measurement specs on top of the generic metric layer. Done.
+   - Define task-local `measurement.quantity` and `measurement.mode`.
+   - Keep stopping on the existing sample `stop_condition`.
+   - Keep `source_task` only as an external wrapper for orchestrators that
+     measure another task.
    - Store measurement value, uncertainty, sample count, source task id, and
      status.
 

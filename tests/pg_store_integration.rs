@@ -1,8 +1,10 @@
 use gammaboard::config::RuntimeConfig;
 use gammaboard::core::{
-    BatchFailOutcome, ControlPlaneStore, StoreError, WorkQueueStore, WorkerRole, next_batch_ids,
+    AccumulatorMetricName, BatchFailOutcome, ControlPlaneStore, RunTaskInput, RunTaskSpec,
+    RunTaskStore, SampleStopCondition, StoreError, TaskMeasurementOutput, WorkQueueStore,
+    WorkerRole, next_batch_ids,
 };
-use gammaboard::{Batch, LatentBatchSpec, PgStore, Point};
+use gammaboard::{Batch, LatentBatchSpec, MeasurementResult, PgStore, Point};
 use sqlx::postgres::PgPoolOptions;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -97,6 +99,90 @@ async fn claim_batch_requires_active_assignment() {
         claimed.is_some(),
         "assigned evaluator should be able to claim"
     );
+
+    sqlx::query("DELETE FROM runs WHERE id = $1")
+        .bind(run_id)
+        .execute(store.pool())
+        .await
+        .expect("cleanup run");
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn task_measurement_output_round_trips() {
+    let Some(store) = test_store().await else {
+        return;
+    };
+
+    let run_id: i32 = sqlx::query_scalar(
+        r#"
+        INSERT INTO runs (
+            name,
+            integration_params,
+            point_spec
+        ) VALUES (
+            'task-measurement-output',
+            '{}'::jsonb,
+            '{"continuous":{"dims":1}}'::jsonb
+        )
+        RETURNING id
+        "#,
+    )
+    .fetch_one(store.pool())
+    .await
+    .expect("insert run");
+
+    let tasks = store
+        .append_run_tasks(
+            run_id,
+            &[RunTaskInput {
+                name: Some("sample".to_string()),
+                task: RunTaskSpec::Sample {
+                    stop_condition: SampleStopCondition {
+                        max_samples: Some(10),
+                        ..SampleStopCondition::default()
+                    },
+                    measurement: None,
+                    evaluator: None,
+                    sampler_aggregator: None,
+                    accumulator: None,
+                    queue_tuning: None,
+                    batch_transforms: None,
+                },
+            }],
+        )
+        .await
+        .expect("append task");
+    let task_id = tasks[0].id;
+
+    store
+        .persist_task_measurement_output(
+            task_id,
+            &TaskMeasurementOutput::Completed {
+                results: vec![MeasurementResult {
+                    name: AccumulatorMetricName::Mean,
+                    component: None,
+                    value: 1.25,
+                    uncertainty: Some(0.1),
+                    sample_count: 10,
+                    completed_samples_per_second: Some(100.0),
+                }],
+            },
+        )
+        .await
+        .expect("persist measurement output");
+
+    let task = store
+        .load_run_task(task_id)
+        .await
+        .expect("load task")
+        .expect("task exists");
+    let Some(TaskMeasurementOutput::Completed { results }) = task.measurement_output else {
+        panic!("missing completed measurement output");
+    };
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].name, AccumulatorMetricName::Mean);
+    assert_eq!(results[0].value, 1.25);
 
     sqlx::query("DELETE FROM runs WHERE id = $1")
         .bind(run_id)

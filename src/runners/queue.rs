@@ -1403,6 +1403,14 @@ mod tests {
             unreachable!("unused in test")
         }
 
+        async fn persist_task_measurement_output(
+            &self,
+            _task_id: i64,
+            _output: &crate::core::TaskMeasurementOutput,
+        ) -> Result<(), StoreError> {
+            unreachable!("unused in test")
+        }
+
         async fn fail_run_task(&self, _task_id: i64, _reason: &str) -> Result<(), StoreError> {
             unreachable!("unused in test")
         }

@@ -937,6 +937,7 @@ mod tests {
                 max_samples: Some(10),
                 ..crate::core::SampleStopCondition::default()
             },
+            measurement: None,
             evaluator: None,
             sampler_aggregator: None,
             accumulator: None,
@@ -967,6 +968,7 @@ mod tests {
                 task,
             })
             .expect("task toml"),
+            measurement_output: None,
         }
     }
 

@@ -40,6 +40,10 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   `moments = { max_order = 4 }`. Generic accumulator metric extraction returns
   JSON-safe metric values plus optional uncertainty; sample stop conditions may
   target these metrics.
+- Sample tasks may declare a task-local `measurement` with `quantity` and
+  `mode`. Stopping stays on the sample `stop_condition`; external measurement
+  references only add `source_task` around the same source-less measurement
+  fields.
 - Run, task-append, and node-launch TOML may use a top-level `replacements`
   table plus placeholders `$(name:default)`. Exact full-string placeholders are
   typed TOML replacements; embedded placeholders interpolate as strings. Server

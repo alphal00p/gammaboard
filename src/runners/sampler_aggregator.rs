@@ -1228,6 +1228,23 @@ where
 
     pub async fn complete_task(&mut self) -> Result<(), RunnerError> {
         self.finalize_completed_task().await?;
+        let measurement_output = match crate::api::measurement::extract_task_measurement(
+            &self.store,
+            self.run_id,
+            &self.task,
+        )
+        .await
+        {
+            Ok(measurement) => crate::core::TaskMeasurementOutput::Completed {
+                results: measurement.results,
+            },
+            Err(err) => crate::core::TaskMeasurementOutput::Failed {
+                reason: err.to_string(),
+            },
+        };
+        self.store
+            .persist_task_measurement_output(self.task.id, &measurement_output)
+            .await?;
         self.store.complete_run_task(self.task.id).await?;
         Ok(())
     }

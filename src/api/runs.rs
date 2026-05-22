@@ -1079,6 +1079,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
                     max_samples: Some(10),
                     ..SampleStopCondition::default()
                 },
+                measurement: None,
                 evaluator: None,
                 sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
                     config: SamplerAggregatorConfig::NaiveMonteCarlo {

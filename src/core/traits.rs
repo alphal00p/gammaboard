@@ -242,6 +242,11 @@ pub trait RunTaskStore: Send + Sync {
         spawned_from_snapshot_id: Option<i64>,
     ) -> Result<(), StoreError>;
     async fn complete_run_task(&self, task_id: i64) -> Result<(), StoreError>;
+    async fn persist_task_measurement_output(
+        &self,
+        task_id: i64,
+        output: &crate::core::TaskMeasurementOutput,
+    ) -> Result<(), StoreError>;
     async fn fail_run_task(&self, task_id: i64, reason: &str) -> Result<(), StoreError>;
 }
 
