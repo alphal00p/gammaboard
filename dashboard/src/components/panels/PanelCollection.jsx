@@ -1497,6 +1497,7 @@ const PanelRenderer = ({
   updateHistogramBundleSelection,
   removeComparedHistogram,
   addComparedHistogram,
+  onSelectRun,
 }) => {
   if (!descriptor) return null;
   switch (descriptor.kind) {
@@ -1549,6 +1550,7 @@ const PanelRenderer = ({
         <TablePanel
           title={descriptor.label}
           state={{ ...state, panel_id: descriptor.panel_id, selected_value: value, onValueChange }}
+          onSelectRun={onSelectRun}
           uploadedBundles={histogramBundlesByPanel?.[descriptor.panel_id] ?? []}
           bundleUploadError={histogramBundleUploadErrors?.[descriptor.panel_id] ?? null}
           onUploadBundle={uploadHistogramBundle}
@@ -1580,7 +1582,14 @@ const PanelRenderer = ({
   }
 };
 
-const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = {}, onPanelValueChange = null }) => {
+const PanelCollection = ({
+  title = null,
+  panelSpecs,
+  panelStates,
+  panelValues = {},
+  onPanelValueChange = null,
+  onSelectRun = null,
+}) => {
   const {
     histogramBundlesByPanel,
     histogramBundleUploadErrors,
@@ -1697,6 +1706,7 @@ const PanelCollection = ({ title = null, panelSpecs, panelStates, panelValues = 
               updateHistogramBundleSelection={updateHistogramBundleSelection}
               removeComparedHistogram={removeComparedHistogram}
               addComparedHistogram={addComparedHistogram}
+              onSelectRun={onSelectRun}
             />
           </Box>
         ))}

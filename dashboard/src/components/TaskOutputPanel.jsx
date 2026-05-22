@@ -6,6 +6,7 @@ const TaskOutputPanel = ({
   runId,
   task,
   title = "Selected Task Output",
+  onSelectRun = null,
 }) => {
   const { panelSpecs, panelStates, panelValues, setPanelValue, error } = useTaskOutput({
     runId,
@@ -36,6 +37,7 @@ const TaskOutputPanel = ({
         panelStates={panelStates}
         panelValues={panelValues}
         onPanelValueChange={setPanelValue}
+        onSelectRun={onSelectRun}
       />
     </Box>
   );

@@ -72,6 +72,7 @@ const BundleUploadControls = ({ state, uploadedBundles, bundleUploadError, onUpl
 const TablePanel = ({
   title,
   state,
+  onSelectRun = null,
   uploadedBundles = [],
   onUploadBundle = null,
   onRemoveBundle = null,
@@ -85,6 +86,11 @@ const TablePanel = ({
   const actions = payload?.actions && typeof payload.actions === "object" ? payload.actions : {};
   const supportsBundleExport = actions.export === true || actions.export_json === true;
   const supportsBundleUpload = actions.upload_bundle === true;
+  const rowAction = payload?.row_action && typeof payload.row_action === "object" ? payload.row_action : null;
+  const rowActionColumnIndex =
+    rowAction?.kind === "select_run"
+      ? columns.findIndex((column) => String(column || "").toLowerCase() === String(rowAction.column || "").toLowerCase())
+      : -1;
   if (columns.length === 0 || rows.length === 0) {
     if (!isHistogramBundle) return null;
     return (
@@ -126,6 +132,7 @@ const TablePanel = ({
   const centralValueIndex = columnKeys.findIndex((column) => column === "central value");
   const errorIndex = columnKeys.findIndex((column) => column === "dy" || column === "error");
   const selectableRows = rowKeys.length === rows.length;
+  const rowsSelectRuns = typeof onSelectRun === "function" && rowActionColumnIndex >= 0;
 
   const handleDownload = async (format) => {
     if (!isHistogramBundle) return;
@@ -216,7 +223,7 @@ const TablePanel = ({
                           : state?.selected_value,
                       )
                   }
-                  sx={{ cursor: selectableRows ? "pointer" : "default" }}
+                  sx={{ cursor: selectableRows || rowsSelectRuns ? "pointer" : "default" }}
                   onClick={
                     selectableRows
                       ? () =>
@@ -228,6 +235,11 @@ const TablePanel = ({
                                 })
                               : rowKeys[rowIndex],
                           )
+                      : rowsSelectRuns
+                        ? () => {
+                            const runId = Number(row?.[rowActionColumnIndex]);
+                            if (Number.isFinite(runId)) onSelectRun(runId);
+                          }
                       : undefined
                   }
                 >

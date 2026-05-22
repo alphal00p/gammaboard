@@ -113,7 +113,7 @@ const DashboardHeader = () => {
   );
 };
 
-const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
+const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelectRun }) => {
   const currentRun = runs.find((entry) => entry.run_id === selectedRun);
   const { tasks } = useRunTasks(selectedRun, 2000);
   const { evaluator, sampler } = useRunConfigPanels({ runId: selectedRun, pollMs: 5000 });
@@ -417,7 +417,12 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
           </Box>
         </Stack>
       ) : null}
-      <TaskOutputPanel key={selectedTask?.id ?? "no-task"} runId={selectedRun} task={selectedTask} />
+      <TaskOutputPanel
+        key={selectedTask?.id ?? "no-task"}
+        runId={selectedRun}
+        task={selectedTask}
+        onSelectRun={onSelectRun}
+      />
       <RunInfo runId={selectedRun} />
       <EvaluatorPanel run={currentRun} panelResponse={evaluator} />
       <SamplerAggregatorPanel run={currentRun} panelResponse={sampler} />
@@ -515,6 +520,7 @@ const RunsWorkspace = ({
   isConnected,
   serverName,
   onRunCreated,
+  onSelectRun,
 }) => {
   const { authenticated } = useAuth();
   const [createRunOpen, setCreateRunOpen] = useState(false);
@@ -631,6 +637,7 @@ const RunsWorkspace = ({
           runs={runs}
           selectedRun={selectedRun}
           onRunCreated={onRunCreated}
+          onSelectRun={onSelectRun}
           onRunDeleted={(runId) => {
             if (selectedRun === runId) {
               setSelectedRun(null);
@@ -757,6 +764,11 @@ function AppContent() {
     setPendingRunSelection(null);
   }, [pendingRunSelection, runList]);
 
+  const selectRunIncludingChildren = useCallback((runId) => {
+    setShowChildRuns(true);
+    setPendingRunSelection(runId);
+  }, []);
+
   return (
     <Container maxWidth="xl" sx={{ py: 3 }}>
       <DashboardHeader />
@@ -781,6 +793,7 @@ function AppContent() {
             isConnected={serverStatus.isConnected}
             serverName={serverStatus.serverName}
             onRunCreated={setPendingRunSelection}
+            onSelectRun={selectRunIncludingChildren}
           />
         ) : mode === "workers" ? (
           <WorkersWorkspace

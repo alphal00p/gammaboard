@@ -116,6 +116,10 @@ fn scan_points_projector() -> TaskPanelProjector {
                 ctx.task.controller_output.as_ref().map(|output| {
                     json!({
                         "parameter_name": output.get("parameter_name").cloned().unwrap_or(JsonValue::Null),
+                        "row_action": {
+                            "kind": "select_run",
+                            "column": "run",
+                        },
                     })
                 }),
                 Default::default(),

@@ -1,8 +1,9 @@
 import { Box, FormControl, FormControlLabel, InputLabel, MenuItem, Select, Switch, Typography } from "@mui/material";
-import { formatRunLabel, formatRunSecondaryLabel } from "../utils/runs";
+import { formatRunLabel, formatRunSecondaryLabel, orderRunsForSelector } from "../utils/runs";
 
 const RunSelector = ({ runs, selectedRun, onRunChange, showChildRuns = false, onShowChildRunsChange = null }) => {
   if (runs.length === 0) return null;
+  const orderedRuns = orderRunsForSelector(runs);
 
   return (
     <Box sx={{ mb: 3 }}>
@@ -26,7 +27,7 @@ const RunSelector = ({ runs, selectedRun, onRunChange, showChildRuns = false, on
           onChange={(e) => onRunChange(Number(e.target.value))}
           label="Select Run"
         >
-          {runs.map((run) => (
+          {orderedRuns.map((run) => (
             <MenuItem key={run.run_id} value={run.run_id}>
               <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                 <Typography component="span" sx={{ fontWeight: 500 }}>
