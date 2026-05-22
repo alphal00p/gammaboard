@@ -3066,7 +3066,23 @@ async fn full_stack_cli_server_can_restart_while_nodes_keep_running() -> anyhow:
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_run_node_exits_on_sigterm_and_releases_name() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
-    let config = temp_run_add_config("name = \"sigterm-node-e2e\"\n");
+    let config = temp_run_add_config(
+        r#"
+name = "sigterm-node-e2e"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 1_000_000 }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"#,
+    );
     harness
         .cli()
         .arg("run")
@@ -3443,6 +3459,148 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
             .await?;
             Ok(run_count == 0 && assigned_count == 0)
         })
+        .await?;
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_removes_child_runs_with_parent() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    harness
+        .start_nodes(&["delete-family-s", "delete-family-e"])
+        .await?;
+
+    let config = temp_run_add_config(
+        r#"
+name = "delete-parent-run-e2e"
+
+[evaluator_runner_params]
+min_tick_time_ms = 50
+db_pool_size = 1
+
+[sampler_aggregator_runner_params]
+min_tick_time_ms = 10
+db_pool_size = 1
+
+[[task_queue]]
+name = "scan"
+kind = "parameter_scan"
+max_concurrent_runs = 1
+trial_run_toml = """
+name = "delete-child-run-$(scale:1)"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+min_eval_time_per_sample_ms = 20
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 1_000_000 }
+measurement = { quantity = "central_value" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"""
+
+[task_queue.parameter]
+name = "scale"
+values = [1]
+
+[task_queue.measurement]
+source_task = "sample"
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let parent_run_id: i32 =
+        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'delete-parent-run-e2e'")
+            .fetch_one(&harness.pool)
+            .await?;
+
+    harness
+        .cli()
+        .args(["auto-assign", &parent_run_id.to_string()])
+        .assert()
+        .success();
+
+    harness
+        .wait_for(
+            "scan child run exists before parent delete",
+            Duration::from_secs(30),
+            || async {
+                let child_count: i64 =
+                    sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE parent_run_id = $1")
+                        .bind(parent_run_id)
+                        .fetch_one(&harness.pool)
+                        .await?;
+                Ok(child_count == 1)
+            },
+        )
+        .await?;
+
+    let child_run_id: i32 = sqlx::query_scalar(
+        r#"
+        SELECT id
+        FROM runs
+        WHERE parent_run_id = $1
+          AND spawn_kind = 'parameter_scan'
+        "#,
+    )
+    .bind(parent_run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+
+    harness
+        .cli()
+        .args(["run", "remove", &parent_run_id.to_string()])
+        .assert()
+        .success();
+
+    harness
+        .wait_for(
+            "parent delete removes child runs and assignments",
+            Duration::from_secs(15),
+            || async {
+                let remaining_runs: i64 = sqlx::query_scalar(
+                    r#"
+                    SELECT COUNT(*)
+                    FROM runs
+                    WHERE id = $1 OR id = $2 OR parent_run_id = $1
+                    "#,
+                )
+                .bind(parent_run_id)
+                .bind(child_run_id)
+                .fetch_one(&harness.pool)
+                .await?;
+                let remaining_assignments: i64 = sqlx::query_scalar(
+                    r#"
+                    SELECT COUNT(*)
+                    FROM nodes
+                    WHERE desired_run_id IN ($1, $2)
+                       OR active_run_id IN ($1, $2)
+                    "#,
+                )
+                .bind(parent_run_id)
+                .bind(child_run_id)
+                .fetch_one(&harness.pool)
+                .await?;
+                Ok(remaining_runs == 0 && remaining_assignments == 0)
+            },
+        )
         .await?;
 
     harness.stop_children().await;
@@ -4593,28 +4751,6 @@ source_task = "sample"
     assert!(
         parent_assignments.is_empty(),
         "server-side scan controller should release parent compute assignments"
-    );
-
-    harness
-        .cli()
-        .args(["run", "remove", &run_id.to_string()])
-        .assert()
-        .success();
-    let remaining_family_runs: i64 = sqlx::query_scalar(
-        r#"
-        SELECT COUNT(*)
-        FROM runs
-        WHERE id = $1
-           OR parent_run_id = $1
-           OR name LIKE 'parameter-scan-child-%'
-        "#,
-    )
-    .bind(run_id)
-    .fetch_one(&harness.pool)
-    .await?;
-    assert_eq!(
-        remaining_family_runs, 0,
-        "removing a parent run should remove scan child runs"
     );
 
     harness.stop_children().await;

@@ -26,24 +26,24 @@ Implemented building blocks:
   1D parameter, reads child measurement output, and exposes progress/table/plot
   panels.
 - Frontend grouping of child runs under parent runs, plus basic scan panels.
+- Parent run deletion recursively removes grouped child runs and clears node
+  assignments for the deleted run family.
 
 This means hyperparameter tuning should be an incremental controller task, not a
 new execution model.
 
-## Before Tuning
+## Ready For Tuning
 
-Do these small polish items first if they are not already done in the current
-branch:
+The prerequisite cleanup is done:
 
-- Verify selected pending task output keeps polling until the task becomes
-  terminal.
-- Verify progress panels update through normal panel replacement without page
-  reloads.
-- Keep child runs hidden/collapsed by default under their parent in run
-  selection.
-- Make sure `parameter_scan` e2e covers worker redistribution and live progress.
-- Update `AGENTS.md` if controller-task wording still mentions sampler-role
-  execution.
+- Selected pending task output keeps polling until terminal state.
+- Progress panels update through normal panel replacement.
+- Child runs are grouped under parent runs in the run selection UI.
+- `parameter_scan` e2e covers worker redistribution and live progress.
+- A focused e2e covers recursive child-run deletion with parent cleanup.
+- `AGENTS.md` documents controller tasks as control-plane work.
+
+Next step: implement the tuning task core types and trial persistence.
 
 ## Recommended First Version
 
