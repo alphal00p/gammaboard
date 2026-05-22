@@ -2,7 +2,7 @@ use crate::api::ApiError;
 use crate::core::{
     AccumulatorMetricName, AccumulatorMetricSelector, AggregationStore, MeasurementResult,
     MeasurementSpec, RunReadStore, RunTask, RunTaskState, RunTaskStore, SamplerRuntimeMetrics,
-    TaskMeasurementSpec,
+    TaskMeasurementOutput, TaskMeasurementSpec,
 };
 use crate::evaluation::{
     AccumulatorMetricValue, AccumulatorState, extract_accumulator_metric_with_runtime,
@@ -14,6 +14,29 @@ pub struct ExtractedMeasurement {
     pub source_task_id: i64,
     pub source_task_name: String,
     pub results: Vec<MeasurementResult>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PersistedTaskMeasurement {
+    pub task_id: i64,
+    pub task_name: String,
+    pub task_state: RunTaskState,
+    pub output: Option<TaskMeasurementOutput>,
+}
+
+pub async fn load_task_measurement_output(
+    store: &impl RunTaskStore,
+    run_id: i32,
+    task_name: &str,
+) -> Result<PersistedTaskMeasurement, ApiError> {
+    let tasks = store.list_run_tasks(run_id).await?;
+    let task = resolve_measurement_source_task(&tasks, task_name)?;
+    Ok(PersistedTaskMeasurement {
+        task_id: task.id,
+        task_name: task.name.clone(),
+        task_state: task.state,
+        output: task.measurement_output.clone(),
+    })
 }
 
 pub async fn extract_measurement(
@@ -695,6 +718,16 @@ mod tests {
         ) -> Result<i32, crate::core::StoreError> {
             unreachable!("unused")
         }
+        async fn set_run_parent_metadata(
+            &self,
+            _run_id: i32,
+            _parent_run_id: i32,
+            _parent_task_id: Option<i64>,
+            _spawn_kind: &str,
+            _spawn_label: Option<&str>,
+        ) -> Result<(), crate::core::StoreError> {
+            unreachable!("unused")
+        }
         async fn remove_run(&self, _run_id: i32) -> Result<(), crate::core::StoreError> {
             unreachable!("unused")
         }
@@ -809,6 +842,52 @@ mod tests {
         assert!(result.value > 0.0);
         assert!(result.uncertainty.is_some());
         assert_eq!(result.completed_samples_per_second, None);
+    }
+
+    #[tokio::test]
+    async fn loads_persisted_task_measurement_output_by_task_name() {
+        let mut task = sample_task(7, "sample", 1);
+        task.measurement_output = Some(TaskMeasurementOutput::Completed {
+            results: vec![MeasurementResult {
+                name: AccumulatorMetricName::Mean,
+                component: None,
+                value: 2.0,
+                uncertainty: None,
+                sample_count: 4,
+                completed_samples_per_second: None,
+            }],
+        });
+        let store = TestStore {
+            tasks: Arc::new(vec![task]),
+            ..TestStore::default()
+        };
+
+        let measurement = load_task_measurement_output(&store, 1, "sample")
+            .await
+            .expect("measurement output");
+
+        assert_eq!(measurement.task_id, 7);
+        let Some(TaskMeasurementOutput::Completed { results }) = measurement.output else {
+            panic!("expected completed output");
+        };
+        assert_eq!(results[0].value, 2.0);
+    }
+
+    #[tokio::test]
+    async fn rejects_ambiguous_persisted_task_measurement_lookup() {
+        let store = TestStore {
+            tasks: Arc::new(vec![
+                sample_task(7, "sample", 1),
+                sample_task(8, "sample", 2),
+            ]),
+            ..TestStore::default()
+        };
+
+        let err = load_task_measurement_output(&store, 1, "sample")
+            .await
+            .expect_err("ambiguous task names should fail");
+
+        assert!(err.to_string().contains("ambiguous"));
     }
 
     #[tokio::test]

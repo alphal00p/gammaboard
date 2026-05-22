@@ -20,3 +20,32 @@ pub(crate) async fn load_run_spec_payload(
 
     Ok(payload)
 }
+
+pub(crate) async fn set_run_parent_metadata(
+    pool: &PgPool,
+    run_id: i32,
+    parent_run_id: i32,
+    parent_task_id: Option<i64>,
+    spawn_kind: &str,
+    spawn_label: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        UPDATE runs
+        SET
+            parent_run_id = $2,
+            parent_task_id = $3,
+            spawn_kind = $4,
+            spawn_label = $5
+        WHERE id = $1
+        "#,
+    )
+    .bind(run_id)
+    .bind(parent_run_id)
+    .bind(parent_task_id)
+    .bind(spawn_kind)
+    .bind(spawn_label)
+    .execute(pool)
+    .await?;
+    Ok(())
+}

@@ -13,6 +13,10 @@ CREATE TABLE IF NOT EXISTS runs (
     batches_completed INT DEFAULT 0,
     exposed_info JSONB NOT NULL DEFAULT '{}'::jsonb,
     run_toml TEXT,
+    parent_run_id INT REFERENCES runs(id) ON DELETE SET NULL,
+    parent_task_id BIGINT,
+    spawn_kind TEXT,
+    spawn_label TEXT,
     sampler_runner_uptime_ms DOUBLE PRECISION NOT NULL DEFAULT 0.0,
     CONSTRAINT runs_sample_progress_check CHECK (
         nr_produced_samples >= 0
@@ -26,3 +30,11 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE INDEX IF NOT EXISTS idx_runs_started_at
     ON runs(started_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_runs_parent_run_id
+    ON runs(parent_run_id, started_at DESC)
+    WHERE parent_run_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_runs_parent_task_id
+    ON runs(parent_task_id, started_at DESC)
+    WHERE parent_task_id IS NOT NULL;

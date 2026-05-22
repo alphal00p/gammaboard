@@ -1555,6 +1555,17 @@ mod tests {
             unreachable!("unused in test")
         }
 
+        async fn set_run_parent_metadata(
+            &self,
+            _run_id: i32,
+            _parent_run_id: i32,
+            _parent_task_id: Option<i64>,
+            _spawn_kind: &str,
+            _spawn_label: Option<&str>,
+        ) -> Result<(), StoreError> {
+            unreachable!("unused in test")
+        }
+
         async fn remove_run(&self, _run_id: i32) -> Result<(), StoreError> {
             unreachable!("unused in test")
         }

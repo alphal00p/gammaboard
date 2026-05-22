@@ -44,6 +44,44 @@ where
         .map_err(|err| ApiError::BadRequest(format!("invalid {label}: {err}")))
 }
 
+pub fn parse_templated_toml_with_replacements<T>(
+    raw: &str,
+    replacements: BTreeMap<String, toml::Value>,
+    label: &str,
+) -> Result<T, ApiError>
+where
+    T: DeserializeOwned,
+{
+    let mut value = toml::from_str(raw)
+        .map_err(|err| ApiError::BadRequest(format!("failed parsing {label}: {err}")))?;
+    merge_replacements(&mut value, replacements)?;
+    let expanded = expand_toml_template(value)?;
+    expanded
+        .value
+        .try_into()
+        .map_err(|err| ApiError::BadRequest(format!("invalid {label}: {err}")))
+}
+
+pub fn merge_replacements(
+    value: &mut toml::Value,
+    replacements: BTreeMap<String, toml::Value>,
+) -> Result<(), ApiError> {
+    if replacements.is_empty() {
+        return Ok(());
+    }
+    let table = value
+        .as_table_mut()
+        .ok_or_else(|| ApiError::BadRequest("templated TOML root must be a table".to_string()))?;
+    let entry = table
+        .entry("replacements".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+    let replacement_table = entry.as_table_mut().ok_or_else(|| {
+        ApiError::BadRequest("top-level replacements must be a TOML table".to_string())
+    })?;
+    replacement_table.extend(replacements);
+    Ok(())
+}
+
 fn extract_replacements(value: &toml::Value) -> Result<BTreeMap<String, toml::Value>, ApiError> {
     let Some(replacements) = value.as_table().and_then(|table| table.get("replacements")) else {
         return Ok(BTreeMap::new());

@@ -95,6 +95,14 @@ pub trait ControlPlaneStore: Send + Sync {
         initial_stage_snapshot: &RunStageSnapshot,
         initial_tasks: &[RunTaskInput],
     ) -> Result<i32, StoreError>;
+    async fn set_run_parent_metadata(
+        &self,
+        run_id: i32,
+        parent_run_id: i32,
+        parent_task_id: Option<i64>,
+        spawn_kind: &str,
+        spawn_label: Option<&str>,
+    ) -> Result<(), StoreError>;
     async fn remove_run(&self, run_id: i32) -> Result<(), StoreError>;
 }
 

@@ -715,6 +715,26 @@ impl ControlPlaneStore for PgStore {
         Ok(run_id)
     }
 
+    async fn set_run_parent_metadata(
+        &self,
+        run_id: i32,
+        parent_run_id: i32,
+        parent_task_id: Option<i64>,
+        spawn_kind: &str,
+        spawn_label: Option<&str>,
+    ) -> Result<(), StoreError> {
+        queries::set_run_parent_metadata(
+            &self.pool,
+            run_id,
+            parent_run_id,
+            parent_task_id,
+            spawn_kind,
+            spawn_label,
+        )
+        .await
+        .map_err(map_sqlx)
+    }
+
     async fn remove_run(&self, run_id: i32) -> Result<(), StoreError> {
         let rows = queries::remove_run(&self.pool, run_id)
             .await

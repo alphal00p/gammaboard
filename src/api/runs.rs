@@ -21,6 +21,16 @@ pub struct CreatedRun {
 }
 
 #[derive(Debug, Clone)]
+pub struct ChildRunRequest {
+    pub parent_run_id: i32,
+    pub parent_task_id: Option<i64>,
+    pub spawn_kind: String,
+    pub spawn_label: Option<String>,
+    pub run_toml: String,
+    pub replacements: BTreeMap<String, toml::Value>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ClonedRun {
     pub run_id: i32,
     pub run_name: String,
@@ -98,6 +108,21 @@ pub fn parse_run_add_config_toml(raw: &str) -> Result<RunAddConfig, ApiError> {
     let overlay = toml::from_str(raw)
         .map_err(|err| ApiError::BadRequest(format!("failed parsing run TOML: {err}")))?;
     merge_toml(&mut merged, overlay);
+    let expanded = toml_template::expand_toml_template(merged)?;
+    let mut config = parse_run_add_config_value(expanded.value)?;
+    config.original_toml = Some(raw.to_string());
+    Ok(config)
+}
+
+pub fn parse_run_add_config_toml_with_replacements(
+    raw: &str,
+    replacements: BTreeMap<String, toml::Value>,
+) -> Result<RunAddConfig, ApiError> {
+    let mut merged = read_default_run_add_toml()?;
+    let overlay = toml::from_str(raw)
+        .map_err(|err| ApiError::BadRequest(format!("failed parsing run TOML: {err}")))?;
+    merge_toml(&mut merged, overlay);
+    toml_template::merge_replacements(&mut merged, replacements)?;
     let expanded = toml_template::expand_toml_template(merged)?;
     let mut config = parse_run_add_config_value(expanded.value)?;
     config.original_toml = Some(raw.to_string());
@@ -201,6 +226,31 @@ pub async fn create_run(
         run_name: processed.name,
         tasks_created: initial_tasks.len(),
     })
+}
+
+pub async fn create_child_run(
+    store: &(impl ControlPlaneStore + AggregationStore + RunTaskStore),
+    request: ChildRunRequest,
+) -> Result<CreatedRun, ApiError> {
+    let spawn_kind = request.spawn_kind.trim();
+    if spawn_kind.is_empty() {
+        return Err(ApiError::BadRequest(
+            "child run spawn_kind must be non-empty".to_string(),
+        ));
+    }
+    let config =
+        parse_run_add_config_toml_with_replacements(&request.run_toml, request.replacements)?;
+    let created = create_run(store, config).await?;
+    store
+        .set_run_parent_metadata(
+            created.run_id,
+            request.parent_run_id,
+            request.parent_task_id,
+            spawn_kind,
+            request.spawn_label.as_deref(),
+        )
+        .await?;
+    Ok(created)
 }
 
 /// Clones a run from a specific persisted stage snapshot into a new idle run.
@@ -795,6 +845,41 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
             panic!("expected sample task");
         };
         assert_eq!(stop_condition.max_samples, Some(12));
+    }
+
+    #[test]
+    fn parse_run_add_allows_external_replacement_injection() {
+        let mut replacements = BTreeMap::new();
+        replacements.insert(
+            "run_name".to_string(),
+            toml::Value::String("child".to_string()),
+        );
+        replacements.insert("samples".to_string(), toml::Value::Integer(32));
+        let config = parse_run_add_config_toml_with_replacements(
+            r#"
+name = '$(run_name:"fallback")'
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[task_queue]]
+kind = "sample"
+stop_condition = { max_samples = "$(samples:8)" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"#,
+            replacements,
+        )
+        .expect("run config");
+
+        assert_eq!(config.name, "child");
+        let tasks = config.task_queue.expect("tasks");
+        let RunTaskSpec::Sample { stop_condition, .. } = &tasks[0].task else {
+            panic!("expected sample task");
+        };
+        assert_eq!(stop_condition.max_samples, Some(32));
     }
 
     #[test]
