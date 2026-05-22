@@ -28,6 +28,7 @@ pub struct ParameterScanPointOutput {
 pub struct ParameterScanOutput {
     pub parameter_name: String,
     pub completed_points: usize,
+    pub running_points: usize,
     pub total_points: usize,
     pub points: Vec<ParameterScanPointOutput>,
 }
@@ -135,7 +136,9 @@ where
                     });
                 }
                 None => {
-                    running_count += 1;
+                    if measurement_output.task_state != crate::core::RunTaskState::Completed {
+                        running_count += 1;
+                    }
                     points.push(ParameterScanPointOutput {
                         index,
                         parameter_value,
@@ -148,15 +151,26 @@ where
             }
         }
 
-        self.persist_output(parameter.name.clone(), completed_count, points)
-            .await?;
-
         if let Some(reason) = failed_reason {
+            self.persist_output(
+                parameter.name.clone(),
+                completed_count,
+                running_count,
+                points,
+            )
+            .await?;
             self.store.fail_run_task(self.task.id, &reason).await?;
             return Ok(true);
         }
 
         if completed_count == parameter.values.len() {
+            self.persist_output(
+                parameter.name.clone(),
+                completed_count,
+                running_count,
+                points,
+            )
+            .await?;
             self.store.complete_run_task(self.task.id).await?;
             return Ok(true);
         }
@@ -191,6 +205,23 @@ where
             }
         }
 
+        for point in &points {
+            if point.status == "completed" || point.status == "failed" {
+                continue;
+            }
+            if let Some(child_run_id) = point.child_run_id {
+                let _ = nodes::auto_assign_run(&self.store, child_run_id, None).await;
+            }
+        }
+
+        self.persist_output(
+            parameter.name.clone(),
+            completed_count,
+            running_count,
+            points,
+        )
+        .await?;
+
         Ok(false)
     }
 
@@ -212,12 +243,14 @@ where
         &self,
         parameter_name: String,
         completed_points: usize,
+        running_points: usize,
         points: Vec<ParameterScanPointOutput>,
     ) -> Result<(), StoreError> {
         let output = serde_json::to_value(ParameterScanOutput {
             total_points: points.len(),
             parameter_name,
             completed_points,
+            running_points,
             points,
         })
         .map_err(|err| StoreError::store(format!("failed to serialize scan output: {err}")))?;
