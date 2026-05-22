@@ -22,7 +22,16 @@ import { asArray } from "../utils/collections";
 import { compareNodesByName, nodeNameOf } from "../utils/nodes";
 import { asTaskList, getCurrentTask } from "../utils/tasks";
 
-const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isConnected, serverName }) => {
+const PerformanceWorkspace = ({
+  runs,
+  workers,
+  selectedRun,
+  setSelectedRun,
+  showChildRuns,
+  setShowChildRuns,
+  isConnected,
+  serverName,
+}) => {
   const { authenticated } = useAuth();
   const [nodeRunFilter, setNodeRunFilter] = useState("selected_run");
   const [nodeActivityFilter, setNodeActivityFilter] = useState("active");
@@ -230,6 +239,8 @@ const PerformanceWorkspace = ({ runs, workers, selectedRun, setSelectedRun, isCo
       runs={runs}
       selectedRun={selectedRun}
       setSelectedRun={setSelectedRun}
+      showChildRuns={showChildRuns}
+      setShowChildRuns={setShowChildRuns}
       isConnected={isConnected}
       noRunsMessage="Create a run to inspect persisted performance history."
       noSelectionMessage="Pick a run to inspect performance panels."

@@ -2,8 +2,8 @@ import { useCallback } from "react";
 import { fetchRuns } from "../services/api";
 import { usePolledResource } from "./usePolledResource";
 
-export const useRuns = (refreshInterval = 2000) => {
-  const fetchResource = useCallback((signal) => fetchRuns(signal), []);
+export const useRuns = ({ refreshInterval = 2000, includeChildren = false } = {}) => {
+  const fetchResource = useCallback((signal) => fetchRuns({ includeChildren }, signal), [includeChildren]);
   const { data, isConnected } = usePolledResource({
     pollMs: refreshInterval,
     initialData: [],

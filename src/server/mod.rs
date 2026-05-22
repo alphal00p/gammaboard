@@ -459,6 +459,12 @@ fn log_control_api_error(action: &str, err: &ApiError) {
 }
 
 #[derive(Deserialize)]
+struct RunsQuery {
+    #[serde(default)]
+    include_children: bool,
+}
+
+#[derive(Deserialize)]
 struct WorkersQuery {
     run_id: Option<i32>,
 }
@@ -835,8 +841,12 @@ async fn get_session_status(
 
 async fn get_runs(
     State(state): State<AppState>,
+    Query(params): Query<RunsQuery>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let runs = state.store.get_all_runs().await?;
+    let mut runs = state.store.get_all_runs().await?;
+    if !params.include_children {
+        runs.retain(|run| run.parent_run_id.is_none());
+    }
     json_response(runs)
 }
 

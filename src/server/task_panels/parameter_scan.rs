@@ -1,22 +1,27 @@
 use super::{TaskPanelContext, TaskPanelProjector, panel_projector};
 use crate::server::panels::{
-    PanelHistoryMode, PanelKind, PanelWidth, PlotPoint, progress_panel, scalar_timeseries_panel,
-    table_panel_with_payload_and_options, with_panel_width,
+    PanelHistoryMode, PanelKind, PanelWidth, PlotPoint, PlotSeries, multi_timeseries_panel,
+    panel_spec, progress_panel, table_panel_with_payload_and_options, with_panel_width,
 };
 use serde_json::{Value as JsonValue, json};
+use std::collections::BTreeMap;
+
+const SCAN_PROGRESS_PANEL_ID: &str = "scan_progress";
+const SCAN_MEAN_PANEL_ID: &str = "scan_mean";
+const SCAN_POINTS_PANEL_ID: &str = "scan_points";
 
 pub(super) fn projectors() -> Vec<TaskPanelProjector> {
     vec![
         scan_progress_projector(),
-        scan_mean_projector(),
+        scan_measurements_projector(),
         scan_points_projector(),
     ]
 }
 
 fn scan_progress_projector() -> TaskPanelProjector {
     panel_projector(
-        crate::server::panels::panel_spec(
-            "scan_progress",
+        panel_spec(
+            SCAN_PROGRESS_PANEL_ID,
             "Scan Progress",
             PanelKind::Progress,
             PanelHistoryMode::None,
@@ -24,7 +29,7 @@ fn scan_progress_projector() -> TaskPanelProjector {
         |ctx| {
             let Some(output) = ctx.task.controller_output.as_ref() else {
                 return Ok(Some(progress_panel(
-                    "scan_progress",
+                    SCAN_PROGRESS_PANEL_ID,
                     0.0,
                     total_points_from_task(ctx).map(|value| value as f64),
                     Some("points"),
@@ -32,7 +37,7 @@ fn scan_progress_projector() -> TaskPanelProjector {
                 )));
             };
             Ok(Some(progress_panel(
-                "scan_progress",
+                SCAN_PROGRESS_PANEL_ID,
                 output
                     .get("completed_points")
                     .and_then(JsonValue::as_u64)
@@ -49,32 +54,26 @@ fn scan_progress_projector() -> TaskPanelProjector {
     )
 }
 
-fn scan_mean_projector() -> TaskPanelProjector {
+fn scan_measurements_projector() -> TaskPanelProjector {
     panel_projector(
         with_panel_width(
-            crate::server::panels::panel_spec(
-                "scan_mean",
-                "Mean over Parameter",
-                PanelKind::ScalarTimeseries,
+            panel_spec(
+                SCAN_MEAN_PANEL_ID,
+                "Central Values over Parameter",
+                PanelKind::MultiTimeseries,
                 PanelHistoryMode::None,
             ),
             PanelWidth::Full,
         ),
         |ctx| {
-            let points = ctx
-                .task
-                .controller_output
-                .as_ref()
-                .and_then(|output| output.get("points"))
-                .and_then(JsonValue::as_array)
+            let series = scan_points(ctx)
                 .map(|points| {
-                    points
-                        .iter()
-                        .filter_map(scan_point_to_plot_point)
-                        .collect::<Vec<_>>()
+                    build_measurement_series(points, |result| {
+                        result.get("name").and_then(JsonValue::as_str) == Some("mean")
+                    })
                 })
                 .unwrap_or_default();
-            Ok(Some(scalar_timeseries_panel("scan_mean", points)))
+            Ok(Some(multi_timeseries_panel(SCAN_MEAN_PANEL_ID, series)))
         },
         |_ctx| Ok(None),
     )
@@ -83,8 +82,8 @@ fn scan_mean_projector() -> TaskPanelProjector {
 fn scan_points_projector() -> TaskPanelProjector {
     panel_projector(
         with_panel_width(
-            crate::server::panels::panel_spec(
-                "scan_points",
+            panel_spec(
+                SCAN_POINTS_PANEL_ID,
                 "Scan Points",
                 PanelKind::Table,
                 PanelHistoryMode::None,
@@ -92,27 +91,24 @@ fn scan_points_projector() -> TaskPanelProjector {
             PanelWidth::Full,
         ),
         |ctx| {
-            let rows = ctx
-                .task
-                .controller_output
-                .as_ref()
-                .and_then(|output| output.get("points"))
-                .and_then(JsonValue::as_array)
+            let rows = scan_points(ctx)
                 .map(|points| {
                     points
                         .iter()
-                        .map(scan_point_to_table_row)
+                        .flat_map(scan_point_to_table_rows)
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
             Ok(Some(table_panel_with_payload_and_options(
-                "scan_points",
+                SCAN_POINTS_PANEL_ID,
                 vec![
                     "index".to_string(),
                     "parameter".to_string(),
                     "status".to_string(),
                     "run".to_string(),
-                    "mean".to_string(),
+                    "metric".to_string(),
+                    "component".to_string(),
+                    "value".to_string(),
                     "uncertainty".to_string(),
                     "samples".to_string(),
                 ],
@@ -129,9 +125,47 @@ fn scan_points_projector() -> TaskPanelProjector {
     )
 }
 
-fn scan_point_to_plot_point(point: &JsonValue) -> Option<PlotPoint> {
-    let x = json_number(point.get("parameter_value")?)?;
-    let result = mean_result(point)?;
+fn scan_points<'a>(ctx: &'a TaskPanelContext<'_>) -> Option<&'a Vec<JsonValue>> {
+    ctx.task
+        .controller_output
+        .as_ref()
+        .and_then(|output| output.get("points"))
+        .and_then(JsonValue::as_array)
+}
+
+fn build_measurement_series(
+    points: &[JsonValue],
+    include_result: impl Fn(&JsonValue) -> bool,
+) -> Vec<PlotSeries> {
+    let mut series_by_id = BTreeMap::<String, PlotSeries>::new();
+    for point in points {
+        let Some(x) = point.get("parameter_value").and_then(json_number) else {
+            continue;
+        };
+        for result in measurement_results(point).filter(|result| include_result(result)) {
+            let Some(id) = measurement_result_series_id(result) else {
+                continue;
+            };
+            let Some(plot_point) = scan_result_to_plot_point(x, result) else {
+                continue;
+            };
+            series_by_id
+                .entry(id.clone())
+                .or_insert_with(|| PlotSeries {
+                    id: id.clone(),
+                    label: measurement_result_label(result),
+                    color: None,
+                    smooth: None,
+                    points: Vec::new(),
+                })
+                .points
+                .push(plot_point);
+        }
+    }
+    series_by_id.into_values().collect()
+}
+
+fn scan_result_to_plot_point(x: f64, result: &JsonValue) -> Option<PlotPoint> {
     let y = result.get("value").and_then(JsonValue::as_f64)?;
     let uncertainty = result.get("uncertainty").and_then(JsonValue::as_f64);
     Some(PlotPoint {
@@ -147,9 +181,8 @@ fn scan_point_to_plot_point(point: &JsonValue) -> Option<PlotPoint> {
     })
 }
 
-fn scan_point_to_table_row(point: &JsonValue) -> Vec<JsonValue> {
-    let result = mean_result(point);
-    vec![
+fn scan_point_to_table_rows(point: &JsonValue) -> Vec<Vec<JsonValue>> {
+    let common = [
         point.get("index").cloned().unwrap_or(JsonValue::Null),
         point
             .get("parameter_value")
@@ -160,28 +193,68 @@ fn scan_point_to_table_row(point: &JsonValue) -> Vec<JsonValue> {
             .get("child_run_id")
             .cloned()
             .unwrap_or(JsonValue::Null),
-        result
-            .and_then(|value| value.get("value"))
-            .cloned()
-            .unwrap_or(JsonValue::Null),
-        result
-            .and_then(|value| value.get("uncertainty"))
-            .cloned()
-            .unwrap_or(JsonValue::Null),
-        result
-            .and_then(|value| value.get("sample_count"))
-            .cloned()
-            .unwrap_or(JsonValue::Null),
-    ]
+    ];
+    let rows = measurement_results(point)
+        .map(|result| {
+            let mut row = common.to_vec();
+            row.extend([
+                result.get("name").cloned().unwrap_or(JsonValue::Null),
+                result.get("component").cloned().unwrap_or(JsonValue::Null),
+                result.get("value").cloned().unwrap_or(JsonValue::Null),
+                result
+                    .get("uncertainty")
+                    .cloned()
+                    .unwrap_or(JsonValue::Null),
+                result
+                    .get("sample_count")
+                    .cloned()
+                    .unwrap_or(JsonValue::Null),
+            ]);
+            row
+        })
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        let mut row = common.to_vec();
+        row.extend([
+            JsonValue::Null,
+            JsonValue::Null,
+            JsonValue::Null,
+            JsonValue::Null,
+            JsonValue::Null,
+        ]);
+        vec![row]
+    } else {
+        rows
+    }
 }
 
-fn mean_result(point: &JsonValue) -> Option<&JsonValue> {
+fn measurement_results(point: &JsonValue) -> impl Iterator<Item = &JsonValue> {
     point
-        .get("measurement")?
-        .get("results")?
-        .as_array()?
-        .iter()
-        .find(|result| result.get("name").and_then(JsonValue::as_str) == Some("mean"))
+        .get("measurement")
+        .and_then(|measurement| measurement.get("results"))
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+}
+
+fn measurement_result_series_id(result: &JsonValue) -> Option<String> {
+    let name = result.get("name")?.as_str()?;
+    let component = result.get("component").and_then(JsonValue::as_str);
+    Some(match component {
+        Some(component) if !component.is_empty() => format!("{name}:{component}"),
+        _ => name.to_string(),
+    })
+}
+
+fn measurement_result_label(result: &JsonValue) -> String {
+    let name = result
+        .get("name")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("measurement");
+    match result.get("component").and_then(JsonValue::as_str) {
+        Some(component) if !component.is_empty() => format!("{component} {name}"),
+        _ => name.to_string(),
+    }
 }
 
 fn json_number(value: &JsonValue) -> Option<f64> {
@@ -300,19 +373,60 @@ mod tests {
                 }
             ]
         })));
-        let panel = scan_mean_projector()
+        let panel = scan_measurements_projector()
             .current(&panel_ctx(&task, &JsonValue::Null))
             .expect("projector")
             .expect("panel");
-        let PanelState::ScalarTimeseries { points, .. } = panel else {
-            panic!("expected scalar timeseries");
+        let PanelState::MultiTimeseries { series, .. } = panel else {
+            panic!("expected multi timeseries");
         };
+        assert_eq!(series.len(), 1);
+        let points = &series[0].points;
         assert_eq!(points.len(), 2);
         assert_eq!(points[0].x, 0.0);
         assert_eq!(points[0].y, 1.0);
         assert_eq!(points[0].y_min, Some(0.9));
         assert_eq!(points[1].x, 1.0);
         assert_eq!(points[1].x_completed_samples_total, Some(200.0));
+    }
+
+    #[test]
+    fn scan_mean_plot_uses_one_series_per_component() {
+        let task = scan_task(Some(json!({
+            "parameter_name": "scale",
+            "completed_points": 1,
+            "total_points": 1,
+            "points": [
+                {
+                    "index": 0,
+                    "parameter_value": 2.0,
+                    "child_run_id": 11,
+                    "status": "completed",
+                    "measurement": {
+                        "status": "completed",
+                        "results": [
+                            {"name": "mean", "component": "real", "value": 2.0, "sample_count": 100},
+                            {"name": "mean", "component": "imag", "value": -1.0, "sample_count": 100},
+                            {"name": "variance", "component": "real", "value": 0.5, "sample_count": 100}
+                        ]
+                    }
+                }
+            ]
+        })));
+        let panel = scan_measurements_projector()
+            .current(&panel_ctx(&task, &JsonValue::Null))
+            .expect("projector")
+            .expect("panel");
+        let PanelState::MultiTimeseries { series, .. } = panel else {
+            panic!("expected multi timeseries");
+        };
+        assert_eq!(
+            series
+                .iter()
+                .map(|series| series.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["mean:imag", "mean:real"]
+        );
     }
 
     #[test]

@@ -10,4 +10,10 @@ export const deriveRunLifecycle = (run) => {
 };
 
 export const formatRunSecondaryLabel = (run) =>
-  `${deriveRunLifecycle(run)} | completed samples ${Number(run?.nr_completed_samples || 0).toLocaleString()}`;
+  [
+    run?.parent_run_id != null ? `child of #${run.parent_run_id}` : null,
+    deriveRunLifecycle(run),
+    `completed samples ${Number(run?.nr_completed_samples || 0).toLocaleString()}`,
+  ]
+    .filter(Boolean)
+    .join(" | ");

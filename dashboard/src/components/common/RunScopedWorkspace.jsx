@@ -7,6 +7,8 @@ const RunScopedWorkspace = ({
   runs,
   selectedRun,
   setSelectedRun,
+  showChildRuns = false,
+  setShowChildRuns = null,
   isConnected,
   serverName,
   noRunsMessage,
@@ -29,7 +31,13 @@ const RunScopedWorkspace = ({
     <>
       <ConnectionStatus isConnected={isConnected} lastUpdate={null} serverName={serverName} />
       {headerActions}
-      <RunSelector runs={runList} selectedRun={selectedRun} onRunChange={setSelectedRun} />
+      <RunSelector
+        runs={runList}
+        selectedRun={selectedRun}
+        onRunChange={setSelectedRun}
+        showChildRuns={showChildRuns}
+        onShowChildRunsChange={setShowChildRuns}
+      />
       {!selectedRun ? <EmptyStateCard title="Select a run" message={noSelectionMessage} /> : children}
     </>
   );

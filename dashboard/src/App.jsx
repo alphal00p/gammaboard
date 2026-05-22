@@ -506,7 +506,16 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted }) => {
   );
 };
 
-const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, serverName, onRunCreated }) => {
+const RunsWorkspace = ({
+  runs,
+  selectedRun,
+  setSelectedRun,
+  showChildRuns,
+  setShowChildRuns,
+  isConnected,
+  serverName,
+  onRunCreated,
+}) => {
   const { authenticated } = useAuth();
   const [createRunOpen, setCreateRunOpen] = useState(false);
   const [createRunBusy, setCreateRunBusy] = useState(false);
@@ -574,6 +583,8 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, serverN
         runs={runs}
         selectedRun={selectedRun}
         setSelectedRun={setSelectedRun}
+        showChildRuns={showChildRuns}
+        setShowChildRuns={setShowChildRuns}
         isConnected={isConnected}
         serverName={serverName}
         noRunsMessage="Create a run to start monitoring task output and engine configuration."
@@ -712,7 +723,8 @@ const RunsWorkspace = ({ runs, selectedRun, setSelectedRun, isConnected, serverN
 };
 
 function AppContent() {
-  const { runs } = useRuns();
+  const [showChildRuns, setShowChildRuns] = useState(false);
+  const { runs } = useRuns({ includeChildren: showChildRuns });
   const serverStatus = useServerStatus(3000);
   const workersData = useWorkersData({ runId: null, pollMs: 3000 });
   const [mode, setMode] = useState("runs");
@@ -764,6 +776,8 @@ function AppContent() {
             runs={runList}
             selectedRun={selectedRun}
             setSelectedRun={setSelectedRun}
+            showChildRuns={showChildRuns}
+            setShowChildRuns={setShowChildRuns}
             isConnected={serverStatus.isConnected}
             serverName={serverStatus.serverName}
             onRunCreated={setPendingRunSelection}
@@ -783,6 +797,8 @@ function AppContent() {
             workers={workersData.workers}
             selectedRun={selectedRun}
             setSelectedRun={setSelectedRun}
+            showChildRuns={showChildRuns}
+            setShowChildRuns={setShowChildRuns}
             isConnected={serverStatus.isConnected}
             serverName={serverStatus.serverName}
           />
@@ -792,6 +808,8 @@ function AppContent() {
             workers={workersData.workers}
             selectedRun={selectedLogRun}
             setSelectedRun={setSelectedLogRun}
+            showChildRuns={showChildRuns}
+            setShowChildRuns={setShowChildRuns}
             isConnected={serverStatus.isConnected}
             serverName={serverStatus.serverName}
           />

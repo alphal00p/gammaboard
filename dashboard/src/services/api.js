@@ -159,6 +159,10 @@ const normalizeRunEntry = (entry) => {
   return {
     ...entry,
     run_id: Number.isFinite(runId) ? runId : entry.run_id,
+    parent_run_id: entry.parent_run_id == null ? null : Number(entry.parent_run_id),
+    parent_task_id: entry.parent_task_id == null ? null : String(entry.parent_task_id),
+    spawn_kind: entry.spawn_kind ?? null,
+    spawn_label: entry.spawn_label ?? null,
     root_stage_snapshot_id: rootStageSnapshotId,
     nr_produced_samples: Number.isFinite(Number(entry.nr_produced_samples)) ? Number(entry.nr_produced_samples) : 0,
     nr_completed_samples: Number.isFinite(Number(entry.nr_completed_samples)) ? Number(entry.nr_completed_samples) : 0,
@@ -186,8 +190,12 @@ const normalizeRunTaskEntry = (entry) => {
   };
 };
 
-export const fetchRuns = async (signal) => {
-  const data = await apiGet("/runs", "Failed to fetch runs", signal);
+export const fetchRuns = async ({ includeChildren = false } = {}, signal) => {
+  const data = await apiGet(
+    `/runs${buildQueryString([["include_children", includeChildren ? "true" : null]])}`,
+    "Failed to fetch runs",
+    signal,
+  );
   return asArray(data).map(normalizeRunEntry).filter(Boolean);
 };
 

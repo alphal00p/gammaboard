@@ -9,7 +9,7 @@ use crate::core::{
 };
 use crate::stores::RunProgress;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value as JsonValue, json};
+use serde_json::Value as JsonValue;
 use std::{collections::BTreeMap, time::Duration};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,15 +78,18 @@ where
         };
 
         let child_runs = self.child_runs().await?;
+        let child_runs_by_label = child_runs
+            .iter()
+            .filter_map(|run| run.spawn_label.as_deref().map(|label| (label, run)))
+            .collect::<BTreeMap<_, _>>();
         let mut points = Vec::with_capacity(parameter.values.len());
         let mut running_count = 0usize;
         let mut completed_count = 0usize;
         let mut failed_reason = None;
 
         for (index, value) in parameter.values.iter().enumerate() {
-            let child = child_runs
-                .iter()
-                .find(|run| run.spawn_label.as_deref() == Some(&index.to_string()));
+            let index_label = index.to_string();
+            let child = child_runs_by_label.get(index_label.as_str()).copied();
             let parameter_value = serde_json::to_value(value).map_err(|err| {
                 StoreError::store(format!("failed to serialize parameter value: {err}"))
             })?;
@@ -168,10 +171,8 @@ where
                 if capacity == 0 {
                     break;
                 }
-                if child_runs
-                    .iter()
-                    .any(|run| run.spawn_label.as_deref() == Some(&index.to_string()))
-                {
+                let index_label = index.to_string();
+                if child_runs_by_label.contains_key(index_label.as_str()) {
                     continue;
                 }
                 let mut replacements = BTreeMap::new();
@@ -182,7 +183,7 @@ where
                         parent_run_id: self.run_id,
                         parent_task_id: Some(self.task.id),
                         spawn_kind: "parameter_scan".to_string(),
-                        spawn_label: Some(index.to_string()),
+                        spawn_label: Some(index_label),
                         run_toml: trial_run_toml.clone(),
                         replacements,
                     },
@@ -230,7 +231,6 @@ where
     }
 
     pub async fn stop(&mut self) -> Result<(), StoreError> {
-        let _ = json!({});
         Ok(())
     }
 

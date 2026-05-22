@@ -1,11 +1,23 @@
-import { Box, FormControl, InputLabel, Select, MenuItem, Typography } from "@mui/material";
+import { Box, FormControl, FormControlLabel, InputLabel, MenuItem, Select, Switch, Typography } from "@mui/material";
 import { formatRunLabel, formatRunSecondaryLabel } from "../utils/runs";
 
-const RunSelector = ({ runs, selectedRun, onRunChange }) => {
+const RunSelector = ({ runs, selectedRun, onRunChange, showChildRuns = false, onShowChildRunsChange = null }) => {
   if (runs.length === 0) return null;
 
   return (
     <Box sx={{ mb: 3 }}>
+      <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 1 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              size="small"
+              checked={showChildRuns}
+              onChange={(event) => onShowChildRunsChange?.(event.target.checked)}
+            />
+          }
+          label="Show child runs"
+        />
+      </Box>
       <FormControl fullWidth variant="outlined">
         <InputLabel id="run-selector-label">Select Run</InputLabel>
         <Select
