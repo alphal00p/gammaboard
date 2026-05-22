@@ -734,15 +734,36 @@ pub(crate) async fn remove_run(pool: &PgPool, run_id: i32) -> Result<u64, sqlx::
     let mut tx = pool.begin().await?;
     sqlx::query(
         r#"
+        WITH RECURSIVE deleted_runs AS (
+            SELECT id
+            FROM runs
+            WHERE id = $1
+            UNION ALL
+            SELECT child.id
+            FROM runs child
+            JOIN deleted_runs parent ON child.parent_run_id = parent.id
+        )
         UPDATE nodes
         SET
-            desired_run_id = CASE WHEN desired_run_id = $1 THEN NULL ELSE desired_run_id END,
-            desired_role = CASE WHEN desired_run_id = $1 THEN NULL ELSE desired_role END,
-            active_run_id = CASE WHEN active_run_id = $1 THEN NULL ELSE active_run_id END,
-            active_role = CASE WHEN active_run_id = $1 THEN NULL ELSE active_role END,
+            desired_run_id = CASE
+                WHEN desired_run_id IN (SELECT id FROM deleted_runs) THEN NULL
+                ELSE desired_run_id
+            END,
+            desired_role = CASE
+                WHEN desired_run_id IN (SELECT id FROM deleted_runs) THEN NULL
+                ELSE desired_role
+            END,
+            active_run_id = CASE
+                WHEN active_run_id IN (SELECT id FROM deleted_runs) THEN NULL
+                ELSE active_run_id
+            END,
+            active_role = CASE
+                WHEN active_run_id IN (SELECT id FROM deleted_runs) THEN NULL
+                ELSE active_role
+            END,
             updated_at = now()
-        WHERE desired_run_id = $1
-           OR active_run_id = $1
+        WHERE desired_run_id IN (SELECT id FROM deleted_runs)
+           OR active_run_id IN (SELECT id FROM deleted_runs)
         "#,
     )
     .bind(run_id)
@@ -750,8 +771,17 @@ pub(crate) async fn remove_run(pool: &PgPool, run_id: i32) -> Result<u64, sqlx::
     .await?;
     let result = sqlx::query(
         r#"
+        WITH RECURSIVE deleted_runs AS (
+            SELECT id
+            FROM runs
+            WHERE id = $1
+            UNION ALL
+            SELECT child.id
+            FROM runs child
+            JOIN deleted_runs parent ON child.parent_run_id = parent.id
+        )
         DELETE FROM runs
-        WHERE id = $1
+        WHERE id IN (SELECT id FROM deleted_runs)
         "#,
     )
     .bind(run_id)

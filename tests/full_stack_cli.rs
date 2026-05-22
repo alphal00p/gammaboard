@@ -4595,6 +4595,28 @@ source_task = "sample"
         "server-side scan controller should release parent compute assignments"
     );
 
+    harness
+        .cli()
+        .args(["run", "remove", &run_id.to_string()])
+        .assert()
+        .success();
+    let remaining_family_runs: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM runs
+        WHERE id = $1
+           OR parent_run_id = $1
+           OR name LIKE 'parameter-scan-child-%'
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(
+        remaining_family_runs, 0,
+        "removing a parent run should remove scan child runs"
+    );
+
     harness.stop_children().await;
     harness.pool.close().await;
     harness.db.cleanup().await?;

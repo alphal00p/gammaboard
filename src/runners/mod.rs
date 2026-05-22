@@ -1,3 +1,4 @@
+pub mod controller_child;
 pub mod evaluator;
 pub mod node_runner;
 pub mod parameter_scan;

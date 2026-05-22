@@ -1,16 +1,17 @@
-use crate::api::{
-    measurement::load_task_measurement_output,
-    nodes,
-    runs::{ChildRunRequest, create_child_run},
-};
 use crate::core::{
     AggregationStore, ControlPlaneStore, RunReadStore, RunSpecStore, RunTask, RunTaskSpec,
     RunTaskStore, StoreError, TaskMeasurementOutput,
 };
-use crate::stores::RunProgress;
+use crate::runners::controller_child::{
+    ControllerChildRunRequest, choose_child_capacity, create_controller_child_run,
+    list_child_runs_for_task, load_child_task_measurement,
+    redistribute_parent_assignments_to_children,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
+
+const PARAMETER_SCAN_SPAWN_KIND: &str = "parameter_scan";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParameterScanPointOutput {
@@ -74,7 +75,13 @@ where
             return Err(StoreError::store("parameter scan runner got non-scan task"));
         };
 
-        let child_runs = self.child_runs().await?;
+        let child_runs = list_child_runs_for_task(
+            &self.store,
+            self.run_id,
+            self.task.id,
+            PARAMETER_SCAN_SPAWN_KIND,
+        )
+        .await?;
         let child_runs_by_label = child_runs
             .iter()
             .filter_map(|run| run.spawn_label.as_deref().map(|label| (label, run)))
@@ -104,9 +111,8 @@ where
             };
 
             let measurement_output =
-                load_task_measurement_output(&self.store, child.run_id, &measurement.source_task)
-                    .await
-                    .map_err(|err| StoreError::store(err.to_string()))?;
+                load_child_task_measurement(&self.store, child.run_id, &measurement.source_task)
+                    .await?;
             match measurement_output.output {
                 Some(TaskMeasurementOutput::Completed { results }) => {
                     completed_count += 1;
@@ -175,7 +181,8 @@ where
             return Ok(true);
         }
 
-        let mut capacity = max_concurrent_runs.saturating_sub(running_count);
+        let mut created_child_run_ids = Vec::new();
+        let mut capacity = choose_child_capacity(*max_concurrent_runs, running_count);
         if capacity > 0 {
             for (index, value) in parameter.values.iter().enumerate() {
                 if capacity == 0 {
@@ -187,32 +194,36 @@ where
                 }
                 let mut replacements = BTreeMap::new();
                 replacements.insert(parameter.name.clone(), value.clone());
-                let child = create_child_run(
+                let child = create_controller_child_run(
                     &self.store,
-                    ChildRunRequest {
+                    ControllerChildRunRequest {
                         parent_run_id: self.run_id,
-                        parent_task_id: Some(self.task.id),
-                        spawn_kind: "parameter_scan".to_string(),
-                        spawn_label: Some(index_label),
+                        parent_task_id: self.task.id,
+                        spawn_kind: PARAMETER_SCAN_SPAWN_KIND.to_string(),
+                        spawn_label: index_label,
                         run_toml: trial_run_toml.clone(),
                         replacements,
                     },
                 )
                 .await
                 .map_err(|err| StoreError::store(err.to_string()))?;
-                let _ = nodes::auto_assign_run(&self.store, child.run_id, None).await;
+                created_child_run_ids.push(child.run_id);
                 capacity -= 1;
             }
         }
 
-        for point in &points {
-            if point.status == "completed" || point.status == "failed" {
-                continue;
-            }
-            if let Some(child_run_id) = point.child_run_id {
-                let _ = nodes::auto_assign_run(&self.store, child_run_id, None).await;
-            }
-        }
+        let mut runnable_child_run_ids = points
+            .iter()
+            .filter(|point| point.status != "completed" && point.status != "failed")
+            .filter_map(|point| point.child_run_id)
+            .collect::<Vec<_>>();
+        runnable_child_run_ids.extend(created_child_run_ids);
+        redistribute_parent_assignments_to_children(
+            &self.store,
+            self.run_id,
+            runnable_child_run_ids,
+        )
+        .await?;
 
         self.persist_output(
             parameter.name.clone(),
@@ -223,20 +234,6 @@ where
         .await?;
 
         Ok(false)
-    }
-
-    async fn child_runs(&self) -> Result<Vec<RunProgress>, StoreError> {
-        Ok(self
-            .store
-            .get_all_runs()
-            .await?
-            .into_iter()
-            .filter(|run| {
-                run.parent_run_id == Some(self.run_id)
-                    && run.parent_task_id.as_deref() == Some(&self.task.id.to_string())
-                    && run.spawn_kind.as_deref() == Some("parameter_scan")
-            })
-            .collect())
     }
 
     async fn persist_output(

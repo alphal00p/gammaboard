@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS runs (
     batches_completed INT DEFAULT 0,
     exposed_info JSONB NOT NULL DEFAULT '{}'::jsonb,
     run_toml TEXT,
-    parent_run_id INT REFERENCES runs(id) ON DELETE SET NULL,
+    parent_run_id INT REFERENCES runs(id) ON DELETE CASCADE,
     parent_task_id BIGINT,
     spawn_kind TEXT,
     spawn_label TEXT,
