@@ -414,6 +414,153 @@ impl ParameterScanMeasurementSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct HyperparameterTuningFloatDomain {
+    pub min: f64,
+    pub max: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct HyperparameterTuningIntegerDomain {
+    pub min: i64,
+    pub max: i64,
+    #[serde(default)]
+    pub step: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct HyperparameterTuningCategoricalDomain {
+    pub values: Vec<toml::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HyperparameterTuningParameterDomain {
+    Float(HyperparameterTuningFloatDomain),
+    Integer(HyperparameterTuningIntegerDomain),
+    Categorical(HyperparameterTuningCategoricalDomain),
+}
+
+impl HyperparameterTuningParameterDomain {
+    pub fn validate(&self, name: &str) -> Result<(), String> {
+        validate_source_name("hyperparameter_tuning.parameters", name)?;
+        match self {
+            Self::Float(domain) => {
+                if !domain.min.is_finite() || !domain.max.is_finite() {
+                    return Err(format!(
+                        "hyperparameter_tuning.parameters.{name} float bounds must be finite"
+                    ));
+                }
+                if domain.min >= domain.max {
+                    return Err(format!(
+                        "hyperparameter_tuning.parameters.{name} float min must be < max"
+                    ));
+                }
+                Ok(())
+            }
+            Self::Integer(domain) => {
+                if domain.min > domain.max {
+                    return Err(format!(
+                        "hyperparameter_tuning.parameters.{name} integer min must be <= max"
+                    ));
+                }
+                if domain.step.is_some_and(|step| step <= 0) {
+                    return Err(format!(
+                        "hyperparameter_tuning.parameters.{name} integer step must be > 0"
+                    ));
+                }
+                Ok(())
+            }
+            Self::Categorical(domain) => {
+                if domain.values.is_empty() {
+                    return Err(format!(
+                        "hyperparameter_tuning.parameters.{name} categorical values must not be empty"
+                    ));
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HyperparameterTuningAlgorithm {
+    RandomSearch,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct HyperparameterTuningOptimizerSpec {
+    pub algorithm: HyperparameterTuningAlgorithm,
+    pub max_trials: usize,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    #[serde(default = "empty_json_object")]
+    pub params: serde_json::Value,
+}
+
+fn empty_json_object() -> serde_json::Value {
+    serde_json::Value::Object(Default::default())
+}
+
+impl HyperparameterTuningOptimizerSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.max_trials == 0 {
+            return Err("hyperparameter_tuning.optimizer.max_trials must be > 0".to_string());
+        }
+        let Some(params) = self.params.as_object() else {
+            return Err("hyperparameter_tuning.optimizer.params must be a table".to_string());
+        };
+        match self.algorithm {
+            HyperparameterTuningAlgorithm::RandomSearch if !params.is_empty() => Err(
+                "hyperparameter_tuning.optimizer.params must be empty for random_search"
+                    .to_string(),
+            ),
+            HyperparameterTuningAlgorithm::RandomSearch => Ok(()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct HyperparameterTuningObjectiveSpec {
+    pub source_task: String,
+    pub quantity: MeasurementQuantitySpec,
+    pub metric: Option<MeasurementMetricSpec>,
+    #[serde(default)]
+    pub mode: MeasurementMode,
+}
+
+impl Default for HyperparameterTuningObjectiveSpec {
+    fn default() -> Self {
+        Self {
+            source_task: "sample".to_string(),
+            quantity: MeasurementQuantitySpec::default(),
+            metric: None,
+            mode: MeasurementMode::default(),
+        }
+    }
+}
+
+impl HyperparameterTuningObjectiveSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_source_name(
+            "hyperparameter_tuning.objective.source_task",
+            &self.source_task,
+        )?;
+        TaskMeasurementSpec {
+            quantity: self.quantity.clone(),
+            metric: self.metric.clone(),
+            mode: self.mode,
+        }
+        .validate()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct SampleStopCondition {
     pub min_samples: Option<i64>,
@@ -754,9 +901,23 @@ pub enum RunTaskSpec {
         #[serde(default = "default_parameter_scan_max_concurrent_runs")]
         max_concurrent_runs: usize,
     },
+    HyperparameterTuning {
+        optimizer: HyperparameterTuningOptimizerSpec,
+        objective: HyperparameterTuningObjectiveSpec,
+        parameters: BTreeMap<String, HyperparameterTuningParameterDomain>,
+        trial_run_toml: String,
+        #[serde(default = "default_hyperparameter_tuning_max_concurrent_trials")]
+        max_concurrent_trials: usize,
+        #[serde(default)]
+        max_failed_trials: usize,
+    },
 }
 
 fn default_parameter_scan_max_concurrent_runs() -> usize {
+    1
+}
+
+fn default_hyperparameter_tuning_max_concurrent_trials() -> usize {
     1
 }
 
@@ -874,6 +1035,36 @@ impl RunTaskSpec {
                 }
                 Ok(())
             }
+            Self::HyperparameterTuning {
+                optimizer,
+                objective,
+                parameters,
+                trial_run_toml,
+                max_concurrent_trials,
+                ..
+            } => {
+                optimizer.validate()?;
+                objective.validate()?;
+                if parameters.is_empty() {
+                    return Err(
+                        "hyperparameter_tuning.parameters must not be empty".to_string()
+                    );
+                }
+                for (name, domain) in parameters {
+                    domain.validate(name)?;
+                }
+                if trial_run_toml.trim().is_empty() {
+                    return Err(
+                        "hyperparameter_tuning.trial_run_toml must be non-empty".to_string()
+                    );
+                }
+                if *max_concurrent_trials == 0 {
+                    return Err(
+                        "hyperparameter_tuning.max_concurrent_trials must be > 0".to_string()
+                    );
+                }
+                Ok(())
+            }
         }
     }
 
@@ -886,13 +1077,16 @@ impl RunTaskSpec {
             Self::PdfAdaptationPlotLine { .. } => "pdf_adaptation_plot_line",
             Self::PlotLine { .. } => "plot_line",
             Self::ParameterScan { .. } => "parameter_scan",
+            Self::HyperparameterTuning { .. } => "hyperparameter_tuning",
         }
     }
 
     pub fn runs_in_control_plane(&self) -> bool {
         matches!(
             self,
-            Self::SetAccumulator { .. } | Self::ParameterScan { .. }
+            Self::SetAccumulator { .. }
+                | Self::ParameterScan { .. }
+                | Self::HyperparameterTuning { .. }
         )
     }
 
@@ -935,7 +1129,7 @@ impl RunTaskSpec {
                     geometry: geometry.clone(),
                 },
             }),
-            Self::ParameterScan { .. } => None,
+            Self::ParameterScan { .. } | Self::HyperparameterTuning { .. } => None,
         }
     }
 
@@ -969,7 +1163,10 @@ impl RunTaskSpec {
                 }
                 Some(SamplerAggregatorSourceSpec::Config { .. }) => None,
             },
-            Self::Image { .. } | Self::PlotLine { .. } | Self::ParameterScan { .. } => None,
+            Self::Image { .. }
+            | Self::PlotLine { .. }
+            | Self::ParameterScan { .. }
+            | Self::HyperparameterTuning { .. } => None,
         }
     }
 
@@ -985,7 +1182,8 @@ impl RunTaskSpec {
             | Self::PdfAdaptationImage { .. }
             | Self::PdfAdaptationPlotLine { .. }
             | Self::PlotLine { .. }
-            | Self::ParameterScan { .. } => None,
+            | Self::ParameterScan { .. }
+            | Self::HyperparameterTuning { .. } => None,
         }
     }
 
@@ -994,7 +1192,8 @@ impl RunTaskSpec {
             Self::SetAccumulator { .. }
             | Self::PdfAdaptationImage { .. }
             | Self::PdfAdaptationPlotLine { .. }
-            | Self::ParameterScan { .. } => None,
+            | Self::ParameterScan { .. }
+            | Self::HyperparameterTuning { .. } => None,
             Self::Sample { evaluator, .. }
             | Self::Image { evaluator, .. }
             | Self::PlotLine { evaluator, .. } => match evaluator {
@@ -1043,7 +1242,7 @@ impl RunTaskSpec {
             | Self::PlotLine {
                 batch_transforms, ..
             } => batch_transforms.clone(),
-            Self::ParameterScan { .. } => None,
+            Self::ParameterScan { .. } | Self::HyperparameterTuning { .. } => None,
         }
     }
 
@@ -1061,7 +1260,8 @@ impl RunTaskSpec {
             | Self::PdfAdaptationImage { .. }
             | Self::PdfAdaptationPlotLine { .. }
             | Self::PlotLine { .. }
-            | Self::ParameterScan { .. } => None,
+            | Self::ParameterScan { .. }
+            | Self::HyperparameterTuning { .. } => None,
         }
     }
 
@@ -1097,7 +1297,7 @@ impl RunTaskSpec {
             Self::Image { accumulator, .. } | Self::PlotLine { accumulator, .. } => {
                 Ok(Some(accumulator.full_config()))
             }
-            Self::ParameterScan { .. } => Ok(None),
+            Self::ParameterScan { .. } | Self::HyperparameterTuning { .. } => Ok(None),
         }
     }
 
@@ -1110,6 +1310,7 @@ impl RunTaskSpec {
             Self::PdfAdaptationPlotLine { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::PlotLine { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::ParameterScan { parameter, .. } => Some(parameter.values.len() as i64),
+            Self::HyperparameterTuning { optimizer, .. } => Some(optimizer.max_trials as i64),
         }
     }
 
@@ -1121,7 +1322,8 @@ impl RunTaskSpec {
             | Self::PdfAdaptationImage { .. }
             | Self::PdfAdaptationPlotLine { .. }
             | Self::PlotLine { .. }
-            | Self::ParameterScan { .. } => None,
+            | Self::ParameterScan { .. }
+            | Self::HyperparameterTuning { .. } => None,
         }
     }
 
@@ -1133,7 +1335,8 @@ impl RunTaskSpec {
             | Self::PdfAdaptationImage { .. }
             | Self::PdfAdaptationPlotLine { .. }
             | Self::PlotLine { .. }
-            | Self::ParameterScan { .. } => None,
+            | Self::ParameterScan { .. }
+            | Self::HyperparameterTuning { .. } => None,
         }
     }
 
@@ -1145,7 +1348,8 @@ impl RunTaskSpec {
             | Self::PdfAdaptationImage { .. }
             | Self::PdfAdaptationPlotLine { .. }
             | Self::PlotLine { .. }
-            | Self::ParameterScan { .. } => None,
+            | Self::ParameterScan { .. }
+            | Self::HyperparameterTuning { .. } => None,
         }
     }
 
@@ -1157,7 +1361,8 @@ impl RunTaskSpec {
             | Self::PdfAdaptationImage { .. }
             | Self::PdfAdaptationPlotLine { .. }
             | Self::PlotLine { .. }
-            | Self::ParameterScan { .. } => None,
+            | Self::ParameterScan { .. }
+            | Self::HyperparameterTuning { .. } => None,
         }
     }
 
@@ -1288,6 +1493,21 @@ impl IntoPreflightTask for RunTaskSpec {
                 measurement,
                 trial_run_toml,
                 max_concurrent_runs,
+            })),
+            Self::HyperparameterTuning {
+                optimizer,
+                objective,
+                parameters,
+                trial_run_toml,
+                max_concurrent_trials,
+                max_failed_trials,
+            } => Ok(Some(Self::HyperparameterTuning {
+                optimizer,
+                objective,
+                parameters,
+                trial_run_toml,
+                max_concurrent_trials,
+                max_failed_trials,
             })),
         }
     }
@@ -1759,6 +1979,105 @@ quantity = { component = "real", metric = "time_normalized_variance" }
             .expect("metric selector");
         assert_eq!(selector.name, AccumulatorMetricName::TimeNormalizedVariance);
         assert_eq!(selector.component.as_deref(), Some("real"));
+    }
+
+    #[test]
+    fn hyperparameter_tuning_task_parses_random_search_config_shape() {
+        #[derive(Debug, Deserialize)]
+        struct Wrapper {
+            task: RunTaskSpec,
+        }
+
+        let wrapper: Wrapper = toml::from_str(
+            r#"
+[task]
+kind = "hyperparameter_tuning"
+max_concurrent_trials = 2
+max_failed_trials = 1
+trial_run_toml = "name = \"trial\"\n"
+
+[task.optimizer]
+algorithm = "random_search"
+max_trials = 8
+seed = 1
+
+[task.objective]
+source_task = "sample"
+mode = "minimize"
+quantity = { metric = "time_normalized_variance" }
+
+[task.parameters.mu_scale]
+kind = "float"
+min = 0.0
+max = 1.0
+
+[task.parameters.bins]
+kind = "integer"
+min = 16
+max = 128
+step = 8
+
+[task.parameters.mode]
+kind = "categorical"
+values = ["auto", "none"]
+"#,
+        )
+        .expect("hyperparameter tuning task shape");
+
+        let RunTaskSpec::HyperparameterTuning {
+            optimizer,
+            objective,
+            parameters,
+            max_concurrent_trials,
+            max_failed_trials,
+            ..
+        } = wrapper.task
+        else {
+            panic!("expected hyperparameter tuning task");
+        };
+
+        assert_eq!(optimizer.max_trials, 8);
+        assert_eq!(optimizer.seed, Some(1));
+        assert_eq!(
+            optimizer.algorithm,
+            HyperparameterTuningAlgorithm::RandomSearch
+        );
+        assert_eq!(objective.source_task, "sample");
+        assert_eq!(parameters.len(), 3);
+        assert_eq!(max_concurrent_trials, 2);
+        assert_eq!(max_failed_trials, 1);
+        optimizer.validate().expect("valid optimizer");
+    }
+
+    #[test]
+    fn hyperparameter_tuning_parameter_domains_validate() {
+        let float = HyperparameterTuningParameterDomain::Float(HyperparameterTuningFloatDomain {
+            min: 0.0,
+            max: 1.0,
+        });
+        float.validate("mu").expect("valid float");
+
+        let int = HyperparameterTuningParameterDomain::Integer(HyperparameterTuningIntegerDomain {
+            min: 1,
+            max: 4,
+            step: Some(1),
+        });
+        int.validate("bins").expect("valid integer");
+
+        let categorical = HyperparameterTuningParameterDomain::Categorical(
+            HyperparameterTuningCategoricalDomain {
+                values: vec![toml::Value::String("auto".to_string())],
+            },
+        );
+        categorical.validate("mode").expect("valid categorical");
+
+        let bad_step =
+            HyperparameterTuningParameterDomain::Integer(HyperparameterTuningIntegerDomain {
+                min: 1,
+                max: 4,
+                step: Some(0),
+            });
+        assert!(bad_step.validate("bins").is_err());
     }
 
     #[test]

@@ -4933,6 +4933,158 @@ source_task = "sample"
 
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_hyperparameter_tuning_random_search_creates_trials_and_collects_objectives()
+-> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    harness
+        .start_nodes(&["tune-parent", "tune-s1", "tune-e1"])
+        .await?;
+
+    let config = temp_run_add_config(
+        r#"
+name = "hyperparameter-tuning-random-e2e"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[evaluator_runner_params]
+min_tick_time_ms = 50
+db_pool_size = 1
+
+[sampler_aggregator_runner_params]
+min_tick_time_ms = 10
+db_pool_size = 1
+
+[[task_queue]]
+name = "tune"
+kind = "hyperparameter_tuning"
+max_concurrent_trials = 2
+max_failed_trials = 0
+trial_run_toml = """
+name = "tuning-child-a-$(a:0.0)-bins-$(bins:16)-mode-$(mode:\"auto\")"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 16 }
+measurement = { quantity = "central_value" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"""
+
+[task_queue.optimizer]
+algorithm = "random_search"
+max_trials = 4
+seed = 3
+
+[task_queue.objective]
+source_task = "sample"
+mode = "minimize"
+quantity = "central_value"
+
+[task_queue.parameters.a]
+kind = "float"
+min = 0.0
+max = 1.0
+
+[task_queue.parameters.bins]
+kind = "integer"
+min = 8
+max = 16
+step = 4
+
+[task_queue.parameters.mode]
+kind = "categorical"
+values = ["auto", "none"]
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 =
+        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'hyperparameter-tuning-random-e2e'")
+            .fetch_one(&harness.pool)
+            .await?;
+
+    harness
+        .cli()
+        .args(["auto-assign", &run_id.to_string()])
+        .assert()
+        .success();
+
+    harness
+        .wait_for(
+            "random tuning completes",
+            Duration::from_secs(90),
+            || async {
+                let state: Option<String> = sqlx::query_scalar(
+                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
+                )
+                .bind(run_id)
+                .fetch_optional(&harness.pool)
+                .await?;
+                Ok(state.as_deref() == Some("completed"))
+            },
+        )
+        .await?;
+
+    let child_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runs WHERE parent_run_id = $1 AND spawn_kind = 'hyperparameter_tuning'",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(child_count, 4);
+
+    let output: JsonValue = sqlx::query_scalar(
+        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(output["completed_trials"], json!(4));
+    assert_eq!(output["failed_trials"], json!(0));
+    assert_eq!(output["total_trials"], json!(4));
+    assert_eq!(output["trials"].as_array().map(Vec::len), Some(4));
+    assert!(output["best_trial"].is_number());
+
+    let measured_children: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM runs r
+        JOIN run_tasks t ON t.run_id = r.id
+        WHERE r.parent_run_id = $1
+          AND r.spawn_kind = 'hyperparameter_tuning'
+          AND t.name = 'sample'
+          AND t.measurement_output IS NOT NULL
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(measured_children, 4);
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_can_clone_run_from_task_snapshot() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 

@@ -2,6 +2,7 @@ use crate::core::{
     AggregationStore, ControlPlaneStore, RunReadStore, RunSpecStore, RunStageSnapshot,
     RunTaskStore, StoreError, WorkQueueStore,
 };
+use crate::runners::hyperparameter_tuning::HyperparameterTuningRunner;
 use crate::runners::parameter_scan::ParameterScanRunner;
 use std::time::Duration;
 use tokio::{sync::watch, time::sleep};
@@ -194,6 +195,10 @@ where
             }
             crate::core::RunTaskSpec::ParameterScan { .. } => {
                 let mut runner = ParameterScanRunner::new(self.store.clone(), run_id, task);
+                runner.tick().await?;
+            }
+            crate::core::RunTaskSpec::HyperparameterTuning { .. } => {
+                let mut runner = HyperparameterTuningRunner::new(self.store.clone(), run_id, task);
                 runner.tick().await?;
             }
             _ => {}

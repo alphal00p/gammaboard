@@ -1,5 +1,6 @@
 pub mod controller_child;
 pub mod evaluator;
+pub mod hyperparameter_tuning;
 pub mod node_runner;
 pub mod parameter_scan;
 pub(crate) mod process_memory;

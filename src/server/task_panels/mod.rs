@@ -1,4 +1,5 @@
 mod full_accumulator;
+mod hyperparameter_tuning;
 mod parameter_scan;
 mod pdf_adaptation;
 mod sample;
@@ -244,6 +245,7 @@ impl RunTaskSpec {
                 ..
             } => full_accumulator::line_projectors(geometry.clone(), *display, *accumulator),
             Self::ParameterScan { .. } => parameter_scan::projectors(),
+            Self::HyperparameterTuning { .. } => hyperparameter_tuning::projectors(),
         });
         Ok(projectors)
     }
@@ -450,6 +452,26 @@ fn build_task_summary_entries(
                 "max_concurrent_runs",
                 "Concurrency",
                 *max_concurrent_runs,
+            ));
+        }
+        RunTaskSpec::HyperparameterTuning {
+            optimizer,
+            parameters,
+            max_concurrent_trials,
+            max_failed_trials,
+            ..
+        } => {
+            entries.push(key_value("parameters", "Parameters", parameters.len()));
+            entries.push(key_value("max_trials", "Max Trials", optimizer.max_trials));
+            entries.push(key_value(
+                "max_concurrent_trials",
+                "Concurrency",
+                *max_concurrent_trials,
+            ));
+            entries.push(key_value(
+                "max_failed_trials",
+                "Max Failed Trials",
+                *max_failed_trials,
             ));
         }
     }
