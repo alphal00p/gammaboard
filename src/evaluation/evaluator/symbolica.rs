@@ -55,6 +55,8 @@ pub struct SymbolicaParams {
 impl SymbolicaEngine {
     pub fn from_params(params: SymbolicaParams) -> Result<Self, crate::BuildError> {
         let settings = ParseSettings::symbolica();
+        // Keep these plain parser calls unless updating Symbolica requires
+        // default-namespace parsing for generated benchmark expressions.
         let parsed_expr = Atom::parse(wrap_input!(&params.expr), settings.clone())
             .map_err(|err| BuildError::build(err.to_string()))?;
 

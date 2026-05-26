@@ -43,6 +43,8 @@ and, on UBELIX, Apptainer/Slurm images.
 The repo-root `./gammaboard` helper builds the current CLI before forwarding
 arguments to it. It uses `dev-optim` by default, `GAMMABOARD_PROFILE=release`
 for release builds, and also builds the dashboard frontend for `deploy run`.
+Set `GAMMABOARD_FRONTEND_BASE=/board/` when building the dashboard for a
+reverse-proxy mount below a URL path instead of at `/`.
 
 ## Model
 

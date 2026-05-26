@@ -1,6 +1,9 @@
 import { asArray } from "../utils/collections";
 
-const API_BASE_URL = "/api";
+const APP_BASE_URL = import.meta.env.BASE_URL || "/";
+const normalizedAppBase = APP_BASE_URL.endsWith("/") ? APP_BASE_URL : `${APP_BASE_URL}/`;
+export const API_BASE_URL = `${normalizedAppBase}api`;
+export const apiUrl = (path = "") => `${API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
 
 const stripHtml = (value) =>
   value
@@ -66,7 +69,7 @@ const buildQueryString = (entries) => {
 };
 
 const apiGet = async (path, message, signal) => {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(apiUrl(path), {
     credentials: "include",
     signal,
   });
@@ -74,7 +77,7 @@ const apiGet = async (path, message, signal) => {
 };
 
 const apiPost = async (path, payload, message, signal) => {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(apiUrl(path), {
     method: "POST",
     credentials: "include",
     headers: {
@@ -87,7 +90,7 @@ const apiPost = async (path, payload, message, signal) => {
 };
 
 const apiDelete = async (path, message, signal) => {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(apiUrl(path), {
     method: "DELETE",
     credentials: "include",
     signal,

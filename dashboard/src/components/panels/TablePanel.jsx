@@ -14,6 +14,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useRef } from "react";
+import { apiUrl } from "../../services/api";
 import { asArray } from "../../utils/collections";
 import { formatCentralValueWithError } from "../../utils/formatters";
 import { renderStructuredValue } from "./BasicPanels";
@@ -21,7 +22,7 @@ import { downloadTextFile } from "./FigureExportActions";
 import { readHistogramBundleSelectedValue, writeHistogramBundlePanelValue } from "./histogramUtils";
 
 const requestHistogramBundleExport = async (payload, format) => {
-  const response = await fetch("/api/histogram-bundle/export", {
+  const response = await fetch(apiUrl("/histogram-bundle/export"), {
     method: "POST",
     credentials: "include",
     headers: { "content-type": "application/json" },
