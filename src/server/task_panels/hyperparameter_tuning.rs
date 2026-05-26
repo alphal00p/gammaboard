@@ -1,18 +1,21 @@
 use super::{TaskPanelContext, TaskPanelProjector, panel_projector};
 use crate::server::panels::{
-    PanelHistoryMode, PanelKind, PanelWidth, PlotPoint, PlotSeries, multi_timeseries_panel,
-    panel_spec, progress_panel, table_panel_with_payload_and_options, with_panel_width,
+    PanelHistoryMode, PanelKind, PanelWidth, PlotPoint, PlotSeries, key_value, key_value_panel,
+    multi_timeseries_panel, panel_spec, progress_panel, table_panel_with_payload_and_options,
+    with_panel_width,
 };
 use serde_json::{Value as JsonValue, json};
 use std::collections::BTreeSet;
 
 const TUNING_PROGRESS_PANEL_ID: &str = "tuning_progress";
+const TUNING_BEST_PANEL_ID: &str = "tuning_best";
 const TUNING_OBJECTIVE_PANEL_ID: &str = "tuning_objective";
 const TUNING_TRIALS_PANEL_ID: &str = "tuning_trials";
 
 pub(super) fn projectors() -> Vec<TaskPanelProjector> {
     vec![
         tuning_progress_projector(),
+        tuning_best_projector(),
         tuning_objective_projector(),
         tuning_trials_projector(),
     ]
@@ -39,6 +42,64 @@ fn tuning_progress_projector() -> TaskPanelProjector {
                 Some("trials"),
                 None,
             )))
+        },
+        |_ctx| Ok(None),
+    )
+}
+
+fn tuning_best_projector() -> TaskPanelProjector {
+    panel_projector(
+        panel_spec(
+            TUNING_BEST_PANEL_ID,
+            "Best Trial",
+            PanelKind::KeyValue,
+            PanelHistoryMode::None,
+        ),
+        |ctx| {
+            let trials = tuning_trials(ctx);
+            let Some(best) = best_trial(&trials, tuning_mode(ctx)) else {
+                return Ok(Some(key_value_panel(
+                    TUNING_BEST_PANEL_ID,
+                    vec![key_value("status", "Status", "No completed trials yet")],
+                )));
+            };
+            let mut entries = vec![
+                key_value(
+                    "trial",
+                    "Trial",
+                    best.get("index").cloned().unwrap_or(JsonValue::Null),
+                ),
+                key_value(
+                    "run",
+                    "Run",
+                    best.get("child_run_id").cloned().unwrap_or(JsonValue::Null),
+                ),
+                key_value(
+                    "objective",
+                    "Objective",
+                    best.get("objective_value")
+                        .cloned()
+                        .unwrap_or(JsonValue::Null),
+                ),
+                key_value(
+                    "uncertainty",
+                    "Uncertainty",
+                    best.get("objective_uncertainty")
+                        .cloned()
+                        .unwrap_or(JsonValue::Null),
+                ),
+                key_value("samples", "Samples", objective_sample_count(best)),
+            ];
+            for name in tuning_parameter_names(ctx, &trials) {
+                let value = best
+                    .get("parameters")
+                    .and_then(JsonValue::as_object)
+                    .and_then(|parameters| parameters.get(&name))
+                    .cloned()
+                    .unwrap_or(JsonValue::Null);
+                entries.push(key_value(&format!("parameter_{name}"), &name, value));
+            }
+            Ok(Some(key_value_panel(TUNING_BEST_PANEL_ID, entries)))
         },
         |_ctx| Ok(None),
     )
@@ -99,6 +160,11 @@ fn tuning_trials_projector() -> TaskPanelProjector {
         |ctx| {
             let trials = tuning_trials(ctx);
             let parameter_names = tuning_parameter_names(ctx, &trials);
+            let show_failure = trials.iter().any(|trial| {
+                trial
+                    .get("failure_reason")
+                    .is_some_and(|reason| !reason.is_null())
+            });
             let mut columns = vec![
                 "index".to_string(),
                 "status".to_string(),
@@ -108,10 +174,12 @@ fn tuning_trials_projector() -> TaskPanelProjector {
                 "samples".to_string(),
             ];
             columns.extend(parameter_names.iter().cloned());
-            columns.push("failure".to_string());
+            if show_failure {
+                columns.push("failure".to_string());
+            }
             let rows = trials
                 .into_iter()
-                .map(|trial| trial_to_table_row(trial, &parameter_names))
+                .map(|trial| trial_to_table_row(trial, &parameter_names, show_failure))
                 .collect::<Vec<_>>();
             Ok(Some(table_panel_with_payload_and_options(
                 TUNING_TRIALS_PANEL_ID,
@@ -176,6 +244,28 @@ fn tuning_parameter_names(ctx: &TaskPanelContext<'_>, trials: &[&JsonValue]) -> 
     names.into_iter().collect()
 }
 
+fn best_trial<'a>(
+    trials: &[&'a JsonValue],
+    mode: crate::core::MeasurementMode,
+) -> Option<&'a JsonValue> {
+    trials
+        .iter()
+        .filter_map(|trial| {
+            trial
+                .get("objective_value")
+                .and_then(JsonValue::as_f64)
+                .map(|value| (*trial, value))
+        })
+        .min_by(|(_, left), (_, right)| {
+            let ordering = left.total_cmp(right);
+            match mode {
+                crate::core::MeasurementMode::Minimize => ordering,
+                crate::core::MeasurementMode::Maximize => ordering.reverse(),
+            }
+        })
+        .map(|(trial, _)| trial)
+}
+
 fn trial_to_plot_point(trial: &JsonValue) -> Option<PlotPoint> {
     let x = trial.get("index").and_then(JsonValue::as_u64)? as f64;
     let y = trial.get("objective_value").and_then(JsonValue::as_f64)?;
@@ -220,7 +310,11 @@ fn best_so_far_points(points: &[PlotPoint], mode: crate::core::MeasurementMode) 
     best_points
 }
 
-fn trial_to_table_row(trial: &JsonValue, parameter_names: &[String]) -> Vec<JsonValue> {
+fn trial_to_table_row(
+    trial: &JsonValue,
+    parameter_names: &[String],
+    include_failure: bool,
+) -> Vec<JsonValue> {
     let mut row = vec![
         trial.get("index").cloned().unwrap_or(JsonValue::Null),
         trial.get("status").cloned().unwrap_or(JsonValue::Null),
@@ -245,12 +339,14 @@ fn trial_to_table_row(trial: &JsonValue, parameter_names: &[String]) -> Vec<Json
             .cloned()
             .unwrap_or(JsonValue::Null)
     }));
-    row.push(
-        trial
-            .get("failure_reason")
-            .cloned()
-            .unwrap_or(JsonValue::Null),
-    );
+    if include_failure {
+        row.push(
+            trial
+                .get("failure_reason")
+                .cloned()
+                .unwrap_or(JsonValue::Null),
+        );
+    }
     row
 }
 
@@ -417,7 +513,80 @@ mod tests {
         assert!(columns.contains(&"center".to_string()));
         assert!(columns.contains(&"scale".to_string()));
         assert!(columns.contains(&"samples".to_string()));
+        assert!(!columns.contains(&"failure".to_string()));
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0][5], json!(4096));
+    }
+
+    #[test]
+    fn tuning_table_shows_failure_column_only_when_needed() {
+        let task = tuning_task(Some(json!({
+            "completed_trials": 0,
+            "running_trials": 0,
+            "failed_trials": 1,
+            "total_trials": 1,
+            "trials": [
+                {
+                    "index": 0,
+                    "status": "failed",
+                    "child_run_id": 11,
+                    "parameters": {"center": 0.5, "scale": 1.0},
+                    "failure_reason": "measurement failed"
+                }
+            ]
+        })));
+        let panel = tuning_trials_projector()
+            .current(&panel_ctx(&task))
+            .expect("projector")
+            .expect("panel");
+        let PanelState::Table { columns, rows, .. } = panel else {
+            panic!("expected table");
+        };
+        assert_eq!(columns.last().map(String::as_str), Some("failure"));
+        assert_eq!(
+            rows[0].last().cloned().unwrap_or(JsonValue::Null),
+            json!("measurement failed")
+        );
+    }
+
+    #[test]
+    fn tuning_best_panel_summarizes_best_trial() {
+        let task = tuning_task(Some(json!({
+            "completed_trials": 2,
+            "running_trials": 0,
+            "failed_trials": 0,
+            "total_trials": 2,
+            "trials": [
+                {"index": 0, "status": "completed", "child_run_id": 11, "objective_value": 3.0, "parameters": {"center": 0.1, "scale": 1.0}},
+                {
+                    "index": 1,
+                    "status": "completed",
+                    "child_run_id": 12,
+                    "objective_value": 2.0,
+                    "objective_uncertainty": 0.2,
+                    "parameters": {"center": 0.5, "scale": 1.0},
+                    "measurement": {
+                        "status": "completed",
+                        "results": [{"name": "mean", "value": 2.0, "uncertainty": 0.2, "sample_count": 200}]
+                    }
+                }
+            ]
+        })));
+        let panel = tuning_best_projector()
+            .current(&panel_ctx(&task))
+            .expect("projector")
+            .expect("panel");
+        let PanelState::KeyValue { entries, .. } = panel else {
+            panic!("expected key-value panel");
+        };
+        let entries_by_key = entries
+            .iter()
+            .map(|entry| (entry.key.as_str(), entry.value.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(entries_by_key.get("trial"), Some(&json!(1)));
+        assert_eq!(entries_by_key.get("run"), Some(&json!(12)));
+        assert_eq!(entries_by_key.get("objective"), Some(&json!(2.0)));
+        assert_eq!(entries_by_key.get("samples"), Some(&json!(200)));
+        assert_eq!(entries_by_key.get("parameter_center"), Some(&json!(0.5)));
     }
 }
