@@ -267,7 +267,15 @@ fn panel_states(
         key_value_panel(
             "run_engine",
             vec![
-                key_value("evaluator", "Evaluator", kind_of(&run_spec.evaluator)),
+                key_value(
+                    "evaluator",
+                    "Evaluator",
+                    run_spec
+                        .evaluator
+                        .as_ref()
+                        .map(kind_of)
+                        .unwrap_or_else(|| "none".to_string()),
+                ),
                 key_value(
                     "accumulator",
                     "Accumulator",

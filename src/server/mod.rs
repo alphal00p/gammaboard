@@ -1088,8 +1088,12 @@ async fn get_run_evaluator_config(
         .load_run_spec(run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
-    let response: PanelResponse = run_spec
-        .evaluator
+    let Some(evaluator) = run_spec.evaluator.as_ref() else {
+        return Err(ApiError::NotFound(format!(
+            "run {run_id} has no root evaluator config"
+        )));
+    };
+    let response: PanelResponse = evaluator
         .build_response(
             format!("run:{run_id}:config:evaluator"),
             &EvaluatorPanelContext {

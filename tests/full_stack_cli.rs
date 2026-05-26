@@ -4944,11 +4944,6 @@ async fn full_stack_cli_hyperparameter_tuning_random_search_creates_trials_and_c
         r#"
 name = "hyperparameter-tuning-random-e2e"
 
-[evaluator]
-kind = "unit"
-continuous_dims = 1
-discrete_dims = 0
-
 [evaluator_runner_params]
 min_tick_time_ms = 50
 db_pool_size = 1
@@ -4961,7 +4956,6 @@ db_pool_size = 1
 name = "tune"
 kind = "hyperparameter_tuning"
 max_concurrent_trials = 2
-max_failed_trials = 0
 trial_run_toml = """
 name = "tuning-child-a-$(a:0.0)-bins-$(bins:16)-mode-$(mode:auto)"
 
@@ -5076,6 +5070,91 @@ values = ["auto", "none"]
     .fetch_one(&harness.pool)
     .await?;
     assert_eq!(measured_children, 4);
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_hyperparameter_tuning_fails_on_bad_trial_template() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    harness
+        .start_nodes(&["bad-tune-parent", "bad-tune-s1", "bad-tune-e1"])
+        .await?;
+
+    let config = temp_run_add_config(
+        r#"
+name = "hyperparameter-tuning-bad-template-e2e"
+
+[[task_queue]]
+name = "tune"
+kind = "hyperparameter_tuning"
+max_concurrent_trials = 1
+trial_run_toml = "name = \"broken-child"
+
+[task_queue.optimizer]
+algorithm = "random_search"
+max_trials = 1
+seed = 3
+
+[task_queue.objective]
+source_task = "sample"
+mode = "minimize"
+quantity = "central_value"
+
+[task_queue.parameters.a]
+kind = "float"
+min = 0.0
+max = 1.0
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 = sqlx::query_scalar(
+        "SELECT id FROM runs WHERE name = 'hyperparameter-tuning-bad-template-e2e'",
+    )
+    .fetch_one(&harness.pool)
+    .await?;
+
+    harness
+        .cli()
+        .args(["auto-assign", &run_id.to_string()])
+        .assert()
+        .success();
+
+    harness
+        .wait_for(
+            "bad template tuning fails",
+            Duration::from_secs(60),
+            || async {
+                let state: Option<String> = sqlx::query_scalar(
+                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
+                )
+                .bind(run_id)
+                .fetch_optional(&harness.pool)
+                .await?;
+                Ok(state.as_deref() == Some("failed"))
+            },
+        )
+        .await?;
+
+    let failure_reason: String = sqlx::query_scalar(
+        "SELECT failure_reason FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert!(failure_reason.contains("failed to create tuning trial 0"));
 
     harness.stop_children().await;
     harness.pool.close().await;

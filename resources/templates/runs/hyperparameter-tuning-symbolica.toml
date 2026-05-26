@@ -1,44 +1,47 @@
-# Hyperparameter tuning demo: random-search over a cheap Symbolica integral.
+# Hyperparameter tuning demo: random-search over evaluator and sampler parameters.
 #
-# Each trial integrates
+# Each trial integrates a 2D Symbolica family with the same exact central value:
 #
-#   f(x) = scale * (x - center)^2 + bias
+#   f(x,y) = 1 + roughness * ((x-center)^2 + (y-center)^2 - offset(center))
 #
-# on [0,1]. The central value is minimized near center = 0.5 with the smallest
-# scale and bias. This is intentionally cheap so the full controller/child-run
-# lifecycle can be tested locally.
+# where offset(center) is the exact [0,1]^2 integral of
+# `(x-center)^2 + (y-center)^2`. This keeps the integral fixed at 1 while
+# changing the integrand shape and estimator variance.
+#
+# Tuned evaluator parameters:
+# - `center`
+# - `roughness`
+#
+# Tuned sampler parameters:
+# - `havana_bins`
+# - `samples_for_update`
+#
+# The objective is the measured standard error, not the central value.
 
-replacements = { run_name = "hyperparameter-tuning-symbolica", trial_samples = 4096, max_trials = 12, max_concurrent_trials = 2 }
+replacements = { run_name = "hyperparameter-tuning-symbolica", trial_samples = 8192, max_trials = 16, max_concurrent_trials = 2 }
 
 name = '$(run_name:"hyperparameter-tuning-symbolica")'
-
-# The parent task only orchestrates child runs. This evaluator defines the run
-# domain and keeps the parent config self-contained.
-[evaluator]
-kind = "symbolica"
-expr = "1"
-args = ["x"]
 
 [[task_queue]]
 name = "random-search"
 kind = "hyperparameter_tuning"
 max_concurrent_trials = "$(max_concurrent_trials:2)"
-max_failed_trials = 0
 trial_run_toml = """
-name = "tune-center-$(center:0.5)-scale-$(scale:1.0)-bias-$(bias:0.0)"
+name = "tune-center-$(center:0.5)-rough-$(roughness:4.0)-bins-$(havana_bins:16)-update-$(samples_for_update:1024)"
+target = { kind = "scalar", value = 1.0 }
 
 [evaluator]
 kind = "symbolica"
-expr = "$(scale:1.0) * (x - $(center:0.5))^2 + $(bias:0.0)"
-args = ["x"]
+expr = "1 + $(roughness:4.0) * ((x - $(center:0.5))^2 + (y - $(center:0.5))^2 - 2 * ($(center:0.5)^3 + (1 - $(center:0.5))^3) / 3)"
+args = ["x", "y"]
 
 [[task_queue]]
 name = "sample"
 kind = "sample"
-measurement = { quantity = "central_value", mode = "minimize" }
-stop_condition = { max_samples = "$(trial_samples:4096)" }
+measurement = { quantity = { metric = "error" }, mode = "minimize" }
+stop_condition = { max_samples = "$(trial_samples:8192)" }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
+sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = "$(havana_bins:16)", samples_for_update = "$(samples_for_update:1024)", initial_training_rate = 0.1, final_training_rate = 0.01 } }
 """
 
 [task_queue.optimizer]
@@ -49,17 +52,23 @@ max_trials = "$(max_trials:12)"
 [task_queue.objective]
 source_task = "sample"
 mode = "minimize"
-quantity = "central_value"
+quantity = { metric = "error" }
 
 [task_queue.parameters.center]
 kind = "float"
-min = 0.0
-max = 1.0
+min = 0.15
+max = 0.85
 
-[task_queue.parameters.scale]
+[task_queue.parameters.roughness]
 kind = "categorical"
-values = [0.5, 1.0, 2.0]
+values = [2.0, 4.0, 8.0]
 
-[task_queue.parameters.bias]
+[task_queue.parameters.havana_bins]
+kind = "integer"
+min = 8
+max = 64
+step = 8
+
+[task_queue.parameters.samples_for_update]
 kind = "categorical"
-values = [0.0, 0.05, 0.1]
+values = [512, 1024, 2048]

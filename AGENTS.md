@@ -51,8 +51,8 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   table plus placeholders `$(name:default)`. Exact full-string placeholders are
   typed TOML replacements; embedded placeholders interpolate as strings. Server
   and runtime configs are not templated.
-- Evaluator config is stage state. The run-global evaluator is the root/default;
-  sample/image/plot-line tasks may set `evaluator = "latest"`,
+- Evaluator config is stage state. The run-global evaluator is optional and,
+  when present, is the root/default; sample/image/plot-line tasks may set `evaluator = "latest"`,
   `{ from_name = "..." }`, or `{ config = ... }`. Task-level evaluators must
   resolve to the run root domain.
 

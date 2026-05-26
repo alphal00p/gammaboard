@@ -1,0 +1,160 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 464e6d6..88c2ef0 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -8,9 +8,9 @@ default = ["gammaloop"]
+ gammaloop = ["dep:gammalooprs", "dep:gammaloop_api"]
+ 
+ [dependencies]
+-gammalooprs = { git = "https://github.com/alphal00p/gammaloop.git", rev = "a1e6ce21b85310680a6b95a6cf997191f3cff0d8", package = "gammalooprs", optional = true }
++gammalooprs = { path = "../gammaloop/crates/gammalooprs", optional = true }
+ 
+-gammaloop_api = { git = "https://github.com/alphal00p/gammaloop.git", rev = "a1e6ce21b85310680a6b95a6cf997191f3cff0d8", package = "gammaloop-api", default-features = false, features = ["cli", "no_pyo3"], optional = true }
++gammaloop_api = { path = "../gammaloop/crates/gammaloop-api", package = "gammaloop-api", default-features = false, features = ["cli", "no_pyo3"], optional = true }
+ tokio = { version = "1.46", features = ["full"] }
+ sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-native-tls", "chrono", "macros"] }
+ rand = { package = "rand", version = "0.9" }
+@@ -43,6 +43,11 @@ assert_cmd = "2"
+ predicates = "3"
+ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+ 
++[patch.crates-io]
++graphica = { git = "https://github.com/symbolica-dev/symbolica", rev = "3638099c607d79da709989716c8dc9d5085364bd" }
++numerica = { git = "https://github.com/symbolica-dev/symbolica", rev = "3638099c607d79da709989716c8dc9d5085364bd" }
++symbolica = { git = "https://github.com/symbolica-dev/symbolica", rev = "3638099c607d79da709989716c8dc9d5085364bd" }
++
+ [profile.dev-optim]
+ inherits = "dev"
+ opt-level = 2
+diff --git a/README.md b/README.md
+index 854bc14..83daee3 100644
+--- a/README.md
++++ b/README.md
+@@ -43,6 +43,8 @@ and, on UBELIX, Apptainer/Slurm images.
+ The repo-root `./gammaboard` helper builds the current CLI before forwarding
+ arguments to it. It uses `dev-optim` by default, `GAMMABOARD_PROFILE=release`
+ for release builds, and also builds the dashboard frontend for `deploy run`.
++Set `GAMMABOARD_FRONTEND_BASE=/board/` when building the dashboard for a
++reverse-proxy mount below a URL path instead of at `/`.
+ 
+ ## Model
+ 
+diff --git a/dashboard/src/components/panels/TablePanel.jsx b/dashboard/src/components/panels/TablePanel.jsx
+index 56944f6..b954b71 100644
+--- a/dashboard/src/components/panels/TablePanel.jsx
++++ b/dashboard/src/components/panels/TablePanel.jsx
+@@ -14,6 +14,7 @@ import {
+   Typography,
+ } from "@mui/material";
+ import { useRef } from "react";
++import { apiUrl } from "../../services/api";
+ import { asArray } from "../../utils/collections";
+ import { formatCentralValueWithError } from "../../utils/formatters";
+ import { renderStructuredValue } from "./BasicPanels";
+@@ -21,7 +22,7 @@ import { downloadTextFile } from "./FigureExportActions";
+ import { readHistogramBundleSelectedValue, writeHistogramBundlePanelValue } from "./histogramUtils";
+ 
+ const requestHistogramBundleExport = async (payload, format) => {
+-  const response = await fetch("/api/histogram-bundle/export", {
++  const response = await fetch(apiUrl("/histogram-bundle/export"), {
+     method: "POST",
+     credentials: "include",
+     headers: { "content-type": "application/json" },
+diff --git a/dashboard/src/services/api.js b/dashboard/src/services/api.js
+index 6632258..2e21565 100644
+--- a/dashboard/src/services/api.js
++++ b/dashboard/src/services/api.js
+@@ -1,6 +1,9 @@
+ import { asArray } from "../utils/collections";
+ 
+-const API_BASE_URL = "/api";
++const APP_BASE_URL = import.meta.env.BASE_URL || "/";
++const normalizedAppBase = APP_BASE_URL.endsWith("/") ? APP_BASE_URL : `${APP_BASE_URL}/`;
++export const API_BASE_URL = `${normalizedAppBase}api`;
++export const apiUrl = (path = "") => `${API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
+ 
+ const stripHtml = (value) =>
+   value
+@@ -66,7 +69,7 @@ const buildQueryString = (entries) => {
+ };
+ 
+ const apiGet = async (path, message, signal) => {
+-  const response = await fetch(`${API_BASE_URL}${path}`, {
++  const response = await fetch(apiUrl(path), {
+     credentials: "include",
+     signal,
+   });
+@@ -74,7 +77,7 @@ const apiGet = async (path, message, signal) => {
+ };
+ 
+ const apiPost = async (path, payload, message, signal) => {
+-  const response = await fetch(`${API_BASE_URL}${path}`, {
++  const response = await fetch(apiUrl(path), {
+     method: "POST",
+     credentials: "include",
+     headers: {
+@@ -87,7 +90,7 @@ const apiPost = async (path, payload, message, signal) => {
+ };
+ 
+ const apiDelete = async (path, message, signal) => {
+-  const response = await fetch(`${API_BASE_URL}${path}`, {
++  const response = await fetch(apiUrl(path), {
+     method: "DELETE",
+     credentials: "include",
+     signal,
+diff --git a/dashboard/vite.config.js b/dashboard/vite.config.js
+index 2c0421c..7cb211b 100644
+--- a/dashboard/vite.config.js
++++ b/dashboard/vite.config.js
+@@ -1,7 +1,15 @@
+ import { defineConfig } from "vite";
+ import react from "@vitejs/plugin-react";
+ 
++const normalizeBase = (value) => {
++  const raw = value && value.trim() ? value.trim() : "/";
++  if (raw === "." || raw === "./") return "./";
++  const withLeadingSlash = raw.startsWith("/") ? raw : `/${raw}`;
++  return withLeadingSlash.endsWith("/") ? withLeadingSlash : `${withLeadingSlash}/`;
++};
++
+ export default defineConfig({
++  base: normalizeBase(process.env.GAMMABOARD_FRONTEND_BASE),
+   plugins: [react()],
+   build: {
+     outDir: "build",
+diff --git a/ops/website/config/server.toml b/ops/website/config/server.toml
+new file mode 100644
+index 0000000..4a2cdad
+--- /dev/null
++++ b/ops/website/config/server.toml
+@@ -0,0 +1,9 @@
++api_host = "127.0.0.1"
++api_port = 4000
++allowed_origins = ["https://gammaloop.hirschi.lu"]
++secure_cookie = true
++
++
++[auth]
++admin_pasword_hash = "$argon2id$v=19$m=19456,t=2,p=1$FcWAMvmY/q87pglXQpv3ZA$BfSYhL6pKHAf9VizQO7Wq5khNt+8Dn8prJhssaHiUWI"
++
+diff --git a/src/evaluation/evaluator/symbolica.rs b/src/evaluation/evaluator/symbolica.rs
+index 4da9acd..e2712dd 100644
+--- a/src/evaluation/evaluator/symbolica.rs
++++ b/src/evaluation/evaluator/symbolica.rs
+@@ -55,12 +55,13 @@ pub struct SymbolicaParams {
+ impl SymbolicaEngine {
+     pub fn from_params(params: SymbolicaParams) -> Result<Self, crate::BuildError> {
+         let settings = ParseSettings::symbolica();
+-        let parsed_expr = Atom::parse(wrap_input!(&params.expr), settings.clone())
+-            .map_err(|err| BuildError::build(err.to_string()))?;
++        let parsed_expr =
++            Atom::parse_with_default_namespace(wrap_input!(&params.expr), settings.clone())
++                .map_err(|err| BuildError::build(err.to_string()))?;
+ 
+         let mut args = Vec::with_capacity(params.args.len());
+         for arg in &params.args {
+-            let parsed = Atom::parse(wrap_input!(arg), settings.clone())
++            let parsed = Atom::parse_with_default_namespace(wrap_input!(arg), settings.clone())
+                 .map_err(|err| BuildError::build(err.to_string()))?;
+             args.push(parsed);
+         }

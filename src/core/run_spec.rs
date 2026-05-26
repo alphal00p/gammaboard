@@ -21,7 +21,8 @@ pub type CapabilityRequirements = BTreeMap<String, u64>;
 /// Canonical integration parameters payload stored on `runs.integration_params`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegrationParams {
-    pub evaluator: EvaluatorConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluator: Option<EvaluatorConfig>,
     #[serde(default)]
     pub evaluator_requirements: CapabilityRequirements,
     #[serde(default)]
@@ -35,7 +36,7 @@ pub struct IntegrationParams {
 pub struct RunSpec {
     pub run_id: i32,
     pub domain: Domain,
-    pub evaluator: EvaluatorConfig,
+    pub evaluator: Option<EvaluatorConfig>,
     pub evaluator_requirements: CapabilityRequirements,
     pub sampler_requirements: CapabilityRequirements,
     pub evaluator_runner_params: EvaluatorRunnerParams,

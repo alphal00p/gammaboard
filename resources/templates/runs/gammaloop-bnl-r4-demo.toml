@@ -1,0 +1,63 @@
+# GammaLoop BNL R4 demo.
+#
+# This runs the optimized below-threshold R4 setup from the BNL benchmark in
+# GammaBoard. It deliberately does not include the additive integrated-UV-sector
+# composition; the selected state is the no-threshold optimized state.
+#
+# Reference value from BNL.md:
+#   R4, MT = ymt = 550 GeV:
+#   +5.588(18)e-16 - 2.143(20)e-16 i
+#
+# Edit these three values for a longer/shorter live demo.
+replacements = { train_samples = 100000, sample_samples = 1000000, max_batch_size = 5000 }
+
+name = "gammaloop_bnl_r4_demo"
+
+# The GammaLoop accumulator owns the concrete vector observable shape.
+target = { kind = "vector", components = { } }
+
+[evaluator]
+kind = "gammaloop"
+state_folder = "/home/ubuntu/gammaloop/examples/cli/BNL/states/final_no_threshold_reference_optimized"
+
+[evaluator.preprocessing]
+read_only = true
+commands = [
+  "set model MT=550.0",
+  "set model ymt=550.0",
+]
+
+[[task_queue]]
+name = "accumulator"
+kind = "set_accumulator"
+accumulator = "gammaloop"
+
+[[task_queue]]
+name = "havana-train"
+kind = "sample"
+stop_condition = { max_samples = "$(train_samples:100000)" }
+accumulator = "latest"
+
+[task_queue.sampler_aggregator.config]
+kind = "havana_training"
+seed = 0
+bins = 64
+samples_for_update = 10000
+initial_training_rate = 0.05
+final_training_rate = 0.005
+
+[task_queue.queue_tuning]
+target_batch_eval_ms = 1000.0
+max_batch_size = "$(max_batch_size:5000)"
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = "$(sample_samples:1000000)", relative_error = 0.02 }
+measurement = { quantity = "central_value" }
+sampler_aggregator = { config = { kind = "havana_inference", source = "latest_training_sampler_aggregator" } }
+accumulator = "latest"
+
+[task_queue.queue_tuning]
+target_batch_eval_ms = 1000.0
+max_batch_size = "$(max_batch_size:5000)"

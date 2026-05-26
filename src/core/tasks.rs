@@ -908,8 +908,6 @@ pub enum RunTaskSpec {
         trial_run_toml: String,
         #[serde(default = "default_hyperparameter_tuning_max_concurrent_trials")]
         max_concurrent_trials: usize,
-        #[serde(default)]
-        max_failed_trials: usize,
     },
 }
 
@@ -1041,7 +1039,6 @@ impl RunTaskSpec {
                 parameters,
                 trial_run_toml,
                 max_concurrent_trials,
-                ..
             } => {
                 optimizer.validate()?;
                 objective.validate()?;
@@ -1500,14 +1497,12 @@ impl IntoPreflightTask for RunTaskSpec {
                 parameters,
                 trial_run_toml,
                 max_concurrent_trials,
-                max_failed_trials,
             } => Ok(Some(Self::HyperparameterTuning {
                 optimizer,
                 objective,
                 parameters,
                 trial_run_toml,
                 max_concurrent_trials,
-                max_failed_trials,
             })),
         }
     }
@@ -1993,7 +1988,6 @@ quantity = { component = "real", metric = "time_normalized_variance" }
 [task]
 kind = "hyperparameter_tuning"
 max_concurrent_trials = 2
-max_failed_trials = 1
 trial_run_toml = "name = \"trial\"\n"
 
 [task.optimizer]
@@ -2029,7 +2023,6 @@ values = ["auto", "none"]
             objective,
             parameters,
             max_concurrent_trials,
-            max_failed_trials,
             ..
         } = wrapper.task
         else {
@@ -2045,7 +2038,6 @@ values = ["auto", "none"]
         assert_eq!(objective.source_task, "sample");
         assert_eq!(parameters.len(), 3);
         assert_eq!(max_concurrent_trials, 2);
-        assert_eq!(max_failed_trials, 1);
         optimizer.validate().expect("valid optimizer");
     }
 

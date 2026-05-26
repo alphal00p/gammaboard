@@ -8,7 +8,8 @@ use serde_json::Value as JsonValue;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RunAddIntegrationParams {
-    pub evaluator: EvaluatorConfig,
+    #[serde(default)]
+    pub evaluator: Option<EvaluatorConfig>,
     #[serde(default)]
     pub evaluator_requirements: crate::core::CapabilityRequirements,
     #[serde(default)]
@@ -54,16 +55,17 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
             .clone(),
     };
 
-    let evaluator_kind = config.integration_params.evaluator.kind_str();
-    let domain = config
-        .integration_params
-        .evaluator
-        .resolve_domain()
-        .map_err(|err| {
-            BuildError::build(format!(
-                "failed to resolve evaluator domain for {evaluator_kind}: {err}"
-            ))
-        })?;
+    let domain = match config.integration_params.evaluator.as_ref() {
+        Some(evaluator) => {
+            let evaluator_kind = evaluator.kind_str();
+            evaluator.resolve_domain().map_err(|err| {
+                BuildError::build(format!(
+                    "failed to resolve evaluator domain for {evaluator_kind}: {err}"
+                ))
+            })?
+        }
+        None => Domain::continuous(0),
+    };
     config.domain = Some(domain.clone());
 
     let initial_stage_snapshot = preflight::build_initial_stage()?;

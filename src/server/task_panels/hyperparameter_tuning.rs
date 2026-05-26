@@ -409,7 +409,6 @@ mod tests {
             ]),
             trial_run_toml: "name = \"trial\"".to_string(),
             max_concurrent_trials: 1,
-            max_failed_trials: 0,
         };
         RunTask {
             id: 1,

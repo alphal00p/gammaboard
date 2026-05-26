@@ -1,6 +1,6 @@
-# Ghost bump with the MADNIS process sampler runtime deployed under resources/processes.
+# Ghost bump with the MADNIS process sampler runtime deployed under resources/madnis.
 
-replacements = { run_name = "ghost_bump_madnis", train_samples = 200000, training_steps = 200, training_batch_size = 1000, save_path = "processes/madnis_gammaboard_api/checkpoints/ghost_bump_madnis", image_bins = 128 }
+replacements = { run_name = "ghost_bump_madnis", train_samples = 200000, training_steps = 200, training_batch_size = 1000, madnis_dir = "madnis", save_path = "madnis/checkpoints/ghost_bump_madnis", image_bins = 128 }
 
 name = '$(run_name:"ghost_bump_madnis")'
 sampler_requirements = { gpu = 1 }
@@ -24,7 +24,7 @@ max_samples = "$(train_samples:200000)"
 
 [task_queue.sampler_aggregator.config]
 kind = "process_sampler"
-command = ["apptainer", "exec", "--no-mount", "/etc/localtime", "--nv", "--bind", "$resources:$resources", "$resources/processes/madnis_gammaboard_api/madnis.sif", "madnis-gammaboard-sampler"]
+command = ["/usr/bin/apptainer", "exec", "--no-mount", "/etc/localtime", "--nv", "--bind", "$resources:$resources", "$resources/$(madnis_dir:\"madnis\")/madnis.sif", "madnis-gammaboard-sampler"]
 cwd = "$resources"
 # Alternative with the Nix runtime when Nix is available:
 # command = ["$resources/processes/madnis_gammaboard_api/result/bin/python", "-u", "-m", "run_sampler"]
@@ -34,7 +34,7 @@ requires_training_values = true
 seed = 0
 training_steps = "$(training_steps:200)"
 training_batch_size = "$(training_batch_size:1000)"
-save_path = '$(save_path:"processes/madnis_gammaboard_api/checkpoints/ghost_bump_madnis")'
+save_path = '$(save_path:"madnis/checkpoints/ghost_bump_madnis")'
 
 [[task_queue]]
 name = "pdf-2d"

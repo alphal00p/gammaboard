@@ -458,7 +458,6 @@ fn build_task_summary_entries(
             optimizer,
             parameters,
             max_concurrent_trials,
-            max_failed_trials,
             ..
         } => {
             entries.push(key_value("parameters", "Parameters", parameters.len()));
@@ -467,11 +466,6 @@ fn build_task_summary_entries(
                 "max_concurrent_trials",
                 "Concurrency",
                 *max_concurrent_trials,
-            ));
-            entries.push(key_value(
-                "max_failed_trials",
-                "Max Failed Trials",
-                *max_failed_trials,
             ));
         }
     }

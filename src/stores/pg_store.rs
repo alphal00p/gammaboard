@@ -1225,9 +1225,10 @@ mod tests {
         .expect("decode");
         assert_eq!(spec.run_id, 7);
         assert_eq!(spec.domain, Domain::continuous(1));
-        assert_eq!(spec.evaluator.kind_str(), "unit");
+        let evaluator = spec.evaluator.as_ref().expect("evaluator");
+        assert_eq!(evaluator.kind_str(), "unit");
         assert!(matches!(
-            &spec.evaluator,
+            evaluator,
             crate::core::EvaluatorConfig::Unit { params }
                 if params.continuous_dims == 1
                 && params.discrete_dims == 0
@@ -1276,8 +1277,9 @@ mod tests {
                 "evaluator": { "kind": "unit" }
             }),
             json!({
-                "continuous_dims": 1,
-                "discrete_dims": 0
+                "continuous": {
+                    "dims": 0
+                }
             }),
         )
         .expect_err("missing params should fail");
@@ -1285,8 +1287,8 @@ mod tests {
     }
 
     #[test]
-    fn decode_run_spec_requires_implementation_fields() {
-        let err = decode_run_spec(
+    fn decode_run_spec_allows_missing_root_evaluator() {
+        let spec = decode_run_spec(
             9,
             json!({
                 "evaluator_runner_params": {
@@ -1317,13 +1319,17 @@ mod tests {
                 }
             }),
             json!({
-                "continuous_dims": 1,
-                "discrete_dims": 0
+                "continuous": {
+                    "dims": 0
+                }
             }),
         )
-        .expect_err("missing required components should fail");
-        assert!(err.to_string().contains("evaluator"));
+        .expect("missing root evaluator should be valid");
+        assert!(spec.evaluator.is_none());
+    }
 
+    #[test]
+    fn decode_run_spec_requires_implementation_fields() {
         let err = decode_run_spec(
             9,
             json!({

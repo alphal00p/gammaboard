@@ -107,7 +107,11 @@ pub fn parse_run_add_config_toml(raw: &str) -> Result<RunAddConfig, ApiError> {
     let mut merged = read_default_run_add_toml()?;
     let overlay = toml::from_str(raw)
         .map_err(|err| ApiError::BadRequest(format!("failed parsing run TOML: {err}")))?;
+    let overlay_has_evaluator = toml_has_key(&overlay, "evaluator");
     merge_toml(&mut merged, overlay);
+    if !overlay_has_evaluator {
+        remove_toml_key(&mut merged, "evaluator");
+    }
     let expanded = toml_template::expand_toml_template(merged)?;
     let mut config = parse_run_add_config_value(expanded.value)?;
     config.original_toml = Some(raw.to_string());
@@ -121,7 +125,11 @@ pub fn parse_run_add_config_toml_with_replacements(
     let mut merged = read_default_run_add_toml()?;
     let overlay = toml::from_str(raw)
         .map_err(|err| ApiError::BadRequest(format!("failed parsing run TOML: {err}")))?;
+    let overlay_has_evaluator = toml_has_key(&overlay, "evaluator");
     merge_toml(&mut merged, overlay);
+    if !overlay_has_evaluator {
+        remove_toml_key(&mut merged, "evaluator");
+    }
     toml_template::merge_replacements(&mut merged, replacements)?;
     let expanded = toml_template::expand_toml_template(merged)?;
     let mut config = parse_run_add_config_value(expanded.value)?;
@@ -141,7 +149,11 @@ pub fn load_run_add_config_file(path: &Path) -> Result<RunAddConfig, ApiError> {
     let overlay = toml::from_str(&raw).map_err(|err| {
         ApiError::BadRequest(format!("failed parsing TOML {}: {err}", path.display()))
     })?;
+    let overlay_has_evaluator = toml_has_key(&overlay, "evaluator");
     merge_toml(&mut merged, overlay);
+    if !overlay_has_evaluator {
+        remove_toml_key(&mut merged, "evaluator");
+    }
     let expanded = toml_template::expand_toml_template(merged)?;
     let mut config = parse_run_add_config_value(expanded.value)?;
     config.original_toml = Some(raw);
@@ -192,13 +204,13 @@ pub async fn create_run(
         .ok_or_else(|| {
             ApiError::Internal("preprocessing did not build initial stage snapshot".to_string())
         })?;
-    initial_stage_snapshot.evaluator = Some(resolved_integration_params.evaluator.clone());
+    initial_stage_snapshot.evaluator = resolved_integration_params.evaluator.clone();
 
     preflight_task_batch(
         store,
         initial_stage_snapshot.run_id,
         &initial_tasks,
-        Some(resolved_integration_params.evaluator.clone()),
+        resolved_integration_params.evaluator.clone(),
     )
     .await?;
 
@@ -373,7 +385,7 @@ pub async fn append_tasks(
                 "run {run_id} has invalid integration_params payload: {err}"
             ))
         })?;
-    preflight_task_batch(store, run_id, &tasks, Some(integration_params.evaluator)).await?;
+    preflight_task_batch(store, run_id, &tasks, integration_params.evaluator).await?;
     let tasks = store.append_run_tasks(run_id, &tasks).await?;
     Ok(AppendedTasks { tasks })
 }
@@ -567,17 +579,37 @@ impl TaskPreflightContext {
             )));
         }
         let effective_accumulator = self.resolve_effective_accumulator(task)?;
-        let effective_evaluator = self.resolve_effective_evaluator(task)?;
-        self.validate_evaluator_domain(&effective_evaluator)?;
+        let effective_evaluator = if task.task.runs_in_control_plane() {
+            None
+        } else {
+            Some(self.resolve_effective_evaluator(task)?)
+        };
+        if let Some(effective_evaluator) = effective_evaluator.as_ref() {
+            self.validate_evaluator_domain(effective_evaluator)?;
+        }
         if let Some(config) = effective_accumulator.as_ref() {
-            self.validate_accumulator_against_evaluator(&effective_evaluator, &config)?;
+            if task.task.runs_in_control_plane() {
+                if let Some(effective_evaluator) = self.current_evaluator.as_ref() {
+                    self.validate_accumulator_against_evaluator(effective_evaluator, config)?;
+                }
+            } else {
+                let Some(effective_evaluator) = effective_evaluator.as_ref() else {
+                    return Err(ApiError::BadRequest(format!(
+                        "task '{}' defines an accumulator but has no effective evaluator configuration",
+                        task_name
+                    )));
+                };
+                self.validate_accumulator_against_evaluator(effective_evaluator, config)?;
+            }
         }
         if task.task.is_sourceable() {
             self.prior_sourceable_names.insert(task_name.clone());
         }
-        self.effective_evaluator_by_name
-            .insert(task_name.clone(), effective_evaluator.clone());
-        self.current_evaluator = Some(effective_evaluator);
+        if let Some(effective_evaluator) = effective_evaluator {
+            self.effective_evaluator_by_name
+                .insert(task_name.clone(), effective_evaluator.clone());
+            self.current_evaluator = Some(effective_evaluator);
+        }
         if let Some(config) = effective_accumulator {
             self.effective_accumulator_by_name
                 .insert(task_name, config.clone());
@@ -592,10 +624,12 @@ impl TaskPreflightContext {
             name: Some(task.name.clone()),
             task: task.task.clone(),
         };
-        let effective_evaluator = self.resolve_effective_evaluator(&input)?;
-        self.effective_evaluator_by_name
-            .insert(task.name.clone(), effective_evaluator.clone());
-        self.current_evaluator = Some(effective_evaluator);
+        if !input.task.runs_in_control_plane() {
+            let effective_evaluator = self.resolve_effective_evaluator(&input)?;
+            self.effective_evaluator_by_name
+                .insert(task.name.clone(), effective_evaluator.clone());
+            self.current_evaluator = Some(effective_evaluator);
+        }
         let effective_accumulator = self.resolve_effective_accumulator(&input)?;
         if let Some(config) = effective_accumulator {
             self.effective_accumulator_by_name
@@ -795,6 +829,18 @@ fn merge_toml(base: &mut toml::Value, overlay: toml::Value) {
     }
 }
 
+fn toml_has_key(value: &toml::Value, key: &str) -> bool {
+    value
+        .as_table()
+        .is_some_and(|table| table.contains_key(key))
+}
+
+fn remove_toml_key(value: &mut toml::Value, key: &str) {
+    if let Some(table) = value.as_table_mut() {
+        table.remove(key);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -833,7 +879,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
         assert_eq!(config.name, "templated-run");
         assert_eq!(config.original_toml.as_deref(), Some(raw));
-        let EvaluatorConfig::Unit { params } = config.integration_params.evaluator else {
+        let Some(EvaluatorConfig::Unit { params }) = config.integration_params.evaluator else {
             panic!("expected unit evaluator");
         };
         assert_eq!(params.continuous_dims, 1);
@@ -1059,7 +1105,7 @@ accumulator = { config = "scalar" }
         .expect("run config");
         let mut context = TaskPreflightContext::from_existing_tasks(
             &[],
-            Some(config.integration_params.evaluator.clone()),
+            config.integration_params.evaluator.clone(),
         )
         .expect("context");
         let err = context
@@ -1074,6 +1120,7 @@ accumulator = { config = "scalar" }
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         for relative_path in [
             "resources/templates/runs/ghost_bump.toml",
+            "resources/templates/runs/gammaloop-bnl-r4-demo.toml",
             "resources/templates/runs/hyperparameter-tuning-symbolica.toml",
             "resources/templates/runs/parameter-scan-symbolica.toml",
             "resources/templates/runs/process-evaluator-process-sampler-demo.toml",
@@ -1171,7 +1218,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
         )
         .expect("run config");
 
-        let EvaluatorConfig::Unit { params } = config.integration_params.evaluator else {
+        let Some(EvaluatorConfig::Unit { params }) = config.integration_params.evaluator else {
             panic!("expected unit evaluator");
         };
         assert_eq!(params.fail_on_batch_nrs, vec![1, 2, 3]);
@@ -1247,6 +1294,63 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
             error
                 .to_string()
                 .contains("sample task has no effective accumulator configuration")
+        );
+    }
+
+    #[test]
+    fn parse_run_add_allows_controller_only_run_without_root_evaluator() {
+        let config = parse_run_add_config_toml(
+            r#"
+name = "controller-only"
+
+[[task_queue]]
+name = "scan"
+kind = "parameter_scan"
+trial_run_toml = "name = \"child\"\n[evaluator]\nkind = \"unit\"\ncontinuous_dims = 1\ndiscrete_dims = 0\n"
+
+[task_queue.parameter]
+name = "scale"
+values = [1]
+
+[task_queue.measurement]
+source_task = "sample"
+"#,
+        )
+        .expect("controller-only run config");
+        assert!(config.integration_params.evaluator.is_none());
+        preprocess_run_add(config).expect("controller-only preprocessing");
+    }
+
+    #[test]
+    fn preflight_rejects_compute_task_without_effective_evaluator() {
+        let mut context = TaskPreflightContext::from_existing_tasks(&[], None).expect("context");
+        let error = context
+            .validate_batch(&[RunTaskInput {
+                name: Some("sample".to_string()),
+                task: RunTaskSpec::Sample {
+                    stop_condition: SampleStopCondition {
+                        max_samples: Some(10),
+                        ..SampleStopCondition::default()
+                    },
+                    measurement: None,
+                    evaluator: None,
+                    sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
+                        config: SamplerAggregatorConfig::NaiveMonteCarlo {
+                            params: NaiveMonteCarloSamplerParams::default(),
+                        },
+                    }),
+                    accumulator: Some(crate::core::AccumulatorSourceSpec::Config {
+                        config: AccumulatorConfig::scalar(),
+                    }),
+                    queue_tuning: None,
+                    batch_transforms: None,
+                },
+            }])
+            .expect_err("missing evaluator should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("task has no effective evaluator configuration")
         );
     }
 

@@ -242,11 +242,14 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             warn!("run has no RunSpec; evaluator not started");
             return Ok(None);
         };
+        let Some(evaluator_config) = spec.evaluator.clone() else {
+            warn!("run has no evaluator config; evaluator not started");
+            return Ok(None);
+        };
         let role_store = self
             .init_role_store(spec.evaluator_runner_params.db_pool_size)
             .await?;
-        let evaluator = spec
-            .evaluator
+        let evaluator = evaluator_config
             .build()
             .map_err(|err| StoreError::store(format!("failed to build evaluator: {err}")))?;
         info!("evaluator worker started");
@@ -256,7 +259,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             target.run_id,
             self.node_name.clone(),
             self.node_uuid.clone(),
-            spec.evaluator.clone(),
+            evaluator_config,
             evaluator,
             spec.domain.clone(),
             spec.evaluator_runner_params.clone(),

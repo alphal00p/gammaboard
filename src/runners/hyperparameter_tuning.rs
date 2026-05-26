@@ -1,6 +1,7 @@
 use crate::core::{
-    AggregationStore, ControlPlaneStore, HyperparameterTuningParameterDomain, MeasurementMode,
-    MeasurementResult, RunReadStore, RunSpecStore, RunTask, RunTaskSpec, RunTaskState,
+    AccumulatorMetricName, AggregationStore, ControlPlaneStore, HyperparameterTuningObjectiveSpec,
+    HyperparameterTuningParameterDomain, MeasurementMode, MeasurementQuantityName,
+    MeasurementQuantitySpec, RunReadStore, RunSpecStore, RunTask, RunTaskSpec, RunTaskState,
     RunTaskStore, StoreError, TaskMeasurementOutput,
 };
 use crate::runners::controller_child::{
@@ -82,7 +83,6 @@ where
             parameters,
             trial_run_toml,
             max_concurrent_trials,
-            max_failed_trials,
         } = &self.task.task
         else {
             return Err(StoreError::store(
@@ -133,7 +133,7 @@ where
                     .await?;
             match measurement_output.output {
                 Some(TaskMeasurementOutput::Completed { results }) => {
-                    match objective_result(&results) {
+                    match objective_result(objective, &results) {
                         Ok(result) => {
                             completed_count += 1;
                             trials.push(HyperparameterTrialOutput {
@@ -210,15 +210,13 @@ where
             }
         }
 
-        if failed_count > *max_failed_trials {
+        if failed_count > 0 {
             self.persist_output(completed_count, running_count, failed_count, trials)
                 .await?;
             self.store
                 .fail_run_task(
                     self.task.id,
-                    &format!(
-                        "hyperparameter tuning failed: failed_trials={failed_count} exceeds max_failed_trials={max_failed_trials}"
-                    ),
+                    &format!("hyperparameter tuning failed: failed_trials={failed_count}"),
                 )
                 .await?;
             return Ok(true);
@@ -327,11 +325,55 @@ fn objective_mode(task: &RunTaskSpec) -> MeasurementMode {
     }
 }
 
-fn objective_result(results: &[MeasurementResult]) -> Result<&MeasurementResult, String> {
-    match results {
+fn objective_result<'a>(
+    objective: &HyperparameterTuningObjectiveSpec,
+    results: &'a [crate::core::MeasurementResult],
+) -> Result<&'a crate::core::MeasurementResult, String> {
+    let selector = objective_selector(objective);
+    let matches = results
+        .iter()
+        .filter(|result| {
+            result.name == selector.0
+                && match (&selector.1, &result.component) {
+                    (Some(expected), Some(actual)) => expected == actual,
+                    (Some(_), None) => false,
+                    (None, _) => true,
+                }
+        })
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
         [result] => Ok(result),
-        [] => Err("objective measurement produced no results".to_string()),
-        _ => Err("objective measurement produced multiple results; use a scalar measurement for the first random_search implementation".to_string()),
+        [] => Err(format!(
+            "objective measurement did not produce metric {:?}{}",
+            selector.0,
+            selector
+                .1
+                .as_ref()
+                .map(|component| format!(" component {component:?}"))
+                .unwrap_or_default()
+        )),
+        _ => Err(format!(
+            "objective measurement produced multiple {:?} results; set objective.quantity.component or objective.metric.component",
+            selector.0
+        )),
+    }
+}
+
+fn objective_selector(
+    objective: &HyperparameterTuningObjectiveSpec,
+) -> (AccumulatorMetricName, Option<String>) {
+    if let Some(metric) = objective.metric.as_ref() {
+        let selector = metric.selector();
+        return (selector.name, selector.component);
+    }
+    match &objective.quantity {
+        MeasurementQuantitySpec::Name(MeasurementQuantityName::CentralValue) => {
+            (AccumulatorMetricName::Mean, None)
+        }
+        MeasurementQuantitySpec::Metric(metric) => {
+            let selector = metric.selector();
+            (selector.name, selector.component)
+        }
     }
 }
 
@@ -422,7 +464,10 @@ pub fn placeholder_output(max_trials: usize) -> JsonValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{HyperparameterTuningFloatDomain, HyperparameterTuningIntegerDomain};
+    use crate::core::{
+        HyperparameterTuningFloatDomain, HyperparameterTuningIntegerDomain,
+        MeasurementMetricQuantity, MeasurementMetricSpec,
+    };
 
     #[test]
     fn random_trial_parameters_are_deterministic_by_index() {
@@ -454,5 +499,70 @@ mod tests {
             panic!("integer parameter missing");
         };
         assert_eq!((n - 2) % 2, 0);
+    }
+
+    #[test]
+    fn objective_result_selects_requested_component() {
+        let objective = HyperparameterTuningObjectiveSpec {
+            source_task: "sample".to_string(),
+            quantity: MeasurementQuantitySpec::Metric(MeasurementMetricQuantity {
+                metric: AccumulatorMetricName::Mean,
+                component: Some("imag".to_string()),
+            }),
+            metric: None,
+            mode: MeasurementMode::Minimize,
+        };
+        let results = vec![
+            crate::core::MeasurementResult {
+                name: AccumulatorMetricName::Mean,
+                component: Some("real".to_string()),
+                value: 1.0,
+                uncertainty: None,
+                sample_count: 10,
+                completed_samples_per_second: None,
+            },
+            crate::core::MeasurementResult {
+                name: AccumulatorMetricName::Mean,
+                component: Some("imag".to_string()),
+                value: 2.0,
+                uncertainty: None,
+                sample_count: 10,
+                completed_samples_per_second: None,
+            },
+        ];
+
+        let selected = objective_result(&objective, &results).expect("selected result");
+        assert_eq!(selected.value, 2.0);
+    }
+
+    #[test]
+    fn objective_result_rejects_ambiguous_metric() {
+        let objective = HyperparameterTuningObjectiveSpec {
+            source_task: "sample".to_string(),
+            quantity: MeasurementQuantitySpec::Name(MeasurementQuantityName::CentralValue),
+            metric: Some(MeasurementMetricSpec::Name(AccumulatorMetricName::Mean)),
+            mode: MeasurementMode::Minimize,
+        };
+        let results = vec![
+            crate::core::MeasurementResult {
+                name: AccumulatorMetricName::Mean,
+                component: Some("real".to_string()),
+                value: 1.0,
+                uncertainty: None,
+                sample_count: 10,
+                completed_samples_per_second: None,
+            },
+            crate::core::MeasurementResult {
+                name: AccumulatorMetricName::Mean,
+                component: Some("imag".to_string()),
+                value: 2.0,
+                uncertainty: None,
+                sample_count: 10,
+                completed_samples_per_second: None,
+            },
+        ];
+
+        let err = objective_result(&objective, &results).expect_err("ambiguous objective");
+        assert!(err.contains("multiple"));
     }
 }
