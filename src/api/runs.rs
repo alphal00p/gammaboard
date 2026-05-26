@@ -1074,6 +1074,7 @@ accumulator = { config = "scalar" }
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         for relative_path in [
             "resources/templates/runs/ghost_bump.toml",
+            "resources/templates/runs/hyperparameter-tuning-symbolica.toml",
             "resources/templates/runs/parameter-scan-symbolica.toml",
             "resources/templates/runs/process-evaluator-process-sampler-demo.toml",
             "resources/templates/runs/process-rust-apptainer-evaluator-demo.toml",

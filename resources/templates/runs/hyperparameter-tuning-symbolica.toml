@@ -1,0 +1,65 @@
+# Hyperparameter tuning demo: random-search over a cheap Symbolica integral.
+#
+# Each trial integrates
+#
+#   f(x) = scale * (x - center)^2 + bias
+#
+# on [0,1]. The central value is minimized near center = 0.5 with the smallest
+# scale and bias. This is intentionally cheap so the full controller/child-run
+# lifecycle can be tested locally.
+
+replacements = { run_name = "hyperparameter-tuning-symbolica", trial_samples = 4096, max_trials = 12, max_concurrent_trials = 2 }
+
+name = '$(run_name:"hyperparameter-tuning-symbolica")'
+
+# The parent task only orchestrates child runs. This evaluator defines the run
+# domain and keeps the parent config self-contained.
+[evaluator]
+kind = "symbolica"
+expr = "1"
+args = ["x"]
+
+[[task_queue]]
+name = "random-search"
+kind = "hyperparameter_tuning"
+max_concurrent_trials = "$(max_concurrent_trials:2)"
+max_failed_trials = 0
+trial_run_toml = """
+name = "tune-center-$(center:0.5)-scale-$(scale:1.0)-bias-$(bias:0.0)"
+
+[evaluator]
+kind = "symbolica"
+expr = "$(scale:1.0) * (x - $(center:0.5))^2 + $(bias:0.0)"
+args = ["x"]
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+measurement = { quantity = "central_value", mode = "minimize" }
+stop_condition = { max_samples = "$(trial_samples:4096)" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
+"""
+
+[task_queue.optimizer]
+algorithm = "random_search"
+seed = 7
+max_trials = "$(max_trials:12)"
+
+[task_queue.objective]
+source_task = "sample"
+mode = "minimize"
+quantity = "central_value"
+
+[task_queue.parameters.center]
+kind = "float"
+min = 0.0
+max = 1.0
+
+[task_queue.parameters.scale]
+kind = "categorical"
+values = [0.5, 1.0, 2.0]
+
+[task_queue.parameters.bias]
+kind = "categorical"
+values = [0.0, 0.05, 0.1]

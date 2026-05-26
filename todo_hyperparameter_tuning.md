@@ -38,7 +38,7 @@ kind = "hyperparameter_tuning"
 max_concurrent_trials = 4
 max_failed_trials = 2
 trial_run_toml = """
-name = "trial-mu-$(mu_scale:0.5)-bins-$(bins:64)-$(subtraction_mode:\"auto\")"
+name = "trial-mu-$(mu_scale:0.5)-bins-$(bins:64)-$(subtraction_mode:auto)"
 
 [[task_queue]]
 name = "sample"

@@ -247,7 +247,7 @@ where
                 }
                 let replacements =
                     trial_parameters(parameters, optimizer.seed.unwrap_or(0), index)?;
-                let child = create_controller_child_run(
+                let child = match create_controller_child_run(
                     &self.store,
                     ControllerChildRunRequest {
                         parent_run_id: self.run_id,
@@ -259,7 +259,16 @@ where
                     },
                 )
                 .await
-                .map_err(|err| StoreError::store(err.to_string()))?;
+                {
+                    Ok(child) => child,
+                    Err(err) => {
+                        let reason = format!("failed to create tuning trial {index}: {err}");
+                        self.persist_output(completed_count, running_count, failed_count, trials)
+                            .await?;
+                        self.store.fail_run_task(self.task.id, &reason).await?;
+                        return Ok(true);
+                    }
+                };
                 created_child_run_ids.push(child.run_id);
                 capacity -= 1;
             }

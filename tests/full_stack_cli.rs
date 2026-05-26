@@ -4963,7 +4963,7 @@ kind = "hyperparameter_tuning"
 max_concurrent_trials = 2
 max_failed_trials = 0
 trial_run_toml = """
-name = "tuning-child-a-$(a:0.0)-bins-$(bins:16)-mode-$(mode:\"auto\")"
+name = "tuning-child-a-$(a:0.0)-bins-$(bins:16)-mode-$(mode:auto)"
 
 [evaluator]
 kind = "unit"
