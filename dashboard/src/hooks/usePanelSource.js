@@ -200,6 +200,7 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
   const cursorRef = useRef(null);
   const panelValuesRef = useRef({});
   const pendingActionsRef = useRef([]);
+  const refreshSeededPanelValuesRef = useRef(false);
 
   useEffect(() => {
     cursorRef.current = state.cursor;
@@ -243,6 +244,9 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
             ? readStoredPanelValues(nextSourceId)
             : panelValuesRef.current;
           const panelValues = reconcilePanelValues(seededPanelValues, panelSpecs, resetRequired && !sourceChanged);
+          if (shouldSeedFromStorage && Object.keys(panelValues).length > 0) {
+            refreshSeededPanelValuesRef.current = true;
+          }
           panelValuesRef.current = panelValues;
           const panelStates = applyUpdates(previous.panelStates, response?.updates, resetRequired);
           const cursor = response?.cursor ?? previous.cursor;
@@ -265,6 +269,10 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
             error: null,
           };
         });
+        if (refreshSeededPanelValuesRef.current) {
+          refreshSeededPanelValuesRef.current = false;
+          return 1;
+        }
         if (nextPollAfterMs === null) return null;
         if (Number.isFinite(Number(nextPollAfterMs)) && Number(nextPollAfterMs) > 0) return Number(nextPollAfterMs);
         return undefined;
@@ -292,15 +300,15 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
     (panelId, value, shouldTriggerPoll = true) => {
       const existing = panelValuesRef.current?.[panelId];
       if (panelValueEquals(existing, value)) return;
+      const nextPanelValues = {
+        ...asObject(panelValuesRef.current),
+        [panelId]: value,
+      };
+      panelValuesRef.current = nextPanelValues;
       setState((previous) => {
-        const panelValues = {
-          ...asObject(previous.panelValues),
-          [panelId]: value,
-        };
-        panelValuesRef.current = panelValues;
         return {
           ...previous,
-          panelValues,
+          panelValues: nextPanelValues,
         };
       });
       if (shouldTriggerPoll) triggerPoll();
