@@ -8,8 +8,11 @@
 #   R4, MT = ymt = 550 GeV:
 #   +5.588(18)e-16 - 2.143(20)e-16 i
 #
-# Edit these three values for a longer/shorter live demo.
-replacements = { train_samples = 100000, sample_samples = 1000000, max_batch_size = 5000 }
+# Common demo knobs:
+# - `state` selects a generated state below `/home/ubuntu/gammaloop/examples/cli/BNL/states`.
+# - `mt` and `ymt` select the model mass point. R4 uses 550 GeV for both.
+# - `train_samples`, `sample_samples`, and `max_batch_size` control demo runtime.
+replacements = { state = "final_no_threshold_reference_optimized", mt = 550.0, ymt = 550.0, train_samples = 100000, sample_samples = 1000000, max_batch_size = 5000 }
 
 name = "gammaloop_bnl_r4_demo"
 
@@ -18,13 +21,13 @@ target = { kind = "vector", components = { } }
 
 [evaluator]
 kind = "gammaloop"
-state_folder = "/home/ubuntu/gammaloop/examples/cli/BNL/states/final_no_threshold_reference_optimized"
+state_folder = '/home/ubuntu/gammaloop/examples/cli/BNL/states/$(state:"final_no_threshold_reference_optimized")'
 
 [evaluator.preprocessing]
 read_only = true
 commands = [
-  "set model MT=550.0",
-  "set model ymt=550.0",
+  "set model MT=$(mt:550.0)",
+  "set model ymt=$(ymt:550.0)",
 ]
 
 [[task_queue]]
@@ -53,7 +56,7 @@ max_batch_size = "$(max_batch_size:5000)"
 [[task_queue]]
 name = "sample"
 kind = "sample"
-stop_condition = { max_samples = "$(sample_samples:1000000)", relative_error = 0.02 }
+stop_condition = { max_samples = "$(sample_samples:1000000)" }
 measurement = { quantity = "central_value" }
 sampler_aggregator = { config = { kind = "havana_inference", source = "latest_training_sampler_aggregator" } }
 accumulator = "latest"

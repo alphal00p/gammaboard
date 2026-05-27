@@ -1,17 +1,21 @@
-# Full GammaLoop + Havana training/inference example with task-level queue tuning.
+# GammaLoop ttH@LO showcase with graph Monte Carlo and observable histograms.
+#
+# The bundled state under `resources/states/epem_a_ttxh/LO/state` already
+# contains the ttH@LO observable definitions: graph/orientation/lmb-channel
+# discrete histograms plus Higgs, top, and jet kinematic distributions. The
+# GammaLoop accumulator imports and updates the whole observable bundle, so no
+# histogram list is needed in this GammaBoard config.
 
-replacements = { run_name = "gammaloop_tth" }
+replacements = { run_name = "gammaloop_tth_lo_histograms", train_samples = 100000, sample_samples = 1000000, havana_bins = 128, samples_for_update = 10000, max_batch_size = 10000 }
 
-name = '$(run_name:"gammaloop_tth")'
+name = '$(run_name:"gammaloop_tth_lo_histograms")'
 target = { kind = "vector", components = { real = 1.563e-3, imag = 0.0 } }
 
 [evaluator]
 kind = "gammaloop"
-# Assumes `gammaloop` is a sister folder of `gammaboard`.
 state_folder = "states/epem_a_ttxh/LO/state"
 integrand_name = "LO"
 
-# In-memory setup derived from the GammaLoop epem_a_ttxh LO runcard.
 [evaluator.preprocessing]
 read_only = true
 commands = [
@@ -22,6 +26,17 @@ commands = [
   "set model aEWM1=132.507",
   "set model Gf=1.166390e-05",
   "set model MZ=91.188",
+
+  # The generated state contains command blocks that define the observable
+  # quantities, histograms, and selectors. They are normally run by the
+  # GammaLoop `integrate` command block, so GammaBoard must run them explicitly
+  # while loading the evaluator.
+  "run set_differential_quantities",
+  "run set_differential_observables",
+  "run set_differential_selectors",
+
+  # Use Monte Carlo over all relevant discrete choices for the demo. This is
+  # what makes the graph/orientation/lmb-channel histograms interesting.
   """set process -p epem_a_tth -i LO string '
 [sampling]
 graphs = "monte_carlo"
@@ -35,3 +50,33 @@ lmb_channels = "monte_carlo"
 name = "accumulator"
 kind = "set_accumulator"
 accumulator = "gammaloop"
+
+[[task_queue]]
+name = "havana-train"
+kind = "sample"
+stop_condition = { max_samples = "$(train_samples:100000)" }
+accumulator = "latest"
+
+[task_queue.sampler_aggregator.config]
+kind = "havana_training"
+seed = 0
+bins = "$(havana_bins:128)"
+samples_for_update = "$(samples_for_update:10000)"
+initial_training_rate = 0.05
+final_training_rate = 0.005
+
+[task_queue.queue_tuning]
+target_batch_eval_ms = 1000.0
+max_batch_size = "$(max_batch_size:10000)"
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = "$(sample_samples:1000000)" }
+measurement = { quantity = "central_value" }
+sampler_aggregator = { config = { kind = "havana_inference", source = "latest_training_sampler_aggregator" } }
+accumulator = "latest"
+
+[task_queue.queue_tuning]
+target_batch_eval_ms = 1000.0
+max_batch_size = "$(max_batch_size:10000)"
