@@ -20,7 +20,6 @@ pub(super) fn projectors(
 ) -> Vec<TaskPanelProjector> {
     vec![
         progress_projector(geometry.nr_points(), "Image Progress", "pixels"),
-        oversampling_metric_projector(),
         image_projector(
             "pdf_adaptation_log_integrand",
             "Reference-normalized integrand",
@@ -47,6 +46,7 @@ pub(super) fn projectors(
             PanelWidth::Half,
             ImageKind::LogPlaneNormalizedPdf,
         ),
+        oversampling_metric_projector(),
         image_projector(
             "pdf_adaptation_oversampling",
             "Sampling Accuracy (Plane-Normalized)",
@@ -132,7 +132,6 @@ pub(super) fn line_projectors(
 ) -> Vec<TaskPanelProjector> {
     vec![
         progress_projector(geometry.nr_points(), "Line Progress", "points"),
-        oversampling_metric_projector(),
         line_projector(
             "pdf_adaptation_log_integrand_line",
             "Reference-normalized integrand (1D)",
@@ -147,6 +146,7 @@ pub(super) fn line_projectors(
             geometry.clone(),
             ImageKind::LogPlaneNormalizedPdf,
         ),
+        oversampling_metric_projector(),
         line_projector(
             "pdf_adaptation_oversampling_line",
             "Sampling Accuracy (Plane-Normalized, 1D)",

@@ -502,13 +502,10 @@ const extractSharedPdfImageView = (value) => {
   const zoom = extractSharedImageZoom(value);
   if (zoom?.zoom) shared.zoom = zoom.zoom;
   if (zoom?.yZoom) shared.yZoom = zoom.yZoom;
-  if (Number.isFinite(Number(value.spread))) shared.spread = clampHeatmapSpread(value.spread, 1);
   return Object.keys(shared).length > 0 ? shared : null;
 };
 const mergeSharedPdfImageView = (current, sharedView) => {
-  const next = mergeSharedImageZoom(current, sharedView);
-  if (Number.isFinite(Number(sharedView?.spread))) next.spread = clampHeatmapSpread(sharedView.spread, 1);
-  return next;
+  return mergeSharedImageZoom(current, sharedView);
 };
 
 const isPdfAdaptationImagePanelSpec = (spec) =>
@@ -1110,7 +1107,7 @@ const heatmapTooltipValueLines = (panelId, value, metricLabel = null, metricMode
   const lines = [`${label}: ${formatScientific(numeric, 6)}`];
   if (typeof panelId === "string" && panelId.includes("oversampling")) {
     const ratio = metricMode === "log10_ratio" ? 10 ** numeric : numeric + 1;
-    if (Number.isFinite(ratio)) lines.push(`PDF / integrand: ${formatScientific(ratio, 6)}`);
+    if (Number.isFinite(ratio)) lines.push(`PDF / |integrand|: ${formatScientific(ratio, 6)}`);
   } else if (typeof panelId === "string" && panelId.startsWith("pdf_adaptation_")) {
     const factor = 10 ** numeric;
     if (Number.isFinite(factor)) lines.push(`linear factor: ${formatScientific(factor, 6)}`);
