@@ -132,3 +132,32 @@ Semantics:
 - 2D response surfaces.
 - Heatmaps over vector components or histogram bins.
 - Worker capability routing per trial.
+
+
+
+Findings**
+- `PanelCollection.jsx` is the biggest complexity hotspot at ~1900 LOC. It owns panel composition, PDF special cases, ECharts charts, canvas image rendering, shared zoom state, export, and panel routing. This should be split.
+- `HistogramPanel.jsx` is also large at ~1100 LOC. Most of that is option/state plumbing and could be moved behind a smaller “chart model -> renderer” boundary.
+- There are still frontend `panel_id` special cases for `pdf_adaptation_*` and `gammaloop_*`. Some are legitimate overlays, but most would be cleaner as backend-declared panel groups/views.
+- Polling is simple and works, but it is still timer-driven across many hooks. Large finished panels benefit from `poll_after_ms = null`, but general run/task lists still poll frequently.
+- UX confirmation uses `window.confirm`, which is functional but inconsistent with the rest of the MUI UI.
+- Snackbar logic is duplicated in `App.jsx`, `WorkersWorkspace`, `WorkerDetailsPanel`, and `SettingsWorkspace`.
+
+**High-Value UX Improvements**
+- Add collapsible panel sections: `Summary`, `Plots`, `Diagnostics`, `Raw config`. Default to summary plus the most relevant plot. This avoids overwhelming PDF/GammaLoop runs.
+- Add panel pinning/favorites per task type. For demos, the operator can pin “central value”, “selected histogram”, or “sampling accuracy”.
+- Add a task “focus mode”: hide run config/evaluator/sampler config panels and show only task output. Useful for live demos.
+- Replace `window.confirm` with one reusable destructive-action dialog showing the exact run/task/node affected.
+- Improve loading states: distinguish “waiting for first output”, “task finished with no panels”, and “loading updated panels”.
+- Add keyboard/mouse hints for image panels: “wheel zoom, drag pan, double click reset”. This is needed now that the canvas renderer is custom.
+
+**Make It Lighter**
+- Split `PanelCollection.jsx` into `PanelCollection`, `Image2dPanel`, `TimeseriesPanel`, `PdfOverlayPanels`, and `panelComposition.js`. This is the best simplification.
+- Move remaining PDF overlay construction to the backend where possible. Frontend should render declared overlays instead of detecting panel pairs by ID.
+- Replace the repeated snackbar state with a tiny `SnackbarProvider` or `useSnackbar` hook.
+- Use a single `useTemplateList(kind)` hook for run/task/node templates.
+- Add `React.lazy` boundaries for heavy panels: `HistogramPanel`, `Image2dPanel`, and maybe `TablePanel`. Right now `PanelCollection` imports most renderers directly.
+- Consider replacing ECharts for simple scalar/multi-timeseries with a lighter canvas/SVG renderer later. ECharts is still valuable for histograms, but it is heavy for basic line plots.
+
+**Suggested Next Commit**
+Extract `Image2dPanel` from `PanelCollection.jsx` first. It is now self-contained and large enough to justify its own file, and this would immediately reduce the main panel component complexity without changing behavior.

@@ -232,7 +232,7 @@ fn oversampling_metric_projector() -> TaskPanelProjector {
         PanelKind::Select,
         PanelHistoryMode::None,
     );
-    spec.width = PanelWidth::Compact;
+    spec.width = PanelWidth::Full;
     spec.state = Some(select_state_spec(
         JsonValue::String(OversamplingMetric::RelativeMismatch.as_str().to_string()),
         vec![

@@ -1346,6 +1346,17 @@ const ScalarImageHeatmapPanel = ({
       observer.disconnect();
     };
   }, []);
+  useEffect(() => {
+    const element = figureRef.current;
+    if (!element) return undefined;
+    const preventPageScroll = (event) => {
+      event.preventDefault();
+    };
+    element.addEventListener("wheel", preventPageScroll, { passive: false });
+    return () => {
+      element.removeEventListener("wheel", preventPageScroll);
+    };
+  }, []);
 
   const canvasPointFromEvent = useCallback((event) => {
     const canvas = canvasRef.current;
