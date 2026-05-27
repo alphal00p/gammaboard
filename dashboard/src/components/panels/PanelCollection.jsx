@@ -217,7 +217,7 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
   const stateMap = new Map(asArray(panelStates).map((panel) => [panel.panel_id, panel]));
   let renderablePanels = asArray(panelSpecs).map((spec) => ({
     descriptor: spec,
-    state: stateMap.get(spec.panel_id) || null,
+    state: normalizePanelStateForPanelValues(stateMap.get(spec.panel_id) || null, panelValues),
     value: panelValues?.[spec.panel_id],
   }));
   const bundlePanel = renderablePanels.find(({ descriptor, state }) => {
@@ -350,6 +350,58 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
   }
 
   return sortRenderablePanels(renderablePanels);
+};
+
+const PDF_OVERSAMPLING_METRIC_PANEL_ID = "pdf_adaptation_oversampling_metric";
+const PDF_OVERSAMPLING_RELATIVE_MISMATCH = "relative_mismatch";
+const PDF_OVERSAMPLING_LOG10_RATIO = "log10_ratio";
+
+const pdfOversamplingMetricLabel = (mode) =>
+  mode === PDF_OVERSAMPLING_LOG10_RATIO ? "log10(PDF / |integrand|)" : "PDF / |integrand| - 1";
+
+const transformPdfOversamplingValue = (value, fromMode, toMode) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || fromMode === toMode) return value;
+  if (fromMode === PDF_OVERSAMPLING_RELATIVE_MISMATCH && toMode === PDF_OVERSAMPLING_LOG10_RATIO) {
+    const ratio = numeric + 1;
+    return ratio > 0 && Number.isFinite(ratio) ? Math.log10(ratio) : Number.NaN;
+  }
+  if (fromMode === PDF_OVERSAMPLING_LOG10_RATIO && toMode === PDF_OVERSAMPLING_RELATIVE_MISMATCH) {
+    const ratio = 10 ** numeric;
+    return Number.isFinite(ratio) ? ratio - 1 : Number.NaN;
+  }
+  return value;
+};
+
+const normalizePanelStateForPanelValues = (state, panelValues) => {
+  if (!state || typeof state?.panel_id !== "string" || !state.panel_id.includes("pdf_adaptation_oversampling")) {
+    return state;
+  }
+  const selectedMode =
+    panelValues?.[PDF_OVERSAMPLING_METRIC_PANEL_ID] === PDF_OVERSAMPLING_LOG10_RATIO
+      ? PDF_OVERSAMPLING_LOG10_RATIO
+      : PDF_OVERSAMPLING_RELATIVE_MISMATCH;
+  const currentMode =
+    state.metric_mode === PDF_OVERSAMPLING_LOG10_RATIO
+      ? PDF_OVERSAMPLING_LOG10_RATIO
+      : PDF_OVERSAMPLING_RELATIVE_MISMATCH;
+  if (state.kind !== "image2d") {
+    return {
+      ...state,
+      metric_label: pdfOversamplingMetricLabel(selectedMode),
+      metric_mode: selectedMode,
+    };
+  }
+  const values =
+    currentMode === selectedMode
+      ? state.values
+      : asArray(state.values).map((value) => transformPdfOversamplingValue(value, currentMode, selectedMode));
+  return {
+    ...state,
+    values,
+    metric_label: pdfOversamplingMetricLabel(selectedMode),
+    metric_mode: selectedMode,
+  };
 };
 
 const inferXAxisLabel = (panelId) => (String(panelId || "").includes("_history") ? "Nr samples" : null);
