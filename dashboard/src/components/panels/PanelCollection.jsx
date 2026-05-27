@@ -444,7 +444,6 @@ const histogramOverlayColors = ["#9b2226", "#3a86ff", "#ff006e", "#6a994e", "#ff
 const scalarHeatmapColors = ["#1d4ed8", "#16a34a", "#dc2626"];
 const HEATMAP_LEGEND_WIDTH = 116;
 const HEATMAP_LEGEND_GAP = 12;
-const HEATMAP_PROGRESSIVE_THRESHOLD = 256 * 256;
 
 const panelColumnSpan = (descriptor) => {
   switch (descriptor?.width) {
@@ -995,16 +994,6 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
   );
 };
 
-const buildLinspaceParameters = (range, count) => {
-  const [min, max] = asArray(range);
-  if (!Number.isFinite(min) || !Number.isFinite(max) || count <= 0) {
-    return Array.from({ length: count }, (_, index) => index);
-  }
-  if (count === 1) return [min];
-  const step = (max - min) / (count - 1);
-  return Array.from({ length: count }, (_, index) => min + step * index);
-};
-
 const buildScalarHeatmapScale = (values, normalizationMode, spread = 1) => {
   const finite = values.filter((value) => Number.isFinite(value));
   if (finite.length === 0) {
@@ -1024,19 +1013,6 @@ const buildScalarHeatmapScale = (values, normalizationMode, spread = 1) => {
   return { zmin, zmax };
 };
 
-const buildInvalidCellOverlay = (invalidIndices, width, height) => {
-  const points = Array.from(invalidIndices || [])
-    .map((index) => {
-      const row = Math.floor(index / width);
-      const col = index % width;
-      if (row < 0 || row >= height || col < 0 || col >= width) return null;
-      return [col, row];
-    })
-    .filter(Boolean);
-
-  return points;
-};
-
 const estimateHeatmapChartHeight = (width, height, panelWidth, margins) => {
   if (width <= 0 || height <= 0) return 360;
   const availableWidth =
@@ -1049,21 +1025,91 @@ const estimateHeatmapChartHeight = (width, height, panelWidth, margins) => {
   return Math.max(220, Math.round(innerHeight + margins.top + margins.bottom));
 };
 
-const heatmapMetricLabel = (panelId) => {
+const parseHexColor = (value) => {
+  const text = String(value || "").replace(/^#/, "");
+  if (text.length !== 6) return [0, 0, 0];
+  return [0, 2, 4].map((offset) => Number.parseInt(text.slice(offset, offset + 2), 16) || 0);
+};
+
+const scalarHeatmapRgb = scalarHeatmapColors.map(parseHexColor);
+
+const mixRgb = (left, right, t) => {
+  const clamped = Math.max(0, Math.min(1, t));
+  return [
+    Math.round(left[0] + (right[0] - left[0]) * clamped),
+    Math.round(left[1] + (right[1] - left[1]) * clamped),
+    Math.round(left[2] + (right[2] - left[2]) * clamped),
+  ];
+};
+
+const heatmapColorForValue = (value, zmin, zmax) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return [255, 0, 255];
+  const min = Number(zmin);
+  const max = Number(zmax);
+  const ratio = max > min ? Math.max(0, Math.min(1, (numeric - min) / (max - min))) : 0.5;
+  if (ratio <= 0.5) return mixRgb(scalarHeatmapRgb[0], scalarHeatmapRgb[1], ratio * 2);
+  return mixRgb(scalarHeatmapRgb[1], scalarHeatmapRgb[2], (ratio - 0.5) * 2);
+};
+
+const parameterAtRasterIndex = (range, count, index) => {
+  const [min, max] = asArray(range);
+  if (!Number.isFinite(min) || !Number.isFinite(max) || count <= 0) return index;
+  if (count === 1) return min;
+  return min + ((max - min) * index) / (count - 1);
+};
+
+const rasterIndexRangeFromZoom = (count, zoomRange) => {
+  const normalized = normalizeZoomRange(zoomRange) || FULL_ZOOM;
+  const safeCount = Math.max(1, count);
+  const start = Math.max(0, Math.min(safeCount - 1, Math.floor((normalized.start / 100) * safeCount)));
+  const exclusiveEnd = Math.max(start + 1, Math.min(safeCount, Math.ceil((normalized.end / 100) * safeCount)));
+  return { start, exclusiveEnd, count: exclusiveEnd - start };
+};
+
+const clampZoomRangeWithWidth = (start, width) => {
+  const clampedWidth = Math.max(0.1, Math.min(100, width));
+  const clampedStart = Math.max(0, Math.min(100 - clampedWidth, start));
+  return { start: clampedStart, end: clampedStart + clampedWidth };
+};
+
+const zoomRangeAroundFraction = (zoomRange, fraction, scale) => {
+  const normalized = normalizeZoomRange(zoomRange) || FULL_ZOOM;
+  const currentWidth = Math.max(0.1, normalized.end - normalized.start);
+  const nextWidth = Math.max(0.1, Math.min(100, currentWidth * scale));
+  const anchor = normalized.start + currentWidth * Math.max(0, Math.min(1, fraction));
+  return clampZoomRangeWithWidth(anchor - nextWidth * Math.max(0, Math.min(1, fraction)), nextWidth);
+};
+
+const panZoomRange = (zoomRange, deltaPercent) => {
+  const normalized = normalizeZoomRange(zoomRange) || FULL_ZOOM;
+  const width = Math.max(0.1, normalized.end - normalized.start);
+  return clampZoomRangeWithWidth(normalized.start + deltaPercent, width);
+};
+
+const visiblePlotRect = (canvasWidth, canvasHeight, margins) => ({
+  x: margins.left,
+  y: margins.top,
+  width: Math.max(1, canvasWidth - margins.left - margins.right),
+  height: Math.max(1, canvasHeight - margins.top - margins.bottom),
+});
+
+const heatmapMetricLabel = (panelId, metricLabel = null) => {
+  if (typeof metricLabel === "string" && metricLabel.trim()) return metricLabel.trim();
   if (typeof panelId !== "string") return "value";
-  if (panelId.includes("oversampling")) return "1 - PDF / integrand";
+  if (panelId.includes("oversampling")) return "PDF / |integrand| - 1";
   if (panelId.includes("log_pdf")) return "log10(normalized PDF)";
   if (panelId.includes("log_integrand")) return "log10(normalized integrand)";
   return "value";
 };
 
-const heatmapTooltipValueLines = (panelId, value) => {
+const heatmapTooltipValueLines = (panelId, value, metricLabel = null, metricMode = null) => {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return ["value: n/a"];
-  const label = heatmapMetricLabel(panelId);
+  const label = heatmapMetricLabel(panelId, metricLabel);
   const lines = [`${label}: ${formatScientific(numeric, 6)}`];
   if (typeof panelId === "string" && panelId.includes("oversampling")) {
-    const ratio = 1 - numeric;
+    const ratio = metricMode === "log10_ratio" ? 10 ** numeric : numeric + 1;
     if (Number.isFinite(ratio)) lines.push(`PDF / integrand: ${formatScientific(ratio, 6)}`);
   } else if (typeof panelId === "string" && panelId.startsWith("pdf_adaptation_")) {
     const factor = 10 ** numeric;
@@ -1072,11 +1118,11 @@ const heatmapTooltipValueLines = (panelId, value) => {
   return lines;
 };
 
-const HeatmapScaleLegend = ({ zmin, zmax, normalizationMode, panelId }) => {
+const HeatmapScaleLegend = ({ zmin, zmax, normalizationMode, panelId, metricLabel = null }) => {
   const max = Number(zmax);
   const min = Number(zmin);
   const showMidpoint = normalizationMode === "symmetric" && min < 0 && max > 0;
-  const label = heatmapMetricLabel(panelId);
+  const label = heatmapMetricLabel(panelId, metricLabel);
   return (
     <Box sx={{ width: HEATMAP_LEGEND_WIDTH, flexShrink: 0, display: "grid", gap: 0.75 }}>
       <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.15 }}>
@@ -1135,17 +1181,19 @@ const ScalarImageHeatmapPanel = ({
   values,
   invalidIndices,
   normalizationMode,
+  metricLabel = null,
+  metricMode = null,
   xRange,
   yRange,
   value = undefined,
   onValueChange = null,
 }) => {
   const figureRef = useRef(null);
-  const echartsRef = useRef(null);
-  const suppressChartEventsRef = useRef(false);
+  const canvasRef = useRef(null);
+  const scratchCanvasRef = useRef(null);
+  const dragRef = useRef(null);
   const [panelWidth, setPanelWidth] = useState(0);
-  const xParameters = useMemo(() => buildLinspaceParameters(xRange, width), [width, xRange]);
-  const yParameters = useMemo(() => buildLinspaceParameters(yRange, height), [height, yRange]);
+  const [tooltip, setTooltip] = useState(null);
   const totalCells = Math.max(0, width * height);
   const boundedValues = useMemo(() => values.slice(0, totalCells), [totalCells, values]);
   const isPdfPanel = typeof panelId === "string" && panelId.startsWith("pdf_adaptation_");
@@ -1156,172 +1204,127 @@ const ScalarImageHeatmapPanel = ({
     () => buildScalarHeatmapScale(boundedValues, normalizationMode, spread),
     [boundedValues, normalizationMode, spread],
   );
-  const invalidOverlay = useMemo(
-    () => buildInvalidCellOverlay(invalidIndices, width, height),
-    [height, invalidIndices, width],
-  );
-  const heatmapData = useMemo(() => {
-    const points = [];
-    for (let row = 0; row < height; row += 1) {
-      for (let col = 0; col < width; col += 1) {
-        const index = row * width + col;
-        if (index >= boundedValues.length) continue;
-        if (invalidIndices?.has(index)) continue;
-        const value = Number(boundedValues[index]);
-        if (!Number.isFinite(value)) continue;
-        points.push([col, row, value]);
-      }
-    }
-    return points;
-  }, [boundedValues, height, invalidIndices, width]);
-
   const heatmapMargins = useMemo(() => ({ left: 56, right: 24, top: 16, bottom: 44 }), []);
   const zoomRange = useMemo(() => readZoomFromPanelValue(value, FULL_ZOOM), [value]);
   const yZoomRange = useMemo(() => readYZoomFromPanelValue(value, FULL_ZOOM), [value]);
   const chartHeight = useMemo(() => {
     return estimateHeatmapChartHeight(width, height, panelWidth, heatmapMargins);
   }, [heatmapMargins.bottom, heatmapMargins.left, heatmapMargins.right, heatmapMargins.top, height, panelWidth, width]);
-  const useProgressiveHeatmap = totalCells > HEATMAP_PROGRESSIVE_THRESHOLD;
 
-  const option = useMemo(
-    () => ({
-      animation: false,
-      grid: heatmapMargins,
-      xAxis: {
-        type: "category",
-        data: Array.from({ length: width }, (_, index) => index),
-        name: "t",
-        axisLine: { show: true, lineStyle: { color: "#94a3b8" } },
-        axisTick: { show: true },
-        axisLabel: {
-          color: "#64748b",
-          fontSize: 11,
-          formatter: (value) => {
-            const index = Number(value);
-            const parameter = Number.isFinite(index) ? xParameters[Math.max(0, Math.min(width - 1, index))] : Number.NaN;
-            return Number.isFinite(parameter) ? formatScientific(parameter, 2) : "";
-          },
-          interval: Math.max(0, Math.ceil(width / 12) - 1),
-        },
-      },
-      yAxis: {
-        type: "category",
-        data: Array.from({ length: height }, (_, index) => index),
-        name: "s",
-        axisLine: { show: true, lineStyle: { color: "#94a3b8" } },
-        axisTick: { show: true },
-        axisLabel: {
-          color: "#64748b",
-          fontSize: 11,
-          formatter: (value) => {
-            const index = Number(value);
-            const parameter = Number.isFinite(index) ? yParameters[Math.max(0, Math.min(height - 1, index))] : Number.NaN;
-            return Number.isFinite(parameter) ? formatScientific(parameter, 2) : "";
-          },
-          interval: Math.max(0, Math.ceil(height / 12) - 1),
-        },
-      },
-      tooltip: {
-        trigger: "item",
-        confine: true,
-        formatter: (params) => {
-          if (params?.seriesName === "invalid") return "invalid value";
-          const data = Array.isArray(params?.data) ? params.data : [];
-          const [col, row, value] = data;
-          const x = Number.isFinite(Number(col)) ? xParameters[Math.max(0, Math.min(width - 1, Number(col)))] : Number.NaN;
-          const y = Number.isFinite(Number(row))
-            ? yParameters[Math.max(0, Math.min(height - 1, Number(row)))]
-            : Number.NaN;
-          return [
-            `t: ${formatScientific(Number(x), 4)}`,
-            `s: ${formatScientific(Number(y), 4)}`,
-            ...heatmapTooltipValueLines(panelId, value),
-          ].join("<br/>");
-        },
-      },
-      visualMap: {
-        show: false,
-        min: zmin,
-        max: zmax,
-        dimension: 2,
-        inRange: { color: scalarHeatmapColors },
-      },
-      dataZoom: buildDataZoom(zoomRange, true, true, yZoomRange, true),
-      series: [
-        {
-          type: "heatmap",
-          name: "value",
-          data: heatmapData,
-          progressive: useProgressiveHeatmap ? 5000 : 0,
-          progressiveThreshold: HEATMAP_PROGRESSIVE_THRESHOLD,
-          emphasis: { disabled: true },
-        },
-        {
-          type: "scatter",
-          name: "invalid",
-          data: invalidOverlay,
-          symbol: "rect",
-          symbolSize: 8,
-          itemStyle: { color: "#ff00ff" },
-          emphasis: { disabled: true },
-        },
-      ],
-    }),
-    [
-      heatmapData,
-      heatmapMargins,
-      height,
-      invalidOverlay,
-      panelId,
-      width,
-      xParameters,
-      zoomRange,
-      yZoomRange,
-      yParameters,
-      zmax,
-      zmin,
-      useProgressiveHeatmap,
-    ],
+  const updateZoom = useCallback(
+    (nextX, nextY) => {
+      if (typeof onValueChange !== "function" || !panelId) return;
+      onValueChange(panelId, writeZoomPanelValue(value, nextX, null, nextY), false);
+    },
+    [onValueChange, panelId, value],
   );
+
   useEffect(() => {
-    suppressChartEventsRef.current = true;
+    const canvas = canvasRef.current;
+    if (!canvas || panelWidth <= 0 || chartHeight <= 0) return undefined;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return undefined;
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const cssWidth = Math.max(1, Math.floor(panelWidth - HEATMAP_LEGEND_WIDTH - HEATMAP_LEGEND_GAP));
+    const cssHeight = Math.max(1, Math.floor(chartHeight));
     const rafId = requestAnimationFrame(() => {
-      suppressChartEventsRef.current = false;
-    });
-    return () => cancelAnimationFrame(rafId);
-  }, [option]);
-  const onDataZoom = useMemo(
-    () => ({
-      datazoom: (event) => {
-        if (suppressChartEventsRef.current) return;
-        if (typeof onValueChange !== "function" || !panelId) return;
-        const next = readDataZoomRanges(event);
-        const nextX = next?.x || zoomRange;
-        const nextY = next?.y || yZoomRange;
-        const xChanged = Boolean(next?.x) && zoomRangeChanged(zoomRange, nextX);
-        const yChanged = Boolean(next?.y) && zoomRangeChanged(yZoomRange, nextY);
-        if (!xChanged && !yChanged) return;
-        onValueChange(panelId, writeZoomPanelValue(value, nextX, null, nextY), false);
-      },
-    }),
-    [onValueChange, panelId, value, yZoomRange, zoomRange],
-  );
-  useEffect(() => {
-    const chart = echartsRef.current?.getEchartsInstance?.();
-    if (!chart) return undefined;
-    suppressChartEventsRef.current = true;
-    let settleRafId = null;
-    const rafId = requestAnimationFrame(() => {
-      chart.resize();
-      settleRafId = requestAnimationFrame(() => {
-        suppressChartEventsRef.current = false;
-      });
+      canvas.width = Math.max(1, Math.floor(cssWidth * dpr));
+      canvas.height = Math.max(1, Math.floor(cssHeight * dpr));
+      canvas.style.width = `${cssWidth}px`;
+      canvas.style.height = `${cssHeight}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, cssWidth, cssHeight);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, cssWidth, cssHeight);
+
+      const plot = visiblePlotRect(cssWidth, cssHeight, heatmapMargins);
+      const xWindow = rasterIndexRangeFromZoom(width, zoomRange);
+      const yWindow = rasterIndexRangeFromZoom(height, yZoomRange);
+      const visibleCols = Math.max(1, xWindow.count);
+      const visibleRows = Math.max(1, yWindow.count);
+      const scratch = scratchCanvasRef.current || document.createElement("canvas");
+      scratchCanvasRef.current = scratch;
+      scratch.width = visibleCols;
+      scratch.height = visibleRows;
+      const scratchCtx = scratch.getContext("2d");
+      const image = scratchCtx.createImageData(visibleCols, visibleRows);
+      for (let row = 0; row < visibleRows; row += 1) {
+        const sourceRow = yWindow.start + row;
+        for (let col = 0; col < visibleCols; col += 1) {
+          const sourceCol = xWindow.start + col;
+          const sourceIndex = sourceRow * width + sourceCol;
+          const targetIndex = (row * visibleCols + col) * 4;
+          const rgb = invalidIndices?.has(sourceIndex)
+            ? [255, 0, 255]
+            : heatmapColorForValue(boundedValues[sourceIndex], zmin, zmax);
+          image.data[targetIndex] = rgb[0];
+          image.data[targetIndex + 1] = rgb[1];
+          image.data[targetIndex + 2] = rgb[2];
+          image.data[targetIndex + 3] = 255;
+        }
+      }
+      scratchCtx.putImageData(image, 0, 0);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(scratch, plot.x, plot.y, plot.width, plot.height);
+
+      ctx.strokeStyle = "#94a3b8";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(plot.x, plot.y, plot.width, plot.height);
+      ctx.fillStyle = "#64748b";
+      ctx.font = "11px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      const xTickCount = 6;
+      for (let tick = 0; tick <= xTickCount; tick += 1) {
+        const fraction = tick / xTickCount;
+        const x = plot.x + plot.width * fraction;
+        const index = xWindow.start + (visibleCols - 1) * fraction;
+        ctx.beginPath();
+        ctx.moveTo(x, plot.y + plot.height);
+        ctx.lineTo(x, plot.y + plot.height + 4);
+        ctx.stroke();
+        ctx.fillText(formatScientific(parameterAtRasterIndex(xRange, width, index), 2), x, plot.y + plot.height + 7);
+      }
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      const yTickCount = 6;
+      for (let tick = 0; tick <= yTickCount; tick += 1) {
+        const fraction = tick / yTickCount;
+        const y = plot.y + plot.height * fraction;
+        const index = yWindow.start + (visibleRows - 1) * fraction;
+        ctx.beginPath();
+        ctx.moveTo(plot.x - 4, y);
+        ctx.lineTo(plot.x, y);
+        ctx.stroke();
+        ctx.fillText(formatScientific(parameterAtRasterIndex(yRange, height, index), 2), plot.x - 7, y);
+      }
+      ctx.textAlign = "center";
+      ctx.textBaseline = "alphabetic";
+      ctx.fillText("t", plot.x + plot.width / 2, cssHeight - 7);
+      ctx.save();
+      ctx.translate(12, plot.y + plot.height / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillText("s", 0, 0);
+      ctx.restore();
     });
     return () => {
       cancelAnimationFrame(rafId);
-      if (settleRafId != null) cancelAnimationFrame(settleRafId);
     };
-  }, [chartHeight, panelWidth]);
+  }, [
+    boundedValues,
+    chartHeight,
+    heatmapMargins,
+    height,
+    invalidIndices,
+    panelWidth,
+    width,
+    xRange,
+    yRange,
+    yZoomRange,
+    zmax,
+    zmin,
+    zoomRange,
+  ]);
   useEffect(() => {
     const element = figureRef.current;
     if (!element || typeof ResizeObserver === "undefined") return undefined;
@@ -1343,6 +1346,150 @@ const ScalarImageHeatmapPanel = ({
       observer.disconnect();
     };
   }, []);
+
+  const canvasPointFromEvent = useCallback((event) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+      width: rect.width,
+      height: rect.height,
+    };
+  }, []);
+
+  const tooltipFromPoint = useCallback(
+    (point) => {
+      if (!point) return null;
+      const plot = visiblePlotRect(point.width, point.height, heatmapMargins);
+      if (
+        point.x < plot.x ||
+        point.x > plot.x + plot.width ||
+        point.y < plot.y ||
+        point.y > plot.y + plot.height
+      ) {
+        return null;
+      }
+      const xWindow = rasterIndexRangeFromZoom(width, zoomRange);
+      const yWindow = rasterIndexRangeFromZoom(height, yZoomRange);
+      const col = Math.max(
+        xWindow.start,
+        Math.min(
+          xWindow.exclusiveEnd - 1,
+          xWindow.start + Math.floor(((point.x - plot.x) / plot.width) * xWindow.count),
+        ),
+      );
+      const row = Math.max(
+        yWindow.start,
+        Math.min(
+          yWindow.exclusiveEnd - 1,
+          yWindow.start + Math.floor(((point.y - plot.y) / plot.height) * yWindow.count),
+        ),
+      );
+      const index = row * width + col;
+      const lines = invalidIndices?.has(index)
+        ? ["invalid value"]
+        : [
+            `t: ${formatScientific(parameterAtRasterIndex(xRange, width, col), 4)}`,
+            `s: ${formatScientific(parameterAtRasterIndex(yRange, height, row), 4)}`,
+            ...heatmapTooltipValueLines(panelId, boundedValues[index], metricLabel, metricMode),
+          ];
+      return {
+        x: Math.min(point.width - 180, point.x + 12),
+        y: Math.max(8, point.y - 8),
+        lines,
+      };
+    },
+    [
+      boundedValues,
+      heatmapMargins,
+      height,
+      invalidIndices,
+      metricLabel,
+      metricMode,
+      panelId,
+      width,
+      xRange,
+      yRange,
+      yZoomRange,
+      zoomRange,
+    ],
+  );
+
+  const handleWheel = useCallback(
+    (event) => {
+      const point = canvasPointFromEvent(event);
+      if (!point) return;
+      event.preventDefault();
+      const plot = visiblePlotRect(point.width, point.height, heatmapMargins);
+      if (
+        point.x < plot.x ||
+        point.x > plot.x + plot.width ||
+        point.y < plot.y ||
+        point.y > plot.y + plot.height
+      ) {
+        return;
+      }
+      const scale = event.deltaY < 0 ? 0.82 : 1.22;
+      updateZoom(
+        zoomRangeAroundFraction(zoomRange, (point.x - plot.x) / plot.width, scale),
+        zoomRangeAroundFraction(yZoomRange, (point.y - plot.y) / plot.height, scale),
+      );
+    },
+    [canvasPointFromEvent, heatmapMargins, updateZoom, yZoomRange, zoomRange],
+  );
+
+  const handlePointerMove = useCallback(
+    (event) => {
+      const point = canvasPointFromEvent(event);
+      if (!point) return;
+      if (dragRef.current) {
+        const drag = dragRef.current;
+        const plot = visiblePlotRect(point.width, point.height, heatmapMargins);
+        const xSpan = Math.max(0.1, drag.zoom.end - drag.zoom.start);
+        const ySpan = Math.max(0.1, drag.yZoom.end - drag.yZoom.start);
+        updateZoom(
+          panZoomRange(drag.zoom, -((point.x - drag.x) / plot.width) * xSpan),
+          panZoomRange(drag.yZoom, -((point.y - drag.y) / plot.height) * ySpan),
+        );
+        return;
+      }
+      setTooltip(tooltipFromPoint(point));
+    },
+    [canvasPointFromEvent, heatmapMargins, tooltipFromPoint, updateZoom],
+  );
+
+  const handlePointerDown = useCallback(
+    (event) => {
+      const point = canvasPointFromEvent(event);
+      if (!point) return;
+      const plot = visiblePlotRect(point.width, point.height, heatmapMargins);
+      if (
+        point.x < plot.x ||
+        point.x > plot.x + plot.width ||
+        point.y < plot.y ||
+        point.y > plot.y + plot.height
+      ) {
+        return;
+      }
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      dragRef.current = {
+        x: point.x,
+        y: point.y,
+        zoom: normalizeZoomRange(zoomRange) || FULL_ZOOM,
+        yZoom: normalizeZoomRange(yZoomRange) || FULL_ZOOM,
+      };
+      setTooltip(null);
+    },
+    [canvasPointFromEvent, heatmapMargins, yZoomRange, zoomRange],
+  );
+
+  const handlePointerUp = useCallback((event) => {
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    dragRef.current = null;
+  }, []);
+
   return (
     <Card variant="outlined">
       <CardContent>
@@ -1393,7 +1540,6 @@ const ScalarImageHeatmapPanel = ({
                 },
               }}
               elementRef={figureRef}
-              echartsRef={echartsRef}
               onResetView={
                 panelId && typeof onValueChange === "function"
                   ? () => onValueChange(panelId, writeZoomPanelValue(value, FULL_ZOOM, null, FULL_ZOOM), false)
@@ -1411,18 +1557,58 @@ const ScalarImageHeatmapPanel = ({
           }}
         >
           <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, height: "100%" }}>
-            <Box sx={{ flex: 1, minWidth: 0, height: "100%" }}>
-              <LazyChart
-                ref={echartsRef}
-                option={option}
-                notMerge={false}
-                onEvents={onDataZoom}
-                lazyUpdate
-                opts={{ renderer: "canvas" }}
-                style={{ width: "100%", height: "100%" }}
+            <Box sx={{ flex: 1, minWidth: 0, height: "100%", position: "relative" }}>
+              <canvas
+                ref={canvasRef}
+                onWheel={handleWheel}
+                onPointerMove={handlePointerMove}
+                onPointerDown={handlePointerDown}
+                onPointerUp={handlePointerUp}
+                onPointerCancel={handlePointerUp}
+                onPointerLeave={() => {
+                  if (!dragRef.current) setTooltip(null);
+                }}
+                onDoubleClick={() => updateZoom(FULL_ZOOM, FULL_ZOOM)}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  height: "100%",
+                  cursor: dragRef.current ? "grabbing" : "grab",
+                  touchAction: "none",
+                }}
               />
+              {tooltip ? (
+                <Box
+                  sx={{
+                    position: "absolute",
+                    left: tooltip.x,
+                    top: tooltip.y,
+                    bgcolor: "rgba(15,23,42,0.92)",
+                    color: "#fff",
+                    borderRadius: 1,
+                    px: 1,
+                    py: 0.75,
+                    pointerEvents: "none",
+                    fontSize: 12,
+                    fontFamily: "monospace",
+                    lineHeight: 1.35,
+                    maxWidth: 260,
+                    zIndex: 1,
+                  }}
+                >
+                  {tooltip.lines.map((line) => (
+                    <Box key={line}>{line}</Box>
+                  ))}
+                </Box>
+              ) : null}
             </Box>
-            <HeatmapScaleLegend zmin={zmin} zmax={zmax} normalizationMode={normalizationMode} panelId={panelId} />
+            <HeatmapScaleLegend
+              zmin={zmin}
+              zmax={zmax}
+              normalizationMode={normalizationMode}
+              panelId={panelId}
+              metricLabel={metricLabel}
+            />
           </Box>
         </Box>
       </CardContent>
@@ -1440,6 +1626,8 @@ const imagePanelPropsEqual = (left, right) =>
   left.state?.height === right.state?.height &&
   left.state?.color_mode === right.state?.color_mode &&
   left.state?.normalization_mode === right.state?.normalization_mode &&
+  left.state?.metric_label === right.state?.metric_label &&
+  left.state?.metric_mode === right.state?.metric_mode &&
   left.state?.x_range === right.state?.x_range &&
   left.state?.y_range === right.state?.y_range &&
   left.state?.values === right.state?.values &&
@@ -1456,6 +1644,8 @@ const Image2dPanel = memo(({ title, state, value = undefined, onValueChange = nu
   }, [state?.imag_values]);
   const invalidIndices = useMemo(() => new Set(asArray(state?.invalid_indices)), [state?.invalid_indices]);
   const normalizationMode = state?.normalization_mode || "min_max";
+  const metricLabel = typeof state?.metric_label === "string" ? state.metric_label : null;
+  const metricMode = typeof state?.metric_mode === "string" ? state.metric_mode : null;
   const xRange = useMemo(() => asArray(state?.x_range), [state?.x_range]);
   const yRange = useMemo(() => asArray(state?.y_range), [state?.y_range]);
   const scalarValues = useMemo(() => {
@@ -1476,6 +1666,8 @@ const Image2dPanel = memo(({ title, state, value = undefined, onValueChange = nu
       values={scalarValues}
       invalidIndices={invalidIndices}
       normalizationMode={normalizationMode}
+      metricLabel={metricLabel}
+      metricMode={metricMode}
       xRange={xRange}
       yRange={yRange}
       value={value}

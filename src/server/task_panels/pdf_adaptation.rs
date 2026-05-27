@@ -8,7 +8,7 @@ use crate::sampling::PdfAdaptationImagePersistedOutput;
 use crate::server::panels::{
     HistogramBin, ImageColorMode, ImageNormalizationMode, PanelHistoryMode, PanelKind, PanelState,
     PanelWidth, PlotPoint, key_value, key_value_panel, panel_spec, progress_panel,
-    scalar_timeseries_panel, with_panel_width,
+    scalar_timeseries_panel, select_state_spec, state_option, with_panel_width,
 };
 use serde_json::{Value as JsonValue, json};
 
@@ -20,6 +20,7 @@ pub(super) fn projectors(
 ) -> Vec<TaskPanelProjector> {
     vec![
         progress_projector(geometry.nr_points(), "Image Progress", "pixels"),
+        oversampling_metric_projector(),
         image_projector(
             "pdf_adaptation_log_integrand",
             "Reference-normalized integrand",
@@ -131,6 +132,7 @@ pub(super) fn line_projectors(
 ) -> Vec<TaskPanelProjector> {
     vec![
         progress_projector(geometry.nr_points(), "Line Progress", "points"),
+        oversampling_metric_projector(),
         line_projector(
             "pdf_adaptation_log_integrand_line",
             "Reference-normalized integrand (1D)",
@@ -194,6 +196,62 @@ enum ImageKind {
     OversamplingPlaneNormalized,
 }
 
+#[derive(Clone, Copy)]
+enum OversamplingMetric {
+    RelativeMismatch,
+    Log10Ratio,
+}
+
+impl OversamplingMetric {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::RelativeMismatch => "relative_mismatch",
+            Self::Log10Ratio => "log10_ratio",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::RelativeMismatch => "PDF / |integrand| - 1",
+            Self::Log10Ratio => "log10(PDF / |integrand|)",
+        }
+    }
+}
+
+fn selected_oversampling_metric(ctx: &TaskPanelContext<'_>) -> OversamplingMetric {
+    match ctx.selected_value("pdf_adaptation_oversampling_metric") {
+        Some("log10_ratio") => OversamplingMetric::Log10Ratio,
+        _ => OversamplingMetric::RelativeMismatch,
+    }
+}
+
+fn oversampling_metric_projector() -> TaskPanelProjector {
+    let mut spec = panel_spec(
+        "pdf_adaptation_oversampling_metric",
+        "Sampling Accuracy Metric",
+        PanelKind::Select,
+        PanelHistoryMode::None,
+    );
+    spec.width = PanelWidth::Compact;
+    spec.state = Some(select_state_spec(
+        JsonValue::String(OversamplingMetric::RelativeMismatch.as_str().to_string()),
+        vec![
+            state_option(
+                OversamplingMetric::RelativeMismatch.as_str(),
+                "Relative mismatch",
+            ),
+            state_option(OversamplingMetric::Log10Ratio.as_str(), "log10 ratio"),
+        ],
+        None,
+    ));
+    panel_projector_with_source(
+        spec,
+        TaskPanelCurrentSourcePolicy::PersistedFirst,
+        |_ctx| Ok(None),
+        |_ctx| Ok(None),
+    )
+}
+
 fn progress_projector(total: usize, label: &'static str, unit: &'static str) -> TaskPanelProjector {
     panel_projector_with_source(
         with_panel_width(
@@ -242,7 +300,14 @@ fn line_projector(
             let Some(derived) = current_derived(ctx)? else {
                 return Ok(None);
             };
-            build_line_panel(panel_id, &geometry, &derived, image_kind).map(Some)
+            build_line_panel(
+                panel_id,
+                &geometry,
+                &derived,
+                image_kind,
+                selected_oversampling_metric(ctx),
+            )
+            .map(Some)
         },
         |_ctx| Ok(None),
     )
@@ -265,7 +330,14 @@ fn image_projector(
             let Some(derived) = current_derived(ctx)? else {
                 return Ok(None);
             };
-            build_image_panel(panel_id, &geometry, &derived, image_kind).map(Some)
+            build_image_panel(
+                panel_id,
+                &geometry,
+                &derived,
+                image_kind,
+                selected_oversampling_metric(ctx),
+            )
+            .map(Some)
         },
         |_ctx| Ok(None),
     )
@@ -292,7 +364,12 @@ fn histogram_projector(
             let Some(derived) = current_derived(ctx)? else {
                 return Ok(None);
             };
-            Ok(Some(histogram_panel(panel_id, &derived, image_kind)))
+            Ok(Some(histogram_panel(
+                panel_id,
+                &derived,
+                image_kind,
+                selected_oversampling_metric(ctx),
+            )))
         },
         |_ctx| Ok(None),
     )
@@ -368,8 +445,8 @@ struct DerivedValues {
     log_plane_normalized_integrand: Vec<Option<f64>>,
     log_reference_normalized_integrand: Vec<Option<f64>>,
     log_plane_normalized_pdf: Vec<Option<f64>>,
-    oversampling_legacy_mismatch: Vec<Option<f64>>,
-    oversampling_plane_normalized_mismatch: Vec<Option<f64>>,
+    oversampling_legacy_ratio: Vec<Option<f64>>,
+    oversampling_plane_normalized_ratio: Vec<Option<f64>>,
 }
 
 impl DerivedValues {
@@ -397,12 +474,12 @@ impl DerivedValues {
             .iter()
             .map(|value| log10_ratio(*value, mean_pdf))
             .collect::<Vec<_>>();
-        let oversampling_legacy_mismatch = output
+        let oversampling_legacy_ratio = output
             .pdf_values
             .iter()
             .zip(output.abs_integrand_values.iter())
             .map(|(pdf, abs_integrand)| {
-                one_minus_plane_normalized_pdf_over_integrand(
+                plane_normalized_pdf_over_integrand_ratio(
                     *pdf,
                     *abs_integrand,
                     mean_abs_integrand,
@@ -410,12 +487,12 @@ impl DerivedValues {
                 )
             })
             .collect::<Vec<_>>();
-        let oversampling_plane_normalized_mismatch = output
+        let oversampling_plane_normalized_ratio = output
             .pdf_values
             .iter()
             .zip(output.abs_integrand_values.iter())
             .map(|(pdf, abs_integrand)| {
-                one_minus_pdf_over_integrand_global_norm(
+                pdf_over_integrand_global_norm_ratio(
                     *pdf,
                     *abs_integrand,
                     reference_abs_integrand_norm,
@@ -429,17 +506,23 @@ impl DerivedValues {
             log_plane_normalized_integrand,
             log_reference_normalized_integrand,
             log_plane_normalized_pdf,
-            oversampling_legacy_mismatch,
-            oversampling_plane_normalized_mismatch,
+            oversampling_legacy_ratio,
+            oversampling_plane_normalized_ratio,
         }
     }
 
-    fn values(&self, image_kind: ImageKind) -> &[Option<f64>] {
+    fn values(&self, image_kind: ImageKind, metric: OversamplingMetric) -> Vec<Option<f64>> {
         match image_kind {
-            ImageKind::LogPlaneNormalizedIntegrand => &self.log_reference_normalized_integrand,
-            ImageKind::LogPlaneNormalizedPdf => &self.log_plane_normalized_pdf,
-            ImageKind::OversamplingLegacy => &self.oversampling_legacy_mismatch,
-            ImageKind::OversamplingPlaneNormalized => &self.oversampling_plane_normalized_mismatch,
+            ImageKind::LogPlaneNormalizedIntegrand => {
+                self.log_reference_normalized_integrand.clone()
+            }
+            ImageKind::LogPlaneNormalizedPdf => self.log_plane_normalized_pdf.clone(),
+            ImageKind::OversamplingLegacy => {
+                oversampling_values(&self.oversampling_legacy_ratio, metric)
+            }
+            ImageKind::OversamplingPlaneNormalized => {
+                oversampling_values(&self.oversampling_plane_normalized_ratio, metric)
+            }
         }
     }
 
@@ -488,9 +571,10 @@ fn build_image_panel(
     geometry: &PlaneRasterGeometry,
     derived: &DerivedValues,
     image_kind: ImageKind,
+    metric: OversamplingMetric,
 ) -> Result<PanelState, EngineError> {
     validate_output_length(geometry.nr_points(), &derived.output)?;
-    let (values, invalid_indices) = option_values_to_image(derived.values(image_kind));
+    let (values, invalid_indices) = option_values_to_image(&derived.values(image_kind, metric));
     Ok(PanelState::Image2d {
         panel_id: panel_id.to_string(),
         width: geometry.u_linspace.count,
@@ -502,6 +586,8 @@ fn build_image_panel(
         y_range: [geometry.v_linspace.start, geometry.v_linspace.stop],
         color_mode: ImageColorMode::ScalarHeatmap,
         normalization_mode: ImageNormalizationMode::Symmetric,
+        metric_label: metric_label(image_kind, metric).map(str::to_string),
+        metric_mode: metric_mode(image_kind, metric).map(str::to_string),
     })
 }
 
@@ -510,15 +596,24 @@ fn build_line_panel(
     geometry: &LineRasterGeometry,
     derived: &DerivedValues,
     image_kind: ImageKind,
+    metric: OversamplingMetric,
 ) -> Result<PanelState, EngineError> {
     validate_output_length(geometry.nr_points(), &derived.output)?;
     Ok(scalar_timeseries_panel(
         panel_id,
-        line_points(geometry, derived.values(image_kind)),
+        line_points(geometry, &derived.values(image_kind, metric)),
     ))
 }
 
-fn histogram_panel(panel_id: &str, derived: &DerivedValues, image_kind: ImageKind) -> PanelState {
+fn histogram_panel(
+    panel_id: &str,
+    derived: &DerivedValues,
+    image_kind: ImageKind,
+    metric: OversamplingMetric,
+) -> PanelState {
+    let oversampling_legacy = derived.values(ImageKind::OversamplingLegacy, metric);
+    let oversampling_plane_normalized =
+        derived.values(ImageKind::OversamplingPlaneNormalized, metric);
     let bins = match image_kind {
         ImageKind::LogPlaneNormalizedIntegrand => {
             histogram_bins_on_shared_edges(
@@ -535,24 +630,36 @@ fn histogram_panel(panel_id: &str, derived: &DerivedValues, image_kind: ImageKin
             .1
         }
         ImageKind::OversamplingLegacy => {
-            histogram_bins_on_shared_edges(
-                &derived.oversampling_legacy_mismatch,
-                &derived.oversampling_plane_normalized_mismatch,
-            )
-            .0
+            histogram_bins_on_shared_edges(&oversampling_legacy, &oversampling_plane_normalized).0
         }
         ImageKind::OversamplingPlaneNormalized => {
-            histogram_bins_on_shared_edges(
-                &derived.oversampling_legacy_mismatch,
-                &derived.oversampling_plane_normalized_mismatch,
-            )
-            .1
+            histogram_bins_on_shared_edges(&oversampling_legacy, &oversampling_plane_normalized).1
         }
     };
     PanelState::Histogram {
         panel_id: panel_id.to_string(),
         bins,
         controls: Some(pdf_adaptation_histogram_controls()),
+    }
+}
+
+fn metric_label(image_kind: ImageKind, metric: OversamplingMetric) -> Option<&'static str> {
+    match image_kind {
+        ImageKind::OversamplingLegacy | ImageKind::OversamplingPlaneNormalized => {
+            Some(metric.label())
+        }
+        ImageKind::LogPlaneNormalizedIntegrand => Some("log10(normalized integrand)"),
+        ImageKind::LogPlaneNormalizedPdf => Some("log10(normalized PDF)"),
+    }
+}
+
+fn metric_mode(image_kind: ImageKind, metric: OversamplingMetric) -> Option<&'static str> {
+    match image_kind {
+        ImageKind::OversamplingLegacy | ImageKind::OversamplingPlaneNormalized => {
+            Some(metric.as_str())
+        }
+        ImageKind::LogPlaneNormalizedIntegrand => Some("log10_integrand"),
+        ImageKind::LogPlaneNormalizedPdf => Some("log10_pdf"),
     }
 }
 
@@ -780,7 +887,22 @@ fn log10_ratio(value: Option<f64>, mean: Option<f64>) -> Option<f64> {
     }
 }
 
-fn one_minus_plane_normalized_pdf_over_integrand(
+fn oversampling_values(ratios: &[Option<f64>], metric: OversamplingMetric) -> Vec<Option<f64>> {
+    ratios
+        .iter()
+        .map(|ratio| match (ratio, metric) {
+            (Some(ratio), OversamplingMetric::RelativeMismatch) if ratio.is_finite() => {
+                Some(ratio - 1.0)
+            }
+            (Some(ratio), OversamplingMetric::Log10Ratio) if ratio.is_finite() && *ratio > 0.0 => {
+                Some(ratio.log10())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn plane_normalized_pdf_over_integrand_ratio(
     pdf: Option<f64>,
     abs_integrand: Option<f64>,
     mean_abs_integrand: Option<f64>,
@@ -797,13 +919,13 @@ fn one_minus_plane_normalized_pdf_over_integrand(
                 && z > 0.0 =>
         {
             let ratio = (pdf / z) / (abs_integrand / i);
-            ratio.is_finite().then_some(1.0 - ratio)
+            ratio.is_finite().then_some(ratio)
         }
         _ => None,
     }
 }
 
-fn one_minus_pdf_over_integrand_global_norm(
+fn pdf_over_integrand_global_norm_ratio(
     pdf: Option<f64>,
     abs_integrand: Option<f64>,
     global_abs_integrand_norm: Option<f64>,
@@ -818,7 +940,7 @@ fn one_minus_pdf_over_integrand_global_norm(
                 && global_pdf_norm > 0.0 =>
         {
             let ratio = (pdf / global_pdf_norm) / (abs_integrand / i);
-            ratio.is_finite().then_some(1.0 - ratio)
+            ratio.is_finite().then_some(ratio)
         }
         _ => None,
     }
@@ -838,7 +960,10 @@ fn finite_mean(values: impl IntoIterator<Item = f64>) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ImageKind, build_image_panel, build_line_panel, histogram_bins};
+    use super::{
+        ImageKind, OversamplingMetric, build_image_panel, build_line_panel, histogram_bins,
+        oversampling_values,
+    };
     use crate::core::{LineRasterGeometry, Linspace, PlaneRasterGeometry};
     use crate::sampling::PdfAdaptationImagePersistedOutput;
     use crate::server::panels::{ImageNormalizationMode, PanelState};
@@ -911,12 +1036,26 @@ mod tests {
             vec![Some((1.0_f64 / 1.5).log10()), Some((2.0_f64 / 1.5).log10())]
         );
         assert_eq!(
-            derived.oversampling_legacy_mismatch,
-            vec![Some(0.0), Some(0.0)]
+            derived.oversampling_legacy_ratio,
+            vec![Some(1.0), Some(1.0)]
         );
         assert_eq!(
-            derived.oversampling_plane_normalized_mismatch,
-            vec![Some(1.0 - 2.5), Some(1.0 - 2.5)]
+            derived.oversampling_plane_normalized_ratio,
+            vec![Some(2.5), Some(2.5)]
+        );
+        assert_eq!(
+            oversampling_values(
+                &derived.oversampling_plane_normalized_ratio,
+                OversamplingMetric::RelativeMismatch,
+            ),
+            vec![Some(1.5), Some(1.5)]
+        );
+        assert_eq!(
+            oversampling_values(
+                &derived.oversampling_plane_normalized_ratio,
+                OversamplingMetric::Log10Ratio,
+            ),
+            vec![Some(2.5_f64.log10()), Some(2.5_f64.log10())]
         );
     }
 
@@ -927,6 +1066,7 @@ mod tests {
             &geometry(),
             &DerivedValues::from_output(output(), None),
             ImageKind::LogPlaneNormalizedPdf,
+            OversamplingMetric::RelativeMismatch,
         )
         .expect("build plane normalized pdf panel");
         let PanelState::Image2d {
@@ -948,6 +1088,7 @@ mod tests {
             &geometry(),
             &DerivedValues::from_output(output(), None),
             ImageKind::OversamplingLegacy,
+            OversamplingMetric::RelativeMismatch,
         )
         .expect("build oversampling panel");
         let PanelState::Image2d {
@@ -980,6 +1121,7 @@ mod tests {
             &line_geometry(),
             &DerivedValues::from_output(output(), None),
             ImageKind::LogPlaneNormalizedPdf,
+            OversamplingMetric::RelativeMismatch,
         )
         .expect("build line panel");
         let PanelState::ScalarTimeseries { points, .. } = panel else {

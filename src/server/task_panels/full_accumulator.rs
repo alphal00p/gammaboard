@@ -235,6 +235,8 @@ fn image_view_panel(
                 y_range: [geometry.v_linspace.start, geometry.v_linspace.stop],
                 color_mode: image_color_mode(mode),
                 normalization_mode: image_normalization_mode(mode),
+                metric_label: None,
+                metric_mode: None,
             })
         }
         other => Err(EngineError::engine(format!(

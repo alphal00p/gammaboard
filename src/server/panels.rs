@@ -215,6 +215,10 @@ pub enum PanelState {
         y_range: [f64; 2],
         color_mode: ImageColorMode,
         normalization_mode: ImageNormalizationMode,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        metric_label: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        metric_mode: Option<String>,
     },
     Progress {
         panel_id: String,
