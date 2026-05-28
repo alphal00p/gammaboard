@@ -140,6 +140,24 @@ where
 
         loop {
             let Some(task) = self.store.activate_next_run_task(run_id).await? else {
+                if let Some(parent_run_id) = run.parent_run_id {
+                    let child_assignments = self
+                        .store
+                        .list_desired_assignments(None)
+                        .await?
+                        .into_iter()
+                        .filter(|assignment| assignment.run_id == run_id)
+                        .collect::<Vec<_>>();
+                    for assignment in child_assignments {
+                        self.store
+                            .upsert_desired_assignment(
+                                &assignment.node_name,
+                                assignment.role,
+                                parent_run_id,
+                            )
+                            .await?;
+                    }
+                }
                 let cleared = self.store.clear_desired_assignments_for_run(run_id).await?;
                 if cleared > 0 {
                     debug!(
