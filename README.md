@@ -108,6 +108,20 @@ domain and passes them as keyword arguments together with the process config
 Examples live in
 [process_api/examples](process_api/examples).
 
+Some examples use generated local artifacts that are not committed. Build all
+currently known optional process artifacts with:
+
+```bash
+just process-artifacts
+```
+
+To create all bundled example runs and start two local workers per run against
+the active runtime config:
+
+```bash
+just start-example-runs
+```
+
 ## Development
 
 ```bash

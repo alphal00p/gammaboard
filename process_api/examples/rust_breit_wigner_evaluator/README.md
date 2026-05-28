@@ -8,7 +8,13 @@ It demonstrates the direct process protocol shape:
 - `src/evaluator.rs` owns config parsing and a vectorized ragged-domain function.
 - `src/main.rs` only connects the protocol to the evaluator.
 
-Build the worker image from this directory:
+Build the worker image from the repo root:
+
+```bash
+just process-rust-breit-wigner-sif
+```
+
+Or build it directly from this directory:
 
 ```bash
 apptainer build runtime.sif apptainer.def
