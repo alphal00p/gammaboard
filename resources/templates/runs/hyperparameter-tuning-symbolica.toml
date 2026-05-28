@@ -35,8 +35,9 @@ target = { kind = "scalar", value = 1.0 }
 
 [evaluator]
 kind = "symbolica"
-expr = "1 + $(roughness:4.0) * ((x - $(center:0.5))^2 + (y - $(center:0.5))^2 - 2 * ($(center:0.5)^3 + (1 - $(center:0.5))^3) / 3)"
+expr = "1 + roughness * ((x - center)^2 + (y - center)^2 - 2 * (center^3 + (1 - center)^3) / 3)"
 args = ["x", "y"]
+constants = { center = "$(center:0.5)", roughness = "$(roughness:4.0)" }
 
 [[task_queue]]
 name = "sample"
@@ -88,8 +89,9 @@ target = { kind = "scalar", value = 1.0 }
 
 [evaluator]
 kind = "symbolica"
-expr = "1 + $(roughness:2.0) * ((x - $(center:0.5))^2 + (y - $(center:0.5))^2 - 2 * ($(center:0.5)^3 + (1 - $(center:0.5))^3) / 3)"
+expr = "1 + roughness * ((x - center)^2 + (y - center)^2 - 2 * (center^3 + (1 - center)^3) / 3)"
 args = ["x", "y"]
+constants = { center = "$(center:0.5)", roughness = "$(roughness:2.0)" }
 
 [[task_queue]]
 name = "sample"
@@ -132,8 +134,9 @@ target = { kind = "scalar", value = 1.0 }
 
 [evaluator]
 kind = "symbolica"
-expr = "1 + $(roughness:4.0) * ((x - $(center:0.5))^2 + (y - $(center:0.5))^2 - 2 * ($(center:0.5)^3 + (1 - $(center:0.5))^3) / 3)"
+expr = "1 + roughness * ((x - center)^2 + (y - center)^2 - 2 * (center^3 + (1 - center)^3) / 3)"
 args = ["x", "y"]
+constants = { center = "$(center:0.5)", roughness = "$(roughness:4.0)" }
 
 [[task_queue]]
 name = "sample"

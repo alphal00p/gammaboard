@@ -6,8 +6,9 @@ name = '$(run_name:"ghost_bump")'
 
 [evaluator]
 kind = "symbolica"
-expr = "1/((x-1/4)^2+(y-1/4)^2+1/20) + 1/((x-3/4)^2+(y-3/4)^2+1/20) - 1/2"
+expr = "1/((x-a)^2+(y-a)^2+w) + 1/((x-b)^2+(y-b)^2+w) - 1/2"
 args = ["x", "y"]
+constants = { a = "1/4", b = "3/4", w = "1/20" }
 
 [[task_queue]]
 name = "accumulator"
@@ -56,9 +57,9 @@ display = "complex_phase"
 
 [task_queue.evaluator.config]
 kind = "symbolica"
-expr = "x - $(phase_center_x:0.5)"
-imag_expr = "y - $(phase_center_y:0.5)"
+expr = "(x - cx) + i * (y - cy)"
 args = ["x", "y"]
+constants = { cx = "$(phase_center_x:0.5)", cy = "$(phase_center_y:0.5)" }
 
 [task_queue.geometry]
 offset = [0.0, 0.0]

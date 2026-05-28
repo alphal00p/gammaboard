@@ -42,6 +42,41 @@ const requestHistogramBundleExport = async (payload, format) => {
   return response.json();
 };
 
+const rowToneStyle = (rowTone) => {
+  if (rowTone === "success") {
+    return {
+      bgcolor: "rgba(20, 184, 166, 0.08)",
+      "&:hover": { bgcolor: "rgba(20, 184, 166, 0.14)" },
+    };
+  }
+  if (rowTone === "min") {
+    return {
+      bgcolor: "rgba(37, 99, 235, 0.07)",
+      "&:hover": { bgcolor: "rgba(37, 99, 235, 0.12)" },
+    };
+  }
+  if (rowTone === "max") {
+    return {
+      bgcolor: "rgba(234, 88, 12, 0.07)",
+      "&:hover": { bgcolor: "rgba(234, 88, 12, 0.12)" },
+    };
+  }
+  if (rowTone === "min_max") {
+    return {
+      bgcolor: "rgba(107, 114, 128, 0.08)",
+      "&:hover": { bgcolor: "rgba(107, 114, 128, 0.14)" },
+    };
+  }
+  return {};
+};
+
+const rowToneChipColor = (rowTone) => {
+  if (rowTone === "success") return "success";
+  if (rowTone === "min") return "info";
+  if (rowTone === "max") return "warning";
+  return "default";
+};
+
 const BundleUploadControls = ({ state, uploadedBundles, bundleUploadError, onUploadBundle, onRemoveBundle, inputRef }) => (
   <Box sx={{ mb: 1.5 }}>
     <input
@@ -231,12 +266,7 @@ const TablePanel = ({
                   }
                   sx={{
                     cursor: selectableRows || rowsSelectRuns ? "pointer" : "default",
-                    ...(rowTone === "success"
-                      ? {
-                          bgcolor: "rgba(20, 184, 166, 0.08)",
-                          "&:hover": { bgcolor: "rgba(20, 184, 166, 0.14)" },
-                        }
-                      : {}),
+                    ...rowToneStyle(rowTone),
                   }}
                   onClick={
                     selectableRows
@@ -272,7 +302,7 @@ const TablePanel = ({
                           <Box component="span">{renderTableCell(row, columnIndex)}</Box>
                           <Chip
                             size="small"
-                            color={rowTone === "success" ? "success" : "default"}
+                            color={rowToneChipColor(rowTone)}
                             label={rowToneLabels[rowTone] || rowTone}
                             sx={{ height: 20, fontSize: 11 }}
                           />

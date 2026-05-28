@@ -1,7 +1,7 @@
 use super::{TaskPanelContext, TaskPanelProjector, panel_projector};
 use crate::server::panels::{
-    PanelHistoryMode, PanelKind, PanelWidth, PlotPoint, PlotSeries, best_row_tones, key_value,
-    key_value_panel, multi_timeseries_panel, panel_spec, progress_panel, row_tone_labels,
+    PanelHistoryMode, PanelKind, PanelWidth, PlotPoint, PlotSeries, key_value, key_value_panel,
+    min_max_row_tones, multi_timeseries_panel, panel_spec, progress_panel, row_tone_labels,
     table_panel_with_payload_and_options, with_panel_width,
 };
 use serde_json::{Value as JsonValue, json};
@@ -181,15 +181,7 @@ fn tuning_trials_projector() -> TaskPanelProjector {
                 .into_iter()
                 .map(|trial| trial_to_table_row(trial, &parameter_names, show_failure))
                 .collect::<Vec<_>>();
-            let best_index = best_trial(&tuning_trials(ctx), tuning_mode(ctx))
-                .and_then(|trial| trial.get("index"))
-                .cloned();
-            let best_row = rows.iter().position(|row| {
-                best_index
-                    .as_ref()
-                    .is_some_and(|best| row.first() == Some(best))
-            });
-            let row_tones = best_row_tones(rows.len(), best_row);
+            let row_tones = min_max_row_tones(&rows, tuning_table_objective_column());
             Ok(Some(table_panel_with_payload_and_options(
                 TUNING_TRIALS_PANEL_ID,
                 columns,
@@ -207,6 +199,10 @@ fn tuning_trials_projector() -> TaskPanelProjector {
         },
         |_ctx| Ok(None),
     )
+}
+
+fn tuning_table_objective_column() -> usize {
+    3
 }
 
 fn tuning_total_trials(ctx: &TaskPanelContext<'_>) -> Option<u64> {
@@ -518,7 +514,13 @@ mod tests {
             .current(&panel_ctx(&task))
             .expect("projector")
             .expect("panel");
-        let PanelState::Table { columns, rows, .. } = panel else {
+        let PanelState::Table {
+            columns,
+            rows,
+            payload,
+            ..
+        } = panel
+        else {
             panic!("expected table");
         };
         assert!(columns.contains(&"center".to_string()));
@@ -527,6 +529,12 @@ mod tests {
         assert!(!columns.contains(&"failure".to_string()));
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0][5], json!(4096));
+        let row_tones = payload
+            .as_ref()
+            .and_then(|payload| payload.get("row_tones"))
+            .and_then(JsonValue::as_array)
+            .expect("row tones");
+        assert_eq!(row_tones, &vec![json!("min_max")]);
     }
 
     #[test]

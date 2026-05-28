@@ -71,15 +71,7 @@ impl EvaluatorConfig {
             Self::ProcessEvaluator { params } => {
                 validate_process_accumulator(self.kind_str(), config, &params.components)
             }
-            Self::Symbolica { params } => validate_semantic_accumulator(
-                self.kind_str(),
-                config,
-                if params.imag_expr.is_some() {
-                    SemanticAccumulatorKind::Vector
-                } else {
-                    SemanticAccumulatorKind::Scalar
-                },
-            ),
+            Self::Symbolica { .. } => validate_symbolica_accumulator(self.kind_str(), config),
             Self::Unit { .. } => validate_semantic_accumulator(
                 self.kind_str(),
                 config,
@@ -94,6 +86,35 @@ impl EvaluatorConfig {
         config: &AccumulatorConfig,
     ) -> Result<AccumulatorState, BuildError> {
         Ok(AccumulatorState::from_config(config))
+    }
+}
+
+fn validate_symbolica_accumulator(
+    evaluator_kind: &str,
+    config: &AccumulatorConfig,
+) -> Result<(), BuildError> {
+    if matches!(config, AccumulatorConfig::Empty) {
+        return Ok(());
+    }
+
+    let supported = match config {
+        AccumulatorConfig::Scalar { .. } => true,
+        AccumulatorConfig::Vector { components, .. } => {
+            components == &["real".to_string(), "imag".to_string()]
+        }
+        AccumulatorConfig::FullVector { components } => {
+            components == &["value".to_string()]
+                || components == &["real".to_string(), "imag".to_string()]
+        }
+        _ => false,
+    };
+    if supported {
+        Ok(())
+    } else {
+        Err(BuildError::invalid_input(format!(
+            "evaluator.kind = \"{evaluator_kind}\" supports scalar accumulators, or vector/full_vector components [\"value\"] or [\"real\", \"imag\"], got \"{}\"",
+            accumulator_config_str(config)
+        )))
     }
 }
 

@@ -445,20 +445,39 @@ pub(crate) fn table_panel_with_payload_and_options(
     }
 }
 
-pub(crate) fn best_row_tones(row_count: usize, best_index: Option<usize>) -> Vec<JsonValue> {
-    (0..row_count)
-        .map(|index| {
-            if Some(index) == best_index {
-                JsonValue::String("success".to_string())
-            } else {
-                JsonValue::Null
-            }
+pub(crate) fn min_max_row_tones(rows: &[Vec<JsonValue>], value_column: usize) -> Vec<JsonValue> {
+    let finite_values = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(index, row)| {
+            row.get(value_column)
+                .and_then(JsonValue::as_f64)
+                .filter(|value| value.is_finite())
+                .map(|value| (index, value))
         })
+        .collect::<Vec<_>>();
+    let min_index = finite_values
+        .iter()
+        .min_by(|(_, left), (_, right)| left.total_cmp(right))
+        .map(|(index, _)| *index);
+    let max_index = finite_values
+        .iter()
+        .max_by(|(_, left), (_, right)| left.total_cmp(right))
+        .map(|(index, _)| *index);
+    (0..rows.len())
+        .map(
+            |index| match (Some(index) == min_index, Some(index) == max_index) {
+                (true, true) => JsonValue::String("min_max".to_string()),
+                (true, false) => JsonValue::String("min".to_string()),
+                (false, true) => JsonValue::String("max".to_string()),
+                (false, false) => JsonValue::Null,
+            },
+        )
         .collect()
 }
 
 pub(crate) fn row_tone_labels() -> JsonValue {
-    serde_json::json!({ "success": "best" })
+    serde_json::json!({ "min": "min", "max": "max", "min_max": "min/max" })
 }
 
 pub(crate) fn replace_panel(panel: PanelState) -> PanelUpdate {

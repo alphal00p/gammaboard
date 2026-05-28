@@ -1,7 +1,7 @@
 use super::{TaskPanelContext, TaskPanelProjector, panel_projector};
 use crate::server::panels::{
     ImageColorMode, ImageNormalizationMode, PanelHistoryMode, PanelKind, PanelState, PanelWidth,
-    PlotPoint, PlotSeries, best_row_tones, multi_timeseries_panel, panel_spec, progress_panel,
+    PlotPoint, PlotSeries, min_max_row_tones, multi_timeseries_panel, panel_spec, progress_panel,
     row_tone_labels, table_panel_with_payload_and_options, with_panel_width,
 };
 use serde_json::{Value as JsonValue, json};
@@ -130,8 +130,8 @@ fn scan_points_projector() -> TaskPanelProjector {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            let best_row = best_scan_table_row(&rows, parameter_names.len());
-            let row_tones = best_row_tones(rows.len(), best_row);
+            let value_column = scan_table_value_column(parameter_names.len());
+            let row_tones = min_max_row_tones(&rows, value_column);
             let mut columns = vec!["index".to_string()];
             columns.extend(parameter_names.iter().cloned());
             columns.extend([
@@ -250,18 +250,8 @@ fn scan_points<'a>(ctx: &'a TaskPanelContext<'_>) -> Option<&'a Vec<JsonValue>> 
         .and_then(JsonValue::as_array)
 }
 
-fn best_scan_table_row(rows: &[Vec<JsonValue>], parameter_count: usize) -> Option<usize> {
-    let value_column = parameter_count + 5;
-    rows.iter()
-        .enumerate()
-        .filter_map(|(index, row)| {
-            row.get(value_column)
-                .and_then(JsonValue::as_f64)
-                .filter(|value| value.is_finite())
-                .map(|value| (index, value))
-        })
-        .min_by(|(_, left), (_, right)| left.total_cmp(right))
-        .map(|(index, _)| index)
+fn scan_table_value_column(parameter_count: usize) -> usize {
+    parameter_count + 5
 }
 
 fn build_measurement_series(
@@ -693,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn scan_table_marks_lowest_value_as_best() {
+    fn scan_table_marks_min_and_max_values() {
         let task = scan_task(Some(json!({
             "parameter_name": "scale",
             "completed_points": 2,
@@ -727,7 +717,7 @@ mod tests {
             .and_then(|payload| payload.get("row_tones"))
             .and_then(JsonValue::as_array)
             .expect("row tones");
-        assert_eq!(row_tones, &vec![JsonValue::Null, json!("success")]);
+        assert_eq!(row_tones, &vec![json!("max"), json!("min")]);
     }
 
     #[test]

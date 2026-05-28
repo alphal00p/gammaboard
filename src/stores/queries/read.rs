@@ -86,7 +86,8 @@ impl RunProgressBaseRow {
         } else {
             0.0
         };
-        let lifecycle_state = if self.desired_assignment_count > 0 {
+        let lifecycle_state = if self.desired_assignment_count > 0 || self.active_task_id.is_some()
+        {
             "running"
         } else if batch_stats.claimed_batches > 0 || self.active_worker_count > 0 {
             "pausing"
