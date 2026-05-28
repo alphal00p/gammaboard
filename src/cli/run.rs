@@ -211,7 +211,7 @@ async fn run_task_command(store: &PgStore, command: TaskCommand) -> Result<()> {
                     task.state.as_str(),
                     task.task.kind_str(),
                     task.nr_produced_samples,
-                    task.nr_completed_samples,
+                    task.nr_completed_samples_including_children,
                     format_task_source_ref(
                         &task.task,
                         task.task.sample_sampler_source(),
@@ -261,7 +261,7 @@ fn print_run_table(runs: Vec<gammaboard::stores::RunProgress>) {
             run.run_name,
             run.lifecycle_state,
             run.nr_produced_samples.to_string(),
-            run.nr_completed_samples.to_string(),
+            run.nr_completed_samples_including_children.to_string(),
         ]);
     }
 

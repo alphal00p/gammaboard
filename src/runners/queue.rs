@@ -1631,6 +1631,7 @@ mod tests {
             _limit: i64,
             _source: Option<&str>,
             _run_id: Option<i32>,
+            _include_child_runs: bool,
             _node_name: Option<&str>,
             _node_uuid: Option<&str>,
             _level: Option<&str>,

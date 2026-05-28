@@ -430,6 +430,8 @@ mod tests {
             state: RunTaskState::Active,
             nr_produced_samples: 0,
             nr_completed_samples: 0,
+            nr_produced_samples_including_children: 0,
+            nr_completed_samples_including_children: 0,
             failure_reason: None,
             started_at: None,
             completed_at: None,

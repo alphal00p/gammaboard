@@ -736,25 +736,19 @@ function AppContent() {
   const workersData = useWorkersData({ runId: null, pollMs: 3000 });
   const [mode, setMode] = useState("runs");
   const [selectedRun, setSelectedRun] = useState(null);
-  const [selectedLogRun, setSelectedLogRun] = useState(null);
   const [pendingRunSelection, setPendingRunSelection] = useState(null);
   const runList = asArray(runs);
 
   useEffect(() => {
     if (runList.length === 0) {
       setSelectedRun(null);
-      setSelectedLogRun(null);
       return;
     }
 
     if (!selectedRun || !runList.some((run) => run.run_id === selectedRun)) {
       setSelectedRun(runList[0].run_id);
     }
-
-    if (!selectedLogRun || !runList.some((run) => run.run_id === selectedLogRun)) {
-      setSelectedLogRun(runList[0].run_id);
-    }
-  }, [runList, selectedRun, selectedLogRun]);
+  }, [runList, selectedRun]);
 
   useEffect(() => {
     if (pendingRunSelection == null) return;
@@ -819,12 +813,7 @@ function AppContent() {
           <LogsWorkspace
             runs={runList}
             workers={workersData.workers}
-            selectedRun={selectedLogRun}
-            setSelectedRun={setSelectedLogRun}
-            showChildRuns={showChildRuns}
-            setShowChildRuns={setShowChildRuns}
-            isConnected={serverStatus.isConnected}
-            serverName={serverStatus.serverName}
+            selectedRun={null}
           />
         ) : (
           <SettingsWorkspace />

@@ -24,6 +24,8 @@ pub struct RunProgress {
     pub target: Option<serde_json::Value>,
     pub nr_produced_samples: i64,
     pub nr_completed_samples: i64,
+    pub nr_produced_samples_including_children: i64,
+    pub nr_completed_samples_including_children: i64,
     pub sampler_runner_uptime_ms: f64,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,

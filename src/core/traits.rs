@@ -326,6 +326,7 @@ pub trait RunReadStore: Send + Sync {
         limit: i64,
         source: Option<&str>,
         run_id: Option<i32>,
+        include_child_runs: bool,
         node_name: Option<&str>,
         node_uuid: Option<&str>,
         level: Option<&str>,

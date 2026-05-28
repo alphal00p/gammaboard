@@ -169,6 +169,12 @@ const normalizeRunEntry = (entry) => {
     root_stage_snapshot_id: rootStageSnapshotId,
     nr_produced_samples: Number.isFinite(Number(entry.nr_produced_samples)) ? Number(entry.nr_produced_samples) : 0,
     nr_completed_samples: Number.isFinite(Number(entry.nr_completed_samples)) ? Number(entry.nr_completed_samples) : 0,
+    nr_produced_samples_including_children: Number.isFinite(Number(entry.nr_produced_samples_including_children))
+      ? Number(entry.nr_produced_samples_including_children)
+      : Number(entry.nr_produced_samples || 0),
+    nr_completed_samples_including_children: Number.isFinite(Number(entry.nr_completed_samples_including_children))
+      ? Number(entry.nr_completed_samples_including_children)
+      : Number(entry.nr_completed_samples || 0),
     sampler_runner_uptime_ms: Number.isFinite(Number(entry.sampler_runner_uptime_ms))
       ? Number(entry.sampler_runner_uptime_ms)
       : 0,
@@ -190,6 +196,12 @@ const normalizeRunTaskEntry = (entry) => {
     root_stage_snapshot_id: entry.root_stage_snapshot_id == null ? null : String(entry.root_stage_snapshot_id),
     nr_produced_samples: Number.isFinite(Number(entry.nr_produced_samples)) ? Number(entry.nr_produced_samples) : 0,
     nr_completed_samples: Number.isFinite(Number(entry.nr_completed_samples)) ? Number(entry.nr_completed_samples) : 0,
+    nr_produced_samples_including_children: Number.isFinite(Number(entry.nr_produced_samples_including_children))
+      ? Number(entry.nr_produced_samples_including_children)
+      : Number(entry.nr_produced_samples || 0),
+    nr_completed_samples_including_children: Number.isFinite(Number(entry.nr_completed_samples_including_children))
+      ? Number(entry.nr_completed_samples_including_children)
+      : Number(entry.nr_completed_samples || 0),
   };
 };
 
@@ -366,6 +378,7 @@ export const fetchRuntimeLogPage = async (
     level = null,
     search = "",
     beforeId = null,
+    includeChildren = false,
   } = {},
   signal,
 ) => {
@@ -374,6 +387,7 @@ export const fetchRuntimeLogPage = async (
       ["limit", limit],
       ["source", source],
       ["run_id", runId],
+      ["include_children", includeChildren ? "true" : null],
       ["node_name", nodeName],
       ["node_uuid", nodeUuid],
       ["level", level],
@@ -388,7 +402,16 @@ export const fetchRuntimeLogPage = async (
 
 export const fetchRunLogPage = async (
   runId,
-  { limit = 100, source = null, nodeName = null, nodeUuid = null, level = null, search = "", beforeId = null } = {},
+  {
+    limit = 100,
+    source = null,
+    nodeName = null,
+    nodeUuid = null,
+    level = null,
+    search = "",
+    beforeId = null,
+    includeChildren = false,
+  } = {},
   signal,
 ) =>
   fetchRuntimeLogPage(
@@ -396,6 +419,7 @@ export const fetchRunLogPage = async (
       limit,
       source,
       runId,
+      includeChildren,
       nodeName,
       nodeUuid,
       level,

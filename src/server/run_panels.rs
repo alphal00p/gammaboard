@@ -178,7 +178,11 @@ fn panel_states(
             vec![
                 key_value("tasks", "Run Tasks", tasks.len()),
                 key_value("produced", "Produced Samples", run.nr_produced_samples),
-                key_value("completed", "Completed Samples", run.nr_completed_samples),
+                key_value(
+                    "completed",
+                    "Completed Samples",
+                    run.nr_completed_samples_including_children,
+                ),
                 key_value("completion_rate", "Completion Rate", run.completion_rate),
             ],
         ),

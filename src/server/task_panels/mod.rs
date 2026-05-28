@@ -1004,6 +1004,8 @@ mod tests {
             state,
             nr_produced_samples: 3,
             nr_completed_samples: 3,
+            nr_produced_samples_including_children: 3,
+            nr_completed_samples_including_children: 3,
             failure_reason: None,
             started_at: None,
             completed_at: None,

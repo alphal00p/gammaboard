@@ -15,6 +15,11 @@ vi.mock("./services/api", () => ({
     next_before_id: null,
     has_more_older: false,
   })),
+  fetchRuntimeLogPage: vi.fn(async () => ({
+    items: [],
+    next_before_id: null,
+    has_more_older: false,
+  })),
   fetchRunTasks: vi.fn(async () => []),
   fetchRunEvaluatorConfigPanels: vi.fn(async () => ({ source_id: "cfg:evaluator", panels: [], updates: [] })),
   fetchRunSamplerConfigPanels: vi.fn(async () => ({ source_id: "cfg:sampler", panels: [], updates: [] })),
@@ -49,6 +54,11 @@ describe("App Component", () => {
     api.login.mockResolvedValue({ authenticated: true });
     api.logout.mockResolvedValue({ authenticated: false });
     api.fetchRunLogPage.mockResolvedValue({
+      items: [],
+      next_before_id: null,
+      has_more_older: false,
+    });
+    api.fetchRuntimeLogPage.mockResolvedValue({
       items: [],
       next_before_id: null,
       has_more_older: false,

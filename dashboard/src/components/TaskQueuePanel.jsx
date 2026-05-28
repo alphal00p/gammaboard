@@ -52,7 +52,11 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
                       <TableCell>{getTaskKindLabel(task)}</TableCell>
                       <TableCell>{task.failure_reason || "-"}</TableCell>
                       <TableCell align="right">{getTaskTargetLabel(task)}</TableCell>
-                      <TableCell align="right">{Number(task.nr_completed_samples || 0).toLocaleString()}</TableCell>
+                      <TableCell align="right">
+                        {Number(
+                          task.nr_completed_samples_including_children ?? task.nr_completed_samples ?? 0,
+                        ).toLocaleString()}
+                      </TableCell>
                     </TableRow>
                   );
                 })}

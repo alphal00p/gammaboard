@@ -76,6 +76,8 @@ fn decode_task_row(row: RunTaskRow) -> Result<RunTask, sqlx::Error> {
         state,
         nr_produced_samples: row.nr_produced_samples,
         nr_completed_samples: row.nr_completed_samples,
+        nr_produced_samples_including_children: row.nr_produced_samples,
+        nr_completed_samples_including_children: row.nr_completed_samples,
         failure_reason: row.failure_reason,
         started_at: row.started_at,
         completed_at: row.completed_at,
@@ -159,7 +161,60 @@ pub(crate) async fn list_run_tasks(
     .fetch_all(pool)
     .await?;
 
-    rows.into_iter().map(decode_task_row).collect()
+    let mut tasks = rows
+        .into_iter()
+        .map(decode_task_row)
+        .collect::<Result<Vec<_>, _>>()?;
+    apply_child_task_sample_totals(pool, run_id, &mut tasks).await?;
+    Ok(tasks)
+}
+
+async fn apply_child_task_sample_totals(
+    pool: &PgPool,
+    run_id: i32,
+    tasks: &mut [RunTask],
+) -> Result<(), sqlx::Error> {
+    if tasks.is_empty() {
+        return Ok(());
+    }
+    let rows = sqlx::query_as::<_, (i64, i64, i64)>(
+        r#"
+        WITH RECURSIVE descendants(parent_task_id, run_id) AS (
+            SELECT parent_task_id, id
+            FROM runs
+            WHERE parent_run_id = $1
+              AND parent_task_id IS NOT NULL
+            UNION ALL
+            SELECT descendants.parent_task_id, runs.id
+            FROM runs
+            JOIN descendants ON runs.parent_run_id = descendants.run_id
+        )
+        SELECT
+            descendants.parent_task_id,
+            COALESCE(SUM(run_tasks.nr_produced_samples), 0) AS nr_produced_samples,
+            COALESCE(SUM(run_tasks.nr_completed_samples), 0) AS nr_completed_samples
+        FROM descendants
+        JOIN run_tasks ON run_tasks.run_id = descendants.run_id
+        GROUP BY descendants.parent_task_id
+        "#,
+    )
+    .bind(run_id)
+    .fetch_all(pool)
+    .await?;
+
+    let child_totals = rows
+        .into_iter()
+        .map(|(task_id, produced, completed)| (task_id, (produced, completed)))
+        .collect::<std::collections::HashMap<_, _>>();
+    for task in tasks {
+        if let Some((produced, completed)) = child_totals.get(&task.id) {
+            task.nr_produced_samples_including_children =
+                task.nr_produced_samples.saturating_add(*produced);
+            task.nr_completed_samples_including_children =
+                task.nr_completed_samples.saturating_add(*completed);
+        }
+    }
+    Ok(())
 }
 
 pub(crate) async fn remove_pending_run_task(

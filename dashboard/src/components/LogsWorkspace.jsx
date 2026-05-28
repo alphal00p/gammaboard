@@ -1,17 +1,11 @@
 import { Alert, Box } from "@mui/material";
 import WorkerLogsPanel from "./WorkerLogsPanel";
-import RunScopedWorkspace from "./common/RunScopedWorkspace";
 import { useWorkerLogs } from "../hooks/useWorkerLogs";
 
 const LogsWorkspace = ({
   runs,
   workers,
   selectedRun,
-  setSelectedRun,
-  showChildRuns,
-  setShowChildRuns,
-  isConnected,
-  serverName,
 }) => {
   const logReader = useWorkerLogs({
     runId: selectedRun,
@@ -20,26 +14,14 @@ const LogsWorkspace = ({
   });
 
   return (
-    <RunScopedWorkspace
-      runs={runs}
-      selectedRun={selectedRun}
-      setSelectedRun={setSelectedRun}
-      showChildRuns={showChildRuns}
-      setShowChildRuns={setShowChildRuns}
-      isConnected={isConnected}
-      serverName={serverName}
-      noRunsMessage="Create a run to inspect logs."
-      noSelectionMessage="Pick a run to inspect its logs."
-    >
-      <Box>
-        <WorkerLogsPanel {...logReader} title="Run Logs" />
-        {logReader.items.length === 0 && !logReader.isLoading && (
-          <Alert severity="info" sx={{ mt: 2 }}>
-            No logs received for this run yet.
-          </Alert>
-        )}
-      </Box>
-    </RunScopedWorkspace>
+    <Box>
+      <WorkerLogsPanel {...logReader} runs={runs} title="Run Logs" />
+      {logReader.items.length === 0 && !logReader.isLoading && (
+        <Alert severity="info" sx={{ mt: 2 }}>
+          No logs match the current filters.
+        </Alert>
+      )}
+    </Box>
   );
 };
 

@@ -112,6 +112,8 @@ impl RunProgressBaseRow {
             target: self.target,
             nr_produced_samples: self.nr_produced_samples,
             nr_completed_samples: self.nr_completed_samples,
+            nr_produced_samples_including_children: self.nr_produced_samples,
+            nr_completed_samples_including_children: self.nr_completed_samples,
             sampler_runner_uptime_ms: self.sampler_runner_uptime_ms,
             started_at: self.started_at,
             completed_at: self.completed_at,
@@ -454,33 +456,68 @@ pub(crate) async fn get_all_runs(pool: &PgPool) -> Result<Vec<RunProgress>, sqlx
     let run_ids = rows.iter().map(|row| row.run_id).collect::<Vec<_>>();
     let batch_stats = load_batch_stats_for_runs(pool, &run_ids).await?;
 
-    Ok(rows
+    let mut runs = rows
         .into_iter()
         .map(|row| {
             let stats = batch_stats.get(&row.run_id).copied().unwrap_or_default();
             row.into_run_progress(stats)
         })
-        .collect())
+        .collect::<Vec<_>>();
+    apply_child_run_sample_totals(&mut runs);
+    Ok(runs)
 }
 
 pub(crate) async fn get_run_progress(
     pool: &PgPool,
     run_id: i32,
 ) -> Result<Option<RunProgress>, sqlx::Error> {
-    let sql = run_progress_sql("WHERE r.id = $1");
+    Ok(get_all_runs(pool)
+        .await?
+        .into_iter()
+        .find(|run| run.run_id == run_id))
+}
 
-    let row = sqlx::query_as::<_, RunProgressBaseRow>(&sql)
-        .bind(run_id)
-        .fetch_optional(pool)
-        .await?;
+fn apply_child_run_sample_totals(runs: &mut [RunProgress]) {
+    fn accumulate(
+        index: usize,
+        runs: &[RunProgress],
+        children_by_parent: &HashMap<i32, Vec<usize>>,
+        totals: &mut HashMap<i32, (i64, i64)>,
+    ) -> (i64, i64) {
+        let run = &runs[index];
+        if let Some(total) = totals.get(&run.run_id) {
+            return *total;
+        }
+        let mut produced = run.nr_produced_samples;
+        let mut completed = run.nr_completed_samples;
+        if let Some(children) = children_by_parent.get(&run.run_id) {
+            for &child_index in children {
+                let (child_produced, child_completed) =
+                    accumulate(child_index, runs, children_by_parent, totals);
+                produced = produced.saturating_add(child_produced);
+                completed = completed.saturating_add(child_completed);
+            }
+        }
+        totals.insert(run.run_id, (produced, completed));
+        (produced, completed)
+    }
 
-    let Some(row) = row else {
-        return Ok(None);
-    };
-    let batch_stats = load_batch_stats_for_runs(pool, &[run_id]).await?;
-    Ok(Some(row.into_run_progress(
-        batch_stats.get(&run_id).copied().unwrap_or_default(),
-    )))
+    let mut children_by_parent: HashMap<i32, Vec<usize>> = HashMap::new();
+    for (index, run) in runs.iter().enumerate() {
+        if let Some(parent_run_id) = run.parent_run_id {
+            children_by_parent
+                .entry(parent_run_id)
+                .or_default()
+                .push(index);
+        }
+    }
+
+    let mut totals = HashMap::new();
+    for index in 0..runs.len() {
+        let (produced, completed) = accumulate(index, runs, &children_by_parent, &mut totals);
+        runs[index].nr_produced_samples_including_children = produced;
+        runs[index].nr_completed_samples_including_children = completed;
+    }
 }
 
 pub(crate) async fn get_work_queue_stats(
@@ -585,6 +622,7 @@ pub(crate) async fn get_runtime_logs(
     limit: i64,
     source: Option<&str>,
     run_id: Option<i32>,
+    include_child_runs: bool,
     node_name: Option<&str>,
     node_uuid: Option<&str>,
     level: Option<&str>,
@@ -619,20 +657,37 @@ pub(crate) async fn get_runtime_logs(
                 fields
             FROM runtime_logs
             WHERE ($1::text IS NULL OR source = $1)
-              AND ($2::int IS NULL OR run_id = $2)
-              AND ($3::text IS NULL OR node_name = $3)
-              AND ($4::text IS NULL OR node_uuid = $4)
-              AND ($5::text IS NULL OR level = $5)
-              AND ($6::text IS NULL OR message ILIKE $6 OR target ILIKE $6 OR fields::text ILIKE $6)
-              AND ($7::bigint IS NULL OR id < $7)
+              AND (
+                  $2::int IS NULL
+                  OR run_id = $2
+                  OR (
+                      $3::bool
+                      AND run_id IN (
+                          WITH RECURSIVE child_runs(id) AS (
+                              SELECT id FROM runs WHERE parent_run_id = $2
+                              UNION ALL
+                              SELECT runs.id
+                              FROM runs
+                              JOIN child_runs ON runs.parent_run_id = child_runs.id
+                          )
+                          SELECT id FROM child_runs
+                      )
+                  )
+              )
+              AND ($4::text IS NULL OR node_name = $4)
+              AND ($5::text IS NULL OR node_uuid = $5)
+              AND ($6::text IS NULL OR level = $6)
+              AND ($7::text IS NULL OR message ILIKE $7 OR target ILIKE $7 OR fields::text ILIKE $7)
+              AND ($8::bigint IS NULL OR id < $8)
             ORDER BY id DESC
-            LIMIT $8
+            LIMIT $9
         ) recent
         ORDER BY id DESC
         "#,
     )
     .bind(source)
     .bind(run_id)
+    .bind(include_child_runs)
     .bind(node_name)
     .bind(node_uuid)
     .bind(level)

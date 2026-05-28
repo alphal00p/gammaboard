@@ -1820,6 +1820,10 @@ pub struct RunTask {
     pub state: RunTaskState,
     pub nr_produced_samples: i64,
     pub nr_completed_samples: i64,
+    #[serde(default)]
+    pub nr_produced_samples_including_children: i64,
+    #[serde(default)]
+    pub nr_completed_samples_including_children: i64,
     pub failure_reason: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,

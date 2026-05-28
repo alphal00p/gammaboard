@@ -312,6 +312,7 @@ impl RunReadStore for PgStore {
         limit: i64,
         source: Option<&str>,
         run_id: Option<i32>,
+        include_child_runs: bool,
         node_name: Option<&str>,
         node_uuid: Option<&str>,
         level: Option<&str>,
@@ -319,7 +320,16 @@ impl RunReadStore for PgStore {
         before_id: Option<i64>,
     ) -> Result<crate::stores::RuntimeLogPage, StoreError> {
         Ok(queries::get_runtime_logs(
-            &self.pool, limit, source, run_id, node_name, node_uuid, level, query, before_id,
+            &self.pool,
+            limit,
+            source,
+            run_id,
+            include_child_runs,
+            node_name,
+            node_uuid,
+            level,
+            query,
+            before_id,
         )
         .await?)
     }
