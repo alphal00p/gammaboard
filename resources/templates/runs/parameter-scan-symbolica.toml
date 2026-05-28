@@ -43,7 +43,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
 
 [[task_queue.parameters]]
 name = "scale"
-values = [0.0, 0.5, 1.0, 1.5, 2.0]
+values = ["0", "1/2",  "1", "3/2", "2"]
 
 [task_queue.measurement]
 source_task = "sample"
@@ -72,11 +72,11 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
 
 [[task_queue.parameters]]
 name = "scale"
-values = [0.0, 1.0, 2.0]
+values = ["0", "1", "2"]
 
 [[task_queue.parameters]]
 name = "offset"
-values = [0.5, 1.0, 1.5]
+values = ["1/2", "1", "3/2"]
 
 [task_queue.measurement]
 source_task = "sample"
@@ -105,15 +105,15 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
 
 [[task_queue.parameters]]
 name = "scale"
-values = [0.0, 1.0]
+values = ["0", "1"]
 
 [[task_queue.parameters]]
 name = "offset"
-values = [0.5, 1.0]
+values = ["1/2", "1"]
 
 [[task_queue.parameters]]
 name = "curvature"
-values = [-1.0, 0.0, 1.0]
+values = ["-1", "0", "1"]
 
 [task_queue.measurement]
 source_task = "sample"
