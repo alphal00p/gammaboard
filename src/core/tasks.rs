@@ -489,17 +489,23 @@ impl HyperparameterTuningParameterDomain {
 #[serde(rename_all = "snake_case")]
 pub enum HyperparameterTuningAlgorithm {
     RandomSearch,
+    GridSearch,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct HyperparameterTuningOptimizerSpec {
     pub algorithm: HyperparameterTuningAlgorithm,
-    pub max_trials: usize,
     #[serde(default)]
     pub seed: Option<u64>,
     #[serde(default = "empty_json_object")]
     pub params: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RandomSearchOptimizerParams {
+    pub max_trials: usize,
 }
 
 fn empty_json_object() -> serde_json::Value {
@@ -508,19 +514,30 @@ fn empty_json_object() -> serde_json::Value {
 
 impl HyperparameterTuningOptimizerSpec {
     pub fn validate(&self) -> Result<(), String> {
-        if self.max_trials == 0 {
-            return Err("hyperparameter_tuning.optimizer.max_trials must be > 0".to_string());
-        }
         let Some(params) = self.params.as_object() else {
             return Err("hyperparameter_tuning.optimizer.params must be a table".to_string());
         };
         match self.algorithm {
-            HyperparameterTuningAlgorithm::RandomSearch if !params.is_empty() => Err(
-                "hyperparameter_tuning.optimizer.params must be empty for random_search"
-                    .to_string(),
+            HyperparameterTuningAlgorithm::GridSearch if !params.is_empty() => Err(
+                "hyperparameter_tuning.optimizer.params must be empty for grid_search".to_string(),
             ),
-            HyperparameterTuningAlgorithm::RandomSearch => Ok(()),
+            HyperparameterTuningAlgorithm::RandomSearch => {
+                let params = self.random_search_params()?;
+                if params.max_trials == 0 {
+                    return Err(
+                        "hyperparameter_tuning.optimizer.params.max_trials must be > 0".to_string(),
+                    );
+                }
+                Ok(())
+            }
+            HyperparameterTuningAlgorithm::GridSearch => Ok(()),
         }
+    }
+
+    pub fn random_search_params(&self) -> Result<RandomSearchOptimizerParams, String> {
+        serde_json::from_value(self.params.clone()).map_err(|err| {
+            format!("invalid hyperparameter_tuning.optimizer.params for random_search: {err}")
+        })
     }
 }
 
@@ -1307,7 +1324,11 @@ impl RunTaskSpec {
             Self::PdfAdaptationPlotLine { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::PlotLine { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::ParameterScan { parameter, .. } => Some(parameter.values.len() as i64),
-            Self::HyperparameterTuning { optimizer, .. } => Some(optimizer.max_trials as i64),
+            Self::HyperparameterTuning {
+                optimizer,
+                parameters,
+                ..
+            } => hyperparameter_tuning_trial_count(optimizer, parameters).map(|count| count as i64),
         }
     }
 
@@ -1379,6 +1400,35 @@ impl RunTaskSpec {
                 Ok(())
             }
             _ => Err("queue_tuning is only supported for sample tasks".to_string()),
+        }
+    }
+}
+
+fn hyperparameter_tuning_trial_count(
+    optimizer: &HyperparameterTuningOptimizerSpec,
+    parameters: &BTreeMap<String, HyperparameterTuningParameterDomain>,
+) -> Option<usize> {
+    match optimizer.algorithm {
+        HyperparameterTuningAlgorithm::RandomSearch => optimizer
+            .random_search_params()
+            .ok()
+            .map(|params| params.max_trials),
+        HyperparameterTuningAlgorithm::GridSearch => {
+            parameters.values().try_fold(1usize, |count, domain| {
+                count.checked_mul(hyperparameter_grid_domain_len(domain)?)
+            })
+        }
+    }
+}
+
+fn hyperparameter_grid_domain_len(domain: &HyperparameterTuningParameterDomain) -> Option<usize> {
+    match domain {
+        HyperparameterTuningParameterDomain::Float(_) => None,
+        HyperparameterTuningParameterDomain::Categorical(domain) => Some(domain.values.len()),
+        HyperparameterTuningParameterDomain::Integer(domain) => {
+            let step = domain.step.unwrap_or(1);
+            let span = domain.max.checked_sub(domain.min)?;
+            Some((span / step + 1) as usize)
         }
     }
 }
@@ -1992,8 +2042,10 @@ trial_run_toml = "name = \"trial\"\n"
 
 [task.optimizer]
 algorithm = "random_search"
-max_trials = 8
 seed = 1
+
+[task.optimizer.params]
+max_trials = 8
 
 [task.objective]
 source_task = "sample"
@@ -2029,7 +2081,7 @@ values = ["auto", "none"]
             panic!("expected hyperparameter tuning task");
         };
 
-        assert_eq!(optimizer.max_trials, 8);
+        assert_eq!(optimizer.random_search_params().unwrap().max_trials, 8);
         assert_eq!(optimizer.seed, Some(1));
         assert_eq!(
             optimizer.algorithm,

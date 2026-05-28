@@ -204,11 +204,11 @@ fn tuning_total_trials(ctx: &TaskPanelContext<'_>) -> Option<u64> {
         .as_ref()
         .and_then(|output| output.get("total_trials"))
         .and_then(JsonValue::as_u64)
-        .or_else(|| match &ctx.task.task {
-            crate::core::RunTaskSpec::HyperparameterTuning { optimizer, .. } => {
-                Some(optimizer.max_trials as u64)
-            }
-            _ => None,
+        .or_else(|| {
+            ctx.task
+                .task
+                .nr_expected_samples()
+                .and_then(|count| u64::try_from(count).ok())
         })
 }
 
@@ -380,9 +380,8 @@ mod tests {
         let task = RunTaskSpec::HyperparameterTuning {
             optimizer: HyperparameterTuningOptimizerSpec {
                 algorithm: HyperparameterTuningAlgorithm::RandomSearch,
-                max_trials: 3,
                 seed: Some(1),
-                params: json!({}),
+                params: json!({ "max_trials": 3 }),
             },
             objective: HyperparameterTuningObjectiveSpec {
                 source_task: "sample".to_string(),

@@ -1,8 +1,8 @@
 # TODO: Hyperparameter Tuning
 
-Goal: add first-class hyperparameter tuning by reusing controller tasks and
-grouped child runs. Trials remain ordinary GammaBoard runs with normal tasks,
-snapshots, logs, measurements, and panels.
+Goal: keep hyperparameter tuning as a transparent controller-task workflow.
+Trials are grouped child runs with normal tasks, snapshots, logs,
+measurements, and panels.
 
 ## Current State
 
@@ -25,20 +25,28 @@ Implemented:
 - `hyperparameter_tuning` task spec with shared parameter domains:
   `float { min, max }`, `integer { min, max, step? }`, and
   `categorical { values }`.
+- Objective selection by measurement metric and optional component selector.
 - `random_search` optimizer with deterministic per-trial parameter generation.
-- Basic tuning panels: progress, objective by trial, and trial table.
-- E2E coverage for random-search child run creation and objective collection.
+- `grid_search` optimizer over finite integer/categorical domains.
+- Basic tuning panels: progress, best trial, objective/best-so-far plot, and
+  trial table with run links, samples, objective uncertainty, and parameter
+  columns.
+- Example templates for error, grid-search, and `time_normalized_variance`
+  Symbolica tuning.
+- E2E coverage for random-search and grid-search child run creation and
+  objective collection.
+- E2E coverage for failed child measurements and parent-held worker
+  redistribution.
 
-## First Version Shape
+## Current Shape
 
 ```toml
 [[task_queue]]
 name = "tune"
 kind = "hyperparameter_tuning"
 max_concurrent_trials = 4
-max_failed_trials = 2
 trial_run_toml = """
-name = "trial-mu-$(mu_scale:0.5)-bins-$(bins:64)-$(subtraction_mode:auto)"
+name = "trial-bins-$(bins:64)-$(subtraction_mode:auto)"
 
 [[task_queue]]
 name = "sample"
@@ -52,6 +60,8 @@ sampler_aggregator = { config = { kind = "havana_training", bins = "$(bins:64)" 
 [task_queue.optimizer]
 algorithm = "random_search"
 seed = 1
+
+[task_queue.optimizer.params]
 max_trials = 64
 
 [task_queue.objective]
@@ -59,15 +69,11 @@ source_task = "sample"
 mode = "minimize"
 quantity = { metric = "time_normalized_variance" }
 
-[task_queue.parameters.mu_scale]
-kind = "float"
-min = 0.0
-max = 1.0
-
 [task_queue.parameters.bins]
 kind = "integer"
 min = 16
 max = 128
+step = 16
 
 [task_queue.parameters.subtraction_mode]
 kind = "categorical"
@@ -80,84 +86,34 @@ Semantics:
 - Trial precision and sample budget stay inside the child sample task
   `stop_condition`.
 - `max_concurrent_trials` controls how many child runs are kept active.
-- Failed child measurements become failed trials.
-- Tuning fails if `failed_trials > max_failed_trials`.
-- Random-search trials are deterministic from `(seed, trial_index)`, so the
-  controller can reconstruct planned parameters after restart without a
-  separate optimizer-state blob.
+- Failed child measurements fail the tuning task in the first version.
+- Random-search trials are deterministic from `(seed, trial_index)`.
+- Grid-search trials deterministically enumerate finite integer/categorical
+  domains. Float grids are deferred until there is an explicit discretization
+  syntax.
+- Trial persistence remains deferred; current state is reconstructed from child
+  runs plus deterministic generation and compact `controller_output`.
 
-## Remaining Work
+## Immediate Work
 
-1. Improve objective selection.
-   - The first implementation requires exactly one measurement result.
-   - Add explicit component/result selectors for vector-valued objectives.
-   - Fail with a focused config error when a child measurement is multi-result
-     and no selector is provided.
+1. Run the ignored full-stack tuning e2e tests once the local PostgreSQL test
+   service is available.
 
-2. Decide whether to add trial persistence.
-   - Current state is reconstructed from child runs plus deterministic
-     generation and compact `controller_output`.
-   - A `hyperparameter_trials` table would make historical optimizer state and
-     partial failed measurements easier to query.
-   - Do this only if the JSON controller output becomes too weak for real
-     optimizers.
-
-3. Add more optimizers.
-   - Add `grid_search` for deterministic exhaustive scans over discrete domains.
-   - Add Bayesian/global optimizers only after the trial lifecycle is stable.
-   - Keep optimizer-specific hyper-hyper-parameters under
-     `optimizer.params`.
-
-4. Polish panels.
-   - Add best-so-far plot.
-   - Include objective sample count in the trial table.
-   - Show parameter columns individually when the number of parameters is small.
-   - Link table rows to child runs consistently with parameter scan.
-
-5. Add examples.
-   - Cheap Symbolica tuning config with an obvious optimum.
-   - One `time_normalized_variance` example using fourth moments.
-
-6. Add failure-path tests.
-   - Failed child measurement increments failed trial count.
-   - Exceeding `max_failed_trials` fails the tuning task.
-   - Parent-held workers are redistributed to tuning child runs.
+2. Decide the next optimizer.
+   - `egobox` is the likely next candidate for mixed continuous/discrete
+     Bayesian/global optimization.
+   - Keep the public config shape algorithm-neutral:
+     `optimizer.algorithm` plus `optimizer.params`.
 
 ## Deferred
 
+- Trial persistence tables.
+- Float grid discretization syntax.
 - Trial pruning or early stopping beyond child task stop conditions.
 - Penalized failed-trial observations via `failure_value`.
 - Replicate trials per parameter point.
+- Bayesian/global optimizers.
 - Parameter-importance plots.
 - 2D response surfaces.
 - Heatmaps over vector components or histogram bins.
 - Worker capability routing per trial.
-
-
-
-Findings**
-- `PanelCollection.jsx` is the biggest complexity hotspot at ~1900 LOC. It owns panel composition, PDF special cases, ECharts charts, canvas image rendering, shared zoom state, export, and panel routing. This should be split.
-- `HistogramPanel.jsx` is also large at ~1100 LOC. Most of that is option/state plumbing and could be moved behind a smaller “chart model -> renderer” boundary.
-- There are still frontend `panel_id` special cases for `pdf_adaptation_*` and `gammaloop_*`. Some are legitimate overlays, but most would be cleaner as backend-declared panel groups/views.
-- Polling is simple and works, but it is still timer-driven across many hooks. Large finished panels benefit from `poll_after_ms = null`, but general run/task lists still poll frequently.
-- UX confirmation uses `window.confirm`, which is functional but inconsistent with the rest of the MUI UI.
-- Snackbar logic is duplicated in `App.jsx`, `WorkersWorkspace`, `WorkerDetailsPanel`, and `SettingsWorkspace`.
-
-**High-Value UX Improvements**
-- Add collapsible panel sections: `Summary`, `Plots`, `Diagnostics`, `Raw config`. Default to summary plus the most relevant plot. This avoids overwhelming PDF/GammaLoop runs.
-- Add panel pinning/favorites per task type. For demos, the operator can pin “central value”, “selected histogram”, or “sampling accuracy”.
-- Add a task “focus mode”: hide run config/evaluator/sampler config panels and show only task output. Useful for live demos.
-- Replace `window.confirm` with one reusable destructive-action dialog showing the exact run/task/node affected.
-- Improve loading states: distinguish “waiting for first output”, “task finished with no panels”, and “loading updated panels”.
-- Add keyboard/mouse hints for image panels: “wheel zoom, drag pan, double click reset”. This is needed now that the canvas renderer is custom.
-
-**Make It Lighter**
-- Split `PanelCollection.jsx` into `PanelCollection`, `Image2dPanel`, `TimeseriesPanel`, `PdfOverlayPanels`, and `panelComposition.js`. This is the best simplification.
-- Move remaining PDF overlay construction to the backend where possible. Frontend should render declared overlays instead of detecting panel pairs by ID.
-- Replace the repeated snackbar state with a tiny `SnackbarProvider` or `useSnackbar` hook.
-- Use a single `useTemplateList(kind)` hook for run/task/node templates.
-- Add `React.lazy` boundaries for heavy panels: `HistogramPanel`, `Image2dPanel`, and maybe `TablePanel`. Right now `PanelCollection` imports most renderers directly.
-- Consider replacing ECharts for simple scalar/multi-timeseries with a lighter canvas/SVG renderer later. ECharts is still valuable for histograms, but it is heavy for basic line plots.
-
-**Suggested Next Commit**
-Extract `Image2dPanel` from `PanelCollection.jsx` first. It is now self-contained and large enough to justify its own file, and this would immediately reduce the main panel component complexity without changing behavior.

@@ -455,13 +455,14 @@ fn build_task_summary_entries(
             ));
         }
         RunTaskSpec::HyperparameterTuning {
-            optimizer,
             parameters,
             max_concurrent_trials,
             ..
         } => {
             entries.push(key_value("parameters", "Parameters", parameters.len()));
-            entries.push(key_value("max_trials", "Max Trials", optimizer.max_trials));
+            if let Some(trials) = task.task.nr_expected_samples() {
+                entries.push(key_value("trials", "Trials", trials));
+            }
             entries.push(key_value(
                 "max_concurrent_trials",
                 "Concurrency",

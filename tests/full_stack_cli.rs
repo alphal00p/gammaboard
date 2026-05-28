@@ -2755,6 +2755,19 @@ async fn full_stack_cli_set_accumulator_enables_following_sample() -> anyhow::Re
         r#"
 name = "set-accumulator-e2e"
 
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[evaluator_runner_params]
+min_tick_time_ms = 50
+db_pool_size = 1
+
+[sampler_aggregator_runner_params]
+min_tick_time_ms = 10
+db_pool_size = 1
+
 [[task_queue]]
 name = "prep"
 kind = "set_accumulator"
@@ -4975,8 +4988,10 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 [task_queue.optimizer]
 algorithm = "random_search"
-max_trials = 4
 seed = 3
+
+[task_queue.optimizer.params]
+max_trials = 4
 
 [task_queue.objective]
 source_task = "sample"
@@ -5079,6 +5094,128 @@ values = ["auto", "none"]
 
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_hyperparameter_tuning_grid_search_enumerates_finite_domains()
+-> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    harness
+        .start_nodes(&["grid-tune-parent", "grid-tune-s1", "grid-tune-e1"])
+        .await?;
+
+    let config = temp_run_add_config(
+        r#"
+name = "hyperparameter-tuning-grid-e2e"
+
+[evaluator_runner_params]
+min_tick_time_ms = 50
+db_pool_size = 1
+
+[sampler_aggregator_runner_params]
+min_tick_time_ms = 10
+db_pool_size = 1
+
+[[task_queue]]
+name = "tune"
+kind = "hyperparameter_tuning"
+max_concurrent_trials = 2
+trial_run_toml = """
+name = "grid-child-bins-$(bins:8)-mode-$(mode:auto)"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 16 }
+measurement = { quantity = "central_value" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"""
+
+[task_queue.optimizer]
+algorithm = "grid_search"
+
+[task_queue.objective]
+source_task = "sample"
+mode = "minimize"
+quantity = "central_value"
+
+[task_queue.parameters.bins]
+kind = "integer"
+min = 8
+max = 16
+step = 4
+
+[task_queue.parameters.mode]
+kind = "categorical"
+values = ["auto", "none"]
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 =
+        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'hyperparameter-tuning-grid-e2e'")
+            .fetch_one(&harness.pool)
+            .await?;
+
+    harness
+        .cli()
+        .args(["auto-assign", &run_id.to_string()])
+        .assert()
+        .success();
+
+    harness
+        .wait_for("grid tuning completes", Duration::from_secs(90), || async {
+            let state: Option<String> = sqlx::query_scalar(
+                "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
+            )
+            .bind(run_id)
+            .fetch_optional(&harness.pool)
+            .await?;
+            Ok(state.as_deref() == Some("completed"))
+        })
+        .await?;
+
+    let output: JsonValue = sqlx::query_scalar(
+        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(output["completed_trials"], json!(6));
+    assert_eq!(output["failed_trials"], json!(0));
+    assert_eq!(output["total_trials"], json!(6));
+    let trials = output["trials"].as_array().expect("trials");
+    assert_eq!(trials.len(), 6);
+    assert_eq!(trials[0]["parameters"], json!({"bins": 8, "mode": "auto"}));
+    assert_eq!(trials[1]["parameters"], json!({"bins": 8, "mode": "none"}));
+    assert_eq!(trials[5]["parameters"], json!({"bins": 16, "mode": "none"}));
+
+    let child_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runs WHERE parent_run_id = $1 AND spawn_kind = 'hyperparameter_tuning'",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(child_count, 6);
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_hyperparameter_tuning_fails_on_bad_trial_template() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
     harness
@@ -5089,6 +5226,14 @@ async fn full_stack_cli_hyperparameter_tuning_fails_on_bad_trial_template() -> a
         r#"
 name = "hyperparameter-tuning-bad-template-e2e"
 
+[evaluator_runner_params]
+min_tick_time_ms = 50
+db_pool_size = 1
+
+[sampler_aggregator_runner_params]
+min_tick_time_ms = 10
+db_pool_size = 1
+
 [[task_queue]]
 name = "tune"
 kind = "hyperparameter_tuning"
@@ -5097,8 +5242,10 @@ trial_run_toml = "name = \"broken-child"
 
 [task_queue.optimizer]
 algorithm = "random_search"
-max_trials = 1
 seed = 3
+
+[task_queue.optimizer.params]
+max_trials = 1
 
 [task_queue.objective]
 source_task = "sample"
@@ -5155,6 +5302,284 @@ max = 1.0
     .fetch_one(&harness.pool)
     .await?;
     assert!(failure_reason.contains("failed to create tuning trial 0"));
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_hyperparameter_tuning_fails_when_child_measurement_fails()
+-> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    harness
+        .start_nodes(&[
+            "failed-measure-parent",
+            "failed-measure-s1",
+            "failed-measure-e1",
+        ])
+        .await?;
+
+    let config = temp_run_add_config(
+        r#"
+name = "hyperparameter-tuning-failed-measurement-e2e"
+
+[evaluator_runner_params]
+min_tick_time_ms = 50
+db_pool_size = 1
+
+[sampler_aggregator_runner_params]
+min_tick_time_ms = 10
+db_pool_size = 1
+
+[[task_queue]]
+name = "tune"
+kind = "hyperparameter_tuning"
+max_concurrent_trials = 1
+trial_run_toml = """
+name = "failed-measure-child-$(scale:1)"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 16 }
+measurement = { quantity = { metric = "variance", component = "missing" } }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"""
+
+[task_queue.optimizer]
+algorithm = "random_search"
+seed = 5
+
+[task_queue.optimizer.params]
+max_trials = 1
+
+[task_queue.objective]
+source_task = "sample"
+mode = "minimize"
+quantity = "central_value"
+
+[task_queue.parameters.scale]
+kind = "integer"
+min = 1
+max = 1
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 = sqlx::query_scalar(
+        "SELECT id FROM runs WHERE name = 'hyperparameter-tuning-failed-measurement-e2e'",
+    )
+    .fetch_one(&harness.pool)
+    .await?;
+
+    harness
+        .cli()
+        .args(["auto-assign", &run_id.to_string()])
+        .assert()
+        .success();
+
+    harness
+        .wait_for(
+            "failed measurement tuning fails",
+            Duration::from_secs(60),
+            || async {
+                let state: Option<String> = sqlx::query_scalar(
+                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
+                )
+                .bind(run_id)
+                .fetch_optional(&harness.pool)
+                .await?;
+                Ok(state.as_deref() == Some("failed"))
+            },
+        )
+        .await?;
+
+    let output: JsonValue = sqlx::query_scalar(
+        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(output["failed_trials"], json!(1));
+    assert_eq!(output["completed_trials"], json!(0));
+    assert!(
+        output["trials"][0]["failure_reason"]
+            .as_str()
+            .is_some_and(
+                |reason| reason.contains("measurement metric") && reason.contains("unavailable")
+            )
+    );
+
+    let failure_reason: String = sqlx::query_scalar(
+        "SELECT failure_reason FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert!(failure_reason.contains("failed_trials=1"));
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_hyperparameter_tuning_redistributes_parent_assignments()
+-> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    harness
+        .start_nodes(&["tune-owned-s", "tune-owned-e1", "tune-owned-e2"])
+        .await?;
+
+    let config = temp_run_add_config(
+        r#"
+name = "hyperparameter-tuning-redistribute-e2e"
+
+[evaluator_runner_params]
+min_tick_time_ms = 50
+db_pool_size = 1
+
+[sampler_aggregator_runner_params]
+min_tick_time_ms = 10
+db_pool_size = 1
+
+[[task_queue]]
+name = "tune"
+kind = "hyperparameter_tuning"
+max_concurrent_trials = 2
+trial_run_toml = """
+name = "tune-redistribute-child-$(scale:1)"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 512 }
+measurement = { quantity = "central_value" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"""
+
+[task_queue.optimizer]
+algorithm = "grid_search"
+
+[task_queue.objective]
+source_task = "sample"
+mode = "minimize"
+quantity = "central_value"
+
+[task_queue.parameters.scale]
+kind = "integer"
+min = 1
+max = 4
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 = sqlx::query_scalar(
+        "SELECT id FROM runs WHERE name = 'hyperparameter-tuning-redistribute-e2e'",
+    )
+    .fetch_one(&harness.pool)
+    .await?;
+
+    for (node, role) in [
+        ("tune-owned-s", "sampler-aggregator"),
+        ("tune-owned-e1", "evaluator"),
+        ("tune-owned-e2", "evaluator"),
+    ] {
+        harness
+            .cli()
+            .args([
+                "node",
+                "assign",
+                node,
+                role,
+                "hyperparameter-tuning-redistribute-e2e",
+            ])
+            .assert()
+            .success();
+    }
+
+    harness
+        .wait_for(
+            "tuning redistributes parent assignments to child runs",
+            Duration::from_secs(30),
+            || async {
+                let parent_desired: i64 =
+                    sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE desired_run_id = $1")
+                        .bind(run_id)
+                        .fetch_one(&harness.pool)
+                        .await?;
+                let child_desired: i64 = sqlx::query_scalar(
+                    r#"
+                    SELECT COUNT(*)
+                    FROM nodes n
+                    JOIN runs r ON r.id = n.desired_run_id
+                    WHERE r.parent_run_id = $1
+                      AND r.spawn_kind = 'hyperparameter_tuning'
+                    "#,
+                )
+                .bind(run_id)
+                .fetch_one(&harness.pool)
+                .await?;
+                Ok(parent_desired == 0 && child_desired > 0)
+            },
+        )
+        .await?;
+
+    harness
+        .wait_for(
+            "redistribution tuning completes",
+            Duration::from_secs(90),
+            || async {
+                let state: Option<String> = sqlx::query_scalar(
+                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
+                )
+                .bind(run_id)
+                .fetch_optional(&harness.pool)
+                .await?;
+                Ok(state.as_deref() == Some("completed"))
+            },
+        )
+        .await?;
+
+    let output: JsonValue = sqlx::query_scalar(
+        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(output["completed_trials"], json!(4));
+    assert_eq!(output["total_trials"], json!(4));
 
     harness.stop_children().await;
     harness.pool.close().await;

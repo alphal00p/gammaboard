@@ -47,6 +47,8 @@ sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = "$(
 [task_queue.optimizer]
 algorithm = "random_search"
 seed = 7
+
+[task_queue.optimizer.params]
 max_trials = "$(max_trials:12)"
 
 [task_queue.objective]

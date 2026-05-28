@@ -1,8 +1,8 @@
 use crate::core::{
-    AccumulatorMetricName, AggregationStore, ControlPlaneStore, HyperparameterTuningObjectiveSpec,
-    HyperparameterTuningParameterDomain, MeasurementMode, MeasurementQuantityName,
-    MeasurementQuantitySpec, RunReadStore, RunSpecStore, RunTask, RunTaskSpec, RunTaskState,
-    RunTaskStore, StoreError, TaskMeasurementOutput,
+    AccumulatorMetricName, AggregationStore, ControlPlaneStore, HyperparameterTuningAlgorithm,
+    HyperparameterTuningObjectiveSpec, HyperparameterTuningParameterDomain, MeasurementMode,
+    MeasurementQuantityName, MeasurementQuantitySpec, RunReadStore, RunSpecStore, RunTask,
+    RunTaskSpec, RunTaskState, RunTaskStore, StoreError, TaskMeasurementOutput,
 };
 use crate::runners::controller_child::{
     ControllerChildRunRequest, choose_child_capacity, create_controller_child_run,
@@ -102,7 +102,7 @@ where
             .filter_map(|run| run.spawn_label.as_deref().map(|label| (label, run)))
             .collect::<BTreeMap<_, _>>();
 
-        let total_trials = optimizer.max_trials;
+        let total_trials = optimizer_trial_count(optimizer, parameters)?;
         let mut trials = Vec::with_capacity(total_trials);
         let mut completed_count = 0usize;
         let mut running_count = 0usize;
@@ -110,7 +110,7 @@ where
 
         for index in 0..total_trials {
             let label = index.to_string();
-            let values = trial_parameters(parameters, optimizer.seed.unwrap_or(0), index)?;
+            let values = trial_parameters(optimizer, parameters, index)?;
             let parameters_json = parameters_to_json(&values)?;
             let child = child_runs_by_label.get(label.as_str()).copied();
 
@@ -243,8 +243,7 @@ where
                 if child_runs_by_label.contains_key(label.as_str()) {
                     continue;
                 }
-                let replacements =
-                    trial_parameters(parameters, optimizer.seed.unwrap_or(0), index)?;
+                let replacements = trial_parameters(optimizer, parameters, index)?;
                 let child = match create_controller_child_run(
                     &self.store,
                     ControllerChildRunRequest {
@@ -399,16 +398,42 @@ fn best_trial(
     best.map_or((None, None), |(index, value)| (Some(index), Some(value)))
 }
 
-fn trial_parameters(
+fn optimizer_trial_count(
+    optimizer: &crate::core::HyperparameterTuningOptimizerSpec,
     parameters: &BTreeMap<String, HyperparameterTuningParameterDomain>,
-    seed: u64,
+) -> Result<usize, StoreError> {
+    match optimizer.algorithm {
+        HyperparameterTuningAlgorithm::RandomSearch => Ok(optimizer
+            .random_search_params()
+            .map_err(StoreError::store)?
+            .max_trials),
+        HyperparameterTuningAlgorithm::GridSearch => {
+            let grid_size = parameters.values().try_fold(1usize, |size, domain| {
+                size.checked_mul(grid_parameter_values(domain)?.len())
+                    .ok_or_else(|| StoreError::store("grid_search parameter grid size overflow"))
+            })?;
+            Ok(grid_size)
+        }
+    }
+}
+
+fn trial_parameters(
+    optimizer: &crate::core::HyperparameterTuningOptimizerSpec,
+    parameters: &BTreeMap<String, HyperparameterTuningParameterDomain>,
     index: usize,
 ) -> Result<BTreeMap<String, toml::Value>, StoreError> {
-    let mut rng = Xoshiro256StarStar::seed_from_u64(seed ^ splitmix64(index as u64));
-    parameters
-        .iter()
-        .map(|(name, domain)| Ok((name.clone(), sample_parameter(domain, &mut rng)?)))
-        .collect()
+    match optimizer.algorithm {
+        HyperparameterTuningAlgorithm::RandomSearch => {
+            let mut rng = Xoshiro256StarStar::seed_from_u64(
+                optimizer.seed.unwrap_or(0) ^ splitmix64(index as u64),
+            );
+            parameters
+                .iter()
+                .map(|(name, domain)| Ok((name.clone(), sample_parameter(domain, &mut rng)?)))
+                .collect()
+        }
+        HyperparameterTuningAlgorithm::GridSearch => grid_trial_parameters(parameters, index),
+    }
 }
 
 fn sample_parameter(
@@ -435,6 +460,49 @@ fn sample_parameter(
             let index = rng.random_range(0..domain.values.len());
             Ok(domain.values[index].clone())
         }
+    }
+}
+
+fn grid_trial_parameters(
+    parameters: &BTreeMap<String, HyperparameterTuningParameterDomain>,
+    mut index: usize,
+) -> Result<BTreeMap<String, toml::Value>, StoreError> {
+    let mut selected = BTreeMap::new();
+    for (name, domain) in parameters.iter().rev() {
+        let values = grid_parameter_values(domain)?;
+        let value_index = index % values.len();
+        index /= values.len();
+        selected.insert(name.clone(), values[value_index].clone());
+    }
+    if index != 0 {
+        return Err(StoreError::store(
+            "grid_search trial index exceeds grid size",
+        ));
+    }
+    Ok(selected)
+}
+
+fn grid_parameter_values(
+    domain: &HyperparameterTuningParameterDomain,
+) -> Result<Vec<toml::Value>, StoreError> {
+    match domain {
+        HyperparameterTuningParameterDomain::Integer(domain) => {
+            let step = domain.step.unwrap_or(1);
+            let mut values = Vec::new();
+            let mut value = domain.min;
+            while value <= domain.max {
+                values.push(toml::Value::Integer(value));
+                match value.checked_add(step) {
+                    Some(next) => value = next,
+                    None => break,
+                }
+            }
+            Ok(values)
+        }
+        HyperparameterTuningParameterDomain::Categorical(domain) => Ok(domain.values.clone()),
+        HyperparameterTuningParameterDomain::Float(_) => Err(StoreError::store(
+            "grid_search does not support float parameter domains yet; use integer/categorical domains",
+        )),
     }
 }
 
@@ -466,7 +534,7 @@ mod tests {
     use super::*;
     use crate::core::{
         HyperparameterTuningFloatDomain, HyperparameterTuningIntegerDomain,
-        MeasurementMetricQuantity, MeasurementMetricSpec,
+        HyperparameterTuningOptimizerSpec, MeasurementMetricQuantity, MeasurementMetricSpec,
     };
 
     #[test]
@@ -489,9 +557,15 @@ mod tests {
             ),
         ]);
 
-        let first = trial_parameters(&parameters, 7, 3).expect("first");
-        let second = trial_parameters(&parameters, 7, 3).expect("second");
-        let different = trial_parameters(&parameters, 7, 4).expect("different");
+        let optimizer = HyperparameterTuningOptimizerSpec {
+            algorithm: HyperparameterTuningAlgorithm::RandomSearch,
+            seed: Some(7),
+            params: json!({ "max_trials": 8 }),
+        };
+
+        let first = trial_parameters(&optimizer, &parameters, 3).expect("first");
+        let second = trial_parameters(&optimizer, &parameters, 3).expect("second");
+        let different = trial_parameters(&optimizer, &parameters, 4).expect("different");
 
         assert_eq!(first, second);
         assert_ne!(first, different);
@@ -499,6 +573,92 @@ mod tests {
             panic!("integer parameter missing");
         };
         assert_eq!((n - 2) % 2, 0);
+    }
+
+    #[test]
+    fn grid_trial_parameters_enumerate_finite_domains() {
+        let parameters = BTreeMap::from([
+            (
+                "bins".to_string(),
+                HyperparameterTuningParameterDomain::Integer(HyperparameterTuningIntegerDomain {
+                    min: 8,
+                    max: 16,
+                    step: Some(4),
+                }),
+            ),
+            (
+                "mode".to_string(),
+                HyperparameterTuningParameterDomain::Categorical(
+                    crate::core::HyperparameterTuningCategoricalDomain {
+                        values: vec![
+                            toml::Value::String("auto".to_string()),
+                            toml::Value::String("none".to_string()),
+                        ],
+                    },
+                ),
+            ),
+        ]);
+        let optimizer = HyperparameterTuningOptimizerSpec {
+            algorithm: HyperparameterTuningAlgorithm::GridSearch,
+            seed: Some(7),
+            params: json!({}),
+        };
+
+        assert_eq!(optimizer_trial_count(&optimizer, &parameters).unwrap(), 6);
+        let trials = (0..6)
+            .map(|index| trial_parameters(&optimizer, &parameters, index).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            trials
+                .iter()
+                .map(|trial| (trial["bins"].clone(), trial["mode"].clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    toml::Value::Integer(8),
+                    toml::Value::String("auto".to_string())
+                ),
+                (
+                    toml::Value::Integer(8),
+                    toml::Value::String("none".to_string())
+                ),
+                (
+                    toml::Value::Integer(12),
+                    toml::Value::String("auto".to_string())
+                ),
+                (
+                    toml::Value::Integer(12),
+                    toml::Value::String("none".to_string())
+                ),
+                (
+                    toml::Value::Integer(16),
+                    toml::Value::String("auto".to_string())
+                ),
+                (
+                    toml::Value::Integer(16),
+                    toml::Value::String("none".to_string())
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn grid_search_rejects_float_domains() {
+        let parameters = BTreeMap::from([(
+            "x".to_string(),
+            HyperparameterTuningParameterDomain::Float(HyperparameterTuningFloatDomain {
+                min: 0.0,
+                max: 1.0,
+            }),
+        )]);
+        let optimizer = HyperparameterTuningOptimizerSpec {
+            algorithm: HyperparameterTuningAlgorithm::GridSearch,
+            seed: None,
+            params: json!({}),
+        };
+
+        let err = optimizer_trial_count(&optimizer, &parameters).expect_err("float grid");
+        assert!(err.to_string().contains("does not support float"));
     }
 
     #[test]
