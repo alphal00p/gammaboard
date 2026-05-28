@@ -1,12 +1,13 @@
 use crate::core::{
     AggregationStore, ControlPlaneStore, RunReadStore, RunSpecStore, RunTask, RunTaskSpec,
-    RunTaskStore, StoreError, TaskMeasurementOutput,
+    RunTaskStore, StoreError, TaskMeasurementOutput, effective_parameter_scan_parameters,
 };
 use crate::runners::controller_child::{
     ControllerChildRunRequest, choose_child_capacity, create_controller_child_run,
     list_child_runs_for_task, load_child_task_measurement,
     redistribute_parent_assignments_to_children,
 };
+use crate::runners::parameter_grid::{ParameterGridItem, cartesian_grid_len, cartesian_grid_point};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
@@ -16,7 +17,7 @@ const PARAMETER_SCAN_SPAWN_KIND: &str = "parameter_scan";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParameterScanPointOutput {
     pub index: usize,
-    pub parameter_value: JsonValue,
+    pub parameter_values: JsonValue,
     pub child_run_id: Option<i32>,
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -27,7 +28,7 @@ pub struct ParameterScanPointOutput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParameterScanOutput {
-    pub parameter_name: String,
+    pub parameters: Vec<String>,
     pub completed_points: usize,
     pub running_points: usize,
     pub total_points: usize,
@@ -67,6 +68,7 @@ where
 
         let RunTaskSpec::ParameterScan {
             parameter,
+            parameters,
             measurement,
             trial_run_toml,
             max_concurrent_runs,
@@ -74,6 +76,10 @@ where
         else {
             return Err(StoreError::store("parameter scan runner got non-scan task"));
         };
+        let parameters = effective_parameter_scan_parameters(parameter, parameters)
+            .map_err(StoreError::store)?;
+        let grid_items = parameter_scan_grid_items(&parameters);
+        let total_points = cartesian_grid_len(&grid_items)?;
 
         let child_runs = list_child_runs_for_task(
             &self.store,
@@ -86,22 +92,23 @@ where
             .iter()
             .filter_map(|run| run.spawn_label.as_deref().map(|label| (label, run)))
             .collect::<BTreeMap<_, _>>();
-        let mut points = Vec::with_capacity(parameter.values.len());
+        let mut points = Vec::with_capacity(total_points);
         let mut running_count = 0usize;
         let mut completed_count = 0usize;
         let mut failed_reason = None;
 
-        for (index, value) in parameter.values.iter().enumerate() {
+        for index in 0..total_points {
             let index_label = index.to_string();
             let child = child_runs_by_label.get(index_label.as_str()).copied();
-            let parameter_value = serde_json::to_value(value).map_err(|err| {
-                StoreError::store(format!("failed to serialize parameter value: {err}"))
+            let replacements = cartesian_grid_point(&grid_items, index)?;
+            let parameter_values = serde_json::to_value(&replacements).map_err(|err| {
+                StoreError::store(format!("failed to serialize parameter values: {err}"))
             })?;
 
             let Some(child) = child else {
                 points.push(ParameterScanPointOutput {
                     index,
-                    parameter_value,
+                    parameter_values,
                     child_run_id: None,
                     status: "pending".to_string(),
                     measurement: None,
@@ -118,7 +125,7 @@ where
                     completed_count += 1;
                     points.push(ParameterScanPointOutput {
                         index,
-                        parameter_value,
+                        parameter_values,
                         child_run_id: Some(child.run_id),
                         status: "completed".to_string(),
                         measurement: Some(TaskMeasurementOutput::Completed { results }),
@@ -132,7 +139,7 @@ where
                     ));
                     points.push(ParameterScanPointOutput {
                         index,
-                        parameter_value,
+                        parameter_values,
                         child_run_id: Some(child.run_id),
                         status: "failed".to_string(),
                         measurement: Some(TaskMeasurementOutput::Failed {
@@ -147,7 +154,7 @@ where
                     }
                     points.push(ParameterScanPointOutput {
                         index,
-                        parameter_value,
+                        parameter_values,
                         child_run_id: Some(child.run_id),
                         status: measurement_output.task_state.as_str().to_string(),
                         measurement: None,
@@ -159,7 +166,7 @@ where
 
         if let Some(reason) = failed_reason {
             self.persist_output(
-                parameter.name.clone(),
+                parameter_scan_names(&parameters),
                 completed_count,
                 running_count,
                 points,
@@ -169,9 +176,9 @@ where
             return Ok(true);
         }
 
-        if completed_count == parameter.values.len() {
+        if completed_count == total_points {
             self.persist_output(
-                parameter.name.clone(),
+                parameter_scan_names(&parameters),
                 completed_count,
                 running_count,
                 points,
@@ -184,7 +191,7 @@ where
         let mut created_child_run_ids = Vec::new();
         let mut capacity = choose_child_capacity(*max_concurrent_runs, running_count);
         if capacity > 0 {
-            for (index, value) in parameter.values.iter().enumerate() {
+            for index in 0..total_points {
                 if capacity == 0 {
                     break;
                 }
@@ -192,8 +199,7 @@ where
                 if child_runs_by_label.contains_key(index_label.as_str()) {
                     continue;
                 }
-                let mut replacements = BTreeMap::new();
-                replacements.insert(parameter.name.clone(), value.clone());
+                let replacements = cartesian_grid_point(&grid_items, index)?;
                 let child = create_controller_child_run(
                     &self.store,
                     ControllerChildRunRequest {
@@ -226,7 +232,7 @@ where
         .await?;
 
         self.persist_output(
-            parameter.name.clone(),
+            parameter_scan_names(&parameters),
             completed_count,
             running_count,
             points,
@@ -238,14 +244,14 @@ where
 
     async fn persist_output(
         &self,
-        parameter_name: String,
+        parameters: Vec<String>,
         completed_points: usize,
         running_points: usize,
         points: Vec<ParameterScanPointOutput>,
     ) -> Result<(), StoreError> {
         let output = serde_json::to_value(ParameterScanOutput {
             total_points: points.len(),
-            parameter_name,
+            parameters,
             completed_points,
             running_points,
             points,
@@ -255,4 +261,23 @@ where
             .persist_task_controller_output(self.task.id, &output)
             .await
     }
+}
+
+fn parameter_scan_grid_items(
+    parameters: &[crate::core::ParameterScanParameterSpec],
+) -> Vec<ParameterGridItem> {
+    parameters
+        .iter()
+        .map(|parameter| ParameterGridItem {
+            name: parameter.name.clone(),
+            values: parameter.values.clone(),
+        })
+        .collect()
+}
+
+fn parameter_scan_names(parameters: &[crate::core::ParameterScanParameterSpec]) -> Vec<String> {
+    parameters
+        .iter()
+        .map(|parameter| parameter.name.clone())
+        .collect()
 }

@@ -1072,15 +1072,60 @@ source_task = "sample"
 
         let RunTaskSpec::ParameterScan {
             parameter,
+            parameters,
             max_concurrent_runs,
             ..
         } = &config.task_queue.expect("tasks")[0].task
         else {
             panic!("expected parameter scan task");
         };
+        let parameter = parameter
+            .as_ref()
+            .or_else(|| parameters.first())
+            .expect("parameter");
         assert_eq!(parameter.name, "scale");
         assert_eq!(parameter.values.len(), 3);
         assert_eq!(*max_concurrent_runs, 2);
+    }
+
+    #[test]
+    fn parse_run_add_accepts_multi_parameter_scan_task() {
+        let config = parse_run_add_config_toml(
+            r#"
+name = "scan-parent"
+
+[[task_queue]]
+name = "scan"
+kind = "parameter_scan"
+max_concurrent_runs = 2
+trial_run_toml = "name = \"child\"\n"
+
+[[task_queue.parameters]]
+name = "scale"
+values = [1, 2]
+
+[[task_queue.parameters]]
+name = "offset"
+values = [0.0, 1.0]
+
+[task_queue.measurement]
+source_task = "sample"
+"#,
+        )
+        .expect("run config");
+
+        let RunTaskSpec::ParameterScan {
+            parameter,
+            parameters,
+            ..
+        } = &config.task_queue.expect("tasks")[0].task
+        else {
+            panic!("expected parameter scan task");
+        };
+        assert!(parameter.is_none());
+        assert_eq!(parameters.len(), 2);
+        assert_eq!(parameters[0].name, "scale");
+        assert_eq!(parameters[1].name, "offset");
     }
 
     #[test]

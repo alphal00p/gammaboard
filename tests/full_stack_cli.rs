@@ -4774,6 +4774,142 @@ source_task = "sample"
 
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_parameter_scan_cartesian_product_parameters() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    harness
+        .start_nodes(&["scan-grid-parent", "scan-grid-s1", "scan-grid-e1"])
+        .await?;
+
+    let config = temp_run_add_config(
+        r#"
+name = "parameter-scan-grid-e2e"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[evaluator_runner_params]
+min_tick_time_ms = 50
+db_pool_size = 1
+
+[sampler_aggregator_runner_params]
+min_tick_time_ms = 10
+db_pool_size = 1
+
+[[task_queue]]
+name = "scan"
+kind = "parameter_scan"
+max_concurrent_runs = 2
+trial_run_toml = """
+name = "parameter-scan-grid-child-$(scale:1)-$(offset:0)"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 16 }
+measurement = { quantity = "central_value" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"""
+
+[[task_queue.parameters]]
+name = "scale"
+values = [1, 2]
+
+[[task_queue.parameters]]
+name = "offset"
+values = [0, 10]
+
+[task_queue.measurement]
+source_task = "sample"
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 =
+        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'parameter-scan-grid-e2e'")
+            .fetch_one(&harness.pool)
+            .await?;
+
+    harness
+        .cli()
+        .args(["auto-assign", &run_id.to_string()])
+        .assert()
+        .success();
+
+    harness
+        .wait_for(
+            "multi-parameter scan completes",
+            Duration::from_secs(90),
+            || async {
+                let state: Option<String> = sqlx::query_scalar(
+                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'scan'",
+                )
+                .bind(run_id)
+                .fetch_optional(&harness.pool)
+                .await?;
+                Ok(state.as_deref() == Some("completed"))
+            },
+        )
+        .await?;
+
+    let output: JsonValue = sqlx::query_scalar(
+        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'scan'",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(output["parameters"], json!(["scale", "offset"]));
+    assert_eq!(output["completed_points"], json!(4));
+    assert_eq!(output["total_points"], json!(4));
+    let points = output["points"].as_array().expect("points");
+    assert_eq!(points.len(), 4);
+    assert_eq!(
+        points[0]["parameter_values"],
+        json!({"offset": 0, "scale": 1})
+    );
+    assert_eq!(
+        points[1]["parameter_values"],
+        json!({"offset": 10, "scale": 1})
+    );
+    assert_eq!(
+        points[2]["parameter_values"],
+        json!({"offset": 0, "scale": 2})
+    );
+    assert_eq!(
+        points[3]["parameter_values"],
+        json!({"offset": 10, "scale": 2})
+    );
+
+    let child_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runs WHERE parent_run_id = $1 AND spawn_kind = 'parameter_scan'",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(child_count, 4);
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_parameter_scan_redistributes_parent_assignments_and_updates_progress()
 -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;

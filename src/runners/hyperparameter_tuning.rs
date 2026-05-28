@@ -9,6 +9,7 @@ use crate::runners::controller_child::{
     list_child_runs_for_task, load_child_task_measurement,
     redistribute_parent_assignments_to_children,
 };
+use crate::runners::parameter_grid::{ParameterGridItem, cartesian_grid_len, cartesian_grid_point};
 use rand::{Rng, SeedableRng};
 use rand_xoshiro::Xoshiro256StarStar;
 use serde::{Deserialize, Serialize};
@@ -483,11 +484,8 @@ fn optimizer_trial_count(
             .map_err(StoreError::store)?
             .max_trials),
         HyperparameterTuningAlgorithm::GridSearch => {
-            let grid_size = parameters.values().try_fold(1usize, |size, domain| {
-                size.checked_mul(grid_parameter_values(domain)?.len())
-                    .ok_or_else(|| StoreError::store("grid_search parameter grid size overflow"))
-            })?;
-            Ok(grid_size)
+            let grid_items = hyperparameter_grid_items(parameters)?;
+            cartesian_grid_len(&grid_items)
         }
     }
 }
@@ -507,7 +505,10 @@ fn trial_parameters(
                 .map(|(name, domain)| Ok((name.clone(), sample_parameter(domain, &mut rng)?)))
                 .collect()
         }
-        HyperparameterTuningAlgorithm::GridSearch => grid_trial_parameters(parameters, index),
+        HyperparameterTuningAlgorithm::GridSearch => {
+            let grid_items = hyperparameter_grid_items(parameters)?;
+            cartesian_grid_point(&grid_items, index)
+        }
     }
 }
 
@@ -538,23 +539,18 @@ fn sample_parameter(
     }
 }
 
-fn grid_trial_parameters(
+fn hyperparameter_grid_items(
     parameters: &BTreeMap<String, HyperparameterTuningParameterDomain>,
-    mut index: usize,
-) -> Result<BTreeMap<String, toml::Value>, StoreError> {
-    let mut selected = BTreeMap::new();
-    for (name, domain) in parameters.iter().rev() {
-        let values = grid_parameter_values(domain)?;
-        let value_index = index % values.len();
-        index /= values.len();
-        selected.insert(name.clone(), values[value_index].clone());
-    }
-    if index != 0 {
-        return Err(StoreError::store(
-            "grid_search trial index exceeds grid size",
-        ));
-    }
-    Ok(selected)
+) -> Result<Vec<ParameterGridItem>, StoreError> {
+    parameters
+        .iter()
+        .map(|(name, domain)| {
+            Ok(ParameterGridItem {
+                name: name.clone(),
+                values: grid_parameter_values(domain)?,
+            })
+        })
+        .collect()
 }
 
 fn grid_parameter_values(

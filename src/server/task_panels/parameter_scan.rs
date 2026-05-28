@@ -66,11 +66,16 @@ fn scan_measurements_projector() -> TaskPanelProjector {
             PanelWidth::Full,
         ),
         |ctx| {
+            let parameter_names = scan_parameter_names(ctx);
             let series = scan_points(ctx)
                 .map(|points| {
-                    build_measurement_series(points, |result| {
-                        result.get("name").and_then(JsonValue::as_str) == Some("mean")
-                    })
+                    if parameter_names.len() == 1 {
+                        build_measurement_series(points, &parameter_names[0], |result| {
+                            result.get("name").and_then(JsonValue::as_str) == Some("mean")
+                        })
+                    } else {
+                        Vec::new()
+                    }
                 })
                 .unwrap_or_default();
             Ok(Some(multi_timeseries_panel(SCAN_MEAN_PANEL_ID, series)))
@@ -91,31 +96,33 @@ fn scan_points_projector() -> TaskPanelProjector {
             PanelWidth::Full,
         ),
         |ctx| {
+            let parameter_names = scan_parameter_names(ctx);
             let rows = scan_points(ctx)
                 .map(|points| {
                     points
                         .iter()
-                        .flat_map(scan_point_to_table_rows)
+                        .flat_map(|point| scan_point_to_table_rows(point, &parameter_names))
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
+            let mut columns = vec!["index".to_string()];
+            columns.extend(parameter_names.iter().cloned());
+            columns.extend([
+                "status".to_string(),
+                "run".to_string(),
+                "metric".to_string(),
+                "component".to_string(),
+                "value".to_string(),
+                "uncertainty".to_string(),
+                "samples".to_string(),
+            ]);
             Ok(Some(table_panel_with_payload_and_options(
                 SCAN_POINTS_PANEL_ID,
-                vec![
-                    "index".to_string(),
-                    "parameter".to_string(),
-                    "status".to_string(),
-                    "run".to_string(),
-                    "metric".to_string(),
-                    "component".to_string(),
-                    "value".to_string(),
-                    "uncertainty".to_string(),
-                    "samples".to_string(),
-                ],
+                columns,
                 rows,
                 ctx.task.controller_output.as_ref().map(|output| {
                     json!({
-                        "parameter_name": output.get("parameter_name").cloned().unwrap_or(JsonValue::Null),
+                        "parameters": output.get("parameters").cloned().unwrap_or(JsonValue::Null),
                         "row_action": {
                             "kind": "select_run",
                             "column": "run",
@@ -139,11 +146,14 @@ fn scan_points<'a>(ctx: &'a TaskPanelContext<'_>) -> Option<&'a Vec<JsonValue>> 
 
 fn build_measurement_series(
     points: &[JsonValue],
+    parameter_name: &str,
     include_result: impl Fn(&JsonValue) -> bool,
 ) -> Vec<PlotSeries> {
     let mut series_by_id = BTreeMap::<String, PlotSeries>::new();
     for point in points {
-        let Some(x) = point.get("parameter_value").and_then(json_number) else {
+        let Some(x) =
+            scan_point_parameter_value(point, parameter_name).and_then(|value| json_number(&value))
+        else {
             continue;
         };
         for result in measurement_results(point).filter(|result| include_result(result)) {
@@ -185,19 +195,20 @@ fn scan_result_to_plot_point(x: f64, result: &JsonValue) -> Option<PlotPoint> {
     })
 }
 
-fn scan_point_to_table_rows(point: &JsonValue) -> Vec<Vec<JsonValue>> {
-    let common = [
-        point.get("index").cloned().unwrap_or(JsonValue::Null),
-        point
-            .get("parameter_value")
-            .cloned()
-            .unwrap_or(JsonValue::Null),
+fn scan_point_to_table_rows(point: &JsonValue, parameter_names: &[String]) -> Vec<Vec<JsonValue>> {
+    let mut common = vec![point.get("index").cloned().unwrap_or(JsonValue::Null)];
+    common.extend(
+        parameter_names
+            .iter()
+            .map(|name| scan_point_parameter_value(point, name).unwrap_or(JsonValue::Null)),
+    );
+    common.extend([
         point.get("status").cloned().unwrap_or(JsonValue::Null),
         point
             .get("child_run_id")
             .cloned()
             .unwrap_or(JsonValue::Null),
-    ];
+    ]);
     let rows = measurement_results(point)
         .map(|result| {
             let mut row = common.to_vec();
@@ -270,9 +281,62 @@ fn json_number(value: &JsonValue) -> Option<f64> {
 
 fn total_points_from_task(ctx: &TaskPanelContext<'_>) -> Option<usize> {
     match &ctx.task.task {
-        crate::core::RunTaskSpec::ParameterScan { parameter, .. } => Some(parameter.values.len()),
+        crate::core::RunTaskSpec::ParameterScan { .. } => ctx
+            .task
+            .task
+            .nr_expected_samples()
+            .map(|value| value as usize),
         _ => None,
     }
+}
+
+fn scan_parameter_names(ctx: &TaskPanelContext<'_>) -> Vec<String> {
+    if let Some(names) = ctx
+        .task
+        .controller_output
+        .as_ref()
+        .and_then(|output| output.get("parameters"))
+        .and_then(JsonValue::as_array)
+    {
+        return names
+            .iter()
+            .filter_map(JsonValue::as_str)
+            .map(str::to_string)
+            .collect();
+    }
+    if let Some(name) = ctx
+        .task
+        .controller_output
+        .as_ref()
+        .and_then(|output| output.get("parameter_name"))
+        .and_then(JsonValue::as_str)
+    {
+        return vec![name.to_string()];
+    }
+    match &ctx.task.task {
+        crate::core::RunTaskSpec::ParameterScan {
+            parameter,
+            parameters,
+            ..
+        } => parameter
+            .as_ref()
+            .map(|parameter| vec![parameter.name.clone()])
+            .unwrap_or_else(|| {
+                parameters
+                    .iter()
+                    .map(|parameter| parameter.name.clone())
+                    .collect()
+            }),
+        _ => Vec::new(),
+    }
+}
+
+fn scan_point_parameter_value(point: &JsonValue, parameter_name: &str) -> Option<JsonValue> {
+    point
+        .get("parameter_values")
+        .and_then(|values| values.get(parameter_name))
+        .cloned()
+        .or_else(|| point.get("parameter_value").cloned())
 }
 
 #[cfg(test)]
@@ -287,14 +351,15 @@ mod tests {
 
     fn scan_task(controller_output: Option<JsonValue>) -> RunTask {
         let task = RunTaskSpec::ParameterScan {
-            parameter: ParameterScanParameterSpec {
+            parameter: Some(ParameterScanParameterSpec {
                 name: "scale".to_string(),
                 values: vec![
                     toml::Value::Float(0.0),
                     toml::Value::Float(1.0),
                     toml::Value::Float(2.0),
                 ],
-            },
+            }),
+            parameters: Vec::new(),
             measurement: ParameterScanMeasurementSpec {
                 source_task: "sample".to_string(),
             },

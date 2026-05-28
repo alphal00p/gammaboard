@@ -443,11 +443,18 @@ fn build_task_summary_entries(
         }
         RunTaskSpec::ParameterScan {
             parameter,
+            parameters,
             max_concurrent_runs,
             ..
         } => {
-            entries.push(key_value("parameter", "Parameter", parameter.name.clone()));
-            entries.push(key_value("points", "Points", parameter.values.len()));
+            let parameter_count = parameter
+                .as_ref()
+                .map(|_| 1)
+                .unwrap_or_else(|| parameters.len());
+            entries.push(key_value("parameters", "Parameters", parameter_count));
+            if let Some(points) = task.task.nr_expected_samples() {
+                entries.push(key_value("points", "Points", points));
+            }
             entries.push(key_value(
                 "max_concurrent_runs",
                 "Concurrency",

@@ -385,9 +385,12 @@ pub struct ParameterScanParameterSpec {
 
 impl ParameterScanParameterSpec {
     pub fn validate(&self) -> Result<(), String> {
-        validate_source_name("parameter", &self.name)?;
+        validate_source_name("parameter_scan.parameters", &self.name)?;
         if self.values.is_empty() {
-            return Err("parameter_scan.parameter.values must not be empty".to_string());
+            return Err(format!(
+                "parameter_scan.parameters.{}.values must not be empty",
+                self.name
+            ));
         }
         Ok(())
     }
@@ -411,6 +414,30 @@ impl ParameterScanMeasurementSpec {
     pub fn validate(&self) -> Result<(), String> {
         validate_source_name("measurement.source_task", &self.source_task)
     }
+}
+
+pub fn effective_parameter_scan_parameters(
+    parameter: &Option<ParameterScanParameterSpec>,
+    parameters: &[ParameterScanParameterSpec],
+) -> Result<Vec<ParameterScanParameterSpec>, String> {
+    match (parameter, parameters.is_empty()) {
+        (Some(_), false) => Err(
+            "parameter_scan must use either [parameter] or [[parameters]], not both".to_string(),
+        ),
+        (Some(parameter), true) => Ok(vec![parameter.clone()]),
+        (None, false) => Ok(parameters.to_vec()),
+        (None, true) => Err("parameter_scan.parameters must not be empty".to_string()),
+    }
+}
+
+pub fn parameter_scan_grid_len(
+    parameter: &Option<ParameterScanParameterSpec>,
+    parameters: &[ParameterScanParameterSpec],
+) -> Option<usize> {
+    let parameters = effective_parameter_scan_parameters(parameter, parameters).ok()?;
+    parameters.iter().try_fold(1usize, |count, parameter| {
+        count.checked_mul(parameter.values.len())
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -911,7 +938,10 @@ pub enum RunTaskSpec {
         batch_transforms: Option<Vec<BatchTransformConfig>>,
     },
     ParameterScan {
-        parameter: ParameterScanParameterSpec,
+        #[serde(default)]
+        parameter: Option<ParameterScanParameterSpec>,
+        #[serde(default)]
+        parameters: Vec<ParameterScanParameterSpec>,
         #[serde(default)]
         measurement: ParameterScanMeasurementSpec,
         trial_run_toml: String,
@@ -1036,11 +1066,15 @@ impl RunTaskSpec {
             }
             Self::ParameterScan {
                 parameter,
+                parameters,
                 measurement,
                 trial_run_toml,
                 max_concurrent_runs,
             } => {
-                parameter.validate()?;
+                let parameters = effective_parameter_scan_parameters(parameter, parameters)?;
+                for parameter in &parameters {
+                    parameter.validate()?;
+                }
                 measurement.validate()?;
                 if trial_run_toml.trim().is_empty() {
                     return Err("parameter_scan.trial_run_toml must be non-empty".to_string());
@@ -1323,7 +1357,11 @@ impl RunTaskSpec {
             Self::PdfAdaptationImage { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::PdfAdaptationPlotLine { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::PlotLine { geometry, .. } => Some(geometry.nr_points() as i64),
-            Self::ParameterScan { parameter, .. } => Some(parameter.values.len() as i64),
+            Self::ParameterScan {
+                parameter,
+                parameters,
+                ..
+            } => parameter_scan_grid_len(parameter, parameters).map(|value| value as i64),
             Self::HyperparameterTuning {
                 optimizer,
                 parameters,
@@ -1532,11 +1570,13 @@ impl IntoPreflightTask for RunTaskSpec {
             }
             Self::ParameterScan {
                 parameter,
+                parameters,
                 measurement,
                 trial_run_toml,
                 max_concurrent_runs,
             } => Ok(Some(Self::ParameterScan {
                 parameter,
+                parameters,
                 measurement,
                 trial_run_toml,
                 max_concurrent_runs,

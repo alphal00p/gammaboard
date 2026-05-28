@@ -21,7 +21,8 @@ Implemented:
 - Grouped child runs via `parent_run_id`, `parent_task_id`, `spawn_kind`, and
   `spawn_label`.
 - Recursive child-run deletion when a parent run is deleted.
-- `parameter_scan` as the first child-run controller task.
+- `parameter_scan` as the first child-run controller task, including finite
+  Cartesian scans over multiple explicit parameters.
 - `hyperparameter_tuning` task spec with shared parameter domains:
   `float { min, max }`, `integer { min, max, step? }`, and
   `categorical { values }`.

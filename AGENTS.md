@@ -47,6 +47,8 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - `parameter_scan` is a control-plane controller task. It spawns normal grouped
   child runs from `trial_run_toml`, stores scan progress in
   `run_tasks.controller_output`, and reads child task `measurement_output`.
+  It supports finite Cartesian scans via `[[parameters]]`; legacy single
+  `[parameter]` configs are normalized to the same internal shape.
 - Run, task-append, and node-launch TOML may use a top-level `replacements`
   table plus placeholders `$(name:default)`. Exact full-string placeholders are
   typed TOML replacements; embedded placeholders interpolate as strings. Server
