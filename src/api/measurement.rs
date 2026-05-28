@@ -243,12 +243,19 @@ fn extract_single_metric(
         .map_err(|err| ApiError::Internal(err.to_string()))?
         .ok_or_else(|| {
             ApiError::BadRequest(format!(
-                "measurement metric {:?} is unavailable for task '{}' in state {}",
-                selector.name,
+                "measurement metric {} is unavailable for task '{}' in state {}",
+                metric_selector_label(selector),
                 source_task.name,
                 source_task.state.as_str()
             ))
         })
+}
+
+fn metric_selector_label(selector: &AccumulatorMetricSelector) -> String {
+    match selector.component.as_deref() {
+        Some(component) => format!("{:?}(component={component})", selector.name),
+        None => format!("{:?}", selector.name),
+    }
 }
 
 fn extract_central_value_metrics(

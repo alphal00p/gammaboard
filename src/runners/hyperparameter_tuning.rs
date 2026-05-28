@@ -149,6 +149,13 @@ where
                         }
                         Err(reason) => {
                             failed_count += 1;
+                            let failure_reason = objective_failure_reason(
+                                index,
+                                child.run_id,
+                                objective,
+                                &results,
+                                &reason,
+                            );
                             trials.push(HyperparameterTrialOutput {
                                 index,
                                 parameters: parameters_json,
@@ -157,13 +164,19 @@ where
                                 objective_value: None,
                                 objective_uncertainty: None,
                                 measurement: Some(TaskMeasurementOutput::Completed { results }),
-                                failure_reason: Some(reason),
+                                failure_reason: Some(failure_reason),
                             });
                         }
                     }
                 }
                 Some(TaskMeasurementOutput::Failed { reason }) => {
                     failed_count += 1;
+                    let failure_reason = objective_measurement_failure_reason(
+                        index,
+                        child.run_id,
+                        objective,
+                        &reason,
+                    );
                     trials.push(HyperparameterTrialOutput {
                         index,
                         parameters: parameters_json,
@@ -174,12 +187,14 @@ where
                         measurement: Some(TaskMeasurementOutput::Failed {
                             reason: reason.clone(),
                         }),
-                        failure_reason: Some(reason),
+                        failure_reason: Some(failure_reason),
                     });
                 }
                 None => {
                     if measurement_output.task_state == RunTaskState::Completed {
                         failed_count += 1;
+                        let failure_reason =
+                            objective_missing_measurement_reason(index, child.run_id, objective);
                         trials.push(HyperparameterTrialOutput {
                             index,
                             parameters: parameters_json,
@@ -188,10 +203,7 @@ where
                             objective_value: None,
                             objective_uncertainty: None,
                             measurement: None,
-                            failure_reason: Some(format!(
-                                "child source task '{}' completed without measurement output",
-                                objective.source_task
-                            )),
+                            failure_reason: Some(failure_reason),
                         });
                     } else {
                         running_count += 1;
@@ -355,6 +367,69 @@ fn objective_result<'a>(
             "objective measurement produced multiple {:?} results; set objective.quantity.component or objective.metric.component",
             selector.0
         )),
+    }
+}
+
+fn objective_failure_reason(
+    trial_index: usize,
+    child_run_id: i32,
+    objective: &HyperparameterTuningObjectiveSpec,
+    results: &[crate::core::MeasurementResult],
+    reason: &str,
+) -> String {
+    format!(
+        "trial {trial_index} child_run_id={child_run_id} objective source_task={} requested={} failed: {reason}; available_results=[{}]",
+        objective.source_task,
+        objective_selector_label(objective),
+        available_measurement_results_label(results),
+    )
+}
+
+fn objective_measurement_failure_reason(
+    trial_index: usize,
+    child_run_id: i32,
+    objective: &HyperparameterTuningObjectiveSpec,
+    reason: &str,
+) -> String {
+    format!(
+        "trial {trial_index} child_run_id={child_run_id} objective source_task={} requested={} measurement failed: {reason}",
+        objective.source_task,
+        objective_selector_label(objective),
+    )
+}
+
+fn objective_missing_measurement_reason(
+    trial_index: usize,
+    child_run_id: i32,
+    objective: &HyperparameterTuningObjectiveSpec,
+) -> String {
+    format!(
+        "trial {trial_index} child_run_id={child_run_id} objective source_task={} requested={} failed: source task completed without measurement output",
+        objective.source_task,
+        objective_selector_label(objective),
+    )
+}
+
+fn objective_selector_label(objective: &HyperparameterTuningObjectiveSpec) -> String {
+    let (name, component) = objective_selector(objective);
+    metric_selector_label(name, component.as_deref())
+}
+
+fn available_measurement_results_label(results: &[crate::core::MeasurementResult]) -> String {
+    if results.is_empty() {
+        return "none".to_string();
+    }
+    results
+        .iter()
+        .map(|result| metric_selector_label(result.name, result.component.as_deref()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn metric_selector_label(name: AccumulatorMetricName, component: Option<&str>) -> String {
+    match component {
+        Some(component) => format!("{name:?}(component={component})"),
+        None => format!("{name:?}"),
     }
 }
 
@@ -724,5 +799,33 @@ mod tests {
 
         let err = objective_result(&objective, &results).expect_err("ambiguous objective");
         assert!(err.contains("multiple"));
+    }
+
+    #[test]
+    fn objective_failure_reason_includes_context_and_available_results() {
+        let objective = HyperparameterTuningObjectiveSpec {
+            source_task: "sample".to_string(),
+            quantity: MeasurementQuantitySpec::Metric(MeasurementMetricQuantity {
+                metric: AccumulatorMetricName::Mean,
+                component: Some("missing".to_string()),
+            }),
+            metric: None,
+            mode: MeasurementMode::Minimize,
+        };
+        let results = vec![crate::core::MeasurementResult {
+            name: AccumulatorMetricName::Mean,
+            component: Some("real".to_string()),
+            value: 1.0,
+            uncertainty: None,
+            sample_count: 10,
+            completed_samples_per_second: None,
+        }];
+
+        let reason = objective_failure_reason(3, 42, &objective, &results, "not found");
+        assert!(reason.contains("trial 3"));
+        assert!(reason.contains("child_run_id=42"));
+        assert!(reason.contains("source_task=sample"));
+        assert!(reason.contains("Mean(component=missing)"));
+        assert!(reason.contains("available_results=[Mean(component=real)]"));
     }
 }

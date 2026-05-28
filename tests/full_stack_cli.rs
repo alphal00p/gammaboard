@@ -5421,9 +5421,12 @@ max = 1
     assert!(
         output["trials"][0]["failure_reason"]
             .as_str()
-            .is_some_and(
-                |reason| reason.contains("measurement metric") && reason.contains("unavailable")
-            )
+            .is_some_and(|reason| reason.contains("child_run_id=")
+                && reason.contains("source_task=sample")
+                && reason.contains("requested=Mean")
+                && reason.contains("Variance(component=missing)")
+                && reason.contains("measurement failed")
+                && reason.contains("unavailable"))
     );
 
     let failure_reason: String = sqlx::query_scalar(
