@@ -74,10 +74,6 @@ where
         + Sync,
 {
     pub async fn tick(&mut self) -> Result<bool, StoreError> {
-        self.store
-            .clear_desired_assignments_for_run(self.run_id)
-            .await?;
-
         let RunTaskSpec::HyperparameterTuning {
             optimizer,
             objective,

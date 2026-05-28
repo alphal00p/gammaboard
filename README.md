@@ -115,8 +115,8 @@ currently known optional process artifacts with:
 just process-artifacts
 ```
 
-To create all bundled example runs and start two local workers per run against
-the active runtime config:
+To build optional artifacts, create all bundled example runs, and start two
+local workers per run against the active runtime config:
 
 ```bash
 just start-example-runs

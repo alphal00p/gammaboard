@@ -7,8 +7,8 @@ process-artifacts: process-rust-breit-wigner-sif
 process-rust-breit-wigner-sif:
     cd process_api/examples/rust_breit_wigner_evaluator && apptainer build runtime.sif apptainer.def
 
-# Create every bundled example run and start two local workers for each run.
-start-example-runs:
+# Build optional artifacts, create every bundled example run, and start two local workers for each run.
+start-example-runs: process-artifacts
     #!/usr/bin/env bash
     set -euo pipefail
     gb="${GAMMABOARD_BIN:-./gammaboard}"
