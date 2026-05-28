@@ -26,24 +26,6 @@ commands = [
   "set model aEWM1=132.507",
   "set model Gf=1.166390e-05",
   "set model MZ=91.188",
-
-  # The generated state contains command blocks that define the observable
-  # quantities, histograms, and selectors. They are normally run by the
-  # GammaLoop `integrate` command block, so GammaBoard must run them explicitly
-  # while loading the evaluator.
-  "run set_differential_quantities",
-  "run set_differential_observables",
-  "run set_differential_selectors",
-
-  # Use Monte Carlo over all relevant discrete choices for the demo. This is
-  # what makes the graph/orientation/lmb-channel histograms interesting.
-  """set process -p epem_a_tth -i LO string '
-[sampling]
-graphs = "monte_carlo"
-orientations = "monte_carlo"
-lmb_multichanneling = true
-lmb_channels = "monte_carlo"
-'""",
 ]
 
 [[task_queue]]
