@@ -191,8 +191,8 @@ async fn apply_child_task_sample_totals(
         )
         SELECT
             descendants.parent_task_id,
-            COALESCE(SUM(run_tasks.nr_produced_samples), 0) AS nr_produced_samples,
-            COALESCE(SUM(run_tasks.nr_completed_samples), 0) AS nr_completed_samples
+            COALESCE(SUM(run_tasks.nr_produced_samples), 0)::BIGINT AS nr_produced_samples,
+            COALESCE(SUM(run_tasks.nr_completed_samples), 0)::BIGINT AS nr_completed_samples
         FROM descendants
         JOIN run_tasks ON run_tasks.run_id = descendants.run_id
         GROUP BY descendants.parent_task_id

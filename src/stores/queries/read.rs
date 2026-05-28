@@ -404,7 +404,7 @@ async fn load_batch_stats_for_runs(
         SELECT
             run_id,
             COUNT(*) AS total_batches,
-            COALESCE(SUM(batch_size), 0) AS total_samples,
+            COALESCE(SUM(batch_size), 0)::BIGINT AS total_samples,
             COUNT(*) FILTER (WHERE status = 'pending') AS pending_batches,
             COUNT(*) FILTER (WHERE status = 'claimed') AS claimed_batches,
             COUNT(*) FILTER (WHERE status = 'completed') AS completed_batches,
