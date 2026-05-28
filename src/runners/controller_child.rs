@@ -1,12 +1,11 @@
 use crate::api::{
     ApiError,
     measurement::load_task_measurement_output,
-    nodes,
     runs::{ChildRunRequest, CreatedRun, create_child_run},
 };
 use crate::core::{
-    AggregationStore, ControlPlaneStore, RunReadStore, RunSpecStore, RunTaskState, RunTaskStore,
-    StoreError, TaskMeasurementOutput,
+    AggregationStore, ControlPlaneStore, RunReadStore, RunTaskState, RunTaskStore, StoreError,
+    TaskMeasurementOutput, WorkerRole,
 };
 use crate::stores::RunProgress;
 use std::collections::BTreeMap;
@@ -73,17 +72,58 @@ pub async fn create_controller_child_run(
 }
 
 pub async fn redistribute_parent_assignments_to_children(
-    store: &(impl ControlPlaneStore + RunReadStore + RunSpecStore),
+    store: &impl ControlPlaneStore,
     parent_run_id: i32,
     child_run_ids: impl IntoIterator<Item = i32>,
 ) -> Result<(), StoreError> {
+    let parent_assignments = store
+        .list_desired_assignments(None)
+        .await?
+        .into_iter()
+        .filter(|assignment| assignment.run_id == parent_run_id)
+        .collect::<Vec<_>>();
+    let child_run_ids = child_run_ids.into_iter().collect::<Vec<_>>();
+
     store
         .clear_desired_assignments_for_run(parent_run_id)
         .await?;
-    for child_run_id in child_run_ids {
-        nodes::auto_assign_run(store, child_run_id, None)
-            .await
-            .map_err(|err| StoreError::store(err.to_string()))?;
+    if child_run_ids.is_empty() || parent_assignments.is_empty() {
+        return Ok(());
+    }
+
+    let mut sampler_nodes = parent_assignments
+        .iter()
+        .filter(|assignment| assignment.role == WorkerRole::SamplerAggregator)
+        .map(|assignment| assignment.node_name.as_str())
+        .collect::<Vec<_>>();
+    let evaluator_nodes = parent_assignments
+        .iter()
+        .filter(|assignment| assignment.role == WorkerRole::Evaluator)
+        .map(|assignment| assignment.node_name.as_str())
+        .collect::<Vec<_>>();
+
+    sampler_nodes.sort_unstable();
+    for (child_run_id, node_name) in child_run_ids.iter().copied().zip(sampler_nodes) {
+        store
+            .upsert_desired_assignment(node_name, WorkerRole::SamplerAggregator, child_run_id)
+            .await?;
+    }
+
+    let sampler_capacity = child_run_ids.len().min(
+        parent_assignments
+            .iter()
+            .filter(|assignment| assignment.role == WorkerRole::SamplerAggregator)
+            .count(),
+    );
+    if sampler_capacity == 0 {
+        return Ok(());
+    }
+
+    for (index, node_name) in evaluator_nodes.into_iter().enumerate() {
+        let child_run_id = child_run_ids[index % sampler_capacity];
+        store
+            .upsert_desired_assignment(node_name, WorkerRole::Evaluator, child_run_id)
+            .await?;
     }
     Ok(())
 }
