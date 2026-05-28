@@ -1,0 +1,66 @@
+# Hyperparameter tuning demo: minimize wall-time-normalized variance.
+#
+# This is the same fixed-integral Symbolica family used by the basic tuning
+# demo, but the objective is `time_normalized_variance`: estimator variance
+# divided by completed samples per second. That penalizes parameter choices that
+# reduce variance only by making the sampler/evaluator much slower.
+#
+# The variance stop condition needs fourth moments, hence
+# `moments = { max_order = 4 }`.
+
+replacements = { run_name = "hyperparameter-tuning-variance-symbolica", trial_samples = 16384, max_trials = 12, max_concurrent_trials = 2 }
+
+name = '$(run_name:"hyperparameter-tuning-variance-symbolica")'
+
+[[task_queue]]
+name = "variance-search"
+kind = "hyperparameter_tuning"
+max_concurrent_trials = "$(max_concurrent_trials:2)"
+trial_run_toml = """
+name = "variance-center-$(center:0.5)-rough-$(roughness:4.0)-bins-$(havana_bins:32)"
+target = { kind = "scalar", value = 1.0 }
+
+[evaluator]
+kind = "symbolica"
+expr = "1 + $(roughness:4.0) * ((x - $(center:0.5))^2 + (y - $(center:0.5))^2 - 2 * ($(center:0.5)^3 + (1 - $(center:0.5))^3) / 3)"
+args = ["x", "y"]
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+measurement = { quantity = { metric = "time_normalized_variance" }, mode = "minimize" }
+stop_condition = { min_samples = 2048, max_samples = "$(trial_samples:16384)", relative_error = 0.25, metric = { name = "variance" } }
+accumulator = { config = { kind = "scalar", moments = { max_order = 4 } } }
+sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = "$(havana_bins:32)", samples_for_update = "$(samples_for_update:1024)", initial_training_rate = 0.1, final_training_rate = 0.01 } }
+"""
+
+[task_queue.optimizer]
+algorithm = "random_search"
+seed = 11
+
+[task_queue.optimizer.params]
+max_trials = "$(max_trials:12)"
+
+[task_queue.objective]
+source_task = "sample"
+mode = "minimize"
+quantity = { metric = "time_normalized_variance" }
+
+[task_queue.parameters.center]
+kind = "float"
+min = 0.2
+max = 0.8
+
+[task_queue.parameters.roughness]
+kind = "categorical"
+values = [2.0, 4.0, 8.0]
+
+[task_queue.parameters.havana_bins]
+kind = "integer"
+min = 16
+max = 64
+step = 16
+
+[task_queue.parameters.samples_for_update]
+kind = "categorical"
+values = [512, 1024, 2048]
