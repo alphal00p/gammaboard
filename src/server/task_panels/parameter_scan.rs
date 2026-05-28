@@ -1,19 +1,22 @@
 use super::{TaskPanelContext, TaskPanelProjector, panel_projector};
 use crate::server::panels::{
-    PanelHistoryMode, PanelKind, PanelWidth, PlotPoint, PlotSeries, multi_timeseries_panel,
-    panel_spec, progress_panel, table_panel_with_payload_and_options, with_panel_width,
+    ImageColorMode, ImageNormalizationMode, PanelHistoryMode, PanelKind, PanelState, PanelWidth,
+    PlotPoint, PlotSeries, best_row_tones, multi_timeseries_panel, panel_spec, progress_panel,
+    row_tone_labels, table_panel_with_payload_and_options, with_panel_width,
 };
 use serde_json::{Value as JsonValue, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const SCAN_PROGRESS_PANEL_ID: &str = "scan_progress";
 const SCAN_MEAN_PANEL_ID: &str = "scan_mean";
+const SCAN_MEAN_HEATMAP_PANEL_ID: &str = "scan_mean_heatmap";
 const SCAN_POINTS_PANEL_ID: &str = "scan_points";
 
 pub(super) fn projectors() -> Vec<TaskPanelProjector> {
     vec![
         scan_progress_projector(),
         scan_measurements_projector(),
+        scan_heatmap_projector(),
         scan_points_projector(),
     ]
 }
@@ -84,6 +87,28 @@ fn scan_measurements_projector() -> TaskPanelProjector {
     )
 }
 
+fn scan_heatmap_projector() -> TaskPanelProjector {
+    panel_projector(
+        with_panel_width(
+            panel_spec(
+                SCAN_MEAN_HEATMAP_PANEL_ID,
+                "Central Value Heatmap",
+                PanelKind::Image2d,
+                PanelHistoryMode::None,
+            ),
+            PanelWidth::Full,
+        ),
+        |ctx| {
+            let parameter_names = scan_parameter_names(ctx);
+            let Some(points) = scan_points(ctx) else {
+                return Ok(None);
+            };
+            Ok(scan_mean_heatmap_panel(points, &parameter_names))
+        },
+        |_ctx| Ok(None),
+    )
+}
+
 fn scan_points_projector() -> TaskPanelProjector {
     panel_projector(
         with_panel_width(
@@ -105,6 +130,8 @@ fn scan_points_projector() -> TaskPanelProjector {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
+            let best_row = best_scan_table_row(&rows, parameter_names.len());
+            let row_tones = best_row_tones(rows.len(), best_row);
             let mut columns = vec!["index".to_string()];
             columns.extend(parameter_names.iter().cloned());
             columns.extend([
@@ -127,6 +154,8 @@ fn scan_points_projector() -> TaskPanelProjector {
                             "kind": "select_run",
                             "column": "run",
                         },
+                        "row_tones": row_tones,
+                        "row_tone_labels": row_tone_labels(),
                     })
                 }),
                 Default::default(),
@@ -136,12 +165,103 @@ fn scan_points_projector() -> TaskPanelProjector {
     )
 }
 
+fn scan_mean_heatmap_panel(points: &[JsonValue], parameter_names: &[String]) -> Option<PanelState> {
+    if parameter_names.len() != 2 {
+        return None;
+    }
+    let x_name = &parameter_names[0];
+    let y_name = &parameter_names[1];
+    let mut x_values = BTreeSet::<OrderedF64>::new();
+    let mut y_values = BTreeSet::<OrderedF64>::new();
+    let mut values_by_coord = BTreeMap::<(OrderedF64, OrderedF64), f64>::new();
+    for point in points {
+        let Some(x) =
+            scan_point_parameter_value(point, x_name).and_then(|value| json_number(&value))
+        else {
+            continue;
+        };
+        let Some(y) =
+            scan_point_parameter_value(point, y_name).and_then(|value| json_number(&value))
+        else {
+            continue;
+        };
+        let Some(result) = measurement_results(point).find(|result| {
+            result.get("name").and_then(JsonValue::as_str) == Some("mean")
+                && result.get("value").and_then(JsonValue::as_f64).is_some()
+        }) else {
+            continue;
+        };
+        let Some(value) = result.get("value").and_then(JsonValue::as_f64) else {
+            continue;
+        };
+        let x = OrderedF64(x);
+        let y = OrderedF64(y);
+        x_values.insert(x);
+        y_values.insert(y);
+        values_by_coord.insert((x, y), value);
+    }
+    if x_values.len() < 2 || y_values.len() < 2 {
+        return None;
+    }
+    let x_values = x_values.into_iter().collect::<Vec<_>>();
+    let y_values = y_values.into_iter().collect::<Vec<_>>();
+    let width = x_values.len();
+    let height = y_values.len();
+    let mut values = Vec::with_capacity(width * height);
+    let mut invalid_indices = Vec::new();
+    for (row, y) in y_values.iter().enumerate() {
+        for (col, x) in x_values.iter().enumerate() {
+            match values_by_coord.get(&(*x, *y)).copied() {
+                Some(value) if value.is_finite() => values.push(value as f32),
+                _ => {
+                    invalid_indices.push(row * width + col);
+                    values.push(f32::NAN);
+                }
+            }
+        }
+    }
+    Some(PanelState::Image2d {
+        panel_id: SCAN_MEAN_HEATMAP_PANEL_ID.to_string(),
+        width,
+        height,
+        values,
+        imag_values: None,
+        invalid_indices: if invalid_indices.is_empty() {
+            None
+        } else {
+            Some(invalid_indices)
+        },
+        x_range: [x_values.first()?.0, x_values.last()?.0],
+        y_range: [y_values.first()?.0, y_values.last()?.0],
+        color_mode: ImageColorMode::ScalarHeatmap,
+        normalization_mode: ImageNormalizationMode::MinMax,
+        metric_label: Some("mean".to_string()),
+        metric_mode: None,
+        x_label: Some(x_name.clone()),
+        y_label: Some(y_name.clone()),
+    })
+}
+
 fn scan_points<'a>(ctx: &'a TaskPanelContext<'_>) -> Option<&'a Vec<JsonValue>> {
     ctx.task
         .controller_output
         .as_ref()
         .and_then(|output| output.get("points"))
         .and_then(JsonValue::as_array)
+}
+
+fn best_scan_table_row(rows: &[Vec<JsonValue>], parameter_count: usize) -> Option<usize> {
+    let value_column = parameter_count + 5;
+    rows.iter()
+        .enumerate()
+        .filter_map(|(index, row)| {
+            row.get(value_column)
+                .and_then(JsonValue::as_f64)
+                .filter(|value| value.is_finite())
+                .map(|value| (index, value))
+        })
+        .min_by(|(_, left), (_, right)| left.total_cmp(right))
+        .map(|(index, _)| index)
 }
 
 fn build_measurement_series(
@@ -339,6 +459,23 @@ fn scan_point_parameter_value(point: &JsonValue, parameter_name: &str) -> Option
         .or_else(|| point.get("parameter_value").cloned())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct OrderedF64(f64);
+
+impl Eq for OrderedF64 {}
+
+impl PartialOrd for OrderedF64 {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for OrderedF64 {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,6 +633,99 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["mean:imag", "mean:real"]
         );
+    }
+
+    #[test]
+    fn scan_heatmap_uses_two_numeric_parameters() {
+        let task = scan_task(Some(json!({
+            "parameters": ["scale", "offset"],
+            "completed_points": 4,
+            "total_points": 4,
+            "points": [
+                {
+                    "index": 0,
+                    "parameter_values": {"scale": 0.0, "offset": 1.0},
+                    "status": "completed",
+                    "measurement": {"results": [{"name": "mean", "value": 1.0}]}
+                },
+                {
+                    "index": 1,
+                    "parameter_values": {"scale": 1.0, "offset": 1.0},
+                    "status": "completed",
+                    "measurement": {"results": [{"name": "mean", "value": 1.5}]}
+                },
+                {
+                    "index": 2,
+                    "parameter_values": {"scale": 0.0, "offset": 2.0},
+                    "status": "completed",
+                    "measurement": {"results": [{"name": "mean", "value": 2.0}]}
+                },
+                {
+                    "index": 3,
+                    "parameter_values": {"scale": 1.0, "offset": 2.0},
+                    "status": "completed",
+                    "measurement": {"results": [{"name": "mean", "value": 2.5}]}
+                }
+            ]
+        })));
+        let panel = scan_heatmap_projector()
+            .current(&panel_ctx(&task, &JsonValue::Null))
+            .expect("projector")
+            .expect("panel");
+        let PanelState::Image2d {
+            width,
+            height,
+            values,
+            x_label,
+            y_label,
+            ..
+        } = panel
+        else {
+            panic!("expected image panel");
+        };
+        assert_eq!(width, 2);
+        assert_eq!(height, 2);
+        assert_eq!(values, vec![1.0, 1.5, 2.0, 2.5]);
+        assert_eq!(x_label.as_deref(), Some("scale"));
+        assert_eq!(y_label.as_deref(), Some("offset"));
+    }
+
+    #[test]
+    fn scan_table_marks_lowest_value_as_best() {
+        let task = scan_task(Some(json!({
+            "parameter_name": "scale",
+            "completed_points": 2,
+            "total_points": 2,
+            "points": [
+                {
+                    "index": 0,
+                    "parameter_value": 0.0,
+                    "child_run_id": 11,
+                    "status": "completed",
+                    "measurement": {"results": [{"name": "mean", "value": 3.0}]}
+                },
+                {
+                    "index": 1,
+                    "parameter_value": 1.0,
+                    "child_run_id": 12,
+                    "status": "completed",
+                    "measurement": {"results": [{"name": "mean", "value": 2.0}]}
+                }
+            ]
+        })));
+        let panel = scan_points_projector()
+            .current(&panel_ctx(&task, &JsonValue::Null))
+            .expect("projector")
+            .expect("panel");
+        let PanelState::Table { payload, .. } = panel else {
+            panic!("expected table panel");
+        };
+        let row_tones = payload
+            .as_ref()
+            .and_then(|payload| payload.get("row_tones"))
+            .and_then(JsonValue::as_array)
+            .expect("row tones");
+        assert_eq!(row_tones, &vec![JsonValue::Null, json!("success")]);
     }
 
     #[test]

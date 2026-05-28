@@ -1101,6 +1101,41 @@ const heatmapColorForValue = (value, zmin, zmax) => {
   return mixRgb(scalarHeatmapRgb[1], scalarHeatmapRgb[2], (ratio - 0.5) * 2);
 };
 
+const hsvToRgb = (hue, saturation, value) => {
+  const h = ((hue % 1) + 1) % 1;
+  const s = Math.max(0, Math.min(1, saturation));
+  const v = Math.max(0, Math.min(1, value));
+  const sector = h * 6;
+  const i = Math.floor(sector);
+  const f = sector - i;
+  const p = v * (1 - s);
+  const q = v * (1 - f * s);
+  const t = v * (1 - (1 - f) * s);
+  const [r, g, b] =
+    i % 6 === 0
+      ? [v, t, p]
+      : i % 6 === 1
+        ? [q, v, p]
+        : i % 6 === 2
+          ? [p, v, t]
+          : i % 6 === 3
+            ? [p, q, v]
+            : i % 6 === 4
+              ? [t, p, v]
+              : [v, p, q];
+  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+};
+
+const complexPhaseColorForValue = (re, im, maxMagnitude) => {
+  const real = Number(re);
+  const imag = Number(im);
+  if (!Number.isFinite(real) || !Number.isFinite(im)) return [255, 0, 255];
+  const magnitude = Math.hypot(real, imag);
+  const hue = (Math.atan2(imag, real) + Math.PI) / (2 * Math.PI);
+  const saturation = maxMagnitude > 0 ? Math.min(1, magnitude / maxMagnitude) : 0;
+  return hsvToRgb(hue, saturation, 1);
+};
+
 const parameterAtRasterIndex = (range, count, index) => {
   const [min, max] = asArray(range);
   if (!Number.isFinite(min) || !Number.isFinite(max) || count <= 0) return index;
@@ -1167,6 +1202,19 @@ const heatmapTooltipValueLines = (panelId, value, metricLabel = null, metricMode
   return lines;
 };
 
+const complexTooltipValueLines = (re, im, metricLabel = null) => {
+  const real = Number(re);
+  const imag = Number(im);
+  if (!Number.isFinite(real) || !Number.isFinite(im)) return ["value: n/a"];
+  const label = typeof metricLabel === "string" && metricLabel.trim() ? metricLabel.trim() : "complex value";
+  return [
+    `${label} re: ${formatScientific(real, 6)}`,
+    `${label} im: ${formatScientific(imag, 6)}`,
+    `|z|: ${formatScientific(Math.hypot(real, imag), 6)}`,
+    `phase: ${formatScientific(Math.atan2(imag, real), 6)}`,
+  ];
+};
+
 const HeatmapScaleLegend = ({ zmin, zmax, normalizationMode, panelId, metricLabel = null }) => {
   const max = Number(zmax);
   const min = Number(zmin);
@@ -1228,10 +1276,14 @@ const ScalarImageHeatmapPanel = ({
   width,
   height,
   values,
+  imagValues = null,
   invalidIndices,
+  colorMode = "scalar_heatmap",
   normalizationMode,
   metricLabel = null,
   metricMode = null,
+  xLabel = "t",
+  yLabel = "s",
   xRange,
   yRange,
   value = undefined,
@@ -1245,10 +1297,19 @@ const ScalarImageHeatmapPanel = ({
   const [tooltip, setTooltip] = useState(null);
   const totalCells = Math.max(0, width * height);
   const boundedValues = useMemo(() => values.slice(0, totalCells), [totalCells, values]);
+  const boundedImagValues = useMemo(() => (imagValues ? imagValues.slice(0, totalCells) : null), [imagValues, totalCells]);
   const isPdfPanel = typeof panelId === "string" && panelId.startsWith("pdf_adaptation_");
   const supportsSpreadControl = normalizationMode === "symmetric" && isPdfPanel && panelId && typeof onValueChange === "function";
   const spread = supportsSpreadControl ? readHeatmapSpreadFromPanelValue(value, 1) : 1;
   const spreadSliderValue = Math.log10(clampHeatmapSpread(spread, 1));
+  const complexMaxMagnitude = useMemo(() => {
+    if (colorMode !== "complex_phase" || !boundedImagValues) return 0;
+    return boundedValues.reduce((max, re, index) => {
+      const im = boundedImagValues[index];
+      if (!Number.isFinite(re) || !Number.isFinite(im)) return max;
+      return Math.max(max, Math.hypot(re, im));
+    }, 0);
+  }, [boundedImagValues, boundedValues, colorMode]);
   const { zmin, zmax } = useMemo(
     () => buildScalarHeatmapScale(boundedValues, normalizationMode, spread),
     [boundedValues, normalizationMode, spread],
@@ -1305,7 +1366,9 @@ const ScalarImageHeatmapPanel = ({
           const targetIndex = (row * visibleCols + col) * 4;
           const rgb = invalidIndices?.has(sourceIndex)
             ? [255, 0, 255]
-            : heatmapColorForValue(boundedValues[sourceIndex], zmin, zmax);
+            : colorMode === "complex_phase" && boundedImagValues
+              ? complexPhaseColorForValue(boundedValues[sourceIndex], boundedImagValues[sourceIndex], complexMaxMagnitude)
+              : heatmapColorForValue(boundedValues[sourceIndex], zmin, zmax);
           image.data[targetIndex] = rgb[0];
           image.data[targetIndex + 1] = rgb[1];
           image.data[targetIndex + 2] = rgb[2];
@@ -1349,11 +1412,11 @@ const ScalarImageHeatmapPanel = ({
       }
       ctx.textAlign = "center";
       ctx.textBaseline = "alphabetic";
-      ctx.fillText("t", plot.x + plot.width / 2, cssHeight - 7);
+      ctx.fillText(xLabel || "x", plot.x + plot.width / 2, cssHeight - 7);
       ctx.save();
       ctx.translate(12, plot.y + plot.height / 2);
       ctx.rotate(-Math.PI / 2);
-      ctx.fillText("s", 0, 0);
+      ctx.fillText(yLabel || "y", 0, 0);
       ctx.restore();
     });
     return () => {
@@ -1361,14 +1424,19 @@ const ScalarImageHeatmapPanel = ({
     };
   }, [
     boundedValues,
+    boundedImagValues,
     chartHeight,
+    colorMode,
+    complexMaxMagnitude,
     heatmapMargins,
     height,
     invalidIndices,
     panelWidth,
     width,
     xRange,
+    xLabel,
     yRange,
+    yLabel,
     yZoomRange,
     zmax,
     zmin,
@@ -1451,9 +1519,11 @@ const ScalarImageHeatmapPanel = ({
       const lines = invalidIndices?.has(index)
         ? ["invalid value"]
         : [
-            `t: ${formatScientific(parameterAtRasterIndex(xRange, width, col), 4)}`,
-            `s: ${formatScientific(parameterAtRasterIndex(yRange, height, row), 4)}`,
-            ...heatmapTooltipValueLines(panelId, boundedValues[index], metricLabel, metricMode),
+            `${xLabel || "x"}: ${formatScientific(parameterAtRasterIndex(xRange, width, col), 4)}`,
+            `${yLabel || "y"}: ${formatScientific(parameterAtRasterIndex(yRange, height, row), 4)}`,
+            ...(colorMode === "complex_phase" && boundedImagValues
+              ? complexTooltipValueLines(boundedValues[index], boundedImagValues[index], metricLabel)
+              : heatmapTooltipValueLines(panelId, boundedValues[index], metricLabel, metricMode)),
           ];
       return {
         x: Math.min(point.width - 180, point.x + 12),
@@ -1463,6 +1533,8 @@ const ScalarImageHeatmapPanel = ({
     },
     [
       boundedValues,
+      boundedImagValues,
+      colorMode,
       heatmapMargins,
       height,
       invalidIndices,
@@ -1471,7 +1543,9 @@ const ScalarImageHeatmapPanel = ({
       panelId,
       width,
       xRange,
+      xLabel,
       yRange,
+      yLabel,
       yZoomRange,
       zoomRange,
     ],
@@ -1596,6 +1670,7 @@ const ScalarImageHeatmapPanel = ({
                   x_range: xRange,
                   y_range: yRange,
                   values,
+                  imag_values: imagValues,
                   invalid_indices: Array.from(invalidIndices || []),
                 },
               }}
@@ -1667,7 +1742,7 @@ const ScalarImageHeatmapPanel = ({
               zmax={zmax}
               normalizationMode={normalizationMode}
               panelId={panelId}
-              metricLabel={metricLabel}
+              metricLabel={colorMode === "complex_phase" ? "phase hue, |z| saturation" : metricLabel}
             />
           </Box>
         </Box>
@@ -1688,6 +1763,8 @@ const imagePanelPropsEqual = (left, right) =>
   left.state?.normalization_mode === right.state?.normalization_mode &&
   left.state?.metric_label === right.state?.metric_label &&
   left.state?.metric_mode === right.state?.metric_mode &&
+  left.state?.x_label === right.state?.x_label &&
+  left.state?.y_label === right.state?.y_label &&
   left.state?.x_range === right.state?.x_range &&
   left.state?.y_range === right.state?.y_range &&
   left.state?.values === right.state?.values &&
@@ -1703,19 +1780,22 @@ const Image2dPanel = memo(({ title, state, value = undefined, onValueChange = nu
     return next.length > 0 ? next : null;
   }, [state?.imag_values]);
   const invalidIndices = useMemo(() => new Set(asArray(state?.invalid_indices)), [state?.invalid_indices]);
+  const colorMode = state?.color_mode || "scalar_heatmap";
   const normalizationMode = state?.normalization_mode || "min_max";
   const metricLabel = typeof state?.metric_label === "string" ? state.metric_label : null;
   const metricMode = typeof state?.metric_mode === "string" ? state.metric_mode : null;
+  const xLabel = typeof state?.x_label === "string" ? state.x_label : "t";
+  const yLabel = typeof state?.y_label === "string" ? state.y_label : "s";
   const xRange = useMemo(() => asArray(state?.x_range), [state?.x_range]);
   const yRange = useMemo(() => asArray(state?.y_range), [state?.y_range]);
   const scalarValues = useMemo(() => {
-    if (!imagValues) return values;
+    if (!imagValues || colorMode === "complex_phase") return values;
     return values.map((re, index) => {
       const im = imagValues[index] || 0;
       if (!Number.isFinite(re) || !Number.isFinite(im)) return Number.NaN;
       return Math.hypot(re, im);
     });
-  }, [imagValues, values]);
+  }, [colorMode, imagValues, values]);
   if (width <= 0 || height <= 0 || values.length === 0) return null;
   return (
     <ScalarImageHeatmapPanel
@@ -1724,10 +1804,14 @@ const Image2dPanel = memo(({ title, state, value = undefined, onValueChange = nu
       width={width}
       height={height}
       values={scalarValues}
+      imagValues={colorMode === "complex_phase" ? imagValues : null}
       invalidIndices={invalidIndices}
+      colorMode={colorMode}
       normalizationMode={normalizationMode}
       metricLabel={metricLabel}
       metricMode={metricMode}
+      xLabel={xLabel}
+      yLabel={yLabel}
       xRange={xRange}
       yRange={yRange}
       value={value}

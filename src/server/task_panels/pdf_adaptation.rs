@@ -588,6 +588,8 @@ fn build_image_panel(
         normalization_mode: ImageNormalizationMode::Symmetric,
         metric_label: metric_label(image_kind, metric).map(str::to_string),
         metric_mode: metric_mode(image_kind, metric).map(str::to_string),
+        x_label: Some("t".to_string()),
+        y_label: Some("s".to_string()),
     })
 }
 

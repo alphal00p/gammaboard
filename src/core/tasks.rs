@@ -1605,6 +1605,7 @@ pub enum ImageDisplayMode {
     Auto,
     ScalarHeatmap,
     VectorMagnitude,
+    ComplexPhase,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]

@@ -71,10 +71,14 @@ impl EvaluatorConfig {
             Self::ProcessEvaluator { params } => {
                 validate_process_accumulator(self.kind_str(), config, &params.components)
             }
-            Self::Symbolica { .. } => validate_semantic_accumulator(
+            Self::Symbolica { params } => validate_semantic_accumulator(
                 self.kind_str(),
                 config,
-                SemanticAccumulatorKind::Scalar,
+                if params.imag_expr.is_some() {
+                    SemanticAccumulatorKind::Vector
+                } else {
+                    SemanticAccumulatorKind::Scalar
+                },
             ),
             Self::Unit { .. } => validate_semantic_accumulator(
                 self.kind_str(),

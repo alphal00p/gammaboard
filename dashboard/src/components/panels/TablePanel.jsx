@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   CardContent,
+  Chip,
   Stack,
   Table as MuiTable,
   TableBody,
@@ -88,6 +89,8 @@ const TablePanel = ({
   const supportsBundleExport = actions.export === true || actions.export_json === true;
   const supportsBundleUpload = actions.upload_bundle === true;
   const rowAction = payload?.row_action && typeof payload.row_action === "object" ? payload.row_action : null;
+  const rowTones = asArray(payload?.row_tones).map((tone) => (typeof tone === "string" ? tone : null));
+  const rowToneLabels = payload?.row_tone_labels && typeof payload.row_tone_labels === "object" ? payload.row_tone_labels : {};
   const rowActionColumnIndex =
     rowAction?.kind === "select_run"
       ? columns.findIndex((column) => String(column || "").toLowerCase() === String(rowAction.column || "").toLowerCase())
@@ -211,8 +214,10 @@ const TablePanel = ({
               </TableRow>
             </TableHead>
             <TableBody>
-              {rows.map((row, rowIndex) => (
-                <TableRow
+              {rows.map((row, rowIndex) => {
+                const rowTone = rowTones[rowIndex] || null;
+                return (
+                  <TableRow
                   key={`row-${rowIndex}`}
                   hover={selectableRows}
                   selected={
@@ -224,7 +229,15 @@ const TablePanel = ({
                           : state?.selected_value,
                       )
                   }
-                  sx={{ cursor: selectableRows || rowsSelectRuns ? "pointer" : "default" }}
+                  sx={{
+                    cursor: selectableRows || rowsSelectRuns ? "pointer" : "default",
+                    ...(rowTone === "success"
+                      ? {
+                          bgcolor: "rgba(20, 184, 166, 0.08)",
+                          "&:hover": { bgcolor: "rgba(20, 184, 166, 0.14)" },
+                        }
+                      : {}),
+                  }}
                   onClick={
                     selectableRows
                       ? () =>
@@ -243,7 +256,7 @@ const TablePanel = ({
                           }
                       : undefined
                   }
-                >
+                  >
                   {visibleColumnIndices.map((columnIndex) => (
                     <TableCell
                       key={`${rowIndex}-${columnIndex}`}
@@ -254,11 +267,24 @@ const TablePanel = ({
                         verticalAlign: "top",
                       }}
                     >
-                      {renderTableCell(row, columnIndex)}
+                      {columnIndex === visibleColumnIndices[0] && rowTone ? (
+                        <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: "wrap" }}>
+                          <Box component="span">{renderTableCell(row, columnIndex)}</Box>
+                          <Chip
+                            size="small"
+                            color={rowTone === "success" ? "success" : "default"}
+                            label={rowToneLabels[rowTone] || rowTone}
+                            sx={{ height: 20, fontSize: 11 }}
+                          />
+                        </Stack>
+                      ) : (
+                        renderTableCell(row, columnIndex)
+                      )}
                     </TableCell>
                   ))}
-                </TableRow>
-              ))}
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </MuiTable>
         </TableContainer>

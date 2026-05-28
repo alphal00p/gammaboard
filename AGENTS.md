@@ -36,6 +36,11 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   projection must not rebuild large samplers to fetch these values.
 - Multi-component observables use vector accumulator models. Full raster
   outputs use `FullVectorAccumulatorState` with named components.
+- Symbolica evaluators are scalar by default; setting `imag_expr` makes them
+  emit `real`/`imag` vector values for vector/full-vector accumulators.
+- `image2d` panels are rendered by the generic canvas heatmap path. Complex
+  image tasks can use `display = "complex_phase"` to draw phase as hue and
+  magnitude as saturation.
 - Scalar/vector accumulators may opt into higher moments with
   `moments = { max_order = 4 }`. Generic accumulator metric extraction returns
   JSON-safe metric values plus optional uncertainty; sample stop conditions may

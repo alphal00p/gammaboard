@@ -1,6 +1,6 @@
-# Symbolica + Havana training, then 2D PDF adaptation on a pure (x,y) domain.
+# Symbolica + Havana training, 2D PDF adaptation, and a complex phase image.
 
-replacements = { run_name = "ghost_bump", train_samples = 200000, havana_bins = 64, samples_for_update = 16384, image_bins = 128 }
+replacements = { run_name = "ghost_bump", train_samples = 200000, havana_bins = 64, samples_for_update = 16384, image_bins = 128, phase_center_x = 0.5, phase_center_y = 0.5 }
 
 name = '$(run_name:"ghost_bump")'
 
@@ -32,6 +32,33 @@ final_training_rate = 0.001
 [[task_queue]]
 name = "pdf-2d"
 kind = "pdf_adaptation_image"
+
+[task_queue.geometry]
+offset = [0.0, 0.0]
+u_vector = [1.0, 0.0]
+v_vector = [0.0, 1.0]
+
+[task_queue.geometry.u_linspace]
+start = 0.0
+stop = 1.0
+count = "$(image_bins:128)"
+
+[task_queue.geometry.v_linspace]
+start = 0.0
+stop = 1.0
+count = "$(image_bins:128)"
+
+[[task_queue]]
+name = "complex-phase"
+kind = "image"
+accumulator = "vector"
+display = "complex_phase"
+
+[task_queue.evaluator.config]
+kind = "symbolica"
+expr = "x - $(phase_center_x:0.5)"
+imag_expr = "y - $(phase_center_y:0.5)"
+args = ["x", "y"]
 
 [task_queue.geometry]
 offset = [0.0, 0.0]

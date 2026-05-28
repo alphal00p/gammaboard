@@ -22,6 +22,7 @@ pub enum PanelKind {
 pub enum ImageColorMode {
     ScalarHeatmap,
     VectorMagnitude,
+    ComplexPhase,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,6 +220,10 @@ pub enum PanelState {
         metric_label: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         metric_mode: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        x_label: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        y_label: Option<String>,
     },
     Progress {
         panel_id: String,
@@ -438,6 +443,22 @@ pub(crate) fn table_panel_with_payload_and_options(
         row_keys: options.row_keys,
         payload,
     }
+}
+
+pub(crate) fn best_row_tones(row_count: usize, best_index: Option<usize>) -> Vec<JsonValue> {
+    (0..row_count)
+        .map(|index| {
+            if Some(index) == best_index {
+                JsonValue::String("success".to_string())
+            } else {
+                JsonValue::Null
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn row_tone_labels() -> JsonValue {
+    serde_json::json!({ "success": "best" })
 }
 
 pub(crate) fn replace_panel(panel: PanelState) -> PanelUpdate {

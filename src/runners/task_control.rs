@@ -109,11 +109,17 @@ where
     }
 
     async fn reconcile_run(&self, run_id: i32) -> Result<(), StoreError> {
+        let mut completed_control_task = false;
         if let Some(task) = self.store.load_active_run_task(run_id).await? {
             if task.task.runs_in_control_plane() {
                 self.reconcile_control_task(run_id, task).await?;
+                if self.store.load_active_run_task(run_id).await?.is_some() {
+                    return Ok(());
+                }
+                completed_control_task = true;
+            } else {
+                return Ok(());
             }
-            return Ok(());
         }
 
         let queue_counts = self.store.get_batch_queue_counts(run_id, None).await?;
@@ -125,7 +131,10 @@ where
         let Some(run) = self.store.get_run_progress(run_id).await? else {
             return Ok(());
         };
-        if run.desired_assignment_count == 0 && run.active_worker_count == 0 {
+        if !completed_control_task
+            && run.desired_assignment_count == 0
+            && run.active_worker_count == 0
+        {
             return Ok(());
         }
 

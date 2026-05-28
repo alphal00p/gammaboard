@@ -33,6 +33,7 @@ enum ImageViewMode {
     ScalarHeatmapMinMax,
     ScalarHeatmapSymmetric,
     VectorMagnitude,
+    ComplexPhase,
 }
 
 impl ImageViewMode {
@@ -41,6 +42,7 @@ impl ImageViewMode {
             Self::ScalarHeatmapMinMax => "scalar_heatmap_min_max",
             Self::ScalarHeatmapSymmetric => "scalar_heatmap_symmetric",
             Self::VectorMagnitude => "vector_magnitude",
+            Self::ComplexPhase => "complex_phase",
         }
     }
 
@@ -58,12 +60,15 @@ impl ImageViewMode {
         ];
         if matches!(
             display,
-            ImageDisplayMode::Auto | ImageDisplayMode::VectorMagnitude
+            ImageDisplayMode::Auto
+                | ImageDisplayMode::VectorMagnitude
+                | ImageDisplayMode::ComplexPhase
         ) {
             options.push(state_option(
                 Self::VectorMagnitude.as_str(),
                 "Vector Magnitude",
             ));
+            options.push(state_option(Self::ComplexPhase.as_str(), "Complex Phase"));
         }
         spec.state = Some(select_state_spec(
             JsonValue::String(default_mode.as_str().to_string()),
@@ -237,6 +242,8 @@ fn image_view_panel(
                 normalization_mode: image_normalization_mode(mode),
                 metric_label: None,
                 metric_mode: None,
+                x_label: None,
+                y_label: None,
             })
         }
         other => Err(EngineError::engine(format!(
@@ -249,6 +256,7 @@ fn image_view_panel(
 fn default_image_view_mode(display: ImageDisplayMode) -> ImageViewMode {
     match display {
         ImageDisplayMode::VectorMagnitude => ImageViewMode::VectorMagnitude,
+        ImageDisplayMode::ComplexPhase => ImageViewMode::ComplexPhase,
         ImageDisplayMode::Auto | ImageDisplayMode::ScalarHeatmap => {
             ImageViewMode::ScalarHeatmapMinMax
         }
@@ -262,6 +270,7 @@ fn selected_image_view_mode(
     match ctx.selected_value("image_view_mode") {
         Some("scalar_heatmap_symmetric") => ImageViewMode::ScalarHeatmapSymmetric,
         Some("vector_magnitude") => ImageViewMode::VectorMagnitude,
+        Some("complex_phase") => ImageViewMode::ComplexPhase,
         Some("scalar_heatmap_min_max") => ImageViewMode::ScalarHeatmapMinMax,
         _ => default_image_view_mode(display),
     }
@@ -270,6 +279,7 @@ fn selected_image_view_mode(
 fn image_color_mode(mode: ImageViewMode) -> ImageColorMode {
     match mode {
         ImageViewMode::VectorMagnitude => ImageColorMode::VectorMagnitude,
+        ImageViewMode::ComplexPhase => ImageColorMode::ComplexPhase,
         ImageViewMode::ScalarHeatmapMinMax | ImageViewMode::ScalarHeatmapSymmetric => {
             ImageColorMode::ScalarHeatmap
         }
@@ -279,9 +289,9 @@ fn image_color_mode(mode: ImageViewMode) -> ImageColorMode {
 fn image_normalization_mode(mode: ImageViewMode) -> ImageNormalizationMode {
     match mode {
         ImageViewMode::ScalarHeatmapSymmetric => ImageNormalizationMode::Symmetric,
-        ImageViewMode::ScalarHeatmapMinMax | ImageViewMode::VectorMagnitude => {
-            ImageNormalizationMode::MinMax
-        }
+        ImageViewMode::ScalarHeatmapMinMax
+        | ImageViewMode::VectorMagnitude
+        | ImageViewMode::ComplexPhase => ImageNormalizationMode::MinMax,
     }
 }
 

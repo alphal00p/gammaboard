@@ -4910,6 +4910,153 @@ source_task = "sample"
 
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_parameter_scan_hands_over_to_next_scan_task() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    harness
+        .start_nodes(&["scan-chain-parent", "scan-chain-s1", "scan-chain-e1"])
+        .await?;
+
+    let config = temp_run_add_config(
+        r#"
+name = "parameter-scan-chain-e2e"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[evaluator_runner_params]
+min_tick_time_ms = 50
+db_pool_size = 1
+
+[sampler_aggregator_runner_params]
+min_tick_time_ms = 10
+db_pool_size = 1
+
+[[task_queue]]
+name = "scan-a"
+kind = "parameter_scan"
+max_concurrent_runs = 1
+trial_run_toml = """
+name = "parameter-scan-chain-a-$(scale:1)"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 16 }
+measurement = { quantity = "central_value" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"""
+
+[task_queue.parameter]
+name = "scale"
+values = [1, 2]
+
+[task_queue.measurement]
+source_task = "sample"
+
+[[task_queue]]
+name = "scan-b"
+kind = "parameter_scan"
+max_concurrent_runs = 1
+trial_run_toml = """
+name = "parameter-scan-chain-b-$(offset:1)"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 16 }
+measurement = { quantity = "central_value" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"""
+
+[task_queue.parameter]
+name = "offset"
+values = [10, 20]
+
+[task_queue.measurement]
+source_task = "sample"
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 =
+        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'parameter-scan-chain-e2e'")
+            .fetch_one(&harness.pool)
+            .await?;
+
+    harness
+        .cli()
+        .args(["auto-assign", &run_id.to_string()])
+        .assert()
+        .success();
+
+    if let Err(err) = harness
+        .wait_for(
+            "second parameter scan completes after first scan",
+            Duration::from_secs(90),
+            || async {
+                let completed: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM run_tasks WHERE run_id = $1 AND name IN ('scan-a', 'scan-b') AND state = 'completed'",
+                )
+                .bind(run_id)
+                .fetch_one(&harness.pool)
+                .await?;
+                Ok(completed == 2)
+            },
+        )
+        .await
+    {
+        let tasks: Vec<(String, String, Option<JsonValue>)> = sqlx::query_as(
+            "SELECT name, state, controller_output FROM run_tasks WHERE run_id = $1 ORDER BY sequence_nr",
+        )
+        .bind(run_id)
+        .fetch_all(&harness.pool)
+        .await?;
+        let nodes: Vec<(String, Option<i32>, Option<String>, Option<i32>, Option<String>)> =
+            sqlx::query_as(
+                "SELECT name, desired_run_id, desired_role, active_run_id, active_role FROM nodes ORDER BY name",
+            )
+            .fetch_all(&harness.pool)
+            .await?;
+        anyhow::bail!("{err}; tasks={tasks:?}; nodes={nodes:?}");
+    }
+
+    let child_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runs WHERE parent_run_id = $1 AND spawn_kind = 'parameter_scan'",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(child_count, 4);
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_parameter_scan_redistributes_parent_assignments_and_updates_progress()
 -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;

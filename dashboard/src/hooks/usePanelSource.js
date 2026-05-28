@@ -102,7 +102,9 @@ const panelStateEquals = (left, right) => {
       arraysEqual(left.imag_values, right.imag_values) &&
       arraysEqual(left.invalid_indices, right.invalid_indices) &&
       left.metric_label === right.metric_label &&
-      left.metric_mode === right.metric_mode
+      left.metric_mode === right.metric_mode &&
+      left.x_label === right.x_label &&
+      left.y_label === right.y_label
     );
   }
   if (left.kind === "progress" && right.kind === "progress") {
