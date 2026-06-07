@@ -523,8 +523,6 @@ pub enum HyperparameterTuningAlgorithm {
 #[serde(deny_unknown_fields)]
 pub struct HyperparameterTuningOptimizerSpec {
     pub algorithm: HyperparameterTuningAlgorithm,
-    #[serde(default)]
-    pub seed: Option<u64>,
     #[serde(default = "empty_json_object")]
     pub params: serde_json::Value,
 }
@@ -533,6 +531,8 @@ pub struct HyperparameterTuningOptimizerSpec {
 #[serde(deny_unknown_fields)]
 pub struct RandomSearchOptimizerParams {
     pub max_trials: usize,
+    #[serde(default)]
+    pub seed: Option<u64>,
 }
 
 fn empty_json_object() -> serde_json::Value {
@@ -2087,10 +2087,10 @@ trial_run_toml = "name = \"trial\"\n"
 
 [task.optimizer]
 algorithm = "random_search"
-seed = 1
 
 [task.optimizer.params]
 max_trials = 8
+seed = 1
 
 [task.objective]
 source_task = "sample"
@@ -2126,8 +2126,9 @@ values = ["auto", "none"]
             panic!("expected hyperparameter tuning task");
         };
 
-        assert_eq!(optimizer.random_search_params().unwrap().max_trials, 8);
-        assert_eq!(optimizer.seed, Some(1));
+        let random_params = optimizer.random_search_params().unwrap();
+        assert_eq!(random_params.max_trials, 8);
+        assert_eq!(random_params.seed, Some(1));
         assert_eq!(
             optimizer.algorithm,
             HyperparameterTuningAlgorithm::RandomSearch

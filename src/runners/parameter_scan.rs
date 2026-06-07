@@ -168,6 +168,7 @@ where
                 points,
             )
             .await?;
+            redistribute_parent_assignments_to_children(&self.store, self.run_id, []).await?;
             self.store.fail_run_task(self.task.id, &reason).await?;
             return Ok(true);
         }
@@ -180,6 +181,7 @@ where
                 points,
             )
             .await?;
+            redistribute_parent_assignments_to_children(&self.store, self.run_id, []).await?;
             self.store.complete_run_task(self.task.id).await?;
             return Ok(true);
         }

@@ -56,6 +56,11 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   `run_tasks.controller_output`, and reads child task `measurement_output`.
   It supports finite Cartesian scans via `[[parameters]]`; legacy single
   `[parameter]` configs are normalized to the same internal shape.
+- `hyperparameter_tuning` is also a control-plane controller task. It owns
+  trial child-run lifecycle and measurement collection; optimizer algorithms
+  only plan parameter candidates. `optimizer.algorithm` selects the adapter and
+  all algorithm-specific knobs, including seeds and budgets, live in
+  `optimizer.params`.
 - Run, task-append, and node-launch TOML may use a top-level `replacements`
   table plus placeholders `$(name:default)`. Exact full-string placeholders are
   typed TOML replacements; embedded placeholders interpolate as strings. Server

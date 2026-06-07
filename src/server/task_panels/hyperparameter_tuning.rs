@@ -387,8 +387,7 @@ mod tests {
         let task = RunTaskSpec::HyperparameterTuning {
             optimizer: HyperparameterTuningOptimizerSpec {
                 algorithm: HyperparameterTuningAlgorithm::RandomSearch,
-                seed: Some(1),
-                params: json!({ "max_trials": 3 }),
+                params: json!({ "max_trials": 3, "seed": 1 }),
             },
             objective: HyperparameterTuningObjectiveSpec {
                 source_task: "sample".to_string(),

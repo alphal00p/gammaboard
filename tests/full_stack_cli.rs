@@ -5271,10 +5271,10 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 [task_queue.optimizer]
 algorithm = "random_search"
-seed = 3
 
 [task_queue.optimizer.params]
 max_trials = 4
+seed = 3
 
 [task_queue.objective]
 source_task = "sample"
@@ -5525,10 +5525,10 @@ trial_run_toml = "name = \"broken-child"
 
 [task_queue.optimizer]
 algorithm = "random_search"
-seed = 3
 
 [task_queue.optimizer.params]
 max_trials = 1
+seed = 3
 
 [task_queue.objective]
 source_task = "sample"
@@ -5640,10 +5640,10 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 [task_queue.optimizer]
 algorithm = "random_search"
-seed = 5
 
 [task_queue.optimizer.params]
 max_trials = 1
+seed = 5
 
 [task_queue.objective]
 source_task = "sample"

@@ -14,7 +14,7 @@ use rand::{Rng, SeedableRng};
 use rand_xoshiro::Xoshiro256StarStar;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const HYPERPARAMETER_TUNING_SPAWN_KIND: &str = "hyperparameter_tuning";
 
@@ -45,6 +45,18 @@ pub struct HyperparameterTuningOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub best_objective_value: Option<f64>,
     pub trials: Vec<HyperparameterTrialOutput>,
+}
+
+#[derive(Debug, Clone)]
+struct OptimizerTrialCandidate {
+    index: usize,
+    parameters: BTreeMap<String, toml::Value>,
+}
+
+#[derive(Debug, Clone)]
+struct OptimizerTrialPlan {
+    total_trials: usize,
+    candidates: Vec<OptimizerTrialCandidate>,
 }
 
 pub struct HyperparameterTuningRunner<S> {
@@ -99,7 +111,13 @@ where
             .filter_map(|run| run.spawn_label.as_deref().map(|label| (label, run)))
             .collect::<BTreeMap<_, _>>();
 
-        let total_trials = optimizer_trial_count(optimizer, parameters)?;
+        let optimizer_plan = plan_optimizer_trials(optimizer, parameters, &BTreeSet::new())?;
+        let total_trials = optimizer_plan.total_trials;
+        let candidates_by_index = optimizer_plan
+            .candidates
+            .iter()
+            .map(|candidate| (candidate.index, candidate))
+            .collect::<BTreeMap<_, _>>();
         let mut trials = Vec::with_capacity(total_trials);
         let mut completed_count = 0usize;
         let mut running_count = 0usize;
@@ -107,7 +125,11 @@ where
 
         for index in 0..total_trials {
             let label = index.to_string();
-            let values = trial_parameters(optimizer, parameters, index)?;
+            let values = candidates_by_index
+                .get(&index)
+                .ok_or_else(|| StoreError::store(format!("optimizer did not plan trial {index}")))?
+                .parameters
+                .clone();
             let parameters_json = parameters_to_json(&values)?;
             let child = child_runs_by_label.get(label.as_str()).copied();
 
@@ -222,6 +244,7 @@ where
         if failed_count > 0 {
             self.persist_output(completed_count, running_count, failed_count, trials)
                 .await?;
+            redistribute_parent_assignments_to_children(&self.store, self.run_id, []).await?;
             self.store
                 .fail_run_task(
                     self.task.id,
@@ -237,6 +260,7 @@ where
             self.store
                 .update_run_task_progress(self.task.id, total_trials as i64, completed_count as i64)
                 .await?;
+            redistribute_parent_assignments_to_children(&self.store, self.run_id, []).await?;
             self.store.complete_run_task(self.task.id).await?;
             return Ok(true);
         }
@@ -252,7 +276,13 @@ where
                 if child_runs_by_label.contains_key(label.as_str()) {
                     continue;
                 }
-                let replacements = trial_parameters(optimizer, parameters, index)?;
+                let replacements = candidates_by_index
+                    .get(&index)
+                    .ok_or_else(|| {
+                        StoreError::store(format!("optimizer did not plan trial {index}"))
+                    })?
+                    .parameters
+                    .clone();
                 let child = match create_controller_child_run(
                     &self.store,
                     ControllerChildRunRequest {
@@ -470,42 +500,87 @@ fn best_trial(
     best.map_or((None, None), |(index, value)| (Some(index), Some(value)))
 }
 
+#[cfg(test)]
 fn optimizer_trial_count(
     optimizer: &crate::core::HyperparameterTuningOptimizerSpec,
     parameters: &BTreeMap<String, HyperparameterTuningParameterDomain>,
 ) -> Result<usize, StoreError> {
+    Ok(plan_optimizer_trials(optimizer, parameters, &BTreeSet::new())?.total_trials)
+}
+
+fn plan_optimizer_trials(
+    optimizer: &crate::core::HyperparameterTuningOptimizerSpec,
+    parameters: &BTreeMap<String, HyperparameterTuningParameterDomain>,
+    existing_trial_indices: &BTreeSet<usize>,
+) -> Result<OptimizerTrialPlan, StoreError> {
     match optimizer.algorithm {
-        HyperparameterTuningAlgorithm::RandomSearch => Ok(optimizer
-            .random_search_params()
-            .map_err(StoreError::store)?
-            .max_trials),
+        HyperparameterTuningAlgorithm::RandomSearch => {
+            let total_trials = optimizer
+                .random_search_params()
+                .map_err(StoreError::store)?
+                .max_trials;
+            let candidates = (0..total_trials)
+                .filter(|index| !existing_trial_indices.contains(index))
+                .map(|index| {
+                    Ok(OptimizerTrialCandidate {
+                        index,
+                        parameters: random_trial_parameters(optimizer, parameters, index)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, StoreError>>()?;
+            Ok(OptimizerTrialPlan {
+                total_trials,
+                candidates,
+            })
+        }
         HyperparameterTuningAlgorithm::GridSearch => {
             let grid_items = hyperparameter_grid_items(parameters)?;
-            cartesian_grid_len(&grid_items)
+            let total_trials = cartesian_grid_len(&grid_items)?;
+            let candidates = (0..total_trials)
+                .filter(|index| !existing_trial_indices.contains(index))
+                .map(|index| {
+                    Ok(OptimizerTrialCandidate {
+                        index,
+                        parameters: cartesian_grid_point(&grid_items, index)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, StoreError>>()?;
+            Ok(OptimizerTrialPlan {
+                total_trials,
+                candidates,
+            })
         }
     }
 }
 
+#[cfg(test)]
 fn trial_parameters(
     optimizer: &crate::core::HyperparameterTuningOptimizerSpec,
     parameters: &BTreeMap<String, HyperparameterTuningParameterDomain>,
     index: usize,
 ) -> Result<BTreeMap<String, toml::Value>, StoreError> {
-    match optimizer.algorithm {
-        HyperparameterTuningAlgorithm::RandomSearch => {
-            let mut rng = Xoshiro256StarStar::seed_from_u64(
-                optimizer.seed.unwrap_or(0) ^ splitmix64(index as u64),
-            );
-            parameters
-                .iter()
-                .map(|(name, domain)| Ok((name.clone(), sample_parameter(domain, &mut rng)?)))
-                .collect()
-        }
-        HyperparameterTuningAlgorithm::GridSearch => {
-            let grid_items = hyperparameter_grid_items(parameters)?;
-            cartesian_grid_point(&grid_items, index)
-        }
-    }
+    plan_optimizer_trials(optimizer, parameters, &BTreeSet::new())?
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.index == index)
+        .map(|candidate| candidate.parameters)
+        .ok_or_else(|| StoreError::store(format!("optimizer did not plan trial {index}")))
+}
+
+fn random_trial_parameters(
+    optimizer: &crate::core::HyperparameterTuningOptimizerSpec,
+    parameters: &BTreeMap<String, HyperparameterTuningParameterDomain>,
+    index: usize,
+) -> Result<BTreeMap<String, toml::Value>, StoreError> {
+    let params = optimizer
+        .random_search_params()
+        .map_err(StoreError::store)?;
+    let mut rng =
+        Xoshiro256StarStar::seed_from_u64(params.seed.unwrap_or(0) ^ splitmix64(index as u64));
+    parameters
+        .iter()
+        .map(|(name, domain)| Ok((name.clone(), sample_parameter(domain, &mut rng)?)))
+        .collect()
 }
 
 fn sample_parameter(
@@ -626,8 +701,7 @@ mod tests {
 
         let optimizer = HyperparameterTuningOptimizerSpec {
             algorithm: HyperparameterTuningAlgorithm::RandomSearch,
-            seed: Some(7),
-            params: json!({ "max_trials": 8 }),
+            params: json!({ "max_trials": 8, "seed": 7 }),
         };
 
         let first = trial_parameters(&optimizer, &parameters, 3).expect("first");
@@ -667,7 +741,6 @@ mod tests {
         ]);
         let optimizer = HyperparameterTuningOptimizerSpec {
             algorithm: HyperparameterTuningAlgorithm::GridSearch,
-            seed: Some(7),
             params: json!({}),
         };
 
@@ -720,7 +793,6 @@ mod tests {
         )]);
         let optimizer = HyperparameterTuningOptimizerSpec {
             algorithm: HyperparameterTuningAlgorithm::GridSearch,
-            seed: None,
             params: json!({}),
         };
 
