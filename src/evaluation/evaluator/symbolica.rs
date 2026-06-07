@@ -141,9 +141,11 @@ fn constant_value_expr(value: &toml::Value) -> Result<String, BuildError> {
     match value {
         toml::Value::String(value) => Ok(value.clone()),
         toml::Value::Integer(value) => Ok(value.to_string()),
-        toml::Value::Float(value) if value.is_finite() => Ok(value.to_string()),
+        toml::Value::Float(_) => Err(BuildError::invalid_input(
+            "symbolica constants must be exact Symbolica numeric values; use integers or strings like \"1/2\" instead of TOML floats",
+        )),
         other => Err(BuildError::invalid_input(format!(
-            "symbolica constants must be strings or finite numbers, got {other}"
+            "symbolica constants must be exact Symbolica numeric values; use integers or strings like \"1/2\", got {other}"
         ))),
     }
 }
@@ -431,6 +433,22 @@ mod tests {
             )
             .expect("evaluate batch");
         assert_eq!(result.values.expect("training values"), vec![1.5]);
+    }
+
+    #[test]
+    fn symbolica_constants_reject_toml_floats() {
+        let mut constants = BTreeMap::new();
+        constants.insert("scale".to_string(), toml::Value::Float(0.5));
+        let err = match SymbolicaEngine::from_params(SymbolicaParams {
+            expr: "scale * x".to_string(),
+            args: vec!["x".to_string()],
+            constants,
+        }) {
+            Ok(_) => panic!("toml float constants should be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("instead of TOML floats"));
     }
 
     #[test]

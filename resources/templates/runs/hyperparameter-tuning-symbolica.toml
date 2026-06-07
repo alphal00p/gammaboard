@@ -30,14 +30,14 @@ name = "random-search"
 kind = "hyperparameter_tuning"
 max_concurrent_trials = "$(max_concurrent_trials:2)"
 trial_run_toml = """
-name = "tune-center-$(center:0.5)-rough-$(roughness:4.0)-bins-$(havana_bins:16)-update-$(samples_for_update:1024)"
+name = "tune-center-$(center:1/2)-rough-$(roughness:4)-bins-$(havana_bins:16)-update-$(samples_for_update:1024)"
 target = { kind = "scalar", value = 1.0 }
 
 [evaluator]
 kind = "symbolica"
 expr = "1 + roughness * ((x - center)^2 + (y - center)^2 - 2 * (center^3 + (1 - center)^3) / 3)"
 args = ["x", "y"]
-constants = { center = "$(center:0.5)", roughness = "$(roughness:4.0)" }
+constants = { center = '$(center:"1/2")', roughness = '$(roughness:"4")' }
 
 [[task_queue]]
 name = "sample"
@@ -61,13 +61,12 @@ mode = "minimize"
 quantity = { metric = "error" }
 
 [task_queue.parameters.center]
-kind = "float"
-min = 0.15
-max = 0.85
+kind = "categorical"
+values = ["3/20", "1/4", "7/20", "1/2", "13/20", "3/4", "17/20"]
 
 [task_queue.parameters.roughness]
 kind = "categorical"
-values = [2.0, 4.0, 8.0]
+values = ["2", "4", "8"]
 
 [task_queue.parameters.havana_bins]
 kind = "integer"
@@ -84,14 +83,14 @@ name = "grid-search"
 kind = "hyperparameter_tuning"
 max_concurrent_trials = "$(max_concurrent_trials:2)"
 trial_run_toml = """
-name = "grid-center-$(center:0.5)-rough-$(roughness:2.0)-bins-$(havana_bins:16)"
+name = "grid-center-$(center:1/2)-rough-$(roughness:2)-bins-$(havana_bins:16)"
 target = { kind = "scalar", value = 1.0 }
 
 [evaluator]
 kind = "symbolica"
 expr = "1 + roughness * ((x - center)^2 + (y - center)^2 - 2 * (center^3 + (1 - center)^3) / 3)"
 args = ["x", "y"]
-constants = { center = "$(center:0.5)", roughness = "$(roughness:2.0)" }
+constants = { center = '$(center:"1/2")', roughness = '$(roughness:"2")' }
 
 [[task_queue]]
 name = "sample"
@@ -112,11 +111,11 @@ quantity = { metric = "error" }
 
 [task_queue.parameters.center]
 kind = "categorical"
-values = [0.25, 0.5, 0.75]
+values = ["1/4", "1/2", "3/4"]
 
 [task_queue.parameters.roughness]
 kind = "categorical"
-values = [2.0, 4.0, 8.0]
+values = ["2", "4", "8"]
 
 [task_queue.parameters.havana_bins]
 kind = "integer"
@@ -129,14 +128,14 @@ name = "variance-search"
 kind = "hyperparameter_tuning"
 max_concurrent_trials = "$(max_concurrent_trials:2)"
 trial_run_toml = """
-name = "variance-center-$(center:0.5)-rough-$(roughness:4.0)-bins-$(havana_bins:32)"
+name = "variance-center-$(center:1/2)-rough-$(roughness:4)-bins-$(havana_bins:32)"
 target = { kind = "scalar", value = 1.0 }
 
 [evaluator]
 kind = "symbolica"
 expr = "1 + roughness * ((x - center)^2 + (y - center)^2 - 2 * (center^3 + (1 - center)^3) / 3)"
 args = ["x", "y"]
-constants = { center = "$(center:0.5)", roughness = "$(roughness:4.0)" }
+constants = { center = '$(center:"1/2")', roughness = '$(roughness:"4")' }
 
 [[task_queue]]
 name = "sample"
@@ -160,13 +159,12 @@ mode = "minimize"
 quantity = { metric = "time_normalized_variance" }
 
 [task_queue.parameters.center]
-kind = "float"
-min = 0.2
-max = 0.8
+kind = "categorical"
+values = ["1/5", "3/10", "2/5", "1/2", "3/5", "7/10", "4/5"]
 
 [task_queue.parameters.roughness]
 kind = "categorical"
-values = [2.0, 4.0, 8.0]
+values = ["2", "4", "8"]
 
 [task_queue.parameters.havana_bins]
 kind = "integer"

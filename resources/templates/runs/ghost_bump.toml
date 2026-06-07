@@ -1,6 +1,6 @@
 # Symbolica + Havana training, 2D PDF adaptation, and a complex phase image.
 
-replacements = { run_name = "ghost_bump", train_samples = 200000, havana_bins = 64, samples_for_update = 16384, image_bins = 128, phase_center_x = 0.5, phase_center_y = 0.5 }
+replacements = { run_name = "ghost_bump", train_samples = 200000, havana_bins = 64, samples_for_update = 16384, image_bins = 128, phase_center_x = "1/2", phase_center_y = "1/2" }
 
 name = '$(run_name:"ghost_bump")'
 
@@ -59,7 +59,7 @@ display = "complex_phase"
 kind = "symbolica"
 expr = "(x - cx) + i * (y - cy)"
 args = ["x", "y"]
-constants = { cx = "$(phase_center_x:0.5)", cy = "$(phase_center_y:0.5)" }
+constants = { cx = '$(phase_center_x:"1/2")', cy = '$(phase_center_y:"1/2")' }
 
 [task_queue.geometry]
 offset = [0.0, 0.0]
