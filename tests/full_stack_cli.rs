@@ -1476,8 +1476,6 @@ components = ["value"]
 training_projection = {{ kind = "component", name = "value" }}
 
 [task_queue.accumulator.discrete_projections]
-max_total_bins = 16
-
 [[task_queue.accumulator.discrete_projections.items]]
 name = "spin"
 dims = [0]

@@ -39,7 +39,6 @@ pub const DEFAULT_DISCRETE_PROJECTION_MAX_TOTAL_BINS: usize = 4096;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct DiscreteProjectionConfig {
-    pub max_total_bins: Option<usize>,
     pub normalization: DiscreteProjectionNormalization,
     pub streams: Vec<String>,
     pub items: Vec<NamedDiscreteProjection>,
@@ -48,7 +47,6 @@ pub struct DiscreteProjectionConfig {
 impl Default for DiscreteProjectionConfig {
     fn default() -> Self {
         Self {
-            max_total_bins: None,
             normalization: DiscreteProjectionNormalization::Contribution,
             streams: Vec::new(),
             items: Vec::new(),
@@ -58,13 +56,6 @@ impl Default for DiscreteProjectionConfig {
 
 impl DiscreteProjectionConfig {
     pub fn validate(&self) -> Result<(), String> {
-        if let Some(limit) = self.max_total_bins
-            && limit == 0
-        {
-            return Err(
-                "accumulator.discrete_projections.max_total_bins must be > 0 when set".to_string(),
-            );
-        }
         if self.items.is_empty() {
             return Err(
                 "accumulator.discrete_projections.items must contain at least one entry"
@@ -105,9 +96,8 @@ impl DiscreteProjectionConfig {
         Ok(())
     }
 
-    pub fn max_total_bins_or_default(&self) -> usize {
-        self.max_total_bins
-            .unwrap_or(DEFAULT_DISCRETE_PROJECTION_MAX_TOTAL_BINS)
+    pub fn bin_limit(&self) -> usize {
+        DEFAULT_DISCRETE_PROJECTION_MAX_TOTAL_BINS
     }
 }
 
@@ -547,13 +537,33 @@ pub struct EgoboxOptimizerParams {
     #[serde(default = "default_egobox_parallel_candidates")]
     pub parallel_candidates: usize,
     #[serde(default)]
-    pub infill: Option<String>,
+    pub infill: Option<EgoboxInfillStrategy>,
     #[serde(default)]
-    pub qei_strategy: Option<String>,
+    pub qei_strategy: Option<EgoboxQeiStrategy>,
     #[serde(default)]
     pub qei_optmod: Option<usize>,
     #[serde(default)]
     pub n_start: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EgoboxInfillStrategy {
+    #[serde(alias = "expected_improvement")]
+    Ei,
+    #[serde(alias = "log_expected_improvement")]
+    LogEi,
+    Wb2,
+    Wb2s,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EgoboxQeiStrategy {
+    KrigingBeliever,
+    KrigingBelieverLowerBound,
+    KrigingBelieverUpperBound,
+    ConstantLiarMinimum,
 }
 
 fn default_egobox_initial_design() -> usize {
@@ -603,33 +613,6 @@ impl HyperparameterTuningOptimizerSpec {
                     return Err(
                         "hyperparameter_tuning.optimizer.params.qei_optmod must be > 0".to_string(),
                     );
-                }
-                if let Some(infill) = params.infill.as_deref()
-                    && !matches!(
-                        infill,
-                        "ei" | "expected_improvement"
-                            | "log_ei"
-                            | "log_expected_improvement"
-                            | "wb2"
-                            | "wb2s"
-                    )
-                {
-                    return Err(format!(
-                        "hyperparameter_tuning.optimizer.params.infill must be one of ei, expected_improvement, log_ei, log_expected_improvement, wb2, wb2s; got {infill:?}"
-                    ));
-                }
-                if let Some(qei_strategy) = params.qei_strategy.as_deref()
-                    && !matches!(
-                        qei_strategy,
-                        "kriging_believer"
-                            | "kriging_believer_lower_bound"
-                            | "kriging_believer_upper_bound"
-                            | "constant_liar_minimum"
-                    )
-                {
-                    return Err(format!(
-                        "hyperparameter_tuning.optimizer.params.qei_strategy must be one of kriging_believer, kriging_believer_lower_bound, kriging_believer_upper_bound, constant_liar_minimum; got {qei_strategy:?}"
-                    ));
                 }
                 Ok(())
             }

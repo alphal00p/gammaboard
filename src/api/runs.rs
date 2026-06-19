@@ -1217,7 +1217,6 @@ kind = "set_accumulator"
 kind = "scalar"
 
 [task_queue.accumulator.discrete_projections]
-max_total_bins = 16
 normalization = "conditional_mean"
 
 [[task_queue.accumulator.discrete_projections.items]]

@@ -235,7 +235,7 @@ struct CompletedIngestStats {
 fn collect_discrete_pdf_subspaces(
     state: &AccumulatorState,
     config: &crate::core::DiscreteProjectionConfig,
-    max_total_bins: usize,
+    bin_limit: usize,
 ) -> Result<Vec<(String, Vec<i64>, DiscreteSubspace)>, EngineError> {
     let mut out = Vec::new();
     match state {
@@ -243,7 +243,7 @@ fn collect_discrete_pdf_subspaces(
             collect_discrete_pdf_subspaces_from_bins(
                 &state.discrete_bins,
                 config,
-                max_total_bins,
+                bin_limit,
                 None,
                 &mut out,
             )?;
@@ -260,7 +260,7 @@ fn collect_discrete_pdf_subspaces(
                 collect_discrete_pdf_subspaces_from_bins(
                     &component.state.discrete_bins,
                     config,
-                    max_total_bins,
+                    bin_limit,
                     Some(&component.name),
                     &mut out,
                 )?;
@@ -281,7 +281,7 @@ fn discrete_projection_includes_stream(
 fn collect_discrete_pdf_subspaces_from_bins(
     bins: &BTreeMap<String, crate::evaluation::accumulator::DiscreteProjectionBinState>,
     config: &crate::core::DiscreteProjectionConfig,
-    max_total_bins: usize,
+    bin_limit: usize,
     component_name: Option<&str>,
     out: &mut Vec<(String, Vec<i64>, DiscreteSubspace)>,
 ) -> Result<(), EngineError> {
@@ -300,7 +300,7 @@ fn collect_discrete_pdf_subspaces_from_bins(
             if !seen.insert(key.clone()) {
                 continue;
             }
-            if seen.len() > max_total_bins {
+            if seen.len() > bin_limit {
                 break;
             }
             let mut fixed_dims = BTreeMap::new();
@@ -1621,11 +1621,8 @@ where
         else {
             return Ok(None);
         };
-        let projected = collect_discrete_pdf_subspaces(
-            &self.observable_state,
-            &config,
-            config.max_total_bins_or_default(),
-        )?;
+        let projected =
+            collect_discrete_pdf_subspaces(&self.observable_state, &config, config.bin_limit())?;
         if projected.is_empty() {
             return Ok(None);
         }

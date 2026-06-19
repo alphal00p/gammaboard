@@ -1,8 +1,9 @@
 use crate::core::{
-    AccumulatorMetricName, AggregationStore, ControlPlaneStore, HyperparameterTuningAlgorithm,
-    HyperparameterTuningObjectiveSpec, HyperparameterTuningParameterDomain, MeasurementMode,
-    MeasurementQuantityName, MeasurementQuantitySpec, RunReadStore, RunSpecStore, RunTask,
-    RunTaskSpec, RunTaskState, RunTaskStore, StoreError, TaskMeasurementOutput,
+    AccumulatorMetricName, AggregationStore, ControlPlaneStore, EgoboxInfillStrategy,
+    EgoboxQeiStrategy, HyperparameterTuningAlgorithm, HyperparameterTuningObjectiveSpec,
+    HyperparameterTuningParameterDomain, MeasurementMode, MeasurementQuantityName,
+    MeasurementQuantitySpec, RunReadStore, RunSpecStore, RunTask, RunTaskSpec, RunTaskState,
+    RunTaskStore, StoreError, TaskMeasurementOutput,
 };
 use crate::runners::controller_child::{
     ControllerChildRunRequest, choose_child_capacity, create_controller_child_run,
@@ -133,7 +134,7 @@ where
             .collect::<BTreeSet<_>>();
         let previous_trials = previous_trial_parameters(self.task.controller_output.as_ref())?;
         let previous_observations =
-            previous_trial_observations(self.task.controller_output.as_ref(), objective.mode)?;
+            previous_trial_observations(self.task.controller_output.as_ref())?;
         let previous_running_count = previous_trials
             .iter()
             .filter(|(_, trial)| {
@@ -779,7 +780,7 @@ fn egobox_trial_plan(
         .take(desired_new)
         .collect::<Vec<_>>();
     let new_candidates =
-        if observations.len() < effective_egobox_initial_design(&params, parameters) {
+        if observations.len() < effective_egobox_initial_design(&params, parameters.len()) {
             next_indices
                 .into_iter()
                 .map(|index| {
@@ -818,9 +819,9 @@ fn egobox_trial_plan(
 
 fn effective_egobox_initial_design(
     params: &crate::core::EgoboxOptimizerParams,
-    parameters: &BTreeMap<String, HyperparameterTuningParameterDomain>,
+    parameter_count: usize,
 ) -> usize {
-    params.initial_design.max(parameters.len() + 1).max(2)
+    params.initial_design.max(parameter_count + 1).max(2)
 }
 
 fn suggest_egobox_candidates(
@@ -844,15 +845,9 @@ fn suggest_egobox_candidates(
         .map_err(|err| StoreError::store(format!("failed to build egobox y_data: {err}")))?;
     let infill_strategy = params
         .infill
-        .as_deref()
-        .map(parse_egobox_infill_strategy)
-        .transpose()?
+        .map(InfillStrategy::from)
         .unwrap_or(InfillStrategy::EI);
-    let qei_strategy = params
-        .qei_strategy
-        .as_deref()
-        .map(parse_egobox_qei_strategy)
-        .transpose()?;
+    let qei_strategy = params.qei_strategy.map(QEiStrategy::from);
     let builder = EgorServiceBuilder::optimize().configure(|config| {
         let config = if let Some(seed) = params.seed {
             config.seed(seed)
@@ -860,7 +855,7 @@ fn suggest_egobox_candidates(
             config
         };
         let config = config
-            .n_doe(effective_egobox_initial_design_for_encoder(params, encoder))
+            .n_doe(effective_egobox_initial_design(params, encoder.len()))
             .configure_qei(|qei| {
                 let mut qei = qei.batch(next_indices.len().max(1));
                 if let Some(strategy) = qei_strategy {
@@ -883,53 +878,45 @@ fn suggest_egobox_candidates(
         .min_within_mixint_space(&encoder.xtypes)
         .map_err(|err| StoreError::store(format!("failed to configure egobox optimizer: {err}")))?;
     let suggested = service.suggest(&x_data, &y_data);
-    let existing_encoded =
+    let mut existing_encoded =
         existing_encoded_points(encoder, existing_trial_indices, previous_trials)?;
     let mut candidates = Vec::new();
     for (offset, index) in next_indices.iter().copied().enumerate() {
         let row_index = offset.min(suggested.nrows().saturating_sub(1));
         let encoded = suggested.row(row_index).to_vec();
-        let parameters = if is_duplicate_encoded(&encoded, &existing_encoded) {
+        let parameters = if contains_encoded(&existing_encoded, &encoded) {
             let mut rng = Xoshiro256StarStar::seed_from_u64(
                 params.seed.unwrap_or(0) ^ splitmix64(index as u64),
             );
-            encoder.random_point(&mut rng)?
+            encoder.random_distinct_point(&mut rng, &existing_encoded)?
         } else {
             encoder.decode(&encoded)?
         };
+        existing_encoded.push(encoder.encode(&parameters)?);
         candidates.push(OptimizerTrialCandidate { index, parameters });
     }
     Ok(candidates)
 }
 
-fn effective_egobox_initial_design_for_encoder(
-    params: &crate::core::EgoboxOptimizerParams,
-    encoder: &ParameterEncoder,
-) -> usize {
-    params.initial_design.max(encoder.names.len() + 1).max(2)
-}
-
-fn parse_egobox_infill_strategy(value: &str) -> Result<InfillStrategy, StoreError> {
-    match value {
-        "ei" | "expected_improvement" => Ok(InfillStrategy::EI),
-        "log_ei" | "log_expected_improvement" => Ok(InfillStrategy::LogEI),
-        "wb2" => Ok(InfillStrategy::WB2),
-        "wb2s" => Ok(InfillStrategy::WB2S),
-        other => Err(StoreError::store(format!(
-            "unsupported egobox infill strategy {other:?}; expected ei, log_ei, wb2, or wb2s"
-        ))),
+impl From<EgoboxInfillStrategy> for InfillStrategy {
+    fn from(value: EgoboxInfillStrategy) -> Self {
+        match value {
+            EgoboxInfillStrategy::Ei => Self::EI,
+            EgoboxInfillStrategy::LogEi => Self::LogEI,
+            EgoboxInfillStrategy::Wb2 => Self::WB2,
+            EgoboxInfillStrategy::Wb2s => Self::WB2S,
+        }
     }
 }
 
-fn parse_egobox_qei_strategy(value: &str) -> Result<QEiStrategy, StoreError> {
-    match value {
-        "kriging_believer" => Ok(QEiStrategy::KrigingBeliever),
-        "kriging_believer_lower_bound" => Ok(QEiStrategy::KrigingBelieverLowerBound),
-        "kriging_believer_upper_bound" => Ok(QEiStrategy::KrigingBelieverUpperBound),
-        "constant_liar_minimum" => Ok(QEiStrategy::ConstantLiarMinimum),
-        other => Err(StoreError::store(format!(
-            "unsupported egobox qei_strategy {other:?}; expected kriging_believer, kriging_believer_lower_bound, kriging_believer_upper_bound, or constant_liar_minimum"
-        ))),
+impl From<EgoboxQeiStrategy> for QEiStrategy {
+    fn from(value: EgoboxQeiStrategy) -> Self {
+        match value {
+            EgoboxQeiStrategy::KrigingBeliever => Self::KrigingBeliever,
+            EgoboxQeiStrategy::KrigingBelieverLowerBound => Self::KrigingBelieverLowerBound,
+            EgoboxQeiStrategy::KrigingBelieverUpperBound => Self::KrigingBelieverUpperBound,
+            EgoboxQeiStrategy::ConstantLiarMinimum => Self::ConstantLiarMinimum,
+        }
     }
 }
 
@@ -999,6 +986,75 @@ impl ParameterEncoder {
             .zip(&self.domains)
             .map(|(name, domain)| Ok((name.clone(), sample_parameter(domain, rng)?)))
             .collect()
+    }
+
+    fn random_distinct_point(
+        &self,
+        rng: &mut Xoshiro256StarStar,
+        existing: &[Vec<f64>],
+    ) -> Result<BTreeMap<String, toml::Value>, StoreError> {
+        let mut last = None;
+        for _ in 0..64 {
+            let point = self.random_point(rng)?;
+            let encoded = self.encode(&point)?;
+            if !contains_encoded(existing, &encoded) {
+                return Ok(point);
+            }
+            last = Some(point);
+        }
+        if let Some(point) = self.first_distinct_finite_point(existing)? {
+            return Ok(point);
+        }
+        last.ok_or_else(|| StoreError::store("failed to sample egobox fallback point"))
+    }
+
+    fn len(&self) -> usize {
+        self.names.len()
+    }
+
+    fn first_distinct_finite_point(
+        &self,
+        existing: &[Vec<f64>],
+    ) -> Result<Option<BTreeMap<String, toml::Value>>, StoreError> {
+        let mut values = Vec::new();
+        for domain in &self.domains {
+            let domain_values = match domain {
+                HyperparameterTuningParameterDomain::Float(_) => return Ok(None),
+                HyperparameterTuningParameterDomain::Integer(domain) => {
+                    integer_domain_values(domain)?
+                        .into_iter()
+                        .map(toml::Value::Integer)
+                        .collect()
+                }
+                HyperparameterTuningParameterDomain::Categorical(domain) => domain.values.clone(),
+            };
+            values.push(domain_values);
+        }
+        let mut point = BTreeMap::new();
+        self.find_distinct_finite_point(0, &values, &mut point, existing)
+    }
+
+    fn find_distinct_finite_point(
+        &self,
+        depth: usize,
+        values: &[Vec<toml::Value>],
+        point: &mut BTreeMap<String, toml::Value>,
+        existing: &[Vec<f64>],
+    ) -> Result<Option<BTreeMap<String, toml::Value>>, StoreError> {
+        if depth == self.names.len() {
+            return Ok((!contains_encoded(existing, &self.encode(point)?)).then(|| point.clone()));
+        }
+        let name = &self.names[depth];
+        for value in &values[depth] {
+            point.insert(name.clone(), value.clone());
+            if let Some(candidate) =
+                self.find_distinct_finite_point(depth + 1, values, point, existing)?
+            {
+                return Ok(Some(candidate));
+            }
+        }
+        point.remove(name);
+        Ok(None)
     }
 
     fn observation_x_data(
@@ -1148,7 +1204,7 @@ fn existing_encoded_points(
         .collect()
 }
 
-fn is_duplicate_encoded(candidate: &[f64], existing: &[Vec<f64>]) -> bool {
+fn contains_encoded(existing: &[Vec<f64>], candidate: &[f64]) -> bool {
     existing.iter().any(|point| {
         point.len() == candidate.len()
             && point
@@ -1196,7 +1252,6 @@ fn previous_trial_parameters(
 
 fn previous_trial_observations(
     output: Option<&JsonValue>,
-    mode: MeasurementMode,
 ) -> Result<Vec<OptimizerObservation>, StoreError> {
     Ok(previous_trial_parameters(output)?
         .into_values()
@@ -1207,10 +1262,7 @@ fn previous_trial_observations(
             }
             Some(OptimizerObservation {
                 parameters: trial.parameters,
-                objective_value: match mode {
-                    MeasurementMode::Minimize => objective_value,
-                    MeasurementMode::Maximize => objective_value,
-                },
+                objective_value,
             })
         })
         .collect())
@@ -1552,6 +1604,85 @@ mod tests {
             .as_float()
             .unwrap();
         assert!((0.0..=1.0).contains(&suggested));
+    }
+
+    #[test]
+    fn egobox_reconstructs_previous_trials_from_controller_output() {
+        let parameters = BTreeMap::from([(
+            "x".to_string(),
+            HyperparameterTuningParameterDomain::Float(HyperparameterTuningFloatDomain {
+                min: 0.0,
+                max: 1.0,
+            }),
+        )]);
+        let optimizer = HyperparameterTuningOptimizerSpec {
+            algorithm: HyperparameterTuningAlgorithm::Egobox,
+            params: json!({
+                "max_trials": 3,
+                "seed": 4,
+                "initial_design": 2,
+                "parallel_candidates": 1
+            }),
+        };
+        let previous_trials = previous_trial_parameters(Some(&json!({
+            "trials": [
+                {
+                    "index": 0,
+                    "status": "completed",
+                    "parameters": { "x": 0.25 },
+                    "objective_value": 1.0
+                }
+            ]
+        })))
+        .expect("previous trials");
+        let observations = previous_trial_observations(Some(&json!({
+            "trials": [
+                {
+                    "index": 0,
+                    "status": "completed",
+                    "parameters": { "x": 0.25 },
+                    "objective_value": 1.0
+                }
+            ]
+        })))
+        .expect("previous observations");
+
+        let plan = plan_optimizer_trials(
+            &optimizer,
+            &parameters,
+            &BTreeSet::from([0]),
+            &previous_trials,
+            &observations,
+            MeasurementMode::Minimize,
+            1,
+        )
+        .expect("egobox restart plan");
+
+        assert_eq!(plan.total_trials, 3);
+        assert_eq!(plan.candidates[0].index, 0);
+        assert_eq!(plan.candidates[0].parameters["x"].as_float(), Some(0.25));
+        assert!(plan.candidates.iter().any(|candidate| candidate.index == 1));
+    }
+
+    #[test]
+    fn egobox_random_fallback_avoids_known_encoded_points_when_possible() {
+        let parameters = BTreeMap::from([(
+            "x".to_string(),
+            HyperparameterTuningParameterDomain::Integer(HyperparameterTuningIntegerDomain {
+                min: 1,
+                max: 3,
+                step: None,
+            }),
+        )]);
+        let encoder = ParameterEncoder::new(&parameters).expect("encoder");
+        let existing = vec![vec![1.0], vec![2.0]];
+        let mut rng = Xoshiro256StarStar::seed_from_u64(1);
+
+        let point = encoder
+            .random_distinct_point(&mut rng, &existing)
+            .expect("distinct point");
+
+        assert_eq!(point["x"].as_integer(), Some(3));
     }
 
     #[test]

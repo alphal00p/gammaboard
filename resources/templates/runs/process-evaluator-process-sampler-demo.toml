@@ -1,4 +1,8 @@
 # Process evaluator + process sampler demo using a venv evaluator and Nix sampler.
+#
+# Required artifacts/tools:
+# - `process_api/examples/python_scalar_sin/.venv` must exist.
+# - Nix must be available for the process sampler runtime.
 replacements = { run_name = "process-evaluator-process-sampler-demo", scale = 1.0, sample_a_samples = 1000, sampler_bins = 8 }
 
 name = '$(run_name:"process-evaluator-process-sampler-demo")'
@@ -18,9 +22,6 @@ kind = "set_accumulator"
 kind = "vector"
 components = ["value"]
 training_projection = { kind = "component", name = "value" }
-
-[task_queue.accumulator.discrete_projections]
-max_total_bins = 16
 
 [[task_queue.accumulator.discrete_projections.items]]
 name = "spin"

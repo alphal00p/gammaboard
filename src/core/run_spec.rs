@@ -796,7 +796,6 @@ mod tests {
 kind = "scalar"
 
 [discrete_projections]
-max_total_bins = 16
 normalization = "conditional_mean"
 
 [[discrete_projections.items]]
@@ -819,6 +818,25 @@ fixed_dims = { "0" = 0 }
             projections.normalization,
             crate::core::DiscreteProjectionNormalization::ConditionalMean
         );
+    }
+
+    #[test]
+    fn accumulator_config_rejects_legacy_discrete_projection_bin_limit() {
+        let err = toml::from_str::<AccumulatorConfig>(
+            r#"
+kind = "scalar"
+
+[discrete_projections]
+max_total_bins = 16
+
+[[discrete_projections.items]]
+name = "spin"
+dims = [0]
+"#,
+        )
+        .expect_err("legacy max_total_bins should be rejected");
+
+        assert!(err.to_string().contains("max_total_bins"));
     }
 
     #[test]

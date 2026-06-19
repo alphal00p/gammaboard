@@ -20,17 +20,17 @@ pub mod tracing;
 pub mod utils;
 
 pub use core::{
-    AccumulatorMetricName, AccumulatorMetricSelector, AccumulatorSourceSpec, EgoboxOptimizerParams,
-    HyperparameterTuningAlgorithm, HyperparameterTuningCategoricalDomain,
-    HyperparameterTuningFloatDomain, HyperparameterTuningIntegerDomain,
-    HyperparameterTuningObjectiveSpec, HyperparameterTuningOptimizerSpec,
-    HyperparameterTuningParameterDomain, ImageDisplayMode, LineDisplayMode, LineRasterGeometry,
-    Linspace, MeasurementMetricQuantity, MeasurementMetricSpec, MeasurementMode,
-    MeasurementQuantityName, MeasurementQuantitySpec, MeasurementResult, MeasurementSpec,
-    ParameterScanMeasurementSpec, ParameterScanParameterSpec, PlaneRasterGeometry,
-    PlotAccumulatorKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState, SampleErrorProjection,
-    SampleStopCondition, SampleTaskConfig, SamplerAggregatorSourceSpec, SourceRefSpec,
-    TaskMeasurementOutput, TaskMeasurementSpec, canonical_task_toml,
+    AccumulatorMetricName, AccumulatorMetricSelector, AccumulatorSourceSpec, EgoboxInfillStrategy,
+    EgoboxOptimizerParams, EgoboxQeiStrategy, HyperparameterTuningAlgorithm,
+    HyperparameterTuningCategoricalDomain, HyperparameterTuningFloatDomain,
+    HyperparameterTuningIntegerDomain, HyperparameterTuningObjectiveSpec,
+    HyperparameterTuningOptimizerSpec, HyperparameterTuningParameterDomain, ImageDisplayMode,
+    LineDisplayMode, LineRasterGeometry, Linspace, MeasurementMetricQuantity,
+    MeasurementMetricSpec, MeasurementMode, MeasurementQuantityName, MeasurementQuantitySpec,
+    MeasurementResult, MeasurementSpec, ParameterScanMeasurementSpec, ParameterScanParameterSpec,
+    PlaneRasterGeometry, PlotAccumulatorKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState,
+    SampleErrorProjection, SampleStopCondition, SampleTaskConfig, SamplerAggregatorSourceSpec,
+    SourceRefSpec, TaskMeasurementOutput, TaskMeasurementSpec, canonical_task_toml,
 };
 pub use core::{BatchRecord, BatchStatus};
 pub use core::{BuildError, EngineError, EvalError, StoreError};

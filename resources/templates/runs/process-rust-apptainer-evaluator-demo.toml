@@ -1,5 +1,7 @@
 # Apptainer-packaged Rust process evaluator over a ragged tree domain.
-# Build the image first:
+# Required artifacts/tools:
+# - Apptainer must be installed.
+# - Build the process evaluator image first:
 #   just process-rust-breit-wigner-sif
 
 replacements = { run_name = "process-rust-apptainer-evaluator-demo", samples = 100000, havana_bins = 32 }

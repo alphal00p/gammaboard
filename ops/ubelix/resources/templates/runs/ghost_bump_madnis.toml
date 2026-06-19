@@ -1,4 +1,9 @@
 # Ghost bump with the MADNIS process sampler runtime deployed under resources/madnis.
+#
+# Required artifacts/tools:
+# - Apptainer with GPU support must be installed on the worker host.
+# - `$resources/madnis/madnis.sif` must exist.
+# - The `madnis/checkpoints` directory must be writable.
 
 replacements = { run_name = "ghost_bump_madnis", train_samples = 200000, training_steps = 200, training_batch_size = 1000, madnis_dir = "madnis", save_path = "madnis/checkpoints/ghost_bump_madnis", image_bins = 128 }
 

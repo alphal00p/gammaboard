@@ -1327,7 +1327,7 @@ fn scalar_discrete_projection_payload(
                         &item.name,
                         config.normalization,
                         total_count,
-                        config.max_total_bins_or_default(),
+                        config.bin_limit(),
                         discrete_pdf
                     )?,
                 }),
@@ -1378,7 +1378,7 @@ fn vector_discrete_projection_payload(
                         &name,
                         config.normalization,
                         component.state.count,
-                        config.max_total_bins_or_default(),
+                        config.bin_limit(),
                         discrete_pdf
                     )?,
                 }),
@@ -1533,7 +1533,7 @@ fn scalar_projected_bins(
     projection_name: &str,
     normalization: DiscreteProjectionNormalization,
     total_count: i64,
-    max_total_bins: usize,
+    bin_limit: usize,
     discrete_pdf: Option<&DiscretePdfCache>,
 ) -> Result<Vec<JsonValue>, String> {
     let mut projected = BTreeMap::<Vec<i64>, DiscreteProjectionBinState>::new();
@@ -1551,7 +1551,7 @@ fn scalar_projected_bins(
                 discrete: key,
                 state: bin.state.clone(),
             });
-        reject_bin_explosion(projected.len(), max_total_bins, &item.name)?;
+        reject_bin_explosion(projected.len(), bin_limit, &item.name)?;
     }
     let total_abs_contribution = projected
         .values()
@@ -1697,10 +1697,10 @@ fn projection_key(
     Ok(Some(key))
 }
 
-fn reject_bin_explosion(count: usize, max_total_bins: usize, name: &str) -> Result<(), String> {
-    if count > max_total_bins {
+fn reject_bin_explosion(count: usize, bin_limit: usize, name: &str) -> Result<(), String> {
+    if count > bin_limit {
         Err(format!(
-            "discrete projection '{name}' exceeds max_total_bins={max_total_bins}"
+            "discrete projection '{name}' exceeds fixed bin limit {bin_limit}"
         ))
     } else {
         Ok(())
