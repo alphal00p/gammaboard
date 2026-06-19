@@ -10,6 +10,8 @@ use crate::runners::controller_child::{
     redistribute_parent_assignments_to_children,
 };
 use crate::runners::parameter_grid::{ParameterGridItem, cartesian_grid_len, cartesian_grid_point};
+use egobox_ego::{EgorServiceBuilder, InfillStrategy, QEiStrategy, XType};
+use ndarray::Array2;
 use rand::{Rng, SeedableRng};
 use rand_xoshiro::Xoshiro256StarStar;
 use serde::{Deserialize, Serialize};
@@ -51,6 +53,20 @@ pub struct HyperparameterTuningOutput {
 struct OptimizerTrialCandidate {
     index: usize,
     parameters: BTreeMap<String, toml::Value>,
+}
+
+#[derive(Debug, Clone)]
+struct OptimizerObservation {
+    parameters: BTreeMap<String, toml::Value>,
+    objective_value: f64,
+}
+
+#[derive(Debug, Clone)]
+struct PreviousTrial {
+    index: usize,
+    status: String,
+    parameters: BTreeMap<String, toml::Value>,
+    objective_value: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -111,7 +127,32 @@ where
             .filter_map(|run| run.spawn_label.as_deref().map(|label| (label, run)))
             .collect::<BTreeMap<_, _>>();
 
-        let optimizer_plan = plan_optimizer_trials(optimizer, parameters, &BTreeSet::new())?;
+        let existing_trial_indices = child_runs_by_label
+            .keys()
+            .filter_map(|label| label.parse::<usize>().ok())
+            .collect::<BTreeSet<_>>();
+        let previous_trials = previous_trial_parameters(self.task.controller_output.as_ref())?;
+        let previous_observations =
+            previous_trial_observations(self.task.controller_output.as_ref(), objective.mode)?;
+        let previous_running_count = previous_trials
+            .iter()
+            .filter(|(_, trial)| {
+                child_runs_by_label.contains_key(trial.index.to_string().as_str())
+                    && trial.status != "completed"
+                    && trial.status != "failed"
+            })
+            .count();
+        let candidate_capacity =
+            choose_child_capacity(*max_concurrent_trials, previous_running_count);
+        let optimizer_plan = plan_optimizer_trials(
+            optimizer,
+            parameters,
+            &existing_trial_indices,
+            &previous_trials,
+            &previous_observations,
+            objective.mode,
+            candidate_capacity,
+        )?;
         let total_trials = optimizer_plan.total_trials;
         let candidates_by_index = optimizer_plan
             .candidates
@@ -123,7 +164,7 @@ where
         let mut running_count = 0usize;
         let mut failed_count = 0usize;
 
-        for index in 0..total_trials {
+        for index in candidates_by_index.keys().copied().collect::<Vec<_>>() {
             let label = index.to_string();
             let values = candidates_by_index
                 .get(&index)
@@ -242,8 +283,14 @@ where
         }
 
         if failed_count > 0 {
-            self.persist_output(completed_count, running_count, failed_count, trials)
-                .await?;
+            self.persist_output(
+                total_trials,
+                completed_count,
+                running_count,
+                failed_count,
+                trials,
+            )
+            .await?;
             redistribute_parent_assignments_to_children(&self.store, self.run_id, []).await?;
             self.store
                 .fail_run_task(
@@ -255,8 +302,14 @@ where
         }
 
         if completed_count + failed_count == total_trials {
-            self.persist_output(completed_count, running_count, failed_count, trials)
-                .await?;
+            self.persist_output(
+                total_trials,
+                completed_count,
+                running_count,
+                failed_count,
+                trials,
+            )
+            .await?;
             self.store
                 .update_run_task_progress(self.task.id, total_trials as i64, completed_count as i64)
                 .await?;
@@ -268,7 +321,7 @@ where
         let mut created_child_run_ids = Vec::new();
         let mut capacity = choose_child_capacity(*max_concurrent_trials, running_count);
         if capacity > 0 {
-            for index in 0..total_trials {
+            for index in candidates_by_index.keys().copied().collect::<Vec<_>>() {
                 if capacity == 0 {
                     break;
                 }
@@ -299,8 +352,14 @@ where
                     Ok(child) => child,
                     Err(err) => {
                         let reason = format!("failed to create tuning trial {index}: {err}");
-                        self.persist_output(completed_count, running_count, failed_count, trials)
-                            .await?;
+                        self.persist_output(
+                            total_trials,
+                            completed_count,
+                            running_count,
+                            failed_count,
+                            trials,
+                        )
+                        .await?;
                         self.store.fail_run_task(self.task.id, &reason).await?;
                         return Ok(true);
                     }
@@ -326,13 +385,20 @@ where
         self.store
             .update_run_task_progress(self.task.id, total_trials as i64, completed_count as i64)
             .await?;
-        self.persist_output(completed_count, running_count, failed_count, trials)
-            .await?;
+        self.persist_output(
+            total_trials,
+            completed_count,
+            running_count,
+            failed_count,
+            trials,
+        )
+        .await?;
         Ok(false)
     }
 
     async fn persist_output(
         &self,
+        total_trials: usize,
         completed_trials: usize,
         running_trials: usize,
         failed_trials: usize,
@@ -341,7 +407,7 @@ where
         let (best_trial, best_objective_value) =
             best_trial(&trials, objective_mode(&self.task.task));
         let output = serde_json::to_value(HyperparameterTuningOutput {
-            total_trials: trials.len(),
+            total_trials,
             completed_trials,
             running_trials,
             failed_trials,
@@ -505,13 +571,26 @@ fn optimizer_trial_count(
     optimizer: &crate::core::HyperparameterTuningOptimizerSpec,
     parameters: &BTreeMap<String, HyperparameterTuningParameterDomain>,
 ) -> Result<usize, StoreError> {
-    Ok(plan_optimizer_trials(optimizer, parameters, &BTreeSet::new())?.total_trials)
+    Ok(plan_optimizer_trials(
+        optimizer,
+        parameters,
+        &BTreeSet::new(),
+        &BTreeMap::new(),
+        &[],
+        MeasurementMode::Minimize,
+        usize::MAX,
+    )?
+    .total_trials)
 }
 
 fn plan_optimizer_trials(
     optimizer: &crate::core::HyperparameterTuningOptimizerSpec,
     parameters: &BTreeMap<String, HyperparameterTuningParameterDomain>,
     existing_trial_indices: &BTreeSet<usize>,
+    previous_trials: &BTreeMap<usize, PreviousTrial>,
+    observations: &[OptimizerObservation],
+    mode: MeasurementMode,
+    candidate_capacity: usize,
 ) -> Result<OptimizerTrialPlan, StoreError> {
     match optimizer.algorithm {
         HyperparameterTuningAlgorithm::RandomSearch => {
@@ -520,7 +599,6 @@ fn plan_optimizer_trials(
                 .map_err(StoreError::store)?
                 .max_trials;
             let candidates = (0..total_trials)
-                .filter(|index| !existing_trial_indices.contains(index))
                 .map(|index| {
                     Ok(OptimizerTrialCandidate {
                         index,
@@ -537,7 +615,6 @@ fn plan_optimizer_trials(
             let grid_items = hyperparameter_grid_items(parameters)?;
             let total_trials = cartesian_grid_len(&grid_items)?;
             let candidates = (0..total_trials)
-                .filter(|index| !existing_trial_indices.contains(index))
                 .map(|index| {
                     Ok(OptimizerTrialCandidate {
                         index,
@@ -550,6 +627,15 @@ fn plan_optimizer_trials(
                 candidates,
             })
         }
+        HyperparameterTuningAlgorithm::Egobox => egobox_trial_plan(
+            optimizer,
+            parameters,
+            existing_trial_indices,
+            previous_trials,
+            observations,
+            mode,
+            candidate_capacity,
+        ),
     }
 }
 
@@ -559,12 +645,20 @@ fn trial_parameters(
     parameters: &BTreeMap<String, HyperparameterTuningParameterDomain>,
     index: usize,
 ) -> Result<BTreeMap<String, toml::Value>, StoreError> {
-    plan_optimizer_trials(optimizer, parameters, &BTreeSet::new())?
-        .candidates
-        .into_iter()
-        .find(|candidate| candidate.index == index)
-        .map(|candidate| candidate.parameters)
-        .ok_or_else(|| StoreError::store(format!("optimizer did not plan trial {index}")))
+    plan_optimizer_trials(
+        optimizer,
+        parameters,
+        &BTreeSet::new(),
+        &BTreeMap::new(),
+        &[],
+        MeasurementMode::Minimize,
+        usize::MAX,
+    )?
+    .candidates
+    .into_iter()
+    .find(|candidate| candidate.index == index)
+    .map(|candidate| candidate.parameters)
+    .ok_or_else(|| StoreError::store(format!("optimizer did not plan trial {index}")))
 }
 
 fn random_trial_parameters(
@@ -648,6 +742,511 @@ fn grid_parameter_values(
     }
 }
 
+fn egobox_trial_plan(
+    optimizer: &crate::core::HyperparameterTuningOptimizerSpec,
+    parameters: &BTreeMap<String, HyperparameterTuningParameterDomain>,
+    existing_trial_indices: &BTreeSet<usize>,
+    previous_trials: &BTreeMap<usize, PreviousTrial>,
+    observations: &[OptimizerObservation],
+    mode: MeasurementMode,
+    candidate_capacity: usize,
+) -> Result<OptimizerTrialPlan, StoreError> {
+    let params = optimizer.egobox_params().map_err(StoreError::store)?;
+    let total_trials = params.max_trials;
+    let mut candidates = previous_trials
+        .values()
+        .filter(|trial| trial.index < total_trials)
+        .map(|trial| OptimizerTrialCandidate {
+            index: trial.index,
+            parameters: trial.parameters.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    let planned_new = total_trials.saturating_sub(existing_trial_indices.len());
+    let desired_new = candidate_capacity
+        .min(params.parallel_candidates)
+        .min(planned_new);
+    if desired_new == 0 {
+        return Ok(OptimizerTrialPlan {
+            total_trials,
+            candidates,
+        });
+    }
+
+    let encoder = ParameterEncoder::new(parameters)?;
+    let next_indices = (0..total_trials)
+        .filter(|index| !existing_trial_indices.contains(index))
+        .take(desired_new)
+        .collect::<Vec<_>>();
+    let new_candidates =
+        if observations.len() < effective_egobox_initial_design(&params, parameters) {
+            next_indices
+                .into_iter()
+                .map(|index| {
+                    let mut rng = Xoshiro256StarStar::seed_from_u64(
+                        params.seed.unwrap_or(0) ^ splitmix64(index as u64),
+                    );
+                    Ok(OptimizerTrialCandidate {
+                        index,
+                        parameters: parameters
+                            .iter()
+                            .map(|(name, domain)| {
+                                Ok((name.clone(), sample_parameter(domain, &mut rng)?))
+                            })
+                            .collect::<Result<BTreeMap<_, _>, StoreError>>()?,
+                    })
+                })
+                .collect::<Result<Vec<_>, StoreError>>()?
+        } else {
+            suggest_egobox_candidates(
+                &params,
+                &encoder,
+                observations,
+                mode,
+                &next_indices,
+                existing_trial_indices,
+                previous_trials,
+            )?
+        };
+    candidates.extend(new_candidates);
+    candidates.sort_by_key(|candidate| candidate.index);
+    Ok(OptimizerTrialPlan {
+        total_trials,
+        candidates,
+    })
+}
+
+fn effective_egobox_initial_design(
+    params: &crate::core::EgoboxOptimizerParams,
+    parameters: &BTreeMap<String, HyperparameterTuningParameterDomain>,
+) -> usize {
+    params.initial_design.max(parameters.len() + 1).max(2)
+}
+
+fn suggest_egobox_candidates(
+    params: &crate::core::EgoboxOptimizerParams,
+    encoder: &ParameterEncoder,
+    observations: &[OptimizerObservation],
+    mode: MeasurementMode,
+    next_indices: &[usize],
+    existing_trial_indices: &BTreeSet<usize>,
+    previous_trials: &BTreeMap<usize, PreviousTrial>,
+) -> Result<Vec<OptimizerTrialCandidate>, StoreError> {
+    let x_data = encoder.observation_x_data(observations)?;
+    let y_values = observations
+        .iter()
+        .map(|observation| match mode {
+            MeasurementMode::Minimize => observation.objective_value,
+            MeasurementMode::Maximize => -observation.objective_value,
+        })
+        .collect::<Vec<_>>();
+    let y_data = Array2::from_shape_vec((y_values.len(), 1), y_values)
+        .map_err(|err| StoreError::store(format!("failed to build egobox y_data: {err}")))?;
+    let infill_strategy = params
+        .infill
+        .as_deref()
+        .map(parse_egobox_infill_strategy)
+        .transpose()?
+        .unwrap_or(InfillStrategy::EI);
+    let qei_strategy = params
+        .qei_strategy
+        .as_deref()
+        .map(parse_egobox_qei_strategy)
+        .transpose()?;
+    let builder = EgorServiceBuilder::optimize().configure(|config| {
+        let config = if let Some(seed) = params.seed {
+            config.seed(seed)
+        } else {
+            config
+        };
+        let config = config
+            .n_doe(effective_egobox_initial_design_for_encoder(params, encoder))
+            .configure_qei(|qei| {
+                let mut qei = qei.batch(next_indices.len().max(1));
+                if let Some(strategy) = qei_strategy {
+                    qei = qei.strategy(strategy);
+                }
+                if let Some(optmod) = params.qei_optmod {
+                    qei.optmod(optmod)
+                } else {
+                    qei
+                }
+            });
+        let config = if let Some(n_start) = params.n_start {
+            config.n_start(n_start)
+        } else {
+            config
+        };
+        config.infill_strategy(infill_strategy)
+    });
+    let service = builder
+        .min_within_mixint_space(&encoder.xtypes)
+        .map_err(|err| StoreError::store(format!("failed to configure egobox optimizer: {err}")))?;
+    let suggested = service.suggest(&x_data, &y_data);
+    let existing_encoded =
+        existing_encoded_points(encoder, existing_trial_indices, previous_trials)?;
+    let mut candidates = Vec::new();
+    for (offset, index) in next_indices.iter().copied().enumerate() {
+        let row_index = offset.min(suggested.nrows().saturating_sub(1));
+        let encoded = suggested.row(row_index).to_vec();
+        let parameters = if is_duplicate_encoded(&encoded, &existing_encoded) {
+            let mut rng = Xoshiro256StarStar::seed_from_u64(
+                params.seed.unwrap_or(0) ^ splitmix64(index as u64),
+            );
+            encoder.random_point(&mut rng)?
+        } else {
+            encoder.decode(&encoded)?
+        };
+        candidates.push(OptimizerTrialCandidate { index, parameters });
+    }
+    Ok(candidates)
+}
+
+fn effective_egobox_initial_design_for_encoder(
+    params: &crate::core::EgoboxOptimizerParams,
+    encoder: &ParameterEncoder,
+) -> usize {
+    params.initial_design.max(encoder.names.len() + 1).max(2)
+}
+
+fn parse_egobox_infill_strategy(value: &str) -> Result<InfillStrategy, StoreError> {
+    match value {
+        "ei" | "expected_improvement" => Ok(InfillStrategy::EI),
+        "log_ei" | "log_expected_improvement" => Ok(InfillStrategy::LogEI),
+        "wb2" => Ok(InfillStrategy::WB2),
+        "wb2s" => Ok(InfillStrategy::WB2S),
+        other => Err(StoreError::store(format!(
+            "unsupported egobox infill strategy {other:?}; expected ei, log_ei, wb2, or wb2s"
+        ))),
+    }
+}
+
+fn parse_egobox_qei_strategy(value: &str) -> Result<QEiStrategy, StoreError> {
+    match value {
+        "kriging_believer" => Ok(QEiStrategy::KrigingBeliever),
+        "kriging_believer_lower_bound" => Ok(QEiStrategy::KrigingBelieverLowerBound),
+        "kriging_believer_upper_bound" => Ok(QEiStrategy::KrigingBelieverUpperBound),
+        "constant_liar_minimum" => Ok(QEiStrategy::ConstantLiarMinimum),
+        other => Err(StoreError::store(format!(
+            "unsupported egobox qei_strategy {other:?}; expected kriging_believer, kriging_believer_lower_bound, kriging_believer_upper_bound, or constant_liar_minimum"
+        ))),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ParameterEncoder {
+    names: Vec<String>,
+    domains: Vec<HyperparameterTuningParameterDomain>,
+    xtypes: Vec<XType>,
+}
+
+impl ParameterEncoder {
+    fn new(
+        parameters: &BTreeMap<String, HyperparameterTuningParameterDomain>,
+    ) -> Result<Self, StoreError> {
+        let mut names = Vec::new();
+        let mut domains = Vec::new();
+        let mut xtypes = Vec::new();
+        for (name, domain) in parameters {
+            names.push(name.clone());
+            domains.push(domain.clone());
+            xtypes.push(domain_to_egobox_xtype(name, domain)?);
+        }
+        Ok(Self {
+            names,
+            domains,
+            xtypes,
+        })
+    }
+
+    fn encode(&self, parameters: &BTreeMap<String, toml::Value>) -> Result<Vec<f64>, StoreError> {
+        self.names
+            .iter()
+            .zip(&self.domains)
+            .map(|(name, domain)| {
+                let value = parameters.get(name).ok_or_else(|| {
+                    StoreError::store(format!("egobox trial is missing parameter {name:?}"))
+                })?;
+                encode_parameter_value(name, domain, value)
+            })
+            .collect()
+    }
+
+    fn decode(&self, encoded: &[f64]) -> Result<BTreeMap<String, toml::Value>, StoreError> {
+        if encoded.len() != self.names.len() {
+            return Err(StoreError::store(format!(
+                "egobox suggested {} parameters, expected {}",
+                encoded.len(),
+                self.names.len()
+            )));
+        }
+        self.names
+            .iter()
+            .zip(&self.domains)
+            .zip(encoded.iter().copied())
+            .map(|((name, domain), value)| {
+                Ok((name.clone(), decode_parameter_value(name, domain, value)?))
+            })
+            .collect()
+    }
+
+    fn random_point(
+        &self,
+        rng: &mut Xoshiro256StarStar,
+    ) -> Result<BTreeMap<String, toml::Value>, StoreError> {
+        self.names
+            .iter()
+            .zip(&self.domains)
+            .map(|(name, domain)| Ok((name.clone(), sample_parameter(domain, rng)?)))
+            .collect()
+    }
+
+    fn observation_x_data(
+        &self,
+        observations: &[OptimizerObservation],
+    ) -> Result<Array2<f64>, StoreError> {
+        let mut data = Vec::with_capacity(observations.len() * self.names.len());
+        for observation in observations {
+            data.extend(self.encode(&observation.parameters)?);
+        }
+        Array2::from_shape_vec((observations.len(), self.names.len()), data)
+            .map_err(|err| StoreError::store(format!("failed to build egobox x_data: {err}")))
+    }
+}
+
+fn domain_to_egobox_xtype(
+    name: &str,
+    domain: &HyperparameterTuningParameterDomain,
+) -> Result<XType, StoreError> {
+    match domain {
+        HyperparameterTuningParameterDomain::Float(domain) => {
+            Ok(XType::Float(domain.min, domain.max))
+        }
+        HyperparameterTuningParameterDomain::Integer(domain) => {
+            let step = domain.step.unwrap_or(1);
+            if step == 1 && i32::try_from(domain.min).is_ok() && i32::try_from(domain.max).is_ok() {
+                Ok(XType::Int(domain.min as i32, domain.max as i32))
+            } else {
+                Ok(XType::Ord(
+                    integer_domain_values(domain)?
+                        .into_iter()
+                        .map(|value| value as f64)
+                        .collect(),
+                ))
+            }
+        }
+        HyperparameterTuningParameterDomain::Categorical(domain) => {
+            if domain.values.len() < 2 {
+                return Err(StoreError::store(format!(
+                    "egobox categorical parameter {name:?} needs at least two values"
+                )));
+            }
+            Ok(XType::Enum(domain.values.len()))
+        }
+    }
+}
+
+fn encode_parameter_value(
+    name: &str,
+    domain: &HyperparameterTuningParameterDomain,
+    value: &toml::Value,
+) -> Result<f64, StoreError> {
+    match domain {
+        HyperparameterTuningParameterDomain::Float(_) => value
+            .as_float()
+            .or_else(|| {
+                value
+                    .as_integer()
+                    .and_then(|integer| integer.to_string().parse::<f64>().ok())
+            })
+            .ok_or_else(|| {
+                StoreError::store(format!("egobox float parameter {name:?} must be numeric"))
+            }),
+        HyperparameterTuningParameterDomain::Integer(_) => value
+            .as_integer()
+            .and_then(|integer| integer.to_string().parse::<f64>().ok())
+            .ok_or_else(|| {
+                StoreError::store(format!("egobox integer parameter {name:?} must be integer"))
+            }),
+        HyperparameterTuningParameterDomain::Categorical(domain) => domain
+            .values
+            .iter()
+            .position(|candidate| candidate == value)
+            .and_then(|index| index.to_string().parse::<f64>().ok())
+            .ok_or_else(|| {
+                StoreError::store(format!(
+                    "egobox categorical parameter {name:?} has value outside its domain"
+                ))
+            }),
+    }
+}
+
+fn decode_parameter_value(
+    _name: &str,
+    domain: &HyperparameterTuningParameterDomain,
+    value: f64,
+) -> Result<toml::Value, StoreError> {
+    match domain {
+        HyperparameterTuningParameterDomain::Float(domain) => {
+            Ok(toml::Value::Float(value.clamp(domain.min, domain.max)))
+        }
+        HyperparameterTuningParameterDomain::Integer(domain) => {
+            let values = integer_domain_values(domain)?;
+            let rounded = take_closest_i64(&values, value);
+            Ok(toml::Value::Integer(rounded))
+        }
+        HyperparameterTuningParameterDomain::Categorical(domain) => {
+            let max_index = domain.values.len().saturating_sub(1);
+            let index = value.round().clamp(0.0, max_index as f64) as usize;
+            Ok(domain.values[index].clone())
+        }
+    }
+}
+
+fn integer_domain_values(
+    domain: &crate::core::HyperparameterTuningIntegerDomain,
+) -> Result<Vec<i64>, StoreError> {
+    let step = domain.step.unwrap_or(1);
+    let mut values = Vec::new();
+    let mut value = domain.min;
+    while value <= domain.max {
+        values.push(value);
+        match value.checked_add(step) {
+            Some(next) => value = next,
+            None => break,
+        }
+    }
+    if values.is_empty() {
+        return Err(StoreError::store("integer parameter domain is empty"));
+    }
+    Ok(values)
+}
+
+fn take_closest_i64(values: &[i64], value: f64) -> i64 {
+    values
+        .iter()
+        .copied()
+        .min_by(|left, right| {
+            let left_dist = ((*left as f64) - value).abs();
+            let right_dist = ((*right as f64) - value).abs();
+            left_dist
+                .partial_cmp(&right_dist)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap_or(0)
+}
+
+fn existing_encoded_points(
+    encoder: &ParameterEncoder,
+    existing_trial_indices: &BTreeSet<usize>,
+    previous_trials: &BTreeMap<usize, PreviousTrial>,
+) -> Result<Vec<Vec<f64>>, StoreError> {
+    existing_trial_indices
+        .iter()
+        .filter_map(|index| previous_trials.get(index))
+        .map(|trial| encoder.encode(&trial.parameters))
+        .collect()
+}
+
+fn is_duplicate_encoded(candidate: &[f64], existing: &[Vec<f64>]) -> bool {
+    existing.iter().any(|point| {
+        point.len() == candidate.len()
+            && point
+                .iter()
+                .zip(candidate)
+                .all(|(left, right)| (left - right).abs() < 1e-9)
+    })
+}
+
+fn previous_trial_parameters(
+    output: Option<&JsonValue>,
+) -> Result<BTreeMap<usize, PreviousTrial>, StoreError> {
+    let Some(trials) = output
+        .and_then(|output| output.get("trials"))
+        .and_then(JsonValue::as_array)
+    else {
+        return Ok(BTreeMap::new());
+    };
+    trials
+        .iter()
+        .filter_map(|trial| {
+            let index = trial.get("index").and_then(JsonValue::as_u64)? as usize;
+            let status = trial
+                .get("status")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("planned")
+                .to_string();
+            let parameters = trial.get("parameters")?.as_object()?;
+            let parameters = parameters
+                .iter()
+                .map(|(name, value)| Ok((name.clone(), json_to_toml(value)?)))
+                .collect::<Result<BTreeMap<_, _>, StoreError>>();
+            Some(parameters.map(|parameters| {
+                let previous = PreviousTrial {
+                    index,
+                    status,
+                    parameters,
+                    objective_value: trial.get("objective_value").and_then(JsonValue::as_f64),
+                };
+                (index, previous)
+            }))
+        })
+        .collect()
+}
+
+fn previous_trial_observations(
+    output: Option<&JsonValue>,
+    mode: MeasurementMode,
+) -> Result<Vec<OptimizerObservation>, StoreError> {
+    Ok(previous_trial_parameters(output)?
+        .into_values()
+        .filter_map(|trial| {
+            let objective_value = trial.objective_value?;
+            if !objective_value.is_finite() {
+                return None;
+            }
+            Some(OptimizerObservation {
+                parameters: trial.parameters,
+                objective_value: match mode {
+                    MeasurementMode::Minimize => objective_value,
+                    MeasurementMode::Maximize => objective_value,
+                },
+            })
+        })
+        .collect())
+}
+
+fn json_to_toml(value: &JsonValue) -> Result<toml::Value, StoreError> {
+    match value {
+        JsonValue::Null => Err(StoreError::store(
+            "cannot convert null tuning parameter to TOML",
+        )),
+        JsonValue::Bool(value) => Ok(toml::Value::Boolean(*value)),
+        JsonValue::Number(value) => {
+            if let Some(integer) = value.as_i64() {
+                Ok(toml::Value::Integer(integer))
+            } else if let Some(float) = value.as_f64() {
+                Ok(toml::Value::Float(float))
+            } else {
+                Err(StoreError::store(
+                    "unsupported JSON number in tuning parameter",
+                ))
+            }
+        }
+        JsonValue::String(value) => Ok(toml::Value::String(value.clone())),
+        JsonValue::Array(values) => values
+            .iter()
+            .map(json_to_toml)
+            .collect::<Result<Vec<_>, _>>()
+            .map(toml::Value::Array),
+        JsonValue::Object(values) => values
+            .iter()
+            .map(|(key, value)| Ok((key.clone(), json_to_toml(value)?)))
+            .collect::<Result<toml::map::Map<_, _>, StoreError>>()
+            .map(toml::Value::Table),
+    }
+}
+
 fn parameters_to_json(parameters: &BTreeMap<String, toml::Value>) -> Result<JsonValue, StoreError> {
     serde_json::to_value(parameters)
         .map_err(|err| StoreError::store(format!("failed to serialize tuning parameters: {err}")))
@@ -675,8 +1274,9 @@ pub fn placeholder_output(max_trials: usize) -> JsonValue {
 mod tests {
     use super::*;
     use crate::core::{
-        HyperparameterTuningFloatDomain, HyperparameterTuningIntegerDomain,
-        HyperparameterTuningOptimizerSpec, MeasurementMetricQuantity, MeasurementMetricSpec,
+        HyperparameterTuningCategoricalDomain, HyperparameterTuningFloatDomain,
+        HyperparameterTuningIntegerDomain, HyperparameterTuningOptimizerSpec,
+        MeasurementMetricQuantity, MeasurementMetricSpec,
     };
 
     #[test]
@@ -798,6 +1398,160 @@ mod tests {
 
         let err = optimizer_trial_count(&optimizer, &parameters).expect_err("float grid");
         assert!(err.to_string().contains("does not support float"));
+    }
+
+    #[test]
+    fn egobox_encoder_round_trips_mixed_parameters() {
+        let parameters = BTreeMap::from([
+            (
+                "center".to_string(),
+                HyperparameterTuningParameterDomain::Float(HyperparameterTuningFloatDomain {
+                    min: 0.0,
+                    max: 1.0,
+                }),
+            ),
+            (
+                "bins".to_string(),
+                HyperparameterTuningParameterDomain::Integer(HyperparameterTuningIntegerDomain {
+                    min: 8,
+                    max: 32,
+                    step: Some(8),
+                }),
+            ),
+            (
+                "mode".to_string(),
+                HyperparameterTuningParameterDomain::Categorical(
+                    HyperparameterTuningCategoricalDomain {
+                        values: vec![
+                            toml::Value::String("auto".to_string()),
+                            toml::Value::String("none".to_string()),
+                        ],
+                    },
+                ),
+            ),
+        ]);
+        let encoder = ParameterEncoder::new(&parameters).expect("encoder");
+        let point = BTreeMap::from([
+            ("center".to_string(), toml::Value::Float(0.5)),
+            ("bins".to_string(), toml::Value::Integer(16)),
+            ("mode".to_string(), toml::Value::String("none".to_string())),
+        ]);
+
+        let encoded = encoder.encode(&point).expect("encoded");
+        let decoded = encoder.decode(&encoded).expect("decoded");
+
+        assert_eq!(decoded, point);
+    }
+
+    #[test]
+    fn egobox_initial_design_uses_bounded_random_candidates() {
+        let parameters = BTreeMap::from([(
+            "x".to_string(),
+            HyperparameterTuningParameterDomain::Float(HyperparameterTuningFloatDomain {
+                min: 0.0,
+                max: 1.0,
+            }),
+        )]);
+        let optimizer = HyperparameterTuningOptimizerSpec {
+            algorithm: HyperparameterTuningAlgorithm::Egobox,
+            params: json!({
+                "max_trials": 4,
+                "seed": 2,
+                "initial_design": 3,
+                "parallel_candidates": 2
+            }),
+        };
+
+        let plan = plan_optimizer_trials(
+            &optimizer,
+            &parameters,
+            &BTreeSet::new(),
+            &BTreeMap::new(),
+            &[],
+            MeasurementMode::Minimize,
+            2,
+        )
+        .expect("egobox initial plan");
+
+        assert_eq!(plan.total_trials, 4);
+        assert_eq!(plan.candidates.len(), 2);
+        for candidate in plan.candidates {
+            let value = candidate.parameters["x"].as_float().unwrap();
+            assert!((0.0..1.0).contains(&value));
+        }
+    }
+
+    #[test]
+    fn egobox_proposes_from_completed_observations() {
+        let parameters = BTreeMap::from([(
+            "x".to_string(),
+            HyperparameterTuningParameterDomain::Float(HyperparameterTuningFloatDomain {
+                min: 0.0,
+                max: 1.0,
+            }),
+        )]);
+        let optimizer = HyperparameterTuningOptimizerSpec {
+            algorithm: HyperparameterTuningAlgorithm::Egobox,
+            params: json!({
+                "max_trials": 4,
+                "seed": 2,
+                "initial_design": 2,
+                "parallel_candidates": 1,
+                "infill": "ei"
+            }),
+        };
+        let previous_trials = BTreeMap::from([
+            (
+                0,
+                PreviousTrial {
+                    index: 0,
+                    status: "completed".to_string(),
+                    parameters: BTreeMap::from([("x".to_string(), toml::Value::Float(0.0))]),
+                    objective_value: Some(1.0),
+                },
+            ),
+            (
+                1,
+                PreviousTrial {
+                    index: 1,
+                    status: "completed".to_string(),
+                    parameters: BTreeMap::from([("x".to_string(), toml::Value::Float(1.0))]),
+                    objective_value: Some(0.0),
+                },
+            ),
+        ]);
+        let observations = previous_trials
+            .values()
+            .map(|trial| OptimizerObservation {
+                parameters: trial.parameters.clone(),
+                objective_value: trial.objective_value.unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let existing = BTreeSet::from([0, 1]);
+
+        let plan = plan_optimizer_trials(
+            &optimizer,
+            &parameters,
+            &existing,
+            &previous_trials,
+            &observations,
+            MeasurementMode::Minimize,
+            1,
+        )
+        .expect("egobox observed plan");
+
+        assert_eq!(plan.total_trials, 4);
+        assert_eq!(plan.candidates.len(), 3);
+        assert!(plan.candidates.iter().any(|candidate| candidate.index == 2));
+        let suggested = plan
+            .candidates
+            .iter()
+            .find(|candidate| candidate.index == 2)
+            .unwrap()
+            .parameters["x"]
+            .as_float()
+            .unwrap();
+        assert!((0.0..=1.0).contains(&suggested));
     }
 
     #[test]

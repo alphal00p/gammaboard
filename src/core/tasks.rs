@@ -517,6 +517,7 @@ impl HyperparameterTuningParameterDomain {
 pub enum HyperparameterTuningAlgorithm {
     RandomSearch,
     GridSearch,
+    Egobox,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -533,6 +534,34 @@ pub struct RandomSearchOptimizerParams {
     pub max_trials: usize,
     #[serde(default)]
     pub seed: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EgoboxOptimizerParams {
+    pub max_trials: usize,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    #[serde(default = "default_egobox_initial_design")]
+    pub initial_design: usize,
+    #[serde(default = "default_egobox_parallel_candidates")]
+    pub parallel_candidates: usize,
+    #[serde(default)]
+    pub infill: Option<String>,
+    #[serde(default)]
+    pub qei_strategy: Option<String>,
+    #[serde(default)]
+    pub qei_optmod: Option<usize>,
+    #[serde(default)]
+    pub n_start: Option<usize>,
+}
+
+fn default_egobox_initial_design() -> usize {
+    0
+}
+
+fn default_egobox_parallel_candidates() -> usize {
+    1
 }
 
 fn empty_json_object() -> serde_json::Value {
@@ -557,6 +586,53 @@ impl HyperparameterTuningOptimizerSpec {
                 }
                 Ok(())
             }
+            HyperparameterTuningAlgorithm::Egobox => {
+                let params = self.egobox_params()?;
+                if params.max_trials == 0 {
+                    return Err(
+                        "hyperparameter_tuning.optimizer.params.max_trials must be > 0".to_string(),
+                    );
+                }
+                if params.parallel_candidates == 0 {
+                    return Err(
+                        "hyperparameter_tuning.optimizer.params.parallel_candidates must be > 0"
+                            .to_string(),
+                    );
+                }
+                if params.qei_optmod.is_some_and(|qei_optmod| qei_optmod == 0) {
+                    return Err(
+                        "hyperparameter_tuning.optimizer.params.qei_optmod must be > 0".to_string(),
+                    );
+                }
+                if let Some(infill) = params.infill.as_deref()
+                    && !matches!(
+                        infill,
+                        "ei" | "expected_improvement"
+                            | "log_ei"
+                            | "log_expected_improvement"
+                            | "wb2"
+                            | "wb2s"
+                    )
+                {
+                    return Err(format!(
+                        "hyperparameter_tuning.optimizer.params.infill must be one of ei, expected_improvement, log_ei, log_expected_improvement, wb2, wb2s; got {infill:?}"
+                    ));
+                }
+                if let Some(qei_strategy) = params.qei_strategy.as_deref()
+                    && !matches!(
+                        qei_strategy,
+                        "kriging_believer"
+                            | "kriging_believer_lower_bound"
+                            | "kriging_believer_upper_bound"
+                            | "constant_liar_minimum"
+                    )
+                {
+                    return Err(format!(
+                        "hyperparameter_tuning.optimizer.params.qei_strategy must be one of kriging_believer, kriging_believer_lower_bound, kriging_believer_upper_bound, constant_liar_minimum; got {qei_strategy:?}"
+                    ));
+                }
+                Ok(())
+            }
             HyperparameterTuningAlgorithm::GridSearch => Ok(()),
         }
     }
@@ -564,6 +640,12 @@ impl HyperparameterTuningOptimizerSpec {
     pub fn random_search_params(&self) -> Result<RandomSearchOptimizerParams, String> {
         serde_json::from_value(self.params.clone()).map_err(|err| {
             format!("invalid hyperparameter_tuning.optimizer.params for random_search: {err}")
+        })
+    }
+
+    pub fn egobox_params(&self) -> Result<EgoboxOptimizerParams, String> {
+        serde_json::from_value(self.params.clone()).map_err(|err| {
+            format!("invalid hyperparameter_tuning.optimizer.params for egobox: {err}")
         })
     }
 }
@@ -1456,6 +1538,10 @@ fn hyperparameter_tuning_trial_count(
                 count.checked_mul(hyperparameter_grid_domain_len(domain)?)
             })
         }
+        HyperparameterTuningAlgorithm::Egobox => optimizer
+            .egobox_params()
+            .ok()
+            .map(|params| params.max_trials),
     }
 }
 
@@ -2137,6 +2223,56 @@ values = ["auto", "none"]
         assert_eq!(parameters.len(), 3);
         assert_eq!(max_concurrent_trials, 2);
         optimizer.validate().expect("valid optimizer");
+    }
+
+    #[test]
+    fn hyperparameter_tuning_task_parses_egobox_config_shape() {
+        #[derive(Debug, Deserialize)]
+        struct Wrapper {
+            task: RunTaskSpec,
+        }
+
+        let wrapper: Wrapper = toml::from_str(
+            r#"
+[task]
+kind = "hyperparameter_tuning"
+max_concurrent_trials = 2
+trial_run_toml = "name = \"trial\"\n"
+
+[task.optimizer]
+algorithm = "egobox"
+
+[task.optimizer.params]
+max_trials = 8
+seed = 1
+initial_design = 3
+parallel_candidates = 2
+infill = "ei"
+qei_strategy = "kriging_believer"
+
+[task.objective]
+source_task = "sample"
+mode = "minimize"
+quantity = { metric = "error" }
+
+[task.parameters.x]
+kind = "float"
+min = 0.0
+max = 1.0
+"#,
+        )
+        .expect("hyperparameter tuning egobox task shape");
+
+        let RunTaskSpec::HyperparameterTuning { optimizer, .. } = wrapper.task else {
+            panic!("expected hyperparameter tuning task");
+        };
+        assert_eq!(optimizer.algorithm, HyperparameterTuningAlgorithm::Egobox);
+        let params = optimizer.egobox_params().unwrap();
+        assert_eq!(params.max_trials, 8);
+        assert_eq!(params.seed, Some(1));
+        assert_eq!(params.initial_design, 3);
+        assert_eq!(params.parallel_candidates, 2);
+        optimizer.validate().expect("valid egobox optimizer");
     }
 
     #[test]

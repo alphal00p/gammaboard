@@ -37,6 +37,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 argon2 = "0.5"
 jsonwebtoken = "9"
 url = "2"
+egobox-ego = "0.37"
+ndarray = "0.16"
 
 [dev-dependencies]
 assert_cmd = "2"

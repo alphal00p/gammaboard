@@ -20,7 +20,7 @@ pub mod tracing;
 pub mod utils;
 
 pub use core::{
-    AccumulatorMetricName, AccumulatorMetricSelector, AccumulatorSourceSpec,
+    AccumulatorMetricName, AccumulatorMetricSelector, AccumulatorSourceSpec, EgoboxOptimizerParams,
     HyperparameterTuningAlgorithm, HyperparameterTuningCategoricalDomain,
     HyperparameterTuningFloatDomain, HyperparameterTuningIntegerDomain,
     HyperparameterTuningObjectiveSpec, HyperparameterTuningOptimizerSpec,

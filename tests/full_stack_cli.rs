@@ -5377,6 +5377,160 @@ values = ["auto", "none"]
 
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_hyperparameter_tuning_egobox_creates_adaptive_trials() -> anyhow::Result<()>
+{
+    let mut harness = FullStackHarness::new().await?;
+    harness
+        .start_nodes(&["egobox-tune-parent", "egobox-tune-s1", "egobox-tune-e1"])
+        .await?;
+
+    let config = temp_run_add_config(
+        r#"
+name = "hyperparameter-tuning-egobox-e2e"
+
+[evaluator_runner_params]
+min_tick_time_ms = 50
+db_pool_size = 1
+
+[sampler_aggregator_runner_params]
+min_tick_time_ms = 10
+db_pool_size = 1
+
+[[task_queue]]
+name = "tune"
+kind = "hyperparameter_tuning"
+max_concurrent_trials = 1
+trial_run_toml = """
+name = "egobox-child-bins-$(bins:1)"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 16 }
+measurement = { quantity = "central_value" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"""
+
+[task_queue.optimizer]
+algorithm = "egobox"
+
+[task_queue.optimizer.params]
+max_trials = 3
+seed = 3
+initial_design = 2
+parallel_candidates = 1
+infill = "ei"
+
+[task_queue.objective]
+source_task = "sample"
+mode = "minimize"
+quantity = "central_value"
+
+[task_queue.parameters.bins]
+kind = "integer"
+min = 1
+max = 4
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 =
+        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'hyperparameter-tuning-egobox-e2e'")
+            .fetch_one(&harness.pool)
+            .await?;
+
+    harness
+        .cli()
+        .args(["auto-assign", &run_id.to_string()])
+        .assert()
+        .success();
+
+    if let Err(err) = harness
+        .wait_for(
+            "egobox tuning completes",
+            Duration::from_secs(90),
+            || async {
+                let state: Option<String> = sqlx::query_scalar(
+                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
+                )
+                .bind(run_id)
+                .fetch_optional(&harness.pool)
+                .await?;
+                Ok(state.as_deref() == Some("completed"))
+            },
+        )
+        .await
+    {
+        let runs: Vec<(i32, String, Option<i32>, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT id, name, parent_run_id, spawn_kind, spawn_label FROM runs ORDER BY id",
+        )
+        .fetch_all(&harness.pool)
+        .await?;
+        let tasks: Vec<(i32, String, String, Option<JsonValue>, Option<String>)> =
+            sqlx::query_as(
+                "SELECT run_id, name, state, controller_output, failure_reason FROM run_tasks ORDER BY run_id, sequence_nr",
+            )
+            .fetch_all(&harness.pool)
+            .await?;
+        let nodes: Vec<(String, Option<i32>, Option<String>, Option<i32>, Option<String>)> =
+            sqlx::query_as(
+                "SELECT name, desired_run_id, desired_role, active_run_id, active_role FROM nodes ORDER BY name",
+            )
+            .fetch_all(&harness.pool)
+            .await?;
+        let logs: Vec<(String, String, JsonValue)> = sqlx::query_as(
+            "SELECT level, message, fields FROM runtime_logs ORDER BY id DESC LIMIT 20",
+        )
+        .fetch_all(&harness.pool)
+        .await?;
+        anyhow::bail!("{err}; runs={runs:?}; tasks={tasks:?}; nodes={nodes:?}; logs={logs:?}");
+    }
+
+    let output: JsonValue = sqlx::query_scalar(
+        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(output["completed_trials"], json!(3));
+    assert_eq!(output["failed_trials"], json!(0));
+    assert_eq!(output["total_trials"], json!(3));
+    let trials = output["trials"].as_array().expect("trials");
+    assert_eq!(trials.len(), 3);
+    for trial in trials {
+        assert!(trial["parameters"]["bins"].is_i64());
+        assert!(trial["objective_value"].is_number());
+    }
+
+    let child_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runs WHERE parent_run_id = $1 AND spawn_kind = 'hyperparameter_tuning'",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(child_count, 3);
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_hyperparameter_tuning_grid_search_enumerates_finite_domains()
 -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
@@ -5842,7 +5996,7 @@ max = 4
         )
         .await?;
 
-    harness
+    if let Err(err) = harness
         .wait_for(
             "redistribution tuning completes",
             Duration::from_secs(90),
@@ -5856,7 +6010,32 @@ max = 4
                 Ok(state.as_deref() == Some("completed"))
             },
         )
+        .await
+    {
+        let runs: Vec<(i32, String, Option<i32>, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT id, name, parent_run_id, spawn_kind, spawn_label FROM runs ORDER BY id",
+        )
+        .fetch_all(&harness.pool)
         .await?;
+        let tasks: Vec<(i32, String, String, Option<JsonValue>, Option<String>)> =
+            sqlx::query_as(
+                "SELECT run_id, name, state, controller_output, failure_reason FROM run_tasks ORDER BY run_id, sequence_nr",
+            )
+            .fetch_all(&harness.pool)
+            .await?;
+        let nodes: Vec<(String, Option<i32>, Option<String>, Option<i32>, Option<String>)> =
+            sqlx::query_as(
+                "SELECT name, desired_run_id, desired_role, active_run_id, active_role FROM nodes ORDER BY name",
+            )
+            .fetch_all(&harness.pool)
+            .await?;
+        let logs: Vec<(String, String, JsonValue)> = sqlx::query_as(
+            "SELECT level, message, fields FROM runtime_logs ORDER BY id DESC LIMIT 20",
+        )
+        .fetch_all(&harness.pool)
+        .await?;
+        anyhow::bail!("{err}; runs={runs:?}; tasks={tasks:?}; nodes={nodes:?}; logs={logs:?}");
+    }
 
     let output: JsonValue = sqlx::query_scalar(
         "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
