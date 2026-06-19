@@ -313,7 +313,7 @@ impl PdfAdaptationRasterPlaneSampler {
                 pdf_values.len()
             )));
         }
-        for (canonical_index, pdf) in pdf_indices.into_iter().zip(pdf_values.into_iter()) {
+        for (canonical_index, pdf) in pdf_indices.into_iter().zip(pdf_values) {
             self.output_state.pdf_values[canonical_index] = pdf.filter(|pdf| pdf.is_finite());
         }
         Ok(())
@@ -426,7 +426,7 @@ impl PdfAdaptationRasterLineSampler {
                 pdf_values.len()
             )));
         }
-        for (canonical_index, pdf) in pdf_indices.into_iter().zip(pdf_values.into_iter()) {
+        for (canonical_index, pdf) in pdf_indices.into_iter().zip(pdf_values) {
             self.output_state.pdf_values[canonical_index] = pdf.filter(|pdf| pdf.is_finite());
         }
         Ok(())

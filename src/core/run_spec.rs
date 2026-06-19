@@ -43,17 +43,12 @@ pub struct RunSpec {
     pub sampler_aggregator_runner_params: SamplerAggregatorRunnerParams,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AccumulatorMomentConfig {
+    #[default]
     Default,
     MaxOrder2,
     MaxOrder4,
-}
-
-impl Default for AccumulatorMomentConfig {
-    fn default() -> Self {
-        Self::Default
-    }
 }
 
 impl AccumulatorMomentConfig {

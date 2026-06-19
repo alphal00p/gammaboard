@@ -258,7 +258,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                         announce_failures = announce_failures.saturating_add(1);
                         let failed_at = *announce_failed_at.get_or_insert_with(Instant::now);
                         let elapsed = failed_at.elapsed();
-                        let should_log = announce_failures == 1 || announce_failures % 10 == 0;
+                        let should_log =
+                            announce_failures == 1 || announce_failures.is_multiple_of(10);
                         if should_log {
                             warn!(
                                 startup,

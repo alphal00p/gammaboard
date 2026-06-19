@@ -47,7 +47,7 @@ impl NaiveMonteCarloSamplerAggregator {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct NaiveMonteCarloSamplerParams {
     pub training_target_samples: usize,
@@ -56,17 +56,6 @@ pub struct NaiveMonteCarloSamplerParams {
     pub fail_on_produce_batch_nr: Option<usize>,
     #[serde(default)]
     pub fail_on_materialize_batch_nr: Option<usize>,
-}
-
-impl Default for NaiveMonteCarloSamplerParams {
-    fn default() -> Self {
-        Self {
-            training_target_samples: 0,
-            training_delay_per_sample_ms: 0,
-            fail_on_produce_batch_nr: None,
-            fail_on_materialize_batch_nr: None,
-        }
-    }
 }
 
 impl NaiveMonteCarloSamplerAggregator {
@@ -175,12 +164,11 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
         self.nr_samples += accepted as i64;
         self.sum += training_values.iter().take(accepted).sum::<f64>();
 
-        if accepted > 0 && self.training_delay_per_sample_ms > 0 {
-            if self.training_target_samples > 0 {
-                thread::sleep(Duration::from_millis(
-                    accepted as u64 * self.training_delay_per_sample_ms,
-                ));
-            }
+        if accepted > 0 && self.training_delay_per_sample_ms > 0 && self.training_target_samples > 0
+        {
+            thread::sleep(Duration::from_millis(
+                accepted as u64 * self.training_delay_per_sample_ms,
+            ));
         }
         self.trained_samples = self.trained_samples.saturating_add(accepted);
         self.pending_training_samples = self

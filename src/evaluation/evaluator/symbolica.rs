@@ -300,7 +300,7 @@ mod tests {
         })
         .expect("build symbolica evaluator");
 
-        let points = vec![
+        let points = [
             (0.25, 0.25, 0.0), // expected peak 1
             (0.75, 0.75, 0.0), // expected peak 2
             (0.25, 0.75, 0.0),
@@ -351,7 +351,7 @@ mod tests {
         })
         .expect("build symbolica evaluator");
 
-        let points = vec![(0.0, 0.0, 0.0), (0.25, 0.25, 0.0), (0.75, 0.75, 0.0)];
+        let points = [(0.0, 0.0, 0.0), (0.25, 0.25, 0.0), (0.75, 0.75, 0.0)];
         let batch = Batch::from_points(
             points
                 .iter()

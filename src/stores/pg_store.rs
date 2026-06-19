@@ -144,16 +144,16 @@ fn map_sqlx(err: sqlx::Error) -> StoreError {
                 return StoreError::invalid_input("task name must be unique within a run");
             }
         }
-        if db_err.code().as_deref() == Some("23514") {
-            if matches!(
+        if db_err.code().as_deref() == Some("23514")
+            && matches!(
                 db_err.constraint(),
                 Some("nodes_desired_assignment_pair_check")
                     | Some("nodes_current_assignment_pair_check")
-            ) {
-                return StoreError::invalid_input(
-                    "node desired/current role and run fields must be both set or both null",
-                );
-            }
+            )
+        {
+            return StoreError::invalid_input(
+                "node desired/current role and run fields must be both set or both null",
+            );
         }
     }
     StoreError::from(err)

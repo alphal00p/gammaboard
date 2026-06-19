@@ -98,8 +98,8 @@ fn unit_hypercube_to_unit_ball(unit: &[f64]) -> (Vec<f64>, f64) {
     mapped[dims - 1] = r * sin_product;
 
     let mut jacobian = 2.0 * PI.powi((dims - 1) as i32) * r.powi((dims - 1) as i32);
-    for angle_idx in 0..(dims - 2) {
-        jacobian *= angles[angle_idx].sin().powi((dims - 2 - angle_idx) as i32);
+    for (angle_idx, angle) in angles.iter().enumerate().take(dims - 2) {
+        jacobian *= angle.sin().powi((dims - 2 - angle_idx) as i32);
     }
 
     (mapped, jacobian)

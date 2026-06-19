@@ -729,10 +729,10 @@ fn resolve_current_source<'a>(
     latest_persisted_snapshot: Option<&'a TaskOutputSnapshot>,
     policy: TaskPanelCurrentSourcePolicy,
 ) -> TaskPanelCurrentSource<'a> {
-    if matches!(task.state, crate::core::RunTaskState::Active) {
-        if let Some(accumulator) = current_accumulator {
-            return TaskPanelCurrentSource::Runtime(accumulator);
-        }
+    if matches!(task.state, crate::core::RunTaskState::Active)
+        && let Some(accumulator) = current_accumulator
+    {
+        return TaskPanelCurrentSource::Runtime(accumulator);
     }
     match policy {
         TaskPanelCurrentSourcePolicy::StageFirst => {

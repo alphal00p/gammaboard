@@ -23,6 +23,12 @@ impl IdentityMaterializer {
     }
 }
 
+impl Default for IdentityMaterializer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Materializer for IdentityMaterializer {
     fn materialize_batch(&mut self, latent_batch: &LatentBatch) -> Result<Batch, EngineError> {
         self.materialized_batches_total = self.materialized_batches_total.saturating_add(1);

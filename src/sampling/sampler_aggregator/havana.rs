@@ -26,17 +26,14 @@ pub struct HavanaSamplerParams {
     pub final_training_rate: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum HavanaInferenceSource {
+    #[default]
     LatestTrainingSamplerAggregator,
-    Snapshot { snapshot_id: i64 },
-}
-
-impl Default for HavanaInferenceSource {
-    fn default() -> Self {
-        Self::LatestTrainingSamplerAggregator
-    }
+    Snapshot {
+        snapshot_id: i64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

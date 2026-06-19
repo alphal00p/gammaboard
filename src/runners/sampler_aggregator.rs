@@ -680,7 +680,7 @@ where
             .task
             .sample_stop_condition()
             .and_then(|condition| condition.projection)
-            .unwrap_or_else(|| match self.observable_state {
+            .unwrap_or(match self.observable_state {
                 AccumulatorState::Gammaloop(_) => SampleErrorProjection::Abs,
                 _ => SampleErrorProjection::Real,
             })

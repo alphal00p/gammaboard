@@ -129,11 +129,11 @@ pub(crate) async fn get_run_sampler_checkpoint(
             .map_err(|err| {
                 sqlx::Error::Protocol(format!("failed to decode sampler_checkpoint: {err}"))
             })
-            .and_then(|mut checkpoint| {
+            .map(|mut checkpoint| {
                 if checkpoint.task_id != task_id {
                     checkpoint.task_id = task_id;
                 }
-                Ok(checkpoint)
+                checkpoint
             })
     })
     .transpose()

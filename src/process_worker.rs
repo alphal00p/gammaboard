@@ -203,12 +203,11 @@ impl Drop for ProcessWorker {
 
 fn format_json_rpc_error(error: &Value) -> String {
     if let Some(message) = error.get("message").and_then(Value::as_str) {
-        if let Some(data) = error.get("data") {
-            if let Some(traceback) = data.get("traceback").and_then(Value::as_str) {
-                if !traceback.is_empty() {
-                    return format!("process worker error: {message}\n{traceback}");
-                }
-            }
+        if let Some(data) = error.get("data")
+            && let Some(traceback) = data.get("traceback").and_then(Value::as_str)
+            && !traceback.is_empty()
+        {
+            return format!("process worker error: {message}\n{traceback}");
         }
         return format!("process worker error: {message}");
     }

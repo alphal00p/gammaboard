@@ -297,7 +297,7 @@ fn panel_states(
                 ),
             ],
         ),
-        text_panel("run_target", &target_summary(run.target.as_ref())),
+        text_panel("run_target", target_summary(run.target.as_ref())),
     ];
     Ok(panels)
 }

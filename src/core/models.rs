@@ -275,7 +275,7 @@ pub struct SamplerWorkRollingAverages {
     pub performance_sync_ms: RollingMetricSnapshot,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct SamplerQueueRollingAverages {
     pub fetch_completed_ms: RollingMetricSnapshot,
@@ -292,27 +292,6 @@ pub struct SamplerQueueRollingAverages {
     pub insert_bundle_commit_ms: RollingMetricSnapshot,
     pub insert_bundle_local_pending_at_start: RollingMetricSnapshot,
     pub insert_bundle_db_pending_at_start: RollingMetricSnapshot,
-}
-
-impl Default for SamplerQueueRollingAverages {
-    fn default() -> Self {
-        Self {
-            fetch_completed_ms: RollingMetricSnapshot::default(),
-            fetch_completed_batches: RollingMetricSnapshot::default(),
-            fetch_completed_prefetch_fill_ratio: RollingMetricSnapshot::default(),
-            insert_bundle_ms: RollingMetricSnapshot::default(),
-            insert_bundle_batches: RollingMetricSnapshot::default(),
-            insert_bundle_ms_per_batch: RollingMetricSnapshot::default(),
-            insert_bundle_serialize_ms: RollingMetricSnapshot::default(),
-            insert_bundle_payload_bytes: RollingMetricSnapshot::default(),
-            insert_bundle_payload_bytes_per_batch: RollingMetricSnapshot::default(),
-            insert_bundle_db_batches_ms: RollingMetricSnapshot::default(),
-            insert_bundle_db_inputs_ms: RollingMetricSnapshot::default(),
-            insert_bundle_commit_ms: RollingMetricSnapshot::default(),
-            insert_bundle_local_pending_at_start: RollingMetricSnapshot::default(),
-            insert_bundle_db_pending_at_start: RollingMetricSnapshot::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

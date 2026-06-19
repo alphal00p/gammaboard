@@ -316,13 +316,13 @@ pub async fn auto_assign_run(
     let mut assigned_sampler = None;
     let mut assigned_evaluators = Vec::new();
 
-    if !sampler_already_assigned {
-        if let Some(node) = take_best_node(&mut free_nodes, &run_spec.sampler_requirements) {
-            store
-                .upsert_desired_assignment(&node.name, WorkerRole::SamplerAggregator, run_id)
-                .await?;
-            assigned_sampler = Some(node.name);
-        }
+    if !sampler_already_assigned
+        && let Some(node) = take_best_node(&mut free_nodes, &run_spec.sampler_requirements)
+    {
+        store
+            .upsert_desired_assignment(&node.name, WorkerRole::SamplerAggregator, run_id)
+            .await?;
+        assigned_sampler = Some(node.name);
     }
 
     for node in take_best_nodes(

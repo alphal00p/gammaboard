@@ -46,9 +46,7 @@ impl UnitEvaluator {
         }
     }
 
-    fn scalar_ingestor<'a>(
-        state: &'a mut AccumulatorState,
-    ) -> Result<&'a mut dyn IngestScalar, EvalError> {
+    fn scalar_ingestor(state: &mut AccumulatorState) -> Result<&mut dyn IngestScalar, EvalError> {
         match state {
             AccumulatorState::Empty(accumulator) => Ok(accumulator),
             AccumulatorState::Scalar(accumulator) => Ok(accumulator),

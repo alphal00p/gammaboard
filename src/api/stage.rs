@@ -107,19 +107,17 @@ where
     if let Some(source_snapshot) =
         resolve_task_source_snapshot(store, run_id, task, task.task.sample_accumulator_source())
             .await?
+        && let Some(accumulator) = source_snapshot.observable_state
     {
-        if let Some(accumulator) = source_snapshot.observable_state {
-            return Ok(Some(accumulator.config()));
-        }
+        return Ok(Some(accumulator.config()));
     }
 
     if let Some(base_snapshot) = store
         .load_latest_stage_snapshot_before_sequence(run_id, task.sequence_nr)
         .await?
+        && let Some(accumulator) = base_snapshot.observable_state
     {
-        if let Some(accumulator) = base_snapshot.observable_state {
-            return Ok(Some(accumulator.config()));
-        }
+        return Ok(Some(accumulator.config()));
     }
 
     Ok(None)

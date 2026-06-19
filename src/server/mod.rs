@@ -1169,20 +1169,18 @@ async fn resolve_active_task_sampler_config(
         task.task.sample_sampler_source(),
     )
     .await?
+        && let Some(config) = source_snapshot.sampler_aggregator
     {
-        if let Some(config) = source_snapshot.sampler_aggregator {
-            return Ok(config);
-        }
+        return Ok(config);
     }
 
     if let Some(base_snapshot) = state
         .store
         .load_latest_stage_snapshot_before_sequence(run_id, task.sequence_nr)
         .await?
+        && let Some(config) = base_snapshot.sampler_aggregator
     {
-        if let Some(config) = base_snapshot.sampler_aggregator {
-            return Ok(config);
-        }
+        return Ok(config);
     }
 
     Err(ApiError::BadRequest(format!(
@@ -1879,10 +1877,10 @@ fn derive_capabilities_from_config(config: &JsonValue) -> BTreeMap<String, u64> 
             caps.insert(key.clone(), number);
         }
     }
-    if let Some(gres) = map.get("gres").and_then(JsonValue::as_str) {
-        if let Some(count) = parse_gpu_count_from_gres(gres) {
-            caps.insert("gpu".to_string(), count);
-        }
+    if let Some(gres) = map.get("gres").and_then(JsonValue::as_str)
+        && let Some(count) = parse_gpu_count_from_gres(gres)
+    {
+        caps.insert("gpu".to_string(), count);
     }
     caps
 }

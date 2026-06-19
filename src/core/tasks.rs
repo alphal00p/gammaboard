@@ -109,22 +109,12 @@ pub enum DiscreteProjectionNormalization {
     ConditionalMean,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct NamedDiscreteProjection {
     pub name: String,
     pub dims: Vec<usize>,
     pub fixed_dims: BTreeMap<String, i64>,
-}
-
-impl Default for NamedDiscreteProjection {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            dims: Vec::new(),
-            fixed_dims: BTreeMap::new(),
-        }
-    }
 }
 
 impl NamedDiscreteProjection {
@@ -267,23 +257,13 @@ pub enum MeasurementMode {
     Maximize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct TaskMeasurementSpec {
     pub quantity: MeasurementQuantitySpec,
     pub metric: Option<MeasurementMetricSpec>,
     #[serde(default)]
     pub mode: MeasurementMode,
-}
-
-impl Default for TaskMeasurementSpec {
-    fn default() -> Self {
-        Self {
-            quantity: MeasurementQuantitySpec::default(),
-            metric: None,
-            mode: MeasurementMode::default(),
-        }
-    }
 }
 
 impl TaskMeasurementSpec {
@@ -322,7 +302,7 @@ impl TaskMeasurementSpec {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct MeasurementSpec {
     pub source_task: String,
@@ -330,17 +310,6 @@ pub struct MeasurementSpec {
     pub metric: Option<MeasurementMetricSpec>,
     #[serde(default)]
     pub mode: MeasurementMode,
-}
-
-impl Default for MeasurementSpec {
-    fn default() -> Self {
-        Self {
-            source_task: String::new(),
-            quantity: MeasurementQuantitySpec::default(),
-            metric: None,
-            mode: MeasurementMode::default(),
-        }
-    }
 }
 
 impl MeasurementSpec {
@@ -669,7 +638,7 @@ impl HyperparameterTuningObjectiveSpec {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct SampleStopCondition {
     pub min_samples: Option<i64>,
@@ -678,19 +647,6 @@ pub struct SampleStopCondition {
     pub relative_error: Option<f64>,
     pub projection: Option<SampleErrorProjection>,
     pub metric: Option<AccumulatorMetricSelector>,
-}
-
-impl Default for SampleStopCondition {
-    fn default() -> Self {
-        Self {
-            min_samples: None,
-            max_samples: None,
-            absolute_error: None,
-            relative_error: None,
-            projection: None,
-            metric: None,
-        }
-    }
 }
 
 impl SampleStopCondition {
@@ -756,7 +712,7 @@ impl SampleStopCondition {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
 pub struct SamplerQueueTuning {
     pub queue_buffer: Option<f64>,
@@ -772,26 +728,6 @@ pub struct SamplerQueueTuning {
     pub max_insert_bundle_size: Option<usize>,
     pub max_concurrent_insert_tasks: Option<usize>,
     pub completed_batch_fetch_limit: Option<usize>,
-}
-
-impl Default for SamplerQueueTuning {
-    fn default() -> Self {
-        Self {
-            queue_buffer: None,
-            target_batch_eval_ms: None,
-            batch_size_deadband_ratio: None,
-            batch_size_cooldown_ticks: None,
-            pending_refill_low_ratio: None,
-            pending_refill_high_ratio: None,
-            max_batch_size: None,
-            local_pending_buffer_multiplier: None,
-            max_queue_size: None,
-            max_batches_per_tick: None,
-            max_insert_bundle_size: None,
-            max_concurrent_insert_tasks: None,
-            completed_batch_fetch_limit: None,
-        }
-    }
 }
 
 impl SamplerQueueTuning {

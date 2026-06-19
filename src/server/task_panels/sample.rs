@@ -158,12 +158,11 @@ fn real_estimate_history_projector(accumulator_config: &AccumulatorConfig) -> Ta
             let target = run_target_from_json(ctx.run_target)
                 .and_then(|target| target.component(&["real", "value"]));
             Ok(sample_accumulator(ctx, &current_config)?
-                .and_then(|accumulator| Some(real_estimate_history_panel(accumulator)))
+                .map(real_estimate_history_panel)
                 .map(|panel| with_scalar_target(panel, target)))
         },
         move |ctx| {
-            Ok(decode_history_observable(ctx, &history_config)?
-                .and_then(|accumulator| Some(real_estimate_history_panel(accumulator))))
+            Ok(decode_history_observable(ctx, &history_config)?.map(real_estimate_history_panel))
         },
     )
 }
@@ -1014,12 +1013,10 @@ fn sample_eta_seconds(
             })
         })
     } else {
-        let projection = stop_condition
-            .projection
-            .unwrap_or_else(|| match accumulator {
-                Some(AccumulatorState::Gammaloop(_)) => SampleErrorProjection::Abs,
-                _ => SampleErrorProjection::Real,
-            });
+        let projection = stop_condition.projection.unwrap_or(match accumulator {
+            Some(AccumulatorState::Gammaloop(_)) => SampleErrorProjection::Abs,
+            _ => SampleErrorProjection::Real,
+        });
         accumulator
             .as_ref()
             .and_then(|accumulator| projected_estimate(accumulator, projection))
@@ -1956,11 +1953,10 @@ mod tests {
         let projected = scalar_projected_bins(&bins, &item, &item.name, normalization, 3, 16, None)
             .expect("project bins");
         assert_eq!(projected.len(), 2);
-        let values = projected
+        projected
             .iter()
             .map(|bin| bin["value"].as_f64().expect("numeric bin value"))
-            .collect::<Vec<_>>();
-        values
+            .collect::<Vec<_>>()
     }
 
     #[test]

@@ -82,7 +82,7 @@ async fn extract_task_measurement_with_spec(
 ) -> Result<ExtractedMeasurement, ApiError> {
     let accumulator = load_measurement_accumulator(store, run_id, source_task).await?;
     let throughput =
-        load_measurement_throughput(store, run_id, &tasks, source_task, measurement).await?;
+        load_measurement_throughput(store, run_id, tasks, source_task, measurement).await?;
     let metrics = extract_measurement_metrics(&accumulator, measurement, throughput, source_task)?;
     Ok(ExtractedMeasurement {
         source_task_id: source_task.id,
@@ -119,11 +119,11 @@ async fn load_measurement_accumulator(
     run_id: i32,
     source_task: &RunTask,
 ) -> Result<AccumulatorState, ApiError> {
-    if source_task.state == RunTaskState::Active {
-        if let Some(current) = store.load_current_accumulator(run_id).await? {
-            return AccumulatorState::from_json(&current)
-                .map_err(|err| ApiError::Internal(err.to_string()));
-        }
+    if source_task.state == RunTaskState::Active
+        && let Some(current) = store.load_current_accumulator(run_id).await?
+    {
+        return AccumulatorState::from_json(&current)
+            .map_err(|err| ApiError::Internal(err.to_string()));
     }
     let latest_stage_snapshot = store
         .get_latest_task_stage_snapshot(run_id, source_task.id)
