@@ -36,10 +36,12 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   projection must not rebuild large samplers to fetch these values.
 - Multi-component observables use vector accumulator models. Full raster
   outputs use `FullVectorAccumulatorState` with named components.
-- Symbolica evaluators use one native expression plus optional `constants`.
-  `args` are sampled coordinates only; `i`/`I` are built-in imaginary-unit
-  constants. Purely real results work with scalar accumulators, while complex
-  results require vector/full-vector components `real` and `imag`.
+- Symbolica evaluators use either a native expression plus optional `constants`
+  or a precompiled Symbolica shared library. `args` are sampled coordinates only;
+  compiled evaluators may declare `compiled_args` plus fixed `bindings` for
+  non-sampled inputs. `i`/`I` are built-in imaginary-unit constants. Purely real
+  results work with scalar accumulators, while complex results require
+  vector/full-vector components `real` and `imag`.
 - `image2d` panels are rendered by the generic canvas heatmap path. Complex
   image tasks can use `display = "complex_phase"` to draw phase as hue and
   magnitude as saturation.

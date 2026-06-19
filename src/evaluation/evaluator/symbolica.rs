@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, fs};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fs,
+    path::PathBuf,
+};
 
 use crate::utils::domain::Domain;
 use crate::{
@@ -6,6 +10,7 @@ use crate::{
     core::AccumulatorConfig,
     evaluation::{AccumulatorState, IngestScalar},
     evaluation::{EvalBatchOptions, Evaluator, ingest_scalar_values},
+    resources::resolve_resource_path,
     runtime_context::evaluator_tmp_dir,
 };
 use serde::{Deserialize, Serialize};
@@ -23,21 +28,23 @@ use tempfile::TempDir;
 
 pub struct SymbolicaEngine {
     eval: CompiledComplexEvaluator,
-    _parsed_expr: Atom,
-    _expr: String,
+    _parsed_expr: Option<Atom>,
+    _expr: Option<String>,
     _constants: BTreeMap<String, toml::Value>,
     args: Vec<String>,
-    _artifacts_dir: TempDir,
+    input_plan: Vec<SymbolicaInputSlot>,
+    _artifacts_dir: Option<TempDir>,
 }
 
 impl SymbolicaEngine {
     fn new(
         eval: CompiledComplexEvaluator,
-        _parsed_expr: Atom,
-        _expr: String,
+        _parsed_expr: Option<Atom>,
+        _expr: Option<String>,
         _constants: BTreeMap<String, toml::Value>,
         args: Vec<String>,
-        artifacts_dir: TempDir,
+        input_plan: Vec<SymbolicaInputSlot>,
+        artifacts_dir: Option<TempDir>,
     ) -> Self {
         SymbolicaEngine {
             eval,
@@ -45,6 +52,7 @@ impl SymbolicaEngine {
             _expr,
             _constants,
             args,
+            input_plan,
             _artifacts_dir: artifacts_dir,
         }
     }
@@ -52,19 +60,46 @@ impl SymbolicaEngine {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SymbolicaParams {
-    pub expr: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expr: Option<String>,
     pub args: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub constants: BTreeMap<String, toml::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<SymbolicaSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compiled_args: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bindings: BTreeMap<String, toml::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SymbolicaSource {
+    Expression {
+        expr: String,
+    },
+    Compiled {
+        path: PathBuf,
+        name: String,
+        #[serde(default = "default_symbolica_outputs")]
+        outputs: usize,
+    },
+}
+
+fn default_symbolica_outputs() -> usize {
+    1
+}
+
+#[derive(Clone)]
+enum SymbolicaInputSlot {
+    Sample(usize),
+    Fixed(SymbolicaComplex<f64>),
 }
 
 impl SymbolicaEngine {
     pub fn from_params(params: SymbolicaParams) -> Result<Self, crate::BuildError> {
         let settings = ParseSettings::symbolica();
-        // Keep these plain parser calls unless updating Symbolica requires
-        // default-namespace parsing for generated benchmark expressions.
-        let parsed_expr = Atom::parse(wrap_input!(&params.expr), settings.clone())
-            .map_err(|err| BuildError::build(err.to_string()))?;
 
         let mut args = Vec::with_capacity(params.args.len());
         for arg in &params.args {
@@ -73,28 +108,170 @@ impl SymbolicaEngine {
             args.push(parsed);
         }
 
-        let root_artifacts_dir = evaluator_tmp_dir("symbolica").map_err(|err| {
-            BuildError::build(format!("failed to resolve evaluator tmp dir: {err}"))
-        })?;
-        fs::create_dir_all(&root_artifacts_dir)?;
+        let source = match params.source.clone() {
+            Some(source) => source,
+            None => SymbolicaSource::Expression {
+                expr: params.expr.clone().ok_or_else(|| {
+                    BuildError::invalid_input(
+                        "symbolica evaluator requires either top-level expr or source",
+                    )
+                })?,
+            },
+        };
 
-        let artifacts_dir = tempfile::Builder::new()
-            .prefix("symbolica-eval-")
-            .rand_bytes(8)
-            .tempdir_in(&root_artifacts_dir)
-            .map_err(|err| BuildError::io(err.to_string()))?;
-        let function_map = build_function_map(&params.constants, &settings)?;
-        let evaluator =
-            compile_complex_evaluator(&parsed_expr, &args, &function_map, &artifacts_dir)?;
+        match source {
+            SymbolicaSource::Expression { expr } => {
+                if params.compiled_args.is_some() {
+                    return Err(BuildError::invalid_input(
+                        "symbolica compiled_args is only valid with source.kind = \"compiled\"",
+                    ));
+                }
+                if !params.bindings.is_empty() {
+                    return Err(BuildError::invalid_input(
+                        "symbolica bindings are only valid with source.kind = \"compiled\"",
+                    ));
+                }
 
-        Ok(SymbolicaEngine::new(
-            evaluator,
-            parsed_expr,
-            params.expr,
-            params.constants,
-            params.args.clone(),
-            artifacts_dir,
+                // Keep these plain parser calls unless updating Symbolica requires
+                // default-namespace parsing for generated benchmark expressions.
+                let parsed_expr = Atom::parse(wrap_input!(&expr), settings.clone())
+                    .map_err(|err| BuildError::build(err.to_string()))?;
+                let root_artifacts_dir = evaluator_tmp_dir("symbolica").map_err(|err| {
+                    BuildError::build(format!("failed to resolve evaluator tmp dir: {err}"))
+                })?;
+                fs::create_dir_all(&root_artifacts_dir)?;
+
+                let artifacts_dir = tempfile::Builder::new()
+                    .prefix("symbolica-eval-")
+                    .rand_bytes(8)
+                    .tempdir_in(&root_artifacts_dir)
+                    .map_err(|err| BuildError::io(err.to_string()))?;
+                let function_map = build_function_map(&params.constants, &settings)?;
+                let evaluator =
+                    compile_complex_evaluator(&parsed_expr, &args, &function_map, &artifacts_dir)?;
+                let input_plan = (0..params.args.len())
+                    .map(SymbolicaInputSlot::Sample)
+                    .collect();
+
+                Ok(SymbolicaEngine::new(
+                    evaluator,
+                    Some(parsed_expr),
+                    Some(expr),
+                    params.constants,
+                    params.args,
+                    input_plan,
+                    Some(artifacts_dir),
+                ))
+            }
+            SymbolicaSource::Compiled {
+                path,
+                name,
+                outputs,
+            } => {
+                if outputs != 1 {
+                    return Err(BuildError::invalid_input(format!(
+                        "symbolica compiled source currently supports exactly one complex output, got {outputs}"
+                    )));
+                }
+                if !params.constants.is_empty() {
+                    return Err(BuildError::invalid_input(
+                        "symbolica constants are only valid with expression sources; use bindings for compiled source fixed inputs",
+                    ));
+                }
+                let compiled_args = params
+                    .compiled_args
+                    .clone()
+                    .unwrap_or_else(|| params.args.clone());
+                let input_plan = build_input_plan(&params.args, &compiled_args, &params.bindings)?;
+                let path = resolve_resource_path(&path).map_err(|err| {
+                    BuildError::build(format!(
+                        "failed to resolve symbolica compiled evaluator '{}': {err}",
+                        path.display()
+                    ))
+                })?;
+                let evaluator = CompiledComplexEvaluator::load(&path, &name).map_err(|err| {
+                    BuildError::build(format!(
+                        "failed to load symbolica compiled evaluator '{}' from {}: {err}",
+                        name,
+                        path.display()
+                    ))
+                })?;
+
+                Ok(SymbolicaEngine::new(
+                    evaluator,
+                    None,
+                    None,
+                    params.constants,
+                    params.args,
+                    input_plan,
+                    None,
+                ))
+            }
+        }
+    }
+}
+
+fn build_input_plan(
+    sampled_args: &[String],
+    compiled_args: &[String],
+    bindings: &BTreeMap<String, toml::Value>,
+) -> Result<Vec<SymbolicaInputSlot>, BuildError> {
+    let sampled_index = sampled_args
+        .iter()
+        .enumerate()
+        .map(|(idx, name)| (name.as_str(), idx))
+        .collect::<HashMap<_, _>>();
+    let mut plan = Vec::with_capacity(compiled_args.len());
+    for name in compiled_args {
+        if let Some(idx) = sampled_index.get(name.as_str()) {
+            plan.push(SymbolicaInputSlot::Sample(*idx));
+            continue;
+        }
+        let Some(value) = bindings.get(name) else {
+            return Err(BuildError::invalid_input(format!(
+                "symbolica compiled arg {name:?} is neither sampled nor provided in bindings"
+            )));
+        };
+        plan.push(SymbolicaInputSlot::Fixed(fixed_input_value(name, value)?));
+    }
+    Ok(plan)
+}
+
+fn fixed_input_value(name: &str, value: &toml::Value) -> Result<SymbolicaComplex<f64>, BuildError> {
+    let value_expr = constant_value_expr(value)?;
+    match value_expr.as_str() {
+        "pi" | "Pi" | "PI" => {
+            return Ok(SymbolicaComplex::new(std::f64::consts::PI, 0.0));
+        }
+        "i" | "I" => return Ok(SymbolicaComplex::new(0.0, 1.0)),
+        _ => {}
+    }
+
+    let settings = ParseSettings::symbolica();
+    let parsed_value = Atom::parse(wrap_input!(&value_expr), settings).map_err(|err| {
+        BuildError::build(format!(
+            "invalid value for symbolica compiled binding {name:?}: {err}"
         ))
+    })?;
+    let value = SymbolicaComplex::<Rational>::try_from(&parsed_value).map_err(|err| {
+        BuildError::build(format!(
+            "symbolica compiled binding {name:?} must be a numeric real or complex value, got {value_expr:?}: {err}"
+        ))
+    })?;
+    Ok(SymbolicaComplex::new(value.re.to_f64(), value.im.to_f64()))
+}
+
+impl SymbolicaParams {
+    #[cfg(test)]
+    fn expression(expr: impl Into<String>, args: Vec<String>) -> Self {
+        Self {
+            expr: Some(expr.into()),
+            args,
+            constants: BTreeMap::new(),
+            source: None,
+            compiled_args: None,
+            bindings: BTreeMap::new(),
+        }
     }
 }
 
@@ -189,7 +366,7 @@ impl Evaluator for SymbolicaEngine {
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
         let width = self.args.len();
-        let mut continuous = Vec::with_capacity(batch.size() * width);
+        let mut continuous = Vec::with_capacity(batch.size() * self.input_plan.len());
         for (sample_idx, point) in batch.points().iter().enumerate() {
             if point.continuous.len() != width {
                 return Err(EvalError::Engine(format!(
@@ -205,12 +382,14 @@ impl Evaluator for SymbolicaEngine {
                     point.discrete, sample_idx
                 )));
             }
-            continuous.extend(
-                point
-                    .continuous
-                    .iter()
-                    .map(|value| SymbolicaComplex::new(*value, 0.0)),
-            );
+            for slot in &self.input_plan {
+                match slot {
+                    SymbolicaInputSlot::Sample(idx) => {
+                        continuous.push(SymbolicaComplex::new(point.continuous[*idx], 0.0));
+                    }
+                    SymbolicaInputSlot::Fixed(value) => continuous.push(value.clone()),
+                }
+            }
         }
 
         let mut observable_state = AccumulatorState::from_config(accumulator);
@@ -286,18 +465,21 @@ impl Evaluator for SymbolicaEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::{SymbolicaEngine, SymbolicaParams};
+    use super::{SymbolicaEngine, SymbolicaParams, SymbolicaSource, compile_complex_evaluator};
     use crate::core::AccumulatorConfig;
     use crate::evaluation::{Batch, EvalBatchOptions, Evaluator, Point};
     use std::collections::BTreeMap;
+    use symbolica::atom::Atom;
+    use symbolica::evaluate::FunctionMap;
+    use symbolica::parser::ParseSettings;
+    use symbolica::wrap_input;
 
     #[test]
     fn symbolica_manual_eval_has_two_expected_peaks_with_decimal_centers() {
-        let mut evaluator = SymbolicaEngine::from_params(SymbolicaParams {
-            expr: "1/((x-0.25)^2+(y-0.25)^2+1/40) + 1/((x-0.75)^2+(y-0.75)^2+1/40) + z".to_string(),
-            args: vec!["x".to_string(), "y".to_string(), "z".to_string()],
-            constants: BTreeMap::new(),
-        })
+        let mut evaluator = SymbolicaEngine::from_params(SymbolicaParams::expression(
+            "1/((x-0.25)^2+(y-0.25)^2+1/40) + 1/((x-0.75)^2+(y-0.75)^2+1/40) + z",
+            vec!["x".to_string(), "y".to_string(), "z".to_string()],
+        ))
         .expect("build symbolica evaluator");
 
         let points = [
@@ -344,11 +526,10 @@ mod tests {
 
     #[test]
     fn symbolica_fraction_literals_match_expected_peak_locations() {
-        let mut evaluator = SymbolicaEngine::from_params(SymbolicaParams {
-            expr: "1/((x-1/4)^2+(y-1/4)^2+1/40) + 1/((x-3/4)^2+(y-3/4)^2+1/40) + z".to_string(),
-            args: vec!["x".to_string(), "y".to_string(), "z".to_string()],
-            constants: BTreeMap::new(),
-        })
+        let mut evaluator = SymbolicaEngine::from_params(SymbolicaParams::expression(
+            "1/((x-1/4)^2+(y-1/4)^2+1/40) + 1/((x-3/4)^2+(y-3/4)^2+1/40) + z",
+            vec!["x".to_string(), "y".to_string(), "z".to_string()],
+        ))
         .expect("build symbolica evaluator");
 
         let points = [(0.0, 0.0, 0.0), (0.25, 0.25, 0.0), (0.75, 0.75, 0.0)];
@@ -379,11 +560,10 @@ mod tests {
 
     #[test]
     fn symbolica_complex_eval_fills_real_imag_full_vector() {
-        let mut evaluator = SymbolicaEngine::from_params(SymbolicaParams {
-            expr: "x + i*y".to_string(),
-            args: vec!["x".to_string(), "y".to_string()],
-            constants: BTreeMap::new(),
-        })
+        let mut evaluator = SymbolicaEngine::from_params(SymbolicaParams::expression(
+            "x + i*y",
+            vec!["x".to_string(), "y".to_string()],
+        ))
         .expect("build symbolica evaluator");
 
         let batch = Batch::from_points([
@@ -414,12 +594,10 @@ mod tests {
         let mut constants = BTreeMap::new();
         constants.insert("scale".to_string(), toml::Value::Integer(3));
         constants.insert("center".to_string(), toml::Value::String("1/2".to_string()));
-        let mut evaluator = SymbolicaEngine::from_params(SymbolicaParams {
-            expr: "scale * (x - center)".to_string(),
-            args: vec!["x".to_string()],
-            constants,
-        })
-        .expect("build symbolica evaluator");
+        let mut params = SymbolicaParams::expression("scale * (x - center)", vec!["x".to_string()]);
+        params.constants = constants;
+        let mut evaluator =
+            SymbolicaEngine::from_params(params).expect("build symbolica evaluator");
 
         let batch =
             Batch::from_points([Point::new(vec![1.0], Vec::new(), 1.0)]).expect("build batch");
@@ -439,11 +617,9 @@ mod tests {
     fn symbolica_constants_reject_toml_floats() {
         let mut constants = BTreeMap::new();
         constants.insert("scale".to_string(), toml::Value::Float(0.5));
-        let err = match SymbolicaEngine::from_params(SymbolicaParams {
-            expr: "scale * x".to_string(),
-            args: vec!["x".to_string()],
-            constants,
-        }) {
+        let mut params = SymbolicaParams::expression("scale * x", vec!["x".to_string()]);
+        params.constants = constants;
+        let err = match SymbolicaEngine::from_params(params) {
             Ok(_) => panic!("toml float constants should be rejected"),
             Err(err) => err,
         };
@@ -452,12 +628,60 @@ mod tests {
     }
 
     #[test]
-    fn symbolica_complex_expr_rejects_scalar_accumulator() {
+    fn symbolica_compiled_source_loads_with_bound_fixed_inputs() {
+        let settings = ParseSettings::symbolica();
+        let expr = Atom::parse(wrap_input!("a + k0 + k1 + k2"), settings.clone())
+            .expect("parse expression");
+        let args = ["a", "k0", "k1", "k2"]
+            .iter()
+            .map(|arg| Atom::parse(wrap_input!(arg), settings.clone()).expect("parse arg"))
+            .collect::<Vec<_>>();
+        let artifacts_dir = tempfile::tempdir().expect("create artifacts dir");
+        let _compiled =
+            compile_complex_evaluator(&expr, &args, &FunctionMap::new(), &artifacts_dir)
+                .expect("compile source evaluator");
+
+        let mut bindings = BTreeMap::new();
+        bindings.insert("a".to_string(), toml::Value::String("1/2".to_string()));
         let mut evaluator = SymbolicaEngine::from_params(SymbolicaParams {
-            expr: "x + i*y".to_string(),
-            args: vec!["x".to_string(), "y".to_string()],
+            expr: None,
+            args: vec!["k0".to_string(), "k1".to_string(), "k2".to_string()],
             constants: BTreeMap::new(),
+            source: Some(SymbolicaSource::Compiled {
+                path: artifacts_dir.path().join("eval.so"),
+                name: "eval".to_string(),
+                outputs: 1,
+            }),
+            compiled_args: Some(vec![
+                "a".to_string(),
+                "k0".to_string(),
+                "k1".to_string(),
+                "k2".to_string(),
+            ]),
+            bindings,
         })
+        .expect("load compiled evaluator");
+
+        let batch = Batch::from_points([Point::new(vec![1.0, 2.0, 3.0], Vec::new(), 1.0)])
+            .expect("build batch");
+        let result = evaluator
+            .eval_batch(
+                &batch,
+                &AccumulatorConfig::scalar(),
+                EvalBatchOptions {
+                    require_training_values: true,
+                },
+            )
+            .expect("evaluate batch");
+        assert_eq!(result.values.expect("training values"), vec![6.5]);
+    }
+
+    #[test]
+    fn symbolica_complex_expr_rejects_scalar_accumulator() {
+        let mut evaluator = SymbolicaEngine::from_params(SymbolicaParams::expression(
+            "x + i*y",
+            vec!["x".to_string(), "y".to_string()],
+        ))
         .expect("build symbolica evaluator");
 
         let batch =
