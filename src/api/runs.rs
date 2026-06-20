@@ -1177,6 +1177,8 @@ accumulator = { config = "scalar" }
             "resources/templates/runs/process-evaluator-process-sampler-demo.toml",
             "resources/templates/runs/process-rust-apptainer-evaluator-demo.toml",
             "resources/templates/runs/symbolica-havana-pdf-1d2d.toml",
+            "resources/templates/runs/symbolica-variable-smooth-compiled.toml",
+            "resources/templates/runs/symbolica-variable-smooth-egobox.toml",
             "resources/templates/tasks/pdf_adaptation_image.toml",
             "resources/templates/tasks/sample_monte_carlo_real.toml",
             "resources/templates/tasks/train_sample.toml",
