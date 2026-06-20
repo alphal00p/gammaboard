@@ -335,23 +335,129 @@ impl MeasurementSpec {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ParameterValueSourceSpec {
+    #[serde(default)]
+    pub values: Vec<toml::Value>,
+    #[serde(default)]
+    pub linspace: Option<ParameterLinspaceSpec>,
+    #[serde(default)]
+    pub range: Option<ParameterIntegerRangeSpec>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ParameterLinspaceSpec {
+    pub start: f64,
+    pub stop: f64,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ParameterIntegerRangeSpec {
+    pub min: i64,
+    pub max: i64,
+    #[serde(default)]
+    pub step: Option<i64>,
+}
+
+impl ParameterValueSourceSpec {
+    pub fn values(&self, label: &str) -> Result<Vec<toml::Value>, String> {
+        let source_count = usize::from(!self.values.is_empty())
+            + usize::from(self.linspace.is_some())
+            + usize::from(self.range.is_some());
+        if source_count == 0 {
+            return Err(format!(
+                "{label} must define one of values, linspace, or range"
+            ));
+        }
+        if source_count > 1 {
+            return Err(format!(
+                "{label} must define only one of values, linspace, or range"
+            ));
+        }
+        if self.values.is_empty() {
+            if let Some(linspace) = &self.linspace {
+                return linspace.values(label);
+            }
+            if let Some(range) = &self.range {
+                return range.values(label);
+            }
+        }
+        Ok(self.values.clone())
+    }
+
+    pub fn len(&self, label: &str) -> Result<usize, String> {
+        self.values(label).map(|values| values.len())
+    }
+
+    pub fn validate(&self, label: &str) -> Result<(), String> {
+        self.values(label).map(|_| ())
+    }
+}
+
+impl ParameterLinspaceSpec {
+    fn values(&self, label: &str) -> Result<Vec<toml::Value>, String> {
+        if !self.start.is_finite() || !self.stop.is_finite() {
+            return Err(format!("{label}.linspace bounds must be finite"));
+        }
+        if self.count == 0 {
+            return Err(format!("{label}.linspace.count must be > 0"));
+        }
+        if self.count == 1 {
+            return Ok(vec![toml::Value::Float(self.start)]);
+        }
+        let denominator = (self.count - 1) as f64;
+        Ok((0..self.count)
+            .map(|index| {
+                let fraction = index as f64 / denominator;
+                toml::Value::Float(self.start + fraction * (self.stop - self.start))
+            })
+            .collect())
+    }
+}
+
+impl ParameterIntegerRangeSpec {
+    fn values(&self, label: &str) -> Result<Vec<toml::Value>, String> {
+        if self.min > self.max {
+            return Err(format!("{label}.range.min must be <= max"));
+        }
+        let step = self.step.unwrap_or(1);
+        if step <= 0 {
+            return Err(format!("{label}.range.step must be > 0"));
+        }
+        let mut values = Vec::new();
+        let mut value = self.min;
+        while value <= self.max {
+            values.push(toml::Value::Integer(value));
+            match value.checked_add(step) {
+                Some(next) => value = next,
+                None => break,
+            }
+        }
+        Ok(values)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ParameterScanParameterSpec {
     pub name: String,
-    pub values: Vec<toml::Value>,
+    #[serde(flatten)]
+    pub source: ParameterValueSourceSpec,
 }
 
 impl ParameterScanParameterSpec {
+    pub fn values(&self) -> Result<Vec<toml::Value>, String> {
+        self.source
+            .values(&format!("parameter_scan.parameters.{}", self.name))
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         validate_source_name("parameter_scan.parameters", &self.name)?;
-        if self.values.is_empty() {
-            return Err(format!(
-                "parameter_scan.parameters.{}.values must not be empty",
-                self.name
-            ));
-        }
-        Ok(())
+        self.source
+            .validate(&format!("parameter_scan.parameters.{}", self.name))
     }
 }
 
@@ -395,7 +501,7 @@ pub fn parameter_scan_grid_len(
 ) -> Option<usize> {
     let parameters = effective_parameter_scan_parameters(parameter, parameters).ok()?;
     parameters.iter().try_fold(1usize, |count, parameter| {
-        count.checked_mul(parameter.values.len())
+        count.checked_mul(parameter.values().ok()?.len())
     })
 }
 
@@ -418,7 +524,8 @@ pub struct HyperparameterTuningIntegerDomain {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct HyperparameterTuningCategoricalDomain {
-    pub values: Vec<toml::Value>,
+    #[serde(flatten)]
+    pub source: ParameterValueSourceSpec,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -459,14 +566,9 @@ impl HyperparameterTuningParameterDomain {
                 }
                 Ok(())
             }
-            Self::Categorical(domain) => {
-                if domain.values.is_empty() {
-                    return Err(format!(
-                        "hyperparameter_tuning.parameters.{name} categorical values must not be empty"
-                    ));
-                }
-                Ok(())
-            }
+            Self::Categorical(domain) => domain
+                .source
+                .validate(&format!("hyperparameter_tuning.parameters.{name}")),
         }
     }
 }
@@ -1467,7 +1569,9 @@ fn hyperparameter_tuning_trial_count(
 fn hyperparameter_grid_domain_len(domain: &HyperparameterTuningParameterDomain) -> Option<usize> {
     match domain {
         HyperparameterTuningParameterDomain::Float(_) => None,
-        HyperparameterTuningParameterDomain::Categorical(domain) => Some(domain.values.len()),
+        HyperparameterTuningParameterDomain::Categorical(domain) => {
+            domain.source.len("hyperparameter_tuning.parameters").ok()
+        }
         HyperparameterTuningParameterDomain::Integer(domain) => {
             let step = domain.step.unwrap_or(1);
             let span = domain.max.checked_sub(domain.min)?;
@@ -2211,7 +2315,10 @@ max = 1.0
 
         let categorical = HyperparameterTuningParameterDomain::Categorical(
             HyperparameterTuningCategoricalDomain {
-                values: vec![toml::Value::String("auto".to_string())],
+                source: ParameterValueSourceSpec {
+                    values: vec![toml::Value::String("auto".to_string())],
+                    ..Default::default()
+                },
             },
         );
         categorical.validate("mode").expect("valid categorical");
@@ -2223,6 +2330,43 @@ max = 1.0
                 step: Some(0),
             });
         assert!(bad_step.validate("bins").is_err());
+    }
+
+    #[test]
+    fn parameter_value_source_materializes_linspace_and_range() {
+        let linspace = ParameterValueSourceSpec {
+            linspace: Some(ParameterLinspaceSpec {
+                start: 0.0,
+                stop: 2.0,
+                count: 3,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            linspace.values("parameter").expect("linspace values"),
+            vec![
+                toml::Value::Float(0.0),
+                toml::Value::Float(1.0),
+                toml::Value::Float(2.0),
+            ]
+        );
+
+        let range = ParameterValueSourceSpec {
+            range: Some(ParameterIntegerRangeSpec {
+                min: 2,
+                max: 6,
+                step: Some(2),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            range.values("parameter").expect("range values"),
+            vec![
+                toml::Value::Integer(2),
+                toml::Value::Integer(4),
+                toml::Value::Integer(6),
+            ]
+        );
     }
 
     #[test]

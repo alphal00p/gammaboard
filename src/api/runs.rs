@@ -1062,7 +1062,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 [task_queue.parameter]
 name = "scale"
-values = [1, 2, 3]
+linspace = { start = 1.0, stop = 3.0, count = 3 }
 
 [task_queue.measurement]
 source_task = "sample"
@@ -1084,7 +1084,14 @@ source_task = "sample"
             .or_else(|| parameters.first())
             .expect("parameter");
         assert_eq!(parameter.name, "scale");
-        assert_eq!(parameter.values.len(), 3);
+        assert_eq!(
+            parameter.values().expect("values"),
+            vec![
+                toml::Value::Float(1.0),
+                toml::Value::Float(2.0),
+                toml::Value::Float(3.0),
+            ]
+        );
         assert_eq!(*max_concurrent_runs, 2);
     }
 

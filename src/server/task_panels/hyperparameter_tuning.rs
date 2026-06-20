@@ -407,7 +407,10 @@ mod tests {
                     "scale".to_string(),
                     HyperparameterTuningParameterDomain::Categorical(
                         HyperparameterTuningCategoricalDomain {
-                            values: vec![toml::Value::Float(1.0)],
+                            source: crate::core::ParameterValueSourceSpec {
+                                values: vec![toml::Value::Float(1.0)],
+                                ..Default::default()
+                            },
                         },
                     ),
                 ),

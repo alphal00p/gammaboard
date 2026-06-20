@@ -538,11 +538,14 @@ mod tests {
         let task = RunTaskSpec::ParameterScan {
             parameter: Some(ParameterScanParameterSpec {
                 name: "scale".to_string(),
-                values: vec![
-                    toml::Value::Float(0.0),
-                    toml::Value::Float(1.0),
-                    toml::Value::Float(2.0),
-                ],
+                source: crate::core::ParameterValueSourceSpec {
+                    values: vec![
+                        toml::Value::Float(0.0),
+                        toml::Value::Float(1.0),
+                        toml::Value::Float(2.0),
+                    ],
+                    ..Default::default()
+                },
             }),
             parameters: Vec::new(),
             measurement: ParameterScanMeasurementSpec {

@@ -636,6 +636,19 @@ const buildErrorBarSeries = ({ name = "error", data, color = "#7c8a96", capPx = 
   },
 });
 
+const buildErrorBarData = (points) =>
+  asArray(points)
+    .map((point) => {
+      const x = Number(point?.x);
+      const yMin = Number(point?.y_min);
+      const yMax = Number(point?.y_max);
+      if (!Number.isFinite(x) || !Number.isFinite(yMin) || !Number.isFinite(yMax) || yMax < yMin || yMax === yMin) {
+        return null;
+      }
+      return [x, yMin, yMax];
+    })
+    .filter(Boolean);
+
 const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange = null }) => {
   const figureRef = useRef(null);
   const echartsRef = useRef(null);
@@ -649,17 +662,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
   const meanData = points.map((point) => [Number(point?.x), Number(point?.y)]);
   const targetValue = Number(state?.target);
   const hasTargetLine = Number.isFinite(targetValue);
-  const errorBarData = points
-    .map((point) => {
-      const x = Number(point?.x);
-      const yMin = Number(point?.y_min);
-      const yMax = Number(point?.y_max);
-      if (!Number.isFinite(x) || !Number.isFinite(yMin) || !Number.isFinite(yMax) || yMax < yMin || yMax === yMin) {
-        return null;
-      }
-      return [x, yMin, yMax];
-    })
-    .filter(Boolean);
+  const errorBarData = buildErrorBarData(points);
   const domain = fitDomain([
     ...points.flatMap((point) => [point.y, point.y_min, point.y_max]),
     ...(hasTargetLine ? [targetValue] : []),
@@ -909,11 +912,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
   }));
   const data = buildMultiSeriesData(series);
   const domain = fitDomain(
-    data.flatMap((row) =>
-      Object.entries(row)
-        .filter(([key]) => key !== "x")
-        .map(([, value]) => value),
-    ),
+    series.flatMap((item) => asArray(item.points).flatMap((point) => [point.y, point.y_min, point.y_max])),
   );
   const xDomain = fitXDomain(data.map((row) => row.x));
   const zoomRange = useMemo(() => readZoomFromPanelValue(value, FULL_ZOOM), [value]);
@@ -986,21 +985,27 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
         formatter: buildTimeseriesTooltipFormatter(historyXAxisMode, usesTimestampXAxis, xAxisOriginMs),
       },
       dataZoom: buildDataZoom(zoomRange, true, true, yZoomRange, true),
-      series: series.map((item, index) => ({
-        type: "line",
-        name: item.label,
-        data: asArray(item.points).map((point) => [Number(point?.x), Number(point?.y)]),
-        smooth: Boolean(item?.smooth),
-        showSymbol: false,
-        connectNulls: false,
-        lineStyle: {
-          width: 1.8,
-          color: item.color || lineColors[index % lineColors.length],
-        },
-        itemStyle: {
-          color: item.color || lineColors[index % lineColors.length],
-        },
-      })),
+      series: series.flatMap((item, index) => {
+        const color = item.color || lineColors[index % lineColors.length];
+        const lineSeries = {
+          type: "line",
+          name: item.label,
+          data: asArray(item.points).map((point) => [Number(point?.x), Number(point?.y)]),
+          smooth: Boolean(item?.smooth),
+          showSymbol: false,
+          connectNulls: false,
+          lineStyle: {
+            width: 1.8,
+            color,
+          },
+          itemStyle: {
+            color,
+          },
+        };
+        const errorBarData = buildErrorBarData(item.points);
+        if (errorBarData.length === 0) return [lineSeries];
+        return [buildErrorBarSeries({ name: item.label, data: errorBarData, color }), lineSeries];
+      }),
     }),
     [domain, historyXAxisMode, panelId, series, usesTimestampXAxis, xAxisOriginMs, xDomain, yZoomRange, zoomRange],
   );

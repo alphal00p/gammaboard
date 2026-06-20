@@ -74,7 +74,7 @@ where
         };
         let parameters = effective_parameter_scan_parameters(parameter, parameters)
             .map_err(StoreError::store)?;
-        let grid_items = parameter_scan_grid_items(&parameters);
+        let grid_items = parameter_scan_grid_items(&parameters)?;
         let total_points = cartesian_grid_len(&grid_items)?;
 
         let child_runs = list_child_runs_for_task(
@@ -263,12 +263,14 @@ where
 
 fn parameter_scan_grid_items(
     parameters: &[crate::core::ParameterScanParameterSpec],
-) -> Vec<ParameterGridItem> {
+) -> Result<Vec<ParameterGridItem>, StoreError> {
     parameters
         .iter()
-        .map(|parameter| ParameterGridItem {
-            name: parameter.name.clone(),
-            values: parameter.values.clone(),
+        .map(|parameter| {
+            Ok(ParameterGridItem {
+                name: parameter.name.clone(),
+                values: parameter.values().map_err(StoreError::store)?,
+            })
         })
         .collect()
 }

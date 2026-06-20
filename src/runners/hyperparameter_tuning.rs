@@ -699,8 +699,9 @@ fn sample_parameter(
             Ok(toml::Value::Integer(domain.min + offset * step))
         }
         HyperparameterTuningParameterDomain::Categorical(domain) => {
-            let index = rng.random_range(0..domain.values.len());
-            Ok(domain.values[index].clone())
+            let values = categorical_domain_values(domain)?;
+            let index = rng.random_range(0..values.len());
+            Ok(values[index].clone())
         }
     }
 }
@@ -736,7 +737,9 @@ fn grid_parameter_values(
             }
             Ok(values)
         }
-        HyperparameterTuningParameterDomain::Categorical(domain) => Ok(domain.values.clone()),
+        HyperparameterTuningParameterDomain::Categorical(domain) => {
+            categorical_domain_values(domain)
+        }
         HyperparameterTuningParameterDomain::Float(_) => Err(StoreError::store(
             "grid_search does not support float parameter domains yet; use integer/categorical domains",
         )),
@@ -1026,7 +1029,9 @@ impl ParameterEncoder {
                         .map(toml::Value::Integer)
                         .collect()
                 }
-                HyperparameterTuningParameterDomain::Categorical(domain) => domain.values.clone(),
+                HyperparameterTuningParameterDomain::Categorical(domain) => {
+                    categorical_domain_values(domain)?
+                }
             };
             values.push(domain_values);
         }
@@ -1092,12 +1097,13 @@ fn domain_to_egobox_xtype(
             }
         }
         HyperparameterTuningParameterDomain::Categorical(domain) => {
-            if domain.values.len() < 2 {
+            let values = categorical_domain_values(domain)?;
+            if values.len() < 2 {
                 return Err(StoreError::store(format!(
                     "egobox categorical parameter {name:?} needs at least two values"
                 )));
             }
-            Ok(XType::Enum(domain.values.len()))
+            Ok(XType::Enum(values.len()))
         }
     }
 }
@@ -1124,16 +1130,17 @@ fn encode_parameter_value(
             .ok_or_else(|| {
                 StoreError::store(format!("egobox integer parameter {name:?} must be integer"))
             }),
-        HyperparameterTuningParameterDomain::Categorical(domain) => domain
-            .values
-            .iter()
-            .position(|candidate| candidate == value)
-            .and_then(|index| index.to_string().parse::<f64>().ok())
-            .ok_or_else(|| {
-                StoreError::store(format!(
-                    "egobox categorical parameter {name:?} has value outside its domain"
-                ))
-            }),
+        HyperparameterTuningParameterDomain::Categorical(domain) => {
+            categorical_domain_values(domain)?
+                .iter()
+                .position(|candidate| candidate == value)
+                .and_then(|index| index.to_string().parse::<f64>().ok())
+                .ok_or_else(|| {
+                    StoreError::store(format!(
+                        "egobox categorical parameter {name:?} has value outside its domain"
+                    ))
+                })
+        }
     }
 }
 
@@ -1152,11 +1159,21 @@ fn decode_parameter_value(
             Ok(toml::Value::Integer(rounded))
         }
         HyperparameterTuningParameterDomain::Categorical(domain) => {
-            let max_index = domain.values.len().saturating_sub(1);
+            let values = categorical_domain_values(domain)?;
+            let max_index = values.len().saturating_sub(1);
             let index = value.round().clamp(0.0, max_index as f64) as usize;
-            Ok(domain.values[index].clone())
+            Ok(values[index].clone())
         }
     }
+}
+
+fn categorical_domain_values(
+    domain: &crate::core::HyperparameterTuningCategoricalDomain,
+) -> Result<Vec<toml::Value>, StoreError> {
+    domain
+        .source
+        .values("hyperparameter_tuning.parameters")
+        .map_err(StoreError::store)
 }
 
 fn integer_domain_values(
@@ -1383,10 +1400,13 @@ mod tests {
                 "mode".to_string(),
                 HyperparameterTuningParameterDomain::Categorical(
                     crate::core::HyperparameterTuningCategoricalDomain {
-                        values: vec![
-                            toml::Value::String("auto".to_string()),
-                            toml::Value::String("none".to_string()),
-                        ],
+                        source: crate::core::ParameterValueSourceSpec {
+                            values: vec![
+                                toml::Value::String("auto".to_string()),
+                                toml::Value::String("none".to_string()),
+                            ],
+                            ..Default::default()
+                        },
                     },
                 ),
             ),
@@ -1474,10 +1494,13 @@ mod tests {
                 "mode".to_string(),
                 HyperparameterTuningParameterDomain::Categorical(
                     HyperparameterTuningCategoricalDomain {
-                        values: vec![
-                            toml::Value::String("auto".to_string()),
-                            toml::Value::String("none".to_string()),
-                        ],
+                        source: crate::core::ParameterValueSourceSpec {
+                            values: vec![
+                                toml::Value::String("auto".to_string()),
+                                toml::Value::String("none".to_string()),
+                            ],
+                            ..Default::default()
+                        },
                     },
                 ),
             ),

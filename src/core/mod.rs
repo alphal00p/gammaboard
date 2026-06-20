@@ -30,12 +30,12 @@ pub use tasks::{
     HyperparameterTuningOptimizerSpec, HyperparameterTuningParameterDomain, ImageDisplayMode,
     LineDisplayMode, LineRasterGeometry, Linspace, MeasurementMetricQuantity,
     MeasurementMetricSpec, MeasurementMode, MeasurementQuantityName, MeasurementQuantitySpec,
-    MeasurementSpec, NamedDiscreteProjection, ParameterScanMeasurementSpec,
-    ParameterScanParameterSpec, PlaneRasterGeometry, PlotAccumulatorKind, RunTask, RunTaskInput,
-    RunTaskSpec, RunTaskState, SampleErrorProjection, SampleStopCondition, SampleTaskConfig,
-    SamplerAggregatorSourceSpec, SamplerQueueTuning, SourceRefSpec, TaskMeasurementOutput,
-    TaskMeasurementSpec, canonical_task_toml, effective_parameter_scan_parameters,
-    generated_task_name,
+    MeasurementSpec, NamedDiscreteProjection, ParameterIntegerRangeSpec, ParameterLinspaceSpec,
+    ParameterScanMeasurementSpec, ParameterScanParameterSpec, ParameterValueSourceSpec,
+    PlaneRasterGeometry, PlotAccumulatorKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState,
+    SampleErrorProjection, SampleStopCondition, SampleTaskConfig, SamplerAggregatorSourceSpec,
+    SamplerQueueTuning, SourceRefSpec, TaskMeasurementOutput, TaskMeasurementSpec,
+    canonical_task_toml, effective_parameter_scan_parameters, generated_task_name,
 };
 pub use traits::{
     AggregationStore, ControlPlaneStore, EvaluatorWorkerStore, RunReadStore, RunSpecStore,

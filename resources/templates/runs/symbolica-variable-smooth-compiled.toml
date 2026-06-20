@@ -79,7 +79,7 @@ outputs = 1
 pi = "pi"
 a = 1.0
 b = 1.0
-c = 0.0
+c = 1.0
 subtraction_width = 0.5
 max_imag_root_part = 1e15
 max_eta_min = 1e10
@@ -122,29 +122,7 @@ seed = 0
 
 [[task_queue.parameters]]
 name = "mass"
-values = [
-  0.2,
-  0.29,
-  0.38,
-  0.47,
-  0.56,
-  0.65,
-  0.74,
-  0.83,
-  0.92,
-  1.01,
-  1.1,
-  1.19,
-  1.28,
-  1.37,
-  1.46,
-  1.55,
-  1.64,
-  1.73,
-  1.82,
-  1.91,
-  2.0,
-]
+linspace = { start = 0.2, stop = 2.0, count = 21 }
 
 [task_queue.measurement]
 source_task = "sample"
