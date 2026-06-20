@@ -1,4 +1,4 @@
-# Symbolica precompiled evaluator demo.
+# Symbolica precompiled evaluator mass scan.
 #
 # This expects a Symbolica shared library exported with function name
 # `variable_theta`, for example from:
@@ -11,15 +11,31 @@
 #
 # The compiled evaluator input order is:
 #
-#   [pi, a, b, c, subtraction_radius, max_imag_root, max_eta_min, mask_width,
+#   [pi, a, b, c, subtraction_width, max_imag_root_part, max_eta_min, mask_width,
 #    m0, m1, m2, q0[0..4], q1[0..4], q2[0..4], k[0..3]]
 #
-# Only k is sampled by GammaBoard here. The control parameters, masses, and
-# momentum offsets are fixed inputs supplied through `bindings`.
+# GammaBoard samples only k0, k1, k2. The scan varies a common mass value with
+# m0 = m1 = m2 over np.linspace(0.2, 2.0, 21). All other compiled inputs are
+# fixed through `bindings`.
 
-replacements = { run_name = "symbolica_variable_smooth_compiled", samples = 100000 }
+replacements = { run_name = "symbolica_variable_theta_mass_scan", samples = 100000, max_concurrent_runs = 2 }
 
-name = '$(run_name:"symbolica_variable_smooth_compiled")'
+name = '$(run_name:"symbolica_variable_theta_mass_scan")'
+
+# The parent scan task only orchestrates child runs. This cheap root evaluator
+# keeps accidental/automatic evaluator assignment to the parent run valid; all
+# physics evaluation happens inside the generated child runs below.
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[task_queue]]
+name = "mass-scan"
+kind = "parameter_scan"
+max_concurrent_runs = "$(max_concurrent_runs:2)"
+trial_run_toml = """
+name = 'variable-theta-mass-$(mass:1.0)'
 target = { kind = "vector", components = { real = 0.0, imag = 0.0 } }
 
 [evaluator]
@@ -34,7 +50,7 @@ args = ["k0", "k1", "k2"]
 compiled_args = [
   "pi",
   "a", "b", "c",
-  "subtraction_radius", "max_imag_root", "max_eta_min", "mask_width",
+  "subtraction_width", "max_imag_root_part", "max_eta_min", "mask_width",
   "m0", "m1", "m2",
   "q0_0", "q0_1", "q0_2", "q0_3",
   "q1_0", "q1_1", "q1_2", "q1_3",
@@ -48,39 +64,51 @@ path = "artifacts/variable_theta.so"
 name = "variable_theta"
 outputs = 1
 
-# Fixed compiled inputs. Values are exact Symbolica-compatible numeric strings;
-# TOML floats are intentionally rejected. `pi`, `i`, and `I` are accepted for
-# compiled input bindings.
+# Fixed compiled inputs. Decimal TOML values are converted to exact rationals
+# before being passed to Symbolica. `pi`, `i`, and `I` are accepted for compiled
+# input bindings.
+#
+# Applied context:
+#   p1 = [1.06066017, 0, 0, 0.35355339]
+#   p2 = [1.76776695, 0, 0, -0.35355339]
+#   max_imag_root_part = 1000000000000000
+#   max_eta_min = 10000000000
+#   mask_width = subtraction_width = 0.5
+#   a = 1, b = 1, c = 0
 [evaluator.bindings]
 pi = "pi"
-a = "1"
-b = "1"
-c = "1"
-subtraction_radius = "1/10"
-max_imag_root = "0"
-max_eta_min = "0"
-mask_width = "1/20"
-m0 = "1"
-m1 = "1"
-m2 = "1"
-q0_0 = "0"
-q0_1 = "0"
-q0_2 = "0"
-q0_3 = "0"
-q1_0 = "0"
-q1_1 = "0"
-q1_2 = "0"
-q1_3 = "0"
-q2_0 = "0"
-q2_1 = "0"
-q2_2 = "0"
-q2_3 = "0"
+a = 1.0
+b = 1.0
+c = 0.0
+subtraction_width = 0.5
+max_imag_root_part = 1e15
+max_eta_min = 1e10
+mask_width = 0.5
+m0 = '$(mass:1.0)'
+m1 = '$(mass:1.0)'
+m2 = '$(mass:1.0)'
+
+# The context sorts (q, mass) by q[0]. With get_qs() = [p1, 0, -p2],
+# the compiled order is q0 = -p2, q1 = 0, q2 = p1.
+q0_0 = -1.76776695
+q0_1 = 0.0
+q0_2 = 0.0
+q0_3 = 0.35355339
+q1_0 = 0.0
+q1_1 = 0.0
+q1_2 = 0.0
+q1_3 = 0.0
+q2_0 = 1.06066017
+q2_1 = 0.0
+q2_2 = 0.0
+q2_3 = 0.35355339
 
 [[task_queue]]
 name = "sample"
 kind = "sample"
 measurement = { quantity = "central_value" }
 stop_condition = { max_samples = "$(samples:100000)" }
+batch_transforms = [{ kind = "spherical" }]
 
 [task_queue.accumulator.config]
 kind = "vector"
@@ -90,3 +118,33 @@ training_projection = { kind = "component", name = "real" }
 [task_queue.sampler_aggregator.config]
 kind = "naive_monte_carlo"
 seed = 0
+"""
+
+[[task_queue.parameters]]
+name = "mass"
+values = [
+  0.2,
+  0.29,
+  0.38,
+  0.47,
+  0.56,
+  0.65,
+  0.74,
+  0.83,
+  0.92,
+  1.01,
+  1.1,
+  1.19,
+  1.28,
+  1.37,
+  1.46,
+  1.55,
+  1.64,
+  1.73,
+  1.82,
+  1.91,
+  2.0,
+]
+
+[task_queue.measurement]
+source_task = "sample"

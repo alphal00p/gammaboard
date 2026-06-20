@@ -316,15 +316,71 @@ fn build_function_map(
 
 fn constant_value_expr(value: &toml::Value) -> Result<String, BuildError> {
     match value {
-        toml::Value::String(value) => Ok(value.clone()),
+        toml::Value::String(value) => {
+            Ok(decimal_literal_to_rational_expr(value).unwrap_or_else(|| value.clone()))
+        }
         toml::Value::Integer(value) => Ok(value.to_string()),
-        toml::Value::Float(_) => Err(BuildError::invalid_input(
-            "symbolica constants must be exact Symbolica numeric values; use integers or strings like \"1/2\" instead of TOML floats",
-        )),
+        toml::Value::Float(value) => {
+            if !value.is_finite() {
+                return Err(BuildError::invalid_input(format!(
+                    "invalid Symbolica float {value}"
+                )));
+            }
+            let value = value.to_string();
+            Ok(decimal_literal_to_rational_expr(&value).unwrap_or(value))
+        }
         other => Err(BuildError::invalid_input(format!(
-            "symbolica constants must be exact Symbolica numeric values; use integers or strings like \"1/2\", got {other}"
+            "symbolica constants must be numeric TOML values or numeric strings, got {other}"
         ))),
     }
+}
+
+fn decimal_literal_to_rational_expr(raw: &str) -> Option<String> {
+    let raw = raw.trim().replace('_', "");
+    if raw.is_empty() {
+        return None;
+    }
+    let (negative, unsigned) = match raw.strip_prefix('-') {
+        Some(value) => (true, value),
+        None => (false, raw.strip_prefix('+').unwrap_or(&raw)),
+    };
+    let exponent_start = unsigned.find(['e', 'E']);
+    let (mantissa, exponent) = match exponent_start {
+        Some(index) => (
+            &unsigned[..index],
+            unsigned[index + 1..].parse::<i32>().ok()?,
+        ),
+        None => (unsigned, 0),
+    };
+    let (integer, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    if integer.is_empty() && fraction.is_empty() {
+        return None;
+    }
+    if !integer.chars().all(|ch| ch.is_ascii_digit())
+        || !fraction.chars().all(|ch| ch.is_ascii_digit())
+    {
+        return None;
+    }
+    if fraction.is_empty() && exponent == 0 {
+        return None;
+    }
+
+    let mut digits = format!("{integer}{fraction}");
+    while digits.starts_with('0') && digits.len() > 1 {
+        digits.remove(0);
+    }
+    if digits.chars().all(|ch| ch == '0') {
+        return Some("0".to_string());
+    }
+
+    let decimal_places = fraction.len() as i32 - exponent;
+    let sign = if negative { "-" } else { "" };
+    if decimal_places <= 0 {
+        digits.extend(std::iter::repeat('0').take((-decimal_places) as usize));
+        return Some(format!("{sign}{digits}"));
+    }
+    let denominator = format!("1{}", "0".repeat(decimal_places as usize));
+    Some(format!("{sign}{digits}/{denominator}"))
 }
 
 fn compile_complex_evaluator(
@@ -614,17 +670,32 @@ mod tests {
     }
 
     #[test]
-    fn symbolica_constants_reject_toml_floats() {
+    fn symbolica_constants_accept_toml_floats_and_decimal_strings() {
         let mut constants = BTreeMap::new();
         constants.insert("scale".to_string(), toml::Value::Float(0.5));
-        let mut params = SymbolicaParams::expression("scale * x", vec!["x".to_string()]);
+        constants.insert("one".to_string(), toml::Value::Float(1.0));
+        constants.insert(
+            "offset".to_string(),
+            toml::Value::String("1e-1".to_string()),
+        );
+        let mut params =
+            SymbolicaParams::expression("one * (scale * x + offset)", vec!["x".to_string()]);
         params.constants = constants;
-        let err = match SymbolicaEngine::from_params(params) {
-            Ok(_) => panic!("toml float constants should be rejected"),
-            Err(err) => err,
-        };
+        let mut evaluator =
+            SymbolicaEngine::from_params(params).expect("build symbolica evaluator");
 
-        assert!(err.to_string().contains("instead of TOML floats"));
+        let batch =
+            Batch::from_points([Point::new(vec![1.0], Vec::new(), 1.0)]).expect("build batch");
+        let result = evaluator
+            .eval_batch(
+                &batch,
+                &AccumulatorConfig::scalar(),
+                EvalBatchOptions {
+                    require_training_values: true,
+                },
+            )
+            .expect("evaluate batch");
+        assert_eq!(result.values.expect("training values"), vec![0.6]);
     }
 
     #[test]
@@ -642,7 +713,7 @@ mod tests {
                 .expect("compile source evaluator");
 
         let mut bindings = BTreeMap::new();
-        bindings.insert("a".to_string(), toml::Value::String("1/2".to_string()));
+        bindings.insert("a".to_string(), toml::Value::Float(0.5));
         let mut evaluator = SymbolicaEngine::from_params(SymbolicaParams {
             expr: None,
             args: vec!["k0".to_string(), "k1".to_string(), "k2".to_string()],

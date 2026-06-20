@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const SCAN_PROGRESS_PANEL_ID: &str = "scan_progress";
 const SCAN_MEAN_PANEL_ID: &str = "scan_mean";
+const SCAN_MEAN_REAL_PANEL_ID: &str = "scan_mean_real";
+const SCAN_MEAN_IMAG_PANEL_ID: &str = "scan_mean_imag";
 const SCAN_MEAN_HEATMAP_PANEL_ID: &str = "scan_mean_heatmap";
 const SCAN_POINTS_PANEL_ID: &str = "scan_points";
 
@@ -16,6 +18,16 @@ pub(super) fn projectors() -> Vec<TaskPanelProjector> {
     vec![
         scan_progress_projector(),
         scan_measurements_projector(),
+        scan_component_measurements_projector(
+            "real",
+            SCAN_MEAN_REAL_PANEL_ID,
+            "Real Central Value",
+        ),
+        scan_component_measurements_projector(
+            "imag",
+            SCAN_MEAN_IMAG_PANEL_ID,
+            "Imaginary Central Value",
+        ),
         scan_heatmap_projector(),
         scan_points_projector(),
     ]
@@ -62,7 +74,7 @@ fn scan_measurements_projector() -> TaskPanelProjector {
         with_panel_width(
             panel_spec(
                 SCAN_MEAN_PANEL_ID,
-                "Central Values over Parameter",
+                "Central Value",
                 PanelKind::MultiTimeseries,
                 PanelHistoryMode::None,
             ),
@@ -75,13 +87,59 @@ fn scan_measurements_projector() -> TaskPanelProjector {
                     if parameter_names.len() == 1 {
                         build_measurement_series(points, &parameter_names[0], |result| {
                             result.get("name").and_then(JsonValue::as_str) == Some("mean")
+                                && result
+                                    .get("component")
+                                    .and_then(JsonValue::as_str)
+                                    .is_none()
                         })
                     } else {
                         Vec::new()
                     }
                 })
                 .unwrap_or_default();
+            if series.is_empty() {
+                return Ok(None);
+            }
             Ok(Some(multi_timeseries_panel(SCAN_MEAN_PANEL_ID, series)))
+        },
+        |_ctx| Ok(None),
+    )
+}
+
+fn scan_component_measurements_projector(
+    component: &'static str,
+    panel_id: &'static str,
+    title: &'static str,
+) -> TaskPanelProjector {
+    panel_projector(
+        with_panel_width(
+            panel_spec(
+                panel_id,
+                title,
+                PanelKind::MultiTimeseries,
+                PanelHistoryMode::None,
+            ),
+            PanelWidth::Full,
+        ),
+        |ctx| {
+            let parameter_names = scan_parameter_names(ctx);
+            let series = scan_points(ctx)
+                .map(|points| {
+                    if parameter_names.len() == 1 {
+                        build_measurement_series(points, &parameter_names[0], |result| {
+                            result.get("name").and_then(JsonValue::as_str) == Some("mean")
+                                && result.get("component").and_then(JsonValue::as_str)
+                                    == Some(component)
+                        })
+                    } else {
+                        Vec::new()
+                    }
+                })
+                .unwrap_or_default();
+            if series.is_empty() {
+                return Ok(None);
+            }
+            Ok(Some(multi_timeseries_panel(panel_id, series)))
         },
         |_ctx| Ok(None),
     )
@@ -589,7 +647,7 @@ mod tests {
     }
 
     #[test]
-    fn scan_mean_plot_uses_one_series_per_component() {
+    fn scan_mean_component_plots_are_separate_and_include_error_bars() {
         let task = scan_task(Some(json!({
             "parameter_name": "scale",
             "completed_points": 1,
@@ -603,28 +661,47 @@ mod tests {
                     "measurement": {
                         "status": "completed",
                         "results": [
-                            {"name": "mean", "component": "real", "value": 2.0, "sample_count": 100},
-                            {"name": "mean", "component": "imag", "value": -1.0, "sample_count": 100},
+                            {"name": "mean", "component": "real", "value": 2.0, "uncertainty": 0.2, "sample_count": 100},
+                            {"name": "mean", "component": "imag", "value": -1.0, "uncertainty": 0.1, "sample_count": 100},
                             {"name": "variance", "component": "real", "value": 0.5, "sample_count": 100}
                         ]
                     }
                 }
             ]
         })));
-        let panel = scan_measurements_projector()
-            .current(&panel_ctx(&task, &JsonValue::Null))
-            .expect("projector")
-            .expect("panel");
-        let PanelState::MultiTimeseries { series, .. } = panel else {
+        let real_panel = scan_component_measurements_projector(
+            "real",
+            SCAN_MEAN_REAL_PANEL_ID,
+            "Real Central Value",
+        )
+        .current(&panel_ctx(&task, &JsonValue::Null))
+        .expect("projector")
+        .expect("panel");
+        let PanelState::MultiTimeseries { series, .. } = real_panel else {
             panic!("expected multi timeseries");
         };
-        assert_eq!(
-            series
-                .iter()
-                .map(|series| series.id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["mean:imag", "mean:real"]
-        );
+        assert_eq!(series.len(), 1);
+        assert_eq!(series[0].id, "mean:real");
+        assert_eq!(series[0].points[0].y, 2.0);
+        assert_eq!(series[0].points[0].y_min, Some(1.8));
+        assert_eq!(series[0].points[0].y_max, Some(2.2));
+
+        let imag_panel = scan_component_measurements_projector(
+            "imag",
+            SCAN_MEAN_IMAG_PANEL_ID,
+            "Imaginary Central Value",
+        )
+        .current(&panel_ctx(&task, &JsonValue::Null))
+        .expect("projector")
+        .expect("panel");
+        let PanelState::MultiTimeseries { series, .. } = imag_panel else {
+            panic!("expected multi timeseries");
+        };
+        assert_eq!(series.len(), 1);
+        assert_eq!(series[0].id, "mean:imag");
+        assert_eq!(series[0].points[0].y, -1.0);
+        assert_eq!(series[0].points[0].y_min, Some(-1.1));
+        assert_eq!(series[0].points[0].y_max, Some(-0.9));
     }
 
     #[test]
