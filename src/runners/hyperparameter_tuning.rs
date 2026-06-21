@@ -17,7 +17,11 @@ use rand::{Rng, SeedableRng};
 use rand_xoshiro::Xoshiro256StarStar;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    panic::{AssertUnwindSafe, catch_unwind},
+};
+use tracing::warn;
 
 const HYPERPARAMETER_TUNING_SPAWN_KIND: &str = "hyperparameter_tuning";
 
@@ -783,7 +787,7 @@ fn egobox_trial_plan(
         .take(desired_new)
         .collect::<Vec<_>>();
     let new_candidates =
-        if observations.len() < effective_egobox_initial_design(&params, parameters.len()) {
+        if observations.len() <= effective_egobox_initial_design(&params, parameters.len()) {
             next_indices
                 .into_iter()
                 .map(|index| {
@@ -877,10 +881,37 @@ fn suggest_egobox_candidates(
         };
         config.infill_strategy(infill_strategy)
     });
-    let service = builder
-        .min_within_mixint_space(&encoder.xtypes)
-        .map_err(|err| StoreError::store(format!("failed to configure egobox optimizer: {err}")))?;
-    let suggested = service.suggest(&x_data, &y_data);
+    let suggested = match catch_unwind(AssertUnwindSafe(|| {
+        let service = builder
+            .min_within_mixint_space(&encoder.xtypes)
+            .map_err(|err| {
+                StoreError::store(format!("failed to configure egobox optimizer: {err}"))
+            })?;
+        Ok::<_, StoreError>(service.suggest(&x_data, &y_data))
+    })) {
+        Ok(Ok(suggested)) => suggested,
+        Ok(Err(err)) => {
+            return egobox_random_fallback_candidates(
+                params,
+                encoder,
+                next_indices,
+                existing_trial_indices,
+                previous_trials,
+                &format!("{err}"),
+            );
+        }
+        Err(payload) => {
+            let reason = panic_payload_message(payload.as_ref());
+            return egobox_random_fallback_candidates(
+                params,
+                encoder,
+                next_indices,
+                existing_trial_indices,
+                previous_trials,
+                &format!("egobox optimizer panicked: {reason}"),
+            );
+        }
+    };
     let mut existing_encoded =
         existing_encoded_points(encoder, existing_trial_indices, previous_trials)?;
     let mut candidates = Vec::new();
@@ -899,6 +930,41 @@ fn suggest_egobox_candidates(
         candidates.push(OptimizerTrialCandidate { index, parameters });
     }
     Ok(candidates)
+}
+
+fn egobox_random_fallback_candidates(
+    params: &crate::core::EgoboxOptimizerParams,
+    encoder: &ParameterEncoder,
+    next_indices: &[usize],
+    existing_trial_indices: &BTreeSet<usize>,
+    previous_trials: &BTreeMap<usize, PreviousTrial>,
+    reason: &str,
+) -> Result<Vec<OptimizerTrialCandidate>, StoreError> {
+    warn!(
+        reason,
+        "egobox candidate generation failed; falling back to deterministic random candidates"
+    );
+    let mut existing_encoded =
+        existing_encoded_points(encoder, existing_trial_indices, previous_trials)?;
+    let mut candidates = Vec::new();
+    for index in next_indices.iter().copied() {
+        let mut rng =
+            Xoshiro256StarStar::seed_from_u64(params.seed.unwrap_or(0) ^ splitmix64(index as u64));
+        let parameters = encoder.random_distinct_point(&mut rng, &existing_encoded)?;
+        existing_encoded.push(encoder.encode(&parameters)?);
+        candidates.push(OptimizerTrialCandidate { index, parameters });
+    }
+    Ok(candidates)
+}
+
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        return (*message).to_string();
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+    "unknown panic payload".to_string()
 }
 
 impl From<EgoboxInfillStrategy> for InfillStrategy {
@@ -1685,6 +1751,112 @@ mod tests {
         assert_eq!(plan.candidates[0].index, 0);
         assert_eq!(plan.candidates[0].parameters["x"].as_float(), Some(0.25));
         assert!(plan.candidates.iter().any(|candidate| candidate.index == 1));
+    }
+
+    #[test]
+    fn egobox_planning_uses_random_design_at_initial_design_boundary() {
+        let parameters = BTreeMap::from([
+            (
+                "havana_bins".to_string(),
+                HyperparameterTuningParameterDomain::Integer(HyperparameterTuningIntegerDomain {
+                    min: 16,
+                    max: 96,
+                    step: Some(16),
+                }),
+            ),
+            (
+                "mask_width".to_string(),
+                HyperparameterTuningParameterDomain::Float(HyperparameterTuningFloatDomain {
+                    min: 0.15,
+                    max: 2.0,
+                }),
+            ),
+            (
+                "mass".to_string(),
+                HyperparameterTuningParameterDomain::Float(HyperparameterTuningFloatDomain {
+                    min: 0.25,
+                    max: 1.8,
+                }),
+            ),
+            (
+                "max_eta_min".to_string(),
+                HyperparameterTuningParameterDomain::Categorical(
+                    HyperparameterTuningCategoricalDomain {
+                        source: crate::core::ParameterValueSourceSpec {
+                            values: vec![toml::Value::Float(0.0), toml::Value::Float(1.0e10)],
+                            ..Default::default()
+                        },
+                    },
+                ),
+            ),
+            (
+                "samples_for_update".to_string(),
+                HyperparameterTuningParameterDomain::Integer(HyperparameterTuningIntegerDomain {
+                    min: 512,
+                    max: 4096,
+                    step: Some(512),
+                }),
+            ),
+            (
+                "subtraction_width".to_string(),
+                HyperparameterTuningParameterDomain::Float(HyperparameterTuningFloatDomain {
+                    min: 0.15,
+                    max: 2.0,
+                }),
+            ),
+        ]);
+        let optimizer = HyperparameterTuningOptimizerSpec {
+            algorithm: HyperparameterTuningAlgorithm::Egobox,
+            params: json!({
+                "max_trials": 16,
+                "seed": 23,
+                "initial_design": 6,
+                "parallel_candidates": 2,
+                "infill": "ei",
+                "qei_strategy": "kriging_believer"
+            }),
+        };
+        let previous_trials = (0..7)
+            .map(|index| {
+                let mut rng = Xoshiro256StarStar::seed_from_u64(23 ^ splitmix64(index as u64));
+                let parameters = parameters
+                    .iter()
+                    .map(|(name, domain)| Ok((name.clone(), sample_parameter(domain, &mut rng)?)))
+                    .collect::<Result<BTreeMap<_, _>, StoreError>>()
+                    .expect("parameters");
+                (
+                    index,
+                    PreviousTrial {
+                        index,
+                        status: "completed".to_string(),
+                        parameters,
+                        objective_value: Some((index + 1) as f64),
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let observations = previous_trials
+            .values()
+            .map(|trial| OptimizerObservation {
+                parameters: trial.parameters.clone(),
+                objective_value: trial.objective_value.unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let existing = previous_trials.keys().copied().collect::<BTreeSet<_>>();
+
+        let plan = plan_optimizer_trials(
+            &optimizer,
+            &parameters,
+            &existing,
+            &previous_trials,
+            &observations,
+            MeasurementMode::Minimize,
+            1,
+        )
+        .expect("egobox plan should avoid fragile minimal-observation suggestion");
+
+        assert_eq!(plan.total_trials, 16);
+        assert!(plan.candidates.iter().any(|candidate| candidate.index == 7));
     }
 
     #[test]

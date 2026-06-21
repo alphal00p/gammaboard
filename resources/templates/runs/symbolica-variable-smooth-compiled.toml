@@ -22,13 +22,9 @@ replacements = { run_name = "symbolica_variable_theta_mass_scan", samples = 1000
 
 name = '$(run_name:"symbolica_variable_theta_mass_scan")'
 
-# The parent scan task only orchestrates child runs. This cheap root evaluator
-# keeps accidental/automatic evaluator assignment to the parent run valid; all
-# physics evaluation happens inside the generated child runs below.
-[evaluator]
-kind = "unit"
-continuous_dims = 1
-discrete_dims = 0
+# The parent scan task only orchestrates child runs. It intentionally has no
+# root evaluator; all physics evaluation happens inside the generated child
+# runs below.
 
 [[task_queue]]
 name = "mass-scan"

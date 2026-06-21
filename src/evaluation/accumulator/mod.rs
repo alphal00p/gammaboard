@@ -337,6 +337,7 @@ mod tests {
     use crate::core::{
         AccumulatorConfig, AccumulatorMetricName, AccumulatorMetricSelector,
         DiscreteProjectionConfig, DiscreteProjectionNormalization, NamedDiscreteProjection,
+        TrainingProjection,
     };
     use crate::evaluation::Point;
 
@@ -401,6 +402,39 @@ mod tests {
         .expect("metric extraction")
         .expect("variance metric");
 
+        assert!(metric.value > 0.0);
+        assert!(metric.uncertainty.is_some_and(|value| value > 0.0));
+        assert_eq!(metric.sample_count, 4);
+    }
+
+    #[test]
+    fn vector_metric_extraction_reports_component_variance_uncertainty_with_fourth_moment() {
+        let config = AccumulatorConfig::Vector {
+            components: vec!["real".to_string(), "imag".to_string()],
+            training_projection: TrainingProjection::component("real"),
+            discrete_projections: None,
+            moments: crate::core::AccumulatorMomentConfig::MaxOrder4,
+        };
+        let AccumulatorState::Vector(mut state) = AccumulatorState::from_config(&config) else {
+            panic!("expected vector accumulator");
+        };
+
+        let point = Point::new(vec![], vec![], 1.0);
+        for values in [[1.0, 0.5], [2.0, 1.0], [4.0, 2.0], [8.0, 4.0]] {
+            state.ingest_vector(&values, &point).expect("vector ingest");
+        }
+
+        let metric = extract_accumulator_metric(
+            &AccumulatorState::Vector(state),
+            &AccumulatorMetricSelector {
+                name: AccumulatorMetricName::Variance,
+                component: Some("real".to_string()),
+            },
+        )
+        .expect("metric extraction")
+        .expect("variance metric");
+
+        assert_eq!(metric.component.as_deref(), Some("real"));
         assert!(metric.value > 0.0);
         assert!(metric.uncertainty.is_some_and(|value| value > 0.0));
         assert_eq!(metric.sample_count, 4);

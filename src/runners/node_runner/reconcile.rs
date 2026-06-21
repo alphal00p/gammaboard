@@ -12,7 +12,7 @@ use crate::runners::{
     stage_context::{HAVANA_HANDOFF_REQUIRED_ERROR, resolve_stage_context},
 };
 use crate::sampling::StageHandoffOwned;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 impl<S: NodeRunnerStore> NodeRunner<S> {
     async fn fail_task_activation_and_pause_run(
@@ -243,7 +243,9 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             return Ok(None);
         };
         let Some(evaluator_config) = spec.evaluator.clone() else {
-            warn!("run has no evaluator config; evaluator not started");
+            debug!(
+                "run has no root evaluator config; evaluator assignment remains idle until reassigned"
+            );
             return Ok(None);
         };
         let role_store = self

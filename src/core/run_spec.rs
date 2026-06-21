@@ -846,6 +846,21 @@ moments = { max_order = 4 }
 
         assert_eq!(config.moments(), AccumulatorMomentConfig::MaxOrder4);
     }
+
+    #[test]
+    fn vector_accumulator_config_parses_moment_config() {
+        let config: AccumulatorConfig = toml::from_str(
+            r#"
+kind = "vector"
+components = ["real", "imag"]
+training_projection = { kind = "component", name = "real" }
+moments = { max_order = 4 }
+"#,
+        )
+        .expect("vector accumulator config");
+
+        assert_eq!(config.moments(), AccumulatorMomentConfig::MaxOrder4);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

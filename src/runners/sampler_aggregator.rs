@@ -783,7 +783,11 @@ where
             let projection = self.effective_stop_projection();
             self.projected_estimate_for_stop(projection)
         };
-        if (stop_condition.absolute_error.is_some() || stop_condition.relative_error.is_some())
+        let min_samples_reached = stop_condition
+            .min_samples
+            .is_none_or(|target| self.task.nr_completed_samples >= target);
+        if min_samples_reached
+            && (stop_condition.absolute_error.is_some() || stop_condition.relative_error.is_some())
             && projected.is_none()
         {
             let target = stop_condition
@@ -808,9 +812,6 @@ where
             ))));
         }
 
-        let min_samples_reached = stop_condition
-            .min_samples
-            .is_none_or(|target| self.task.nr_completed_samples >= target);
         let max_samples_reached = stop_condition
             .max_samples
             .is_some_and(|target| self.task.nr_completed_samples >= target);
