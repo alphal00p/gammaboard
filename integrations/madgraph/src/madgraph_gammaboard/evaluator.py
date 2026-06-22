@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 from gammaboard_process import Evaluator, run_evaluator
 
-from .artifacts import MatrixElementBackend, load_matrix_element_backend
+from .artifacts import MatrixElement, load_matrix_element
 from .phase_space import TwoBodyPhaseSpace, build_phase_space
 
 
@@ -28,7 +28,7 @@ class MadGraphEvaluator(Evaluator):
                 f"continuous_dims={continuous_dims} does not match "
                 f"{self.phase_space.dims} required by phase_space.kind='two_body'"
             )
-        self.backend: MatrixElementBackend = load_matrix_element_backend(matrix_element)
+        self.matrix_element: MatrixElement = load_matrix_element(matrix_element)
         self.output = output or ["value"]
         allowed = {"value", "matrix_element", "phase_space_weight"}
         unknown = [name for name in self.output if name not in allowed]
@@ -39,7 +39,7 @@ class MadGraphEvaluator(Evaluator):
         if xs_discrete.shape[1] != 0:
             raise ValueError("the first MadGraph evaluator version expects no discrete coordinates")
         mapped = self.phase_space.map(xs_continuous)
-        matrix_element = self.backend.evaluate(mapped.momenta)
+        matrix_element = self.matrix_element(mapped.momenta)
         value = matrix_element * mapped.weight
         columns = {
             "value": value,

@@ -1,7 +1,5 @@
 .venv/
 artifacts/*
-!artifacts/ee_mumu/
-!artifacts/ee_mumu/my_mg7_adapter.py
 build/
 *.egg-info/
 .pytest_cache/

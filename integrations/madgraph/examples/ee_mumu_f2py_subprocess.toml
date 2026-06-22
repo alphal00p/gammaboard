@@ -57,7 +57,6 @@ output = ["value"]
 phase_space = { kind = "two_body", final_state_masses = [0.0, 0.0], include_flux = true }
 
 [evaluator.args.matrix_element]
-kind = "madgraph_f2py_subprocess"
 search_path = "integrations/madgraph/artifacts/ee_mumu/ee_mumu_f2py/SubProcesses/P1_epem_mupmum"
 module = "matrix2py"
 initialize_path = "integrations/madgraph/artifacts/ee_mumu/ee_mumu_f2py/Cards/param_card.dat"
