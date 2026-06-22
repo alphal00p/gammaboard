@@ -12,6 +12,8 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - `src/process_runtime`, `src/process_worker`: process command launchers and framed JSON-RPC worker protocol.
 - `src/server`: API and backend-owned panel models.
 - `src/cli`: command parsing/bootstrap.
+- `integrations/*`: optional external-tool wrappers and heavier examples;
+  keep these out of the default local `resources/` space.
 - `ops/*/config`: runtime/server profiles. `src/config_defaults`: embedded defaults.
 
 ## Model

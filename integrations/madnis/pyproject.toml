@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+
+[project]
+name = "madnis_gammaboard_api"
+version = "0.1.0"
+requires-python = ">=3.12,<3.14"
+authors = [ { name = "Nic Fink", email = "nic.fink@students.unibe.ch" } ]
+
+dependencies = [
+    "gammaboard-process @ git+https://github.com/alphal00p/gammaboard.git@main#subdirectory=process_api/python",
+    "madnis @ git+https://github.com/madgraph-ml/madnis.git@main",
+]
+
+[project.scripts]
+madnis-gammaboard-sampler = "run_sampler:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+py-modules = ["madnis_sampler", "run_sampler"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

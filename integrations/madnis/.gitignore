@@ -1,0 +1,7 @@
+.venv/
+result
+result-*
+madnis.sif
+checkpoints/
+__pycache__/
+*.py[cod]
