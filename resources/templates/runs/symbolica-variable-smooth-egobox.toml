@@ -1,0 +1,149 @@
+# Symbolica precompiled evaluator Egobox tuning demo.
+#
+# This reuses the `variable_theta` shared library used by the mass-scan demo:
+#
+#   resources/artifacts/variable_theta.so
+#
+# The natural numerical hyperparameters are inferred from triangler's
+# `IntegrandBuilder`/`TriangleIntegrandContext`:
+#
+# - subtraction_width: radius of the threshold subtraction region
+# - mask_width: smoothing/localization width for the integrated counterterm mask
+# - max_eta_min: switches between global/per-sample eta filtering behavior
+# The common internal mass is fixed for this tuning demo. Use `fixed_mass` if
+# you want to retarget the search to another mass point.
+#
+# `a`, `b`, and `c` are kept fixed to the combined integrand. In triangler they
+# are contribution switches, not stability knobs:
+#
+#   a * unsubtracted - b * counterterm + c * integrated_counterterm
+#
+# The objective is the real-component time-normalized variance, so slower
+# settings are penalized automatically. Keep trial counts modest for a live demo;
+# increase `max_trials` and `trial_samples` for a real search.
+
+replacements = { run_name = "symbolica_variable_theta_egobox", fixed_mass = 1.0, trial_samples = 50000, max_trials = 16, max_concurrent_trials = 2 }
+
+name = '$(run_name:"symbolica_variable_theta_egobox")'
+
+[[task_queue]]
+name = "egobox-tune"
+kind = "hyperparameter_tuning"
+max_concurrent_trials = "$(max_concurrent_trials:2)"
+trial_run_toml = """
+name = 'variable-theta-egobox-m$(fixed_mass:1.0)-sw$(subtraction_width:0.5)-mw$(mask_width:0.5)-eta$(max_eta_min:10000000000.0)-bins$(havana_bins:64)'
+target = { kind = "vector", components = { real = 0.0, imag = 0.0 } }
+
+[evaluator]
+kind = "symbolica"
+args = ["k0", "k1", "k2"]
+compiled_args = [
+  "pi",
+  "a", "b", "c",
+  "subtraction_width", "max_imag_root_part", "max_eta_min", "mask_width",
+  "m0", "m1", "m2",
+  "q0_0", "q0_1", "q0_2", "q0_3",
+  "q1_0", "q1_1", "q1_2", "q1_3",
+  "q2_0", "q2_1", "q2_2", "q2_3",
+  "k0", "k1", "k2",
+]
+
+[evaluator.source]
+kind = "compiled"
+path = "artifacts/variable_theta.so"
+name = "variable_theta"
+outputs = 1
+
+[evaluator.bindings]
+pi = "pi"
+a = 1.0
+b = 1.0
+c = 1.0
+subtraction_width = '$(subtraction_width:0.5)'
+max_imag_root_part = 1e15
+max_eta_min = '$(max_eta_min:10000000000.0)'
+mask_width = '$(mask_width:0.5)'
+m0 = '$(fixed_mass:1.0)'
+m1 = '$(fixed_mass:1.0)'
+m2 = '$(fixed_mass:1.0)'
+
+# Ordered q values for the context:
+#   p1 = [1.06066017, 0, 0, 0.35355339]
+#   p2 = [1.76776695, 0, 0, -0.35355339]
+#   get_qs() = [p1, 0, -p2], sorted by q[0].
+q0_0 = -1.76776695
+q0_1 = 0.0
+q0_2 = 0.0
+q0_3 = 0.35355339
+q1_0 = 0.0
+q1_1 = 0.0
+q1_2 = 0.0
+q1_3 = 0.0
+q2_0 = 1.06066017
+q2_1 = 0.0
+q2_2 = 0.0
+q2_3 = 0.35355339
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+measurement = { quantity = { metric = "time_normalized_variance", component = "real" }, mode = "minimize" }
+stop_condition = { max_samples = "$(trial_samples:50000)" }
+batch_transforms = [{ kind = "spherical" }]
+
+[task_queue.accumulator.config]
+kind = "vector"
+components = ["real", "imag"]
+training_projection = { kind = "component", name = "real" }
+moments = { max_order = 4 }
+
+[task_queue.sampler_aggregator.config]
+kind = "havana_training"
+seed = 0
+bins = "$(havana_bins:64)"
+samples_for_update = "$(samples_for_update:2048)"
+initial_training_rate = 0.1
+final_training_rate = 0.01
+"""
+
+[task_queue.optimizer]
+algorithm = "egobox"
+
+[task_queue.optimizer.params]
+max_trials = "$(max_trials:16)"
+seed = 23
+initial_design = 6
+parallel_candidates = "$(max_concurrent_trials:2)"
+infill = "ei"
+qei_strategy = "kriging_believer"
+
+[task_queue.objective]
+source_task = "sample"
+mode = "minimize"
+quantity = { metric = "time_normalized_variance", component = "real" }
+
+[task_queue.parameters.subtraction_width]
+kind = "float"
+min = 0.15
+max = 2.0
+
+[task_queue.parameters.mask_width]
+kind = "float"
+min = 0.15
+max = 2.0
+
+[task_queue.parameters.max_eta_min]
+kind = "categorical"
+values = [0.0, 10000000000.0]
+
+[task_queue.parameters.havana_bins]
+kind = "integer"
+min = 16
+max = 96
+step = 16
+
+[task_queue.parameters.samples_for_update]
+kind = "integer"
+min = 512
+max = 4096
+step = 512
