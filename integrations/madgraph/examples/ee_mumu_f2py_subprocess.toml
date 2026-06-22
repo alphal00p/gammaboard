@@ -1,0 +1,83 @@
+# MadGraph7 e+ e- -> mu+ mu- F2PY subprocess demo.
+#
+# This is the real-artifact path tested during development:
+# GammaBoard -> process evaluator -> Python wrapper -> generated matrix2py.so.
+#
+# One-time wrapper setup:
+#
+#   cd integrations/madgraph
+#   python -m venv .venv
+#   . .venv/bin/activate
+#   python -m pip install --upgrade pip
+#   python -m pip install .
+#
+# One-time artifact build:
+#
+#   git clone https://github.com/MadGraphTeam/MadGraph7.git /tmp/MadGraph7
+#   cd /home/cedricsigrist/Workspace/repos/gammaboard
+#   mkdir -p integrations/madgraph/artifacts/ee_mumu
+#   cat > /tmp/gammaboard_ee_mumu_mg7.cmd <<'EOF'
+#   import model sm
+#   generate e+ e- > mu+ mu-
+#   output standalone integrations/madgraph/artifacts/ee_mumu/ee_mumu_f2py -f
+#   quit
+#   EOF
+#   python /tmp/MadGraph7/bin/mg5_aMC /tmp/gammaboard_ee_mumu_mg7.cmd
+#
+#   # Some generated makefiles overwrite PDIR with an absolute path, which
+#   # makes the linker try to create `libme/home/...so`. Remove that line.
+#   sed -i '/^PDIR:=$(shell dirname $(realpath --no-symlinks $(firstword matrix.f)))$/d' \
+#     integrations/madgraph/artifacts/ee_mumu/ee_mumu_f2py/SubProcesses/P1_epem_mupmum/makefile
+#
+#   cd integrations/madgraph/artifacts/ee_mumu/ee_mumu_f2py/SubProcesses
+#   make
+#   find . -name 'matrix2py*.so'
+#
+# This generated artifact is flavor-dependent, but the generated F2PY wrappers
+# for `py_get_value` and `py_smatrix` do not expose the flavor argument. The
+# config therefore uses the wrapper-side `py_matrix_sum` mode: call `py_matrix`
+# for every ± helicity assignment, pass the explicit MadGraph flavor IDs, and
+# divide by the initial-state helicity average.
+
+replacements = { run_name = "madgraph_ee_mumu_f2py", samples = 100000 }
+
+name = '$(run_name:"madgraph_ee_mumu_f2py")'
+target = { kind = "scalar", value = 0.0 }
+
+[evaluator]
+kind = "process_evaluator"
+command = ["$resources/../integrations/madgraph/.venv/bin/madgraph-gammaboard-evaluator"]
+cwd = "$resources/.."
+domain = { continuous = { dims = 2 } }
+components = ["value"]
+
+[evaluator.args]
+ecm = 91.188
+output = ["value"]
+phase_space = { kind = "two_body", final_state_masses = [0.0, 0.0], include_flux = true }
+
+[evaluator.args.matrix_element]
+kind = "madgraph_f2py_subprocess"
+search_path = "integrations/madgraph/artifacts/ee_mumu/ee_mumu_f2py/SubProcesses/P1_epem_mupmum"
+module = "matrix2py"
+initialize_path = "integrations/madgraph/artifacts/ee_mumu/ee_mumu_f2py/Cards/param_card.dat"
+function = "py_matrix_sum"
+flavor = [1, 1, 2, 2]
+helicities = "all_pm"
+normalization = 4.0
+
+[[task_queue]]
+name = "accumulator"
+kind = "set_accumulator"
+
+[task_queue.accumulator]
+kind = "vector"
+components = ["value"]
+training_projection = { kind = "component", name = "value" }
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+measurement = { quantity = "central_value" }
+stop_condition = { max_samples = "$(samples:100000)" }
+sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 64, samples_for_update = 4096 } }

@@ -10,6 +10,18 @@
 #       ...
 #
 # The callable should return one matrix-element value per phase-space point.
+#
+# Setup:
+#
+#   cd integrations/madgraph
+#   python -m venv .venv
+#   . .venv/bin/activate
+#   python -m pip install --upgrade pip
+#   python -m pip install .
+#
+# This example ships with a tiny non-physical demo adapter so it can run
+# immediately. For real physics, replace `my_mg7_adapter.py` with an adapter
+# around a generated MadGraph7/MadGraph Python matrix element.
 
 replacements = { run_name = "madgraph_ee_mumu_callable_demo", samples = 100000 }
 
@@ -37,7 +49,11 @@ search_path = "integrations/madgraph/artifacts/ee_mumu"
 [[task_queue]]
 name = "accumulator"
 kind = "set_accumulator"
-accumulator = "scalar"
+
+[task_queue.accumulator]
+kind = "vector"
+components = ["value"]
+training_projection = { kind = "component", name = "value" }
 
 [[task_queue]]
 name = "sample"
