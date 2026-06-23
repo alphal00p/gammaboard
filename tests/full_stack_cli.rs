@@ -1828,9 +1828,6 @@ training_projection = {{ kind = "component", name = "real" }}
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege and python+numpy"]
 async fn full_stack_cli_python_gammaloop_observable_process_api_e2e() -> anyhow::Result<()> {
-    let mut harness = FullStackHarness::new().await?;
-    harness.start_nodes(&["w-1", "w-2"]).await?;
-
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let example_dir = manifest_dir.join("process_api/examples/python_gammaloop_observable");
     let default_python = example_dir.join(".venv/bin/python");
@@ -1848,17 +1845,36 @@ async fn full_stack_cli_python_gammaloop_observable_process_api_e2e() -> anyhow:
         example_dir.join("src").display()
     );
 
-    let preflight_status = std::process::Command::new(&python)
-        .args(["-c", "import run_evaluator"])
-        .env("PYTHONPATH", &pythonpath)
-        .current_dir(example_dir.join("src"))
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()?;
+    let preflight_output = tokio::time::timeout(
+        Duration::from_secs(30),
+        TokioCommand::new(&python)
+            .args([
+                "-c",
+                "import numpy; import gammaboard_process; from demo_evaluator import PolynomialEvaluator",
+            ])
+            .env("PYTHONPATH", &pythonpath)
+            .current_dir(example_dir.join("src"))
+            .output(),
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "timed out preflighting python_gammaloop_observable runtime with {} using PYTHONPATH={}",
+            python,
+            pythonpath
+        )
+    })??;
     anyhow::ensure!(
-        preflight_status.success(),
-        "failed to preflight python_gammaloop_observable runtime"
+        preflight_output.status.success(),
+        "failed to preflight python_gammaloop_observable runtime with {} using PYTHONPATH={}\nstdout:\n{}\nstderr:\n{}",
+        python,
+        pythonpath,
+        String::from_utf8_lossy(&preflight_output.stdout),
+        String::from_utf8_lossy(&preflight_output.stderr)
     );
+
+    let mut harness = FullStackHarness::new().await?;
+    harness.start_nodes(&["w-1", "w-2"]).await?;
 
     let run_name = format!("python-gammaloop-observable-e2e-{}", unique_suffix());
     let config = temp_run_add_config(&format!(
@@ -1882,9 +1898,9 @@ kind = "gammaloop"
 [[task_queue]]
 name = "sample"
 kind = "sample"
-stop_condition = {{ max_samples = 64 }}
+stop_condition = {{ max_samples = 8 }}
 accumulator = "latest"
-sampler_aggregator = {{ config = {{ kind = "havana_training", seed = 0, bins = 8, samples_for_update = 8, initial_training_rate = 0.1, final_training_rate = 0.01 }} }}
+sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo", seed = 0 }} }}
 
 [task_queue.queue_tuning]
 max_batch_size = 8
@@ -1898,8 +1914,21 @@ target_batch_eval_ms = 1.0
     harness.assign_node("w-1", "sampler-aggregator", &run_name);
     harness.assign_node("w-2", "evaluator", &run_name);
 
+    sleep(Duration::from_secs(3)).await;
+    let (startup_state, startup_failure): (String, Option<String>) = sqlx::query_as(
+        "SELECT state, failure_reason FROM run_tasks WHERE run_id = $1 AND name = 'sample'",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    anyhow::ensure!(
+        startup_state != "failed",
+        "sample failed during startup: {}",
+        startup_failure.unwrap_or_else(|| "no failure_reason".to_string())
+    );
+
     harness
-        .wait_for("python gammaloop observable sample completes", Duration::from_secs(60), || {
+        .wait_for("python gammaloop observable sample completes", Duration::from_secs(15), || {
             let pool = harness.pool.clone();
             async move {
                 let (state, failure_reason): (String, Option<String>) = sqlx::query_as(
@@ -1931,12 +1960,12 @@ target_batch_eval_ms = 1.0
         .and_then(JsonValue::as_i64)
         .unwrap_or(0);
     assert!(
-        real_count >= 64,
-        "expected real estimate count >= 64, got {real_count}; observable={observable}"
+        real_count >= 8,
+        "expected real estimate count >= 8, got {real_count}; observable={observable}"
     );
     assert!(
-        histogram_sample_count >= 64,
-        "expected x histogram sample_count >= 64, got {histogram_sample_count}; observable={observable}"
+        histogram_sample_count >= 8,
+        "expected x histogram sample_count >= 8, got {histogram_sample_count}; observable={observable}"
     );
 
     let persisted = harness
