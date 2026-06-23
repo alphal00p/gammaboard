@@ -1,0 +1,77 @@
+# MadGraph7 p p -> mu+ mu- (Drell-Yan) MadSpace demo.
+#
+# Uses the madspace Python API from MG7 to evaluate the combined
+# phase-space + matrix-element integrand directly from a MG7 state directory.
+# Requires NNPDF23_lo_as_0130_qed (the MG7 default PDF set).
+#
+# One-time wrapper setup:
+#
+#   cd integrations/madgraph
+#   python -m venv .venv
+#   . .venv/bin/activate
+#   python -m pip install --upgrade pip
+#   python -m pip install .
+#
+# One-time PDF set download (if not already present):
+#
+#   wget https://lhapdfsets.web.cern.ch/lhapdfsets/current/NNPDF23_lo_as_0130_qed.tar.gz -P /tmp/
+#   sudo tar -xzf /tmp/NNPDF23_lo_as_0130_qed.tar.gz -C /usr/share/LHAPDF/
+#
+# One-time state generation (from repos/gammaboard):
+#
+#   mkdir -p integrations/madgraph/artifacts/pp_mumu
+#   python /home/cedricsigrist/Workspace/repos/MadGraph7/bin/mg5_aMC <<'EOF'
+#   generate p p > mu+ mu-
+#   output integrations/madgraph/artifacts/pp_mumu/mg7_state -f
+#   quit
+#   EOF
+#
+# Verify random_dim matches domain.continuous.dims before running:
+#
+#   cd integrations/madgraph && . .venv/bin/activate
+#   python - <<'EOF'
+#   from madgraph_gammaboard.state import MadSpaceState
+#   s = MadSpaceState.load(
+#       state_path="integrations/madgraph/artifacts/pp_mumu/mg7_state",
+#       madgraph_root="/home/cedricsigrist/Workspace/repos/MadGraph7",
+#   )
+#   print("random_dim =", s.random_dim)
+#   EOF
+
+replacements = { run_name = "madgraph_pp_mumu_madspace", samples = 100000 }
+
+name = '$(run_name:"madgraph_pp_mumu_madspace")'
+target = { kind = "scalar", value = 0.0 }
+
+[evaluator]
+kind = "process_evaluator"
+command = ["$resources/../integrations/madgraph/.venv/bin/madgraph-gammaboard-evaluator"]
+cwd = "$resources/.."
+domain = { continuous = { dims = 6 } }
+components = ["weight"]
+
+[evaluator.args]
+state_path = "integrations/madgraph/artifacts/pp_mumu/mg7_state"
+madgraph_root = "/home/cedricsigrist/Workspace/repos/MadGraph7"
+subprocess_index = 0
+phase_space = "flat"
+channel_index = 0
+device = "cppnone"
+thread_count = -1
+output = ["weight"]
+
+[[task_queue]]
+name = "accumulator"
+kind = "set_accumulator"
+
+[task_queue.accumulator]
+kind = "vector"
+components = ["weight"]
+training_projection = { kind = "component", name = "weight" }
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+measurement = { quantity = "central_value" }
+stop_condition = { max_samples = "$(samples:100000)" }
+sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 64, samples_for_update = 4096 } }
