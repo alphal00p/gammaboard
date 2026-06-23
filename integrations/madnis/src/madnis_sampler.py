@@ -442,7 +442,16 @@ class MadnisSampler(Sampler):
 
     def get_diagnostics(self) -> Dict[str, Any]:
         """Optional runtime diagnostics. Empty dict means no diagnostics available."""
-        return {} if self.last_loss is None else dict(loss=self.last_loss)
+        diagnostics: Dict[str, Any] = dict(
+            produced_batches=self.produced_batches,
+            produced_samples=self.produced_samples,
+            total_trained_samples=self.total_trained_samples,
+        )
+        if self.last_loss is not None:
+            diagnostics["loss"] = self.last_loss
+        if self.gammaloop_metadata is not None:
+            diagnostics["gammaloop_metadata"] = asdict(self.gammaloop_metadata)
+        return diagnostics
 
     def pdf(
         self, xs_discrete: NDArray, xs_continuous: NDArray

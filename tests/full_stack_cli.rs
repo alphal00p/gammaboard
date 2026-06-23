@@ -1576,6 +1576,215 @@ sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", 
 }
 
 #[tokio::test]
+#[ignore = "requires local postgres, nix, the integrations/madnis runtime, and the bundled GammaLoop state"]
+async fn full_stack_cli_gammaloop_madnis_metadata_and_batch_fuzz_e2e() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let process_api_python = manifest_dir.join("process_api/python/src");
+    let madnis_src = manifest_dir.join("integrations/madnis/src");
+    let gammaloop_state = manifest_dir.join("resources/states/epem_a_ttxh/LO/state");
+    let madnis_pythonpath = format!("{}:{}", process_api_python.display(), madnis_src.display());
+    let madnis_flake_ref = format!(
+        "path:{}#runtime",
+        manifest_dir.join("integrations/madnis").display()
+    );
+    let run_name = format!("gammaloop-madnis-metadata-fuzz-{}", unique_suffix());
+    let cases = [(1_usize, 1_usize, 2_usize), (2, 1, 3), (3, 2, 4)];
+
+    let madnis_runtime_status = std::process::Command::new("nix")
+        .args([
+            "shell",
+            &madnis_flake_ref,
+            "-c",
+            "env",
+            &format!("PYTHONPATH={madnis_pythonpath}"),
+            "python",
+            "-c",
+            "import run_sampler",
+        ])
+        .current_dir(manifest_dir.join("resources"))
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()?;
+    anyhow::ensure!(
+        madnis_runtime_status.success(),
+        "failed to preflight MadNIS runtime"
+    );
+
+    harness.start_nodes(&["w-1", "w-2"]).await?;
+
+    let mut task_toml = String::new();
+    for (case_idx, (queue_max_batch_size, madnis_max_batch_size, samples_for_update)) in
+        cases.iter().copied().enumerate()
+    {
+        task_toml.push_str(&format!(
+            r#"
+
+[[task_queue]]
+name = "madnis-case-{case_idx}"
+kind = "sample"
+stop_condition = {{ max_samples = {samples_for_update} }}
+accumulator = "latest"
+sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", "shell", "{madnis_flake_ref}", "-c", "env", "PYTHONPATH={madnis_pythonpath}", "python", "-u", "-m", "run_sampler"], requires_training_values = true, args = {{ seed = {case_idx}, training_steps = 1, training_batch_size = {samples_for_update}, max_batch_size = {madnis_max_batch_size}, use_gpu = false, learning_rate = 0.001, use_scheduler = false, discrete_model = "made", discrete_dims_position = "first", flow_config = {{ layers = 1, units = 8, bins = 4 }}, made_config = {{ layers = 1, nodes_per_feature = 8 }} }} }} }}
+
+[task_queue.queue_tuning]
+max_batch_size = {queue_max_batch_size}
+target_batch_eval_ms = 1.0
+"#
+        ));
+    }
+
+    let config = temp_run_add_config(&format!(
+        r#"
+name = "{run_name}"
+
+[evaluator]
+kind = "gammaloop"
+state_folder = "{}"
+integrand_name = "LO"
+training_projection = "abs"
+
+[evaluator.preprocessing]
+read_only = true
+commands = [
+  "set model MT=173.0",
+  "set model WT=0.0",
+  "set model ymt=173.0",
+  "set model aS=0.118",
+  "set model aEWM1=132.507",
+  "set model Gf=1.166390e-05",
+  "set model MZ=91.188",
+]
+
+[sampler_aggregator_runner_params]
+performance_snapshot_interval_ms = 100
+min_tick_time_ms = 10
+frontend_sync_interval_ms = 100
+db_pool_size = 2
+
+[evaluator_runner_params]
+performance_snapshot_interval_ms = 100
+min_tick_time_ms = 50
+db_pool_size = 1
+
+[[task_queue]]
+name = "accumulator"
+kind = "set_accumulator"
+
+[task_queue.accumulator]
+kind = "vector"
+components = ["real", "imag"]
+training_projection = {{ kind = "component", name = "real" }}
+
+{task_toml}
+"#,
+        gammaloop_state.display()
+    ));
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = $1")
+        .bind(&run_name)
+        .fetch_one(&harness.pool)
+        .await?;
+
+    harness
+        .cli()
+        .args(["node", "assign", "w-1", "sampler-aggregator", &run_name])
+        .assert()
+        .success();
+    harness
+        .cli()
+        .args(["node", "assign", "w-2", "evaluator", &run_name])
+        .assert()
+        .success();
+
+    for case_idx in 0..cases.len() {
+        let task_name = format!("madnis-case-{case_idx}");
+        harness
+            .wait_for(
+                format!("GammaLoop/MadNIS task {task_name} completes"),
+                Duration::from_secs(300),
+                || {
+                    let pool = harness.pool.clone();
+                    let task_name = task_name.clone();
+                    async move {
+                        let (state, failure_reason): (String, Option<String>) = sqlx::query_as(
+                            "SELECT state, failure_reason FROM run_tasks WHERE run_id = $1 AND name = $2",
+                        )
+                        .bind(run_id)
+                        .bind(&task_name)
+                        .fetch_one(&pool)
+                        .await?;
+                        anyhow::ensure!(
+                            state != "failed",
+                            "{task_name} failed: {}",
+                            failure_reason.unwrap_or_else(|| "no failure_reason".to_string())
+                        );
+                        Ok(state == "completed")
+                    }
+                },
+            )
+            .await?;
+    }
+
+    harness
+        .wait_for(
+            "MadNIS diagnostics include GammaLoop evaluator metadata",
+            Duration::from_secs(30),
+            || {
+                let pool = harness.pool.clone();
+                async move {
+                    let diagnostics: Option<JsonValue> = sqlx::query_scalar(
+                        r#"
+                        SELECT engine_diagnostics
+                        FROM sampler_aggregator_performance_latest
+                        WHERE run_id = $1 AND worker_id = 'w-1'
+                        "#,
+                    )
+                    .bind(run_id)
+                    .fetch_optional(&pool)
+                    .await?;
+                    let Some(diagnostics) = diagnostics else {
+                        return Ok(false);
+                    };
+                    let metadata = &diagnostics["gammaloop_metadata"];
+                    Ok(metadata["state_folder"].as_str().is_some_and(|path| {
+                        path.ends_with("resources/states/epem_a_ttxh/LO/state")
+                    }) && metadata["process_id"].as_u64().is_some()
+                        && metadata["integrand_name"].as_str() == Some("LO")
+                        && metadata["coordinate_space"].as_str() == Some("x_space")
+                        && diagnostics["produced_batches"].as_u64().unwrap_or(0) > 0)
+                }
+            },
+        )
+        .await?;
+
+    let completed_samples: i64 =
+        sqlx::query_scalar("SELECT nr_completed_samples FROM runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_one(&harness.pool)
+            .await?;
+    let expected_samples: i64 = cases
+        .iter()
+        .map(|(_, _, samples_for_update)| *samples_for_update as i64)
+        .sum();
+    assert!(completed_samples >= expected_samples);
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_task_level_evaluator_switch_e2e() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
