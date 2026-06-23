@@ -186,7 +186,20 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                 );
                 if now_blocked {
                     let reason = format!("{} role permanently failed to start: {err}", target.role);
-                    if let Some(task) = self.store.load_active_run_task(target.run_id).await? {
+                    let task_to_fail =
+                        if let Some(task) = self.store.load_active_run_task(target.run_id).await? {
+                            Some(task)
+                        } else {
+                            self.store
+                                .list_run_tasks(target.run_id)
+                                .await?
+                                .into_iter()
+                                .find(|task| {
+                                    matches!(task.state, crate::core::RunTaskState::Pending)
+                                        && task.task.runs_on_sampler_worker()
+                                })
+                        };
+                    if let Some(task) = task_to_fail {
                         self.fail_task_activation_and_pause_run(
                             target.run_id,
                             task.id,

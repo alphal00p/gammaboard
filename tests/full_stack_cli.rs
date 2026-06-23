@@ -1644,6 +1644,7 @@ training_projection = "abs"
 [evaluator.preprocessing]
 read_only = true
 commands = [
+  "set process string '\n[sampling]\ngraphs = \"summed\"\norientations = \"summed\"\nlmb_multichanneling = false\nlmb_channels = \"summed\"\n'",
   "set model MT=173.0",
   "set model WT=0.0",
   "set model ymt=173.0",
@@ -4885,7 +4886,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
     assert_eq!(task.0, "failed");
     let reason = task.1.unwrap_or_default();
     assert!(
-        reason.contains("permanently failed to start"),
+        reason.contains("failed to build evaluator"),
         "expected build failure reason, got: {reason}"
     );
     assert!(
