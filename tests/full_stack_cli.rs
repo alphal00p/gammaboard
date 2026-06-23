@@ -1848,10 +1848,7 @@ async fn full_stack_cli_python_gammaloop_observable_process_api_e2e() -> anyhow:
     let preflight_output = tokio::time::timeout(
         Duration::from_secs(30),
         TokioCommand::new(&python)
-            .args([
-                "-c",
-                "import numpy; import gammaboard_process; from demo_evaluator import PolynomialEvaluator",
-            ])
+            .args(["-c", "import run_evaluator"])
             .env("PYTHONPATH", &pythonpath)
             .current_dir(example_dir.join("src"))
             .output(),
