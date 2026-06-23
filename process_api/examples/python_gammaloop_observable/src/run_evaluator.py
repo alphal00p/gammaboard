@@ -1,0 +1,4 @@
+from demo_evaluator import PolynomialEvaluator
+from gammaboard_process import run_evaluator
+
+run_evaluator(PolynomialEvaluator)

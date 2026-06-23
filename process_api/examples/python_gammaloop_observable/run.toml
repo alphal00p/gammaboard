@@ -1,0 +1,21 @@
+name = "python-gammaloop-observable-demo"
+
+[evaluator]
+kind = "process_evaluator"
+command = ["$resources/../process_api/examples/python_gammaloop_observable/.venv/bin/python", "-u", "-m", "run_evaluator"]
+cwd = "$resources/../process_api/examples/python_gammaloop_observable/src"
+domain = { continuous = { dims = 1 } }
+accumulator = "gammaloop"
+
+[[task_queue]]
+name = "accumulator"
+kind = "set_accumulator"
+
+[task_queue.accumulator]
+kind = "gammaloop"
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 100000 }
+sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 32, samples_for_update = 4096, initial_training_rate = 0.1, final_training_rate = 0.01 } }
