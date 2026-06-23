@@ -12,8 +12,7 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-$(cd -- "${SCRIPT_DIR}/../.." && pwd -P)}"
+WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-$(pwd -P)}"
 
 if [[ $# -ne 2 ]]; then
   echo "usage: build.sbatch OUTPUT.sif DEF.def" >&2

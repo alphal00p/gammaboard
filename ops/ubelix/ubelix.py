@@ -424,6 +424,7 @@ def submit_singleton_job(
     ensure_dirs()
     env = os.environ.copy()
     env["GAMMABOARD_PORT_OFFSET"] = str(port_offset)
+    env["GAMMABOARD_WORKSPACE_ROOT"] = WORKSPACE_ROOT
     result = run(
         [
             "sbatch",
@@ -1000,10 +1001,12 @@ def command_watch_requests(args: argparse.Namespace) -> None:
 
 def command_build(args: argparse.Namespace) -> None:
     ensure_dirs()
+    env = os.environ.copy()
+    env["GAMMABOARD_WORKSPACE_ROOT"] = WORKSPACE_ROOT
     if args.build_kind == "gammaboard":
-        result = run(["sbatch", "--chdir", WORKSPACE_ROOT, GB_BUILD_SBATCH])
+        result = run(["sbatch", "--chdir", WORKSPACE_ROOT, GB_BUILD_SBATCH], env=env)
     elif args.build_kind == "gammaloop":
-        result = run(["sbatch", "--chdir", WORKSPACE_ROOT, GL_BUILD_SBATCH])
+        result = run(["sbatch", "--chdir", WORKSPACE_ROOT, GL_BUILD_SBATCH], env=env)
     elif args.build_kind == "apptainer":
         result = run(
             [
@@ -1013,7 +1016,8 @@ def command_build(args: argparse.Namespace) -> None:
                 APPTAINER_BUILD_SBATCH,
                 args.output,
                 args.def_file,
-            ]
+            ],
+            env=env,
         )
     else:
         raise SystemExit(f"unknown build kind: {args.build_kind}")

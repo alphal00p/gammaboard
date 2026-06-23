@@ -21,8 +21,7 @@ if [[ -f "${PRIVATE_ENV}" ]]; then
   source "${PRIVATE_ENV}"
 fi
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-$(cd -- "${SCRIPT_DIR}/../.." && pwd -P)}"
+WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-$(pwd -P)}"
 IMAGE_PATH="${WORKSPACE_ROOT}/images/gammaboard/gammaboard.sif"
 SLURM_LOG_DIR="${WORKSPACE_ROOT}/logs/slurm/control"
 SERVER_CFG="${WORKSPACE_ROOT}/ops/config/server.toml"

@@ -21,8 +21,7 @@ unset NO_SYMBOLICA_OEM_LICENSE
 unset APPTAINERENV_NO_SYMBOLICA_OEM_LICENSE
 unset APPTAINERENV_SYMBOLICA_LICENSE
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-$(cd -- "${SCRIPT_DIR}/../.." && pwd -P)}"
+WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-$(pwd -P)}"
 GAMMABOARD_REPO="${GAMMABOARD_REPO:-https://github.com/alphal00p/gammaboard.git}"
 GAMMABOARD_DEF_REL="ops/build/gammaboard.def"
 GB_IMAGE_DIR_REL="images/gammaboard"
