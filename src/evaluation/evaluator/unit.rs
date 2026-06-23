@@ -31,9 +31,7 @@ impl UnitEvaluator {
 
     pub fn from_params(params: UnitEvaluatorParams) -> Result<Self, BuildError> {
         if params.fail_on_build {
-            return Err(BuildError::build(
-                "unit evaluator injected build failure",
-            ));
+            return Err(BuildError::build("unit evaluator injected build failure"));
         }
         Ok(Self::new(
             Domain::rectangular(params.continuous_dims, params.discrete_dims),

@@ -69,7 +69,10 @@ impl EvaluatorConfig {
 
         match self {
             Self::ProcessEvaluator { params } => {
-                if matches!(params.accumulator, process::ProcessAccumulatorKind::Gammaloop) {
+                if matches!(
+                    params.accumulator,
+                    process::ProcessAccumulatorKind::Gammaloop
+                ) {
                     match config {
                         AccumulatorConfig::Empty | AccumulatorConfig::Gammaloop => Ok(()),
                         other => Err(BuildError::invalid_input(format!(

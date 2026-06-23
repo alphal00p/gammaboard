@@ -320,9 +320,7 @@ impl ProcessRuntimeWorker {
                     .enumerate()
                     .map(|(index, v)| {
                         v.as_f64().ok_or_else(|| {
-                            EvalError::eval(format!(
-                                "non-f64 in training_values at index {index}"
-                            ))
+                            EvalError::eval(format!("non-f64 in training_values at index {index}"))
                         })
                     })
                     .collect::<Result<Vec<f64>, EvalError>>()
@@ -360,7 +358,9 @@ fn default_components() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProcessEvaluatorParams, ProcessRuntimeWorker, RaggedRowMajorInputs};
+    use super::{
+        ProcessAccumulatorKind, ProcessEvaluatorParams, ProcessRuntimeWorker, RaggedRowMajorInputs,
+    };
     use serde_json::json;
     use std::error::Error;
     use std::time::Instant;
@@ -485,6 +485,7 @@ domain = { discrete = { axis_label = "d0", branches = [
             cwd: None,
             domain: crate::utils::domain::Domain::continuous(2),
             components: vec!["value".to_string()],
+            accumulator: ProcessAccumulatorKind::Vector,
             args: json!({}),
         };
         let components = params.components.clone();

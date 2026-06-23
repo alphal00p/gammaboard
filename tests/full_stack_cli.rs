@@ -606,6 +606,50 @@ impl FullStackHarness {
         let _ = tokio::time::timeout(Duration::from_secs(10), managed.child.wait()).await;
         Ok(())
     }
+
+    async fn run_id(&self, name: &str) -> anyhow::Result<i32> {
+        let id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = $1")
+            .bind(name)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(id)
+    }
+
+    fn add_run(&self, config: &NamedTempFile) {
+        self.cli()
+            .arg("run")
+            .arg("add")
+            .arg(config.path())
+            .assert()
+            .success();
+    }
+
+    fn assign_node(&self, node: &str, role: &str, run_name: &str) {
+        self.cli()
+            .args(["node", "assign", node, role, run_name])
+            .assert()
+            .success();
+    }
+
+    async fn wait_for_nodes_idle(&self, nodes: &[&str], timeout: Duration) -> anyhow::Result<()> {
+        let nodes: Vec<String> = nodes.iter().map(|s| s.to_string()).collect();
+        self.wait_for(format!("nodes {nodes:?} all idle"), timeout, || async {
+            for node in &nodes {
+                let s = self.node_state(node).await?;
+                if s.0.is_some() || s.1.is_some() || s.2.is_some() || s.3.is_some() {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        })
+        .await
+    }
+
+    async fn cleanup(&mut self) -> anyhow::Result<()> {
+        self.stop_children().await;
+        self.pool.close().await;
+        self.db.cleanup().await
+    }
 }
 
 impl Drop for FullStackHarness {
@@ -1778,6 +1822,134 @@ training_projection = {{ kind = "component", name = "real" }}
     harness.stop_children().await;
     harness.pool.close().await;
     harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege and python+numpy"]
+async fn full_stack_cli_python_gammaloop_observable_process_api_e2e() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    harness.start_nodes(&["w-1", "w-2"]).await?;
+
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let example_dir = manifest_dir.join("process_api/examples/python_gammaloop_observable");
+    let default_python = example_dir.join(".venv/bin/python");
+    let python = std::env::var("GAMMABOARD_GAMMALOOP_EXAMPLE_PYTHON").unwrap_or_else(|_| {
+        if default_python.is_file() {
+            default_python.display().to_string()
+        } else {
+            "python".to_string()
+        }
+    });
+    let process_api_python = manifest_dir.join("process_api/python/src");
+    let pythonpath = format!(
+        "{}:{}",
+        process_api_python.display(),
+        example_dir.join("src").display()
+    );
+
+    let preflight_status = std::process::Command::new(&python)
+        .args(["-c", "import run_evaluator"])
+        .env("PYTHONPATH", &pythonpath)
+        .current_dir(example_dir.join("src"))
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()?;
+    anyhow::ensure!(
+        preflight_status.success(),
+        "failed to preflight python_gammaloop_observable runtime"
+    );
+
+    let run_name = format!("python-gammaloop-observable-e2e-{}", unique_suffix());
+    let config = temp_run_add_config(&format!(
+        r#"
+name = "{run_name}"
+
+[evaluator]
+kind = "process_evaluator"
+command = ["env", "PYTHONPATH={pythonpath}", "{python}", "-u", "-m", "run_evaluator"]
+cwd = "{}"
+domain = {{ continuous = {{ dims = 1 }} }}
+accumulator = "gammaloop"
+
+[[task_queue]]
+name = "accumulator"
+kind = "set_accumulator"
+
+[task_queue.accumulator]
+kind = "gammaloop"
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = {{ max_samples = 64 }}
+accumulator = "latest"
+sampler_aggregator = {{ config = {{ kind = "havana_training", seed = 0, bins = 8, samples_for_update = 8, initial_training_rate = 0.1, final_training_rate = 0.01 }} }}
+
+[task_queue.queue_tuning]
+max_batch_size = 8
+target_batch_eval_ms = 1.0
+"#,
+        example_dir.join("src").display()
+    ));
+
+    harness.add_run(&config);
+    let run_id = harness.run_id(&run_name).await?;
+    harness.assign_node("w-1", "sampler-aggregator", &run_name);
+    harness.assign_node("w-2", "evaluator", &run_name);
+
+    harness
+        .wait_for("python gammaloop observable sample completes", Duration::from_secs(60), || {
+            let pool = harness.pool.clone();
+            async move {
+                let (state, failure_reason): (String, Option<String>) = sqlx::query_as(
+                    "SELECT state, failure_reason FROM run_tasks WHERE run_id = $1 AND name = 'sample'",
+                )
+                .bind(run_id)
+                .fetch_one(&pool)
+                .await?;
+                anyhow::ensure!(
+                    state != "failed",
+                    "sample failed: {}",
+                    failure_reason.unwrap_or_else(|| "no failure_reason".to_string())
+                );
+                Ok(state == "completed")
+            }
+        })
+        .await?;
+
+    let observable = harness
+        .run_current_accumulator(run_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing current GammaLoop observable"))?;
+    let real_count = observable
+        .pointer("/estimate/components/0/state/count")
+        .and_then(JsonValue::as_i64)
+        .unwrap_or(0);
+    let histogram_sample_count = observable
+        .pointer("/bundle/histograms/x/sample_count")
+        .and_then(JsonValue::as_i64)
+        .unwrap_or(0);
+    assert!(
+        real_count >= 64,
+        "expected real estimate count >= 64, got {real_count}; observable={observable}"
+    );
+    assert!(
+        histogram_sample_count >= 64,
+        "expected x histogram sample_count >= 64, got {histogram_sample_count}; observable={observable}"
+    );
+
+    let persisted = harness
+        .latest_task_persisted_observable(run_id, "sample")
+        .await?;
+    assert_eq!(
+        persisted
+            .pointer("/bundle/histograms/x/title")
+            .and_then(JsonValue::as_str),
+        Some("x")
+    );
+
+    harness.cleanup().await?;
     Ok(())
 }
 

@@ -208,7 +208,11 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                         )
                         .await;
                     } else {
-                        match self.store.clear_desired_assignments_for_run(target.run_id).await {
+                        match self
+                            .store
+                            .clear_desired_assignments_for_run(target.run_id)
+                            .await
+                        {
                             Ok(cleared) => warn!(
                                 run_id = target.run_id,
                                 assignments_cleared = cleared,
