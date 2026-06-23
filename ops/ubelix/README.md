@@ -6,7 +6,7 @@ Shared docs live in repo-root `docs/`: `docs/deployment.md`, `docs/config.md`, a
 
 ## UBELIX Model
 
-- Workspace: `/storage/research/itp_localunitaritydata/gammaboard`
+- Workspace: the directory containing the installed `ubelix.py`
 - Deploy: one control/UI Slurm job with Postgres, API, nginx, and frontend
 - Workers: separate Slurm jobs connecting to the control job database
 - Access: one SSH tunnel to the frontend port
@@ -123,10 +123,10 @@ Admin-protected commands accept `--admin-password` or `GAMMABOARD_ADMIN_PASSWORD
   runtime/
 ```
 
-Local overrides live in `${HOME}/.config/gammaboard/slurm.env`; all sbatch scripts source it when present. GammaBoard/GammaLoop use the Symbolica OEM license compiled during the build jobs, so runtime Slurm jobs do not require `SYMBOLICA_LICENSE`.
+Local overrides live in `${HOME}/.config/gammaboard/slurm.env`; all sbatch scripts source it when present. The workspace is self-locating from the installed `ubelix.py` and sbatch paths, so `GAMMABOARD_WORKSPACE_ROOT` is only needed as an explicit override. GammaBoard/GammaLoop use the Symbolica OEM license compiled during the build jobs, so runtime Slurm jobs do not require `SYMBOLICA_LICENSE`.
 
 Remove obsolete Nix state after syncing current ops:
 
 ```bash
-rm -rf /storage/research/itp_localunitaritydata/gammaboard/nix /scratch/network/users/$USER/gammaboard-nix
+rm -rf nix /scratch/network/users/$USER/gammaboard-nix
 ```

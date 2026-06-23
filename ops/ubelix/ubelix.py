@@ -13,9 +13,13 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
-WORKSPACE_ROOT = "/storage/research/itp_localunitaritydata/gammaboard"
+WORKSPACE_ROOT = os.environ.get(
+    "GAMMABOARD_WORKSPACE_ROOT",
+    str(Path(__file__).resolve().parent),
+)
 JOB_PREFIX = "gb"
 CONTROL_JOB_NAME = f"{JOB_PREFIX}-ctl"
 SINGLE_NODE_JOB_NAME = f"{JOB_PREFIX}-single"

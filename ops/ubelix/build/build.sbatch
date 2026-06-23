@@ -7,12 +7,13 @@
 #SBATCH --mem=16G
 #SBATCH --account=gratis
 #SBATCH --partition=epyc2
-#SBATCH --output=/storage/research/itp_localunitaritydata/gammaboard/logs/slurm/build/%x-%j.out
-#SBATCH --error=/storage/research/itp_localunitaritydata/gammaboard/logs/slurm/build/%x-%j.err
+#SBATCH --output=logs/slurm/build/%x-%j.out
+#SBATCH --error=logs/slurm/build/%x-%j.err
 
 set -euo pipefail
 
-WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata/gammaboard}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-$(cd -- "${SCRIPT_DIR}/../.." && pwd -P)}"
 
 if [[ $# -ne 2 ]]; then
   echo "usage: build.sbatch OUTPUT.sif DEF.def" >&2

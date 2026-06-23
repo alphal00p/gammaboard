@@ -26,7 +26,8 @@ require_cmd() {
   }
 }
 
-WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-/storage/research/itp_localunitaritydata/gammaboard}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-$(cd -- "${SCRIPT_DIR}/../.." && pwd -P)}"
 mkdir -p "${WORKSPACE_ROOT}/logs/slurm/build"
 
 # Absolute path to SIF image on UBELIX filesystem.
