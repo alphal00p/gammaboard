@@ -1,4 +1,4 @@
-use crate::core::{AccumulatorConfig, EvalError};
+use crate::core::{AccumulatorConfig, BuildError, EvalError};
 use crate::evaluation::{
     AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator, IngestScalar,
     ingest_scalar_values,
@@ -29,12 +29,17 @@ impl UnitEvaluator {
         }
     }
 
-    pub fn from_params(params: UnitEvaluatorParams) -> Self {
-        Self::new(
+    pub fn from_params(params: UnitEvaluatorParams) -> Result<Self, BuildError> {
+        if params.fail_on_build {
+            return Err(BuildError::build(
+                "unit evaluator injected build failure",
+            ));
+        }
+        Ok(Self::new(
             Domain::rectangular(params.continuous_dims, params.discrete_dims),
             params.fail_on_batch_nrs,
             params.min_eval_time_per_sample_ms,
-        )
+        ))
     }
 
     fn maybe_sleep(&self, samples: usize) {
@@ -73,6 +78,8 @@ pub struct UnitEvaluatorParams {
     #[serde(default)]
     pub fail_on_batch_nrs: Vec<usize>,
     #[serde(default)]
+    pub fail_on_build: bool,
+    #[serde(default)]
     pub min_eval_time_per_sample_ms: u64,
 }
 
@@ -82,6 +89,7 @@ impl Default for UnitEvaluatorParams {
             continuous_dims: 1,
             discrete_dims: 0,
             fail_on_batch_nrs: Vec::new(),
+            fail_on_build: false,
             min_eval_time_per_sample_ms: 0,
         }
     }

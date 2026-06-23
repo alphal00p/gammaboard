@@ -4609,6 +4609,93 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_evaluator_build_failure_fails_task_and_unassigns_run() -> anyhow::Result<()>
+{
+    let mut harness = FullStackHarness::new().await?;
+
+    let config = temp_run_add_config(
+        r#"
+name = "evaluator-build-fail-e2e"
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+fail_on_build = true
+
+[[task_queue]]
+kind = "sample"
+stop_condition = { max_samples = 32 }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"#,
+    );
+
+    harness
+        .cli()
+        .arg("run")
+        .arg("add")
+        .arg(config.path())
+        .assert()
+        .success();
+
+    let run_id: i32 =
+        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'evaluator-build-fail-e2e'")
+            .fetch_one(&harness.pool)
+            .await?;
+
+    harness.start_nodes(&["w-1", "w-2"]).await?;
+
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-1",
+            "sampler-aggregator",
+            "evaluator-build-fail-e2e",
+        ])
+        .assert()
+        .success();
+    harness
+        .cli()
+        .args([
+            "node",
+            "assign",
+            "w-2",
+            "evaluator",
+            "evaluator-build-fail-e2e",
+        ])
+        .assert()
+        .success();
+
+    wait_for_task_failed_and_run_unassigned(&harness, run_id, Duration::from_secs(30)).await?;
+
+    let task: (String, Option<String>) = sqlx::query_as(
+        "SELECT state, failure_reason FROM run_tasks WHERE run_id = $1 AND sequence_nr = 1",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(task.0, "failed");
+    let reason = task.1.unwrap_or_default();
+    assert!(
+        reason.contains("permanently failed to start"),
+        "expected build failure reason, got: {reason}"
+    );
+    assert!(
+        reason.contains("build failure"),
+        "expected injected build failure message, got: {reason}"
+    );
+
+    harness.stop_children().await;
+    harness.pool.close().await;
+    harness.db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_parameter_scan_creates_child_runs_and_collects_measurements()
 -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;

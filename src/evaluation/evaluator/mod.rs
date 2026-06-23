@@ -35,7 +35,7 @@ impl EvaluatorConfig {
             Self::Gammaloop { params } => {
                 Ok(Box::new(GammaLoopEvaluator::from_params(params.clone())?))
             }
-            Self::Unit { params } => Ok(Box::new(UnitEvaluator::from_params(params.clone()))),
+            Self::Unit { params } => Ok(Box::new(UnitEvaluator::from_params(params.clone())?)),
             Self::Symbolica { params } => {
                 Ok(Box::new(SymbolicaEngine::from_params(params.clone())?))
             }
