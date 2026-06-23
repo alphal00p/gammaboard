@@ -19,6 +19,11 @@ just --justfile ops/ubelix/justfile sync-ops
 ```
 
 `sync-ops` uploads `ops/`, `docs/`, `ubelix.py`, and this README. The justfile stays local.
+Pass `remote_folder` to sync into a different relative path under `/storage/research/itp_localunitaritydata`:
+
+```bash
+just --justfile ops/ubelix/justfile remote_folder=$USER/gammaboard sync-ops
+```
 
 ## Build Images
 

@@ -1,13 +1,21 @@
-sync-ops host="ubelix" remote_root="/storage/research/itp_localunitaritydata/gammaboard":
+host := "ubelix"
+remote_folder := "gammaboard"
+
+sync-ops:
     #!/usr/bin/env bash
     set -euo pipefail
+    if [[ ! "{{remote_folder}}" =~ ^[A-Za-z0-9._/-]+$ || "{{remote_folder}}" = /* || "{{remote_folder}}" == *..* || "{{remote_folder}}" == *//* ]]; then
+      echo "remote_folder must be a safe relative path under /storage/research/itp_localunitaritydata: {{remote_folder}}" >&2
+      exit 1
+    fi
+    REMOTE_ROOT="/storage/research/itp_localunitaritydata/{{remote_folder}}"
     REPO_ROOT="$(git rev-parse --show-toplevel)"
     cd "${REPO_ROOT}"
-    ssh "{{host}}" "mkdir -p '{{remote_root}}/ops/build' '{{remote_root}}/ops/config' '{{remote_root}}/ops/slurm' '{{remote_root}}/resources' '{{remote_root}}/docs'"
-    scp -r ops/ubelix/build/* "{{host}}:{{remote_root}}/ops/build/"
-    scp -r ops/ubelix/config/* "{{host}}:{{remote_root}}/ops/config/"
-    scp -r ops/ubelix/slurm/* "{{host}}:{{remote_root}}/ops/slurm/"
-    scp -r ops/ubelix/resources/* "{{host}}:{{remote_root}}/resources/"
-    scp -r docs/* "{{host}}:{{remote_root}}/docs/"
-    scp ops/ubelix/ubelix.py "{{host}}:{{remote_root}}/ubelix.py"
-    scp ops/ubelix/README.md "{{host}}:{{remote_root}}/README.md"
+    ssh "{{host}}" "mkdir -p '${REMOTE_ROOT}/ops/build' '${REMOTE_ROOT}/ops/config' '${REMOTE_ROOT}/ops/slurm' '${REMOTE_ROOT}/resources' '${REMOTE_ROOT}/docs'"
+    scp -r ops/ubelix/build/* "{{host}}:${REMOTE_ROOT}/ops/build/"
+    scp -r ops/ubelix/config/* "{{host}}:${REMOTE_ROOT}/ops/config/"
+    scp -r ops/ubelix/slurm/* "{{host}}:${REMOTE_ROOT}/ops/slurm/"
+    scp -r ops/ubelix/resources/* "{{host}}:${REMOTE_ROOT}/resources/"
+    scp -r docs/* "{{host}}:${REMOTE_ROOT}/docs/"
+    scp ops/ubelix/ubelix.py "{{host}}:${REMOTE_ROOT}/ubelix.py"
+    scp ops/ubelix/README.md "{{host}}:${REMOTE_ROOT}/README.md"
