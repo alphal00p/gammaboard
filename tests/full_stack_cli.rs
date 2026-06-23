@@ -1576,7 +1576,7 @@ sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", 
 }
 
 #[tokio::test]
-#[ignore = "requires local postgres, nix, the integrations/madnis runtime, and the bundled GammaLoop state"]
+#[ignore = "requires local postgres, a local MadNIS Python runtime, and the bundled GammaLoop state"]
 async fn full_stack_cli_gammaloop_madnis_metadata_and_batch_fuzz_e2e() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
@@ -1585,24 +1585,20 @@ async fn full_stack_cli_gammaloop_madnis_metadata_and_batch_fuzz_e2e() -> anyhow
     let madnis_src = manifest_dir.join("integrations/madnis/src");
     let gammaloop_state = manifest_dir.join("resources/states/epem_a_ttxh/LO/state");
     let madnis_pythonpath = format!("{}:{}", process_api_python.display(), madnis_src.display());
-    let madnis_flake_ref = format!(
-        "path:{}#runtime",
-        manifest_dir.join("integrations/madnis").display()
-    );
+    let default_madnis_python = manifest_dir.join("integrations/madnis/.venv/bin/python");
+    let madnis_python = std::env::var("GAMMABOARD_MADNIS_PYTHON").unwrap_or_else(|_| {
+        if default_madnis_python.is_file() {
+            default_madnis_python.display().to_string()
+        } else {
+            "python".to_string()
+        }
+    });
     let run_name = format!("gammaloop-madnis-metadata-fuzz-{}", unique_suffix());
     let cases = [(1_usize, 1_usize, 2_usize), (2, 1, 3), (3, 2, 4)];
 
-    let madnis_runtime_status = std::process::Command::new("nix")
-        .args([
-            "shell",
-            &madnis_flake_ref,
-            "-c",
-            "env",
-            &format!("PYTHONPATH={madnis_pythonpath}"),
-            "python",
-            "-c",
-            "import run_sampler",
-        ])
+    let madnis_runtime_status = std::process::Command::new(&madnis_python)
+        .args(["-c", "import run_sampler"])
+        .env("PYTHONPATH", &madnis_pythonpath)
         .current_dir(manifest_dir.join("resources"))
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -1626,7 +1622,7 @@ name = "madnis-case-{case_idx}"
 kind = "sample"
 stop_condition = {{ max_samples = {samples_for_update} }}
 accumulator = "latest"
-sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", "shell", "{madnis_flake_ref}", "-c", "env", "PYTHONPATH={madnis_pythonpath}", "python", "-u", "-m", "run_sampler"], requires_training_values = true, args = {{ seed = {case_idx}, training_steps = 1, training_batch_size = {samples_for_update}, max_batch_size = {madnis_max_batch_size}, use_gpu = false, learning_rate = 0.001, use_scheduler = false, discrete_model = "made", discrete_dims_position = "first", flow_config = {{ layers = 1, units = 8, bins = 4 }}, made_config = {{ layers = 1, nodes_per_feature = 8 }} }} }} }}
+sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["env", "PYTHONPATH={madnis_pythonpath}", "{madnis_python}", "-u", "-m", "run_sampler"], requires_training_values = true, args = {{ seed = {case_idx}, training_steps = 1, training_batch_size = {samples_for_update}, max_batch_size = {madnis_max_batch_size}, use_gpu = false, learning_rate = 0.001, use_scheduler = false, discrete_model = "made", discrete_dims_position = "first", flow_config = {{ layers = 1, units = 8, bins = 4 }}, made_config = {{ layers = 1, nodes_per_feature = 8 }} }} }} }}
 
 [task_queue.queue_tuning]
 max_batch_size = {queue_max_batch_size}
