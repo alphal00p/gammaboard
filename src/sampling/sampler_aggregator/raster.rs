@@ -216,7 +216,9 @@ impl PdfAdaptationRasterPlaneSampler {
     ) -> Result<Self, BuildError> {
         validate_plane_geometry(&params.geometry, domain)?;
         let total_samples = params.geometry.nr_points();
-        let mut source_sampler = source_sampler_snapshot.clone().into_runtime(domain)?;
+        let mut source_sampler = source_sampler_snapshot
+            .clone()
+            .into_runtime(domain, serde_json::json!({}))?;
         let global_pdf_norm = source_sampler.global_pdf_norm().map_err(|err| {
             BuildError::build(format!(
                 "failed to read global pdf normalization from source sampler: {err}"
@@ -329,7 +331,9 @@ impl PdfAdaptationRasterLineSampler {
     ) -> Result<Self, BuildError> {
         validate_line_geometry(&params.geometry, domain)?;
         let total_samples = params.geometry.nr_points();
-        let mut source_sampler = source_sampler_snapshot.clone().into_runtime(domain)?;
+        let mut source_sampler = source_sampler_snapshot
+            .clone()
+            .into_runtime(domain, serde_json::json!({}))?;
         let global_pdf_norm = source_sampler.global_pdf_norm().map_err(|err| {
             BuildError::build(format!(
                 "failed to read global pdf normalization from source sampler: {err}"
@@ -987,7 +991,7 @@ mod tests {
         let source_snapshot = SamplerAggregatorConfig::NaiveMonteCarlo {
             params: crate::sampling::NaiveMonteCarloSamplerParams::default(),
         }
-        .build(domain.clone(), None, None)
+        .build(domain.clone(), None, None, serde_json::json!({}))
         .expect("build source sampler")
         .snapshot()
         .expect("source snapshot");
@@ -1031,7 +1035,7 @@ mod tests {
         let source_snapshot = SamplerAggregatorConfig::NaiveMonteCarlo {
             params: crate::sampling::NaiveMonteCarloSamplerParams::default(),
         }
-        .build(domain.clone(), None, None)
+        .build(domain.clone(), None, None, serde_json::json!({}))
         .expect("build source sampler")
         .snapshot()
         .expect("source snapshot");
@@ -1084,7 +1088,7 @@ mod tests {
         let source_snapshot = SamplerAggregatorConfig::NaiveMonteCarlo {
             params: crate::sampling::NaiveMonteCarloSamplerParams::default(),
         }
-        .build(domain.clone(), None, None)
+        .build(domain.clone(), None, None, serde_json::json!({}))
         .expect("build source sampler")
         .snapshot()
         .expect("source snapshot");
@@ -1137,7 +1141,7 @@ mod tests {
         let source_snapshot = SamplerAggregatorConfig::NaiveMonteCarlo {
             params: crate::sampling::NaiveMonteCarloSamplerParams::default(),
         }
-        .build(domain.clone(), None, None)
+        .build(domain.clone(), None, None, serde_json::json!({}))
         .expect("build source sampler")
         .snapshot()
         .expect("source snapshot");

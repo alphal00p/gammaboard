@@ -122,6 +122,39 @@ class MadnisConfig:
         )
 
 
+@dataclass
+class GammaLoopEvaluatorMetadata:
+    state_folder: str
+    process_id: int
+    integrand_name: str
+    momentum_space: bool = False
+    coordinate_space: str = "x_space"
+    domain_axes: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, metadata: dict[str, Any]) -> GammaLoopEvaluatorMetadata:
+        if metadata.get("kind") != "gammaloop":
+            raise ValueError("GammaLoop metadata must have kind='gammaloop'")
+        return cls(
+            state_folder=str(metadata["state_folder"]),
+            process_id=int(metadata["process_id"]),
+            integrand_name=str(metadata["integrand_name"]),
+            momentum_space=bool(metadata.get("momentum_space", False)),
+            coordinate_space=str(metadata.get("coordinate_space", "x_space")),
+            domain_axes=[str(axis) for axis in metadata.get("domain_axes", [])],
+        )
+
+
+def parse_gammaloop_metadata(
+    evaluator_metadata: dict[str, Any] | None,
+) -> GammaLoopEvaluatorMetadata | None:
+    if not evaluator_metadata:
+        return None
+    if evaluator_metadata.get("kind") != "gammaloop":
+        return None
+    return GammaLoopEvaluatorMetadata.from_dict(evaluator_metadata)
+
+
 class MadnisSampler(Sampler):
     def __init__(
         self,
@@ -158,11 +191,14 @@ class MadnisSampler(Sampler):
         torch_cpu_rng_state: Tensor | None = None,
         torch_gpu_rng_state: Tensor | None = None,
         madnis_blob: bytes | None = None,
+        evaluator_metadata: dict[str, Any] | None = None,
     ):
         torch.set_default_dtype(torch.float64)
 
         self.discrete_cardinalities: List[int] = discrete_cardinalities
         self.continuous_dims: int = continuous_dims
+        self.evaluator_metadata: dict[str, Any] = evaluator_metadata or {}
+        self.gammaloop_metadata = parse_gammaloop_metadata(self.evaluator_metadata)
         if not isinstance(self.discrete_cardinalities, list) or any(
                 cardinality <= 0 for cardinality in self.discrete_cardinalities):
             raise TypeError("discrete_cardinalities must be a list of positive integers")
@@ -235,6 +271,7 @@ class MadnisSampler(Sampler):
         discrete_cardinalities: List[int],
         continuous_dims: int,
         init_args: dict[str, Any] | None = None,
+        evaluator_metadata: dict[str, Any] | None = None,
     ) -> MadnisSampler:
 
         save_path = snapshot.get("save_path")
@@ -260,7 +297,8 @@ class MadnisSampler(Sampler):
                 pending_training_probs=state.get("pending_training_probs"),
                 torch_cpu_rng_state=state.get("torch_cpu_rng_state"),
                 torch_gpu_rng_state=state.get("torch_gpu_rng_state"),
-                madnis_blob=state.get("madnis_blob")
+                madnis_blob=state.get("madnis_blob"),
+                evaluator_metadata=evaluator_metadata,
             )
             instance.madnis.integrand = instance._get_madnis_integrand()
             ch_remap = (

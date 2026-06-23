@@ -66,7 +66,8 @@ class _EvaluatorWorker:
             )
             self.discrete_cardinalities = discrete_cardinalities
             self.continuous_dims = continuous_dims
-            return {"ok": True}
+            metadata = _read_metadata(self.evaluator)
+            return {"ok": True, "metadata": metadata}
         if method == "eval_batch":
             if self.evaluator is None or self.discrete_cardinalities is None or self.continuous_dims is None:
                 raise RuntimeError("worker not initialized")
@@ -103,6 +104,7 @@ class _SamplerWorker:
         self.discrete_cardinalities: list[int] | None = None
         self.continuous_dims: int | None = None
         self.sampler_args: dict[str, Any] = {}
+        self.evaluator_metadata: Any = {}
 
     def run(self) -> None:
         while True:
@@ -126,12 +128,14 @@ class _SamplerWorker:
             if any(value <= 0 for value in discrete_cardinalities):
                 raise ValueError("discrete_cardinalities must contain only positive integers")
             self.sampler_args = params.get("args") or {}
+            self.evaluator_metadata = params.get("evaluator_metadata") or {}
             self.sampler = instantiate_user_object(
                 self.target,
                 discrete_cardinalities=discrete_cardinalities,
                 continuous_dims=continuous_dims,
                 init_args=self.sampler_args,
                 snapshot=params.get("snapshot"),
+                evaluator_metadata=self.evaluator_metadata,
             )
             self.discrete_cardinalities = discrete_cardinalities
             self.continuous_dims = continuous_dims
@@ -250,3 +254,11 @@ def _call_optional(obj: Any, name: str, fallback: Any, *args: Any) -> Any:
     if method is None:
         return fallback
     return method(*args)
+
+
+def _read_metadata(obj: Any) -> Any:
+    raw = getattr(obj, "metadata", None)
+    if raw is None:
+        return {}
+    value = raw() if callable(raw) else raw
+    return {} if value is None else value

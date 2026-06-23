@@ -24,6 +24,7 @@ pub struct ProcessEvaluatorParams {
 pub struct ProcessEvaluator {
     domain: Domain,
     components: Vec<String>,
+    metadata: Value,
     worker: ProcessRuntimeWorker,
 }
 
@@ -49,6 +50,7 @@ impl ProcessEvaluator {
         Ok(Self {
             domain,
             components: params.components,
+            metadata: worker.metadata.clone(),
             worker,
         })
     }
@@ -57,6 +59,10 @@ impl ProcessEvaluator {
 impl Evaluator for ProcessEvaluator {
     fn get_domain(&self) -> Domain {
         self.domain.clone()
+    }
+
+    fn metadata(&self) -> Value {
+        self.metadata.clone()
     }
 
     fn eval_batch(
@@ -141,6 +147,7 @@ struct ProcessRuntimeWorker {
     process: ProcessWorker,
     domain: Domain,
     components: Vec<String>,
+    metadata: Value,
 }
 
 impl ProcessRuntimeWorker {
@@ -174,6 +181,7 @@ impl ProcessRuntimeWorker {
             process: ProcessWorker::new("process evaluator", child, stdin, stdout, stderr_tail),
             domain,
             components: params.components.clone(),
+            metadata: default_args(),
         };
         worker.send_init(params.args.clone())?;
         Ok(worker)
@@ -196,7 +204,8 @@ impl ProcessRuntimeWorker {
                 }),
             )
             .map_err(BuildError::build)?;
-        Self::expect_ack(response).map_err(BuildError::build)
+        self.metadata = Self::expect_ack(response).map_err(BuildError::build)?;
+        Ok(())
     }
 
     fn eval_batch(
@@ -243,9 +252,12 @@ impl ProcessRuntimeWorker {
             .collect()
     }
 
-    fn expect_ack(response: Value) -> Result<(), String> {
+    fn expect_ack(response: Value) -> Result<Value, String> {
         if response.get("ok").and_then(Value::as_bool).unwrap_or(false) {
-            return Ok(());
+            return Ok(response
+                .get("metadata")
+                .cloned()
+                .unwrap_or_else(default_args));
         }
         Err("process worker initialize result missing ok=true".to_string())
     }
@@ -350,6 +362,24 @@ domain = { discrete = { axis_label = "d0", branches = [
         .expect("process evaluator config should parse inhomogeneous domain");
 
         assert_eq!(params.domain.fixed_rectangular_dims(), None);
+    }
+
+    #[test]
+    fn process_evaluator_initialize_metadata_defaults_to_empty_object() {
+        let metadata = ProcessRuntimeWorker::expect_ack(json!({"ok": true}))
+            .expect("initialize ack should parse");
+        assert_eq!(metadata, json!({}));
+    }
+
+    #[test]
+    fn process_evaluator_initialize_metadata_roundtrips() {
+        let metadata = json!({"space": "momentum", "loop_count": 2});
+        let parsed = ProcessRuntimeWorker::expect_ack(json!({
+            "ok": true,
+            "metadata": metadata,
+        }))
+        .expect("initialize ack should parse");
+        assert_eq!(parsed, metadata);
     }
 
     #[test]

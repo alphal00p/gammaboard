@@ -53,9 +53,11 @@ class SymbolicaHavanaSampler(Sampler):
         initial_training_rate: float = 0.1,
         final_training_rate: float = 0.1,
         integrator: NumericalIntegrator | None = None,
+        evaluator_metadata: dict[str, object] | None = None,
     ) -> None:
         self.discrete_cardinalities = [int(value) for value in discrete_cardinalities]
         self.continuous_dims = int(continuous_dims)
+        self.evaluator_metadata = evaluator_metadata or {}
         self.seed = int(seed)
         self.bins = int(bins)
         self.samples_for_update = int(samples_for_update)
@@ -94,6 +96,7 @@ class SymbolicaHavanaSampler(Sampler):
         discrete_cardinalities: list[int],
         continuous_dims: int,
         init_args: dict[str, Any],
+        evaluator_metadata: dict[str, object] | None = None,
     ) -> "SymbolicaHavanaSampler":
         args = init_args or {}
         grid_b64 = snapshot.get("grid_b64")
@@ -121,6 +124,7 @@ class SymbolicaHavanaSampler(Sampler):
                 snapshot.get("final_training_rate", args.get("final_training_rate", 0.1))
             ),
             integrator=NumericalIntegrator.import_grid(base64.b64decode(grid_b64)),
+            evaluator_metadata=evaluator_metadata,
         )
         sampler.batches_produced = int(snapshot.get("batches_produced", 0))
         sampler.samples_produced = int(snapshot.get("samples_produced", 0))

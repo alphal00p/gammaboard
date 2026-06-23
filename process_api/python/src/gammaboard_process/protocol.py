@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import sys
@@ -103,15 +104,21 @@ def instantiate_user_object(
     continuous_dims: int,
     init_args: dict[str, Any],
     snapshot: Any = None,
+    evaluator_metadata: Any = None,
 ) -> Any:
     if not isinstance(init_args, dict):
         raise TypeError("args must be an object")
     if not isinstance(target, type):
         raise TypeError("run_evaluator(...) and run_sampler(...) require passing a class, not an instance")
-    if "discrete_cardinalities" in init_args or "continuous_dims" in init_args:
+    if (
+        "discrete_cardinalities" in init_args
+        or "continuous_dims" in init_args
+        or "evaluator_metadata" in init_args
+    ):
         raise TypeError(
-            "process args must not define reserved keys 'discrete_cardinalities' or 'continuous_dims'"
+            "process args must not define reserved keys 'discrete_cardinalities', 'continuous_dims', or 'evaluator_metadata'"
         )
+    evaluator_metadata = {} if evaluator_metadata is None else evaluator_metadata
     if snapshot is not None:
         if isinstance(snapshot, dict) and "save_path" not in snapshot and "save_path" in init_args:
             snapshot = {**snapshot, "save_path": init_args["save_path"]}
@@ -124,14 +131,32 @@ def instantiate_user_object(
                 discrete_cardinalities=discrete_cardinalities,
                 continuous_dims=continuous_dims,
                 init_args=init_args,
+                **_optional_evaluator_metadata_kwargs(from_snapshot, evaluator_metadata),
             )
         except NotImplementedError as exc:
             raise TypeError("class must override from_snapshot(...) when restoring from snapshot") from exc
     return target(
         discrete_cardinalities=discrete_cardinalities,
         continuous_dims=continuous_dims,
+        **_optional_evaluator_metadata_kwargs(target, evaluator_metadata),
         **init_args,
     )
+
+
+def _optional_evaluator_metadata_kwargs(callable_obj: Any, evaluator_metadata: Any) -> dict[str, Any]:
+    try:
+        signature = inspect.signature(callable_obj)
+    except (TypeError, ValueError):
+        return {}
+    for parameter in signature.parameters.values():
+        if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+            return {"evaluator_metadata": evaluator_metadata}
+        if parameter.name == "evaluator_metadata" and parameter.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ):
+            return {"evaluator_metadata": evaluator_metadata}
+    return {}
 
 
 def normalize_discrete_subspaces(params: dict[str, Any]) -> list[dict[int, int]]:

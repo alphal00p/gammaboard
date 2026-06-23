@@ -388,10 +388,27 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             .nr_expected_samples()
             .and_then(|value| usize::try_from(value).ok());
 
+        let evaluator = match evaluator_config.build() {
+            Ok(evaluator) => evaluator,
+            Err(err) => {
+                let reason = format!("failed to build evaluator for sampler metadata: {err}");
+                self.fail_task_activation_and_pause_run(
+                    worker.run_id,
+                    task.id,
+                    &reason,
+                    "task activation failed during evaluator metadata resolution",
+                )
+                .await;
+                return Ok(None);
+            }
+        };
+        let evaluator_metadata = evaluator.metadata();
+
         let sampler = match sampler_config.build(
             spec.domain.clone(),
             sample_budget,
             handoff.as_ref().map(StageHandoffOwned::as_ref),
+            evaluator_metadata,
         ) {
             Ok(s) => s,
             Err(err) => {

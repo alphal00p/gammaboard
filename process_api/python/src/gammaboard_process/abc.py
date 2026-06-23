@@ -18,13 +18,18 @@ class Evaluator(ABC):
     def eval(self, xs_discrete: np.ndarray, xs_continuous: np.ndarray) -> Any:
         """Return values with shape ``(nr_samples,)`` or ``(nr_samples, nr_components)``."""
 
+    def metadata(self) -> Any:
+        """Return JSON-safe evaluator metadata passed to sampler initialization."""
+        return {}
+
 
 class Sampler(ABC):
     """Optional base class for process samplers.
 
     Inheritance is not required. ``run_sampler`` accepts any class with the
     required sampler methods. Fresh workers construct samplers as
-    ``ClassName(discrete_cardinalities=..., continuous_dims=..., **args)``.
+    ``ClassName(discrete_cardinalities=..., continuous_dims=..., evaluator_metadata=..., **args)``
+    when the class accepts the ``evaluator_metadata`` keyword.
     """
 
     @abstractmethod
@@ -51,6 +56,7 @@ class Sampler(ABC):
         discrete_cardinalities: list[int],
         continuous_dims: int,
         init_args: dict[str, Any],
+        evaluator_metadata: Any = None,
     ) -> Any:
         """Optional constructor used when restoring a persisted sampler snapshot."""
         raise NotImplementedError("override from_snapshot(...) to support sampler restore")

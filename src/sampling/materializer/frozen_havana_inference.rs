@@ -93,7 +93,7 @@ mod tests {
             final_training_rate: 0.01,
         };
         let mut training = SamplerAggregatorConfig::HavanaTraining { params }
-            .build(domain.clone(), Some(8), None)
+            .build(domain.clone(), Some(8), None, serde_json::json!({}))
             .expect("build havana training sampler");
         let _ = training
             .produce_latent_batch(4)
@@ -113,6 +113,7 @@ mod tests {
                 sampler_snapshot: Some(&snapshot),
                 observable_state: None,
             }),
+            serde_json::json!({}),
         )
         .expect("build inference sampler");
         let latent_batch = inference

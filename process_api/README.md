@@ -45,6 +45,9 @@ Evaluator classes implement:
 eval(xs_discrete, xs_continuous)
 ```
 
+They may also implement `metadata()` or expose a `metadata` attribute returning
+JSON-safe evaluator metadata. The default is `{}`.
+
 Sampler classes implement:
 
 ```python
@@ -73,10 +76,13 @@ Fresh initialization always uses:
 ClassName(discrete_cardinalities=..., continuous_dims=..., **init_args)
 ```
 
+If the sampler class accepts an `evaluator_metadata` keyword, the wrapper passes
+the evaluator metadata to fresh and restored sampler construction.
+
 Sampler restore may additionally implement:
 
 ```python
-from_snapshot(*, snapshot, discrete_cardinalities, continuous_dims, init_args)
+from_snapshot(*, snapshot, discrete_cardinalities, continuous_dims, init_args, evaluator_metadata=None)
 ```
 
 These homogeneous dimensions are derived from the protocol `domain`; `init_args`

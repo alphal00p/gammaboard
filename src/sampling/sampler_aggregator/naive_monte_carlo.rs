@@ -331,7 +331,9 @@ mod tests {
         sampler.sum = 4.5;
 
         let snapshot = sampler.snapshot().expect("snapshot");
-        let mut restored = snapshot.into_runtime(&domain).expect("restore");
+        let mut restored = snapshot
+            .into_runtime(&domain, serde_json::json!({}))
+            .expect("restore");
         let restored_snapshot = restored.snapshot().expect("snapshot after restore");
 
         let SamplerAggregatorSnapshot::NaiveMonteCarlo { raw } = restored_snapshot else {

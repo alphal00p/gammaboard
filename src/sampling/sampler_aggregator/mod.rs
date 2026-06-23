@@ -9,6 +9,7 @@ use crate::evaluation::AccumulatorState;
 use crate::sampling::materializer::{HavanaInferenceMaterializer, IdentityMaterializer};
 use crate::sampling::{SamplerAggregator, SamplerAggregatorSnapshot, StageHandoff};
 use crate::utils::domain::Domain;
+use serde_json::Value as JsonValue;
 
 pub use self::havana::HavanaInferenceSamplerParams;
 pub use self::havana::HavanaInferenceSource;
@@ -46,7 +47,11 @@ fn global_abs_integrand_norm_from_handoff(handoff: Option<StageHandoff<'_>>) -> 
 }
 
 impl SamplerAggregatorSnapshot {
-    pub fn into_runtime(self, domain: &Domain) -> Result<Box<dyn SamplerAggregator>, BuildError> {
+    pub fn into_runtime(
+        self,
+        domain: &Domain,
+        evaluator_metadata: JsonValue,
+    ) -> Result<Box<dyn SamplerAggregator>, BuildError> {
         match self {
             Self::NaiveMonteCarlo { raw } => {
                 let snapshot: NaiveMonteCarloSamplerAggregator = serde_json::from_value(raw)
@@ -130,7 +135,11 @@ impl SamplerAggregatorSnapshot {
                             "failed to decode process_sampler sampler snapshot: {err}"
                         ))
                     })?;
-                Ok(Box::new(ProcessSampler::from_snapshot(snapshot, domain)?))
+                Ok(Box::new(ProcessSampler::from_snapshot(
+                    snapshot,
+                    domain,
+                    evaluator_metadata,
+                )?))
             }
         }
     }
@@ -165,12 +174,13 @@ impl SamplerAggregatorConfig {
         domain: Domain,
         sample_budget: Option<usize>,
         handoff: Option<StageHandoff<'_>>,
+        evaluator_metadata: JsonValue,
     ) -> Result<Box<dyn SamplerAggregator>, BuildError> {
         if let Some(snapshot) = handoff
             .and_then(|handoff| handoff.sampler_snapshot.cloned())
             .filter(|snapshot| snapshot.matches_config(self))
         {
-            return snapshot.into_runtime(&domain);
+            return snapshot.into_runtime(&domain, evaluator_metadata);
         }
 
         match self {
@@ -245,9 +255,13 @@ impl SamplerAggregatorConfig {
                     &domain,
                 )?))
             }
-            Self::ProcessSampler { params } => Ok(Box::new(
-                ProcessSampler::from_params_and_domain(params.clone(), &domain)?,
-            )),
+            Self::ProcessSampler { params } => {
+                Ok(Box::new(ProcessSampler::from_params_and_domain(
+                    params.clone(),
+                    &domain,
+                    evaluator_metadata,
+                )?))
+            }
         }
     }
     pub fn build_materializer(

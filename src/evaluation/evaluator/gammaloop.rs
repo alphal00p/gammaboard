@@ -14,6 +14,7 @@ use gammalooprs::settings::RuntimeSettings;
 use gammalooprs::settings::runtime::{DiscreteGraphSamplingType, SamplingSettings};
 use gammalooprs::utils::F;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value as JsonValue, json};
 use symbolica::numerical_integration::Sample;
 
 use crate::{
@@ -30,9 +31,21 @@ pub struct GammaLoopEvaluator {
     integrand: ProcessIntegrand,
     pristine_integrand: ProcessIntegrand,
     model: Model,
+    metadata: GammaLoopMetadata,
     momentum_space: bool,
     training_projection: TrainingProjection,
     domain: Domain,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GammaLoopMetadata {
+    kind: &'static str,
+    state_folder: String,
+    process_id: usize,
+    integrand_name: String,
+    momentum_space: bool,
+    coordinate_space: &'static str,
+    domain_axes: Vec<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, Eq)]
@@ -102,7 +115,7 @@ impl Default for GammaLoopParams {
 impl GammaLoopEvaluator {
     fn load_integrand_and_model(
         mut params: GammaLoopParams,
-    ) -> Result<(ProcessIntegrand, Model, bool), BuildError> {
+    ) -> Result<(ProcessIntegrand, Model, GammaLoopMetadata), BuildError> {
         params.state_folder = resolve_resource_path(&params.state_folder).map_err(|err| {
             BuildError::build(format!(
                 "failed to resolve gammaloop state_folder '{}': {err}",
@@ -131,19 +144,27 @@ impl GammaLoopEvaluator {
             .map_err(|err| BuildError::build(err.to_string()))?
             .clone();
         let model = state.model.clone();
-        if params.momentum_space {
-            tracing::warn!(
-                "GammaLoop momentum_space=true is deprecated for gammaboard; forcing x-space evaluation"
-            );
-        }
-        let momentum_space = false;
-        Ok((integrand, model, momentum_space))
+        let momentum_space = params.momentum_space;
+        let metadata = GammaLoopMetadata {
+            kind: "gammaloop",
+            state_folder: params.state_folder.to_string_lossy().into_owned(),
+            process_id,
+            integrand_name,
+            momentum_space,
+            coordinate_space: if momentum_space {
+                "momentum_space"
+            } else {
+                "x_space"
+            },
+            domain_axes: Self::domain_axes(&integrand),
+        };
+        Ok((integrand, model, metadata))
     }
 
     pub fn resolve_domain_from_params(params: GammaLoopParams) -> Result<Domain, BuildError> {
         match std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<Domain, BuildError> {
-            let (integrand, _model, momentum_space) = Self::load_integrand_and_model(params)?;
-            Self::build_domain(&integrand, momentum_space)
+            let (integrand, _model, metadata) = Self::load_integrand_and_model(params)?;
+            Self::build_domain(&integrand, metadata.momentum_space)
         })) {
             Ok(result) => result,
             Err(payload) => Err(BuildError::build(format!(
@@ -182,7 +203,13 @@ impl GammaLoopEvaluator {
             discrete_selection: &[usize],
         ) -> Result<Domain, BuildError> {
             let dims = if momentum_space {
-                integrand.get_n_dim()
+                let dims = integrand.get_n_dim();
+                if !dims.is_multiple_of(3) {
+                    return Err(BuildError::build(format!(
+                        "gammaloop momentum-space domain dimension must be divisible by 3, got {dims}"
+                    )));
+                }
+                dims
             } else {
                 integrand
                     .expected_x_space_dimension(discrete_selection)
@@ -301,6 +328,25 @@ impl GammaLoopEvaluator {
         }
     }
 
+    fn domain_axes(integrand: &ProcessIntegrand) -> Vec<&'static str> {
+        match integrand.get_settings().sampling.clone() {
+            SamplingSettings::Default(_) | SamplingSettings::MultiChanneling(_) => Vec::new(),
+            SamplingSettings::DiscreteGraphs(discrete_settings) => {
+                let mut axes = vec!["graph_group"];
+                if discrete_settings.sample_orientations {
+                    axes.push("orientation");
+                }
+                if matches!(
+                    discrete_settings.sampling_type,
+                    DiscreteGraphSamplingType::DiscreteMultiChanneling(_)
+                ) {
+                    axes.push("channel");
+                }
+                axes
+            }
+        }
+    }
+
     fn panic_message(payload: Box<dyn Any + Send>) -> String {
         if let Some(message) = payload.downcast_ref::<&str>() {
             return (*message).to_string();
@@ -405,9 +451,8 @@ impl GammaLoopEvaluator {
 
     pub fn from_params(params: GammaLoopParams) -> Result<Self, BuildError> {
         match std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<Self, BuildError> {
-            let (mut integrand, model, momentum_space) =
-                Self::load_integrand_and_model(params.clone())?;
-            let domain = Self::build_domain(&integrand, momentum_space)?;
+            let (mut integrand, model, metadata) = Self::load_integrand_and_model(params.clone())?;
+            let domain = Self::build_domain(&integrand, metadata.momentum_space)?;
             integrand
                 .warm_up(&model)
                 .map_err(|err| BuildError::build(format!("failed to warm up integrand: {err}")))?;
@@ -415,7 +460,8 @@ impl GammaLoopEvaluator {
                 pristine_integrand: integrand.clone(),
                 integrand,
                 model,
-                momentum_space,
+                momentum_space: metadata.momentum_space,
+                metadata,
                 training_projection: params.training_projection,
                 domain,
             })
@@ -626,6 +672,10 @@ fn set_top_level_sample_weight(sample: &mut Sample<F<f64>>, integrator_weight: F
 impl Evaluator for GammaLoopEvaluator {
     fn get_domain(&self) -> Domain {
         self.domain.clone()
+    }
+
+    fn metadata(&self) -> JsonValue {
+        serde_json::to_value(&self.metadata).unwrap_or_else(|_| json!({}))
     }
 
     fn eval_batch(

@@ -41,9 +41,11 @@ impl ProcessSampler {
     pub(crate) fn from_params_and_domain(
         params: ProcessSamplerParams,
         domain: &Domain,
+        evaluator_metadata: Value,
     ) -> Result<Self, BuildError> {
         validate_params(&params)?;
-        let worker = ProcessSamplerWorker::spawn(&params, domain.clone(), None)?;
+        let worker =
+            ProcessSamplerWorker::spawn(&params, domain.clone(), None, evaluator_metadata)?;
         Ok(Self {
             params,
             domain: domain.clone(),
@@ -54,12 +56,14 @@ impl ProcessSampler {
     pub(crate) fn from_snapshot(
         snapshot: ProcessSamplerSnapshot,
         domain: &Domain,
+        evaluator_metadata: Value,
     ) -> Result<Self, BuildError> {
         validate_params(&snapshot.params)?;
         let worker = ProcessSamplerWorker::spawn(
             &snapshot.params,
             domain.clone(),
             Some(snapshot.sampler_state),
+            evaluator_metadata,
         )?;
         Ok(Self {
             params: snapshot.params,
@@ -187,6 +191,7 @@ impl ProcessSamplerWorker {
         params: &ProcessSamplerParams,
         domain: Domain,
         snapshot: Option<Value>,
+        evaluator_metadata: Value,
     ) -> Result<Self, BuildError> {
         let mut command =
             build_process_worker_command(&params.command, params.cwd.as_deref(), "sampler")?;
@@ -217,11 +222,16 @@ impl ProcessSamplerWorker {
             process: ProcessWorker::new("process sampler", child, stdin, stdout, stderr_tail),
             domain,
         };
-        worker.send_init(params.args.clone(), snapshot)?;
+        worker.send_init(params.args.clone(), snapshot, evaluator_metadata)?;
         Ok(worker)
     }
 
-    fn send_init(&mut self, args: Value, snapshot: Option<Value>) -> Result<(), BuildError> {
+    fn send_init(
+        &mut self,
+        args: Value,
+        snapshot: Option<Value>,
+        evaluator_metadata: Value,
+    ) -> Result<(), BuildError> {
         let response = self
             .process
             .request(
@@ -232,6 +242,7 @@ impl ProcessSamplerWorker {
                     "domain": self.domain,
                     "args": args,
                     "snapshot": snapshot,
+                    "evaluator_metadata": evaluator_metadata,
                 }),
             )
             .map_err(BuildError::build)?;
@@ -596,8 +607,55 @@ fn parse_offsets_or_fixed(
 
 #[cfg(test)]
 mod tests {
-    use super::ProcessSamplerParams;
+    use super::{ProcessSampler, ProcessSamplerParams};
+    use crate::sampling::{SamplerAggregator, SamplerAggregatorSnapshot};
     use crate::utils::domain::Domain;
+    use serde_json::json;
+
+    const METADATA_ECHO_SAMPLER_WORKER: &str = r#"
+import json, sys
+
+state = {}
+
+def read_frame():
+    content_length = None
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        line = line.decode("ascii", errors="replace").strip()
+        if not line:
+            if content_length is not None:
+                break
+            continue
+        name, sep, value = line.partition(":")
+        if sep and name.lower() == "content-length":
+            content_length = int(value.strip())
+    return json.loads(sys.stdin.buffer.read(content_length))
+
+def send_result(req_id, result):
+    body = json.dumps(
+        {"jsonrpc": "2.0", "id": req_id, "result": result},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    sys.stdout.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("ascii"))
+    sys.stdout.buffer.write(body)
+    sys.stdout.buffer.flush()
+
+while True:
+    req = read_frame()
+    if req is None:
+        break
+    method = req.get("method")
+    params = req.get("params") or {}
+    if method == "initialize":
+        state["evaluator_metadata"] = params.get("evaluator_metadata")
+        send_result(req.get("id"), {"ok": True})
+    elif method == "snapshot":
+        send_result(req.get("id"), {"snapshot": state})
+    else:
+        send_result(req.get("id"), {"ok": True})
+"#;
 
     #[test]
     fn process_sampler_deserializes_command_and_args() {
@@ -634,5 +692,39 @@ args = { seed = 0 }
             ],
         );
         assert_eq!(domain.fixed_rectangular_dims(), None);
+    }
+
+    #[test]
+    fn process_sampler_initialize_receives_evaluator_metadata() {
+        let python =
+            std::env::var("GAMMABOARD_TEST_PYTHON").unwrap_or_else(|_| "python3".to_string());
+        let params = ProcessSamplerParams {
+            command: vec![
+                python,
+                "-u".to_string(),
+                "-c".to_string(),
+                METADATA_ECHO_SAMPLER_WORKER.to_string(),
+            ],
+            cwd: None,
+            requires_training_values: false,
+            args: json!({}),
+        };
+        let metadata = json!({"space": "momentum", "loop_count": 2});
+        let mut sampler = ProcessSampler::from_params_and_domain(
+            params,
+            &Domain::continuous(6),
+            metadata.clone(),
+        )
+        .expect("process sampler should initialize");
+
+        let SamplerAggregatorSnapshot::ProcessSampler { raw } =
+            sampler.snapshot().expect("snapshot")
+        else {
+            panic!("expected process sampler snapshot");
+        };
+        assert_eq!(
+            raw.pointer("/sampler_state/evaluator_metadata"),
+            Some(&metadata)
+        );
     }
 }

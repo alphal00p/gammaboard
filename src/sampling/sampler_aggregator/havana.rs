@@ -802,7 +802,9 @@ mod tests {
             .expect("produce pending batch");
 
         let snapshot = sampler.snapshot().expect("snapshot");
-        let restored = snapshot.into_runtime(&domain).expect("restore");
+        let restored = snapshot
+            .into_runtime(&domain, serde_json::json!({}))
+            .expect("restore");
         let mut restored = restored;
         let restored_snapshot = restored.snapshot().expect("snapshot after restore");
 

@@ -73,6 +73,10 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   when present, is the root/default; sample/image/plot-line tasks may set `evaluator = "latest"`,
   `{ from_name = "..." }`, or `{ config = ... }`. Task-level evaluators must
   resolve to the run root domain.
+- Evaluators may expose JSON-safe metadata after initialization. Sampler
+  activation instantiates the effective evaluator first, reads this metadata,
+  and passes it into sampler construction; process samplers receive it as
+  `evaluator_metadata` in `initialize`.
 
 ## Design Rules
 - Keep adapters thin; put reusable behavior in `src/api` or lower layers.

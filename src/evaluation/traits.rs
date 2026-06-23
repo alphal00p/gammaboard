@@ -2,6 +2,7 @@ use super::{Batch, BatchResult, IngestScalar, Point};
 use crate::core::{AccumulatorConfig, BuildError, EngineError, EvalError};
 use crate::sampling::LatentBatch;
 use crate::utils::domain::Domain;
+use serde_json::{Value as JsonValue, json};
 
 #[derive(Debug, Clone, Copy)]
 pub struct EvalBatchOptions {
@@ -10,6 +11,10 @@ pub struct EvalBatchOptions {
 
 pub trait Evaluator: Send {
     fn get_domain(&self) -> Domain;
+    fn metadata(&self) -> JsonValue {
+        json!({})
+    }
+
     fn eval_batch(
         &mut self,
         batch: &Batch,

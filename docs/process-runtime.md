@@ -62,8 +62,11 @@ GammaBoard requires exactly one of `result` or `error`.
 Return:
 
 ```json
-{ "ok": true }
+{ "ok": true, "metadata": {} }
 ```
+
+`metadata` is optional and defaults to `{}`. It may contain any JSON-safe
+evaluator-derived information the sampler needs at initialization.
 
 `eval_batch` evaluates a batch in ragged row-major form. The offset arrays have length `nr_samples + 1`; sample `i` uses `row_major[offsets[i]..offsets[i + 1]]`.
 
@@ -96,7 +99,8 @@ Process evaluators should use a `kind = "vector"` accumulator with matching `com
   "role": "sampler",
   "domain": { "continuous": { "dims": 2 } },
   "args": {},
-  "snapshot": null
+  "snapshot": null,
+  "evaluator_metadata": {}
 }
 ```
 
