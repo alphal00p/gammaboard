@@ -4,10 +4,21 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::core::{AccumulatorConfig, BuildError, EvalError};
-use crate::evaluation::{AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator};
+use crate::evaluation::{
+    AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator, GammaLoopAccumulatorState,
+};
 use crate::process_runtime::build_process_worker_command;
 use crate::process_worker::{PROCESS_PROTOCOL, ProcessWorker, pipe_process_stderr};
 use crate::utils::domain::Domain;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessAccumulatorKind {
+    #[default]
+    Vector,
+    FullVector,
+    Gammaloop,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProcessEvaluatorParams {
@@ -17,6 +28,8 @@ pub struct ProcessEvaluatorParams {
     pub domain: Domain,
     #[serde(default = "default_components")]
     pub components: Vec<String>,
+    #[serde(default)]
+    pub accumulator: ProcessAccumulatorKind,
     #[serde(default = "default_args")]
     pub args: Value,
 }
@@ -40,7 +53,9 @@ impl ProcessEvaluator {
                 "process_evaluator args must be a TOML table / JSON object",
             ));
         }
-        if params.components.is_empty() {
+        if !matches!(params.accumulator, ProcessAccumulatorKind::Gammaloop)
+            && params.components.is_empty()
+        {
             return Err(BuildError::build(
                 "process_evaluator components must not be empty",
             ));
@@ -73,6 +88,14 @@ impl Evaluator for ProcessEvaluator {
     ) -> Result<BatchResult, EvalError> {
         let mut observable_state = AccumulatorState::from_config(accumulator);
         let inputs = ragged_row_major_inputs(batch);
+
+        if let AccumulatorState::Gammaloop(gl_state) = &mut observable_state {
+            let (new_state, training_values) =
+                self.worker.eval_batch_gammaloop(&inputs, batch.size())?;
+            *gl_state = new_state;
+            return Ok(BatchResult::new(training_values, observable_state));
+        }
+
         let values = self.worker.eval_batch(&inputs, batch.size())?;
         let mut training_values = options
             .require_training_values
@@ -147,6 +170,7 @@ struct ProcessRuntimeWorker {
     process: ProcessWorker,
     domain: Domain,
     components: Vec<String>,
+    accumulator_kind: ProcessAccumulatorKind,
     metadata: Value,
 }
 
@@ -181,6 +205,7 @@ impl ProcessRuntimeWorker {
             process: ProcessWorker::new("process evaluator", child, stdin, stdout, stderr_tail),
             domain,
             components: params.components.clone(),
+            accumulator_kind: params.accumulator.clone(),
             metadata: default_args(),
         };
         worker.send_init(params.args.clone())?;
@@ -188,21 +213,28 @@ impl ProcessRuntimeWorker {
     }
 
     fn send_init(&mut self, args: Value) -> Result<(), BuildError> {
+        let init_params = match self.accumulator_kind {
+            ProcessAccumulatorKind::Gammaloop => serde_json::json!({
+                "protocol": PROCESS_PROTOCOL,
+                "role": "evaluator",
+                "accumulator": "gammaloop",
+                "domain": self.domain,
+                "args": args,
+            }),
+            _ => serde_json::json!({
+                "protocol": PROCESS_PROTOCOL,
+                "role": "evaluator",
+                "components": self.components,
+                "observable": {
+                    "components": self.components,
+                },
+                "domain": self.domain,
+                "args": args,
+            }),
+        };
         let response = self
             .process
-            .request(
-                "initialize",
-                serde_json::json!({
-                    "protocol": PROCESS_PROTOCOL,
-                    "role": "evaluator",
-                    "components": self.components,
-                    "observable": {
-                        "components": self.components,
-                    },
-                    "domain": self.domain,
-                    "args": args,
-                }),
-            )
+            .request("initialize", init_params)
             .map_err(BuildError::build)?;
         self.metadata = Self::expect_ack(response).map_err(BuildError::build)?;
         Ok(())
@@ -250,6 +282,61 @@ impl ProcessRuntimeWorker {
                 })
             })
             .collect()
+    }
+
+    fn eval_batch_gammaloop(
+        &mut self,
+        inputs: &RaggedRowMajorInputs,
+        nr_samples: usize,
+    ) -> Result<(GammaLoopAccumulatorState, Option<Vec<f64>>), EvalError> {
+        let response = self
+            .process
+            .request(
+                "eval_batch",
+                serde_json::json!({
+                    "nr_samples": nr_samples,
+                    "accumulator": "gammaloop",
+                    "xs_discrete_row_major": inputs.xs_discrete_row_major,
+                    "xs_discrete_offsets": inputs.xs_discrete_offsets,
+                    "xs_continuous_row_major": inputs.xs_continuous_row_major,
+                    "xs_continuous_offsets": inputs.xs_continuous_offsets,
+                }),
+            )
+            .map_err(EvalError::eval)?;
+        let state: GammaLoopAccumulatorState = serde_json::from_value(
+            response
+                .get("gammaloop_state")
+                .ok_or_else(|| {
+                    EvalError::eval("process worker response missing 'gammaloop_state'")
+                })?
+                .clone(),
+        )
+        .map_err(|err| EvalError::eval(format!("failed to parse gammaloop_state: {err}")))?;
+        let training_values = response
+            .get("training_values")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .enumerate()
+                    .map(|(index, v)| {
+                        v.as_f64().ok_or_else(|| {
+                            EvalError::eval(format!(
+                                "non-f64 in training_values at index {index}"
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<f64>, EvalError>>()
+            })
+            .transpose()?;
+        if let Some(ref tv) = training_values {
+            if tv.len() != nr_samples {
+                return Err(EvalError::eval(format!(
+                    "training_values length {} does not match nr_samples {nr_samples}",
+                    tv.len()
+                )));
+            }
+        }
+        Ok((state, training_values))
     }
 
     fn expect_ack(response: Value) -> Result<Value, String> {

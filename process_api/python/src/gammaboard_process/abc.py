@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from .gammaloop import GammaLoopBatchResult
 
 
 class Evaluator(ABC):
@@ -17,6 +20,25 @@ class Evaluator(ABC):
     @abstractmethod
     def eval(self, xs_discrete: np.ndarray, xs_continuous: np.ndarray) -> Any:
         """Return values with shape ``(nr_samples,)`` or ``(nr_samples, nr_components)``."""
+
+    def eval_gammaloop(
+        self, xs_discrete: np.ndarray, xs_continuous: np.ndarray
+    ) -> GammaLoopBatchResult:
+        """Evaluate a batch and return a GammaLoop accumulator state.
+
+        Override this method when the run's accumulator is configured as
+        ``gammaloop``.  The returned :class:`~gammaboard_process.GammaLoopBatchResult`
+        carries a JSON-serializable ``GammaLoopAccumulatorState`` dict (with at
+        minimum a ``bundle`` key containing an
+        :class:`~gammaboard_process.gammaloop.ObservableSnapshotBundle`) and an
+        optional list of per-sample training values for the sampler.
+
+        The default implementation raises ``NotImplementedError``.
+        """
+        raise NotImplementedError(
+            "eval_gammaloop is required when the run uses accumulator = 'gammaloop'; "
+            "override this method and return a GammaLoopBatchResult"
+        )
 
     def metadata(self) -> Any:
         """Return JSON-safe evaluator metadata passed to sampler initialization."""

@@ -16,7 +16,7 @@ use self::process::ProcessEvaluator;
 use self::symbolica::SymbolicaEngine;
 use self::unit::UnitEvaluator;
 pub use gammaloop::GammaLoopParams;
-pub use process::ProcessEvaluatorParams;
+pub use process::{ProcessAccumulatorKind, ProcessEvaluatorParams};
 pub use symbolica::SymbolicaParams;
 pub use unit::UnitEvaluatorParams;
 
@@ -69,7 +69,19 @@ impl EvaluatorConfig {
 
         match self {
             Self::ProcessEvaluator { params } => {
-                validate_process_accumulator(self.kind_str(), config, &params.components)
+                if matches!(params.accumulator, process::ProcessAccumulatorKind::Gammaloop) {
+                    match config {
+                        AccumulatorConfig::Empty | AccumulatorConfig::Gammaloop => Ok(()),
+                        other => Err(BuildError::invalid_input(format!(
+                            "evaluator.kind = \"{}\" with accumulator = \"gammaloop\" requires \
+                             gammaloop accumulator config, got \"{}\"",
+                            self.kind_str(),
+                            other.kind_str()
+                        ))),
+                    }
+                } else {
+                    validate_process_accumulator(self.kind_str(), config, &params.components)
+                }
             }
             Self::Symbolica { .. } => validate_symbolica_accumulator(self.kind_str(), config),
             Self::Unit { .. } => validate_semantic_accumulator(

@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 
 from .batches import SampleBatch
+from .gammaloop import GammaLoopBatchResult
 from .protocol import (
     PROTOCOL,
     ProtocolIo,
@@ -33,6 +34,7 @@ class _EvaluatorWorker:
         self.discrete_cardinalities: list[int] | None = None
         self.continuous_dims: int | None = None
         self.components = ["value"]
+        self._accumulator_kind: str = "vector"
 
     def run(self) -> None:
         while True:
@@ -55,9 +57,11 @@ class _EvaluatorWorker:
             discrete_cardinalities, continuous_dims = fixed_domain_shape(params["domain"])
             if any(value <= 0 for value in discrete_cardinalities):
                 raise ValueError("discrete_cardinalities must contain only positive integers")
-            self.components = [str(value) for value in params.get("components", ["value"])]
-            if not self.components:
-                raise ValueError("components must not be empty")
+            self._accumulator_kind = str(params.get("accumulator") or "vector")
+            if self._accumulator_kind != "gammaloop":
+                self.components = [str(value) for value in params.get("components", ["value"])]
+                if not self.components:
+                    raise ValueError("components must not be empty")
             self.evaluator = instantiate_user_object(
                 self.target,
                 discrete_cardinalities=discrete_cardinalities,
@@ -82,10 +86,31 @@ class _EvaluatorWorker:
                 (nr_samples, self.continuous_dims)
             )
             self._validate_points(xs_discrete, xs_continuous)
+            if self._accumulator_kind == "gammaloop":
+                return self._eval_batch_gammaloop(xs_discrete, xs_continuous, nr_samples)
             raw_values = self.evaluator.eval(xs_discrete, xs_continuous)
             values = _normalize_evaluator_values(raw_values, nr_samples, self.components)
             return {"values_row_major": values.reshape((nr_samples * len(self.components),)).tolist()}
         raise ValueError(f"unknown method: {method}")
+
+    def _eval_batch_gammaloop(
+        self,
+        xs_discrete: np.ndarray,
+        xs_continuous: np.ndarray,
+        nr_samples: int,
+    ) -> dict[str, Any]:
+        raw = self.evaluator.eval_gammaloop(xs_discrete, xs_continuous)
+        result = _normalize_gammaloop_result(raw, nr_samples)
+        response: dict[str, Any] = {"gammaloop_state": result.state}
+        if result.training_values is not None:
+            tvs = list(result.training_values)
+            if len(tvs) != nr_samples:
+                raise ValueError(
+                    f"GammaLoopBatchResult.training_values length {len(tvs)} "
+                    f"does not match nr_samples {nr_samples}"
+                )
+            response["training_values"] = [float(v) for v in tvs]
+        return response
 
     def _validate_points(self, xs_discrete: np.ndarray, xs_continuous: np.ndarray) -> None:
         if not np.isfinite(xs_continuous).all():
@@ -221,6 +246,18 @@ class _SamplerWorker:
                 raise ValueError(
                     f"produce_latent_batch returned discrete values outside [0, {cardinality}) on axis {axis}"
                 )
+
+
+def _normalize_gammaloop_result(raw: Any, nr_samples: int) -> GammaLoopBatchResult:
+    if isinstance(raw, GammaLoopBatchResult):
+        return raw
+    if isinstance(raw, dict):
+        state = raw.get("state", raw)
+        training_values = raw.get("training_values")
+        return GammaLoopBatchResult(state=state, training_values=training_values)
+    raise TypeError(
+        f"eval_gammaloop must return a GammaLoopBatchResult or dict, got {type(raw).__name__}"
+    )
 
 
 def _normalize_evaluator_values(values: Any, nr_samples: int, components: list[str]) -> np.ndarray:
