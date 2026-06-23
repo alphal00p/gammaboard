@@ -177,13 +177,38 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             Ok(None) => Ok(None),
             Err(err) if err.is_database_error() => Err(err),
             Err(err) => {
-                self.note_start_failure(target);
+                let now_blocked = self.note_start_failure(target);
                 error!(
                     role = %target.role,
                     run_id = target.run_id,
                     error = %err,
                     "failed to start role runner"
                 );
+                if now_blocked {
+                    let reason = format!("{} role permanently failed to start: {err}", target.role);
+                    if let Some(task) = self.store.load_active_run_task(target.run_id).await? {
+                        self.fail_task_activation_and_pause_run(
+                            target.run_id,
+                            task.id,
+                            &reason,
+                            "role runner permanently failed to start",
+                        )
+                        .await;
+                    } else {
+                        match self.store.clear_desired_assignments_for_run(target.run_id).await {
+                            Ok(cleared) => warn!(
+                                run_id = target.run_id,
+                                assignments_cleared = cleared,
+                                "role runner permanently failed to start (no active task); desired assignments cleared"
+                            ),
+                            Err(clear_err) => warn!(
+                                run_id = target.run_id,
+                                error = %clear_err,
+                                "role runner permanently failed to start: failed to clear desired assignments"
+                            ),
+                        }
+                    }
+                }
                 Ok(None)
             }
         }
@@ -440,11 +465,11 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         self.reset_reconcile_backoff();
     }
 
-    pub(super) fn note_start_failure(&mut self, target: RoleTarget) {
-        if self
+    pub(super) fn note_start_failure(&mut self, target: RoleTarget) -> bool {
+        let now_blocked = self
             .retry_state
-            .note_failure(target, self.config.max_consecutive_start_failures)
-        {
+            .note_failure(target, self.config.max_consecutive_start_failures);
+        if now_blocked {
             warn!(
                 role = %target.role,
                 run_id = target.run_id,
@@ -453,6 +478,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                 "aborting role runner restarts after repeated failures; waiting for desired assignment change"
             );
         }
+        now_blocked
     }
 
     pub(super) async fn finish_current_assignment(&mut self) -> Result<(), StoreError> {
@@ -467,11 +493,11 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         target: RoleTarget,
         err: &StoreError,
     ) -> Result<(), StoreError> {
-        self.note_start_failure(target);
+        let now_blocked = self.note_start_failure(target);
         self.reset_reconcile_backoff();
         self.stop_current().await;
         let role = target.role;
-        if matches!(role, crate::core::WorkerRole::Evaluator) {
+        if !now_blocked && matches!(role, crate::core::WorkerRole::Evaluator) {
             warn!(
                 run_id = target.run_id,
                 role = %role,
@@ -481,31 +507,29 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             return Ok(());
         }
 
-        if matches!(role, crate::core::WorkerRole::SamplerAggregator) {
-            if let Some(task) = self.store.load_active_run_task(target.run_id).await? {
-                let reason = format!("{role} role failed: {err}");
-                if let Err(fail_err) = self.store.fail_run_task(task.id, &reason).await {
-                    warn!(
-                        run_id = target.run_id,
-                        task_id = task.id,
-                        error = %fail_err,
-                        "failed to persist task failure after role error"
-                    );
-                }
+        if let Some(task) = self.store.load_active_run_task(target.run_id).await? {
+            let reason = format!("{role} role failed: {err}");
+            if let Err(fail_err) = self.store.fail_run_task(task.id, &reason).await {
+                warn!(
+                    run_id = target.run_id,
+                    task_id = task.id,
+                    error = %fail_err,
+                    "failed to persist task failure after role error"
+                );
             }
-
-            let cleared = self
-                .store
-                .clear_desired_assignments_for_run(target.run_id)
-                .await?;
-            warn!(
-                run_id = target.run_id,
-                role = %role,
-                assignments_cleared = cleared,
-                error = %err,
-                "role failed; desired assignments cleared"
-            );
         }
+
+        let cleared = self
+            .store
+            .clear_desired_assignments_for_run(target.run_id)
+            .await?;
+        warn!(
+            run_id = target.run_id,
+            role = %role,
+            assignments_cleared = cleared,
+            error = %err,
+            "role failed; desired assignments cleared"
+        );
         Ok(())
     }
 

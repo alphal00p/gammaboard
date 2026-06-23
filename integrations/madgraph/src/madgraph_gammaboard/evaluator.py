@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-from typing import Any
-
 import numpy as np
 from gammaboard_process import Evaluator, run_evaluator
 
-from .artifacts import MatrixElement, load_matrix_element
-from .phase_space import TwoBodyPhaseSpace, build_phase_space
+from .state import MadSpaceState
 
 
 class MadGraphEvaluator(Evaluator):
@@ -15,38 +12,42 @@ class MadGraphEvaluator(Evaluator):
         *,
         discrete_cardinalities: list[int],
         continuous_dims: int,
-        ecm: float,
-        matrix_element: dict[str, Any],
-        phase_space: dict[str, Any] | None = None,
+        state_path: str,
+        madgraph_root: str | None = None,
+        subprocess_index: int = 0,
+        phase_space: str = "flat",
+        channel_index: int = 0,
+        device: str = "cppnone",
+        thread_count: int = -1,
         output: list[str] | None = None,
     ) -> None:
         if discrete_cardinalities:
-            raise ValueError("the first MadGraph evaluator version does not use discrete dimensions")
-        self.phase_space: TwoBodyPhaseSpace = build_phase_space(phase_space or {}, ecm=float(ecm))
-        if int(continuous_dims) != self.phase_space.dims:
+            raise ValueError("MadGraph evaluator does not use discrete dimensions")
+        self.state = MadSpaceState.load(
+            state_path=state_path,
+            madgraph_root=madgraph_root,
+            subprocess_index=subprocess_index,
+            phase_space=phase_space,
+            channel_index=channel_index,
+            device=device,
+            thread_count=thread_count,
+        )
+        if int(continuous_dims) != self.state.random_dim:
             raise ValueError(
                 f"continuous_dims={continuous_dims} does not match "
-                f"{self.phase_space.dims} required by phase_space.kind='two_body'"
+                f"{self.state.random_dim} random dimensions required by the MadSpace integrand"
             )
-        self.matrix_element: MatrixElement = load_matrix_element(matrix_element)
-        self.output = output or ["value"]
-        allowed = {"value", "matrix_element", "phase_space_weight"}
+        self.output = output or ["weight"]
+        allowed = {"weight"}
         unknown = [name for name in self.output if name not in allowed]
         if unknown:
-            raise ValueError(f"unsupported MadGraph output component(s): {unknown}")
+            raise ValueError(f"unsupported MadGraph output component(s): {unknown!r}")
 
     def eval(self, xs_discrete: np.ndarray, xs_continuous: np.ndarray) -> dict[str, np.ndarray]:
         if xs_discrete.shape[1] != 0:
-            raise ValueError("the first MadGraph evaluator version expects no discrete coordinates")
-        mapped = self.phase_space.map(xs_continuous)
-        matrix_element = self.matrix_element(mapped.momenta)
-        value = matrix_element * mapped.weight
-        columns = {
-            "value": value,
-            "matrix_element": matrix_element,
-            "phase_space_weight": mapped.weight,
-        }
-        return {name: columns[name] for name in self.output}
+            raise ValueError("MadGraph evaluator expects no discrete coordinates")
+        weight = self.state.evaluate(xs_continuous)
+        return {name: weight for name in self.output}
 
 
 def main() -> None:
