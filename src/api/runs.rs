@@ -1172,6 +1172,7 @@ accumulator = { config = "scalar" }
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         for relative_path in [
             "resources/templates/runs/ghost_bump.toml",
+            "resources/templates/runs/gammaloop-6photons-hsigma-ecom-scan.toml",
             "resources/templates/runs/hyperparameter-tuning-symbolica.toml",
             "resources/templates/runs/parameter-scan-symbolica.toml",
             "resources/templates/runs/symbolica-havana-pdf-1d2d.toml",

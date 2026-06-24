@@ -115,7 +115,7 @@ impl ScalarAccumulatorState {
     }
 
     pub fn rsd(&self) -> f64 {
-        relative_squared_dispersion(self.variance(), self.mean_abs())
+        reduced_square_deviation(self.variance(), self.mean_abs())
     }
 
     pub fn max_weight_impact(&self) -> f64 {
@@ -272,11 +272,11 @@ fn signal_to_noise_ratio(mean_abs: f64, abs_err: f64) -> f64 {
     }
 }
 
-fn relative_squared_dispersion(variance: f64, mean_abs: f64) -> f64 {
+fn reduced_square_deviation(variance: f64, mean_abs: f64) -> f64 {
     if mean_abs == 0.0 {
         0.0
     } else {
-        variance / (mean_abs * mean_abs)
+        variance.max(0.0).sqrt() / mean_abs
     }
 }
 

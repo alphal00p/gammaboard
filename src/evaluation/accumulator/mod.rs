@@ -408,6 +408,32 @@ mod tests {
     }
 
     #[test]
+    fn scalar_rsd_is_std_over_mean_abs() {
+        let AccumulatorState::Scalar(mut state) =
+            AccumulatorState::from_config(&AccumulatorConfig::scalar())
+        else {
+            panic!("expected scalar accumulator");
+        };
+        let point = Point::new(vec![], vec![], 1.0);
+        for value in [1.0, 3.0] {
+            state.add_sample(value, &point);
+        }
+
+        let metric = extract_accumulator_metric(
+            &AccumulatorState::Scalar(state.clone()),
+            &AccumulatorMetricSelector {
+                name: AccumulatorMetricName::Rsd,
+                component: None,
+            },
+        )
+        .expect("metric extraction")
+        .expect("rsd metric");
+
+        assert_eq!(state.rsd(), 0.5);
+        assert_eq!(metric.value, 0.5);
+    }
+
+    #[test]
     fn vector_metric_extraction_reports_component_variance_uncertainty_with_fourth_moment() {
         let config = AccumulatorConfig::Vector {
             components: vec!["real".to_string(), "imag".to_string()],

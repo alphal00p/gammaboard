@@ -106,7 +106,7 @@ fn metric_for_scalar(
         AccumulatorMetricName::RelativeVarianceError => variance_error
             .map(|error| relative_error(variance, error))
             .unwrap_or(f64::INFINITY),
-        AccumulatorMetricName::RelativeSquaredDispersion => state.rsd(),
+        AccumulatorMetricName::Rsd => state.rsd(),
         AccumulatorMetricName::TimeNormalizedVariance => unreachable!(
             "time-normalized variance requires runtime throughput and is handled before scalar extraction"
         ),
@@ -117,7 +117,7 @@ fn metric_for_scalar(
         AccumulatorMetricName::Error
         | AccumulatorMetricName::RelativeError
         | AccumulatorMetricName::RelativeVarianceError
-        | AccumulatorMetricName::RelativeSquaredDispersion
+        | AccumulatorMetricName::Rsd
         | AccumulatorMetricName::TimeNormalizedVariance => None,
     };
     AccumulatorMetricValue {

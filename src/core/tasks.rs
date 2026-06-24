@@ -181,7 +181,7 @@ pub enum AccumulatorMetricName {
     RelativeError,
     Variance,
     RelativeVarianceError,
-    RelativeSquaredDispersion,
+    Rsd,
     TimeNormalizedVariance,
 }
 
