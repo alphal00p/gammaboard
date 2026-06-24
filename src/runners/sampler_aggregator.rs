@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
-const MIN_BATCH_SIZE: usize = 16;
+pub const MIN_BATCH_SIZE: usize = 16;
 const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.25;
 const COMPLETED_SAMPLES_PER_SECOND_EWMA_ALPHA: f64 = 0.2;
 const ETA_COMPLETED_SAMPLES_PER_SECOND_EWMA_ALPHA: f64 = 0.02;
@@ -1120,6 +1120,7 @@ where
         let persist_snapshot = force
             || self.runtime_state.initial_round_trip_snapshot_pending
             || self.runtime_state.pending_persisted_completed_batches > 0;
+        let cleared_initial_round_trip = persist_snapshot;
         let current_accumulator = self
             .observable_state
             .to_json()
@@ -1139,7 +1140,6 @@ where
             None
         };
         let flushed_completed_batches = self.runtime_state.pending_persisted_completed_batches;
-        let cleared_initial_round_trip = persist_snapshot;
         let started_at = Instant::now();
         let store = self.store.clone();
         let run_id = self.run_id;
