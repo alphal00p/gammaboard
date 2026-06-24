@@ -1873,6 +1873,15 @@ fn derive_capabilities_from_config(config: &JsonValue) -> BTreeMap<String, u64> 
             }
             continue;
         }
+        if matches!(
+            key.as_str(),
+            "cores" | "nr_cores" | "cpus" | "cpus_per_task" | "cpus-per-task"
+        ) {
+            if let Some(number) = value.as_u64() {
+                caps.insert("cpus".to_string(), number);
+            }
+            continue;
+        }
         if let Some(number) = value.as_u64() {
             caps.insert(key.clone(), number);
         }
@@ -2164,12 +2173,12 @@ mod tests {
         let payload = AutoRunNodesRequest {
             toml: Some(
                 r#"
-replacements = { count = 2, prefix = "cpu", cpus = 4 }
+replacements = { count = 2, prefix = "cpu", cores = 4 }
 
 [[groups]]
 count = "$(count:1)"
 name_prefix = '$(prefix:"worker")'
-config = { cpus = "$(cpus:1)" }
+config = { cores = "$(cores:1)" }
 "#
                 .to_string(),
             ),
@@ -2184,6 +2193,28 @@ config = { cpus = "$(cpus:1)" }
         assert_eq!(groups[0].count, 2);
         assert_eq!(groups[0].name_prefix, "cpu");
         assert_eq!(groups[0].capabilities.get("cpus"), Some(&4));
+    }
+
+    #[test]
+    fn node_launch_group_cpu_aliases_derive_cpus_capability() {
+        for key in [
+            "cores",
+            "nr_cores",
+            "cpus",
+            "cpus_per_task",
+            "cpus-per-task",
+        ] {
+            let config = serde_json::json!({ key: 8 });
+            let capabilities = derive_capabilities_from_config(&config);
+            assert_eq!(
+                capabilities.get("cpus"),
+                Some(&8),
+                "cpu alias {key} should register cpus capability"
+            );
+            if key != "cpus" {
+                assert_eq!(capabilities.get(key), None);
+            }
+        }
     }
 
     #[test]

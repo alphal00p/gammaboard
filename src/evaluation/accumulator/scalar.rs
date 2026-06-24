@@ -306,7 +306,8 @@ fn reduced_square_deviation_stderr(
     let rsd = variance.sqrt() / mean_abs;
     let relative_variance = variance_stderr / (2.0 * variance);
     let relative_mean = mean_stderr / mean_abs;
-    let stderr = rsd * (relative_variance * relative_variance + relative_mean * relative_mean).sqrt();
+    let stderr =
+        rsd * (relative_variance * relative_variance + relative_mean * relative_mean).sqrt();
     stderr.is_finite().then_some(stderr)
 }
 

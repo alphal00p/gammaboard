@@ -550,6 +550,10 @@ def derive_capabilities_from_config(config: dict) -> dict[str, int]:
                 if gpu_count is not None:
                     capabilities["gpu"] = gpu_count
             continue
+        if key in ("cores", "nr_cores", "cpus", "cpus_per_task", "cpus-per-task"):
+            if isinstance(value, int):
+                capabilities["cpus"] = value
+            continue
         if isinstance(value, bool):
             capabilities[key] = 1 if value else 0
         elif isinstance(value, int):
@@ -661,9 +665,19 @@ SBATCH_CONFIG_OPTIONS = {
 }
 
 
+def normalize_sbatch_config(config: dict) -> dict:
+    normalized_config = dict(config)
+    if "cpus_per_task" not in normalized_config and "cpus-per-task" not in normalized_config:
+        for key in ("cores", "nr_cores", "cpus"):
+            if key in normalized_config:
+                normalized_config["cpus_per_task"] = normalized_config[key]
+                break
+    return normalized_config
+
+
 def sbatch_args_from_config(config: dict) -> list[str]:
     sbatch_args: list[str] = []
-    normalized_config = dict(config)
+    normalized_config = normalize_sbatch_config(config)
     gpu_value = normalized_config.get("gpu")
     gpu_gres = gpu_gres_from_value(gpu_value)
     if gpu_gres is not None and "gres" not in normalized_config and "gpus" not in normalized_config:

@@ -91,6 +91,7 @@ config = { gpu = "rtx4090:1" }
 ```
 
 submits worker jobs with `--gres=gpu:rtx4090:1 --partition=gpu` and registers `gpu=1` as a worker capability. Select another free-tier GPU type with `config = { gpu = "h100:1" }` when available. The dashboard template root is `ops/resources/templates`, and UBELIX-specific node launch templates are checked in under `ops/ubelix/resources/templates/nodes`. Supported `config` keys are `account`, `partition`, `qos`, `wckey`, `reservation`, `gpu`, `gres`, `gpus`, `cpus_per_task`, `mem`, `mem_per_cpu`, `time`, `constraint`, `nodelist`, and `exclude`.
+Use `cores`, `nr_cores`, or `cpus` as dashboard-friendly aliases for `cpus_per_task`; they submit `--cpus-per-task=<value>` and register `cpus=<value>` as the worker capability.
 Omitted group `config` defaults to `{}` and omitted `max_start_failures` defaults to `3`.
 Workers with `gpu > 0` start the GammaBoard image with Apptainer `--nv`, so nested Python Apptainer runtimes can request NVIDIA passthrough with `nv = true`.
 

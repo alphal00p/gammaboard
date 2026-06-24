@@ -327,4 +327,4 @@ Curated task bundles:
 Curated node launch templates:
 
 - `resources/templates/nodes/local-two-workers.toml`: two local workers for local/ITPhlies development.
-- UBELIX-specific node launch templates live under `ops/ubelix/resources/templates/nodes`.
+- UBELIX-specific node launch templates live under `ops/ubelix/resources/templates/nodes`; use `config.cores` to request Slurm `--cpus-per-task` for each worker.

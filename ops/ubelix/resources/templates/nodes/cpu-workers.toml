@@ -1,5 +1,6 @@
-replacements = { workers = 4, prefix = "cpu" }
+replacements = { workers = 4, prefix = "cpu", cores = 1, mem = "2G", time = "00:30:00" }
 
 [[groups]]
 count = "$(workers:4)"
 name_prefix = '$(prefix:"cpu")'
+config = { cores = "$(cores:1)", mem = '$(mem:"2G")', time = '$(time:"00:30:00")' }

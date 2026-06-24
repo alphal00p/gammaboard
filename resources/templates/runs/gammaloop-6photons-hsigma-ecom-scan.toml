@@ -30,7 +30,7 @@
 #
 # and set `state_folder = "state"` in the replacements.
 
-replacements = { run_name = "gammaloop_6photons_hsigma_ecom_scan", state_folder = "/home/cedricsigrist/Workspace/repos/gammaloop/glnis_gammaloop_examples/6photons/massive/1L/state", havana_total_nr_of_samples = 1_000_000, havana_bins = 64, havana_samples_for_update = 50_000, trial_max_samples = 10_000_000, trial_rsd_relative_error = 0.25, max_batch_size = 5000, max_concurrent_runs = 1 }
+replacements = { run_name = "gammaloop_6photons_hsigma_ecom_scan", state_folder = "/home/cedricsigrist/Workspace/repos/gammaloop/glnis_gammaloop_examples/6photons/massive/1L/state", havana_total_nr_of_samples = 1_000_000, havana_bins = 64, havana_samples_for_update = 50_000, trial_max_samples = 100_000, trial_rsd_relative_error = 0.1, max_batch_size = 10000, max_concurrent_runs = 1 }
 
 name = '$(run_name:"gammaloop_6photons_hsigma_ecom_scan")'
 

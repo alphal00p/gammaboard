@@ -1,11 +1,12 @@
-replacements = { gpu_workers = 1, gpu_prefix = "gpu", gpu_kind = "rtx4090:1", cpu_workers = 4, cpu_prefix = "cpu" }
+replacements = { gpu_workers = 1, gpu_prefix = "gpu", gpu_kind = "rtx4090:1", gpu_cores = 4, gpu_mem = "16G", cpu_workers = 4, cpu_prefix = "cpu", cpu_cores = 1, cpu_mem = "2G", time = "00:30:00" }
 
 [[groups]]
 count = "$(gpu_workers:1)"
 name_prefix = '$(gpu_prefix:"gpu")'
 max_start_failures = 6
-config = { gpu = '$(gpu_kind:"rtx4090:1")' }
+config = { gpu = '$(gpu_kind:"rtx4090:1")', cores = "$(gpu_cores:4)", mem = '$(gpu_mem:"16G")', time = '$(time:"00:30:00")' }
 
 [[groups]]
 count = "$(cpu_workers:4)"
 name_prefix = '$(cpu_prefix:"cpu")'
+config = { cores = "$(cpu_cores:1)", mem = '$(cpu_mem:"2G")', time = '$(time:"00:30:00")' }
