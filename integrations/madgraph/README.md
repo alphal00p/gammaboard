@@ -7,8 +7,9 @@ Python API from MG7.
 The split is deliberately simple:
 
 1. Generate a MG7 process state outside GammaBoard.
-2. The wrapper loads the state via `MadSpaceState`, which builds the combined
-   phase-space + matrix-element integrand using MG7's `madspace` runtime.
+2. The wrapper loads the state via `MadSpaceState`, which builds one or more
+   combined phase-space + matrix-element integrands using MG7's `madspace`
+   runtime.
 3. GammaBoard sends unit-hypercube points; the wrapper returns the integrand
    weight through the GammaBoard process evaluator protocol.
 
@@ -38,6 +39,23 @@ the combined weight. The only output component is `weight`.
 Use a vector accumulator with the `weight` component name, or a scalar
 accumulator if only one component is listed.
 
+The default mode evaluates one selected subprocess/channel integrand. For
+multi-channel examples, use a rectangular domain with one discrete axis:
+
+```toml
+domain = { rectangular = { discrete_cardinalities = [12], continuous_dims = 8 } }
+
+[evaluator.args]
+subprocess_indices = "all"
+channel_indices = "all"
+phase_space = "multichannel"
+```
+
+In this mode the first discrete coordinate selects a flattened MadSpace
+subprocess/channel integrand. GammaBoard samples that axis uniformly, so the
+wrapper multiplies each selected integrand weight by the number of flattened
+integrands to estimate the summed integrand.
+
 ## Evaluator Config
 
 ```toml
@@ -59,6 +77,11 @@ thread_count = -1      # -1 = auto
 output = ["weight"]
 ```
 
+For flattened integrands, replace `subprocess_index`/`channel_index` with
+`subprocess_indices`/`channel_indices`, each either `"all"` or an explicit list
+of indices. The configured `discrete_cardinalities[0]` must equal the resulting
+number of flattened integrands.
+
 ### Finding `random_dim`
 
 The number of integration variables depends on the process and phase-space
@@ -71,6 +94,22 @@ print(state.random_dim)
 ```
 
 Set `domain.continuous.dims` in the run config to match this value.
+
+For flattened integrands:
+
+```python
+from madgraph_gammaboard.state import MadSpaceState
+state = MadSpaceState.load(
+    state_path="...",
+    madgraph_root="...",
+    subprocess_indices="all",
+    channel_indices="all",
+    phase_space="multichannel",
+    flattened_integrands=True,
+)
+print(state.random_dim)
+print(state.nr_integrands)
+```
 
 ## Generating a MG7 State
 
