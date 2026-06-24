@@ -1,12 +1,9 @@
-# MadGraph7 p p -> e+ e- j (Drell-Yan + jet) MadSpace demo.
+# MadGraph7 p p -> e+ e- j (Drell-Yan + jet) direct MadSpace demo.
 #
-# Uses the madspace Python API from MG7 to evaluate the combined
-# phase-space + matrix-element integrands directly from a MG7 state directory.
-# The first GammaBoard discrete coordinate selects a flattened MadSpace
-# subprocess/channel integrand. The evaluator multiplies selected-channel
-# weights by the number of flattened integrands to compensate for uniform
-# sampling of this discrete axis.
-# Requires NNPDF23_lo_as_0130_qed (the MG7 default PDF set).
+# The wrapper intentionally uses only the flat PhaseSpaceMapping plus
+# DifferentialCrossSection from MG7's madevent.py. It does not use MG7's
+# build_integrands helper, Vegas mappings, adaptive mappings, discrete channel
+# sampling, or multichannel phase-space machinery.
 #
 # One-time wrapper setup:
 #
@@ -14,7 +11,7 @@
 #   python -m venv .venv
 #   . .venv/bin/activate
 #   python -m pip install --upgrade pip
-#   python -m pip install .
+#   python -m pip install --force-reinstall .
 #
 # One-time PDF set download (if not already present):
 #
@@ -31,7 +28,7 @@
 #   quit
 #   EOF
 #
-# Print the values to pass as replacements before running:
+# Print the callable random_dim to pass as a replacement before running:
 #
 #   cd integrations/madgraph && . .venv/bin/activate
 #   python - <<'EOF'
@@ -39,21 +36,19 @@
 #   s = MadSpaceState.load(
 #       state_path="integrations/madgraph/artifacts/pp_eej/mg7_state",
 #       madgraph_root="/home/cedricsigrist/Workspace/repos/MadGraph7",
-#       subprocess_indices="all",
-#       channel_indices="all",
-#       phase_space="multichannel",
-#       flattened_integrands=True,
+#       subprocess_index=0,
+#       flavor_index=0,
 #   )
 #   print("random_dim =", s.random_dim)
-#   print("nr_integrands =", s.nr_integrands)
+#   print("mapping_random_dim =", s.mapping_random_dim)
 #   EOF
 #
-# Then run with replacements, for example:
+# Then run with the replacement, for example:
 #
 #   gammaboard run add integrations/madgraph/examples/pp_eej_madspace.toml \
-#     --replace continuous_dims=<random_dim> --replace integrands=<nr_integrands>
+#     --replace continuous_dims=<random_dim>
 
-replacements = { run_name = "madgraph_pp_eej_madspace", samples = 1000000, continuous_dims = 1, integrands = 1 }
+replacements = { run_name = "madgraph_pp_eej_madspace", samples = 1000000, continuous_dims = 1 }
 
 name = '$(run_name:"madgraph_pp_eej_madspace")'
 
@@ -61,17 +56,14 @@ name = '$(run_name:"madgraph_pp_eej_madspace")'
 kind = "process_evaluator"
 command = ["$resources/../integrations/madgraph/.venv/bin/madgraph-gammaboard-evaluator"]
 cwd = "$resources/.."
-domain = { rectangular = { discrete_cardinalities = ["$(integrands:1)"], continuous_dims = "$(continuous_dims:1)" } }
+domain = { continuous = { dims = "$(continuous_dims:1)" } }
 components = ["weight"]
 
 [evaluator.args]
 state_path = "integrations/madgraph/artifacts/pp_eej/mg7_state"
 madgraph_root = "/home/cedricsigrist/Workspace/repos/MadGraph7"
-subprocess_indices = "all"
-phase_space = "multichannel"
-channel_indices = "all"
-device = "cppnone"
-thread_count = -1
+subprocess_index = 0
+flavor_index = 0
 output = ["weight"]
 
 [[task_queue]]
