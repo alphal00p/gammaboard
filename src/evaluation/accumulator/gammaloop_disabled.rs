@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{Accumulator, VectorAccumulatorState};
-use crate::core::{EngineError, RunSpec, TrainingProjection};
+use crate::core::{AccumulatorMomentConfig, EngineError, RunSpec, TrainingProjection};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GammaLoopAccumulatorState {
@@ -179,7 +179,9 @@ impl Default for GammaLoopAccumulatorState {
                 vec!["real".to_string(), "imag".to_string()],
                 TrainingProjection::Norm,
                 None,
-                Default::default(),
+                // Mirror the enabled accumulator: track 4th-order moments so the
+                // RSD metric can carry an uncertainty.
+                AccumulatorMomentConfig::MaxOrder4,
             ),
             diagnostics: GammaLoopDiagnostics::default(),
         }

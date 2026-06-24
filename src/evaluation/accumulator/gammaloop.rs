@@ -1,5 +1,5 @@
 use super::{Accumulator, VectorAccumulatorState};
-use crate::core::{EngineError, RunSpec};
+use crate::core::{AccumulatorMomentConfig, EngineError, RunSpec};
 use gammalooprs::integrands::evaluation::{EvaluationResult, StabilityStatus};
 use gammalooprs::observables::{HistogramSnapshot, ObservableSnapshotBundle};
 use gammalooprs::settings::runtime::Precision;
@@ -21,7 +21,10 @@ impl Default for GammaLoopAccumulatorState {
                 vec!["real".to_string(), "imag".to_string()],
                 crate::core::TrainingProjection::Norm,
                 None,
-                Default::default(),
+                // Track up to the 4th moment so the estimate can report a
+                // variance-of-variance, and hence an uncertainty on the RSD
+                // metric (used by parameter-scan stop conditions).
+                AccumulatorMomentConfig::MaxOrder4,
             ),
             diagnostics: GammaLoopDiagnostics::default(),
         }
