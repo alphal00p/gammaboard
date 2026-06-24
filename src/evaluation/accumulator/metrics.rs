@@ -114,10 +114,10 @@ fn metric_for_scalar(
     let uncertainty = match name {
         AccumulatorMetricName::Mean | AccumulatorMetricName::AbsMean => Some(mean_error),
         AccumulatorMetricName::Variance => variance_error,
+        AccumulatorMetricName::Rsd => state.rsd_stderr(),
         AccumulatorMetricName::Error
         | AccumulatorMetricName::RelativeError
         | AccumulatorMetricName::RelativeVarianceError
-        | AccumulatorMetricName::Rsd
         | AccumulatorMetricName::TimeNormalizedVariance => None,
     };
     AccumulatorMetricValue {

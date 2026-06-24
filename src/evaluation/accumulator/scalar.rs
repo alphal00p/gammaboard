@@ -118,6 +118,15 @@ impl ScalarAccumulatorState {
         reduced_square_deviation(self.variance(), self.mean_abs())
     }
 
+    pub fn rsd_stderr(&self) -> Option<f64> {
+        reduced_square_deviation_stderr(
+            self.variance(),
+            self.variance_stderr(),
+            self.mean_abs(),
+            self.stderr(),
+        )
+    }
+
     pub fn max_weight_impact(&self) -> f64 {
         if self.count <= 0 {
             return 0.0;
@@ -278,6 +287,27 @@ fn reduced_square_deviation(variance: f64, mean_abs: f64) -> f64 {
     } else {
         variance.max(0.0).sqrt() / mean_abs
     }
+}
+
+/// First-order uncertainty on `RSD = sqrt(variance) / mean_abs` via error
+/// propagation. With `RSD = sqrt(V)/M`, the relative uncertainty is
+/// `sqrt((dV / 2V)^2 + (dM / M)^2)`; the `1/2` comes from `d sqrt(V)/dV`. The
+/// V-M covariance is neglected, as is conventional.
+fn reduced_square_deviation_stderr(
+    variance: f64,
+    variance_stderr: Option<f64>,
+    mean_abs: f64,
+    mean_stderr: f64,
+) -> Option<f64> {
+    let variance_stderr = variance_stderr?;
+    if !(variance > 0.0) || !(mean_abs > 0.0) {
+        return None;
+    }
+    let rsd = variance.sqrt() / mean_abs;
+    let relative_variance = variance_stderr / (2.0 * variance);
+    let relative_mean = mean_stderr / mean_abs;
+    let stderr = rsd * (relative_variance * relative_variance + relative_mean * relative_mean).sqrt();
+    stderr.is_finite().then_some(stderr)
 }
 
 fn merge_positive_extrema(

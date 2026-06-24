@@ -11,9 +11,13 @@
 # This template scans two runtime parameters through GammaLoop post-load /
 # pre-initialization commands:
 #
-#   h_sigma -> default_runtime_settings.h_function.sigma
-#           -> default_runtime_settings.subtraction.integrated_ct_settings.range.h_function_settings.sigma
-#   e_com   -> default_runtime_settings.kinematics.e_cm
+# These use `set process kv`, which writes into the loaded integrand's settings
+# (the values the evaluator actually reads). `set default-runtime kv` only
+# mutates the throwaway default runtime settings and has no effect here.
+#
+#   h_sigma -> process.h_function.sigma
+#           -> process.subtraction.integrated_ct_settings.range.h_function_settings.sigma
+#   e_com   -> process.kinematics.e_cm
 #
 # GammaLoop calls the center-of-mass energy setting `e_cm`; the scan parameter
 # is named `e_com` here to match the operator-facing search label.
@@ -48,9 +52,9 @@ integrand_name = "default"
 [evaluator.preprocessing]
 read_only = true
 commands = [
-  'set default-runtime kv h_function.sigma=$(h_sigma:1.0)',
-  'set default-runtime kv subtraction.integrated_ct_settings.range.type=infinite subtraction.integrated_ct_settings.range.h_function_settings.sigma=$(h_sigma:1.0)',
-  'set default-runtime kv kinematics.e_cm=$(e_com:1000.0)',
+  'set process kv h_function.sigma=$(h_sigma:1.0)',
+  'set process kv subtraction.integrated_ct_settings.range.type=infinite subtraction.integrated_ct_settings.range.h_function_settings.sigma=$(h_sigma:1.0)',
+  'set process kv kinematics.e_cm=$(e_com:1000.0)',
 ]
 
 [[task_queue]]
@@ -80,7 +84,7 @@ max_batch_size = "$(max_batch_size:5000)"
 name = "sample"
 kind = "sample"
 measurement = { quantity = { metric = "rsd" }, mode = "minimize" }
-stop_condition = { max_samples = "$(sample_samples:100000)" }
+stop_condition = { max_samples = "$(sample_samples:100000)", relative_error = 0.05, metric = { name = "rsd" } }
 sampler_aggregator = { config = { kind = "havana_inference", source = "latest_training_sampler_aggregator" } }
 accumulator = "latest"
 
