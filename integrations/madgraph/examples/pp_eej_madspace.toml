@@ -1,0 +1,91 @@
+# MadGraph7 p p -> e+ e- j (Drell-Yan + jet) MadSpace demo.
+#
+# Uses the madspace Python API from MG7 to evaluate the combined
+# phase-space + matrix-element integrands directly from a MG7 state directory.
+# The first GammaBoard discrete coordinate selects a flattened MadSpace
+# subprocess/channel integrand. The evaluator multiplies selected-channel
+# weights by the number of flattened integrands to compensate for uniform
+# sampling of this discrete axis.
+# Requires NNPDF23_lo_as_0130_qed (the MG7 default PDF set).
+#
+# One-time wrapper setup:
+#
+#   cd integrations/madgraph
+#   python -m venv .venv
+#   . .venv/bin/activate
+#   python -m pip install --upgrade pip
+#   python -m pip install .
+#
+# One-time PDF set download (if not already present):
+#
+#   wget https://lhapdfsets.web.cern.ch/lhapdfsets/current/NNPDF23_lo_as_0130_qed.tar.gz -P /tmp/
+#   sudo tar -xzf /tmp/NNPDF23_lo_as_0130_qed.tar.gz -C /usr/share/LHAPDF/
+#
+# One-time state generation (from repos/gammaboard):
+#
+#   mkdir -p integrations/madgraph/artifacts/pp_eej
+#   python /home/cedricsigrist/Workspace/repos/MadGraph7/bin/mg5_aMC <<'EOF'
+#   import model sm
+#   generate p p > e+ e- j
+#   output integrations/madgraph/artifacts/pp_eej/mg7_state -f
+#   quit
+#   EOF
+#
+# Print the values to pass as replacements before running:
+#
+#   cd integrations/madgraph && . .venv/bin/activate
+#   python - <<'EOF'
+#   from madgraph_gammaboard.state import MadSpaceState
+#   s = MadSpaceState.load(
+#       state_path="integrations/madgraph/artifacts/pp_eej/mg7_state",
+#       madgraph_root="/home/cedricsigrist/Workspace/repos/MadGraph7",
+#       subprocess_indices="all",
+#       channel_indices="all",
+#       phase_space="multichannel",
+#       flattened_integrands=True,
+#   )
+#   print("random_dim =", s.random_dim)
+#   print("nr_integrands =", s.nr_integrands)
+#   EOF
+#
+# Then run with replacements, for example:
+#
+#   gammaboard run add integrations/madgraph/examples/pp_eej_madspace.toml \
+#     --replace continuous_dims=<random_dim> --replace integrands=<nr_integrands>
+
+replacements = { run_name = "madgraph_pp_eej_madspace", samples = 1000000, continuous_dims = 1, integrands = 1 }
+
+name = '$(run_name:"madgraph_pp_eej_madspace")'
+
+[evaluator]
+kind = "process_evaluator"
+command = ["$resources/../integrations/madgraph/.venv/bin/madgraph-gammaboard-evaluator"]
+cwd = "$resources/.."
+domain = { rectangular = { discrete_cardinalities = ["$(integrands:1)"], continuous_dims = "$(continuous_dims:1)" } }
+components = ["weight"]
+
+[evaluator.args]
+state_path = "integrations/madgraph/artifacts/pp_eej/mg7_state"
+madgraph_root = "/home/cedricsigrist/Workspace/repos/MadGraph7"
+subprocess_indices = "all"
+phase_space = "multichannel"
+channel_indices = "all"
+device = "cppnone"
+thread_count = -1
+output = ["weight"]
+
+[[task_queue]]
+name = "accumulator"
+kind = "set_accumulator"
+
+[task_queue.accumulator]
+kind = "vector"
+components = ["weight"]
+training_projection = { kind = "component", name = "weight" }
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+measurement = { quantity = "central_value" }
+stop_condition = { max_samples = "$(samples:100000)" }
+sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 64, samples_for_update = 4096 } }
