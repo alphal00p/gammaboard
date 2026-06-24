@@ -4,9 +4,11 @@ mod process;
 mod raster;
 
 use crate::Materializer;
-use crate::core::{BuildError, SamplerAggregatorConfig};
+use crate::core::{BuildError, MaterializerConfig, SamplerAggregatorConfig};
 use crate::evaluation::AccumulatorState;
-use crate::sampling::materializer::{HavanaInferenceMaterializer, IdentityMaterializer};
+use crate::sampling::materializer::{
+    HavanaInferenceMaterializer, IdentityMaterializer, ProcessMaterializer,
+};
 use crate::sampling::{SamplerAggregator, SamplerAggregatorSnapshot, StageHandoff};
 use crate::utils::domain::Domain;
 use serde_json::Value as JsonValue;
@@ -151,7 +153,7 @@ impl SamplerAggregatorConfig {
             Self::HavanaTraining { .. }
             | Self::PdfAdaptationRasterPlane { .. }
             | Self::PdfAdaptationRasterLine { .. } => true,
-            Self::ProcessSampler { params } => params.requires_training_values,
+            Self::ProcessSampler { params, .. } => params.requires_training_values,
             _ => false,
         }
     }
@@ -184,17 +186,16 @@ impl SamplerAggregatorConfig {
         }
 
         match self {
-            Self::NaiveMonteCarlo { params } => Ok(Box::new(
+            Self::NaiveMonteCarlo { params, .. } => Ok(Box::new(
                 NaiveMonteCarloSamplerAggregator::from_params_and_domain(params.clone(), &domain)?,
             )),
-            Self::RasterPlane { params } => Ok(Box::new(
+            Self::RasterPlane { params, .. } => Ok(Box::new(
                 RasterPlaneSampler::from_params_and_domain(params.clone(), &domain)?,
             )),
-            Self::RasterLine { params } => Ok(Box::new(RasterLineSampler::from_params_and_domain(
-                params.clone(),
-                &domain,
-            )?)),
-            Self::PdfAdaptationRasterPlane { params } => {
+            Self::RasterLine { params, .. } => Ok(Box::new(
+                RasterLineSampler::from_params_and_domain(params.clone(), &domain)?,
+            )),
+            Self::PdfAdaptationRasterPlane { params, .. } => {
                 let Some(snapshot) = handoff.and_then(|handoff| handoff.sampler_snapshot.cloned())
                 else {
                     return Err(BuildError::build(
@@ -213,7 +214,7 @@ impl SamplerAggregatorConfig {
                     )?,
                 ))
             }
-            Self::PdfAdaptationRasterLine { params } => {
+            Self::PdfAdaptationRasterLine { params, .. } => {
                 let Some(snapshot) = handoff.and_then(|handoff| handoff.sampler_snapshot.cloned())
                 else {
                     return Err(BuildError::build(
@@ -232,7 +233,7 @@ impl SamplerAggregatorConfig {
                     )?,
                 ))
             }
-            Self::HavanaTraining { params } => {
+            Self::HavanaTraining { params, .. } => {
                 let sample_budget = sample_budget.ok_or_else(|| {
                     BuildError::build("havana_training sampler requires a sample budget")
                 })?;
@@ -242,7 +243,7 @@ impl SamplerAggregatorConfig {
                     sample_budget,
                 )?))
             }
-            Self::HavanaInference { params } => {
+            Self::HavanaInference { params, .. } => {
                 let Some(snapshot) = handoff.and_then(|handoff| handoff.sampler_snapshot.cloned())
                 else {
                     return Err(BuildError::build(
@@ -255,7 +256,7 @@ impl SamplerAggregatorConfig {
                     &domain,
                 )?))
             }
-            Self::ProcessSampler { params } => {
+            Self::ProcessSampler { params, .. } => {
                 Ok(Box::new(ProcessSampler::from_params_and_domain(
                     params.clone(),
                     &domain,
@@ -266,16 +267,37 @@ impl SamplerAggregatorConfig {
     }
     pub fn build_materializer(
         &self,
+        domain: &Domain,
         handoff: Option<StageHandoff<'_>>,
     ) -> Result<Box<dyn Materializer>, BuildError> {
+        if let Some(materializer) = self.materializer_config() {
+            return match materializer {
+                MaterializerConfig::ProcessMaterializer { params } => Ok(Box::new(
+                    ProcessMaterializer::from_params_and_domain(params.clone(), domain)?,
+                )),
+            };
+        }
         Ok(match self {
-            SamplerAggregatorConfig::NaiveMonteCarlo { params } => Box::new(
+            SamplerAggregatorConfig::NaiveMonteCarlo { params, .. } => Box::new(
                 IdentityMaterializer::new_with_failure(params.fail_on_materialize_batch_nr),
             ),
-            SamplerAggregatorConfig::HavanaInference { params: _ } => {
+            SamplerAggregatorConfig::HavanaInference { params: _, .. } => {
                 Box::new(HavanaInferenceMaterializer::new(handoff)?)
             }
             _ => Box::new(IdentityMaterializer::new()),
         })
+    }
+
+    fn materializer_config(&self) -> Option<&MaterializerConfig> {
+        match self {
+            SamplerAggregatorConfig::NaiveMonteCarlo { materializer, .. }
+            | SamplerAggregatorConfig::RasterPlane { materializer, .. }
+            | SamplerAggregatorConfig::RasterLine { materializer, .. }
+            | SamplerAggregatorConfig::PdfAdaptationRasterPlane { materializer, .. }
+            | SamplerAggregatorConfig::PdfAdaptationRasterLine { materializer, .. }
+            | SamplerAggregatorConfig::HavanaTraining { materializer, .. }
+            | SamplerAggregatorConfig::HavanaInference { materializer, .. }
+            | SamplerAggregatorConfig::ProcessSampler { materializer, .. } => materializer.as_ref(),
+        }
     }
 }

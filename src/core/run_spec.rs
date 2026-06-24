@@ -7,9 +7,9 @@ use crate::core::tasks::DiscreteProjectionConfig;
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use crate::sampling::HavanaInferenceSamplerParams;
 use crate::sampling::{
-    HavanaSamplerParams, NaiveMonteCarloSamplerParams, ProcessSamplerParams,
-    RasterLineSamplerParams, RasterPlaneSamplerParams, SphericalBatchTransformParams,
-    UnitBallBatchTransformParams,
+    HavanaSamplerParams, NaiveMonteCarloSamplerParams, ProcessBatchTransformParams,
+    ProcessMaterializerParams, ProcessSamplerParams, RasterLineSamplerParams,
+    RasterPlaneSamplerParams, SphericalBatchTransformParams, UnitBallBatchTransformParams,
 };
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -749,34 +749,59 @@ pub enum SamplerAggregatorConfig {
     NaiveMonteCarlo {
         #[serde(flatten)]
         params: NaiveMonteCarloSamplerParams,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        materializer: Option<MaterializerConfig>,
     },
     RasterPlane {
         #[serde(flatten)]
         params: RasterPlaneSamplerParams,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        materializer: Option<MaterializerConfig>,
     },
     RasterLine {
         #[serde(flatten)]
         params: RasterLineSamplerParams,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        materializer: Option<MaterializerConfig>,
     },
     PdfAdaptationRasterPlane {
         #[serde(flatten)]
         params: RasterPlaneSamplerParams,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        materializer: Option<MaterializerConfig>,
     },
     PdfAdaptationRasterLine {
         #[serde(flatten)]
         params: RasterLineSamplerParams,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        materializer: Option<MaterializerConfig>,
     },
     HavanaTraining {
         #[serde(flatten)]
         params: HavanaSamplerParams,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        materializer: Option<MaterializerConfig>,
     },
     HavanaInference {
         #[serde(flatten)]
         params: HavanaInferenceSamplerParams,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        materializer: Option<MaterializerConfig>,
     },
     ProcessSampler {
         #[serde(flatten)]
         params: ProcessSamplerParams,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        materializer: Option<MaterializerConfig>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MaterializerConfig {
+    ProcessMaterializer {
+        #[serde(flatten)]
+        params: ProcessMaterializerParams,
     },
 }
 
@@ -863,7 +888,7 @@ moments = { max_order = 4 }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BatchTransformConfig {
     UnitBall {
@@ -873,5 +898,9 @@ pub enum BatchTransformConfig {
     Spherical {
         #[serde(flatten)]
         params: SphericalBatchTransformParams,
+    },
+    ProcessBatchTransform {
+        #[serde(flatten)]
+        params: ProcessBatchTransformParams,
     },
 }

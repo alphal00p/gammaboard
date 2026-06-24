@@ -1,6 +1,6 @@
 # Process API Examples
 
-This folder contains self-contained examples for external GammaBoard evaluators and samplers.
+This folder contains self-contained examples for external GammaBoard evaluators, samplers, batch transforms, and materializers.
 
 For the stable process protocol, see [../docs/process-runtime.md](../docs/process-runtime.md).
 
@@ -36,8 +36,27 @@ from gammaboard_process import run_sampler
 run_sampler(MySampler)
 ```
 
-The `Evaluator` and `Sampler` ABCs are optional documentation/type-hint helpers.
-`run_evaluator(...)` and `run_sampler(...)` accept any compatible class.
+or:
+
+```python
+from demo_materializer import MyMaterializer
+from gammaboard_process import run_materializer
+
+run_materializer(MyMaterializer)
+```
+
+or:
+
+```python
+from demo_transform import MyTransform
+from gammaboard_process import run_batch_transform
+
+run_batch_transform(MyTransform)
+```
+
+The `Evaluator`, `Sampler`, `BatchTransform`, and `Materializer` ABCs are optional documentation/type-hint helpers.
+`run_evaluator(...)`, `run_sampler(...)`, `run_batch_transform(...)`, and
+`run_materializer(...)` accept any compatible class.
 
 Evaluator classes implement:
 
@@ -60,6 +79,26 @@ snapshot()
 Samplers may also implement `training_samples_remaining()`,
 `pdf(xs_discrete, xs_continuous)`, `discrete_pdf(subspaces)`, and
 `get_diagnostics()`.
+
+Batch transform classes implement:
+
+```python
+transform_batch(xs_discrete, xs_continuous, weights)
+```
+
+They return a `TransformedBatch`, a dict with `xs_discrete` /
+`xs_continuous` / `weights`, a 3-tuple, or any object with those attributes.
+Use them in task configs with `batch_transforms = [{ kind = "process_batch_transform", ... }]`.
+
+Materializer classes implement:
+
+```python
+materialize_batch(latent_batch)
+```
+
+They return a `MaterializedBatch`, a dict with `xs_discrete` /
+`xs_continuous` / `weights`, a 3-tuple, or any object with those attributes.
+Attach them to sampler configs with `materializer = { kind = "process_materializer", ... }`.
 
 `discrete_pdf(subspaces)` receives a list of fixed-dimension maps:
 
@@ -89,5 +128,5 @@ These homogeneous dimensions are derived from the protocol `domain`; `init_args`
 is the process config `args` table unchanged.
 This wrapper shape is only a convenience layer. Non-Python runtimes can implement
 the protocol directly. The bundled Python wrappers intentionally support only
-homogeneous fixed-width batches and reject ragged offset layouts with a clear
-error.
+homogeneous fixed-width evaluator/sampler/batch-transform/materializer batches
+and reject ragged offset layouts with a clear error.

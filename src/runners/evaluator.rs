@@ -489,7 +489,10 @@ where
         }
         let materializer = resolved
             .sampler_config
-            .build_materializer(resolved.handoff.as_ref().map(|handoff| handoff.as_ref()))
+            .build_materializer(
+                &self.domain,
+                resolved.handoff.as_ref().map(|handoff| handoff.as_ref()),
+            )
             .map_err(|err| {
                 EvaluatorRunnerError::Store(StoreError::store(format!(
                     "failed to build materializer for task {}: {err}",

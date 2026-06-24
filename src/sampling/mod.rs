@@ -8,8 +8,14 @@ pub mod sampler_aggregator;
 use crate::evaluation::AccumulatorState;
 use crate::{core::RunStageSnapshot, runners::sampler_aggregator::SamplerAggregatorCheckpoint};
 
-pub use batch_transform::{SphericalBatchTransformParams, UnitBallBatchTransformParams};
+pub use batch_transform::{
+    ProcessBatchTransformParams, SphericalBatchTransformParams, UnitBallBatchTransformParams,
+};
 pub use latent_batch::{LatentBatch, LatentBatchPayload, LatentBatchSpec, SamplePlan};
+pub use materializer::{
+    HavanaInferenceMaterializer, IdentityMaterializer, ProcessMaterializer,
+    ProcessMaterializerParams,
+};
 pub use sampler::{DiscreteSubspace, PdfPoint, SamplerAggregator, SamplerAggregatorSnapshot};
 pub use sampler_aggregator::{
     HavanaInferenceSamplerParams, HavanaInferenceSource, HavanaSamplerParams,

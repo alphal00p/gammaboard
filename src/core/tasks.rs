@@ -1260,12 +1260,14 @@ impl RunTaskSpec {
                 params: RasterPlaneSamplerParams {
                     geometry: geometry.clone(),
                 },
+                materializer: None,
             }),
             Self::PdfAdaptationImage { geometry, .. } => {
                 Some(SamplerAggregatorConfig::PdfAdaptationRasterPlane {
                     params: RasterPlaneSamplerParams {
                         geometry: geometry.clone(),
                     },
+                    materializer: None,
                 })
             }
             Self::PdfAdaptationPlotLine { geometry, .. } => {
@@ -1273,12 +1275,14 @@ impl RunTaskSpec {
                     params: RasterLineSamplerParams {
                         geometry: geometry.clone(),
                     },
+                    materializer: None,
                 })
             }
             Self::PlotLine { geometry, .. } => Some(SamplerAggregatorConfig::RasterLine {
                 params: RasterLineSamplerParams {
                     geometry: geometry.clone(),
                 },
+                materializer: None,
             }),
             Self::ParameterScan { .. } | Self::HyperparameterTuning { .. } => None,
         }
@@ -2000,6 +2004,7 @@ mod tests {
             sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
                 config: SamplerAggregatorConfig::NaiveMonteCarlo {
                     params: NaiveMonteCarloSamplerParams::default(),
+                    materializer: None,
                 },
             }),
             accumulator: Some(AccumulatorSourceSpec::Latest("latest".to_string())),
@@ -2449,6 +2454,7 @@ max = 1.0
             sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
                 config: SamplerAggregatorConfig::HavanaTraining {
                     params: HavanaSamplerParams::default(),
+                    materializer: None,
                 },
             }),
             accumulator: None,
@@ -2617,6 +2623,7 @@ max = 1.0
             sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
                 config: SamplerAggregatorConfig::NaiveMonteCarlo {
                     params: NaiveMonteCarloSamplerParams::default(),
+                    materializer: None,
                 },
             }),
             batch_transforms: None,
@@ -2665,6 +2672,7 @@ max = 1.0
             sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
                 config: SamplerAggregatorConfig::NaiveMonteCarlo {
                     params: NaiveMonteCarloSamplerParams::default(),
+                    materializer: None,
                 },
             }),
             batch_transforms: None,

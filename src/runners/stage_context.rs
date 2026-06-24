@@ -139,7 +139,7 @@ where
         Some(snapshot.into())
     } else {
         match &sampler_config {
-            crate::core::SamplerAggregatorConfig::HavanaInference { params } => {
+            crate::core::SamplerAggregatorConfig::HavanaInference { params, .. } => {
                 let snapshot = match &params.source {
                     crate::sampling::HavanaInferenceSource::Snapshot { snapshot_id } => {
                         store.load_stage_snapshot(*snapshot_id).await?

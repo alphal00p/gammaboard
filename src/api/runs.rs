@@ -1308,7 +1308,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
         else {
             panic!("expected sample task with sampler config");
         };
-        let SamplerAggregatorConfig::NaiveMonteCarlo { params } = config else {
+        let SamplerAggregatorConfig::NaiveMonteCarlo { params, .. } = config else {
             panic!("expected naive monte carlo config");
         };
         assert_eq!(params.fail_on_materialize_batch_nr, Some(1));
@@ -1327,6 +1327,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
                 sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
                     config: SamplerAggregatorConfig::NaiveMonteCarlo {
                         params: NaiveMonteCarloSamplerParams::default(),
+                        materializer: None,
                     },
                 }),
                 accumulator,
@@ -1391,6 +1392,7 @@ source_task = "sample"
                     sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
                         config: SamplerAggregatorConfig::NaiveMonteCarlo {
                             params: NaiveMonteCarloSamplerParams::default(),
+                            materializer: None,
                         },
                     }),
                     accumulator: Some(crate::core::AccumulatorSourceSpec::Config {

@@ -990,6 +990,7 @@ mod tests {
         let domain = Domain::rectangular(2, 0);
         let source_snapshot = SamplerAggregatorConfig::NaiveMonteCarlo {
             params: crate::sampling::NaiveMonteCarloSamplerParams::default(),
+            materializer: None,
         }
         .build(domain.clone(), None, None, serde_json::json!({}))
         .expect("build source sampler")
@@ -1034,6 +1035,7 @@ mod tests {
         let domain = Domain::rectangular(2, 0);
         let source_snapshot = SamplerAggregatorConfig::NaiveMonteCarlo {
             params: crate::sampling::NaiveMonteCarloSamplerParams::default(),
+            materializer: None,
         }
         .build(domain.clone(), None, None, serde_json::json!({}))
         .expect("build source sampler")
@@ -1087,6 +1089,7 @@ mod tests {
         let domain = Domain::rectangular(2, 0);
         let source_snapshot = SamplerAggregatorConfig::NaiveMonteCarlo {
             params: crate::sampling::NaiveMonteCarloSamplerParams::default(),
+            materializer: None,
         }
         .build(domain.clone(), None, None, serde_json::json!({}))
         .expect("build source sampler")
@@ -1140,6 +1143,7 @@ mod tests {
         let domain = Domain::rectangular(2, 0);
         let source_snapshot = SamplerAggregatorConfig::NaiveMonteCarlo {
             params: crate::sampling::NaiveMonteCarloSamplerParams::default(),
+            materializer: None,
         }
         .build(domain.clone(), None, None, serde_json::json!({}))
         .expect("build source sampler")

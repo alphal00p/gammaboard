@@ -1,6 +1,6 @@
 # Process Runtime
 
-GammaBoard can run evaluators and samplers as ordinary child processes. A process can be Python, Rust, C++, or anything else that can read stdin and write stdout.
+GammaBoard can run evaluators, samplers, batch transforms, and materializers as ordinary child processes. A process can be Python, Rust, C++, or anything else that can read stdin and write stdout.
 
 ## Contract
 
@@ -10,7 +10,7 @@ The extension protocol is `gammaboard-jsonrpc-v1`.
 - Direction: GammaBoard sends requests on process stdin; the process writes responses on stdout.
 - Logging: stderr is for logs. GammaBoard also tolerates limited accidental line-oriented stdout before a protocol frame and forwards it to logs, but stdout should be treated as reserved for framed responses.
 - Concurrency: requests are synchronous. GammaBoard sends one request at a time per process and waits for the matching response id before sending the next.
-- Batching: evaluator `eval_batch`, sampler `produce_latent_batch`, sampler `ingest_training_values`, and sampler `pdf` are batched.
+- Batching: evaluator `eval_batch`, sampler `produce_latent_batch`, sampler `ingest_training_values`, sampler `pdf`, batch transform `transform_batch`, and materializer `materialize_batch` are batched.
 - Arguments: run TOML `args = { ... }` is passed unchanged in `initialize`.
 - Stability: adding optional fields is allowed; changing/removing fields or changing method semantics requires a new protocol string.
 
@@ -198,6 +198,115 @@ Return either an array of `f64 | null` values or `null` when unsupported:
 { "diagnostics": { "training_rate": 0.01 } }
 ```
 
+## Batch Transform Methods
+
+`initialize` is sent once after process start:
+
+```json
+{
+  "protocol": "gammaboard-jsonrpc-v1",
+  "role": "batch_transform",
+  "domain": { "continuous": { "dims": 2 } },
+  "args": {}
+}
+```
+
+Return:
+
+```json
+{ "ok": true }
+```
+
+`transform_batch` maps one concrete batch to another concrete batch after
+materialization and before evaluation. This is the recommended process-API hook
+for parametrizations that operate on sampled coordinates.
+
+```json
+{
+  "nr_samples": 2,
+  "xs_discrete_row_major": [],
+  "xs_discrete_offsets": [0, 0, 0],
+  "xs_continuous_row_major": [0.1, 0.2, 0.3, 0.4],
+  "xs_continuous_offsets": [0, 2, 4],
+  "weights": [1.0, 1.0]
+}
+```
+
+Return the transformed concrete points in the same row-major form:
+
+```json
+{
+  "xs_discrete_row_major": [],
+  "xs_discrete_offsets": [0, 0, 0],
+  "xs_continuous_row_major": [0.2, 0.4, 0.6, 0.8],
+  "xs_continuous_offsets": [0, 2, 4],
+  "weights": [2.0, 2.0]
+}
+```
+
+Weights must be positive finite `f64` values. Continuous coordinates must be
+finite. The transformed batch is validated against the run domain before
+evaluation.
+
+## Materializer Methods
+
+`initialize` is sent once after process start:
+
+```json
+{
+  "protocol": "gammaboard-jsonrpc-v1",
+  "role": "materializer",
+  "domain": { "continuous": { "dims": 2 } },
+  "args": {}
+}
+```
+
+Return:
+
+```json
+{ "ok": true }
+```
+
+`materialize_batch` converts one queued latent batch into concrete evaluator
+points. `latent_batch` is the JSON form stored by Gammaboard; for current
+samplers this is usually an `indexed_batch` payload containing discrete
+signatures, per-sample discrete-map entries, continuous layouts/values, and
+weights.
+
+```json
+{
+  "nr_samples": 2,
+  "latent_batch": {
+    "nr_samples": 2,
+    "accumulator": { "kind": "scalar" },
+    "payload": {
+      "kind": "indexed_batch",
+      "discrete_signatures": [[]],
+      "discrete_map": [0, 0],
+      "continuous_layouts": [2, 2],
+      "continuous_values": [0.1, 0.2, 0.3, 0.4],
+      "weights": [1.0, 1.0]
+    }
+  }
+}
+```
+
+Return concrete points in the same ragged row-major form used by sampler output:
+
+```json
+{
+  "xs_discrete_row_major": [],
+  "xs_discrete_offsets": [0, 0, 0],
+  "xs_continuous_row_major": [0.1, 0.2, 0.3, 0.4],
+  "xs_continuous_offsets": [0, 2, 4],
+  "weights": [1.0, 1.0]
+}
+```
+
+Weights must be positive finite `f64` values. Continuous coordinates must be
+finite. The materialized batch is validated against the run domain before
+evaluation.
+
 ## Config Shape
 
 The process command is explicit in run config. GammaBoard does not append worker scripts or assume Python.
@@ -208,6 +317,31 @@ command = ["python", "-m", "my_runtime.evaluator_worker"]
 cwd = "$resources"
 domain = { continuous = { dims = 2 } }
 components = ["value"]
+args = { scale = 1.0 }
+```
+
+Process batch transforms are task-level stage state:
+
+```toml
+[[task_queue.batch_transforms]]
+kind = "process_batch_transform"
+command = ["python", "-m", "my_runtime.transform_worker"]
+cwd = "$resources"
+args = { scale = 1.0 }
+```
+
+Process materializers are attached to sampler configs:
+
+```toml
+[task_queue.sampler_aggregator.config]
+kind = "process_sampler"
+command = ["python", "-m", "my_runtime.sampler_worker"]
+cwd = "$resources"
+
+[task_queue.sampler_aggregator.config.materializer]
+kind = "process_materializer"
+command = ["python", "-m", "my_runtime.materializer_worker"]
+cwd = "$resources"
 args = { scale = 1.0 }
 ```
 
@@ -249,13 +383,35 @@ from gammaboard_process import run_sampler
 run_sampler(SymbolicaHavanaSampler)
 ```
 
-The `Evaluator` and `Sampler` ABCs are optional documentation/type-hint helpers.
-Inheritance is not required; `run_evaluator(...)` and `run_sampler(...)` accept
-any compatible class.
+```python
+from demo_materializer import MyMaterializer
+from gammaboard_process import run_materializer
+
+run_materializer(MyMaterializer)
+```
+
+```python
+from demo_transform import MyTransform
+from gammaboard_process import run_batch_transform
+
+run_batch_transform(MyTransform)
+```
+
+The `Evaluator`, `Sampler`, `BatchTransform`, and `Materializer` ABCs are optional documentation/type-hint helpers.
+Inheritance is not required; `run_evaluator(...)`, `run_sampler(...)`,
+`run_batch_transform(...)`, and `run_materializer(...)` accept any compatible class.
 
 Evaluator classes implement `eval(xs_discrete, xs_continuous)`.
 
 Sampler classes implement `sample_plan`, `produce_latent_batch`, `ingest_training_values`, `snapshot`, and optional `training_samples_remaining` / `pdf` / `discrete_pdf` / `get_diagnostics`.
+
+Batch transform classes implement `transform_batch(xs_discrete, xs_continuous, weights)` and return a
+`TransformedBatch`, a dict with `xs_discrete` / `xs_continuous` / `weights`, a
+3-tuple, or any object with those attributes.
+
+Materializer classes implement `materialize_batch(latent_batch)` and return a
+`MaterializedBatch`, a dict with `xs_discrete` / `xs_continuous` / `weights`, a
+3-tuple, or any object with those attributes.
 
 Fresh initialization uses
 `ClassName(discrete_cardinalities=..., continuous_dims=..., **args)`.

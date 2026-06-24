@@ -577,6 +577,7 @@ fn batch_transform_label(config: &BatchTransformConfig) -> &'static str {
     match config {
         BatchTransformConfig::UnitBall { .. } => "unit_ball",
         BatchTransformConfig::Spherical { .. } => "spherical",
+        BatchTransformConfig::ProcessBatchTransform { .. } => "process_batch_transform",
     }
 }
 

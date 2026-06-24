@@ -4,7 +4,7 @@ from typing import Any
 
 import numpy as np
 
-from .batches import SampleBatch
+from .batches import MaterializedBatch, SampleBatch, TransformedBatch
 from .gammaloop import GammaLoopBatchResult
 from .protocol import (
     PROTOCOL,
@@ -23,6 +23,16 @@ def run_evaluator(target: Any) -> None:
 
 def run_sampler(target: Any) -> None:
     worker = _SamplerWorker(target)
+    worker.run()
+
+
+def run_materializer(target: Any) -> None:
+    worker = _MaterializerWorker(target)
+    worker.run()
+
+
+def run_batch_transform(target: Any) -> None:
+    worker = _BatchTransformWorker(target)
     worker.run()
 
 
@@ -248,6 +258,172 @@ class _SamplerWorker:
                 )
 
 
+class _MaterializerWorker:
+    def __init__(self, target: Any) -> None:
+        self.target = target
+        self.io = ProtocolIo()
+        self.materializer = None
+        self.discrete_cardinalities: list[int] | None = None
+        self.continuous_dims: int | None = None
+
+    def run(self) -> None:
+        while True:
+            req = self.io.read_frame()
+            if req is None:
+                break
+            req_id = req.get("id")
+            try:
+                result = self.handle(req["method"], req.get("params") or {})
+                self.io.send_result(req_id, result)
+            except Exception as exc:
+                self.io.send_error(req_id, exc)
+
+    def handle(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        if method == "initialize":
+            if params.get("protocol") != PROTOCOL:
+                raise ValueError(f"unsupported protocol: {params.get('protocol')!r}")
+            if params.get("role") != "materializer":
+                raise ValueError(f"expected materializer role, got {params.get('role')!r}")
+            discrete_cardinalities, continuous_dims = fixed_domain_shape(params["domain"])
+            if any(value <= 0 for value in discrete_cardinalities):
+                raise ValueError("discrete_cardinalities must contain only positive integers")
+            self.materializer = instantiate_user_object(
+                self.target,
+                discrete_cardinalities=discrete_cardinalities,
+                continuous_dims=continuous_dims,
+                init_args=params.get("args") or {},
+            )
+            self.discrete_cardinalities = discrete_cardinalities
+            self.continuous_dims = continuous_dims
+            return {"ok": True}
+        if self.materializer is None:
+            raise RuntimeError("worker not initialized")
+        if method == "materialize_batch":
+            return self._materialize_batch(params)
+        raise ValueError(f"unknown method: {method}")
+
+    def _materialize_batch(self, params: dict[str, Any]) -> dict[str, Any]:
+        nr_samples = int(params["nr_samples"])
+        batch = _normalize_materialized_batch(self.materializer.materialize_batch(params["latent_batch"]))
+        discrete_dims = len(self.discrete_cardinalities or [])
+        continuous_dims = int(self.continuous_dims or 0)
+        xs_discrete = np.asarray(batch.xs_discrete, dtype=np.int64).reshape((nr_samples, discrete_dims))
+        xs_continuous = np.asarray(batch.xs_continuous, dtype=np.float64).reshape((nr_samples, continuous_dims))
+        weights = np.asarray(batch.weights, dtype=np.float64).reshape((nr_samples,))
+        self._validate_materialized_batch(xs_discrete, xs_continuous, weights)
+        return {
+            "xs_discrete_row_major": xs_discrete.reshape((nr_samples * discrete_dims,)).tolist(),
+            "xs_discrete_offsets": [index * discrete_dims for index in range(nr_samples + 1)],
+            "xs_continuous_row_major": xs_continuous.reshape((nr_samples * continuous_dims,)).tolist(),
+            "xs_continuous_offsets": [index * continuous_dims for index in range(nr_samples + 1)],
+            "weights": weights.tolist(),
+        }
+
+    def _validate_materialized_batch(
+        self, xs_discrete: np.ndarray, xs_continuous: np.ndarray, weights: np.ndarray
+    ) -> None:
+        if not np.isfinite(xs_continuous).all():
+            raise ValueError("materialize_batch returned non-finite continuous values")
+        if not np.isfinite(weights).all():
+            raise ValueError("materialize_batch returned non-finite weights")
+        if (weights <= 0.0).any():
+            raise ValueError("materialize_batch returned non-positive weights")
+        for axis, cardinality in enumerate(self.discrete_cardinalities or []):
+            axis_values = xs_discrete[:, axis]
+            if ((axis_values < 0) | (axis_values >= cardinality)).any():
+                raise ValueError(
+                    f"materialize_batch returned discrete values outside [0, {cardinality}) on axis {axis}"
+                )
+
+
+class _BatchTransformWorker:
+    def __init__(self, target: Any) -> None:
+        self.target = target
+        self.io = ProtocolIo()
+        self.transform = None
+        self.discrete_cardinalities: list[int] | None = None
+        self.continuous_dims: int | None = None
+
+    def run(self) -> None:
+        while True:
+            req = self.io.read_frame()
+            if req is None:
+                break
+            req_id = req.get("id")
+            try:
+                result = self.handle(req["method"], req.get("params") or {})
+                self.io.send_result(req_id, result)
+            except Exception as exc:
+                self.io.send_error(req_id, exc)
+
+    def handle(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        if method == "initialize":
+            if params.get("protocol") != PROTOCOL:
+                raise ValueError(f"unsupported protocol: {params.get('protocol')!r}")
+            if params.get("role") != "batch_transform":
+                raise ValueError(f"expected batch_transform role, got {params.get('role')!r}")
+            discrete_cardinalities, continuous_dims = fixed_domain_shape(params["domain"])
+            if any(value <= 0 for value in discrete_cardinalities):
+                raise ValueError("discrete_cardinalities must contain only positive integers")
+            self.transform = instantiate_user_object(
+                self.target,
+                discrete_cardinalities=discrete_cardinalities,
+                continuous_dims=continuous_dims,
+                init_args=params.get("args") or {},
+            )
+            self.discrete_cardinalities = discrete_cardinalities
+            self.continuous_dims = continuous_dims
+            return {"ok": True}
+        if self.transform is None:
+            raise RuntimeError("worker not initialized")
+        if method == "transform_batch":
+            return self._transform_batch(params)
+        raise ValueError(f"unknown method: {method}")
+
+    def _transform_batch(self, params: dict[str, Any]) -> dict[str, Any]:
+        if self.discrete_cardinalities is None or self.continuous_dims is None:
+            raise RuntimeError("worker not initialized")
+        nr_samples = int(params["nr_samples"])
+        discrete_dims = len(self.discrete_cardinalities)
+        require_homogeneous_offsets(params, "xs_discrete_offsets", nr_samples, discrete_dims, "batch_transform")
+        require_homogeneous_offsets(params, "xs_continuous_offsets", nr_samples, self.continuous_dims, "batch_transform")
+        xs_discrete = np.asarray(params["xs_discrete_row_major"], dtype=np.int64).reshape(
+            (nr_samples, discrete_dims)
+        )
+        xs_continuous = np.asarray(params["xs_continuous_row_major"], dtype=np.float64).reshape(
+            (nr_samples, self.continuous_dims)
+        )
+        weights = np.asarray(params["weights"], dtype=np.float64).reshape((nr_samples,))
+        batch = _normalize_transformed_batch(self.transform.transform_batch(xs_discrete, xs_continuous, weights))
+        out_discrete = np.asarray(batch.xs_discrete, dtype=np.int64).reshape((nr_samples, discrete_dims))
+        out_continuous = np.asarray(batch.xs_continuous, dtype=np.float64).reshape((nr_samples, self.continuous_dims))
+        out_weights = np.asarray(batch.weights, dtype=np.float64).reshape((nr_samples,))
+        self._validate_transformed_batch(out_discrete, out_continuous, out_weights)
+        return {
+            "xs_discrete_row_major": out_discrete.reshape((nr_samples * discrete_dims,)).tolist(),
+            "xs_discrete_offsets": [index * discrete_dims for index in range(nr_samples + 1)],
+            "xs_continuous_row_major": out_continuous.reshape((nr_samples * self.continuous_dims,)).tolist(),
+            "xs_continuous_offsets": [index * self.continuous_dims for index in range(nr_samples + 1)],
+            "weights": out_weights.tolist(),
+        }
+
+    def _validate_transformed_batch(
+        self, xs_discrete: np.ndarray, xs_continuous: np.ndarray, weights: np.ndarray
+    ) -> None:
+        if not np.isfinite(xs_continuous).all():
+            raise ValueError("transform_batch returned non-finite continuous values")
+        if not np.isfinite(weights).all():
+            raise ValueError("transform_batch returned non-finite weights")
+        if (weights <= 0.0).any():
+            raise ValueError("transform_batch returned non-positive weights")
+        for axis, cardinality in enumerate(self.discrete_cardinalities or []):
+            axis_values = xs_discrete[:, axis]
+            if ((axis_values < 0) | (axis_values >= cardinality)).any():
+                raise ValueError(
+                    f"transform_batch returned discrete values outside [0, {cardinality}) on axis {axis}"
+                )
+
+
 def _normalize_gammaloop_result(raw: Any, nr_samples: int) -> GammaLoopBatchResult:
     if isinstance(raw, GammaLoopBatchResult):
         return raw
@@ -284,6 +460,30 @@ def _normalize_sample_batch(batch: Any) -> SampleBatch:
     if isinstance(batch, tuple) and len(batch) == 3:
         return SampleBatch(batch[0], batch[1], batch[2])
     return SampleBatch(batch.xs_discrete, batch.xs_continuous, batch.weights)
+
+
+def _normalize_materialized_batch(batch: Any) -> MaterializedBatch:
+    if isinstance(batch, MaterializedBatch):
+        return batch
+    if isinstance(batch, SampleBatch):
+        return MaterializedBatch(batch.xs_discrete, batch.xs_continuous, batch.weights)
+    if isinstance(batch, dict):
+        return MaterializedBatch(batch["xs_discrete"], batch["xs_continuous"], batch["weights"])
+    if isinstance(batch, tuple) and len(batch) == 3:
+        return MaterializedBatch(batch[0], batch[1], batch[2])
+    return MaterializedBatch(batch.xs_discrete, batch.xs_continuous, batch.weights)
+
+
+def _normalize_transformed_batch(batch: Any) -> TransformedBatch:
+    if isinstance(batch, TransformedBatch):
+        return batch
+    if isinstance(batch, (MaterializedBatch, SampleBatch)):
+        return TransformedBatch(batch.xs_discrete, batch.xs_continuous, batch.weights)
+    if isinstance(batch, dict):
+        return TransformedBatch(batch["xs_discrete"], batch["xs_continuous"], batch["weights"])
+    if isinstance(batch, tuple) and len(batch) == 3:
+        return TransformedBatch(batch[0], batch[1], batch[2])
+    return TransformedBatch(batch.xs_discrete, batch.xs_continuous, batch.weights)
 
 
 def _call_optional(obj: Any, name: str, fallback: Any, *args: Any) -> Any:

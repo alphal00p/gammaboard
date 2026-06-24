@@ -53,14 +53,54 @@ reverse-proxy mount below a URL path instead of at `/`.
 - The node supervisor leader advances task state and controller tasks in the control plane; sampler/evaluator assignments are reserved for compute work.
 - Run names are human-facing and not unique. Ambiguous CLI name references fail.
 - Node identity is a human-facing `name` plus a live-process `uuid`.
-- Process evaluators and samplers are external commands speaking `gammaboard-jsonrpc-v1`.
+- Process evaluators, samplers, batch transforms, and materializers are external commands speaking `gammaboard-jsonrpc-v1`.
+
+## Core Ideas
+
+Gammaboard separates integration into a persisted control plane and stateless-ish
+workers that can come and go.
+
+- A run is the immutable top-level problem definition: domain, root evaluator,
+  default runner settings, and the task queue.
+- A task is one step on the run timeline, such as sampling, plotting, setting an
+  accumulator, parameter scanning, or hyperparameter tuning.
+- A snapshot records the stage state after a task: accumulator state, sampler
+  state, evaluator config, and batch transform config. Later tasks restore from
+  these snapshots instead of relying on in-memory handoff.
+- A node is a live worker process registered in PostgreSQL by `name` plus
+  process `uuid`. Nodes receive desired role assignments from the control plane:
+  sampler aggregator, evaluator, or supervisor.
+- The supervisor leader activates pending tasks, runs controller tasks, and
+  updates node assignments. It does not consume evaluator/sampler compute slots.
+- Sampler aggregators own sample production. They decide when to produce work,
+  emit latent batches into the queue, ingest evaluator feedback when training is
+  enabled, expose optional PDFs/diagnostics, and persist sampler snapshots.
+- Materializers convert queued latent batches into concrete evaluator-side
+  batches. Most samplers use identity materialization; specialized samplers can
+  use built-in materializers or a `process_materializer`.
+- Evaluators consume concrete batches, validate them against the run domain,
+  evaluate the integrand, and return accumulator updates plus optional scalar
+  training values for adaptive samplers.
+- Accumulators own observable semantics: scalar/vector/full-vector/GammaLoop
+  state, error estimates, moments, projections, and panel-ready metrics.
+
+The hot path is:
+
+```text
+sampler aggregator -> latent batch queue -> materializer -> batch transforms -> evaluator -> accumulator snapshot/training feedback
+```
+
+The run domain is authoritative throughout this path. Samplers produce points in
+that domain, materializers and transforms must preserve a valid concrete batch,
+and evaluator workers validate materialized/transformed batches before calling
+the configured evaluator.
 
 ## Process API
 
-Custom evaluators and samplers can run as ordinary child processes. GammaBoard
-sends framed JSON-RPC requests on stdin and reads responses from stdout; stderr
-is used for logs. See [docs/process-runtime.md](docs/process-runtime.md) for
-the full protocol.
+Custom evaluators, samplers, and materializers can run as ordinary child
+processes. GammaBoard sends framed JSON-RPC requests on stdin and reads
+responses from stdout; stderr is used for logs. See
+[docs/process-runtime.md](docs/process-runtime.md) for the full protocol.
 
 For Python runtimes, install the small helper package:
 
@@ -101,12 +141,61 @@ class MySampler(Sampler):  # ABC inheritance is optional.
 run_sampler(MySampler)
 ```
 
+Minimal batch transform:
+
+```python
+from gammaboard_process import BatchTransform, TransformedBatch, run_batch_transform
+
+class MyTransform(BatchTransform):  # ABC inheritance is optional.
+    def transform_batch(self, xs_discrete, xs_continuous, weights):
+        return TransformedBatch(xs_discrete, xs_continuous, weights)
+
+run_batch_transform(MyTransform)
+```
+
+Minimal materializer:
+
+```python
+from gammaboard_process import MaterializedBatch, Materializer, run_materializer
+
+class MyMaterializer(Materializer):  # ABC inheritance is optional.
+    def materialize_batch(self, latent_batch):
+        payload = latent_batch["payload"]
+        return MaterializedBatch(xs_discrete, xs_continuous, weights)
+
+run_materializer(MyMaterializer)
+```
+
 GammaBoard derives `discrete_cardinalities` and `continuous_dims` from the run
 domain and passes them as keyword arguments together with the process config
 `args`. Sampler restore may additionally implement
 `from_snapshot(snapshot=..., discrete_cardinalities=..., continuous_dims=..., init_args=...)`.
 Examples live in
 [process_api/examples](process_api/examples).
+
+Use a process batch transform for process-side parametrizations that map
+concrete sampled coordinates to evaluator coordinates:
+
+```toml
+[[task_queue.batch_transforms]]
+kind = "process_batch_transform"
+command = ["python", "-u", "-m", "my_runtime.transform"]
+args = { scale = 1.0 }
+```
+
+Attach a process materializer to a sampler config only when the sampler emits a
+latent representation that must be mapped before normal batch transforms:
+
+```toml
+[task_queue.sampler_aggregator.config]
+kind = "process_sampler"
+command = ["python", "-u", "-m", "my_runtime.sampler"]
+
+[task_queue.sampler_aggregator.config.materializer]
+kind = "process_materializer"
+command = ["python", "-u", "-m", "my_runtime.materializer"]
+args = { scale = 1.0 }
+```
 
 Some examples use generated local artifacts that are not committed. Build all
 currently known optional process artifacts with:

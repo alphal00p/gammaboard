@@ -18,7 +18,8 @@ pub use models::{
 };
 pub use run_spec::{
     AccumulatorConfig, AccumulatorMomentConfig, BatchTransformConfig, CapabilityRequirements,
-    EvaluatorConfig, IntegrationParams, RunSpec, SamplerAggregatorConfig, TrainingProjection,
+    EvaluatorConfig, IntegrationParams, MaterializerConfig, RunSpec, SamplerAggregatorConfig,
+    TrainingProjection,
 };
 pub use tasks::{
     AccumulatorMetricName, AccumulatorMetricSelector, AccumulatorSourceSpec,

@@ -94,3 +94,34 @@ class Sampler(ABC):
 
     def get_diagnostics(self) -> dict[str, Any]:
         return {}
+
+
+class Materializer(ABC):
+    """Optional base class for process materializers.
+
+    Inheritance is not required. ``run_materializer`` accepts any class with a
+    compatible ``materialize_batch`` method. Fresh workers construct
+    materializers as ``ClassName(discrete_cardinalities=..., continuous_dims=..., **args)``.
+    """
+
+    @abstractmethod
+    def materialize_batch(self, latent_batch: dict[str, Any]) -> Any:
+        """Return a ``MaterializedBatch`` or compatible object."""
+
+
+class BatchTransform(ABC):
+    """Optional base class for process batch transforms.
+
+    Inheritance is not required. ``run_batch_transform`` accepts any class with
+    a compatible ``transform_batch`` method. Fresh workers construct transforms
+    as ``ClassName(discrete_cardinalities=..., continuous_dims=..., **args)``.
+    """
+
+    @abstractmethod
+    def transform_batch(
+        self,
+        xs_discrete: np.ndarray,
+        xs_continuous: np.ndarray,
+        weights: np.ndarray,
+    ) -> Any:
+        """Return a ``TransformedBatch`` or compatible object."""

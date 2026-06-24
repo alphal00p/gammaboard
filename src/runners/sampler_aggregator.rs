@@ -1795,6 +1795,7 @@ mod tests {
                     discrete: Vec::new(),
                 },
             },
+            materializer: None,
         };
         let raster_line = SamplerAggregatorConfig::RasterLine {
             params: RasterLineSamplerParams {
@@ -1809,9 +1810,11 @@ mod tests {
                     discrete: Vec::new(),
                 },
             },
+            materializer: None,
         };
         let naive = SamplerAggregatorConfig::NaiveMonteCarlo {
             params: NaiveMonteCarloSamplerParams::default(),
+            materializer: None,
         };
 
         assert!(

@@ -92,9 +92,12 @@ mod tests {
             initial_training_rate: 0.1,
             final_training_rate: 0.01,
         };
-        let mut training = SamplerAggregatorConfig::HavanaTraining { params }
-            .build(domain.clone(), Some(8), None, serde_json::json!({}))
-            .expect("build havana training sampler");
+        let mut training = SamplerAggregatorConfig::HavanaTraining {
+            params,
+            materializer: None,
+        }
+        .build(domain.clone(), Some(8), None, serde_json::json!({}))
+        .expect("build havana training sampler");
         let _ = training
             .produce_latent_batch(4)
             .expect("produce training batch");
@@ -105,6 +108,7 @@ mod tests {
         let snapshot = training.snapshot().expect("snapshot");
         let mut inference = SamplerAggregatorConfig::HavanaInference {
             params: HavanaInferenceSamplerParams::default(),
+            materializer: None,
         }
         .build(
             domain.clone(),
