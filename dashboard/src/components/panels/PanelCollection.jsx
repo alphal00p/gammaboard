@@ -468,12 +468,12 @@ const buildMultiSeriesData = (seriesList) => {
 };
 
 const historyXAxisValueForPoint = (point, mode) => {
-  if (mode === HISTORY_X_AXIS_MODE_SAMPLER_UPTIME) {
-    const uptimeMs = Number(point?.x_sampler_uptime_ms);
+  if (mode === HISTORY_X_AXIS_MODE_SAMPLER_UPTIME && point?.x_sampler_uptime_ms != null) {
+    const uptimeMs = Number(point.x_sampler_uptime_ms);
     if (Number.isFinite(uptimeMs)) return uptimeMs;
   }
-  if (mode === HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES) {
-    const completedSamples = Number(point?.x_completed_samples_total);
+  if (mode === HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES && point?.x_completed_samples_total != null) {
+    const completedSamples = Number(point.x_completed_samples_total);
     if (Number.isFinite(completedSamples)) return completedSamples;
   }
   const fallback = Number(point?.x);
