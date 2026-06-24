@@ -158,11 +158,12 @@ fn real_estimate_history_projector(accumulator_config: &AccumulatorConfig) -> Ta
             let target = run_target_from_json(ctx.run_target)
                 .and_then(|target| target.component(&["real", "value"]));
             Ok(sample_accumulator(ctx, &current_config)?
-                .map(real_estimate_history_panel)
+                .and_then(real_estimate_history_panel)
                 .map(|panel| with_scalar_target(panel, target)))
         },
         move |ctx| {
-            Ok(decode_history_observable(ctx, &history_config)?.map(real_estimate_history_panel))
+            Ok(decode_history_observable(ctx, &history_config)?
+                .and_then(real_estimate_history_panel))
         },
     )
 }
@@ -200,7 +201,7 @@ fn rsd_history_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelPro
         "abs_signal_to_noise_history",
         "RSD",
         accumulator_config.clone(),
-        |accumulator| Some(rsd_history_panel(accumulator)),
+        rsd_history_panel,
     )
 }
 
@@ -468,9 +469,12 @@ fn config_label(config: &AccumulatorConfig) -> &'static str {
     }
 }
 
-fn real_estimate_history_panel(accumulator: AccumulatorState) -> PanelState {
+fn real_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
+    if accumulator.sample_count() <= 0 {
+        return None;
+    }
     let smooth = Some(true);
-    match accumulator {
+    Some(match accumulator {
         AccumulatorState::Scalar(state) => scalar_timeseries_panel_with_smoothing(
             "real_estimate_history",
             vec![PlotPoint {
@@ -511,10 +515,13 @@ fn real_estimate_history_panel(accumulator: AccumulatorState) -> PanelState {
             smooth,
         ),
         _ => scalar_timeseries_panel_with_smoothing("real_estimate_history", Vec::new(), smooth),
-    }
+    })
 }
 
 fn imag_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
+    if accumulator.sample_count() <= 0 {
+        return None;
+    }
     let smooth = Some(true);
     match accumulator {
         AccumulatorState::Gammaloop(state) => Some(scalar_timeseries_panel_with_smoothing(
@@ -533,14 +540,17 @@ fn imag_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelSta
     }
 }
 
-fn rsd_history_panel(accumulator: AccumulatorState) -> PanelState {
+fn rsd_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
+    if accumulator.sample_count() <= 0 {
+        return None;
+    }
     let rsd = match &accumulator {
         AccumulatorState::Scalar(state) => state.rsd(),
         AccumulatorState::Vector(state) => state.rsd(),
         AccumulatorState::Gammaloop(state) => state.rsd(),
         _ => 0.0,
     };
-    scalar_timeseries_panel_with_smoothing(
+    Some(scalar_timeseries_panel_with_smoothing(
         "abs_signal_to_noise_history",
         vec![PlotPoint {
             x: accumulator.sample_count() as f64,
@@ -551,7 +561,7 @@ fn rsd_history_panel(accumulator: AccumulatorState) -> PanelState {
             y_max: None,
         }],
         Some(true),
-    )
+    ))
 }
 
 fn estimate_summary_panel(
@@ -1957,6 +1967,29 @@ mod tests {
             .iter()
             .map(|bin| bin["value"].as_f64().expect("numeric bin value"))
             .collect::<Vec<_>>()
+    }
+
+    #[test]
+    fn estimate_history_starts_at_first_non_empty_accumulator() {
+        assert!(
+            real_estimate_history_panel(AccumulatorState::Scalar(ScalarAccumulatorState::plain()))
+                .is_none()
+        );
+
+        let panel = real_estimate_history_panel(AccumulatorState::Scalar(ScalarAccumulatorState {
+            count: 16,
+            sum_weighted_value: 8.0,
+            sum_sq: 4.0,
+            ..ScalarAccumulatorState::plain()
+        }))
+        .expect("non-empty accumulator should produce history point");
+
+        let PanelState::ScalarTimeseries { points, .. } = panel else {
+            panic!("expected scalar timeseries");
+        };
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].x, 16.0);
+        assert_eq!(points[0].y, 0.5);
     }
 
     #[test]

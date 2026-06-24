@@ -38,10 +38,9 @@
 #   print("random_dim =", s.random_dim)
 #   EOF
 
-replacements = { run_name = "madgraph_pp_mumu_madspace", samples = 100000 }
+replacements = { run_name = "madgraph_pp_mumu_madspace", samples = 1000000 }
 
 name = '$(run_name:"madgraph_pp_mumu_madspace")'
-target = { kind = "scalar", value = 0.0 }
 
 [evaluator]
 kind = "process_evaluator"
