@@ -19,7 +19,10 @@ use symbolica::numerical_integration::Sample;
 
 use crate::{
     Batch, BatchResult, BuildError, Domain, DomainBranch, EvalError,
-    core::{AccumulatorConfig, TrainingProjection as AccumulatorTrainingProjection},
+    core::{
+        AccumulatorConfig, AccumulatorMomentConfig,
+        TrainingProjection as AccumulatorTrainingProjection,
+    },
     evaluation::{
         AccumulatorState, EvalBatchOptions, Evaluator, GammaLoopAccumulatorState,
         VectorAccumulatorState, ingest_scalar_values,
@@ -499,7 +502,9 @@ impl GammaLoopEvaluator {
             vec!["real".to_string(), "imag".to_string()],
             AccumulatorTrainingProjection::Norm,
             None,
-            Default::default(),
+            // Track 4th-order moments so each batch contributes the running sums
+            // needed for the RSD metric's uncertainty (see GammaLoopAccumulatorState).
+            AccumulatorMomentConfig::MaxOrder4,
         );
         for (result, point) in evaluation_results.iter().zip(points.iter()) {
             let mut debug_point = point.clone();
