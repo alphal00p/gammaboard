@@ -184,50 +184,6 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serve
           ) : null}
         </Stack>
 
-        <Box sx={{ mb: 3 }}>
-          <Typography variant="subtitle1" gutterBottom>
-            Node Startup Queue
-          </Typography>
-          {!authenticated ? (
-            <EmptyStateCard title="Login required" message="Authenticate to inspect and create node launch requests." />
-          ) : launchRequestsData.error ? (
-            <Alert severity="error" sx={{ mb: 2 }}>
-              Failed to fetch node launch requests.
-            </Alert>
-          ) : launchRequestsData.launchRequests.length === 0 ? (
-            <EmptyStateCard title="No launch requests" message="Node start requests will appear here." />
-          ) : (
-            <TableContainer component={Paper} variant="outlined">
-              <Table size="small" aria-label="node launch requests table">
-                <TableHead>
-                  <TableRow>
-                    <TableCell>ID</TableCell>
-                    <TableCell>State</TableCell>
-                    <TableCell>Backend</TableCell>
-                    <TableCell>Count</TableCell>
-                    <TableCell>Submitted</TableCell>
-                    <TableCell>Created</TableCell>
-                    <TableCell>Error</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {launchRequestsData.launchRequests.map((request) => (
-                    <TableRow key={request.id}>
-                      <TableCell>{request.id}</TableCell>
-                      <TableCell>{request.state}</TableCell>
-                      <TableCell>{request.backend}</TableCell>
-                      <TableCell>{request.requested_count}</TableCell>
-                      <TableCell>{request.started_count}</TableCell>
-                      <TableCell>{formatDateTime(request.created_at, "-")}</TableCell>
-                      <TableCell>{request.error || "-"}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          )}
-        </Box>
-
         <Typography variant="subtitle1" gutterBottom>
           Live Nodes
         </Typography>
@@ -294,6 +250,50 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serve
             </TableContainer>
           </Stack>
         )}
+
+        <Box sx={{ mt: 3 }}>
+          <Typography variant="subtitle1" gutterBottom>
+            Node Startup Queue
+          </Typography>
+          {!authenticated ? (
+            <EmptyStateCard title="Login required" message="Authenticate to inspect and create node launch requests." />
+          ) : launchRequestsData.error ? (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              Failed to fetch node launch requests.
+            </Alert>
+          ) : launchRequestsData.launchRequests.length === 0 ? (
+            <EmptyStateCard title="No launch requests" message="Node start requests will appear here." />
+          ) : (
+            <TableContainer component={Paper} variant="outlined">
+              <Table size="small" aria-label="node launch requests table">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>ID</TableCell>
+                    <TableCell>State</TableCell>
+                    <TableCell>Backend</TableCell>
+                    <TableCell>Count</TableCell>
+                    <TableCell>Submitted</TableCell>
+                    <TableCell>Created</TableCell>
+                    <TableCell>Error</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {launchRequestsData.launchRequests.map((request) => (
+                    <TableRow key={request.id}>
+                      <TableCell>{request.id}</TableCell>
+                      <TableCell>{request.state}</TableCell>
+                      <TableCell>{request.backend}</TableCell>
+                      <TableCell>{request.requested_count}</TableCell>
+                      <TableCell>{request.started_count}</TableCell>
+                      <TableCell>{formatDateTime(request.created_at, "-")}</TableCell>
+                      <TableCell>{request.error || "-"}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </Box>
       </Paper>
 
       {selectedWorker ? (

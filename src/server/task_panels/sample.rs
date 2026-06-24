@@ -2,7 +2,6 @@ use super::{
     TaskPanelContext, TaskPanelCurrentSourcePolicy, TaskPanelHistoryContext, TaskPanelProjector,
     panel_projector, panel_projector_with_source,
 };
-use crate::runners::sampler_aggregator::MIN_BATCH_SIZE;
 use crate::core::{
     AccumulatorConfig, DiscreteProjectionConfig, DiscreteProjectionNormalization, EngineError,
     NamedDiscreteProjection, SampleErrorProjection, SampleStopCondition,
@@ -12,6 +11,7 @@ use crate::evaluation::{
     Accumulator, AccumulatorState, GammaLoopDiagnostics, Point, SemanticAccumulatorKind,
     extract_accumulator_metric_with_runtime,
 };
+use crate::runners::sampler_aggregator::MIN_BATCH_SIZE;
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, TableStateOptions,
     TickBreakdownSegment, key_value, key_value_panel, panel_spec, progress_panel,
@@ -471,7 +471,7 @@ fn config_label(config: &AccumulatorConfig) -> &'static str {
 }
 
 fn real_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
-    if accumulator.sample_count() <= MIN_BATCH_SIZE as i64 {
+    if accumulator.sample_count() < MIN_BATCH_SIZE as i64 {
         return None;
     }
     let smooth = Some(true);
@@ -520,7 +520,7 @@ fn real_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelSta
 }
 
 fn imag_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
-    if accumulator.sample_count() <= MIN_BATCH_SIZE as i64 {
+    if accumulator.sample_count() < MIN_BATCH_SIZE as i64 {
         return None;
     }
     let smooth = Some(true);
@@ -542,7 +542,7 @@ fn imag_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelSta
 }
 
 fn rsd_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
-    if accumulator.sample_count() <= MIN_BATCH_SIZE as i64 {
+    if accumulator.sample_count() < MIN_BATCH_SIZE as i64 {
         return None;
     }
     let rsd = match &accumulator {

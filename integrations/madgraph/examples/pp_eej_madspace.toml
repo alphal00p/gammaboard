@@ -47,8 +47,10 @@
 #
 #   gammaboard run add integrations/madgraph/examples/pp_eej_madspace.toml \
 #     --replace continuous_dims=<random_dim>
+#
+# For the generated pp_eej artifact in this repo, the current value is 8.
 
-replacements = { run_name = "madgraph_pp_eej_madspace", samples = 1000000, continuous_dims = 1 }
+replacements = { run_name = "madgraph_pp_eej_madspace", samples = 1000000, continuous_dims = 8 }
 
 name = '$(run_name:"madgraph_pp_eej_madspace")'
 
@@ -56,7 +58,7 @@ name = '$(run_name:"madgraph_pp_eej_madspace")'
 kind = "process_evaluator"
 command = ["$resources/../integrations/madgraph/.venv/bin/madgraph-gammaboard-evaluator"]
 cwd = "$resources/.."
-domain = { continuous = { dims = "$(continuous_dims:1)" } }
+domain = { continuous = { dims = "$(continuous_dims:8)" } }
 components = ["weight"]
 
 [evaluator.args]

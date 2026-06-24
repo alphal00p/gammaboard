@@ -128,7 +128,7 @@ impl GammaLoopEvaluator {
         // documentation of the intended preprocessing mode.
         let mut state = State::load(params.state_folder.clone(), None, None).map_err(|err| {
             BuildError::build(format!(
-                "failed to load state from {}: {err}",
+                "failed to load state from {}: {err:#}",
                 params.state_folder.display()
             ))
         })?;
