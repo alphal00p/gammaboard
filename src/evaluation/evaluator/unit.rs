@@ -149,10 +149,12 @@ mod tests {
             .expect("result");
 
         assert_eq!(result.values, Some(vec![2.0, 3.0]));
-        let AccumulatorState::Scalar(accumulator) = result.accumulator else {
-            panic!("expected scalar accumulator");
+        let AccumulatorState::Vector(accumulator) = result.accumulator else {
+            panic!("expected vector accumulator");
         };
-        assert_eq!(accumulator.count, 2);
-        assert_eq!(accumulator.sum_weighted_value, 5.0);
+        assert_eq!(accumulator.components.len(), 1);
+        assert_eq!(accumulator.components[0].name, "value");
+        assert_eq!(accumulator.components[0].state.count, 2);
+        assert_eq!(accumulator.components[0].state.sum_weighted_value, 5.0);
     }
 }

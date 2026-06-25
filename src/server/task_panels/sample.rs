@@ -1799,7 +1799,9 @@ fn timing_segment(key: &str, label: &str, value_ms: f64, color: &str) -> TickBre
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::evaluation::ScalarAccumulatorState;
+    use crate::{
+        NamedScalarAccumulator, VectorAccumulatorState, evaluation::ScalarAccumulatorState,
+    };
 
     fn discrete_bin(
         discrete: Vec<i64>,
@@ -1849,15 +1851,29 @@ mod tests {
     #[test]
     fn estimate_history_starts_at_first_non_empty_accumulator() {
         assert!(
-            real_estimate_history_panel(AccumulatorState::Scalar(ScalarAccumulatorState::plain()))
-                .is_none()
+            real_estimate_history_panel(AccumulatorState::Vector(VectorAccumulatorState {
+                components: vec![],
+                projection_spec: crate::core::TrainingProjection::Norm,
+                projection: NamedScalarAccumulator {
+                    name: "test".to_string(),
+                    state: ScalarAccumulatorState::plain()
+                }
+            }))
+            .is_none()
         );
 
-        let panel = real_estimate_history_panel(AccumulatorState::Scalar(ScalarAccumulatorState {
-            count: 16,
-            sum_weighted_value: 8.0,
-            sum_sq: 4.0,
-            ..ScalarAccumulatorState::plain()
+        let panel = real_estimate_history_panel(AccumulatorState::Vector(VectorAccumulatorState {
+            components: vec![],
+            projection_spec: crate::core::TrainingProjection::Norm,
+            projection: NamedScalarAccumulator {
+                name: "test".to_string(),
+                state: ScalarAccumulatorState {
+                    count: 16,
+                    sum_weighted_value: 8.0,
+                    sum_sq: 4.0,
+                    ..ScalarAccumulatorState::plain()
+                },
+            },
         }))
         .expect("non-empty accumulator should produce history point");
 

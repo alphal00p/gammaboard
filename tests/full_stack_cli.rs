@@ -2076,12 +2076,25 @@ accumulator = "latest"
     .await?;
 
     assert_eq!(rows.len(), 2);
+
     let mean = |state: &JsonValue| -> f64 {
         let sum = state
+            .get("components")
+            .expect("components")
+            .get(0)
+            .expect("index 0")
+            .get("state")
+            .unwrap()
             .get("sum_weighted_value")
             .and_then(JsonValue::as_f64)
             .expect("sum_weighted_value");
         let count = state
+            .get("components")
+            .expect("components")
+            .get(0)
+            .expect("index 0")
+            .get("state")
+            .unwrap()
             .get("count")
             .and_then(JsonValue::as_i64)
             .expect("count") as f64;
